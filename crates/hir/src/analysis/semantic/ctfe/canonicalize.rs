@@ -6,13 +6,14 @@ use rustc_hash::FxHashSet;
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        SBlock, SBlockId, SConst, SExpr, SStmt, SStmtKind, STerminatorKind, SemConstId,
-        SemConstValue, SemanticBody, SemanticCalleeRef, array_const,
+        LayoutBackingPlace, SBlock, SBlockId, SConst, SExpr, SStmt, SStmtKind, STerminatorKind,
+        SemConstId, SemConstValue, SemanticBody, SemanticCalleeRef, array_const,
         consts::demand_concrete_const_ty, enum_const, instance::SemanticInstance,
         reify_runtime_const_for_ty, sem_const_from_ty, struct_const, tuple_const,
     },
     ty::ty_def::{BorrowKind, CapabilityKind, TyId},
 };
+use crate::projection::{IndexSource, Projection};
 
 use super::{CtfeError, eval_const_ref, machine::try_eval_expr_to_const};
 
@@ -22,7 +23,17 @@ type LocalDefs<'db> = Vec<Vec<SExpr<'db>>>;
 #[derive(Clone, Copy)]
 enum ConstCanonicalizationMode {
     Full,
-    ReferencesOnly,
+    Admission,
+}
+
+#[derive(Clone, Copy)]
+struct ConstCanonicalizationCx<'a, 'db> {
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    body: &'a SemanticBody<'db>,
+    local_defs: &'a LocalDefs<'db>,
+    layout_index_locals: &'a [bool],
+    mode: ConstCanonicalizationMode,
 }
 
 #[salsa::tracked(return_ref)]
@@ -62,7 +73,7 @@ pub(crate) fn canonicalize_semantic_consts_from_body<'db>(
     )
 }
 
-pub(crate) fn canonicalize_semantic_const_refs_from_body<'db>(
+pub(crate) fn canonicalize_semantic_consts_for_admission<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     original: &SemanticBody<'db>,
@@ -71,7 +82,7 @@ pub(crate) fn canonicalize_semantic_const_refs_from_body<'db>(
         db,
         instance,
         original,
-        ConstCanonicalizationMode::ReferencesOnly,
+        ConstCanonicalizationMode::Admission,
     )
 }
 
@@ -86,6 +97,15 @@ fn canonicalize_semantic_consts_from_body_with_mode<'db>(
         return body;
     }
     let local_defs = collect_local_defs(original);
+    let layout_index_locals = collect_layout_index_locals(original);
+    let cx = ConstCanonicalizationCx {
+        db,
+        instance,
+        body: original,
+        local_defs: &local_defs,
+        layout_index_locals: &layout_index_locals,
+        mode,
+    };
 
     let mut incoming = vec![None; body.blocks.len()];
     incoming[0] = Some(vec![None; body.locals.len()]);
@@ -95,15 +115,7 @@ fn canonicalize_semantic_consts_from_body_with_mode<'db>(
         let Some(mut locals) = incoming[bb.index()].clone() else {
             continue;
         };
-        body.blocks[bb.index()] = canonicalize_block(
-            db,
-            instance,
-            &original.blocks[bb.index()],
-            &mut locals,
-            original,
-            &local_defs,
-            mode,
-        );
+        body.blocks[bb.index()] = canonicalize_block(cx, &original.blocks[bb.index()], &mut locals);
         for succ in block_successors(&original.blocks[bb.index()].terminator.kind) {
             if merge_local_consts(&mut incoming[succ.index()], &locals) {
                 pending.push_back(succ);
@@ -114,15 +126,7 @@ fn canonicalize_semantic_consts_from_body_with_mode<'db>(
     let mut unknown_locals = vec![None; body.locals.len()];
     for (idx, state) in incoming.iter().enumerate() {
         if state.is_none() {
-            body.blocks[idx] = canonicalize_block(
-                db,
-                instance,
-                &original.blocks[idx],
-                &mut unknown_locals,
-                original,
-                &local_defs,
-                mode,
-            );
+            body.blocks[idx] = canonicalize_block(cx, &original.blocks[idx], &mut unknown_locals);
             unknown_locals.fill(None);
         }
     }
@@ -131,55 +135,45 @@ fn canonicalize_semantic_consts_from_body_with_mode<'db>(
 }
 
 fn canonicalize_block<'db>(
-    db: &'db dyn HirAnalysisDb,
-    instance: SemanticInstance<'db>,
+    cx: ConstCanonicalizationCx<'_, 'db>,
     block: &SBlock<'db>,
     locals: &mut LocalConstMap<'db>,
-    body: &SemanticBody<'db>,
-    local_defs: &LocalDefs<'db>,
-    mode: ConstCanonicalizationMode,
 ) -> SBlock<'db> {
     SBlock {
         stmts: block
             .stmts
             .iter()
-            .map(|stmt| canonicalize_stmt(db, instance, stmt, locals, body, local_defs, mode))
+            .map(|stmt| canonicalize_stmt(cx, stmt, locals))
             .collect(),
         terminator: block.terminator.clone(),
     }
 }
 
 fn canonicalize_stmt<'db>(
-    db: &'db dyn HirAnalysisDb,
-    instance: SemanticInstance<'db>,
+    cx: ConstCanonicalizationCx<'_, 'db>,
     stmt: &SStmt<'db>,
     locals: &mut LocalConstMap<'db>,
-    body: &SemanticBody<'db>,
-    local_defs: &LocalDefs<'db>,
-    mode: ConstCanonicalizationMode,
 ) -> SStmt<'db> {
     let kind = match &stmt.kind {
         SStmtKind::Assign { dst, expr } => {
             let (expr, value) = canonicalize_expr(
-                db,
-                instance,
+                cx,
                 expr,
-                body.locals[dst.index()].ty,
+                cx.body.locals[dst.index()].ty,
                 locals,
-                body,
-                mode,
+                cx.layout_index_locals[dst.index()],
             );
             locals[dst.index()] = value;
-            invalidate_mutated_call_locals(db, &expr, locals, body, local_defs);
+            invalidate_mutated_call_locals(cx.db, &expr, locals, cx.body, cx.local_defs);
             SStmtKind::Assign { dst: *dst, expr }
         }
         SStmtKind::Store { dst, src } => {
             locals[dst.local.index()] = None;
             // A store through a mut-borrow carrier also mutates the borrowed
             // locals, so their cached constants are stale.
-            let mut memo = vec![None; body.locals.len()];
+            let mut memo = vec![None; cx.body.locals.len()];
             let mut visiting = FxHashSet::default();
-            for root in writable_local_roots(dst.local, local_defs, &mut memo, &mut visiting) {
+            for root in writable_local_roots(dst.local, cx.local_defs, &mut memo, &mut visiting) {
                 locals[root.index()] = None;
             }
             SStmtKind::Store {
@@ -203,6 +197,24 @@ fn collect_local_defs<'db>(body: &SemanticBody<'db>) -> LocalDefs<'db> {
         }
     }
     defs
+}
+
+fn collect_layout_index_locals(body: &SemanticBody<'_>) -> Vec<bool> {
+    let mut locals = vec![false; body.locals.len()];
+    for local in &body.locals {
+        for backing in &local.layout_backing_sources {
+            let path = match &backing.source {
+                LayoutBackingPlace::Local(place) => &place.path,
+                LayoutBackingPlace::RootProvider { path, .. } => path,
+            };
+            for projection in path.iter() {
+                if let Projection::Index(IndexSource::Dynamic(local)) = projection {
+                    locals[local.index()] = true;
+                }
+            }
+        }
+    }
+    locals
 }
 
 fn invalidate_mutated_call_locals<'db>(
@@ -296,41 +308,42 @@ fn writable_local_roots<'db>(
 }
 
 fn canonicalize_expr<'db>(
-    db: &'db dyn HirAnalysisDb,
-    instance: SemanticInstance<'db>,
+    cx: ConstCanonicalizationCx<'_, 'db>,
     expr: &SExpr<'db>,
     result_ty: TyId<'db>,
     locals: &LocalConstMap<'db>,
-    body: &SemanticBody<'db>,
-    mode: ConstCanonicalizationMode,
+    preserves_layout_index: bool,
 ) -> (SExpr<'db>, Option<SemConstId<'db>>) {
     if let SExpr::Const(SConst::Ref(cref)) = expr {
-        let Ok(value) = eval_const_ref(db, *cref) else {
+        let Ok(value) = eval_const_ref(cx.db, *cref) else {
             return (SExpr::Const(SConst::Ref(*cref)), None);
         };
-        let value = canonicalize_const_value(db, instance, value);
-        let runtime = reify_runtime_const_for_ty(db, instance, result_ty, value);
+        let value = canonicalize_const_value(cx.db, cx.instance, value);
+        let runtime = reify_runtime_const_for_ty(cx.db, cx.instance, result_ty, value);
         return (
             SExpr::Const(runtime.map_or(SConst::Value(value), |_| SConst::Ref(*cref))),
             runtime,
         );
     }
 
-    if matches!(mode, ConstCanonicalizationMode::Full) {
+    if matches!(cx.mode, ConstCanonicalizationMode::Full)
+        || matches!(cx.mode, ConstCanonicalizationMode::Admission)
+            && (matches!(expr, SExpr::Call { .. }) || !preserves_layout_index)
+    {
         let has_runtime_evidence = match expr {
             SExpr::Call { callee, .. } => callee
                 .key
-                .layout_bundle_signature(db)
+                .layout_bundle_signature(cx.db)
                 .has_runtime_evidence(),
             _ => false,
         };
         if !has_runtime_evidence
             && let Some(value) =
-                try_eval_expr_to_const(db, body, result_ty, expr, locals, synthetic())
-            && !matches!(value.value(db), SemConstValue::TypeLevel { .. })
+                try_eval_expr_to_const(cx.db, cx.body, result_ty, expr, locals, synthetic())
+            && !matches!(value.value(cx.db), SemConstValue::TypeLevel { .. })
         {
-            let value = canonicalize_const_value(db, instance, value);
-            if let Some(value) = reify_runtime_const_for_ty(db, instance, result_ty, value) {
+            let value = canonicalize_const_value(cx.db, cx.instance, value);
+            if let Some(value) = reify_runtime_const_for_ty(cx.db, cx.instance, result_ty, value) {
                 return (SExpr::Const(SConst::Value(value)), Some(value));
             }
         }
@@ -338,8 +351,8 @@ fn canonicalize_expr<'db>(
 
     match expr {
         SExpr::Const(SConst::Value(value)) => {
-            let value = canonicalize_const_value(db, instance, *value);
-            let runtime = reify_runtime_const_for_ty(db, instance, result_ty, value);
+            let value = canonicalize_const_value(cx.db, cx.instance, *value);
+            let runtime = reify_runtime_const_for_ty(cx.db, cx.instance, result_ty, value);
             let value = runtime.unwrap_or(value);
             (SExpr::Const(SConst::Value(value)), runtime)
         }

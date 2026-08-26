@@ -1,8 +1,11 @@
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        NBorrowRoot, NEffectArg, NEffectArgValue, NOperand, NSPlace, NSPlaceRoot, ReadMode,
-        SLocalId, SemanticLocalKind, borrowck::NLocalOrigin,
+        SLocalId, SemanticLocalKind,
+        normalized::{
+            NEffectArg, NEffectArgValue, NOperand as SemanticOperand, NPlace, NPlaceBase,
+            NRootKind, ReadMode,
+        },
     },
     ty::ty_def::TyId,
 };
@@ -19,10 +22,11 @@ use super::{
         CompiledEffectValuePlan, CompiledMaterializationPlan, CompiledValuePassPlan,
     },
     classify::{
-        BodyEnv, InferClassCache, carrier_value_class, nonself_backing_value_place,
-        provider_root_space, runtime_class_for_direct_value_provider_in_env, snapshot_source_place,
+        BodyEnv, InferClassCache, carrier_value_class, provider_root_space,
+        runtime_class_for_direct_value_provider_in_env,
     },
     realize::SelectedRuntimeArg,
+    semantic_body::RuntimeOperand,
     source::{RuntimeSourceMode, RuntimeSourceQuery, SemanticPlaceValueSource},
     type_info::{effect_handle_transport_class_for_ty_in_env, stored_class_for_ty_in_env},
 };
@@ -31,6 +35,7 @@ pub(super) struct RuntimeArgSelector<'a, 'carriers, 'roots, 'cache, 'db> {
     env: BodyEnv<'a, 'db>,
     carriers: &'carriers [RuntimeCarrier<'db>],
     source_mode: RuntimeSourceMode<'roots, 'db>,
+    concrete_value_classes: Option<&'roots [Option<RuntimeClass<'db>>]>,
     class_cache: Option<&'cache mut InferClassCache<'db>>,
 }
 
@@ -44,6 +49,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             env,
             carriers,
             source_mode: RuntimeSourceMode::Abstract,
+            concrete_value_classes: None,
             class_cache,
         }
     }
@@ -53,6 +59,14 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         roots: &'roots [crate::runtime::RuntimeLocalRoot<'db>],
     ) -> Self {
         self.source_mode = RuntimeSourceMode::Concrete(roots);
+        self
+    }
+
+    pub(super) fn with_concrete_value_classes(
+        mut self,
+        classes: &'roots [Option<RuntimeClass<'db>>],
+    ) -> Self {
+        self.concrete_value_classes = Some(classes);
         self
     }
 
@@ -67,16 +81,16 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         self.select_actual_operand_value(local, copy_operand(local))
     }
 
-    pub(super) fn selected_materialized_value(
+    pub(super) fn selected_materialized_operand(
         &mut self,
-        local: SLocalId,
+        operand: RuntimeOperand,
     ) -> Option<SelectedRuntimeArg<'db>> {
-        self.select_materialized_operand_value(local, copy_operand(local))
+        self.select_materialized_operand_value(operand.local, operand)
     }
 
     pub(super) fn selected_call_inputs(
         &mut self,
-        args: &[NOperand],
+        args: &[SemanticOperand],
         effect_args: &[NEffectArg<'db>],
         plan: &CompiledCallInputPlan<'db>,
     ) -> Vec<SelectedRuntimeArg<'db>> {
@@ -84,14 +98,14 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             args.len(),
             plan.param_plans.len(),
             "runtime call arg count mismatch during value evaluation: caller={:?} args={args:?} plans={:?}",
-            self.env.body().owner.key(self.env.db()),
+            self.env.body().owner().key(self.env.db()),
             plan.param_plans,
         );
         assert_eq!(
             effect_args.len(),
             plan.effect_plans.len(),
             "runtime effect arg count mismatch during value evaluation: caller={:?} effect_args={effect_args:?} plans={:?}",
-            self.env.body().owner.key(self.env.db()),
+            self.env.body().owner().key(self.env.db()),
             plan.effect_plans,
         );
         let mut selected = self.selected_param_inputs(args, &plan.param_plans);
@@ -106,24 +120,29 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
 
     pub(super) fn selected_param_inputs(
         &mut self,
-        args: &[NOperand],
+        args: &[SemanticOperand],
         plans: &[CompiledValuePassPlan<'db>],
     ) -> Vec<SelectedRuntimeArg<'db>> {
         assert_eq!(
             args.len(),
             plans.len(),
             "runtime call arg count mismatch during param evaluation: caller={:?} args={args:?} plans={plans:?}",
-            self.env.body().owner.key(self.env.db()),
+            self.env.body().owner().key(self.env.db()),
         );
         args.iter()
             .zip(plans.iter())
-            .filter_map(|(arg, plan)| self.selected_value_pass_plan(*arg, plan))
+            .filter_map(|(arg, plan)| {
+                self.env
+                    .body()
+                    .runtime_operand(*arg)
+                    .and_then(|arg| self.selected_value_pass_plan(arg, plan))
+            })
             .collect()
     }
 
     pub(super) fn selected_semantic_operand_for_boundary(
         &mut self,
-        arg: NOperand,
+        arg: RuntimeOperand,
         boundary: &RuntimeBoundarySpec<'db>,
     ) -> SelectedRuntimeArg<'db> {
         let local = arg.local;
@@ -148,7 +167,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                 .unwrap_or_else(|| {
                     panic!(
                         "semantic operand boundary has no runtime use plan: owner={:?}; arg={arg:?}; boundary={boundary:?}",
-                        self.env.body().owner.key(self.env.db()).owner(self.env.db()),
+                        self.env.body().owner().key(self.env.db()).owner(self.env.db()),
                     )
                 }),
         }
@@ -156,15 +175,15 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
 
     pub(super) fn selected_semantic_operand_for_class(
         &mut self,
-        arg: NOperand,
+        arg: RuntimeOperand,
         target: &RuntimeClass<'db>,
     ) -> SelectedRuntimeArg<'db> {
         self.try_selected_semantic_operand_for_class(arg, target)
             .unwrap_or_else(|| {
                 panic!(
                     "semantic operand has no lowerable runtime source for class: owner={:?}; arg={arg:?}; target={target:?}; local={:?}; carrier={:?}; source_mode={:?}",
-                    self.env.body().owner.key(self.env.db()).owner(self.env.db()),
-                    self.env.body().locals.get(arg.local.index()),
+                    self.env.body().owner().key(self.env.db()).owner(self.env.db()),
+                    self.env.body().local(arg.local),
                     self.carriers.get(arg.local.index()),
                     self.source_mode,
                 )
@@ -173,18 +192,27 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
 
     fn try_selected_semantic_operand_for_class(
         &mut self,
-        arg: NOperand,
+        arg: RuntimeOperand,
         target: &RuntimeClass<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
         let local = arg.local;
+        if self.operand_value_class(arg).as_ref() == Some(target) {
+            return Some(SelectedRuntimeArg::semantic_operand(arg, target.clone()));
+        }
+        if target.is_runtime_zst(self.env.db()) {
+            return Some(SelectedRuntimeArg::placeholder(
+                self.env.body().local(local)?.ty,
+                target.clone(),
+            ));
+        }
         if matches!(target, RuntimeClass::AggregateValue { .. })
             && self.env.boundary_source_transport_sensitive(local)
             && let Some(actual) = self
                 .env
-                .actual_aggregate_class_for_source(self.carriers, local)
+                .actual_aggregate_class_for_operand(self.carriers, arg)
         {
             return Some(SelectedRuntimeArg::aggregate_from_runtime_source(
-                local, actual,
+                arg, actual,
             ));
         }
         if !target.is_transport()
@@ -196,7 +224,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             && effect_handle_transport_class_for_ty_in_env(
                 self.env.db(),
                 self.env.type_env(),
-                self.env.body().locals.get(local.index())?.ty,
+                self.env.body().local(local)?.ty,
             )
             .is_some()
             && self
@@ -230,7 +258,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
 
     pub(super) fn selected_value_pass_plan(
         &mut self,
-        arg: NOperand,
+        arg: RuntimeOperand,
         plan: &CompiledValuePassPlan<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
         let local = arg.local;
@@ -244,28 +272,54 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                 Some(self.selected_semantic_operand_for_class(arg, exact))
             }
             CompiledValuePassPlan::ExactShapeAggregate(exact) => self
-                .select_actual_aggregate_value(local)
+                .select_actual_aggregate_value(arg)
                 .or_else(|| Some(self.selected_semantic_operand_for_class(arg, exact))),
             CompiledValuePassPlan::ExactShapeRefLike(boundary) => self
-                .select_exact_shape_ref_like_value(local, boundary)
+                .select_operand_boundary_compatible_value(arg, boundary)
+                .or_else(|| self.select_exact_shape_ref_like_value(local, boundary))
                 .or_else(|| self.select_effect_handle_operand_for_boundary(arg, boundary))
                 .or_else(|| self.exact_shape_ref_like_placeholder(local, boundary)),
             CompiledValuePassPlan::ReadOnlyView { value, borrow } => self
-                .select_free_boundary_compatible_value(local, borrow)
-                .or_else(|| self.select_value_view_arg(local, arg, value))
+                .select_operand_boundary_compatible_value(arg, borrow)
+                .or_else(|| self.select_free_boundary_compatible_value(local, borrow))
+                .or_else(|| self.select_value_view_arg(arg, value))
                 .or_else(|| self.select_materializable_semantic_value(arg, borrow)),
             CompiledValuePassPlan::BorrowLike(boundary) => {
-                if let Some(selected) = self.select_boundary_compatible_value(local, boundary) {
-                    return Some(selected);
-                }
                 if let Some(selected) =
                     self.select_effect_handle_operand_for_boundary(arg, boundary)
                 {
                     return Some(selected);
                 }
+                if let Some(selected) = self.select_operand_boundary_compatible_value(arg, boundary)
+                {
+                    return Some(selected);
+                }
+                if let Some(selected) = self.select_boundary_compatible_value(local, boundary) {
+                    return Some(selected);
+                }
                 self.select_materializable_semantic_value(arg, boundary)
             }
         }
+    }
+
+    fn select_operand_boundary_compatible_value(
+        &mut self,
+        arg: RuntimeOperand,
+        boundary: &StagedBoundary<'db>,
+    ) -> Option<SelectedRuntimeArg<'db>> {
+        let boundary = self.specialized_boundary(arg.local, boundary);
+        if let Some(class) = self.concrete_operand_value_class(arg)
+            && carrier_value_class(arg.local, self.carriers).as_ref() == Some(&class)
+            && BoundaryMatcher::class_satisfies_boundary(&class, &boundary)
+        {
+            return Some(SelectedRuntimeArg::semantic_operand(arg, class));
+        }
+        let (place, semantic_ty) = self.sources().semantic_place_address_source(arg)?;
+        let class = self
+            .env
+            .normalized_place_address_class(self.carriers, &place)?;
+        BoundaryMatcher::class_satisfies_boundary(&class, &boundary)
+            .then(|| SelectedRuntimeArg::place_addr(place, semantic_ty, class))
     }
 
     pub(super) fn selected_value_for_local(
@@ -278,12 +332,11 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
 
     fn select_value_view_arg(
         &mut self,
-        local: SLocalId,
-        arg: NOperand,
+        arg: RuntimeOperand,
         value: &RuntimeClass<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
         if matches!(value, RuntimeClass::AggregateValue { .. })
-            && let Some(selected) = self.select_actual_aggregate_value(local)
+            && let Some(selected) = self.select_actual_aggregate_value(arg)
         {
             return Some(selected);
         }
@@ -293,7 +346,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
     fn select_materialized_operand_value(
         &mut self,
         local: SLocalId,
-        arg: NOperand,
+        arg: RuntimeOperand,
     ) -> Option<SelectedRuntimeArg<'db>> {
         match self.env.materialization_plan(local)? {
             CompiledMaterializationPlan::Erased => None,
@@ -302,10 +355,10 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                 .semantic_value_class(self.carriers, local)
                 .and_then(|class| self.try_selected_semantic_operand_for_class(arg, &class)),
             CompiledMaterializationPlan::AggregateFromSource => {
-                self.select_actual_aggregate_value(local)
+                self.select_actual_aggregate_value(arg)
             }
             CompiledMaterializationPlan::AggregateFromSourceOrFallback(fallback) => self
-                .select_actual_aggregate_value(local)
+                .select_actual_aggregate_value(arg)
                 .or_else(|| Some(self.selected_semantic_operand_for_class(arg, fallback))),
         }
     }
@@ -315,14 +368,15 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         local: SLocalId,
         target: &RuntimeClass<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
-        let local_data = self.env.body().locals.get(local.index())?;
+        let local_data = self.env.body().local(local)?;
         if !matches!(
-            (&local_data.facts.interface, &local_data.facts.origin),
-            (
-                SemanticLocalKind::DirectValue,
-                NLocalOrigin::SelfRooted | NLocalOrigin::AliasedPlace
-            )
-        ) {
+            local_data.role,
+            hir::analysis::semantic::SemanticLocalRole::DirectValue { .. }
+        ) || local_data
+            .role
+            .root_provider(&self.env.body().source.locals)
+            .is_some()
+        {
             return None;
         }
         let current = self.env.semantic_value_class(self.carriers, local)?;
@@ -360,13 +414,8 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         local: SLocalId,
         materialized_class: &RuntimeClass<'db>,
     ) -> bool {
-        let Some(local_data) = self.env.body().locals.get(local.index()) else {
-            return false;
-        };
-        local_data
-            .backing_place()
-            .is_some_and(|place| self.sources().place_is_lowerable(place))
-            || self.direct_value_transport_place_is_lowerable(local, materialized_class)
+        self.env.body().local(local).is_some()
+            && self.direct_value_transport_place_is_lowerable(local, materialized_class)
     }
 
     fn direct_value_transport_place_is_lowerable(
@@ -388,10 +437,10 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
 
     fn select_semantic_place_value_for_class(
         &self,
-        arg: NOperand,
+        arg: RuntimeOperand,
         target: &RuntimeClass<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
-        match self.sources().semantic_place_value_source(arg.local)? {
+        match self.sources().semantic_place_value_source(arg)? {
             SemanticPlaceValueSource::PlaceValue { place, semantic_ty } => Some(
                 SelectedRuntimeArg::place_load(place, semantic_ty, target.clone()),
             ),
@@ -403,22 +452,12 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
 
     fn select_semantic_place_address_for_class(
         &self,
-        arg: NOperand,
+        arg: RuntimeOperand,
         target: &RuntimeClass<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
-        let local_data = self.env.body().locals.get(arg.local.index())?;
-        if let Some(place) = nonself_backing_value_place(self.env.body(), arg.local)
-            && let Some(arg) = self.select_place_address_if_satisfies(
-                place.clone(),
-                local_data.ty,
-                &RuntimeBoundarySpec::ExactTransport(target.clone()),
-                true,
-            )
-        {
-            return Some(arg);
-        }
+        let local_data = self.env.body().local(arg.local)?;
         if matches!(
-            local_data.facts.interface,
+            local_data.role.kind(),
             SemanticLocalKind::DirectValue
                 | SemanticLocalKind::PlaceCarrier
                 | SemanticLocalKind::PlaceBoundValue
@@ -438,8 +477,11 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
     fn select_actual_operand_value(
         &mut self,
         local: SLocalId,
-        arg: NOperand,
+        arg: RuntimeOperand,
     ) -> Option<SelectedRuntimeArg<'db>> {
+        if let Some(class) = self.operand_value_class(arg) {
+            return Some(SelectedRuntimeArg::semantic_operand(arg, class));
+        }
         carrier_value_class(local, self.carriers)
             .map(|class| SelectedRuntimeArg::local_value(local, class))
             .or_else(|| {
@@ -461,11 +503,11 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
 
     fn select_actual_aggregate_value(
         &mut self,
-        local: SLocalId,
+        operand: RuntimeOperand,
     ) -> Option<SelectedRuntimeArg<'db>> {
         self.env
-            .actual_aggregate_class_for_source(self.carriers, local)
-            .map(|class| SelectedRuntimeArg::aggregate_from_runtime_source(local, class))
+            .actual_aggregate_class_for_operand(self.carriers, operand)
+            .map(|class| SelectedRuntimeArg::aggregate_from_runtime_source(operand, class))
     }
 
     fn select_boundary_compatible_value(
@@ -500,31 +542,32 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         boundary: &RuntimeBoundarySpec<'db>,
         allow_new_place_address: bool,
     ) -> Option<SelectedRuntimeArg<'db>> {
-        let local_data = self.env.body().locals.get(local.index())?;
-        let semantic_ty = local_data.ty;
+        let local_data = self.env.body().local(local)?;
         if let Some(class) = carrier_value_class(local, self.carriers)
             && BoundaryMatcher::class_satisfies_boundary(&class, boundary)
         {
             return Some(SelectedRuntimeArg::local_value(local, class));
         }
         if let Some(value_class) = self.env.semantic_value_class(self.carriers, local) {
-            if let Some(provider) = local_data.facts.origin.root_provider()
+            if let Some(provider) = local_data
+                .role
+                .root_provider(&self.env.body().source.locals)
                 && let Some(root_class) = self
                     .env
-                    .actual_runtime_visible_root_provider_class(self.carriers, provider)
+                    .actual_runtime_visible_root_provider_class(self.carriers, &provider)
                     .map(|(_, class)| class)
                     .or_else(|| {
                         runtime_class_for_direct_value_provider_in_env(
                             self.env.db(),
                             self.env.type_env(),
-                            provider,
+                            &provider,
                         )
                     })
             {
                 let class = crate::runtime::place::ref_class_for_place_result(
                     &root_class,
                     &value_class,
-                    provider_root_space(provider, &root_class),
+                    provider_root_space(&provider, &root_class),
                     false,
                 );
                 if BoundaryMatcher::class_satisfies_boundary(&class, boundary) {
@@ -532,8 +575,9 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                 }
             }
             let cx = self.env.with_carriers(self.carriers);
-            if allow_new_place_address
-                && self.sources().local_has_existing_runtime_root(local)
+            let sources = self.sources();
+            if (allow_new_place_address || sources.local_has_concrete_runtime_root(local))
+                && sources.local_has_existing_runtime_root(local)
                 && let Some(root_class) = super::infer::local_place_root_class(
                     cx,
                     local,
@@ -548,47 +592,15 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                     false,
                 );
                 if BoundaryMatcher::class_satisfies_boundary(&class, boundary) {
-                    return Some(SelectedRuntimeArg::handle_like_value(local, class));
+                    return Some(SelectedRuntimeArg::semantic_place_addr(
+                        local,
+                        local_data.ty,
+                        class,
+                    ));
                 }
             }
         }
-
-        [
-            local_data.backing_place().cloned(),
-            snapshot_source_place(self.env.body(), local).cloned(),
-        ]
-        .into_iter()
-        .flatten()
-        .find_map(|place| {
-            self.select_place_address_if_satisfies(
-                place,
-                semantic_ty,
-                boundary,
-                allow_new_place_address,
-            )
-        })
-    }
-
-    fn select_place_address_if_satisfies(
-        &self,
-        place: NSPlace<'db>,
-        semantic_ty: TyId<'db>,
-        boundary: &RuntimeBoundarySpec<'db>,
-        allow_new_place_address: bool,
-    ) -> Option<SelectedRuntimeArg<'db>> {
-        let sources = self.sources();
-        if !(if allow_new_place_address {
-            sources.place_is_lowerable(&place)
-        } else {
-            sources.place_has_existing_runtime_root(&place)
-        }) {
-            return None;
-        }
-        let class = self
-            .env
-            .normalized_place_address_class(self.carriers, &place)?;
-        BoundaryMatcher::class_satisfies_boundary(&class, boundary)
-            .then(|| SelectedRuntimeArg::place_addr(place, semantic_ty, class))
+        None
     }
 
     fn select_exact_shape_ref_like_value(
@@ -617,44 +629,47 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                 "exact-shape ref-like pass plan specialized to non-exact-shape boundary: owner={:?}; local={local:?}; boundary={boundary:?}",
                 self.env
                     .body()
-                    .owner
+                    .owner()
                     .key(self.env.db())
                     .owner(self.env.db()),
             );
         };
         Some(SelectedRuntimeArg::placeholder(
-            self.env.body().locals[local.index()].ty,
+            self.env.body().source.locals[local.index()].ty,
             class,
         ))
     }
 
     fn select_effect_handle_operand_for_boundary(
         &mut self,
-        arg: NOperand,
+        arg: RuntimeOperand,
         boundary: &StagedBoundary<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
-        let semantic_ty = self.env.body().locals.get(arg.local.index())?.ty;
+        let semantic_ty = self.env.body().local(arg.local)?.ty;
         let transport = effect_handle_transport_class_for_ty_in_env(
             self.env.db(),
             self.env.type_env(),
             semantic_ty,
         )?;
+        let ordinary = stored_class_for_ty_in_env(self.env.db(), self.env.type_env(), semantic_ty);
         let boundary = self.specialized_boundary(arg.local, boundary);
         if BoundaryMatcher::class_satisfies_boundary(&transport, &boundary) {
-            return Some(SelectedRuntimeArg::semantic_operand(arg, transport));
+            if arg.value.is_some() && self.operand_value_class(arg).as_ref() == Some(&ordinary) {
+                return Some(SelectedRuntimeArg::semantic_operand(arg, transport));
+            }
+            return Some(SelectedRuntimeArg::handle_like_value(arg.local, transport));
         }
-        let ordinary = stored_class_for_ty_in_env(self.env.db(), self.env.type_env(), semantic_ty);
         let materialization = RuntimeValueMaterialization::for_boundary(&boundary)?;
         let target = materialization.class();
         target
             .aggregate_value_class()
             .is_some_and(|target| target.shares_runtime_rep_with(self.env.db(), &ordinary))
-            .then(|| SelectedRuntimeArg::semantic_operand(arg, materialization.class()))
+            .then(|| SelectedRuntimeArg::handle_like_value(arg.local, materialization.class()))
     }
 
     fn select_place_for_boundary(
         &self,
-        place: NSPlace<'db>,
+        place: NPlace<'db>,
         semantic_ty: TyId<'db>,
         boundary: RuntimeBoundarySpec<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
@@ -701,7 +716,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
 
     fn placeholder_arg_for_unlowerable_place(
         &self,
-        place: NSPlace<'db>,
+        place: NPlace<'db>,
         semantic_ty: TyId<'db>,
         boundary: &RuntimeBoundarySpec<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
@@ -731,7 +746,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                     "compiled effect arg source kind mismatch: owner={:?}; arg={arg:?}; plan={plan:?}",
                     self.env
                         .body()
-                        .owner
+                        .owner()
                         .key(self.env.db())
                         .owner(self.env.db()),
                 )
@@ -741,9 +756,10 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
 
     fn select_value_effect_arg(
         &mut self,
-        value: NOperand,
+        value: SemanticOperand,
         plan: &CompiledEffectValuePlan<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
+        let value = self.env.body().runtime_operand(value)?;
         match plan {
             CompiledEffectValuePlan::ErasedPlainValue => {
                 self.select_materialized_operand_value(value.local, value)
@@ -754,7 +770,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                 .or_else(|| self.select_actual_operand_value(value.local, value))
                 .or_else(|| {
                     Some(SelectedRuntimeArg::placeholder(
-                        self.env.body().locals[value.local.index()].ty,
+                        self.env.body().source.locals[value.local.index()].ty,
                         fallback.clone(),
                     ))
                 }),
@@ -763,6 +779,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                 allow_materialize,
             } => self
                 .select_boundary_compatible_value(value.local, boundary)
+                .or_else(|| self.select_effect_handle_operand_for_boundary(value, boundary))
                 .or_else(|| {
                     allow_materialize
                         .then(|| self.select_materializable_semantic_value(value, boundary))
@@ -773,7 +790,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
 
     fn select_materializable_semantic_value(
         &mut self,
-        arg: NOperand,
+        arg: RuntimeOperand,
         boundary: &StagedBoundary<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
         if !self
@@ -788,11 +805,11 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
 
     fn select_materialized_semantic_value(
         &self,
-        arg: NOperand,
+        arg: RuntimeOperand,
         boundary: &RuntimeBoundarySpec<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
         let materialization = RuntimeValueMaterialization::for_boundary(boundary)?;
-        let selected = match self.sources().semantic_place_value_source(arg.local) {
+        let selected = match self.sources().semantic_place_value_source(arg) {
             Some(SemanticPlaceValueSource::PlaceValue { place, semantic_ty }) => {
                 SelectedRuntimeArg::materialized_place(place, semantic_ty, materialization)
             }
@@ -813,7 +830,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
     fn select_place_effect_arg(
         &self,
         arg: &NEffectArg<'db>,
-        place: &NSPlace<'db>,
+        place: &NPlace<'db>,
         plan: &CompiledEffectPlacePlan<'db>,
     ) -> SelectedRuntimeArg<'db> {
         match plan {
@@ -831,7 +848,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
     fn select_effect_place_for_boundary(
         &self,
         arg: &NEffectArg<'db>,
-        place: &NSPlace<'db>,
+        place: &NPlace<'db>,
         boundary: RuntimeBoundarySpec<'db>,
     ) -> SelectedRuntimeArg<'db> {
         if let Some(selected) = self.select_effect_handle_value_for_boundary(place, &boundary) {
@@ -845,27 +862,32 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         .unwrap_or_else(|| {
             panic!(
                 "effect place arg boundary has no runtime use plan: owner={:?}; arg={arg:?}; boundary={boundary:?}",
-                self.env.body().owner.key(self.env.db()).owner(self.env.db()),
+                self.env.body().owner().key(self.env.db()).owner(self.env.db()),
             )
         })
     }
 
     fn select_effect_handle_value_for_boundary(
         &self,
-        place: &NSPlace<'db>,
+        place: &NPlace<'db>,
         boundary: &RuntimeBoundarySpec<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
         if !place.path.is_empty() {
             return None;
         }
-        let local = match place.root {
-            NSPlaceRoot::CarrierDerefLocal(local) => local,
-            NSPlaceRoot::Root(root) => match self.env.body().root(root)? {
-                NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local } => *local,
-                NBorrowRoot::Provider { .. } => return None,
+        let local = match place.base {
+            NPlaceBase::CapabilityTarget { carrier } => self.env.source_local(carrier)?,
+            NPlaceBase::Root(root) => match &self.env.body().normalized.root(root)?.kind {
+                NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
+                    self.env.body().root_source(root)?
+                }
+                NRootKind::CapabilityRepresentation { carrier } => {
+                    self.env.source_local(*carrier)?
+                }
+                NRootKind::Provider { .. } => return None,
             },
         };
-        let semantic_ty = self.env.body().locals.get(local.index())?.ty;
+        let semantic_ty = self.env.body().local(local)?.ty;
         let transport = effect_handle_transport_class_for_ty_in_env(
             self.env.db(),
             self.env.type_env(),
@@ -901,11 +923,24 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         .boundary
         .into_owned()
     }
+
+    fn operand_value_class(&self, arg: RuntimeOperand) -> Option<RuntimeClass<'db>> {
+        if self.concrete_value_classes.is_some() {
+            return self.concrete_operand_value_class(arg);
+        }
+        self.env.runtime_operand_value_class(self.carriers, arg)
+    }
+
+    fn concrete_operand_value_class(&self, arg: RuntimeOperand) -> Option<RuntimeClass<'db>> {
+        self.concrete_value_classes?
+            .get(arg.value?.index())?
+            .clone()
+    }
 }
 
 enum EffectArgInput<'arg, 'db> {
-    Value(NOperand),
-    Place(&'arg NSPlace<'db>),
+    Value(SemanticOperand),
+    Place(&'arg NPlace<'db>),
 }
 
 impl<'arg, 'db> EffectArgInput<'arg, 'db> {
@@ -917,9 +952,10 @@ impl<'arg, 'db> EffectArgInput<'arg, 'db> {
     }
 }
 
-fn copy_operand(local: SLocalId) -> NOperand {
-    NOperand {
+fn copy_operand(local: SLocalId) -> RuntimeOperand {
+    RuntimeOperand {
         local,
+        value: None,
         origin: None,
         mode: ReadMode::Copy,
     }

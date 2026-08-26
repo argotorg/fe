@@ -44,29 +44,29 @@ func private %match_bool_tuple(v0.constref<@layout_1>) -> i8 {
         jump block1;
 
     block1:
+        v2.objref<@layout_1> = obj.alloc @layout_1;
+        obj.init.const v2 v0;
+        v3.@layout_1 = obj.load v2;
         jump block3;
 
     block2:
-        v2.i8 = phi (3.i8 block7) (1.i8 block8) (2.i8 block10) (0.i8 block11);
-        return v2;
+        v4.i8 = phi (3.i8 block7) (1.i8 block8) (2.i8 block10) (0.i8 block11);
+        return v4;
 
     block3:
-        v5.constref<i1> = const.proj v0 1.i256;
-        v6.i1 = const.load v5;
-        v8.i1 = eq v6 1.i1;
-        br v8 block4 block6;
+        v7.i1 = extract_value v3 1.i256;
+        v9.i1 = eq v7 1.i1;
+        br v9 block4 block6;
 
     block4:
-        v11.constref<i1> = const.proj v0 0.i256;
-        v12.i1 = const.load v11;
+        v12.i1 = extract_value v3 0.i256;
         v13.i1 = eq v12 1.i1;
         br v13 block7 block9;
 
     block5:
-        v15.constref<i1> = const.proj v0 0.i256;
-        v16.i1 = const.load v15;
-        v17.i1 = eq v16 1.i1;
-        br v17 block10 block12;
+        v15.i1 = extract_value v3 0.i256;
+        v16.i1 = eq v15 1.i1;
+        br v16 block10 block12;
 
     block6:
         jump block5;
@@ -95,21 +95,22 @@ func private %match_mixed_tuple(v0.constref<@layout_2>) -> i8 {
         jump block1;
 
     block1:
+        v2.objref<@layout_2> = obj.alloc @layout_2;
+        obj.init.const v2 v0;
+        v3.@layout_2 = obj.load v2;
         jump block3;
 
     block2:
-        v2.i8 = phi (0.i8 block5) (10.i8 block7) (11.i8 block8) (12.i8 block9);
-        return v2;
+        v4.i8 = phi (0.i8 block5) (10.i8 block7) (11.i8 block8) (12.i8 block9);
+        return v4;
 
     block3:
-        v5.constref<i1> = const.proj v0 0.i256;
-        v6.i1 = const.load v5;
-        v8.i1 = eq v6 1.i1;
-        br v8 block4 block6;
+        v7.i1 = extract_value v3 0.i256;
+        v9.i1 = eq v7 1.i1;
+        br v9 block4 block6;
 
     block4:
-        v11.constref<i8> = const.proj v0 1.i256;
-        v12.i8 = const.load v11;
+        v12.i8 = extract_value v3 1.i256;
         v14.i1 = eq v12 0.i8;
         br v14 block7 block10;
 
@@ -141,17 +142,19 @@ func private %match_tuple_with_wildcard(v0.constref<@layout_1>) -> i8 {
         jump block1;
 
     block1:
+        v2.objref<@layout_1> = obj.alloc @layout_1;
+        obj.init.const v2 v0;
+        v3.@layout_1 = obj.load v2;
         jump block3;
 
     block2:
-        v2.i8 = phi (1.i8 block4) (0.i8 block5);
-        return v2;
+        v4.i8 = phi (1.i8 block4) (0.i8 block5);
+        return v4;
 
     block3:
-        v5.constref<i1> = const.proj v0 0.i256;
-        v6.i1 = const.load v5;
-        v8.i1 = eq v6 1.i1;
-        br v8 block4 block6;
+        v7.i1 = extract_value v3 0.i256;
+        v9.i1 = eq v7 1.i1;
+        br v9 block4 block6;
 
     block4:
         jump block2;

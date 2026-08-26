@@ -7,7 +7,10 @@ use rustc_hash::FxHashSet;
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        NExpr, NSStmtKind, NSTerminatorKind, NormalizedSemanticBody, SBlockId, SConst, SLocalId,
+        SConst, SLocalId, SemanticBody,
+        normalized::{
+            NBlockId, NExpr, NLayoutPlan, NStatementKind, NTerminatorKind, NormalizedBody,
+        },
     },
     ty::{
         CallableLayoutParamPort, CallableLayoutPort, LayoutBundleComponent,
@@ -39,7 +42,7 @@ fn operand_map_ty<'db>(
 
 fn verify_projection_indices(
     db: &dyn HirAnalysisDb,
-    normalized: &NormalizedSemanticBody<'_>,
+    source: &SemanticBody<'_>,
     indices: &[LayoutEvidenceIndex],
     dimensions: &[usize],
 ) -> Result<(), LayoutEvidenceVerifyError> {
@@ -52,7 +55,7 @@ fn verify_projection_indices(
                 return Err(LayoutEvidenceVerifyError::InvalidProjection);
             }
             LayoutEvidenceIndex::Dynamic(index)
-                if !normalized.local(*index).is_some_and(|local| {
+                if !source.local(*index).is_some_and(|local| {
                     matches!(
                         local.ty.data(db),
                         TyData::TyBase(TyBase::Prim(PrimTy::Usize))
@@ -69,7 +72,7 @@ fn verify_projection_indices(
 
 fn expr_map_ty<'db>(
     db: &'db dyn HirAnalysisDb,
-    normalized: &NormalizedSemanticBody<'db>,
+    source: &SemanticBody<'db>,
     body: &LayoutEvidenceBody<'db>,
     expr: &LayoutEvidenceExpr<'db>,
     call_output: Option<&'db LayoutBundleInterface<'db>>,
@@ -78,9 +81,12 @@ fn expr_map_ty<'db>(
 ) -> Result<LayoutMapTy<'db>, LayoutEvidenceVerifyError> {
     match expr {
         LayoutEvidenceExpr::Use(operand) => operand_map_ty(body, operand),
-        LayoutEvidenceExpr::Project { source, indices } => {
-            let source_ty = operand_map_ty(body, source)?;
-            verify_projection_indices(db, normalized, indices, &source_ty.dimensions)?;
+        LayoutEvidenceExpr::Project {
+            source: operand,
+            indices,
+        } => {
+            let source_ty = operand_map_ty(body, operand)?;
+            verify_projection_indices(db, source, indices, &source_ty.dimensions)?;
             source_ty
                 .projected(indices.len())
                 .ok_or(LayoutEvidenceVerifyError::MapTypeMismatch)
@@ -89,11 +95,9 @@ fn expr_map_ty<'db>(
             let Some(first) = elements.first() else {
                 return Err(LayoutEvidenceVerifyError::EmptyArray);
             };
-            let element_ty =
-                expr_map_ty(db, normalized, body, first, call_output, block, statement)?;
+            let element_ty = expr_map_ty(db, source, body, first, call_output, block, statement)?;
             for element in &elements[1..] {
-                let actual =
-                    expr_map_ty(db, normalized, body, element, call_output, block, statement)?;
+                let actual = expr_map_ty(db, source, body, element, call_output, block, statement)?;
                 if actual != element_ty {
                     return Err(LayoutEvidenceVerifyError::MapTypeMismatch);
                 }
@@ -107,8 +111,7 @@ fn expr_map_ty<'db>(
             })
         }
         LayoutEvidenceExpr::Repeat { len, element } => {
-            let element_ty =
-                expr_map_ty(db, normalized, body, element, call_output, block, statement)?;
+            let element_ty = expr_map_ty(db, source, body, element, call_output, block, statement)?;
             if *len == 0 {
                 return Err(LayoutEvidenceVerifyError::MapTypeMismatch);
             }
@@ -121,13 +124,13 @@ fn expr_map_ty<'db>(
             })
         }
         LayoutEvidenceExpr::Update {
-            source,
+            source: operand,
             indices,
             value,
         } => {
-            let source_ty = operand_map_ty(body, source)?;
-            verify_projection_indices(db, normalized, indices, &source_ty.dimensions)?;
-            let value_ty = expr_map_ty(db, normalized, body, value, call_output, block, statement)?;
+            let source_ty = operand_map_ty(body, operand)?;
+            verify_projection_indices(db, source, indices, &source_ty.dimensions)?;
+            let value_ty = expr_map_ty(db, source, body, value, call_output, block, statement)?;
             if source_ty.projected(indices.len()).as_ref() != Some(&value_ty) {
                 return Err(LayoutEvidenceVerifyError::MapTypeMismatch);
             }
@@ -191,7 +194,7 @@ fn expr_inputs(
 
 fn const_binding_candidates<'db>(
     db: &'db dyn HirAnalysisDb,
-    normalized: &NormalizedSemanticBody<'db>,
+    source: &SemanticBody<'db>,
     body: &LayoutEvidenceBody<'db>,
     param: TyId<'db>,
 ) -> (Vec<LayoutEvidenceConstBinding<'db>>, bool) {
@@ -199,7 +202,7 @@ fn const_binding_candidates<'db>(
         |component: &LayoutBundleComponent<'db>| component.supplied_const_params.contains(&param);
     let mut candidates = Vec::new();
     let mut is_layout_dependency = false;
-    for (local_idx, local) in normalized.locals.iter().enumerate() {
+    for (local_idx, local) in source.locals.iter().enumerate() {
         let Some(origin) = local
             .source
             .and_then(|source| source.callable_input_origin(db))
@@ -255,24 +258,23 @@ fn const_binding_candidates<'db>(
 
 fn verify_const_bindings<'db>(
     db: &'db dyn HirAnalysisDb,
-    normalized: &NormalizedSemanticBody<'db>,
+    source: &SemanticBody<'db>,
     body: &LayoutEvidenceBody<'db>,
-    kind: &NSStmtKind<'db>,
+    kind: &NStatementKind<'db>,
     statement: &LayoutEvidenceStatement<'db>,
     block: usize,
     statement_idx: usize,
 ) -> Result<(), LayoutEvidenceVerifyError> {
     let uses = match kind {
-        NSStmtKind::Assign {
+        NStatementKind::Define {
             expr: NExpr::Const(SConst::Value(value)),
             ..
         } => layout_const_param_uses(db, *value),
-        NSStmtKind::Assign { .. } | NSStmtKind::Store { .. } => Vec::new(),
+        NStatementKind::Define { .. } | NStatementKind::Store { .. } => Vec::new(),
     };
     let mut expected = Vec::new();
     for param in uses {
-        let (candidates, is_layout_dependency) =
-            const_binding_candidates(db, normalized, body, param);
+        let (candidates, is_layout_dependency) = const_binding_candidates(db, source, body, param);
         match candidates.as_slice() {
             [candidate] if operand_map_ty(body, &candidate.value)?.rank() == 0 => {
                 expected.push(candidate.clone());
@@ -331,19 +333,11 @@ fn verify_const_bindings<'db>(
     Ok(())
 }
 
-fn block_successors(kind: &NSTerminatorKind<'_>) -> Vec<SBlockId> {
-    match kind {
-        NSTerminatorKind::Goto(target) => vec![*target],
-        NSTerminatorKind::Branch {
-            then_bb, else_bb, ..
-        } => vec![*then_bb, *else_bb],
-        NSTerminatorKind::MatchEnum { cases, default, .. } => cases
-            .iter()
-            .map(|(_, target)| *target)
-            .chain(*default)
-            .collect(),
-        NSTerminatorKind::Assert { .. } | NSTerminatorKind::Return(_) => Vec::new(),
-    }
+fn block_successors(kind: &NTerminatorKind<'_>) -> Vec<NBlockId> {
+    kind.successors()
+        .into_iter()
+        .map(|target| target.block)
+        .collect()
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -370,23 +364,32 @@ impl JoinSemiLattice for DefinedLocals {
 }
 
 struct DefinitionAnalysis<'a, 'db> {
-    normalized: &'a NormalizedSemanticBody<'db>,
+    normalized: &'a NormalizedBody<'db>,
+    layout_plan: &'a NLayoutPlan<'db>,
+    source: &'a SemanticBody<'db>,
     body: &'a LayoutEvidenceBody<'db>,
-    successors: SecondaryMap<SBlockId, Vec<SBlockId>>,
+    successors: SecondaryMap<NBlockId, Vec<NBlockId>>,
 }
 
 impl<'a, 'db> DefinitionAnalysis<'a, 'db> {
-    fn new(normalized: &'a NormalizedSemanticBody<'db>, body: &'a LayoutEvidenceBody<'db>) -> Self {
+    fn new(
+        normalized: &'a NormalizedBody<'db>,
+        layout_plan: &'a NLayoutPlan<'db>,
+        source: &'a SemanticBody<'db>,
+        body: &'a LayoutEvidenceBody<'db>,
+    ) -> Self {
         let mut successors = SecondaryMap::new();
         successors.resize(normalized.blocks.len());
         for (idx, block) in normalized.blocks.iter().enumerate() {
-            successors[SBlockId::new(idx)] = block_successors(&block.terminator.kind)
+            successors[NBlockId::new(idx)] = block_successors(&block.terminator.kind)
                 .into_iter()
                 .filter(|target| target.index() < normalized.blocks.len())
                 .collect();
         }
         Self {
             normalized,
+            layout_plan,
+            source,
             body,
             successors,
         }
@@ -394,7 +397,7 @@ impl<'a, 'db> DefinitionAnalysis<'a, 'db> {
 }
 
 impl ForwardCfgAnalysis for DefinitionAnalysis<'_, '_> {
-    type Block = SBlockId;
+    type Block = NBlockId;
     type State = DefinedLocals;
     type Error = Infallible;
 
@@ -403,7 +406,7 @@ impl ForwardCfgAnalysis for DefinitionAnalysis<'_, '_> {
     }
 
     fn seed_blocks(&self) -> Vec<Self::Block> {
-        vec![SBlockId::new(0)]
+        vec![self.normalized.entry]
     }
 
     fn bottom(&self) -> Self::State {
@@ -414,12 +417,12 @@ impl ForwardCfgAnalysis for DefinitionAnalysis<'_, '_> {
         &mut self,
         entry_states: &mut SecondaryMap<Self::Block, Self::State>,
     ) -> Result<(), Self::Error> {
-        let entry = &mut entry_states[SBlockId::new(0)];
+        let entry = &mut entry_states[self.normalized.entry];
         entry.reached = true;
         entry.evidence.extend(self.body.params.iter().copied());
         entry
             .semantic
-            .extend(self.normalized.entry_locals.iter().copied());
+            .extend(self.source.entry_locals.iter().copied());
         Ok(())
     }
 
@@ -429,17 +432,21 @@ impl ForwardCfgAnalysis for DefinitionAnalysis<'_, '_> {
         in_state: &Self::State,
     ) -> Result<Self::State, Self::Error> {
         let mut state = in_state.clone();
-        for statement in &self.normalized.blocks[block.index()].stmts {
-            state.evidence.extend(
-                self.body
-                    .statement(statement.id)
-                    .expect("statement identity set was verified")
-                    .assignments
-                    .iter()
-                    .map(|assignment| assignment.dst),
-            );
-            if let NSStmtKind::Assign { dst, .. } = statement.kind {
-                state.semantic.insert(dst);
+        for statement in &self.normalized.blocks[block.index()].statements {
+            if let Some(source) = statement.source {
+                state.evidence.extend(
+                    self.body
+                        .statement(source)
+                        .expect("statement identity set was verified")
+                        .assignments
+                        .iter()
+                        .map(|assignment| assignment.dst),
+                );
+            }
+            if let NStatementKind::Define { result, .. } = statement.kind
+                && let Some(local) = self.layout_plan.value_source(result)
+            {
+                state.semantic.insert(local);
             }
         }
         Ok(state)
@@ -482,26 +489,41 @@ fn verify_expr_definitions(
 }
 
 fn verify_definitions(
-    normalized: &NormalizedSemanticBody<'_>,
+    normalized: &NormalizedBody<'_>,
+    layout_plan: &NLayoutPlan<'_>,
+    source: &SemanticBody<'_>,
     body: &LayoutEvidenceBody<'_>,
 ) -> Result<(), LayoutEvidenceVerifyError> {
     if normalized.blocks.is_empty() {
         return Ok(());
     }
-    let entry_states = solve_forward_cfg(&mut DefinitionAnalysis::new(normalized, body));
+    let entry_states = solve_forward_cfg(&mut DefinitionAnalysis::new(
+        normalized,
+        layout_plan,
+        source,
+        body,
+    ));
     let unreachable = DefinedLocals {
         evidence: body.params.iter().copied().collect(),
-        semantic: normalized.entry_locals.iter().copied().collect(),
+        semantic: source.entry_locals.iter().copied().collect(),
         ..DefinedLocals::default()
     };
     for (block_idx, block) in normalized.blocks.iter().enumerate() {
-        let entry = &entry_states[SBlockId::new(block_idx)];
+        let entry = &entry_states[NBlockId::new(block_idx)];
         let entry = if entry.reached { entry } else { &unreachable };
         let mut defined_evidence = entry.evidence.clone();
         let mut defined_semantic = entry.semantic.clone();
-        for (statement_idx, normalized_statement) in block.stmts.iter().enumerate() {
+        for (statement_idx, normalized_statement) in block.statements.iter().enumerate() {
+            let Some(source_statement) = normalized_statement.source else {
+                if let NStatementKind::Define { result, .. } = normalized_statement.kind
+                    && let Some(local) = layout_plan.value_source(result)
+                {
+                    defined_semantic.insert(local);
+                }
+                continue;
+            };
             let statement = body
-                .statement(normalized_statement.id)
+                .statement(source_statement)
                 .expect("statement identity set was verified");
             for binding in &statement.const_bindings {
                 if let LayoutEvidenceOperand::Local(local) = &binding.value
@@ -535,8 +557,10 @@ fn verify_definitions(
                 )?;
                 defined_evidence.insert(assignment.dst);
             }
-            if let NSStmtKind::Assign { dst, .. } = normalized_statement.kind {
-                defined_semantic.insert(dst);
+            if let NStatementKind::Define { result, .. } = normalized_statement.kind
+                && let Some(local) = layout_plan.value_source(result)
+            {
+                defined_semantic.insert(local);
             }
         }
         for local in body.terminators[block_idx]
@@ -571,14 +595,11 @@ fn dynamic_locals(value: &super::LayoutEvidenceValue<'_>) -> Vec<LayoutEvidenceL
 }
 
 fn verify_statement_id_set(
-    normalized: &NormalizedSemanticBody<'_>,
+    normalized: &NormalizedBody<'_>,
+    source: &SemanticBody<'_>,
     body: &LayoutEvidenceBody<'_>,
 ) -> Result<(), LayoutEvidenceVerifyError> {
-    let expected = normalized
-        .blocks
-        .iter()
-        .map(|block| block.stmts.len())
-        .sum();
+    let expected = source.blocks.iter().map(|block| block.stmts.len()).sum();
     if body.statements.len() != expected {
         return Err(LayoutEvidenceVerifyError::StatementCount {
             expected,
@@ -587,20 +608,27 @@ fn verify_statement_id_set(
     }
     let mut seen = FxHashSet::default();
     for (block, normalized_block) in normalized.blocks.iter().enumerate() {
-        for (statement, normalized_statement) in normalized_block.stmts.iter().enumerate() {
-            if body.statement(normalized_statement.id).is_none() {
+        for (statement, normalized_statement) in normalized_block.statements.iter().enumerate() {
+            let Some(source) = normalized_statement.source else {
+                continue;
+            };
+            if body.statement(source).is_none() {
                 return Err(LayoutEvidenceVerifyError::InvalidStatementId {
                     block,
                     statement,
-                    id: normalized_statement.id,
+                    id: source,
                 });
             }
-            if !seen.insert(normalized_statement.id) {
-                return Err(LayoutEvidenceVerifyError::DuplicateStatementId(
-                    normalized_statement.id,
-                ));
+            if !seen.insert(source) {
+                return Err(LayoutEvidenceVerifyError::DuplicateStatementId(source));
             }
         }
+    }
+    if seen.len() != expected {
+        return Err(LayoutEvidenceVerifyError::StatementCount {
+            expected,
+            actual: seen.len(),
+        });
     }
     Ok(())
 }
@@ -614,7 +642,9 @@ fn verify_statement_id_set(
 /// call only when that call has no runtime layout-evidence ABI.
 pub fn verify_layout_evidence_runtime_compatibility<'db>(
     db: &'db dyn HirAnalysisDb,
-    runtime: &NormalizedSemanticBody<'db>,
+    runtime: &NormalizedBody<'db>,
+    layout_plan: &NLayoutPlan<'db>,
+    source: &SemanticBody<'db>,
     body: &LayoutEvidenceBody<'db>,
 ) -> Result<(), LayoutEvidenceVerifyError> {
     if body.owner != runtime.owner {
@@ -623,9 +653,9 @@ pub fn verify_layout_evidence_runtime_compatibility<'db>(
     if body.template_owner != runtime.template_owner {
         return Err(LayoutEvidenceVerifyError::TemplateOwnerMismatch);
     }
-    if body.semantic_values.len() != runtime.locals.len() {
+    if body.semantic_values.len() != source.locals.len() {
         return Err(LayoutEvidenceVerifyError::SemanticValueCount {
-            expected: runtime.locals.len(),
+            expected: source.locals.len(),
             actual: body.semantic_values.len(),
         });
     }
@@ -635,14 +665,17 @@ pub fn verify_layout_evidence_runtime_compatibility<'db>(
             actual: body.terminators.len(),
         });
     }
-    verify_statement_id_set(runtime, body)?;
+    verify_statement_id_set(runtime, source, body)?;
     for (block_idx, runtime_block) in runtime.blocks.iter().enumerate() {
-        for (statement_idx, runtime_statement) in runtime_block.stmts.iter().enumerate() {
+        for (statement_idx, runtime_statement) in runtime_block.statements.iter().enumerate() {
+            let Some(source) = runtime_statement.source else {
+                continue;
+            };
             let evidence_statement = body
-                .statement(runtime_statement.id)
+                .statement(source)
                 .expect("statement identity set was verified");
             let runtime_callee = match &runtime_statement.kind {
-                NSStmtKind::Assign {
+                NStatementKind::Define {
                     expr: NExpr::Call { callee, .. },
                     ..
                 } if callee
@@ -652,7 +685,7 @@ pub fn verify_layout_evidence_runtime_compatibility<'db>(
                 {
                     Some(*callee)
                 }
-                NSStmtKind::Assign { .. } | NSStmtKind::Store { .. } => None,
+                NStatementKind::Define { .. } | NStatementKind::Store { .. } => None,
             };
             if evidence_statement.call.is_some() != runtime_callee.is_some() {
                 return Err(LayoutEvidenceVerifyError::CallPresence {
@@ -670,12 +703,15 @@ pub fn verify_layout_evidence_runtime_compatibility<'db>(
             }
         }
     }
+    verify_definitions(runtime, layout_plan, source, body)?;
     Ok(())
 }
 
 pub fn verify_layout_evidence_body<'db>(
     db: &'db dyn HirAnalysisDb,
-    normalized: &NormalizedSemanticBody<'db>,
+    normalized: &NormalizedBody<'db>,
+    layout_plan: &NLayoutPlan<'db>,
+    source: &SemanticBody<'db>,
     body: &LayoutEvidenceBody<'db>,
 ) -> Result<(), LayoutEvidenceVerifyError> {
     if body.owner != normalized.owner {
@@ -684,9 +720,9 @@ pub fn verify_layout_evidence_body<'db>(
     if body.template_owner != normalized.template_owner {
         return Err(LayoutEvidenceVerifyError::TemplateOwnerMismatch);
     }
-    if body.semantic_values.len() != normalized.locals.len() {
+    if body.semantic_values.len() != source.locals.len() {
         return Err(LayoutEvidenceVerifyError::SemanticValueCount {
-            expected: normalized.locals.len(),
+            expected: source.locals.len(),
             actual: body.semantic_values.len(),
         });
     }
@@ -696,7 +732,7 @@ pub fn verify_layout_evidence_body<'db>(
             actual: body.terminators.len(),
         });
     }
-    verify_statement_id_set(normalized, body)?;
+    verify_statement_id_set(normalized, source, body)?;
     body.output
         .validate()
         .map_err(|error| LayoutEvidenceVerifyError::InvalidInterface { local: None, error })?;
@@ -744,7 +780,7 @@ pub fn verify_layout_evidence_body<'db>(
                         || metadata.component != component_id
                         || metadata.map_ty != schema.map_ty()
                         || metadata.param
-                            != normalized.locals[local_idx]
+                            != source.locals[local_idx]
                                 .source
                                 .and_then(|source| source.callable_input_origin(db))
                                 .map(|origin| {
@@ -774,7 +810,7 @@ pub fn verify_layout_evidence_body<'db>(
     for param in signature.runtime_params() {
         let evidence_local = match &param.source {
             CallableLayoutParamPort::Input(port) => {
-                let local = normalized
+                let local = source
                     .locals
                     .iter()
                     .position(|local| {
@@ -835,22 +871,44 @@ pub fn verify_layout_evidence_body<'db>(
     }
 
     for (block_idx, normalized_block) in normalized.blocks.iter().enumerate() {
-        for (statement_idx, normalized_statement) in normalized_block.stmts.iter().enumerate() {
+        for (statement_idx, normalized_statement) in normalized_block.statements.iter().enumerate()
+        {
+            let Some(source_statement) = normalized_statement.source else {
+                continue;
+            };
             let statement = body
-                .statement(normalized_statement.id)
+                .statement(source_statement)
                 .expect("statement identity set was verified");
-            let (dst, call_signature) = match &normalized_statement.kind {
-                NSStmtKind::Assign {
-                    dst,
+            let (dst, call_signature, result_used) = match &normalized_statement.kind {
+                NStatementKind::Define {
+                    result,
                     expr: NExpr::Call { callee, .. },
-                } => (*dst, Some(callee.key.layout_bundle_signature(db))),
-                NSStmtKind::Assign { dst, .. } => (*dst, None),
-                NSStmtKind::Store { src, .. } => (src.local, None),
+                } => (
+                    layout_plan
+                        .value_source(*result)
+                        .ok_or(LayoutEvidenceVerifyError::InvalidProjection)?,
+                    Some(callee.key.layout_bundle_signature(db)),
+                    normalized.value_is_used(*result),
+                ),
+                NStatementKind::Define { result, .. } => (
+                    layout_plan
+                        .value_source(*result)
+                        .ok_or(LayoutEvidenceVerifyError::InvalidProjection)?,
+                    None,
+                    normalized.value_is_used(*result),
+                ),
+                NStatementKind::Store { value, .. } => (
+                    layout_plan
+                        .value_source(value.value)
+                        .ok_or(LayoutEvidenceVerifyError::InvalidProjection)?,
+                    None,
+                    true,
+                ),
             };
             let call_output = call_signature.as_ref().map(|signature| &signature.output);
             verify_const_bindings(
                 db,
-                normalized,
+                source,
                 body,
                 &normalized_statement.kind,
                 statement,
@@ -868,7 +926,7 @@ pub fn verify_layout_evidence_body<'db>(
                 });
             }
             if let (
-                NSStmtKind::Assign {
+                NStatementKind::Define {
                     expr: NExpr::Call { callee, .. },
                     ..
                 },
@@ -895,20 +953,17 @@ pub fn verify_layout_evidence_body<'db>(
                     });
                 }
                 for (arg, (target, expected)) in call.args.iter().zip(expected) {
-                    let actual = expr_map_ty(
-                        db,
-                        normalized,
-                        body,
-                        &arg.value,
-                        None,
-                        block_idx,
-                        statement_idx,
-                    )?;
+                    let actual =
+                        expr_map_ty(db, source, body, &arg.value, None, block_idx, statement_idx)?;
                     if arg.target != target || actual != expected.map_ty() {
                         return Err(LayoutEvidenceVerifyError::MapTypeMismatch);
                     }
                 }
-                let expected_results = signature.output.runtime_descriptor_count();
+                let expected_results = if result_used {
+                    signature.output.runtime_descriptor_count()
+                } else {
+                    0
+                };
                 let actual_results = statement
                     .assignments
                     .iter()
@@ -925,8 +980,12 @@ pub fn verify_layout_evidence_body<'db>(
                     });
                 }
             }
-            if matches!(normalized_statement.kind, NSStmtKind::Assign { .. }) {
-                let expected = dynamic_locals(&body.semantic_values[dst.index()]);
+            if matches!(normalized_statement.kind, NStatementKind::Define { .. }) {
+                let expected = if result_used {
+                    dynamic_locals(&body.semantic_values[dst.index()])
+                } else {
+                    Vec::new()
+                };
                 if statement.assignments.len() != expected.len() {
                     return Err(LayoutEvidenceVerifyError::AssignmentCount {
                         block: block_idx,
@@ -953,7 +1012,7 @@ pub fn verify_layout_evidence_body<'db>(
                         local: assignment.dst,
                     });
                 };
-                if matches!(&normalized_statement.kind, NSStmtKind::Assign { .. })
+                if matches!(&normalized_statement.kind, NStatementKind::Define { .. })
                     && metadata.semantic_local != Some(dst)
                 {
                     return Err(LayoutEvidenceVerifyError::InvalidAssignmentTarget {
@@ -964,7 +1023,7 @@ pub fn verify_layout_evidence_body<'db>(
                 }
                 let actual = expr_map_ty(
                     db,
-                    normalized,
+                    source,
                     body,
                     &assignment.expr,
                     call_output,
@@ -995,12 +1054,12 @@ pub fn verify_layout_evidence_body<'db>(
             }
         }
         let returned_local = match normalized_block.terminator.kind {
-            NSTerminatorKind::Return(Some(value)) => Some(value.local),
-            NSTerminatorKind::Goto(_)
-            | NSTerminatorKind::Branch { .. }
-            | NSTerminatorKind::MatchEnum { .. }
-            | NSTerminatorKind::Assert { .. }
-            | NSTerminatorKind::Return(None) => None,
+            NTerminatorKind::Return(Some(value)) => layout_plan.value_source(value.value),
+            NTerminatorKind::Goto(_)
+            | NTerminatorKind::Branch { .. }
+            | NTerminatorKind::MatchEnum { .. }
+            | NTerminatorKind::Assert { .. }
+            | NTerminatorKind::Return(None) => None,
         };
         let expected_returns = returned_local.map_or(0, |_| body.output.runtime_descriptor_count());
         let terminator = body
@@ -1051,5 +1110,5 @@ pub fn verify_layout_evidence_body<'db>(
             }
         }
     }
-    verify_definitions(normalized, body)
+    verify_definitions(normalized, layout_plan, source, body)
 }

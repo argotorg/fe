@@ -1,5 +1,5 @@
 use hir::analysis::{
-    semantic::{NOperand, NSPlace, SLocalId},
+    semantic::{SLocalId, normalized::NPlace},
     ty::ty_def::TyId,
 };
 
@@ -12,6 +12,7 @@ use super::boundary::{
     BoundaryMatcher, RuntimeValueAddress, RuntimeValueMaterialization, RuntimeValueSource,
     RuntimeValueUsePlan, RuntimeValueUsePlanner,
 };
+use super::semantic_body::RuntimeOperand;
 
 #[derive(Clone, Debug)]
 pub(super) struct SelectedRuntimeArg<'db> {
@@ -22,22 +23,22 @@ pub(super) struct SelectedRuntimeArg<'db> {
 
 #[derive(Clone, Debug)]
 pub(super) enum RuntimeArgSource<'db> {
-    SemanticOperand(NOperand),
+    SemanticOperand(RuntimeOperand),
     DirectValueMaterialization {
         local: SLocalId,
         materialized_class: RuntimeClass<'db>,
     },
     RuntimeValue(SLocalId),
     HandleLikeValue(SLocalId),
-    PlaceAddress(NSPlace<'db>, TyId<'db>),
-    PlaceValue(NSPlace<'db>, TyId<'db>),
+    PlaceAddress(NPlace<'db>, TyId<'db>),
+    PlaceValue(NPlace<'db>, TyId<'db>),
     ValueExtract {
-        place: NSPlace<'db>,
+        place: NPlace<'db>,
         semantic_ty: TyId<'db>,
         value_class: RuntimeClass<'db>,
     },
     SemanticPlaceAddress(SLocalId, TyId<'db>),
-    AggregateFromRuntimeSource(SLocalId),
+    AggregateFromRuntimeSource(RuntimeOperand),
     Placeholder(TyId<'db>),
 }
 
@@ -330,7 +331,7 @@ impl<'db> SelectedRuntimeArg<'db> {
         Self::coerce(RuntimeArgSource::HandleLikeValue(local), class)
     }
 
-    pub(super) fn semantic_operand(arg: NOperand, class: RuntimeClass<'db>) -> Self {
+    pub(super) fn semantic_operand(arg: RuntimeOperand, class: RuntimeClass<'db>) -> Self {
         Self::coerce(RuntimeArgSource::SemanticOperand(arg), class)
     }
 
@@ -357,7 +358,7 @@ impl<'db> SelectedRuntimeArg<'db> {
     }
 
     pub(super) fn place_addr(
-        place: NSPlace<'db>,
+        place: NPlace<'db>,
         semantic_ty: TyId<'db>,
         class: RuntimeClass<'db>,
     ) -> Self {
@@ -369,7 +370,7 @@ impl<'db> SelectedRuntimeArg<'db> {
     }
 
     pub(super) fn place_load(
-        place: NSPlace<'db>,
+        place: NPlace<'db>,
         semantic_ty: TyId<'db>,
         class: RuntimeClass<'db>,
     ) -> Self {
@@ -377,7 +378,7 @@ impl<'db> SelectedRuntimeArg<'db> {
     }
 
     pub(super) fn value_extract(
-        place: NSPlace<'db>,
+        place: NPlace<'db>,
         semantic_ty: TyId<'db>,
         class: RuntimeClass<'db>,
     ) -> Self {
@@ -404,12 +405,15 @@ impl<'db> SelectedRuntimeArg<'db> {
         }
     }
 
-    pub(super) fn aggregate_from_runtime_source(local: SLocalId, class: RuntimeClass<'db>) -> Self {
-        Self::coerce(RuntimeArgSource::AggregateFromRuntimeSource(local), class)
+    pub(super) fn aggregate_from_runtime_source(
+        operand: RuntimeOperand,
+        class: RuntimeClass<'db>,
+    ) -> Self {
+        Self::coerce(RuntimeArgSource::AggregateFromRuntimeSource(operand), class)
     }
 
     pub(super) fn materialized_place(
-        place: NSPlace<'db>,
+        place: NPlace<'db>,
         semantic_ty: TyId<'db>,
         materialization: RuntimeValueMaterialization<'db>,
     ) -> Self {
@@ -420,7 +424,7 @@ impl<'db> SelectedRuntimeArg<'db> {
     }
 
     pub(super) fn materialized_value_extract(
-        place: NSPlace<'db>,
+        place: NPlace<'db>,
         semantic_ty: TyId<'db>,
         value_class: RuntimeClass<'db>,
         materialization: RuntimeValueMaterialization<'db>,
@@ -436,7 +440,7 @@ impl<'db> SelectedRuntimeArg<'db> {
     }
 
     pub(super) fn materialized_semantic_operand(
-        arg: NOperand,
+        arg: RuntimeOperand,
         materialization: RuntimeValueMaterialization<'db>,
     ) -> Self {
         Self::materialize(RuntimeArgSource::SemanticOperand(arg), materialization)

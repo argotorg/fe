@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 431
 expression: output
 input_file: crates/codegen/tests/fixtures/zero_sized_aggregates.fe
 ---
@@ -15,13 +14,18 @@ global private const @layout_1 $const_region_2 = {{}, 5};
 
 func private %empty_field_assign() {
     block0:
+        v0.objref<@layout_1> = obj.alloc @layout_1;
         jump block1;
 
     block1:
-        v1.constref<@layout_1> = const.ref $const_region_0;
-        v3.objref<@layout_1> = obj.alloc @layout_1;
-        v4.objref<i256> = obj.proj v3 1.i256;
-        obj.store v4 1.i256;
+        v2.constref<@layout_1> = const.ref $const_region_0;
+        v6.@layout_1 = insert_value undef.@layout_1 0.i256 undef.@layout_0;
+        v7.@layout_1 = insert_value v6 1.i256 1.i256;
+        v8.objref<@layout_0> = obj.proj v0 0.i256;
+        v9.@layout_0 = extract_value v7 0.i256;
+        v10.objref<i256> = obj.proj v0 1.i256;
+        v11.i256 = extract_value v7 1.i256;
+        obj.store v10 v11;
         return;
 }
 

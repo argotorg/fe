@@ -1,0 +1,2509 @@
+use std::cell::RefCell;
+
+use cranelift_entity::EntityRef;
+use rustc_hash::{FxHashMap, FxHashSet};
+
+use crate::{
+    analysis::{
+        HirAnalysisDb,
+        semantic::{
+            FieldIndex, LayoutBackingPlace, PlaceProvenance, SBlockId, SExpr, SLocalId, SOperand,
+            SPlace, SStmtId, SStmtKind, STerminatorKind, SemanticBody, SemanticInstance,
+            SemanticLocalRole, ValueProvenance, VariantIndex,
+            normalized::{
+                NBlock, NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr,
+                NIndex, NOperand, NPlace, NPlaceBase, NRoot, NRootId, NRootKind, NStatement,
+                NStatementKind, NStructuralPath, NSuccessor, NTerminator, NTerminatorKind, NValue,
+                NValueDefinition, NValueId, NormalizedBody, ReadMode, StructuralRepack,
+                layout_plan::{
+                    NLayoutBackingSource, NLayoutPlan, NLayoutUseBacking, NRootRepresentation,
+                    NValueRepresentation,
+                },
+                verify::project_path_ty,
+            },
+        },
+        ty::{
+            adt_def::AdtRef,
+            provider::{
+                ProviderAddressSpace, ProviderKind, ProviderLayoutEvidence, provider_semantics,
+            },
+            trait_resolution::PredicateListId,
+            ty_check::{BodyOwner, LocalBinding},
+            ty_def::{CapabilityKind, TyId},
+            ty_is_copy, ty_is_noesc,
+        },
+    },
+    hir_def::FuncParamMode,
+    projection::{IndexSource, Projection},
+    semantic::ProviderBinding,
+};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NormalizeError<'db> {
+    MissingValue(SLocalId),
+    MissingRoot(SLocalId),
+    MissingProviderAddressSpace(ProviderBinding<'db>),
+    InvalidProjection,
+    UnsupportedPlaceProjection,
+    UnsupportedCapabilityCast { from: TyId<'db>, to: TyId<'db> },
+    InvalidControlFlow,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NormalizedArtifacts<'db> {
+    pub body: NormalizedBody<'db>,
+    pub layout_plan: NLayoutPlan<'db>,
+}
+
+pub fn normalize_raw_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    raw: &SemanticBody<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Result<NormalizedArtifacts<'db>, NormalizeError<'db>> {
+    NormalizeCx::new(db, instance, raw, assumptions).normalize()
+}
+
+struct NormalizeCx<'a, 'db> {
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    raw: &'a SemanticBody<'db>,
+    assumptions: PredicateListId<'db>,
+    roots: Vec<NRoot<'db>>,
+    root_for_local: Vec<Option<NRootId>>,
+    provider_target_root_for_local: Vec<Option<NRootId>>,
+    provider_roots: FxHashMap<(ProviderBinding<'db>, TyId<'db>), NRootId>,
+    phi_locals: Vec<Vec<SLocalId>>,
+    phi_values: Vec<Vec<NValueId>>,
+    values: Vec<NValue<'db>>,
+    value_sources: Vec<NValueRepresentation>,
+    root_sources: Vec<NRootRepresentation>,
+    use_backings: Vec<NLayoutUseBacking<'db>>,
+    blocks: Vec<NBlock<'db>>,
+    current_values: Vec<Vec<NValueId>>,
+    projection_values: Vec<Option<NValueId>>,
+    copy_cache: RefCell<FxHashMap<TyId<'db>, bool>>,
+}
+
+impl<'a, 'db> NormalizeCx<'a, 'db> {
+    fn new(
+        db: &'db dyn HirAnalysisDb,
+        instance: SemanticInstance<'db>,
+        raw: &'a SemanticBody<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> Self {
+        let local_count = raw.locals.len();
+        Self {
+            db,
+            instance,
+            raw,
+            assumptions,
+            roots: Vec::new(),
+            root_for_local: vec![None; local_count],
+            provider_target_root_for_local: vec![None; local_count],
+            provider_roots: FxHashMap::default(),
+            phi_locals: vec![Vec::new(); raw.blocks.len()],
+            phi_values: vec![Vec::new(); raw.blocks.len()],
+            values: Vec::new(),
+            value_sources: Vec::new(),
+            root_sources: Vec::new(),
+            use_backings: Vec::new(),
+            blocks: Vec::new(),
+            current_values: vec![Vec::new(); local_count],
+            projection_values: vec![None; local_count],
+            copy_cache: RefCell::new(FxHashMap::default()),
+        }
+    }
+
+    fn normalize(mut self) -> Result<NormalizedArtifacts<'db>, NormalizeError<'db>> {
+        if self.raw.blocks.is_empty() {
+            return self.normalize_empty_body();
+        }
+
+        self.classify_roots()?;
+        let cfg = RawCfg::new(self.raw);
+        self.phi_locals = cfg.phi_locals(self.raw, &self.root_for_local);
+        self.blocks = (0..self.raw.blocks.len())
+            .map(|_| NBlock {
+                params: Box::default(),
+                statements: Vec::new(),
+                terminator: NTerminator {
+                    origin: crate::analysis::semantic::SemOrigin::Synthetic,
+                    kind: NTerminatorKind::Assert { message: None },
+                },
+            })
+            .collect();
+
+        self.allocate_entry_values()?;
+        self.allocate_phi_values();
+
+        for root in cfg.dominator_roots() {
+            self.rename_block(root, &cfg)?;
+        }
+
+        let body = NormalizedBody {
+            owner: self.instance,
+            template_owner: self.raw.template_owner,
+            values: self.values,
+            roots: self.roots,
+            blocks: self.blocks,
+            entry: NBlockId::new(0),
+        };
+        Ok(NormalizedArtifacts {
+            body,
+            layout_plan: NLayoutPlan {
+                value_representations: self.value_sources,
+                root_representations: self.root_sources,
+                use_backings: self.use_backings,
+            },
+        })
+    }
+
+    fn normalize_empty_body(mut self) -> Result<NormalizedArtifacts<'db>, NormalizeError<'db>> {
+        self.classify_roots()?;
+        self.blocks.push(NBlock {
+            params: Box::default(),
+            statements: Vec::new(),
+            terminator: NTerminator {
+                origin: crate::analysis::semantic::SemOrigin::Body(self.raw.template_owner),
+                kind: NTerminatorKind::Return(None),
+            },
+        });
+        self.allocate_entry_values()?;
+        Ok(NormalizedArtifacts {
+            body: NormalizedBody {
+                owner: self.instance,
+                template_owner: self.raw.template_owner,
+                values: self.values,
+                roots: self.roots,
+                blocks: self.blocks,
+                entry: NBlockId::new(0),
+            },
+            layout_plan: NLayoutPlan {
+                value_representations: self.value_sources,
+                root_representations: self.root_sources,
+                use_backings: self.use_backings,
+            },
+        })
+    }
+
+    fn classify_roots(&mut self) -> Result<(), NormalizeError<'db>> {
+        let mut needs_slot = vec![false; self.raw.locals.len()];
+        for (index, local) in self.raw.locals.iter().enumerate() {
+            let direct_capability = local.ty.as_capability(self.db).is_some();
+            needs_slot[index] =
+                !direct_capability && local.source.is_some_and(|binding| binding.is_mut());
+        }
+        for block in &self.raw.blocks {
+            for statement in &block.stmts {
+                match &statement.kind {
+                    SStmtKind::Assign { expr, .. } => {
+                        for_each_address_required_local(expr, |local| {
+                            if self.raw.locals[local.index()]
+                                .ty
+                                .as_capability(self.db)
+                                .is_none()
+                            {
+                                needs_slot[local.index()] = true;
+                            }
+                        });
+                    }
+                    SStmtKind::Store { dst, .. } => {
+                        if self.raw.locals[dst.local.index()]
+                            .ty
+                            .as_capability(self.db)
+                            .is_none()
+                        {
+                            needs_slot[dst.local.index()] = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        for (index, needs_slot) in needs_slot.into_iter().enumerate() {
+            let local_id = SLocalId::new(index);
+            let local = &self.raw.locals[index];
+            let direct_capability = local.ty.as_capability(self.db).is_some();
+            let direct_carrier = matches!(local.role, SemanticLocalRole::DirectCarrier { .. });
+            let provider = semantic_root_provider(&local.role, local.ty);
+            let root = if let Some((provider, value_ty)) = provider {
+                let root = self.provider_root(provider, value_ty)?;
+                if direct_capability || direct_carrier {
+                    self.provider_target_root_for_local[index] = Some(root);
+                    None
+                } else {
+                    Some(root)
+                }
+            } else if needs_slot {
+                Some(self.local_slot_root(local_id))
+            } else {
+                None
+            };
+            self.root_for_local[index] = root;
+        }
+        Ok(())
+    }
+
+    fn provider_root(
+        &mut self,
+        binding: ProviderBinding<'db>,
+        value_ty: TyId<'db>,
+    ) -> Result<NRootId, NormalizeError<'db>> {
+        let value_ty = self.instance.normalized_ty(self.db, value_ty);
+        if let Some(root) = self.provider_roots.get(&(binding.clone(), value_ty)) {
+            return Ok(*root);
+        }
+        let address_space = binding.semantics.address_space.or_else(|| {
+            matches!(binding.semantics.kind, ProviderKind::RootObject)
+                .then_some(ProviderAddressSpace::Memory)
+        });
+        let Some(address_space) = address_space else {
+            return Err(NormalizeError::MissingProviderAddressSpace(binding));
+        };
+        let root = NRootId::new(self.roots.len());
+        self.roots.push(NRoot {
+            kind: NRootKind::Provider {
+                binding: binding.clone(),
+            },
+            ty: value_ty,
+            address_space,
+            mutability: crate::analysis::semantic::Mutability::Mutable,
+            origin: crate::analysis::semantic::SemOrigin::Body(self.raw.template_owner),
+        });
+        self.root_sources.push(NRootRepresentation {
+            root,
+            source_local: None,
+        });
+        self.provider_roots.insert((binding, value_ty), root);
+        Ok(root)
+    }
+
+    fn local_slot_root(&mut self, local: SLocalId) -> NRootId {
+        let local_data = &self.raw.locals[local.index()];
+        let param = local_data.source.and_then(|binding| match binding {
+            LocalBinding::Param { idx, .. } => Some(idx as u32),
+            _ => None,
+        });
+        let root = NRootId::new(self.roots.len());
+        self.roots.push(NRoot {
+            kind: param.map_or_else(
+                || NRootKind::LocalSlot {
+                    binding: local_data.source,
+                },
+                |param| NRootKind::ParamPlace { param },
+            ),
+            ty: self.instance.normalized_ty(self.db, local_data.ty),
+            address_space: ProviderAddressSpace::Memory,
+            mutability: local_data.mutability,
+            origin: crate::analysis::semantic::SemOrigin::Body(self.raw.template_owner),
+        });
+        self.root_sources.push(NRootRepresentation {
+            root,
+            source_local: Some(local),
+        });
+        root
+    }
+
+    fn allocate_entry_values(&mut self) -> Result<(), NormalizeError<'db>> {
+        let mut values = Vec::new();
+        for (param, local) in self.raw.entry_locals.iter().copied().enumerate() {
+            if self.root_for_local[local.index()].is_some() {
+                continue;
+            }
+            let local_data = &self.raw.locals[local.index()];
+            let value = self.push_value(
+                self.normalized_local_ty(local),
+                crate::analysis::semantic::SemOrigin::Body(self.raw.template_owner),
+                NValueDefinition::EntryParam {
+                    param: param as u32,
+                },
+                local_data.source,
+                local,
+            );
+            self.current_values[local.index()].push(value);
+            values.push((value, local));
+        }
+        for (value, local) in values {
+            self.prepare_layout_backing_indices(
+                SBlockId::new(0),
+                crate::analysis::semantic::SemOrigin::Body(self.raw.template_owner),
+                local,
+            )?;
+            self.record_layout_backings(
+                value,
+                local,
+                SBlockId::new(0),
+                crate::analysis::semantic::SemOrigin::Body(self.raw.template_owner),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn allocate_phi_values(&mut self) {
+        for block_index in 0..self.phi_locals.len() {
+            let block = NBlockId::new(block_index);
+            let locals = self.phi_locals[block_index].clone();
+            let mut params = Vec::with_capacity(locals.len());
+            for (index, local) in locals.into_iter().enumerate() {
+                let local_data = &self.raw.locals[local.index()];
+                params.push(self.push_value(
+                    self.normalized_local_ty(local),
+                    crate::analysis::semantic::SemOrigin::Synthetic,
+                    NValueDefinition::BlockParam {
+                        block,
+                        index: index as u32,
+                    },
+                    local_data.source,
+                    local,
+                ));
+            }
+            self.phi_values[block_index] = params.clone();
+            self.blocks[block_index].params = params.into_boxed_slice();
+        }
+    }
+
+    fn rename_block(
+        &mut self,
+        raw_block: SBlockId,
+        cfg: &RawCfg,
+    ) -> Result<(), NormalizeError<'db>> {
+        let block_index = raw_block.index();
+        let mut pushed = Vec::new();
+        for (local, value) in self.phi_locals[block_index]
+            .iter()
+            .copied()
+            .zip(self.phi_values[block_index].iter().copied())
+        {
+            self.current_values[local.index()].push(value);
+            pushed.push(local);
+        }
+        for statement in &self.raw.blocks[block_index].stmts {
+            self.projection_values.fill(None);
+            match &statement.kind {
+                SStmtKind::Assign { dst, expr } => {
+                    let normalized =
+                        self.normalize_expr(raw_block, statement.id, statement.origin, *dst, expr)?;
+                    let result_ty = match &normalized {
+                        NExpr::Borrow { place, kind, .. } => match kind {
+                            crate::analysis::ty::ty_def::BorrowKind::Mut => {
+                                TyId::borrow_mut_of(self.db, place.ty)
+                            }
+                            crate::analysis::ty::ty_def::BorrowKind::Ref => {
+                                TyId::borrow_ref_of(self.db, place.ty)
+                            }
+                        },
+                        NExpr::Forward { src } => self.values[src.value.index()].ty,
+                        NExpr::Load { place, .. } => place.ty,
+                        NExpr::ProjectValue { value, path } => project_path_ty(
+                            self.db,
+                            self.instance,
+                            &self.values,
+                            self.values[value.value.index()].ty,
+                            &path.0,
+                        )
+                        .map_err(|_| NormalizeError::InvalidProjection)?,
+                        NExpr::ScalarCast { to, .. } => *to,
+                        _ => self.normalized_local_ty(*dst),
+                    };
+                    if let Some(root) = self.root_for_local[dst.index()] {
+                        let result = self.emit_define(
+                            raw_block,
+                            Some(statement.id),
+                            statement.origin,
+                            result_ty,
+                            *dst,
+                            normalized,
+                        )?;
+                        let destination = self.root_place(root, statement.origin);
+                        let value = self.operand(result, statement.origin, ReadMode::Move);
+                        self.emit_store(raw_block, None, statement.origin, destination, value);
+                    } else {
+                        let value = self.emit_define(
+                            raw_block,
+                            Some(statement.id),
+                            statement.origin,
+                            result_ty,
+                            *dst,
+                            normalized,
+                        )?;
+                        self.current_values[dst.index()].push(value);
+                        pushed.push(*dst);
+                    }
+                }
+                SStmtKind::Store { dst, src } => {
+                    let destination = self.normalize_place(raw_block, statement.origin, dst)?;
+                    let value = self.read_operand(raw_block, statement.origin, *src, None)?;
+                    self.emit_store(
+                        raw_block,
+                        Some(statement.id),
+                        statement.origin,
+                        destination,
+                        value,
+                    );
+                }
+            }
+        }
+
+        let terminator = self.normalize_terminator(raw_block)?;
+        self.blocks[block_index].terminator = terminator;
+
+        for child in cfg.dom_children[block_index].iter().copied() {
+            self.rename_block(SBlockId::new(child), cfg)?;
+        }
+        for local in pushed.into_iter().rev() {
+            self.current_values[local.index()].pop();
+        }
+        Ok(())
+    }
+
+    fn normalize_expr(
+        &mut self,
+        block: SBlockId,
+        _statement: SStmtId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        dst: SLocalId,
+        expr: &SExpr<'db>,
+    ) -> Result<NExpr<'db>, NormalizeError<'db>> {
+        let dst_ty = self.normalized_local_ty(dst);
+        Ok(match expr {
+            SExpr::Forward(value) => NExpr::Forward {
+                src: self.read_operand(block, origin, *value, Some(ReadMode::Copy))?,
+            },
+            SExpr::UseValue(value) => {
+                let source_ty = self.normalized_local_ty(value.value);
+                if source_ty != dst_ty && self.local_has_place(value.value) {
+                    let place =
+                        self.place_for_local(block, value.sem_origin(origin), value.value)?;
+                    let mode = matches!(
+                        self.raw.locals[value.value.index()].role,
+                        SemanticLocalRole::PlaceCarrier { .. }
+                    )
+                    .then_some(ReadMode::Copy);
+                    self.load_or_borrow_place(value.sem_origin(origin), dst_ty, place, mode)?
+                } else {
+                    NExpr::Forward {
+                        src: self.read_operand(block, origin, *value, None)?,
+                    }
+                }
+            }
+            SExpr::ReadPlace { place } => {
+                if self.local_has_place(place.local) {
+                    let place = self.normalize_place(block, origin, place)?;
+                    self.load_or_borrow_place(origin, dst_ty, place, None)?
+                } else {
+                    let value = self.read_operand(
+                        block,
+                        origin,
+                        SOperand::inherited(place.local),
+                        None,
+                    )?;
+                    let path = self.normalize_path(block, origin, &place.path)?;
+                    self.normalize_value_projection(
+                        block,
+                        origin,
+                        place.local,
+                        value,
+                        path,
+                        dst_ty,
+                    )?
+                }
+            }
+            SExpr::Field { base, field } => self.normalize_projection_expr(
+                block,
+                origin,
+                *base,
+                NDataProjection::Field(*field),
+                dst_ty,
+            )?,
+            SExpr::Index { base, index } => {
+                let index_local = index.value;
+                let index =
+                    self.read_scalar_operand(block, origin, *index, Some(ReadMode::Copy))?;
+                self.projection_values[index_local.index()] = Some(index.value);
+                self.normalize_projection_expr(
+                    block,
+                    origin,
+                    *base,
+                    NDataProjection::Index(NIndex::Value(index.value)),
+                    dst_ty,
+                )?
+            }
+            SExpr::ExtractEnumField {
+                value,
+                variant,
+                field,
+            } => self.normalize_projection_expr(
+                block,
+                origin,
+                *value,
+                NDataProjection::VariantField {
+                    variant: *variant,
+                    field: *field,
+                },
+                dst_ty,
+            )?,
+            SExpr::Borrow {
+                place,
+                kind,
+                provider,
+            } => NExpr::Borrow {
+                place: self.normalize_place(block, origin, place)?,
+                kind: *kind,
+                provider: *provider,
+            },
+            SExpr::CodeRegionRef { region } => NExpr::CodeRegionRef {
+                region: region.clone(),
+            },
+            SExpr::Const(value) => NExpr::Const(value.clone()),
+            SExpr::Unary { op, value } => NExpr::Unary {
+                op: *op,
+                value: self.read_scalar_operand(block, origin, *value, None)?,
+            },
+            SExpr::Binary { op, lhs, rhs } => NExpr::Binary {
+                op: *op,
+                lhs: self.read_scalar_operand(block, origin, *lhs, None)?,
+                rhs: self.read_scalar_operand(block, origin, *rhs, None)?,
+            },
+            SExpr::Cast { value, to } => {
+                let to = self.instance.normalized_ty(self.db, *to);
+                let raw_value = *value;
+                let materialize_place = matches!(
+                    self.raw.locals[raw_value.value.index()].role,
+                    SemanticLocalRole::PlaceCarrier { .. }
+                        | SemanticLocalRole::PlaceBoundValue { .. }
+                        | SemanticLocalRole::DirectCarrier { .. }
+                ) && to.as_capability(self.db).is_none();
+                let (value, from) = if materialize_place {
+                    let place = self.place_for_local(
+                        block,
+                        raw_value.sem_origin(origin),
+                        raw_value.value,
+                    )?;
+                    let mode = self.read_mode_for_place(origin, place.ty, &place);
+                    let loaded = self.emit_define(
+                        block,
+                        None,
+                        origin,
+                        place.ty,
+                        raw_value.value,
+                        NExpr::Load { place, mode },
+                    )?;
+                    (self.operand(loaded, origin, mode), self.values[loaded.index()].ty)
+                } else {
+                    let value = self.read_operand(block, origin, raw_value, None)?;
+                    let from = self.values[value.value.index()].ty;
+                    (value, from)
+                };
+                if from == to {
+                    NExpr::Forward { src: value }
+                } else if ty_is_noesc(self.db, from) || ty_is_noesc(self.db, to) {
+                    let mapping = structural_repack_mapping(self.db, self.instance, from, to).ok_or(
+                        NormalizeError::UnsupportedCapabilityCast { from, to },
+                    )?;
+                    NExpr::StructuralRepack { value, mapping }
+                } else {
+                    NExpr::ScalarCast { value, to }
+                }
+            }
+            SExpr::ArrayRepeat { ty, value } => {
+                let ty = self.instance.normalized_ty(self.db, *ty);
+                let element_ty = ty
+                    .decompose_ty_app(self.db)
+                    .1
+                    .first()
+                    .copied()
+                    .map(|ty| self.instance.normalized_ty(self.db, ty))
+                    .filter(|_| ty.is_array(self.db))
+                    .ok_or(NormalizeError::InvalidProjection)?;
+                NExpr::ArrayRepeat {
+                    ty,
+                    value: self.read_operand_as(block, origin, *value, element_ty)?,
+                }
+            }
+            SExpr::AggregateMake { ty, fields } => {
+                let ty = self.instance.normalized_ty(self.db, *ty);
+                let field_tys = if ty.is_array(self.db) {
+                    let element_ty = ty
+                        .decompose_ty_app(self.db)
+                        .1
+                        .first()
+                        .copied()
+                        .map(|ty| self.instance.normalized_ty(self.db, ty))
+                        .ok_or(NormalizeError::InvalidProjection)?;
+                    vec![element_ty; fields.len()]
+                } else {
+                    self.instance.normalized_field_types(self.db, ty).to_vec()
+                };
+                if field_tys.len() != fields.len() {
+                    return Err(NormalizeError::InvalidProjection);
+                }
+                NExpr::AggregateMake {
+                    ty,
+                    fields: fields
+                        .iter()
+                        .copied()
+                        .zip(field_tys)
+                        .map(|(field, field_ty)| {
+                            self.read_operand_as(block, origin, field, field_ty)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into_boxed_slice(),
+                }
+            }
+            SExpr::EnumMake {
+                enum_ty,
+                variant,
+                fields,
+            } => {
+                let enum_ty = self.instance.normalized_ty(self.db, *enum_ty);
+                let adt = enum_ty
+                    .adt_def(self.db)
+                    .ok_or(NormalizeError::InvalidProjection)?;
+                let expected = adt
+                    .fields(self.db)
+                    .get(variant.0 as usize)
+                    .ok_or(NormalizeError::InvalidProjection)?;
+                if expected.num_types() != fields.len() {
+                    return Err(NormalizeError::InvalidProjection);
+                }
+                NExpr::EnumMake {
+                    enum_ty,
+                    variant: *variant,
+                    fields: fields
+                        .iter()
+                        .copied()
+                        .enumerate()
+                        .map(|(index, field)| {
+                            self.read_operand_as(
+                                block,
+                                origin,
+                                field,
+                                self.instance.normalized_enum_variant_field_tys(
+                                    self.db,
+                                    enum_ty,
+                                    *variant,
+                                )[index],
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into_boxed_slice(),
+                }
+            }
+            SExpr::GetEnumTag { value } => NExpr::GetEnumTag {
+                value: self.read_operand(block, origin, *value, Some(ReadMode::Copy))?,
+            },
+            SExpr::IsEnumVariant { value, variant } => NExpr::IsEnumVariant {
+                value: self.read_operand(block, origin, *value, Some(ReadMode::Copy))?,
+                variant: *variant,
+            },
+            SExpr::CodeRegionOffset { target } => NExpr::CodeRegionOffset {
+                target: target.clone(),
+            },
+            SExpr::CodeRegionLen { target } => NExpr::CodeRegionLen {
+                target: target.clone(),
+            },
+            SExpr::Call {
+                call_site,
+                callee,
+                args,
+                effect_args,
+            } => NExpr::Call {
+                call_site: *call_site,
+                callee: *callee,
+                args: args
+                    .iter()
+                    .enumerate()
+                    .map(|(index, arg)| {
+                        self.read_operand(
+                            block,
+                            origin,
+                            *arg,
+                            self.call_arg_mode(*callee, index, arg.value),
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_boxed_slice(),
+                effect_args: effect_args
+                    .iter()
+                    .map(|arg| {
+                        Ok(NEffectArg {
+                            binding_idx: arg.binding_idx,
+                            arg: match &arg.arg {
+                                crate::analysis::semantic::SEffectArgValue::Place(place) => {
+                                    NEffectArgValue::Place(self.normalize_place(
+                                        block, origin, place,
+                                    )?)
+                                }
+                                crate::analysis::semantic::SEffectArgValue::Value(value) => {
+                                    NEffectArgValue::Value(self.read_operand(
+                                        block,
+                                        origin,
+                                        *value,
+                                        matches!(arg.pass_mode, crate::analysis::ty::ty_check::EffectPassMode::ByTempPlace)
+                                            .then_some(ReadMode::Copy),
+                                    )?)
+                                }
+                            },
+                            pass_mode: arg.pass_mode,
+                            required_mut: arg.required_mut,
+                            target_ty: arg
+                                .target_ty
+                                .map(|ty| self.instance.normalized_ty(self.db, ty)),
+                            provider: arg.provider,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, NormalizeError<'db>>>()?
+                    .into_boxed_slice(),
+            },
+        })
+    }
+
+    fn load_or_borrow_place(
+        &self,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        result_ty: TyId<'db>,
+        place: NPlace<'db>,
+        load_mode: Option<ReadMode>,
+    ) -> Result<NExpr<'db>, NormalizeError<'db>> {
+        if result_ty == place.ty {
+            return Ok(NExpr::Load {
+                mode: load_mode
+                    .unwrap_or_else(|| self.read_mode_for_place(origin, result_ty, &place)),
+                place,
+            });
+        }
+        if let Some((kind, target)) = result_ty.as_capability(self.db)
+            && (target == place.ty
+                || structural_repack_mapping(self.db, self.instance, place.ty, target).is_some())
+        {
+            return Ok(NExpr::Borrow {
+                place,
+                kind: match kind {
+                    CapabilityKind::Mut => crate::analysis::ty::ty_def::BorrowKind::Mut,
+                    CapabilityKind::Ref | CapabilityKind::View => {
+                        crate::analysis::ty::ty_def::BorrowKind::Ref
+                    }
+                },
+                provider: None,
+            });
+        }
+        if structural_repack_mapping(self.db, self.instance, place.ty, result_ty).is_some() {
+            Ok(NExpr::Load {
+                mode: load_mode
+                    .unwrap_or_else(|| self.read_mode_for_place(origin, place.ty, &place)),
+                place,
+            })
+        } else {
+            Err(NormalizeError::InvalidProjection)
+        }
+    }
+
+    fn normalize_projection_expr(
+        &mut self,
+        block: SBlockId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        base: SOperand,
+        projection: NDataProjection,
+        result_ty: TyId<'db>,
+    ) -> Result<NExpr<'db>, NormalizeError<'db>> {
+        if self.local_has_place(base.value) {
+            let mut place = self.place_for_local(block, base.sem_origin(origin), base.value)?;
+            if let Some((_, target)) = place.ty.as_capability(self.db) {
+                let carrier_ty = place.ty;
+                let carrier = self.emit_define(
+                    block,
+                    None,
+                    base.sem_origin(origin),
+                    carrier_ty,
+                    base.value,
+                    NExpr::Load {
+                        place,
+                        mode: ReadMode::Copy,
+                    },
+                )?;
+                place = NPlace {
+                    base: NPlaceBase::CapabilityTarget { carrier },
+                    path: NDataPath::empty(),
+                    ty: target,
+                    origin: base.sem_origin(origin),
+                };
+            }
+            place.path = place.path.appended(projection);
+            place.ty = project_path_ty(
+                self.db,
+                self.instance,
+                &self.values,
+                self.place_base_ty(place.base)?,
+                &place.path,
+            )
+            .map_err(|_| NormalizeError::InvalidProjection)?;
+            self.load_or_borrow_place(base.sem_origin(origin), result_ty, place, None)
+        } else {
+            let value = self.read_operand(block, origin, base, None)?;
+            self.normalize_value_projection(
+                block,
+                origin,
+                base.value,
+                value,
+                NDataPath::new(vec![projection].into_boxed_slice()),
+                result_ty,
+            )
+        }
+    }
+
+    fn normalize_value_projection(
+        &mut self,
+        block: SBlockId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        source_local: SLocalId,
+        mut value: NOperand,
+        path: NDataPath,
+        result_ty: TyId<'db>,
+    ) -> Result<NExpr<'db>, NormalizeError<'db>> {
+        if path.is_empty() {
+            return Ok(NExpr::Forward { src: value });
+        }
+        let projections = path.iter().copied().collect::<Vec<_>>();
+        let mut projected_ty = self.values[value.value.index()].ty;
+        for (index, projection) in projections.iter().copied().enumerate() {
+            projected_ty = project_path_ty(
+                self.db,
+                self.instance,
+                &self.values,
+                projected_ty,
+                &NDataPath::new(vec![projection].into_boxed_slice()),
+            )
+            .map_err(|_| NormalizeError::InvalidProjection)?;
+            let Some((_, target)) = projected_ty.as_capability(self.db) else {
+                continue;
+            };
+            if index + 1 == projections.len() {
+                break;
+            }
+            if self.ty_is_copy(projected_ty) {
+                value.mode = ReadMode::Copy;
+            }
+            let carrier = self.emit_define(
+                block,
+                None,
+                origin,
+                projected_ty,
+                source_local,
+                NExpr::ProjectValue {
+                    value,
+                    path: NStructuralPath(NDataPath::new(
+                        projections[..=index].to_vec().into_boxed_slice(),
+                    )),
+                },
+            )?;
+            let mut place = NPlace {
+                base: NPlaceBase::CapabilityTarget { carrier },
+                path: NDataPath::empty(),
+                ty: target,
+                origin,
+            };
+            for (remaining_index, projection) in
+                projections[index + 1..].iter().copied().enumerate()
+            {
+                place.path.push(projection);
+                place.ty = project_path_ty(
+                    self.db,
+                    self.instance,
+                    &self.values,
+                    self.place_base_ty(place.base)?,
+                    &place.path,
+                )
+                .map_err(|_| NormalizeError::InvalidProjection)?;
+                if remaining_index + index + 2 < projections.len()
+                    && let Some((_, target)) = place.ty.as_capability(self.db)
+                {
+                    let carrier = self.emit_define(
+                        block,
+                        None,
+                        origin,
+                        place.ty,
+                        source_local,
+                        NExpr::Load {
+                            place,
+                            mode: ReadMode::Copy,
+                        },
+                    )?;
+                    place = NPlace {
+                        base: NPlaceBase::CapabilityTarget { carrier },
+                        path: NDataPath::empty(),
+                        ty: target,
+                        origin,
+                    };
+                }
+            }
+            return self.load_or_borrow_place(origin, result_ty, place, None);
+        }
+        if self.ty_is_copy(projected_ty) {
+            value.mode = ReadMode::Copy;
+        }
+        Ok(NExpr::ProjectValue {
+            value,
+            path: NStructuralPath(path),
+        })
+    }
+
+    fn normalize_place(
+        &mut self,
+        block: SBlockId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        raw: &SPlace<'db>,
+    ) -> Result<NPlace<'db>, NormalizeError<'db>> {
+        let mut place = self.place_for_local(block, origin, raw.local)?;
+        let suffix = self.normalize_path(block, origin, &raw.path)?;
+        for (index, projection) in suffix.iter().copied().enumerate() {
+            place.path.push(projection);
+            let base_ty = self.place_base_ty(place.base)?;
+            place.ty = project_path_ty(self.db, self.instance, &self.values, base_ty, &place.path)
+                .map_err(|_| NormalizeError::InvalidProjection)?;
+            if index + 1 < suffix.len()
+                && let Some((_, target)) = place.ty.as_capability(self.db)
+            {
+                let carrier_ty = place.ty;
+                let carrier = self.emit_define(
+                    block,
+                    None,
+                    origin,
+                    carrier_ty,
+                    raw.local,
+                    NExpr::Load {
+                        place,
+                        mode: ReadMode::Copy,
+                    },
+                )?;
+                place = NPlace {
+                    base: NPlaceBase::CapabilityTarget { carrier },
+                    path: NDataPath::empty(),
+                    ty: target,
+                    origin,
+                };
+            }
+        }
+        Ok(place)
+    }
+
+    fn place_for_local(
+        &mut self,
+        block: SBlockId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        local: SLocalId,
+    ) -> Result<NPlace<'db>, NormalizeError<'db>> {
+        if let Some(root) = self.root_for_local[local.index()] {
+            return Ok(self.root_place(root, origin));
+        }
+        if let Some(root) = self.provider_target_root_for_local[local.index()] {
+            return Ok(self.root_place(root, origin));
+        }
+        let local_data = &self.raw.locals[local.index()];
+        match &local_data.role {
+            SemanticLocalRole::PlaceBoundValue {
+                provenance: PlaceProvenance::Derived(place),
+                ..
+            } => self.normalize_place(block, origin, place),
+            _ if local_data.ty.as_capability(self.db).is_some() => {
+                let carrier = self.current_value(local)?;
+                let ty = self.values[carrier.index()]
+                    .ty
+                    .as_capability(self.db)
+                    .map(|(_, target)| target)
+                    .ok_or(NormalizeError::MissingRoot(local))?;
+                Ok(NPlace {
+                    base: NPlaceBase::CapabilityTarget { carrier },
+                    path: NDataPath::empty(),
+                    ty,
+                    origin,
+                })
+            }
+            _ => Err(NormalizeError::MissingRoot(local)),
+        }
+    }
+
+    fn normalize_path(
+        &mut self,
+        block: SBlockId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        path: &crate::analysis::semantic::SemanticProjectionPath<'db>,
+    ) -> Result<NDataPath, NormalizeError<'db>> {
+        let mut projections = Vec::with_capacity(path.len());
+        for projection in path.iter() {
+            projections.push(match projection {
+                Projection::Field(field) => {
+                    NDataProjection::Field(crate::analysis::semantic::FieldIndex(
+                        u16::try_from(*field).map_err(|_| NormalizeError::InvalidProjection)?,
+                    ))
+                }
+                Projection::VariantField {
+                    variant, field_idx, ..
+                } => NDataProjection::VariantField {
+                    variant: *variant,
+                    field: crate::analysis::semantic::FieldIndex(
+                        u16::try_from(*field_idx).map_err(|_| NormalizeError::InvalidProjection)?,
+                    ),
+                },
+                Projection::Index(IndexSource::Constant(index)) => {
+                    NDataProjection::Index(NIndex::Const(*index))
+                }
+                Projection::Index(IndexSource::Dynamic(local)) => {
+                    let index = self.read_scalar_operand(
+                        block,
+                        origin,
+                        SOperand::inherited(*local),
+                        Some(ReadMode::Copy),
+                    )?;
+                    self.projection_values[local.index()] = Some(index.value);
+                    NDataProjection::Index(NIndex::Value(index.value))
+                }
+                Projection::Deref | Projection::Discriminant => {
+                    return Err(NormalizeError::UnsupportedPlaceProjection);
+                }
+            });
+        }
+        Ok(NDataPath::new(projections.into_boxed_slice()))
+    }
+
+    fn read_operand(
+        &mut self,
+        block: SBlockId,
+        fallback: crate::analysis::semantic::SemOrigin<'db>,
+        operand: SOperand,
+        forced_mode: Option<ReadMode>,
+    ) -> Result<NOperand, NormalizeError<'db>> {
+        self.read_local(
+            block,
+            operand.sem_origin(fallback),
+            operand.value,
+            forced_mode,
+        )
+    }
+
+    fn read_scalar_operand(
+        &mut self,
+        block: SBlockId,
+        fallback: crate::analysis::semantic::SemOrigin<'db>,
+        operand: SOperand,
+        forced_mode: Option<ReadMode>,
+    ) -> Result<NOperand, NormalizeError<'db>> {
+        let origin = operand.sem_origin(fallback);
+        if !self.local_has_place(operand.value) {
+            return self.read_local(block, origin, operand.value, forced_mode);
+        }
+        let place = self.place_for_local(block, origin, operand.value)?;
+        let mode =
+            forced_mode.unwrap_or_else(|| self.read_mode_for_place(origin, place.ty, &place));
+        let value = self.emit_define(
+            block,
+            None,
+            origin,
+            place.ty,
+            operand.value,
+            NExpr::Load { place, mode },
+        )?;
+        Ok(self.operand(value, origin, mode))
+    }
+
+    fn read_operand_as(
+        &mut self,
+        block: SBlockId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        operand: SOperand,
+        target_ty: TyId<'db>,
+    ) -> Result<NOperand, NormalizeError<'db>> {
+        let value = self.read_operand(block, origin, operand, None)?;
+        self.repack_operand_as(block, origin, operand.value, value, target_ty)
+    }
+
+    fn repack_operand_as(
+        &mut self,
+        block: SBlockId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        source_local: SLocalId,
+        value: NOperand,
+        target_ty: TyId<'db>,
+    ) -> Result<NOperand, NormalizeError<'db>> {
+        let source_ty = self.values[value.value.index()].ty;
+        if source_ty == target_ty {
+            return Ok(value);
+        }
+        let mapping = structural_repack_mapping(self.db, self.instance, source_ty, target_ty)
+            .ok_or(NormalizeError::UnsupportedCapabilityCast {
+                from: source_ty,
+                to: target_ty,
+            })?;
+        let mode = value.mode;
+        let value = self.emit_define(
+            block,
+            None,
+            origin,
+            target_ty,
+            source_local,
+            NExpr::StructuralRepack { value, mapping },
+        )?;
+        Ok(self.operand(value, origin, mode))
+    }
+
+    fn read_local(
+        &mut self,
+        block: SBlockId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        local: SLocalId,
+        forced_mode: Option<ReadMode>,
+    ) -> Result<NOperand, NormalizeError<'db>> {
+        if self.root_for_local[local.index()].is_some() {
+            let place = self.place_for_local(block, origin, local)?;
+            let mode = forced_mode.unwrap_or_else(|| {
+                self.read_mode_for_place(origin, self.raw.locals[local.index()].ty, &place)
+            });
+            let value = self.emit_define(
+                block,
+                None,
+                origin,
+                place.ty,
+                local,
+                NExpr::Load { place, mode },
+            )?;
+            return Ok(self.operand(value, origin, mode));
+        }
+        let value = self.current_value(local)?;
+        let mode = forced_mode.unwrap_or_else(|| self.read_mode_for_value(origin, local));
+        Ok(self.operand(value, origin, mode))
+    }
+
+    fn normalize_terminator(
+        &mut self,
+        block: SBlockId,
+    ) -> Result<NTerminator<'db>, NormalizeError<'db>> {
+        let raw = self.raw.blocks[block.index()].terminator.clone();
+        let kind = match &raw.kind {
+            STerminatorKind::Goto(target) => {
+                NTerminatorKind::Goto(self.successor(block, raw.origin, *target)?)
+            }
+            STerminatorKind::Branch {
+                cond,
+                then_bb,
+                else_bb,
+            } => NTerminatorKind::Branch {
+                cond: self.read_scalar_operand(block, raw.origin, *cond, Some(ReadMode::Copy))?,
+                then_target: self.successor(block, raw.origin, *then_bb)?,
+                else_target: self.successor(block, raw.origin, *else_bb)?,
+            },
+            STerminatorKind::MatchEnum {
+                value,
+                enum_ty,
+                cases,
+                default,
+            } => NTerminatorKind::MatchEnum {
+                value: self.read_operand(block, raw.origin, *value, Some(ReadMode::Copy))?,
+                enum_ty: self.instance.normalized_ty(self.db, *enum_ty),
+                cases: cases
+                    .iter()
+                    .map(|(variant, target)| {
+                        Ok((*variant, self.successor(block, raw.origin, *target)?))
+                    })
+                    .collect::<Result<Vec<_>, NormalizeError<'db>>>()?
+                    .into_boxed_slice(),
+                default: default
+                    .map(|target| self.successor(block, raw.origin, target))
+                    .transpose()?,
+            },
+            STerminatorKind::Assert { message } => NTerminatorKind::Assert { message: *message },
+            STerminatorKind::Return(value) => NTerminatorKind::Return(
+                value
+                    .map(|value| self.read_operand(block, raw.origin, value, None))
+                    .transpose()?,
+            ),
+        };
+        Ok(NTerminator {
+            origin: raw.origin,
+            kind,
+        })
+    }
+
+    fn successor(
+        &mut self,
+        block: SBlockId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        target: SBlockId,
+    ) -> Result<NSuccessor, NormalizeError<'db>> {
+        let locals = self.phi_locals[target.index()].clone();
+        let params = self.phi_values[target.index()].clone();
+        let args = locals
+            .into_iter()
+            .zip(params)
+            .map(|(local, param)| {
+                let value = self.current_value(local)?;
+                let value = self.operand(value, origin, ReadMode::Copy);
+                self.repack_operand_as(block, origin, local, value, self.values[param.index()].ty)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(NSuccessor {
+            block: NBlockId::new(target.index()),
+            args: args.into_boxed_slice(),
+        })
+    }
+
+    fn emit_define(
+        &mut self,
+        block: SBlockId,
+        source: Option<SStmtId>,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        ty: TyId<'db>,
+        source_local: SLocalId,
+        expr: NExpr<'db>,
+    ) -> Result<NValueId, NormalizeError<'db>> {
+        let forwarded = match &expr {
+            NExpr::Forward { src } => Some(src.value),
+            _ => None,
+        };
+        if forwarded.is_none() {
+            self.prepare_layout_backing_indices(block, origin, source_local)?;
+        }
+        let statement = self.blocks[block.index()].statements.len() as u32;
+        let source_binding = forwarded
+            .and_then(|source| self.values.get(source.index())?.source)
+            .or(self.raw.locals[source_local.index()].source);
+        let value = self.push_value(
+            ty,
+            origin,
+            NValueDefinition::Statement {
+                block: NBlockId::new(block.index()),
+                statement,
+            },
+            source_binding,
+            source_local,
+        );
+        self.blocks[block.index()].statements.push(NStatement {
+            source,
+            origin,
+            kind: NStatementKind::Define {
+                result: value,
+                expr,
+            },
+        });
+        if let Some(source) = forwarded {
+            let backings = self
+                .use_backings
+                .iter()
+                .filter(|backing| backing.value == source)
+                .cloned()
+                .map(|mut backing| {
+                    backing.value = value;
+                    backing.origin = origin;
+                    backing
+                })
+                .collect::<Vec<_>>();
+            self.use_backings.extend(backings);
+        } else {
+            self.record_layout_backings(value, source_local, block, origin)?;
+        }
+        Ok(value)
+    }
+
+    fn emit_store(
+        &mut self,
+        block: SBlockId,
+        source: Option<SStmtId>,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        destination: NPlace<'db>,
+        value: NOperand,
+    ) {
+        self.blocks[block.index()].statements.push(NStatement {
+            source,
+            origin,
+            kind: NStatementKind::Store { destination, value },
+        });
+    }
+
+    fn record_layout_backings(
+        &mut self,
+        value: NValueId,
+        source_local: SLocalId,
+        block: SBlockId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+    ) -> Result<(), NormalizeError<'db>> {
+        let backings = self.raw.locals[source_local.index()]
+            .layout_backing_sources
+            .clone();
+        for backing in backings {
+            let source = match backing.source {
+                LayoutBackingPlace::Local(place) => {
+                    let path = self.normalize_layout_path(block, origin, &place.path)?;
+                    if let Some(root) = self.root_for_local[place.local.index()] {
+                        NLayoutBackingSource::Root { root, path }
+                    } else {
+                        let source = if place.local == source_local {
+                            value
+                        } else {
+                            self.current_value(place.local)?
+                        };
+                        NLayoutBackingSource::Value {
+                            value: source,
+                            path,
+                        }
+                    }
+                }
+                LayoutBackingPlace::RootProvider {
+                    provider,
+                    value_ty,
+                    path,
+                } => NLayoutBackingSource::Root {
+                    root: self.provider_root(provider, value_ty)?,
+                    path: self.normalize_layout_path(block, origin, &path)?,
+                },
+            };
+            self.use_backings.push(NLayoutUseBacking {
+                value,
+                target: backing.target.into_boxed_slice(),
+                source,
+                origin,
+            });
+        }
+        Ok(())
+    }
+
+    fn prepare_layout_backing_indices(
+        &mut self,
+        block: SBlockId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        source_local: SLocalId,
+    ) -> Result<(), NormalizeError<'db>> {
+        let backings = self.raw.locals[source_local.index()]
+            .layout_backing_sources
+            .clone();
+        for backing in backings {
+            let path = match backing.source {
+                LayoutBackingPlace::Local(place) => place.path,
+                LayoutBackingPlace::RootProvider { path, .. } => path,
+            };
+            self.normalize_layout_path(block, origin, &path)?;
+        }
+        Ok(())
+    }
+
+    fn normalize_layout_path(
+        &mut self,
+        block: SBlockId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        path: &crate::analysis::semantic::SemanticProjectionPath<'db>,
+    ) -> Result<NDataPath, NormalizeError<'db>> {
+        let mut normalized = Vec::with_capacity(path.len());
+        for projection in path.iter() {
+            normalized.push(match projection {
+                Projection::Field(field) => NDataProjection::Field(
+                    u16::try_from(*field)
+                        .map(crate::analysis::semantic::FieldIndex)
+                        .map_err(|_| NormalizeError::InvalidProjection)?,
+                ),
+                Projection::VariantField {
+                    variant, field_idx, ..
+                } => NDataProjection::VariantField {
+                    variant: *variant,
+                    field: crate::analysis::semantic::FieldIndex(
+                        u16::try_from(*field_idx).map_err(|_| NormalizeError::InvalidProjection)?,
+                    ),
+                },
+                Projection::Index(IndexSource::Constant(index)) => {
+                    NDataProjection::Index(NIndex::Const(*index))
+                }
+                Projection::Index(IndexSource::Dynamic(local)) => {
+                    let value = if let Some(value) = self.projection_values[local.index()] {
+                        value
+                    } else {
+                        let value = self
+                            .read_scalar_operand(
+                                block,
+                                origin,
+                                SOperand::inherited(*local),
+                                Some(ReadMode::Copy),
+                            )?
+                            .value;
+                        self.projection_values[local.index()] = Some(value);
+                        value
+                    };
+                    NDataProjection::Index(NIndex::Value(value))
+                }
+                Projection::Deref | Projection::Discriminant => {
+                    return Err(NormalizeError::UnsupportedPlaceProjection);
+                }
+            });
+        }
+        Ok(NDataPath::new(normalized.into_boxed_slice()))
+    }
+
+    fn push_value(
+        &mut self,
+        ty: TyId<'db>,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        definition: NValueDefinition,
+        source: Option<LocalBinding<'db>>,
+        source_local: SLocalId,
+    ) -> NValueId {
+        let ty = self.instance.normalized_ty(self.db, ty);
+        let value = NValueId::new(self.values.len());
+        self.values.push(NValue {
+            ty,
+            origin,
+            definition,
+            source,
+        });
+        self.value_sources.push(NValueRepresentation {
+            value,
+            source_local,
+        });
+        value
+    }
+
+    fn current_value(&self, local: SLocalId) -> Result<NValueId, NormalizeError<'db>> {
+        self.current_values[local.index()]
+            .last()
+            .copied()
+            .ok_or(NormalizeError::MissingValue(local))
+    }
+
+    fn normalized_local_ty(&self, local: SLocalId) -> TyId<'db> {
+        let local = &self.raw.locals[local.index()];
+        let ty = if matches!(
+            local.role,
+            SemanticLocalRole::DirectValue {
+                provenance: ValueProvenance::Ordinary,
+            }
+        ) && let Some((_, target)) = local.ty.as_capability(self.db)
+        {
+            target
+        } else {
+            local.ty
+        };
+        self.instance.normalized_ty(self.db, ty)
+    }
+
+    fn call_arg_mode(
+        &self,
+        callee: crate::analysis::semantic::SemanticCalleeRef<'db>,
+        index: usize,
+        local: SLocalId,
+    ) -> Option<ReadMode> {
+        let BodyOwner::Func(func) = callee.key.owner(self.db) else {
+            return None;
+        };
+        matches!(
+            func.params(self.db)
+                .nth(index)
+                .map(|param| param.mode(self.db)),
+            Some(FuncParamMode::View)
+        )
+        .then(|| {
+            if self.ty_is_copy(self.normalized_local_ty(local)) {
+                ReadMode::Copy
+            } else {
+                ReadMode::Read
+            }
+        })
+    }
+
+    fn operand(
+        &self,
+        value: NValueId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        mode: ReadMode,
+    ) -> NOperand {
+        NOperand {
+            value,
+            origin: match origin {
+                crate::analysis::semantic::SemOrigin::Expr(expr) => Some(expr),
+                crate::analysis::semantic::SemOrigin::Stmt(_)
+                | crate::analysis::semantic::SemOrigin::Body(_)
+                | crate::analysis::semantic::SemOrigin::Synthetic => None,
+            },
+            mode,
+        }
+    }
+
+    fn root_place(
+        &self,
+        root: NRootId,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+    ) -> NPlace<'db> {
+        NPlace {
+            base: NPlaceBase::Root(root),
+            path: NDataPath::empty(),
+            ty: self.roots[root.index()].ty,
+            origin,
+        }
+    }
+
+    fn place_base_ty(&self, base: NPlaceBase) -> Result<TyId<'db>, NormalizeError<'db>> {
+        match base {
+            NPlaceBase::Root(root) => self
+                .roots
+                .get(root.index())
+                .map(|root| root.ty)
+                .ok_or(NormalizeError::InvalidProjection),
+            NPlaceBase::CapabilityTarget { carrier } => self
+                .values
+                .get(carrier.index())
+                .and_then(|value| value.ty.as_capability(self.db))
+                .map(|(_, target)| target)
+                .ok_or(NormalizeError::InvalidProjection),
+        }
+    }
+
+    fn local_has_place(&self, local: SLocalId) -> bool {
+        self.root_for_local[local.index()].is_some()
+            || self.raw.locals[local.index()]
+                .ty
+                .as_capability(self.db)
+                .is_some()
+            || matches!(
+                self.raw.locals[local.index()].role,
+                SemanticLocalRole::PlaceBoundValue {
+                    provenance: PlaceProvenance::Derived(_),
+                    ..
+                }
+            )
+    }
+
+    fn ty_is_copy(&self, ty: TyId<'db>) -> bool {
+        if let Some(result) = self.copy_cache.borrow().get(&ty) {
+            return *result;
+        }
+        let result = ty_is_copy(
+            self.db,
+            self.raw.template_owner.scope(),
+            ty,
+            self.assumptions,
+        );
+        self.copy_cache.borrow_mut().insert(ty, result);
+        result
+    }
+
+    fn origin_is_implicit_move(&self, origin: crate::analysis::semantic::SemOrigin<'db>) -> bool {
+        matches!(
+            origin,
+            crate::analysis::semantic::SemOrigin::Expr(expr)
+                if self.instance.key(self.db).instantiate_typed_body(self.db).is_implicit_move(expr)
+        )
+    }
+
+    fn read_mode_for_value(
+        &self,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        local: SLocalId,
+    ) -> ReadMode {
+        let local_id = local;
+        let local = &self.raw.locals[local_id.index()];
+        let source = self.current_values[local_id.index()]
+            .last()
+            .and_then(|value| self.values.get(value.index()))
+            .and_then(|value| value.source)
+            .or(local.source);
+        let ty = self.normalized_local_ty(local_id);
+        if ty.as_capability(self.db).is_some()
+            || matches!(local.role, SemanticLocalRole::DirectCarrier { .. })
+        {
+            ReadMode::Copy
+        } else if matches!(
+            source,
+            Some(LocalBinding::Param {
+                mode: FuncParamMode::View,
+                ..
+            })
+        ) {
+            if self.ty_is_copy(ty) {
+                ReadMode::Copy
+            } else {
+                ReadMode::Read
+            }
+        } else if self.origin_is_implicit_move(origin) || !self.ty_is_copy(ty) {
+            ReadMode::Move
+        } else {
+            ReadMode::Copy
+        }
+    }
+
+    fn read_mode_for_place(
+        &self,
+        origin: crate::analysis::semantic::SemOrigin<'db>,
+        ty: TyId<'db>,
+        place: &NPlace<'db>,
+    ) -> ReadMode {
+        match place.base {
+            NPlaceBase::Root(root)
+                if matches!(self.roots[root.index()].kind, NRootKind::Provider { .. }) =>
+            {
+                ReadMode::Copy
+            }
+            NPlaceBase::CapabilityTarget { .. } => {
+                if self.origin_is_implicit_move(origin) {
+                    if self.ty_is_copy_or_direct_carrier(ty) {
+                        ReadMode::Copy
+                    } else {
+                        ReadMode::Move
+                    }
+                } else if self.ty_is_copy_or_direct_carrier(ty) {
+                    ReadMode::Copy
+                } else {
+                    ReadMode::Read
+                }
+            }
+            NPlaceBase::Root(_) if self.origin_is_implicit_move(origin) || !self.ty_is_copy(ty) => {
+                ReadMode::Move
+            }
+            NPlaceBase::Root(_) => ReadMode::Copy,
+        }
+    }
+
+    fn ty_is_copy_or_direct_carrier(&self, ty: TyId<'db>) -> bool {
+        self.ty_is_copy(ty)
+            || matches!(
+                provider_semantics(
+                    self.db,
+                    self.raw.template_owner.scope(),
+                    self.assumptions,
+                    ty,
+                )
+                .evidence,
+                ProviderLayoutEvidence::ResolvedHandle(_)
+            )
+    }
+}
+
+fn semantic_root_provider<'db>(
+    role: &SemanticLocalRole<'db>,
+    local_ty: TyId<'db>,
+) -> Option<(ProviderBinding<'db>, TyId<'db>)> {
+    match role {
+        SemanticLocalRole::DirectValue {
+            provenance: ValueProvenance::RootProvider(provider),
+        } => Some((provider.clone(), local_ty)),
+        SemanticLocalRole::PlaceCarrier {
+            provider: Some(provider),
+            value_ty,
+        }
+        | SemanticLocalRole::PlaceBoundValue {
+            provenance: PlaceProvenance::RootProvider(provider),
+            value_ty,
+        } => Some((provider.clone(), *value_ty)),
+        SemanticLocalRole::DirectCarrier {
+            provider: Some(provider),
+            target_ty,
+        } => Some((provider.clone(), *target_ty)),
+        SemanticLocalRole::Erased
+        | SemanticLocalRole::DirectValue {
+            provenance: ValueProvenance::Ordinary,
+        }
+        | SemanticLocalRole::PlaceCarrier { provider: None, .. }
+        | SemanticLocalRole::PlaceBoundValue {
+            provenance: PlaceProvenance::Derived(_),
+            ..
+        }
+        | SemanticLocalRole::DirectCarrier { provider: None, .. } => None,
+    }
+}
+
+fn for_each_address_required_local(expr: &SExpr<'_>, mut f: impl FnMut(SLocalId)) {
+    match expr {
+        SExpr::Borrow { place, .. } => f(place.local),
+        SExpr::Call { effect_args, .. } => {
+            for arg in effect_args {
+                if let crate::analysis::semantic::SEffectArgValue::Place(place) = &arg.arg {
+                    f(place.local);
+                }
+            }
+        }
+        SExpr::Forward(_)
+        | SExpr::UseValue(_)
+        | SExpr::ReadPlace { .. }
+        | SExpr::CodeRegionRef { .. }
+        | SExpr::Const(_)
+        | SExpr::Unary { .. }
+        | SExpr::Binary { .. }
+        | SExpr::Cast { .. }
+        | SExpr::ArrayRepeat { .. }
+        | SExpr::AggregateMake { .. }
+        | SExpr::EnumMake { .. }
+        | SExpr::Field { .. }
+        | SExpr::Index { .. }
+        | SExpr::GetEnumTag { .. }
+        | SExpr::IsEnumVariant { .. }
+        | SExpr::ExtractEnumField { .. }
+        | SExpr::CodeRegionOffset { .. }
+        | SExpr::CodeRegionLen { .. } => {}
+    }
+}
+
+struct StructuralRepackCollector<'db> {
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    mapping: Vec<(NDataPath, NDataPath)>,
+    visiting: FxHashSet<(TyId<'db>, TyId<'db>)>,
+}
+
+impl<'db> StructuralRepackCollector<'db> {
+    fn collect(
+        &mut self,
+        mut source: TyId<'db>,
+        mut target: TyId<'db>,
+        source_path: NDataPath,
+        target_path: NDataPath,
+    ) -> bool {
+        let db = self.db;
+        let instance = self.instance;
+        source = instance.normalized_ty(db, source);
+        target = instance.normalized_ty(db, target);
+        if !self.visiting.insert((source, target)) {
+            return true;
+        }
+        let result = if source.as_capability(db).is_some() || target.as_capability(db).is_some() {
+            if source == target {
+                self.mapping.push((target_path, source_path));
+                true
+            } else {
+                false
+            }
+        } else if source.is_array(db) && target.is_array(db) {
+            let source_elem = source.decompose_ty_app(db).1.first().copied();
+            let target_elem = target.decompose_ty_app(db).1.first().copied();
+            if source.array_len(db) != target.array_len(db) {
+                false
+            } else if source.array_len(db) == Some(0) {
+                true
+            } else {
+                source_elem
+                    .zip(target_elem)
+                    .is_some_and(|(source_elem, target_elem)| {
+                        self.collect(
+                            instance.normalized_ty(db, source_elem),
+                            instance.normalized_ty(db, target_elem),
+                            source_path.appended(NDataProjection::Index(NIndex::Const(0))),
+                            target_path.appended(NDataProjection::Index(NIndex::Const(0))),
+                        )
+                    })
+            }
+        } else if let (Some(source_adt), Some(target_adt)) =
+            (source.adt_def(db), target.adt_def(db))
+            && matches!(source_adt.adt_ref(db), AdtRef::Enum(_))
+            && matches!(target_adt.adt_ref(db), AdtRef::Enum(_))
+        {
+            let source_variants = source_adt.fields(db);
+            let target_variants = target_adt.fields(db);
+            source_variants.len() == target_variants.len()
+                && source_variants.iter().zip(target_variants).enumerate().all(
+                    |(variant, (source_fields, target_fields))| {
+                        source_fields.num_types() == target_fields.num_types()
+                            && (0..source_fields.num_types()).all(|field| {
+                                self.collect(
+                                    instance.normalized_enum_variant_field_tys(
+                                        db,
+                                        source,
+                                        VariantIndex(variant as u16),
+                                    )[field],
+                                    instance.normalized_enum_variant_field_tys(
+                                        db,
+                                        target,
+                                        VariantIndex(variant as u16),
+                                    )[field],
+                                    source_path.appended(NDataProjection::VariantField {
+                                        variant: VariantIndex(variant as u16),
+                                        field: FieldIndex(field as u16),
+                                    }),
+                                    target_path.appended(NDataProjection::VariantField {
+                                        variant: VariantIndex(variant as u16),
+                                        field: FieldIndex(field as u16),
+                                    }),
+                                )
+                            })
+                    },
+                )
+        } else if source
+            .adt_def(db)
+            .is_some_and(|adt| matches!(adt.adt_ref(db), AdtRef::Enum(_)))
+            || target
+                .adt_def(db)
+                .is_some_and(|adt| matches!(adt.adt_ref(db), AdtRef::Enum(_)))
+        {
+            false
+        } else if instance.normalized_field_types(db, source).is_empty()
+            && instance.normalized_field_types(db, target).is_empty()
+        {
+            if source == target {
+                if !source.is_zero_sized(db) {
+                    self.mapping.push((target_path, source_path));
+                }
+                true
+            } else {
+                source.is_zero_sized(db)
+                    && target.is_zero_sized(db)
+                    && source.adt_def(db) == target.adt_def(db)
+            }
+        } else {
+            let source_fields = instance.normalized_field_types(db, source);
+            let target_fields = instance.normalized_field_types(db, target);
+            !source_fields.is_empty()
+                && source_fields.len() == target_fields.len()
+                && source_fields
+                    .into_iter()
+                    .zip(target_fields)
+                    .enumerate()
+                    .all(|(index, (source_field, target_field))| {
+                        let field = crate::analysis::semantic::FieldIndex(index as u16);
+                        self.collect(
+                            *source_field,
+                            *target_field,
+                            source_path.appended(NDataProjection::Field(field)),
+                            target_path.appended(NDataProjection::Field(field)),
+                        )
+                    })
+        };
+        self.visiting.remove(&(source, target));
+        result
+    }
+}
+
+fn structural_repack_mapping<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    source: TyId<'db>,
+    target: TyId<'db>,
+) -> Option<StructuralRepack> {
+    let mut collector = StructuralRepackCollector {
+        db,
+        instance,
+        mapping: Vec::new(),
+        visiting: FxHashSet::default(),
+    };
+    collector
+        .collect(source, target, NDataPath::empty(), NDataPath::empty())
+        .then(|| StructuralRepack {
+            fields: collector.mapping.into_boxed_slice(),
+        })
+}
+
+struct RawCfg {
+    successors: Vec<Vec<usize>>,
+    reachable: Vec<bool>,
+    dom_children: Vec<Vec<usize>>,
+    dominance_frontier: Vec<FxHashSet<usize>>,
+}
+
+impl RawCfg {
+    fn new(body: &SemanticBody<'_>) -> Self {
+        let successors = body
+            .blocks
+            .iter()
+            .map(|block| raw_successors(&block.terminator.kind))
+            .collect::<Vec<_>>();
+        let mut predecessors = vec![Vec::new(); body.blocks.len()];
+        for (block, targets) in successors.iter().enumerate() {
+            for target in targets {
+                predecessors[*target].push(block);
+            }
+        }
+        let mut reachable = vec![false; body.blocks.len()];
+        let mut pending = vec![0usize];
+        while let Some(block) = pending.pop() {
+            if reachable[block] {
+                continue;
+            }
+            reachable[block] = true;
+            pending.extend(successors[block].iter().copied());
+        }
+        let reachable_set = reachable
+            .iter()
+            .enumerate()
+            .filter_map(|(block, reachable)| reachable.then_some(block))
+            .collect::<FxHashSet<_>>();
+        let mut dominators = reachable
+            .iter()
+            .enumerate()
+            .map(|(block, reachable)| {
+                if !reachable {
+                    FxHashSet::from_iter([block])
+                } else if block == 0 {
+                    FxHashSet::from_iter([0])
+                } else {
+                    reachable_set.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        loop {
+            let mut changed = false;
+            for block in 1..body.blocks.len() {
+                if !reachable[block] {
+                    continue;
+                }
+                let mut incoming = predecessors[block]
+                    .iter()
+                    .copied()
+                    .filter(|pred| reachable[*pred]);
+                let mut next = incoming
+                    .next()
+                    .map(|pred| dominators[pred].clone())
+                    .unwrap_or_default();
+                for pred in incoming {
+                    next.retain(|dom| dominators[pred].contains(dom));
+                }
+                next.insert(block);
+                changed |= next != dominators[block];
+                dominators[block] = next;
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut idom = vec![None; body.blocks.len()];
+        for block in 1..body.blocks.len() {
+            if reachable[block] {
+                idom[block] = dominators[block]
+                    .iter()
+                    .copied()
+                    .filter(|dom| *dom != block)
+                    .max_by_key(|dom| dominators[*dom].len());
+            }
+        }
+        let mut dom_children = vec![Vec::new(); body.blocks.len()];
+        for (block, parent) in idom.iter().copied().enumerate() {
+            if let Some(parent) = parent {
+                dom_children[parent].push(block);
+            }
+        }
+        let mut dominance_frontier = vec![FxHashSet::default(); body.blocks.len()];
+        for block in 0..body.blocks.len() {
+            let reachable_preds = predecessors[block]
+                .iter()
+                .copied()
+                .filter(|pred| reachable[*pred])
+                .collect::<Vec<_>>();
+            if reachable_preds.len() < 2 {
+                continue;
+            }
+            for pred in reachable_preds {
+                let mut runner = Some(pred);
+                while runner != idom[block] {
+                    let Some(current) = runner else {
+                        break;
+                    };
+                    dominance_frontier[current].insert(block);
+                    runner = idom[current];
+                }
+            }
+        }
+        Self {
+            successors,
+            reachable,
+            dom_children,
+            dominance_frontier,
+        }
+    }
+
+    fn dominator_roots(&self) -> Vec<SBlockId> {
+        let mut roots = vec![SBlockId::new(0)];
+        roots.extend(
+            self.reachable
+                .iter()
+                .enumerate()
+                .skip(1)
+                .filter_map(|(block, reachable)| (!reachable).then_some(SBlockId::new(block))),
+        );
+        roots
+    }
+
+    fn phi_locals(
+        &self,
+        body: &SemanticBody<'_>,
+        root_for_local: &[Option<NRootId>],
+    ) -> Vec<Vec<SLocalId>> {
+        let (uses, defs) = block_uses_and_defs(body);
+        let mut live_in = vec![FxHashSet::default(); body.blocks.len()];
+        let mut live_out = vec![FxHashSet::default(); body.blocks.len()];
+        loop {
+            let mut changed = false;
+            for block in (0..body.blocks.len()).rev() {
+                let next_out = self.successors[block]
+                    .iter()
+                    .flat_map(|successor| live_in[*successor].iter().copied())
+                    .collect::<FxHashSet<_>>();
+                let mut next_in = uses[block].clone();
+                next_in.extend(next_out.difference(&defs[block]).copied());
+                changed |= next_in != live_in[block] || next_out != live_out[block];
+                live_in[block] = next_in;
+                live_out[block] = next_out;
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        let mut def_blocks = vec![FxHashSet::default(); body.locals.len()];
+        for local in &body.entry_locals {
+            def_blocks[local.index()].insert(0);
+        }
+        for (block_index, block_defs) in defs.iter().enumerate() {
+            for local in block_defs {
+                def_blocks[local.index()].insert(block_index);
+            }
+        }
+        let mut phis = vec![FxHashSet::default(); body.blocks.len()];
+        for local_index in 0..body.locals.len() {
+            if root_for_local[local_index].is_some() {
+                continue;
+            }
+            let local = SLocalId::new(local_index);
+            let mut work = def_blocks[local_index].iter().copied().collect::<Vec<_>>();
+            let mut seen = def_blocks[local_index].clone();
+            while let Some(block) = work.pop() {
+                for frontier in &self.dominance_frontier[block] {
+                    if live_in[*frontier].contains(&local)
+                        && phis[*frontier].insert(local)
+                        && seen.insert(*frontier)
+                    {
+                        work.push(*frontier);
+                    }
+                }
+            }
+        }
+        phis.into_iter()
+            .map(|locals| {
+                let mut locals = locals.into_iter().collect::<Vec<_>>();
+                locals.sort_by_key(|local| local.index());
+                locals
+            })
+            .collect()
+    }
+}
+
+fn raw_successors(terminator: &STerminatorKind<'_>) -> Vec<usize> {
+    match terminator {
+        STerminatorKind::Goto(block) => vec![block.index()],
+        STerminatorKind::Branch {
+            then_bb, else_bb, ..
+        } => vec![then_bb.index(), else_bb.index()],
+        STerminatorKind::MatchEnum { cases, default, .. } => cases
+            .iter()
+            .map(|(_, block)| block.index())
+            .chain(default.iter().map(|block| block.index()))
+            .collect(),
+        STerminatorKind::Assert { .. } | STerminatorKind::Return(_) => Vec::new(),
+    }
+}
+
+fn block_uses_and_defs(
+    body: &SemanticBody<'_>,
+) -> (Vec<FxHashSet<SLocalId>>, Vec<FxHashSet<SLocalId>>) {
+    let mut uses = Vec::with_capacity(body.blocks.len());
+    let mut defs = Vec::with_capacity(body.blocks.len());
+    for block in &body.blocks {
+        let mut block_uses = FxHashSet::default();
+        let mut block_defs = FxHashSet::default();
+        for statement in &block.stmts {
+            match &statement.kind {
+                SStmtKind::Assign { dst, expr } => {
+                    for local in expr_used_locals(expr) {
+                        if !block_defs.contains(&local) {
+                            block_uses.insert(local);
+                        }
+                    }
+                    block_defs.insert(*dst);
+                }
+                SStmtKind::Store { dst, src } => {
+                    for local in place_used_locals(dst)
+                        .into_iter()
+                        .chain(std::iter::once(src.value))
+                    {
+                        if !block_defs.contains(&local) {
+                            block_uses.insert(local);
+                        }
+                    }
+                }
+            }
+        }
+        for local in terminator_used_locals(&block.terminator.kind) {
+            if !block_defs.contains(&local) {
+                block_uses.insert(local);
+            }
+        }
+        uses.push(block_uses);
+        defs.push(block_defs);
+    }
+    (uses, defs)
+}
+
+fn expr_used_locals(expr: &SExpr<'_>) -> Vec<SLocalId> {
+    let mut locals = Vec::new();
+    match expr {
+        SExpr::Forward(value)
+        | SExpr::UseValue(value)
+        | SExpr::Unary { value, .. }
+        | SExpr::Cast { value, .. }
+        | SExpr::ArrayRepeat { value, .. }
+        | SExpr::GetEnumTag { value }
+        | SExpr::IsEnumVariant { value, .. }
+        | SExpr::ExtractEnumField { value, .. } => locals.push(value.value),
+        SExpr::ReadPlace { place } | SExpr::Borrow { place, .. } => {
+            locals.extend(place_used_locals(place));
+        }
+        SExpr::Binary { lhs, rhs, .. } => {
+            locals.push(lhs.value);
+            locals.push(rhs.value);
+        }
+        SExpr::AggregateMake { fields, .. } | SExpr::EnumMake { fields, .. } => {
+            locals.extend(fields.iter().map(|field| field.value));
+        }
+        SExpr::Field { base, .. } => locals.push(base.value),
+        SExpr::Index { base, index } => {
+            locals.push(base.value);
+            locals.push(index.value);
+        }
+        SExpr::Call {
+            args, effect_args, ..
+        } => {
+            locals.extend(args.iter().map(|arg| arg.value));
+            for arg in effect_args {
+                match &arg.arg {
+                    crate::analysis::semantic::SEffectArgValue::Place(place) => {
+                        locals.extend(place_used_locals(place));
+                    }
+                    crate::analysis::semantic::SEffectArgValue::Value(value) => {
+                        locals.push(value.value);
+                    }
+                }
+            }
+        }
+        SExpr::CodeRegionRef { .. }
+        | SExpr::Const(_)
+        | SExpr::CodeRegionOffset { .. }
+        | SExpr::CodeRegionLen { .. } => {}
+    }
+    locals
+}
+
+fn place_used_locals(place: &SPlace<'_>) -> Vec<SLocalId> {
+    std::iter::once(place.local)
+        .chain(place.path.iter().filter_map(|projection| match projection {
+            Projection::Index(IndexSource::Dynamic(index)) => Some(*index),
+            Projection::Field(_)
+            | Projection::VariantField { .. }
+            | Projection::Discriminant
+            | Projection::Index(IndexSource::Constant(_))
+            | Projection::Deref => None,
+        }))
+        .collect()
+}
+
+fn terminator_used_locals(terminator: &STerminatorKind<'_>) -> Vec<SLocalId> {
+    match terminator {
+        STerminatorKind::Goto(_)
+        | STerminatorKind::Assert { .. }
+        | STerminatorKind::Return(None) => Vec::new(),
+        STerminatorKind::Branch { cond, .. }
+        | STerminatorKind::MatchEnum { value: cond, .. }
+        | STerminatorKind::Return(Some(cond)) => vec![cond.value],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cranelift_entity::EntityRef;
+
+    use crate::{
+        analysis::{
+            semantic::{
+                get_or_build_semantic_instance, identity_semantic_instance_key,
+                normalized::{
+                    NDataPath, NDataProjection, NExpr, NIndex, NStatementKind,
+                    NormalizedBodyVerifyError, StructuralRepack, normalize_raw_body,
+                    verify_normalized_body,
+                },
+            },
+            ty::{ty_check::BodyOwner, ty_def::TyId, ty_is_noesc},
+        },
+        hir_def::ItemKind,
+        test_db::HirAnalysisTestDb,
+    };
+
+    fn normalized_func<'db>(
+        db: &'db HirAnalysisTestDb,
+        top_mod: crate::hir_def::TopLevelMod<'db>,
+        name: &str,
+    ) -> super::NormalizedArtifacts<'db> {
+        let func = top_mod
+            .all_items(db)
+            .iter()
+            .find_map(|item| match item {
+                ItemKind::Func(func)
+                    if func
+                        .name(db)
+                        .to_opt()
+                        .is_some_and(|func_name| func_name.data(db) == name) =>
+                {
+                    Some(*func)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing function `{name}`"));
+        let instance = get_or_build_semantic_instance(
+            db,
+            identity_semantic_instance_key(db, BodyOwner::Func(func)),
+        );
+        let raw = instance
+            .admitted_body(db)
+            .expect("test body should be admitted");
+        normalize_raw_body(db, instance, raw, instance.assumptions(db))
+            .unwrap_or_else(|error| panic!("test body should normalize: {error:?}\n{raw:#?}"))
+    }
+
+    #[test]
+    fn branch_results_are_ssa_block_parameters() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "normalized.fe".into(),
+            r#"
+fn choose(flag: bool, lhs: u256, rhs: u256) -> u256 {
+    if flag { lhs } else { rhs }
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let artifacts = normalized_func(&db, top_mod, "choose");
+        verify_normalized_body(&db, &artifacts.body).unwrap_or_else(|error| {
+            panic!(
+                "normalized body should verify: {error:?}\n{:#?}",
+                artifacts.body
+            )
+        });
+        assert!(
+            artifacts
+                .body
+                .blocks
+                .iter()
+                .any(|block| !block.params.is_empty()),
+            "branch result must cross its join through a block parameter"
+        );
+    }
+
+    #[test]
+    fn mutable_index_rereads_produce_distinct_values() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "normalized.fe".into(),
+            r#"
+fn read_twice(mut _ index: own usize, values: [u256; 2]) -> u256 {
+    let first = values[index]
+    index = 1
+    first + values[index]
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let artifacts = normalized_func(&db, top_mod, "read_twice");
+        verify_normalized_body(&db, &artifacts.body).unwrap_or_else(|error| {
+            panic!(
+                "normalized body should verify: {error:?}\n{:#?}",
+                artifacts.body
+            )
+        });
+        let indices = artifacts
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| match &statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::ProjectValue { path, .. },
+                    ..
+                } => path.0.iter().find_map(|projection| match projection {
+                    NDataProjection::Index(NIndex::Value(value)) => Some(*value),
+                    NDataProjection::Field(_)
+                    | NDataProjection::VariantField { .. }
+                    | NDataProjection::Index(NIndex::Const(_)) => None,
+                }),
+                NStatementKind::Define {
+                    expr: NExpr::Load { place, .. },
+                    ..
+                } => place.path.iter().find_map(|projection| match projection {
+                    NDataProjection::Index(NIndex::Value(value)) => Some(*value),
+                    NDataProjection::Field(_)
+                    | NDataProjection::VariantField { .. }
+                    | NDataProjection::Index(NIndex::Const(_)) => None,
+                }),
+                NStatementKind::Define { .. } | NStatementKind::Store { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            indices.len(),
+            2,
+            "unexpected normalized indices: {indices:?}"
+        );
+        assert_ne!(
+            indices[0], indices[1],
+            "an index reread after mutation must have fresh value identity"
+        );
+
+        let mut invalid = artifacts.body.clone();
+        let mut replaced = false;
+        'blocks: for block in &mut invalid.blocks {
+            for statement in &mut block.statements {
+                let NStatementKind::Define { expr, .. } = &mut statement.kind else {
+                    continue;
+                };
+                let path = match expr {
+                    NExpr::ProjectValue { path, .. } => Some(&mut path.0),
+                    NExpr::Load { place, .. } => Some(&mut place.path),
+                    _ => None,
+                };
+                if let Some(path) = path
+                    && path.iter().any(|projection| {
+                        matches!(projection, NDataProjection::Index(NIndex::Value(value)) if *value == indices[0])
+                    })
+                {
+                    *path = NDataPath::new(
+                        path.iter()
+                            .map(|projection| match projection {
+                                NDataProjection::Index(NIndex::Value(value))
+                                    if *value == indices[0] =>
+                                {
+                                    NDataProjection::Index(NIndex::Value(indices[1]))
+                                }
+                                projection => *projection,
+                            })
+                            .collect::<Vec<_>>(),
+                    );
+                    replaced = true;
+                    break 'blocks;
+                }
+            }
+        }
+        assert!(replaced, "missing first dynamic index projection");
+        assert!(matches!(
+            verify_normalized_body(&db, &invalid),
+            Err(NormalizedBodyVerifyError::UseBeforeDefinition { value, .. })
+                if value == indices[1]
+        ));
+    }
+
+    #[test]
+    fn same_type_capability_cast_is_an_exact_forward() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "normalized.fe".into(),
+            r#"
+fn identity(mut _ value: own u256) -> mut u256 {
+    let borrowed: mut u256 = mut value
+    borrowed as mut u256
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let artifacts = normalized_func(&db, top_mod, "identity");
+        verify_normalized_body(&db, &artifacts.body).unwrap_or_else(|error| {
+            panic!(
+                "normalized body should verify: {error:?}\n{:#?}",
+                artifacts.body
+            )
+        });
+        let (result, source) = artifacts
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| match &statement.kind {
+                NStatementKind::Define {
+                    result,
+                    expr: NExpr::Forward { src },
+                } => Some((*result, src.value)),
+                _ => None,
+            })
+            .expect("identity capability cast must emit Forward");
+        let result_ty = artifacts.body.value(result).expect("forward result").ty;
+        assert_eq!(
+            result_ty,
+            artifacts.body.value(source).expect("forward source").ty
+        );
+        assert!(ty_is_noesc(&db, result_ty));
+
+        let mut invalid = artifacts.body.clone();
+        invalid.values[result.index()].ty = TyId::borrow_ref_of(&db, TyId::u256(&db));
+        assert!(matches!(
+            verify_normalized_body(&db, &invalid),
+            Err(NormalizedBodyVerifyError::ForwardType {
+                result: invalid_result,
+                source: invalid_source,
+            }) if invalid_result == result && invalid_source == source
+        ));
+    }
+
+    #[test]
+    fn scalar_casts_reject_capabilities_and_invalid_repacks() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "normalized.fe".into(),
+            r#"
+fn widen(_ value: own u8) -> u256 {
+    value as u256
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let artifacts = normalized_func(&db, top_mod, "widen");
+        verify_normalized_body(&db, &artifacts.body).expect("scalar cast should verify");
+        let (result, source) = artifacts
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| match &statement.kind {
+                NStatementKind::Define {
+                    result,
+                    expr: NExpr::ScalarCast { value, .. },
+                } => Some((*result, value.value)),
+                _ => None,
+            })
+            .expect("widening cast must emit ScalarCast");
+        assert!(!ty_is_noesc(
+            &db,
+            artifacts.body.value(source).expect("cast source").ty
+        ));
+        assert!(!ty_is_noesc(
+            &db,
+            artifacts.body.value(result).expect("cast result").ty
+        ));
+
+        let mut capability_operand = artifacts.body.clone();
+        let source_ty = capability_operand.values[source.index()].ty;
+        capability_operand.values[source.index()].ty = TyId::borrow_mut_of(&db, source_ty);
+        assert!(matches!(
+            verify_normalized_body(&db, &capability_operand),
+            Err(NormalizedBodyVerifyError::ScalarOperandCapability(value)) if value == source
+        ));
+
+        let mut invalid_repack = artifacts.body.clone();
+        for block in &mut invalid_repack.blocks {
+            for statement in &mut block.statements {
+                if let NStatementKind::Define {
+                    result: candidate,
+                    expr,
+                } = &mut statement.kind
+                    && *candidate == result
+                {
+                    let value = match expr {
+                        NExpr::ScalarCast { value, .. } => *value,
+                        _ => unreachable!("located scalar cast changed shape"),
+                    };
+                    *expr = NExpr::StructuralRepack {
+                        value,
+                        mapping: StructuralRepack {
+                            fields: Box::new([]),
+                        },
+                    };
+                }
+            }
+        }
+        assert_eq!(
+            verify_normalized_body(&db, &invalid_repack),
+            Err(NormalizedBodyVerifyError::InvalidRepack)
+        );
+    }
+}

@@ -296,8 +296,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
     fn lower_bodies(&mut self) -> Result<(), LowerError> {
         for function in self.package.functions(self.db) {
-            let body = function.instance(self.db).body(self.db);
-            let func_ref = self.func_ref(function.instance(self.db))?;
+            let instance = function.instance(self.db);
+            let body = instance.body(self.db);
+            let func_ref = self.func_ref(instance)?;
             let ctx = FunctionLowerer::new(self, body, func_ref)?;
             ctx.lower()?;
         }
@@ -615,6 +616,10 @@ enum SlotRoot {
 }
 
 enum PlaceTerminal<'db> {
+    StackPtr {
+        addr: ValueId,
+        class: RuntimeClass<'db>,
+    },
     Ptr {
         addr: ValueId,
         space: AddressSpaceKind,
@@ -2504,6 +2509,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         class: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
         match terminal {
+            PlaceTerminal::StackPtr { addr, .. } => {
+                let ty = self.module.ty_for_class(class)?;
+                Ok(self
+                    .fb
+                    .insert_inst(Mload::new(self.module.inst_set(), *addr, ty), ty))
+            }
             PlaceTerminal::Object { value, .. } => Ok(self.fb.insert_inst(
                 ObjLoad::new(self.module.inst_set(), *value),
                 self.module.ty_for_class(class)?,
@@ -2541,11 +2552,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 match self.slot_roots.get(&local).ok_or_else(|| {
                     LowerError::Internal(format!("missing slot root for {local:?}"))
                 })? {
-                    SlotRoot::Ptr(ptr, _) => PlaceTerminal::Ptr {
-                        addr: *ptr,
-                        space: AddressSpaceKind::Memory,
-                        class,
-                    },
+                    SlotRoot::Ptr(ptr, _) => PlaceTerminal::StackPtr { addr: *ptr, class },
                     SlotRoot::Object(value, _) => PlaceTerminal::Object {
                         value: *value,
                         class,
@@ -2740,6 +2747,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     return Err(LowerError::Unsupported(format!(
                         "unsupported place projection terminal `{terminal_kind}` with `{elem:?}`",
                         terminal_kind = match terminal {
+                            PlaceTerminal::StackPtr { .. } => "stack ptr",
                             PlaceTerminal::Ptr { .. } => "ptr",
                             PlaceTerminal::Object { .. } => "object",
                             PlaceTerminal::Const { .. } => "const",
@@ -2759,6 +2767,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             return Ok(Lowered::Terminated);
         };
         Ok(Lowered::Value(match terminal {
+            PlaceTerminal::StackPtr { addr, class } => {
+                let ty = self.module.ty_for_class(&class)?;
+                self.fb
+                    .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty)
+            }
             PlaceTerminal::Object { value, .. } => self.fb.insert_inst(
                 ObjLoad::new(self.module.inst_set(), value),
                 self.module.ty_for_class(&class)?,
@@ -2827,7 +2840,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         let Lowered::Value(terminal) = self.resolve_place(place)? else {
             return Ok(Lowered::Terminated);
         };
-        let source = self.copy_source_for_terminal(terminal);
+        let source = self.copy_source_for_terminal(terminal)?;
         self.copy_source_into_object(source, &RuntimeClass::AggregateValue { layout }, object)?;
         Ok(Lowered::Value(object))
     }
@@ -2866,12 +2879,24 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         })
     }
 
-    fn copy_source_for_terminal(&self, terminal: PlaceTerminal<'db>) -> CopySource<'db> {
-        match terminal {
+    fn copy_source_for_terminal(
+        &mut self,
+        terminal: PlaceTerminal<'db>,
+    ) -> Result<CopySource<'db>, LowerError> {
+        Ok(match terminal {
+            PlaceTerminal::StackPtr { addr, class } => {
+                let ty = self.module.ty_for_class(&class)?;
+                CopySource::Value {
+                    value: self
+                        .fb
+                        .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty),
+                    class,
+                }
+            }
             PlaceTerminal::Object { value, class } => CopySource::Object { value, class },
             PlaceTerminal::Const { value, class } => CopySource::Const { value, class },
             PlaceTerminal::Ptr { addr, space, class } => CopySource::Ptr { addr, space, class },
-        }
+        })
     }
 
     fn copy_source_into_object(
@@ -3348,7 +3373,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     "borrowing const-backed places requires a const-backed destination".to_string(),
                 ))
             }
-            PlaceTerminal::Ptr { addr, .. } => {
+            PlaceTerminal::StackPtr { addr, .. } | PlaceTerminal::Ptr { addr, .. } => {
                 if let Some(dst) = dst
                     && matches!(
                         self.body.value_class(dst),
@@ -3383,6 +3408,13 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             return Ok(Lowered::Terminated);
         };
         match terminal {
+            PlaceTerminal::StackPtr { addr, class } => {
+                let ty = self.module.ty_for_class(&class)?;
+                let src = self.coerce_value_to_ty(src, ty)?;
+                self.fb
+                    .insert_inst_no_result(Mstore::new(self.module.inst_set(), addr, src, ty));
+                Ok(Lowered::Value(()))
+            }
             PlaceTerminal::Ptr { addr, space, class } => {
                 self.store_to_ptr(addr, space, &class, src)?;
                 Ok(Lowered::Value(()))
@@ -3418,6 +3450,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             return Ok(Lowered::Terminated);
         };
         match terminal {
+            PlaceTerminal::StackPtr { .. } => Err(LowerError::Internal(
+                "aggregate CopyInto unexpectedly targeted a scalar stack slot".to_string(),
+            )),
             PlaceTerminal::Object { value, .. } => {
                 let source = self.copy_source_for_local(src, src_value)?;
                 self.copy_source_into_object(source, &dst_class, value)?;

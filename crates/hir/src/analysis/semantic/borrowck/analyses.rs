@@ -7,16 +7,15 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        SBlockId, SLocalId, SemanticInstance,
-        borrowck::ir::{NExpr, NSStmtKind},
-        get_or_build_semantic_instance,
+        SemanticInstance, get_or_build_semantic_instance,
+        normalized::{NBlockId, NExpr, NStatement, NStatementKind, NValueId, NormalizedBody},
     },
 };
 
 use super::{
     canon::{BorrowCanonCx, CanonPlace, CfgAdjacency, Loan, LoanId, MovedPlaces, State},
     check::{Borrowck, provisional_borrow_summary_voucher, semantic_borrow_summary_voucher},
-    ir::{BlockedSemanticBody, BorrowInputRef, NormalizedSemanticBody, SemanticBorrowDiagnostic},
+    ir::{BlockedSemanticBody, BorrowInputRef, SemanticBorrowDiagnostic},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,9 +31,9 @@ pub(super) struct BorrowLoanTargetState<'a, 'db> {
 pub(super) struct BorrowLoanTargetAnalysis<'a, 'db> {
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    body: &'a NormalizedSemanticBody<'db>,
-    entry_state: &'a SecondaryMap<SBlockId, State>,
-    loan_for_local: &'a FxHashMap<SLocalId, LoanId>,
+    body: &'a NormalizedBody<'db>,
+    entry_state: &'a SecondaryMap<NBlockId, State>,
+    loan_for_value: &'a FxHashMap<NValueId, LoanId>,
     summary_mode: BorrowSummaryMode,
     blocked: Option<BlockedSemanticBody<'db>>,
 }
@@ -43,9 +42,9 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
     pub(super) fn new(
         db: &'db dyn HirAnalysisDb,
         instance: SemanticInstance<'db>,
-        body: &'a NormalizedSemanticBody<'db>,
-        entry_state: &'a SecondaryMap<SBlockId, State>,
-        loan_for_local: &'a FxHashMap<SLocalId, LoanId>,
+        body: &'a NormalizedBody<'db>,
+        entry_state: &'a SecondaryMap<NBlockId, State>,
+        loan_for_value: &'a FxHashMap<NValueId, LoanId>,
         summary_mode: BorrowSummaryMode,
     ) -> Self {
         Self {
@@ -53,7 +52,7 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
             instance,
             body,
             entry_state,
-            loan_for_local,
+            loan_for_value,
             summary_mode,
             blocked: None,
         }
@@ -69,7 +68,7 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
             self.instance,
             self.body,
             loans,
-            self.loan_for_local,
+            self.loan_for_value,
         )
     }
 
@@ -88,16 +87,16 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
         before_targets != loan.targets.len() || before_parents != loan.parents.len()
     }
 
-    fn update_loan_from_stmt(
+    fn update_loan_from_statement(
         &mut self,
         loans: &mut [Loan<'db>],
         state: &State,
-        stmt: &super::ir::NSStmt<'db>,
+        statement: &NStatement<'db>,
     ) -> Result<bool, SemanticBorrowDiagnostic<'db>> {
-        let NSStmtKind::Assign { dst, expr } = &stmt.kind else {
+        let NStatementKind::Define { result, expr } = &statement.kind else {
             return Ok(false);
         };
-        let Some(&loan_id) = self.loan_for_local.get(dst) else {
+        let Some(&loan_id) = self.loan_for_value.get(result) else {
             return Ok(false);
         };
         match expr {
@@ -105,7 +104,7 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
                 let (targets, parents) = {
                     let canon = self.canon(loans);
                     (
-                        canon.canonicalize_place(state, place, stmt.origin)?,
+                        canon.canonicalize_place(state, place, statement.origin)?,
                         canon.mut_loans_for_place(state, place),
                     )
                 };
@@ -135,26 +134,34 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
                     for transform in &summary {
                         let BorrowInputRef::Param(idx) = transform.input;
                         if let Some(arg) = args.get(idx as usize) {
-                            for base in canon.canonicalize_value_base(state, arg.local) {
+                            for base in canon.canonicalize_value_base(state, arg.value) {
                                 targets.insert(CanonPlace {
                                     root: base.root,
                                     proj: base.proj.concat(&transform.proj),
                                 });
                             }
-                            parents.extend(canon.mut_loans_for_value(state, arg.local));
+                            parents.extend(canon.mut_loans_for_value(state, arg.value));
                         }
                     }
                     (targets, parents)
                 };
                 Ok(self.extend_loan(loans, loan_id, targets, parents))
             }
-            NExpr::Use(value) => {
+            NExpr::ProjectValue { value, path } => {
                 let canon = self.canon(loans);
+                let targets = canon
+                    .canonicalize_value_base(state, value.value)
+                    .into_iter()
+                    .map(|base| CanonPlace {
+                        root: base.root,
+                        proj: base.proj.concat(&path.0),
+                    })
+                    .collect();
                 Ok(self.extend_loan(
                     loans,
                     loan_id,
-                    canon.canonicalize_value_base(state, value.local),
-                    canon.mut_loans_for_value(state, value.local),
+                    targets,
+                    canon.mut_loans_for_value(state, value.value),
                 ))
             }
             _ => Ok(false),
@@ -163,7 +170,7 @@ impl<'a, 'db> BorrowLoanTargetAnalysis<'a, 'db> {
 }
 
 impl<'a, 'db> SparseAnalysis for BorrowLoanTargetAnalysis<'a, 'db> {
-    type Node = SBlockId;
+    type Node = NBlockId;
     type State = BorrowLoanTargetState<'a, 'db>;
     type Error = SemanticBorrowDiagnostic<'db>;
 
@@ -172,22 +179,23 @@ impl<'a, 'db> SparseAnalysis for BorrowLoanTargetAnalysis<'a, 'db> {
     }
 
     fn seed_nodes(&self) -> Vec<Self::Node> {
-        (0..self.body.blocks.len()).map(SBlockId::new).collect()
+        (0..self.body.blocks.len()).map(NBlockId::new).collect()
     }
 
     fn step(&mut self, node: Self::Node, state: &mut Self::State) -> Result<bool, Self::Error> {
         let mut local_state = self.entry_state[node].clone();
         let mut changed = false;
-        for stmt in &self.body.blocks[node.index()].stmts {
-            changed |= self.update_loan_from_stmt(&mut *state.loans, &local_state, stmt)?;
+        for statement in &self.body.blocks[node.index()].statements {
+            changed |=
+                self.update_loan_from_statement(&mut *state.loans, &local_state, statement)?;
             self.canon(state.loans)
-                .apply_stmt_state(&mut local_state, stmt);
+                .apply_statement_state(&mut local_state, statement);
         }
         Ok(changed)
     }
 
     fn dependents(&self, _node: Self::Node, out: &mut Vec<Self::Node>) {
-        out.extend((0..self.body.blocks.len()).map(SBlockId::new));
+        out.extend((0..self.body.blocks.len()).map(NBlockId::new));
     }
 }
 
@@ -206,7 +214,7 @@ impl<'a, 'db> BorrowEntryStateAnalysis<'a, 'db> {
 }
 
 impl ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, '_> {
-    type Block = SBlockId;
+    type Block = NBlockId;
     type State = State;
     type Error = Infallible;
 
@@ -215,10 +223,7 @@ impl ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, '_> {
     }
 
     fn seed_blocks(&self) -> Vec<Self::Block> {
-        (!self.borrowck.body.blocks.is_empty())
-            .then_some(SBlockId::new(0))
-            .into_iter()
-            .collect()
+        vec![self.borrowck.body.entry]
     }
 
     fn bottom(&self) -> Self::State {
@@ -229,11 +234,9 @@ impl ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, '_> {
         &mut self,
         entry_states: &mut SecondaryMap<Self::Block, Self::State>,
     ) -> Result<(), Self::Error> {
-        if !self.borrowck.body.blocks.is_empty() {
-            let entry = &mut entry_states[SBlockId::new(0)];
-            for (&local, &loan) in &self.borrowck.param_loan_for_local {
-                entry.assign_loans(local, FxHashSet::from_iter([loan]));
-            }
+        let entry = &mut entry_states[self.borrowck.body.entry];
+        for (&value, &loan) in &self.borrowck.param_loan_for_value {
+            entry.assign_loans(value, FxHashSet::from_iter([loan]));
         }
         Ok(())
     }
@@ -244,8 +247,16 @@ impl ForwardCfgAnalysis for BorrowEntryStateAnalysis<'_, '_> {
         in_state: &Self::State,
     ) -> Result<Self::State, Self::Error> {
         let mut state = in_state.clone();
-        for stmt in &self.borrowck.body.blocks[block.index()].stmts {
-            self.borrowck.canon().apply_stmt_state(&mut state, stmt);
+        let block_data = &self.borrowck.body.blocks[block.index()];
+        for statement in &block_data.statements {
+            self.borrowck
+                .canon()
+                .apply_statement_state(&mut state, statement);
+        }
+        for successor in block_data.terminator.kind.successors() {
+            self.borrowck
+                .canon()
+                .apply_successor_state(&mut state, successor);
         }
         Ok(state)
     }
@@ -283,7 +294,7 @@ impl<'a, 'db> BorrowMovedStateAnalysis<'a, 'db> {
 }
 
 impl<'db> ForwardCfgAnalysis for BorrowMovedStateAnalysis<'_, 'db> {
-    type Block = SBlockId;
+    type Block = NBlockId;
     type State = MovedState<'db>;
     type Error = SemanticBorrowDiagnostic<'db>;
 
@@ -292,10 +303,7 @@ impl<'db> ForwardCfgAnalysis for BorrowMovedStateAnalysis<'_, 'db> {
     }
 
     fn seed_blocks(&self) -> Vec<Self::Block> {
-        (!self.borrowck.body.blocks.is_empty())
-            .then_some(SBlockId::new(0))
-            .into_iter()
-            .collect()
+        vec![self.borrowck.body.entry]
     }
 
     fn bottom(&self) -> Self::State {
@@ -309,10 +317,12 @@ impl<'db> ForwardCfgAnalysis for BorrowMovedStateAnalysis<'_, 'db> {
     ) -> Result<Self::State, Self::Error> {
         let mut state = self.borrowck.entry_state[block].clone();
         let mut moved = in_state.0.clone();
-        for stmt in &self.borrowck.body.blocks[block.index()].stmts {
+        for statement in &self.borrowck.body.blocks[block.index()].statements {
             self.borrowck
-                .update_moved_for_stmt(&state, &mut moved, stmt)?;
-            self.borrowck.canon().apply_stmt_state(&mut state, stmt);
+                .update_moved_for_statement(&state, &mut moved, statement)?;
+            self.borrowck
+                .canon()
+                .apply_statement_state(&mut state, statement);
         }
         Ok(MovedState(moved))
     }
@@ -323,7 +333,7 @@ impl<'db> ForwardCfgAnalysis for BorrowMovedStateAnalysis<'_, 'db> {
 }
 
 #[derive(Clone, Default)]
-pub(super) struct LiveSet(pub(super) FxHashSet<SLocalId>);
+pub(super) struct LiveSet(pub(super) FxHashSet<NValueId>);
 
 impl JoinSemiLattice for LiveSet {
     fn join_into(&mut self, other: &Self) -> bool {
@@ -348,7 +358,7 @@ impl<'a, 'db> BorrowLivenessAnalysis<'a, 'db> {
 }
 
 impl<'db> BackwardCfgAnalysis for BorrowLivenessAnalysis<'_, 'db> {
-    type Block = SBlockId;
+    type Block = NBlockId;
     type State = LiveSet;
 
     fn block_count(&self) -> usize {
@@ -357,7 +367,7 @@ impl<'db> BackwardCfgAnalysis for BorrowLivenessAnalysis<'_, 'db> {
 
     fn seed_blocks(&self) -> Vec<Self::Block> {
         (0..self.borrowck.body.blocks.len())
-            .map(SBlockId::new)
+            .map(NBlockId::new)
             .collect()
     }
 
@@ -370,9 +380,14 @@ impl<'db> BackwardCfgAnalysis for BorrowLivenessAnalysis<'_, 'db> {
     fn transfer(&mut self, block: Self::Block, out_state: &Self::State) -> Self::State {
         let block_data = &self.borrowck.body.blocks[block.index()];
         let mut live = out_state.0.clone();
+        for successor in block_data.terminator.kind.successors() {
+            for param in &self.borrowck.body.blocks[successor.block.index()].params {
+                live.remove(param);
+            }
+        }
         live.extend(self.borrowck.facts.terminator_uses(block));
-        for (stmt_idx, _) in block_data.stmts.iter().enumerate().rev() {
-            live = self.borrowck.live_before_stmt(block, stmt_idx, &live);
+        for (statement, _) in block_data.statements.iter().enumerate().rev() {
+            live = self.borrowck.live_before_statement(block, statement, &live);
         }
         LiveSet(live)
     }

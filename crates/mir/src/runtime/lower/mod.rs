@@ -14,6 +14,7 @@ pub(crate) mod layout_evidence;
 mod provider_space;
 pub(crate) mod realize;
 pub(crate) mod returns;
+pub(crate) mod semantic_body;
 pub(crate) mod source;
 pub(crate) mod tuple;
 pub(crate) mod type_info;

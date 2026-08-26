@@ -8,7 +8,10 @@ use crate::{
         HirAnalysisDb,
         diagnostics::DiagnosticVoucher,
         diagnostics::SpannedHirAnalysisDb,
-        semantic::{NOperand, SLocalId, SemOrigin, SemanticInstance},
+        semantic::{
+            SLocalId, SemOrigin, SemanticInstance,
+            normalized::{NOperand, NormalizedBody},
+        },
         ty::ty_check::BodyOwner,
     },
     hir_def::{Body, Partial},
@@ -16,8 +19,8 @@ use crate::{
 };
 
 use super::ir::{
-    BorrowDiagnosticId, NormalizedSemanticBody, SemanticBorrowDiagKind, SemanticBorrowDiagnostic,
-    SemanticBorrowDiagnosticLabel, SemanticBorrowDiagnosticSpan, SemanticNormalizeError,
+    BorrowDiagnosticId, SemanticBorrowDiagKind, SemanticBorrowDiagnostic,
+    SemanticBorrowDiagnosticLabel, SemanticBorrowDiagnosticSpan,
 };
 
 pub(super) fn operand_origin<'db>(operand: NOperand, fallback: SemOrigin<'db>) -> SemOrigin<'db> {
@@ -27,7 +30,7 @@ pub(super) fn operand_origin<'db>(operand: NOperand, fallback: SemOrigin<'db>) -
 pub(super) fn normalized_body_internal_diag<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    body: &NormalizedSemanticBody<'db>,
+    body: &NormalizedBody<'db>,
     origin: SemOrigin<'db>,
     message: String,
 ) -> SemanticBorrowDiagnostic<'db> {
@@ -43,7 +46,7 @@ pub(super) fn normalized_body_internal_diag<'db>(
     )
 }
 
-pub(super) fn smir_lowering_admission_diag<'db>(
+pub(crate) fn smir_lowering_admission_diag<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     causes: &[crate::analysis::ty::ty_check::SmirLoweringIssue],
@@ -64,48 +67,63 @@ pub(super) fn smir_lowering_admission_diag<'db>(
     )
 }
 
-pub(super) fn normalize_error_to_diag<'db>(
+pub(crate) fn normalized_body_error_to_diag<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    err: SemanticNormalizeError<'db>,
+    error: crate::analysis::semantic::normalized::NormalizeError<'db>,
 ) -> SemanticBorrowDiagnostic<'db> {
+    use crate::analysis::semantic::normalized::NormalizeError;
+
     let owner = instance.key(db).owner(db);
-    let hir_body = owner.body(db);
-    let (message, span) = match err {
-        SemanticNormalizeError::MissingBorrowRoot { local } => {
-            let message = if let Some(body) = hir_body
-                && let Ok(raw) = instance.admitted_body(db)
-                && let Some(raw_local) = raw.local(local)
-                && let Some(source) = raw_local.source
-            {
-                format!(
-                    "cannot normalize borrow roots for `{}`",
-                    source.pretty_name_in_body(db, body)
-                )
-            } else {
-                format!("cannot normalize borrow roots for `%{}`", local.index())
-            };
-            (
-                message,
-                SemanticBorrowDiagnosticSpan::LocalSourceOrBody { instance, local },
-            )
-        }
-        SemanticNormalizeError::LocalProvenanceCycle { local, .. } => (
+    let (message, span) = match error {
+        NormalizeError::MissingValue(local) => (
             format!(
-                "detected a cycle while normalizing derived-place provenance for `%{}`",
+                "normalized body is missing a value for raw local `%{}`",
                 local.index()
+            ),
+            SemanticBorrowDiagnosticSpan::LocalSourceOrBody { instance, local },
+        ),
+        NormalizeError::MissingRoot(local) => (
+            format!(
+                "normalized body is missing a root for raw local `%{}`",
+                local.index()
+            ),
+            SemanticBorrowDiagnosticSpan::LocalSourceOrBody { instance, local },
+        ),
+        NormalizeError::MissingProviderAddressSpace(provider) => (
+            format!("normalized provider has no address space: {provider:?}"),
+            SemanticBorrowDiagnosticSpan::Origin {
+                owner,
+                origin: SemOrigin::Body(owner),
+            },
+        ),
+        NormalizeError::InvalidProjection => (
+            "normalized body contains an invalid projection".to_string(),
+            SemanticBorrowDiagnosticSpan::Origin {
+                owner,
+                origin: SemOrigin::Body(owner),
+            },
+        ),
+        NormalizeError::UnsupportedPlaceProjection => (
+            "normalized body contains a non-data place projection".to_string(),
+            SemanticBorrowDiagnosticSpan::Origin {
+                owner,
+                origin: SemOrigin::Body(owner),
+            },
+        ),
+        NormalizeError::UnsupportedCapabilityCast { from, to } => (
+            format!(
+                "normalized body cannot structurally repack `{}` as `{}`",
+                from.pretty_print(db),
+                to.pretty_print(db),
             ),
             SemanticBorrowDiagnosticSpan::Origin {
                 owner,
                 origin: SemOrigin::Body(owner),
             },
         ),
-        SemanticNormalizeError::NonPlaceDerivedValue { local, base, .. } => (
-            format!(
-                "cannot normalize derived-place provenance for `%{}` from non-place base `%{}`",
-                local.index(),
-                base.index()
-            ),
+        NormalizeError::InvalidControlFlow => (
+            "normalized body contains invalid control flow".to_string(),
             SemanticBorrowDiagnosticSpan::Origin {
                 owner,
                 origin: SemOrigin::Body(owner),
@@ -113,6 +131,40 @@ pub(super) fn normalize_error_to_diag<'db>(
         ),
     };
     SemanticBorrowDiagnostic::new(instance, SemanticBorrowDiagKind::Internal, message, span)
+}
+
+pub(crate) fn normalized_body_verify_error_to_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    error: crate::analysis::semantic::normalized::NormalizedBodyVerifyError,
+) -> SemanticBorrowDiagnostic<'db> {
+    let owner = instance.key(db).owner(db);
+    SemanticBorrowDiagnostic::new(
+        instance,
+        SemanticBorrowDiagKind::Internal,
+        format!("normalized body verification failed: {error:?}"),
+        SemanticBorrowDiagnosticSpan::Origin {
+            owner,
+            origin: SemOrigin::Body(owner),
+        },
+    )
+}
+
+pub(crate) fn normalized_layout_plan_verify_error_to_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    error: crate::analysis::semantic::normalized::NormalizedLayoutPlanVerifyError,
+) -> SemanticBorrowDiagnostic<'db> {
+    let owner = instance.key(db).owner(db);
+    SemanticBorrowDiagnostic::new(
+        instance,
+        SemanticBorrowDiagKind::Internal,
+        format!("normalized layout plan verification failed: {error:?}"),
+        SemanticBorrowDiagnosticSpan::Origin {
+            owner,
+            origin: SemOrigin::Body(owner),
+        },
+    )
 }
 
 impl<'db> SemanticBorrowDiagnostic<'db> {

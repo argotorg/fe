@@ -5,14 +5,16 @@ use fe_hir::test_db::{HirAnalysisTestDb, format_diagnostics};
 use fe_hir::{
     analysis::{
         semantic::{
-            BorrowInputRef, BorrowTransform, CtfeError, LayoutEvidenceError, NBorrowRoot, NExpr,
-            NLocalOrigin, NSPlaceRoot, NSStmtKind, NormalizedBindingLowering, ReadMode, SStmtKind,
+            BorrowInputRef, BorrowTransform, CtfeError, LayoutEvidenceError, NDataPath,
+            NDataProjection, NExpr, NIndex, NPlaceBase, NRootKind, NStatementKind,
+            NValueDefinition, NormalizedArtifacts, ReadMode, SExpr, SStmtKind, STerminatorKind,
             SemanticAnalysisError, SemanticBodyAdmission, SemanticBorrowDiagKind, SemanticInstance,
-            SemanticLocalKind, SemanticNormalizationFailure, canonicalize_semantic_consts,
-            check_semantic_borrows, check_semantic_noesc,
-            collect_semantic_borrow_diagnostic_vouchers, contract_init_assigned_fields,
-            get_or_build_semantic_instance, identity_semantic_instance_key, layout_evidence_body,
-            normalize_semantic_body, semantic_body_admission, semantic_borrow_summary,
+            SemanticNormalizationFailure, canonicalize_semantic_consts, check_semantic_borrows,
+            check_semantic_noesc, collect_semantic_borrow_diagnostic_vouchers,
+            contract_init_assigned_fields, get_or_build_semantic_instance,
+            identity_semantic_instance_key, layout_evidence_body, normalize_semantic_body,
+            normalized::{normalize_raw_body, verify_normalized_body},
+            semantic_body_admission, semantic_borrow_summary,
         },
         ty::{
             ProviderAddressSpace,
@@ -21,7 +23,7 @@ use fe_hir::{
         },
     },
     hir_def::{ItemKind, Partial},
-    projection::{IndexSource, Projection, ProjectionPath},
+    projection::Projection,
 };
 
 fn borrow_diags(src: &str) -> String {
@@ -356,7 +358,7 @@ fn normalized_func_body<'db>(
     db: &'db HirAnalysisTestDb,
     top_mod: fe_hir::hir_def::TopLevelMod<'db>,
     func_name: &str,
-) -> fe_hir::analysis::semantic::NormalizedSemanticBody<'db> {
+) -> NormalizedArtifacts<'db> {
     let instance = top_mod
         .all_items(db)
         .iter()
@@ -398,22 +400,35 @@ fn rebuild(mut _ value: own Pair) -> Pair {
     );
     let (top_mod, _) = db.top_mod(file);
     let normalized = normalized_func_body(&db, top_mod, "rebuild");
-    let param = normalized
+    let source = normalized.body.owner.body(&db);
+    let param_local = source
         .locals
         .iter()
-        .find(|local| matches!(local.source, Some(LocalBinding::Param { idx: 0, .. })))
+        .enumerate()
+        .find(|(_, local)| matches!(local.source, Some(LocalBinding::Param { idx: 0, .. })))
+        .map(|(index, _)| fe_hir::analysis::semantic::SLocalId::new(index))
         .expect("missing value parameter");
-    let root = param
-        .lowering
-        .root()
+    let param_root = normalized
+        .body
+        .roots
+        .iter()
+        .enumerate()
+        .find_map(|(index, root)| {
+            (matches!(root.kind, NRootKind::ParamPlace { param: 0 })
+                && normalized
+                    .layout_plan
+                    .root_source(fe_hir::analysis::semantic::NRootId::new(index))
+                    == Some(param_local))
+            .then_some(fe_hir::analysis::semantic::NRootId::new(index))
+        })
         .expect("mutable owned aggregate parameter must have a root");
 
-    assert!(!param.layout_backing_sources().is_empty());
     assert!(
-        param
-            .layout_backing_sources()
+        normalized
+            .layout_plan
+            .use_backings
             .iter()
-            .all(|source| source.source.root.borrow_root() == Some(root))
+            .any(|source| matches!(source.source, fe_hir::analysis::semantic::NLayoutBackingSource::Root { root, .. } if root == param_root))
     );
 }
 
@@ -465,11 +480,17 @@ impl Ledger {
     assert_eq!(summary.len(), 2, "unexpected summary: {summary:#?}");
     assert!(summary.iter().any(|transform| {
         matches!(transform.input, BorrowInputRef::Param(0))
-            && transform.proj.iter().cloned().collect::<Vec<_>>() == vec![Projection::Field(2)]
+            && transform.proj.iter().cloned().collect::<Vec<_>>()
+                == vec![NDataProjection::Field(
+                    fe_hir::analysis::semantic::FieldIndex(2),
+                )]
     }));
     assert!(summary.iter().any(|transform| {
         matches!(transform.input, BorrowInputRef::Param(0))
-            && transform.proj.iter().cloned().collect::<Vec<_>>() == vec![Projection::Field(0)]
+            && transform.proj.iter().cloned().collect::<Vec<_>>()
+                == vec![NDataProjection::Field(
+                    fe_hir::analysis::semantic::FieldIndex(0),
+                )]
     }));
     check_semantic_borrows(&db, instance).expect("borrowck should accept branch-returned borrow");
 }
@@ -517,7 +538,7 @@ impl Holder {
         summary,
         vec![BorrowTransform {
             input: BorrowInputRef::Param(1),
-            proj: ProjectionPath::default(),
+            proj: NDataPath::empty(),
         }]
     );
     check_semantic_borrows(&db, instance).expect("borrowck should accept forwarded borrows");
@@ -528,6 +549,46 @@ fn contract_field_mut_borrow_matrix_fixture_borrowchecks() {
     for_each_fixture_instance(
         include_str!("../../fe/tests/fixtures/fe_test/contract_field_mut_borrow_matrix.fe"),
         |db, instance| {
+            let raw = instance.body(db);
+            let artifacts = normalize_raw_body(db, instance, raw, instance.assumptions(db))
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "phase-one normalization failed for {} ({:?}): {error:#?}",
+                        owner_name(db, instance.key(db).owner(db)),
+                        instance.key(db),
+                    )
+                });
+            verify_normalized_body(db, &artifacts.body).unwrap_or_else(|error| {
+                let type_detail = match error {
+                    fe_hir::analysis::semantic::normalized::NormalizedBodyVerifyError::ForwardType {
+                        result,
+                        source,
+                    } => format!(
+                        "result_ty={} source_ty={}",
+                        artifacts.body.value(result).expect("result value").ty.pretty_print(db),
+                        artifacts.body.value(source).expect("source value").ty.pretty_print(db),
+                    ),
+                    fe_hir::analysis::semantic::normalized::NormalizedBodyVerifyError::StoreType {
+                        value,
+                        destination: fe_hir::analysis::semantic::normalized::NPlaceBase::Root(root),
+                    } => format!(
+                        "source_ty={} destination_ty={}",
+                        artifacts.body.value(value).expect("source value").ty.pretty_print(db),
+                        artifacts.body.root(root).expect("destination root").ty.pretty_print(db),
+                    ),
+                    _ => String::new(),
+                };
+                panic!(
+                    "phase-one normalized body failed verification for {} ({:?}): {error:#?} {type_detail}\nraw={raw:#?}\nnormalized={:#?}",
+                    owner_name(db, instance.key(db).owner(db)),
+                    instance.key(db),
+                    artifacts.body,
+                )
+            });
+            assert!(matches!(
+                fe_hir::analysis::semantic::normalized::semantic_body_admission(db, instance),
+                fe_hir::analysis::semantic::normalized::SemanticBodyAdmission::Ready(_),
+            ));
             if let Err(diag) = check_semantic_borrows(db, instance) {
                 panic!(
                     "borrowck failed for {} ({:?}): {diag:#?}",
@@ -540,6 +601,73 @@ fn contract_field_mut_borrow_matrix_fixture_borrowchecks() {
 }
 
 #[test]
+fn diverging_if_branch_does_not_forward_never_into_join_result() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+fn diverge() -> ! {
+    core::panic()
+}
+
+fn choose(flag: bool) {
+    if flag {
+        diverge()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let choose = top_mod
+        .all_items(&db)
+        .iter()
+        .find_map(|item| match item {
+            ItemKind::Func(func)
+                if func
+                    .name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "choose") =>
+            {
+                Some(*func)
+            }
+            _ => None,
+        })
+        .expect("missing `choose` function");
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(choose)),
+    );
+    let raw = instance.body(&db);
+    let mut saw_diverging_call = false;
+    for block in &raw.blocks {
+        for statement in &block.stmts {
+            let SStmtKind::Assign { dst, expr } = &statement.kind else {
+                continue;
+            };
+            if matches!(expr, SExpr::Call { .. }) && raw.locals[dst.index()].ty.is_never(&db) {
+                saw_diverging_call = true;
+                assert!(matches!(
+                    block.terminator.kind,
+                    STerminatorKind::Assert { message: None }
+                ));
+            }
+            if let SExpr::Forward(source) = expr {
+                assert_eq!(
+                    raw.locals[dst.index()].ty,
+                    raw.locals[source.value.index()].ty
+                );
+            }
+        }
+    }
+    assert!(saw_diverging_call);
+
+    let artifacts = normalize_raw_body(&db, instance, raw, instance.assumptions(&db))
+        .expect("never-branch body should normalize");
+    verify_normalized_body(&db, &artifacts.body)
+        .expect("never-branch normalized body should verify");
+}
+
+#[test]
 fn returned_storage_borrow_effect_args_are_finalized_in_normalized_body() {
     let mut saw_storage_add_effect = false;
     for_each_fixture_instance(
@@ -547,11 +675,12 @@ fn returned_storage_borrow_effect_args_are_finalized_in_normalized_body() {
         |db, instance| {
             let normalized = normalize_semantic_body(db, instance).expect("normalized body");
             for stmt in normalized
+                .body
                 .blocks
                 .iter()
-                .flat_map(|block| block.stmts.iter())
+                .flat_map(|block| block.statements.iter())
             {
-                let NSStmtKind::Assign {
+                let NStatementKind::Define {
                     expr:
                         NExpr::Call {
                             callee,
@@ -814,31 +943,41 @@ fn mutate(mut _ ptr: own TaggedPtr<u256>) -> u256 {
     ptr.tag
 }
 "#;
-    assert!(borrow_diags(source).is_empty());
+    let diags = borrow_diags(source);
+    assert!(diags.is_empty(), "{diags}");
 
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone("semantic_borrowck.fe".into(), source);
     let (top_mod, _) = db.top_mod(file);
     let normalized = normalized_func_body(&db, top_mod, "read_call_result");
-    let place = normalized
+    let (value, path) = normalized
+        .body
         .blocks
         .iter()
-        .flat_map(|block| block.stmts.iter())
+        .flat_map(|block| block.statements.iter())
         .find_map(|stmt| match &stmt.kind {
-            NSStmtKind::Assign {
-                expr: NExpr::ReadPlace { place, .. },
+            NStatementKind::Define {
+                result,
+                expr: NExpr::ProjectValue { value, path },
                 ..
-            } if matches!(place.path.iter().next(), Some(Projection::Field(0))) => Some(place),
+            } if normalized.body.values[result.index()].ty.pretty_print(&db) == "u256"
+                && matches!(
+                    path.0.iter().next(),
+                    Some(NDataProjection::Field(field)) if field.0 == 0
+                ) =>
+            {
+                Some((value.value, path))
+            }
             _ => None,
         })
         .expect("tag field read");
-    let root = place
-        .root
-        .borrow_root()
-        .expect("ordinary handle backing root");
     assert!(
-        matches!(normalized.root(root), Some(NBorrowRoot::LocalSlot { .. })),
-        "ordinary handle field should read its ADT backing local: {place:#?}"
+        normalized.body.values[value.index()]
+            .ty
+            .pretty_print(&db)
+            .to_string()
+            .starts_with("TaggedPtr<"),
+        "ordinary handle field should project the handle value representation: {path:#?}"
     );
 }
 
@@ -1365,14 +1504,15 @@ fn find_empty(board: Board, row: usize, col: usize) -> bool {
 
     let normalized = normalized_func_body(&db, top_mod, "read_board");
     let row_read_mode = normalized
+        .body
         .blocks
         .iter()
-        .flat_map(|block| block.stmts.iter())
+        .flat_map(|block| block.statements.iter())
         .find_map(|stmt| match &stmt.kind {
-            NSStmtKind::Assign {
-                dst,
-                expr: NExpr::ReadPlace { mode, .. },
-            } if normalized.locals[dst.index()].ty.pretty_print(&db) == "Row" => Some(mode),
+            NStatementKind::Define {
+                result,
+                expr: NExpr::Load { mode, .. },
+            } if normalized.body.values[result.index()].ty.pretty_print(&db) == "Row" => Some(mode),
             _ => None,
         })
         .expect("row projection read");
@@ -1627,96 +1767,56 @@ fn read_balance(addr: Address) -> u256 uses (store: TokenStore) {
         panic!("{diag:?}");
     }
     let normalized = normalize_semantic_body(&db, instance).expect("normalized body");
-    let store_local = normalized
+    let source = instance.body(&db);
+    let (store_local, store) = source
         .locals
         .iter()
         .enumerate()
-        .find_map(|(idx, local)| match local.source {
+        .find_map(|(index, local)| match local.source {
             Some(fe_hir::analysis::ty::ty_check::LocalBinding::EffectParam { .. }) => {
-                Some((idx, local))
+                Some((fe_hir::analysis::semantic::SLocalId::new(index), local))
             }
             _ => None,
         })
         .expect("store effect binding");
-    let root = match &store_local.1.lowering {
-        NormalizedBindingLowering::ValueLocal { place } => place
-            .root
-            .borrow_root()
-            .expect("store binding should preserve a borrow root"),
-        ref lowering => panic!("unexpected lowering for store binding: {lowering:?}"),
-    };
-    let Some(NBorrowRoot::Provider { value_ty, .. }) = normalized.root(root) else {
-        panic!(
-            "expected provider root for store binding, got {:?}",
-            normalized.root(root)
-        );
-    };
-    assert_eq!(*value_ty, store_local.1.layout_ty());
+    let (provider_root, root) = normalized
+        .body
+        .roots
+        .iter()
+        .enumerate()
+        .find(|(_, root)| matches!(root.kind, NRootKind::Provider { .. }) && root.ty == store.ty)
+        .map(|(index, root)| (fe_hir::analysis::semantic::NRootId::new(index), root))
+        .expect("store binding must normalize to a provider root");
     assert_eq!(
-        store_local.1.facts.interface,
-        SemanticLocalKind::DirectValue
+        normalized.layout_plan.root_source(provider_root),
+        None,
+        "provider identity must not be represented by a source local"
     );
-    assert!(matches!(
-        store_local.1.facts.origin,
-        NLocalOrigin::RootProvider(_)
-    ));
-    assert!(store_local.1.snapshot_source_place().is_some());
-    let field_local = normalized
-        .locals
-        .get(3)
-        .expect("field projection temp should exist");
-    let root = match &field_local.lowering {
-        NormalizedBindingLowering::ValueLocal { place } => place
-            .root
-            .borrow_root()
-            .expect("field projection should preserve a local root"),
-        ref lowering => panic!("unexpected lowering for provider field temp: {lowering:?}"),
-    };
+    assert_eq!(root.address_space, ProviderAddressSpace::Memory);
+    assert!(normalized.body.blocks.iter().any(|block| {
+        block.statements.iter().any(|statement| {
+            matches!(
+                &statement.kind,
+                NStatementKind::Define {
+                    expr: NExpr::Load { place, .. },
+                    ..
+                } if place.base == NPlaceBase::Root(provider_root)
+                    && matches!(place.path.iter().next(), Some(NDataProjection::Field(field)) if field.0 == 0)
+            )
+        })
+    }));
     assert!(
-        matches!(
-            normalized.root(root),
-            Some(NBorrowRoot::LocalSlot { local }) if *local == fe_hir::analysis::semantic::SLocalId::from_u32(3)
-        ),
-        "expected self-rooted local slot for provider field temp, got {:?}",
-        normalized.root(root)
+        normalized
+            .layout_plan
+            .use_backings
+            .iter()
+            .any(|backing| matches!(
+                backing.source,
+                fe_hir::analysis::semantic::NLayoutBackingSource::Root { root, .. }
+                    if root == provider_root
+            )),
+        "provider-rooted loads must retain runtime backing provenance for {store_local:?}"
     );
-    assert_eq!(field_local.facts.interface, SemanticLocalKind::DirectValue);
-    assert!(matches!(field_local.facts.origin, NLocalOrigin::SelfRooted));
-    let backing_place = field_local
-        .backing_place()
-        .expect("field projection temp should keep its own backing place");
-    let backing_root = backing_place
-        .root
-        .borrow_root()
-        .expect("field projection backing root");
-    assert!(
-        matches!(
-            normalized.root(backing_root),
-            Some(NBorrowRoot::LocalSlot { local }) if *local == fe_hir::analysis::semantic::SLocalId::from_u32(3)
-        ),
-        "expected self-rooted backing place for provider field temp, got {:?}",
-        normalized.root(backing_root)
-    );
-    assert!(backing_place.path.is_empty());
-    let snapshot_source = field_local
-        .snapshot_source_place()
-        .expect("field projection temp should preserve its source place");
-    let snapshot_root = snapshot_source
-        .root
-        .borrow_root()
-        .expect("field projection snapshot source root");
-    let Some(NBorrowRoot::Provider { value_ty, .. }) = normalized.root(snapshot_root) else {
-        panic!(
-            "expected provider-root snapshot source for provider field temp, got {:?}",
-            normalized.root(snapshot_root)
-        );
-    };
-    assert_eq!(*value_ty, store_local.1.layout_ty());
-    assert_eq!(
-        snapshot_source.path.iter().next(),
-        Some(&fe_hir::projection::Projection::Field(0))
-    );
-    assert!(!field_local.facts.root_demand.needs_runtime_root());
 }
 
 #[test]
@@ -1756,11 +1856,12 @@ fn read(pair: Pair) -> u256 {
         .expect("read instance");
     let normalized = normalize_semantic_body(&db, instance).expect("normalized body");
     let borrow = normalized
+        .body
         .blocks
         .iter()
-        .flat_map(|block| block.stmts.iter())
+        .flat_map(|block| block.statements.iter())
         .find_map(|stmt| match &stmt.kind {
-            NSStmtKind::Assign {
+            NStatementKind::Define {
                 expr:
                     NExpr::Borrow {
                         place,
@@ -1772,20 +1873,85 @@ fn read(pair: Pair) -> u256 {
             _ => None,
         })
         .expect("borrow expression");
-    assert!(
-        matches!(borrow.root, NSPlaceRoot::CarrierDerefLocal(local) if normalized.local(local).is_some_and(|local| {
-            matches!(
-                local.source,
-                Some(fe_hir::analysis::ty::ty_check::LocalBinding::Param { .. })
-            )
-        })),
-        "expected carrier-rooted view param place for ref projection, got {:?}",
-        borrow.root
-    );
+    let NPlaceBase::CapabilityTarget { carrier } = borrow.base else {
+        panic!("expected capability-target view-param place for ref projection: {borrow:#?}")
+    };
+    assert!(matches!(
+        normalized.body.value(carrier).map(|value| value.definition),
+        Some(NValueDefinition::EntryParam { param: 0 })
+    ));
     assert_eq!(borrow.path.len(), 1);
     assert_eq!(
         borrow.path.iter().next(),
-        Some(&fe_hir::projection::Projection::Field(0))
+        Some(&NDataProjection::Field(
+            fe_hir::analysis::semantic::FieldIndex(0)
+        ))
+    );
+}
+
+#[test]
+fn nested_projection_through_borrow_field_uses_explicit_capability_target() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+struct Data {
+    x: u256,
+}
+
+struct View {
+    d: ref Data,
+}
+
+fn read(v: own View) -> u256 {
+    v.d.x
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let normalized = normalized_func_body(&db, top_mod, "read");
+    check_semantic_borrows(&db, normalized.body.owner)
+        .unwrap_or_else(|error| panic!("nested projection should borrowcheck: {error:#?}"));
+    let (carrier, field) = normalized
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| block.statements.iter())
+        .find_map(|statement| match &statement.kind {
+            NStatementKind::Define {
+                expr: NExpr::Load { place, .. },
+                ..
+            } => match place.base {
+                NPlaceBase::CapabilityTarget { carrier } => Some((carrier, place)),
+                NPlaceBase::Root(_) => None,
+            },
+            NStatementKind::Define { .. } | NStatementKind::Store { .. } => None,
+        })
+        .expect("projection through nested borrow field");
+    assert!(normalized.body.blocks.iter().any(|block| {
+        block.statements.iter().any(|statement| {
+            matches!(
+                &statement.kind,
+                NStatementKind::Define {
+                    result,
+                    expr: NExpr::ProjectValue { path, .. },
+                } if *result == carrier
+                    && path.0.iter().eq([&NDataProjection::Field(
+                        fe_hir::analysis::semantic::FieldIndex(0),
+                    )])
+            )
+        })
+    }));
+    assert_eq!(
+        field.base,
+        NPlaceBase::CapabilityTarget { carrier },
+        "nested projection must follow the loaded capability carrier: {field:#?}",
+    );
+    assert_eq!(
+        field.path.iter().collect::<Vec<_>>(),
+        vec![&NDataProjection::Field(
+            fe_hir::analysis::semantic::FieldIndex(0),
+        )],
     );
 }
 
@@ -1831,7 +1997,8 @@ fn read(wrapper: own Wrapper) -> u256 {
         })
         .expect("read instance");
     let normalized = normalize_semantic_body(&db, instance).expect("normalized body");
-    let pair_ty = normalized
+    let source = instance.body(&db);
+    let pair_ty = source
         .locals
         .iter()
         .find(|local| {
@@ -1842,7 +2009,7 @@ fn read(wrapper: own Wrapper) -> u256 {
         })
         .map(|local| local.ty)
         .expect("pair locals should exist");
-    let locals = normalized
+    let locals = source
         .locals
         .iter()
         .enumerate()
@@ -1850,10 +2017,7 @@ fn read(wrapper: own Wrapper) -> u256 {
             Some(fe_hir::analysis::ty::ty_check::LocalBinding::Local { .. })
                 if local.ty == pair_ty =>
             {
-                Some((
-                    fe_hir::analysis::semantic::SLocalId::from_u32(idx as u32),
-                    local,
-                ))
+                Some(fe_hir::analysis::semantic::SLocalId::new(idx))
             }
             _ => None,
         })
@@ -1863,61 +2027,95 @@ fn read(wrapper: own Wrapper) -> u256 {
         2,
         "expected pair/copy locals, got {locals:#?}"
     );
-    let (pair_local_id, pair_local) = locals[0];
-    let (copy_local_id, copy_local) = locals[1];
+    let [pair_local, copy_local] = locals.as_slice() else {
+        panic!("expected pair/copy locals, got {locals:#?}")
+    };
+    let root_for = |local| {
+        normalized
+            .body
+            .roots
+            .iter()
+            .enumerate()
+            .find_map(|(index, root)| {
+                let root_id = fe_hir::analysis::semantic::NRootId::new(index);
+                (normalized.layout_plan.root_source(root_id) == Some(local)
+                    && matches!(root.kind, NRootKind::LocalSlot { .. }))
+                .then_some(root_id)
+            })
+            .unwrap_or_else(|| panic!("missing local-slot root for {local:?}"))
+    };
+    let copy_root = root_for(*copy_local);
 
-    for (local_id, local) in [(pair_local_id, pair_local), (copy_local_id, copy_local)] {
-        assert_eq!(local.facts.interface, SemanticLocalKind::DirectValue);
-        assert!(matches!(local.facts.origin, NLocalOrigin::SelfRooted));
-        let backing_place = local
-            .backing_place()
-            .expect("projected snapshot should keep a backing place");
-        let backing_root = backing_place
-            .root
-            .borrow_root()
-            .expect("projected snapshot backing root");
-        assert!(
-            matches!(
-                normalized.root(backing_root),
-                Some(NBorrowRoot::LocalSlot { local: root_local }) if *root_local == local_id
-            ),
-            "expected self-rooted backing place for {local_id:?}, got {:?}",
-            normalized.root(backing_root)
-        );
-        assert!(backing_place.path.is_empty());
-    }
-
-    let pair_snapshot = pair_local
-        .snapshot_source_place()
-        .expect("projected snapshot should preserve source lineage");
-    let pair_snapshot_root = pair_snapshot
-        .root
-        .borrow_root()
-        .expect("projected snapshot source root");
-    assert!(
-        matches!(
-            normalized.root(pair_snapshot_root),
-            Some(NBorrowRoot::Param { .. })
-        ),
-        "expected param-root snapshot lineage for projected local, got {:?}",
-        normalized.root(pair_snapshot_root)
-    );
-    assert_eq!(
-        pair_snapshot.path.iter().next(),
-        Some(&fe_hir::projection::Projection::Field(0))
-    );
-
-    let copy_snapshot = copy_local
-        .snapshot_source_place()
-        .expect("forwarded snapshot should preserve source lineage");
-    assert_eq!(copy_snapshot, pair_snapshot);
-
-    let borrow = normalized
+    let pair_value = normalized
+        .body
         .blocks
         .iter()
-        .flat_map(|block| block.stmts.iter())
+        .flat_map(|block| block.statements.iter())
+        .find_map(|statement| match &statement.kind {
+            NStatementKind::Define {
+                result,
+                expr: NExpr::Forward { src },
+            } if normalized.layout_plan.value_source(*result) == Some(*pair_local) => {
+                Some((*result, src.value))
+            }
+            _ => None,
+        })
+        .expect("pair forwarding value");
+    assert!(normalized.body.blocks.iter().any(|block| {
+        block.statements.iter().any(|statement| {
+            matches!(
+                &statement.kind,
+                NStatementKind::Define {
+                    result,
+                    expr: NExpr::ProjectValue { path, .. },
+                } if *result == pair_value.1
+                    && path.0.iter().eq([&NDataProjection::Field(
+                        fe_hir::analysis::semantic::FieldIndex(0),
+                    )])
+            )
+        })
+    }));
+    assert!(normalized.body.roots.iter().enumerate().all(|(index, _)| {
+        normalized
+            .layout_plan
+            .root_source(fe_hir::analysis::semantic::NRootId::new(index))
+            != Some(*pair_local)
+    }));
+    let copy_value = normalized
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| block.statements.iter())
+        .find_map(|statement| match statement.kind {
+            NStatementKind::Define {
+                result,
+                expr: NExpr::Forward { src },
+            } if normalized.layout_plan.value_source(result) == Some(*copy_local)
+                && src.value == pair_value.0 =>
+            {
+                Some(result)
+            }
+            _ => None,
+        })
+        .expect("copy forwarding value");
+    assert!(normalized.body.blocks.iter().any(|block| {
+        block.statements.iter().any(|statement| {
+            matches!(
+                statement.kind,
+                NStatementKind::Store { ref destination, value }
+                    if destination.base == NPlaceBase::Root(copy_root)
+                        && value.value == copy_value
+            )
+        })
+    }));
+
+    let borrow = normalized
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| block.statements.iter())
         .find_map(|stmt| match &stmt.kind {
-            NSStmtKind::Assign {
+            NStatementKind::Define {
                 expr:
                     NExpr::Borrow {
                         place,
@@ -1929,15 +2127,7 @@ fn read(wrapper: own Wrapper) -> u256 {
             _ => None,
         })
         .expect("borrow expression");
-    let borrow_root = borrow.root.borrow_root().expect("borrow root");
-    assert!(
-        matches!(
-            normalized.root(borrow_root),
-            Some(NBorrowRoot::LocalSlot { local }) if *local == copy_local_id
-        ),
-        "expected borrow of copied snapshot to use its own local root, got {:?}",
-        normalized.root(borrow_root)
-    );
+    assert_eq!(borrow.base, NPlaceBase::Root(copy_root));
     assert!(borrow.path.is_empty());
 }
 
@@ -1977,26 +2167,27 @@ impl Table {
         let normalized = normalized_func_body(&db, top_mod, name);
         let mut saw_nested_read = false;
         for stmt in normalized
+            .body
             .blocks
             .iter()
-            .flat_map(|block| block.stmts.iter())
+            .flat_map(|block| block.statements.iter())
         {
-            let NSStmtKind::Assign {
-                dst,
-                expr: NExpr::ReadPlace { place, .. },
+            let NStatementKind::Define {
+                result,
+                expr: NExpr::Load { place, .. },
             } = &stmt.kind
             else {
                 continue;
             };
-            let local = &normalized.locals[dst.index()];
-            if local.ty.pretty_print(&db) == elem_ty {
+            let value = &normalized.body.values[result.index()];
+            if value.ty.pretty_print(&db) == elem_ty {
                 assert!(
                     matches!(
                         place.path.iter().cloned().collect::<Vec<_>>().as_slice(),
                         [
-                            Projection::Field(path_field),
-                            Projection::Index(IndexSource::Dynamic(_))
-                        ] if *path_field == field
+                            NDataProjection::Field(path_field),
+                            NDataProjection::Index(NIndex::Value(_))
+                        ] if usize::from(path_field.0) == field
                     ),
                     "unexpected nested place path in {name}: {:?}",
                     place.path
@@ -2004,9 +2195,11 @@ impl Table {
                 saw_nested_read = true;
             }
             assert!(
-                !(local.ty.array_len(&db).is_some()
+                !(value.ty.array_len(&db).is_some()
                     && place.path.iter().cloned().collect::<Vec<_>>()
-                        == vec![Projection::Field(field)]),
+                        == vec![NDataProjection::Field(
+                            fe_hir::analysis::semantic::FieldIndex(field as u16)
+                        )]),
                 "unexpected intermediate whole-array read in {name}: {stmt:?}"
             );
         }
@@ -2018,7 +2211,7 @@ impl Table {
 }
 
 #[test]
-fn owned_aggregate_value_boundaries_project_from_the_owned_local() {
+fn owned_aggregate_value_boundaries_stay_unrooted() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "semantic_borrowck.fe".into(),
@@ -2037,8 +2230,9 @@ impl Table {
     );
     let (top_mod, _) = db.top_mod(file);
     let normalized = normalized_func_body(&db, top_mod, "get");
+    let source = normalized.body.owner.body(&db);
 
-    let (used_local_id, used_local) = normalized
+    let used_local = source
         .locals
         .iter()
         .enumerate()
@@ -2046,80 +2240,57 @@ impl Table {
             Some(fe_hir::analysis::ty::ty_check::LocalBinding::Local { .. })
                 if local.ty.array_len(&db).is_some() =>
             {
-                Some((
-                    fe_hir::analysis::semantic::SLocalId::from_u32(idx as u32),
-                    local,
-                ))
+                Some(fe_hir::analysis::semantic::SLocalId::new(idx))
             }
             _ => None,
         })
         .expect("owned array local");
-
-    assert_eq!(used_local.facts.interface, SemanticLocalKind::DirectValue);
-    assert!(matches!(used_local.facts.origin, NLocalOrigin::SelfRooted));
-    let backing_place = used_local
-        .backing_place()
-        .expect("owned aggregate local should keep backing storage");
-    let backing_root = backing_place.root.borrow_root().expect("backing root");
     assert!(
-        matches!(
-            normalized.root(backing_root),
-            Some(NBorrowRoot::LocalSlot { local }) if *local == used_local_id
-        ),
-        "expected owned aggregate backing root to be the local itself, got {:?}",
-        normalized.root(backing_root)
+        normalized.body.roots.iter().enumerate().all(|(index, _)| {
+            let root_id = fe_hir::analysis::semantic::NRootId::new(index);
+            normalized.layout_plan.root_source(root_id) != Some(used_local)
+        }),
+        "immutable owned array projection should not force a local-slot root"
     );
-    assert!(backing_place.path.is_empty());
-    let snapshot_source = used_local
-        .snapshot_source_place()
-        .expect("owned aggregate should preserve lineage");
-    let snapshot_root = snapshot_source.root.borrow_root().expect("snapshot root");
-    assert!(
-        matches!(
-            normalized.root(snapshot_root),
-            Some(NBorrowRoot::Param { .. })
-        ),
-        "expected source lineage to point at the parameter root, got {:?}",
-        normalized.root(snapshot_root)
-    );
-    assert_eq!(
-        snapshot_source.path.iter().cloned().collect::<Vec<_>>(),
-        vec![Projection::Field(0)]
-    );
+    assert!(normalized.body.blocks.iter().any(|block| {
+        block.statements.iter().any(|statement| {
+            matches!(
+                &statement.kind,
+                NStatementKind::Define {
+                    expr: NExpr::ProjectValue { path, .. },
+                    ..
+                } if path.0.iter().eq([&NDataProjection::Field(
+                        fe_hir::analysis::semantic::FieldIndex(0),
+                    )])
+            )
+        })
+    }));
 
-    let element_read = normalized
+    let element_path = normalized
+        .body
         .blocks
         .iter()
-        .flat_map(|block| block.stmts.iter())
+        .flat_map(|block| block.statements.iter())
         .find_map(|stmt| match &stmt.kind {
-            NSStmtKind::Assign {
-                dst,
-                expr: NExpr::ReadPlace { place, .. },
-            } if normalized.locals[dst.index()].ty.pretty_print(&db) == "u8" => Some(place),
+            NStatementKind::Define {
+                result,
+                expr: NExpr::ProjectValue { path, .. },
+            } if normalized.body.values[result.index()].ty.pretty_print(&db) == "u8" => Some(path),
             _ => None,
         })
         .expect("element read");
-    let read_root = element_read.root.borrow_root().expect("element read root");
     assert!(
         matches!(
-            normalized.root(read_root),
-            Some(NBorrowRoot::LocalSlot { local }) if *local == used_local_id
-        ),
-        "expected owned aggregate projection to read from the owned local, got {:?}",
-        normalized.root(read_root)
-    );
-    assert!(
-        matches!(
-            element_read
-                .path
+            element_path
+                .0
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>()
                 .as_slice(),
-            [Projection::Index(IndexSource::Dynamic(_))]
+            [NDataProjection::Index(NIndex::Value(_))]
         ),
         "unexpected owned-local projection path: {:?}",
-        element_read.path
+        element_path.0
     );
 }
 
@@ -2128,6 +2299,22 @@ fn zero_sized_aggregate_fixture_instances_normalize_and_borrowcheck() {
     for_each_fixture_instance(
         include_str!("../../codegen/tests/fixtures/zero_sized_aggregates.fe"),
         |db, instance| {
+            let raw = instance.body(db);
+            let artifacts = normalize_raw_body(db, instance, raw, instance.assumptions(db))
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "phase-one normalization failed for {} ({:?}): {error:#?}",
+                        owner_name(db, instance.key(db).owner(db)),
+                        instance.key(db),
+                    )
+                });
+            verify_normalized_body(db, &artifacts.body).unwrap_or_else(|error| {
+                panic!(
+                    "phase-one normalized body failed verification for {} ({:?}): {error:#?}",
+                    owner_name(db, instance.key(db).owner(db)),
+                    instance.key(db),
+                )
+            });
             if let Err(err) = normalize_semantic_body(db, instance) {
                 panic!(
                     "normalize failed for {} ({:?}): {err:?}",
@@ -2140,6 +2327,88 @@ fn zero_sized_aggregate_fixture_instances_normalize_and_borrowcheck() {
                     "borrowck failed for {} ({:?}): {diag:#?}",
                     owner_name(db, instance.key(db).owner(db)),
                     instance.key(db),
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn if_let_fixture_instances_normalize_and_borrowcheck() {
+    for_each_fixture_instance(
+        include_str!("../../fe/tests/fixtures/fe_test/if_let_while_let.fe"),
+        |db, instance| {
+            let raw = instance.body(db);
+            let artifacts = normalize_raw_body(db, instance, raw, instance.assumptions(db))
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "phase-one normalization failed for {} ({:?}): {error:#?}\nraw={raw:#?}",
+                        owner_name(db, instance.key(db).owner(db)),
+                        instance.key(db),
+                    )
+                });
+            verify_normalized_body(db, &artifacts.body).unwrap_or_else(|error| {
+                panic!(
+                    "phase-one normalized body failed verification for {} ({:?}): {error:#?}\nraw={raw:#?}\nnormalized={:#?}",
+                    owner_name(db, instance.key(db).owner(db)),
+                    instance.key(db),
+                    artifacts.body,
+                )
+            });
+            if let Err(diag) = check_semantic_borrows(db, instance) {
+                panic!(
+                    "borrowck failed for {} ({:?}): {diag:#?}\nraw={raw:#?}\nnormalized={:#?}",
+                    owner_name(db, instance.key(db).owner(db)),
+                    instance.key(db),
+                    artifacts.body,
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn custom_effect_handle_fixture_instances_normalize_and_borrowcheck() {
+    for_each_fixture_instance(
+        include_str!("../../fe/tests/fixtures/fe_test/effect_handle_representation.fe"),
+        |db, instance| {
+            let raw = instance.body(db);
+            let local_types = raw
+                .locals
+                .iter()
+                .map(|local| {
+                    format!(
+                        "{} role={:?}",
+                        local.ty.pretty_print(db),
+                        local
+                            .role
+                            .root_provider(&raw.locals)
+                            .map(|provider| provider.provider_ty.pretty_print(db)),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let artifacts = normalize_raw_body(db, instance, raw, instance.assumptions(db))
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "phase-one normalization failed for {} ({:?}): {error:#?}\nlocal_types={local_types:#?}\nraw={raw:#?}",
+                        owner_name(db, instance.key(db).owner(db)),
+                        instance.key(db),
+                    )
+                });
+            verify_normalized_body(db, &artifacts.body).unwrap_or_else(|error| {
+                panic!(
+                    "phase-one normalized body failed verification for {} ({:?}): {error:#?}\nraw={raw:#?}\nnormalized={:#?}",
+                    owner_name(db, instance.key(db).owner(db)),
+                    instance.key(db),
+                    artifacts.body,
+                )
+            });
+            if let Err(diag) = check_semantic_borrows(db, instance) {
+                panic!(
+                    "borrowck failed for {} ({:?}): {diag:#?}\nraw={raw:#?}\nnormalized={:#?}",
+                    owner_name(db, instance.key(db).owner(db)),
+                    instance.key(db),
+                    artifacts.body,
                 );
             }
         },

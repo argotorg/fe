@@ -5,7 +5,7 @@ use fe_hir::{
     analysis::{
         initialize_analysis_pass,
         semantic::{
-            EffectProviderSubst, GenericSubst, ImplEnv, NExpr, NSStmtKind, SemanticInstanceKey,
+            EffectProviderSubst, GenericSubst, ImplEnv, NExpr, NStatementKind, SemanticInstanceKey,
             get_or_build_semantic_instance, identity_semantic_instance_key,
             normalize_semantic_body,
         },
@@ -2813,11 +2813,12 @@ fn call(value: Wrapper<Rooted<7>, 9>) -> Rooted<7> {
     );
     let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
     let signature = normalized
+        .body
         .blocks
         .iter()
-        .flat_map(|block| &block.stmts)
+        .flat_map(|block| &block.statements)
         .find_map(|statement| {
-            let NSStmtKind::Assign {
+            let NStatementKind::Define {
                 expr: NExpr::Call { callee, .. },
                 ..
             } = &statement.kind
@@ -2896,11 +2897,12 @@ fn call<const ROOT: u256>(value: Outer<ROOT, ROOT>) {
     );
     let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
     let signature = normalized
+        .body
         .blocks
         .iter()
-        .flat_map(|block| &block.stmts)
+        .flat_map(|block| &block.statements)
         .find_map(|statement| {
-            let NSStmtKind::Assign {
+            let NStatementKind::Define {
                 expr: NExpr::Call { callee, .. },
                 ..
             } = &statement.kind

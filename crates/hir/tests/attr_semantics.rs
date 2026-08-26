@@ -2,9 +2,9 @@ use fe_hir::test_db::HirAnalysisTestDb;
 use fe_hir::{
     analysis::{
         semantic::{
-            NExpr, NSStmtKind, SExpr, SStmtKind, SemanticCodeRegionRef, SemanticCodeRegionTarget,
-            get_or_build_semantic_instance, identity_semantic_instance_key,
-            normalize_semantic_body,
+            NExpr, NStatementKind, SExpr, SStmtKind, SemanticCodeRegionRef,
+            SemanticCodeRegionTarget, get_or_build_semantic_instance,
+            identity_semantic_instance_key, normalize_semantic_body,
         },
         ty::ty_check::{BodyOwner, check_func_body},
     },
@@ -544,15 +544,16 @@ fn array_repeat_lowering_preserves_repeat_expr_through_normalization() {
 
     let normalized = normalize_semantic_body(&db, instance).expect("normalized body");
     let normalized_array_len = normalized
+        .body
         .blocks
         .iter()
-        .flat_map(|block| block.stmts.iter())
+        .flat_map(|block| block.statements.iter())
         .find_map(|stmt| match &stmt.kind {
-            NSStmtKind::Assign {
+            NStatementKind::Define {
                 expr: NExpr::ArrayRepeat { ty, .. },
                 ..
             } if ty.is_array(&db) => ty.array_len(&db),
-            NSStmtKind::Assign { .. } | NSStmtKind::Store { .. } => None,
+            NStatementKind::Define { .. } | NStatementKind::Store { .. } => None,
         })
         .expect("expected concrete array repeat to remain structural after normalization");
     assert_eq!(normalized_array_len, 4);
@@ -592,15 +593,16 @@ fn generic_array_repeat_with_symbolic_len_normalizes_as_repeat() {
 
     let normalized = normalize_semantic_body(&db, instance).expect("normalized body");
     normalized
+        .body
         .blocks
         .iter()
-        .flat_map(|block| block.stmts.iter())
+        .flat_map(|block| block.statements.iter())
         .find_map(|stmt| match &stmt.kind {
-            NSStmtKind::Assign {
+            NStatementKind::Define {
                 expr: NExpr::ArrayRepeat { ty, .. },
                 ..
             } if ty.is_array(&db) && ty.array_len(&db).is_none() => Some(()),
-            NSStmtKind::Assign { .. } | NSStmtKind::Store { .. } => None,
+            NStatementKind::Define { .. } | NStatementKind::Store { .. } => None,
         })
         .expect("expected symbolic array repeat to stay unexpanded after normalization");
 }

@@ -1,15 +1,14 @@
 use common::indexmap::IndexSet;
-use cranelift_entity::{EntityRef, PrimaryMap};
+use cranelift_entity::{EntityRef, PrimaryMap, entity_impl};
 use hir::analysis::{
     semantic::{
-        FieldIndex, GenericSubst, ImplEnv, NEffectArg, ReadMode, SBlockId, SConst, SLocalId,
-        SemanticCalleeRef, SemanticInstance, SemanticInstanceKey, SemanticLocalKind,
-        SemanticLocalRole, ValueProvenance, VariantIndex,
-        borrowck::{
-            NAssignmentId, NBorrowRoot, NExpr, NLocalOrigin, NOperand, NSLocal, NSPlace,
-            NSPlaceRoot, NormalizedBindingLowering, NormalizedBodyFacts, NormalizedSemanticBody,
+        FieldIndex, GenericSubst, ImplEnv, Mutability, SConst, SLocal, SLocalId, SemanticCalleeRef,
+        SemanticInstance, SemanticInstanceKey, SemanticLocalKind, SemanticLocalRole,
+        ValueProvenance, VariantIndex, get_or_build_semantic_instance,
+        normalized::{
+            NDataProjection, NEffectArg, NExpr, NIndex, NOperand, NPlace, NPlaceBase, NRootKind,
+            NStatementKind, NValueDefinition, NValueId, ReadMode,
         },
-        get_or_build_semantic_instance,
     },
     ty::{
         ProviderKind,
@@ -25,7 +24,6 @@ use hir::analysis::{
     },
 };
 use hir::hir_def::{ArithBinOp, FuncParamMode, ItemKind};
-use hir::projection::Projection;
 use hir::semantic::{ProviderBinding, ProviderSource, constraints_for};
 use rustc_hash::FxHashMap;
 use salsa::Update;
@@ -33,14 +31,11 @@ use salsa::Update;
 use crate::{
     db::MirDb,
     instance::{RuntimeInstanceKey, RuntimeInstanceSource},
-    runtime::place::{
-        project_field_class, project_index_class, project_variant_field_class,
-        ref_class_for_place_result,
-    },
+    runtime::place::{project_field_class, project_index_class, ref_class_for_place_result},
     runtime::{
-        AddressSpaceKind, BorrowAccess, Layout, LayoutId, RuntimeBoundarySpec, RuntimeCarrier,
-        RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan, SaturatingBinOp,
-        ScalarClass, ScalarRepr, ScalarRole, VariantId,
+        AddressSpaceKind, BorrowAccess, Layout, LayoutId, RefKind, RuntimeBoundarySpec,
+        RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan,
+        SaturatingBinOp, ScalarClass, ScalarRepr, ScalarRole,
     },
 };
 
@@ -67,6 +62,7 @@ use super::{
     provider_space::address_space_from_provider,
     realize::SelectedRuntimeArg,
     returns::{StaticRuntimeReturnDecision, static_runtime_return_decision},
+    semantic_body::{RuntimeOperand, RuntimeSemanticBody},
     type_info::{
         RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env,
         provider_address_space_to_runtime, provider_class_for_target_in_env,
@@ -78,19 +74,26 @@ use super::{
 
 #[derive(Clone)]
 pub(crate) struct BodyStaticFacts<'db> {
-    normalized_facts: NormalizedBodyFacts,
     local_facts: Vec<LocalStaticFacts<'db>>,
     assignments: PrimaryMap<AssignmentId, AssignStaticFacts<'db>>,
+    statement_assignments: Vec<Vec<Option<AssignmentId>>>,
+    source_locals: Vec<Vec<SLocalId>>,
+    assignments_using_local: Vec<Vec<AssignmentId>>,
+    assignments_defining_local: Vec<Vec<AssignmentId>>,
+    dynamic_dependents: Vec<Vec<SLocalId>>,
     root_provider_locals: FxHashMap<ProviderBinding<'db>, SLocalId>,
 }
 
-pub(crate) type AssignmentId = NAssignmentId;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct AssignmentId(u32);
+entity_impl!(AssignmentId);
 
 #[derive(Clone)]
 pub(super) struct AssignStaticFacts<'db> {
     pub(super) block_idx: usize,
     pub(super) stmt_idx: usize,
     pub(super) dst: SLocalId,
+    uses: Vec<SLocalId>,
     expr: Option<ExprStaticFacts<'db>>,
 }
 
@@ -250,20 +253,19 @@ struct CallStaticFacts<'db> {
 }
 
 impl<'db> BodyStaticFacts<'db> {
-    pub(crate) fn new(db: &'db dyn MirDb, body: &NormalizedSemanticBody<'db>) -> Self {
-        let typed_body = body.owner.key(db).typed_body(db);
-        let type_env = RuntimeTypeEnv::for_semantic(db, body.owner);
+    pub(crate) fn new(db: &'db dyn MirDb, body: &RuntimeSemanticBody<'db>) -> Self {
+        let typed_body = body.owner().key(db).typed_body(db);
+        let type_env = RuntimeTypeEnv::for_semantic(db, body.owner());
         Self::new_in_context(db, body, typed_body, type_env)
     }
 
     pub(super) fn new_in_context(
         db: &'db dyn MirDb,
-        body: &NormalizedSemanticBody<'db>,
+        body: &RuntimeSemanticBody<'db>,
         typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
         type_env: RuntimeTypeEnv<'db>,
     ) -> Self {
         let mut boundary_sites = BoundarySiteAllocator::default();
-        let normalized_facts = NormalizedBodyFacts::new(body);
         let expr_facts_builder = ExprStaticFactsBuilder {
             db,
             body,
@@ -271,43 +273,67 @@ impl<'db> BodyStaticFacts<'db> {
             type_env,
         };
         let local_facts: Vec<_> = body
+            .source
             .locals
             .iter()
-            .enumerate()
-            .map(|(idx, local_data)| {
-                let local = SLocalId::from_u32(idx as u32);
-                build_local_static_facts(db, type_env, local, local_data)
-            })
+            .map(|local_data| build_local_static_facts(db, type_env, body, local_data))
             .collect();
         let mut assignments = PrimaryMap::new();
-        for (assign_id, structural) in normalized_facts.assignments().iter() {
-            let stmt = &body.blocks[structural.block.index()].stmts[structural.stmt_idx];
-            let hir::analysis::semantic::NSStmtKind::Assign { dst, expr } = &stmt.kind else {
-                panic!(
-                    "normalized assignment facts point to non-assignment statement: block={} stmt={}",
-                    structural.block.index(),
-                    structural.stmt_idx
-                );
-            };
-            let result_ty = body
-                .locals
-                .get(dst.index())
-                .unwrap_or_else(|| panic!("missing assignment local for {dst:?}"))
-                .ty;
-            let expr_facts = expr_facts_builder.build(expr, *dst, result_ty, &mut boundary_sites);
-            let pushed = assignments.push(AssignStaticFacts {
-                block_idx: structural.block.index(),
-                stmt_idx: structural.stmt_idx,
-                dst: *dst,
-                expr: expr_facts,
-            });
-            debug_assert_eq!(pushed, assign_id);
+        let local_count = body.source.locals.len();
+        let mut statement_assignments = body
+            .normalized
+            .blocks
+            .iter()
+            .map(|block| vec![None; block.statements.len()])
+            .collect::<Vec<_>>();
+        let mut source_locals = vec![Vec::new(); local_count];
+        let mut assignments_using_local = vec![Vec::new(); local_count];
+        let mut assignments_defining_local = vec![Vec::new(); local_count];
+        let mut dynamic_dependents = vec![Vec::new(); local_count];
+        for (block_idx, block) in body.normalized.blocks.iter().enumerate() {
+            for (stmt_idx, statement) in block.statements.iter().enumerate() {
+                let NStatementKind::Define { result, expr } = &statement.kind else {
+                    continue;
+                };
+                let dst = body.value_source(*result).unwrap_or_else(|| {
+                    panic!("missing runtime representation for normalized value {result:?}")
+                });
+                let result_ty = body
+                    .normalized
+                    .value(*result)
+                    .expect("normalized definition result must exist")
+                    .ty;
+                let uses = runtime_expr_source_locals(body, expr);
+                let dynamic_indices = runtime_expr_dynamic_index_locals(body, expr);
+                let expr_facts =
+                    expr_facts_builder.build(expr, dst, result_ty, &mut boundary_sites);
+                let assignment = assignments.push(AssignStaticFacts {
+                    block_idx,
+                    stmt_idx,
+                    dst,
+                    uses: uses.clone(),
+                    expr: expr_facts,
+                });
+                statement_assignments[block_idx][stmt_idx] = Some(assignment);
+                assignments_defining_local[dst.index()].push(assignment);
+                for source in uses {
+                    push_unique(&mut source_locals[dst.index()], source);
+                    assignments_using_local[source.index()].push(assignment);
+                }
+                for index in dynamic_indices {
+                    push_unique(&mut dynamic_dependents[index.index()], dst);
+                }
+            }
         }
         let root_provider_locals = build_runtime_visible_root_provider_locals(db, body);
         Self {
-            normalized_facts,
             local_facts,
             assignments,
+            statement_assignments,
+            source_locals,
+            assignments_using_local,
+            assignments_defining_local,
+            dynamic_dependents,
             root_provider_locals,
         }
     }
@@ -317,9 +343,11 @@ impl<'db> BodyStaticFacts<'db> {
     }
 
     fn expr(&self, block_idx: usize, stmt_idx: usize) -> Option<&ExprStaticFacts<'db>> {
-        let assign_id = self
-            .normalized_facts
-            .stmt_assignment(SBlockId::new(block_idx), stmt_idx)?;
+        let assign_id = *self
+            .statement_assignments
+            .get(block_idx)?
+            .get(stmt_idx)?
+            .as_ref()?;
         self.assignments.get(assign_id)?.expr.as_ref()
     }
 
@@ -332,26 +360,38 @@ impl<'db> BodyStaticFacts<'db> {
     }
 
     pub(super) fn source_locals(&self, local: SLocalId) -> &[SLocalId] {
-        self.normalized_facts.local_source_uses(local)
+        self.source_locals
+            .get(local.index())
+            .map(Vec::as_slice)
+            .unwrap_or_default()
     }
 
     fn assignments_using_local(&self, local: SLocalId) -> &[AssignmentId] {
-        self.normalized_facts.assignments_using_local(local)
+        self.assignments_using_local
+            .get(local.index())
+            .map(Vec::as_slice)
+            .unwrap_or_default()
     }
 
     pub(super) fn assignments_defining_local(&self, local: SLocalId) -> &[AssignmentId] {
-        self.normalized_facts.defs_by_local(local)
+        self.assignments_defining_local
+            .get(local.index())
+            .map(Vec::as_slice)
+            .unwrap_or_default()
     }
 
     pub(super) fn assignment_uses(&self, assign_id: AssignmentId) -> &[SLocalId] {
-        self.normalized_facts
-            .assignment(assign_id)
-            .map(|assignment| assignment.uses())
+        self.assignments
+            .get(assign_id)
+            .map(|assignment| assignment.uses.as_slice())
             .unwrap_or(&[])
     }
 
     fn dynamic_dependents(&self, local: SLocalId) -> &[SLocalId] {
-        self.normalized_facts.dynamic_dependents(local)
+        self.dynamic_dependents
+            .get(local.index())
+            .map(Vec::as_slice)
+            .unwrap_or_default()
     }
 
     pub(super) fn root_provider_local(&self, provider: &ProviderBinding<'db>) -> Option<SLocalId> {
@@ -359,10 +399,73 @@ impl<'db> BodyStaticFacts<'db> {
     }
 }
 
+fn runtime_expr_source_locals(body: &RuntimeSemanticBody<'_>, expr: &NExpr<'_>) -> Vec<SLocalId> {
+    let mut sources = Vec::new();
+    expr.for_each_value_operand(|operand| {
+        if let Some(local) = body.operand_source(operand) {
+            push_unique(&mut sources, local);
+        }
+    });
+    expr.for_each_place_operand(|place| {
+        match place.base {
+            NPlaceBase::Root(root) => {
+                if let Some(local) = body.root_source(root) {
+                    push_unique(&mut sources, local);
+                }
+            }
+            NPlaceBase::CapabilityTarget { carrier } => {
+                if let Some(local) = body.value_source(carrier) {
+                    push_unique(&mut sources, local);
+                }
+            }
+        }
+        for projection in place.path.iter() {
+            if let NDataProjection::Index(NIndex::Value(value)) = projection
+                && let Some(local) = body.value_source(*value)
+            {
+                push_unique(&mut sources, local);
+            }
+        }
+    });
+    sources
+}
+
+fn runtime_expr_dynamic_index_locals(
+    body: &RuntimeSemanticBody<'_>,
+    expr: &NExpr<'_>,
+) -> Vec<SLocalId> {
+    let mut indices = Vec::new();
+    expr.for_each_place_operand(|place| {
+        for projection in place.path.iter() {
+            if let NDataProjection::Index(NIndex::Value(value)) = projection
+                && let Some(local) = body.value_source(*value)
+            {
+                push_unique(&mut indices, local);
+            }
+        }
+    });
+    if let NExpr::ProjectValue { path, .. } = expr {
+        for projection in path.0.iter() {
+            if let NDataProjection::Index(NIndex::Value(value)) = projection
+                && let Some(local) = body.value_source(*value)
+            {
+                push_unique(&mut indices, local);
+            }
+        }
+    }
+    indices
+}
+
+fn push_unique<T: Copy + PartialEq>(values: &mut Vec<T>, value: T) {
+    if !values.contains(&value) {
+        values.push(value);
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct BodyEnv<'a, 'db> {
     db: &'db dyn MirDb,
-    body: &'a NormalizedSemanticBody<'db>,
+    body: &'a RuntimeSemanticBody<'db>,
     type_env: RuntimeTypeEnv<'db>,
     facts: &'a BodyStaticFacts<'db>,
 }
@@ -370,16 +473,16 @@ pub(crate) struct BodyEnv<'a, 'db> {
 impl<'a, 'db> BodyEnv<'a, 'db> {
     pub(crate) fn new(
         db: &'db dyn MirDb,
-        body: &'a NormalizedSemanticBody<'db>,
+        body: &'a RuntimeSemanticBody<'db>,
         facts: &'a BodyStaticFacts<'db>,
     ) -> Self {
-        let type_env = RuntimeTypeEnv::for_semantic(db, body.owner);
+        let type_env = RuntimeTypeEnv::for_semantic(db, body.owner());
         Self::from_parts(db, body, type_env, facts)
     }
 
     pub(super) fn from_parts(
         db: &'db dyn MirDb,
-        body: &'a NormalizedSemanticBody<'db>,
+        body: &'a RuntimeSemanticBody<'db>,
         type_env: RuntimeTypeEnv<'db>,
         facts: &'a BodyStaticFacts<'db>,
     ) -> Self {
@@ -395,8 +498,16 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         self.db
     }
 
-    pub(super) fn body(self) -> &'a NormalizedSemanticBody<'db> {
+    pub(super) fn body(self) -> &'a RuntimeSemanticBody<'db> {
         self.body
+    }
+
+    pub(super) fn local(self, local: SLocalId) -> Option<&'a SLocal<'db>> {
+        self.body.local(local)
+    }
+
+    pub(super) fn source_local(self, value: NValueId) -> Option<SLocalId> {
+        self.body.value_source(value)
     }
 
     pub(super) fn type_env(self) -> RuntimeTypeEnv<'db> {
@@ -506,15 +617,16 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
     ) -> Option<RuntimeClass<'db>> {
         let expr_facts = self.expr_facts(block_idx, stmt_idx);
         Some(match expr {
-            NExpr::Use(value) => {
+            NExpr::Forward { src } | NExpr::StructuralRepack { value: src, .. } => {
+                let operand = self.body.runtime_operand(*src)?;
                 RuntimeArgSelector::new(self, carriers, class_cache)
-                    .selected_materialized_value(value.local)?
+                    .selected_materialized_operand(operand)?
                     .class
             }
             NExpr::Const(_)
             | NExpr::Unary { .. }
             | NExpr::Binary { .. }
-            | NExpr::Cast { .. }
+            | NExpr::ScalarCast { .. }
             | NExpr::CodeRegionOffset { .. }
             | NExpr::CodeRegionLen { .. }
             | NExpr::IsEnumVariant { .. } => match expr_facts {
@@ -523,7 +635,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 }
                 _ => panic!(
                     "missing staged runtime class facts: owner={:?}; expr={expr:?}",
-                    self.body.owner.key(self.db),
+                    self.body.owner().key(self.db),
                 ),
             },
             NExpr::CodeRegionRef { .. } => return None,
@@ -531,7 +643,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 let Some(ExprStaticFacts::AggregateMake(facts)) = expr_facts else {
                     panic!(
                         "missing staged array-repeat facts: owner={:?}; expr={expr:?}",
-                        self.body.owner.key(self.db),
+                        self.body.owner().key(self.db),
                     );
                 };
                 let len = ty.array_len(self.db).unwrap_or_else(|| {
@@ -549,8 +661,9 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 )?
             }
             NExpr::GetEnumTag { value } => {
+                let local = self.source_local(value.value)?;
                 let enum_layout = self
-                    .semantic_value_class(carriers, value.local)?
+                    .semantic_value_class(carriers, local)?
                     .aggregate_layout()
                     .expect("enum tag source should have aggregate layout");
                 RuntimeClass::Scalar(ScalarClass {
@@ -567,7 +680,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 let Some(ExprStaticFacts::AggregateMake(facts)) = expr_facts else {
                     panic!(
                         "missing staged aggregate facts: owner={:?}; expr={expr:?}",
-                        self.body.owner.key(self.db),
+                        self.body.owner().key(self.db),
                     );
                 };
                 aggregate_make_class_from_facts(
@@ -578,21 +691,11 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                     class_cache.as_deref_mut(),
                 )?
             }
-            NExpr::ExtractEnumField {
-                value,
-                variant,
-                field,
-            } => {
-                let value_class = self.semantic_value_class(carriers, value.local)?;
-                let variant = VariantId {
-                    enum_layout: value_class
-                        .aggregate_layout()
-                        .expect("enum extract source should have aggregate layout"),
-                    index: variant.0,
-                };
-                project_variant_field_class(self.db, value_class, variant, FieldIndex(field.0))
+            NExpr::ProjectValue { value, path } => {
+                let value_class = self.normalized_value_structural_class(carriers, value.value)?;
+                self.walk_data_path_class(value_class, &path.0)
             }
-            NExpr::ReadPlace { place, .. } => match expr_facts {
+            NExpr::Load { place, .. } => match expr_facts {
                 Some(ExprStaticFacts::DirectClass(None)) => return None,
                 Some(ExprStaticFacts::DirectClass(Some(_))) | None => self
                     .normalized_place_class(carriers, place)
@@ -607,7 +710,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                     | ExprStaticFacts::Call(_),
                 ) => panic!(
                     "unexpected staged runtime class facts for read-place expr: owner={:?}; expr={expr:?}",
-                    self.body.owner.key(self.db),
+                    self.body.owner().key(self.db),
                 ),
             },
             NExpr::Borrow { place, .. } => self
@@ -624,7 +727,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 let Some(ExprStaticFacts::Call(facts)) = expr_facts else {
                     panic!(
                         "missing staged runtime call facts: owner={:?}; expr={expr:?}",
-                        self.body.owner.key(self.db),
+                        self.body.owner().key(self.db),
                     );
                 };
                 if let Some(class) = facts.builtin_return_class.clone() {
@@ -656,112 +759,64 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
     pub(crate) fn normalized_place_class(
         self,
         carriers: &[RuntimeCarrier<'db>],
-        place: &NSPlace<'db>,
+        place: &NPlace<'db>,
     ) -> Option<RuntimeClass<'db>> {
-        let root = normalized_place_root_class_in_context(self, place.root.clone(), carriers)?;
-        Some(self.walk_place_path_classes(root, place).0)
+        let root = normalized_place_root_class_in_context(self, place.base, carriers)?;
+        Some(self.walk_data_path_class(root, &place.path))
     }
 
-    /// Projects `root` through the place's path, returning the final class and
-    /// the carrier class crossed by the last `Deref` (if any).
-    fn walk_place_path_classes(
+    fn walk_data_path_class(
         self,
-        root: RuntimeClass<'db>,
-        place: &NSPlace<'db>,
-    ) -> (RuntimeClass<'db>, Option<RuntimeClass<'db>>) {
-        let mut current = root;
-        let mut last_deref_carrier = None;
-        for (idx, projection) in place.path.iter().enumerate() {
-            if matches!(projection, Projection::Deref) {
-                last_deref_carrier = Some(current.clone());
-            }
+        mut current: RuntimeClass<'db>,
+        path: &hir::analysis::semantic::normalized::NDataPath,
+    ) -> RuntimeClass<'db> {
+        for (index, projection) in path.iter().enumerate() {
             current = match projection {
-                Projection::Field(field) => project_field_class(
-                    self.db,
-                    current,
-                    FieldIndex((*field).try_into().expect("field index fits")),
-                ),
-                Projection::Index(_) => project_index_class(self.db, current),
-                Projection::Deref => current
-                    .deref_target()
-                    .unwrap_or_else(|| panic!("invalid deref projection class")),
-                Projection::VariantField {
-                    variant, field_idx, ..
-                } => project_variant_field_place_class(
-                    self.db,
-                    current,
-                    *variant,
-                    FieldIndex((*field_idx).try_into().expect("field index fits")),
-                ),
-                Projection::Discriminant => match current {
-                    RuntimeClass::Ref { pointee, .. } => match pointee.aggregate_layout() {
-                        Some(layout) => match layout.data(self.db) {
-                            Layout::Enum(layout) => RuntimeClass::Scalar(layout.tag),
-                            Layout::Struct(_) | Layout::Array(_) => {
-                                panic!("invalid discriminant projection class")
-                            }
-                        },
-                        None => panic!("invalid discriminant projection class"),
-                    },
-                    RuntimeClass::AggregateValue { layout }
-                    | RuntimeClass::RawAddr {
-                        target: Some(layout),
-                        ..
-                    } => match layout.data(self.db) {
-                        Layout::Enum(layout) => RuntimeClass::Scalar(layout.tag),
-                        Layout::Struct(_) | Layout::Array(_) => {
-                            panic!("invalid discriminant projection class")
-                        }
-                    },
-                    RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { target: None, .. } => {
-                        panic!("invalid discriminant projection class")
-                    }
-                },
+                NDataProjection::Field(field) => project_field_class(self.db, current, *field),
+                NDataProjection::Index(_) => project_index_class(self.db, current),
+                NDataProjection::VariantField { variant, field } => {
+                    project_variant_field_place_class(self.db, current, *variant, *field)
+                }
             };
-            // Mirror `try_lower_place`: projecting onward through a
-            // handle-classed element continues in the pointee, which re-roots
-            // the place in that carrier's transport.
-            if idx + 1 < place.path.len()
+            if index + 1 < path.len()
                 && let Some(target) = current.deref_target()
             {
-                last_deref_carrier = Some(current.clone());
                 current = target;
             }
         }
-        (current, last_deref_carrier)
+        current
     }
 
     pub(crate) fn normalized_place_address_class(
         self,
         carriers: &[RuntimeCarrier<'db>],
-        place: &NSPlace<'db>,
+        place: &NPlace<'db>,
     ) -> Option<RuntimeClass<'db>> {
         let value_class = self.normalized_place_class(carriers, place)?;
-        let mut root_class =
-            normalized_place_root_transport_class_in_context(self, place.root.clone(), carriers)?;
-        let (mut root_space, mut force_raw) = match place.root {
-            NSPlaceRoot::CarrierDerefLocal(_) => (AddressSpaceKind::Memory, false),
-            NSPlaceRoot::Root(root) => match self.body.root(root)? {
-                NBorrowRoot::Param { .. } | NBorrowRoot::LocalSlot { .. } => {
+        let root_class =
+            normalized_place_root_transport_class_in_context(self, place.base, carriers)?;
+        let (root_space, force_raw) = match place.base {
+            NPlaceBase::CapabilityTarget { .. } => (
+                root_class
+                    .address_space()
+                    .unwrap_or(AddressSpaceKind::Memory),
+                matches!(&root_class, RuntimeClass::RawAddr { .. }),
+            ),
+            NPlaceBase::Root(root) => match &self.body.normalized.root(root)?.kind {
+                NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
                     (AddressSpaceKind::Memory, false)
                 }
-                NBorrowRoot::Provider { binding, .. } => {
+                NRootKind::Provider { binding } => {
                     (provider_root_space(binding, &root_class), false)
                 }
+                NRootKind::CapabilityRepresentation { .. } => (
+                    root_class
+                        .address_space()
+                        .unwrap_or(AddressSpaceKind::Memory),
+                    matches!(&root_class, RuntimeClass::RawAddr { .. }),
+                ),
             },
         };
-        // A deref along the path re-roots the address in the dereffed
-        // carrier's transport (mirroring `resolve_runtime_place_address_class`
-        // over lowered places), so a borrow through a handle-typed field keeps
-        // the handle's transport rather than the place root's.
-        if let Some(root) =
-            normalized_place_root_class_in_context(self, place.root.clone(), carriers)
-            && let (_, Some(carrier)) = self.walk_place_path_classes(root, place)
-        {
-            root_space = carrier.address_space().unwrap_or(root_space);
-            force_raw = matches!(carrier, RuntimeClass::RawAddr { .. });
-            root_class = carrier;
-        }
         Some(ref_class_for_place_result(
             &root_class,
             &value_class,
@@ -792,13 +847,43 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         carriers: &[RuntimeCarrier<'db>],
         local: SLocalId,
     ) -> Option<RuntimeClass<'db>> {
-        snapshot_source_place(self.body, local)
-            .and_then(|place| self.normalized_place_class(carriers, place))
+        self.semantic_value_class(carriers, local)
             .and_then(|class| class.aggregate_value_class())
-            .or_else(|| {
-                self.semantic_value_class(carriers, local)
-                    .and_then(|class| class.aggregate_value_class())
-            })
+    }
+
+    pub(crate) fn runtime_operand_value_class(
+        self,
+        carriers: &[RuntimeCarrier<'db>],
+        operand: RuntimeOperand,
+    ) -> Option<RuntimeClass<'db>> {
+        operand
+            .value
+            .and_then(|value| normalized_value_runtime_class(self, value, carriers))
+            .or_else(|| self.semantic_value_class(carriers, operand.local))
+    }
+
+    pub(crate) fn normalized_value_structural_class(
+        self,
+        carriers: &[RuntimeCarrier<'db>],
+        value: NValueId,
+    ) -> Option<RuntimeClass<'db>> {
+        let ty = self.body.normalized.value(value)?.ty;
+        let ordinary = stored_class_for_ty_in_env(self.db, self.type_env(), ty);
+        if effect_handle_transport_class_for_ty_in_env(self.db, self.type_env(), ty).is_some() {
+            return Some(ordinary);
+        }
+        self.source_local(value)
+            .and_then(|local| self.semantic_value_class(carriers, local))
+            .or(Some(ordinary))
+    }
+
+    pub(crate) fn actual_aggregate_class_for_operand(
+        self,
+        carriers: &[RuntimeCarrier<'db>],
+        operand: RuntimeOperand,
+    ) -> Option<RuntimeClass<'db>> {
+        self.runtime_operand_value_class(carriers, operand)
+            .and_then(|class| class.aggregate_value_class())
     }
 
     pub(super) fn semantic_value_class(
@@ -806,21 +891,45 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         carriers: &[RuntimeCarrier<'db>],
         local: SLocalId,
     ) -> Option<RuntimeClass<'db>> {
-        let local_data = self.body.locals.get(local.index())?;
+        let local_data = self.local(local)?;
         let local_facts = self.local_facts(local)?;
-        match local_data.facts.interface {
+        match local_data.role.kind() {
             SemanticLocalKind::Erased => None,
-            SemanticLocalKind::DirectValue | SemanticLocalKind::DirectCarrier => {
-                carrier_value_class(local, carriers)
+            SemanticLocalKind::DirectValue => {
+                if local_data
+                    .role
+                    .root_provider(&self.body.source.locals)
+                    .is_some()
+                    && matches!(
+                        local_facts.root_place_fallback_class,
+                        Some(RuntimeClass::Scalar(_))
+                    )
+                {
+                    local_facts.root_place_fallback_class.clone()
+                } else {
+                    carrier_value_class(local, carriers)
+                }
             }
+            SemanticLocalKind::DirectCarrier => carrier_value_class(local, carriers),
             SemanticLocalKind::PlaceCarrier => carrier_value_class(local, carriers)
                 .or_else(|| local_facts.semantic_fallback_class.clone()),
-            SemanticLocalKind::PlaceBoundValue => self
-                .normalized_place_class(
-                    carriers,
-                    self.body.locals.get(local.index())?.backing_place()?,
-                )
-                .or_else(|| local_facts.semantic_fallback_class.clone()),
+            SemanticLocalKind::PlaceBoundValue => {
+                if matches!(
+                    local_data.role,
+                    SemanticLocalRole::PlaceBoundValue {
+                        provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(_),
+                        ..
+                    }
+                ) && matches!(
+                    local_facts.semantic_fallback_class,
+                    Some(RuntimeClass::Scalar(_))
+                ) {
+                    local_facts.semantic_fallback_class.clone()
+                } else {
+                    carrier_value_class(local, carriers)
+                        .or_else(|| local_facts.semantic_fallback_class.clone())
+                }
+            }
         }
     }
 }
@@ -859,16 +968,16 @@ fn root_provider_for_runtime_visible_binding<'db>(
 
 fn build_runtime_visible_root_provider_locals<'db>(
     db: &'db dyn MirDb,
-    body: &NormalizedSemanticBody<'db>,
+    body: &RuntimeSemanticBody<'db>,
 ) -> FxHashMap<ProviderBinding<'db>, SLocalId> {
-    let semantic = body.owner;
+    let semantic = body.owner();
     let mut locals = FxHashMap::default();
     for entry in runtime_visible_binding_plans(db, semantic) {
         let Some(provider) = root_provider_for_runtime_visible_binding(db, semantic, entry.binding)
         else {
             continue;
         };
-        let local = runtime_visible_binding_local(body, entry.binding);
+        let local = runtime_visible_binding_local(&body.source, entry.binding);
         locals.entry(provider).or_insert(local);
     }
     locals
@@ -877,16 +986,16 @@ fn build_runtime_visible_root_provider_locals<'db>(
 fn build_local_static_facts<'db>(
     db: &'db dyn MirDb,
     type_env: RuntimeTypeEnv<'db>,
-    local: SLocalId,
-    local_data: &hir::analysis::semantic::borrowck::NSLocal<'db>,
+    body: &RuntimeSemanticBody<'db>,
+    local_data: &SLocal<'db>,
 ) -> LocalStaticFacts<'db> {
     let scope = type_env.scope;
     let assumptions = type_env.assumptions;
-    let lowered_ty = lowered_place_like_ty(local, local_data);
+    let lowered_ty = lowered_place_like_ty(local_data);
     let local_is_effect_handle =
         effect_handle_transport_class_for_ty_in_env(db, type_env, local_data.ty).is_some();
     let zero_sized_transport = if local_is_effect_handle
-        && !local_uses_effect_handle_transport(local_data)
+        && !local_uses_effect_handle_transport(local_data, &body.source.locals)
     {
         runtime_zero_sized_ty(db, local_data.ty, scope, assumptions)
     } else {
@@ -895,7 +1004,8 @@ fn build_local_static_facts<'db>(
                 && lowered_ty
                     .is_some_and(|ty| runtime_zero_sized_transport_ty(db, ty, scope, assumptions)))
     };
-    let semantic_fallback_class = match local_data.facts.interface {
+    let interface = local_data.role.kind();
+    let semantic_fallback_class = match interface {
         SemanticLocalKind::PlaceCarrier | SemanticLocalKind::PlaceBoundValue
             if !zero_sized_transport =>
         {
@@ -907,7 +1017,7 @@ fn build_local_static_facts<'db>(
         | SemanticLocalKind::PlaceCarrier
         | SemanticLocalKind::PlaceBoundValue => None,
     };
-    let root_place_fallback_class = match local_data.facts.interface {
+    let root_place_fallback_class = match interface {
         SemanticLocalKind::Erased => None,
         SemanticLocalKind::DirectValue if !zero_sized_transport => {
             Some(stored_class_for_ty_in_env(db, type_env, local_data.ty))
@@ -935,16 +1045,17 @@ fn build_local_static_facts<'db>(
         root_place_fallback_class,
         root_transport_fallback_class: fallback_root_transport_class(
             db,
+            body,
             local_data,
             scope,
             assumptions,
         ),
-        materialization_plan: if matches!(local_data.facts.interface, SemanticLocalKind::Erased)
+        materialization_plan: if matches!(interface, SemanticLocalKind::Erased)
             || zero_sized_transport
         {
             CompiledMaterializationPlan::Erased
         } else {
-            match local_data.facts.interface {
+            match interface {
                 SemanticLocalKind::DirectValue => top_level_class_for_ty_in_env(
                     db,
                     type_env,
@@ -964,37 +1075,73 @@ fn build_local_static_facts<'db>(
     }
 }
 
-pub(super) fn local_uses_effect_handle_transport(local: &NSLocal<'_>) -> bool {
-    local.facts.origin.root_provider().is_some()
+pub(super) fn local_uses_effect_handle_transport(
+    local: &SLocal<'_>,
+    locals: &[SLocal<'_>],
+) -> bool {
+    local.role.root_provider(locals).is_some()
         || matches!(local.source, Some(LocalBinding::EffectParam { .. }))
 }
 
-pub(super) fn lowered_place_like_ty<'db>(
-    local: SLocalId,
-    local_data: &hir::analysis::semantic::borrowck::NSLocal<'db>,
-) -> Option<TyId<'db>> {
-    match (&local_data.facts.interface, &local_data.lowering) {
-        (
-            SemanticLocalKind::PlaceCarrier | SemanticLocalKind::DirectCarrier,
-            NormalizedBindingLowering::CarrierLocal { target_ty, .. },
-        ) => Some(*target_ty),
-        (
-            SemanticLocalKind::PlaceBoundValue,
-            NormalizedBindingLowering::PlaceBoundValue { value_ty, .. },
-        ) => Some(*value_ty),
-        (SemanticLocalKind::PlaceCarrier | SemanticLocalKind::DirectCarrier, _) => {
-            panic!("carrier local missing carrier lowering: {local:?}")
-        }
-        (SemanticLocalKind::PlaceBoundValue, _) => {
-            panic!("place-bound local missing place-bound lowering: {local:?}")
-        }
-        (SemanticLocalKind::Erased | SemanticLocalKind::DirectValue, _) => None,
+pub(super) fn lowered_place_like_ty<'db>(local_data: &SLocal<'db>) -> Option<TyId<'db>> {
+    match &local_data.role {
+        SemanticLocalRole::PlaceCarrier { value_ty, .. }
+        | SemanticLocalRole::PlaceBoundValue { value_ty, .. } => Some(*value_ty),
+        SemanticLocalRole::DirectCarrier { target_ty, .. } => Some(*target_ty),
+        SemanticLocalRole::Erased | SemanticLocalRole::DirectValue { .. } => None,
     }
+}
+
+fn local_disallows_const_ref_storage(body: &RuntimeSemanticBody<'_>, local: SLocalId) -> bool {
+    let place_uses_local = |place: &NPlace<'_>| match place.base {
+        NPlaceBase::Root(root) => body.root_source(root) == Some(local),
+        NPlaceBase::CapabilityTarget { carrier } => body.value_source(carrier) == Some(local),
+    };
+    let mutable_place_uses_local = |place: &NPlace<'_>| {
+        place_uses_local(place)
+            && match place.base {
+                NPlaceBase::Root(root) => body
+                    .normalized
+                    .root(root)
+                    .is_some_and(|root| matches!(root.mutability, Mutability::Mutable)),
+                NPlaceBase::CapabilityTarget { .. } => true,
+            }
+    };
+    body.normalized.blocks.iter().any(|block| {
+        block
+            .statements
+            .iter()
+            .any(|statement| match &statement.kind {
+                NStatementKind::Store { destination, .. } => mutable_place_uses_local(destination),
+                NStatementKind::Define {
+                    expr: NExpr::Borrow { place, kind, .. },
+                    ..
+                } => {
+                    matches!(kind, hir::analysis::ty::ty_def::BorrowKind::Mut)
+                        && place_uses_local(place)
+                }
+                NStatementKind::Define {
+                    expr: NExpr::Call { effect_args, .. },
+                    ..
+                } => effect_args.iter().any(|arg| {
+                    arg.required_mut
+                        && match &arg.arg {
+                            hir::analysis::semantic::normalized::NEffectArgValue::Place(place) => {
+                                place_uses_local(place)
+                            }
+                            hir::analysis::semantic::normalized::NEffectArgValue::Value(value) => {
+                                body.operand_source(*value) == Some(local)
+                            }
+                        }
+                }),
+                NStatementKind::Define { .. } => false,
+            })
+    })
 }
 
 struct ExprStaticFactsBuilder<'a, 'db> {
     db: &'db dyn MirDb,
-    body: &'a NormalizedSemanticBody<'db>,
+    body: &'a RuntimeSemanticBody<'db>,
     typed_body: &'a hir::analysis::ty::ty_check::TypedBody<'db>,
     type_env: RuntimeTypeEnv<'db>,
 }
@@ -1012,31 +1159,30 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
         let typed_body = self.typed_body;
         let type_env = self.type_env;
         Some(match expr {
-            NExpr::Use(_) | NExpr::CodeRegionRef { .. } => return None,
+            NExpr::Forward { .. }
+            | NExpr::ProjectValue { .. }
+            | NExpr::StructuralRepack { .. }
+            | NExpr::CodeRegionRef { .. } => return None,
             NExpr::Const(const_) => ExprStaticFacts::Const(match const_ {
                 SConst::Value(value) => runtime_const_value_class(
                     db,
                     type_env,
                     *value,
-                    body.locals
-                        .get(dst.index())
-                        .is_none_or(|local| !local.facts.root_demand.disallows_const_ref_storage()),
+                    !local_disallows_const_ref_storage(body, dst),
                 ),
                 SConst::Ref(cref) => {
-                    let value = reified_const_ref_value_for_ty(db, body.owner, *cref, result_ty);
+                    let value = reified_const_ref_value_for_ty(db, body.owner(), *cref, result_ty);
                     runtime_const_value_class(
                         db,
                         type_env,
                         value,
-                        body.locals.get(dst.index()).is_none_or(|local| {
-                            !local.facts.root_demand.disallows_const_ref_storage()
-                        }),
+                        !local_disallows_const_ref_storage(body, dst),
                     )
                 }
             }),
             NExpr::Unary { .. }
             | NExpr::Binary { .. }
-            | NExpr::Cast { .. }
+            | NExpr::ScalarCast { .. }
             | NExpr::CodeRegionOffset { .. }
             | NExpr::CodeRegionLen { .. } => ExprStaticFacts::DirectClass(
                 scalar_class_for_ty_in_env(db, type_env, result_ty).map(RuntimeClass::Scalar),
@@ -1150,13 +1296,12 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                     fields,
                 })
             }
-            NExpr::ReadPlace { .. } => ExprStaticFacts::DirectClass(top_level_class_for_ty_in_env(
+            NExpr::Load { .. } => ExprStaticFacts::DirectClass(top_level_class_for_ty_in_env(
                 db,
                 type_env,
                 result_ty,
                 AddressSpaceKind::Memory,
             )),
-            NExpr::ExtractEnumField { .. } => return None,
             NExpr::Borrow {
                 provider, place, ..
             } => {
@@ -1168,15 +1313,17 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                 ) {
                     None
                 } else {
-                    match place.root {
-                        NSPlaceRoot::Root(root) => match body.root(root) {
-                            Some(NBorrowRoot::Provider { binding, .. })
-                                if provider_erases_runtime_root(
-                                    db,
-                                    binding,
-                                    type_env.scope,
-                                    type_env.assumptions,
-                                ) =>
+                    match place.base {
+                        NPlaceBase::Root(root) => match body.normalized.root(root) {
+                            Some(hir::analysis::semantic::normalized::NRoot {
+                                kind: NRootKind::Provider { binding },
+                                ..
+                            }) if provider_erases_runtime_root(
+                                db,
+                                binding,
+                                type_env.scope,
+                                type_env.assumptions,
+                            ) =>
                             {
                                 None
                             }
@@ -1185,7 +1332,7 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                                 target: None,
                             }),
                         },
-                        NSPlaceRoot::CarrierDerefLocal(_) => {
+                        NPlaceBase::CapabilityTarget { .. } => {
                             provider.map(|provider| RuntimeClass::RawAddr {
                                 space: address_space_from_provider(provider),
                                 target: None,
@@ -1207,7 +1354,7 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                 effect_args,
                 ..
             } => {
-                let caller_key = body.owner.key(db);
+                let caller_key = body.owner().key(db);
                 let callee_key = resolve_runtime_call_key(
                     db, caller_key, typed_body, body, *callee, args,
                 )
@@ -1919,6 +2066,7 @@ fn aggregate_make_class_from_facts<'db>(
     let mut field_classes = Vec::with_capacity(fields.len());
     let mut evaluator = RuntimeArgSelector::new(env, carriers, class_cache);
     for (field, field_facts) in fields.iter().copied().zip(facts.fields.iter()) {
+        let field = env.body.runtime_operand(field)?;
         let selected = if let Some(boundary) = field_facts.boundary.as_ref() {
             let mut boundary_sites = BoundarySiteAllocator::default();
             evaluator.selected_value_pass_plan(
@@ -1929,7 +2077,7 @@ fn aggregate_make_class_from_facts<'db>(
                 ),
             )
         } else {
-            evaluator.selected_materialized_value(field.local)
+            evaluator.selected_materialized_operand(field)
         };
         let class = selected
             .map(|arg| arg.class)
@@ -1963,9 +2111,9 @@ pub(super) fn selected_visible_return_for_local<'db>(
     let mut evaluator = RuntimeArgSelector::new(env, carriers, None);
     match plan {
         RuntimeVisibleReturnPlan::Erased => None,
-        RuntimeVisibleReturnPlan::Exact(class) => evaluator
-            .selected_materialized_value(local)
-            .or_else(|| Some(selected_semantic_copy(local, class.clone()))),
+        RuntimeVisibleReturnPlan::Exact(class) => {
+            Some(evaluator.selected_semantic_operand_for_class(copy_operand(local), class))
+        }
         RuntimeVisibleReturnPlan::Constrained(boundary) => {
             let mut boundary_sites = BoundarySiteAllocator::default();
             evaluator.selected_value_for_local(
@@ -1980,51 +2128,13 @@ pub(super) fn selected_visible_return_for_local<'db>(
     }
 }
 
-fn selected_semantic_copy<'db>(
-    local: SLocalId,
-    class: RuntimeClass<'db>,
-) -> SelectedRuntimeArg<'db> {
-    SelectedRuntimeArg::semantic_operand(
-        NOperand {
-            local,
-            origin: None,
-            mode: ReadMode::Copy,
-        },
-        class,
-    )
-}
-
-pub(super) fn nonself_backing_value_place<'a, 'db>(
-    body: &'a NormalizedSemanticBody<'db>,
-    local: SLocalId,
-) -> Option<&'a NSPlace<'db>> {
-    let place = body.local(local)?.backing_place()?;
-    (!is_self_rooted_value_place(body, local, place)).then_some(place)
-}
-
-fn is_self_rooted_value_place<'db>(
-    body: &NormalizedSemanticBody<'db>,
-    local: SLocalId,
-    place: &NSPlace<'db>,
-) -> bool {
-    if !place.path.is_empty() {
-        return false;
+fn copy_operand(local: SLocalId) -> RuntimeOperand {
+    RuntimeOperand {
+        local,
+        value: None,
+        origin: None,
+        mode: ReadMode::Copy,
     }
-    match place.root {
-        NSPlaceRoot::CarrierDerefLocal(root_local) => root_local == local,
-        NSPlaceRoot::Root(root) => matches!(
-            body.root(root),
-            Some(NBorrowRoot::Param { local: root_local, .. } | NBorrowRoot::LocalSlot { local: root_local })
-                if *root_local == local
-        ),
-    }
-}
-
-pub(super) fn snapshot_source_place<'a, 'db>(
-    body: &'a NormalizedSemanticBody<'db>,
-    local: SLocalId,
-) -> Option<&'a NSPlace<'db>> {
-    body.local(local)?.snapshot_source_place()
 }
 
 fn binding_forwards_runtime_transport<'db>(
@@ -2206,7 +2316,7 @@ pub(crate) fn resolve_runtime_call_key<'db>(
     db: &'db dyn MirDb,
     caller_key: SemanticInstanceKey<'db>,
     caller_typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
-    body: &NormalizedSemanticBody<'db>,
+    body: &RuntimeSemanticBody<'db>,
     callee: SemanticCalleeRef<'db>,
     args: &[NOperand],
 ) -> Result<SemanticInstanceKey<'db>, crate::runtime::LowerError> {
@@ -2247,13 +2357,18 @@ pub(crate) fn resolve_runtime_call_key<'db>(
         };
         let Some(self_ty) = concrete_runtime_self_ty_for_call_arg(
             db,
-            RuntimeTypeEnv::for_semantic(db, body.owner),
+            RuntimeTypeEnv::for_semantic(db, body.owner()),
             body,
-            arg.local,
+            body.operand_source(*arg).ok_or_else(|| {
+                crate::runtime::LowerError::Unsupported(format!(
+                    "runtime trait-call self argument has no representation: caller={caller_key:?} callee={callee_key:?} value={:?}",
+                    arg.value,
+                ))
+            })?,
         ) else {
             return Err(crate::runtime::LowerError::Unsupported(format!(
                 "runtime trait-call resolution could not infer the concrete self type: caller={caller_key:?} callee={callee_key:?} local={:?}",
-                arg.local,
+                arg.value,
             )));
         };
         let mut inst_args = original_inst
@@ -2343,43 +2458,29 @@ fn runtime_callee_assumptions<'db>(
 fn concrete_runtime_self_ty_for_call_arg<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,
-    body: &NormalizedSemanticBody<'db>,
+    body: &RuntimeSemanticBody<'db>,
     local: SLocalId,
 ) -> Option<TyId<'db>> {
     let scope = env.scope;
     let assumptions = env.assumptions;
     let normalized = |ty| normalize_runtime_self_ty(db, ty, scope, assumptions);
-    let local_data = body.locals.get(local.index())?;
-    match (
-        &local_data.facts.interface,
-        &local_data.facts.origin,
-        &local_data.lowering,
-    ) {
-        (SemanticLocalKind::Erased, _, _) => None,
-        (
-            SemanticLocalKind::DirectValue | SemanticLocalKind::DirectCarrier,
-            NLocalOrigin::RootProvider(provider),
-            _,
-        ) => Some(normalized(provider.provider_ty)),
-        (
-            SemanticLocalKind::PlaceBoundValue,
-            NLocalOrigin::RootProvider(provider),
-            NormalizedBindingLowering::PlaceBoundValue { value_ty, .. },
-        ) => Some(normalized(
-            provider.semantics.target_ty.unwrap_or(*value_ty),
+    let local_data = body.local(local)?;
+    let provider = local_data.role.root_provider(&body.source.locals);
+    match &local_data.role {
+        SemanticLocalRole::Erased => None,
+        SemanticLocalRole::DirectValue { .. } | SemanticLocalRole::DirectCarrier { .. }
+            if provider.is_some() =>
+        {
+            Some(normalized(provider?.provider_ty))
+        }
+        SemanticLocalRole::PlaceBoundValue { value_ty, .. } => Some(normalized(
+            provider
+                .and_then(|provider| provider.semantics.target_ty)
+                .unwrap_or(*value_ty),
         )),
-        (
-            SemanticLocalKind::PlaceBoundValue,
-            NLocalOrigin::SelfRooted | NLocalOrigin::AliasedPlace,
-            NormalizedBindingLowering::PlaceBoundValue { value_ty, .. },
-        ) => Some(normalized(*value_ty)),
-        (SemanticLocalKind::DirectValue, _, _) => Some(normalized(local_data.ty)),
-        (
-            SemanticLocalKind::PlaceCarrier | SemanticLocalKind::DirectCarrier,
-            _,
-            NormalizedBindingLowering::CarrierLocal { target_ty, .. },
-        ) => Some(normalized(*target_ty)),
-        _ => None,
+        SemanticLocalRole::DirectValue { .. } => Some(normalized(local_data.ty)),
+        SemanticLocalRole::PlaceCarrier { value_ty, .. } => Some(normalized(*value_ty)),
+        SemanticLocalRole::DirectCarrier { target_ty, .. } => Some(normalized(*target_ty)),
     }
 }
 
@@ -2410,47 +2511,81 @@ pub(super) fn carrier_value_class_ref<'a, 'db>(
     carriers.get(local.index())?.value_class()
 }
 
+pub(super) fn local_slot_uses_transport_class(
+    mutability: Mutability,
+    transport: Option<&RuntimeClass<'_>>,
+) -> bool {
+    mutability == Mutability::Immutable
+        && matches!(
+            transport,
+            Some(RuntimeClass::Ref {
+                kind: RefKind::Const,
+                ..
+            })
+        )
+}
+
 fn normalized_place_root_transport_class_in_context<'db>(
     env: BodyEnv<'_, 'db>,
-    root: NSPlaceRoot,
+    base: NPlaceBase,
     carriers: &[RuntimeCarrier<'db>],
 ) -> Option<RuntimeClass<'db>> {
-    match root {
-        NSPlaceRoot::CarrierDerefLocal(local) => {
-            carrier_value_class(local, carriers).or_else(|| {
-                env.local_facts(local)?
-                    .root_transport_fallback_class
-                    .clone()
-            })
+    match base {
+        NPlaceBase::CapabilityTarget { carrier } => {
+            normalized_value_runtime_class(env, carrier, carriers)
         }
-        NSPlaceRoot::Root(root) => match env.body.root(root)? {
-            NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local } => {
-                carrier_value_class(*local, carriers).or_else(|| {
-                    env.local_facts(*local)?
+        NPlaceBase::Root(root) => match &env.body.normalized.root(root)?.kind {
+            NRootKind::LocalSlot { .. } => {
+                let local = env.body.root_source(root)?;
+                let root = env.body.normalized.root(root)?;
+                let transport = carrier_value_class(local, carriers).or_else(|| {
+                    env.local_facts(local)?
+                        .root_transport_fallback_class
+                        .clone()
+                });
+                if local_slot_uses_transport_class(root.mutability, transport.as_ref()) {
+                    transport
+                } else {
+                    local_place_root_class(
+                        env.with_carriers(carriers),
+                        local,
+                        env.local(local)?,
+                        carriers.get(local.index())?,
+                    )
+                }
+            }
+            NRootKind::ParamPlace { .. } => {
+                let local = env.body.root_source(root)?;
+                carrier_value_class(local, carriers).or_else(|| {
+                    env.local_facts(local)?
                         .root_transport_fallback_class
                         .clone()
                 })
             }
-            NBorrowRoot::Provider { binding, .. } => {
-                if provider_erases_runtime_root(env.db, binding, env.scope(), env.assumptions()) {
+            NRootKind::Provider { binding } => {
+                let actual = env.actual_runtime_visible_root_provider_class(carriers, binding);
+                if actual.is_none()
+                    && provider_erases_runtime_root(env.db, binding, env.scope(), env.assumptions())
+                {
                     return None;
                 }
-                env.actual_runtime_visible_root_provider_class(carriers, binding)
-                    .map(|(_, class)| class)
+                actual.map(|(_, class)| class).or_else(|| {
+                    runtime_class_for_effect_binding_provider_in_env(
+                        env.db,
+                        env.type_env(),
+                        binding,
+                    )
                     .or_else(|| {
-                        runtime_class_for_effect_binding_provider_in_env(
+                        runtime_class_for_direct_value_provider_in_env(
                             env.db,
                             env.type_env(),
                             binding,
                         )
-                        .or_else(|| {
-                            runtime_class_for_direct_value_provider_in_env(
-                                env.db,
-                                env.type_env(),
-                                binding,
-                            )
-                        })
                     })
+                })
+            }
+            NRootKind::CapabilityRepresentation { carrier } => {
+                normalized_value_runtime_class(env, *carrier, carriers)
             }
         },
     }
@@ -2458,63 +2593,140 @@ fn normalized_place_root_transport_class_in_context<'db>(
 
 fn normalized_place_root_class_in_context<'db>(
     env: BodyEnv<'_, 'db>,
-    root: NSPlaceRoot,
+    base: NPlaceBase,
     carriers: &[RuntimeCarrier<'db>],
 ) -> Option<RuntimeClass<'db>> {
     let cx = env.with_carriers(carriers);
-    match root {
-        NSPlaceRoot::CarrierDerefLocal(local) => {
-            let local_data = env.body.locals.get(local.index())?;
-            local_place_root_class(cx, local, local_data, carriers.get(local.index())?)
+    match base {
+        NPlaceBase::CapabilityTarget { carrier } => {
+            let carrier_ty = env.body.normalized.value(carrier)?.ty;
+            let (_, target_ty) = carrier_ty.as_capability(env.db)?;
+            runtime_source_place_class(
+                env,
+                normalized_value_runtime_class(env, carrier, carriers)?,
+                target_ty,
+            )
         }
-        NSPlaceRoot::Root(root) => match env.body.root(root)? {
-            NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local } => {
-                local_place_root_class(
-                    cx,
-                    *local,
-                    env.body.locals.get(local.index())?,
-                    carriers.get(local.index())?,
-                )
+        NPlaceBase::Root(root) => match &env.body.normalized.root(root)?.kind {
+            NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
+                let local = env.body.root_source(root)?;
+                local_place_root_class(cx, local, env.local(local)?, carriers.get(local.index())?)
             }
-            NBorrowRoot::Provider { binding, value_ty } => {
-                if provider_erases_runtime_root(env.db, binding, env.scope(), env.assumptions()) {
+            NRootKind::Provider { binding } => {
+                let value_ty = env.body.normalized.root(root)?.ty;
+                let actual = env.actual_runtime_visible_root_provider_class(carriers, binding);
+                if actual.is_none()
+                    && provider_erases_runtime_root(env.db, binding, env.scope(), env.assumptions())
+                {
                     return None;
                 }
-                if let Some((local, _)) =
-                    env.actual_runtime_visible_root_provider_class(carriers, binding)
-                    && let Some(local) = env.body.locals.get(local.index())
+                if let Some((local, _)) = &actual
+                    && let Some(local) = env.local(*local)
                     && local.ty == binding.provider_ty
                     && effect_handle_transport_class_for_ty_in_env(env.db, env.type_env(), local.ty)
                         .is_some()
                 {
                     return Some(stored_class_for_ty_in_env(env.db, env.type_env(), local.ty));
                 }
-                let provider_class = env
-                    .actual_runtime_visible_root_provider_class(carriers, binding)
-                    .map(|(_, class)| class)
+                let provider_class = actual.map(|(_, class)| class).or_else(|| {
+                    runtime_class_for_effect_binding_provider_in_env(
+                        env.db,
+                        env.type_env(),
+                        binding,
+                    )
                     .or_else(|| {
-                        runtime_class_for_effect_binding_provider_in_env(
+                        runtime_class_for_direct_value_provider_in_env(
                             env.db,
                             env.type_env(),
                             binding,
                         )
-                        .or_else(|| {
-                            runtime_class_for_direct_value_provider_in_env(
-                                env.db,
-                                env.type_env(),
-                                binding,
-                            )
-                        })
-                    })?;
+                    })
+                })?;
                 Some(provider_root_place_class(
                     env.db,
-                    *value_ty,
+                    value_ty,
                     &provider_class,
                     env.scope(),
                     env.assumptions(),
                 ))
             }
+            NRootKind::CapabilityRepresentation { carrier } => runtime_source_place_class(
+                env,
+                normalized_value_runtime_class(env, *carrier, carriers)?,
+                env.body.normalized.root(root)?.ty,
+            ),
         },
+    }
+}
+
+fn runtime_source_place_class<'db>(
+    env: BodyEnv<'_, 'db>,
+    class: RuntimeClass<'db>,
+    target_ty: TyId<'db>,
+) -> Option<RuntimeClass<'db>> {
+    match class {
+        class @ (RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. }) => Some(class),
+        RuntimeClass::Ref { .. }
+        | RuntimeClass::RawAddr {
+            target: Some(_), ..
+        } => class.deref_target(),
+        RuntimeClass::RawAddr {
+            space,
+            target: None,
+        } => top_level_class_for_ty_in_env(env.db, env.type_env(), target_ty, space),
+    }
+}
+
+fn normalized_value_runtime_class<'db>(
+    env: BodyEnv<'_, 'db>,
+    value: NValueId,
+    carriers: &[RuntimeCarrier<'db>],
+) -> Option<RuntimeClass<'db>> {
+    let value_data = env.body.normalized.value(value)?;
+    let local = env.source_local(value)?;
+    let fallback = || {
+        carrier_value_class(local, carriers).or_else(|| {
+            env.local_facts(local)?
+                .root_transport_fallback_class
+                .clone()
+        })
+    };
+    let NValueDefinition::Statement { block, statement } = value_data.definition else {
+        return fallback();
+    };
+    let NStatementKind::Define { expr, .. } = &env
+        .body
+        .normalized
+        .block(block)?
+        .statements
+        .get(statement as usize)?
+        .kind
+    else {
+        return fallback();
+    };
+    match expr {
+        NExpr::Forward { src } | NExpr::StructuralRepack { value: src, .. } => {
+            normalized_value_runtime_class(env, src.value, carriers)
+        }
+        NExpr::ProjectValue { value, path } => Some(env.walk_data_path_class(
+            env.normalized_value_structural_class(carriers, value.value)?,
+            &path.0,
+        )),
+        NExpr::Load { place, .. } => env.normalized_place_class(carriers, place),
+        NExpr::Borrow { place, .. } => env.normalized_place_address_class(carriers, place),
+        NExpr::CodeRegionRef { .. }
+        | NExpr::Const(_)
+        | NExpr::Unary { .. }
+        | NExpr::Binary { .. }
+        | NExpr::ScalarCast { .. }
+        | NExpr::ArrayRepeat { .. }
+        | NExpr::AggregateMake { .. }
+        | NExpr::EnumMake { .. }
+        | NExpr::GetEnumTag { .. }
+        | NExpr::IsEnumVariant { .. }
+        | NExpr::Call { .. }
+        | NExpr::CodeRegionOffset { .. }
+        | NExpr::CodeRegionLen { .. } => fallback(),
     }
 }
 
@@ -2831,10 +3043,10 @@ mod tests {
     use driver::DriverDataBase;
     use hir::{
         analysis::semantic::{
-            NBorrowRoot, NEffectArg, NSPlace, NSPlaceRoot, SemanticInstance,
-            borrowck::{NSTerminatorKind, NormalizedSemanticBody, normalize_semantic_body},
-            get_or_build_semantic_instance, owner_effect_bindings,
-            resolved_provider_binding_for_instance_effect, root_semantic_instance_key,
+            NEffectArg, NPlace, NPlaceBase, NRootKind, NStatementKind, NTerminatorKind,
+            SemanticInstance, SemanticNormalizationFailure, get_or_build_semantic_instance,
+            owner_effect_bindings, resolved_provider_binding_for_instance_effect,
+            root_semantic_instance_key,
         },
         analysis::ty::ty_check::{BodyOwner, LocalBinding},
     };
@@ -2857,14 +3069,22 @@ mod tests {
             infer::LocalStateInferer,
             interface::{runtime_param_locals, runtime_param_plans, runtime_visible_binding_plans},
             returns::declaration_runtime_return_class,
+            semantic_body::RuntimeSemanticBody,
         },
         package::runtime_instance_for_semantic,
         package::runtime_instance_for_semantic_with_visible_param_overrides,
     };
 
+    fn normalize_semantic_body<'db>(
+        db: &'db DriverDataBase,
+        instance: SemanticInstance<'db>,
+    ) -> Result<RuntimeSemanticBody<'db>, SemanticNormalizationFailure<'db>> {
+        RuntimeSemanticBody::admitted(db, instance)
+    }
+
     fn call_input_plan_for_test<'db>(
         db: &'db DriverDataBase,
-        body: &NormalizedSemanticBody<'db>,
+        body: &RuntimeSemanticBody<'db>,
         call_facts: &CallStaticFacts<'db>,
         effect_args: &[NEffectArg<'db>],
     ) -> CompiledCallInputPlan<'db> {
@@ -3191,20 +3411,21 @@ mod tests {
         let inferred = LocalStateInferer::new(
             env,
             params,
-            &runtime_param_locals(&db, semantic, &normalized, params),
+            &runtime_param_locals(&db, semantic, &normalized.source, params),
         )
         .run();
         let return_plan = desired_runtime_return_plan(&db, semantic);
         let selected_returns = normalized
+            .normalized
             .blocks
             .iter()
-            .filter_map(|block| match block.terminator.kind {
-                NSTerminatorKind::Return(Some(value)) => Some(value.local),
-                NSTerminatorKind::Goto(_)
-                | NSTerminatorKind::Branch { .. }
-                | NSTerminatorKind::MatchEnum { .. }
-                | NSTerminatorKind::Assert { .. }
-                | NSTerminatorKind::Return(None) => None,
+            .filter_map(|block| match &block.terminator.kind {
+                NTerminatorKind::Return(Some(value)) => normalized.operand_source(*value),
+                NTerminatorKind::Goto(_)
+                | NTerminatorKind::Branch { .. }
+                | NTerminatorKind::MatchEnum { .. }
+                | NTerminatorKind::Assert { .. }
+                | NTerminatorKind::Return(None) => None,
             })
             .map(|local| {
                 selected_visible_return_for_local(env, local, &return_plan, &inferred.carriers)
@@ -3369,7 +3590,7 @@ fn takes_empty(_ host: Empty, value: u256) -> u256 {
             "the zero-width Empty host param must not be reintroduced by the override path:\n{params:#?}"
         );
         assert_eq!(
-            runtime_param_locals(&db, semantic, &normalized, params).len(),
+            runtime_param_locals(&db, semantic, &normalized.source, params).len(),
             params.len(),
             "runtime params should remain aligned with visible semantic bindings"
         );
@@ -3541,11 +3762,12 @@ uses (slot: Slot<u256>)
         let protected_body = normalize_semantic_body(&db, protected)
             .unwrap_or_else(|err| panic!("failed to normalize Protected: {err:?}"));
         let try_lock = protected_body
+            .normalized
             .blocks
             .iter()
-            .flat_map(|block| &block.stmts)
+            .flat_map(|block| &block.statements)
             .find_map(|stmt| {
-                let hir::analysis::semantic::NSStmtKind::Assign {
+                let NStatementKind::Define {
                     expr: NExpr::Call { callee, .. },
                     ..
                 } = &stmt.kind
@@ -3600,13 +3822,13 @@ uses (slot: Slot<u256>)
         let inferred = LocalStateInferer::new(
             env,
             params,
-            &runtime_param_locals(&db, semantic, &normalized, params),
+            &runtime_param_locals(&db, semantic, &normalized.source, params),
         )
         .run();
         let mut checked_calls = Vec::new();
-        for (block_idx, block) in normalized.blocks.iter().enumerate() {
-            for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
-                let hir::analysis::semantic::NSStmtKind::Assign { expr, .. } = &stmt.kind else {
+        for (block_idx, block) in normalized.normalized.blocks.iter().enumerate() {
+            for (stmt_idx, stmt) in block.statements.iter().enumerate() {
+                let NStatementKind::Define { expr, .. } = &stmt.kind else {
                     continue;
                 };
                 let NExpr::Call {
@@ -3649,15 +3871,16 @@ uses (slot: Slot<u256>)
                         runtime_param_plans(&db, call_facts.semantic),
                     );
                 }
-                let receiver = args.first().map(|arg| arg.local);
+                let receiver = args.first().and_then(|arg| normalized.operand_source(*arg));
                 let (receiver_actual, receiver_materialized, selected, selected_classes) = {
-                    let mut class_cache = InferClassCache::new(normalized.locals.len());
+                    let mut class_cache = InferClassCache::new(normalized.source.locals.len());
                     let mut evaluator =
                         RuntimeArgSelector::new(env, &inferred.carriers, Some(&mut class_cache));
                     let receiver_actual =
                         receiver.and_then(|local| evaluator.selected_actual_value(local));
-                    let receiver_materialized =
-                        receiver.and_then(|local| evaluator.selected_materialized_value(local));
+                    let receiver_materialized = receiver.and_then(|local| {
+                        evaluator.selected_materialized_operand(copy_operand(local))
+                    });
                     let input_plan =
                         call_input_plan_for_test(&db, &normalized, call_facts, effect_args);
                     let selected = evaluator.selected_call_inputs(args, effect_args, &input_plan);
@@ -3769,14 +3992,13 @@ uses (slot: Slot<u256>)
             let inferred = LocalStateInferer::new(
                 env,
                 params,
-                &runtime_param_locals(&db, semantic, &normalized, params),
+                &runtime_param_locals(&db, semantic, &normalized.source, params),
             )
             .run();
 
-            for (block_idx, block) in normalized.blocks.iter().enumerate() {
-                for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
-                    let hir::analysis::semantic::NSStmtKind::Assign { expr, .. } = &stmt.kind
-                    else {
+            for (block_idx, block) in normalized.normalized.blocks.iter().enumerate() {
+                for (stmt_idx, stmt) in block.statements.iter().enumerate() {
+                    let NStatementKind::Define { expr, .. } = &stmt.kind else {
                         continue;
                     };
                     let NExpr::Call {
@@ -3838,7 +4060,7 @@ uses (slot: Slot<u256>)
                         "StorageMap effect arg should erase for `{owner_name}` -> `{name}`:\nargs={args:#?}\neffect_args={effect_args:#?}\ninput_plan={input_plan:#?}",
                     );
 
-                    let mut class_cache = InferClassCache::new(normalized.locals.len());
+                    let mut class_cache = InferClassCache::new(normalized.source.locals.len());
                     let selected =
                         RuntimeArgSelector::new(env, &inferred.carriers, Some(&mut class_cache))
                             .with_concrete_roots(&inferred.roots)
@@ -3923,14 +4145,13 @@ uses (slot: Slot<u256>)
             let inferred = LocalStateInferer::new(
                 env,
                 params,
-                &runtime_param_locals(&db, semantic, &normalized, params),
+                &runtime_param_locals(&db, semantic, &normalized.source, params),
             )
             .run();
 
-            for (block_idx, block) in normalized.blocks.iter().enumerate() {
-                for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
-                    let hir::analysis::semantic::NSStmtKind::Assign { expr, .. } = &stmt.kind
-                    else {
+            for (block_idx, block) in normalized.normalized.blocks.iter().enumerate() {
+                for (stmt_idx, stmt) in block.statements.iter().enumerate() {
+                    let NStatementKind::Define { expr, .. } = &stmt.kind else {
                         continue;
                     };
                     let NExpr::Call {
@@ -3968,7 +4189,7 @@ uses (slot: Slot<u256>)
                         "StoragePackedArray effect arg should erase for `{owner_name}` -> `{name}`:\nargs={args:#?}\neffect_args={effect_args:#?}\ninput_plan={input_plan:#?}",
                     );
 
-                    let mut class_cache = InferClassCache::new(normalized.locals.len());
+                    let mut class_cache = InferClassCache::new(normalized.source.locals.len());
                     let selected =
                         RuntimeArgSelector::new(env, &inferred.carriers, Some(&mut class_cache))
                             .with_concrete_roots(&inferred.roots)
@@ -3999,7 +4220,7 @@ uses (slot: Slot<u256>)
     }
 
     fn selected_erased_place_root<'db>(
-        body: &NormalizedSemanticBody<'db>,
+        body: &RuntimeSemanticBody<'db>,
         carriers: &[RuntimeCarrier<'db>],
         roots: &[RuntimeLocalRoot<'db>],
         selected: &SelectedRuntimeArg<'db>,
@@ -4027,16 +4248,17 @@ uses (slot: Slot<u256>)
     }
 
     fn place_root_local<'db>(
-        body: &NormalizedSemanticBody<'db>,
-        place: &NSPlace<'db>,
+        body: &RuntimeSemanticBody<'db>,
+        place: &NPlace<'db>,
     ) -> Option<SLocalId> {
-        match place.root {
-            NSPlaceRoot::CarrierDerefLocal(local) => Some(local),
-            NSPlaceRoot::Root(root) => match body.root(root) {
-                Some(NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local }) => {
-                    Some(*local)
+        match place.base {
+            NPlaceBase::CapabilityTarget { carrier } => body.value_source(carrier),
+            NPlaceBase::Root(root) => match body.normalized.root(root).map(|root| &root.kind) {
+                Some(NRootKind::ParamPlace { .. } | NRootKind::LocalSlot { .. }) => {
+                    body.root_source(root)
                 }
-                Some(NBorrowRoot::Provider { .. }) | None => None,
+                Some(NRootKind::Provider { .. } | NRootKind::CapabilityRepresentation { .. })
+                | None => None,
             },
         }
     }
@@ -4090,50 +4312,59 @@ uses (slot: Slot<u256>)
         let inferred = LocalStateInferer::new(
             env,
             params,
-            &runtime_param_locals(&db, semantic, &normalized, params),
+            &runtime_param_locals(&db, semantic, &normalized.source, params),
         )
         .run();
         let (call_dst, args, effect_args, call_facts) = normalized
+            .normalized
             .blocks
             .iter()
             .enumerate()
             .find_map(|(block_idx, block)| {
-                block.stmts.iter().enumerate().find_map(|(stmt_idx, stmt)| {
-                    let hir::analysis::semantic::NSStmtKind::Assign { dst, expr } = &stmt.kind
-                    else {
-                        return None;
-                    };
-                    let NExpr::Call {
-                        callee,
-                        args,
-                        effect_args,
-                        ..
-                    } = expr
-                    else {
-                        return None;
-                    };
-                    let BodyOwner::Func(func) = callee.key.owner(&db) else {
-                        return None;
-                    };
-                    if func
-                        .name(&db)
-                        .to_opt()
-                        .is_none_or(|name| name.data(&db) != "take")
-                    {
-                        return None;
-                    }
-                    let ExprStaticFacts::Call(call_facts) =
-                        facts.expr(block_idx, stmt_idx).unwrap_or_else(|| {
-                            panic!("missing staged call facts for {block_idx}:{stmt_idx}")
-                        })
-                    else {
-                        panic!("inner take expression should keep staged call facts");
-                    };
-                    Some((*dst, args.clone(), effect_args.clone(), call_facts.clone()))
-                })
+                block
+                    .statements
+                    .iter()
+                    .enumerate()
+                    .find_map(|(stmt_idx, stmt)| {
+                        let NStatementKind::Define { result, expr } = &stmt.kind else {
+                            return None;
+                        };
+                        let NExpr::Call {
+                            callee,
+                            args,
+                            effect_args,
+                            ..
+                        } = expr
+                        else {
+                            return None;
+                        };
+                        let BodyOwner::Func(func) = callee.key.owner(&db) else {
+                            return None;
+                        };
+                        if func
+                            .name(&db)
+                            .to_opt()
+                            .is_none_or(|name| name.data(&db) != "take")
+                        {
+                            return None;
+                        }
+                        let ExprStaticFacts::Call(call_facts) =
+                            facts.expr(block_idx, stmt_idx).unwrap_or_else(|| {
+                                panic!("missing staged call facts for {block_idx}:{stmt_idx}")
+                            })
+                        else {
+                            panic!("inner take expression should keep staged call facts");
+                        };
+                        Some((
+                            normalized.value_source(*result)?,
+                            args.clone(),
+                            effect_args.clone(),
+                            call_facts.clone(),
+                        ))
+                    })
             })
             .expect("specialized take_u256 should contain an inner call to take");
-        let mut class_cache = InferClassCache::new(normalized.locals.len());
+        let mut class_cache = InferClassCache::new(normalized.source.locals.len());
         let input_plan = call_input_plan_for_test(&db, &normalized, &call_facts, &effect_args);
         let inferred_param_classes =
             RuntimeArgSelector::new(env, &inferred.carriers, Some(&mut class_cache))
@@ -4232,50 +4463,54 @@ uses (slot: Slot<u256>)
         let inferred = LocalStateInferer::new(
             env,
             params,
-            &runtime_param_locals(&db, semantic, &normalized, params),
+            &runtime_param_locals(&db, semantic, &normalized.source, params),
         )
         .run();
         let (args, effect_args, call_facts) = normalized
+            .normalized
             .blocks
             .iter()
             .enumerate()
             .find_map(|(block_idx, block)| {
-                block.stmts.iter().enumerate().find_map(|(stmt_idx, stmt)| {
-                    let hir::analysis::semantic::NSStmtKind::Assign { expr, .. } = &stmt.kind
-                    else {
-                        return None;
-                    };
-                    let NExpr::Call {
-                        callee,
-                        args,
-                        effect_args,
-                        ..
-                    } = expr
-                    else {
-                        return None;
-                    };
-                    let BodyOwner::Func(func) = callee.key.owner(&db) else {
-                        return None;
-                    };
-                    if func
-                        .name(&db)
-                        .to_opt()
-                        .is_none_or(|name| name.data(&db) != "set_scaled")
-                    {
-                        return None;
-                    }
-                    let ExprStaticFacts::Call(call_facts) =
-                        facts.expr(block_idx, stmt_idx).unwrap_or_else(|| {
-                            panic!("missing staged call facts for {block_idx}:{stmt_idx}")
-                        })
-                    else {
-                        panic!("set_scaled expression should keep staged call facts");
-                    };
-                    Some((args.clone(), effect_args.clone(), call_facts.clone()))
-                })
+                block
+                    .statements
+                    .iter()
+                    .enumerate()
+                    .find_map(|(stmt_idx, stmt)| {
+                        let NStatementKind::Define { expr, .. } = &stmt.kind else {
+                            return None;
+                        };
+                        let NExpr::Call {
+                            callee,
+                            args,
+                            effect_args,
+                            ..
+                        } = expr
+                        else {
+                            return None;
+                        };
+                        let BodyOwner::Func(func) = callee.key.owner(&db) else {
+                            return None;
+                        };
+                        if func
+                            .name(&db)
+                            .to_opt()
+                            .is_none_or(|name| name.data(&db) != "set_scaled")
+                        {
+                            return None;
+                        }
+                        let ExprStaticFacts::Call(call_facts) =
+                            facts.expr(block_idx, stmt_idx).unwrap_or_else(|| {
+                                panic!("missing staged call facts for {block_idx}:{stmt_idx}")
+                            })
+                        else {
+                            panic!("set_scaled expression should keep staged call facts");
+                        };
+                        Some((args.clone(), effect_args.clone(), call_facts.clone()))
+                    })
             })
             .expect("SelectAndMutate should call set_scaled");
-        let mut class_cache = InferClassCache::new(normalized.locals.len());
+        let mut class_cache = InferClassCache::new(normalized.source.locals.len());
         let input_plan = call_input_plan_for_test(&db, &normalized, &call_facts, &effect_args);
         let inferred_param_classes =
             RuntimeArgSelector::new(env, &inferred.carriers, Some(&mut class_cache))

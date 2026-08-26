@@ -238,39 +238,49 @@ func private %return_data(v0.i256, v1.i256) {
 
 func private %runtime() {
     block0:
+        v0.objref<@layout_0> = obj.alloc @layout_0;
+        v1.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
 
     block1:
-        v1.@layout_0 = call %stor_ptr__g2c78 0.i256;
-        v3.@layout_0 = call %stor_ptr__gd216 2.i256;
-        v4.i256 = call %calldataload 0.i256;
-        v6.i256 = shr 224.i256 v4;
-        v8.i1 = eq v6 2877082652.i256;
-        br v8 block2 block7;
+        v3.@layout_0 = call %stor_ptr__g2c78 0.i256;
+        v4.objref<i256> = obj.proj v0 0.i256;
+        v5.i256 = extract_value v3 0.i256;
+        obj.store v4 v5;
+        v7.@layout_0 = call %stor_ptr__gd216 2.i256;
+        v8.objref<i256> = obj.proj v1 0.i256;
+        v9.i256 = extract_value v7 0.i256;
+        obj.store v8 v9;
+        v10.i256 = call %calldataload 0.i256;
+        v12.i256 = shr 224.i256 v10;
+        v14.i1 = eq v12 2877082652.i256;
+        br v14 block2 block7;
 
     block2:
-        v10.i256 = call %calldataload 4.i256;
-        v12.i256 = call %calldataload 36.i256;
-        v13.i1 = eq v10 0.i256;
-        br v13 block12 block14;
+        v16.i256 = call %calldataload 4.i256;
+        v18.i256 = call %calldataload 36.i256;
+        v19.i1 = eq v16 0.i256;
+        br v19 block12 block14;
 
     block3:
-        v14.i256 = call %calldataload 4.i256;
-        v16.i256 = call %raw__g9438 v1;
-        v17.i256 = call %balance_of_raw v14 v16;
-        call %abi_encode v17;
+        v20.i256 = call %calldataload 4.i256;
+        v21.@layout_0 = obj.load v0;
+        v22.i256 = call %raw__g9438 v21;
+        v23.i256 = call %balance_of_raw v20 v22;
+        call %abi_encode v23;
         unreachable;
 
     block4:
-        v18.i256 = call %calldataload 4.i256;
-        v19.i256 = call %calldataload 36.i256;
-        v20.i1 = eq v18 0.i256;
-        br v20 block16 block18;
+        v24.i256 = call %calldataload 4.i256;
+        v25.i256 = call %calldataload 36.i256;
+        v26.i1 = eq v24 0.i256;
+        br v26 block16 block18;
 
     block5:
-        v22.i256 = call %raw__gf198 v3;
-        v23.i256 = call %total_supply v22;
-        call %abi_encode v23;
+        v27.@layout_0 = obj.load v1;
+        v28.i256 = call %raw__gf198 v27;
+        v29.i256 = call %total_supply v28;
+        call %abi_encode v29;
         unreachable;
 
     block6:
@@ -278,54 +288,60 @@ func private %runtime() {
         unreachable;
 
     block7:
-        v26.i1 = eq v6 1818602213.i256;
-        br v26 block3 block8;
+        v32.i1 = eq v12 1818602213.i256;
+        br v32 block3 block8;
 
     block8:
-        v29.i1 = eq v6 217554442.i256;
-        br v29 block4 block9;
+        v35.i1 = eq v12 217554442.i256;
+        br v35 block4 block9;
 
     block9:
-        v32.i1 = eq v6 960555502.i256;
-        br v32 block5 block10;
+        v38.i1 = eq v12 960555502.i256;
+        br v38 block5 block10;
 
     block10:
         jump block6;
 
     block11:
-        v33.i256 = phi (v39 block12) (v45 block13);
-        call %abi_encode v33;
+        v39.i256 = phi (v45 block12) (v51 block13);
+        call %abi_encode v39;
         unreachable;
 
     block12:
-        v35.i256 = call %raw__g9438 v1;
-        v37.i256 = call %raw__gf198 v3;
-        v39.i256 = call %credit_alice v12 v35 v37;
+        v40.@layout_0 = obj.load v0;
+        v41.@layout_0 = obj.load v1;
+        v42.i256 = call %raw__g9438 v40;
+        v43.i256 = call %raw__gf198 v41;
+        v45.i256 = call %credit_alice v18 v42 v43;
         jump block11;
 
     block13:
-        v41.i256 = call %raw__g9438 v1;
-        v43.i256 = call %raw__gf198 v3;
-        v45.i256 = call %credit_bob v12 v41 v43;
+        v46.@layout_0 = obj.load v0;
+        v47.@layout_0 = obj.load v1;
+        v48.i256 = call %raw__g9438 v46;
+        v49.i256 = call %raw__gf198 v47;
+        v51.i256 = call %credit_bob v18 v48 v49;
         jump block11;
 
     block14:
         jump block13;
 
     block15:
-        v46.@layout_1 = phi (v51 block16) (v55 block17);
-        v47.i256 = call %transfer_result_code v46;
-        call %abi_encode v47;
+        v52.@layout_1 = phi (v57 block16) (v61 block17);
+        v53.i256 = call %transfer_result_code v52;
+        call %abi_encode v53;
         unreachable;
 
     block16:
-        v49.i256 = call %raw__g9438 v1;
-        v51.@layout_1 = call %transfer_from_alice v19 v49;
+        v54.@layout_0 = obj.load v0;
+        v55.i256 = call %raw__g9438 v54;
+        v57.@layout_1 = call %transfer_from_alice v25 v55;
         jump block15;
 
     block17:
-        v53.i256 = call %raw__g9438 v1;
-        v55.@layout_1 = call %transfer_from_bob v19 v53;
+        v58.@layout_0 = obj.load v0;
+        v59.i256 = call %raw__g9438 v58;
+        v61.@layout_1 = call %transfer_from_bob v25 v59;
         jump block15;
 
     block18:

@@ -6,19 +6,17 @@ mod diagnostics;
 mod facts;
 mod ir;
 mod noesc;
-mod normalize;
-mod verify;
 
 pub(crate) use callsite::provisional_call_site_provider_refinements;
 pub use check::{
     SemanticAnalysisError, SemanticBorrowAnalysisPass, check_semantic_borrows,
     collect_semantic_borrow_diagnostic_vouchers, semantic_borrow_summary,
 };
-pub(crate) use diagnostics::{checker_name, resolve_local_source_span, span_for_origin_from_body};
+pub(crate) use diagnostics::{
+    checker_name, normalized_body_error_to_diag, normalized_body_verify_error_to_diag,
+    normalized_layout_plan_verify_error_to_diag, resolve_local_source_span,
+    smir_lowering_admission_diag, span_for_origin_from_body,
+};
 pub use facts::*;
 pub use ir::*;
 pub use noesc::check_semantic_noesc;
-pub use normalize::{
-    normalize_semantic_body, normalize_semantic_body_for_layout_evidence, semantic_body_admission,
-};
-pub use verify::verify_normalized_semantic_body;

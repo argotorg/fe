@@ -27,22 +27,27 @@ func private %main_root() {
 
 func private %sum_loop(v0.i256) -> i256 {
     block0:
+        v1.*i256 = alloca i256;
+        v2.*i256 = alloca i256;
         jump block1;
 
     block1:
+        mstore v1 0.i256 i256;
+        mstore v2 0.i256 i256;
         jump block2;
 
     block2:
-        v29.i256 = phi (0.i256 block1) (v20 block11);
-        v2.i256 = phi (0.i256 block1) (v25 block11);
-        v4.i1 = lt v2 v0;
-        br v4 block3 block4;
+        v4.i256 = mload v1 i256;
+        v6.i1 = lt v4 v0;
+        br v6 block3 block4;
 
     block3:
-        v7.i1 = eq 3.i256 0.i256;
-        br v7 block5 block6;
+        v8.i256 = mload v1 i256;
+        v9.i1 = eq 3.i256 0.i256;
+        br v9 block5 block6;
 
     block4:
+        v29.i256 = mload v2 i256;
         return v29;
 
     block5:
@@ -51,20 +56,21 @@ func private %sum_loop(v0.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        v12.i256 = evm_umod v2 3.i256;
-        v13.constref<[i256; 3]> = const.ref $const_region_0;
-        v14.i1 = lt v12 3.i256;
-        v15.i1 = is_zero v14;
-        br v15 block7 block8;
+        v14.i256 = evm_umod v8 3.i256;
+        v15.constref<[i256; 3]> = const.ref $const_region_0;
+        v16.i1 = lt v14 3.i256;
+        v17.i1 = is_zero v16;
+        br v17 block7 block8;
 
     block7:
         evm_revert 0.i256 0.i256;
 
     block8:
-        v17.constref<i256> = const.index v13 v12;
-        v18.i256 = const.load v17;
-        (v20.i256, v21.i1) = uaddo v29 v18;
-        br v21 block9 block10;
+        v19.constref<i256> = const.index v15 v14;
+        v20.i256 = const.load v19;
+        v21.i256 = mload v2 i256;
+        (v22.i256, v23.i1) = uaddo v21 v20;
+        br v23 block9 block10;
 
     block9:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -72,10 +78,13 @@ func private %sum_loop(v0.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block10:
-        (v25.i256, v26.i1) = uaddo v2 1.i256;
-        br v26 block9 block11;
+        mstore v2 v22 i256;
+        v26.i256 = mload v1 i256;
+        (v27.i256, v28.i1) = uaddo v26 1.i256;
+        br v28 block9 block11;
 
     block11:
+        mstore v1 v27 i256;
         jump block2;
 }
 

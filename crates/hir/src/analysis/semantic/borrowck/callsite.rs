@@ -4,7 +4,11 @@ use rustc_hash::FxHashSet;
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        CallSiteProviderRefinement, SBlockId, SemOrigin, SemanticInstance,
+        CallSiteProviderRefinement, SemOrigin, SemanticInstance,
+        normalized::{
+            NBlockId, NEffectArg, NEffectArgValue, NExpr, NOperand, NStatement, NStatementKind,
+            normalize_semantic_body_provisional,
+        },
         provisional_provider_idx_for_requirement,
     },
     ty::{
@@ -17,18 +21,14 @@ use super::{
     canon::{CanonPlace, State, address_space_for_borrow_root},
     check::Borrowck,
     diagnostics::operand_origin,
-    ir::{
-        NEffectArg, NEffectArgValue, NExpr, NOperand, NSStmt, NSStmtKind, SemanticBorrowDiagnostic,
-        SemanticNormalizationFailure,
-    },
-    normalize::normalize_provisional_semantic_body,
+    ir::{SemanticBorrowDiagnostic, SemanticNormalizationFailure},
 };
 
 pub(crate) fn provisional_call_site_provider_refinements<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Result<Vec<CallSiteProviderRefinement>, SemanticNormalizationFailure<'db>> {
-    let body = normalize_provisional_semantic_body(db, instance)?;
+    let body = normalize_semantic_body_provisional(db, instance)?.body;
     let mut borrowck = Borrowck::new_with_body(
         db,
         instance,
@@ -56,22 +56,24 @@ impl<'db> CallSiteProviderRefiner<'db> {
     fn refine(&self) -> Result<Vec<CallSiteProviderRefinement>, SemanticBorrowDiagnostic<'db>> {
         let mut out = Vec::new();
         for (bb_idx, block) in self.borrowck.body.blocks.iter().enumerate() {
-            let mut state = self.borrowck.entry_state[SBlockId::new(bb_idx)].clone();
-            for stmt in &block.stmts {
-                self.refine_stmt(&state, stmt, &mut out)?;
-                self.borrowck.canon().apply_stmt_state(&mut state, stmt);
+            let mut state = self.borrowck.entry_state[NBlockId::new(bb_idx)].clone();
+            for statement in &block.statements {
+                self.refine_statement(&state, statement, &mut out)?;
+                self.borrowck
+                    .canon()
+                    .apply_statement_state(&mut state, statement);
             }
         }
         Ok(out)
     }
 
-    fn refine_stmt(
+    fn refine_statement(
         &self,
         state: &State,
-        stmt: &NSStmt<'db>,
+        statement: &NStatement<'db>,
         out: &mut Vec<CallSiteProviderRefinement>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
-        let NSStmtKind::Assign {
+        let NStatementKind::Define {
             expr:
                 NExpr::Call {
                     call_site,
@@ -80,7 +82,7 @@ impl<'db> CallSiteProviderRefiner<'db> {
                     ..
                 },
             ..
-        } = &stmt.kind
+        } = &statement.kind
         else {
             return Ok(());
         };
@@ -88,7 +90,8 @@ impl<'db> CallSiteProviderRefiner<'db> {
             if matches!(arg.pass_mode, EffectPassMode::Unknown) {
                 continue;
             }
-            let Some(address_space) = self.effect_arg_address_space(state, stmt.origin, arg)?
+            let Some(address_space) =
+                self.effect_arg_address_space(state, statement.origin, arg)?
             else {
                 continue;
             };
@@ -125,7 +128,7 @@ impl<'db> CallSiteProviderRefiner<'db> {
     fn value_targets(&self, state: &State, value: NOperand) -> FxHashSet<CanonPlace<'db>> {
         self.borrowck
             .canon()
-            .canonicalize_value_base(state, value.local)
+            .canonicalize_value_base(state, value.value)
     }
 
     fn address_space_for_targets(

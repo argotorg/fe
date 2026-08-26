@@ -1,5 +1,8 @@
 use hir::analysis::{
-    semantic::{NEffectArg, NEffectArgValue, SemanticInstance},
+    semantic::{
+        SemanticInstance,
+        normalized::{NEffectArg, NEffectArgValue, NPlaceBase},
+    },
     ty::ty_check::EffectPassMode,
 };
 
@@ -12,6 +15,7 @@ use super::{
     boundary::{BoundarySiteAllocator, StagedBoundary, default_by_place_boundary},
     classify::{desired_runtime_effect_arg_boundary, runtime_effect_binding_plan_for_binding_idx},
     provider_space::resolved_effect_arg_address_space,
+    semantic_body::RuntimeSemanticBody,
     type_info::{
         RuntimeTypeEnv, provider_class_for_target_in_env, runtime_zero_sized_transport_ty,
         runtime_zero_sized_ty,
@@ -104,7 +108,7 @@ pub(super) fn compile_value_pass_plan<'db>(
 
 pub(super) fn compile_call_input_plan_for_semantic<'db>(
     db: &'db dyn MirDb,
-    body: &hir::analysis::semantic::borrowck::NormalizedSemanticBody<'db>,
+    body: &RuntimeSemanticBody<'db>,
     semantic: SemanticInstance<'db>,
     type_env: RuntimeTypeEnv<'db>,
     effect_args: &[NEffectArg<'db>],
@@ -129,7 +133,7 @@ pub(super) fn compile_call_input_plan_for_semantic<'db>(
 
 fn compile_effect_arg_plan<'db>(
     db: &'db dyn MirDb,
-    body: &hir::analysis::semantic::borrowck::NormalizedSemanticBody<'db>,
+    body: &RuntimeSemanticBody<'db>,
     semantic: SemanticInstance<'db>,
     type_env: RuntimeTypeEnv<'db>,
     arg: &NEffectArg<'db>,
@@ -153,7 +157,7 @@ fn compile_effect_arg_plan<'db>(
                 NEffectArgValue::Value(_) | NEffectArgValue::Place(_),
             ) => panic!(
                 "effect arg without provider/target should compile as a plain value: owner={:?}; arg={arg:?}",
-                body.owner.key(db).owner(db),
+                body.owner().key(db).owner(db),
             ),
         };
     }
@@ -205,7 +209,7 @@ fn compile_effect_arg_plan<'db>(
 
 fn effect_arg_is_runtime_zst<'db>(
     db: &'db dyn MirDb,
-    body: &hir::analysis::semantic::borrowck::NormalizedSemanticBody<'db>,
+    body: &RuntimeSemanticBody<'db>,
     type_env: RuntimeTypeEnv<'db>,
     arg: &NEffectArg<'db>,
 ) -> bool {
@@ -215,10 +219,20 @@ fn effect_arg_is_runtime_zst<'db>(
         return true;
     }
     match &arg.arg {
-        NEffectArgValue::Value(value) => body.local(value.local).is_some_and(|local| {
-            runtime_zero_sized_transport_ty(db, local.ty, type_env.scope, type_env.assumptions)
-        }),
-        NEffectArgValue::Place(place) => body.place_root_ty(&place.root).is_some_and(|ty| {
+        NEffectArgValue::Value(value) => body
+            .operand_source(*value)
+            .and_then(|local| body.local(local))
+            .is_some_and(|local| {
+                runtime_zero_sized_transport_ty(db, local.ty, type_env.scope, type_env.assumptions)
+            }),
+        NEffectArgValue::Place(place) => match place.base {
+            NPlaceBase::Root(root) => body.normalized.root(root).map(|root| root.ty),
+            NPlaceBase::CapabilityTarget { carrier } => body
+                .normalized
+                .value(carrier)
+                .and_then(|value| value.ty.as_capability(db).map(|(_, target)| target)),
+        }
+        .is_some_and(|ty| {
             runtime_zero_sized_transport_ty(db, ty, type_env.scope, type_env.assumptions)
         }),
     }

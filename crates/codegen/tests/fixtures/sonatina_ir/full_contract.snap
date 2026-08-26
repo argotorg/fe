@@ -78,49 +78,49 @@ func private %codecopy(v0.i256, v1.i256, v2.i256) {
 
 func private %dispatch() {
     block0:
+        v0.objref<@layout_0> = obj.alloc @layout_0;
+        v1.objref<@layout_1> = obj.alloc @layout_1;
         jump block1;
 
     block1:
-        v1.i256 = call %calldataload 0.i256;
-        v3.i256 = shr 224.i256 v1;
-        v5.i1 = eq v3 151146943.i256;
-        br v5 block2 block3;
+        v3.i256 = call %calldataload 0.i256;
+        v5.i256 = shr 224.i256 v3;
+        v7.i1 = eq v5 151146943.i256;
+        br v7 block2 block3;
 
     block2:
-        v7.i256 = call %calldataload 4.i256;
-        v9.i256 = call %calldataload 36.i256;
-        v11.@layout_0 = insert_value undef.@layout_0 0.i256 v7;
-        v13.@layout_0 = insert_value v11 1.i256 v9;
-        v14.objref<@layout_0> = obj.alloc @layout_0;
-        v15.objref<i256> = obj.proj v14 0.i256;
-        v16.i256 = extract_value v13 0.i256;
-        obj.store v15 v16;
-        v17.objref<i256> = obj.proj v14 1.i256;
-        v18.i256 = extract_value v13 1.i256;
-        obj.store v17 v18;
-        v19.objref<i256> = obj.proj v14 0.i256;
-        v20.i256 = obj.load v19;
-        (v21.i256, v22.i1) = uaddo v20 1.i256;
-        br v22 block8 block9;
+        v9.i256 = call %calldataload 4.i256;
+        v11.i256 = call %calldataload 36.i256;
+        v13.@layout_0 = insert_value undef.@layout_0 0.i256 v9;
+        v15.@layout_0 = insert_value v13 1.i256 v11;
+        v16.objref<i256> = obj.proj v0 0.i256;
+        v17.i256 = extract_value v15 0.i256;
+        obj.store v16 v17;
+        v18.objref<i256> = obj.proj v0 1.i256;
+        v19.i256 = extract_value v15 1.i256;
+        obj.store v18 v19;
+        v20.objref<i256> = obj.proj v0 0.i256;
+        v21.i256 = obj.load v20;
+        (v22.i256, v23.i1) = uaddo v21 1.i256;
+        br v23 block8 block9;
 
     block3:
         jump block4;
 
     block4:
-        v37.i1 = eq v3 2066295049.i256;
+        v37.i1 = eq v5 2066295049.i256;
         br v37 block5 block6;
 
     block5:
         v38.i256 = call %calldataload 4.i256;
         v40.@layout_1 = insert_value undef.@layout_1 0.i256 v38;
-        v41.objref<@layout_1> = obj.alloc @layout_1;
-        v42.objref<i256> = obj.proj v41 0.i256;
-        v43.i256 = extract_value v40 0.i256;
-        obj.store v42 v43;
-        v44.objref<i256> = obj.proj v41 0.i256;
-        v45.i256 = obj.load v44;
-        (v47.i256, v48.i1) = uaddo v45 3.i256;
-        br v48 block8 block11;
+        v41.objref<i256> = obj.proj v1 0.i256;
+        v42.i256 = extract_value v40 0.i256;
+        obj.store v41 v42;
+        v43.objref<i256> = obj.proj v1 0.i256;
+        v44.i256 = obj.load v43;
+        (v46.i256, v47.i1) = uaddo v44 3.i256;
+        br v47 block8 block11;
 
     block6:
         jump block7;
@@ -135,25 +135,27 @@ func private %dispatch() {
         evm_revert 0.i256 36.i256;
 
     block9:
-        v26.objref<i256> = obj.proj v14 0.i256;
-        obj.store v26 v21;
-        v27.objref<i256> = obj.proj v14 1.i256;
+        v26.objref<i256> = obj.proj v0 0.i256;
+        obj.store v26 v22;
+        v27.objref<i256> = obj.proj v0 1.i256;
         v28.i256 = obj.load v27;
         (v30.i256, v31.i1) = uaddo v28 2.i256;
         br v31 block8 block10;
 
     block10:
-        v33.objref<i256> = obj.proj v14 1.i256;
-        obj.store v33 v30;
-        v34.i256 = call %impl_Point__area v14;
+        v32.objref<i256> = obj.proj v0 1.i256;
+        obj.store v32 v30;
+        v33.@layout_0 = obj.load v0;
+        v34.i256 = call %impl_Point__area v0;
         call %abi_encode v34;
         unreachable;
 
     block11:
-        v50.objref<i256> = obj.proj v41 0.i256;
-        obj.store v50 v47;
-        v51.i256 = call %impl_Square__area v41;
-        call %abi_encode v51;
+        v48.objref<i256> = obj.proj v1 0.i256;
+        obj.store v48 v46;
+        v49.@layout_1 = obj.load v1;
+        v50.i256 = call %impl_Square__area v1;
+        call %abi_encode v50;
         unreachable;
 }
 

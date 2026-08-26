@@ -29,6 +29,7 @@ use crate::{
                 ValuePathRef,
             },
             ty_def::{BorrowKind, TyData, TyId},
+            ty_lower::lower_hir_ty,
         },
     },
     hir_def::{
@@ -492,6 +493,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     pub(super) fn lower_expr(&mut self, expr: ExprId) -> SValueId {
+        let value = self.lower_expr_inner(expr);
+        if self.expr_ty(expr).is_never(self.db) && !self.is_terminated(self.current) {
+            self.set_synthetic_terminator(self.current, STerminatorKind::Assert { message: None });
+        }
+        value
+    }
+
+    fn lower_expr_inner(&mut self, expr: ExprId) -> SValueId {
         let Partial::Present(expr_data) = expr.data(self.db, self.body) else {
             panic!("cannot lower absent expression")
         };
@@ -611,14 +620,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Expr::Cast(value, to) => {
                 let value = self.lower_expr_operand(*value);
-                self.emit_expr_with_origin(
-                    origin,
-                    ty,
-                    SExpr::Cast {
-                        value,
-                        to: to.to_opt().map_or(ty, |_| ty),
-                    },
-                )
+                let to = to.to_opt().map_or(ty, |to| {
+                    normalize_ty(
+                        self.db,
+                        lower_hir_ty(self.db, to, self.body.scope(), self.assumptions),
+                        self.body.scope(),
+                        self.assumptions,
+                    )
+                });
+                self.emit_expr_with_origin(origin, ty, SExpr::Cast { value, to })
             }
             Expr::Call(_, args) => self.lower_call(expr, None, args),
             Expr::Assert(args) => self.lower_assert(expr, args),
@@ -664,7 +674,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Expr::Block(stmts) => self.lower_block_expr(stmts),
             Expr::If(cond, then_expr, else_expr) => {
-                self.lower_if_expr(*cond, *then_expr, *else_expr)
+                self.lower_if_expr(expr, *cond, *then_expr, *else_expr)
             }
             Expr::Match(scrutinee, arms) => self.lower_match_expr(expr, *scrutinee, arms),
             Expr::With(bindings, body) => self.lower_with_expr(bindings, *body),
@@ -851,7 +861,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 SemOrigin::Expr(expr),
                 self.expr_ty(expr),
                 SExpr::EnumMake {
-                    enum_ty: variant.ty,
+                    enum_ty: self.expr_ty(expr),
                     variant: VariantIndex(variant.variant.idx),
                     fields: Box::new([]),
                 },
@@ -954,7 +964,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     SemOrigin::Expr(expr),
                     self.expr_ty(expr),
                     SExpr::EnumMake {
-                        enum_ty: variant.ty,
+                        enum_ty: self.expr_ty(expr),
                         variant: VariantIndex(variant.variant.idx),
                         fields: values
                             .into_iter()
@@ -1397,11 +1407,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     fn lower_if_expr(
         &mut self,
+        expr: ExprId,
         cond: CondId,
         then_expr: ExprId,
         else_expr: Option<ExprId>,
     ) -> SValueId {
-        let result_ty = self.expr_ty(then_expr);
+        let result_ty = self.expr_ty(expr);
         let result = self.alloc_temp(result_ty);
         let then_bb = self.new_block();
         let else_bb = self.new_block();

@@ -22,8 +22,7 @@ use crate::{
             normalize::normalize_ty,
             provider::{
                 ProviderAddressSpace, ProviderKind, ProviderLayoutEvidence, ProviderTransport,
-                RootProviderRegistration, RootProviderSiteKind, provider_semantics,
-                provider_semantics_for_specialized_call,
+                provider_semantics, provider_semantics_for_specialized_call,
             },
             trait_resolution::{
                 GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
@@ -725,15 +724,29 @@ impl<'db> SemanticInstance<'db> {
         binding: LocalBinding<'db>,
     ) -> TyId<'db> {
         match binding {
-            LocalBinding::EffectParam { site, idx, .. } => EffectEnvView::new(site)
-                .requirements(db)
-                .into_iter()
-                .find(|requirement| requirement.binding_idx as usize == idx)
-                .and_then(|requirement| requirement.key.binding_ty(db))
-                .and_then(|ty| instantiate_normalized_ty(db, self.key(db), ty).ok())
+            LocalBinding::EffectParam { site, idx, .. } => {
+                let requirement = EffectEnvView::new(site)
+                    .requirements(db)
+                    .into_iter()
+                    .find(|requirement| requirement.binding_idx as usize == idx);
+                let requirement_ty = requirement
+                    .as_ref()
+                    .and_then(|requirement| requirement.key.binding_ty(db))
+                    .and_then(|ty| instantiate_normalized_ty(db, self.key(db), ty).ok());
+                let provider_ty =
+                    provisional_provider_binding_for_instance_effect(db, self, binding)
+                        .map(|provider| provider.provider_ty);
+                match requirement.as_ref().map(|requirement| &requirement.key) {
+                    Some(EffectRequirementKey::Trait(_)) => provider_ty.or(requirement_ty),
+                    Some(EffectRequirementKey::Type(_) | EffectRequirementKey::Other) => {
+                        requirement_ty.or(provider_ty)
+                    }
+                    None => None,
+                }
                 .unwrap_or_else(|| {
                     TyId::invalid(db, crate::analysis::ty::ty_def::InvalidCause::Other)
-                }),
+                })
+            }
             LocalBinding::Local { .. } | LocalBinding::Param { .. } => {
                 self.key(db).typed_body(db).binding_ty(db, binding)
             }
@@ -1199,7 +1212,7 @@ fn provisional_provider_binding_for_effect<'db>(
                     layout_env: None,
                 });
             }
-            provisional_root_provider_binding(db, key, site, requirement_idx, provider_idx, is_mut)
+            provisional_root_provider_binding(db, key, site, provider_idx)
         }
         EffectParamSite::Contract(contract)
         | EffectParamSite::ContractInit { contract }
@@ -1238,7 +1251,7 @@ fn provisional_provider_binding_for_effect<'db>(
                     }),
                 });
             }
-            provisional_root_provider_binding(db, key, site, requirement_idx, provider_idx, is_mut)
+            provisional_root_provider_binding(db, key, site, provider_idx)
         }
     }
 }
@@ -1247,38 +1260,16 @@ fn provisional_root_provider_binding<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SemanticInstanceKey<'db>,
     site: EffectParamSite<'db>,
-    requirement_idx: u32,
     provider_idx: u32,
-    is_mut: bool,
 ) -> Option<ProviderBinding<'db>> {
-    let requirement = EffectEnvView::new(site)
-        .requirements(db)
+    EffectEnvView::new(site)
+        .providers(db)
         .into_iter()
-        .find(|requirement| requirement.binding_idx == requirement_idx)?;
-    let provider_ty = requirement
-        .key
-        .binding_ty(db)
-        .and_then(|ty| instantiate_normalized_ty(db, key, ty).ok())?;
-    let site_kind = match site {
-        EffectParamSite::Func(_) => RootProviderSiteKind::Func,
-        EffectParamSite::Contract(_) => RootProviderSiteKind::Contract,
-        EffectParamSite::ContractInit { .. } => RootProviderSiteKind::ContractInit,
-        EffectParamSite::ContractRecvArm { .. } => RootProviderSiteKind::ContractRecvArm,
-    };
-    let registration = RootProviderRegistration {
-        idx: provider_idx,
-        site_kind,
-        provider_ty,
-    };
-    let assumptions = semantic_instance_base_assumptions_for_key(db, key);
-    Some(ProviderBinding {
-        provider_idx,
-        provider_ty,
-        is_mut,
-        source: ProviderSource::RootProvider { site, registration },
-        semantics: provider_semantics(db, key.owner(db).scope(), assumptions, provider_ty),
-        layout_env: None,
-    })
+        .find(|provider| {
+            provider.provider_idx == provider_idx
+                && matches!(provider.source, ProviderSource::RootProvider { .. })
+        })
+        .and_then(|provider| instantiate_provider_binding(db, key, provider).ok())
 }
 
 fn effect_binding_ty_from_env<'db>(

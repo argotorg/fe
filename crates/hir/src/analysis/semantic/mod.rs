@@ -6,6 +6,7 @@ pub mod instance;
 pub mod ir;
 pub mod layout_evidence;
 pub mod lower;
+pub mod normalized;
 mod verify;
 
 pub use borrowck::*;
@@ -30,4 +31,5 @@ pub use layout_evidence::*;
 pub use lower::{
     effect_param_site, lower_to_smir, owner_effect_bindings, same_owner_effect_binding,
 };
+pub use normalized::*;
 pub use verify::{SemanticVerifyError, verify_semantic_body};

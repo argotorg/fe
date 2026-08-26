@@ -4,8 +4,16 @@ use rustc_hash::FxHashSet;
 use crate::analysis::{
     HirAnalysisDb,
     diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
-    semantic::{SemOrigin, SemanticCalleeRef, SemanticInstance},
-    ty::{ProviderAddressSpace, ty_check::BodyOwner, ty_def::TyId, ty_is_noesc},
+    semantic::{
+        SemOrigin, SemanticCalleeRef, SemanticInstance,
+        normalized::{NBlockId, NExpr, NOperand, NPlace, NStatement, NStatementKind},
+    },
+    ty::{
+        ProviderAddressSpace,
+        ty_check::BodyOwner,
+        ty_def::{BorrowKind, TyId},
+        ty_is_noesc,
+    },
 };
 
 use super::{
@@ -13,9 +21,8 @@ use super::{
     check::{Borrowck, SemanticAnalysisError},
     diagnostics::{normalized_body_internal_diag, operand_origin},
     ir::{
-        BlockedSemanticBody, BorrowDiagnosticId, NExpr, NOperand, NSStmt, NSStmtKind,
-        SemanticBorrowCheckResult, SemanticBorrowDiagKind, SemanticBorrowDiagnostic,
-        SemanticBorrowDiagnosticSpan, SemanticNormalizationFailure,
+        BlockedSemanticBody, BorrowDiagnosticId, SemanticBorrowCheckResult, SemanticBorrowDiagKind,
+        SemanticBorrowDiagnostic, SemanticBorrowDiagnosticSpan, SemanticNormalizationFailure,
     },
 };
 
@@ -70,28 +77,31 @@ impl<'db> NoEsc<'db> {
 
     fn check_body(&self) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         for (bb_idx, block) in self.borrowck.body.blocks.iter().enumerate() {
-            let mut state =
-                self.borrowck.entry_state[crate::analysis::semantic::SBlockId::new(bb_idx)].clone();
-            for stmt in &block.stmts {
-                self.check_stmt(&state, stmt)?;
-                self.borrowck.canon().apply_stmt_state(&mut state, stmt);
+            let mut state = self.borrowck.entry_state[NBlockId::new(bb_idx)].clone();
+            for statement in &block.statements {
+                self.check_statement(&state, statement)?;
+                self.borrowck
+                    .canon()
+                    .apply_statement_state(&mut state, statement);
             }
         }
         Ok(())
     }
 
-    fn check_stmt(
+    fn check_statement(
         &self,
         state: &State,
-        stmt: &NSStmt<'db>,
+        statement: &NStatement<'db>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
-        match &stmt.kind {
-            NSStmtKind::Assign {
+        match &statement.kind {
+            NStatementKind::Define {
                 expr: NExpr::Call { callee, args, .. },
                 ..
-            } => self.check_call_args(state, stmt.origin, *callee, args),
-            NSStmtKind::Store { dst, src } => self.check_store(state, stmt.origin, dst, *src),
-            NSStmtKind::Assign { .. } => Ok(()),
+            } => self.check_call_args(state, statement.origin, *callee, args),
+            NStatementKind::Store { destination, value } => {
+                self.check_store(state, statement.origin, destination, *value)
+            }
+            NStatementKind::Define { .. } => Ok(()),
         }
     }
 
@@ -99,7 +109,7 @@ impl<'db> NoEsc<'db> {
         &self,
         state: &State,
         origin: SemOrigin<'db>,
-        dst: &super::ir::NSPlace<'db>,
+        dst: &NPlace<'db>,
         src: NOperand,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         let targets = self
@@ -145,10 +155,10 @@ impl<'db> NoEsc<'db> {
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         for arg in args.iter().copied().skip(self.receiver_arg_count(callee)) {
             let ty = self.operand_ty(arg, origin)?;
-            if ty.as_borrow(self.borrowck.db).is_none() {
+            if !matches!(ty.as_borrow(self.borrowck.db), Some((BorrowKind::Mut, _))) {
                 continue;
             }
-            let targets = self.borrowck.canon().borrow_local_targets(state, arg.local);
+            let targets = self.borrowck.canon().borrow_value_targets(state, arg.value);
             let spaces = self.address_spaces_for_targets(&targets, operand_origin(arg, origin))?;
             let Some(space) = spaces
                 .iter()
@@ -183,14 +193,14 @@ impl<'db> NoEsc<'db> {
     ) -> Result<TyId<'db>, SemanticBorrowDiagnostic<'db>> {
         self.borrowck
             .body
-            .local(operand.local)
-            .map(|local| local.ty)
+            .value(operand.value)
+            .map(|value| value.ty)
             .ok_or_else(|| {
                 self.internal_diag(
                     origin,
                     format!(
-                        "noesc operand local `%{}` is missing",
-                        operand.local.index()
+                        "noesc operand value `%v{}` is missing",
+                        operand.value.index()
                     ),
                 )
             })

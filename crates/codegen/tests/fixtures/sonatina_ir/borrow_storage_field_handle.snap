@@ -40,13 +40,18 @@ func private %from_raw(v0.i256) -> @layout_0 {
 
 func private %main() -> i256 {
     block0:
+        v0.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
 
     block1:
-        v1.@layout_0 = call %stor_ptr 0.i256;
-        v2.i256 = call %raw v1;
-        v3.i256 = call %borrow_storage_field_handle v2;
-        return v3;
+        v2.@layout_0 = call %stor_ptr 0.i256;
+        v3.objref<i256> = obj.proj v0 0.i256;
+        v4.i256 = extract_value v2 0.i256;
+        obj.store v3 v4;
+        v5.@layout_0 = obj.load v0;
+        v6.i256 = call %raw v5;
+        v7.i256 = call %borrow_storage_field_handle v6;
+        return v7;
 }
 
 func private %main_root() {

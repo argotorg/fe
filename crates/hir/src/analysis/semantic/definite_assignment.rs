@@ -21,10 +21,14 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            BlockedSemanticBody, BorrowDiagnosticId, SBlockId, SConst, SLocalId, SemConstScalar,
-            SemConstValue, SemanticBodyAdmission, SemanticInstance, SemanticNormalizationFailure,
-            get_or_build_semantic_instance, identity_semantic_instance_key,
-            semantic_body_admission,
+            BlockedSemanticBody, BorrowDiagnosticId, SConst, SemConstScalar, SemConstValue,
+            SemanticInstance, SemanticNormalizationFailure, get_or_build_semantic_instance,
+            identity_semantic_instance_key,
+            normalized::{
+                NBlockId, NEffectArg, NEffectArgValue, NExpr, NOperand, NPlace, NPlaceBase,
+                NRootKind, NStatementKind, NTerminatorKind, NValueId, NormalizedBody,
+                SemanticBodyAdmission, semantic_body_admission,
+            },
         },
         ty::{
             ty_check::{BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite},
@@ -33,11 +37,6 @@ use crate::{
     },
     hir_def::{Contract, Func, FuncParamMode},
     semantic::{ContractFieldId, ProviderSource},
-};
-
-use super::borrowck::{
-    NBorrowRoot, NEffectArg, NEffectArgValue, NExpr, NSPlace, NSPlaceRoot, NSStmtKind,
-    NSTerminatorKind, NormalizedSemanticBody,
 };
 
 /// A caller-visible write target a body definitely assigns (whole-value)
@@ -139,8 +138,8 @@ fn instance_assigned_targets<'db>(
 
     let mut exit_states = Vec::new();
     for (idx, block) in body.blocks.iter().enumerate() {
-        let block_id = SBlockId::new(idx);
-        if matches!(block.terminator.kind, NSTerminatorKind::Return(_))
+        let block_id = NBlockId::new(idx);
+        if matches!(block.terminator.kind, NTerminatorKind::Return(_))
             && entry_states[block_id].reached
         {
             match analysis.transfer_state(block_id, &entry_states[block_id]) {
@@ -208,66 +207,53 @@ impl JoinSemiLattice for MustAssignState<'_> {
 
 struct DefiniteAssignment<'a, 'db> {
     db: &'db dyn HirAnalysisDb,
-    body: &'a NormalizedSemanticBody<'db>,
-    successors: SecondaryMap<SBlockId, Vec<SBlockId>>,
-    /// The unique defining expression of single-assignment locals, used to
-    /// chase borrow carriers (`let r = mut x`, borrow-mode call arguments)
-    /// back to the borrowed place.
-    single_defs: FxHashMap<SLocalId, &'a NExpr<'db>>,
+    body: &'a NormalizedBody<'db>,
+    successors: SecondaryMap<NBlockId, Vec<NBlockId>>,
+    definitions: FxHashMap<NValueId, &'a NExpr<'db>>,
 }
 
 impl<'a, 'db> DefiniteAssignment<'a, 'db> {
-    fn new(db: &'db dyn HirAnalysisDb, body: &'a NormalizedSemanticBody<'db>) -> Self {
-        let mut assign_counts: FxHashMap<SLocalId, u32> = FxHashMap::default();
-        let mut defs: FxHashMap<SLocalId, &'a NExpr<'db>> = FxHashMap::default();
+    fn new(db: &'db dyn HirAnalysisDb, body: &'a NormalizedBody<'db>) -> Self {
+        let mut definitions = FxHashMap::default();
         for block in &body.blocks {
-            for stmt in &block.stmts {
-                if let NSStmtKind::Assign { dst, expr } = &stmt.kind {
-                    *assign_counts.entry(*dst).or_default() += 1;
-                    defs.insert(*dst, expr);
+            for statement in &block.statements {
+                if let NStatementKind::Define { result, expr } = &statement.kind {
+                    definitions.insert(*result, expr);
                 }
             }
         }
-        let single_defs = defs
-            .into_iter()
-            .filter(|(local, _)| assign_counts.get(local) == Some(&1))
-            .collect();
 
-        let mut_aliased = mut_aliased_locals(body);
-
-        let mut successors: SecondaryMap<SBlockId, Vec<SBlockId>> = SecondaryMap::new();
+        let mut successors: SecondaryMap<NBlockId, Vec<NBlockId>> = SecondaryMap::new();
         successors.resize(body.blocks.len());
         for (idx, block) in body.blocks.iter().enumerate() {
-            successors[SBlockId::new(idx)] =
-                block_successors(db, body, idx, &block.terminator.kind, &mut_aliased);
+            successors[NBlockId::new(idx)] = block_successors(db, body, &block.terminator.kind);
         }
 
         Self {
             db,
             body,
             successors,
-            single_defs,
+            definitions,
         }
     }
 
-    /// The place mut-borrowed into `local`, when `local` is a
-    /// single-assignment carrier holding exactly one borrow (chasing copies
-    /// like `let r = mut x`, which lowers to a borrow temp plus a `Use`).
-    fn borrowed_place_of(&self, mut local: SLocalId) -> Option<&'a NSPlace<'db>> {
+    /// The place mut-borrowed into `value`, chasing exact SSA forwards such as
+    /// `let r = mut x` back to the defining borrow.
+    fn borrowed_place_of(&self, mut value: NValueId) -> Option<&'a NPlace<'db>> {
         let mut depth = 0;
         loop {
-            match self.single_defs.get(&local)? {
+            match self.definitions.get(&value)? {
                 NExpr::Borrow {
                     place,
                     kind: BorrowKind::Mut,
                     ..
                 } => return Some(place),
-                NExpr::Use(op) => {
+                NExpr::Forward { src } => {
                     depth += 1;
                     if depth > 16 {
                         return None;
                     }
-                    local = op.local;
+                    value = src.value;
                 }
                 _ => return None,
             }
@@ -276,18 +262,18 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
 
     fn transfer_state(
         &self,
-        block: SBlockId,
+        block: NBlockId,
         in_state: &MustAssignState<'db>,
     ) -> Result<MustAssignState<'db>, AssignedTargetsFailure<'db>> {
         let mut state = in_state.clone();
-        for stmt in &self.body.blocks[block.index()].stmts {
-            match &stmt.kind {
-                NSStmtKind::Store { dst, .. } => {
-                    if let Some(target) = self.write_target_of_place(dst) {
+        for statement in &self.body.blocks[block.index()].statements {
+            match &statement.kind {
+                NStatementKind::Store { destination, .. } => {
+                    if let Some(target) = self.write_target_of_place(destination) {
                         state.assigned.insert(target);
                     }
                 }
-                NSStmtKind::Assign { expr, .. } => {
+                NStatementKind::Define { expr, .. } => {
                     if let NExpr::Call {
                         callee,
                         args,
@@ -305,13 +291,13 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
 
     /// Resolves a whole-value store destination to a caller-visible target,
     /// looking through capability params and single-borrow local carriers.
-    fn write_target_of_place(&self, place: &NSPlace<'db>) -> Option<AssignedTarget<'db>> {
+    fn write_target_of_place(&self, place: &NPlace<'db>) -> Option<AssignedTarget<'db>> {
         if !place.path.is_empty() {
             return None;
         }
-        match &place.root {
-            NSPlaceRoot::Root(root_id) => match self.body.root(*root_id)? {
-                NBorrowRoot::Provider { binding, .. } => match binding.source {
+        match place.base {
+            NPlaceBase::Root(root_id) => match &self.body.root(root_id)?.kind {
+                NRootKind::Provider { binding } => match binding.source {
                     ProviderSource::ContractField { field } => {
                         Some(AssignedTarget::ContractField(field))
                     }
@@ -324,23 +310,25 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
                     }),
                     _ => None,
                 },
-                NBorrowRoot::Param { .. } | NBorrowRoot::LocalSlot { .. } => None,
+                NRootKind::LocalSlot { .. }
+                | NRootKind::ParamPlace { .. }
+                | NRootKind::CapabilityRepresentation { .. } => None,
             },
-            NSPlaceRoot::CarrierDerefLocal(local) => self
-                .target_of_param_carrier(*local)
-                .or_else(|| self.write_target_of_place(self.borrowed_place_of(*local)?)),
+            NPlaceBase::CapabilityTarget { carrier } => self
+                .target_of_param_carrier(carrier)
+                .or_else(|| self.write_target_of_place(self.borrowed_place_of(carrier)?)),
         }
     }
 
-    /// A capability-`mut` function parameter carried by `local`, if any.
-    fn target_of_param_carrier(&self, local: SLocalId) -> Option<AssignedTarget<'db>> {
+    /// A capability-`mut` function parameter carried by `value`, if any.
+    fn target_of_param_carrier(&self, value: NValueId) -> Option<AssignedTarget<'db>> {
         let Some(LocalBinding::Param {
             site: ParamSite::Func(func),
             idx,
             mode: FuncParamMode::View,
             ty,
             ..
-        }) = self.body.local(local)?.source
+        }) = self.body.value(value)?.source
         else {
             return None;
         };
@@ -357,7 +345,7 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
     fn apply_call(
         &self,
         callee_key: crate::analysis::semantic::SemanticInstanceKey<'db>,
-        args: &[super::borrowck::NOperand],
+        args: &[NOperand],
         effect_args: &[NEffectArg<'db>],
         state: &mut MustAssignState<'db>,
     ) -> Result<(), AssignedTargetsFailure<'db>> {
@@ -396,9 +384,9 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
                     }),
                 AssignedTarget::FuncParam { func, param_idx } if *func == callee_func => args
                     .get(*param_idx as usize)
-                    .and_then(|arg| match self.borrowed_place_of(arg.local) {
+                    .and_then(|arg| match self.borrowed_place_of(arg.value) {
                         Some(place) => self.write_target_of_place(place),
-                        None => self.target_of_param_carrier(arg.local),
+                        None => self.target_of_param_carrier(arg.value),
                     }),
                 _ => None,
             };
@@ -411,7 +399,7 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
 }
 
 impl<'db> dataflow::ForwardCfgAnalysis for DefiniteAssignment<'_, 'db> {
-    type Block = SBlockId;
+    type Block = NBlockId;
     type State = MustAssignState<'db>;
     type Error = AssignedTargetsFailure<'db>;
 
@@ -420,10 +408,7 @@ impl<'db> dataflow::ForwardCfgAnalysis for DefiniteAssignment<'_, 'db> {
     }
 
     fn seed_blocks(&self) -> Vec<Self::Block> {
-        (!self.body.blocks.is_empty())
-            .then_some(SBlockId::new(0))
-            .into_iter()
-            .collect()
+        vec![self.body.entry]
     }
 
     fn bottom(&self) -> Self::State {
@@ -434,9 +419,7 @@ impl<'db> dataflow::ForwardCfgAnalysis for DefiniteAssignment<'_, 'db> {
         &mut self,
         entry_states: &mut SecondaryMap<Self::Block, Self::State>,
     ) -> Result<(), Self::Error> {
-        if !self.body.blocks.is_empty() {
-            entry_states[SBlockId::new(0)].reached = true;
-        }
+        entry_states[self.body.entry].reached = true;
         Ok(())
     }
 
@@ -453,102 +436,63 @@ impl<'db> dataflow::ForwardCfgAnalysis for DefiniteAssignment<'_, 'db> {
     }
 }
 
-/// Locals whose slot can be written other than by an `Assign` to the local
-/// itself: mut-borrow targets, mut effect-provider places, and direct store
-/// destinations. Branch folding must not trust `Assign`-visible constants
-/// for these, since an aliasing write between the constant definition and
-/// the branch would not show up as a later `Assign`.
-fn mut_aliased_locals(body: &NormalizedSemanticBody<'_>) -> FxHashSet<SLocalId> {
-    let mut aliased = FxHashSet::default();
-    let note_place = |place: &NSPlace<'_>, aliased: &mut FxHashSet<SLocalId>| {
-        if let NSPlaceRoot::Root(root_id) = &place.root
-            && let Some(NBorrowRoot::Param { local, .. } | NBorrowRoot::LocalSlot { local }) =
-                body.root(*root_id)
-        {
-            aliased.insert(*local);
-        }
-    };
-    for block in &body.blocks {
-        for stmt in &block.stmts {
-            match &stmt.kind {
-                NSStmtKind::Store { dst, .. } => note_place(dst, &mut aliased),
-                NSStmtKind::Assign { expr, .. } => match expr {
-                    NExpr::Borrow {
-                        place,
-                        kind: BorrowKind::Mut,
-                        ..
-                    } => note_place(place, &mut aliased),
-                    NExpr::Call { effect_args, .. } => {
-                        for arg in effect_args.iter().filter(|arg| arg.required_mut) {
-                            if let NEffectArgValue::Place(place) = &arg.arg {
-                                note_place(place, &mut aliased);
-                            }
-                        }
-                    }
-                    _ => {}
-                },
-            }
-        }
-    }
-    aliased
-}
-
 fn block_successors<'db>(
     db: &'db dyn HirAnalysisDb,
-    body: &NormalizedSemanticBody<'db>,
-    block_idx: usize,
-    terminator: &NSTerminatorKind<'db>,
-    mut_aliased: &FxHashSet<SLocalId>,
-) -> Vec<SBlockId> {
+    body: &NormalizedBody<'db>,
+    terminator: &NTerminatorKind<'db>,
+) -> Vec<NBlockId> {
     match terminator {
-        NSTerminatorKind::Goto(target) => vec![*target],
-        NSTerminatorKind::Branch {
+        NTerminatorKind::Goto(target) => vec![target.block],
+        NTerminatorKind::Branch {
             cond,
-            then_bb,
-            else_bb,
-        } => match literal_bool_cond(db, body, block_idx, cond.local, mut_aliased) {
-            Some(true) => vec![*then_bb],
-            Some(false) => vec![*else_bb],
-            None => vec![*then_bb, *else_bb],
+            then_target,
+            else_target,
+        } => match literal_bool_cond(db, body, cond.value) {
+            Some(true) => vec![then_target.block],
+            Some(false) => vec![else_target.block],
+            None => vec![then_target.block, else_target.block],
         },
-        NSTerminatorKind::MatchEnum { cases, default, .. } => cases
+        NTerminatorKind::MatchEnum { cases, default, .. } => cases
             .iter()
-            .map(|(_, target)| *target)
-            .chain(*default)
+            .map(|(_, target)| target.block)
+            .chain(default.iter().map(|target| target.block))
             .collect(),
-        NSTerminatorKind::Assert { .. } | NSTerminatorKind::Return(_) => Vec::new(),
+        NTerminatorKind::Assert { .. } | NTerminatorKind::Return(_) => Vec::new(),
     }
 }
 
-/// The boolean value of `local` at `block_idx`'s terminator, when its
-/// dominating definition in the same block is a literal constant and the
-/// local cannot be mutated through an alias.
+/// The literal boolean value of an immutable SSA definition, chasing exact
+/// forwards. Loads remain unknown because roots may have changed.
 fn literal_bool_cond<'db>(
     db: &'db dyn HirAnalysisDb,
-    body: &NormalizedSemanticBody<'db>,
-    block_idx: usize,
-    local: SLocalId,
-    mut_aliased: &FxHashSet<SLocalId>,
+    body: &NormalizedBody<'db>,
+    mut value: NValueId,
 ) -> Option<bool> {
-    if mut_aliased.contains(&local) {
-        return None;
+    for _ in 0..16 {
+        let definition = body.value(value)?.definition;
+        let crate::analysis::semantic::normalized::NValueDefinition::Statement { block, statement } =
+            definition
+        else {
+            return None;
+        };
+        let NStatementKind::Define { expr, .. } =
+            &body.block(block)?.statements.get(statement as usize)?.kind
+        else {
+            return None;
+        };
+        match expr {
+            NExpr::Forward { src } => value = src.value,
+            NExpr::Const(SConst::Value(value)) => {
+                return match value.value(db) {
+                    SemConstValue::Scalar {
+                        value: SemConstScalar::Bool(value),
+                        ..
+                    } => Some(value),
+                    _ => None,
+                };
+            }
+            _ => return None,
+        }
     }
-    let last_def = body.blocks[block_idx]
-        .stmts
-        .iter()
-        .rev()
-        .find_map(|stmt| match &stmt.kind {
-            NSStmtKind::Assign { dst, expr } if *dst == local => Some(expr),
-            _ => None,
-        })?;
-    let NExpr::Const(SConst::Value(value)) = last_def else {
-        return None;
-    };
-    match value.value(db) {
-        SemConstValue::Scalar {
-            value: SemConstScalar::Bool(value),
-            ..
-        } => Some(value),
-        _ => None,
-    }
+    None
 }

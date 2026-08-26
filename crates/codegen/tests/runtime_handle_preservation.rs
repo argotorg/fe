@@ -204,6 +204,33 @@ fn storage_pair_ref_layout<'db>(class: &RuntimeClass<'db>) -> Option<LayoutId<'d
 }
 
 #[test]
+fn local_storage_handles_preserve_storage_effect_transport() {
+    with_runtime_package!(
+        "local_storage_handles_preserve_storage_effect_transport.fe",
+        include_str!("fixtures/borrow_storage_field_handle.fe").to_string(),
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "borrow_storage_field_handle");
+            let [store] = body.signature.params.as_slice() else {
+                panic!("storage effect helper should have one runtime parameter:\n{body:#?}");
+            };
+            assert!(
+                matches!(
+                    store.class,
+                    RuntimeClass::Ref {
+                        kind: RefKind::Provider {
+                            space: AddressSpaceKind::Storage,
+                            ..
+                        },
+                        ..
+                    }
+                ),
+                "local storage handles must cross effect boundaries as storage providers:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
 fn transparent_wrapper_returns_preserve_handle_fields_in_rmir() {
     let src = format!(
         "{}\nfn emit_helpers() -> u256 {{\n    let arr: [u256; 8] = [1, 2, 3, 4, 5, 6, 7, 8]\n    sum_last4(arr) + sum_first4(arr)\n}}\n",
@@ -599,30 +626,65 @@ fn storage_backed_nested_handle_field_borrows_use_storage_transport() {
                 .expect("generated bump runtime function");
             let body = bump.instance(&db).body(&db);
 
+            let carrier = body
+                .blocks
+                .iter()
+                .flat_map(|block| block.stmts.iter())
+                .find_map(|stmt| match stmt {
+                    RStmt::Assign {
+                        dst,
+                        expr: RExpr::Load { place },
+                    } if matches!(place.root, PlaceRoot::Ref(_))
+                        && matches!(place.path.as_ref(), [PlaceElem::Field(field)] if field.0 == 0)
+                        && matches!(
+                            body.value_class(*dst),
+                            Some(RuntimeClass::Ref {
+                                pointee,
+                                kind: RefKind::Provider {
+                                    space: mir::AddressSpaceKind::Storage,
+                                    ..
+                                },
+                                ..
+                            }) if matches!(**pointee, RuntimeClass::AggregateValue { .. })
+                        ) =>
+                    {
+                        Some(*dst)
+                    }
+                    RStmt::Assign { .. }
+                    | RStmt::AssertIndexInBounds { .. }
+                    | RStmt::EnumAssertVariant { .. }
+                    | RStmt::Store { .. }
+                    | RStmt::CopyInto { .. }
+                    | RStmt::EnumSetTag { .. }
+                    | RStmt::EnumWriteVariant { .. } => None,
+                })
+                .unwrap_or_else(|| {
+                    panic!("expected nested handle carrier load in bump runtime body:\n{body:#?}")
+                });
             let nested_field_borrow = body
-        .blocks
-        .iter()
-        .flat_map(|block| block.stmts.iter())
-        .find_map(|stmt| match stmt {
-            RStmt::Assign {
-                dst,
-                expr: RExpr::AddrOf { place },
-            } if matches!(place.root, PlaceRoot::Ref(_))
-                && matches!(place.path.as_ref(), [PlaceElem::Field(field0), PlaceElem::Deref, PlaceElem::Field(field1)] if field0.0 == 0 && field1.0 == 0) =>
-            {
-                Some(*dst)
-            }
-            RStmt::Assign { .. }
-            | RStmt::AssertIndexInBounds { .. }
-            | RStmt::EnumAssertVariant { .. }
-            | RStmt::Store { .. }
-            | RStmt::CopyInto { .. }
-            | RStmt::EnumSetTag { .. }
-            | RStmt::EnumWriteVariant { .. } => None,
-        })
-        .unwrap_or_else(|| {
-            panic!("expected nested field borrow in bump runtime body:\n{body:#?}")
-        });
+                .blocks
+                .iter()
+                .flat_map(|block| block.stmts.iter())
+                .find_map(|stmt| match stmt {
+                    RStmt::Assign {
+                        dst,
+                        expr: RExpr::AddrOf { place },
+                    } if place.root == PlaceRoot::Ref(carrier)
+                        && matches!(place.path.as_ref(), [PlaceElem::Field(field)] if field.0 == 0) =>
+                    {
+                        Some(*dst)
+                    }
+                    RStmt::Assign { .. }
+                    | RStmt::AssertIndexInBounds { .. }
+                    | RStmt::EnumAssertVariant { .. }
+                    | RStmt::Store { .. }
+                    | RStmt::CopyInto { .. }
+                    | RStmt::EnumSetTag { .. }
+                    | RStmt::EnumWriteVariant { .. } => None,
+                })
+                .unwrap_or_else(|| {
+                    panic!("expected nested field borrow from its explicit carrier in bump runtime body:\n{body:#?}")
+                });
 
             let Some(RuntimeClass::Ref { pointee, kind, .. }) =
                 body.value_class(nested_field_borrow)
@@ -778,24 +840,26 @@ fn entry() -> u256 {
                 .unwrap_or_else(|| {
                     panic!("mutated scalar local should keep runtime storage:\n{body:#?}")
                 });
-            let rooted_ptr = runtime_body_stmts(&body)
-                .find_map(|stmt| match stmt {
+            let rooted_ptrs = runtime_body_stmts(&body)
+                .filter_map(|stmt| match stmt {
                     RStmt::Assign {
                         dst,
                         expr: RExpr::AddrOf { place },
                     } if place.root == PlaceRoot::Slot(rooted_scalar) => Some(*dst),
                     _ => None,
                 })
-                .unwrap_or_else(|| {
-                    panic!("mutated scalar local should take the address of its rooted slot:\n{body:#?}")
-                });
-            let stored_ptr = transported_local_from_param(&body, rooted_ptr);
+                .map(|rooted_ptr| transported_local_from_param(&body, rooted_ptr))
+                .collect::<Vec<_>>();
+            assert!(
+                !rooted_ptrs.is_empty(),
+                "mutated scalar local should take the address of its rooted slot:\n{body:#?}"
+            );
             assert!(
                 runtime_body_stmts(&body).any(|stmt| {
                     matches!(
                         stmt,
                         RStmt::Store { dst, .. }
-                            if matches!(dst.root, PlaceRoot::Ptr { addr, .. } if addr == stored_ptr)
+                            if matches!(dst.root, PlaceRoot::Ptr { addr, .. } if rooted_ptrs.contains(&addr))
                     )
                 }),
                 "mutated scalar local should store through the rooted slot pointer:\n{body:#?}"
@@ -1657,10 +1721,8 @@ fn mutable_with_provider_reuses_materialized_root_for_later_readonly_effects() {
                             dst,
                             expr: RExpr::AddrOf { place },
                         } if *dst == arg && place.path.is_empty() => match place.root {
-                            PlaceRoot::Ref(root) => Some(root),
-                            PlaceRoot::Slot(_) | PlaceRoot::Ptr { .. } | PlaceRoot::Provider(_) => {
-                                None
-                            }
+                            PlaceRoot::Ref(root) | PlaceRoot::Slot(root) => Some(root),
+                            PlaceRoot::Ptr { .. } | PlaceRoot::Provider(_) => None,
                         },
                         _ => None,
                     })
@@ -1689,11 +1751,8 @@ fn mutable_with_provider_reuses_materialized_root_for_later_readonly_effects() {
             );
             assert!(
                 matches!(
-                    body.value_class(inc_root),
-                    Some(RuntimeClass::Ref {
-                        kind: RefKind::Object,
-                        ..
-                    })
+                    body.locals[inc_root.as_u32() as usize].root,
+                    RuntimeLocalRoot::Slot(RuntimeClass::AggregateValue { .. })
                 ),
                 "shared mutable with-provider root should be object-backed:\n{body:#?}"
             );

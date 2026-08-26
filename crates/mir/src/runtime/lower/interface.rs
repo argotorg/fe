@@ -1,8 +1,5 @@
 use hir::analysis::{
-    semantic::{
-        SemanticInstance, borrowck::NormalizedSemanticBody, owner_effect_bindings,
-        same_owner_effect_binding,
-    },
+    semantic::{SemanticBody, SemanticInstance, owner_effect_bindings, same_owner_effect_binding},
     ty::{
         ty_check::{BodyOwner, LocalBinding, ParamSite},
         ty_def::TyId,
@@ -24,7 +21,7 @@ use super::{
 pub(crate) fn runtime_param_locals<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
-    body: &NormalizedSemanticBody<'db>,
+    body: &SemanticBody<'db>,
     params: &[crate::runtime::RuntimeClass<'db>],
 ) -> Vec<hir::analysis::semantic::SLocalId> {
     let entries = runtime_visible_binding_plans(db, semantic);
@@ -153,7 +150,7 @@ pub(crate) fn runtime_visible_binding_plans<'db>(
 }
 
 pub(crate) fn runtime_visible_binding_local<'db>(
-    body: &NormalizedSemanticBody<'db>,
+    body: &SemanticBody<'db>,
     binding: LocalBinding<'db>,
 ) -> hir::analysis::semantic::SLocalId {
     if let Some(local) = body.entry_locals.iter().copied().find(|local| {

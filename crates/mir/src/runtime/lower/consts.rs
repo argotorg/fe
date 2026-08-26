@@ -1,12 +1,11 @@
 use std::collections::HashSet;
 
-use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        NExpr, SConst, SemConstId, SemConstScalar, SemConstValue, SemanticConstRef,
-        SemanticInstance, VariantIndex,
-        borrowck::{NSStmtKind, NormalizedSemanticBody},
-        eval_const_ref, normalize_int_to_shape, reify_runtime_const_for_ty, sem_const_ty,
+        SConst, SemConstId, SemConstScalar, SemConstValue, SemanticConstRef, SemanticInstance,
+        VariantIndex, eval_const_ref, normalize_int_to_shape,
+        normalized::{NExpr, NStatementKind},
+        reify_runtime_const_for_ty, sem_const_ty,
     },
     ty::const_ty::{ConstTyData, EvaluatedConstTy, evaluate_type_level_int_const_expr},
     ty::ty_def::{TyData, TyId},
@@ -22,6 +21,7 @@ use crate::{
 
 use super::{
     layout::layout_for_ty_in_env,
+    semantic_body::RuntimeSemanticBody,
     type_info::{
         RuntimeTypeEnv, runtime_zero_sized_ty, scalar_class_for_ty_in_env,
         top_level_class_for_ty_in_env,
@@ -48,13 +48,14 @@ pub(super) fn reified_const_ref_value_for_ty<'db>(
 pub(super) fn collect_const_ref_regions<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,
-    body: &NormalizedSemanticBody<'db>,
+    body: &RuntimeSemanticBody<'db>,
 ) -> HashSet<ConstRegionId<'db>> {
-    body.blocks
+    body.normalized
+        .blocks
         .iter()
-        .flat_map(|block| block.stmts.iter())
+        .flat_map(|block| block.statements.iter())
         .filter_map(|stmt| {
-            let NSStmtKind::Assign { dst, expr } = &stmt.kind else {
+            let NStatementKind::Define { result, expr } = &stmt.kind else {
                 return None;
             };
             let NExpr::Const(SConst::Ref(cref)) = expr else {
@@ -63,7 +64,12 @@ pub(super) fn collect_const_ref_regions<'db>(
             aggregate_const_ref_region(
                 db,
                 env,
-                reified_const_ref_value_for_ty(db, body.owner, *cref, body.locals[dst.index()].ty),
+                reified_const_ref_value_for_ty(
+                    db,
+                    body.owner(),
+                    *cref,
+                    body.normalized.value(*result)?.ty,
+                ),
             )
         })
         .collect()

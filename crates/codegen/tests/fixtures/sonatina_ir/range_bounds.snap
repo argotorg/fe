@@ -51,25 +51,28 @@ func private %main_root() {
 
 func private %sum_const() -> i256 {
     block0:
+        v0.*i256 = alloca i256;
         jump block1;
 
     block1:
-        v2.i256 = call %len;
+        mstore v0 0.i256 i256;
+        v3.i256 = call %len;
         jump block2;
 
     block2:
-        v20.i256 = phi (0.i256 block1) (v9 block7);
-        v3.i256 = phi (0.i256 block1) (v16 block7);
-        v5.i1 = lt v3 v2;
-        br v5 block3 block4;
+        v4.i256 = phi (0.i256 block1) (v17 block7);
+        v6.i1 = lt v4 v3;
+        br v6 block3 block4;
 
     block3:
-        v7.i256 = call %get v3;
-        (v9.i256, v10.i1) = uaddo v20 v7;
-        br v10 block5 block6;
+        v8.i256 = call %get v4;
+        v9.i256 = mload v0 i256;
+        (v10.i256, v11.i1) = uaddo v9 v8;
+        br v11 block5 block6;
 
     block4:
-        return v20;
+        v19.i256 = mload v0 i256;
+        return v19;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -77,8 +80,9 @@ func private %sum_const() -> i256 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        (v16.i256, v17.i1) = uaddo v3 1.i256;
-        br v17 block5 block7;
+        mstore v0 v10 i256;
+        (v17.i256, v18.i1) = uaddo v4 1.i256;
+        br v18 block5 block7;
 
     block7:
         jump block2;

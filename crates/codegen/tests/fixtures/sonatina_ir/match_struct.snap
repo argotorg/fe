@@ -45,26 +45,29 @@ func private %match_struct_fields(v0.constref<@layout_0>) -> i8 {
         jump block3;
 
     block2:
-        v6.i8 = phi (0.i8 block7) (v25 block8) (v29 block10) (v37 block14);
+        v6.i8 = phi (0.i8 block7) (v29 block8) (v34 block10) (v44 block14);
         return v6;
 
     block3:
-        v10.constref<i8> = const.proj v0 1.i256;
-        v11.i8 = const.load v10;
-        v12.i1 = eq v11 0.i8;
-        br v12 block4 block6;
+        v9.constref<i8> = const.proj v0 1.i256;
+        v11.constref<i8> = const.proj v0 1.i256;
+        v12.i8 = const.load v11;
+        v13.i1 = eq v12 0.i8;
+        br v13 block4 block6;
 
     block4:
-        v15.constref<i8> = const.proj v0 0.i256;
-        v16.i8 = const.load v15;
-        v17.i1 = eq v16 0.i8;
-        br v17 block7 block9;
+        v16.constref<i8> = const.proj v0 0.i256;
+        v17.constref<i8> = const.proj v0 0.i256;
+        v18.i8 = const.load v17;
+        v19.i1 = eq v18 0.i8;
+        br v19 block7 block9;
 
     block5:
-        v19.constref<i8> = const.proj v0 0.i256;
-        v20.i8 = const.load v19;
-        v21.i1 = eq v20 0.i8;
-        br v21 block10 block12;
+        v21.constref<i8> = const.proj v0 0.i256;
+        v22.constref<i8> = const.proj v0 0.i256;
+        v23.i8 = const.load v22;
+        v24.i1 = eq v23 0.i8;
+        br v24 block10 block12;
 
     block6:
         jump block5;
@@ -73,33 +76,37 @@ func private %match_struct_fields(v0.constref<@layout_0>) -> i8 {
         jump block2;
 
     block8:
-        v23.constref<i8> = const.proj v0 0.i256;
-        v24.i8 = const.load v23;
-        mstore v2 v24 i8;
-        v25.i8 = mload v2 i8;
+        v26.constref<i8> = const.proj v0 0.i256;
+        v27.i8 = const.load v26;
+        mstore v2 v27 i8;
+        v28.constref<i8> = const.proj v0 0.i256;
+        v29.i8 = const.load v28;
         jump block2;
 
     block9:
         jump block8;
 
     block10:
-        v27.constref<i8> = const.proj v0 1.i256;
-        v28.i8 = const.load v27;
-        mstore v1 v28 i8;
-        v29.i8 = mload v1 i8;
+        v31.constref<i8> = const.proj v0 1.i256;
+        v32.i8 = const.load v31;
+        mstore v1 v32 i8;
+        v33.constref<i8> = const.proj v0 1.i256;
+        v34.i8 = const.load v33;
         jump block2;
 
     block11:
-        v31.constref<i8> = const.proj v0 0.i256;
-        v32.i8 = const.load v31;
-        mstore v3 v32 i8;
-        v33.constref<i8> = const.proj v0 1.i256;
-        v34.i8 = const.load v33;
-        mstore v4 v34 i8;
-        v35.i8 = mload v3 i8;
-        v36.i8 = mload v4 i8;
-        (v37.i8, v38.i1) = uaddo v35 v36;
-        br v38 block13 block14;
+        v36.constref<i8> = const.proj v0 0.i256;
+        v37.i8 = const.load v36;
+        mstore v3 v37 i8;
+        v38.constref<i8> = const.proj v0 1.i256;
+        v39.i8 = const.load v38;
+        mstore v4 v39 i8;
+        v40.constref<i8> = const.proj v0 0.i256;
+        v41.i8 = const.load v40;
+        v42.constref<i8> = const.proj v0 1.i256;
+        v43.i8 = const.load v42;
+        (v44.i8, v45.i1) = uaddo v41 v43;
+        br v45 block13 block14;
 
     block12:
         jump block11;
@@ -125,19 +132,21 @@ func private %match_struct_wildcard(v0.constref<@layout_0>) -> i8 {
         return v2;
 
     block3:
-        v6.constref<i8> = const.proj v0 0.i256;
-        v7.i8 = const.load v6;
-        v8.i1 = eq v7 0.i8;
-        br v8 block4 block6;
+        v5.constref<i8> = const.proj v0 0.i256;
+        v7.constref<i8> = const.proj v0 0.i256;
+        v8.i8 = const.load v7;
+        v9.i1 = eq v8 0.i8;
+        br v9 block4 block6;
 
     block4:
         jump block2;
 
     block5:
-        v12.constref<i8> = const.proj v0 1.i256;
-        v13.i8 = const.load v12;
-        v14.i1 = eq v13 0.i8;
-        br v14 block7 block9;
+        v13.constref<i8> = const.proj v0 1.i256;
+        v14.constref<i8> = const.proj v0 1.i256;
+        v15.i8 = const.load v14;
+        v16.i1 = eq v15 0.i8;
+        br v16 block7 block9;
 
     block6:
         jump block5;

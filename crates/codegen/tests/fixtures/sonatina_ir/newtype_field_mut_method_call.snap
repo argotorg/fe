@@ -50,20 +50,20 @@ func private %main_root() {
 
 func private %newtype_field_mut_method_call(v0.i256) -> i256 {
     block0:
+        v1.objref<@layout_2> = obj.alloc @layout_2;
         jump block1;
 
     block1:
-        v4.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        v6.@layout_0 = insert_value v4 1.i256 0.i256;
-        v8.@layout_1 = insert_value undef.@layout_1 0.i256 v6;
-        v10.@layout_2 = insert_value undef.@layout_2 0.i256 0.i256;
-        v11.@layout_2 = insert_value v10 1.i256 v8;
-        v12.objref<@layout_2> = obj.alloc @layout_2;
-        v13.objref<i256> = obj.proj v12 0.i256;
-        v14.i256 = extract_value v11 0.i256;
+        v5.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
+        v7.@layout_0 = insert_value v5 1.i256 0.i256;
+        v9.@layout_1 = insert_value undef.@layout_1 0.i256 v7;
+        v11.@layout_2 = insert_value undef.@layout_2 0.i256 0.i256;
+        v12.@layout_2 = insert_value v11 1.i256 v9;
+        v13.objref<i256> = obj.proj v1 0.i256;
+        v14.i256 = extract_value v12 0.i256;
         obj.store v13 v14;
-        v15.objref<@layout_1> = obj.proj v12 1.i256;
-        v16.@layout_1 = extract_value v11 1.i256;
+        v15.objref<@layout_1> = obj.proj v1 1.i256;
+        v16.@layout_1 = extract_value v12 1.i256;
         v17.objref<@layout_0> = obj.proj v15 0.i256;
         v18.@layout_0 = extract_value v16 0.i256;
         v19.objref<i256> = obj.proj v17 0.i256;
@@ -72,9 +72,9 @@ func private %newtype_field_mut_method_call(v0.i256) -> i256 {
         v21.objref<i256> = obj.proj v17 1.i256;
         v22.i256 = extract_value v18 1.i256;
         obj.store v21 v22;
-        v23.objref<@layout_1> = obj.proj v12 1.i256;
+        v23.objref<@layout_1> = obj.proj v1 1.i256;
         call %bump v23;
-        v25.objref<@layout_1> = obj.proj v12 1.i256;
+        v25.objref<@layout_1> = obj.proj v1 1.i256;
         v26.objref<@layout_0> = obj.proj v25 0.i256;
         v27.objref<i256> = obj.proj v26 0.i256;
         v28.i256 = obj.load v27;

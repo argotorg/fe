@@ -420,23 +420,24 @@ func private %encode_single_root(v0.i256, v1.objref<@layout_0>) {
 
 func private %encode_single_root_alloc(v0.i256) -> @layout_0 {
     block0:
+        v1.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
 
     block1:
-        v2.i256 = call %abi_single_root_size v0;
-        v3.@layout_0 = call %encoder_new v2;
-        v4.objref<@layout_0> = obj.alloc @layout_0;
-        v6.objref<i256> = obj.proj v4 0.i256;
-        v7.i256 = extract_value v3 0.i256;
+        v3.i256 = call %abi_single_root_size v0;
+        v4.@layout_0 = call %encoder_new v3;
+        v6.objref<i256> = obj.proj v1 0.i256;
+        v7.i256 = extract_value v4 0.i256;
         obj.store v6 v7;
-        v9.objref<i256> = obj.proj v4 1.i256;
-        v10.i256 = extract_value v3 1.i256;
+        v9.objref<i256> = obj.proj v1 1.i256;
+        v10.i256 = extract_value v4 1.i256;
         obj.store v9 v10;
-        v11.i256 = call %impl_trait_SolEncoder__base v4;
-        call %encode_single_root v0 v4;
-        v14.@layout_0 = insert_value undef.@layout_0 0.i256 v11;
-        v15.@layout_0 = insert_value v14 1.i256 v2;
-        return v15;
+        v11.@layout_0 = obj.load v1;
+        v12.i256 = call %impl_trait_SolEncoder__base v1;
+        call %encode_single_root v0 v1;
+        v15.@layout_0 = insert_value undef.@layout_0 0.i256 v12;
+        v16.@layout_0 = insert_value v15 1.i256 v3;
+        return v16;
 }
 
 func private %encode_to_ptr(v0.i256, v1.i256) {
@@ -493,21 +494,20 @@ func inline(always) private %impl_trait_CallData__len(v0.@layout_3) -> i256 {
         v2.i256 = evm_calldata_size;
         v5.i256 = extract_value v0 0.i256;
         mstore v1 v2 i256;
-        v6.i256 = mload v1 i256;
-        v7.i1 = gt v5 v6;
-        br v7 block2 block3;
+        v6.i1 = gt v5 v2;
+        br v6 block2 block3;
 
     block2:
         jump block4;
 
     block3:
-        v9.i256 = extract_value v0 0.i256;
-        (v11.i256, v12.i1) = usubo v2 v9;
-        br v12 block5 block6;
+        v8.i256 = extract_value v0 0.i256;
+        (v10.i256, v11.i1) = usubo v2 v8;
+        br v11 block5 block6;
 
     block4:
-        v17.i256 = phi (0.i256 block2) (v11 block6);
-        return v17;
+        v16.i256 = phi (0.i256 block2) (v10 block6);
+        return v16;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -627,25 +627,24 @@ func inline(always) private %read_word(v0.objref<@layout_2>) -> i256 {
         jump block4;
 
     block4:
-        v27.objref<@layout_1> = obj.proj v0 0.i256;
-        v28.objref<@layout_0> = obj.proj v27 0.i256;
-        v29.@layout_0 = obj.load v28;
-        v30.objref<@layout_1> = obj.proj v0 0.i256;
-        v31.objref<i256> = obj.proj v30 1.i256;
-        v32.i256 = obj.load v31;
-        v33.objref<@layout_1> = obj.proj v0 0.i256;
-        v34.objref<@layout_0> = obj.proj v33 0.i256;
-        v35.i256 = call %word_at v34 v32;
-        v37.objref<@layout_1> = obj.proj v0 0.i256;
-        v38.objref<i256> = obj.proj v37 1.i256;
-        obj.store v38 v15;
-        return v35;
+        v29.objref<@layout_1> = obj.proj v0 0.i256;
+        v30.objref<@layout_0> = obj.proj v29 0.i256;
+        v31.@layout_0 = obj.load v30;
+        v32.objref<@layout_1> = obj.proj v0 0.i256;
+        v33.objref<i256> = obj.proj v32 1.i256;
+        v34.i256 = obj.load v33;
+        v35.objref<@layout_1> = obj.proj v0 0.i256;
+        v36.objref<@layout_0> = obj.proj v35 0.i256;
+        v37.i256 = call %word_at v36 v34;
+        v39.objref<@layout_1> = obj.proj v0 0.i256;
+        v40.objref<i256> = obj.proj v39 1.i256;
+        obj.store v40 v15;
+        return v37;
 
     block5:
         mstore v1 v9 i256;
-        v41.i256 = mload v1 i256;
-        v42.i1 = gt v15 v41;
-        br v42 block2 block3;
+        v43.i1 = gt v15 v9;
+        br v43 block2 block3;
 
     block6:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -655,9 +654,11 @@ func inline(always) private %read_word(v0.objref<@layout_2>) -> i256 {
     block7:
         v22.objref<@layout_1> = obj.proj v0 0.i256;
         v23.objref<i256> = obj.proj v22 1.i256;
-        v24.i256 = obj.load v23;
-        v25.i1 = lt v15 v24;
-        br v25 block2 block5;
+        v24.objref<@layout_1> = obj.proj v0 0.i256;
+        v25.objref<i256> = obj.proj v24 1.i256;
+        v26.i256 = obj.load v25;
+        v27.i1 = lt v15 v26;
+        br v27 block2 block5;
 }
 
 func private %return_bytes(v0.i256, v1.i256) {
@@ -775,9 +776,8 @@ func inline(always) private %validate_runtime_head(v0.i256, v1.i256, v2.i256) {
         v11.i256 = call %from_word v10;
         v13.i256 = call %from_word v2;
         mstore v3 v13 i256;
-        v14.i256 = mload v3 i256;
-        v15.i1 = slt v11 v14;
-        br v15 block5 block6;
+        v14.i1 = slt v11 v13;
+        br v14 block5 block6;
 
     block3:
         jump block4;

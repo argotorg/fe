@@ -1,8 +1,5 @@
 use cranelift_entity::EntityRef;
-use hir::analysis::{
-    semantic::borrowck::NormalizedSemanticBody,
-    ty::{CallableLayoutParamPort, LayoutBundleComponentId, LayoutMapTy},
-};
+use hir::analysis::ty::{CallableLayoutParamPort, LayoutBundleComponentId, LayoutMapTy};
 
 use crate::{
     db::MirDb,
@@ -17,6 +14,7 @@ use super::{
     interface::runtime_param_locals,
     layout_evidence::runtime_layout_map_for_map_ty,
     returns::{declaration_runtime_return_class, runtime_return_class_for_body},
+    semantic_body::RuntimeSemanticBody,
     type_info::RuntimeTypeEnv,
 };
 
@@ -165,13 +163,14 @@ fn semantic_runtime_abi_plan<'db>(
 pub(crate) fn runtime_body_abi_plan<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
-    body: &NormalizedSemanticBody<'db>,
+    body: &RuntimeSemanticBody<'db>,
 ) -> RuntimeAbiPlan<'db> {
     let semantic = key
         .semantic(db)
         .expect("runtime body ABI requires a semantic instance");
     assert_eq!(
-        body.owner, semantic,
+        body.owner(),
+        semantic,
         "runtime ABI body must belong to its semantic instance"
     );
     let visible = runtime_return_class_for_body(db, key, body);
@@ -192,15 +191,16 @@ pub(crate) fn runtime_body_abi_plan<'db>(
         key.params(db),
     );
     let mut plan = semantic_runtime_abi_plan(db, key, semantic, visible);
-    for (param, local) in
-        plan.visible_params
-            .iter_mut()
-            .zip(runtime_param_locals(db, semantic, body, key.params(db)))
-    {
+    for (param, local) in plan.visible_params.iter_mut().zip(runtime_param_locals(
+        db,
+        semantic,
+        &body.source,
+        key.params(db),
+    )) {
         param.local = RLocalId::from_u32(local.index() as u32);
     }
     for (index, evidence) in plan.evidence_params.iter_mut().enumerate() {
-        evidence.param.local = RLocalId::from_u32(body.locals.len() as u32 + index as u32);
+        evidence.param.local = RLocalId::from_u32(body.source.locals.len() as u32 + index as u32);
     }
     plan
 }

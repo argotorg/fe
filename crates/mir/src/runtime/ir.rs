@@ -64,6 +64,19 @@ impl<'db> RuntimeClass<'db> {
         }
     }
 
+    pub fn is_runtime_zst(&self, db: &'db dyn MirDb) -> bool {
+        match self {
+            Self::Scalar(_) | Self::Ref { .. } | Self::RawAddr { .. } => false,
+            Self::AggregateValue { layout } => match layout.data(db) {
+                Layout::Struct(layout) => {
+                    layout.fields.iter().all(|field| field.is_runtime_zst(db))
+                }
+                Layout::Array(layout) => layout.len == 0 || layout.elem.is_runtime_zst(db),
+                Layout::Enum(_) => false,
+            },
+        }
+    }
+
     pub fn const_ref(layout: LayoutId<'db>) -> Self {
         Self::Ref {
             pointee: Box::new(Self::AggregateValue { layout }),
