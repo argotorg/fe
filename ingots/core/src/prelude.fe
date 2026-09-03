@@ -9,6 +9,7 @@ pub use super::{
     num::IntDowncast,
     num::UnsignedAbs,
     option::Option::{self, *},
+    ptr::{FixedMemBuffer, MemArray, MemBuffer, MemSlice, MemSpan, byte_ptr, cast, offset, offset_bytes},
     result::Result::{self, *},
     todo, panic,
 }

@@ -370,6 +370,7 @@ fn verify_terminator<'db>(
             verify_word_value(body, *len)?;
             Ok(())
         }
+        RTerminator::RevertEmpty => Ok(()),
         RTerminator::SelfDestruct { beneficiary } => verify_word_value(body, *beneficiary),
         RTerminator::Trap => Ok(()),
         RTerminator::Return(value) => {

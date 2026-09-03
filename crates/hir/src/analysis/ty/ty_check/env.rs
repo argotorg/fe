@@ -1,8 +1,8 @@
 use crate::{
     analysis::place::Place,
     hir_def::{
-        BinOp, Body, Contract, Expr, ExprId, Func, IdentId, ItemKind, Partial, Pat, PatId, PathId,
-        Stmt, StmtId, UnOp, scope_graph::ScopeId,
+        BinOp, Body, Contract, Expr, ExprId, Func, IdentId, ItemKind, Partial, Pat, PatId, Stmt,
+        StmtId, UnOp, scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };
@@ -927,6 +927,7 @@ impl<'db> TyCheckEnv<'db> {
 
         TypedBody {
             body: Some(self.body),
+            has_diagnostics: false,
             result_ty,
             assumptions,
             pat_ty: self.pat_ty,
@@ -1084,7 +1085,7 @@ impl<'db> TyChecker<'db> {
     ) -> bool {
         let snapshot = self.snapshot_state();
         let pattern = build_pattern_from_requirement_decl(self.db, req, scope, assumptions);
-        let Some(key_path) = req.key_path else {
+        let Some(key_path) = req.key_ty.as_path(self.db) else {
             self.rollback_state(snapshot);
             return false;
         };
@@ -1330,7 +1331,6 @@ pub enum LocalBinding<'db> {
         idx: usize,
         binding_name: IdentId<'db>,
         provider_idx: u32,
-        key_path: PathId<'db>,
         is_mut: bool,
     },
 }
@@ -1388,7 +1388,6 @@ impl<'db> LocalBinding<'db> {
             idx: binding.requirement.binding_idx as usize,
             binding_name: binding.requirement.binding_name,
             provider_idx: binding.provider.provider_idx,
-            key_path: binding.requirement.binding_path,
             is_mut: binding.requirement.is_mut,
         }
     }

@@ -1,6 +1,8 @@
+use core::ptr
 use std::evm::RawMem
 
 #[test]
 fn test_effect() uses (mem: mut RawMem) {
-    mem.mstore(addr: 0x80, value: 1)
+    let data = ptr::alloc_bytes(32)
+    mem.mstore(addr: data, value: 1)
 }

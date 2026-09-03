@@ -1,7 +1,7 @@
-use core::abi::{Abi, AbiDecoder, AbiEncoder, AbiSize, AbiSpan, ByteInput, Decode, Encode}
+use core::abi::{Abi, AbiDecoder, AbiSize, AbiSpan, ByteInput, Decode, Encode, store_word}
 use core::num::IntDowncast
 use core::ops::{WrappingAdd, WrappingMul, WrappingSub}
-use ingot::evm::{TopicValue, ops::{revert, signextend}}
+use ingot::evm::{TopicValue, ops::{revert_empty, signextend}}
 
 use super::types::SolCompat
 
@@ -17,7 +17,7 @@ fn canonical_unsigned_word(word: u256, bits: u256) -> u256 {
     if word >> bits == 0 {
         return word
     }
-    revert(offset: 0, len: 0)
+    revert_empty()
 }
 
 #[inline(always)]
@@ -28,7 +28,7 @@ fn canonical_custom_signed_word(word: u256, bits: u256) -> u256 {
         if word == 0 {
             return 0
         }
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     let sign = (word >> (bits - 1)) & 1
@@ -36,13 +36,13 @@ fn canonical_custom_signed_word(word: u256, bits: u256) -> u256 {
         if word >> bits == 0 {
             return word
         }
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     if word >> bits == (FULL_WORD_MASK >> bits) {
         return word
     }
-    revert(offset: 0, len: 0)
+    revert_empty()
 }
 
 #[inline(always)]
@@ -875,11 +875,9 @@ impl<T: SolWrappingInt + SolInt> WrappingMul for T {
 }
 
 impl<T: SolWordRepr + SolInt, A: Abi> Encode<A> for T {
-    const DIRECT_ENCODE: bool = true
-
-    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.canonical_word()) }
-
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.canonical_word()) }
+    fn encode(own self, _ ptr: *u8) {
+        store_word(ptr: ptr, value: self.canonical_word())
+    }
 }
 
 impl Copy for Uint24 {}

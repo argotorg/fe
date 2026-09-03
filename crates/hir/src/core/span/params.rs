@@ -82,7 +82,7 @@ define_lazy_span_node!(
         (mut_kw, mut_token),
     }
     @node {
-        (path, path, LazyPathSpan),
+        (ty, ty, LazyTySpan),
     }
 );
 

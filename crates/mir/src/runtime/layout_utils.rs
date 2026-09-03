@@ -1,106 +1,268 @@
 use common::layout::TargetDataLayout;
 use hir::analysis::semantic::FieldIndex;
+use rustc_hash::FxHashSet;
 
 use crate::{
     db::MirDb,
     runtime::{
-        ConstNode, ConstRegionId, ConstScalar, Layout, LayoutId, LowerError, RuntimeClass,
-        ScalarClass, ScalarRepr, VariantId,
+        AddressSpaceKind, ArrayLayout, ConstNode, ConstRegionId, ConstScalar, Layout, LayoutId,
+        LowerError, RuntimeClass, ScalarClass, ScalarRepr, StructLayout, VariantId,
     },
 };
 
-pub fn layout_size_bytes<'db>(
-    db: &'db dyn MirDb,
-    layout: LayoutId<'db>,
-    target: TargetDataLayout,
-) -> usize {
-    match layout.data(db) {
-        Layout::Struct(data) => data
-            .fields
-            .iter()
-            .map(|field| memory_size_bytes_for_class(db, field, target))
-            .sum(),
-        Layout::Array(data) => round_up_to_word(
-            data.len as usize * array_elem_size_bytes(db, layout, target),
-            target,
-        ),
-        Layout::Enum(data) => {
-            let payload = data
-                .variants
-                .iter()
-                .map(|variant| {
-                    variant
-                        .fields
-                        .iter()
-                        .map(|field| memory_size_bytes_for_class(db, field, target))
-                        .sum()
-                })
-                .max()
-                .unwrap_or(0);
-            target.discriminant_size_bytes + payload
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeMemoryLayoutError {
+    Overflow,
+    Recursive,
+    InvalidProjection(&'static str),
+}
+
+impl From<RuntimeMemoryLayoutError> for LowerError {
+    fn from(error: RuntimeMemoryLayoutError) -> Self {
+        match error {
+            RuntimeMemoryLayoutError::Overflow => LowerError::Unsupported(
+                "runtime memory layout exceeds the supported 64-bit size".to_string(),
+            ),
+            RuntimeMemoryLayoutError::Recursive => {
+                LowerError::Unsupported("recursive runtime memory layout".to_string())
+            }
+            RuntimeMemoryLayoutError::InvalidProjection(projection) => LowerError::Unsupported(
+                format!("invalid {projection} projection for runtime memory layout"),
+            ),
         }
     }
 }
 
-pub fn struct_field_offset_bytes<'db>(
-    db: &'db dyn MirDb,
-    layout: LayoutId<'db>,
-    field: FieldIndex,
-    target: TargetDataLayout,
-) -> usize {
-    let Layout::Struct(data) = layout.data(db) else {
-        panic!("struct_field_offset_bytes called for non-struct layout {layout:?}");
-    };
-    data.fields
-        .iter()
-        .take(field.0 as usize)
-        .map(|field| memory_size_bytes_for_class(db, field, target))
-        .sum()
+#[derive(Clone, Copy)]
+enum RuntimeMemoryUnit {
+    Byte,
+    Word,
 }
 
-pub fn array_elem_size_bytes<'db>(
+#[derive(Clone, Copy)]
+pub struct RuntimeMemoryLayout<'db> {
     db: &'db dyn MirDb,
-    layout: LayoutId<'db>,
-    target: TargetDataLayout,
-) -> usize {
-    let Layout::Array(data) = layout.data(db) else {
-        panic!("array_elem_size_bytes called for non-array layout {layout:?}");
-    };
-    if packed_array_scalar_stride(&data.elem).is_some() {
-        1
-    } else {
-        memory_size_bytes_for_class(db, &data.elem, target)
+    unit: RuntimeMemoryUnit,
+}
+
+impl<'db> RuntimeMemoryLayout<'db> {
+    pub fn for_space(db: &'db dyn MirDb, space: AddressSpaceKind) -> Self {
+        Self {
+            db,
+            unit: if space.is_byte_addressed() {
+                RuntimeMemoryUnit::Byte
+            } else {
+                RuntimeMemoryUnit::Word
+            },
+        }
+    }
+
+    pub fn raw(db: &'db dyn MirDb) -> Self {
+        Self::for_space(db, AddressSpaceKind::Memory)
+    }
+
+    pub fn class_size(self, class: &RuntimeClass<'db>) -> Result<u64, RuntimeMemoryLayoutError> {
+        self.class_size_inner(class, &mut FxHashSet::default())
+    }
+
+    pub fn layout_size(self, layout: LayoutId<'db>) -> Result<u64, RuntimeMemoryLayoutError> {
+        self.layout_size_inner(layout, &mut FxHashSet::default())
+    }
+
+    pub fn field_offset(
+        self,
+        class: &RuntimeClass<'db>,
+        field: FieldIndex,
+    ) -> Result<u64, RuntimeMemoryLayoutError> {
+        let layout = class
+            .aggregate_layout()
+            .ok_or(RuntimeMemoryLayoutError::InvalidProjection("field"))?;
+        let Layout::Struct(layout) = layout.data(self.db) else {
+            return Err(RuntimeMemoryLayoutError::InvalidProjection("field"));
+        };
+        self.struct_field_offset(&layout, field.0 as usize)
+    }
+
+    pub fn struct_field_offset(
+        self,
+        layout: &StructLayout<'db>,
+        field: usize,
+    ) -> Result<u64, RuntimeMemoryLayoutError> {
+        layout
+            .fields
+            .get(field)
+            .ok_or(RuntimeMemoryLayoutError::InvalidProjection("field"))?;
+        self.class_sizes_sum(&layout.fields[..field], &mut FxHashSet::default())
+    }
+
+    pub fn array_element_offset(
+        self,
+        layout: &ArrayLayout<'db>,
+        index: u64,
+    ) -> Result<u64, RuntimeMemoryLayoutError> {
+        if index >= layout.len {
+            return Err(RuntimeMemoryLayoutError::InvalidProjection("array element"));
+        }
+        self.class_size(&layout.elem)?
+            .checked_mul(index)
+            .ok_or(RuntimeMemoryLayoutError::Overflow)
+    }
+
+    pub fn index_stride(self, class: &RuntimeClass<'db>) -> Result<u64, RuntimeMemoryLayoutError> {
+        let layout = class
+            .aggregate_layout()
+            .ok_or(RuntimeMemoryLayoutError::InvalidProjection("index"))?;
+        let Layout::Array(layout) = layout.data(self.db) else {
+            return Err(RuntimeMemoryLayoutError::InvalidProjection("index"));
+        };
+        self.class_size(&layout.elem)
+    }
+
+    pub fn variant_field_offset(
+        self,
+        variant: VariantId<'db>,
+        field: FieldIndex,
+    ) -> Result<u64, RuntimeMemoryLayoutError> {
+        let Layout::Enum(layout) = variant.enum_layout.data(self.db) else {
+            return Err(RuntimeMemoryLayoutError::InvalidProjection("variant field"));
+        };
+        let variant = layout
+            .variants
+            .get(variant.index as usize)
+            .ok_or(RuntimeMemoryLayoutError::InvalidProjection("variant field"))?;
+        let field = field.0 as usize;
+        variant
+            .fields
+            .get(field)
+            .ok_or(RuntimeMemoryLayoutError::InvalidProjection("variant field"))?;
+        self.scalar_size(&layout.tag)
+            .checked_add(self.class_sizes_sum(&variant.fields[..field], &mut FxHashSet::default())?)
+            .ok_or(RuntimeMemoryLayoutError::Overflow)
+    }
+
+    fn class_size_inner(
+        self,
+        class: &RuntimeClass<'db>,
+        visiting: &mut FxHashSet<LayoutId<'db>>,
+    ) -> Result<u64, RuntimeMemoryLayoutError> {
+        match class {
+            RuntimeClass::Scalar(scalar) => Ok(self.scalar_size(scalar)),
+            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => Ok(self.pointer_size()),
+            RuntimeClass::AggregateValue { layout } => self.layout_size_inner(*layout, visiting),
+        }
+    }
+
+    fn layout_size_inner(
+        self,
+        layout: LayoutId<'db>,
+        visiting: &mut FxHashSet<LayoutId<'db>>,
+    ) -> Result<u64, RuntimeMemoryLayoutError> {
+        if !visiting.insert(layout) {
+            return Err(RuntimeMemoryLayoutError::Recursive);
+        }
+        let size = match layout.data(self.db) {
+            Layout::Struct(data) => self.class_sizes_sum(&data.fields, visiting),
+            Layout::Array(data) => self
+                .class_size_inner(&data.elem, visiting)?
+                .checked_mul(data.len)
+                .ok_or(RuntimeMemoryLayoutError::Overflow),
+            Layout::Enum(data) => self
+                .scalar_size(&data.tag)
+                .checked_add(
+                    data.variants
+                        .iter()
+                        .map(|variant| self.class_sizes_sum(&variant.fields, visiting))
+                        .try_fold(0u64, |max, size| Ok(max.max(size?)))?,
+                )
+                .ok_or(RuntimeMemoryLayoutError::Overflow),
+        };
+        visiting.remove(&layout);
+        size
+    }
+
+    fn class_sizes_sum(
+        self,
+        classes: &[RuntimeClass<'db>],
+        visiting: &mut FxHashSet<LayoutId<'db>>,
+    ) -> Result<u64, RuntimeMemoryLayoutError> {
+        classes.iter().try_fold(0u64, |size, class| {
+            size.checked_add(self.class_size_inner(class, visiting)?)
+                .ok_or(RuntimeMemoryLayoutError::Overflow)
+        })
+    }
+
+    fn scalar_size(self, scalar: &ScalarClass<'_>) -> u64 {
+        match self.unit {
+            RuntimeMemoryUnit::Byte => scalar_raw_memory_size_bytes(scalar),
+            RuntimeMemoryUnit::Word => 1,
+        }
+    }
+
+    fn pointer_size(self) -> u64 {
+        match self.unit {
+            RuntimeMemoryUnit::Byte => 32,
+            RuntimeMemoryUnit::Word => 1,
+        }
     }
 }
 
-pub fn enum_tag_size_bytes<'db>(
-    _db: &'db dyn MirDb,
-    _layout: LayoutId<'db>,
-    target: TargetDataLayout,
-) -> usize {
-    target.discriminant_size_bytes
+pub fn scalar_raw_memory_size_bytes(scalar: &ScalarClass<'_>) -> u64 {
+    match scalar.repr {
+        ScalarRepr::Bool => 1,
+        ScalarRepr::Int { bits, .. } | ScalarRepr::Address { bits } => u64::from(bits.div_ceil(8)),
+        ScalarRepr::FixedBytes { len } => u64::from(len),
+    }
 }
 
-pub fn enum_variant_field_offset_bytes<'db>(
+fn layout_size_bytes<'db>(
     db: &'db dyn MirDb,
     layout: LayoutId<'db>,
-    variant: VariantId<'db>,
-    field: FieldIndex,
     target: TargetDataLayout,
-) -> usize {
-    let Layout::Enum(data) = layout.data(db) else {
-        panic!("enum_variant_field_offset_bytes called for non-enum layout {layout:?}");
+) -> Result<usize, LowerError> {
+    match layout.data(db) {
+        Layout::Struct(data) => data.fields.iter().try_fold(0usize, |size, field| {
+            checked_const_layout_add(size, memory_size_bytes_for_class(db, field, target)?)
+        }),
+        Layout::Array(data) => {
+            let len = usize::try_from(data.len).map_err(|_| const_layout_overflow())?;
+            round_up_to_word(
+                checked_const_layout_mul(len, array_elem_size_bytes(db, layout, target)?)?,
+                target,
+            )
+        }
+        Layout::Enum(data) => {
+            let payload = data.variants.iter().try_fold(0usize, |max, variant| {
+                variant
+                    .fields
+                    .iter()
+                    .try_fold(0usize, |size, field| {
+                        checked_const_layout_add(
+                            size,
+                            memory_size_bytes_for_class(db, field, target)?,
+                        )
+                    })
+                    .map(|size| max.max(size))
+            })?;
+            checked_const_layout_add(scalar_storage_size_bytes(data.tag.repr), payload)
+        }
+    }
+}
+
+fn array_elem_size_bytes<'db>(
+    db: &'db dyn MirDb,
+    layout: LayoutId<'db>,
+    target: TargetDataLayout,
+) -> Result<usize, LowerError> {
+    let Layout::Array(data) = layout.data(db) else {
+        return Err(LowerError::Unsupported(format!(
+            "array element layout requested for non-array `{layout:?}`"
+        )));
     };
-    let variant = data
-        .variants
-        .get(variant.index as usize)
-        .unwrap_or_else(|| panic!("invalid enum variant {} for {layout:?}", variant.index));
-    variant
-        .fields
-        .iter()
-        .take(field.0 as usize)
-        .map(|field| memory_size_bytes_for_class(db, field, target))
-        .sum()
+    if packed_array_scalar_stride(&data.elem).is_some() {
+        Ok(1)
+    } else {
+        memory_size_bytes_for_class(db, &data.elem, target)
+    }
 }
 
 pub fn serialize_const_region_bytes<'db>(
@@ -146,7 +308,7 @@ fn serialize_struct_bytes<'db>(
             "struct const region `{layout:?}` does not match expected field shape"
         )));
     }
-    let mut out = Vec::with_capacity(layout_size_bytes(db, layout, target));
+    let mut out = Vec::with_capacity(layout_size_bytes(db, layout, target)?);
     for (field_class, field_node) in fields.iter().zip(nodes.iter()) {
         out.extend(serialize_const_node_for_class(
             db,
@@ -179,8 +341,8 @@ fn serialize_array_bytes<'db>(
             "array const region `{layout:?}` does not match expected element shape"
         )));
     }
-    let stride = array_elem_size_bytes(db, layout, target);
-    let total = layout_size_bytes(db, layout, target);
+    let stride = array_elem_size_bytes(db, layout, target)?;
+    let total = layout_size_bytes(db, layout, target)?;
     let mut out = Vec::with_capacity(total);
     for elem in fields {
         out.extend(serialize_const_node_with_size(
@@ -217,7 +379,7 @@ fn serialize_enum_bytes<'db>(
             "enum const region `{layout:?}` does not contain a tag node"
         )));
     }
-    let tag_size = enum_tag_size_bytes(db, layout, target);
+    let tag_size = scalar_storage_size_bytes(data.tag.repr);
     let tag = serialize_const_scalar_with_size(enum_tag_scalar(fields[0].clone())?, tag_size)?;
     let variant_index = enum_variant_index(&fields[0])?;
     let Some(variant) = data.variants.get(variant_index) else {
@@ -230,7 +392,9 @@ fn serialize_enum_bytes<'db>(
             "enum const region `{layout:?}` payload shape does not match variant {variant_index}"
         )));
     }
-    let payload_capacity = layout_size_bytes(db, layout, target) - tag_size;
+    let payload_capacity = layout_size_bytes(db, layout, target)?
+        .checked_sub(tag_size)
+        .ok_or_else(const_layout_overflow)?;
     let mut payload = Vec::with_capacity(payload_capacity);
     for (field_class, field_node) in variant.fields.iter().zip(fields.iter().skip(1)) {
         payload.extend(serialize_const_node_for_class(
@@ -257,7 +421,7 @@ fn serialize_const_node_for_class<'db>(
     node: &ConstNode<'db>,
     target: TargetDataLayout,
 ) -> Result<Vec<u8>, LowerError> {
-    let size = memory_size_bytes_for_class(db, class, target);
+    let size = memory_size_bytes_for_class(db, class, target)?;
     serialize_const_node_with_size(db, class, node, size, target)
 }
 
@@ -280,12 +444,19 @@ fn serialize_const_node_with_size<'db>(
         RuntimeClass::Ref { .. } => Err(LowerError::Unsupported(
             "reference const nodes are not serializable runtime data".to_string(),
         )),
-        RuntimeClass::AggregateValue { layout }
-        | RuntimeClass::RawAddr {
-            target: Some(layout),
+        RuntimeClass::AggregateValue { layout } => {
+            serialize_const_node_to_layout_bytes(db, *layout, node, target)
+        }
+        RuntimeClass::RawAddr {
+            pointee: Some(pointee),
             ..
-        } => serialize_const_node_to_layout_bytes(db, *layout, node, target),
-        RuntimeClass::RawAddr { target: None, .. } => {
+        } if matches!(pointee.as_ref(), RuntimeClass::AggregateValue { .. }) => {
+            let RuntimeClass::AggregateValue { layout } = pointee.as_ref() else {
+                unreachable!()
+            };
+            serialize_const_node_to_layout_bytes(db, *layout, node, target)
+        }
+        RuntimeClass::RawAddr { .. } => {
             let ConstNode::Scalar(scalar) = node else {
                 return Err(LowerError::Unsupported(
                     "raw address const node expected scalar payload".to_string(),
@@ -300,13 +471,13 @@ fn memory_size_bytes_for_class<'db>(
     db: &'db dyn MirDb,
     class: &RuntimeClass<'db>,
     target: TargetDataLayout,
-) -> usize {
+) -> Result<usize, LowerError> {
     match class {
         RuntimeClass::Scalar(class) => {
             round_up_to_word(scalar_storage_size_bytes(class.repr), target)
         }
         RuntimeClass::AggregateValue { layout } => layout_size_bytes(db, *layout, target),
-        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => target.word_size_bytes,
+        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => Ok(target.word_size_bytes),
     }
 }
 
@@ -335,12 +506,27 @@ fn packed_array_scalar_stride(class: &RuntimeClass<'_>) -> Option<usize> {
     }
 }
 
-fn round_up_to_word(size: usize, target: TargetDataLayout) -> usize {
+fn round_up_to_word(size: usize, target: TargetDataLayout) -> Result<usize, LowerError> {
     if size == 0 {
-        0
+        Ok(0)
     } else {
-        size.div_ceil(target.word_size_bytes) * target.word_size_bytes
+        checked_const_layout_mul(
+            size.div_ceil(target.word_size_bytes),
+            target.word_size_bytes,
+        )
     }
+}
+
+fn checked_const_layout_add(lhs: usize, rhs: usize) -> Result<usize, LowerError> {
+    lhs.checked_add(rhs).ok_or_else(const_layout_overflow)
+}
+
+fn checked_const_layout_mul(lhs: usize, rhs: usize) -> Result<usize, LowerError> {
+    lhs.checked_mul(rhs).ok_or_else(const_layout_overflow)
+}
+
+fn const_layout_overflow() -> LowerError {
+    LowerError::Unsupported("constant-region layout exceeds the host size limit".to_string())
 }
 
 fn serialize_const_scalar_with_size(
@@ -416,4 +602,108 @@ fn enum_tag_scalar(node: ConstNode<'_>) -> Result<ConstScalar, LowerError> {
         ));
     };
     Ok(scalar)
+}
+
+#[cfg(test)]
+mod tests {
+    use driver::DriverDataBase;
+
+    use super::*;
+    use crate::runtime::{
+        ArrayLayout, EnumLayoutKey, EnumVariantLayout, LayoutKey, ScalarRole, StructLayout,
+    };
+
+    fn scalar(bits: u16) -> RuntimeClass<'static> {
+        RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int {
+                bits,
+                signed: false,
+            },
+            role: ScalarRole::Plain,
+        })
+    }
+
+    #[test]
+    fn raw_array_layout_size_is_checked() {
+        let db = DriverDataBase::default();
+        let layout = LayoutId::new(
+            &db,
+            LayoutKey::Array(ArrayLayout {
+                elem: scalar(256),
+                len: u64::MAX,
+            }),
+        );
+
+        assert_eq!(
+            RuntimeMemoryLayout::raw(&db).layout_size(layout),
+            Err(RuntimeMemoryLayoutError::Overflow)
+        );
+    }
+
+    #[test]
+    fn address_space_layout_uses_bytes_or_words_consistently() {
+        let db = DriverDataBase::default();
+        let struct_layout = StructLayout {
+            fields: vec![scalar(8), scalar(256)].into_boxed_slice(),
+        };
+        let array_layout = ArrayLayout {
+            elem: scalar(16),
+            len: 3,
+        };
+
+        let bytes = RuntimeMemoryLayout::for_space(&db, AddressSpaceKind::Memory);
+        assert_eq!(bytes.struct_field_offset(&struct_layout, 1), Ok(1));
+        assert_eq!(bytes.array_element_offset(&array_layout, 2), Ok(4));
+
+        let words = RuntimeMemoryLayout::for_space(&db, AddressSpaceKind::Storage);
+        assert_eq!(words.struct_field_offset(&struct_layout, 1), Ok(1));
+        assert_eq!(words.array_element_offset(&array_layout, 2), Ok(2));
+    }
+
+    #[test]
+    fn wide_enum_layout_uses_its_declared_tag_width() {
+        let db = DriverDataBase::default();
+        let mut variants = (0..257)
+            .map(|_| EnumVariantLayout {
+                fields: Box::new([]),
+            })
+            .collect::<Vec<_>>();
+        variants[0].fields = vec![scalar(8)].into_boxed_slice();
+        let layout = LayoutId::new(
+            &db,
+            LayoutKey::Enum(EnumLayoutKey {
+                variants: variants.into_boxed_slice(),
+            }),
+        );
+        let variant = VariantId {
+            enum_layout: layout,
+            index: 0,
+        };
+
+        let bytes = RuntimeMemoryLayout::raw(&db);
+        assert_eq!(bytes.layout_size(layout), Ok(3));
+        assert_eq!(bytes.variant_field_offset(variant, FieldIndex(0)), Ok(2));
+
+        let words = RuntimeMemoryLayout::for_space(&db, AddressSpaceKind::Storage);
+        assert_eq!(words.layout_size(layout), Ok(2));
+        assert_eq!(words.variant_field_offset(variant, FieldIndex(0)), Ok(1));
+
+        let region = ConstRegionId::new(
+            &db,
+            layout,
+            ConstNode::Aggregate {
+                layout,
+                fields: vec![ConstNode::Scalar(ConstScalar::Int {
+                    bits: 16,
+                    signed: false,
+                    words: vec![1, 0],
+                })]
+                .into_boxed_slice(),
+            },
+        );
+        let serialized = serialize_const_region_bytes(&db, region, common::layout::EVM_LAYOUT)
+            .expect("wide enum constant should serialize");
+        assert_eq!(&serialized[..2], &[1, 0]);
+        assert_eq!(serialized.len(), 34);
+    }
 }

@@ -377,9 +377,9 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         match carrier_value_class(local, self.carriers) {
             Some(RuntimeClass::Ref { .. })
             | Some(RuntimeClass::RawAddr {
-                target: Some(_), ..
+                pointee: Some(_), ..
             }) => true,
-            Some(RuntimeClass::RawAddr { target: None, .. }) => {
+            Some(RuntimeClass::RawAddr { pointee: None, .. }) => {
                 matches!(materialized_class, RuntimeClass::Scalar(_))
             }
             Some(RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. }) | None => false,
@@ -883,7 +883,8 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
     }
 
     fn effect_arg_target_ty(&self, arg: &NEffectArg<'db>) -> TyId<'db> {
-        arg.target_ty.unwrap_or_else(|| TyId::unit(self.env.db()))
+        arg.provider_target_ty
+            .unwrap_or_else(|| TyId::unit(self.env.db()))
     }
 
     fn specialized_boundary(

@@ -5,13 +5,45 @@ input_file: crates/codegen/tests/fixtures/revert.fe
 ---
 target = "evm-ethereum-osaka"
 
+type @layout_0 = {i256, i256, i256};
+type @layout_1 = {i256, i256};
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__alloc_5593(v0.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.*i8 = evm_malloc v0;
+        v3.i256 = ptr_to_int v2 i256;
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v3;
+        v8.@layout_0 = insert_value v6 1.i256 v0;
+        v10.@layout_0 = insert_value v8 2.i256 v0;
+        return v10;
+}
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__alloc_5593_0(v0.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.*i8 = evm_malloc v0;
+        v3.i256 = ptr_to_int v2 i256;
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v3;
+        v8.@layout_0 = insert_value v6 1.i256 v0;
+        v10.@layout_0 = insert_value v8 2.i256 v0;
+        return v10;
+}
+
 func private %standalone_revert__revert__fail__gcd5c_35c3() {
     block0:
         jump block1;
 
     block1:
-        call %mstore 0.i256 42.i256;
-        call %revert 0.i256 32.i256;
+        v1.@layout_0 = call %core__lib__ptr__impl_MemBuffer_2cdf__alloc_5593 32.i256;
+        v2.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_592c v1;
+        call %mstore v2 42.i256;
+        v5.@layout_1 = call %core__lib__ptr__impl_MemBuffer_2cdf__span_a21d v1;
+        call %revert v5;
         unreachable;
 }
 
@@ -20,9 +52,41 @@ func private %standalone_revert__revert__fail__gcd5c_cdbf() {
         jump block1;
 
     block1:
-        call %mstore 0.i256 42.i256;
-        call %revert 0.i256 32.i256;
+        v1.@layout_0 = call %core__lib__ptr__impl_MemBuffer_2cdf__alloc_5593_0 32.i256;
+        v2.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_592c_0 v1;
+        call %mstore v2 42.i256;
+        v5.@layout_1 = call %core__lib__ptr__impl_MemBuffer_2cdf__span_a21d_0 v1;
+        call %revert v5;
         unreachable;
+}
+
+func private %core__lib__ptr__impl_MemSlice_aa77__from_raw_parts__g79ff_c78e(v0.i256, v1.i256) -> @layout_1 {
+    block0:
+        jump block1;
+
+    block1:
+        v6.@layout_1 = insert_value undef.@layout_1 0.i256 v0;
+        v8.@layout_1 = insert_value v6 1.i256 v1;
+        return v8;
+}
+
+func private %core__lib__ptr__impl_MemSlice_aa77__from_raw_parts__g79ff_c78e_0(v0.i256, v1.i256) -> @layout_1 {
+    block0:
+        jump block1;
+
+    block1:
+        v6.@layout_1 = insert_value undef.@layout_1 0.i256 v0;
+        v8.@layout_1 = insert_value v6 1.i256 v1;
+        return v8;
+}
+
+func private %len(v0.@layout_1) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = extract_value v0 1.i256;
+        return v3;
 }
 
 func private %main() {
@@ -52,12 +116,63 @@ func private %mstore(v0.i256, v1.i256) {
         return;
 }
 
-func private %revert(v0.i256, v1.i256) {
+func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_592c(v0.@layout_0) -> i256 {
     block0:
         jump block1;
 
     block1:
-        evm_revert v0 v1;
+        v3.i256 = extract_value v0 0.i256;
+        return v3;
+}
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_592c_0(v0.@layout_0) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = extract_value v0 0.i256;
+        return v3;
+}
+
+func private %ptr__g79ff(v0.@layout_1) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = extract_value v0 0.i256;
+        return v3;
+}
+
+func private %revert(v0.@layout_1) {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %ptr__g79ff v0;
+        v3.i256 = call %len v0;
+        evm_revert v2 v3;
+}
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__span_a21d(v0.@layout_0) -> @layout_1 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = extract_value v0 0.i256;
+        v5.i256 = extract_value v0 1.i256;
+        v6.@layout_1 = call %core__lib__ptr__impl_MemSlice_aa77__from_raw_parts__g79ff_c78e v3 v5;
+        return v6;
+}
+
+func private %core__lib__ptr__impl_MemBuffer_2cdf__span_a21d_0(v0.@layout_0) -> @layout_1 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = extract_value v0 0.i256;
+        v5.i256 = extract_value v0 1.i256;
+        v6.@layout_1 = call %core__lib__ptr__impl_MemSlice_aa77__from_raw_parts__g79ff_c78e_0 v3 v5;
+        return v6;
 }
 
 

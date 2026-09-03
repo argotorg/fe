@@ -23,6 +23,7 @@ type LocalDefs<'db> = Vec<Vec<SExpr<'db>>>;
 enum ConstCanonicalizationMode {
     Full,
     ReferencesOnly,
+    Provisional,
 }
 
 #[salsa::tracked(return_ref)]
@@ -56,6 +57,19 @@ pub(crate) fn canonicalize_semantic_const_refs_from_body<'db>(
         instance,
         original,
         ConstCanonicalizationMode::ReferencesOnly,
+    )
+}
+
+pub(crate) fn canonicalize_provisional_semantic_consts_from_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    original: &SemanticBody<'db>,
+) -> SemanticBody<'db> {
+    canonicalize_semantic_consts_from_body_with_mode(
+        db,
+        instance,
+        original,
+        ConstCanonicalizationMode::Provisional,
     )
 }
 
@@ -287,6 +301,9 @@ fn canonicalize_expr<'db>(
     mode: ConstCanonicalizationMode,
 ) -> (SExpr<'db>, Option<SemConstId<'db>>) {
     if let SExpr::Const(SConst::Ref(cref)) = expr {
+        if matches!(mode, ConstCanonicalizationMode::Provisional) {
+            return (expr.clone(), None);
+        }
         let Ok(value) = eval_const_ref(db, *cref) else {
             return (SExpr::Const(SConst::Ref(*cref)), None);
         };
@@ -321,6 +338,11 @@ fn canonicalize_expr<'db>(
     match expr {
         SExpr::Const(SConst::Value(value)) => {
             let value = canonicalize_const_value(db, instance, *value);
+            if matches!(mode, ConstCanonicalizationMode::Provisional) {
+                let runtime =
+                    (!matches!(value.value(db), SemConstValue::TypeLevel { .. })).then_some(value);
+                return (SExpr::Const(SConst::Value(value)), runtime);
+            }
             let runtime = reify_runtime_const_for_ty(db, instance, result_ty, value);
             let value = runtime.unwrap_or(value);
             (SExpr::Const(SConst::Value(value)), runtime)

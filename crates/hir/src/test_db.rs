@@ -36,7 +36,7 @@ use common::{
     file::File,
     indexmap::IndexMap,
     paths::absolute_utf8,
-    stdlib::{HasBuiltinCore, HasBuiltinStd},
+    stdlib::{BUILTIN_STD_BASE_URL, HasBuiltinCore, HasBuiltinStd},
 };
 use derive_more::TryIntoError;
 use rustc_hash::FxHashMap;
@@ -266,6 +266,35 @@ impl HirAnalysisTestDb {
             <Url as UrlExt>::from_file_path_lossy(file_path.as_std_path()),
             Some(text.to_string()),
         )
+    }
+
+    pub fn new_trusted_effect_handle_module(&mut self, file_path: Utf8PathBuf, text: &str) -> File {
+        self.initialize_builtin_core();
+        self.initialize_builtin_std();
+        let base_url = Url::parse("test-effect-handle:/").expect("valid trusted handle test URL");
+        self.workspace().touch(
+            self,
+            base_url.join("fe.toml").expect("valid test std config URL"),
+            Some(
+                r#"
+[ingot]
+name = "effect-handle-test"
+version = "0.0.0"
+"#
+                .to_string(),
+            ),
+        );
+        self.dependency_graph().add_dependency(
+            self,
+            &base_url,
+            &Url::parse(BUILTIN_STD_BASE_URL).expect("valid builtin std URL"),
+            "std".into(),
+            Default::default(),
+        );
+        let url = base_url
+            .join(&format!("src/__test__/{}", file_path.as_str()))
+            .expect("valid std test module URL");
+        self.workspace().touch(self, url, Some(text.to_string()))
     }
 
     pub fn top_mod(&self, input: File) -> (TopLevelMod<'_>, HirPropertyFormatter<'_>) {

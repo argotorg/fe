@@ -416,6 +416,7 @@ fn format_value_index_source(index: &IndexSource<RValueId>) -> String {
     match index {
         IndexSource::Constant(index) => index.to_string(),
         IndexSource::Dynamic(index) => format_local_id(*index),
+        IndexSource::Any => "*".to_string(),
     }
 }
 
@@ -450,34 +451,24 @@ fn format_expr<'db>(db: &'db dyn MirDb, expr: &RExpr<'db>) -> String {
         RExpr::MaterializePlaceToObject { place } => {
             format!("materialize_place_to_object {}", format_place(place))
         }
-        RExpr::ProviderFromRaw {
+        RExpr::ProviderRefFromRaw {
             raw,
             provider_ty,
             space,
-            target,
         } => format!(
-            "provider_from_raw {} {} {}{}",
+            "provider_ref_from_raw {} {} {}",
             format_local_id(*raw),
             provider_ty.pretty_print(db),
             format_space(*space),
-            target.map_or_else(String::new, |layout| format!(
-                " {}",
-                format_layout(db, layout)
-            ))
         ),
-        RExpr::WordToRawAddr {
-            value,
-            space,
-            target,
-        } => format!(
-            "word_to_raw {} {}{}",
+        RExpr::WordToRawAddr { value, space } => format!(
+            "word_to_raw {} {}",
             format_local_id(*value),
             format_space(*space),
-            target
-                .map(|target| format!(" {}", format_layout(db, target)))
-                .unwrap_or_default()
         ),
-        RExpr::ProviderToRaw { value } => format!("provider_to_raw {}", format_local_id(*value)),
+        RExpr::ProviderRefToRaw { value } => {
+            format!("provider_ref_to_raw {}", format_local_id(*value))
+        }
         RExpr::RetagRef { value } => format!("retag_ref {}", format_local_id(*value)),
         RExpr::AddrOf { place } => format!("addr_of {}", format_place(place)),
         RExpr::Load { place } => format!("load {}", format_place(place)),
@@ -655,6 +646,7 @@ fn format_terminator<'db>(db: &'db dyn MirDb, term: &RTerminator<'db>) -> String
             format_local_id(*offset),
             format_local_id(*len)
         ),
+        RTerminator::RevertEmpty => "revert_empty".to_string(),
         RTerminator::SelfDestruct { beneficiary } => {
             format!("selfdestruct {}", format_local_id(*beneficiary))
         }
@@ -687,6 +679,11 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
             "mcopy {}, {}, {}",
             format_local_id(*dst),
             format_local_id(*src),
+            format_local_id(*len)
+        ),
+        RuntimeBuiltin::ZeroMem { dst, len } => format!(
+            "zero_mem {}, {}",
+            format_local_id(*dst),
             format_local_id(*len)
         ),
         RuntimeBuiltin::Msize => "msize".to_string(),
@@ -802,6 +799,11 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
         RuntimeBuiltin::CodeRegionOffset { region } => format!("code_region_offset {:?}", region),
         RuntimeBuiltin::CodeRegionLen { region } => format!("code_region_len {:?}", region),
         RuntimeBuiltin::Malloc { size } => format!("malloc {}", format_local_id(*size)),
+        RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => format!(
+            "ptr_offset_bytes {}, {}",
+            format_local_id(*ptr),
+            format_local_id(*offset)
+        ),
         RuntimeBuiltin::Call {
             gas,
             addr,
@@ -980,11 +982,12 @@ fn format_class<'db>(db: &'db dyn MirDb, class: &RuntimeClass<'db>) -> String {
             format_ref_view(db, view),
             format_class(db, pointee)
         ),
-        RuntimeClass::RawAddr { space, target } => format!(
+        RuntimeClass::RawAddr { space, pointee } => format!(
             "raw {}{}",
             format_space(*space),
-            target
-                .map(|layout| format!(" {}", format_layout(db, layout)))
+            pointee
+                .as_deref()
+                .map(|pointee| format!(" {}", format_class(db, pointee)))
                 .unwrap_or_default()
         ),
     }
@@ -1063,6 +1066,7 @@ fn format_index_source(index: IndexSource<RLocalId>) -> String {
     match index {
         IndexSource::Constant(value) => value.to_string(),
         IndexSource::Dynamic(local) => format_local_id(local),
+        IndexSource::Any => "*".to_string(),
     }
 }
 

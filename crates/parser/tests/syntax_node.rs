@@ -1,4 +1,5 @@
 use dir_test::{Fixture, dir_test};
+use fe_parser::SyntaxKind;
 
 use test_utils::{normalize::normalize_newlines, snap_test};
 
@@ -64,6 +65,76 @@ fn test_pat(fixture: Fixture<&str>) {
     let node = format! {"{:#?}", cst};
     assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     snap_test!(node, fixture.path());
+}
+
+#[test]
+fn line_start_star_begins_a_dereference_statement() {
+    let source = r#"
+fn choose(value: u256, pointer: *u256) -> u256 {
+    value
+    *pointer
+}
+"#;
+    let (syntax, _) = TestRunner::item_list(true).run(source);
+
+    assert_eq!(
+        syntax
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::ExprStmt)
+            .count(),
+        2,
+        "{syntax:#?}",
+    );
+    assert_eq!(
+        syntax
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::UnExpr)
+            .count(),
+        1,
+        "{syntax:#?}",
+    );
+    assert!(
+        syntax
+            .descendants()
+            .all(|node| node.kind() != SyntaxKind::BinExpr),
+        "{syntax:#?}",
+    );
+}
+
+#[test]
+fn star_operator_continuations_remain_binary() {
+    let source = r#"
+fn update(mut value: u256, rhs: u256) -> u256 {
+    value
+        *= rhs
+    value
+        ** rhs
+}
+"#;
+    let (syntax, _) = TestRunner::item_list(true).run(source);
+
+    assert_eq!(
+        syntax
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::AugAssignExpr)
+            .count(),
+        1,
+        "{syntax:#?}",
+    );
+    assert_eq!(
+        syntax
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::BinExpr)
+            .count(),
+        1,
+        "{syntax:#?}",
+    );
+    assert!(
+        syntax
+            .descendants()
+            .all(|node| node.kind() != SyntaxKind::UnExpr),
+        "{syntax:#?}",
+    );
 }
 
 #[cfg(target_family = "wasm")]

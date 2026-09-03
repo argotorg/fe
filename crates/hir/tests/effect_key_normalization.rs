@@ -5,14 +5,15 @@ use fe_hir::analysis::diagnostics::DiagnosticVoucher;
 use fe_hir::analysis::place::PlaceBase;
 use fe_hir::analysis::semantic::{
     GenericSubst, get_or_build_semantic_instance, instantiate_typed_body, instantiated_effect_env,
-    resolved_provider_binding_for_instance_effect, root_semantic_instance_key, typed_body_template,
-    validate_instantiated_effect_env_key,
+    layout_evidence_body, resolved_provider_binding_for_instance_effect,
+    root_semantic_instance_key, typed_body_template, validate_instantiated_effect_env_key,
 };
 use fe_hir::analysis::ty::effects::{EffectKeyKind, place_effect_provider_param_index_map};
 use fe_hir::analysis::ty::trait_def::resolve_trait_method_instance;
 use fe_hir::analysis::ty::trait_resolution::TraitSolveCx;
 use fe_hir::analysis::ty::ty_check::{
-    BodyOwner, EffectArg, EffectPassMode, TypedBody, check_contract_recv_arm_body, check_func_body,
+    BodyOwner, EffectArg, EffectArgLayoutView, EffectPassMode, TypedBody,
+    check_contract_recv_arm_body, check_func_body,
 };
 use fe_hir::hir_def::{CallableDef, Contract, Expr, ExprId, Func, ItemKind, Partial, TopLevelMod};
 use fe_hir::test_db::{HirAnalysisTestDb, initialize_test_analysis_pass};
@@ -556,7 +557,7 @@ trait Logger {
 struct Console {}
 
 struct Ptr<T> {
-    raw: u256
+    raw: *T
 }
 
 impl<T> Logger for Ptr<T> {
@@ -567,9 +568,9 @@ impl<T> EffectHandle for Ptr<T> {
     type Target = T
 
     const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
+    type Raw = *T
 
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
-    fn raw(self) -> u256 { self.raw }
+    fn raw(self) -> *T { self.raw }
 }
 
 impl<T> EffectRef<T> for Ptr<T> {}
@@ -777,8 +778,8 @@ impl<T> EffectHandle for Ptr<T> {
     type Target = T
 
     const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
+    type Raw = u256
 
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -1806,8 +1807,8 @@ impl<T> EffectHandle for Ptr<T> {
     type Target = T
 
     const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
+    type Raw = u256
 
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -2048,8 +2049,8 @@ impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
 
     const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
+    type Raw = u256
 
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -2117,8 +2118,8 @@ impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
 
     const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
+    type Raw = u256
 
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -2173,16 +2174,16 @@ struct Storage<T> {
 }
 
 struct Ptr<T> {
-    raw: u256
+    raw: *T
 }
 
 impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
 
     const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
+    type Raw = *Storage<u8>
 
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
-    fn raw(self) -> u256 { self.raw }
+    fn raw(self) -> *Storage<u8> { self.raw }
 }
 
 impl EffectRef<Storage<u8>> for Ptr<Storage<u8>> {}
@@ -2208,7 +2209,7 @@ fn caller(x: own Ptr<Storage<u8>>) {
 #[test]
 fn unkeyed_wrapper_type_effects_renormalize_projection_targets_after_later_proofs() {
     let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
+    let file = db.new_trusted_effect_handle_module(
         Utf8PathBuf::from(
             "unkeyed_wrapper_type_effects_renormalize_projection_targets_after_later_proofs.fe",
         ),
@@ -2244,8 +2245,8 @@ where
     type Target = Storage<T::Assoc>
 
     const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
+    type Raw = u256
 
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -2279,7 +2280,7 @@ fn caller() {
 #[test]
 fn keyed_wrapper_type_effects_renormalize_projection_targets_after_later_proofs() {
     let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
+    let file = db.new_trusted_effect_handle_module(
         Utf8PathBuf::from(
             "keyed_wrapper_type_effects_renormalize_projection_targets_after_later_proofs.fe",
         ),
@@ -2315,8 +2316,8 @@ where
     type Target = Storage<T::Assoc>
 
     const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
+    type Raw = u256
 
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -3690,16 +3691,16 @@ struct Storage<T> {
 }
 
 struct Ptr<T> {
-    raw: u256
+    raw: *T
 }
 
 impl EffectHandle for Ptr<Storage<u8>> {
     type Target = Storage<u8>
 
     const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Memory
+    type Raw = *Storage<u8>
 
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
-    fn raw(self) -> u256 { self.raw }
+    fn raw(self) -> *Storage<u8> { self.raw }
 }
 
 impl EffectRef<Storage<u8>> for Ptr<Storage<u8>> {}
@@ -4499,6 +4500,14 @@ fn caller()
             .to_string(),
         "0"
     );
+    for instance in [root, nested_instance, needs_instance] {
+        layout_evidence_body(&db, instance).unwrap_or_else(|error| {
+            panic!(
+                "effect forwarding must layoutize {:?}: {error:?}",
+                instance.key(&db).owner(&db)
+            )
+        });
+    }
 }
 
 #[test]
@@ -4587,6 +4596,14 @@ pub contract Test {
             .to_string(),
         "0"
     );
+    for instance in [recv, nested_instance, needs_instance] {
+        layout_evidence_body(&db, instance).unwrap_or_else(|error| {
+            panic!(
+                "projected effect forwarding must layoutize {:?}: {error:?}",
+                instance.key(&db).owner(&db)
+            )
+        });
+    }
 }
 
 #[test]
@@ -4944,7 +4961,7 @@ fn impl_sum_semantic_body_uses_self_binding_directly() {
 }
 
 #[test]
-fn effect_handle_constructors_preserve_direct_carrier_roles() {
+fn effect_handle_values_preserve_direct_carrier_roles_without_constructor_calls() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         Utf8PathBuf::from("effect_handle_field_deref.fe"),
@@ -4975,19 +4992,32 @@ fn effect_handle_constructors_preserve_direct_carrier_roles() {
     };
     let callee = get_or_build_semantic_instance(&db, callee.key);
     let callee_body = callee.body(&db);
+    assert!(
+        callee_body
+            .blocks
+            .iter()
+            .flat_map(|block| block.stmts.iter())
+            .all(|stmt| !matches!(
+                &stmt.kind,
+                fe_hir::analysis::semantic::SStmtKind::Assign {
+                    expr: fe_hir::analysis::semantic::SExpr::Call { .. },
+                    ..
+                }
+            )),
+        "ordinary effect-handle values must not call a raw constructor: {callee_body:#?}"
+    );
     let carrier_local = callee_body
         .blocks
         .iter()
-        .flat_map(|block| block.stmts.iter())
-        .find_map(|stmt| match &stmt.kind {
-            fe_hir::analysis::semantic::SStmtKind::Assign {
-                dst,
-                expr: fe_hir::analysis::semantic::SExpr::Call { .. },
-            } => Some(*dst),
-            fe_hir::analysis::semantic::SStmtKind::Assign { .. }
-            | fe_hir::analysis::semantic::SStmtKind::Store { .. } => None,
+        .find_map(|block| match &block.terminator.kind {
+            fe_hir::analysis::semantic::STerminatorKind::Return(Some(value)) => Some(value.value),
+            fe_hir::analysis::semantic::STerminatorKind::Goto(_)
+            | fe_hir::analysis::semantic::STerminatorKind::Branch { .. }
+            | fe_hir::analysis::semantic::STerminatorKind::MatchEnum { .. }
+            | fe_hir::analysis::semantic::STerminatorKind::Assert { .. }
+            | fe_hir::analysis::semantic::STerminatorKind::Return(None) => None,
         })
-        .unwrap_or_else(|| panic!("expected helper call in lowered body: {callee_body:#?}"));
+        .unwrap_or_else(|| panic!("expected returned handle value: {callee_body:#?}"));
     assert!(
         matches!(
             callee_body.locals[carrier_local.index()].role,
@@ -5534,7 +5564,8 @@ fn local_effect_handle_calls_preserve_concrete_provider_spaces() {
     let file = db.new_stand_alone(
         Utf8PathBuf::from("local_effect_handle_provider_spaces.fe"),
         r#"
-use std::evm::{MemPtr, RawMem, RawStorage, StorPtr}
+use core::ptr
+use std::evm::{RawStorage, StorPtr}
 
 struct Foo {
     value: u256,
@@ -5548,8 +5579,8 @@ fn bump_stor() uses (foo: mut Foo) {
     foo.value += 1
 }
 
-fn test_spaces() uses (st: mut RawStorage, mem: mut RawMem) {
-    let mp: MemPtr<Foo> = mem.mem_ptr(0x100)
+fn test_spaces() uses (st: mut RawStorage) {
+    let mp = ptr::alloc<Foo>()
     with (mp) {
         bump_mem()
     }
@@ -5574,6 +5605,7 @@ fn test_spaces() uses (st: mut RawStorage, mem: mut RawMem) {
         .expect("bump_mem should have a resolved effect arg");
     assert_eq!(mem_args.len(), 1);
     assert_eq!(mem_args[0].pass_mode, EffectPassMode::ByValue);
+    assert_eq!(mem_args[0].layout_view, EffectArgLayoutView::ProviderTarget);
     assert_eq!(
         mem_args[0].provider,
         Some(fe_hir::analysis::ty::ProviderAddressSpace::Memory)
@@ -5584,6 +5616,10 @@ fn test_spaces() uses (st: mut RawStorage, mem: mut RawMem) {
         .expect("bump_stor should have a resolved effect arg");
     assert_eq!(stor_args.len(), 1);
     assert_eq!(stor_args[0].pass_mode, EffectPassMode::ByValue);
+    assert_eq!(
+        stor_args[0].layout_view,
+        EffectArgLayoutView::ProviderTarget
+    );
     assert_eq!(
         stor_args[0].provider,
         Some(fe_hir::analysis::ty::ProviderAddressSpace::Storage)
@@ -5630,6 +5666,10 @@ fn test_projected(slot: u256, value: u256) uses (evm: mut Evm) {
     assert_eq!(effect_args.len(), 1);
     assert_eq!(effect_args[0].pass_mode, EffectPassMode::ByValue);
     assert_eq!(
+        effect_args[0].layout_view,
+        EffectArgLayoutView::ProviderTarget
+    );
+    assert_eq!(
         effect_args[0].provider,
         Some(fe_hir::analysis::ty::ProviderAddressSpace::Storage)
     );
@@ -5653,13 +5693,14 @@ fn handle_typed_effect_bindings_use_by_value_transport() {
         .expect("raw_store should have resolved effect args");
     assert_eq!(effect_args.len(), 2);
     assert_eq!(effect_args[0].pass_mode, EffectPassMode::ByValue);
+    assert_eq!(effect_args[0].layout_view, EffectArgLayoutView::Direct);
     assert_eq!(
         effect_args[0]
             .instantiated_key_ty
             .expect("handle effect arg should retain its matched key carrier")
             .pretty_print(&db)
             .to_string(),
-        "MemPtr<Data>"
+        "*<Data>"
     );
     assert_eq!(
         effect_args[0]

@@ -1,11 +1,11 @@
-use std::evm::alloc
+use core::ptr
 
-pub fn bump_self_assign(size: u256) -> u256 {
-    let mut x: u256 = size
-    x = alloc(x)
+pub fn bump_self_assign(size: u256) -> *u8 {
+    let mut x = ptr::alloc_bytes(size)
+    x = ptr::alloc_bytes(64)
     x
 }
 
-pub fn main() -> u256 {
+pub fn main() -> *u8 {
     bump_self_assign(64)
 }

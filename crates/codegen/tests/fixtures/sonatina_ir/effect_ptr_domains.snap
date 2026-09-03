@@ -6,10 +6,22 @@ input_file: crates/codegen/tests/fixtures/effect_ptr_domains.fe
 target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256, i256};
+type @layout_1 = {i256};
 
 global private const @layout_0 $const_region_0 = {10, 20};
 
-func private %bump__gc323(v0.i256) {
+func private %alloc() -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.*i8 = evm_malloc 64.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        v3.i256 = call %cast v2;
+        return v3;
+}
+
+func private %bump__g6a4b(v0.i256) {
     block0:
         jump block1;
 
@@ -33,6 +45,33 @@ func private %bump__gc323(v0.i256) {
     block4:
         v18.i256 = add v0 1.i256;
         evm_sstore v18 v15;
+        return;
+}
+
+func private %bump__g80ba(v0.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = mload v0 i256;
+        (v4.i256, v5.i1) = uaddo v2 1.i256;
+        br v5 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        mstore v0 v4 i256;
+        v13.i256 = add v0 32.i256;
+        v14.i256 = mload v13 i256;
+        (v16.i256, v17.i1) = uaddo v14 2.i256;
+        br v17 block2 block4;
+
+    block4:
+        v19.i256 = add v0 32.i256;
+        mstore v19 v16 i256;
         return;
 }
 
@@ -65,42 +104,7 @@ func private %bump__gb2d8(v0.objref<@layout_0>) {
         return;
 }
 
-func private %bump__gaab0(v0.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = mload v0 i256;
-        (v4.i256, v5.i1) = uaddo v2 1.i256;
-        br v5 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        mstore v0 v4 i256;
-        v13.i256 = add v0 32.i256;
-        v14.i256 = mload v13 i256;
-        (v16.i256, v17.i1) = uaddo v14 2.i256;
-        br v17 block2 block4;
-
-    block4:
-        v19.i256 = add v0 32.i256;
-        mstore v19 v16 i256;
-        return;
-}
-
-func private %impl_trait_MemPtr__from_raw__gb2d8(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
-}
-
-func private %impl_trait_StorPtr__from_raw__gb2d8(v0.i256) -> i256 {
+func private %cast(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -117,22 +121,22 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %mem_ptr(v0.i256) -> i256 {
+func private %raw(v0.@layout_1) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %impl_trait_MemPtr__from_raw__gb2d8 v0;
-        return v2;
+        v3.i256 = extract_value v0 0.i256;
+        return v3;
 }
 
-func private %stor_ptr(v0.i256) -> i256 {
+func private %stor_ptr(v0.i256) -> @layout_1 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %impl_trait_StorPtr__from_raw__gb2d8 v0;
-        return v2;
+        v4.@layout_1 = insert_value undef.@layout_1 0.i256 v0;
+        return v4;
 }
 
 func private %test_effect_ptr_domains() {
@@ -140,10 +144,11 @@ func private %test_effect_ptr_domains() {
         jump block1;
 
     block1:
-        v1.i256 = call %mem_ptr 256.i256;
-        call %bump__gaab0 v1;
-        v4.i256 = call %stor_ptr 0.i256;
-        call %bump__gc323 v4;
+        v0.i256 = call %alloc;
+        call %bump__g80ba v0;
+        v3.@layout_1 = call %stor_ptr 0.i256;
+        v4.i256 = call %raw v3;
+        call %bump__g6a4b v4;
         v8.constref<@layout_0> = const.ref $const_region_0;
         v9.objref<@layout_0> = obj.alloc @layout_0;
         v10.objref<i256> = obj.proj v9 0.i256;

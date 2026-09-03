@@ -9,7 +9,7 @@
 use common::InputDb;
 use dir_test::{Fixture, dir_test};
 use driver::DriverDataBase;
-use fe_codegen::emit_module_sonatina_ir;
+use fe_codegen::{OptLevel, emit_module_sonatina_ir, emit_module_sonatina_ir_optimized};
 use std::{collections::HashSet, path::Path};
 use test_utils::_macro_support::_insta::{self, Settings};
 use tracing::{info, warn};
@@ -177,6 +177,85 @@ pub fn main() -> u32 {
             .filter(|name| name.starts_with("identity"))
             .all(|name| name.starts_with("identity__g")),
         "colliding generic specializations should include generic identity components:\n{ir}"
+    );
+}
+
+#[test]
+fn first_class_pointer_fixture_lowers_to_sonatina_ir() {
+    let ir = with_top_mod_for_source(
+        "pointer_first_class.fe",
+        include_str!("fixtures/pointer_first_class.fe"),
+        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit"),
+    );
+
+    assert!(
+        ir.contains("evm_malloc") && ir.contains("mstore") && ir.contains("mload"),
+        "first-class pointer fixture should lower through memory operations:\n{ir}"
+    );
+}
+
+#[test]
+fn fixed_mem_buffer_exposes_constant_nonescaping_malloc_to_backend() {
+    let ir = with_top_mod_for_source(
+        "fixed_mem_buffer_exposes_constant_nonescaping_malloc_to_backend.fe",
+        r#"
+use core::ptr::{self, FixedMemBuffer}
+use core::result::Result
+use std::evm::crypto::{ec_add, keccak256}
+
+msg FixedBufferMsg {
+    #[selector = 0x01]
+    Hash { word: u256 } -> u256,
+    #[selector = 0x02]
+    AddIdentity -> u256,
+}
+
+pub contract FixedBuffer {
+    recv FixedBufferMsg {
+        Hash { word } -> u256 {
+            fixed_buffer_hash(word)
+        }
+        AddIdentity -> u256 {
+            fixed_precompile_buffers()
+        }
+    }
+}
+
+fn fixed_buffer_hash(word: u256) -> u256 {
+    let buffer = FixedMemBuffer<64>::alloc()
+    let words = ptr::cast<u8, u256>(buffer.ptr())
+    *words = word
+    *ptr::offset(words, 1) = word
+    keccak256(buffer.span())
+}
+
+fn fixed_precompile_buffers() -> u256 {
+    match ec_add(ax: 0, ay: 0, bx: 0, by: 0) {
+        Result::Ok(result) => result.0,
+        Result::Err(_) => 0,
+    }
+}
+"#,
+        |db, top_mod| {
+            emit_module_sonatina_ir_optimized(db, top_mod, OptLevel::O1, None)
+                .expect("optimized Sonatina IR should emit")
+        },
+    );
+
+    assert!(
+        ir.split("\n}\n")
+            .any(|body| body.contains("evm_malloc 64.i256") && body.contains("evm_keccak256")),
+        "fixed buffers must expose a constant malloc in the consuming function so backend \
+         non-escape planning can place it in static scratch memory:\n{ir}"
+    );
+    assert!(
+        ir.split("\n}\n").any(|body| {
+            body.contains("evm_malloc 128.i256")
+                && body.contains("evm_malloc 64.i256")
+                && body.contains("evm_static_call")
+        }),
+        "fixed precompile input/output buffers must remain constant allocations in the consuming \
+         function so backend non-escape planning can place them in static scratch memory:\n{ir}"
     );
 }
 
@@ -472,13 +551,13 @@ fn helper(value: u256) -> u256 {
 }
 
 #[test]
-fn raw_log_emit_sonatina_ir_lowers_mem_ptr_from_raw() {
+fn raw_log_emit_sonatina_ir_lowers_native_pointer_provider() {
     let output = with_top_mod_for_source(
-        "raw_log_emit_sonatina_ir_lowers_mem_ptr_from_raw.fe",
+        "raw_log_emit_sonatina_ir_lowers_mem_ptr.fe",
         include_str!("fixtures/raw_log_emit.fe"),
         |db, top_mod| {
             emit_module_sonatina_ir(db, top_mod)
-                .expect("MemPtr::from_raw should lower for Sonatina")
+                .expect("native pointer providers should lower for Sonatina")
         },
     );
 

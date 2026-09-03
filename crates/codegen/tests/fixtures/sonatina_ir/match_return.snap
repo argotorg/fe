@@ -5,26 +5,68 @@ input_file: crates/codegen/tests/fixtures/match_return.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = enum {
+type @layout_0 = {i256, i256};
+type @layout_1 = enum {
     #variant_0,
     #variant_1,
 };
 
-func private %f(v0.@layout_0) {
+func private %cast(v0.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.enumtag(@layout_0) = enum.tag v0;
-        br_table v2 (0.enumtag(@layout_0) block2) (1.enumtag(@layout_0) block3);
+        return v0;
+}
+
+func private %empty() -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v1.*i8 = evm_malloc 0.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        v3.i256 = call %cast v2;
+        v4.@layout_0 = call %from_raw_parts v3 0.i256;
+        return v4;
+}
+
+func private %f(v0.@layout_1) {
+    block0:
+        jump block1;
+
+    block1:
+        v2.enumtag(@layout_1) = enum.tag v0;
+        br_table v2 (0.enumtag(@layout_1) block2) (1.enumtag(@layout_1) block3);
 
     block2:
-        call %return_data 0.i256 0.i256;
+        v5.@layout_0 = call %empty;
+        call %return_data v5;
         unreachable;
 
     block3:
-        call %return_data 0.i256 0.i256;
+        v6.@layout_0 = call %empty;
+        call %return_data v6;
         unreachable;
+}
+
+func private %from_raw_parts(v0.i256, v1.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
+        v8.@layout_0 = insert_value v6 1.i256 v1;
+        return v8;
+}
+
+func private %len(v0.@layout_0) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = extract_value v0 1.i256;
+        return v3;
 }
 
 func private %main() {
@@ -32,7 +74,7 @@ func private %main() {
         jump block1;
 
     block1:
-        v0.@layout_0 = enum.make @layout_0 #variant_0;
+        v0.@layout_1 = enum.make @layout_1 #variant_0;
         call %f v0;
         unreachable;
 }
@@ -46,12 +88,23 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %return_data(v0.i256, v1.i256) {
+func private %ptr(v0.@layout_0) -> i256 {
     block0:
         jump block1;
 
     block1:
-        evm_return v0 v1;
+        v3.i256 = extract_value v0 0.i256;
+        return v3;
+}
+
+func private %return_data(v0.@layout_0) {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %ptr v0;
+        v3.i256 = call %len v0;
+        evm_return v2 v3;
 }
 
 

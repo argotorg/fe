@@ -1,10 +1,10 @@
 use crate::{
     analysis::{
         place::{Place, PlaceBase, PlaceProjection, projectable_place_ty},
-        semantic::{FieldIndex, SPlace},
+        semantic::{FieldIndex, SExpr, SPlace, SemOrigin},
         ty::ty_def::TyId,
     },
-    hir_def::ExprId,
+    hir_def::{ExprId, Partial},
 };
 
 use super::body::SmirLowerCtxt;
@@ -15,6 +15,25 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     pub(super) fn lower_place(&mut self, expr: ExprId) -> SPlace<'db> {
+        if let Partial::Present(crate::hir_def::Expr::Un(inner, crate::hir_def::UnOp::Deref)) =
+            expr.data(self.db, self.body)
+        {
+            let inner_ty = self.expr_ty(*inner);
+            if let Some((_, ptr_ty)) = inner_ty.as_capability(self.db)
+                && ptr_ty.as_ptr(self.db).is_some()
+                && let Some(place) = self.typed_body.expr_place(*inner)
+            {
+                let place = self.lower_place_data(place);
+                let ptr = self.emit_expr_with_origin(
+                    SemOrigin::Expr(*inner),
+                    ptr_ty,
+                    SExpr::ReadPlace { place },
+                );
+                return SPlace::deref(ptr);
+            }
+            let ptr = self.lower_expr(*inner);
+            return SPlace::deref(ptr);
+        }
         let place = self
             .typed_body
             .expr_place(expr)
@@ -32,6 +51,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
         for projection in &source_place.projections {
             match *projection {
+                PlaceProjection::Deref { .. } => {
+                    place.push_deref();
+                }
                 PlaceProjection::Field { index, .. } => {
                     place.push_field(FieldIndex(index));
                 }

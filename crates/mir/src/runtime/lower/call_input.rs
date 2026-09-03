@@ -12,10 +12,7 @@ use super::{
     boundary::{BoundarySiteAllocator, StagedBoundary, default_by_place_boundary},
     classify::{desired_runtime_effect_arg_boundary, runtime_effect_binding_plan_for_binding_idx},
     provider_space::resolved_effect_arg_address_space,
-    type_info::{
-        RuntimeTypeEnv, provider_class_for_target_in_env, runtime_zero_sized_transport_ty,
-        runtime_zero_sized_ty,
-    },
+    type_info::{RuntimeTypeEnv, provider_class_for_target_in_env},
 };
 
 #[derive(Clone, Debug)]
@@ -137,12 +134,12 @@ fn compile_effect_arg_plan<'db>(
 ) -> CompiledEffectArgPlan<'db> {
     let space = resolved_effect_arg_address_space(db, body, arg);
     let binding_plan = runtime_effect_binding_plan_for_binding_idx(db, semantic, arg.binding_idx);
-    if binding_plan.is_none() && effect_arg_is_runtime_zst(db, body, type_env, arg) {
+    if binding_plan.is_none() {
         return CompiledEffectArgPlan::Erased;
     }
     let boundary =
         desired_runtime_effect_arg_boundary(db, type_env, arg, binding_plan.as_ref(), space);
-    if boundary.is_none() && arg.provider.is_none() && arg.target_ty.is_none() {
+    if boundary.is_none() && arg.provider.is_none() && arg.provider_target_ty.is_none() {
         return match (&arg.pass_mode, &arg.arg) {
             (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Value(_)) => {
                 CompiledEffectArgPlan::Value(CompiledEffectValuePlan::ErasedPlainValue)
@@ -163,10 +160,10 @@ fn compile_effect_arg_plan<'db>(
                 compile_value_pass_plan(RuntimeParamPlan::Boundary(boundary), boundary_sites)
             });
             if matches!(plan, CompiledValuePassPlan::ActualValue)
-                && (arg.provider.is_some() || arg.target_ty.is_some())
+                && (arg.provider.is_some() || arg.provider_target_ty.is_some())
             {
                 CompiledEffectArgPlan::Value(CompiledEffectValuePlan::ByValueFallback(
-                    provider_class_for_target_in_env(db, type_env, arg.target_ty, space),
+                    provider_class_for_target_in_env(db, type_env, arg.provider_target_ty, space),
                 ))
             } else {
                 CompiledEffectArgPlan::Value(CompiledEffectValuePlan::ByValue(plan))
@@ -176,7 +173,12 @@ fn compile_effect_arg_plan<'db>(
             .map_or_else(
                 || {
                     CompiledEffectArgPlan::Place(CompiledEffectPlacePlan::Fallback(
-                        provider_class_for_target_in_env(db, type_env, arg.target_ty, space),
+                        provider_class_for_target_in_env(
+                            db,
+                            type_env,
+                            arg.provider_target_ty,
+                            space,
+                        ),
                     ))
                 },
                 |boundary| {
@@ -186,40 +188,21 @@ fn compile_effect_arg_plan<'db>(
                 },
             ),
         (EffectPassMode::ByPlace | EffectPassMode::ByTempPlace, NEffectArgValue::Value(_)) => {
-            let boundary = boundary
-                .unwrap_or_else(|| default_by_place_boundary(db, type_env, arg.target_ty, space));
+            let boundary = boundary.unwrap_or_else(|| {
+                default_by_place_boundary(db, type_env, arg.provider_target_ty, space)
+            });
             CompiledEffectArgPlan::Value(CompiledEffectValuePlan::ByPlace {
                 boundary: boundary_sites.stage(boundary),
                 allow_materialize: matches!(arg.pass_mode, EffectPassMode::ByTempPlace),
             })
         }
         (EffectPassMode::ByPlace | EffectPassMode::ByTempPlace, NEffectArgValue::Place(_)) => {
-            let boundary = boundary
-                .unwrap_or_else(|| default_by_place_boundary(db, type_env, arg.target_ty, space));
+            let boundary = boundary.unwrap_or_else(|| {
+                default_by_place_boundary(db, type_env, arg.provider_target_ty, space)
+            });
             CompiledEffectArgPlan::Place(CompiledEffectPlacePlan::Boundary(
                 boundary_sites.stage(boundary),
             ))
         }
-    }
-}
-
-fn effect_arg_is_runtime_zst<'db>(
-    db: &'db dyn MirDb,
-    body: &hir::analysis::semantic::borrowck::NormalizedSemanticBody<'db>,
-    type_env: RuntimeTypeEnv<'db>,
-    arg: &NEffectArg<'db>,
-) -> bool {
-    if arg.target_ty.is_some_and(|target_ty| {
-        runtime_zero_sized_ty(db, target_ty, type_env.scope, type_env.assumptions)
-    }) {
-        return true;
-    }
-    match &arg.arg {
-        NEffectArgValue::Value(value) => body.local(value.local).is_some_and(|local| {
-            runtime_zero_sized_transport_ty(db, local.ty, type_env.scope, type_env.assumptions)
-        }),
-        NEffectArgValue::Place(place) => body.place_root_ty(&place.root).is_some_and(|ty| {
-            runtime_zero_sized_transport_ty(db, ty, type_env.scope, type_env.assumptions)
-        }),
     }
 }

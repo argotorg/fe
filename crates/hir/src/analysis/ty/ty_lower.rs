@@ -37,7 +37,7 @@ use super::{
         reanchor_template_holes, rewrite_structural_holes, structural_hole_id,
         substitute_layout_holes_by_placeholder, substitute_layout_holes_by_placeholder_in,
     },
-    provider::{EffectHandleTargetResolution, resolve_effect_handle_target},
+    provider::{EffectHandleResolution, resolve_effect_handle},
     trait_def::{ImplementorId, TraitInstId},
     trait_resolution::{
         PredicateListId,
@@ -1025,7 +1025,7 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             return;
         };
         let effect_target = self.expand_effect_targets.then(|| {
-            resolve_effect_handle_target(
+            resolve_effect_handle(
                 self.db,
                 self.site.scope(),
                 self.site.assumptions(self.db),
@@ -1033,15 +1033,12 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             )
         });
         let family = match &effect_target {
-            Some(EffectHandleTargetResolution::Resolved { impl_instance, .. }) => {
+            Some(EffectHandleResolution::Resolved { impl_instance, .. }) => {
                 CallableLayoutExpansionFamily::Provider(impl_instance.selected())
             }
-            Some(
-                EffectHandleTargetResolution::NotHandle
-                | EffectHandleTargetResolution::Ambiguous
-                | EffectHandleTargetResolution::UnresolvedTarget,
-            )
-            | None => CallableLayoutExpansionFamily::Adt(adt),
+            Some(EffectHandleResolution::NotHandle | EffectHandleResolution::Invalid(_)) | None => {
+                CallableLayoutExpansionFamily::Adt(adt)
+            }
         };
         match classify_layout_view_recurrence(
             self.db,
@@ -1280,7 +1277,7 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                 }
             }
         }
-        if let Some(EffectHandleTargetResolution::Resolved {
+        if let Some(EffectHandleResolution::Resolved {
             impl_instance,
             target_ty,
             ..
@@ -1587,11 +1584,11 @@ fn callable_input_layout_types<'db>(
         inputs.push((origin, ty));
     }
     for effect in func.effect_params(db) {
-        let Some(key_path) = effect.key_path(db) else {
+        let Some(key_ty) = effect.key_ty(db) else {
             continue;
         };
         let ResolvedEffectKey::Type(schema) =
-            resolve_callable_input_effect_key(db, func, effect.index(), key_path, assumptions)
+            resolve_callable_input_effect_key(db, func, effect.index(), key_ty, assumptions)
         else {
             continue;
         };
@@ -2186,10 +2183,10 @@ pub(crate) fn resolve_callable_input_effect_key<'db>(
     db: &'db dyn HirAnalysisDb,
     func: crate::hir_def::Func<'db>,
     effect_idx: usize,
-    key_path: PathId<'db>,
+    key_ty: HirTyId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> ResolvedEffectKey<'db> {
-    match super::effects::resolve_effect_key(db, key_path, func.scope(), assumptions) {
+    match super::effects::resolve_effect_key(db, key_ty, func.scope(), assumptions) {
         ResolvedEffectKey::Type(mut schema) => {
             schema.carrier = bind_callable_input_layout_holes(
                 db,
@@ -2221,15 +2218,15 @@ pub(crate) fn instantiate_callable_effect_layout_args<'db>(
     subst_args: &mut [TyId<'db>],
 ) {
     let assumptions = collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
-    let Some(key_path) = func
+    let Some(key_ty) = func
         .effect_params(db)
         .nth(effect_idx)
-        .and_then(|effect| effect.key_path(db))
+        .and_then(|effect| effect.key_ty(db))
     else {
         return;
     };
     let ResolvedEffectKey::Type(expected_key) =
-        resolve_callable_input_effect_key(db, func, effect_idx, key_path, assumptions)
+        resolve_callable_input_effect_key(db, func, effect_idx, key_ty, assumptions)
     else {
         return;
     };
@@ -2379,14 +2376,14 @@ pub(crate) fn callable_input_layout_hole_groups<'db>(
     }
 
     for effect in func.effect_params(db) {
-        let Some(key_path) = effect.key_path(db) else {
+        let Some(key_ty) = effect.key_ty(db) else {
             continue;
         };
         let placeholders = match resolve_callable_input_effect_key(
             db,
             func,
             effect.index(),
-            key_path,
+            key_ty,
             assumptions,
         ) {
             ResolvedEffectKey::Type(schema) => {
@@ -2497,11 +2494,11 @@ pub(crate) fn func_implicit_param_plan<'db>(
     let mut provider_param_index_by_effect = vec![None; func.effects(db).data(db).len()];
     let mut provider_idx = 0usize;
     for effect in func.effect_params(db) {
-        let Some(key_path) = effect.key_path(db) else {
+        let Some(key_ty) = effect.key_ty(db) else {
             continue;
         };
         if !matches!(
-            resolve_callable_input_effect_key(db, func, effect.index(), key_path, assumptions),
+            resolve_callable_input_effect_key(db, func, effect.index(), key_ty, assumptions),
             ResolvedEffectKey::Type(_) | ResolvedEffectKey::Trait(_)
         ) {
             continue;
@@ -2622,11 +2619,11 @@ pub fn callable_input_layout_backing_sources<'db>(
     }
     let assumptions = collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
     for effect in func.effect_params(db) {
-        let Some(key_path) = effect.key_path(db) else {
+        let Some(key_ty) = effect.key_ty(db) else {
             continue;
         };
         let resolved =
-            resolve_callable_input_effect_key(db, func, effect.index(), key_path, assumptions);
+            resolve_callable_input_effect_key(db, func, effect.index(), key_ty, assumptions);
         let origin = CallableInputLayoutHoleOrigin::Effect(effect.index());
         let bindings = plan
             .bindings_by_origin
@@ -2965,9 +2962,9 @@ pub(crate) fn callable_input_layout_origin_ty<'db>(
         CallableInputLayoutHoleOrigin::Effect(effect_idx) => {
             let assumptions =
                 collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
-            let key_path = func.effect_params(db).nth(effect_idx)?.key_path(db)?;
+            let key_ty = func.effect_params(db).nth(effect_idx)?.key_ty(db)?;
             let ResolvedEffectKey::Type(schema) =
-                resolve_callable_input_effect_key(db, func, effect_idx, key_path, assumptions)
+                resolve_callable_input_effect_key(db, func, effect_idx, key_ty, assumptions)
             else {
                 return None;
             };

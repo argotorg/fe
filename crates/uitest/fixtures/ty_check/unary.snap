@@ -9,6 +9,12 @@ error[1-0001]: line-start `-` after an expression is ambiguous; move `-` to the 
 11 │     -3
    │     ^ line-start `-` after an expression is ambiguous; move `-` to the previous line for subtraction or parenthesize explicitly
 
+error[8-0000]: type mismatch
+   ┌─ unary.fe:12:6
+   │
+12 │     *4
+   │      ^ expected `*<_>`, but `{integer}` is given
+
 error[8-0016]: `core::ops::Neg` trait is not implemented
   ┌─ unary.fe:6:14
   │
@@ -30,10 +36,20 @@ error[8-0016]: `core::ops::Not` trait is not implemented
 error[8-0031]: type annotation is needed
    ┌─ unary.fe:11:5
    │
-11 │ ╭ ╭     -3
-12 │ │ │     *4
-   │ ╰─│──────^ type annotation is needed
-   │   ╰──────' no default type is provided for an integer type. consider giving integer type
+11 │     -3
+   │     ^^
+   │     │
+   │     type annotation is needed
+   │     no default type is provided for an integer type. consider giving integer type
+
+error[8-0031]: type annotation is needed
+   ┌─ unary.fe:12:6
+   │
+12 │     *4
+   │      ^
+   │      │
+   │      type annotation is needed
+   │      no default type is provided for an integer type. consider giving integer type
 
 error[8-0052]: unary `+` is not supported
   ┌─ unary.fe:5:14

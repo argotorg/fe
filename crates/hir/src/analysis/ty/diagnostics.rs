@@ -1,6 +1,6 @@
 use super::{
     adt_def::AdtCycleMember,
-    provider::ProviderAddressSpace,
+    provider::{ProviderAddressSpace, ProviderLayoutFailure},
     trait_def::TraitInstId,
     ty_check::{RecordLike, TraitOps},
     ty_def::{BorrowKind, CapabilityKind, Kind, TyId},
@@ -13,7 +13,7 @@ use crate::{analysis::ty::ty_check::EffectParamOwner, span::DynLazySpan};
 use crate::{
     core::hir_def::{
         CallableDef, CompBinOp, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId,
-        ImplTrait, IntegerId,
+        ImplTrait, IntegerId, TypeId as HirTypeId,
     },
     hir_def::TypeAlias,
 };
@@ -242,6 +242,12 @@ pub enum TyLowerDiag<'db> {
         ty: TyId<'db>,
     },
 
+    ContractFieldProviderRawInvalid {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+        failure: ProviderLayoutFailure,
+    },
+
     ContractFieldProviderCycle {
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
@@ -317,6 +323,7 @@ impl TyLowerDiag<'_> {
             Self::ContractFieldLayoutInvariant { .. } => 46,
             Self::ContractFieldConcreteLayoutRootUnresolved { .. } => 47,
             Self::ContractFieldProviderCycle { .. } => 48,
+            Self::ContractFieldProviderRawInvalid { .. } => 49,
         }
     }
 }
@@ -414,7 +421,7 @@ pub enum BodyDiag<'db> {
 
     InvalidEffectKey {
         owner: EffectParamOwner<'db>,
-        key: PathId<'db>,
+        key: HirTypeId<'db>,
         idx: usize,
     },
 
@@ -427,7 +434,7 @@ pub enum BodyDiag<'db> {
 
     ContractRootEffectTypeNotZeroSized {
         owner: EffectParamOwner<'db>,
-        key: PathId<'db>,
+        key: HirTypeId<'db>,
         idx: usize,
         given: TyId<'db>,
     },
@@ -435,26 +442,26 @@ pub enum BodyDiag<'db> {
     MissingEffect {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
-        key: PathId<'db>,
+        key: HirTypeId<'db>,
     },
 
     AmbiguousEffect {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
-        key: PathId<'db>,
+        key: HirTypeId<'db>,
     },
 
     EffectMutabilityMismatch {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
-        key: PathId<'db>,
+        key: HirTypeId<'db>,
         provided_span: Option<DynLazySpan<'db>>,
     },
 
     EffectTypeMismatch {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
-        key: PathId<'db>,
+        key: HirTypeId<'db>,
         expected: TyId<'db>,
         given: TyId<'db>,
         provided_span: Option<DynLazySpan<'db>>,
@@ -463,7 +470,7 @@ pub enum BodyDiag<'db> {
     EffectProviderMismatch {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
-        key: PathId<'db>,
+        key: HirTypeId<'db>,
         expected: TyId<'db>,
         given: TyId<'db>,
         provided_span: Option<DynLazySpan<'db>>,
@@ -472,7 +479,7 @@ pub enum BodyDiag<'db> {
     EffectTraitUnsatisfied {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
-        key: PathId<'db>,
+        key: HirTypeId<'db>,
         trait_req: TraitInstId<'db>,
         given: TyId<'db>,
         provided_span: Option<DynLazySpan<'db>>,
@@ -507,6 +514,10 @@ pub enum BodyDiag<'db> {
     },
 
     TypeMustBeKnown(DynLazySpan<'db>),
+    TypeSizeOverflow {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
     ConstValueMustBeKnown(DynLazySpan<'db>),
     StaticAssertFailed {
         primary: DynLazySpan<'db>,
@@ -923,6 +934,7 @@ impl<'db> BodyDiag<'db> {
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::IncompatibleBorrowProviders { .. } => 77,
             Self::TypeMustBeKnown(..) => 14,
+            Self::TypeSizeOverflow { .. } => 88,
             Self::InvalidCast { .. } => 55,
             Self::ConstValueMustBeKnown(..) => 64,
             Self::StaticAssertFailed { .. } => 81,
@@ -1187,6 +1199,12 @@ pub enum ImplDiag<'db> {
         fn_span: DynLazySpan<'db>,
         const_name: IdentId<'db>,
     },
+
+    InvalidEffectHandleRaw {
+        primary: DynLazySpan<'db>,
+        raw_ty: TyId<'db>,
+        failure: ProviderLayoutFailure,
+    },
 }
 
 impl ImplDiag<'_> {
@@ -1214,6 +1232,7 @@ impl ImplDiag<'_> {
             Self::InherentConstConflict { .. } => 19,
             Self::InherentConstShadowsVariant { .. } => 20,
             Self::InherentConstShadowsFn { .. } => 21,
+            Self::InvalidEffectHandleRaw { .. } => 22,
         }
     }
 }

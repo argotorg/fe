@@ -5,16 +5,13 @@ use super::{
     AbiFieldContext, AbiFieldDiagnostic, FileLowerCtxt,
     attr::{has_named_attr, lower_attrs_without_named, named_attr_specs},
     hir_builder::HirBuilder,
-    msg::{
-        build_head_size_body_expr, create_direct_encode_assoc_const, create_head_size_assoc_const,
-        create_is_dynamic_assoc_const, create_payload_size_func,
-    },
+    msg::{create_head_size_assoc_const, create_is_dynamic_assoc_const, create_payload_size_func},
 };
 use crate::{
     hir_def::{
-        ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, FieldDef,
-        FieldDefListId, FieldIndex, FuncModifiers, GenericParamListId, IdentId, LitKind, Partial,
-        Pat, PathId, Stmt, Struct, TrackedItemVariant, TraitRefId, TypeId, TypeKind, Visibility,
+        AssocConstDef, AttrListId, Body, BodyKind, Expr, FieldDef, FieldDefListId, FuncModifiers,
+        GenericParamListId, IdentId, LitKind, Partial, PathId, Struct, TrackedItemVariant,
+        TraitRefId, TypeId, TypeKind, Visibility,
     },
     span::{ErrorDesugared, HirOrigin},
 };
@@ -405,83 +402,25 @@ fn lower_error_encode_impl<'db>(
     builder.with_item_scope(
         TrackedItemVariant::ImplTrait(impl_trait_idx),
         |builder, id| {
-            let direct_encode_const = create_direct_encode_assoc_const(builder, &field_specs);
-            let impl_trait = builder.new_impl_trait(
-                id,
-                trait_ref,
-                ty,
-                vec![],
-                vec![direct_encode_const],
-                builder.origin(),
-            );
+            let impl_trait =
+                builder.new_impl_trait(id, trait_ref, ty, vec![], vec![], builder.origin());
 
-            // encode<E>() method
-            let abi_encoder_trait_ref = builder.core_abi_trait_ref_sol("AbiEncoder");
-            let (e_generic_params, e_ty) =
-                builder.type_param_with_trait_bound("E", abi_encoder_trait_ref);
-
-            let encoder_ident = builder.ident("e");
+            let ptr_ident = builder.ident("ptr");
+            let u8_ty = builder.ty_ident(builder.ident("u8"));
+            let ptr_ty = builder.ty_ptr(u8_ty);
             let params = builder.params([
                 builder.param_own_self(),
-                builder.param_mut_underscore_named(encoder_ident, e_ty),
+                builder.param_underscore_named(ptr_ident, ptr_ty),
             ]);
 
-            builder.func_generic_inline_always(
-                "encode",
-                e_generic_params,
-                params,
-                None,
-                FuncModifiers::new(Visibility::Private, false, false, false),
-                |body| {
-                    body.encode_fields(&field_specs, encoder_ident, e_ty);
-                },
-            );
-
-            // encode_to_ptr() method
-            let ptr_ident = builder.ident("ptr");
-            let ptr_ty = builder.ty_ident(builder.ident("u256"));
-            let ptr_param = builder.param_underscore_named(ptr_ident, ptr_ty);
-            let params = builder.params([builder.param_own_self(), ptr_param]);
-            let encode_to_ptr_ident = builder.ident("encode_to_ptr");
-
             builder.func_with_body_inline_always(
-                encode_to_ptr_ident,
+                builder.ident("encode"),
                 builder.empty_generic_params(),
                 params,
                 None,
                 FuncModifiers::new(Visibility::Private, false, false, false),
                 |body| {
-                    let db = body.db();
-                    let self_expr = body.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
-                    let mut field_ptr_ident = ptr_ident;
-
-                    for (index, (field_name, field_ty)) in field_specs.iter().copied().enumerate() {
-                        let receiver = body.push_expr(Expr::Field(
-                            self_expr,
-                            Partial::Present(FieldIndex::Ident(field_name)),
-                        ));
-                        let field_ptr = body.ident_expr(field_ptr_ident);
-                        let call =
-                            body.method_call_expr(receiver, encode_to_ptr_ident, vec![field_ptr]);
-                        body.emit_expr_stmt(call);
-
-                        if index + 1 != field_specs.len() {
-                            let next_ptr_ident = IdentId::new(db, format!("__field_ptr{index}"));
-                            let current_ptr = body.ident_expr(field_ptr_ident);
-                            let field_size = build_head_size_body_expr(body, field_ty);
-                            let next_ptr = body.push_expr(Expr::Bin(
-                                current_ptr,
-                                field_size,
-                                BinOp::Arith(ArithBinOp::Add),
-                            ));
-                            let next_ptr_pat = body.push_pat(Pat::Path(
-                                Partial::Present(PathId::from_ident(db, next_ptr_ident)),
-                                false,
-                            ));
-                            body.emit_stmt(Stmt::Let(next_ptr_pat, None, Some(next_ptr)));
-                            field_ptr_ident = next_ptr_ident;
-                        }
-                    }
+                    body.encode_fields(&field_specs, ptr_ident);
                 },
             );
             impl_trait

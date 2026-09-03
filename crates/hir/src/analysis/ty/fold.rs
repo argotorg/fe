@@ -417,6 +417,9 @@ impl<'db> TyFoldable<'db> for PlaceProjection<'db> {
         F: TyFolder<'db>,
     {
         match self {
+            PlaceProjection::Deref { result_ty } => PlaceProjection::Deref {
+                result_ty: result_ty.fold_with(db, folder),
+            },
             PlaceProjection::Field { index, result_ty } => PlaceProjection::Field {
                 index,
                 result_ty: result_ty.fold_with(db, folder),
@@ -467,6 +470,7 @@ impl<'db> TyFoldable<'db> for ResolvedEffectArg<'db> {
             key: self.key,
             arg: self.arg.fold_with(db, folder),
             pass_mode: self.pass_mode,
+            layout_view: self.layout_view,
             required_mut: self.required_mut,
             key_kind: self.key_kind,
             instantiated_key_ty: self.instantiated_key_ty.map(|ty| ty.fold_with(db, folder)),

@@ -49,3 +49,18 @@ fn aug_assign_prefers_add_assign_semantics() {
     let sum = x + z
     assert!(sum.value == 99)
 }
+
+#[test]
+fn indexed_aug_assign_uses_index_mut_and_add_assign() {
+    let mut items = core::ptr::MemArray<Divergent>::new_uninit(1)
+    items[0] = Divergent { value: 1 }
+    let item_delta = Divergent { value: 2 }
+    items[0] += item_delta
+    assert!(items[0].value == 7)
+
+    let pointer = core::ptr::alloc<[Divergent; 1]>()
+    pointer[0] = Divergent { value: 1 }
+    let pointer_delta = Divergent { value: 2 }
+    pointer[0] += pointer_delta
+    assert!(pointer[0].value == 7)
+}

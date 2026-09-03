@@ -7,7 +7,7 @@ target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256};
 
-func private %from_raw(v0.i256) -> @layout_0 {
+func private %calldata_ptr(v0.i256) -> @layout_0 {
     block0:
         jump block1;
 
@@ -16,12 +16,21 @@ func private %from_raw(v0.i256) -> @layout_0 {
         return v4;
 }
 
-func private %main_root() {
+func private %main() {
     block0:
         jump block1;
 
     block1:
         call %test_calldata_ptr_domain;
+        return;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        call %main;
         evm_stop;
 }
 
@@ -48,7 +57,7 @@ func private %test_calldata_ptr_domain() {
         jump block1;
 
     block1:
-        v1.@layout_0 = call %from_raw 0.i256;
+        v1.@layout_0 = call %calldata_ptr 0.i256;
         v2.i256 = call %raw v1;
         v3.i256 = call %read_x v2;
         return;

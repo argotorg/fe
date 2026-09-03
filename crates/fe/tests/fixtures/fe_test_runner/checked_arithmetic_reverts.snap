@@ -20,8 +20,12 @@ FAIL  [<time>] test_div_overflow_i8
     Test reverted: 0x4e487b710000000000000000000000000000000000000000000000000000000000000011
 FAIL  [<time>] test_pow_negative_exp_i8
     Test reverted: 0x
+FAIL  [<time>] test_memarray_allocation_size_overflow
+    Test reverted: 0x4e487b710000000000000000000000000000000000000000000000000000000000000011
+FAIL  [<time>] test_pointer_offset_size_overflow
+    Test reverted: 0x4e487b710000000000000000000000000000000000000000000000000000000000000011
 
-test result: FAILED. 0 passed; 8 failed
+test result: FAILED. 0 passed; 10 failed
 
 failures:
     test_add_overflow_u8
@@ -32,5 +36,7 @@ failures:
     test_neg_overflow_i8
     test_div_overflow_i8
     test_pow_negative_exp_i8
+    test_memarray_allocation_size_overflow
+    test_pointer_offset_size_overflow
 
 === EXIT CODE: 1 ===

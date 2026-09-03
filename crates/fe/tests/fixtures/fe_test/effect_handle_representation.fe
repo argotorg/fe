@@ -1,20 +1,16 @@
-use core::{AddressSpace, EffectHandle, EffectRef}
-use std::evm::{Evm, RawMem}
+use core::{AddressSpace, EffectHandle, EffectHandleMut, EffectRef, EffectRefMut, ptr}
 
 struct TaggedPtr<T> {
     tag: u256,
-    addr: u256,
+    addr: *T,
 }
 
 impl<T> EffectHandle for TaggedPtr<T> {
     type Target = T
+    type Raw = *T
     const SPACE: AddressSpace = AddressSpace::Memory
 
-    fn from_raw(_ raw: u256) -> Self {
-        Self { tag: 11, addr: raw }
-    }
-
-    fn raw(self) -> u256 {
+    fn raw(self) -> *T {
         self.addr
     }
 }
@@ -28,8 +24,8 @@ fn identity_tagged(_ ptr: TaggedPtr<u256>) -> TaggedPtr<u256> {
     ptr
 }
 
-fn tagged_raw() -> u256 uses (ptr: TaggedPtr<u256>) {
-    ptr.raw()
+fn tagged_targets(_ expected: *u256) -> bool uses (ptr: TaggedPtr<u256>) {
+    ptr.raw() == expected
 }
 
 fn tagged_tag() -> u256 uses (ptr: TaggedPtr<u256>) {
@@ -38,42 +34,43 @@ fn tagged_tag() -> u256 uses (ptr: TaggedPtr<u256>) {
 
 #[test]
 fn ordinary_effect_handles_keep_their_full_adt_representation() {
+    let first = ptr::alloc<u256>()
+    let second = ptr::alloc<u256>()
     let ptrs: [TaggedPtr<u256>; 2] = [
-        TaggedPtr { tag: 21, addr: 0x100 },
-        TaggedPtr { tag: 22, addr: 0x120 },
+        TaggedPtr { tag: 21, addr: first },
+        TaggedPtr { tag: 22, addr: second },
     ]
     let holder = TaggedHolder { ptr: ptrs[1], marker: 33 }
     let ptr = identity_tagged(holder.ptr)
     assert!(ptr.tag == 22)
-    assert!(ptr.raw() == 0x120)
+    assert!(ptr.raw() == second)
     assert!(holder.marker == 33)
 }
 
 #[test]
-fn effect_boundaries_use_raw_and_from_raw() {
-    let ptr = TaggedPtr<u256> { tag: 99, addr: 0x100 }
-    let raw = with (ptr) { tagged_raw() }
-    assert!(raw == 0x100)
+fn effect_boundaries_preserve_nominal_handle_values() {
+    let addr = ptr::alloc<u256>()
+    let handle = TaggedPtr<u256> { tag: 99, addr }
+    let targets_addr = with (handle) { tagged_targets(addr) }
+    assert!(targets_addr)
 
-    let ptr = TaggedPtr<u256> { tag: 99, addr: 0x100 }
-    let tag = with (ptr) { tagged_tag() }
-    assert!(tag == 11)
+    let handle = TaggedPtr<u256> { tag: 99, addr }
+    let tag = with (handle) { tagged_tag() }
+    assert!(tag == 99)
 }
 
 struct OffsetPtr<T> {
+    addr: *T,
     encoded: u256,
 }
 
 impl<T> EffectHandle for OffsetPtr<T> {
     type Target = T
+    type Raw = *T
     const SPACE: AddressSpace = AddressSpace::Memory
 
-    fn from_raw(_ raw: u256) -> Self {
-        Self { encoded: raw + 32 }
-    }
-
-    fn raw(self) -> u256 {
-        self.encoded - 32
+    fn raw(self) -> *T {
+        self.addr
     }
 }
 
@@ -89,16 +86,20 @@ fn read_value() -> u256 uses (value: u256) {
 }
 
 #[test]
-fn nonidentity_handle_encoding_addresses_the_raw_target() uses (evm: mut Evm) {
-    evm.mstore(addr: 0x100, value: 11)
-    evm.mstore(addr: 0x120, value: 22)
-    let ptr: OffsetPtr<u256> = OffsetPtr::from_raw(0x100)
+fn handle_metadata_does_not_change_the_raw_target() {
+    let first = ptr::alloc<u256>()
+    let second = ptr::alloc<u256>()
+    *first = 11
+    *second = 22
+    let ptr: OffsetPtr<u256> = OffsetPtr { addr: first, encoded: 0x120 }
     assert!(ptr.encoded == 0x120)
     let value = with (ptr) { read_value() }
     assert!(value == 11)
 
-    let holder: OffsetHolder<u256> =
-        OffsetHolder { marker: 9, ptr: OffsetPtr::from_raw(0x120) }
+    let holder: OffsetHolder<u256> = OffsetHolder {
+        marker: 9,
+        ptr: OffsetPtr { addr: second, encoded: 0x140 },
+    }
     let value = with (holder.ptr) { read_value() }
     assert!(value == 22)
 }
@@ -107,32 +108,39 @@ struct FixedPtr<T> {}
 
 impl<T> EffectHandle for FixedPtr<T> {
     type Target = T
+    type Raw = *T
     const SPACE: AddressSpace = AddressSpace::Memory
 
-    fn from_raw(_ raw: u256) -> Self {
-        assert!(raw == 0x100)
-        Self {}
-    }
-
-    fn raw(self) -> u256 {
-        0x100
+    fn raw(self) -> *T {
+        ptr::alloc<T>()
     }
 }
 
 impl<T> EffectRef<T> for FixedPtr<T> {}
+impl<T> EffectRefMut<T> for FixedPtr<T> {}
+impl<T> EffectHandleMut for FixedPtr<T> {}
 
-fn fixed_raw() -> u256 uses (ptr: FixedPtr<u256>) {
-    ptr.raw()
+fn fixed_raw_roundtrip(value: u256) -> u256 uses (ptr: FixedPtr<u256>) {
+    let raw = ptr.raw()
+    *raw = value
+    *raw
+}
+
+fn write_then_read(value: u256) -> u256 uses (target: mut u256) {
+    target = value
+    target
 }
 
 #[test]
-fn zero_sized_handles_convert_without_a_fake_runtime_payload() uses (evm: mut Evm) {
-    evm.mstore(addr: 0x100, value: 77)
+fn zero_sized_handles_supply_a_target_without_a_runtime_payload() {
     let ptr = FixedPtr<u256> {}
-    let value = with (ptr) { read_value() }
+    let value = with (ptr) { write_then_read(value: 77) }
     assert!(value == 77)
+}
 
+#[test]
+fn zero_sized_handle_values_can_expose_a_raw_pointer() {
     let ptr = FixedPtr<u256> {}
-    let raw = with (ptr) { fixed_raw() }
-    assert!(raw == 0x100)
+    let value = with (ptr) { fixed_raw_roundtrip(value: 88) }
+    assert!(value == 88)
 }
