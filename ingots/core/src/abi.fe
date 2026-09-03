@@ -150,6 +150,9 @@ pub trait AbiDecoder<A: Abi> {
     fn pos(self) -> u256
     fn set_pos(mut self, _ new_pos: u256)
 
+    /// Number of bytes remaining in the input after the current cursor.
+    fn remaining(self) -> u256
+
     fn read_u8(mut self) -> u8
     fn read_word(mut self) -> u256
     fn peek_word(self, _ at: u256) -> u256
