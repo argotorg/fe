@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::name_resolution;
+use crate::analysis::name_resolution::{self, PathRes};
 use crate::analysis::ty;
 use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag};
 use crate::analysis::ty::normalize::normalize_ty;
@@ -18,9 +18,9 @@ use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 use crate::analysis::ty::ty_error::collect_ty_lower_errors;
 use crate::hir_def::scope_graph::ScopeId;
 use crate::hir_def::{
-    Contract, Enum, EnumVariant, FieldParent, Func, GenericParam, GenericParamOwner,
-    GenericParamView, IdentId, Impl, ImplTrait, ItemKind, Partial, PathId, Struct, Trait,
-    TypeAlias, TypeBound, VariantKind, WhereClauseOwner,
+    ConstGenericArgValue, Contract, Enum, EnumVariant, FieldParent, Func, GenericParam,
+    GenericParamOwner, GenericParamView, IdentId, Impl, ImplTrait, ItemKind, Partial, PathId,
+    Struct, Trait, TypeAlias, TypeBound, VariantKind, WhereClauseOwner,
 };
 use crate::span::DynLazySpan;
 
@@ -31,6 +31,7 @@ use crate::semantic::{
     FieldView, FuncParamView, ImplAssocTypeView, InherentImplAdmissibility, SuperTraitRefView,
     VariantView, WherePredicateBoundView, WherePredicateView, constraints_for,
     header_constraints_for, lower_hir_kind_local, param_env,
+    reference::{ReferenceView, body_references},
 };
 
 /// Unified "pull" diagnostics surface for HIR items and views.
@@ -1342,9 +1343,7 @@ impl<'db> GenericParamOwner<'db> {
         let mut out = Vec::new();
         let mut default_idxs = Vec::new();
         for view in self.params(db) {
-            let is_defaulted_type =
-                matches!(view.param, GenericParam::Type(tp) if tp.default_ty.is_some());
-            if is_defaulted_type {
+            if view.param.has_default() {
                 default_idxs.push(view.idx);
             } else if !default_idxs.is_empty() {
                 for &idx in &default_idxs {
@@ -1412,6 +1411,7 @@ impl<'db> GenericParamOwner<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<TyDiagCollection<'db>> {
         use ty::{
+            const_ty::ConstTyData,
             ty_def::{TyId, TyParam},
             ty_lower::lower_hir_ty,
             visitor::{TyVisitable, TyVisitor},
@@ -1425,49 +1425,84 @@ impl<'db> GenericParamOwner<'db> {
         let scope = self.scope();
 
         for view in self.params(db) {
-            let default_ty = match view.param {
-                GenericParam::Type(tp) => tp.default_ty,
-                GenericParam::Const(_) => None,
-            };
-            let Some(default_ty) = default_ty else {
-                continue;
-            };
-
-            if default_ty.is_self_ty(db) {
-                continue;
-            }
-
-            let lowered = lower_hir_ty(db, default_ty, scope, assumptions);
-
-            struct Collector<'db> {
-                db: &'db dyn HirAnalysisDb,
-                scope: ScopeId<'db>,
-                out: Vec<usize>,
-            }
-            impl<'db> TyVisitor<'db> for Collector<'db> {
-                fn db(&self) -> &'db dyn HirAnalysisDb {
-                    self.db
-                }
-                fn visit_param(&mut self, tp: &TyParam<'db>) {
-                    if !tp.is_trait_self() && tp.owner == self.scope {
-                        self.out.push(tp.original_idx(self.db));
+            let referenced = match view.param {
+                GenericParam::Type(tp) => {
+                    let Some(default_ty) = tp.default_ty else {
+                        continue;
+                    };
+                    if default_ty.is_self_ty(db) {
+                        continue;
                     }
-                }
-                fn visit_const_param(&mut self, tp: &TyParam<'db>, _ty: TyId<'db>) {
-                    if tp.owner == self.scope {
-                        self.out.push(tp.original_idx(self.db));
+
+                    struct Collector<'db> {
+                        db: &'db dyn HirAnalysisDb,
+                        scope: ScopeId<'db>,
+                        out: Vec<usize>,
                     }
+                    impl<'db> TyVisitor<'db> for Collector<'db> {
+                        fn db(&self) -> &'db dyn HirAnalysisDb {
+                            self.db
+                        }
+                        fn visit_param(&mut self, tp: &TyParam<'db>) {
+                            if !tp.is_trait_self() && tp.owner == self.scope {
+                                self.out.push(tp.original_idx(self.db));
+                            }
+                        }
+                        fn visit_const_param(&mut self, tp: &TyParam<'db>, _ty: TyId<'db>) {
+                            if tp.owner == self.scope {
+                                self.out.push(tp.original_idx(self.db));
+                            }
+                        }
+                    }
+
+                    let lowered = lower_hir_ty(db, default_ty, scope, assumptions);
+                    let mut collector = Collector {
+                        db,
+                        scope,
+                        out: Vec::new(),
+                    };
+                    lowered.visit_with(&mut collector);
+                    collector.out
                 }
-            }
-
-            let mut collector = Collector {
-                db,
-                scope,
-                out: Vec::new(),
+                GenericParam::Const(param) => {
+                    let Some(ConstGenericArgValue::Expr(Partial::Present(body))) = param.default
+                    else {
+                        continue;
+                    };
+                    body_references(db, body)
+                        .iter()
+                        .filter_map(|reference| match reference {
+                            ReferenceView::Path(path) => Some(path),
+                            _ => None,
+                        })
+                        .filter_map(|path| {
+                            match name_resolution::resolve_path(
+                                db,
+                                path.path,
+                                path.scope,
+                                assumptions,
+                                true,
+                            )
+                            .ok()?
+                            {
+                                PathRes::Ty(ty) => Some(ty),
+                                _ => None,
+                            }
+                        })
+                        .filter_map(|ty| {
+                            let ty::ty_def::TyData::ConstTy(const_ty) = ty.data(db) else {
+                                return None;
+                            };
+                            let ConstTyData::TyParam(param, _) = const_ty.data(db) else {
+                                return None;
+                            };
+                            (param.owner == scope).then(|| param.original_idx(db))
+                        })
+                        .collect()
+                }
             };
-            lowered.visit_with(&mut collector);
 
-            for j in collector.out.into_iter().filter(|j| *j >= view.idx) {
+            for j in referenced.into_iter().filter(|j| *j >= view.idx) {
                 if let Some(name) = self.param_view(db, j).param.name().to_opt() {
                     let span = view.span();
                     out.push(TyLowerDiag::GenericDefaultForwardRef { span, name }.into());

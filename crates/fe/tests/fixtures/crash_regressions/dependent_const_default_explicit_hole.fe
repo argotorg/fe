@@ -1,0 +1,16 @@
+const fn plus_one(_ value: usize) -> usize {
+    value + 1
+}
+
+fn dependent<const N: usize, const M: usize = plus_one(N)>(
+    _ value: [u8; M],
+) {}
+
+struct Dependent<const N: usize, const M: usize = plus_one(N)> {}
+
+fn accepts_dependent(_ value: Dependent<_>) {}
+
+fn test() {
+    let value: [u8; 2] = [0, 1]
+    dependent<_>(value)
+}

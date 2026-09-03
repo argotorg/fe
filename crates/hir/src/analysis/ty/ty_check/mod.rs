@@ -27,7 +27,7 @@ use crate::analysis::ty::trait_resolution::constraint::{
     PredicateSource, collect_func_decl_constraint_pairs,
 };
 use crate::analysis::ty::visitor::TyVisitable;
-use crate::hir_def::{CallableDef, ImplTrait, Trait};
+use crate::hir_def::{CallableDef, ConstGenericArgValue, GenericParam, ImplTrait, Trait};
 use crate::{
     hir_def::{
         BinOp, Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParamOwner,
@@ -232,6 +232,53 @@ pub fn check_trait_const_default_bodies<'db>(
             );
         } else {
             diags.extend(body_diags.iter().cloned());
+        }
+    }
+    diags
+}
+
+/// Type-checks and CTFE-validates generic const parameter defaults at their
+/// declarations. Calls and type applications may never force an unused
+/// default, but its body must still be a valid const expression of the
+/// declared parameter type.
+#[salsa::tracked(return_ref)]
+pub fn check_generic_const_default_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let param_set = collect_generic_params(db, owner);
+    let mut diags = Vec::new();
+    for view in owner.params(db) {
+        let GenericParam::Const(param) = view.param else {
+            continue;
+        };
+        let Some(ConstGenericArgValue::Expr(Partial::Present(body))) = param.default else {
+            continue;
+        };
+        let Some(param_ty) = param_set.param_by_original_idx(db, view.idx) else {
+            continue;
+        };
+        let TyData::ConstTy(param_ty) = param_ty.data(db) else {
+            continue;
+        };
+        let expected = param_ty.ty(db);
+        if expected.has_invalid(db) {
+            continue;
+        }
+
+        let body_diags = &check_anon_const_body(db, body, expected).0;
+        if expected.has_param(db) {
+            diags.extend(
+                body_diags
+                    .iter()
+                    .filter(|diag| !diag_depends_on_param_instantiation(db, diag))
+                    .cloned(),
+            );
+        } else {
+            diags.extend(body_diags.iter().cloned());
+        }
+        if body_diags.is_empty() {
+            diags.extend(const_body_ctfe_diags(db, body, expected, true));
         }
     }
     diags

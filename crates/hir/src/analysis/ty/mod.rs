@@ -6,7 +6,7 @@ use crate::analysis::ty::trait_resolution::{
 use crate::analysis::ty::ty_check::EffectParamOwner;
 use crate::core::adt_lower::lower_adt;
 use crate::core::hir_def::{
-    IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias,
+    GenericParamOwner, IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use adt_def::{AdtDef, AdtRef, instantiate_adt_field_shape};
@@ -423,6 +423,15 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
                 .all_traits(db)
                 .iter()
                 .flat_map(|trait_| ty_check::check_trait_const_default_bodies(db, *trait_))
+                .map(|diag| diag.to_voucher()),
+        );
+
+        diags.extend(
+            top_mod
+                .all_items(db)
+                .iter()
+                .filter_map(|item| GenericParamOwner::from_item_opt(*item))
+                .flat_map(|owner| ty_check::check_generic_const_default_bodies(db, owner))
                 .map(|diag| diag.to_voucher()),
         );
 

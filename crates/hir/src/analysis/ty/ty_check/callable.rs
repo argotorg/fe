@@ -26,7 +26,10 @@ use crate::analysis::{
         },
         ty_def::{BorrowKind, CapabilityKind},
         ty_def::{InvalidCause, TyBase, TyData, TyFlags, TyId},
-        ty_lower::{lower_generic_arg_list, specialized_callable_layout_bundle_signature},
+        ty_lower::{
+            ConstDefaultCompletion, collect_generic_params, lower_generic_arg_list,
+            specialized_callable_layout_bundle_signature,
+        },
         visitor::{TyVisitable, TyVisitor, collect_flags},
     },
 };
@@ -157,35 +160,78 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
     mut unify_arg: impl FnMut(&mut TyChecker<'db>, usize, TyId<'db>, &mut TyId<'db>) -> bool,
 ) -> Result<(), CallGenericArgUnifyError> {
     let db = tc.db;
-    if !args.is_given(db) {
-        return Ok(());
-    }
-
     let minter = HoleMinter::new(anchor);
-    let given_args = lower_generic_arg_list(
-        db,
-        args,
-        tc.env.scope(),
-        tc.env.assumptions(),
-        LayoutHoleArgSite::GenericArgList(args),
-        &minter,
-    );
+    let given_args = args.is_given(db).then(|| {
+        lower_generic_arg_list(
+            db,
+            args,
+            tc.env.scope(),
+            tc.env.assumptions(),
+            LayoutHoleArgSite::GenericArgList(args),
+            &minter,
+        )
+    });
     let offset = callable.callable_def.offset_to_explicit_params_position(db);
-    let current_args = &mut callable.generic_args[offset..];
-    if current_args.len() != given_args.len() {
+    let explicit_arg_count = callable.generic_args.len() - offset;
+
+    let completed_args = match callable.callable_def {
+        CallableDef::Func(func) => {
+            let param_set = collect_generic_params(db, func.into());
+            let required = param_set.required_explicit_param_count(db);
+            if given_args
+                .as_ref()
+                .is_some_and(|args| args.len() < required || args.len() > explicit_arg_count)
+            {
+                let given = given_args.as_ref().map_or(0, Vec::len);
+                return Err(CallGenericArgUnifyError::ArityMismatch {
+                    given,
+                    expected: if given < required {
+                        required
+                    } else {
+                        explicit_arg_count
+                    },
+                });
+            }
+
+            let inferred_required;
+            let provided = if let Some(given_args) = &given_args {
+                given_args.as_slice()
+            } else {
+                inferred_required = callable.generic_args[offset..offset + required].to_vec();
+                &inferred_required
+            };
+            param_set.complete_callable_explicit_args(
+                db,
+                func,
+                &callable.generic_args[..offset],
+                provided,
+                tc.env.assumptions(),
+                ConstDefaultCompletion::metadata_at_application(&minter),
+            )
+        }
+        CallableDef::VariantCtor(_) => given_args
+            .clone()
+            .unwrap_or_else(|| callable.generic_args[offset..].to_vec()),
+    };
+
+    if completed_args.len() != explicit_arg_count {
         return Err(CallGenericArgUnifyError::ArityMismatch {
-            given: given_args.len(),
-            expected: current_args.len(),
+            given: given_args.as_ref().map_or(0, Vec::len),
+            expected: explicit_arg_count,
         });
     }
 
-    for (idx, (given, current)) in given_args
+    let given_count = given_args.as_ref().map_or(0, Vec::len);
+    for (idx, (completed, current)) in completed_args
         .into_iter()
-        .zip(current_args.iter_mut())
+        .zip(&mut callable.generic_args[offset..])
         .enumerate()
     {
-        if !unify_arg(tc, idx, given, current) {
+        if idx < given_count && !unify_arg(tc, idx, completed, current) {
             return Err(CallGenericArgUnifyError::UnificationFailed);
+        }
+        if idx >= given_count {
+            *current = completed;
         }
     }
 

@@ -1,10 +1,10 @@
 use std::iter;
 
 use crate::core::hir_def::{
-    Body, CallableDef, ConstGenericArgValue, Expr, GenericArg, GenericArgListId, GenericParam,
-    GenericParamOwner, GenericParamView, IdentId, KindBound as HirKindBound, Partial, PathId, Stmt,
-    TypeAlias as HirTypeAlias, TypeBound, TypeId as HirTyId, TypeKind as HirTyKind, TypeMode,
-    scope_graph::ScopeId,
+    Body, CallableDef, ConstGenericArgValue, Expr, Func, GenericArg, GenericArgListId,
+    GenericParam, GenericParamOwner, GenericParamView, IdentId, KindBound as HirKindBound, Partial,
+    PathId, Stmt, TypeAlias as HirTypeAlias, TypeBound, TypeId as HirTyId, TypeKind as HirTyKind,
+    TypeMode, scope_graph::ScopeId,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
@@ -237,8 +237,7 @@ fn collect_layout_root_uses_in_hir_ty<'db>(
             if let Ok(PathRes::TyAlias(alias, _)) =
                 resolve_path_with_minter(db, path, scope, assumptions, false, minter)
             {
-                let instantiated =
-                    alias.instantiate_layout_from_path(db, path, &args, assumptions, minter);
+                let instantiated = alias.instantiate_layout(db, &args, assumptions, minter);
                 uses.extend(
                     instantiated
                         .root_uses
@@ -3192,22 +3191,19 @@ impl<'db> TyAlias<'db> {
         self.param_set.params(db)
     }
 
-    pub(crate) fn instantiate_from_path(
+    pub(crate) fn instantiate(
         &self,
         db: &'db dyn HirAnalysisDb,
-        path: PathId<'db>,
         args: &[TyId<'db>],
         assumptions: PredicateListId<'db>,
         minter: &HoleMinter<'db>,
     ) -> TyId<'db> {
-        self.instantiate_layout_from_path(db, path, args, assumptions, minter)
-            .ty
+        self.instantiate_layout(db, args, assumptions, minter).ty
     }
 
-    pub(crate) fn instantiate_layout_from_path(
+    pub(crate) fn instantiate_layout(
         &self,
         db: &'db dyn HirAnalysisDb,
-        path: PathId<'db>,
         args: &[TyId<'db>],
         assumptions: PredicateListId<'db>,
         minter: &HoleMinter<'db>,
@@ -3222,8 +3218,7 @@ impl<'db> TyAlias<'db> {
             None,
             args,
             assumptions,
-            ConstDefaultCompletion::metadata(Some(path)),
-            Some(minter),
+            ConstDefaultCompletion::metadata_at_application(minter),
         );
         if completed.len() < expected {
             return instantiate_layout_template(
@@ -3535,6 +3530,13 @@ impl<'db> GenericParamTypeSet<'db> {
             .saturating_sub(self.offset_to_explicit(db))
     }
 
+    pub(crate) fn required_explicit_param_count(self, db: &'db dyn HirAnalysisDb) -> usize {
+        self.params_precursor(db)[self.offset_to_explicit(db)..]
+            .iter()
+            .rposition(|param| param.default_hir_ty.is_none() && param.default_hir_const.is_none())
+            .map_or(0, |idx| idx + 1)
+    }
+
     pub(crate) fn explicit_const_param_default_hole_ty(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -3611,26 +3613,46 @@ impl<'db> GenericParamTypeSet<'db> {
     ///
     /// - `provided_explicit`: args corresponding to the explicit params (i.e.,
     ///   skipping implicit ones like trait `Self`).
-    /// - `implicit_bindings`: mapping of (lowered_idx -> TyId) for implicit
-    ///   parameters that should be available when evaluating defaults (e.g.,
-    ///   trait `Self` at index 0).
     pub(crate) fn complete_explicit_args(
         self,
         db: &'db dyn HirAnalysisDb,
         trait_self: Option<TyId<'db>>,
         provided_explicit: &[TyId<'db>],
         assumptions: PredicateListId<'db>,
-        completion: ConstDefaultCompletion<'db>,
-        minter: Option<&HoleMinter<'db>>,
+        completion: ConstDefaultCompletion<'_, 'db>,
     ) -> Vec<TyId<'db>> {
         self.complete_explicit_args_with_defaults_in_mode(
             db,
-            trait_self,
+            trait_self.as_slice(),
+            trait_self.is_some(),
             provided_explicit,
             assumptions,
             completion,
             false,
-            minter,
+        )
+    }
+
+    pub(crate) fn complete_callable_explicit_args(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        func: Func<'db>,
+        implicit_args: &[TyId<'db>],
+        provided_explicit: &[TyId<'db>],
+        assumptions: PredicateListId<'db>,
+        completion: ConstDefaultCompletion<'_, 'db>,
+    ) -> Vec<TyId<'db>> {
+        debug_assert_eq!(
+            GenericParamOwner::from_item_opt(self.scope(db).item()),
+            Some(func.into()),
+        );
+        self.complete_explicit_args_with_defaults_in_mode(
+            db,
+            implicit_args,
+            func.is_associated_func(db),
+            provided_explicit,
+            assumptions,
+            completion,
+            false,
         )
     }
 
@@ -3640,17 +3662,16 @@ impl<'db> GenericParamTypeSet<'db> {
         trait_self: Option<TyId<'db>>,
         provided_explicit: &[TyId<'db>],
         assumptions: PredicateListId<'db>,
-        completion: ConstDefaultCompletion<'db>,
-        minter: Option<&HoleMinter<'db>>,
+        completion: ConstDefaultCompletion<'_, 'db>,
     ) -> Vec<TyId<'db>> {
         self.complete_explicit_args_with_defaults_in_mode(
             db,
-            trait_self,
+            trait_self.as_slice(),
+            trait_self.is_some(),
             provided_explicit,
             assumptions,
             completion,
             true,
-            minter,
         )
     }
 
@@ -3676,28 +3697,31 @@ impl<'db> GenericParamTypeSet<'db> {
     fn complete_explicit_args_with_defaults_in_mode(
         self,
         db: &'db dyn HirAnalysisDb,
-        trait_self: Option<TyId<'db>>,
+        implicit_args: &[TyId<'db>],
+        self_ty_available: bool,
         provided_explicit: &[TyId<'db>],
         assumptions: PredicateListId<'db>,
-        completion: ConstDefaultCompletion<'db>,
+        completion: ConstDefaultCompletion<'_, 'db>,
         checked_explicit: bool,
-        minter: Option<&HoleMinter<'db>>,
     ) -> Vec<TyId<'db>> {
         let total = self.params_precursor(db).len();
         let offset = self.offset_to_explicit(db);
+        debug_assert_eq!(implicit_args.len(), offset);
 
         // mapping from lowered param idx -> bound arg, used to substitute in defaults
-        let mut mapping = vec![];
-        let mut result = Vec::with_capacity(provided_explicit.len());
-        if let Some(self_ty) = trait_self {
-            mapping.push(Some(self_ty));
+        let mut mapping = vec![None; total];
+        let mut result =
+            Vec::with_capacity(total.saturating_sub(offset).max(provided_explicit.len()));
+        for (&arg, slot) in implicit_args.iter().zip(&mut mapping[..offset]) {
+            *slot = Some(arg);
         }
         for (explicit_idx, ty) in provided_explicit.iter().enumerate() {
             let checked = self.checked_explicit_arg(db, explicit_idx, *ty);
-            mapping.push(Some(checked));
+            if let Some(slot) = mapping.get_mut(offset + explicit_idx) {
+                *slot = Some(checked);
+            }
             result.push(if checked_explicit { checked } else { *ty });
         }
-        mapping.resize(total, None);
         let scope = self.scope(db);
 
         let mapped_generic_args = |mapping: &[Option<TyId<'db>>], end: usize| {
@@ -3755,9 +3779,9 @@ impl<'db> GenericParamTypeSet<'db> {
             let prec = &self.params_precursor(db)[i];
 
             if let Some(hir_ty) = prec.default_hir_ty {
-                let lowered = if hir_ty.is_self_ty(db) && trait_self.is_none() {
+                let lowered = if hir_ty.is_self_ty(db) && !self_ty_available {
                     TyId::invalid(db, InvalidCause::Other)
-                } else if let Some(minter) = minter {
+                } else if let Some(minter) = completion.application_minter {
                     // Mint through the application's minter: the memoized
                     // lowering would hand two applications of the same
                     // default the same hole identities.
@@ -3776,7 +3800,7 @@ impl<'db> GenericParamTypeSet<'db> {
                 let lowered = match default {
                     ConstGenericArgValue::Expr(default) => {
                         let generic_args = mapped_generic_args(&mapping, i);
-                        let const_ty = if minter.is_some_and(|minter| {
+                        let const_ty = if completion.application_minter.is_some_and(|minter| {
                             minter.const_bodies() == ConstBodyLowering::Deferred
                         }) {
                             ConstTyId::from_opt_body_deferred(db, default, expected, generic_args)
@@ -3802,8 +3826,8 @@ impl<'db> GenericParamTypeSet<'db> {
                     ConstGenericArgValue::Hole => TyId::const_ty(
                         db,
                         completion
-                            .application_path
-                            .and_then(|_| {
+                            .application_minter
+                            .and_then(|minter| {
                                 let owner = prec.owner?;
                                 let param_idx = prec.original_idx?;
                                 Some(ConstTyId::structural_hole(
@@ -3812,7 +3836,7 @@ impl<'db> GenericParamTypeSet<'db> {
                                         .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other)),
                                     StructuralHoleOrigin::DefaultHoleParam { owner, param_idx },
                                     LayoutIntroSite::definition(owner, param_idx),
-                                    minter?.mint(db),
+                                    minter.mint(db),
                                 ))
                             })
                             .unwrap_or_else(|| {
@@ -3846,23 +3870,32 @@ enum ConstDefaultCompletionMode {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct ConstDefaultCompletion<'db> {
+pub(crate) struct ConstDefaultCompletion<'a, 'db> {
     mode: ConstDefaultCompletionMode,
-    application_path: Option<PathId<'db>>,
+    // Application completion owns structural layout identity. Identity-only
+    // normalization has no source occurrence and therefore uses opaque holes.
+    application_minter: Option<&'a HoleMinter<'db>>,
 }
 
-impl<'db> ConstDefaultCompletion<'db> {
-    pub(crate) fn metadata(application_path: Option<PathId<'db>>) -> Self {
+impl<'a, 'db> ConstDefaultCompletion<'a, 'db> {
+    pub(crate) fn metadata_at_application(minter: &'a HoleMinter<'db>) -> Self {
         Self {
             mode: ConstDefaultCompletionMode::MetadataOnly,
-            application_path,
+            application_minter: Some(minter),
         }
     }
 
-    pub(crate) fn evaluate(application_path: Option<PathId<'db>>) -> Self {
+    pub(crate) fn evaluate_at_application(minter: &'a HoleMinter<'db>) -> Self {
         Self {
             mode: ConstDefaultCompletionMode::Evaluate,
-            application_path,
+            application_minter: Some(minter),
+        }
+    }
+
+    pub(crate) fn evaluate_for_identity() -> Self {
+        Self {
+            mode: ConstDefaultCompletionMode::Evaluate,
+            application_minter: None,
         }
     }
 }
