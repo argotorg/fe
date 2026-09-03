@@ -1,0 +1,25 @@
+msg FibMsg {
+    #[selector = 0x01]
+    Compute { n: u32 } -> u32,
+}
+
+struct FibStore {}
+
+pub contract Fib {
+    store: FibStore
+
+    recv FibMsg {
+        Compute { n } -> u32 {
+            let mut a: u32 = 0
+            let mut b: u32 = 1
+            let mut i: u32 = 0
+            while i < n {
+                let next: u32 = a + b
+                a = b
+                b = next
+                i = i + 1
+            }
+            return a
+        }
+    }
+}

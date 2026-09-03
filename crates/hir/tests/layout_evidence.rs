@@ -1165,7 +1165,7 @@ fn select<const ROOT: u256>(
             .blocks
             .iter()
             .map(|block| block.stmts.len())
-            .sum()
+            .sum::<usize>()
     );
     let (source, indices) = evidence
         .statements

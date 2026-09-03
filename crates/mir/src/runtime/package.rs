@@ -42,8 +42,8 @@ use crate::{
         EntryEffectContext, entry_semantic_args_plan, target_root_provider_materialization,
     },
     runtime::stable_key::{
-        IdentityMode, item_identity, semantic_instance_identity_in_mode, stable_identity_hash,
-        type_identity,
+        IdentityMode, item_identity, semantic_instance_identity_in_mode,
+        stable_identity_fingerprint, type_identity,
     },
     runtime::{
         AddressSpaceKind, ConstRegionId, ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm,
@@ -1698,7 +1698,7 @@ fn make_resolved_code_region<'db>(
     ResolvedCodeRegion::new(db, region, symbol, source, root)
 }
 
-const RUNTIME_SYMBOL_DISAMBIG_HASH_LEN: usize = 4;
+const RUNTIME_SYMBOL_DISAMBIG_FINGERPRINT_LEN: usize = 4;
 
 fn collect_runtime_functions<'db>(
     db: &'db dyn MirDb,
@@ -1716,7 +1716,7 @@ fn collect_runtime_functions<'db>(
         .map(|instance| {
             (
                 instance,
-                runtime_instance_symbol_base(db, instance),
+                runtime_instance_display_name(db, instance),
                 runtime_instance_symbol_key(db, instance),
             )
         })
@@ -1763,8 +1763,11 @@ fn runtime_instance_symbol(
     emitted_counts: &mut FxHashMap<String, usize>,
 ) -> String {
     let mut symbol = if needs_disambiguator {
-        let hash = stable_identity_hash(stable_key);
-        format!("{base}_{}", &hash[..RUNTIME_SYMBOL_DISAMBIG_HASH_LEN])
+        let fingerprint = stable_identity_fingerprint(stable_key);
+        format!(
+            "{base}_{}",
+            &fingerprint[..RUNTIME_SYMBOL_DISAMBIG_FINGERPRINT_LEN]
+        )
     } else {
         base
     };
@@ -2326,7 +2329,10 @@ fn address_space_sort_key(space: AddressSpaceKind) -> &'static str {
     }
 }
 
-fn runtime_instance_symbol_base<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) -> String {
+pub(crate) fn runtime_instance_display_name<'db>(
+    db: &'db dyn MirDb,
+    instance: RuntimeInstance<'db>,
+) -> String {
     match instance.key(db).source(db) {
         RuntimeInstanceSource::Semantic(semantic) => {
             symbol_base_for_semantic_instance(db, semantic)
@@ -2345,7 +2351,7 @@ fn wrap_runtime_lowering_error<'db>(
     match err {
         LowerError::Unsupported(message) => LowerError::Unsupported(format!(
             "MIR lowering failed: unsupported while lowering `{}`: {message}",
-            runtime_instance_symbol_base(db, instance)
+            runtime_instance_display_name(db, instance)
         )),
     }
 }
