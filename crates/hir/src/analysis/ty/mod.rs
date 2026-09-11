@@ -437,8 +437,8 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
         // Associated const bodies in inherent impl blocks live inside the impl
         // rather than as standalone items, so check them here. A value/declared-type
         // mismatch surfaces as a plain `TypeMismatch`, same as a top-level `const`.
-        // (Trait impl consts are not included: desugared `#[event]`/`#[error]`
-        // impls rely on cascaded body errors being suppressed.)
+        // Trait impl consts are checked separately above according to each
+        // constant's body-checking policy.
         for &impl_ in top_mod.all_impls(db) {
             // Consts on generic impls have legitimately parametric values
             // (e.g. `256 / BITS`), validated per instantiation; only flag a

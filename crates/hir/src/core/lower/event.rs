@@ -414,6 +414,12 @@ fn create_topic0_const<'db>(
         name: Partial::Present(topic0_name),
         ty: Partial::Present(topic0_ty),
         value: Partial::Present(body),
+        // Fieldless signatures have no field-source errors to cascade from.
+        body_check_policy: if field_type_paths.is_empty() {
+            crate::hir_def::AssocConstBodyCheckPolicy::BodyAnalysis
+        } else {
+            crate::hir_def::AssocConstBodyCheckPolicy::ExpansionSourceCompatibility
+        },
         vis: crate::hir_def::Visibility::Public,
     }
 }

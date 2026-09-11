@@ -357,6 +357,7 @@ fn create_selector_const<'db>(
         name: Partial::Present(selector_name),
         ty: Partial::Present(selector_ty),
         value: Partial::Present(body),
+        body_check_policy: crate::hir_def::AssocConstBodyCheckPolicy::ExpansionSourceCompatibility,
         vis: crate::hir_def::Visibility::Public,
     }
 }

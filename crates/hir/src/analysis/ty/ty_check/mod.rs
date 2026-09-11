@@ -151,10 +151,11 @@ pub fn check_impl_trait_const_bodies<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
-    // Only check impls the user wrote; attribute-expanded impls (e.g.
-    // `#[event]`) would re-report their cascade failures at the expansion
-    // site on already-diagnosed code.
-    if !matches!(impl_trait.origin(db), crate::span::HirOrigin::Raw(_)) {
+    // Producers explicitly record any other diagnostic owner or compatibility
+    // exception. A generated origin alone never exempts a new constant body.
+    if !impl_trait.hir_consts(db).iter().any(|constant| {
+        constant.body_check_policy == crate::hir_def::AssocConstBodyCheckPolicy::BodyAnalysis
+    }) {
         return Vec::new();
     }
     let Some(implementor) = lower_impl_trait(db, impl_trait) else {
@@ -166,6 +167,11 @@ pub fn check_impl_trait_const_bodies<'db>(
 
     let mut diags = Vec::new();
     for impl_const in impl_trait.assoc_consts(db) {
+        if impl_const.body_check_policy(db)
+            != crate::hir_def::AssocConstBodyCheckPolicy::BodyAnalysis
+        {
+            continue;
+        }
         let Some(body) = impl_const.value_body(db) else {
             continue;
         };

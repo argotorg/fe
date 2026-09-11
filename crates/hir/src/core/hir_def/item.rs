@@ -1293,12 +1293,30 @@ pub struct AssocTyDef<'db> {
     pub(crate) type_ref: Partial<TypeId<'db>>,
 }
 
+/// Controls body checking and diagnostic ownership for an impl associated constant.
+/// This policy is independent of source origin and does not affect checking
+/// the constant's declared type against the trait declaration.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, salsa::Update)]
+pub enum AssocConstBodyCheckPolicy {
+    /// The ordinary body-analysis pass checks the value against its expected type.
+    #[default]
+    BodyAnalysis,
+    /// Message selector analysis checks and evaluates this value, reporting its
+    /// body diagnostics before checking selector uniqueness.
+    MsgSelectorAnalysis,
+    /// Preserve cascade suppression for existing message/event/error ABI
+    /// synthesis. Their source diagnostics do not establish that every generated
+    /// body has been checked. New producers should use `BodyAnalysis`.
+    ExpansionSourceCompatibility,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocConstDef<'db> {
     pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
     pub ty: Partial<TypeId<'db>>,
     pub value: Partial<Body<'db>>,
+    pub body_check_policy: AssocConstBodyCheckPolicy,
     /// Only meaningful for consts in inherent `impl` blocks; consts in trait
     /// impls inherit their visibility from the trait.
     pub vis: Visibility,
