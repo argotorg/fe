@@ -1,13 +1,15 @@
-//! Checked scalar function-body generation in an explicit, isolated stage.
+//! Checked value function-body generation in an explicit, isolated stage.
 //!
 //! An ordinary Fe const function computes a designated `FunctionBody<T>` value.
-//! Only its finished scalar crosses stages. The supplied source template owns
+//! Only its finished value crosses stages. The supplied source template owns
 //! the complete signature and context; generation replaces its empty body.
 //! The resulting standalone stage uses builtin core/std and default compiler
 //! options. Custom dependencies and references into the provider stage are not
 //! implicitly imported. No database-specific semantic IDs cross the boundary.
 
-use std::{fmt, ops::Range};
+use std::{collections::HashSet, fmt, ops::Range};
+
+mod value;
 
 use common::{
     InputDb,
@@ -18,7 +20,7 @@ use common::{
 };
 use hir::{
     analysis::{
-        semantic::{SemConstScalar, SemConstValue, eval_body_owner_const_with_args, sem_const_ty},
+        semantic::{SemConstValue, eval_body_owner_const_with_args, sem_const_ty},
         ty::{
             corelib::resolve_lib_type_path, normalize::normalize_ty,
             trait_resolution::PredicateListId, ty_check::BodyOwner, ty_def::TyId,
@@ -43,6 +45,80 @@ pub struct FunctionTemplate {
     pub url: Url,
     pub source: String,
     pub function_name: String,
+}
+
+/// A logical request name within an explicitly named stage. This is not a
+/// source fingerprint, semantic item ID, or authority to reuse an old artifact.
+/// A fresh session can reevaluate the same identity against revised sources.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct RequestIdentity {
+    pub stage: String,
+    pub key: String,
+}
+
+pub struct GenerationRequest {
+    pub key: String,
+    pub template: FunctionTemplate,
+}
+
+/// One evaluation of a stage. Every attempted key is reserved, including failed
+/// requests. Duplicate keys fail before checking or execution and are never
+/// silently replayed. Start a fresh session to reevaluate a stage after edits.
+/// Stage/key names are supplied by the caller, not inferred from output text or
+/// allocation order. Uniqueness is enforced within this session only. The
+/// attempted-key ledger is not bounded by the output budget; callers control
+/// admission and the lifetime of a session.
+pub struct GenerationSession {
+    stage: String,
+    attempted: HashSet<String>,
+    budget: GenerationBudget,
+}
+
+impl GenerationSession {
+    pub fn new(stage: String, budget: GenerationBudget) -> Self {
+        Self {
+            stage,
+            attempted: HashSet::new(),
+            budget,
+        }
+    }
+
+    pub fn budget(&self) -> &GenerationBudget {
+        &self.budget
+    }
+
+    /// Fill a checked template from a bool/u256 value or a tuple/fixed array of
+    /// those values. User nominal types and cross-stage references are excluded.
+    pub fn generate_value_function(
+        &mut self,
+        db: &DriverDataBase,
+        provider: Func<'_>,
+        request: GenerationRequest,
+    ) -> Result<GeneratedFunction, GenerationError> {
+        let identity = RequestIdentity {
+            stage: self.stage.clone(),
+            key: request.key.clone(),
+        };
+        if !self.attempted.insert(request.key) {
+            let mut error = GenerationError::new(
+                GenerationErrorKind::DuplicateRequest,
+                "generation request key was already attempted in this session",
+            );
+            error.request_identity = Some(identity);
+            return Err(error);
+        }
+        generate_function(
+            db,
+            provider,
+            request.template,
+            &mut self.budget,
+            Some(identity.clone()),
+        )
+        .map_err(|mut error| {
+            error.request_identity = Some(identity);
+            error
+        })
+    }
 }
 
 /// Request-local accounting, independent of query-cache execution counts.
@@ -112,11 +188,15 @@ pub struct GenerationProvenance {
     pub template_source: String,
     pub template_body: Range<usize>,
     pub generated_body: Range<usize>,
+    /// Emission ordinal for budget accounting, not logical identity.
     pub invocation: usize,
+    /// Present for explicit-session requests; absent for the scalar entry.
+    pub request_identity: Option<RequestIdentity>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GenerationErrorKind {
+    DuplicateRequest,
     Provider,
     Protocol,
     Execution,
@@ -133,6 +213,7 @@ pub struct GenerationError {
     pub kind: GenerationErrorKind,
     pub message: String,
     pub provenance: Option<Box<GenerationProvenance>>,
+    pub request_identity: Option<RequestIdentity>,
 }
 
 impl GenerationError {
@@ -141,6 +222,7 @@ impl GenerationError {
             kind,
             message: message.into(),
             provenance: None,
+            request_identity: None,
         }
     }
 
@@ -183,27 +265,6 @@ impl GeneratedFunction {
     pub fn function(&self) -> Func<'_> {
         target_function(&self.db, self.file, &self.function_name)
             .expect("checked generation artifact has its selected function")
-    }
-}
-
-enum ScalarValue {
-    Bool(bool),
-    U256(String),
-}
-
-impl ScalarValue {
-    fn body(&self) -> String {
-        match self {
-            Self::Bool(value) => format!("{{ {value} }}"),
-            Self::U256(value) => format!("{{ {value} }}"),
-        }
-    }
-
-    fn ty<'db>(&self, db: &'db DriverDataBase) -> TyId<'db> {
-        match self {
-            Self::Bool(_) => TyId::bool(db),
-            Self::U256(_) => TyId::u256(db),
-        }
     }
 }
 
@@ -297,6 +358,16 @@ pub fn generate_scalar_function(
     template: FunctionTemplate,
     budget: &mut GenerationBudget,
 ) -> Result<GeneratedFunction, GenerationError> {
+    generate_function(db, provider, template, budget, None)
+}
+
+fn generate_function(
+    db: &DriverDataBase,
+    provider: Func<'_>,
+    template: FunctionTemplate,
+    budget: &mut GenerationBudget,
+    request_identity: Option<RequestIdentity>,
+) -> Result<GeneratedFunction, GenerationError> {
     if budget.used_functions >= budget.max_functions
         || template.source.len() > budget.max_source_bytes
     {
@@ -367,13 +438,20 @@ pub fn generate_scalar_function(
     let (base, args) = return_ty.decompose_ty_app(db);
     if base != designated.base_ty(db)
         || args.len() != 1
-        || (args[0] != TyId::bool(db) && args[0] != TyId::u256(db))
+        || (request_identity.is_none() && args[0] != TyId::bool(db) && args[0] != TyId::u256(db))
     {
         return Err(GenerationError::new(
             GenerationErrorKind::Protocol,
-            "provider must return core::meta::FunctionBody<bool> or FunctionBody<u256>",
+            if request_identity.is_some() {
+                "provider must return core::meta::FunctionBody with a supported value type"
+            } else {
+                "provider must return core::meta::FunctionBody<bool> or FunctionBody<u256>"
+            },
         ));
     }
+    // Preserve structural type identity even for empty aggregates. Reading the
+    // shape also bounds nesting and expanded value nodes before evaluation.
+    let expected = value::read_type(db, args[0])?;
     let value = eval_body_owner_const_with_args(db, BodyOwner::Func(provider), vec![], vec![])
         .map_err(|err| {
             GenerationError::new(
@@ -393,28 +471,15 @@ pub fn generate_scalar_function(
             "provider descriptor type or fields do not match its checked return type",
         ));
     }
-    let scalar = match fields[0].value(db) {
-        SemConstValue::Scalar {
-            value: SemConstScalar::Bool(value),
-            ..
-        } if args[0] == TyId::bool(db) => ScalarValue::Bool(value),
-        SemConstValue::Scalar {
-            value: SemConstScalar::Int { value },
-            ..
-        } if args[0] == TyId::u256(db)
-            && value.bits() <= 256
-            && !value.to_string().starts_with('-') =>
-        {
-            ScalarValue::U256(value.to_string())
-        }
-        _ => {
-            return Err(GenerationError::new(
-                GenerationErrorKind::Protocol,
-                "provider descriptor has an unsupported scalar value",
-            ));
-        }
-    };
-    let body = scalar.body();
+    let remaining = budget.max_source_bytes.saturating_sub(budget.used_bytes);
+    let surrounding = template.source.len() - body_range.len();
+    let body_limit = remaining.checked_sub(surrounding).ok_or_else(|| {
+        GenerationError::new(
+            GenerationErrorKind::Limit,
+            "generated source byte limit exceeded",
+        )
+    })?;
+    let body = value::body(db, fields[0], &expected, body_limit)?;
     let mut source = template.source.clone();
     source.replace_range(body_range.clone(), &body);
     let invocation = budget.charge(source.len())?;
@@ -429,6 +494,7 @@ pub fn generate_scalar_function(
         template_body: body_range.clone(),
         generated_body: body_range.start..body_range.start + body.len(),
         invocation,
+        request_identity,
     };
     let mut target = DriverDataBase::default();
     target.initialize_builtin_core();
@@ -454,13 +520,12 @@ pub fn generate_scalar_function(
         func.scope(),
         param_env(&target, func.into()),
     );
-    let expected = scalar.ty(&target);
-    if actual != expected {
+    if value::read_type(&target, actual).ok().as_ref() != Some(&expected) {
         return Err(GenerationError::new(
             GenerationErrorKind::ReturnType,
             format!(
                 "descriptor body has type {}, but target function returns {}",
-                expected.pretty_print(&target),
+                expected,
                 actual.pretty_print(&target)
             ),
         )

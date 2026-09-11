@@ -77,3 +77,65 @@ charged before target checking, including attempts rejected by that checking.
 The input template is also checked against the source limit before parsing.
 These are logical source/function limits, not a bound on all compiler memory or
 provider evaluation work. CTFE's existing execution limits still apply.
+
+## Aggregate values and request identity
+
+For tuples and fixed arrays, use an explicit `GenerationSession`:
+
+```rust,ignore
+use fe_driver::generation::{GenerationRequest, GenerationSession};
+
+let mut session = GenerationSession::new(
+    "schema-stage".to_owned(),
+    GenerationBudget::new(8, 64 * 1024),
+);
+let artifact = session.generate_value_function(
+    &provider_db,
+    provider_func,
+    GenerationRequest {
+        key: "constants".to_owned(),
+        template,
+    },
+)?;
+```
+
+This entry accepts `FunctionBody<T>` where `T` is recursively `bool`, `u256`, a
+tuple (including unit), or a fixed array. For example, a provider can compute
+`FunctionBody<([u256; 2], bool)>` for a template returning `([u256; 2], bool)`.
+The source body contains only canonical literal syntax. Ordinary target checking
+still validates its complete declaration and all callers.
+
+The transport retains a structural type independently of its contents. Empty
+`[bool; 0]` and `[u256; 0]` values therefore remain different contracts. User
+nominal types, references, pointers and unsupported scalar types are rejected,
+even inside zero-length arrays. Target aliases normalize normally, but fitting
+integer literals cannot silently narrow the descriptor's element type.
+
+Transport is bounded to 32 levels, 4,096 type nodes, and 4,096 expanded value
+occurrences. Expanded array
+cost uses saturating arithmetic before the explicit provider evaluation request;
+an enclosing empty
+array does not materialize its latent element values. Literal rendering checks
+the remaining aggregate source budget before each append. These bounds apply to
+the transport, not all work in ordinary checking or CTFE.
+
+Every attempted request key is reserved before validation. Reusing a key in the
+same session returns `DuplicateRequest`, even if the first attempt failed. Failed
+attempts before source emission do not consume the output budget; emitted but
+invalid target stages do. A duplicate consumes neither output nor execution.
+The attempted-key ledger is not limited by the output budget; callers control
+session admission and lifetime.
+
+Receipts and errors retain `RequestIdentity { stage, key }`. The existing
+`invocation` field is an emission ordinal only. Reversing request order changes
+that ordinal but not the caller-supplied identity. Equal emitted text does not
+merge distinct requests. Two fresh sessions may evaluate the same stage/key
+against different sources; identity equality is not evidence of equal artifacts
+or permission to reuse one. A shared stage key does not make the artifacts in
+separate databases mutually visible. The original scalar entry retains `None` for request
+identity and continues to reject aggregates.
+
+Cross-stage item references remain unsupported. Request identities name logical
+work, not compiler declarations, source snapshots, or imported symbols. A future
+reference protocol must bind a particular checked artifact incarnation, exported
+item and receiving compilation context before ordinary name/type checking.
