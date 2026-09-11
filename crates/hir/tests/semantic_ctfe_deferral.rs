@@ -1966,7 +1966,7 @@ fn repeated_invocations_share_identity_after_scope_transfer() {
 }
 
 #[test]
-fn ctfe_typed_read_preserves_provider_borrow_rejection() {
+fn ctfe_typed_read_through_frame_local_borrow_evaluates() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "ctfe_typed_read.fe".into(),
@@ -1999,11 +1999,10 @@ fn ctfe_typed_read_preserves_provider_borrow_rejection() {
         BodyOwner::Func(function(&db, module, "caller")),
         vec![],
     );
-    assert!(matches!(
-        outcome,
-        EvalOutcome::Failed(EvalFailure::Ctfe(ref error))
-            if matches!(root_error(error), CtfeError::InvalidProviderUse { .. })
-    ));
+    // `ref value` borrows a local of the caller's own frame, so the typed read
+    // in `read` loads it. Borrows of memory outside CTFE frames stay rejected
+    // (`borrow_through_pointer_is_rejected` in the machine tests).
+    assert_integer_result(&db, outcome, TyId::u256(&db), 7);
 }
 
 #[test]

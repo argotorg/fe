@@ -21,6 +21,126 @@ use fe_hir::{
 };
 use num_traits::ToPrimitive;
 
+/// Reads a fixture from `test_files/semantic_ctfe`, returning its real path
+/// (so the file gets a real `file:` URL) and its text.
+fn semantic_ctfe_fixture(name: &str) -> (camino::Utf8PathBuf, String) {
+    let path = camino::Utf8PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test_files/semantic_ctfe"
+    ))
+    .join(name);
+    let text = std::fs::read_to_string(&path).expect("fixture should be readable");
+    (path, text)
+}
+
+/// Each fixture's `answer` borrows one of its own frame locals, possibly
+/// through a call, and evaluates to 42.
+#[dir_test::dir_test(
+    dir: "$CARGO_MANIFEST_DIR/test_files/semantic_ctfe/frame_local_borrows",
+    glob: "*.fe"
+)]
+fn semantic_ctfe_evaluates_frame_local_borrows(fixture: dir_test::Fixture<&str>) {
+    use fe_hir::analysis::ty::provider::ProviderAddressSpace;
+    use fe_hir::projection::Projection;
+
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(fixture.path().into(), fixture.content());
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    let func = find_func(&db, top_mod, "answer");
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+    );
+    let borrows_frame_local = instance
+        .body(&db)
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .any(|stmt| {
+            matches!(
+                &stmt.kind,
+                SStmtKind::Assign {
+                    expr: SExpr::Borrow {
+                        provider: Some(ProviderAddressSpace::Memory),
+                        place,
+                        ..
+                    },
+                    ..
+                } if !place.path.iter().any(|projection| matches!(projection, Projection::Deref))
+            )
+        });
+    assert!(borrows_frame_local, "`answer` must borrow a frame local");
+    let value = match eval_body_owner_const(&db, BodyOwner::Func(func), vec![]) {
+        EvalOutcome::Ready(value) => value,
+        outcome => panic!("{outcome:?}"),
+    };
+    assert_eq!(value.pretty_print(&db), "42");
+}
+
+#[test]
+fn semantic_ctfe_rejects_references_to_a_returning_frame() {
+    let mut db = HirAnalysisTestDb::default();
+    let (path, text) = semantic_ctfe_fixture("returning_frame_borrow.fe");
+    let file = db.new_stand_alone(path, &text);
+    let (top_mod, _) = db.top_mod(file);
+    let func = find_func(&db, top_mod, "use_dangling");
+    // Even direct evaluator clients that omit borrow analysis must get an
+    // error, not a stale frame reference or a panic when that reference is read.
+    let EvalOutcome::Failed(EvalFailure::Ctfe(error)) =
+        eval_body_owner_const(&db, BodyOwner::Func(func), vec![])
+    else {
+        panic!("a dangling frame reference must fail evaluation");
+    };
+    // The failure happens in the callee and reaches the caller wrapped.
+    let mut root = &error;
+    while let CtfeError::CalleeError { source, .. } = root {
+        root = &**source;
+    }
+    assert!(matches!(root, CtfeError::InvalidBorrow { .. }), "{error:?}");
+}
+
+#[test]
+fn semantic_ctfe_preserves_const_and_anonymous_result_modes() {
+    let mut db = HirAnalysisTestDb::default();
+    let (path, text) = semantic_ctfe_fixture("const_borrow_result_modes.fe");
+    let file = db.new_stand_alone(path, &text);
+    let (top_mod, _) = db.top_mod(file);
+    let constants = top_mod
+        .all_items(&db)
+        .iter()
+        .copied()
+        .filter_map(|item| match item {
+            ItemKind::Const(const_) => Some(const_),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(constants.len(), 2);
+    for const_ in constants {
+        let expected = const_.ty(&db);
+        for owner in [
+            BodyOwner::Const(const_),
+            BodyOwner::AnonConstBody {
+                body: const_.body(&db).to_opt().unwrap(),
+                expected,
+            },
+        ] {
+            let result = eval_body_owner_const(&db, owner, vec![]);
+            if expected.as_capability(&db).is_some() {
+                assert!(
+                    matches!(
+                        result,
+                        EvalOutcome::Failed(EvalFailure::Ctfe(CtfeError::InvalidBorrow { .. }))
+                    ),
+                    "{result:?}"
+                );
+            } else {
+                assert_eq!(result.into_ready().unwrap().pretty_print(&db), "42");
+            }
+        }
+    }
+}
+
 #[test]
 fn semantic_const_operands_keep_formal_evidence_distinct() {
     let mut db = HirAnalysisTestDb::default();

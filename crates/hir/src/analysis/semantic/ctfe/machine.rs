@@ -20,9 +20,9 @@ use crate::{
             STerminatorKind, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody,
             SemanticConstRef, VariantIndex, array_const, bool_const, bytes_const,
             consts::instantiate_const_template, enum_const, execute_scalar_cast,
-            execute_source_int_binary, execute_source_int_unary, int_const, int_in_range,
-            int_ty_shape, normalize_int_to_shape, runtime_size_bytes, sem_const_eq,
-            sem_const_from_ty, sem_const_ty, struct_const, tuple_const, unit_const,
+            execute_source_int_binary, execute_source_int_unary, instantiate_with_generic_args,
+            int_const, int_in_range, int_ty_shape, normalize_int_to_shape, runtime_size_bytes,
+            sem_const_eq, sem_const_from_ty, sem_const_ty, struct_const, tuple_const, unit_const,
         },
         ty::{
             const_ty::{ConstTyData, ConstTyId},
@@ -31,6 +31,7 @@ use crate::{
                 SaturatingArithmetic, core_primitive_wrapper_call_kind, ctfe_extern_intrinsic_kind,
             },
             normalize::normalize_ty,
+            provider::ProviderAddressSpace,
             ty_check::{BodyOwner, LocalBinding, ParamSite},
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
@@ -1159,7 +1160,47 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             locals,
             current: 0,
         });
-        let result = self.run_frame(frame_idx);
+        let result = self.run_frame(frame_idx).and_then(|value| {
+            if let CtfeValue::Ref(r#ref) = &value {
+                let key = instance.key(self.db);
+                let result_ty = match key.owner(self.db) {
+                    BodyOwner::Func(func) => func.return_ty(self.db),
+                    BodyOwner::Const(const_) => const_.ty(self.db),
+                    BodyOwner::AnonConstBody { expected, .. } => expected,
+                    BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
+                        return Err(CtfeError::NotConstEvaluable { origin }.into());
+                    }
+                };
+                let ty = instantiate_with_generic_args(
+                    self.db,
+                    result_ty,
+                    key.subst(self.db).generic_args(self.db),
+                );
+                let returns_borrow = normalize_ty(
+                    self.db,
+                    ty,
+                    key.impl_env(self.db).normalization_scope(self.db),
+                    key.impl_env(self.db).assumptions(self.db),
+                )
+                .as_capability(self.db)
+                .is_some();
+                // Returning an ordinary value reads the referent before its
+                // frame disappears. Returning a capability preserves the ref.
+                if !returns_borrow {
+                    return self
+                        .load_ref_value(r#ref, origin)
+                        .map(CtfeValue::Value)
+                        .map_err(Into::into);
+                }
+            }
+            // A callee may return a reference into a caller's frame, but never
+            // into the frame that is about to be removed.
+            if matches!(&value, CtfeValue::Ref(r#ref) if r#ref.frame >= frame_idx) {
+                Err(CtfeError::InvalidBorrow { origin }.into())
+            } else {
+                Ok(value)
+            }
+        });
         self.frames.pop();
         result
     }
@@ -1480,15 +1521,26 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     .map(CtfeValue::Value)?)
             }
             SExpr::Borrow {
-                place: _,
-                provider: Some(_),
-                ..
-            } => Err(CtfeError::InvalidProviderUse { origin }.into()),
-            SExpr::Borrow {
-                place,
-                provider: None,
-                ..
+                place, provider, ..
             } => {
+                if let Some(provider) = provider {
+                    let locals = &self.frames[frame_idx].body.locals;
+                    // Ordinary explicit local borrows also carry Memory
+                    // metadata. Only frame-backed places are meaningful here:
+                    // CTFE has no external address-space/provider state.
+                    if provider != ProviderAddressSpace::Memory
+                        || place
+                            .path
+                            .iter()
+                            .any(|elem| matches!(elem, Projection::Deref))
+                        || locals[place.local.index()]
+                            .role
+                            .root_provider(locals)
+                            .is_some()
+                    {
+                        return Err(CtfeError::InvalidProviderUse { origin }.into());
+                    }
+                }
                 let place = self.resolve_place(frame_idx, &place, origin)?;
                 Ok(CtfeValue::Ref(CtfeRef {
                     frame: place.frame,
@@ -3329,6 +3381,59 @@ mod tests {
             panic!("retry root must remain an integer");
         };
         assert_eq!(original, BigInt::from(7));
+    }
+
+    #[test]
+    fn borrow_through_pointer_is_rejected() {
+        // A pointer argument cannot come from a verified request, so reach the
+        // borrow directly: memory outside CTFE frames is not addressable.
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "internal_ctfe_pointer_borrow.fe".into(),
+            "const fn external(p: *u8) -> mut u8 { mut *p }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(module.all_funcs(&db)[0])),
+        );
+        let body = instance.body(&db);
+        let (dst, expr, origin) = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.stmts)
+            .find_map(|stmt| match &stmt.kind {
+                SStmtKind::Assign {
+                    dst,
+                    expr:
+                        expr @ SExpr::Borrow {
+                            provider: Some(ProviderAddressSpace::Memory),
+                            place,
+                            ..
+                        },
+                } if place
+                    .path
+                    .iter()
+                    .any(|elem| matches!(elem, Projection::Deref)) =>
+                {
+                    Some((*dst, expr.clone(), stmt.origin))
+                }
+                _ => None,
+            })
+            .expect("`mut *p` must lower as a memory borrow through a dereference");
+        let mut machine = CtfeMachine::new(&db, CtfeConfig::default());
+        machine.frames.push(CtfeFrame {
+            body,
+            locals: vec![CtfeSlot::Uninit; body.locals.len()],
+            current: 0,
+        });
+        assert!(matches!(
+            machine.eval_expr(0, body.locals[dst.index()].ty, expr, origin),
+            Err(EvalStop::Failed(EvalFailure::Ctfe(
+                CtfeError::InvalidProviderUse { .. }
+            )))
+        ));
     }
 
     #[test]

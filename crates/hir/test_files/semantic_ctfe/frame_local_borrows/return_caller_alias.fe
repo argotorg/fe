@@ -1,0 +1,8 @@
+const fn forward(value: mut u8) -> mut u8 { mut value }
+
+const fn answer() -> u8 {
+    let mut x: u8 = 0
+    let a = forward(value: mut x)
+    a = 42
+    x
+}
