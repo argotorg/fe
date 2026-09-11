@@ -9,6 +9,9 @@ use crate::{
     ingot::{Ingot, IngotBaseUrl},
 };
 
+// Track the embedded catalog as well as files in the current macro expansion.
+const _: &str = env!("FE_BUILTIN_FINGERPRINT");
+
 // Use the canonical single-slash form for custom-scheme base URLs.
 // `Url::join` normalizes children under `builtin-core:/...`, so lookups must
 // use the same base form or builtin ingots appear empty.
