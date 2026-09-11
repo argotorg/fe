@@ -53,13 +53,20 @@ where
     desugared: O,
 }
 
-struct FuncBodySpec<'db> {
-    name: IdentId<'db>,
-    attrs: AttrListId<'db>,
-    generic_params: GenericParamListId<'db>,
-    params: FuncParamListId<'db>,
-    ret_ty: Option<TypeId<'db>>,
-    modifiers: FuncModifiers,
+/// Complete declaration data for a generated function with a body.
+///
+/// Callers that mirror an existing declaration can preserve every signature
+/// component here. Narrow compiler-generated helpers use the convenience
+/// wrappers below, which intentionally provide empty predicates and effects.
+pub(super) struct GeneratedFunctionSpec<'db> {
+    pub(super) name: IdentId<'db>,
+    pub(super) attrs: AttrListId<'db>,
+    pub(super) generic_params: GenericParamListId<'db>,
+    pub(super) where_clause: WhereClauseId<'db>,
+    pub(super) params: FuncParamListId<'db>,
+    pub(super) effects: EffectParamListId<'db>,
+    pub(super) ret_ty: Option<TypeId<'db>>,
+    pub(super) modifiers: FuncModifiers,
 }
 
 impl<'ctxt, 'db, O> HirBuilder<'ctxt, 'db, O>
@@ -469,12 +476,14 @@ where
         modifiers: FuncModifiers,
         build_body: impl FnOnce(&mut BodyBuilder<'_, 'db, O>),
     ) -> Func<'db> {
-        self.func_with_body_spec(
-            FuncBodySpec {
+        self.generated_func_with_body(
+            GeneratedFunctionSpec {
                 name,
                 attrs: self.inline_always_attrs(),
                 generic_params,
+                where_clause: self.empty_where_clause(),
                 params,
+                effects: self.empty_effect_params(),
                 ret_ty,
                 modifiers,
             },
@@ -482,13 +491,12 @@ where
         )
     }
 
-    fn func_with_body_spec(
+    /// Builds a function without filling in any declaration defaults.
+    pub(super) fn generated_func_with_body(
         &mut self,
-        spec: FuncBodySpec<'db>,
+        spec: GeneratedFunctionSpec<'db>,
         build_body: impl FnOnce(&mut BodyBuilder<'_, 'db, O>),
     ) -> Func<'db> {
-        let where_clause = self.empty_where_clause();
-        let effects = self.empty_effect_params();
         self.with_item_scope(
             TrackedItemVariant::Func(Partial::Present(spec.name)),
             |this, id| {
@@ -507,9 +515,9 @@ where
                     Partial::Present(spec.name),
                     spec.attrs,
                     spec.generic_params,
-                    where_clause,
+                    spec.where_clause,
                     Partial::Present(spec.params),
-                    effects,
+                    spec.effects,
                     spec.ret_ty,
                     spec.modifiers,
                     Some(body),
@@ -529,12 +537,14 @@ where
         modifiers: FuncModifiers,
         build_body: impl FnOnce(&mut BodyBuilder<'_, 'db, O>),
     ) -> Func<'db> {
-        self.func_with_body_spec(
-            FuncBodySpec {
+        self.generated_func_with_body(
+            GeneratedFunctionSpec {
                 name: self.ident(name),
                 attrs: self.inline_always_attrs(),
                 generic_params,
+                where_clause: self.empty_where_clause(),
                 params,
+                effects: self.empty_effect_params(),
                 ret_ty,
                 modifiers,
             },
@@ -955,5 +965,203 @@ where
         let root_expr = self.push_expr(Expr::Block(stmts));
         self.body.f_ctxt.leave_block_scope(root_expr);
         self.body.build(None, root_expr, BodyKind::FuncBody)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        HirDb,
+        hir_def::{
+            EffectParam, EffectParamListId, Func, FuncModifiers, FuncParam, FuncParamMode,
+            FuncParamName, InlineHint, Partial, Stmt, TopLevelMod, TraitRefId, TypeBound, TypeMode,
+            Visibility, WhereClauseId, WherePredicate,
+        },
+        span::{EventDesugared, HirOrigin},
+        test_db::{HirAnalysisTestDb, TestDb},
+    };
+
+    use super::{FileLowerCtxt, GeneratedFunctionSpec, HirBuilder};
+
+    #[salsa::tracked]
+    fn build_complete_test_function<'db>(
+        db: &'db dyn HirDb,
+        top_mod: TopLevelMod<'db>,
+    ) -> Func<'db> {
+        let source_struct = top_mod
+            .all_structs(db)
+            .first()
+            .expect("test source has an origin struct");
+        let HirOrigin::Raw(event_struct) = source_struct.origin(db).clone() else {
+            panic!("test origin struct was not raw")
+        };
+        let mut ctxt = FileLowerCtxt::enter_top_mod(db, top_mod);
+        ctxt.insert_synthetic_prelude_use();
+        let mut builder = HirBuilder::new(&mut ctxt, EventDesugared { event_struct });
+
+        let copy_path = builder.path_from_root(builder.roots().core, &["marker", "Copy"]);
+        let copy_trait = TraitRefId::new(db, Partial::Present(copy_path));
+        let (generic_params, value_ty) = builder.type_param_with_trait_bound("T", copy_trait);
+        let where_clause = WhereClauseId::new(
+            db,
+            vec![WherePredicate {
+                ty: Partial::Present(value_ty),
+                bounds: vec![TypeBound::Trait(copy_trait)],
+            }],
+        );
+        let effect_name = builder.ident("capability");
+        let effects = EffectParamListId::new(
+            db,
+            vec![EffectParam {
+                name: Some(effect_name),
+                key_ty: Partial::Present(value_ty),
+                is_mut: true,
+            }],
+        );
+        let value_name = builder.ident("value");
+        let borrowed_name = builder.ident("borrowed");
+        let borrowed_ty = builder.ty_path(crate::hir_def::PathId::from_ident(
+            db,
+            builder.ident("u256"),
+        ));
+        let borrowed_ty = crate::hir_def::TypeId::new(
+            db,
+            crate::hir_def::TypeKind::Mode(TypeMode::Ref, Partial::Present(borrowed_ty)),
+        );
+        let params = builder.params([
+            FuncParam {
+                mode: FuncParamMode::Own,
+                is_mut: false,
+                has_ref_prefix: false,
+                has_own_prefix: true,
+                is_label_suppressed: false,
+                name: Partial::Present(FuncParamName::Ident(value_name)),
+                ty: Partial::Present(value_ty),
+                self_ty_fallback: false,
+            },
+            FuncParam {
+                mode: FuncParamMode::View,
+                is_mut: true,
+                has_ref_prefix: true,
+                has_own_prefix: false,
+                is_label_suppressed: true,
+                name: Partial::Present(FuncParamName::Ident(borrowed_name)),
+                ty: Partial::Present(borrowed_ty),
+                self_ty_fallback: false,
+            },
+        ]);
+        let spec = GeneratedFunctionSpec {
+            name: builder.ident("generated_identity"),
+            attrs: builder.inline_always_attrs(),
+            generic_params,
+            where_clause,
+            params,
+            effects,
+            ret_ty: Some(value_ty),
+            modifiers: FuncModifiers::new(Visibility::Public, true, false, false),
+        };
+        let func = builder.generated_func_with_body(spec, |body| {
+            let value = body.ident_expr(value_name);
+            body.emit_return(Some(value));
+        });
+        ctxt.leave_item_scope(top_mod);
+        let _graph = ctxt.build();
+        func
+    }
+
+    #[test]
+    fn complete_generated_function_preserves_signature_and_body_fields() {
+        let mut db = TestDb::default();
+        let file = db.standalone_file("struct Origin {}\n");
+        let top_mod = crate::lower::map_file_to_mod(&db, file);
+        let func = build_complete_test_function(&db, top_mod);
+
+        let generic_params = func.generic_params(&db);
+        assert_eq!(generic_params.data(&db).len(), 1);
+        let where_clause = func.where_clause(&db);
+        assert_eq!(where_clause.data(&db).len(), 1);
+        let effects = func.effects(&db);
+        let [effect] = effects.data(&db).as_slice() else {
+            panic!("expected one generated effect parameter")
+        };
+        assert_eq!(effect.name.unwrap().data(&db), "capability");
+        assert!(effect.is_mut);
+
+        let params = func.params_list(&db).to_opt().unwrap();
+        let [owned, borrowed] = params.data(&db).as_slice() else {
+            panic!("expected two generated parameters")
+        };
+        assert_eq!(owned.mode, FuncParamMode::Own);
+        assert!(owned.has_own_prefix);
+        assert!(!owned.is_label_suppressed);
+        assert_eq!(func.param_label(&db, 0).unwrap().data(&db), "value");
+        assert_eq!(borrowed.mode, FuncParamMode::View);
+        assert!(borrowed.is_mut);
+        assert!(borrowed.has_ref_prefix);
+        assert!(borrowed.is_label_suppressed);
+        assert!(matches!(
+            borrowed.ty.to_opt().unwrap().data(&db),
+            crate::hir_def::TypeKind::Mode(TypeMode::Ref, _)
+        ));
+
+        assert!(func.ret_type_ref(&db).is_some());
+        assert_eq!(
+            func.modifiers(&db),
+            FuncModifiers::new(Visibility::Public, true, false, false)
+        );
+        assert_eq!(func.inline_hint(&db), Some(InlineHint::Always));
+        let body = func.body(&db).expect("generated function has a body");
+        assert!(
+            body.stmts(&db)
+                .iter()
+                .any(|(_, stmt)| matches!(stmt, Partial::Present(Stmt::Return(Some(_)))))
+        );
+    }
+
+    #[test]
+    fn existing_event_error_and_msg_generated_functions_still_type_check() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "complete_generated_function_consumers.fe".into(),
+            r#"
+use core::abi::AbiSize
+use std::evm::{Address, Log}
+
+#[event]
+struct Transfer {
+    #[indexed]
+    from: Address,
+    amount: u256,
+}
+
+#[error]
+struct Failure {}
+
+msg Calls {
+    #[selector = 1]
+    Ping { value: u256 } -> bool,
+}
+
+fn error_payload(value: own Failure) -> u256 { value.payload_size() }
+fn msg_payload(value: own Calls::Ping) -> u256 { value.payload_size() }
+fn emit_event<L: Log>(value: own Transfer, log: mut L) { value.emit(log) }
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+
+        let generated = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .filter(|func| matches!(func.origin(&db), HirOrigin::Desugared(_)))
+            .collect::<Vec<_>>();
+        assert!(
+            !generated.is_empty(),
+            "fixture produced no generated functions"
+        );
+        assert!(generated.iter().all(|func| {
+            func.where_clause(&db).data(&db).is_empty() && func.effects(&db).data(&db).is_empty()
+        }));
     }
 }
