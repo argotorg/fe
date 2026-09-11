@@ -11,7 +11,7 @@ use crate::analysis::{
     ty::{
         trait_resolution::{
             constraint::ty_constraints,
-            table_solver::{TargetSolutionMatch, TargetSolutionStatus, has_solution, solve},
+            table_solver::{TargetSolutionMatch, has_solution, solve},
         },
         unify::UnificationTable,
     },
@@ -27,6 +27,8 @@ use salsa::Update;
 
 pub(crate) mod constraint;
 mod table_solver;
+
+pub use table_solver::TargetSolutionStatus;
 
 pub(crate) const TRAIT_SOLVER_ROOT_ANSWER_LIMIT: usize = 2;
 
@@ -305,7 +307,82 @@ fn query_has_solution<'db>(
     if query.flags(db).contains(TyFlags::HAS_INVALID) {
         return TargetSolutionStatus::NotFound;
     }
-    has_solution(db, origin_ingot, query, target, relation)
+    has_solution(db, origin_ingot, query, target, relation, None)
+}
+
+#[salsa::tracked(
+    cycle_fn=query_candidate_proves_goal_cycle_recover,
+    cycle_initial=query_candidate_proves_goal_cycle_initial
+)]
+fn query_candidate_proves_goal<'db>(
+    db: &'db dyn HirAnalysisDb,
+    origin_ingot: Ingot<'db>,
+    query: Canonical<TraitSolverQuery<'db>>,
+    candidate: ImplementorId<'db>,
+    target: Canonical<TraitInstId<'db>>,
+) -> TargetSolutionStatus {
+    if query.flags(db).contains(TyFlags::HAS_INVALID) {
+        return TargetSolutionStatus::NotFound;
+    }
+    has_solution(
+        db,
+        origin_ingot,
+        query,
+        target,
+        TargetSolutionMatch::Equal,
+        Some(candidate),
+    )
+}
+
+fn query_candidate_proves_goal_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _origin_ingot: Ingot<'db>,
+    _query: Canonical<TraitSolverQuery<'db>>,
+    _candidate: ImplementorId<'db>,
+    _target: Canonical<TraitInstId<'db>>,
+) -> TargetSolutionStatus {
+    TargetSolutionStatus::Incomplete
+}
+
+fn query_candidate_proves_goal_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &TargetSolutionStatus,
+    _count: u32,
+    _origin_ingot: Ingot<'db>,
+    _query: Canonical<TraitSolverQuery<'db>>,
+    _candidate: ImplementorId<'db>,
+    _target: Canonical<TraitInstId<'db>>,
+) -> salsa::CycleRecoveryAction<TargetSolutionStatus> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+/// Proves a complete trait instance through one selected implementor.
+///
+/// `candidate` identifies an implementor definition, rather than a separately
+/// instantiated impl application. `Found` means that this implementor can
+/// realize `goal` and that all of its substituted premises have proofs. It does
+/// not imply that the implementor is unique or coherent with other
+/// implementors. `Incomplete` means solver limits or pending cycle convergence
+/// prevented a definitive answer. Complete goals may contain rigid type
+/// parameters backed by `solve_cx` assumptions, but inference-bearing goals are
+/// outside this entry point's contract because target equality is checked after
+/// solving.
+pub fn candidate_proves_goal<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    candidate: ImplementorId<'db>,
+    goal: TraitInstId<'db>,
+) -> TargetSolutionStatus {
+    let scope = solve_cx.normalization_scope_for_trait_inst(db, goal);
+    let goal = normalize_trait_inst_preserving_validity(db, goal, scope, solve_cx.assumptions());
+    let query = CanonicalGoalQuery::new(db, goal, solve_cx.assumptions());
+    query_candidate_proves_goal(
+        db,
+        solve_cx.origin_ingot(),
+        query.canonical(),
+        candidate,
+        Canonical::new(db, goal),
+    )
 }
 
 fn query_has_solution_cycle_initial<'db>(
@@ -883,19 +960,21 @@ mod tests {
     use common::indexmap::{IndexMap, IndexSet};
 
     use super::{
-        CanonicalGoalQuery, GoalSatisfiability, TraitInstId, TraitSolveCompletion, TraitSolveCx,
-        goal_query_has_solution, is_goal_query_satisfiable, is_goal_satisfiable,
+        CanonicalGoalQuery, GoalSatisfiability, TargetSolutionStatus, TraitInstId,
+        TraitSolveCompletion, TraitSolveCx, candidate_proves_goal, goal_query_has_solution,
+        is_goal_query_satisfiable, is_goal_satisfiable,
     };
     use crate::{
         analysis::ty::{
             adt_def::AdtRef,
             canonical::Canonical,
+            trait_def::{ImplementorId, impls_for_trait_in_ingots},
             trait_resolution::{PredicateListId, constraint::collect_func_def_constraints},
             ty_def::{Kind, TyId, TyVarSort},
             ty_lower::collect_generic_params,
             unify::UnificationTable,
         },
-        hir_def::{Func, TopLevelMod, Trait},
+        hir_def::{Func, IdentId, TopLevelMod, Trait},
         test_db::HirAnalysisTestDb,
     };
 
@@ -946,6 +1025,19 @@ mod tests {
             inner = TyId::app(db, constructor, inner);
         }
         inner
+    }
+
+    fn candidates_for_goal<'db>(
+        db: &'db HirAnalysisTestDb,
+        top_mod: TopLevelMod<'db>,
+        goal: TraitInstId<'db>,
+    ) -> Vec<ImplementorId<'db>> {
+        let solve_cx = TraitSolveCx::new(db, top_mod.scope());
+        let (primary, secondary) = solve_cx.search_ingots_for_trait_inst(db, goal);
+        impls_for_trait_in_ingots(db, primary, secondary, Canonical::new(db, goal))
+            .iter()
+            .map(|candidate| candidate.instantiate_identity())
+            .collect()
     }
 
     #[test]
@@ -1302,5 +1394,282 @@ impl Foo for Third {}
             .expect("the two-answer cutoff must omit one implementation");
 
         assert!(goal_query_has_solution(&db, solve_cx, &query, target));
+    }
+
+    #[test]
+    fn selected_candidate_proof_checks_its_own_premises() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "selected_candidate_proof_checks_its_own_premises.fe".into(),
+            r#"
+trait Marker {}
+trait Goal {}
+
+struct Missing {}
+struct Subject {}
+
+impl Goal for Subject where Missing: Marker {}
+impl Goal for Subject {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let goal_trait = named_trait(&db, top_mod, "Goal");
+        let subject = named_struct_ty(&db, top_mod, "Subject");
+        let goal = TraitInstId::new(&db, goal_trait, vec![subject], IndexMap::new());
+        let solve_cx = TraitSolveCx::new(&db, top_mod.scope());
+        let candidates = candidates_for_goal(&db, top_mod, goal);
+
+        assert_eq!(
+            candidates.len(),
+            2,
+            "both competing impls must be collected"
+        );
+        let rejected = candidates
+            .iter()
+            .copied()
+            .find(|candidate| !candidate.constraints(&db).is_empty(&db))
+            .expect("missing constrained candidate");
+        let accepted = candidates
+            .iter()
+            .copied()
+            .find(|candidate| candidate.constraints(&db).is_empty(&db))
+            .expect("missing unconditional candidate");
+
+        assert!(matches!(
+            is_goal_satisfiable(&db, solve_cx, goal),
+            GoalSatisfiability::Satisfied(solution)
+                if solution.value.implementor == accepted
+        ));
+        assert_eq!(
+            candidate_proves_goal(&db, solve_cx, rejected, goal),
+            TargetSolutionStatus::NotFound
+        );
+        assert_eq!(
+            candidate_proves_goal(&db, solve_cx, accepted, goal),
+            TargetSolutionStatus::Found
+        );
+    }
+
+    #[test]
+    fn selected_candidate_proof_checks_trait_arguments_and_associated_bindings() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "selected_candidate_proof_checks_trait_arguments_and_associated_bindings.fe".into(),
+            r#"
+trait Select<T> {}
+trait Produce {
+    type Output
+}
+
+struct Subject {}
+struct A {}
+struct B {}
+
+impl Select<A> for Subject {}
+impl Produce for Subject {
+    type Output = A
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let subject = named_struct_ty(&db, top_mod, "Subject");
+        let a = named_struct_ty(&db, top_mod, "A");
+        let b = named_struct_ty(&db, top_mod, "B");
+        let select = named_trait(&db, top_mod, "Select");
+        let produce = named_trait(&db, top_mod, "Produce");
+        let solve_cx = TraitSolveCx::new(&db, top_mod.scope());
+
+        let select_a = TraitInstId::new(&db, select, vec![subject, a], IndexMap::new());
+        let select_b = TraitInstId::new(&db, select, vec![subject, b], IndexMap::new());
+        let select_candidate = candidates_for_goal(&db, top_mod, select_a)
+            .into_iter()
+            .next()
+            .expect("missing Select<A> candidate");
+        assert_eq!(
+            candidate_proves_goal(&db, solve_cx, select_candidate, select_a),
+            TargetSolutionStatus::Found
+        );
+        assert_eq!(
+            candidate_proves_goal(&db, solve_cx, select_candidate, select_b),
+            TargetSolutionStatus::NotFound
+        );
+
+        let output = IdentId::new(&db, "Output".to_string());
+        let produce_a = TraitInstId::new(
+            &db,
+            produce,
+            vec![subject],
+            [(output, a)].into_iter().collect::<IndexMap<_, _>>(),
+        );
+        let produce_b = TraitInstId::new(
+            &db,
+            produce,
+            vec![subject],
+            [(output, b)].into_iter().collect::<IndexMap<_, _>>(),
+        );
+        let produce_candidate = candidates_for_goal(&db, top_mod, produce_a)
+            .into_iter()
+            .next()
+            .expect("missing Produce candidate");
+        assert_eq!(
+            candidate_proves_goal(&db, solve_cx, produce_candidate, produce_a),
+            TargetSolutionStatus::Found
+        );
+        assert_eq!(
+            candidate_proves_goal(&db, solve_cx, produce_candidate, produce_b),
+            TargetSolutionStatus::NotFound
+        );
+    }
+
+    #[test]
+    fn selected_recursive_candidate_uses_ordinary_premise_resolution() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "selected_recursive_candidate_uses_ordinary_premise_resolution.fe".into(),
+            r#"
+trait Proof {}
+
+struct Grounded {}
+impl Proof for Grounded where Grounded: Proof {}
+impl Proof for Grounded {}
+
+struct Dead {}
+impl Proof for Dead where Dead: Proof {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let proof = named_trait(&db, top_mod, "Proof");
+        let grounded = named_struct_ty(&db, top_mod, "Grounded");
+        let dead = named_struct_ty(&db, top_mod, "Dead");
+        let solve_cx = TraitSolveCx::new(&db, top_mod.scope());
+        let grounded_goal = TraitInstId::new(&db, proof, vec![grounded], IndexMap::new());
+        let dead_goal = TraitInstId::new(&db, proof, vec![dead], IndexMap::new());
+
+        let grounded_candidates = candidates_for_goal(&db, top_mod, grounded_goal)
+            .into_iter()
+            .filter(|candidate| candidate.self_ty(&db) == grounded)
+            .collect::<Vec<_>>();
+        assert_eq!(grounded_candidates.len(), 2);
+        let recursive_grounded = grounded_candidates
+            .into_iter()
+            .find(|candidate| !candidate.constraints(&db).is_empty(&db))
+            .expect("missing recursive Grounded candidate");
+        let recursive_dead = candidates_for_goal(&db, top_mod, dead_goal)
+            .into_iter()
+            .filter(|candidate| candidate.self_ty(&db) == dead)
+            .find(|candidate| !candidate.constraints(&db).is_empty(&db))
+            .expect("missing recursive Dead candidate");
+
+        assert_eq!(
+            candidate_proves_goal(&db, solve_cx, recursive_grounded, grounded_goal),
+            TargetSolutionStatus::Found,
+            "the selected root's recursive premise may use the base impl"
+        );
+        assert_eq!(
+            candidate_proves_goal(&db, solve_cx, recursive_dead, dead_goal),
+            TargetSolutionStatus::NotFound,
+            "an ungrounded inductive cycle is not a proof"
+        );
+    }
+
+    #[test]
+    fn selected_candidate_premises_use_ambient_assumptions() {
+        fn goal_for<'db>(
+            db: &'db HirAnalysisTestDb,
+            func: Func<'db>,
+            goal_trait: Trait<'db>,
+            wrapper: TyId<'db>,
+        ) -> (TraitInstId<'db>, TraitSolveCx<'db>) {
+            let param = collect_generic_params(db, func.into()).explicit_params(db)[0];
+            let assumptions =
+                collect_func_def_constraints(db, func.into(), true).instantiate_identity();
+            let self_ty = TyId::app(db, wrapper, param);
+            let goal = TraitInstId::new(db, goal_trait, vec![self_ty], IndexMap::new());
+            (
+                goal,
+                TraitSolveCx::new(db, func.scope()).with_assumptions(assumptions),
+            )
+        }
+
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "selected_candidate_premises_use_ambient_assumptions.fe".into(),
+            r#"
+trait Marker {}
+trait Goal {}
+struct Wrapper<T> {}
+
+impl<T: Marker> Goal for Wrapper<T> {}
+
+fn with_marker<T: Marker>() {}
+fn without_marker<T>() {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let goal_trait = named_trait(&db, top_mod, "Goal");
+        let wrapper = named_struct_ty(&db, top_mod, "Wrapper");
+        let named_func = |name: &str| {
+            top_mod
+                .all_funcs(&db)
+                .iter()
+                .copied()
+                .find(|func| {
+                    func.name(&db)
+                        .to_opt()
+                        .is_some_and(|ident| ident.data(&db) == name)
+                })
+                .unwrap_or_else(|| panic!("missing `{name}` function"))
+        };
+        let (with_goal, with_cx) = goal_for(&db, named_func("with_marker"), goal_trait, wrapper);
+        let (without_goal, without_cx) =
+            goal_for(&db, named_func("without_marker"), goal_trait, wrapper);
+        let candidate = candidates_for_goal(&db, top_mod, with_goal)
+            .into_iter()
+            .next()
+            .expect("missing generic Goal candidate");
+
+        assert_eq!(
+            candidate_proves_goal(&db, with_cx, candidate, with_goal),
+            TargetSolutionStatus::Found
+        );
+        assert_eq!(
+            candidate_proves_goal(&db, without_cx, candidate, without_goal),
+            TargetSolutionStatus::NotFound
+        );
+    }
+
+    #[test]
+    fn selected_candidate_proof_preserves_incomplete_growth_result() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "selected_candidate_proof_preserves_incomplete_growth_result.fe".into(),
+            r#"
+trait Grow {}
+struct Dead {}
+struct Wrap<T> {}
+
+impl<T> Grow for T where Wrap<T>: Grow {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let grow = named_trait(&db, top_mod, "Grow");
+        let dead = named_struct_ty(&db, top_mod, "Dead");
+        let goal = TraitInstId::new(&db, grow, vec![dead], IndexMap::new());
+        let candidate = candidates_for_goal(&db, top_mod, goal)
+            .into_iter()
+            .next()
+            .expect("missing growing candidate");
+
+        assert_eq!(
+            candidate_proves_goal(
+                &db,
+                TraitSolveCx::new(&db, top_mod.scope()),
+                candidate,
+                goal,
+            ),
+            TargetSolutionStatus::Incomplete
+        );
     }
 }

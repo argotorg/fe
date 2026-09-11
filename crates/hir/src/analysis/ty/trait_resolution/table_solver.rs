@@ -39,7 +39,17 @@ use crate::analysis::{
 /// bound growth relative to that query instead of imposing an absolute depth.
 const MAXIMUM_TYPE_GROWTH: usize = 256;
 
-type Query<'db> = Canonical<TraitSolverQuery<'db>>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct Query<'db> {
+    query: Canonical<TraitSolverQuery<'db>>,
+    selected_candidate: Option<ImplementorId<'db>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Goal<'db> {
+    query: TraitSolverQuery<'db>,
+    selected_candidate: Option<ImplementorId<'db>>,
+}
 type GoalSolution<'db> = Solution<TraitGoalSolution<'db>>;
 type UnsatSubgoal<'db> = Solution<TraitInstId<'db>>;
 
@@ -96,7 +106,7 @@ enum StopReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, salsa::Update)]
-pub(crate) enum TargetSolutionStatus {
+pub enum TargetSolutionStatus {
     Found,
     NotFound,
     Incomplete,
@@ -196,7 +206,7 @@ impl<'db> TraitResolutionContext<'db> {
         }
 
         let mut table = PersistentUnificationTable::new(self.db);
-        let query = key.extract_identity(&mut table);
+        let query = key.query.extract_identity(&mut table);
         let scope = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
             self.db,
             self.origin_ingot,
@@ -230,7 +240,7 @@ impl<'db> TraitResolutionContext<'db> {
         branch: &mut Branch<'db>,
         goal: TraitInstId<'db>,
     ) -> GoalSolution<'db> {
-        parent.canonicalize_solution(
+        parent.query.canonicalize_solution(
             self.db,
             &mut branch.table,
             TraitGoalSolution {
@@ -279,9 +289,12 @@ impl<'db> TraitResolutionContext<'db> {
         let next_goal = next_goal.fold_with(self.db, &mut branch.table);
         let assumptions = assumptions.fold_with(self.db, &mut branch.table);
         Transition::Suspend {
-            goal: TraitSolverQuery {
-                goal: next_goal,
-                assumptions,
+            goal: Goal {
+                query: TraitSolverQuery {
+                    goal: next_goal,
+                    assumptions,
+                },
+                selected_candidate: None,
             },
             state: branch,
         }
@@ -289,7 +302,7 @@ impl<'db> TraitResolutionContext<'db> {
 }
 
 impl<'db> ResolutionContext for TraitResolutionContext<'db> {
-    type Goal = TraitSolverQuery<'db>;
+    type Goal = Goal<'db>;
     type Key = Query<'db>;
     type Clause = Clause<'db>;
     type Answer = GoalSolution<'db>;
@@ -307,9 +320,13 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         // Assumptions participate in the table key, so they must be bounded
         // together with the goal; otherwise substitutions can create an
         // unbounded sequence of keys while the goal itself stays shallow.
-        let exceeds_type_depth = self.type_depth_budget.exceeded(self.db, goal);
-        let query = CanonicalGoalQuery::from_query(self.db, goal);
-        let canonical = TabledCanonical::new(query.canonical(), query);
+        let exceeds_type_depth = self.type_depth_budget.exceeded(self.db, goal.query);
+        let query = CanonicalGoalQuery::from_query(self.db, goal.query);
+        let key = Query {
+            query: query.canonical(),
+            selected_candidate: goal.selected_candidate,
+        };
+        let canonical = TabledCanonical::new(key, query);
         if exceeds_type_depth {
             Ok(CanonicalizeOutcome::Stop {
                 canonical,
@@ -339,8 +356,20 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
 
         let mut clauses =
             Vec::with_capacity(implementors.len() + prepared.query.assumptions.list(self.db).len());
-        clauses.extend(implementors.iter().copied().map(Clause::Implementor));
-        if self.goal_can_use_assumptions(prepared.normalized_goal) {
+        if let Some(selected_candidate) = key.selected_candidate {
+            clauses.extend(
+                implementors
+                    .iter()
+                    .copied()
+                    .filter(|candidate| candidate.instantiate_identity() == selected_candidate)
+                    .map(Clause::Implementor),
+            );
+        } else {
+            clauses.extend(implementors.iter().copied().map(Clause::Implementor));
+        }
+        if key.selected_candidate.is_none()
+            && self.goal_can_use_assumptions(prepared.normalized_goal)
+        {
             clauses.extend(
                 (0..prepared.query.assumptions.list(self.db).len()).map(Clause::Assumption),
             );
@@ -570,7 +599,7 @@ impl<'db> UnresolvedGoalObserver<'db> {
                 .get_mut(consumer.index())
                 .and_then(Option::as_mut)?;
             let [child] = suspended.children.as_slice() else {
-                return Some(root.canonicalize_solution(
+                return Some(root.query.canonicalize_solution(
                     db,
                     &mut suspended.table,
                     suspended.query.goal(),
@@ -617,7 +646,7 @@ fn map_completion(completion: Completion<StopReason>) -> TraitSolveCompletion {
 pub(super) fn solve<'db>(
     db: &'db dyn HirAnalysisDb,
     origin_ingot: crate::Ingot<'db>,
-    query: Query<'db>,
+    query: Canonical<TraitSolverQuery<'db>>,
 ) -> GoalSatisfiability<'db> {
     let mut root_table = PersistentUnificationTable::new(db);
     let root_goal = query.extract_identity(&mut root_table);
@@ -633,7 +662,10 @@ pub(super) fn solve<'db>(
     let options = ReportOptions::default().with_answerless(AnswerlessMode::Omit);
     let report = match solve_with_observer_and_options(
         &mut context,
-        root_goal,
+        Goal {
+            query: root_goal,
+            selected_candidate: None,
+        },
         config,
         options,
         &mut observer,
@@ -662,14 +694,19 @@ pub(super) fn solve<'db>(
 pub(super) fn has_solution<'db>(
     db: &'db dyn HirAnalysisDb,
     origin_ingot: crate::Ingot<'db>,
-    query: Query<'db>,
+    query: Canonical<TraitSolverQuery<'db>>,
     target: Canonical<TraitInstId<'db>>,
     relation: TargetSolutionMatch,
+    selected_candidate: Option<ImplementorId<'db>>,
 ) -> TargetSolutionStatus {
     let mut root_table = PersistentUnificationTable::new(db);
     let root_goal = query.extract_identity(&mut root_table);
+    let root_key = Query {
+        query,
+        selected_candidate,
+    };
     let target = TargetAnswer {
-        root: query,
+        root: root_key,
         inst: target,
         relation,
     };
@@ -682,7 +719,15 @@ pub(super) fn has_solution<'db>(
         scheduling: Scheduling::Fair,
         ..Config::default()
     };
-    let report = match solve_with_options(&mut context, root_goal, config, options) {
+    let report = match solve_with_options(
+        &mut context,
+        Goal {
+            query: root_goal,
+            selected_candidate,
+        },
+        config,
+        options,
+    ) {
         Ok(report) => report,
         Err(never) => match never {},
     };
