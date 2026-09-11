@@ -22,6 +22,196 @@ use fe_hir::{
 use num_traits::ToPrimitive;
 
 #[test]
+fn semantic_ctfe_evaluates_frame_local_borrows_and_reborrows() {
+    use fe_hir::analysis::ty::provider::ProviderAddressSpace;
+    use fe_hir::projection::Projection;
+
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "ctfe_local_borrows.fe".into(),
+        r#"
+const fn set(value: mut u8) { value = 42 }
+const fn forward(value: mut u8) -> mut u8 { mut value }
+
+const fn local_alias() -> u8 {
+    let mut x: u8 = 0
+    let a = mut x
+    a = 42
+    x
+}
+const fn projected_alias() -> u8 {
+    let mut values: [u8; 2] = [0, 1]
+    let a = mut values[1]
+    a = 42
+    values[1]
+}
+const fn call_alias() -> u8 {
+    let mut x: u8 = 0
+    set(value: mut x)
+    x
+}
+const fn return_caller_alias() -> u8 {
+    let mut x: u8 = 0
+    let a = forward(value: mut x)
+    a = 42
+    x
+}
+const fn read_alias() -> u8 {
+    let x: u8 = 42
+    let a = ref x
+    a
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    for name in [
+        "local_alias",
+        "projected_alias",
+        "call_alias",
+        "return_caller_alias",
+        "read_alias",
+    ] {
+        let func = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|id| id.data(&db) == name)
+            })
+            .unwrap();
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+        );
+        assert!(instance.body(&db).blocks.iter().flat_map(|block| &block.stmts).any(|stmt| {
+            matches!(&stmt.kind, SStmtKind::Assign { expr: SExpr::Borrow { provider: Some(ProviderAddressSpace::Memory), place, .. }, .. }
+                if !place.path.iter().any(|projection| matches!(projection, Projection::Deref)))
+        }), "{name} must exercise a real local Memory borrow");
+        let value = eval_body_owner_const(&db, BodyOwner::Func(func), vec![])
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert_eq!(value.pretty_print(&db), "42", "{name}");
+    }
+}
+
+#[test]
+fn semantic_ctfe_rejects_external_memory_borrows() {
+    use fe_hir::analysis::semantic::int_const;
+    use fe_hir::analysis::ty::provider::ProviderAddressSpace;
+    use fe_hir::projection::Projection;
+
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "ctfe_external_borrow.fe".into(),
+        "const fn external(p: *u8) -> mut u8 { mut *p }",
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    let func = top_mod.all_funcs(&db)[0];
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+    );
+    assert!(instance.body(&db).blocks.iter().flat_map(|block| &block.stmts).any(|stmt| {
+        matches!(&stmt.kind, SStmtKind::Assign { expr: SExpr::Borrow { provider: Some(ProviderAddressSpace::Memory), place, .. }, .. }
+            if place.path.iter().any(|projection| matches!(projection, Projection::Deref)))
+    }));
+    // An externally supplied pointer is not an allocation in a CTFE frame.
+    let pointer_ty = *func.arg_tys(&db)[0].skip_binder();
+    let pointer = int_const(&db, pointer_ty, 0.into());
+    assert!(matches!(
+        eval_body_owner_const_with_args(&db, BodyOwner::Func(func), vec![], vec![pointer]),
+        Err(CtfeError::InvalidProviderUse { .. })
+    ));
+}
+
+#[test]
+fn semantic_ctfe_rejects_references_to_a_returning_frame() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "ctfe_escaping_borrow.fe".into(),
+        r#"
+const fn dangling() -> mut u8 {
+    let mut x: u8 = 0
+    mut x
+}
+
+const fn use_dangling() -> u8 {
+    let a = dangling()
+    a
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = top_mod
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|id| id.data(&db) == "use_dangling")
+        })
+        .unwrap();
+    // Even direct evaluator clients that omit borrow analysis must get an
+    // error, not a stale frame reference or a panic when that reference is read.
+    let error = eval_body_owner_const(&db, BodyOwner::Func(func), vec![]).unwrap_err();
+    assert!(format!("{error:?}").contains("InvalidBorrow"), "{error:?}");
+}
+
+#[test]
+fn semantic_ctfe_preserves_const_and_anonymous_result_modes() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "ctfe_const_borrows.fe".into(),
+        r#"
+const VALUE: u8 = {
+    let x: u8 = 42
+    let a = ref x
+    a
+}
+const BORROW: ref u8 = {
+    let x: u8 = 42
+    ref x
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let constants = top_mod
+        .all_items(&db)
+        .iter()
+        .copied()
+        .filter_map(|item| match item {
+            ItemKind::Const(const_) => Some(const_),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(constants.len(), 2);
+    for const_ in constants {
+        let expected = const_.ty(&db);
+        for owner in [
+            BodyOwner::Const(const_),
+            BodyOwner::AnonConstBody {
+                body: const_.body(&db).to_opt().unwrap(),
+                expected,
+            },
+        ] {
+            let result = eval_body_owner_const(&db, owner, vec![]);
+            if expected.as_capability(&db).is_some() {
+                assert!(
+                    matches!(result, Err(CtfeError::InvalidBorrow { .. })),
+                    "{result:?}"
+                );
+            } else {
+                assert_eq!(result.unwrap().pretty_print(&db), "42");
+            }
+        }
+    }
+}
+
+#[test]
 fn canonicalize_folds_const_calls_into_nested_aggregate_consts() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

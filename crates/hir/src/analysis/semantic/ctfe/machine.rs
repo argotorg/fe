@@ -18,9 +18,9 @@ use crate::{
             FieldIndex, SConst, SExpr, SLocalId, SOperand, SPlace, SStmt, SStmtKind,
             STerminatorKind, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody,
             SemanticConstRef, VariantIndex, array_const, bool_const, bytes_const,
-            consts::demand_concrete_const_ty, enum_const, int_const, int_ty_shape,
-            normalize_int_to_shape, runtime_size_bytes, sem_const_eq, sem_const_from_ty,
-            sem_const_ty, struct_const, tuple_const, unit_const,
+            consts::demand_concrete_const_ty, enum_const, instantiate_with_generic_args, int_const,
+            int_ty_shape, normalize_int_to_shape, runtime_size_bytes, sem_const_eq,
+            sem_const_from_ty, sem_const_ty, struct_const, tuple_const, unit_const,
         },
         ty::{
             const_expr::{ConstExpr, ConstExprId},
@@ -30,6 +30,7 @@ use crate::{
                 runtime_builtin_func_kind,
             },
             normalize::normalize_ty,
+            provider::ProviderAddressSpace,
             ty_check::{
                 BodyOwner, LocalBinding, ParamSite, check_anon_const_body, check_const_body,
                 check_func_body,
@@ -1140,7 +1141,44 @@ impl<'db> CtfeMachine<'db> {
             locals,
             current: 0,
         });
-        let result = self.run_frame(frame_idx);
+        let result = self.run_frame(frame_idx).and_then(|value| {
+            if let CtfeValue::Ref(r#ref) = &value {
+                let key = instance.key(self.db);
+                let result_ty = match key.owner(self.db) {
+                    BodyOwner::Func(func) => func.return_ty(self.db),
+                    BodyOwner::Const(const_) => const_.ty(self.db),
+                    BodyOwner::AnonConstBody { expected, .. } => expected,
+                    BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
+                        return Err(CtfeError::NotConstEvaluable { origin });
+                    }
+                };
+                let ty = instantiate_with_generic_args(
+                    self.db,
+                    result_ty,
+                    key.subst(self.db).generic_args(self.db),
+                );
+                let returns_borrow = normalize_ty(
+                    self.db,
+                    ty,
+                    key.impl_env(self.db).normalization_scope(self.db),
+                    key.impl_env(self.db).assumptions(self.db),
+                )
+                .as_capability(self.db)
+                .is_some();
+                // Returning an ordinary value reads the referent before its
+                // frame disappears. Returning a capability preserves the ref.
+                if !returns_borrow {
+                    return self.load_ref_value(r#ref, origin).map(CtfeValue::Value);
+                }
+            }
+            // A callee may return a reference into a caller's frame, but never
+            // into the frame that is about to be removed.
+            if matches!(&value, CtfeValue::Ref(r#ref) if r#ref.frame >= frame_idx) {
+                Err(CtfeError::InvalidBorrow { origin })
+            } else {
+                Ok(value)
+            }
+        });
         self.frames.pop();
         result
     }
@@ -1341,15 +1379,26 @@ impl<'db> CtfeMachine<'db> {
                     .map(CtfeValue::Value)
             }
             SExpr::Borrow {
-                place: _,
-                provider: Some(_),
-                ..
-            } => Err(CtfeError::InvalidProviderUse { origin }),
-            SExpr::Borrow {
-                place,
-                provider: None,
-                ..
+                place, provider, ..
             } => {
+                if let Some(provider) = provider {
+                    let locals = &self.frames[frame_idx].body.locals;
+                    // Ordinary explicit local borrows also carry Memory
+                    // metadata. Only frame-backed places are meaningful here:
+                    // CTFE has no external address-space/provider state.
+                    if provider != ProviderAddressSpace::Memory
+                        || place
+                            .path
+                            .iter()
+                            .any(|elem| matches!(elem, Projection::Deref))
+                        || locals[place.local.index()]
+                            .role
+                            .root_provider(locals)
+                            .is_some()
+                    {
+                        return Err(CtfeError::InvalidProviderUse { origin });
+                    }
+                }
                 let place = self.resolve_place(frame_idx, &place, origin)?;
                 Ok(CtfeValue::Ref(CtfeRef {
                     frame: place.frame,

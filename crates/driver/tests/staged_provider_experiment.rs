@@ -502,13 +502,7 @@ fn borrow_checking_and_ctfe_support_are_separate_gates() {
             );
             assert_eq!(request.ctfe_requests, 0);
         } else {
-            // The valid local alias passes both analysis gates but this CTFE
-            // path currently cannot execute it. Record that limitation without
-            // treating well-typed code as automatically const-evaluable.
-            assert!(
-                matches!(result, Err(Failure::Execution(ref error)) if error.contains("InvalidProviderUse")),
-                "{result:?}"
-            );
+            assert_eq!(result.unwrap().output_source, " ");
             assert_eq!(request.ctfe_requests, 1);
         }
     }
