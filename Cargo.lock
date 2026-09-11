@@ -2177,6 +2177,7 @@ dependencies = [
  "codespan-reporting",
  "fe-common",
  "fe-hir",
+ "fe-parser",
  "fe-resolver",
  "glob",
  "petgraph",

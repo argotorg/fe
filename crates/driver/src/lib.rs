@@ -4,6 +4,7 @@ pub mod cli_target;
 pub mod db;
 pub mod diagnostics;
 pub mod files;
+pub mod generation;
 mod ingot_handler;
 
 pub use common::dependencies::DependencyTree;

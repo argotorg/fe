@@ -1,0 +1,7 @@
+/// A computed value for a generated function body.
+///
+/// The driver accepts bool and u256 bodies against an explicit function
+/// template. This value carries no authority to alter the template's signature.
+pub struct FunctionBody<T> {
+    pub value: T,
+}
