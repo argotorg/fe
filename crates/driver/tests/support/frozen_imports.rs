@@ -352,3 +352,52 @@ pub fn import_stage(
     check(&db, file)?;
     Ok(ImportStage { db, file, receipts })
 }
+
+/// Validate one explicitly designated direct call, after ordinary checking and
+/// before running its caller. Both compared function IDs belong to stage.db.
+/// This is a test-side binding contract, not a general call-graph validator.
+pub fn validate_call_binding(
+    stage: &ImportStage,
+    call_range: Range<usize>,
+    selected_import: usize,
+) -> Result<(), String> {
+    use hir::{
+        analysis::ty::ty_check::check_func_body,
+        hir_def::{CallableDef, Expr, Partial},
+    };
+    let db = &stage.db;
+    let receipt = stage
+        .receipts
+        .get(selected_import)
+        .ok_or_else(|| "missing selected import".to_owned())?;
+    let file = db
+        .workspace()
+        .get(db, &receipt.materialized_source_url)
+        .ok_or_else(|| "missing materialized source".to_owned())?;
+    let expected = find_named(db, file, &receipt.export_name)
+        .ok_or_else(|| "missing materialized export".to_owned())?;
+    let mut resolved = Vec::new();
+    for caller in db.top_mod(stage.file).all_funcs(db) {
+        let typed = &check_func_body(db, *caller).1;
+        let Some(body) = typed.body() else { continue };
+        for expr in body.exprs(db).keys() {
+            if !matches!(expr.data(db, body), Partial::Present(Expr::Call(..))) {
+                continue;
+            }
+            let Some(span) = expr.span(body).resolve(db) else {
+                continue;
+            };
+            let range: Range<usize> = span.range.into();
+            if span.file == stage.file && range == call_range {
+                resolved.push(typed.callable_expr(expr).map(|call| call.callable_def()));
+            }
+        }
+    }
+    if resolved.len() != 1 {
+        return Err("designated range must select exactly one direct call".to_owned());
+    }
+    if resolved[0] != Some(CallableDef::Func(expected)) {
+        return Err("designated call binding does not match the selected frozen export".to_owned());
+    }
+    Ok(())
+}

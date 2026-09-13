@@ -235,3 +235,82 @@ fn import_admission_rejects_duplicate_aliases_and_excessive_source() {
         .collect::<Vec<_>>();
     assert!(import_stage(&imports, recipient).is_err());
 }
+
+fn designated_call(source: &str, spelling: &str) -> std::ops::Range<usize> {
+    let mut offsets = source.match_indices(spelling).map(|(offset, _)| offset);
+    let start = offsets.next().expect("designated call spelling");
+    assert!(offsets.next().is_none(), "ambiguous fixture call slot");
+    start..start + spelling.len()
+}
+
+#[test]
+fn explicit_call_binding_rejects_shadows_without_banning_unrelated_names() {
+    let source = artifact(40, CONTEXT);
+    let export = FrozenExport::new(&source, "apply").unwrap();
+    for (recipient, call, accepts) in [
+        (
+            "const fn consume() -> u256 { chosen::apply(amount: 1) }",
+            "chosen::apply(amount: 1)",
+            true,
+        ),
+        (
+            r#"
+use chosen::apply as selected
+mod unrelated { mod chosen { pub const fn apply(amount: u256) -> u256 { 999 } } }
+const fn consume() -> u256 { selected(amount: 1) }
+"#,
+            "selected(amount: 1)",
+            true,
+        ),
+        (
+            r#"
+mod chosen { pub const fn apply(amount: u256) -> u256 { 999 } }
+const fn consume() -> u256 { chosen::apply(amount: 1) }
+"#,
+            "chosen::apply(amount: 1)",
+            false,
+        ),
+        (
+            r#"
+mod wrapper {
+    mod chosen { pub const fn apply(amount: u256) -> u256 { 999 } }
+    pub const fn run() -> u256 { chosen::apply(amount: 1) }
+}
+const fn consume() -> u256 { wrapper::run() }
+"#,
+            "chosen::apply(amount: 1)",
+            false,
+        ),
+    ] {
+        let stage = import_stage(&[("chosen", &export)], recipient).unwrap();
+        let checked = frozen::validate_call_binding(&stage, designated_call(recipient, call), 0);
+        if accepts {
+            checked.unwrap();
+            assert_eq!(evaluate(&stage.db, stage.file, "consume"), "42");
+        } else {
+            rejection(checked, "binding does not match");
+            // No evaluation follows a failed explicit binding check.
+        }
+    }
+}
+
+#[test]
+fn explicit_binding_distinguishes_same_identity_and_same_signature_revisions() {
+    let old = artifact(40, CONTEXT);
+    let new = artifact(80, CONTEXT);
+    let left = FrozenExport::new(&old, "apply").unwrap();
+    let right = FrozenExport::new(&new, "apply").unwrap();
+    let recipient = "const fn consume() -> u256 { newer::apply(amount: 1) }";
+    let stage = import_stage(&[("older", &left), ("newer", &right)], recipient).unwrap();
+    let call = designated_call(recipient, "newer::apply(amount: 1)");
+    rejection(
+        frozen::validate_call_binding(&stage, call.clone(), 0),
+        "binding does not match",
+    );
+    frozen::validate_call_binding(&stage, call.clone(), 1).unwrap();
+    assert_eq!(evaluate(&stage.db, stage.file, "consume"), "82");
+    rejection(
+        frozen::validate_call_binding(&stage, call.start..call.end - 1, 1),
+        "exactly one",
+    );
+}
