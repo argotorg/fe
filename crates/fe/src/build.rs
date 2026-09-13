@@ -124,8 +124,21 @@ fn validate_build_request(
             Err("native backend only supports `--emit executable` and `--emit ir`".to_string())
         }
         #[cfg(feature = "cranelift")]
+        BuildBackend::Native if emit.executable && !native_executable_host_supported() => Err(
+            "native executable output currently requires an x86-64 Linux or AArch64 macOS host"
+                .to_string(),
+        ),
+        #[cfg(feature = "cranelift")]
         BuildBackend::Native => Ok(()),
     }
+}
+
+#[cfg(feature = "cranelift")]
+fn native_executable_host_supported() -> bool {
+    cfg!(any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    ))
 }
 
 fn write_report_file(report: &BuildReportContext, rel: &str, contents: &str) {
@@ -1382,35 +1395,34 @@ fn build_native_top_mod(
         return BuildSummary { had_errors: true };
     }
     let report_dir = report_dir.map(Utf8PathBuf::as_path);
-    if emit.ir {
-        let ir = match codegen::emit_module_native_ir(db, top_mod, opt_level) {
-            Ok(ir) => ir,
-            Err(err) => {
-                eprintln!("Error: Failed to compile native Sonatina IR: {err}");
-                return BuildSummary { had_errors: true };
-            }
-        };
-        if let Err(err) =
+    let artifacts = match codegen::emit_module_native_artifacts(
+        db,
+        top_mod,
+        opt_level,
+        codegen::NativeOutputSelection {
+            ir: emit.ir,
+            object: emit.executable,
+        },
+    ) {
+        Ok(artifacts) => artifacts,
+        Err(err) => {
+            eprintln!("Error: Failed to compile native output: {err}");
+            return BuildSummary { had_errors: true };
+        }
+    };
+    if let Some(ir) = artifacts.ir
+        && let Err(err) =
             write_named_ir_artifact(out_dir, report_dir, ir_file_stem, "native.sona", &ir)
-        {
-            eprintln!("Error: {err}");
-            return BuildSummary { had_errors: true };
-        }
+    {
+        eprintln!("Error: {err}");
+        return BuildSummary { had_errors: true };
     }
-    if emit.executable {
-        let object = match codegen::emit_module_native_object(db, top_mod, opt_level) {
-            Ok(object) => object,
-            Err(err) => {
-                eprintln!("Error: Failed to compile native object: {err}");
-                return BuildSummary { had_errors: true };
-            }
-        };
-        if let Err(err) =
-            write_native_executable_artifact(out_dir, report_dir, ir_file_stem, &object)
-        {
-            eprintln!("Error: {err}");
-            return BuildSummary { had_errors: true };
-        }
+    if let Some(object) = artifacts.object
+        && let Err(err) =
+            link_native_executable_artifact(out_dir, report_dir, ir_file_stem, &object)
+    {
+        eprintln!("Error: {err}");
+        return BuildSummary { had_errors: true };
     }
     BuildSummary { had_errors: false }
 }
@@ -2110,24 +2122,22 @@ fn describe_emit_selection(emit: EmitSelection) -> String {
 }
 
 #[cfg(feature = "cranelift")]
-fn write_native_executable_artifact(
+fn link_native_executable_artifact(
     out_dir: &Utf8Path,
     report_dir: Option<&Utf8Path>,
     file_stem: &str,
     object: &[u8],
 ) -> Result<(), String> {
     let base = sanitize_name_with_default(file_stem, "main");
-    let executable_name = if cfg!(windows) {
-        format!("{base}.exe")
-    } else {
-        base.clone()
-    };
+    let executable_name = base.clone();
     let temp = tempfile::tempdir()
         .map_err(|err| format!("Failed to create temporary native linker directory: {err}"))?;
     let object_path = temp.path().join(format!("{base}.o"));
     let linked_path = temp.path().join(&executable_name);
     fs::write(&object_path, object)
         .map_err(|err| format!("Failed to write temporary native object: {err}"))?;
+    // Cranelift emits a relocatable object. Use the system C compiler driver
+    // to supply the host startup objects and platform linker configuration.
     let output = Command::new("cc")
         .arg(&object_path)
         .arg("-o")

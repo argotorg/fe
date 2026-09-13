@@ -1,0 +1,11 @@
+pub fn unused<const N: usize>() -> usize {
+    N
+}
+
+fn identity<T>(value: own T) -> T {
+    value
+}
+
+pub fn main() -> i32 {
+    identity(value: 0)
+}

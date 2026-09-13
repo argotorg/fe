@@ -474,8 +474,10 @@ fn test_cli_build_emit_abi_writes_json_artifact() {
 
 #[cfg(all(
     feature = "cranelift",
-    any(target_os = "linux", target_os = "macos"),
-    any(target_arch = "x86_64", target_arch = "aarch64")
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
 ))]
 #[test]
 fn test_cli_build_native_executable_uses_main_return_as_exit_code() {
@@ -488,6 +490,8 @@ fn test_cli_build_native_executable_uses_main_return_as_exit_code() {
         "build",
         "--backend",
         "native",
+        "--emit",
+        "ir,executable",
         "--out-dir",
         out_dir.to_str().expect("UTF-8 output path"),
         source.to_str().expect("UTF-8 source path"),
@@ -496,10 +500,92 @@ fn test_cli_build_native_executable_uses_main_return_as_exit_code() {
 
     let executable = out_dir.join("native_exit");
     assert!(executable.is_file(), "missing native executable:\n{output}");
+    assert!(
+        out_dir.join("native_exit.native.sona").is_file(),
+        "missing native IR:\n{output}"
+    );
     let status = Command::new(&executable)
         .status()
         .expect("run native executable");
     assert_eq!(status.code(), Some(42));
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn test_cli_build_native_executes_representative_programs_at_o0_and_o1() {
+    let fixture_dir =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_output/native");
+    let temp = tempdir().expect("tempdir");
+    for name in [
+        "arithmetic",
+        "control_flow",
+        "aggregates",
+        "wide_integer",
+        "generic_reachability",
+    ] {
+        let source_path = fixture_dir.join(format!("{name}.fe"));
+        for level in ["0", "1"] {
+            let out_dir = temp.path().join(format!("out-{name}-o{level}"));
+            let (output, exit_code) = run_fe_main(&[
+                "build",
+                "--backend",
+                "native",
+                "-O",
+                level,
+                "--out-dir",
+                out_dir.to_str().expect("UTF-8 output path"),
+                source_path.to_str().expect("UTF-8 source path"),
+            ]);
+            assert_eq!(
+                exit_code, 0,
+                "fe native build failed for {name} at O{level}:\n{output}"
+            );
+
+            let executable = out_dir.join(name);
+            let status = Command::new(&executable)
+                .status()
+                .unwrap_or_else(|err| panic!("failed to run {executable:?}: {err}"));
+            assert_eq!(
+                status.code(),
+                Some(0),
+                "native program {name} failed at O{level}"
+            );
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    not(any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    ))
+))]
+#[test]
+fn test_cli_build_native_rejects_executable_on_unsupported_host() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("native_exit.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").expect("write native source");
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        source.to_str().expect("UTF-8 source path"),
+    ]);
+    assert_eq!(exit_code, 1, "expected native host rejection:\n{output}");
+    assert!(
+        output.contains(
+            "native executable output currently requires an x86-64 Linux or AArch64 macOS host"
+        ),
+        "unexpected output:\n{output}"
+    );
 }
 
 #[cfg(feature = "cranelift")]

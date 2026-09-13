@@ -51,6 +51,7 @@ pub enum BuildEmit {
 pub enum BuildBackend {
     Sonatina,
     #[cfg(feature = "cranelift")]
+    /// Host-native IR, or executables on x86-64 Linux and AArch64 macOS.
     Native,
 }
 

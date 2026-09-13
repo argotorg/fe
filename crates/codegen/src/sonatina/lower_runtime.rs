@@ -63,6 +63,7 @@ use sonatina_ir::{
     object::EmbedSymbol,
     types::{CompoundType, EnumReprHint, EnumVariantRef, VariantData},
 };
+use sonatina_triple::Architecture;
 
 use super::LowerError;
 use crate::function_symbols::{FunctionSymbolInput, assign_function_symbols};
@@ -240,9 +241,9 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
     }
 
     fn is_native_target(&self) -> bool {
-        !matches!(
+        matches!(
             self.builder.ctx.triple.architecture,
-            sonatina_triple::Architecture::Evm
+            Architecture::X86_64 | Architecture::Aarch64
         )
     }
 

@@ -96,6 +96,20 @@ pub struct SonatinaTestOptions {
     pub emit_observability: bool,
 }
 
+#[cfg(feature = "cranelift")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeOutputSelection {
+    pub ir: bool,
+    pub object: bool,
+}
+
+#[cfg(feature = "cranelift")]
+#[derive(Debug)]
+pub struct NativeArtifacts {
+    pub ir: Option<String>,
+    pub object: Option<Vec<u8>>,
+}
+
 pub(crate) fn create_evm_isa() -> Evm {
     Evm::new(TargetTriple::new(
         Architecture::Evm,
@@ -701,17 +715,20 @@ pub fn emit_module_native_object(
     top_mod: TopLevelMod<'_>,
     opt_level: OptLevel,
 ) -> Result<Vec<u8>, LowerError> {
-    let module = compile_executable_sonatina_native(db, top_mod)?;
-    let main = ensure_native_main_signature(&module)?;
-    module.ctx.update_func_linkage(main, Linkage::Public);
-
-    let mut compile = Compile::new(module, CraneliftObjectBackend::new())
-        .with_opt_level(to_sonatina_opt_level(opt_level));
-    ensure_module_sonatina_ir_valid(compile.optimize())?;
-    compile
-        .compile()
-        .map(|artifact| artifact.into_bytes())
-        .map_err(|errors| LowerError::Internal(format_cranelift_errors(&errors)))
+    emit_module_native_artifacts(
+        db,
+        top_mod,
+        opt_level,
+        NativeOutputSelection {
+            ir: false,
+            object: true,
+        },
+    )
+    .map(|artifacts| {
+        artifacts
+            .object
+            .expect("native object output was requested")
+    })
 }
 
 #[cfg(feature = "cranelift")]
@@ -720,15 +737,47 @@ pub fn emit_module_native_ir(
     top_mod: TopLevelMod<'_>,
     opt_level: OptLevel,
 ) -> Result<String, LowerError> {
+    emit_module_native_artifacts(
+        db,
+        top_mod,
+        opt_level,
+        NativeOutputSelection {
+            ir: true,
+            object: false,
+        },
+    )
+    .map(|artifacts| artifacts.ir.expect("native IR output was requested"))
+}
+
+#[cfg(feature = "cranelift")]
+pub fn emit_module_native_artifacts(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+    outputs: NativeOutputSelection,
+) -> Result<NativeArtifacts, LowerError> {
     let module = compile_executable_sonatina_native(db, top_mod)?;
     let main = ensure_native_main_signature(&module)?;
     module.ctx.update_func_linkage(main, Linkage::Public);
 
     let mut compile = Compile::new(module, CraneliftObjectBackend::new())
         .with_opt_level(to_sonatina_opt_level(opt_level));
-    let module = compile.optimize();
-    ensure_module_sonatina_ir_valid(module)?;
-    Ok(ModuleWriter::new(module).dump_string())
+    compile.optimize();
+    ensure_module_sonatina_ir_valid(compile.module())?;
+    let ir = outputs
+        .ir
+        .then(|| ModuleWriter::new(compile.module()).dump_string());
+    let object = if outputs.object {
+        Some(
+            compile
+                .compile()
+                .map(|artifact| artifact.into_bytes())
+                .map_err(|errors| LowerError::Internal(format_cranelift_errors(&errors)))?,
+        )
+    } else {
+        None
+    };
+    Ok(NativeArtifacts { ir, object })
 }
 
 #[cfg(feature = "cranelift")]

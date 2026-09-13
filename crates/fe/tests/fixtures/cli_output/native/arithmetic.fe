@@ -1,0 +1,10 @@
+fn signed_roundtrip(value: i32) -> i32 {
+    let quotient: i32 = value / 3
+    let remainder: i32 = value % 3
+    quotient * 3 + remainder
+}
+
+pub fn main() -> i32 {
+    let value: i32 = -101
+    if signed_roundtrip(value) == value { 0 } else { 11 }
+}
