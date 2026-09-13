@@ -25,7 +25,7 @@ pub use runtime::{
     RuntimePackage, RuntimeParam, RuntimePlace, RuntimeProgramView, RuntimeReturnPlan,
     RuntimeSection, RuntimeSectionName, RuntimeSectionRef, RuntimeSyntheticSpec, SaturatingBinOp,
     ScalarClass, ScalarRepr, ScalarRole, StructLayout, VariantId,
-    build_ingot_module_runtime_package, build_library_package, build_runtime_package,
+    build_ingot_module_runtime_package, build_native_executable_package, build_runtime_package,
     build_test_runtime_package, format_runtime_body, format_runtime_body_excerpt,
     format_runtime_package, format_runtime_verify_failure, runtime_instance_stable_key,
     runtime_instance_symbol_key, scalar_raw_memory_size_bytes, serialize_const_region_bytes,

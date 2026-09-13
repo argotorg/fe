@@ -20,32 +20,31 @@ fn with_top_mod_for_source<T>(
 }
 
 #[test]
-fn library_package_roots_every_public_function() {
-    with_top_mod_for_source(
-        "native_public_roots.fe",
+fn native_executable_roots_main_and_reachable_generic_helpers_only() {
+    let ir = with_top_mod_for_source(
+        "native_main_root.fe",
         r#"
-pub fn helper(value: i32) -> i32 {
-    value + 1
+pub fn unused<const N: usize>() -> usize {
+    N
+}
+
+fn identity<T>(value: own T) -> T {
+    value
 }
 
 pub fn main() -> i32 {
-    0
+    identity(value: 42)
 }
 "#,
-        |db, top_mod| {
-            let package = mir::build_library_package(db, top_mod)
-                .expect("native library package should build");
-            let symbols = package
-                .functions(db)
-                .into_iter()
-                .map(|function| function.symbol(db).clone())
-                .collect::<Vec<_>>();
-            assert!(
-                symbols.iter().any(|symbol| symbol == "helper"),
-                "{symbols:?}"
-            );
-            assert!(symbols.iter().any(|symbol| symbol == "main"), "{symbols:?}");
-        },
+        |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+    )
+    .expect("native executable should ignore unreachable generic roots");
+
+    assert!(ir.contains("%main"), "missing main function:\n{ir}");
+    assert!(ir.contains("identity"), "missing reachable helper:\n{ir}");
+    assert!(
+        !ir.contains("unused"),
+        "found unreachable generic root:\n{ir}"
     );
 }
 

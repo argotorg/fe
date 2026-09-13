@@ -7,7 +7,7 @@ use common::ingot::Ingot;
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
 #[cfg(feature = "cranelift")]
-use mir::build_library_package;
+use mir::build_native_executable_package;
 use mir::runtime::ir::RuntimePackagePlan;
 use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rustc_hash::FxHashSet;
@@ -668,11 +668,11 @@ pub fn compile_runtime_package_sonatina(
 }
 
 #[cfg(feature = "cranelift")]
-pub fn compile_library_sonatina_native(
+fn compile_executable_sonatina_native(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
 ) -> Result<Module, LowerError> {
-    let package = build_library_package(db, top_mod)?;
+    let package = build_native_executable_package(db, top_mod)?;
     let isa = create_native_isa()?;
     lower_runtime::compile_runtime_package_sonatina_for_isa(db, &package, &isa, false)
 }
@@ -701,7 +701,7 @@ pub fn emit_module_native_object(
     top_mod: TopLevelMod<'_>,
     opt_level: OptLevel,
 ) -> Result<Vec<u8>, LowerError> {
-    let module = compile_library_sonatina_native(db, top_mod)?;
+    let module = compile_executable_sonatina_native(db, top_mod)?;
     let main = ensure_native_main_signature(&module)?;
     module.ctx.update_func_linkage(main, Linkage::Public);
 
@@ -720,7 +720,7 @@ pub fn emit_module_native_ir(
     top_mod: TopLevelMod<'_>,
     opt_level: OptLevel,
 ) -> Result<String, LowerError> {
-    let module = compile_library_sonatina_native(db, top_mod)?;
+    let module = compile_executable_sonatina_native(db, top_mod)?;
     let main = ensure_native_main_signature(&module)?;
     module.ctx.update_func_linkage(main, Linkage::Public);
 
