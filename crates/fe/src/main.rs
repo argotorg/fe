@@ -635,6 +635,11 @@ pub fn run(opts: &Options) {
             report_failed_only,
             recovery_mode,
         } => {
+            let emit = if emit.is_empty() {
+                backend.default_emit()
+            } else {
+                emit.clone()
+            };
             if let Some(metadata_path) = from_metadata {
                 if !matches!(backend, BuildBackend::Sonatina) {
                     eprintln!("Error: `--from-metadata` only supports `--backend sonatina`");
@@ -644,7 +649,7 @@ pub fn run(opts: &Options) {
                     metadata_path,
                     contract.as_deref(),
                     optimize.as_deref(),
-                    emit,
+                    &emit,
                     out_dir.as_ref(),
                     profile,
                     *recovery_mode,
@@ -657,11 +662,6 @@ pub fn run(opts: &Options) {
                     eprintln!("Error: {err}");
                     std::process::exit(1);
                 }
-            };
-            let emit = if emit.is_empty() {
-                backend.default_emit()
-            } else {
-                emit.clone()
             };
             build(
                 path,

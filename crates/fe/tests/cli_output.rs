@@ -1177,45 +1177,87 @@ fn test_cli_build_emit_metadata_combined_with_other_artifacts() {
 }
 
 #[test]
-fn test_cli_build_metadata_round_trip_reproduces_runtime_bytecode() {
+fn test_cli_build_from_metadata_preserves_default_and_explicit_emits() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path();
     write_app_with_path_dependency(root);
 
-    // Original build: emit metadata + runtime bytecode.
     let out_dir = root.join("app/out");
     let (output, exit_code) = run_fe_main(&[
         "build",
+        "-O2",
         "--emit",
-        "metadata,runtime-bytecode",
+        "metadata,bytecode,runtime-bytecode,abi",
         "--out-dir",
         out_dir.to_str().expect("out utf8"),
         root.join("app").to_str().expect("app utf8"),
     ]);
     assert_eq!(exit_code, 0, "original build failed:\n{output}");
-    let original_runtime =
-        fs::read_to_string(out_dir.join("Foo.runtime.bin")).expect("read original runtime.bin");
-
-    // Rebuild solely from the metadata artifact via `--from-metadata`.
     let metadata_path = out_dir.join("Foo.metadata.json");
-    let recon = tempdir().expect("recon tempdir");
-    let recon_out = recon.path().join("out");
+    for emit in [None, Some("runtime-bytecode")] {
+        let recon = tempdir().expect("recon tempdir");
+        let recon_out = recon.path().join("out");
+        let mut args = vec![
+            "build",
+            "--from-metadata",
+            metadata_path.to_str().expect("metadata utf8"),
+            "--out-dir",
+            recon_out.to_str().expect("out utf8"),
+        ];
+        if let Some(emit) = emit {
+            args.extend(["--emit", emit]);
+        }
+        let (output, exit_code) = run_fe_main(&args);
+        assert_eq!(exit_code, 0, "rebuild from metadata failed:\n{output}");
+        for artifact in ["Foo.bin", "Foo.runtime.bin", "Foo.abi.json"] {
+            let rebuilt = recon_out.join(artifact);
+            if emit.is_none() || artifact == "Foo.runtime.bin" {
+                assert_eq!(
+                    fs::read(&rebuilt).unwrap_or_else(|err| panic!("read {rebuilt:?}: {err}")),
+                    fs::read(out_dir.join(artifact)).expect("read original artifact"),
+                    "rebuilt {artifact} must match the recorded build"
+                );
+            } else {
+                assert!(!rebuilt.exists(), "unrequested artifact {rebuilt:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn test_cli_build_from_metadata_rejects_executable_emit() {
+    let temp = tempdir().expect("tempdir");
+    let file = temp.path().join("foo.fe");
+    fs::write(&file, "pub contract Foo {}\n").expect("write foo.fe");
+    let out_dir = temp.path().join("original");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        file.to_str().expect("file utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "original build failed:\n{output}");
+    let metadata_path = out_dir.join("Foo.metadata.json");
+    let recon_out = temp.path().join("rebuilt");
     let (output, exit_code) = run_fe_main(&[
         "build",
         "--from-metadata",
         metadata_path.to_str().expect("metadata utf8"),
         "--emit",
-        "runtime-bytecode",
+        "executable",
         "--out-dir",
         recon_out.to_str().expect("out utf8"),
     ]);
-    assert_eq!(exit_code, 0, "rebuild from metadata failed:\n{output}");
-    let rebuilt_runtime =
-        fs::read_to_string(recon_out.join("Foo.runtime.bin")).expect("read rebuilt runtime.bin");
-
-    assert_eq!(
-        original_runtime, rebuilt_runtime,
-        "runtime bytecode rebuilt from metadata.json must be byte-identical"
+    assert_ne!(exit_code, 0, "executable emit should fail:\n{output}");
+    assert!(
+        output.contains("`--emit executable` requires `--backend native`"),
+        "unexpected error:\n{output}"
+    );
+    assert!(
+        !recon_out.exists(),
+        "invalid request must not write artifacts"
     );
 }
 

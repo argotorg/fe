@@ -388,7 +388,10 @@ pub fn build_from_metadata(
     use_recovery_mode: bool,
 ) {
     let emit = EmitSelection::from_requested(emit);
-
+    if let Err(err) = validate_build_request(BuildBackend::Sonatina, None, contract, emit) {
+        eprintln!("Error: {err}");
+        std::process::exit(1);
+    }
     let metadata = match crate::metadata_input::read_metadata(input) {
         Ok(metadata) => metadata,
         Err(err) => {
