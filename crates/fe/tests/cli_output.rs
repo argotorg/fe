@@ -1,6 +1,17 @@
 use dir_test::{Fixture, dir_test};
 use serde_json::Value;
 use std::{fs, io::IsTerminal, path::Path, process::Command};
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 use tempfile::tempdir;
 use test_utils::{
     normalize::{normalize_newlines, normalize_path_separators, replace_path_token},
@@ -566,10 +577,21 @@ fn native_exit_code(source: &str, level: &str) -> Option<i32> {
         exit_code, 0,
         "fe native build failed at O{level}:\n{output}"
     );
-    Command::new(out_dir.join("program"))
-        .status()
-        .expect("run native executable")
-        .code()
+    let mut child = Command::new(out_dir.join("program"))
+        .spawn()
+        .expect("run native executable");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.try_wait().expect("poll native executable") {
+            return status.code();
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("kill timed out native executable");
+            child.wait().expect("reap native executable");
+            panic!("native program did not finish within 10 seconds at O{level}");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[cfg(all(
@@ -655,6 +677,121 @@ pub fn main() -> i32 {{
                     native_exit_code(&source, level),
                     None,
                     "checked {ty} {value} {op} {divisor} did not trap at O{level}"
+                );
+            }
+        }
+    }
+}
+
+fn power_edge_source(bits: u16) -> String {
+    let sign_bit = bits - 1;
+    let signed_exp_bit = bits - 2;
+    format!(
+        r#"
+fn checked_unsigned(base: u{bits}, exponent: u{bits}) -> u{bits} {{ base ** exponent }}
+fn checked_signed(base: i{bits}, exponent: i{bits}) -> i{bits} {{ base ** exponent }}
+#[arithmetic(unchecked)]
+fn wrapping_unsigned(base: u{bits}, exponent: u{bits}) -> u{bits} {{ base ** exponent }}
+#[arithmetic(unchecked)]
+fn wrapping_signed(base: i{bits}, exponent: i{bits}) -> i{bits} {{ base ** exponent }}
+
+fn verify() -> bool {{
+    let min: i{bits} = 1 << {sign_bit}
+    let large: u{bits} = 1 << {sign_bit}
+    let signed_large: i{bits} = 1 << {signed_exp_bit}
+    if checked_unsigned(base: 0, exponent: 0) != 1 {{ return false }}
+    if checked_unsigned(base: 200, exponent: 1) != 200 {{ return false }}
+    if checked_unsigned(base: 1, exponent: large) != 1 {{ return false }}
+    if checked_unsigned(base: 0, exponent: large) != 0 {{ return false }}
+    if checked_signed(base: min, exponent: 0) != 1 {{ return false }}
+    if checked_signed(base: min, exponent: 1) != min {{ return false }}
+    if checked_signed(base: -2, exponent: {sign_bit}) != min {{ return false }}
+    if checked_signed(base: -1, exponent: signed_large) != 1 {{ return false }}
+    if checked_signed(base: -1, exponent: signed_large + 1) != -1 {{ return false }}
+    if wrapping_unsigned(base: 2, exponent: {bits}) != 0 {{ return false }}
+    if wrapping_unsigned(base: 3, exponent: 5) != 243 {{ return false }}
+    if wrapping_signed(base: -1, exponent: -1) != -1 {{ return false }}
+    if wrapping_signed(base: -1, exponent: -2) != 1 {{ return false }}
+    if wrapping_signed(base: 2, exponent: -1) != 0 {{ return false }}
+    true
+}}
+
+#[test]
+fn power_edges() {{ assert!(verify()) }}
+
+pub fn main() -> i32 {{ if verify() {{ 0 }} else {{ 1 }} }}
+"#
+    )
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn test_cli_build_native_power_edges() {
+    for bits in [8, 128, 256] {
+        let source = power_edge_source(bits);
+        for level in ["0", "1"] {
+            assert_eq!(
+                native_exit_code(&source, level),
+                Some(0),
+                "{bits}-bit power edge case failed at O{level}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_cli_evm_power_edges() {
+    let temp = tempdir().expect("tempdir");
+    for bits in [8, 128, 256] {
+        let path = temp.path().join(format!("power_{bits}.fe"));
+        fs::write(&path, power_edge_source(bits)).expect("write power edge cases");
+        for level in ["0", "1"] {
+            let (output, exit_code) = run_fe_main(&[
+                "test",
+                "-O",
+                level,
+                path.to_str().expect("UTF-8 source path"),
+            ]);
+            assert_eq!(
+                exit_code, 0,
+                "{bits}-bit EVM power failed at O{level}:\n{output}"
+            );
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn test_cli_build_native_checked_power_still_traps() {
+    for bits in [8, 128, 256] {
+        let sign_bit = bits - 1;
+        for (prefix, base, exponent) in [("u", 2, bits), ("i", 2, sign_bit), ("i", 3, -1)] {
+            let ty = format!("{prefix}{bits}");
+            let source = format!(
+                r#"
+fn calculate(base: {ty}, exponent: {ty}) -> {ty} {{ base ** exponent }}
+pub fn main() -> i32 {{
+    if calculate(base: {base}, exponent: {exponent}) == 0 {{ 0 }} else {{ 1 }}
+}}
+"#
+            );
+            for level in ["0", "1"] {
+                assert_eq!(
+                    native_exit_code(&source, level),
+                    None,
+                    "checked {ty} {base} ** {exponent} did not trap at O{level}"
                 );
             }
         }

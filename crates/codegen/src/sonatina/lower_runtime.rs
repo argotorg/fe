@@ -5252,7 +5252,9 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 }
                 self.lower_unchecked_rem(lhs, rhs, ty, signed)?
             }
-            ArithBinOp::Pow if checked => self.lower_checked_pow_builtin(lhs, rhs, ty, signed)?,
+            ArithBinOp::Pow if checked || self.module.is_native_target() => {
+                self.lower_pow(lhs, rhs, ty, signed, checked)?
+            }
             ArithBinOp::Pow => self.fb.insert_inst(
                 EvmExp::new(self.module.required_inst::<EvmExp>()?, lhs, rhs),
                 ty,
@@ -5303,16 +5305,18 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             result
         })
     }
-    fn lower_checked_pow_builtin(
+
+    fn lower_pow(
         &mut self,
         base: ValueId,
         exp: ValueId,
         ty: Type,
         signed: bool,
+        checked: bool,
     ) -> Result<ValueId, LowerError> {
         let zero = self.fb.make_imm_value(Immediate::zero(ty));
         let one = self.fb.make_imm_value(Immediate::one(ty));
-        if signed {
+        if checked && signed {
             let negative = self
                 .fb
                 .insert_inst(Slt::new(self.module.inst_set(), exp, zero), Type::I1);
@@ -5322,9 +5326,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         let entry = self
             .fb
             .current_block()
-            .expect("checked pow requires a current block");
+            .expect("pow requires a current block");
         let header = self.fb.append_block();
-        let body = self.fb.append_block();
+        let test_bit = self.fb.append_block();
+        let multiply = self.fb.append_block();
+        let advance = self.fb.append_block();
+        let square = self.fb.append_block();
         let done = self.fb.append_block();
         self.fb
             .insert_inst_no_result(Jump::new(self.module.inst_set(), header));
@@ -5332,37 +5339,77 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         let result = self
             .fb
             .insert_inst(Phi::new(self.module.inst_set(), vec![(one, entry)]), ty);
-        let idx = self
+        let factor = self
             .fb
-            .insert_inst(Phi::new(self.module.inst_set(), vec![(zero, entry)]), ty);
+            .insert_inst(Phi::new(self.module.inst_set(), vec![(base, entry)]), ty);
+        let remaining = self
+            .fb
+            .insert_inst(Phi::new(self.module.inst_set(), vec![(exp, entry)]), ty);
         let done_cond = self
             .fb
-            .insert_inst(Eq::new(self.module.inst_set(), idx, exp), Type::I1);
+            .insert_inst(IsZero::new(self.module.inst_set(), remaining), Type::I1);
         self.fb
-            .insert_inst_no_result(Br::new(self.module.inst_set(), done_cond, done, body));
+            .insert_inst_no_result(Br::new(self.module.inst_set(), done_cond, done, test_bit));
 
-        self.fb.switch_to_block(body);
-        let [next_result, overflow] = if signed {
-            self.fb.insert_smulo(result, base)
-        } else {
-            self.fb.insert_umulo(result, base)
-        };
-        self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
-        let one_step = self.fb.make_imm_value(Immediate::one(ty));
-        let next_idx = self
+        // Exponentiation by squaring consumes one exponent bit per iteration.
+        // Unchecked signed exponents use their unsigned bit pattern, as in CTFE.
+        self.fb.switch_to_block(test_bit);
+        let bit = self
             .fb
-            .insert_inst(Add::new(self.module.inst_set(), idx, one_step), ty);
+            .insert_inst(And::new(self.module.inst_set(), remaining, one), ty);
+        let even = self
+            .fb
+            .insert_inst(IsZero::new(self.module.inst_set(), bit), Type::I1);
+        self.fb
+            .insert_inst_no_result(Br::new(self.module.inst_set(), even, advance, multiply));
+
+        self.fb.switch_to_block(multiply);
+        let product = self.lower_arith(ArithBinOp::Mul, checked, result, factor, ty, signed)?;
+        let multiply_exit = self
+            .fb
+            .current_block()
+            .expect("pow multiply requires a block");
+        self.fb
+            .insert_inst_no_result(Jump::new(self.module.inst_set(), advance));
+
+        self.fb.switch_to_block(advance);
+        let next_result = self.fb.insert_inst(
+            Phi::new(
+                self.module.inst_set(),
+                vec![(result, test_bit), (product, multiply_exit)],
+            ),
+            ty,
+        );
+        let next_exp = self
+            .fb
+            .insert_inst(Shr::new(self.module.inst_set(), one, remaining), ty);
+        let finished = self
+            .fb
+            .insert_inst(IsZero::new(self.module.inst_set(), next_exp), Type::I1);
+        self.fb
+            .insert_inst_no_result(Br::new(self.module.inst_set(), finished, done, square));
+
+        // A final unused square could overflow even when the result fits.
+        self.fb.switch_to_block(square);
+        let next_factor = self.lower_arith(ArithBinOp::Mul, checked, factor, factor, ty, signed)?;
         let loop_back = self
             .fb
             .current_block()
-            .expect("checked pow body should stay in a block");
+            .expect("pow square requires a block");
         self.fb.append_phi_arg(result, next_result, loop_back);
-        self.fb.append_phi_arg(idx, next_idx, loop_back);
+        self.fb.append_phi_arg(factor, next_factor, loop_back);
+        self.fb.append_phi_arg(remaining, next_exp, loop_back);
         self.fb
             .insert_inst_no_result(Jump::new(self.module.inst_set(), header));
 
         self.fb.switch_to_block(done);
-        Ok(result)
+        Ok(self.fb.insert_inst(
+            Phi::new(
+                self.module.inst_set(),
+                vec![(result, header), (next_result, advance)],
+            ),
+            ty,
+        ))
     }
 
     fn lower_comp(

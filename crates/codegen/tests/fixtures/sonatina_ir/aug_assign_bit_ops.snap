@@ -16,42 +16,61 @@ func private %aug_assign_bit_ops(v0.i256, v1.i256) -> i256 {
         jump block2;
 
     block2:
-        v8.i256 = phi (1.i256 block1) (v11 block6);
-        v9.i256 = phi (0.i256 block1) (v17 block6);
-        v10.i1 = eq v9 v1;
-        br v10 block4 block3;
+        v8.i256 = phi (1.i256 block1) (v20 block10);
+        v9.i256 = phi (v5 block1) (v23 block10);
+        v10.i256 = phi (v1 block1) (v21 block10);
+        v11.i1 = is_zero v10;
+        br v11 block7 block3;
 
     block3:
-        (v11.i256, v12.i1) = umulo v8 v5;
-        br v12 block5 block6;
+        v12.i256 = and v10 1.i256;
+        v13.i1 = is_zero v12;
+        br v13 block5 block4;
 
     block4:
-        obj.store v2 v8;
-        v20.i256 = obj.load v2;
-        v21.i256 = shl 3.i256 v20;
-        obj.store v2 v21;
-        v22.i256 = obj.load v2;
-        v23.i256 = shr 1.i256 v22;
-        obj.store v2 v23;
-        v25.i256 = obj.load v2;
-        v26.i256 = and v25 255.i256;
-        obj.store v2 v26;
-        v27.i256 = obj.load v2;
-        v28.i256 = or v27 1.i256;
-        obj.store v2 v28;
-        v30.i256 = obj.load v2;
-        v31.i256 = xor v30 2.i256;
-        obj.store v2 v31;
-        v32.i256 = obj.load v2;
-        return v32;
+        (v14.i256, v15.i1) = umulo v8 v9;
+        br v15 block8 block9;
 
     block5:
+        v20.i256 = phi (v8 block3) (v14 block9);
+        v21.i256 = shr 1.i256 v10;
+        v22.i1 = is_zero v21;
+        br v22 block7 block6;
+
+    block6:
+        (v23.i256, v24.i1) = umulo v9 v9;
+        br v24 block8 block10;
+
+    block7:
+        v25.i256 = phi (v8 block2) (v20 block5);
+        obj.store v2 v25;
+        v28.i256 = obj.load v2;
+        v29.i256 = shl 3.i256 v28;
+        obj.store v2 v29;
+        v30.i256 = obj.load v2;
+        v31.i256 = shr 1.i256 v30;
+        obj.store v2 v31;
+        v33.i256 = obj.load v2;
+        v34.i256 = and v33 255.i256;
+        obj.store v2 v34;
+        v35.i256 = obj.load v2;
+        v36.i256 = or v35 1.i256;
+        obj.store v2 v36;
+        v38.i256 = obj.load v2;
+        v39.i256 = xor v38 2.i256;
+        obj.store v2 v39;
+        v40.i256 = obj.load v2;
+        return v40;
+
+    block8:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
 
-    block6:
-        v17.i256 = add v9 1.i256;
+    block9:
+        jump block5;
+
+    block10:
         jump block2;
 }
 
