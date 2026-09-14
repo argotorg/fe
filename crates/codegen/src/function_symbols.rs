@@ -31,6 +31,7 @@ struct OwnerContextCandidates {
 
 pub(crate) struct FunctionSymbolInput<'db> {
     pub owner: RuntimeFunctionOwner<'db>,
+    pub fixed_symbol: Option<String>,
     pub fallback_symbol: String,
     pub variant_suffix: String,
     pub disambiguator: String,
@@ -80,6 +81,9 @@ fn function_symbol_candidates<'db>(
     db: &'db DriverDataBase,
     input: &FunctionSymbolInput<'db>,
 ) -> Vec<String> {
+    if let Some(symbol) = &input.fixed_symbol {
+        return vec![symbol.clone()];
+    }
     match &input.owner {
         RuntimeFunctionOwner::Semantic(semantic) => {
             semantic_function_symbol_candidates(db, *semantic, &input.variant_suffix)
@@ -235,7 +239,9 @@ fn uniquify_function_symbols(
     );
     let mut used = conflicts
         .iter()
-        .filter(|(_, group)| group.len() == 1)
+        .filter(|(_, group)| {
+            group.len() == 1 || group.iter().any(|&idx| inputs[idx].fixed_symbol.is_some())
+        })
         .map(|(symbol, _)| symbol.clone())
         .collect::<FxHashSet<_>>();
     for group in conflicts.values().filter(|group| group.len() > 1) {
@@ -247,6 +253,9 @@ fn uniquify_function_symbols(
                 .then_with(|| lhs.cmp(rhs))
         });
         for idx in group {
+            if inputs[idx].fixed_symbol.is_some() {
+                continue;
+            }
             let base = symbols[idx].clone();
             let fingerprint = stable_identity_fingerprint(&inputs[idx].disambiguator);
             let candidate = format!(

@@ -525,14 +525,13 @@ pub fn build_native_executable_package<'db>(
     top_mod: TopLevelMod<'db>,
 ) -> Result<RuntimePackage<'db>, LowerError> {
     let Some(main) = top_mod
-        .all_funcs(db)
-        .iter()
-        .copied()
-        .filter(|func| func.top_mod(db) == top_mod)
-        .filter(|func| !func.is_extern(db) && !is_test_func(db, *func))
-        .find(|func| {
-            !func.is_associated_func(db) && func.vis(db).is_pub() && is_main_func(db, *func)
+        .children_non_nested(db)
+        .filter_map(|item| match item {
+            ItemKind::Func(func) => Some(func),
+            _ => None,
         })
+        .filter(|func| !func.is_extern(db) && !is_test_func(db, *func))
+        .find(|func| func.vis(db).is_pub() && is_main_func(db, *func))
     else {
         return Err(LowerError::Unsupported(
             "native executable output requires `pub fn main() -> i32`".to_string(),

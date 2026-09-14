@@ -49,6 +49,46 @@ pub fn main() -> i32 {
 }
 
 #[test]
+fn native_entry_symbol_is_reserved_when_reachable_helpers_are_named_main() {
+    let ir = with_top_mod_for_source(
+        "native_entry_collision.fe",
+        include_str!("../../fe/tests/fixtures/cli_output/native/entry_name_collision.fe"),
+        |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+    )
+    .expect("native entry should retain its symbol when reachable helpers are named main");
+
+    assert!(
+        ir.contains("func public %main() -> i32"),
+        "missing exported C main:\n{ir}"
+    );
+    assert_eq!(
+        ir.lines()
+            .filter(|line| line.starts_with("func ") && line.contains("__main("))
+            .count(),
+        3,
+        "associated, trait, and module helpers should have qualified symbols:\n{ir}"
+    );
+    assert_eq!(ir.matches(" = call %").count(), 3, "missing calls:\n{ir}");
+}
+
+#[test]
+fn native_executable_rejects_main_outside_the_root_scope() {
+    let error = with_top_mod_for_source(
+        "nested_main_only.fe",
+        "mod nested { pub fn main() -> i32 { 0 } }\n",
+        |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+    )
+    .expect_err("a nested main is not the executable entry");
+
+    assert!(
+        error
+            .to_string()
+            .contains("requires `pub fn main() -> i32`"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn native_ir_uses_host_isa_and_target_neutral_signed_division() {
     let ir = with_top_mod_for_source(
         "native_div.fe",

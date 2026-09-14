@@ -1,0 +1,29 @@
+struct Helper {}
+
+impl Helper {
+    fn main(self) -> i32 { 10 }
+}
+
+trait Main {
+    fn main(self) -> i32
+}
+
+struct TraitHelper {}
+
+impl Main for TraitHelper {
+    fn main(self) -> i32 { 12 }
+}
+
+mod nested {
+    pub fn main() -> i32 { 20 }
+}
+
+pub fn main() -> i32 {
+    let helper = Helper {}
+    let trait_helper = TraitHelper {}
+    if helper.main() + trait_helper.main() + nested::main() == 42 {
+        0
+    } else {
+        1
+    }
+}

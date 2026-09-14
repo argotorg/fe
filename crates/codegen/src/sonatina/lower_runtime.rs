@@ -158,21 +158,23 @@ pub(super) fn compile_runtime_package_sonatina(
     package: &RuntimePackage<'_>,
 ) -> Result<Module, LowerError> {
     let isa = super::create_evm_isa();
-    compile_runtime_package_sonatina_for_isa(db, package, &isa, true)
+    compile_runtime_package_sonatina_for_isa(db, package, &isa, true, None)
+        .map(|(module, _)| module)
 }
 
-pub(super) fn compile_runtime_package_sonatina_for_isa<I>(
-    db: &DriverDataBase,
-    package: &RuntimePackage<'_>,
+pub(super) fn compile_runtime_package_sonatina_for_isa<'db, I>(
+    db: &'db DriverDataBase,
+    package: &RuntimePackage<'db>,
     isa: &I,
     declare_objects: bool,
-) -> Result<Module, LowerError>
+    fixed_symbol: Option<(RuntimeInstance<'db>, &str)>,
+) -> Result<(Module, FxHashMap<RuntimeInstance<'db>, FuncRef>), LowerError>
 where
     I: Isa,
     I::InstSet: LoweringInstSet,
 {
     let builder = ModuleBuilder::new(ModuleCtx::new(isa));
-    let mut lowerer = ModuleLowerer::new(db, builder, isa.inst_set(), package);
+    let mut lowerer = ModuleLowerer::new(db, builder, isa.inst_set(), package, fixed_symbol);
     lowerer.declare_functions()?;
     lowerer.lower_const_regions()?;
     lowerer.lower_bodies()?;
@@ -204,6 +206,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         builder: ModuleBuilder,
         inst_set: &'static I,
         package: &'a RuntimePackage<'db>,
+        fixed_symbol: Option<(RuntimeInstance<'db>, &str)>,
     ) -> Self {
         Self {
             db,
@@ -212,7 +215,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             package,
             func_map: FxHashMap::default(),
             argument_packs: FxHashMap::default(),
-            func_symbols: assign_sonatina_function_symbols(db, package),
+            func_symbols: assign_sonatina_function_symbols(db, package, fixed_symbol),
             section_membership: compute_section_membership(db, package),
             type_cache: FxHashMap::default(),
             layout_names: FxHashMap::default(),
@@ -222,8 +225,8 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         }
     }
 
-    fn finish(self) -> Module {
-        self.builder.build()
+    fn finish(self) -> (Module, FxHashMap<RuntimeInstance<'db>, FuncRef>) {
+        (self.builder.build(), self.func_map)
     }
 
     fn inst_set(&self) -> &'static I {
@@ -719,12 +722,16 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
 fn assign_sonatina_function_symbols<'db>(
     db: &'db DriverDataBase,
     package: &RuntimePackage<'db>,
+    fixed_symbol: Option<(RuntimeInstance<'db>, &str)>,
 ) -> FxHashMap<mir::RuntimeInstance<'db>, String> {
     let functions = package.functions(db);
     let inputs = functions
         .iter()
         .map(|function| FunctionSymbolInput {
             owner: function.owner(db).clone(),
+            fixed_symbol: fixed_symbol
+                .filter(|(instance, _)| *instance == function.instance(db))
+                .map(|(_, symbol)| symbol.to_string()),
             fallback_symbol: function.symbol(db).clone(),
             variant_suffix: String::new(),
             disambiguator: mir::runtime_instance_symbol_key(db, function.instance(db)),

@@ -176,6 +176,7 @@ pub contract SlotContract {
             ModuleBuilder::new(ModuleCtx::new(&isa)),
             isa.inst_set(),
             &package,
+            None,
         );
         lowerer.declare_functions().unwrap();
         lowerer.lower_const_regions().unwrap();
@@ -196,7 +197,7 @@ pub contract SlotContract {
         let (mut artifacts, _) = emit_runtime_module_sonatina_bytecode_with_options(
             &db,
             &package,
-            lowerer.finish(),
+            lowerer.finish().0,
             opt,
             false,
             None,

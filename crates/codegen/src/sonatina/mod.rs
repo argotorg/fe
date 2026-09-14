@@ -6,10 +6,10 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use common::ingot::Ingot;
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
-#[cfg(feature = "cranelift")]
-use mir::build_native_executable_package;
 use mir::runtime::ir::RuntimePackagePlan;
 use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
+#[cfg(feature = "cranelift")]
+use mir::{RuntimeSectionName, build_native_executable_package};
 use rustc_hash::FxHashSet;
 #[cfg(feature = "cranelift")]
 use sonatina_codegen::{Compile, isa::cranelift::CraneliftObjectBackend};
@@ -685,10 +685,32 @@ pub fn compile_runtime_package_sonatina(
 fn compile_executable_sonatina_native(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
-) -> Result<Module, LowerError> {
+) -> Result<(Module, FuncRef), LowerError> {
     let package = build_native_executable_package(db, top_mod)?;
+    let entry = package
+        .primary_object(db)
+        .and_then(|object| {
+            object
+                .sections(db)
+                .into_iter()
+                .find(|section| section.name == RuntimeSectionName::Main)
+        })
+        .ok_or_else(|| LowerError::Internal("native package is missing its main section".into()))?
+        .entry
+        .instance(db);
     let isa = create_native_isa()?;
-    lower_runtime::compile_runtime_package_sonatina_for_isa(db, &package, &isa, false)
+    let (module, functions) = lower_runtime::compile_runtime_package_sonatina_for_isa(
+        db,
+        &package,
+        &isa,
+        false,
+        Some((entry, "main")),
+    )?;
+    let main = functions
+        .get(&entry)
+        .copied()
+        .ok_or_else(|| LowerError::Internal("native main was not lowered".into()))?;
+    Ok((module, main))
 }
 
 #[cfg(feature = "cranelift")]
@@ -756,8 +778,8 @@ pub fn emit_module_native_artifacts(
     opt_level: OptLevel,
     outputs: NativeOutputSelection,
 ) -> Result<NativeArtifacts, LowerError> {
-    let module = compile_executable_sonatina_native(db, top_mod)?;
-    let main = ensure_native_main_signature(&module)?;
+    let (module, main) = compile_executable_sonatina_native(db, top_mod)?;
+    ensure_native_main_signature(&module, main)?;
     module.ctx.update_func_linkage(main, Linkage::Public);
 
     let mut compile = Compile::new(module, CraneliftObjectBackend::new())
@@ -781,41 +803,18 @@ pub fn emit_module_native_artifacts(
 }
 
 #[cfg(feature = "cranelift")]
-fn ensure_native_main_signature(module: &Module) -> Result<FuncRef, LowerError> {
-    let signatures = module
-        .funcs()
-        .into_iter()
-        .filter_map(|func_ref| {
-            module.ctx.func_sig(func_ref, |signature| {
-                Some((
-                    func_ref,
-                    signature.name().to_string(),
-                    signature.args().to_vec(),
-                    signature.ret_tys().to_vec(),
-                ))
-            })
-        })
-        .collect::<Vec<_>>();
-    let mut main_signatures = signatures.iter().filter(|(_, name, _, _)| name == "main");
-    let Some((func_ref, _, args, ret_tys)) = main_signatures.next() else {
-        return Err(LowerError::Unsupported(
-            "native executable output requires `pub fn main() -> i32`".to_string(),
-        ));
-    };
-    if main_signatures.next().is_some() {
-        return Err(LowerError::Unsupported(
-            "native executable output requires exactly one exported `main` function".to_string(),
-        ));
-    }
-    if args.is_empty() && ret_tys.as_slice() == [Type::I32] {
-        Ok(*func_ref)
-    } else {
-        Err(LowerError::Unsupported(format!(
-            "native executable `main` must have signature `pub fn main() -> i32`, found `main({}) -> {}`",
-            format_native_types(args, module),
-            format_native_types(ret_tys, module)
-        )))
-    }
+fn ensure_native_main_signature(module: &Module, main: FuncRef) -> Result<(), LowerError> {
+    module.ctx.func_sig(main, |signature| {
+        if signature.args().is_empty() && signature.ret_tys() == [Type::I32] {
+            Ok(())
+        } else {
+            Err(LowerError::Unsupported(format!(
+                "native executable `main` must have signature `pub fn main() -> i32`, found `main({}) -> {}`",
+                format_native_types(signature.args(), module),
+                format_native_types(signature.ret_tys(), module)
+            )))
+        }
+    })
 }
 
 #[cfg(feature = "cranelift")]
