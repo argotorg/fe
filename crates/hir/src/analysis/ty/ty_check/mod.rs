@@ -258,6 +258,62 @@ fn diag_depends_on_param_instantiation<'db>(
     }
 }
 
+/// Ground predicates are declaration obligations, never solver assumptions.
+/// Reject all generic scopes until substitution and every use-site gate exist.
+/// A failed or unsupported evaluation must never count as a satisfied condition.
+pub fn check_where_const_predicates<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: WhereClauseOwner<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let predicates = owner.where_clause(db).const_predicates(db);
+    if predicates.is_empty() {
+        return Vec::new();
+    }
+    let mut item = Some(crate::hir_def::ItemKind::from(owner));
+    while let Some(current) = item {
+        if let Some(params) = GenericParamOwner::from_item_opt(current)
+            && !collect_generic_params(db, params).params(db).is_empty()
+        {
+            return predicates
+                .iter()
+                .map(|body| BodyDiag::GenericConstPredicateUnsupported(body.span().into()).into())
+                .collect();
+        }
+        item = current.scope().parent_item(db);
+    }
+
+    let mut diags = Vec::new();
+    for &body in predicates {
+        let expected = TyId::bool(db);
+        let body_owner = BodyOwner::AnonConstBody { body, expected };
+        let (body_diags, _) = check_anon_const_body(db, body, expected);
+        if !body_diags.is_empty() && !static_assert_ignorable_type_diags(db, body_diags) {
+            diags.extend(body_diags.iter().cloned());
+            continue;
+        }
+        match eval_body_owner_const(db, body_owner, Vec::new()) {
+            Ok(value) => match static_assert_bool_value(db, value) {
+                Some(true) => {}
+                Some(false) => {
+                    diags.push(BodyDiag::WhereConstPredicateFailed(body.span().into()).into())
+                }
+                None => diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into()),
+            },
+            Err(error) => {
+                let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, body_owner, error));
+                diags.push(
+                    ty.emit_diag(db, body.span().into())
+                        .map(FuncBodyDiag::from)
+                        .unwrap_or_else(|| {
+                            BodyDiag::ConstValueMustBeKnown(body.span().into()).into()
+                        }),
+                );
+            }
+        }
+    }
+    diags
+}
+
 #[salsa::tracked(return_ref)]
 pub fn check_static_assert<'db>(
     db: &'db dyn HirAnalysisDb,

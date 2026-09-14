@@ -147,11 +147,7 @@ impl FrozenArtifact {
             || !func
                 .as_callable(db)
                 .is_some_and(|callable| callable.params(db).is_empty())
-            || WhereClauseOwner::Func(func)
-                .clause(db)
-                .predicates(db)
-                .next()
-                .is_some()
+            || !WhereClauseOwner::Func(func).clause(db).is_empty(db)
             || !db
                 .top_mod(file)
                 .children_non_nested(db)

@@ -152,7 +152,7 @@ where
     }
 
     pub(super) fn empty_where_clause(&self) -> WhereClauseId<'db> {
-        WhereClauseId::new(self.db(), vec![])
+        WhereClauseId::new(self.db(), vec![], vec![])
     }
 
     pub(super) fn empty_effect_params(&self) -> EffectParamListId<'db> {
@@ -1037,6 +1037,7 @@ mod tests {
                 ty: Partial::Present(value_ty),
                 bounds: vec![TypeBound::Trait(copy_trait)],
             }],
+            vec![],
         );
         let effect_name = builder.ident("capability");
         let effects = EffectParamListId::new(

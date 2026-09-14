@@ -3342,6 +3342,21 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
+            Self::WhereConstPredicateFailed(span) => primary_diag(
+                severity,
+                "const where predicate failed",
+                "condition evaluated to `false`",
+                span.resolve(db),
+                error_code,
+            ),
+            Self::GenericConstPredicateUnsupported(span) => primary_diag(
+                severity,
+                "const where predicates in generic scopes are not supported yet",
+                "requires generic predicate substitution and use-site checking",
+                span.resolve(db),
+                error_code,
+            ),
+
             Self::ConstValueMustBeKnown(span) => primary_diag(
                 severity,
                 "const value must be resolvable during type checking",

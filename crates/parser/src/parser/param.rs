@@ -6,7 +6,7 @@ use crate::{ExpectedKind, ParseError, SyntaxKind};
 
 use super::{
     ErrProof, Parser, Recovery, define_scope,
-    expr::{parse_const_generic_expr, parse_expr},
+    expr::{parse_const_generic_expr, parse_expr, parse_expr_no_struct},
     expr_atom::{BlockExprScope, LitExprScope},
     parse_list,
     path::PathScope,
@@ -480,8 +480,17 @@ impl super::Parse for WhereClauseScope {
         loop {
             parser.set_newline_as_trivia(true);
             match parser.current_kind() {
-                Some(kind) if is_type_start(kind) => {
-                    parser.parse(WherePredicateScope::default())?;
+                Some(kind) if is_type_start(kind) || is_const_predicate_start(kind) => {
+                    let type_bound = is_type_start(kind)
+                        && parser.dry_run(|p| {
+                            parse_type(p, None).is_ok()
+                                && p.current_kind() == Some(SyntaxKind::Colon)
+                        });
+                    if type_bound {
+                        parser.parse(WherePredicateScope::default())?;
+                    } else {
+                        parser.parse(WhereConstPredicateScope::default())?;
+                    }
                     pred_count += 1;
                 }
                 _ => break,
@@ -489,7 +498,9 @@ impl super::Parse for WhereClauseScope {
 
             if !parser.bump_if(SyntaxKind::Comma)
                 && parser.current_kind().is_some()
-                && is_type_start(parser.current_kind().unwrap())
+                && parser
+                    .current_kind()
+                    .is_some_and(|kind| is_type_start(kind) || is_const_predicate_start(kind))
             {
                 parser.set_newline_as_trivia(false);
                 let newline = parser.current_kind() == Some(SyntaxKind::Newline);
@@ -516,8 +527,28 @@ impl super::Parse for WhereClauseScope {
         }
 
         if pred_count == 0 {
-            parser.error("`where` clause requires one or more type constraints");
+            parser.error("`where` clause requires one or more predicates");
         }
+        Ok(())
+    }
+}
+
+// A leading brace belongs to the item. Parenthesize a block predicate so
+// its delimiter cannot be confused with a function body or a field list.
+fn is_const_predicate_start(kind: SyntaxKind) -> bool {
+    use SyntaxKind::*;
+    matches!(
+        kind,
+        Not | Minus | Tilde | Plus | IfKw | MatchKw | Int | String | TrueKw | FalseKw
+    )
+}
+
+define_scope! { WhereConstPredicateScope, WhereConstPredicate }
+impl super::Parse for WhereConstPredicateScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parse_expr_no_struct(parser)?;
         Ok(())
     }
 }

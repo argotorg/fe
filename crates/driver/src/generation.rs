@@ -408,11 +408,7 @@ fn generate_function(
             .any(|item| item == ItemKind::Func(provider))
         || provider.params(db).next().is_some()
         || provider.has_effects(db)
-        || WhereClauseOwner::Func(provider)
-            .clause(db)
-            .predicates(db)
-            .next()
-            .is_some()
+        || !WhereClauseOwner::Func(provider).clause(db).is_empty(db)
         || !provider
             .as_callable(db)
             .is_some_and(|callable| callable.params(db).is_empty())

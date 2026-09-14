@@ -269,3 +269,32 @@ allocations. Every materialized package is checked. Receipts on output errors
 retain sources and dependency URLs after the temporary database is dropped.
 Materialization URLs are local to that compilation, not persistent package IDs.
 No filesystem or network access is performed.
+
+## Ground const where predicates
+
+Ordinary compilation now checks boolean `where` conditions on declarations
+without in-scope generic parameters:
+
+```fe
+const LIMIT: u256 = 8
+const fn allowed(_ size: u256) -> bool { size < LIMIT }
+
+fn operation() where allowed(3), !false {}
+```
+
+Every condition is checked at its declaration, even if nobody uses the item.
+Only evaluation to `true` succeeds. Type errors, nonconst operations, failed
+execution, recursion, and exhausted CTFE limits are errors. Conditions enter
+ordinary semantic borrow and layout checking as anonymous const bodies.
+They neither add solver assumptions nor filter impl candidates.
+
+Type/trait predicates keep their existing syntax and meaning. Parenthesize a
+block condition, as in `where ({ ... })`, to distinguish it from the item's
+body. Const predicates in generic scopes are explicitly rejected, including
+conditions that happen to look constant and a trait's implicit `Self` scope.
+Generic substitution, use-site discharge, and symbolic implication are separate
+future work; removing that rejection alone would not implement them.
+
+Generated target templates retain these conditions and receive the same checks.
+The existing provider and frozen-export protocols continue to exclude root
+requirements, including ground const predicates.

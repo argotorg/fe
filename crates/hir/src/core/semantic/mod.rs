@@ -3097,6 +3097,10 @@ impl<'db> WhereClauseOwner<'db> {
 }
 
 impl<'db> WhereClauseView<'db> {
+    pub fn is_empty(self, db: &'db dyn HirDb) -> bool {
+        self.id.data(db).is_empty() && self.id.const_predicates(db).is_empty()
+    }
+
     pub fn predicates(
         self,
         db: &'db dyn HirDb,

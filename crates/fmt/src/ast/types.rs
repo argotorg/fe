@@ -584,6 +584,18 @@ impl ToDoc for ast::ConstGenericParam {
     }
 }
 
+fn where_predicate_doc<'a>(
+    node: parser::SyntaxNode,
+    ctx: &'a RewriteContext<'a>,
+) -> Option<Doc<'a>> {
+    if let Some(predicate) = ast::WherePredicate::cast(node.clone()) {
+        return Some(predicate.to_doc(ctx));
+    }
+    ast::WhereConstPredicate::cast(node)
+        .and_then(|predicate| predicate.expr())
+        .map(|expr| expr.to_doc(ctx))
+}
+
 impl ToDoc for ast::WhereClause {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
@@ -591,7 +603,11 @@ impl ToDoc for ast::WhereClause {
         let indent = ctx.config.clause_indent as isize;
 
         if !has_comment_tokens(self.syntax()) {
-            let predicates: Vec<_> = self.into_iter().map(|pred| pred.to_doc(ctx)).collect();
+            let predicates: Vec<_> = self
+                .syntax()
+                .children()
+                .filter_map(|node| where_predicate_doc(node, ctx))
+                .collect();
             if predicates.is_empty() {
                 return alloc.nil();
             }
@@ -617,11 +633,11 @@ impl ToDoc for ast::WhereClause {
         for child in self.syntax().children_with_tokens() {
             match child {
                 NodeOrToken::Node(node) => {
-                    let Some(pred) = ast::WherePredicate::cast(node) else {
+                    let Some(doc) = where_predicate_doc(node, ctx) else {
                         continue;
                     };
                     entries.push(Entry {
-                        doc: pred.to_doc(ctx),
+                        doc,
                         blank_line_before: pending_newlines >= 2,
                         is_predicate: true,
                     });

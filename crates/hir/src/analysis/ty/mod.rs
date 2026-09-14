@@ -496,6 +496,15 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
             diags.extend(body_diags.iter().map(|diag| diag.to_voucher()));
         }
 
+        diags.extend(
+            top_mod
+                .all_items(db)
+                .iter()
+                .filter_map(|item| crate::hir_def::WhereClauseOwner::from_item_opt(*item))
+                .flat_map(|owner| ty_check::check_where_const_predicates(db, owner))
+                .map(|diag| diag.to_voucher()),
+        );
+
         let reported_error_function_goals = &reported_error_function_goals;
         diags.extend(
             top_mod

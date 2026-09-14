@@ -319,6 +319,20 @@ fn collect_top_mod_semantic_borrow_diagnostic_vouchers<'db>(
         .iter()
         .filter(|item| item.top_mod(db) == top_mod)
     {
+        if let Some(owner) = crate::hir_def::WhereClauseOwner::from_item_opt(*item) {
+            for &body in owner.where_clause(db).const_predicates(db) {
+                collect_owner(
+                    db,
+                    BodyOwner::AnonConstBody {
+                        body,
+                        expected: crate::analysis::ty::ty_def::TyId::bool(db),
+                    },
+                    seen_owners,
+                    seen_diags,
+                    diags,
+                );
+            }
+        }
         match item {
             ItemKind::Func(func) => {
                 collect_owner(db, BodyOwner::Func(*func), seen_owners, seen_diags, diags)

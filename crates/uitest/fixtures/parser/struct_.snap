@@ -15,12 +15,6 @@ error[1-0001]: missing closing `>` for generic parameter list
 1 │ pub struct<T, U
   │                ^ expected `>` or `,`
 
-error[1-0001]: missing type bound for `where` predicate
-  ┌─ struct_.fe:2:8
-  │
-2 │ where T
-  │        ^ expected `:`
-
 error[1-0001]: expected `,`
   ┌─ struct_.fe:2:8
   │

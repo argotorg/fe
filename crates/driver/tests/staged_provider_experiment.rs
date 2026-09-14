@@ -104,11 +104,7 @@ impl Request {
                 .any(|item| item == ItemKind::Func(provider))
             || provider.params(db).next().is_some()
             || provider.has_effects(db)
-            || WhereClauseOwner::Func(provider)
-                .clause(db)
-                .predicates(db)
-                .next()
-                .is_some()
+            || !WhereClauseOwner::Func(provider).clause(db).is_empty(db)
             || !provider.as_callable(db).unwrap().params(db).is_empty()
         {
             return Err(Failure::Protocol);
