@@ -216,3 +216,56 @@ The example's tests run in the normal Cargo test suite. They compare a provider
 edit in a reused database with fresh compilation and verify that a retained old
 export keeps its original behavior. This is a focused edit oracle for this
 pipeline, not a general incremental correctness or performance claim.
+
+## Nominal identity and frozen package graphs
+
+`generation::imports::packages` composes ordinary checked Fe packages while
+preserving the identity of their captured dependency graph:
+
+```rust,ignore
+use fe_driver::generation::imports::packages::{
+    FrozenPackage, PackageLimits, compose_packages,
+};
+
+let records = FrozenPackage::from(frozen_artifact);
+let result = compose_packages(
+    consumer_source.to_owned(),
+    &[("left", &records), ("right", &records)],
+    PackageLimits::new(16, 64 * 1024),
+)?;
+```
+
+The result exposes `database()`, `file()`, `source()` and owned materialization
+receipts. It can itself become a dependency of another composition. Clones and
+repeated conversions from the same cloned `FrozenArtifact` retain one recipe
+identity. Each unique recipe is materialized once per receiving compilation,
+so two aliases of that package refer to the same nominal types. Independently
+created artifacts stay distinct even when their sources and logical request
+identities are equal. A diamond preserves sharing through the captured graph.
+
+For example, a generated package can contain a private computed `limit()`, a
+public `Record`, a `make(value) -> Record` constructor and a
+`valid(record: Record) -> bool` function. The consumer can pass
+`left::make(value: 15)` to `right::valid` when both aliases select the same
+package. Separate same-shaped `Record` definitions fail ordinary type checking.
+The executable examples are in `tests/frozen_packages.rs`; the underlying
+resolver controls are in `tests/nominal_package_identity.rs`.
+
+This entry exposes ordinary package imports. Public visibility and alias
+shadowing retain their normal behavior. It does not extend the scalar
+`bind_function` contract to nominal interfaces or verify every authored call's
+selected target. Nominal compatibility is decided by the existing compiler,
+not by a parallel structural comparison in the package layer.
+
+Composition captures immutable source/edge recipes; it does not retain every
+intermediate composition's checked database. Generated leaves retain their
+original artifact. The returned root owns its fresh checked database, with
+builtin core/std and default compiler options. This API constructs finite DAGs;
+it does not specify general cyclic dependency or provider-discovery semantics.
+
+Limits count the new root and unique transitive packages, their source bytes,
+and each dependency alias once per unique parent. They do not bound all compiler
+allocations. Every materialized package is checked. Receipts on output errors
+retain sources and dependency URLs after the temporary database is dropped.
+Materialization URLs are local to that compilation, not persistent package IDs.
+No filesystem or network access is performed.

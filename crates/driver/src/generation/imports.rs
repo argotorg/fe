@@ -33,6 +33,8 @@ use super::{
 };
 use crate::DriverDataBase;
 
+pub mod packages;
+
 const IMPORT_ALIAS: &str = "__frozen_import";
 const ARTIFACT_CONFIG_URL: &str = "file:///frozen-bind/artifact/fe.toml";
 const ARTIFACT_SOURCE_URL: &str = "file:///frozen-bind/artifact/src/lib.fe";
