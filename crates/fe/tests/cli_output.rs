@@ -521,7 +521,6 @@ fn test_cli_build_native_executable_uses_main_return_as_exit_code() {
 fn test_cli_build_native_executes_representative_programs_at_o0_and_o1() {
     let fixture_dir =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_output/native");
-    let temp = tempdir().expect("tempdir");
     for name in [
         "arithmetic",
         "control_flow",
@@ -529,33 +528,135 @@ fn test_cli_build_native_executes_representative_programs_at_o0_and_o1() {
         "wide_integer",
         "generic_reachability",
     ] {
-        let source_path = fixture_dir.join(format!("{name}.fe"));
+        let source = fs::read_to_string(fixture_dir.join(format!("{name}.fe")))
+            .expect("read native fixture");
         for level in ["0", "1"] {
-            let out_dir = temp.path().join(format!("out-{name}-o{level}"));
-            let (output, exit_code) = run_fe_main(&[
-                "build",
-                "--backend",
-                "native",
-                "-O",
-                level,
-                "--out-dir",
-                out_dir.to_str().expect("UTF-8 output path"),
-                source_path.to_str().expect("UTF-8 source path"),
-            ]);
             assert_eq!(
-                exit_code, 0,
-                "fe native build failed for {name} at O{level}:\n{output}"
-            );
-
-            let executable = out_dir.join(name);
-            let status = Command::new(&executable)
-                .status()
-                .unwrap_or_else(|err| panic!("failed to run {executable:?}: {err}"));
-            assert_eq!(
-                status.code(),
+                native_exit_code(&source, level),
                 Some(0),
                 "native program {name} failed at O{level}"
             );
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+fn native_exit_code(source: &str, level: &str) -> Option<i32> {
+    let temp = tempdir().expect("tempdir");
+    let source_path = temp.path().join("program.fe");
+    fs::write(&source_path, source).expect("write native source");
+    let out_dir = temp.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        "-O",
+        level,
+        "--out-dir",
+        out_dir.to_str().expect("UTF-8 output path"),
+        source_path.to_str().expect("UTF-8 source path"),
+    ]);
+    assert_eq!(
+        exit_code, 0,
+        "fe native build failed at O{level}:\n{output}"
+    );
+    Command::new(out_dir.join("program"))
+        .status()
+        .expect("run native executable")
+        .code()
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn test_cli_build_native_unchecked_div_rem_integer_widths() {
+    for bits in [8, 16, 32, 64, 128, 256] {
+        let sign_bit = bits - 1;
+        let source = format!(
+            r#"
+#[arithmetic(unchecked)]
+fn signed(value: i{bits}, divisor: i{bits}, quotient: i{bits}, remainder: i{bits}) -> bool {{
+    value / divisor == quotient && value % divisor == remainder
+}}
+
+#[arithmetic(unchecked)]
+fn unsigned(value: u{bits}, divisor: u{bits}, quotient: u{bits}, remainder: u{bits}) -> bool {{
+    value / divisor == quotient && value % divisor == remainder
+}}
+
+fn checked_rem(value: i{bits}, divisor: i{bits}) -> i{bits} {{
+    value % divisor
+}}
+
+pub fn main() -> i32 {{
+    let min: i{bits} = 1 << {sign_bit}
+    if !signed(value: -17, divisor: 0, quotient: 0, remainder: 0) {{ return 1 }}
+    if !unsigned(value: 17, divisor: 0, quotient: 0, remainder: 0) {{ return 2 }}
+    if !signed(value: min, divisor: -1, quotient: min, remainder: 0) {{ return 3 }}
+    if !signed(value: -17, divisor: 5, quotient: -3, remainder: -2) {{ return 4 }}
+    if !signed(value: 17, divisor: -5, quotient: -3, remainder: 2) {{ return 5 }}
+    if !unsigned(value: 17, divisor: 5, quotient: 3, remainder: 2) {{ return 6 }}
+    if checked_rem(value: min, divisor: -1) != 0 {{ return 7 }}
+    0
+}}
+"#
+        );
+        for level in ["0", "1"] {
+            assert_eq!(
+                native_exit_code(&source, level),
+                Some(0),
+                "unchecked {bits}-bit division/remainder failed at O{level}"
+            );
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn test_cli_build_native_checked_div_rem_still_traps() {
+    for bits in [8, 128, 256] {
+        let sign_bit = bits - 1;
+        let min = format!("1 << {sign_bit}");
+        for (prefix, op, value, divisor) in [
+            ("u", "/", "17", "0"),
+            ("u", "%", "17", "0"),
+            ("i", "/", "-17", "0"),
+            ("i", "%", "-17", "0"),
+            ("i", "/", min.as_str(), "-1"),
+        ] {
+            let ty = format!("{prefix}{bits}");
+            let source = format!(
+                r#"
+fn calculate(value: {ty}, divisor: {ty}) -> {ty} {{ value {op} divisor }}
+pub fn main() -> i32 {{
+    if calculate(value: {value}, divisor: {divisor}) == 0 {{ 0 }} else {{ 1 }}
+}}
+"#
+            );
+            for level in ["0", "1"] {
+                assert_eq!(
+                    native_exit_code(&source, level),
+                    None,
+                    "checked {ty} {value} {op} {divisor} did not trap at O{level}"
+                );
+            }
         }
     }
 }

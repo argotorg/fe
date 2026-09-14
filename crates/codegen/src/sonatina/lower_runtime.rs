@@ -5168,7 +5168,30 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         ty: Type,
         signed: bool,
     ) -> Result<ValueId, LowerError> {
-        Ok(match op {
+        // Fe defines unchecked division and remainder by zero as zero. Native
+        // instructions may trap, so skip the operation on that edge entirely.
+        let zero_divisor_result = if !checked
+            && self.module.is_native_target()
+            && matches!(op, ArithBinOp::Div | ArithBinOp::Rem)
+        {
+            let zero = self.fb.make_imm_value(Immediate::zero(ty));
+            let is_zero = self
+                .fb
+                .insert_inst(IsZero::new(self.module.inst_set(), rhs), Type::I1);
+            let entry = self
+                .fb
+                .current_block()
+                .expect("arithmetic requires a block");
+            let nonzero = self.fb.append_block();
+            let done = self.fb.append_block();
+            self.fb
+                .insert_inst_no_result(Br::new(self.module.inst_set(), is_zero, done, nonzero));
+            self.fb.switch_to_block(nonzero);
+            Some((zero, entry, done))
+        } else {
+            None
+        };
+        let result = match op {
             ArithBinOp::Add if checked => {
                 let [raw, overflow] = if signed {
                     self.fb.insert_saddo(lhs, rhs)
@@ -5260,6 +5283,24 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     "range is not a runtime arithmetic op".to_string(),
                 ));
             }
+        };
+        Ok(if let Some((zero, entry, done)) = zero_divisor_result {
+            let nonzero = self
+                .fb
+                .current_block()
+                .expect("arithmetic requires a block");
+            self.fb
+                .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
+            self.fb.switch_to_block(done);
+            self.fb.insert_inst(
+                Phi::new(
+                    self.module.inst_set(),
+                    vec![(zero, entry), (result, nonzero)],
+                ),
+                ty,
+            )
+        } else {
+            result
         })
     }
     fn lower_checked_pow_builtin(
