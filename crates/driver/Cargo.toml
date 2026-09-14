@@ -28,3 +28,7 @@ glob.workspace = true
 
 [dev-dependencies]
 tempfile = "3.13"
+
+[[example]]
+name = "generated_validator"
+test = true

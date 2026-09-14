@@ -182,3 +182,37 @@ Each emission charges one function and the bytes of both the frozen package and
 completed consumer source, including emissions rejected during checking. These
 are logical source limits, not a bound on all compiler allocations. Request
 identities continue to name logical work rather than imported declarations.
+
+## End-to-end validator example
+
+Run the complete in-memory example from the repository root:
+
+```sh
+cargo run --release -p fe-driver --example generated_validator
+```
+
+The Fe provider computes inclusive bounds `(10, 20)` as
+`FunctionBody<(u256, u256)>`. Generation fills a private `bounds()` function in
+a package with a public `within(value: u256) -> bool` helper. A frozen export
+of that helper then supplies the body of `validate(value: u256) -> bool` in a
+separate consumer. Ordinary Fe callers evaluate the boundary cases:
+
+```text
+below: false
+lower: true
+inside: true
+upper: true
+above: false
+```
+
+The example needs no manual editing of generated source. The helper reads the
+provider-computed bounds from its retained package context, so this application
+uses the existing value-generation and bound-call operations. It does not yet
+need a general expression builder or literal arguments in the call protocol.
+The host supplies explicit templates, selects the export and sequences the two
+stages; providers are not automatically discovered.
+
+The example's tests run in the normal Cargo test suite. They compare a provider
+edit in a reused database with fresh compilation and verify that a retained old
+export keeps its original behavior. This is a focused edit oracle for this
+pipeline, not a general incremental correctness or performance claim.
