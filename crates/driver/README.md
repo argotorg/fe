@@ -135,7 +135,50 @@ or permission to reuse one. A shared stage key does not make the artifacts in
 separate databases mutually visible. The original scalar entry retains `None` for request
 identity and continues to reject aggregates.
 
-Cross-stage item references remain unsupported. Request identities name logical
-work, not compiler declarations, source snapshots, or imported symbols. A future
-reference protocol must bind a particular checked artifact incarnation, exported
-item and receiving compilation context before ordinary name/type checking.
+## Frozen exports and bound calls
+
+`generation::imports` supports one explicit call to a selected function from a
+checked generated artifact:
+
+```rust,ignore
+use fe_driver::generation::imports::{FrozenArtifact, bind_function};
+
+let frozen = FrozenArtifact::new(artifact);
+let selected = frozen.export("apply")?;
+let bound = bind_function(template, &selected, &[1, 0], &mut budget)?;
+```
+
+The template selects a top-level function with an explicit return type and an
+empty body. The index list forwards its parameters in the selected export's
+argument order; labels come from the export. For example, `[1, 0]` forwards the
+second template parameter first. Repeated indices are allowed for these Copy
+scalar values. There is no arbitrary argument-expression string input.
+
+Exports must be public, safe, monomorphic const functions over `bool` and `u256`,
+without effects or where clauses. Ordinary View/Own parameter adaptation is
+checked by the compiler. Exact scalar types must match after normalization;
+references, nominal types and generic interfaces are outside this entry.
+
+The handle retains its particular immutable artifact incarnation, even after the
+original wrapper is dropped. Reusing a logical request identity does not rebind
+an existing handle. Materialization copies the complete frozen source into a
+separate dependency ingot, retaining root paths and private supporting context.
+The dependency exposes its whole public surface, not an export whitelist.
+
+The driver constructs the call slot and checks the completed compilation. It
+then compares that call's resolved function against the selected materialized
+export in the receiving database. Shadowing cannot silently redirect a returned
+bound artifact. This check covers the designated direct call; it does not prove
+a transitive call graph or establish a general hygiene mechanism.
+
+`BoundFunction` exposes its immutable database, source, selected function and
+receipt. The receipt retains the frozen source, original generation provenance,
+selected export, completed consumer source and emitted call range. Post-emission
+errors retain this receipt after the temporary database is dropped. The operation performs no filesystem
+writes and uses builtin dependencies with default compiler options. Custom
+dependency closures and persistent serialized handles remain future work.
+
+Each emission charges one function and the bytes of both the frozen package and
+completed consumer source, including emissions rejected during checking. These
+are logical source limits, not a bound on all compiler allocations. Request
+identities continue to name logical work rather than imported declarations.
