@@ -1,0 +1,20 @@
+// `where T` parses as a const predicate, so a type without a bound is
+// reported where names are resolved.
+trait Trait {}
+
+fn function<T>() where T {}
+
+struct Record<T, U> where T, U: Trait {
+    first: T,
+    second: U,
+}
+
+struct Wrapper<T> {
+    value: T,
+}
+
+impl<T> Trait for Wrapper<T> where T {}
+
+const FLAG: bool = true
+
+fn condition() where FLAG {}

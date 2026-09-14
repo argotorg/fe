@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/every_evaluation_failure_rejects_the_predicate/recursive_constant.fe
+---
+error[3-0037]: recursive constant definition
+  ┌─ recursive_constant.fe:1:17
+  │
+1 │ const A: bool = A
+  │                 ^ this constant requires its own value
+
+error[3-0037]: recursive constant definition
+  ┌─ recursive_constant.fe:2:19
+  │
+2 │ fn unused() where A {}
+  │                   ^ this constant requires its own value

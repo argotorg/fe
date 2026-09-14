@@ -1,0 +1,2 @@
+fn flag() -> bool { true }
+fn unused() where flag() {}

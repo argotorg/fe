@@ -1,0 +1,3 @@
+trait Marker {}
+struct S {}
+impl Marker for S where false {}

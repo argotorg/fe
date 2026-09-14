@@ -1,0 +1,2 @@
+const fn divide(_ n: u256) -> bool { 1 / n == 0 }
+fn unused() where divide(0) {}

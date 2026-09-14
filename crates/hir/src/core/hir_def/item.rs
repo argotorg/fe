@@ -1702,6 +1702,7 @@ pub enum TrackedItemVariant<'db> {
     FuncBody,
     NamelessBody,
     StaticAssertCondition,
+    WhereConstPredicate(u32),
     StaticAssertComparisonLhs,
     StaticAssertComparisonRhs,
     Joined(Box<Self>, Box<Self>),

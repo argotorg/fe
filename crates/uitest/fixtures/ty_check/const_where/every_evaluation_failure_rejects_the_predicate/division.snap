@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/every_evaluation_failure_rejects_the_predicate/division.fe
+---
+error[3-0025]: division by zero in const context
+  ┌─ division.fe:1:38
+  │
+1 │ const fn divide(_ n: u256) -> bool { 1 / n == 0 }
+  │                                      ^^^^^ cannot divide by zero

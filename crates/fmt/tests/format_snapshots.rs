@@ -84,3 +84,45 @@ fn load(pointer: **u256) -> u256 {
         "{syntax:#?}",
     );
 }
+
+#[test]
+fn const_where_predicates_survive_formatting_in_source_order() {
+    fn predicates(source: &str) -> Vec<(SyntaxKind, String)> {
+        let (green, errors) = parse_source_file(source, RecoveryMode::NoRecover);
+        assert!(errors.is_empty(), "{errors:?}\n{source}");
+        SyntaxNode::new_root(green)
+            .descendants()
+            .filter(|node| {
+                matches!(
+                    node.kind(),
+                    SyntaxKind::WherePredicate | SyntaxKind::WhereConstPredicate
+                )
+            })
+            .map(|node| {
+                (
+                    node.kind(),
+                    node.descendants_with_tokens()
+                        .filter_map(|element| element.into_token())
+                        .filter(|token| {
+                            !matches!(token.kind(), SyntaxKind::WhiteSpace | SyntaxKind::Newline)
+                        })
+                        .map(|token| token.text().to_string())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                )
+            })
+            .collect()
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/const_where_predicates.fe");
+    let source = std::fs::read_to_string(path)
+        .expect("fixture should be readable")
+        .replace("\r\n", "\n");
+    let formatted = format_str(&source, &Config::default()).unwrap();
+    assert_eq!(predicates(&source), predicates(&formatted), "{formatted}");
+    assert_eq!(
+        formatted,
+        format_str(&formatted, &Config::default()).unwrap()
+    );
+    assert!(formatted.contains("// keep this condition"), "{formatted}");
+}

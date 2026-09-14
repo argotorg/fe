@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/ground_predicate_calls_discharge_unused_helper_requirements/with_impl.fe
+---
+

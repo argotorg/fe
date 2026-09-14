@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/predicates_require_bool_and_check_untaken_code/integer.fe
+---
+error[8-0000]: type mismatch
+  ┌─ integer.fe:1:19
+  │
+1 │ fn unused() where 42 {}
+  │                   ^^ expected `bool`, but `{integer}` is given

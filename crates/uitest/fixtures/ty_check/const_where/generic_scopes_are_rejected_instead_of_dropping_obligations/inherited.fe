@@ -1,0 +1,3 @@
+trait Has { fn unused() }
+struct S<T> { value: T }
+impl<T> Has for S<T> { fn unused() where true {} }

@@ -297,6 +297,118 @@ fn diag_depends_on_param_instantiation<'db>(
     }
 }
 
+/// Ground predicates are declaration obligations, never solver assumptions.
+/// Reject all generic scopes until substitution and every use-site gate exist.
+/// A failed or unsupported evaluation must never count as a satisfied condition.
+pub(crate) fn check_where_const_predicates<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: WhereClauseOwner<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let predicates = owner.where_clause(db).const_predicates(db);
+    if predicates.is_empty() {
+        return Vec::new();
+    }
+    // `where T` parses as a const predicate. When the lone path names a type,
+    // the author most likely left out the trait bound, so say that instead of
+    // reporting a type used as a value.
+    let (missing_bounds, predicates): (Vec<Body<'db>>, Vec<Body<'db>>) = predicates
+        .iter()
+        .partition(|body| predicate_names_a_type(db, **body));
+    let mut diags: Vec<FuncBodyDiag<'db>> = missing_bounds
+        .iter()
+        .map(|body| BodyDiag::WhereTypeBoundMissing(body.span().into()).into())
+        .collect();
+    if predicates.is_empty() {
+        return diags;
+    }
+    let mut item = Some(crate::hir_def::ItemKind::from(owner));
+    while let Some(current) = item {
+        if let Some(params) = GenericParamOwner::from_item_opt(current)
+            && !collect_generic_params(db, params).params(db).is_empty()
+        {
+            diags.extend(
+                predicates.iter().map(|body| {
+                    BodyDiag::GenericConstPredicateUnsupported(body.span().into()).into()
+                }),
+            );
+            return diags;
+        }
+        item = current.scope().parent_item(db);
+    }
+
+    for &body in &predicates {
+        let expected = TyId::bool(db);
+        let body_owner = BodyOwner::AnonConstBody { body, expected };
+        let (body_diags, _) = check_anon_const_body(db, body, expected);
+        if !body_diags.is_empty() && !static_assert_ignorable_type_diags(db, body_diags) {
+            diags.extend(body_diags.iter().cloned());
+            continue;
+        }
+        let outcome = eval_body_owner_const(db, body_owner, Vec::new());
+        diags.extend(const_predicate_outcome_diags(db, body, body_owner, outcome));
+    }
+    diags
+}
+
+/// Reports the CTFE outcome of a const predicate. The predicate holds only when
+/// it evaluates to `true`; a blocked or failed evaluation is an error.
+fn const_predicate_outcome_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    predicate: Body<'db>,
+    owner: BodyOwner<'db>,
+    outcome: EvalOutcome<'db, SemConstId<'db>>,
+) -> Vec<FuncBodyDiag<'db>> {
+    match outcome {
+        EvalOutcome::Ready(value) => match static_assert_bool_value(db, value) {
+            Some(true) => Vec::new(),
+            Some(false) => {
+                vec![BodyDiag::WhereConstPredicateFailed(predicate.span().into()).into()]
+            }
+            None => vec![BodyDiag::ConstValueMustBeKnown(predicate.span().into()).into()],
+        },
+        EvalOutcome::Blocked(info) => {
+            let (primary, dependency) = blocked_const_detail(db, predicate, &info);
+            vec![
+                BodyDiag::ConstDependencyMustBeKnown {
+                    primary,
+                    dependency,
+                }
+                .into(),
+            ]
+        }
+        EvalOutcome::Failed(failure) => {
+            let ty = TyId::invalid(db, invalid_cause_from_eval_failure(db, owner, failure));
+            vec![
+                ty.emit_diag(db, predicate.span().into())
+                    .map(FuncBodyDiag::from)
+                    .unwrap_or_else(|| {
+                        BodyDiag::ConstValueMustBeKnown(predicate.span().into()).into()
+                    }),
+            ]
+        }
+    }
+}
+
+/// Whether a const predicate is a lone path that names a type, as in `where T`.
+/// A const generic parameter also resolves to a type, but it is a value here,
+/// matching how the type checker reads a path expression.
+fn predicate_names_a_type<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> bool {
+    let Partial::Present(Expr::Path(Partial::Present(path))) = body.expr(db).data(db, body) else {
+        return false;
+    };
+    let resolved = crate::analysis::name_resolution::resolve_path(
+        db,
+        *path,
+        body.scope(),
+        PredicateListId::empty_list(db),
+        true,
+    );
+    matches!(
+        resolved,
+        Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) if ty.const_ty_ty(db).is_none()
+    )
+}
+
 #[salsa::tracked(return_ref)]
 pub fn check_static_assert<'db>(
     db: &'db dyn HirAnalysisDb,

@@ -1,0 +1,3 @@
+const fn forever() -> bool { while true {}
+ true }
+fn unused() where forever() {}

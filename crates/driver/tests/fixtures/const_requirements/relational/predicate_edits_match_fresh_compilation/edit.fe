@@ -1,0 +1,2 @@
+const FLAG: bool = true
+fn unused() where FLAG {}

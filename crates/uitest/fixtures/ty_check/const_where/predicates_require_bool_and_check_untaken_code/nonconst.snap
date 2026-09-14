@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/predicates_require_bool_and_check_untaken_code/nonconst.fe
+---
+error[3-0024]: non-const function call in const context
+  ┌─ nonconst.fe:2:19
+  │
+2 │ fn unused() where flag() {}
+  │                   ^^^^^^ calls in const context must be `const fn`

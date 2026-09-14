@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/unused_false_predicates_fail_at_their_declarations/record.fe
+---
+error[8-0091]: const where predicate failed
+  ┌─ record.fe:1:21
+  │
+1 │ struct Unused where false { value: u256 }
+  │                     ^^^^^ condition evaluated to `false`

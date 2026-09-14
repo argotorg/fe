@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/predicates_require_bool_and_check_untaken_code/runtime_parameter.fe
+---
+error[8-0064]: const value must be resolvable during type checking
+  ┌─ runtime_parameter.fe:1:29
+  │
+1 │ fn unused(flag: bool) where flag {}
+  │                             ^^^^ requires fully-resolved const value

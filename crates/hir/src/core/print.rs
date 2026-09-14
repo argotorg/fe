@@ -359,13 +359,18 @@ impl<'db> WhereClauseId<'db> {
     /// Pretty-prints a where clause.
     pub fn pretty_print(self, db: &'db dyn HirDb) -> String {
         let predicates = self.data(db);
-        if predicates.is_empty() {
+        if predicates.is_empty() && self.const_predicates(db).is_empty() {
             return String::new();
         }
 
         let preds = predicates
             .iter()
             .map(|p| p.pretty_print(db))
+            .chain(
+                self.const_predicates(db)
+                    .iter()
+                    .map(|body| format!("({})", body.pretty_print(db))),
+            )
             .collect::<Vec<_>>()
             .join(", ");
         format!(" where {}", preds)

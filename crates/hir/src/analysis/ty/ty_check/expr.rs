@@ -3879,7 +3879,12 @@ impl<'db> TyChecker<'db> {
                     ExprProp::invalid(self.db)
                 }
                 PathRes::FuncParam(..) => {
-                    unreachable!("func params should be resolved as bindings")
+                    // An anonymous const body can see the declaration's scope,
+                    // but does not have its runtime parameter bindings.
+                    self.push_diag(BodyDiag::ConstValueMustBeKnown(
+                        path_expr_span.clone().into(),
+                    ));
+                    ExprProp::invalid(self.db)
                 }
             },
         }

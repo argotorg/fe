@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/every_evaluation_failure_rejects_the_predicate/steps.fe
+---
+error[3-0026]: const evaluation exceeded the step limit
+  ┌─ steps.fe:1:28
+  │
+1 │   const fn forever() -> bool { while true {}
+  │ ╭────────────────────────────^
+2 │ │  true }
+  │ ╰───────^ const evaluation takes too many steps

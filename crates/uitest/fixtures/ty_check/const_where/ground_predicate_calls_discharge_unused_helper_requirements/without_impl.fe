@@ -1,0 +1,4 @@
+trait Required {}
+
+const fn allowed<T>() -> bool where T: Required { true }
+fn unused() where allowed<u256>() {}

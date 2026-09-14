@@ -375,6 +375,15 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
             top_mod
                 .all_items(db)
                 .iter()
+                .filter_map(|item| crate::hir_def::WhereClauseOwner::from_item_opt(*item))
+                .flat_map(|owner| ty_check::check_where_const_predicates(db, owner))
+                .map(|diag| diag.to_voucher()),
+        );
+
+        diags.extend(
+            top_mod
+                .all_items(db)
+                .iter()
                 .filter_map(|item| match item {
                     ItemKind::Const(const_) => Some(*const_),
                     _ => None,

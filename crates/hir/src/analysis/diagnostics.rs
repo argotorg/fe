@@ -3407,6 +3407,36 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
+            Self::WhereConstPredicateFailed(span) => primary_diag(
+                severity,
+                "const where predicate failed",
+                "condition evaluated to `false`",
+                span.resolve(db),
+                error_code,
+            ),
+            Self::GenericConstPredicateUnsupported(span) => primary_diag(
+                severity,
+                "const where predicates in generic scopes are not supported yet",
+                "requires generic predicate substitution and use-site checking",
+                span.resolve(db),
+                error_code,
+            ),
+            Self::WhereTypeBoundMissing(span) => {
+                let mut diag = primary_diag(
+                    severity,
+                    "missing type bound for `where` predicate",
+                    "expected `:` and a trait bound after this type",
+                    span.resolve(db),
+                    error_code,
+                );
+                diag.notes.push(
+                    "a `where` predicate without `:` is a const condition and must be \
+                     a `bool` value"
+                        .to_string(),
+                );
+                diag
+            }
+
             Self::ConstValueMustBeKnown(span) => primary_diag(
                 severity,
                 "const value must be resolvable during type checking",
