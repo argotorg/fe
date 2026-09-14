@@ -1,0 +1,1 @@
+Add `core::abi::AbiRecordLayout`, the `AbiRecord<N>` trait and the checked prefix sum `abi_record_layout`, which compute the ABI head offsets and head size of a record from its fields. Generated `msg` variants and `#[error]` structs implement `AbiRecord<N>`, and their encoders and decoders read offsets from its `LAYOUT`.

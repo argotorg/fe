@@ -165,6 +165,9 @@ pub fn check_impl_trait_const_bodies<'db>(
     }
     let generated_origin = match impl_trait.origin(db) {
         crate::span::HirOrigin::Raw(_) => None,
+        crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::Msg(_)) => {
+            Some("generated `msg` implementation")
+        }
         crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::Event(_)) => {
             Some("generated `#[event]` implementation")
         }

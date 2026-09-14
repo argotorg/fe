@@ -1,0 +1,22 @@
+// A generated error impl's LAYOUT calls `abi_record_layout`. An unsatisfied
+// bound on that helper is reported, not hidden as a cascade.
+mod core {
+    pub mod abi {
+        pub trait Unexpected {}
+        pub struct AbiRecordLayout<const N: usize> {
+            pub offsets: [u256; N],
+            pub head_size: u256,
+        }
+        pub trait AbiRecord<const N: usize> {
+            const LAYOUT: AbiRecordLayout<N>
+        }
+        pub const fn abi_record_layout<const N: usize>(
+            _ sizes: [u256; N],
+        ) -> AbiRecordLayout<N> where bool: Unexpected {
+            AbiRecordLayout { offsets: [0; N], head_size: 0 }
+        }
+    }
+}
+
+#[error]
+pub struct Empty {}

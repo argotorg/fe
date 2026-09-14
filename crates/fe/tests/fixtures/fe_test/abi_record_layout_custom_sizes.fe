@@ -1,0 +1,39 @@
+// The layout function keeps custom static head sizes and gives a dynamic
+// field one word, whatever its declared HEAD_SIZE.
+use core::abi::{AbiRecordLayout, AbiSize, abi_field_head_size, abi_record_layout}
+
+struct One {}
+impl AbiSize for One {
+    const HEAD_SIZE: u256 = 1
+    const IS_DYNAMIC: bool = false
+}
+
+struct Seven {}
+impl AbiSize for Seven {
+    const HEAD_SIZE: u256 = 7
+    const IS_DYNAMIC: bool = false
+}
+
+struct DynamicHuge {}
+impl AbiSize for DynamicHuge {
+    const HEAD_SIZE: u256 = 999
+    const IS_DYNAMIC: bool = true
+}
+
+const LAYOUT: AbiRecordLayout<4> = abi_record_layout([
+    abi_field_head_size<One>(),
+    abi_field_head_size<Seven>(),
+    abi_field_head_size<DynamicHuge>(),
+    abi_field_head_size<One>(),
+])
+
+static_assert(LAYOUT.offsets[1] == 1)
+static_assert(LAYOUT.offsets[2] == 8)
+static_assert(LAYOUT.offsets[3] == 40)
+static_assert(LAYOUT.head_size == 41)
+
+#[test]
+fn custom_head_sizes() {
+    assert!(LAYOUT.offsets[3] == 40)
+    assert!(LAYOUT.head_size == 41)
+}

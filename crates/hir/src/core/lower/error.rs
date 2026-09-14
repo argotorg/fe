@@ -6,7 +6,7 @@ use super::{
     attr::{has_named_attr, lower_attrs_without_named, named_attr_specs},
     event::create_sol_signature_const,
     hir_builder::HirBuilder,
-    msg::{lower_abi_size_impl, lower_sol_encode_impl},
+    msg::{lower_abi_record_impl, lower_abi_size_impl, lower_sol_encode_impl},
 };
 use crate::{
     hir_def::{
@@ -142,6 +142,8 @@ pub(super) fn lower_error_struct<'db>(
 
     let field_specs = parsed_fields.field_specs.clone();
     let field_types: Vec<_> = field_specs.iter().map(|(_, ty)| *ty).collect();
+
+    lower_abi_record_impl(&mut builder, self_ty, &field_specs);
 
     let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
     builder.with_item_scope(

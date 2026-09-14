@@ -39,6 +39,35 @@ fn generated_event_impl<'db>(
     generated[0]
 }
 
+fn generated_error_impl_with_const<'db>(
+    db: &'db HirAnalysisTestDb,
+    top_mod: TopLevelMod<'db>,
+    const_name: &str,
+) -> ImplTrait<'db> {
+    let generated = top_mod
+        .all_impl_traits(db)
+        .iter()
+        .copied()
+        .filter(|item| {
+            matches!(
+                impl_trait_ast(db, *item),
+                HirOrigin::Desugared(DesugaredOrigin::Error(_))
+            ) && item.hir_consts(db).iter().any(|constant| {
+                constant
+                    .name
+                    .to_opt()
+                    .is_some_and(|name| name.data(db) == const_name)
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        generated.len(),
+        1,
+        "expected one generated error impl containing `{const_name}`"
+    );
+    generated[0]
+}
+
 fn is_mismatch_between<'db>(
     db: &'db HirAnalysisTestDb,
     diagnostic: &FuncBodyDiag<'db>,
@@ -104,6 +133,61 @@ fn standard_fieldless_event_remains_clean_with_body_checking() {
 }
 
 #[test]
+fn generated_abi_record_and_metadata_consts_use_body_analysis() {
+    let mut db = HirAnalysisTestDb::default();
+    let (path, text) = fixture("error_with_field.fe");
+    let file = db.new_stand_alone(path, &text);
+    let (top_mod, _) = db.top_mod(file);
+
+    for const_name in ["LAYOUT", "HEAD_SIZE", "IS_DYNAMIC"] {
+        let generated = generated_error_impl_with_const(&db, top_mod, const_name);
+        let constant = generated
+            .hir_consts(&db)
+            .iter()
+            .find(|constant| {
+                constant
+                    .name
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == const_name)
+            })
+            .expect("selected impl contains the constant");
+        assert_eq!(
+            constant.body_check_policy,
+            AssocConstBodyCheckPolicy::BodyAnalysis,
+            "generated `{const_name}` must retain ordinary body checking"
+        );
+    }
+
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn generated_abi_record_layout_checks_the_trait_expected_type() {
+    // Querying the generated impl directly isolates body checking from the
+    // separate impl-header conformance diagnostic.
+    let mut db = HirAnalysisTestDb::default();
+    let (path, text) = fixture("abi_record_layout_expects_bool.fe");
+    let file = db.new_stand_alone(path, &text);
+    let (top_mod, _) = db.top_mod(file);
+    let generated = generated_error_impl_with_const(&db, top_mod, "LAYOUT");
+    assert_eq!(generated.hir_consts(&db).len(), 1);
+    assert_eq!(
+        generated.hir_consts(&db)[0].body_check_policy,
+        AssocConstBodyCheckPolicy::BodyAnalysis
+    );
+
+    let diagnostics = check_impl_trait_const_bodies(&db, generated);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert!(
+        is_mismatch_between(&db, &diagnostics[0], "bool", "AbiRecordLayout<0>"),
+        "{diagnostics:#?}"
+    );
+}
+
+// The rendered diagnostic for an unsatisfied bound on `abi_record_layout` is
+// the uitest fixture `ty_check/abi_record_layout_unrelated_helper_bound.fe`.
+
+#[test]
 fn ordinary_associated_const_body_checking_is_preserved() {
     for (name, mismatch) in [
         ("ordinary_value_mismatch.fe", Some(("u256", "bool"))),
@@ -155,6 +239,16 @@ fn message_selector_body_diagnostic_has_one_owner() {
             .count(),
         1
     );
-    assert!(policies.contains(&AssocConstBodyCheckPolicy::ExpansionSourceCompatibility));
+    assert_eq!(
+        policies
+            .iter()
+            .filter(|&&policy| policy == AssocConstBodyCheckPolicy::BodyAnalysis)
+            .count(),
+        3
+    );
+    assert!(
+        !policies.contains(&AssocConstBodyCheckPolicy::ExpansionSourceCompatibility),
+        "message ABI constants must not escape ordinary body checking: {policies:?}"
+    );
     db.assert_no_diags(top_mod);
 }
