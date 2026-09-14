@@ -10,3 +10,20 @@ error[3-0002]: recursive type definition
   │        ^^^^^^^^^ recursive type definition here
 6 │     next: Recursive,
   │           --------- recursion occurs here
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ msg_selector_recursive_abi_type.fe:11:5
+    │
+ 11 │     Direct { value: Recursive },
+    │     ^^^^^^ `Recursive` doesn't implement `AbiSize`
+    │
+    ┌─ src/abi.fe:229:37
+    │
+229 │ pub const fn abi_field_head_size<T: AbiSize>() -> u256 {
+    │                                     ------- required by this bound on `abi_field_head_size`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ msg_selector_recursive_abi_type.fe:11:5
+   │
+11 │     Direct { value: Recursive },
+   │     ^^^^^^ `Recursive` doesn't implement `AbiSize`

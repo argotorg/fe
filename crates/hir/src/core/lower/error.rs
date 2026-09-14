@@ -5,7 +5,10 @@ use super::{
     AbiFieldContext, AbiFieldDiagnostic, FileLowerCtxt,
     attr::{has_named_attr, lower_attrs_without_named, named_attr_specs},
     hir_builder::HirBuilder,
-    msg::{create_head_size_assoc_const, create_is_dynamic_assoc_const, create_payload_size_func},
+    msg::{
+        create_head_size_assoc_const, create_is_dynamic_assoc_const, create_payload_size_func,
+        lower_abi_record_impl,
+    },
 };
 use crate::{
     hir_def::{
@@ -142,6 +145,8 @@ pub(super) fn lower_error_struct<'db>(
 
     let field_type_paths = parsed_fields.field_type_paths.clone();
     let field_specs = parsed_fields.field_specs.clone();
+
+    lower_abi_record_impl(&mut builder, self_ty, &field_specs);
 
     let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
     builder.with_item_scope(
@@ -403,6 +408,7 @@ fn lower_error_encode_impl<'db>(
     builder.with_item_scope(
         TrackedItemVariant::ImplTrait(impl_trait_idx),
         |builder, id| {
+            let abi_record_trait = builder.abi_record_trait_ref(field_specs.len());
             let impl_trait =
                 builder.new_impl_trait(id, trait_ref, ty, vec![], vec![], builder.origin());
 
@@ -421,7 +427,7 @@ fn lower_error_encode_impl<'db>(
                 None,
                 FuncModifiers::new(Visibility::Private, false, false, false),
                 |body| {
-                    body.encode_fields(&field_specs, ptr_ident);
+                    body.encode_fields(&field_specs, ptr_ident, abi_record_trait);
                 },
             );
             impl_trait

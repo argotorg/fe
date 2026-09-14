@@ -233,6 +233,36 @@ pub const fn abi_field_head_size<T: AbiSize>() -> u256 {
     <T as AbiSize>::HEAD_SIZE
 }
 
+/// Compile-time head positions for an ordered ABI record.
+/// Dynamic payloads follow this head and retain their ordinary encoding rules.
+pub struct AbiRecordLayout<const N: usize> {
+    pub offsets: [u256; N],
+    pub head_size: u256,
+}
+
+/// Generated messages and errors compute this descriptor as an associated
+/// constant. Metadata, encoders and decoders consume the same head plan.
+/// Dynamic classification stays independent so field sizes can depend on it.
+pub trait AbiRecord<const N: usize> {
+    const LAYOUT: AbiRecordLayout<N>
+}
+
+/// Accumulate embedded field head sizes without introducing padding.
+/// `abi_field_head_size` supplies each field's contribution. This function checks
+/// arithmetic, not the validity of arbitrary user-defined ABI metadata.
+#[arithmetic(checked)]
+pub const fn abi_record_layout<const N: usize>(_ sizes: [u256; N]) -> AbiRecordLayout<N> {
+    let mut offsets: [u256; N] = [0; N]
+    let mut head_size: u256 = 0
+    let mut index: usize = 0
+    while index < N {
+        offsets[index] = head_size
+        head_size += sizes[index]
+        index += 1
+    }
+    AbiRecordLayout { offsets, head_size }
+}
+
 pub const fn abi_payload_head_size<T: AbiSize>() -> u256 {
     <T as AbiSize>::HEAD_SIZE
 }

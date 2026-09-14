@@ -1,7 +1,11 @@
 use fe_hir::{
-    analysis::ty::{
-        diagnostics::{BodyDiag, FuncBodyDiag},
-        ty_check::check_impl_trait_const_bodies,
+    analysis::{
+        analysis_pass::ModuleAnalysisPass,
+        ty::{
+            BodyAnalysisPass,
+            diagnostics::{BodyDiag, FuncBodyDiag},
+            ty_check::check_impl_trait_const_bodies,
+        },
     },
     hir_def::{AssocConstBodyCheckPolicy, ImplTrait, TopLevelMod},
     span::{DesugaredOrigin, HirOrigin, impl_trait_ast},
@@ -24,6 +28,35 @@ fn generated_event_impl<'db>(
         })
         .collect::<Vec<_>>();
     assert_eq!(generated.len(), 1, "expected one generated event impl");
+    generated[0]
+}
+
+fn generated_error_impl_with_const<'db>(
+    db: &'db HirAnalysisTestDb,
+    top_mod: TopLevelMod<'db>,
+    const_name: &str,
+) -> ImplTrait<'db> {
+    let generated = top_mod
+        .all_impl_traits(db)
+        .iter()
+        .copied()
+        .filter(|item| {
+            matches!(
+                impl_trait_ast(db, *item),
+                HirOrigin::Desugared(DesugaredOrigin::Error(_))
+            ) && item.hir_consts(db).iter().any(|constant| {
+                constant
+                    .name
+                    .to_opt()
+                    .is_some_and(|name| name.data(db) == const_name)
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        generated.len(),
+        1,
+        "expected one generated error impl containing `{const_name}`"
+    );
     generated[0]
 }
 
@@ -101,6 +134,120 @@ fn standard_fieldless_event_remains_clean_with_body_checking() {
 }
 
 #[test]
+fn generated_abi_record_and_metadata_consts_use_body_analysis() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "generated_abi_record_const_policies.fe".into(),
+        "#[error]\npub struct Failure { pub code: u256 }\n",
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    for const_name in ["LAYOUT", "HEAD_SIZE", "IS_DYNAMIC"] {
+        let generated = generated_error_impl_with_const(&db, top_mod, const_name);
+        let constant = generated
+            .hir_consts(&db)
+            .iter()
+            .find(|constant| {
+                constant
+                    .name
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == const_name)
+            })
+            .expect("selected impl contains the constant");
+        assert_eq!(
+            constant.body_check_policy,
+            AssocConstBodyCheckPolicy::BodyAnalysis,
+            "generated `{const_name}` must retain ordinary body checking"
+        );
+    }
+
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn generated_abi_record_layout_checks_the_trait_expected_type() {
+    let mut db = HirAnalysisTestDb::default();
+    // The local ABI trait deliberately changes LAYOUT's expected type while
+    // the real error producer still emits an AbiRecordLayout body. Querying
+    // the generated impl directly isolates body checking from the separate
+    // impl-header conformance diagnostic.
+    let file = db.new_stand_alone(
+        "generated_abi_record_expected_type.fe".into(),
+        r#"
+mod core {
+    pub mod abi {
+        pub struct AbiRecordLayout<const N: usize> {
+            pub offsets: [u256; N],
+            pub head_size: u256,
+        }
+        pub trait AbiRecord<const N: usize> { const LAYOUT: bool }
+        pub const fn abi_record_layout<const N: usize>(
+            _ sizes: [u256; N],
+        ) -> AbiRecordLayout<N> {
+            AbiRecordLayout { offsets: [0; N], head_size: 0 }
+        }
+    }
+}
+
+#[error]
+pub struct Empty {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let generated = generated_error_impl_with_const(&db, top_mod, "LAYOUT");
+    assert_eq!(generated.hir_consts(&db).len(), 1);
+    assert_eq!(
+        generated.hir_consts(&db)[0].body_check_policy,
+        AssocConstBodyCheckPolicy::BodyAnalysis
+    );
+
+    let diagnostics = check_impl_trait_const_bodies(&db, generated);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert!(
+        is_mismatch_between(&db, &diagnostics[0], "bool", "AbiRecordLayout<0>"),
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
+fn generated_abi_record_does_not_hide_an_unrelated_helper_bound() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "generated_abi_record_unrelated_bound.fe".into(),
+        r#"
+mod core {
+    pub mod abi {
+        pub trait Unexpected {}
+        pub struct AbiRecordLayout<const N: usize> {
+            pub offsets: [u256; N],
+            pub head_size: u256,
+        }
+        pub trait AbiRecord<const N: usize> {
+            const LAYOUT: AbiRecordLayout<N>
+        }
+        pub const fn abi_record_layout<const N: usize>(
+            _ sizes: [u256; N],
+        ) -> AbiRecordLayout<N> where bool: Unexpected {
+            AbiRecordLayout { offsets: [0; N], head_size: 0 }
+        }
+    }
+}
+
+#[error]
+pub struct Empty {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diagnostics = BodyAnalysisPass {}.run_on_module(&db, top_mod);
+    let rendered = format_diagnostics(&db, &diagnostics);
+    assert!(rendered.contains("Unexpected"), "{rendered}");
+    assert!(
+        rendered.contains("trait bound is not satisfied"),
+        "{rendered}"
+    );
+}
+
+#[test]
 fn ordinary_associated_const_body_checking_is_preserved() {
     for value in ["true", "7"] {
         let mut db = HirAnalysisTestDb::default();
@@ -161,7 +308,17 @@ msg Calls {{
                 .count(),
             1
         );
-        assert!(policies.contains(&AssocConstBodyCheckPolicy::ExpansionSourceCompatibility));
+        assert_eq!(
+            policies
+                .iter()
+                .filter(|&&policy| policy == AssocConstBodyCheckPolicy::BodyAnalysis)
+                .count(),
+            3
+        );
+        assert!(
+            !policies.contains(&AssocConstBodyCheckPolicy::ExpansionSourceCompatibility),
+            "message ABI constants must not escape ordinary body checking: {policies:?}"
+        );
         let diagnostics = format_diagnostics(&db, &db.run_on_top_mod(top_mod));
         if selector_type == "bool" {
             assert_eq!(diagnostics.matches("error[").count(), 1, "{diagnostics}");

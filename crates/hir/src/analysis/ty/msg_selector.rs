@@ -112,16 +112,41 @@ fn check_variant_field_abi_requirements<'db>(
     variant_name: &str,
     diags: &mut Vec<Box<dyn DiagnosticVoucher + 'db>>,
 ) {
+    for (idx, kind) in variant_field_abi_issues(db, struct_) {
+        let primary_range = msg_variant_field(db, top_mod, struct_, idx)
+            .map(|field| {
+                field
+                    .ty()
+                    .map_or(field.syntax().text_range(), |ty| ty.syntax().text_range())
+            })
+            .unwrap_or_else(|| {
+                msg_variant_focus_range(db, top_mod, struct_, MsgDesugaredFocus::Selector)
+            });
+        diags.push(Box::new(MsgDiagnostic {
+            kind,
+            file: top_mod.file(db),
+            primary_range,
+            secondary_range: None,
+            variant_name: variant_name.to_string(),
+        }));
+    }
+}
+
+pub(crate) fn variant_field_abi_issues<'db>(
+    db: &'db dyn HirAnalysisDb,
+    struct_: Struct<'db>,
+) -> Vec<(usize, MsgDiagnosticKind)> {
     let (Some(sol_ty), Some(abi_size_trait), Some(encode_trait), Some(decode_trait)) = (
         resolve_lib_type_path(db, struct_.scope(), "std::abi::Sol"),
         resolve_core_trait(db, struct_.scope(), &["abi", "AbiSize"]),
         resolve_core_trait(db, struct_.scope(), &["abi", "Encode"]),
         resolve_core_trait(db, struct_.scope(), &["abi", "Decode"]),
     ) else {
-        return;
+        return Vec::new();
     };
 
     let solve_cx = TraitSolveCx::new(db, struct_.scope());
+    let mut issues = Vec::new();
     for (idx, field_ty) in struct_
         .field_tys(db)
         .into_iter()
@@ -163,23 +188,9 @@ fn check_variant_field_abi_requirements<'db>(
             }
         };
 
-        let primary_range = msg_variant_field(db, top_mod, struct_, idx)
-            .map(|field| {
-                field
-                    .ty()
-                    .map_or(field.syntax().text_range(), |ty| ty.syntax().text_range())
-            })
-            .unwrap_or_else(|| {
-                msg_variant_focus_range(db, top_mod, struct_, MsgDesugaredFocus::Selector)
-            });
-        diags.push(Box::new(MsgDiagnostic {
-            kind,
-            file: top_mod.file(db),
-            primary_range,
-            secondary_range: None,
-            variant_name: variant_name.to_string(),
-        }));
+        issues.push((idx, kind));
     }
+    issues
 }
 
 /// Checks the argument types declared in a variant's `sol("...")` selector

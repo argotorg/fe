@@ -1,4 +1,4 @@
-use crate::analysis::ty::diagnostics::BodyDiag;
+use crate::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag, TyDiagCollection};
 use crate::analysis::ty::effects::{ResolvedEffectKey, resolve_effect_key};
 use crate::analysis::ty::trait_resolution::{
     GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
@@ -6,19 +6,20 @@ use crate::analysis::ty::trait_resolution::{
 use crate::analysis::ty::ty_check::EffectParamOwner;
 use crate::core::adt_lower::lower_adt;
 use crate::core::hir_def::{
-    IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias,
+    AssocConstBodyCheckPolicy, IdentId, ImplTrait, ItemKind, PathId, TopLevelMod, Trait, TypeAlias,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use adt_def::{AdtDef, AdtRef, instantiate_adt_field_shape};
-use common::indexmap::IndexMap;
+use common::{indexmap::IndexMap, ingot::IngotKind};
 use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
-use trait_def::impls_for_trait_def;
+use trait_def::{TraitInstId, impls_for_trait_def};
 use trait_resolution::constraint::super_trait_cycle;
 use ty_def::{BorrowKind, InvalidCause, TyData, TyId};
 use ty_lower::{collect_generic_params, lower_type_alias};
 
+use crate::MsgDiagnosticKind;
 use crate::analysis::name_resolution::{PathRes, resolve_path};
 use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
@@ -370,6 +371,93 @@ fn walk<'db>(
 
 pub struct BodyAnalysisPass {}
 
+// Generated ABI metadata bodies remain fully checked. An unsatisfied core
+// AbiSize goal for an actual source-record field repeats a requirement already
+// owned by message field analysis or the generated error encode/payload bodies.
+fn present_generated_abi_const_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_trait: ImplTrait<'db>,
+    diag: &FuncBodyDiag<'db>,
+    reported_error_function_goals: &FxHashSet<TraitInstId<'db>>,
+) -> bool {
+    let FuncBodyDiag::Ty(TyDiagCollection::Satisfiability(
+        diagnostics::TraitConstraintDiag::TraitBoundNotSat { primary_goal, .. },
+    )) = diag
+    else {
+        return true;
+    };
+    if !matches!(
+        impl_trait.origin(db),
+        HirOrigin::Desugared(DesugaredOrigin::Msg(_) | DesugaredOrigin::Error(_))
+    ) {
+        return true;
+    }
+
+    let constants = impl_trait.hir_consts(db);
+    let is_generated_abi_metadata = !constants.is_empty()
+        && constants.iter().all(|constant| {
+            constant.body_check_policy == AssocConstBodyCheckPolicy::BodyAnalysis
+                && constant.name.to_opt().is_some_and(|name| {
+                    matches!(
+                        name.data(db).as_str(),
+                        "LAYOUT" | "HEAD_SIZE" | "IS_DYNAMIC"
+                    )
+                })
+        });
+
+    if !is_generated_abi_metadata {
+        return true;
+    }
+
+    let Some(abi_size_trait) =
+        corelib::resolve_core_trait(db, impl_trait.scope(), &["abi", "AbiSize"])
+    else {
+        return true;
+    };
+    if abi_size_trait.top_mod(db).ingot(db).kind(db) != IngotKind::Core
+        || primary_goal.def(db) != abi_size_trait
+    {
+        return true;
+    }
+
+    let Some(implementor) = trait_lower::lower_impl_trait(db, impl_trait) else {
+        return true;
+    };
+    let record_ty = implementor.instantiate_identity().self_ty(db);
+    let missing_ty = primary_goal.self_ty(db);
+    let matching_field_indices = record_ty
+        .field_types(db)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, field_ty)| (field_ty == missing_ty).then_some(idx))
+        .collect::<Vec<_>>();
+    if matching_field_indices.is_empty() {
+        return true;
+    }
+
+    match impl_trait.origin(db) {
+        HirOrigin::Desugared(DesugaredOrigin::Msg(_)) => {
+            let Some(AdtRef::Struct(record)) = record_ty.adt_ref(db) else {
+                return true;
+            };
+            !msg_selector::variant_field_abi_issues(db, record)
+                .iter()
+                .any(|(idx, issue)| {
+                    matching_field_indices.contains(idx)
+                        && matches!(
+                            issue,
+                            MsgDiagnosticKind::MissingAbiTraits { .. }
+                                | MsgDiagnosticKind::UnsupportedAbiField { .. }
+                        )
+                })
+        }
+        HirOrigin::Desugared(DesugaredOrigin::Error(_)) => {
+            !reported_error_function_goals.contains(primary_goal)
+        }
+        _ => true,
+    }
+}
+
 impl ModuleAnalysisPass for BodyAnalysisPass {
     fn run_on_module<'db>(
         &mut self,
@@ -378,6 +466,7 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         // Check function and const bodies; contract-specific analysis is handled separately.
         let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = Vec::new();
+        let mut reported_error_function_goals = FxHashSet::default();
         for func in top_mod
             .all_funcs(db)
             .iter()
@@ -390,9 +479,24 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
             })
         {
             let (body_diags, _) = ty_check::check_func_body(db, *func);
+            if matches!(
+                func.origin(db),
+                HirOrigin::Desugared(DesugaredOrigin::Error(_))
+            ) {
+                reported_error_function_goals.extend(body_diags.iter().filter_map(|diag| {
+                    let FuncBodyDiag::Ty(TyDiagCollection::Satisfiability(
+                        diagnostics::TraitConstraintDiag::TraitBoundNotSat { primary_goal, .. },
+                    )) = diag
+                    else {
+                        return None;
+                    };
+                    Some(*primary_goal)
+                }));
+            }
             diags.extend(body_diags.iter().map(|diag| diag.to_voucher()));
         }
 
+        let reported_error_function_goals = &reported_error_function_goals;
         diags.extend(
             top_mod
                 .all_items(db)
@@ -414,7 +518,18 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
             top_mod
                 .all_impl_traits(db)
                 .iter()
-                .flat_map(|impl_trait| ty_check::check_impl_trait_const_bodies(db, *impl_trait))
+                .flat_map(|impl_trait| {
+                    ty_check::check_impl_trait_const_bodies(db, *impl_trait)
+                        .iter()
+                        .filter(move |diag| {
+                            present_generated_abi_const_diag(
+                                db,
+                                *impl_trait,
+                                diag,
+                                reported_error_function_goals,
+                            )
+                        })
+                })
                 .map(|diag| diag.to_voucher()),
         );
 
