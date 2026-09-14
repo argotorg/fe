@@ -1520,6 +1520,97 @@ mod tests {
         Url::from_file_path(&fixture_path).expect("fixture path should be absolute")
     }
 
+    #[cfg(all(
+        feature = "cranelift",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    fn native_pointer_object_ir(name: &str, source: &str) -> String {
+        let mut db = DriverDataBase::default();
+        let file = db
+            .workspace()
+            .touch(&mut db, temp_fixture_url(name), Some(source.to_string()));
+        let top_mod = db.top_mod(file);
+        // Keep pointer inputs dynamic by testing before executable ABI validation.
+        let (module, main) = compile_executable_sonatina_native(&db, top_mod)
+            .expect("native pointer fixture should lower");
+        module.ctx.update_func_linkage(main, Linkage::Public);
+        let mut compile = Compile::new(module, CraneliftObjectBackend::new())
+            .with_opt_level(SonatinaOptLevel::O0);
+        compile.optimize();
+        ensure_module_sonatina_ir_valid(compile.module()).expect("native IR should verify");
+        let ir = ModuleWriter::new(compile.module()).dump_string();
+        let object = compile
+            .compile()
+            .expect("reachable native pointer operations should compile")
+            .into_bytes();
+        assert!(!object.is_empty(), "native object must not be empty");
+        ir
+    }
+
+    #[cfg(all(
+        feature = "cranelift",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[test]
+    fn native_object_emission_lowers_first_class_pointer_memzero() {
+        let ir = native_pointer_object_ir(
+            "native_memzero.fe",
+            r#"
+fn zero_buffer(ptr: *u8, len: u256) {
+    core::ptr::zero_bytes(ptr, len)
+}
+
+pub fn main(ptr: *u8, len: own u256) -> i32 {
+    zero_buffer(ptr, len)
+    0
+}
+"#,
+        );
+        assert!(
+            ir.contains("%zero_buffer("),
+            "missing reachable helper:\n{ir}"
+        );
+        assert!(
+            ir.contains("memzero "),
+            "missing pointer memory zeroing:\n{ir}"
+        );
+    }
+
+    #[cfg(all(
+        feature = "cranelift",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[test]
+    fn native_object_emission_uses_typed_pointer_memory_accesses() {
+        let ir = native_pointer_object_ir(
+            "native_pointer_access.fe",
+            r#"
+fn replace_byte(ptr: *u8, value: u8) -> u8 {
+    let previous = *ptr
+    *ptr = value
+    previous
+}
+
+pub fn main(ptr: *u8, value: own u8) -> i32 {
+    replace_byte(ptr, value) as i32
+}
+"#,
+        );
+        assert!(
+            ir.contains("%replace_byte("),
+            "missing reachable helper:\n{ir}"
+        );
+        assert!(
+            ir.contains(".i8 = mload "),
+            "missing byte-sized load:\n{ir}"
+        );
+        assert!(
+            ir.lines()
+                .any(|line| line.trim_start().starts_with("mstore ") && line.ends_with(" i8;")),
+            "missing byte-sized store:\n{ir}"
+        );
+    }
+
     #[test]
     fn wrapped_init_observability_stops_before_runtime_payload() {
         let runtime = [0x60, 0x01, 0x00];
