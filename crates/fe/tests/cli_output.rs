@@ -1,6 +1,17 @@
 use dir_test::{Fixture, dir_test};
 use serde_json::Value;
 use std::{fs, io::IsTerminal, path::Path, process::Command};
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 use tempfile::tempdir;
 use test_utils::{
     normalize::{normalize_newlines, normalize_path_separators, replace_path_token},
@@ -470,6 +481,394 @@ fn test_cli_build_emit_abi_writes_json_artifact() {
     assert_eq!(function["inputs"][0]["name"], "value");
     assert_eq!(function["inputs"][0]["type"], "uint256");
     assert_eq!(function["outputs"][0]["type"], "uint256");
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn test_cli_build_native_executable_uses_main_return_as_exit_code() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("native_exit.fe");
+    fs::write(&source, "pub fn main() -> i32 { 42 }\n").expect("write native source");
+    let out_dir = temp.path().join("out");
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        "--emit",
+        "ir,executable",
+        "--out-dir",
+        out_dir.to_str().expect("UTF-8 output path"),
+        source.to_str().expect("UTF-8 source path"),
+    ]);
+    assert_eq!(exit_code, 0, "fe native build failed:\n{output}");
+
+    let executable = out_dir.join("native_exit");
+    assert!(executable.is_file(), "missing native executable:\n{output}");
+    assert!(
+        out_dir.join("native_exit.native.sona").is_file(),
+        "missing native IR:\n{output}"
+    );
+    let status = Command::new(&executable)
+        .status()
+        .expect("run native executable");
+    assert_eq!(status.code(), Some(42));
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn test_cli_build_native_executes_representative_programs_at_o0_and_o1() {
+    let fixture_dir =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_output/native");
+    for name in [
+        "arithmetic",
+        "control_flow",
+        "aggregates",
+        "wide_integer",
+        "generic_reachability",
+        "entry_name_collision",
+    ] {
+        let source = fs::read_to_string(fixture_dir.join(format!("{name}.fe")))
+            .expect("read native fixture");
+        for level in ["0", "1"] {
+            assert_eq!(
+                native_exit_code(&source, level),
+                Some(0),
+                "native program {name} failed at O{level}"
+            );
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+fn native_exit_code(source: &str, level: &str) -> Option<i32> {
+    let temp = tempdir().expect("tempdir");
+    let source_path = temp.path().join("program.fe");
+    fs::write(&source_path, source).expect("write native source");
+    let out_dir = temp.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        "-O",
+        level,
+        "--out-dir",
+        out_dir.to_str().expect("UTF-8 output path"),
+        source_path.to_str().expect("UTF-8 source path"),
+    ]);
+    assert_eq!(
+        exit_code, 0,
+        "fe native build failed at O{level}:\n{output}"
+    );
+    let mut child = Command::new(out_dir.join("program"))
+        .spawn()
+        .expect("run native executable");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.try_wait().expect("poll native executable") {
+            return status.code();
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("kill timed out native executable");
+            child.wait().expect("reap native executable");
+            panic!("native program did not finish within 10 seconds at O{level}");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn test_cli_build_native_unchecked_div_rem_integer_widths() {
+    for bits in [8, 16, 32, 64, 128, 256] {
+        let sign_bit = bits - 1;
+        let source = format!(
+            r#"
+#[arithmetic(unchecked)]
+fn signed(value: i{bits}, divisor: i{bits}, quotient: i{bits}, remainder: i{bits}) -> bool {{
+    value / divisor == quotient && value % divisor == remainder
+}}
+
+#[arithmetic(unchecked)]
+fn unsigned(value: u{bits}, divisor: u{bits}, quotient: u{bits}, remainder: u{bits}) -> bool {{
+    value / divisor == quotient && value % divisor == remainder
+}}
+
+fn checked_rem(value: i{bits}, divisor: i{bits}) -> i{bits} {{
+    value % divisor
+}}
+
+pub fn main() -> i32 {{
+    let min: i{bits} = 1 << {sign_bit}
+    if !signed(value: -17, divisor: 0, quotient: 0, remainder: 0) {{ return 1 }}
+    if !unsigned(value: 17, divisor: 0, quotient: 0, remainder: 0) {{ return 2 }}
+    if !signed(value: min, divisor: -1, quotient: min, remainder: 0) {{ return 3 }}
+    if !signed(value: -17, divisor: 5, quotient: -3, remainder: -2) {{ return 4 }}
+    if !signed(value: 17, divisor: -5, quotient: -3, remainder: 2) {{ return 5 }}
+    if !unsigned(value: 17, divisor: 5, quotient: 3, remainder: 2) {{ return 6 }}
+    if checked_rem(value: min, divisor: -1) != 0 {{ return 7 }}
+    0
+}}
+"#
+        );
+        for level in ["0", "1"] {
+            assert_eq!(
+                native_exit_code(&source, level),
+                Some(0),
+                "unchecked {bits}-bit division/remainder failed at O{level}"
+            );
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn test_cli_build_native_checked_div_rem_still_traps() {
+    for bits in [8, 128, 256] {
+        let sign_bit = bits - 1;
+        let min = format!("1 << {sign_bit}");
+        for (prefix, op, value, divisor) in [
+            ("u", "/", "17", "0"),
+            ("u", "%", "17", "0"),
+            ("i", "/", "-17", "0"),
+            ("i", "%", "-17", "0"),
+            ("i", "/", min.as_str(), "-1"),
+        ] {
+            let ty = format!("{prefix}{bits}");
+            let source = format!(
+                r#"
+fn calculate(value: {ty}, divisor: {ty}) -> {ty} {{ value {op} divisor }}
+pub fn main() -> i32 {{
+    if calculate(value: {value}, divisor: {divisor}) == 0 {{ 0 }} else {{ 1 }}
+}}
+"#
+            );
+            for level in ["0", "1"] {
+                assert_eq!(
+                    native_exit_code(&source, level),
+                    None,
+                    "checked {ty} {value} {op} {divisor} did not trap at O{level}"
+                );
+            }
+        }
+    }
+}
+
+fn power_edge_source(bits: u16) -> String {
+    let sign_bit = bits - 1;
+    let signed_exp_bit = bits - 2;
+    format!(
+        r#"
+fn checked_unsigned(base: u{bits}, exponent: u{bits}) -> u{bits} {{ base ** exponent }}
+fn checked_signed(base: i{bits}, exponent: i{bits}) -> i{bits} {{ base ** exponent }}
+#[arithmetic(unchecked)]
+fn wrapping_unsigned(base: u{bits}, exponent: u{bits}) -> u{bits} {{ base ** exponent }}
+#[arithmetic(unchecked)]
+fn wrapping_signed(base: i{bits}, exponent: i{bits}) -> i{bits} {{ base ** exponent }}
+
+fn verify() -> bool {{
+    let min: i{bits} = 1 << {sign_bit}
+    let large: u{bits} = 1 << {sign_bit}
+    let signed_large: i{bits} = 1 << {signed_exp_bit}
+    if checked_unsigned(base: 0, exponent: 0) != 1 {{ return false }}
+    if checked_unsigned(base: 200, exponent: 1) != 200 {{ return false }}
+    if checked_unsigned(base: 1, exponent: large) != 1 {{ return false }}
+    if checked_unsigned(base: 0, exponent: large) != 0 {{ return false }}
+    if checked_signed(base: min, exponent: 0) != 1 {{ return false }}
+    if checked_signed(base: min, exponent: 1) != min {{ return false }}
+    if checked_signed(base: -2, exponent: {sign_bit}) != min {{ return false }}
+    if checked_signed(base: -1, exponent: signed_large) != 1 {{ return false }}
+    if checked_signed(base: -1, exponent: signed_large + 1) != -1 {{ return false }}
+    if wrapping_unsigned(base: 2, exponent: {bits}) != 0 {{ return false }}
+    if wrapping_unsigned(base: 3, exponent: 5) != 243 {{ return false }}
+    if wrapping_signed(base: -1, exponent: -1) != -1 {{ return false }}
+    if wrapping_signed(base: -1, exponent: -2) != 1 {{ return false }}
+    if wrapping_signed(base: 2, exponent: -1) != 0 {{ return false }}
+    true
+}}
+
+#[test]
+fn power_edges() {{ assert!(verify()) }}
+
+pub fn main() -> i32 {{ if verify() {{ 0 }} else {{ 1 }} }}
+"#
+    )
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn test_cli_build_native_power_edges() {
+    for bits in [8, 128, 256] {
+        let source = power_edge_source(bits);
+        for level in ["0", "1"] {
+            assert_eq!(
+                native_exit_code(&source, level),
+                Some(0),
+                "{bits}-bit power edge case failed at O{level}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_cli_evm_power_edges() {
+    let temp = tempdir().expect("tempdir");
+    for bits in [8, 128, 256] {
+        let path = temp.path().join(format!("power_{bits}.fe"));
+        fs::write(&path, power_edge_source(bits)).expect("write power edge cases");
+        for level in ["0", "1"] {
+            let (output, exit_code) = run_fe_main(&[
+                "test",
+                "-O",
+                level,
+                path.to_str().expect("UTF-8 source path"),
+            ]);
+            assert_eq!(
+                exit_code, 0,
+                "{bits}-bit EVM power failed at O{level}:\n{output}"
+            );
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn test_cli_build_native_checked_power_still_traps() {
+    for bits in [8, 128, 256] {
+        let sign_bit = bits - 1;
+        for (prefix, base, exponent) in [("u", 2, bits), ("i", 2, sign_bit), ("i", 3, -1)] {
+            let ty = format!("{prefix}{bits}");
+            let source = format!(
+                r#"
+fn calculate(base: {ty}, exponent: {ty}) -> {ty} {{ base ** exponent }}
+pub fn main() -> i32 {{
+    if calculate(base: {base}, exponent: {exponent}) == 0 {{ 0 }} else {{ 1 }}
+}}
+"#
+            );
+            for level in ["0", "1"] {
+                assert_eq!(
+                    native_exit_code(&source, level),
+                    None,
+                    "checked {ty} {base} ** {exponent} did not trap at O{level}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    not(any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    ))
+))]
+#[test]
+fn test_cli_build_native_rejects_executable_on_unsupported_host() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("native_exit.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").expect("write native source");
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        source.to_str().expect("UTF-8 source path"),
+    ]);
+    assert_eq!(exit_code, 1, "expected native host rejection:\n{output}");
+    assert!(
+        output.contains(
+            "native executable output currently requires an x86-64 Linux or AArch64 macOS host"
+        ),
+        "unexpected output:\n{output}"
+    );
+}
+
+#[cfg(feature = "cranelift")]
+#[test]
+fn test_cli_build_native_rejects_evm_artifacts() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("native_exit.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").expect("write native source");
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "native",
+        "--emit",
+        "bytecode",
+        source.to_str().expect("UTF-8 source path"),
+    ]);
+    assert_eq!(exit_code, 1, "expected native build rejection:\n{output}");
+    assert!(
+        output.contains("native backend only supports `--emit executable` and `--emit ir`"),
+        "unexpected output:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_build_sonatina_rejects_executable_emit() {
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("main.fe");
+    fs::write(&source, "pub fn main() -> i32 { 0 }\n").expect("write source");
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "executable",
+        source.to_str().expect("UTF-8 source path"),
+    ]);
+    assert_eq!(
+        exit_code, 1,
+        "expected executable emit rejection:\n{output}"
+    );
+    assert!(
+        output.contains("`--emit executable` requires `--backend native`"),
+        "unexpected output:\n{output}"
+    );
 }
 
 #[test]
@@ -1017,45 +1416,87 @@ fn test_cli_build_emit_metadata_combined_with_other_artifacts() {
 }
 
 #[test]
-fn test_cli_build_metadata_round_trip_reproduces_runtime_bytecode() {
+fn test_cli_build_from_metadata_preserves_default_and_explicit_emits() {
     let temp = tempdir().expect("tempdir");
     let root = temp.path();
     write_app_with_path_dependency(root);
 
-    // Original build: emit metadata + runtime bytecode.
     let out_dir = root.join("app/out");
     let (output, exit_code) = run_fe_main(&[
         "build",
+        "-O2",
         "--emit",
-        "metadata,runtime-bytecode",
+        "metadata,bytecode,runtime-bytecode,abi",
         "--out-dir",
         out_dir.to_str().expect("out utf8"),
         root.join("app").to_str().expect("app utf8"),
     ]);
     assert_eq!(exit_code, 0, "original build failed:\n{output}");
-    let original_runtime =
-        fs::read_to_string(out_dir.join("Foo.runtime.bin")).expect("read original runtime.bin");
-
-    // Rebuild solely from the metadata artifact via `--from-metadata`.
     let metadata_path = out_dir.join("Foo.metadata.json");
-    let recon = tempdir().expect("recon tempdir");
-    let recon_out = recon.path().join("out");
+    for emit in [None, Some("runtime-bytecode")] {
+        let recon = tempdir().expect("recon tempdir");
+        let recon_out = recon.path().join("out");
+        let mut args = vec![
+            "build",
+            "--from-metadata",
+            metadata_path.to_str().expect("metadata utf8"),
+            "--out-dir",
+            recon_out.to_str().expect("out utf8"),
+        ];
+        if let Some(emit) = emit {
+            args.extend(["--emit", emit]);
+        }
+        let (output, exit_code) = run_fe_main(&args);
+        assert_eq!(exit_code, 0, "rebuild from metadata failed:\n{output}");
+        for artifact in ["Foo.bin", "Foo.runtime.bin", "Foo.abi.json"] {
+            let rebuilt = recon_out.join(artifact);
+            if emit.is_none() || artifact == "Foo.runtime.bin" {
+                assert_eq!(
+                    fs::read(&rebuilt).unwrap_or_else(|err| panic!("read {rebuilt:?}: {err}")),
+                    fs::read(out_dir.join(artifact)).expect("read original artifact"),
+                    "rebuilt {artifact} must match the recorded build"
+                );
+            } else {
+                assert!(!rebuilt.exists(), "unrequested artifact {rebuilt:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn test_cli_build_from_metadata_rejects_executable_emit() {
+    let temp = tempdir().expect("tempdir");
+    let file = temp.path().join("foo.fe");
+    fs::write(&file, "pub contract Foo {}\n").expect("write foo.fe");
+    let out_dir = temp.path().join("original");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "metadata",
+        "--out-dir",
+        out_dir.to_str().expect("out utf8"),
+        file.to_str().expect("file utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "original build failed:\n{output}");
+    let metadata_path = out_dir.join("Foo.metadata.json");
+    let recon_out = temp.path().join("rebuilt");
     let (output, exit_code) = run_fe_main(&[
         "build",
         "--from-metadata",
         metadata_path.to_str().expect("metadata utf8"),
         "--emit",
-        "runtime-bytecode",
+        "executable",
         "--out-dir",
         recon_out.to_str().expect("out utf8"),
     ]);
-    assert_eq!(exit_code, 0, "rebuild from metadata failed:\n{output}");
-    let rebuilt_runtime =
-        fs::read_to_string(recon_out.join("Foo.runtime.bin")).expect("read rebuilt runtime.bin");
-
-    assert_eq!(
-        original_runtime, rebuilt_runtime,
-        "runtime bytecode rebuilt from metadata.json must be byte-identical"
+    assert_ne!(exit_code, 0, "executable emit should fail:\n{output}");
+    assert!(
+        output.contains("`--emit executable` requires `--backend native`"),
+        "unexpected error:\n{output}"
+    );
+    assert!(
+        !recon_out.exists(),
+        "invalid request must not write artifacts"
     );
 }
 

@@ -1,0 +1,19 @@
+fn fibonacci(n: u32) -> u32 {
+    if n <= 1 {
+        return n
+    }
+    let mut previous: u32 = 0
+    let mut current: u32 = 1
+    let mut index: u32 = 2
+    while index <= n {
+        let next: u32 = previous + current
+        previous = current
+        current = next
+        index = index + 1
+    }
+    current
+}
+
+pub fn main() -> i32 {
+    if fibonacci(n: 10) == 55 { 0 } else { 21 }
+}

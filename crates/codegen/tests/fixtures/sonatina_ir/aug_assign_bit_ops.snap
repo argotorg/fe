@@ -17,47 +17,66 @@ func private %aug_assign_bit_ops(v0.i256, v1.i256) -> i256 {
         jump block2;
 
     block2:
-        v9.i256 = phi (1.i256 block1) (v12 block6);
-        v10.i256 = phi (0.i256 block1) (v18 block6);
-        v11.i1 = eq v10 v1;
-        br v11 block4 block3;
+        v9.i256 = phi (1.i256 block1) (v21 block10);
+        v10.i256 = phi (v6 block1) (v24 block10);
+        v11.i256 = phi (v1 block1) (v22 block10);
+        v12.i1 = is_zero v11;
+        br v12 block7 block3;
 
     block3:
-        (v12.i256, v13.i1) = umulo v9 v6;
-        br v13 block5 block6;
+        v13.i256 = and v11 1.i256;
+        v14.i1 = is_zero v13;
+        br v14 block5 block4;
 
     block4:
-        mstore v4 v9 i256;
-        v20.i256 = ptr_to_int v2 i256;
-        v22.i256 = mload v20 i256;
-        v23.i256 = shl 3.i256 v22;
-        mstore v20 v23 i256;
-        v24.i256 = ptr_to_int v2 i256;
-        v25.i256 = mload v24 i256;
-        v26.i256 = shr 1.i256 v25;
-        mstore v24 v26 i256;
-        v27.i256 = ptr_to_int v2 i256;
-        v29.i256 = mload v27 i256;
-        v30.i256 = and v29 255.i256;
-        mstore v27 v30 i256;
-        v31.i256 = ptr_to_int v2 i256;
-        v32.i256 = mload v31 i256;
-        v33.i256 = or v32 1.i256;
-        mstore v31 v33 i256;
-        v34.i256 = ptr_to_int v2 i256;
-        v36.i256 = mload v34 i256;
-        v37.i256 = xor v36 2.i256;
-        mstore v34 v37 i256;
-        v38.i256 = mload v2 i256;
-        return v38;
+        (v15.i256, v16.i1) = umulo v9 v10;
+        br v16 block8 block9;
 
     block5:
+        v21.i256 = phi (v9 block3) (v15 block9);
+        v22.i256 = shr 1.i256 v11;
+        v23.i1 = is_zero v22;
+        br v23 block7 block6;
+
+    block6:
+        (v24.i256, v25.i1) = umulo v10 v10;
+        br v25 block8 block10;
+
+    block7:
+        v26.i256 = phi (v9 block2) (v21 block5);
+        mstore v4 v26 i256;
+        v28.i256 = ptr_to_int v2 i256;
+        v30.i256 = mload v28 i256;
+        v31.i256 = shl 3.i256 v30;
+        mstore v28 v31 i256;
+        v32.i256 = ptr_to_int v2 i256;
+        v33.i256 = mload v32 i256;
+        v34.i256 = shr 1.i256 v33;
+        mstore v32 v34 i256;
+        v35.i256 = ptr_to_int v2 i256;
+        v37.i256 = mload v35 i256;
+        v38.i256 = and v37 255.i256;
+        mstore v35 v38 i256;
+        v39.i256 = ptr_to_int v2 i256;
+        v40.i256 = mload v39 i256;
+        v41.i256 = or v40 1.i256;
+        mstore v39 v41 i256;
+        v42.i256 = ptr_to_int v2 i256;
+        v44.i256 = mload v42 i256;
+        v45.i256 = xor v44 2.i256;
+        mstore v42 v45 i256;
+        v46.i256 = mload v2 i256;
+        return v46;
+
+    block8:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
 
-    block6:
-        v18.i256 = add v10 1.i256;
+    block9:
+        jump block5;
+
+    block10:
         jump block2;
 }
 

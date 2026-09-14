@@ -518,6 +518,42 @@ fn build_contract_package<'db>(
     Ok(package)
 }
 
+/// Build a target-neutral executable package rooted at a public top-level
+/// `main` function while preserving its ordinary function signature.
+pub fn build_native_executable_package<'db>(
+    db: &'db dyn MirDb,
+    top_mod: TopLevelMod<'db>,
+) -> Result<RuntimePackage<'db>, LowerError> {
+    let Some(main) = top_mod
+        .children_non_nested(db)
+        .filter_map(|item| match item {
+            ItemKind::Func(func) => Some(func),
+            _ => None,
+        })
+        .filter(|func| !func.is_extern(db) && !is_test_func(db, *func))
+        .find(|func| func.vis(db).is_pub() && is_main_func(db, *func))
+    else {
+        return Err(LowerError::Unsupported(
+            "native executable output requires `pub fn main() -> i32`".to_string(),
+        ));
+    };
+    let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(main))?;
+    let instance = runtime_instance_for_semantic(db, semantic);
+    let package = build_sectioned_package(
+        db,
+        top_mod,
+        vec![instance],
+        vec![(
+            sanitize_object_name("main"),
+            vec![(RuntimeSectionName::Main, instance)],
+        )],
+        Some("main"),
+    )?;
+    verify_runtime_package(db, package)
+        .map_err(|err| LowerError::Unsupported(format!("invalid native package: {err:?}")))?;
+    Ok(package)
+}
+
 fn manual_contract_objects<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,

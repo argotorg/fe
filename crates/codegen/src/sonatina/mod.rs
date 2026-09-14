@@ -7,13 +7,19 @@ use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::runtime::ir::RuntimePackagePlan;
 use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
+#[cfg(feature = "cranelift")]
+use mir::{RuntimeSectionName, build_native_executable_package};
 use rustc_hash::FxHashSet;
+#[cfg(feature = "cranelift")]
+use sonatina_codegen::{Compile, isa::cranelift::CraneliftObjectBackend};
 use sonatina_codegen::{EvmCompile, OptLevel as SonatinaOptLevel};
+#[cfg(feature = "cranelift")]
+use sonatina_ir::{Linkage, Type, ir_writer::IrWrite, isa::native::Native};
 use sonatina_ir::{
     Module,
     ir_writer::{FuncWriter, ModuleWriter},
     isa::evm::Evm,
-    module::{FuncRef, ModuleCtx},
+    module::FuncRef,
 };
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 use sonatina_verifier::{
@@ -78,16 +84,26 @@ pub struct SonatinaTestOptions {
     pub emit_observability: bool,
 }
 
+#[cfg(feature = "cranelift")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeOutputSelection {
+    pub ir: bool,
+    pub object: bool,
+}
+
+#[cfg(feature = "cranelift")]
+#[derive(Debug)]
+pub struct NativeArtifacts {
+    pub ir: Option<String>,
+    pub object: Option<Vec<u8>>,
+}
+
 pub(crate) fn create_evm_isa() -> Evm {
     Evm::new(TargetTriple::new(
         Architecture::Evm,
         Vendor::Ethereum,
         OperatingSystem::Evm(EvmVersion::Osaka),
     ))
-}
-
-fn create_module_ctx() -> ModuleCtx {
-    ModuleCtx::new(&create_evm_isa())
 }
 
 fn ensure_module_sonatina_ir_valid(module: &Module) -> Result<(), LowerError> {
@@ -196,6 +212,15 @@ fn format_object_compile_errors(errors: &[sonatina_codegen::object::ObjectCompil
         .join("; ")
 }
 
+#[cfg(feature = "cranelift")]
+fn format_cranelift_errors(errors: &[sonatina_codegen::isa::cranelift::CraneliftError]) -> String {
+    errors
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 fn compile_runtime_objects(
     module: Module,
     opt_level: OptLevel,
@@ -257,6 +282,156 @@ pub fn compile_runtime_package_sonatina(
     package: &RuntimePackage<'_>,
 ) -> Result<Module, LowerError> {
     lower_runtime::compile_runtime_package_sonatina(db, package)
+}
+
+#[cfg(feature = "cranelift")]
+fn compile_executable_sonatina_native(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+) -> Result<(Module, FuncRef), LowerError> {
+    let package = build_native_executable_package(db, top_mod)?;
+    let entry = package
+        .primary_object(db)
+        .and_then(|object| {
+            object
+                .sections(db)
+                .into_iter()
+                .find(|section| section.name == RuntimeSectionName::Main)
+        })
+        .ok_or_else(|| LowerError::Internal("native package is missing its main section".into()))?
+        .entry
+        .instance(db);
+    let isa = create_native_isa()?;
+    let (module, functions) = lower_runtime::compile_runtime_package_sonatina_for_isa(
+        db,
+        &package,
+        &isa,
+        false,
+        Some((entry, "main")),
+    )?;
+    let main = functions
+        .get(&entry)
+        .copied()
+        .ok_or_else(|| LowerError::Internal("native main was not lowered".into()))?;
+    Ok((module, main))
+}
+
+#[cfg(feature = "cranelift")]
+fn create_native_isa() -> Result<Native, LowerError> {
+    #[cfg(target_arch = "x86_64")]
+    let architecture = Architecture::X86_64;
+    #[cfg(target_arch = "aarch64")]
+    let architecture = Architecture::Aarch64;
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    return Err(LowerError::Unsupported(
+        "native code generation requires an x86_64 or aarch64 host".to_string(),
+    ));
+
+    Ok(Native::new(TargetTriple::new(
+        architecture,
+        Vendor::Unknown,
+        OperatingSystem::Native,
+    )))
+}
+
+#[cfg(feature = "cranelift")]
+pub fn emit_module_native_object(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+) -> Result<Vec<u8>, LowerError> {
+    emit_module_native_artifacts(
+        db,
+        top_mod,
+        opt_level,
+        NativeOutputSelection {
+            ir: false,
+            object: true,
+        },
+    )
+    .map(|artifacts| {
+        artifacts
+            .object
+            .expect("native object output was requested")
+    })
+}
+
+#[cfg(feature = "cranelift")]
+pub fn emit_module_native_ir(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+) -> Result<String, LowerError> {
+    emit_module_native_artifacts(
+        db,
+        top_mod,
+        opt_level,
+        NativeOutputSelection {
+            ir: true,
+            object: false,
+        },
+    )
+    .map(|artifacts| artifacts.ir.expect("native IR output was requested"))
+}
+
+#[cfg(feature = "cranelift")]
+pub fn emit_module_native_artifacts(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+    outputs: NativeOutputSelection,
+) -> Result<NativeArtifacts, LowerError> {
+    let (module, main) = compile_executable_sonatina_native(db, top_mod)?;
+    ensure_native_main_signature(&module, main)?;
+    module.ctx.update_func_linkage(main, Linkage::Public);
+
+    let mut compile = Compile::new(module, CraneliftObjectBackend::new())
+        .with_opt_level(to_sonatina_opt_level(opt_level));
+    compile.optimize();
+    ensure_module_sonatina_ir_valid(compile.module())?;
+    let ir = outputs
+        .ir
+        .then(|| ModuleWriter::new(compile.module()).dump_string());
+    let object = if outputs.object {
+        Some(
+            compile
+                .compile()
+                .map(|artifact| artifact.into_bytes())
+                .map_err(|errors| LowerError::Internal(format_cranelift_errors(&errors)))?,
+        )
+    } else {
+        None
+    };
+    Ok(NativeArtifacts { ir, object })
+}
+
+#[cfg(feature = "cranelift")]
+fn ensure_native_main_signature(module: &Module, main: FuncRef) -> Result<(), LowerError> {
+    module.ctx.func_sig(main, |signature| {
+        if signature.args().is_empty() && signature.ret_tys() == [Type::I32] {
+            Ok(())
+        } else {
+            Err(LowerError::Unsupported(format!(
+                "native executable `main` must have signature `pub fn main() -> i32`, found `main({}) -> {}`",
+                format_native_types(signature.args(), module),
+                format_native_types(signature.ret_tys(), module)
+            )))
+        }
+    })
+}
+
+#[cfg(feature = "cranelift")]
+fn format_native_types(types: &[Type], module: &Module) -> String {
+    types
+        .iter()
+        .map(|ty| {
+            let mut bytes = Vec::new();
+            ty.write(&mut bytes, &module.ctx)
+                .expect("writing a Sonatina type to Vec cannot fail");
+            String::from_utf8(bytes).expect("Sonatina type output should be UTF-8")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn select_runtime_package_contract<'db>(
@@ -788,6 +963,97 @@ mod tests {
     fn temp_fixture_url(name: &str) -> Url {
         let fixture_path = std::env::temp_dir().join(name);
         Url::from_file_path(&fixture_path).expect("fixture path should be absolute")
+    }
+
+    #[cfg(all(
+        feature = "cranelift",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    fn native_pointer_object_ir(name: &str, source: &str) -> String {
+        let mut db = DriverDataBase::default();
+        let file = db
+            .workspace()
+            .touch(&mut db, temp_fixture_url(name), Some(source.to_string()));
+        let top_mod = db.top_mod(file);
+        // Keep pointer inputs dynamic by testing before executable ABI validation.
+        let (module, main) = compile_executable_sonatina_native(&db, top_mod)
+            .expect("native pointer fixture should lower");
+        module.ctx.update_func_linkage(main, Linkage::Public);
+        let mut compile = Compile::new(module, CraneliftObjectBackend::new())
+            .with_opt_level(SonatinaOptLevel::O0);
+        compile.optimize();
+        ensure_module_sonatina_ir_valid(compile.module()).expect("native IR should verify");
+        let ir = ModuleWriter::new(compile.module()).dump_string();
+        let object = compile
+            .compile()
+            .expect("reachable native pointer operations should compile")
+            .into_bytes();
+        assert!(!object.is_empty(), "native object must not be empty");
+        ir
+    }
+
+    #[cfg(all(
+        feature = "cranelift",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[test]
+    fn native_object_emission_lowers_first_class_pointer_memzero() {
+        let ir = native_pointer_object_ir(
+            "native_memzero.fe",
+            r#"
+fn zero_buffer(ptr: *u8, len: u256) {
+    core::ptr::zero_bytes(ptr, len)
+}
+
+pub fn main(ptr: *u8, len: own u256) -> i32 {
+    zero_buffer(ptr, len)
+    0
+}
+"#,
+        );
+        assert!(
+            ir.contains("%zero_buffer("),
+            "missing reachable helper:\n{ir}"
+        );
+        assert!(
+            ir.contains("memzero "),
+            "missing pointer memory zeroing:\n{ir}"
+        );
+    }
+
+    #[cfg(all(
+        feature = "cranelift",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[test]
+    fn native_object_emission_uses_typed_pointer_memory_accesses() {
+        let ir = native_pointer_object_ir(
+            "native_pointer_access.fe",
+            r#"
+fn replace_byte(ptr: *u8, value: u8) -> u8 {
+    let previous = *ptr
+    *ptr = value
+    previous
+}
+
+pub fn main(ptr: *u8, value: own u8) -> i32 {
+    replace_byte(ptr, value) as i32
+}
+"#,
+        );
+        assert!(
+            ir.contains("%replace_byte("),
+            "missing reachable helper:\n{ir}"
+        );
+        assert!(
+            ir.contains(".i8 = mload "),
+            "missing byte-sized load:\n{ir}"
+        );
+        assert!(
+            ir.lines()
+                .any(|line| line.trim_start().starts_with("mstore ") && line.ends_with(" i8;")),
+            "missing byte-sized store:\n{ir}"
+        );
     }
 
     #[test]

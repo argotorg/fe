@@ -1,0 +1,10 @@
+fn wide_roundtrip(value: u256, divisor: u256) -> bool {
+    let quotient: u256 = value / divisor
+    let remainder: u256 = value % divisor
+    quotient * divisor + remainder == value
+}
+
+pub fn main() -> i32 {
+    let value: u256 = 0x100000000000000000000000000000000000000000000003039
+    if wide_roundtrip(value, divisor: 97) { 0 } else { 41 }
+}

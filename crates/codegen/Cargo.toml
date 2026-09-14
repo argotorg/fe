@@ -3,6 +3,9 @@ name = "fe-codegen"
 version = "26.2.0"
 edition.workspace = true
 
+[features]
+cranelift = ["sonatina-codegen/cranelift"]
+
 [dependencies]
 driver = { path = "../driver", package = "fe-driver" }
 mir = { path = "../mir", package = "fe-mir" }

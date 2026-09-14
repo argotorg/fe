@@ -1,0 +1,29 @@
+struct Pair {
+    left: u32,
+    right: u32,
+}
+
+fn pair_sum(value: Pair) -> u32 {
+    value.left + value.right
+}
+
+fn array_sum() -> u32 {
+    let values: [u32; 4] = [3, 5, 7, 11]
+    let mut total: u32 = 0
+    let mut index: usize = 0
+    while index < 4 {
+        total = total + values[index]
+        index = index + 1
+    }
+    total
+}
+
+pub fn main() -> i32 {
+    let value = Pair { left: 13, right: 17 }
+    if pair_sum(value) == 30 {
+        if array_sum() == 26 {
+            return 0
+        }
+    }
+    31
+}

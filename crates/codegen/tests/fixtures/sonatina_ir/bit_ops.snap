@@ -52,25 +52,44 @@ func private %pow_op(v0.i256, v1.i256) -> i256 {
         jump block2;
 
     block2:
-        v6.i256 = phi (1.i256 block1) (v9 block6);
-        v7.i256 = phi (0.i256 block1) (v15 block6);
-        v8.i1 = eq v7 v1;
-        br v8 block4 block3;
+        v6.i256 = phi (1.i256 block1) (v18 block10);
+        v7.i256 = phi (v0 block1) (v21 block10);
+        v8.i256 = phi (v1 block1) (v19 block10);
+        v9.i1 = is_zero v8;
+        br v9 block7 block3;
 
     block3:
-        (v9.i256, v10.i1) = umulo v6 v0;
-        br v10 block5 block6;
+        v10.i256 = and v8 1.i256;
+        v11.i1 = is_zero v10;
+        br v11 block5 block4;
 
     block4:
-        return v6;
+        (v12.i256, v13.i1) = umulo v6 v7;
+        br v13 block8 block9;
 
     block5:
+        v18.i256 = phi (v6 block3) (v12 block9);
+        v19.i256 = shr 1.i256 v8;
+        v20.i1 = is_zero v19;
+        br v20 block7 block6;
+
+    block6:
+        (v21.i256, v22.i1) = umulo v7 v7;
+        br v22 block8 block10;
+
+    block7:
+        v23.i256 = phi (v6 block2) (v18 block5);
+        return v23;
+
+    block8:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
 
-    block6:
-        v15.i256 = add v7 1.i256;
+    block9:
+        jump block5;
+
+    block10:
         jump block2;
 }
 

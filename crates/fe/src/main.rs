@@ -42,6 +42,45 @@ pub enum BuildEmit {
     Ir,
     Abi,
     Metadata,
+    Executable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum BuildBackend {
+    Sonatina,
+    #[cfg(feature = "cranelift")]
+    /// Host-native IR, or executables on x86-64 Linux and AArch64 macOS.
+    Native,
+}
+
+impl BuildBackend {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Sonatina => "sonatina",
+            #[cfg(feature = "cranelift")]
+            Self::Native => "native",
+        }
+    }
+
+    pub fn is_native(self) -> bool {
+        #[cfg(feature = "cranelift")]
+        if matches!(self, Self::Native) {
+            return true;
+        }
+        false
+    }
+
+    fn default_emit(self) -> Vec<BuildEmit> {
+        match self {
+            Self::Sonatina => vec![
+                BuildEmit::Bytecode,
+                BuildEmit::RuntimeBytecode,
+                BuildEmit::Abi,
+            ],
+            #[cfg(feature = "cranelift")]
+            Self::Native => vec![BuildEmit::Executable],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -99,7 +138,7 @@ impl OptimizeArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
-    /// Compile Fe code to EVM bytecode.
+    /// Compile Fe code.
     Build {
         /// Path to an ingot/workspace directory (containing fe.toml), a workspace member name, or a .fe file.
         #[arg(default_value_t = default_project_path())]
@@ -126,6 +165,9 @@ pub enum Command {
         /// Build a specific contract by name (defaults to all contracts in the target).
         #[arg(long)]
         contract: Option<String>,
+        /// Backend to use for compilation.
+        #[arg(long, value_enum, default_value = "sonatina")]
+        backend: BuildBackend,
         #[command(flatten)]
         optimize: OptimizeArgs,
         /// Output directory for artifacts.
@@ -135,13 +177,7 @@ pub enum Command {
         #[arg(long, default_value = "release", value_name = "PROFILE")]
         profile: String,
         /// Comma-delimited artifacts to emit.
-        #[arg(
-            long,
-            short = 'e',
-            value_enum,
-            value_delimiter = ',',
-            default_value = "bytecode,runtime-bytecode,abi"
-        )]
+        #[arg(long, short = 'e', value_enum, value_delimiter = ',')]
         emit: Vec<BuildEmit>,
         /// Write a debugging report as a `.tar.gz` file (includes sources, IR, backend output, and bytecode artifacts).
         #[arg(long)]
@@ -470,6 +506,7 @@ pub fn run(opts: &Options) {
             standalone,
             from_metadata,
             contract,
+            backend,
             optimize,
             out_dir,
             profile,
@@ -479,12 +516,21 @@ pub fn run(opts: &Options) {
             report_failed_only,
             recovery_mode,
         } => {
+            let emit = if emit.is_empty() {
+                backend.default_emit()
+            } else {
+                emit.clone()
+            };
             if let Some(metadata_path) = from_metadata {
+                if !matches!(backend, BuildBackend::Sonatina) {
+                    eprintln!("Error: `--from-metadata` only supports `--backend sonatina`");
+                    std::process::exit(1);
+                }
                 build::build_from_metadata(
                     metadata_path,
                     contract.as_deref(),
                     optimize.as_deref(),
-                    emit,
+                    &emit,
                     out_dir.as_ref(),
                     profile,
                     *recovery_mode,
@@ -503,8 +549,9 @@ pub fn run(opts: &Options) {
                 ingot.as_deref(),
                 *standalone,
                 contract.as_deref(),
+                *backend,
                 opt_level,
-                emit,
+                &emit,
                 out_dir.as_ref(),
                 profile,
                 (*report).then_some(report_out),
