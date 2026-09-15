@@ -3305,15 +3305,16 @@ impl<'db> TypedBody<'db> {
         self.result_ty
     }
 
+    // A provisional inference result can lack call information before it has
+    // diagnostics. Readiness depends on the body structure, not that flag.
     pub(crate) fn has_smir_lowering_blocking_diagnostics(
         &self,
         db: &'db dyn HirAnalysisDb,
     ) -> bool {
-        self.has_diagnostics
-            && (matches!(
-                self.result_ty.invalid_cause(db),
-                Some(InvalidCause::TypeLoweringCycle)
-            ) || self.has_smir_lowering_blocker(db))
+        matches!(
+            self.result_ty.invalid_cause(db),
+            Some(InvalidCause::TypeLoweringCycle)
+        ) || self.has_smir_lowering_blocker(db)
     }
 
     fn has_smir_lowering_blocker(&self, db: &'db dyn HirAnalysisDb) -> bool {

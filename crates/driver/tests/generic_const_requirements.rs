@@ -533,3 +533,148 @@ fn type_dependent_associated_constants_can_be_forwarded() {
         "{errors}"
     );
 }
+
+#[test]
+fn anonymous_constants_forward_enclosing_function_requirements() {
+    let prefix = "const fn length<const N: usize>() -> usize where N > 0 { 0 }";
+    for (name, declaration) in [
+        (
+            "local",
+            "const fn forward<const M: usize>() -> usize where M > 0 { let values: [u8; { length<M>() }] = []\n 42 }",
+        ),
+        (
+            "result",
+            "const fn forward<const M: usize>() -> [u8; { length<M>() }] where M > 0 { [] }",
+        ),
+        (
+            "parameter",
+            "const fn forward<const M: usize>(_ values: [u8; { length<M>() }]) -> usize where M > 0 { 42 }",
+        ),
+    ] {
+        let mut db = database();
+        checked(&mut db, name, &format!("{prefix}\n{declaration}"));
+        let missing = declaration.replace("where M > 0", "");
+        let file = input(
+            &mut db,
+            &format!("{name}-missing"),
+            &format!("{prefix}\n{missing}"),
+        );
+        let errors = diagnostics(&db, file);
+        assert!(errors.contains("const requirement"), "{name}: {errors}");
+    }
+}
+
+#[test]
+fn signature_requirements_are_enforced_at_concrete_roots() {
+    let prefix = "const fn length<const N: usize>() -> usize where N > 0 { 0 }\nconst fn forward<const M: usize>(_ values: [u8; { length<M>() }]) -> usize where M > 0 { 42 }";
+    let mut db = database();
+    let file = checked(
+        &mut db,
+        "signature-root",
+        &format!("{prefix}\nconst fn answer() -> usize {{ forward<1>([]) }}"),
+    );
+    assert_eq!(evaluate(&db, file, "answer"), "42");
+    let file = input(
+        &mut db,
+        "signature-false",
+        &format!("{prefix}\nconst fn answer() -> usize {{ forward<0>([]) }}"),
+    );
+    let errors = diagnostics(&db, file);
+    assert!(
+        errors.contains("const requirement") && errors.contains("false"),
+        "{errors}"
+    );
+}
+
+#[test]
+fn nested_predicate_constants_cannot_borrow_enclosing_premises() {
+    let prefix = "const fn length<const N: usize>() -> usize where N > 0 { 0 }\nconst fn accepts<const SIZE: usize>() -> bool { true }";
+    for predicate in [
+        "N > 0, accepts<{ length<N>() }>()",
+        "accepts<{ length<N>() }>(), N > 0",
+        "N > 0, ({ let values: [u8; { length<N>() }] = []\n true })",
+    ] {
+        let mut db = database();
+        let file = input(
+            &mut db,
+            "nested-formation",
+            &format!("{prefix}\nfn forward<const N: usize>() where {predicate} {{}}"),
+        );
+        let errors = diagnostics(&db, file);
+        assert!(
+            errors.contains("const requirement")
+                || errors.contains("const value must be resolvable"),
+            "{predicate}: {errors}"
+        );
+        let file = input(
+            &mut db,
+            "nested-formation-ground",
+            &format!(
+                "{prefix}\nfn forward<const N: usize>() where {} {{}}",
+                predicate.replace("length<N>()", "length<1>()")
+            ),
+        );
+        let errors = diagnostics(&db, file);
+        assert!(errors.is_empty(), "{predicate}: {errors}");
+    }
+}
+
+#[test]
+fn scoped_premise_edits_match_fresh_databases() {
+    use hir::analysis::ty::ty_check::check_func_body;
+    use salsa::Setter;
+    for first in ["forward", "answer"] {
+        let mut db = database();
+        let file = input(&mut db, "scoped-edits", "");
+        for premise in ["M > 0", "M > 1", "M > 0"] {
+            let source = format!(
+                "const fn length<const N: usize>() -> usize where N > 0 {{ 0 }}\nconst fn forward<const M: usize>(_ values: [u8; {{ length<M>() }}]) -> usize where {premise} {{ 42 }}\nconst fn answer() -> usize {{ forward<1>([]) }}"
+            );
+            file.set_text(&mut db).to(source.clone());
+            let _ = check_func_body(&db, named(&db, file, first));
+            let warm = diagnostics(&db, file);
+            assert_eq!(
+                warm.is_empty(),
+                premise == "M > 0",
+                "{first}, {premise}: {warm}"
+            );
+            let mut fresh = database();
+            let fresh_file = input(&mut fresh, "scoped-edits", &source);
+            assert_eq!(warm, diagnostics(&fresh, fresh_file));
+        }
+    }
+}
+
+#[test]
+fn generated_signatures_use_the_same_scoped_premises() {
+    use fe_driver::generation::{FunctionTemplate, GenerationBudget, generate_scalar_function};
+    let mut db = database();
+    let file = checked(
+        &mut db,
+        "signature-provider",
+        "use core::meta::FunctionBody\nconst fn provide() -> FunctionBody<u256> { FunctionBody { value: 42 } }",
+    );
+    for (premise, n, valid) in [("N > 0", 1, true), ("N > 0", 0, false), ("N > 1", 2, false)] {
+        let result = generate_scalar_function(
+            &db,
+            named(&db, file, "provide"),
+            FunctionTemplate {
+                url: Url::parse("file:///const-where/generated-signature.fe").unwrap(),
+                source: format!(
+                    "const fn length<const M: usize>() -> usize where M > 0 {{ 0 }}\nconst fn generated<const N: usize>(_ values: [u8; {{ length<N>() }}]) -> u256 where {premise} {{}}\nconst fn answer() -> u256 {{ generated<{n}>([]) }}"
+                ),
+                function_name: "generated".into(),
+            },
+            &mut GenerationBudget::new(1, 4096),
+        );
+        if valid {
+            let artifact = result.unwrap();
+            assert_eq!(
+                evaluate(artifact.database(), artifact.file(), "answer"),
+                "42"
+            );
+        } else {
+            assert!(format!("{:?}", result.err().unwrap()).contains("const requirement"));
+        }
+    }
+}

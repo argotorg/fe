@@ -1,0 +1,1 @@
+Anonymous constants in ordinary function signatures and bodies can forward matching const requirements from their enclosing function. Predicate formation, including nested constants, cannot assume those requirements.

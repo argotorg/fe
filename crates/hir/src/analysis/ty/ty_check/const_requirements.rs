@@ -4,7 +4,7 @@
 //! unknown parameters or assuming the obligation being checked.
 use super::*;
 use crate::analysis::ty::binder::Binder;
-use crate::hir_def::{UnOp, scope_graph::ScopeId};
+use crate::hir_def::{ItemKind, UnOp, scope_graph::ScopeId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PredicateKey<'db> {
@@ -137,6 +137,40 @@ pub(super) fn predicate_may_depend_on_params<'db>(
     predicate_flags(db, typed.clone()).contains(TyFlags::HAS_PARAM)
 }
 
+// Requirements scope over a function's signature and executable body, but
+// their formation must be checked without those assumptions. In particular,
+// nested anonymous constants inside a predicate are part of its formation.
+fn requirement_premise_owner<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> Option<Func<'db>> {
+    if !matches!(owner, BodyOwner::Func(_) | BodyOwner::AnonConstBody { .. }) {
+        return None;
+    }
+    let origin = owner.scope();
+    let mut current = Some(origin);
+    while let Some(scope) = current {
+        match scope.item() {
+            ItemKind::Func(func) => {
+                if func.is_associated_func(db)
+                    || WhereClauseOwner::Func(func)
+                        .where_clause(db)
+                        .const_predicates(db)
+                        .iter()
+                        .any(|predicate| origin.is_transitive_child_of(db, predicate.scope()))
+                {
+                    return None;
+                }
+                return Some(func);
+            }
+            ItemKind::Body(_) => current = scope.parent(db),
+            // A nested declaration does not inherit function premises.
+            _ => return None,
+        }
+    }
+    None
+}
+
 pub(super) fn check_body_requirements<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
@@ -145,12 +179,7 @@ pub(super) fn check_body_requirements<'db>(
     let Some(body) = typed.body() else {
         return Vec::new();
     };
-    // A predicate body cannot use its enclosing function's predicates as
-    // premises: doing so could let the requirement establish itself.
-    let caller = match owner {
-        BodyOwner::Func(func) if !func.is_associated_func(db) => Some(func),
-        _ => None,
-    };
+    let caller = requirement_premise_owner(db, owner);
     let direct_callees: FxHashSet<_> = body
         .exprs(db)
         .values()

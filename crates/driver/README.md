@@ -327,11 +327,27 @@ symbolic expressions are literals, const paths, unary/binary operations, casts
 and ordinary const calls. This is exact forwarding, not algebraic implication:
 `N > 1` does not automatically establish `N > 0`. Blocks and control flow can
 be evaluated with concrete arguments but cannot yet be forwarded symbolically.
-Symbolic premises currently come only from ordinary function bodies. Anonymous
-constant expressions, including type expressions and predicates, do not inherit
-the enclosing function's conditions. Their concrete obligations still use the
-same check. Recursive requirements cannot establish themselves. These are
-explicit limits of this initial entailment contract.
+Anonymous constants in an ordinary function's signature or executable body can
+forward that function's checked conditions. Predicate formation cannot use any
+of the enclosing function's conditions, including from constants nested inside
+a predicate. This rule is independent of clause order. Nested declarations do
+not inherit function premises, and associated functions remain outside the
+supported generic requirement scope. Recursive requirements cannot establish
+themselves.
+
+For example, a constrained helper can compute an array length in a signature:
+
+```fe
+const fn empty_length<const N: usize>() -> usize where N > 0 { 0 }
+const fn consume<const COUNT: usize>(
+    _ values: [u8; { empty_length<COUNT>() }]
+) -> u256 where COUNT > 0 { 42 }
+const fn answer() -> u256 { consume<1>([]) }
+```
+
+The matching condition permits the signature's helper call. `consume<0>([])`
+still fails, even though the helper returns zero for every input. This extends
+requirement forwarding, not the supported symbolic array evaluation language.
 
 Generated target templates support the same generic declarations and ordinary
 callers. Providers and selected frozen exports keep their existing root
