@@ -1,0 +1,1 @@
+Generic enums now check const requirements on type uses and variant construction, with explicit premise forwarding into payload types. Unsupported tuple-variant constructor values receive a diagnostic instead of panicking.

@@ -261,7 +261,7 @@ fn diag_depends_on_param_instantiation<'db>(
 }
 
 /// Ground predicates are declaration obligations. Ordinary generic functions
-/// and records retain parameter-dependent predicates for substitution at uses.
+/// and ADTs retain parameter-dependent predicates for substitution at uses.
 /// A failed or unsupported evaluation must never count as a satisfied condition.
 pub fn check_where_const_predicates<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -276,6 +276,7 @@ pub fn check_where_const_predicates<'db>(
             Some(GenericParamOwner::Func(func))
         }
         WhereClauseOwner::Struct(record) => Some(GenericParamOwner::Struct(record)),
+        WhereClauseOwner::Enum(enum_) => Some(GenericParamOwner::Enum(enum_)),
         _ => None,
     };
     let mut item = Some(crate::hir_def::ItemKind::from(owner));
@@ -5049,6 +5050,19 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
             let is_direct_call_callee =
                 matches!(expr_data, Expr::Path(..)) && self.direct_call_callees.contains(&expr);
             if prop.binding.is_none() && !is_direct_call_callee {
+                if matches!(expr_data, Expr::Path(..))
+                    && matches!(
+                        prop.ty.base_ty(self.db).data(self.db),
+                        TyData::TyBase(TyBase::Func(CallableDef::VariantCtor(_)))
+                    )
+                {
+                    self.diags.push(
+                        BodyDiag::VariantConstructorValueUnsupported(span.clone().into()).into(),
+                    );
+                    // Constructors have direct-call lowering, but no value
+                    // representation. Mark this path unready for semantic MIR.
+                    self.body.expr_ty[expr] = Some(ExprProp::invalid(self.db));
+                }
                 self.check_wf(prop.ty, span.into());
             }
         }

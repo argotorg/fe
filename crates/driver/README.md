@@ -390,8 +390,7 @@ Declared type positions and inferred body types use the shared frontend
 requirement checker. Inferred types are checked after inference. The generated
 consumer tests use ordinary record declarations retained in the source template;
 this does not introduce a record-generation descriptor or a new builder API.
-Generic enum, trait, impl and associated-function predicates remain outside
-this increment. Symbolic entailment remains exact forwarding, and the bounded
+Generic trait, impl and associated-function predicates remain unsupported. Symbolic entailment remains exact forwarding, and the bounded
 Lean model does not constitute a refinement proof of the compiler.
 
 Records with const requirements must currently be fully applied when used as
@@ -399,3 +398,41 @@ types. Passing an unapplied constrained constructor through a higher-kinded
 parameter is rejected: this increment has no protocol for retaining its
 conditions under future applications. Fully applied aliases work; generic
 aliases cannot silently acquire or discard the target record's obligations.
+
+
+## Const requirements on generic enums
+
+Generic enums use the same requirement contract as records. Conditions apply
+to the whole type, including unit variants and unused type positions:
+
+```fe
+enum Choice<const N: usize> where N > 0 {
+    Empty,
+    Value(u256),
+}
+const fn read<const M: usize>(_ item: Choice<M>) -> u256 where M > 0 {
+    match item {
+        Choice::Empty => 42,
+        Choice::Value(value) => value,
+    }
+}
+const fn answer() -> u256 { read(Choice<1>::Value(42)) }
+```
+
+Constructing `Choice<0>::Empty` fails despite having no payload. Tuple-variant
+constructors must be called directly; storing or passing one as a value receives
+an unsupported-use diagnostic.
+Matching a valid enum does not grant new const premises: generic consumers
+state their conditions explicitly.
+
+All variant payload types must be valid, including unselected variants.
+Payloads can forward the enum's explicit conditions into nested constrained
+records, enums and anonymous array lengths. Predicate formation cannot use
+those conditions to justify itself. Ordinary trait bounds remain available
+when forming type-parameter predicates such as `T::ALLOWED`.
+
+As with records, constrained enums must be fully applied; higher-kinded
+transport of their conditions remains unsupported. Generated consumer templates
+follow the same rules, without adding an enum-generation descriptor. These
+checks share the existing frontend discharge queries and do not change
+runtime representation or backend lowering.

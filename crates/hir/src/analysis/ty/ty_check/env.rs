@@ -105,8 +105,8 @@ impl<'db> TyCheckEnv<'db> {
                     db,
                     vec![crate::semantic::trait_self_predicate(db, trait_)],
                 ),
-                Some(ItemKind::Struct(record)) => {
-                    crate::semantic::constraints_for(db, record.into())
+                Some(item @ (ItemKind::Struct(_) | ItemKind::Enum(_))) => {
+                    crate::semantic::constraints_for(db, item)
                 }
                 Some(ItemKind::ImplTrait(impl_trait)) => {
                     collect_constraints(db, impl_trait.into()).instantiate_identity()
