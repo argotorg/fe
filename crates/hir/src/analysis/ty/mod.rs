@@ -505,6 +505,12 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
                 .map(|diag| diag.to_voucher()),
         );
 
+        diags.extend(
+            ty_check::check_declared_type_requirements(db, top_mod)
+                .iter()
+                .map(|diag| diag.to_voucher()),
+        );
+
         let reported_error_function_goals = &reported_error_function_goals;
         diags.extend(
             top_mod

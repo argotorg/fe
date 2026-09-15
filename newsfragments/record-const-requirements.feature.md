@@ -1,0 +1,1 @@
+Generic records can declare const requirements, checked at concrete uses and forwarded from matching function or record premises. Declaration checks include unused aliases, defaults and associated types; inferred uses are checked after inference.

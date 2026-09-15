@@ -137,31 +137,40 @@ pub(super) fn predicate_may_depend_on_params<'db>(
     predicate_flags(db, typed.clone()).contains(TyFlags::HAS_PARAM)
 }
 
-// Requirements scope over a function's signature and executable body, but
+// Requirements scope over function signatures/bodies and record fields, but
 // their formation must be checked without those assumptions. In particular,
 // nested anonymous constants inside a predicate are part of its formation.
 fn requirement_premise_owner<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
-) -> Option<Func<'db>> {
+) -> Option<WhereClauseOwner<'db>> {
     if !matches!(owner, BodyOwner::Func(_) | BodyOwner::AnonConstBody { .. }) {
         return None;
     }
-    let origin = owner.scope();
+    premise_owner_in_scope(db, owner.scope())
+}
+
+fn premise_owner_in_scope<'db>(
+    db: &'db dyn HirAnalysisDb,
+    origin: ScopeId<'db>,
+) -> Option<WhereClauseOwner<'db>> {
     let mut current = Some(origin);
     while let Some(scope) = current {
         match scope.item() {
-            ItemKind::Func(func) => {
-                if func.is_associated_func(db)
-                    || WhereClauseOwner::Func(func)
-                        .where_clause(db)
-                        .const_predicates(db)
-                        .iter()
-                        .any(|predicate| origin.is_transitive_child_of(db, predicate.scope()))
+            item @ (ItemKind::Func(_) | ItemKind::Struct(_)) => {
+                if matches!(item, ItemKind::Func(func) if func.is_associated_func(db)) {
+                    return None;
+                }
+                let candidate = WhereClauseOwner::from_item_opt(item)?;
+                if candidate
+                    .where_clause(db)
+                    .const_predicates(db)
+                    .iter()
+                    .any(|predicate| origin.is_transitive_child_of(db, predicate.scope()))
                 {
                     return None;
                 }
-                return Some(func);
+                return Some(candidate);
             }
             ItemKind::Body(_) => current = scope.parent(db),
             // A nested declaration does not inherit function premises.
@@ -189,7 +198,23 @@ pub(super) fn check_body_requirements<'db>(
         })
         .collect();
     let mut diags = Vec::new();
+    for (pat, ty) in typed.pat_ty.iter() {
+        if let Some(ty) = ty
+            && let Some(diag) =
+                check_type_requirements(db, *ty, owner.scope(), pat.span(body).into())
+        {
+            diags.push(diag.into());
+        }
+    }
     for (expr, _) in body.exprs(db).iter() {
+        if let Some(diag) = check_type_requirements(
+            db,
+            typed.expr_ty(db, expr),
+            owner.scope(),
+            expr.span(body).into(),
+        ) {
+            diags.push(diag.into());
+        }
         if direct_callees.contains(&expr) && typed.callable_expr(expr).is_none() {
             continue;
         }
@@ -203,6 +228,13 @@ pub(super) fn check_body_requirements<'db>(
             };
             (*definition, args)
         };
+        for &arg in args {
+            if let Some(diag) =
+                check_type_requirements(db, arg, owner.scope(), expr.span(body).into())
+            {
+                diags.push(diag.into());
+            }
+        }
         let CallableDef::Func(func) = definition else {
             continue;
         };
@@ -221,7 +253,13 @@ pub(super) fn check_body_requirements<'db>(
         }
         let caller = caller.filter(|_| args.iter().any(|ty| ty.has_param(db)));
         for &predicate in predicates {
-            let failures = discharge_requirement(db, func, predicate, args.to_vec(), caller);
+            let failures = discharge_requirement(
+                db,
+                WhereClauseOwner::Func(func),
+                predicate,
+                args.to_vec(),
+                caller,
+            );
             if !failures.is_empty() {
                 diags.push(
                     BodyDiag::ConstRequirementNotSatisfied {
@@ -236,6 +274,56 @@ pub(super) fn check_body_requirements<'db>(
         }
     }
     diags
+}
+
+fn check_type_requirements<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    scope: ScopeId<'db>,
+    span: crate::span::DynLazySpan<'db>,
+) -> Option<crate::analysis::ty::diagnostics::TyDiagCollection<'db>> {
+    let (base, args) = ty.decompose_ty_app(db);
+    for &arg in args {
+        if let Some(diag) = check_type_requirements(db, arg, scope, span.clone()) {
+            return Some(diag);
+        }
+    }
+    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
+        return None;
+    };
+    let crate::analysis::ty::adt_def::AdtRef::Struct(record) = adt.adt_ref(db) else {
+        return None;
+    };
+    let declaration = WhereClauseOwner::Struct(record);
+    let predicates = declaration.where_clause(db).const_predicates(db);
+    if predicates.is_empty() {
+        return None;
+    }
+    if args.len() != collect_generic_params(db, record.into()).params(db).len() {
+        return Some(crate::analysis::ty::diagnostics::TyLowerDiag::ConstRequirementNotSatisfied {
+            primary: span,
+            predicate: predicates[0].span().into(),
+            reason: "partially applied records with const requirements are not supported; supply all arguments".into(),
+        }.into());
+    }
+    if args.iter().any(|arg| arg.has_var(db)) {
+        return None;
+    }
+    let caller = premise_owner_in_scope(db, scope);
+    for &predicate in predicates {
+        let failures = discharge_requirement(db, declaration, predicate, args.to_vec(), caller);
+        if !failures.is_empty() {
+            return Some(
+                crate::analysis::ty::diagnostics::TyLowerDiag::ConstRequirementNotSatisfied {
+                    primary: span,
+                    predicate: predicate.span().into(),
+                    reason: requirement_reason(failures),
+                }
+                .into(),
+            );
+        }
+    }
+    None
 }
 
 fn requirement_reason(diags: &[FuncBodyDiag<'_>]) -> String {
@@ -276,10 +364,10 @@ fn requirement_reason(diags: &[FuncBodyDiag<'_>]) -> String {
 #[salsa::tracked(return_ref, cycle_initial=requirement_cycle_initial, cycle_fn=requirement_cycle_recover)]
 fn discharge_requirement<'db>(
     db: &'db dyn HirAnalysisDb,
-    func: Func<'db>,
+    declaration: WhereClauseOwner<'db>,
     predicate: Body<'db>,
     args: Vec<TyId<'db>>,
-    caller: Option<Func<'db>>,
+    caller: Option<WhereClauseOwner<'db>>,
 ) -> Vec<FuncBodyDiag<'db>> {
     let expected = TyId::bool(db);
     let (diags, typed) = check_predicate_formation(db, predicate);
@@ -289,12 +377,20 @@ fn discharge_requirement<'db>(
     if !diags.is_empty() && !static_assert_ignorable_type_diags(db, diags) {
         return diags.clone();
     }
-    let mut instantiated = Binder::bind(typed.clone()).instantiate_scoped(db, func.scope(), &args);
+    let mut instantiated = Binder::bind(typed.clone()).instantiate_scoped(
+        db,
+        ItemKind::from(declaration).scope(),
+        &args,
+    );
     // TypedBody deliberately preserves formal TypeConst paths for runtime ABI
     // selection. Substitute these references only in this dependency view.
     for reference in instantiated.value_path_refs.values_mut().flatten() {
         if let ValuePathRef::TypeConst(ty) = reference {
-            *ty = Binder::bind(*ty).instantiate_scoped(db, func.scope(), &args);
+            *ty = Binder::bind(*ty).instantiate_scoped(
+                db,
+                ItemKind::from(declaration).scope(),
+                &args,
+            );
         }
     }
     let symbolic = predicate_flags(db, instantiated).contains(TyFlags::HAS_PARAM);
@@ -304,15 +400,16 @@ fn discharge_requirement<'db>(
             predicate,
             typed,
             predicate.expr(db),
-            func.scope(),
+            ItemKind::from(declaration).scope(),
             &args,
         );
         if let (Some(key), Some(caller)) = (&key, caller) {
-            let caller_args = collect_generic_params(db, caller.into()).params(db);
-            for &premise in WhereClauseOwner::Func(caller)
-                .where_clause(db)
-                .const_predicates(db)
-            {
+            let caller_args = collect_generic_params(
+                db,
+                GenericParamOwner::from_item_opt(caller.into()).unwrap(),
+            )
+            .params(db);
+            for &premise in caller.where_clause(db).const_predicates(db) {
                 let (diags, typed) = check_predicate_formation(db, premise);
                 if (!diags.is_empty() && !static_assert_ignorable_type_diags(db, diags))
                     || predicate_key(
@@ -320,7 +417,7 @@ fn discharge_requirement<'db>(
                         premise,
                         typed,
                         premise.expr(db),
-                        caller.scope(),
+                        ItemKind::from(caller).scope(),
                         caller_args,
                     )
                     .as_ref()
@@ -371,10 +468,10 @@ fn discharge_requirement<'db>(
 
 fn requirement_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
-    _func: Func<'db>,
+    _declaration: WhereClauseOwner<'db>,
     predicate: Body<'db>,
     _args: Vec<TyId<'db>>,
-    _caller: Option<Func<'db>>,
+    _caller: Option<WhereClauseOwner<'db>>,
 ) -> Vec<FuncBodyDiag<'db>> {
     vec![BodyDiag::RecursiveConstRequirement(predicate.span().into()).into()]
 }
@@ -383,10 +480,10 @@ fn requirement_cycle_recover<'db>(
     _db: &'db dyn HirAnalysisDb,
     _value: &[FuncBodyDiag<'db>],
     _count: u32,
-    _func: Func<'db>,
+    _declaration: WhereClauseOwner<'db>,
     _predicate: Body<'db>,
     _args: Vec<TyId<'db>>,
-    _caller: Option<Func<'db>>,
+    _caller: Option<WhereClauseOwner<'db>>,
 ) -> salsa::CycleRecoveryAction<Vec<FuncBodyDiag<'db>>> {
     salsa::CycleRecoveryAction::Iterate
 }
@@ -427,4 +524,50 @@ fn formation_cycle_recover<'db>(
     _body: Body<'db>,
 ) -> salsa::CycleRecoveryAction<(Vec<FuncBodyDiag<'db>>, TypedBody<'db>)> {
     salsa::CycleRecoveryAction::Iterate
+}
+
+/// Check every authored type position, including unused defaults and aliases.
+/// Inferred expression types are checked separately after body inference.
+pub(crate) fn check_declared_type_requirements<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: crate::hir_def::TopLevelMod<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    use crate::span::types::LazyTySpan;
+    use crate::visitor::{Visitor, VisitorCtxt, walk_type};
+    struct Checker<'db> {
+        db: &'db dyn HirAnalysisDb,
+        diags: Vec<FuncBodyDiag<'db>>,
+    }
+    impl<'db> Visitor<'db> for Checker<'db> {
+        fn visit_ty(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>,
+            hir_ty: crate::hir_def::TypeId<'db>,
+        ) {
+            let scope = ctxt.scope();
+            let mut enclosing = scope;
+            while matches!(enclosing.item(), ItemKind::Body(_)) {
+                let Some(parent) = enclosing.parent(self.db) else {
+                    break;
+                };
+                enclosing = parent;
+            }
+            let assumptions = crate::semantic::constraints_for(self.db, enclosing.item());
+            let ty = lower_hir_ty(self.db, hir_ty, scope, assumptions);
+            if !ty.has_invalid(self.db)
+                && let Some(span) = ctxt.span()
+                && let Some(diag) = check_type_requirements(self.db, ty, scope, span.into())
+            {
+                self.diags.push(diag.into());
+            }
+            walk_type(self, ctxt, hir_ty);
+        }
+    }
+    let mut checker = Checker {
+        db,
+        diags: Vec::new(),
+    };
+    let mut ctxt = VisitorCtxt::new(db, top_mod.scope(), top_mod.span());
+    checker.visit_top_mod(&mut ctxt, top_mod);
+    checker.diags
 }

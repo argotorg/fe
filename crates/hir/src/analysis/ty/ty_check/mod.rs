@@ -1,5 +1,6 @@
 mod callable;
 mod const_requirements;
+pub(crate) use const_requirements::check_declared_type_requirements;
 mod contract;
 mod effect_env;
 pub(crate) mod env;
@@ -259,8 +260,8 @@ fn diag_depends_on_param_instantiation<'db>(
     }
 }
 
-/// Ground predicates are declaration obligations. Top-level generic functions
-/// retain parameter-dependent predicates for substitution at each use site.
+/// Ground predicates are declaration obligations. Ordinary generic functions
+/// and records retain parameter-dependent predicates for substitution at uses.
 /// A failed or unsupported evaluation must never count as a satisfied condition.
 pub fn check_where_const_predicates<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -270,15 +271,19 @@ pub fn check_where_const_predicates<'db>(
     if predicates.is_empty() {
         return Vec::new();
     }
-    let generic_function = match owner {
-        WhereClauseOwner::Func(func) if !func.is_associated_func(db) => Some(func),
+    let generic_declaration = match owner {
+        WhereClauseOwner::Func(func) if !func.is_associated_func(db) => {
+            Some(GenericParamOwner::Func(func))
+        }
+        WhereClauseOwner::Struct(record) => Some(GenericParamOwner::Struct(record)),
         _ => None,
     };
     let mut item = Some(crate::hir_def::ItemKind::from(owner));
     while let Some(current) = item {
         if let Some(params) = GenericParamOwner::from_item_opt(current)
             && !collect_generic_params(db, params).params(db).is_empty()
-            && generic_function.is_none_or(|func| current != crate::hir_def::ItemKind::Func(func))
+            && generic_declaration
+                .is_none_or(|declaration| current != crate::hir_def::ItemKind::from(declaration))
         {
             return predicates
                 .iter()
@@ -297,8 +302,8 @@ pub fn check_where_const_predicates<'db>(
             diags.extend(body_diags.iter().cloned());
             continue;
         }
-        if let Some(func) = generic_function
-            && !collect_generic_params(db, func.into())
+        if let Some(declaration) = generic_declaration
+            && !collect_generic_params(db, declaration)
                 .params(db)
                 .is_empty()
             && const_requirements::predicate_may_depend_on_params(db, body)

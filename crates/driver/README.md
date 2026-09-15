@@ -360,3 +360,42 @@ semantic templates and CTFE results are not certificates that a program meets
 its requirements. Use normal compiler diagnostics, as generation does, before
 admitting a program to lowering. The implementation is shared frontend logic;
 no backend has a separate const-requirement evaluator.
+
+## Const requirements on generic records
+
+Ordinary generic records can declare boolean const requirements. Every concrete
+use must satisfy them, including construction, unused type annotations,
+defaults, aliases, fields and trait arguments. Generic uses currently need an
+exact matching premise after substitution, just like generic function calls.
+
+```fe
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+
+const fn make<const COUNT: usize>() -> Bounded<COUNT> where COUNT > 0 {
+    Bounded { value: 42 }
+}
+const fn answer() -> u256 {
+    let item = make<1>()
+    item.value
+}
+```
+
+`Bounded<0>` is rejected even when its value is never constructed. Mentioning
+`Bounded<N>` does not implicitly establish `N > 0`: a generic function using
+that type must state the matching requirement. A containing record can state
+and forward its own requirement into its fields. Predicate formation cannot
+assume the record's conditions, including in nested anonymous constants.
+
+Declared type positions and inferred body types use the shared frontend
+requirement checker. Inferred types are checked after inference. The generated
+consumer tests use ordinary record declarations retained in the source template;
+this does not introduce a record-generation descriptor or a new builder API.
+Generic enum, trait, impl and associated-function predicates remain outside
+this increment. Symbolic entailment remains exact forwarding, and the bounded
+Lean model does not constitute a refinement proof of the compiler.
+
+Records with const requirements must currently be fully applied when used as
+types. Passing an unapplied constrained constructor through a higher-kinded
+parameter is rejected: this increment has no protocol for retaining its
+conditions under future applications. Fully applied aliases work; generic
+aliases cannot silently acquire or discard the target record's obligations.

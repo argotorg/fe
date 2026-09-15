@@ -180,10 +180,6 @@ fn every_evaluation_failure_rejects_the_predicate() {
 fn generic_scopes_are_rejected_instead_of_dropping_obligations() {
     let mut db = database();
     for (name, source) in [
-        (
-            "record",
-            "struct S<const N: usize> where N > 0 { values: [u256; N] }",
-        ),
         ("trait_self", "trait Marker where true {}"),
         (
             "inherited",
