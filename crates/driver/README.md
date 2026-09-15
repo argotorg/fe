@@ -290,8 +290,9 @@ They neither add solver assumptions nor filter impl candidates.
 
 Type/trait predicates keep their existing syntax and meaning. Parenthesize a
 block condition, as in `where ({ ... })`, to distinguish it from the item's
-body. Generic type, trait, impl and associated-function contexts remain
-explicitly unsupported, including a trait's implicit `Self` scope.
+body. Generic functions, records, enums and inherent methods support the
+parameter-dependent requirements described below. Generic trait and impl
+conditions remain unsupported, including a trait's implicit `Self` scope.
 
 Generated target templates retain these conditions and receive the same checks.
 The existing provider and frozen-export protocols continue to exclude root
@@ -331,9 +332,9 @@ Anonymous constants in an ordinary function's signature or executable body can
 forward that function's checked conditions. Predicate formation cannot use any
 of the enclosing function's conditions, including from constants nested inside
 a predicate. This rule is independent of clause order. Nested declarations do
-not inherit function premises, and associated functions remain outside the
-supported generic requirement scope. Recursive requirements cannot establish
-themselves.
+not inherit function premises. Inherent methods follow the same rules as
+described below; generic trait methods remain unsupported. Recursive
+requirements cannot establish themselves.
 
 For example, a constrained helper can compute an array length in a signature:
 
@@ -390,8 +391,9 @@ Declared type positions and inferred body types use the shared frontend
 requirement checker. Inferred types are checked after inference. The generated
 consumer tests use ordinary record declarations retained in the source template;
 this does not introduce a record-generation descriptor or a new builder API.
-Generic trait, impl and associated-function predicates remain unsupported. Symbolic entailment remains exact forwarding, and the bounded
-Lean model does not constitute a refinement proof of the compiler.
+Generic trait and impl predicates remain unsupported. Symbolic entailment
+remains exact forwarding, and the bounded Lean model does not constitute a
+refinement proof of the compiler.
 
 Records with const requirements must currently be fully applied when used as
 types. Passing an unapplied constrained constructor through a higher-kinded
@@ -436,3 +438,35 @@ transport of their conditions remains unsupported. Generated consumer templates
 follow the same rules, without adding an enum-generation descriptor. These
 checks share the existing frontend discharge queries and do not change
 runtime representation or backend lowering.
+
+
+## Const requirements on inherent methods
+
+Inherent methods and associated functions can require conditions involving
+both inherited impl parameters and their own generic parameters:
+
+```fe
+struct Window<const N: usize> { value: u256 }
+impl<const N: usize> Window<N> {
+    const fn take<const M: usize>(self) -> u256 where N > 0, M > N {
+        self.value
+    }
+}
+const fn answer() -> u256 { Window<1> { value: 42 }.take<2>() }
+```
+
+The checker discharges requirements on the ordinarily resolved method.
+Conditions do not select methods, resolve ambiguity, or provide fallback.
+Receiver calls and qualified calls use the same requirements, even when a
+method body does not use its generic parameters. Exact explicit premises can
+be forwarded between free functions and methods, including within signatures.
+Predicate formation cannot borrow those premises.
+
+Inherited parameters retain their identity through the method's leading generic
+slots; explicit method parameters follow them. Requirement checking reconciles
+lexical impl-owned references with method-owned parameters before applying call
+arguments. This is a local checking view, not a runtime ABI transformation.
+
+Generic impl-level conditions and generic trait-method conditions remain
+unsupported. Generated consumer templates can contain checked inherent methods;
+this does not extend the generation API to selecting or generating method bodies.

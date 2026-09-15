@@ -183,7 +183,7 @@ fn generic_scopes_are_rejected_instead_of_dropping_obligations() {
         ("trait_self", "trait Marker where true {}"),
         (
             "inherited",
-            "struct S<T> { value: T }\nimpl<T> S<T> { fn unused() where true {} }",
+            "trait Has { fn unused() }\nstruct S<T> { value: T }\nimpl<T> Has for S<T> { fn unused() where true {} }",
         ),
     ] {
         let file = input(&mut db, name, source);
