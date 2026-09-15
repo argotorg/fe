@@ -157,6 +157,11 @@ pub enum TyLowerDiag<'db> {
         span: DynLazySpan<'db>,
     },
 
+    ConstRequirementNotSatisfied {
+        primary: DynLazySpan<'db>,
+        predicate: DynLazySpan<'db>,
+        reason: String,
+    },
     InvalidConstTyExpr(DynLazySpan<'db>),
 
     ConstEvalUnsupported(DynLazySpan<'db>),
@@ -293,6 +298,7 @@ impl TyLowerDiag<'_> {
             Self::OwnParamCannotBeBorrow { .. } => 14,
             Self::InvalidMutParamPrefixWithoutOwnType { .. } => 31,
             Self::InvalidConstTyExpr(_) => 15,
+            Self::ConstRequirementNotSatisfied { .. } => 50,
             Self::ConstEvalUnsupported(_) => 23,
             Self::ConstEvalAssertionFailed { .. } => 36,
             Self::ConstEvalNonConstCall(_) => 24,
@@ -521,6 +527,12 @@ pub enum BodyDiag<'db> {
     ConstValueMustBeKnown(DynLazySpan<'db>),
     WhereConstPredicateFailed(DynLazySpan<'db>),
     GenericConstPredicateUnsupported(DynLazySpan<'db>),
+    RecursiveConstRequirement(DynLazySpan<'db>),
+    ConstRequirementNotSatisfied {
+        primary: DynLazySpan<'db>,
+        predicate: DynLazySpan<'db>,
+        reason: String,
+    },
     StaticAssertFailed {
         primary: DynLazySpan<'db>,
         comparison: Option<StaticAssertComparisonValues>,
@@ -941,6 +953,8 @@ impl<'db> BodyDiag<'db> {
             Self::ConstValueMustBeKnown(..) => 64,
             Self::WhereConstPredicateFailed(..) => 89,
             Self::GenericConstPredicateUnsupported(..) => 90,
+            Self::RecursiveConstRequirement(..) => 92,
+            Self::ConstRequirementNotSatisfied { .. } => 91,
             Self::StaticAssertFailed { .. } => 81,
             Self::AccessedFieldNotFound { .. } => 15,
             Self::OpsTraitNotImplemented { .. } => 16,

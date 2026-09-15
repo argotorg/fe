@@ -290,11 +290,57 @@ They neither add solver assumptions nor filter impl candidates.
 
 Type/trait predicates keep their existing syntax and meaning. Parenthesize a
 block condition, as in `where ({ ... })`, to distinguish it from the item's
-body. Const predicates in generic scopes are explicitly rejected, including
-conditions that happen to look constant and a trait's implicit `Self` scope.
-Generic substitution, use-site discharge, and symbolic implication are separate
-future work; removing that rejection alone would not implement them.
+body. Generic type, trait, impl and associated-function contexts remain
+explicitly unsupported, including a trait's implicit `Self` scope.
 
 Generated target templates retain these conditions and receive the same checks.
 The existing provider and frozen-export protocols continue to exclude root
 requirements, including ground const predicates.
+
+
+## Generic function const requirements
+
+Top-level generic functions can retain parameter-dependent boolean conditions:
+
+```fe
+const fn bounded<const N: usize>() -> u256 where N > 0 { 42 }
+
+const fn forward<const COUNT: usize>() -> u256 where COUNT > 0 {
+    bounded<COUNT>()
+}
+
+const fn answer() -> u256 { forward<1>() }
+```
+
+The declarations check the predicates' types and const-language operations.
+Each function use discharges its requirements after inference. `bounded<0>()`
+is rejected even though its body does not use `N`. Function values and calls in
+constant initializers, array lengths and other anonymous constant bodies use
+the same check. A ground condition is still checked on an unused generic
+function; parameter-dependent conditions are obligations for its callers.
+
+Concrete conditions use ordinary CTFE and its execution limits. Generic
+forwarding currently accepts an identical resolved, typed expression after
+scoped substitution. Parameter spelling is irrelevant; declaration identities,
+parameter positions, operation identities and arithmetic mode matter. Supported
+symbolic expressions are literals, const paths, unary/binary operations, casts
+and ordinary const calls. This is exact forwarding, not algebraic implication:
+`N > 1` does not automatically establish `N > 0`. Blocks and control flow can
+be evaluated with concrete arguments but cannot yet be forwarded symbolically.
+Symbolic premises currently come only from ordinary function bodies. Anonymous
+constant expressions, including type expressions and predicates, do not inherit
+the enclosing function's conditions. Their concrete obligations still use the
+same check. Recursive requirements cannot establish themselves. These are
+explicit limits of this initial entailment contract.
+
+Generated target templates support the same generic declarations and ordinary
+callers. Providers and selected frozen exports keep their existing root
+restrictions. This does not add automatic provider discovery or a generic
+cross-stage export protocol.
+
+Inference templates and requirement discharge have separate queries so CTFE
+can consume completed inference while checking a condition. Raw inference,
+semantic templates and CTFE results are not certificates that a program meets
+its requirements. Use normal compiler diagnostics, as generation does, before
+admitting a program to lowering. The implementation is shared frontend logic;
+no backend has a separate const-requirement evaluator.

@@ -1438,6 +1438,21 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
         return Err(InvalidCause::ConstTyMismatch { expected, given });
     }
 
+    if let Some((primary, predicate, reason)) = diags.iter().find_map(|diag| match diag {
+        FuncBodyDiag::Body(BodyDiag::ConstRequirementNotSatisfied {
+            primary,
+            predicate,
+            reason,
+        }) => Some((primary.clone(), predicate.clone(), reason.clone())),
+        _ => None,
+    }) {
+        return Err(InvalidCause::ConstRequirementNotSatisfied {
+            primary,
+            predicate,
+            reason,
+        });
+    }
+
     if !diags.is_empty() {
         if let Some(cause) = typed_body
             .body()

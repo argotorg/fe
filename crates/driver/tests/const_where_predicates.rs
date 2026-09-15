@@ -180,8 +180,6 @@ fn every_evaluation_failure_rejects_the_predicate() {
 fn generic_scopes_are_rejected_instead_of_dropping_obligations() {
     let mut db = database();
     for (name, source) in [
-        ("function", "fn unused<const N: usize>() where N > 0 {}"),
-        ("ground_in_generic", "fn unused<T>() where true {}"),
         (
             "record",
             "struct S<const N: usize> where N > 0 { values: [u256; N] }",

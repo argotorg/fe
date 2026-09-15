@@ -1,0 +1,1 @@
+Support boolean const requirements on top-level generic functions, with concrete call-site evaluation and exact forwarding after substitution. Authored and generated functions share the checks, including function values and anonymous constant bodies. Generic type, trait, impl and associated-function requirements remain unsupported.

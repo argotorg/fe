@@ -32,8 +32,8 @@ use crate::{
             normalize::normalize_ty,
             provider::ProviderAddressSpace,
             ty_check::{
-                BodyOwner, LocalBinding, ParamSite, check_anon_const_body, check_const_body,
-                check_func_body,
+                BodyOwner, LocalBinding, ParamSite, infer_body,
+                inference_has_failed_const_requirements,
             },
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
@@ -1194,17 +1194,10 @@ impl<'db> CtfeMachine<'db> {
             }
             owner
             @ (BodyOwner::Func(_) | BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. }) => {
-                let typed_body = match owner {
-                    BodyOwner::Func(func) => &check_func_body(self.db, func).1,
-                    BodyOwner::Const(const_) => &check_const_body(self.db, const_).1,
-                    BodyOwner::AnonConstBody { body, expected } => {
-                        &check_anon_const_body(self.db, body, expected).1
-                    }
-                    BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
-                        unreachable!("contract bodies are not const-evaluable")
-                    }
-                };
-                if typed_body.has_smir_lowering_blocking_diagnostics(self.db) {
+                let (diags, typed_body) = infer_body(self.db, owner);
+                if inference_has_failed_const_requirements(diags)
+                    || typed_body.has_smir_lowering_blocking_diagnostics(self.db)
+                {
                     Err(CtfeError::InvalidBody { origin })
                 } else {
                     Ok(())
