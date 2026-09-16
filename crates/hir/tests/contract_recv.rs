@@ -53,5 +53,5 @@ version = "0.0.0"
     );
     let span = diag.sub_diagnostics[0].span.as_ref().unwrap();
     assert_eq!(span.file, file);
-    assert_eq!(&file.text(&db)[span.range.clone()], "test_mod");
+    assert_eq!(&file.text(&db)[span.range], "test_mod");
 }
