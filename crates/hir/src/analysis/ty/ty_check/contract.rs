@@ -12,7 +12,7 @@ use num_traits::ToPrimitive;
 use crate::{
     analysis::{
         HirAnalysisDb,
-        name_resolution::{ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path},
+        name_resolution::{ExpectedPathKind, PathRes, resolve_path},
         semantic::{
             SemConstScalar, SemConstValue, contract_init_assigned_fields, eval_body_owner_const,
         },
@@ -933,7 +933,18 @@ pub(super) fn resolve_recv_msg_mod<'db>(
         Ok(other) => {
             let ident = msg_path.ident(db).to_opt()?;
             if emit_diag {
-                diags.push(PathResDiag::ExpectedType(span.into(), ident, other.kind_name()).into());
+                let given_kind = match other {
+                    PathRes::Mod(ScopeId::Item(ItemKind::TopMod(_))) => "file module",
+                    _ => other.kind_name(),
+                };
+                diags.push(
+                    BodyDiag::RecvExpectedMsgModule {
+                        primary: span.into(),
+                        given: ident,
+                        given_kind,
+                    }
+                    .into(),
+                );
             }
             None
         }

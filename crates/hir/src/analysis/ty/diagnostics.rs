@@ -738,6 +738,13 @@ pub enum BodyDiag<'db> {
         given: TyId<'db>,
     },
 
+    /// The root path of a recv block names a module-like scope that isn't a msg module
+    RecvExpectedMsgModule {
+        primary: DynLazySpan<'db>,
+        given: IdentId<'db>,
+        given_kind: &'static str, // can be "file module", "function", "constant", etc...
+    },
+
     /// A recv arm pattern is not a variant of the expected msg type
     RecvArmNotMsgVariant {
         primary: DynLazySpan<'db>,
@@ -979,6 +986,7 @@ impl<'db> BodyDiag<'db> {
             Self::UnreachablePattern { .. } => 35,
             Self::PatternAnalysisInconclusive { .. } => 87,
             Self::RecvExpectedMsgType { .. } => 41,
+            Self::RecvExpectedMsgModule { .. } => 90,
             Self::RecvArmNotMsgVariant { .. } => 42,
             Self::RecvArmRetTypeMissing { .. } => 43,
             Self::RecvArmDuplicateVariant { .. } => 44,

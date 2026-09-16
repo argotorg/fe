@@ -4373,6 +4373,27 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     notes: vec![],
                     error_code,
                 }
+            },
+            BodyDiag::RecvExpectedMsgModule {
+                primary,
+                given,
+                given_kind,
+            } => {
+                let sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "expected `msg` module, but {given_kind} `{}` is given",
+                        given.data(db)
+                    ),
+                    span: primary.resolve(db),
+                }];
+                CompleteDiagnostic {
+                    severity,
+                    message: "recv block expects a msg module".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
             }
             BodyDiag::RecvArmNotMsgVariant { primary, msg_name } => {
                 let sub_diagnostics = vec![SubDiagnostic {
