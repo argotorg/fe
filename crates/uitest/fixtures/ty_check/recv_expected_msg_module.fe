@@ -1,0 +1,8 @@
+// File modules cannot be used as named recv roots.
+pub contract CurrentFile {
+    recv self {}
+}
+
+pub contract DependencyRoot {
+    recv core {}
+}

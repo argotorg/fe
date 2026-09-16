@@ -4361,14 +4361,14 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: format!(
-                        "expected `msg` type, but `{}` is given",
+                        "expected `msg` module, but `{}` is given",
                         given.pretty_print(db)
                     ),
                     span: primary.resolve(db),
                 }];
                 CompleteDiagnostic {
                     severity,
-                    message: "recv block expects a msg type".to_string(),
+                    message: "recv block expects a msg module".to_string(),
                     sub_diagnostics,
                     notes: vec![],
                     error_code,
