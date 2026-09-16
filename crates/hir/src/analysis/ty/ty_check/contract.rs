@@ -926,13 +926,10 @@ pub(super) fn resolve_recv_msg_mod<'db>(
             }
             None
         }
-        Ok(PathRes::Mod(scope)) => {
-            // Accept any module as a recv root (both msg-desugared and manually defined)
-            if let ScopeId::Item(ItemKind::Mod(mod_)) = scope {
-                return Some(mod_);
-            }
-            unreachable!();
-        }
+        // Accept any module as a recv root (both msg-desugared and manually defined).
+        // Other module-like scopes (e.g. top-level file modules) fall through to the
+        // `Ok(other)` arm below and are reported as diagnostics instead of panicking.
+        Ok(PathRes::Mod(ScopeId::Item(ItemKind::Mod(mod_)))) => Some(mod_),
         Ok(other) => {
             let ident = msg_path.ident(db).to_opt()?;
             if emit_diag {
