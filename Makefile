@@ -73,12 +73,17 @@ notes:
 	towncrier build --yes --version $(version)
 	git commit -m "Compile release notes"
 
+.PHONY: release release-test
 release:
 	# Ensure release notes where generated before running the release command
 	./newsfragments/validate_files.py is-empty
 	cargo release $(version) --execute --all --no-tag --no-push
-	# Run the tests again because we may have to adjust some based on the update version
-	cargo test --workspace
+	$(MAKE) release-test
+
+# Repeat validation after a version bump without rerunning cargo-release.
+release-test:
+	# Optimize compiler-heavy tests and give deeply nested type queries enough stack.
+	RUST_MIN_STACK=16777216 cargo test --release --locked --workspace
 
 push-tag:
 	# Run `make release version=<version>` first
