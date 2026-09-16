@@ -1,0 +1,23 @@
+
+use std::evm::StorageMap
+
+msg M {
+    #[selector = 0x01]
+    X { key: u256 } -> u256,
+    #[selector = 0x02]
+    Y { key: u256 } -> u256,
+    #[selector = 0x03]
+    Z { key: u256 } -> u256,
+}
+
+pub contract C {
+    mut x: StorageMap<u256, u256, 1>,
+    mut y: StorageMap<u256, u256>,
+    mut z: StorageMap<u256, u256>,
+
+    recv M {
+        X { key } -> u256 uses x { x.get(key) }
+        Y { key } -> u256 uses y { y.get(key) }
+        Z { key } -> u256 uses z { z.get(key) }
+    }
+}

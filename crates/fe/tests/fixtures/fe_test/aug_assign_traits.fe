@@ -64,3 +64,52 @@ fn indexed_aug_assign_uses_index_mut_and_add_assign() {
     pointer[0] += pointer_delta
     assert!(pointer[0].value == 7)
 }
+
+#[test]
+fn usize_shl_assign() {
+    let mut value: usize = 3
+    value <<= 4
+    assert!(value == 48)
+    value <<= 0
+    assert!(value == 48)
+}
+
+#[test]
+fn usize_shr_assign() {
+    let mut value: usize = 48
+    value >>= 4
+    assert!(value == 3)
+    value >>= 0
+    assert!(value == 3)
+    value >>= 2
+    assert!(value == 0)
+}
+
+#[test]
+fn usize_bitor_assign() {
+    let mut value: usize = 0b1010
+    value |= 0b1100
+    assert!(value == 0b1110)
+    value |= 0
+    assert!(value == 0b1110)
+}
+
+#[test]
+fn usize_bitand_assign() {
+    let mut value: usize = 0b1010
+    value &= 0b1100
+    assert!(value == 0b1000)
+    value &= 0
+    assert!(value == 0)
+}
+
+#[test]
+fn usize_bitxor_assign() {
+    let mut value: usize = 0b1010
+    value ^= 0b1100
+    assert!(value == 0b0110)
+    value ^= 0
+    assert!(value == 0b0110)
+    value ^= 0b0110
+    assert!(value == 0)
+}

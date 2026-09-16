@@ -1,0 +1,7 @@
+
+struct Empty {
+}
+
+pub fn new_empty() -> Empty {
+    Empty {}
+}

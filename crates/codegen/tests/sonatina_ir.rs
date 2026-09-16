@@ -16,14 +16,16 @@ use tracing::{info, warn};
 use url::Url;
 
 fn with_top_mod_for_source<T>(
-    name: &str,
-    source: &str,
+    fixture: &Fixture<&str>,
     f: impl for<'db> FnOnce(&'db DriverDataBase, hir::hir_def::TopLevelMod<'db>) -> T,
 ) -> T {
     let mut db = DriverDataBase::default();
-    let file_url = Url::parse(&format!("file:///{name}")).expect("test URL should parse");
-    db.workspace()
-        .touch(&mut db, file_url.clone(), Some(source.to_string()));
+    let file_url = Url::from_file_path(fixture.path()).expect("fixture path should be absolute");
+    db.workspace().touch(
+        &mut db,
+        file_url.clone(),
+        Some(fixture.content().to_string()),
+    );
     let file = db
         .workspace()
         .get(&db, &file_url)
@@ -43,6 +45,42 @@ fn sonatina_function_names(ir: &str) -> Vec<String> {
         .collect()
 }
 
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "observability_preserves_creation_and_runtime_bytecode.fe")]
+fn observability_preserves_creation_and_runtime_bytecode(fixture: Fixture<&str>) {
+    with_top_mod_for_source(&fixture, |db, top_mod| {
+        for level in [OptLevel::O0, OptLevel::O2] {
+            let plain = fe_codegen::emit_module_sonatina_bytecode(db, top_mod, level, None)
+                .expect("ordinary bytecode compilation");
+            let observed = fe_codegen::emit_module_sonatina_bytecode_with_observability(
+                db, top_mod, level, None,
+            )
+            .expect("observable bytecode compilation");
+            assert!(!plain.is_empty());
+            assert_eq!(
+                plain.keys().collect::<Vec<_>>(),
+                observed.keys().collect::<Vec<_>>()
+            );
+            for (name, ordinary) in &plain {
+                let instrumented = &observed[name];
+                assert!(!ordinary.deploy.is_empty());
+                assert!(!ordinary.runtime.is_empty());
+                assert_eq!(
+                    ordinary.deploy, instrumented.deploy,
+                    "creation: {name}, {level:?}"
+                );
+                assert_eq!(
+                    ordinary.runtime, instrumented.runtime,
+                    "runtime: {name}, {level:?}"
+                );
+                assert!(instrumented.deploy_observability.is_some());
+                assert!(instrumented.runtime_observability.is_some());
+                assert!(ordinary.deploy_observability.is_none());
+                assert!(ordinary.runtime_observability.is_none());
+            }
+        }
+    });
+}
+
 fn sonatina_function_body<'a>(ir: &'a str, symbol_segment: &str) -> Option<&'a str> {
     let header = ir
         .lines()
@@ -53,20 +91,11 @@ fn sonatina_function_body<'a>(ir: &'a str, symbol_segment: &str) -> Option<&'a s
     Some(&body[..end])
 }
 
-#[test]
-fn zero_sized_const_aggregates_do_not_emit_const_regions() {
-    let ir = with_top_mod_for_source(
-        "zero_sized_const_aggregates_do_not_emit_const_regions.fe",
-        r#"
-struct Empty {
-}
-
-pub fn new_empty() -> Empty {
-    Empty {}
-}
-"#,
-        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit"),
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "zero_sized_const_aggregates_do_not_emit_const_regions.fe")]
+fn zero_sized_const_aggregates_do_not_emit_const_regions(fixture: Fixture<&str>) {
+    let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit")
+    });
 
     assert!(
         !ir.contains("global private const"),
@@ -82,17 +111,11 @@ pub fn new_empty() -> Empty {
     );
 }
 
-#[test]
-fn assert_macro_message_lowers_to_direct_revert_payload() {
-    let ir = with_top_mod_for_source(
-        "assert_macro_message_lowers_to_direct_revert_payload.fe",
-        r#"
-pub fn main() {
-    assert!(false, "boom")
-}
-"#,
-        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit"),
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "assert_macro_message_lowers_to_direct_revert_payload.fe")]
+fn assert_macro_message_lowers_to_direct_revert_payload(fixture: Fixture<&str>) {
+    let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit")
+    });
 
     assert!(
         ir.contains("evm_revert") && ir.contains("100.i256"),
@@ -100,29 +123,11 @@ pub fn main() {
     );
 }
 
-#[test]
-fn sonatina_function_names_disambiguate_module_conflicts() {
-    let ir = with_top_mod_for_source(
-        "sonatina_function_names_disambiguate_module_conflicts.fe",
-        r#"
-pub mod left {
-    pub fn same() -> u8 {
-        1
-    }
-}
-
-pub mod right {
-    pub fn same() -> u8 {
-        2
-    }
-}
-
-pub fn main() -> u8 {
-    left::same() + right::same()
-}
-"#,
-        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit"),
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "sonatina_function_names_disambiguate_module_conflicts.fe")]
+fn sonatina_function_names_disambiguate_module_conflicts(fixture: Fixture<&str>) {
+    let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit")
+    });
 
     let names = sonatina_function_names(&ir);
     let unique_names = names.iter().collect::<HashSet<_>>();
@@ -140,29 +145,11 @@ pub fn main() -> u8 {
     );
 }
 
-#[test]
-fn sonatina_function_names_disambiguate_generic_specializations() {
-    let ir = with_top_mod_for_source(
-        "sonatina_function_names_disambiguate_generic_specializations.fe",
-        r#"
-fn identity<T>(_ value: own T) -> T {
-    value
-}
-
-fn bool_score(value: bool) -> u32 {
-    if value {
-        1
-    } else {
-        0
-    }
-}
-
-pub fn main() -> u32 {
-    identity(7) + bool_score(identity(true))
-}
-"#,
-        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit"),
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "sonatina_function_names_disambiguate_generic_specializations.fe")]
+fn sonatina_function_names_disambiguate_generic_specializations(fixture: Fixture<&str>) {
+    let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit")
+    });
 
     let names = sonatina_function_names(&ir);
     let unique_names = names.iter().collect::<HashSet<_>>();
@@ -180,13 +167,11 @@ pub fn main() -> u32 {
     );
 }
 
-#[test]
-fn first_class_pointer_fixture_lowers_to_sonatina_ir() {
-    let ir = with_top_mod_for_source(
-        "pointer_first_class.fe",
-        include_str!("fixtures/pointer_first_class.fe"),
-        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit"),
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures", glob: "pointer_first_class.fe")]
+fn first_class_pointer_fixture_lowers_to_sonatina_ir(fixture: Fixture<&str>) {
+    let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit")
+    });
 
     assert!(
         ir.contains("evm_malloc") && ir.contains("mstore") && ir.contains("mload"),
@@ -194,53 +179,12 @@ fn first_class_pointer_fixture_lowers_to_sonatina_ir() {
     );
 }
 
-#[test]
-fn fixed_mem_buffer_exposes_constant_nonescaping_malloc_to_backend() {
-    let ir = with_top_mod_for_source(
-        "fixed_mem_buffer_exposes_constant_nonescaping_malloc_to_backend.fe",
-        r#"
-use core::ptr::{self, FixedMemBuffer}
-use core::result::Result
-use std::evm::crypto::{ec_add, keccak256}
-
-msg FixedBufferMsg {
-    #[selector = 0x01]
-    Hash { word: u256 } -> u256,
-    #[selector = 0x02]
-    AddIdentity -> u256,
-}
-
-pub contract FixedBuffer {
-    recv FixedBufferMsg {
-        Hash { word } -> u256 {
-            fixed_buffer_hash(word)
-        }
-        AddIdentity -> u256 {
-            fixed_precompile_buffers()
-        }
-    }
-}
-
-fn fixed_buffer_hash(word: u256) -> u256 {
-    let buffer = FixedMemBuffer<64>::alloc()
-    let words = ptr::cast<u8, u256>(buffer.ptr())
-    *words = word
-    *ptr::offset(words, 1) = word
-    keccak256(buffer.span())
-}
-
-fn fixed_precompile_buffers() -> u256 {
-    match ec_add(ax: 0, ay: 0, bx: 0, by: 0) {
-        Result::Ok(result) => result.0,
-        Result::Err(_) => 0,
-    }
-}
-"#,
-        |db, top_mod| {
-            emit_module_sonatina_ir_optimized(db, top_mod, OptLevel::O1, None)
-                .expect("optimized Sonatina IR should emit")
-        },
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "fixed_mem_buffer_exposes_constant_nonescaping_malloc_to_backend.fe")]
+fn fixed_mem_buffer_exposes_constant_nonescaping_malloc_to_backend(fixture: Fixture<&str>) {
+    let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir_optimized(db, top_mod, OptLevel::O1, None)
+            .expect("optimized Sonatina IR should emit")
+    });
 
     assert!(
         ir.split("\n}\n")
@@ -259,24 +203,12 @@ fn fixed_precompile_buffers() -> u256 {
     );
 }
 
-#[test]
-fn wildcard_storage_map_root_reports_runtime_root_error() {
-    let err = with_top_mod_for_source(
-        "wildcard_storage_map_root_reports_runtime_root_error.fe",
-        r#"
-use std::evm::StorageMap
-
-pub fn main() -> u256
-    uses (balances: mut StorageMap<u256, u256>)
-{
-    balances.get(key: 1)
-}
-"#,
-        |db, top_mod| {
-            emit_module_sonatina_ir(db, top_mod)
-                .expect_err("wildcard StorageMap roots should be rejected")
-        },
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "wildcard_storage_map_root_reports_runtime_root_error.fe")]
+fn wildcard_storage_map_root_reports_runtime_root_error(fixture: Fixture<&str>) {
+    let err = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod)
+            .expect_err("wildcard StorageMap roots should be rejected")
+    });
     let message = err.to_string();
     assert!(
         message.contains("standalone runtime root")
@@ -287,105 +219,22 @@ pub fn main() -> u256
     );
 }
 
-#[test]
-fn explicit_storage_map_root_compiles_without_a_runtime_provider() {
-    let output = with_top_mod_for_source(
-        "explicit_storage_map_root_compiles_without_a_runtime_provider.fe",
-        r#"
-use std::evm::StorageMap
-
-pub fn main() -> u256
-    uses (balances: mut StorageMap<u256, u256, 0>)
-{
-    balances.get(key: 1)
-}
-"#,
-        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("explicit root should compile"),
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "explicit_storage_map_root_compiles_without_a_runtime_provider.fe")]
+fn explicit_storage_map_root_compiles_without_a_runtime_provider(fixture: Fixture<&str>) {
+    let output = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod).expect("explicit root should compile")
+    });
     assert!(
         output.contains("call %storagemap_get_word_with_salt v0 0.i256"),
         "explicit root was not lowered as the concrete StorageMap salt:\n{output}"
     );
 }
 
-#[test]
-fn persistent_layout_maps_lower_with_checked_projection_control_flow() {
-    let output = with_top_mod_for_source(
-        "persistent_layout_maps_lower_with_checked_projection_control_flow.fe",
-        r#"
-struct Rooted<const ROOT: u256 = _> {}
-
-impl<const ROOT: u256> Copy for Rooted<ROOT> {}
-
-impl<const ROOT: u256> Rooted<ROOT> {
-    fn root(self) -> u256 {
-        ROOT
-    }
-}
-
-fn repeat<const ROOT: u256>(value: Rooted<ROOT>) -> [Rooted<ROOT>; 3] {
-    [value; 3]
-}
-
-fn reorder<const ROOT: u256>(values: [Rooted<ROOT>; 3]) -> [Rooted<ROOT>; 3] {
-    [values[2], values[0], values[1]]
-}
-
-fn fresh<const ROOT: u256>() -> Rooted<ROOT> {
-    Rooted {}
-}
-
-fn replace<const ROOT: u256>(
-    values: own [Rooted<ROOT>; 3],
-    lane: usize,
-) -> [Rooted<ROOT>; 3] {
-    let mut result = values
-    result[lane] = fresh()
-    result
-}
-
-fn patch<const ROOT: u256>(
-    values: own [Rooted<ROOT>; 3],
-    lane: usize,
-    replacement: Rooted<ROOT>,
-) -> [Rooted<ROOT>; 3] {
-    let mut result = values
-    result[lane] = replacement
-    result
-}
-
-fn select<const ROOT: u256>(values: [Rooted<ROOT>; 3], lane: usize) -> Rooted<ROOT> {
-    values[lane]
-}
-
-msg Msg {
-    #[selector = 1]
-    Get { lane: usize } -> u256,
-}
-
-pub contract C {
-    mut values: [Rooted; 3],
-
-    recv Msg {
-        Get { lane } -> u256 uses (values) {
-            let repeated = repeat(value: values[0])
-            let reordered = reorder(values: repeated)
-            let replaced = replace(
-                values: reordered,
-                lane: lane,
-            )
-            let patched = patch(
-                values: replaced,
-                lane: lane,
-                replacement: values[0],
-            )
-            select(values: patched, lane: lane).root()
-        }
-    }
-}
-"#,
-        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("layout maps should lower"),
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "persistent_layout_maps_lower_with_checked_projection_control_flow.fe")]
+fn persistent_layout_maps_lower_with_checked_projection_control_flow(fixture: Fixture<&str>) {
+    let output = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod).expect("layout maps should lower")
+    });
 
     assert!(
         output.contains("br_table") && output.contains("evm_revert") && output.contains("lt "),
@@ -411,39 +260,12 @@ pub contract C {
     );
 }
 
-#[test]
-fn inferred_storage_map_roots_skip_explicit_contract_salts() {
-    let output = with_top_mod_for_source(
-        "inferred_storage_map_roots_skip_explicit_contract_salts.fe",
-        r#"
-use std::evm::StorageMap
-
-msg M {
-    #[selector = 0x01]
-    X { key: u256 } -> u256,
-    #[selector = 0x02]
-    Y { key: u256 } -> u256,
-    #[selector = 0x03]
-    Z { key: u256 } -> u256,
-}
-
-pub contract C {
-    mut x: StorageMap<u256, u256, 1>,
-    mut y: StorageMap<u256, u256>,
-    mut z: StorageMap<u256, u256>,
-
-    recv M {
-        X { key } -> u256 uses x { x.get(key) }
-        Y { key } -> u256 uses y { y.get(key) }
-        Z { key } -> u256 uses z { z.get(key) }
-    }
-}
-"#,
-        |db, top_mod| {
-            emit_module_sonatina_ir(db, top_mod)
-                .expect("mixed explicit and inferred roots should compile")
-        },
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "inferred_storage_map_roots_skip_explicit_contract_salts.fe")]
+fn inferred_storage_map_roots_skip_explicit_contract_salts(fixture: Fixture<&str>) {
+    let output = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod)
+            .expect("mixed explicit and inferred roots should compile")
+    });
     for salt in ["0.i256", "1.i256", "2.i256"] {
         assert!(
             output.lines().any(|line| {
@@ -454,74 +276,26 @@ pub contract C {
     }
 }
 
-#[test]
-fn wildcard_storage_map_free_function_compiles_with_concrete_provider() {
-    let output = with_top_mod_for_source(
-        "wildcard_storage_map_free_function_compiles_with_concrete_provider.fe",
-        r#"
-use std::evm::StorageMap
-
-fn get_balance(addr: u256) -> u256
-    uses (balances: StorageMap<u256, u256>)
-{
-    balances.get(key: addr)
-}
-
-msg M {
-    #[selector = 0]
-    Get -> u256,
-}
-
-contract C {
-    balances: StorageMap<u256, u256>
-
-    recv M {
-        Get -> u256 uses (balances) {
-            with (balances) {
-                get_balance(addr: 1)
-            }
-        }
-    }
-}
-"#,
-        |db, top_mod| {
-            emit_module_sonatina_ir(db, top_mod)
-                .expect("wildcard StorageMap helpers should compile from a concrete provider")
-        },
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "wildcard_storage_map_free_function_compiles_with_concrete_provider.fe")]
+fn wildcard_storage_map_free_function_compiles_with_concrete_provider(fixture: Fixture<&str>) {
+    let output = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod)
+            .expect("wildcard StorageMap helpers should compile from a concrete provider")
+    });
     assert!(
         output.contains("func private %get_balance") && output.contains("object @C"),
         "concrete-provider StorageMap helper should emit real Sonatina IR:\n{output}"
     );
 }
 
-#[test]
-fn generic_noesc_storage_specialization_is_rejected_during_runtime_lowering() {
-    let err = with_top_mod_for_source(
-        "generic_noesc_storage_specialization_is_rejected_during_runtime_lowering.fe",
-        r#"
-struct Box<T> {
-    value: T,
-}
-
-fn store_generic<T>(value: own T) uses (slot: mut Box<T>) {
-    slot = Box<T> { value }
-}
-
-pub contract GenericNoEsc {
-    mut slot: Box<mut u256>
-
-    init() uses (mut slot) {
-        let mut x: u256 = 0
-        store_generic<mut u256>(mut x)
-    }
-}
-"#,
-        |db, top_mod| {
-            emit_module_sonatina_ir(db, top_mod)
-                .expect_err("runtime lowering should reject specialized noesc storage escape")
-        },
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "generic_noesc_storage_specialization_is_rejected_during_runtime_lowering.fe")]
+fn generic_noesc_storage_specialization_is_rejected_during_runtime_lowering(
+    fixture: Fixture<&str>,
+) {
+    let err = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod)
+            .expect_err("runtime lowering should reject specialized noesc storage escape")
+    });
     let message = err.to_string();
     assert!(
         message.contains("semantic noesc checking failed")
@@ -530,19 +304,11 @@ pub contract GenericNoEsc {
     );
 }
 
-#[test]
-fn sonatina_ir_rejects_target_only_output() {
-    let err = with_top_mod_for_source(
-        "sonatina_ir_rejects_target_only_output.fe",
-        r#"
-fn helper(value: u256) -> u256 {
-    value
-}
-"#,
-        |db, top_mod| {
-            emit_module_sonatina_ir(db, top_mod).expect_err("empty packages should not emit IR")
-        },
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "sonatina_ir_rejects_target_only_output.fe")]
+fn sonatina_ir_rejects_target_only_output(fixture: Fixture<&str>) {
+    let err = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod).expect_err("empty packages should not emit IR")
+    });
     let message = err.to_string();
     assert!(
         message.contains("no root objects") && message.contains("target-only Sonatina IR"),
@@ -550,16 +316,12 @@ fn helper(value: u256) -> u256 {
     );
 }
 
-#[test]
-fn raw_log_emit_sonatina_ir_lowers_native_pointer_provider() {
-    let output = with_top_mod_for_source(
-        "raw_log_emit_sonatina_ir_lowers_mem_ptr.fe",
-        include_str!("fixtures/raw_log_emit.fe"),
-        |db, top_mod| {
-            emit_module_sonatina_ir(db, top_mod)
-                .expect("native pointer providers should lower for Sonatina")
-        },
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures", glob: "raw_log_emit.fe")]
+fn raw_log_emit_sonatina_ir_lowers_native_pointer_provider(fixture: Fixture<&str>) {
+    let output = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod)
+            .expect("native pointer providers should lower for Sonatina")
+    });
 
     assert!(
         output.contains("func private %raw_emit") && output.contains("object @main"),
@@ -567,21 +329,12 @@ fn raw_log_emit_sonatina_ir_lowers_native_pointer_provider() {
     );
 }
 
-#[test]
-fn constant_oob_index_terminates_without_continuation_projection() {
-    let output = with_top_mod_for_source(
-        "constant_oob_index_terminates_without_continuation_projection.fe",
-        r#"
-fn main() -> u256 {
-    let arr: [u256; 2] = [10, 20]
-    return arr[2]
-}
-"#,
-        |db, top_mod| {
-            emit_module_sonatina_ir(db, top_mod)
-                .expect("constant out-of-bounds array access should lower to a revert")
-        },
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "constant_oob_index_terminates_without_continuation_projection.fe")]
+fn constant_oob_index_terminates_without_continuation_projection(fixture: Fixture<&str>) {
+    let output = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod)
+            .expect("constant out-of-bounds array access should lower to a revert")
+    });
 
     assert!(
         output.contains("evm_revert 0.i256 0.i256"),
@@ -597,41 +350,12 @@ fn main() -> u256 {
     );
 }
 
-#[test]
-fn semantic_never_returning_recv_returns_emit_sonatina_ir() {
-    let output = with_top_mod_for_source(
-        "semantic_never_returning_recv_returns_emit_sonatina_ir.fe",
-        r#"
-use core::abi::Bytes
-
-msg Msg {
-    #[selector = 0x01]
-    GetBytes -> Bytes,
-    #[selector = 0x02]
-    GetScalar -> u256,
-}
-
-fn abort() -> ! {
-    core::panic()
-}
-
-pub contract C {
-    recv Msg {
-        GetBytes -> Bytes {
-            abort()
-        }
-
-        GetScalar -> u256 {
-            abort()
-        }
-    }
-}
-"#,
-        |db, top_mod| {
-            emit_module_sonatina_ir(db, top_mod)
-                .expect("semantic never-returning recv arms should emit Sonatina IR")
-        },
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "semantic_never_returning_recv_returns_emit_sonatina_ir.fe")]
+fn semantic_never_returning_recv_returns_emit_sonatina_ir(fixture: Fixture<&str>) {
+    let output = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod)
+            .expect("semantic never-returning recv arms should emit Sonatina IR")
+    });
 
     assert!(
         output.contains("object @C") && output.contains("evm_invalid"),
@@ -639,31 +363,11 @@ pub contract C {
     );
 }
 
-#[test]
-fn runtime_abi_head_guard_matches_modern_solidity_signed_size_check() {
-    let output = with_top_mod_for_source(
-        "runtime_abi_head_guard_matches_modern_solidity_signed_size_check.fe",
-        r#"
-msg Msg {
-    #[selector = 1]
-    Identity { value: u256 } -> u256,
-    #[selector = 2]
-    Ping -> u256,
-}
-
-pub contract Identity {
-    recv Msg {
-        Identity { value } -> u256 {
-            value
-        }
-        Ping -> u256 {
-            1
-        }
-    }
-}
-"#,
-        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit"),
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "runtime_abi_head_guard_matches_modern_solidity_signed_size_check.fe")]
+fn runtime_abi_head_guard_matches_modern_solidity_signed_size_check(fixture: Fixture<&str>) {
+    let output = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit")
+    });
 
     assert!(
         output.lines().any(|line| {
@@ -751,36 +455,11 @@ fn sonatina_ir_snap(fixture: Fixture<&str>) {
 /// (`struct Pair<T> { left: T, right: T }` as `Pair<StorageMap<..>>`) must lower
 /// to *distinct* storage roots. Before the fix both fields shared one root,
 /// silently merging their storage in deployed bytecode.
-#[test]
-fn repeated_generic_storage_fields_lower_to_distinct_slots() {
-    let ir = with_top_mod_for_source(
-        "repeated_generic_storage_fields_lower_to_distinct_slots.fe",
-        r#"
-use std::evm::{Address, StorageMap, StorPtr}
-
-struct Pair<T> {
-    left: T,
-    right: T,
-}
-
-msg Msg {
-    #[selector = 1]
-    Swap { user: Address, amount: u256 } -> u256,
-}
-
-pub contract C {
-    mut pair: StorPtr<Pair<StorageMap<Address, u256>>>,
-
-    recv Msg {
-        Swap { user, amount } -> u256 uses (mut pair) {
-            pair.left.set(key: user, value: amount)
-            pair.right.get(key: user)
-        }
-    }
-}
-"#,
-        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit"),
-    );
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "repeated_generic_storage_fields_lower_to_distinct_slots.fe")]
+fn repeated_generic_storage_fields_lower_to_distinct_slots(fixture: Fixture<&str>) {
+    let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit")
+    });
 
     // `pair.left.set` and `pair.right.get` each lower to a storage-map access
     // salted by the field's root slot. The two salts must differ. The salt is

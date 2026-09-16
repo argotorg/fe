@@ -1,0 +1,17 @@
+
+msg BetaMsg {
+    #[selector = 0x02]
+    Sum { a: u32, b: u32 } -> u32,
+}
+
+struct BetaStore {}
+
+pub contract Beta {
+    store: BetaStore
+
+    recv BetaMsg {
+        Sum { a, b } -> u32 {
+            return a + b
+        }
+    }
+}

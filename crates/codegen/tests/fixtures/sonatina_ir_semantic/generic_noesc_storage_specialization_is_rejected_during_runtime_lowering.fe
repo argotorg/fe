@@ -1,0 +1,17 @@
+
+struct Box<T> {
+    value: T,
+}
+
+fn store_generic<T>(value: own T) uses (slot: mut Box<T>) {
+    slot = Box<T> { value }
+}
+
+pub contract GenericNoEsc {
+    mut slot: Box<mut u256>
+
+    init() uses (mut slot) {
+        let mut x: u256 = 0
+        store_generic<mut u256>(mut x)
+    }
+}

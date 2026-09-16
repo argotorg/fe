@@ -1,0 +1,16 @@
+
+pub mod left {
+    pub fn same() -> u8 {
+        1
+    }
+}
+
+pub mod right {
+    pub fn same() -> u8 {
+        2
+    }
+}
+
+pub fn main() -> u8 {
+    left::same() + right::same()
+}

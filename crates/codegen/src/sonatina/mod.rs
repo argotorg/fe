@@ -1,6 +1,7 @@
 mod lower_runtime;
+pub(crate) mod observability;
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use common::ingot::Ingot;
 use driver::DriverDataBase;
@@ -8,12 +9,21 @@ use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::runtime::ir::RuntimePackagePlan;
 use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use rustc_hash::FxHashSet;
-use sonatina_codegen::{EvmCompile, OptLevel as SonatinaOptLevel};
+use sonatina_codegen::{
+    EvmCompile, OptLevel as SonatinaOptLevel,
+    machinst::vcode::{SectionCodeUnitId, VCodeInst},
+    object::{
+        OBSERVABILITY_SCHEMA_VERSION, ObjectArtifact, PcAttribution, PcMapEntry, PcMapUnit,
+        SectionArtifact, SectionObservability, SymbolDef, SymbolId, UnmappedReason,
+        UnmappedReasonCoverage,
+    },
+};
 use sonatina_ir::{
-    Module,
+    BlockId, Module,
     ir_writer::{FuncWriter, ModuleWriter},
     isa::evm::Evm,
     module::{FuncRef, ModuleCtx},
+    object::EmbedSymbol,
 };
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 use sonatina_verifier::{
@@ -71,6 +81,8 @@ impl From<mir::RuntimeMemoryLayoutError> for LowerError {
 pub struct SonatinaContractBytecode {
     pub deploy: Vec<u8>,
     pub runtime: Vec<u8>,
+    pub deploy_observability: Option<SectionObservability>,
+    pub runtime_observability: Option<SectionObservability>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -185,6 +197,7 @@ fn to_sonatina_opt_level(opt_level: OptLevel) -> SonatinaOptLevel {
 fn evm_compile(module: Module, opt_level: OptLevel, emit_observability: bool) -> EvmCompile {
     EvmCompile::new(module)
         .with_opt_level(to_sonatina_opt_level(opt_level))
+        .with_symbol_table(emit_observability)
         .with_observability(emit_observability)
 }
 
@@ -201,11 +214,321 @@ fn compile_runtime_objects(
     opt_level: OptLevel,
     emit_observability: bool,
 ) -> Result<Vec<sonatina_codegen::object::ObjectArtifact>, LowerError> {
+    let (artifacts, _) =
+        compile_runtime_objects_with_postopt_trace(module, opt_level, emit_observability, None)?;
+    Ok(artifacts)
+}
+
+fn compile_runtime_objects_with_postopt_trace(
+    module: Module,
+    opt_level: OptLevel,
+    emit_observability: bool,
+    postopt_trace_owner: Option<&str>,
+) -> Result<
+    (
+        Vec<sonatina_codegen::object::ObjectArtifact>,
+        Vec<trace_facts::TraceFact>,
+    ),
+    LowerError,
+> {
     let mut compile = evm_compile(module, opt_level, emit_observability);
     ensure_module_sonatina_ir_valid(compile.optimize())?;
-    compile
+    if emit_observability && let Some(owner) = postopt_trace_owner {
+        stamp_postopt_instruction_provenance(owner, &mut compile);
+    }
+    let postopt_trace_facts = if let Some(owner) = postopt_trace_owner {
+        crate::trace::emit_sonatina_trace_view_facts(
+            owner,
+            compile.optimize(),
+            trace_facts::CompilerPhase::SonatinaPostOpt,
+        )?
+    } else {
+        Vec::new()
+    };
+    let artifacts = compile
         .compile()
-        .map_err(|errors| LowerError::Internal(format_object_compile_errors(&errors)))
+        .map_err(|errors| LowerError::Internal(format_object_compile_errors(&errors)))?;
+    Ok((artifacts, postopt_trace_facts))
+}
+
+fn stamp_postopt_instruction_provenance(owner_key: &str, compile: &mut EvmCompile) {
+    // One pass over every function through the sanctioned bulk door; the door
+    // only visits live optimized instructions, so stamping cannot fail here.
+    compile.stamp_all_post_opt_provenance(|func_ref, inst| {
+        let key = crate::trace::sonatina_postopt_inst_key(owner_key, func_ref, inst.raw());
+        Some(serde_json::to_string(&key).expect("OriginExportKey serialization cannot fail"))
+    });
+}
+
+fn merged_section_observability<'db>(
+    db: &'db dyn mir::MirDb,
+    objects_by_name: &HashMap<String, mir::RuntimeObject<'db>>,
+    artifacts_by_name: &HashMap<&str, &ObjectArtifact>,
+    section_artifact: &SectionArtifact,
+    section: &mir::RuntimeSection<'db>,
+    root_key: (String, mir::RuntimeSectionName),
+) -> Result<Option<SectionObservability>, LowerError> {
+    fn merge_embeds<'db>(
+        db: &'db dyn mir::MirDb,
+        objects_by_name: &HashMap<String, mir::RuntimeObject<'db>>,
+        artifacts_by_name: &HashMap<&str, &ObjectArtifact>,
+        section_artifact: &SectionArtifact,
+        section: &mir::RuntimeSection<'db>,
+        path: &mut FxHashSet<(String, mir::RuntimeSectionName)>,
+    ) -> Result<Option<SectionObservability>, LowerError> {
+        let Some(mut merged) = section_artifact.observability.clone() else {
+            return Ok(None);
+        };
+        let mut embed_cursor = merged
+            .code_bytes
+            .checked_add(merged.data_bytes)
+            .ok_or_else(|| {
+                LowerError::Internal(format!(
+                    "observability section `{}` code/data layout overflows",
+                    merged.section.0
+                ))
+            })?;
+        let expected_section_bytes =
+            embed_cursor
+                .checked_add(merged.embed_bytes)
+                .ok_or_else(|| {
+                    LowerError::Internal(format!(
+                        "observability section `{}` embed layout overflows",
+                        merged.section.0
+                    ))
+                })?;
+        if expected_section_bytes != merged.section_bytes {
+            return Err(LowerError::Internal(format!(
+                "observability section `{}` layout describes {expected_section_bytes} bytes but reports {}",
+                merged.section.0, merged.section_bytes
+            )));
+        }
+
+        for embed in &section.embeds {
+            let embed_key = section_ref_key(embed.source.clone());
+            enter_observability_embed(path, embed_key.clone())?;
+            let symbol_id = SymbolId::Embed(EmbedSymbol::from(embed.as_symbol.clone()));
+            let (embedded_section, embedded_artifact) = resolve_embedded_section_artifact(
+                db,
+                objects_by_name,
+                artifacts_by_name,
+                &embed.source,
+            )?;
+            let embedded_observability = require_embedded_observability(
+                merge_embeds(
+                    db,
+                    objects_by_name,
+                    artifacts_by_name,
+                    embedded_artifact,
+                    &embedded_section,
+                    path,
+                )?,
+                &embed_key,
+            )?;
+            let expected_symbol_def = SymbolDef {
+                offset: embed_cursor,
+                size: embedded_observability.section_bytes,
+            };
+            let symbol_def = required_embed_symbol_at(
+                section_artifact,
+                &symbol_id,
+                &embed_key,
+                &embed.as_symbol,
+                expected_symbol_def,
+            )?;
+
+            merge_embedded_pc_map(&mut merged, embedded_observability, symbol_def, &embed_key)?;
+            embed_cursor = embed_cursor.checked_add(symbol_def.size).ok_or_else(|| {
+                LowerError::Internal(format!(
+                    "observability embed {embed_key:?} advances past the section address space"
+                ))
+            })?;
+            path.remove(&embed_key);
+        }
+
+        if embed_cursor != merged.section_bytes {
+            return Err(LowerError::Internal(format!(
+                "observability section `{}` merged embeds end at {embed_cursor} but section size is {}",
+                merged.section.0, merged.section_bytes
+            )));
+        }
+
+        merged
+            .pc_map
+            .sort_by_key(|entry| (entry.pc_start, entry.pc_end));
+        Ok(Some(merged))
+    }
+
+    let mut path = FxHashSet::default();
+    path.insert(root_key);
+    merge_embeds(
+        db,
+        objects_by_name,
+        artifacts_by_name,
+        section_artifact,
+        section,
+        &mut path,
+    )
+}
+
+fn enter_observability_embed(
+    path: &mut FxHashSet<(String, mir::RuntimeSectionName)>,
+    embed_key: (String, mir::RuntimeSectionName),
+) -> Result<(), LowerError> {
+    if !path.insert(embed_key.clone()) {
+        return Err(LowerError::Internal(format!(
+            "observability embed cycle at {embed_key:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn required_embed_symbol(
+    section_artifact: &SectionArtifact,
+    symbol_id: &SymbolId,
+    embed_key: &(String, mir::RuntimeSectionName),
+    symbol_name: &str,
+) -> Result<SymbolDef, LowerError> {
+    section_artifact
+        .symtab
+        .get(symbol_id)
+        .copied()
+        .ok_or_else(|| {
+            LowerError::Internal(format!(
+                "observability embed {embed_key:?} is missing symbol `{symbol_name}`"
+            ))
+        })
+}
+
+fn required_embed_symbol_at(
+    section_artifact: &SectionArtifact,
+    symbol_id: &SymbolId,
+    embed_key: &(String, mir::RuntimeSectionName),
+    symbol_name: &str,
+    expected: SymbolDef,
+) -> Result<SymbolDef, LowerError> {
+    let symbol_def = required_embed_symbol(section_artifact, symbol_id, embed_key, symbol_name)?;
+    if symbol_def != expected {
+        return Err(LowerError::Internal(format!(
+            "observability embed {embed_key:?} symbol definition {symbol_def:?} disagrees with expected {expected:?}"
+        )));
+    }
+    Ok(symbol_def)
+}
+
+fn require_embedded_observability(
+    observability: Option<SectionObservability>,
+    embed_key: &(String, mir::RuntimeSectionName),
+) -> Result<SectionObservability, LowerError> {
+    observability.ok_or_else(|| {
+        LowerError::Internal(format!(
+            "observability embed {embed_key:?} has no section observability"
+        ))
+    })
+}
+
+fn merge_embedded_pc_map(
+    merged: &mut SectionObservability,
+    embedded: SectionObservability,
+    symbol_def: SymbolDef,
+    embed_key: &(String, mir::RuntimeSectionName),
+) -> Result<(), LowerError> {
+    let symbol_end = symbol_def
+        .offset
+        .checked_add(symbol_def.size)
+        .ok_or_else(|| {
+            LowerError::Internal(format!(
+                "observability embed {embed_key:?} symbol range overflows"
+            ))
+        })?;
+    if symbol_end > merged.section_bytes {
+        return Err(LowerError::Internal(format!(
+            "observability embed {embed_key:?} symbol range [{}, {symbol_end}) exceeds section size {}",
+            symbol_def.offset, merged.section_bytes
+        )));
+    }
+    if embedded.section_bytes != symbol_def.size {
+        return Err(LowerError::Internal(format!(
+            "observability embed {embed_key:?} describes {} bytes but its symbol has size {}",
+            embedded.section_bytes, symbol_def.size
+        )));
+    }
+    for mut entry in embedded.pc_map {
+        if entry.pc_end < entry.pc_start {
+            return Err(LowerError::Internal(format!(
+                "observability embed {embed_key:?} has reversed range [{}, {})",
+                entry.pc_start, entry.pc_end
+            )));
+        }
+        if entry.pc_end > symbol_def.size {
+            return Err(LowerError::Internal(format!(
+                "observability embed {embed_key:?} range [{}, {}) exceeds symbol size {}",
+                entry.pc_start, entry.pc_end, symbol_def.size
+            )));
+        }
+        entry.pc_start = entry
+            .pc_start
+            .checked_add(symbol_def.offset)
+            .ok_or_else(|| {
+                LowerError::Internal(format!(
+                    "observability embed {embed_key:?} pc start overflow"
+                ))
+            })?;
+        entry.pc_end = entry.pc_end.checked_add(symbol_def.offset).ok_or_else(|| {
+            LowerError::Internal(format!("observability embed {embed_key:?} pc end overflow"))
+        })?;
+        merged.pc_map.push(entry);
+    }
+    Ok(())
+}
+
+fn resolve_embedded_section_artifact<'db, 'a>(
+    db: &'db dyn mir::MirDb,
+    objects_by_name: &HashMap<String, mir::RuntimeObject<'db>>,
+    artifacts_by_name: &'a HashMap<&str, &ObjectArtifact>,
+    section_ref: &mir::RuntimeSectionRef,
+) -> Result<(mir::RuntimeSection<'db>, &'a SectionArtifact), LowerError> {
+    let (object, section_name) = match section_ref {
+        mir::RuntimeSectionRef::Local { object, section }
+        | mir::RuntimeSectionRef::External { object, section } => (object, section),
+    };
+    let runtime_object = *objects_by_name.get(object.as_str()).ok_or_else(|| {
+        LowerError::Internal(format!(
+            "observability embed cannot resolve runtime object `{object}`"
+        ))
+    })?;
+    let runtime_section = runtime_object
+        .sections(db)
+        .into_iter()
+        .find(|section| &section.name == section_name)
+        .ok_or_else(|| {
+            LowerError::Internal(format!(
+                "observability embed cannot resolve runtime section `{object}`/{section_name:?}"
+            ))
+        })?;
+    let section_artifact =
+        resolve_compiled_section_artifact(artifacts_by_name, object.as_str(), section_name)?;
+    Ok((runtime_section, section_artifact))
+}
+
+fn resolve_compiled_section_artifact<'a>(
+    artifacts_by_name: &'a HashMap<&str, &ObjectArtifact>,
+    object: &str,
+    section_name: &mir::RuntimeSectionName,
+) -> Result<&'a SectionArtifact, LowerError> {
+    let artifact = artifacts_by_name.get(object).copied().ok_or_else(|| {
+        LowerError::Internal(format!(
+            "observability embed cannot resolve compiled object `{object}`"
+        ))
+    })?;
+    artifact
+        .sections
+        .get(&section_name_for_runtime(section_name))
+        .ok_or_else(|| {
+            LowerError::Internal(format!(
+                "observability embed cannot resolve compiled section `{object}`/{section_name:?}"
+            ))
+        })
 }
 
 fn section_name_for_runtime(name: &mir::RuntimeSectionName) -> sonatina_ir::SectionName {
@@ -215,6 +538,19 @@ fn section_name_for_runtime(name: &mir::RuntimeSectionName) -> sonatina_ir::Sect
         mir::RuntimeSectionName::Main => "main".into(),
         mir::RuntimeSectionName::Test(name) => format!("test_{name}").into(),
     }
+}
+
+fn ensure_observable_contract_section(
+    section_name: &mir::RuntimeSectionName,
+    emit_observability: bool,
+) -> Result<(), LowerError> {
+    if emit_observability && matches!(section_name, mir::RuntimeSectionName::Main) {
+        return Err(LowerError::Unsupported(
+            "observable contract trace supports init/runtime sections only; standalone main sections are not Ethdebug contract inputs"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn wrap_as_init_code(runtime: &[u8]) -> Vec<u8> {
@@ -252,6 +588,67 @@ fn wrap_as_init_code(runtime: &[u8]) -> Vec<u8> {
     init
 }
 
+fn wrapped_init_observability(
+    section_bytes: usize,
+    code_bytes: usize,
+) -> Option<SectionObservability> {
+    let section_bytes = u32::try_from(section_bytes).ok()?;
+    let code_bytes = u32::try_from(code_bytes).ok()?;
+    // The deploy wrapper is compiler-synthesized copy-and-return scaffolding
+    // with no Fe source, so every code byte is honestly unmapped as Synthetic.
+    Some(all_unmapped_observability(
+        "init",
+        section_bytes,
+        code_bytes,
+        UnmappedReason::Synthetic,
+    ))
+}
+
+/// Build an observability record for a section whose code bytes carry no source
+/// attribution. The reason table is derived from the same `code_bytes` reported
+/// unmapped, so the conservation equation (unmapped bytes == reason totals)
+/// cannot desynchronize here or at any future call site.
+fn all_unmapped_observability(
+    section: &str,
+    section_bytes: u32,
+    code_bytes: u32,
+    reason: UnmappedReason,
+) -> SectionObservability {
+    let mut unmapped_reason_coverage = UnmappedReasonCoverage::default();
+    unmapped_reason_coverage.add_bytes(reason, code_bytes);
+    let pc_map = (code_bytes > 0)
+        .then(|| PcMapEntry {
+            pc_start: 0,
+            pc_end: code_bytes,
+            unit: PcMapUnit::Synthetic {
+                object: "fe.wrapper".into(),
+                section: section.into(),
+                unit: SectionCodeUnitId(0),
+            },
+            func_name: format!("fe.{section}.wrapper"),
+            block: BlockId(0),
+            vcode_inst: VCodeInst(0),
+            attribution: PcAttribution::Unmapped {
+                machine_inst: None,
+                reason,
+            },
+        })
+        .into_iter()
+        .collect();
+    SectionObservability {
+        schema_version: OBSERVABILITY_SCHEMA_VERSION,
+        section: section.into(),
+        section_bytes,
+        code_bytes,
+        data_bytes: 0,
+        embed_bytes: section_bytes.saturating_sub(code_bytes),
+        mapped_code_bytes: 0,
+        unmapped_code_bytes: code_bytes,
+        unmapped_reason_coverage,
+        pc_map,
+    }
+}
+
 pub fn compile_runtime_package_sonatina(
     db: &DriverDataBase,
     package: &RuntimePackage<'_>,
@@ -259,7 +656,7 @@ pub fn compile_runtime_package_sonatina(
     lower_runtime::compile_runtime_package_sonatina(db, package)
 }
 
-fn select_runtime_package_contract<'db>(
+pub(crate) fn select_runtime_package_contract<'db>(
     db: &'db dyn mir::MirDb,
     package: RuntimePackage<'db>,
     contract: Option<&str>,
@@ -529,18 +926,88 @@ pub fn emit_runtime_package_sonatina_ir_optimized(
     Ok(writer.dump_string())
 }
 
-pub fn emit_runtime_package_sonatina_bytecode(
+fn emit_runtime_package_sonatina_bytecode_with_options(
     db: &DriverDataBase,
     package: &RuntimePackage<'_>,
     opt_level: OptLevel,
-) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
+    emit_observability: bool,
+    postopt_trace_owner: Option<&str>,
+) -> Result<
+    (
+        BTreeMap<String, SonatinaContractBytecode>,
+        Vec<trace_facts::TraceFact>,
+    ),
+    LowerError,
+> {
     ensure_runtime_package_has_roots(db, package, "Sonatina bytecode")?;
     let module = compile_runtime_package_sonatina(db, package)?;
+    emit_runtime_module_sonatina_bytecode_with_options(
+        db,
+        package,
+        module,
+        opt_level,
+        emit_observability,
+        postopt_trace_owner,
+    )
+}
+
+/// Compile bytecode from an already-lowered module. Trace emission uses this
+/// so the preopt trace view and the compiled bytecode come from the SAME
+/// lowering; a second lowering would silently rely on both producing
+/// bit-identical FuncRefs/InstIds for the preopt/postopt joins to line up.
+pub fn emit_runtime_module_sonatina_bytecode_with_observability_and_trace(
+    db: &DriverDataBase,
+    package: &RuntimePackage<'_>,
+    module: Module,
+    opt_level: OptLevel,
+    postopt_trace_owner: &str,
+) -> Result<
+    (
+        BTreeMap<String, SonatinaContractBytecode>,
+        Vec<trace_facts::TraceFact>,
+    ),
+    LowerError,
+> {
+    ensure_runtime_package_has_roots(db, package, "Sonatina bytecode")?;
+    emit_runtime_module_sonatina_bytecode_with_options(
+        db,
+        package,
+        module,
+        opt_level,
+        true,
+        Some(postopt_trace_owner),
+    )
+}
+
+fn emit_runtime_module_sonatina_bytecode_with_options(
+    db: &DriverDataBase,
+    package: &RuntimePackage<'_>,
+    module: Module,
+    opt_level: OptLevel,
+    emit_observability: bool,
+    postopt_trace_owner: Option<&str>,
+) -> Result<
+    (
+        BTreeMap<String, SonatinaContractBytecode>,
+        Vec<trace_facts::TraceFact>,
+    ),
+    LowerError,
+> {
     ensure_module_sonatina_ir_valid(&module)?;
-    let artifacts = compile_runtime_objects(module, opt_level, false)?;
+    let (artifacts, postopt_trace_facts) = compile_runtime_objects_with_postopt_trace(
+        module,
+        opt_level,
+        emit_observability,
+        postopt_trace_owner,
+    )?;
     let artifacts_by_name = artifacts
         .iter()
         .map(|artifact| (artifact.object.0.as_str(), artifact))
+        .collect::<std::collections::HashMap<_, _>>();
+    let package_objects = package.objects(db);
+    let objects_by_name = package_objects
+        .iter()
+        .map(|object| (object.name(db), *object))
         .collect::<std::collections::HashMap<_, _>>();
 
     let mut out = BTreeMap::new();
@@ -558,14 +1025,55 @@ pub fn emit_runtime_package_sonatina_bytecode(
         let runtime = artifact
             .sections
             .get(&section_name_for_runtime(&mir::RuntimeSectionName::Runtime));
-        let (deploy, runtime) = match (init, runtime) {
-            (Some(init), Some(runtime)) => (init.bytes.clone(), runtime.bytes.clone()),
+        let runtime_section_name = mir::RuntimeSectionName::Runtime;
+        let init_section_name = mir::RuntimeSectionName::Init;
+        let (deploy, runtime, deploy_observability, runtime_observability) = match (init, runtime) {
+            (Some(init), Some(runtime)) => {
+                let sections = object.sections(db);
+                let init_section = sections
+                    .iter()
+                    .find(|section| section.name == init_section_name)
+                    .ok_or_else(|| {
+                        LowerError::Internal(format!(
+                            "root object `{object_name}` has init artifact but no init section"
+                        ))
+                    })?;
+                let runtime_section = sections
+                    .iter()
+                    .find(|section| section.name == runtime_section_name)
+                    .ok_or_else(|| {
+                        LowerError::Internal(format!(
+                            "root object `{object_name}` has runtime artifact but no runtime section"
+                        ))
+                    })?;
+                (
+                    init.bytes.clone(),
+                    runtime.bytes.clone(),
+                    merged_section_observability(
+                        db,
+                        &objects_by_name,
+                        &artifacts_by_name,
+                        init,
+                        init_section,
+                        (object_name.clone(), init_section.name.clone()),
+                    )?,
+                    merged_section_observability(
+                        db,
+                        &objects_by_name,
+                        &artifacts_by_name,
+                        runtime,
+                        runtime_section,
+                        (object_name.clone(), runtime_section.name.clone()),
+                    )?,
+                )
+            }
             _ => {
                 let sections = object.sections(db);
                 let section = sections.first().ok_or_else(|| {
                     LowerError::Internal(format!("root object `{object_name}` has no sections"))
                 })?;
-                let runtime = artifact
+                ensure_observable_contract_section(&section.name, emit_observability)?;
+                let runtime_section = artifact
                     .sections
                     .get(&section_name_for_runtime(&section.name))
                     .ok_or_else(|| {
@@ -573,18 +1081,54 @@ pub fn emit_runtime_package_sonatina_bytecode(
                             "compiled object `{object_name}` is missing section `{:?}`",
                             section.name
                         ))
-                    })?
-                    .bytes
-                    .clone();
-                (wrap_as_init_code(&runtime), runtime)
+                    })?;
+                let runtime = runtime_section.bytes.clone();
+                let runtime_observability = merged_section_observability(
+                    db,
+                    &objects_by_name,
+                    &artifacts_by_name,
+                    runtime_section,
+                    section,
+                    (object_name.clone(), section.name.clone()),
+                )?;
+                let deploy = wrap_as_init_code(&runtime);
+                let deploy_code_bytes = deploy.len().saturating_sub(runtime.len());
+                let deploy_observability = emit_observability
+                    .then(|| wrapped_init_observability(deploy.len(), deploy_code_bytes))
+                    .flatten();
+                (deploy, runtime, deploy_observability, runtime_observability)
             }
         };
         out.insert(
             object_name.clone(),
-            SonatinaContractBytecode { deploy, runtime },
+            SonatinaContractBytecode {
+                deploy,
+                runtime,
+                deploy_observability,
+                runtime_observability,
+            }
+            .checked(&object_name, emit_observability)?,
         );
     }
-    Ok(out)
+    Ok((out, postopt_trace_facts))
+}
+
+pub fn emit_runtime_package_sonatina_bytecode(
+    db: &DriverDataBase,
+    package: &RuntimePackage<'_>,
+    opt_level: OptLevel,
+) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
+    emit_runtime_package_sonatina_bytecode_with_options(db, package, opt_level, false, None)
+        .map(|(bytecode, _)| bytecode)
+}
+
+pub fn emit_runtime_package_sonatina_bytecode_with_observability(
+    db: &DriverDataBase,
+    package: &RuntimePackage<'_>,
+    opt_level: OptLevel,
+) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
+    emit_runtime_package_sonatina_bytecode_with_options(db, package, opt_level, true, None)
+        .map(|(bytecode, _)| bytecode)
 }
 
 pub fn emit_module_sonatina_ir(
@@ -664,6 +1208,17 @@ pub fn emit_module_sonatina_bytecode(
     let package = build_runtime_package(db, top_mod)?;
     let package = select_runtime_package_contract(db, package, contract)?;
     emit_runtime_package_sonatina_bytecode(db, &package, opt_level)
+}
+
+pub fn emit_module_sonatina_bytecode_with_observability(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
+    let package = build_runtime_package(db, top_mod)?;
+    let package = select_runtime_package_contract(db, package, contract)?;
+    emit_runtime_package_sonatina_bytecode_with_observability(db, &package, opt_level)
 }
 
 pub fn emit_ingot_sonatina_bytecode(
@@ -788,6 +1343,240 @@ mod tests {
     fn temp_fixture_url(name: &str) -> Url {
         let fixture_path = std::env::temp_dir().join(name);
         Url::from_file_path(&fixture_path).expect("fixture path should be absolute")
+    }
+
+    #[test]
+    fn wrapped_init_observability_stops_before_runtime_payload() {
+        let runtime = [0x60, 0x01, 0x00];
+        let deploy = wrap_as_init_code(&runtime);
+        let code_bytes = deploy.len() - runtime.len();
+        let observability = wrapped_init_observability(deploy.len(), code_bytes)
+            .expect("wrapped init sizes should fit the observability schema");
+
+        assert_eq!(observability.section.0, "init");
+        assert_eq!(observability.section_bytes as usize, deploy.len());
+        assert_eq!(observability.code_bytes as usize, code_bytes);
+        assert_eq!(observability.embed_bytes as usize, runtime.len());
+        assert_eq!(observability.mapped_code_bytes, 0);
+        assert_eq!(observability.unmapped_code_bytes as usize, code_bytes);
+        // The deploy-wrapper bytes must bucket as Synthetic (the F2 choice), so a
+        // regression that mis-buckets them fails here, not only on byte totals.
+        assert_eq!(
+            observability.unmapped_reason_coverage.synthetic as usize,
+            code_bytes
+        );
+        assert_eq!(
+            observability.unmapped_reason_coverage.total_bytes() as usize,
+            code_bytes
+        );
+        assert_eq!(observability.pc_map.len(), 1);
+        assert_eq!(observability.pc_map[0].pc_start, 0);
+        assert_eq!(observability.pc_map[0].pc_end as usize, code_bytes);
+        assert!(matches!(
+            observability.pc_map[0].attribution,
+            PcAttribution::Unmapped {
+                reason: UnmappedReason::Synthetic,
+                ..
+            }
+        ));
+    }
+
+    fn test_embed_observability(section_bytes: u32, ranges: &[(u32, u32)]) -> SectionObservability {
+        SectionObservability {
+            schema_version: OBSERVABILITY_SCHEMA_VERSION,
+            section: "embedded".into(),
+            section_bytes,
+            code_bytes: 0,
+            data_bytes: 0,
+            embed_bytes: section_bytes,
+            mapped_code_bytes: 0,
+            unmapped_code_bytes: 0,
+            unmapped_reason_coverage: Default::default(),
+            pc_map: ranges
+                .iter()
+                .map(|&(pc_start, pc_end)| PcMapEntry {
+                    pc_start,
+                    pc_end,
+                    unit: PcMapUnit::Synthetic {
+                        object: "embedded".into(),
+                        section: "embedded".into(),
+                        unit: SectionCodeUnitId(0),
+                    },
+                    func_name: "embedded".to_string(),
+                    block: BlockId(0),
+                    vcode_inst: VCodeInst(0),
+                    attribution: PcAttribution::Unmapped {
+                        machine_inst: None,
+                        reason: UnmappedReason::Synthetic,
+                    },
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn embedded_observability_ranges_shift_through_nested_sections() {
+        let leaf_key = ("leaf".to_string(), mir::RuntimeSectionName::Runtime);
+        let mut middle = test_embed_observability(4, &[]);
+        merge_embedded_pc_map(
+            &mut middle,
+            test_embed_observability(2, &[(0, 1)]),
+            SymbolDef { offset: 2, size: 2 },
+            &leaf_key,
+        )
+        .expect("leaf observability should merge into its parent");
+        assert_eq!(
+            middle
+                .pc_map
+                .iter()
+                .map(|entry| (entry.pc_start, entry.pc_end))
+                .collect::<Vec<_>>(),
+            vec![(2, 3)]
+        );
+
+        let middle_key = ("middle".to_string(), mir::RuntimeSectionName::Runtime);
+        let mut root = test_embed_observability(12, &[]);
+        merge_embedded_pc_map(
+            &mut root,
+            middle,
+            SymbolDef { offset: 4, size: 4 },
+            &middle_key,
+        )
+        .expect("nested observability should merge into the root");
+        assert_eq!(
+            root.pc_map
+                .iter()
+                .map(|entry| (entry.pc_start, entry.pc_end))
+                .collect::<Vec<_>>(),
+            vec![(6, 7)]
+        );
+    }
+
+    #[test]
+    fn embedded_observability_rejects_corrupt_ranges_and_overflow() {
+        let embed_key = ("embedded".to_string(), mir::RuntimeSectionName::Runtime);
+
+        let mut root = test_embed_observability(8, &[]);
+        let err = merge_embedded_pc_map(
+            &mut root,
+            test_embed_observability(4, &[(0, 5)]),
+            SymbolDef { offset: 4, size: 4 },
+            &embed_key,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("exceeds symbol size"));
+
+        let mut root = test_embed_observability(8, &[]);
+        let err = merge_embedded_pc_map(
+            &mut root,
+            test_embed_observability(4, &[(3, 2)]),
+            SymbolDef { offset: 4, size: 4 },
+            &embed_key,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("reversed range"));
+
+        let mut root = test_embed_observability(u32::MAX, &[]);
+        let err = merge_embedded_pc_map(
+            &mut root,
+            test_embed_observability(2, &[]),
+            SymbolDef {
+                offset: u32::MAX,
+                size: 2,
+            },
+            &embed_key,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("symbol range overflows"));
+
+        let mut root = test_embed_observability(8, &[]);
+        let err = merge_embedded_pc_map(
+            &mut root,
+            test_embed_observability(3, &[]),
+            SymbolDef { offset: 4, size: 4 },
+            &embed_key,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("describes 3 bytes"));
+    }
+
+    #[test]
+    fn embedded_observability_rejects_missing_inputs_and_cycles() {
+        use sonatina_ir::object::ObjectName;
+
+        let embed_key = ("embedded".to_string(), mir::RuntimeSectionName::Runtime);
+        let section_artifact = SectionArtifact {
+            bytes: Vec::new(),
+            symtab: Default::default(),
+            observability: Some(test_embed_observability(0, &[])),
+        };
+        let symbol_id = SymbolId::Embed(EmbedSymbol::from("embedded".to_string()));
+        let err = required_embed_symbol(&section_artifact, &symbol_id, &embed_key, "embedded")
+            .unwrap_err();
+        assert!(err.to_string().contains("missing symbol"));
+
+        let err = require_embedded_observability(None, &embed_key).unwrap_err();
+        assert!(err.to_string().contains("no section observability"));
+
+        let missing_objects = HashMap::new();
+        let err = resolve_compiled_section_artifact(
+            &missing_objects,
+            "embedded",
+            &mir::RuntimeSectionName::Runtime,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("compiled object"));
+
+        let artifact = ObjectArtifact {
+            object: ObjectName("embedded".into()),
+            sections: Default::default(),
+        };
+        let artifacts = HashMap::from([("embedded", &artifact)]);
+        let err = resolve_compiled_section_artifact(
+            &artifacts,
+            "embedded",
+            &mir::RuntimeSectionName::Runtime,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("compiled section"));
+
+        let mut path = FxHashSet::from_iter([embed_key.clone()]);
+        let err = enter_observability_embed(&mut path, embed_key).unwrap_err();
+        assert!(err.to_string().contains("embed cycle"));
+    }
+
+    #[test]
+    fn embedded_observability_rejects_equal_size_reordered_symbol() {
+        let embed_key = ("embedded".to_string(), mir::RuntimeSectionName::Runtime);
+        let symbol_id = SymbolId::Embed(EmbedSymbol::from("embedded".to_string()));
+        let mut symtab = rustc_hash::FxHashMap::default();
+        symtab.insert(symbol_id.clone(), SymbolDef { offset: 8, size: 4 });
+        let artifact = SectionArtifact {
+            bytes: vec![0; 12],
+            symtab,
+            observability: Some(test_embed_observability(4, &[])),
+        };
+        let err = required_embed_symbol_at(
+            &artifact,
+            &symbol_id,
+            &embed_key,
+            "embedded",
+            SymbolDef { offset: 4, size: 4 },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("disagrees with expected"));
+    }
+
+    #[test]
+    fn observable_bytecode_rejects_standalone_main_sections_only() {
+        let err =
+            ensure_observable_contract_section(&mir::RuntimeSectionName::Main, true).unwrap_err();
+        assert!(err.to_string().contains("standalone main sections"));
+
+        ensure_observable_contract_section(&mir::RuntimeSectionName::Main, false)
+            .expect("ordinary standalone compilation remains supported");
+        ensure_observable_contract_section(&mir::RuntimeSectionName::Runtime, true)
+            .expect("contract runtime observability remains supported");
     }
 
     #[test]

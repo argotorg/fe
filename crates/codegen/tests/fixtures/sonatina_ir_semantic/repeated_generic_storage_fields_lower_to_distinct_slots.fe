@@ -1,0 +1,23 @@
+
+use std::evm::{Address, StorageMap, StorPtr}
+
+struct Pair<T> {
+    left: T,
+    right: T,
+}
+
+msg Msg {
+    #[selector = 1]
+    Swap { user: Address, amount: u256 } -> u256,
+}
+
+pub contract C {
+    mut pair: StorPtr<Pair<StorageMap<Address, u256>>>,
+
+    recv Msg {
+        Swap { user, amount } -> u256 uses (mut pair) {
+            pair.left.set(key: user, value: amount)
+            pair.right.get(key: user)
+        }
+    }
+}

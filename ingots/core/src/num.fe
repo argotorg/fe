@@ -1692,6 +1692,11 @@ impl MulAssign for usize { const fn mul_assign(mut self, _ other: own usize) { s
 impl DivAssign for usize { const fn div_assign(mut self, _ other: own usize) { self = self / other } }
 impl RemAssign for usize { const fn rem_assign(mut self, _ other: own usize) { self = self % other } }
 impl PowAssign for usize { const fn pow_assign(mut self, _ other: own usize) { self = self ** other } }
+impl ShlAssign for usize { const fn shl_assign(mut self, _ other: own usize) { self = self << other } }
+impl ShrAssign for usize { const fn shr_assign(mut self, _ other: own usize) { self = self >> other } }
+impl BitAndAssign for usize { const fn bitand_assign(mut self, _ other: own usize) { self = self & other } }
+impl BitOrAssign for usize { const fn bitor_assign(mut self, _ other: own usize) { self = self | other } }
+impl BitXorAssign for usize { const fn bitxor_assign(mut self, _ other: own usize) { self = self ^ other } }
 impl Default for usize { fn default() -> Self { 0 } }
 
 // i256 impls

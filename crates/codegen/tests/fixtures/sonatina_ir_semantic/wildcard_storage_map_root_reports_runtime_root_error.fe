@@ -1,0 +1,8 @@
+
+use std::evm::StorageMap
+
+pub fn main() -> u256
+    uses (balances: mut StorageMap<u256, u256>)
+{
+    balances.get(key: 1)
+}

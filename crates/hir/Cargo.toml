@@ -11,6 +11,7 @@ doctest = false
 
 [dependencies]
 bitflags = "2.8"
+blake3.workspace = true
 camino.workspace = true
 cranelift-entity.workspace = true
 derive_more.workspace = true
@@ -34,6 +35,7 @@ tracing.workspace = true
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 
 common.workspace = true
+trace-facts.workspace = true
 dataflow.workspace = true
 parser.workspace = true
 test-utils.workspace = true
@@ -44,6 +46,7 @@ codespan-reporting.workspace = true
 testutils = []
 
 [dev-dependencies]
+trybuild = "1.0"
 ascii_tree = "0.1"
 camino.workspace = true
 dir-test.workspace = true

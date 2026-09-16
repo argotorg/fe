@@ -16,6 +16,7 @@ salsa.workspace = true
 serde-semver.workspace = true
 smol_str.workspace = true
 rust-embed = "8.5.0"
+serde = { version = "1.0", features = ["derive"] }
 toml = "0.8.8"
 tracing.workspace = true
 petgraph.workspace = true
@@ -26,3 +27,7 @@ typed-path.workspace = true
 ordermap = "0.5.5"
 rustc-hash.workspace = true
 radix_immutable = "0.1"
+
+[dev-dependencies]
+serde_json = "1.0"
+trybuild = "1.0"

@@ -1,0 +1,15 @@
+msg CanaryMsg {
+    #[selector = 0x01]
+    Get { n: u256, m: u256 } -> u256,
+}
+
+pub contract Canary {
+    recv CanaryMsg {
+        Get { n, m } -> u256 {
+            let unrelated = m & 0x223456789abcde
+            let first = n & 0x123456789abcde
+            let second = n & 0x123456789abcde
+            return (first | second) ^ unrelated
+        }
+    }
+}

@@ -1,0 +1,37 @@
+
+use core::ptr::{self, FixedMemBuffer}
+use core::result::Result
+use std::evm::crypto::{ec_add, keccak256}
+
+msg FixedBufferMsg {
+    #[selector = 0x01]
+    Hash { word: u256 } -> u256,
+    #[selector = 0x02]
+    AddIdentity -> u256,
+}
+
+pub contract FixedBuffer {
+    recv FixedBufferMsg {
+        Hash { word } -> u256 {
+            fixed_buffer_hash(word)
+        }
+        AddIdentity -> u256 {
+            fixed_precompile_buffers()
+        }
+    }
+}
+
+fn fixed_buffer_hash(word: u256) -> u256 {
+    let buffer = FixedMemBuffer<64>::alloc()
+    let words = ptr::cast<u8, u256>(buffer.ptr())
+    *words = word
+    *ptr::offset(words, 1) = word
+    keccak256(buffer.span())
+}
+
+fn fixed_precompile_buffers() -> u256 {
+    match ec_add(ax: 0, ay: 0, bx: 0, by: 0) {
+        Result::Ok(result) => result.0,
+        Result::Err(_) => 0,
+    }
+}

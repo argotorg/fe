@@ -1,0 +1,26 @@
+msg SharedMsg {
+    #[selector = 0x01]
+    Get { n: u256 } -> u256,
+}
+
+fn helper(n: u256) -> u256 {
+    return n + 1
+}
+
+struct SharedStore {
+    value: u256,
+}
+
+pub contract Shared {
+    mut store: SharedStore
+
+    init(n: u256) uses (mut store) {
+        store.value = helper(n)
+    }
+
+    recv SharedMsg {
+        Get { n } -> u256 {
+            return helper(n)
+        }
+    }
+}

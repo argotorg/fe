@@ -1,0 +1,71 @@
+
+struct Rooted<const ROOT: u256 = _> {}
+
+impl<const ROOT: u256> Copy for Rooted<ROOT> {}
+
+impl<const ROOT: u256> Rooted<ROOT> {
+    fn root(self) -> u256 {
+        ROOT
+    }
+}
+
+fn repeat<const ROOT: u256>(value: Rooted<ROOT>) -> [Rooted<ROOT>; 3] {
+    [value; 3]
+}
+
+fn reorder<const ROOT: u256>(values: [Rooted<ROOT>; 3]) -> [Rooted<ROOT>; 3] {
+    [values[2], values[0], values[1]]
+}
+
+fn fresh<const ROOT: u256>() -> Rooted<ROOT> {
+    Rooted {}
+}
+
+fn replace<const ROOT: u256>(
+    values: own [Rooted<ROOT>; 3],
+    lane: usize,
+) -> [Rooted<ROOT>; 3] {
+    let mut result = values
+    result[lane] = fresh()
+    result
+}
+
+fn patch<const ROOT: u256>(
+    values: own [Rooted<ROOT>; 3],
+    lane: usize,
+    replacement: Rooted<ROOT>,
+) -> [Rooted<ROOT>; 3] {
+    let mut result = values
+    result[lane] = replacement
+    result
+}
+
+fn select<const ROOT: u256>(values: [Rooted<ROOT>; 3], lane: usize) -> Rooted<ROOT> {
+    values[lane]
+}
+
+msg Msg {
+    #[selector = 1]
+    Get { lane: usize } -> u256,
+}
+
+pub contract C {
+    mut values: [Rooted; 3],
+
+    recv Msg {
+        Get { lane } -> u256 uses (values) {
+            let repeated = repeat(value: values[0])
+            let reordered = reorder(values: repeated)
+            let replaced = replace(
+                values: reordered,
+                lane: lane,
+            )
+            let patched = patch(
+                values: replaced,
+                lane: lane,
+                replacement: values[0],
+            )
+            select(values: patched, lane: lane).root()
+        }
+    }
+}

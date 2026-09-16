@@ -1,0 +1,7 @@
+error: TraceFactSpec requires #[trace_fact(type = "...")]
+ --> tests/ui/trace_fact_spec_missing_fact_attr.rs:4:21
+  |
+4 | #[derive(Serialize, TraceFactSpec)]
+  |                     ^^^^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `TraceFactSpec` (in Nightly builds, run with -Z macro-backtrace for more info)

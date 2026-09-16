@@ -9,6 +9,76 @@ It is not a stability guarantee.
 
 - `--color <auto|always|never>`: controls colored output (default: `auto`).
 
+### Unstable developer tracing
+
+`fe dev trace emit` produces compiler-derived trace JSONL with phase-owned MIR facts, source-local display names, MIR storage decisions, Sonatina trace-view CFG/loop facts through a Fe adapter, and actual EVM bytecode instruction/gas facts. It accepts a standalone `.fe` file, an ingot directory, or a workspace member name; one bundle covers every runtime module and contract of the target (workspace roots are rejected, pass a member). The target must compile: a bundle asserts compiler-emitted provenance, so emission prints the diagnostics and refuses if `fe check` would fail. Backend storage allocation, target bytecode loop membership, and zext causality are still explicit gaps. Whole-file code-object source attribution is coarse and should be read as low confidence. `fe dev trace validate` re-checks an emitted bundle and reports the schema-validation summary.
+
+```
+fe dev trace emit crates/fe/tests/fixtures/trace/fib_demo.fe --out target/fib.trace.jsonl
+fe dev trace validate --from target/fib.trace.jsonl
+```
+
+`fe dev debug emit --format ethdebug` derives an ethdebug instruction/source artifact from a validated trace bundle; `fe dev debug validate` re-checks an artifact (and its optional Fe origin/confidence attribution details).
+
+```
+fe dev debug emit --format ethdebug --from target/fib.trace.jsonl --out target/fib.ethdebug.json --attribution-details target/fib.attribution-details.json
+fe dev debug validate --format ethdebug --input target/fib.ethdebug.json --attribution-details target/fib.attribution-details.json
+```
+
+Emit also prints a per-program human-readable attribution summary, including when no
+attribution details file is requested. Its counts describe the emitted view;
+they are not a completeness guarantee and are not a machine-readable API.
+
+#### Attribution and capability contract
+
+The observable compiler path supports contract creation/runtime sections, not
+standalone `main` sections. It provides partial instruction attribution, not
+complete source coverage or exhaustive transformation history. An exact path
+in the recorded graph is not proof that every contributing source origin was
+recorded. Shared generated paths must not select one requesting statement as
+their unique source; per-site mappings remain useful where justified.
+
+The fact schema and relational projections already represent types, lexical
+scopes, variables, and location ranges. This does not mean the compiler
+populates all of them: the current source-local producer emits unknown types
+and absent scopes, and the EVM trace path does not provide physical variable
+location ranges. Backend unmapped reasons are validated in aggregate and
+preserved per emitted instruction as typed `attribution_gap` facts. The debug
+bundle and optional attribution details expose them as
+`classification_reason`, including
+missing provenance, missing machine instructions, label/fixup-only emission,
+synthetic emission, unknown backend reasons, and missing PC-map entries.
+`NoSourceAttributionEvidence` identifies an unmapped instruction without a
+more specific explanation; it does not establish why the evidence is missing.
+Consumers must not interpret these missing capabilities as complete negative
+evidence.
+
+Source identities belong to HIR/MIR, transformation relationships to the
+transform that knows them, and emitted layout to the backend/linker. Exporters
+project those facts; they must not invent missing attribution. The shared
+panic regression exercises generated-block reuse at O0/O2 in both statement
+orders. A separate optimized mask canary checks a surviving constant's source
+against genuine contributors and a live neighboring expression. These are
+bounded semantic checks, not general optimizer fusion or multi-parent history.
+
+The debug artifact uses a Fe-specific versioned schema, not an upstream
+ethdebug program document. Its wrapper, absent contract definitions, and absent
+source contents require adaptation before stock-consumer use. The local
+validator checks the Fe schema, not upstream conformance or debugger behavior.
+Code-object export accepts the typed EVM creation and runtime kinds only;
+native, unknown, and mixed EVM/unsupported bundles are rejected rather than
+partially exported. The attribution index uses the same admission rule.
+Trace emission compiles
+separately from ordinary build/test execution, so it is not yet a bundle bound
+to the exact artifact executed by a failing test. These developer interfaces
+are not a stable, target-neutral instrumentation format.
+
+Trace bundles currently use schema v2, and attribution details use schema
+`fe-ethdebug-attribution-details-v1`. Version matching is exact. Attribution
+details are an experimental implementation detail with no compatibility
+guarantees. They may change or disappear, so regenerate older experimental
+outputs rather than relying on compatibility.
+
 ### Output streams
 
 - **Stdout**: “normal” command output (e.g. artifact paths, formatted file paths, dependency trees).

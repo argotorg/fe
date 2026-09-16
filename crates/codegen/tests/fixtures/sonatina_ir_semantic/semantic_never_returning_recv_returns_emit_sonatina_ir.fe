@@ -1,0 +1,25 @@
+
+use core::abi::Bytes
+
+msg Msg {
+    #[selector = 0x01]
+    GetBytes -> Bytes,
+    #[selector = 0x02]
+    GetScalar -> u256,
+}
+
+fn abort() -> ! {
+    core::panic()
+}
+
+pub contract C {
+    recv Msg {
+        GetBytes -> Bytes {
+            abort()
+        }
+
+        GetScalar -> u256 {
+            abort()
+        }
+    }
+}

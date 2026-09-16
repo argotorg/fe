@@ -1,0 +1,18 @@
+
+msg Msg {
+    #[selector = 1]
+    Identity { value: u256 } -> u256,
+    #[selector = 2]
+    Ping -> u256,
+}
+
+pub contract Identity {
+    recv Msg {
+        Identity { value } -> u256 {
+            value
+        }
+        Ping -> u256 {
+            1
+        }
+    }
+}
