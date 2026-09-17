@@ -4473,7 +4473,7 @@ pub fn validate_allocated_contract_layout<'db>(
                 primary_range = Some((first.start, end));
             }
         }
-        if primary_range.map_or((field.slot_offset, field.slot_offset), |range| range)
+        if primary_range.unwrap_or((field.slot_offset, field.slot_offset))
             != (field.slot_offset, expected_end)
         {
             return Err(LayoutInvariantError::InvalidFieldExtent { field: field.field });
