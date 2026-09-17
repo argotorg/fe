@@ -1100,3 +1100,124 @@ fn negated_min_i8_compares_equal() -> bool {
         "negated minimum integer literal should not stay abstract and fold to false"
     );
 }
+
+#[test]
+fn canonicalize_tracks_mutation_through_aggregate_capabilities() {
+    for (name, operation, folds) in [
+        ("field", "holder.handle = 1", false),
+        (
+            "reborrow",
+            "let alias = mut holder.handle\n alias = 1",
+            false,
+        ),
+        (
+            "array",
+            "let mut values = [holder]\n values[index].handle = 1",
+            false,
+        ),
+        (
+            "nested",
+            "let mut outer = Outer { inner: mut holder }\n outer.inner.handle = 1",
+            false,
+        ),
+        ("value_call", "write(holder)", false),
+        ("borrowed_call", "write_borrowed(mut holder)", false),
+        (
+            "returned",
+            "let alias = returned(holder)\n alias = 1",
+            false,
+        ),
+        (
+            "stored",
+            "let mut values = [Wrap { handle: mut other }]\n values[0] = holder\n values[0].handle = 1",
+            false,
+        ),
+        (
+            "call_stored",
+            "let mut values = [Wrap { handle: mut other }]\n replace(values: mut values, replacement: holder)\n values[0].handle = 1",
+            false,
+        ),
+        (
+            "loop",
+            "while index == 0 { holder.handle = 1\n break }",
+            false,
+        ),
+        ("reassigned_control", "holder.handle = 1\n value = 1", true),
+        ("unrelated_control", "holder.handle = 1", true),
+        ("shared_control", "read(ref unrelated)", true),
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let result = if matches!(name, "unrelated_control" | "shared_control") {
+            "unrelated == 7"
+        } else {
+            "value == 1"
+        };
+        let source = format!(
+            r#"
+struct Wrap {{ handle: mut u256 }}
+struct Outer {{ inner: mut Wrap }}
+fn read(_ value: ref u256) -> u256 {{ value }}
+fn write(holder: Wrap) {{ holder.handle = 1 }}
+fn write_borrowed(_ holder: mut Wrap) {{ holder.handle = 1 }}
+fn returned(holder: Wrap) -> mut u256 {{ holder.handle }}
+fn replace(values: mut [Wrap; 1], replacement: Wrap) {{ values[0] = replacement }}
+fn probe(index: usize) -> bool {{
+    let unrelated: u256 = 7
+    let mut value: u256 = 0
+    let mut other: u256 = 0
+    let mut holder = Wrap {{ handle: mut value }}
+    {operation}
+    {result}
+}}
+"#
+        );
+        let file = db.new_stand_alone(format!("ctfe_{name}.fe").into(), &source);
+        let (top_mod, _) = db.top_mod(file);
+        let func = top_mod.all_funcs(&db).iter().copied().find(|func| {
+            matches!(func.name(&db), Partial::Present(name) if name.data(&db) == "probe")
+        }).unwrap();
+        let (diagnostics, _) = check_func_body(&db, func).clone();
+        assert!(diagnostics.is_empty(), "{name}: {diagnostics:#?}");
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+        );
+        let body = canonicalize_semantic_consts(&db, instance).unwrap();
+        let mut constant_true = false;
+        let mut dynamic_comparison = false;
+        for statement in body.blocks.iter().flat_map(|block| &block.stmts) {
+            if let SStmtKind::Assign { dst, expr } = &statement.kind
+                && body.locals[dst.index()].ty.is_bool(&db)
+            {
+                match expr {
+                    SExpr::Const(SConst::Value(value)) => {
+                        assert!(
+                            !matches!(
+                                value.value(&db),
+                                SemConstValue::Scalar {
+                                    value: SemConstScalar::Bool(false),
+                                    ..
+                                }
+                            ),
+                            "{name}: stale comparison folded to false: {body:#?}"
+                        );
+                        constant_true |= matches!(
+                            value.value(&db),
+                            SemConstValue::Scalar {
+                                value: SemConstScalar::Bool(true),
+                                ..
+                            }
+                        );
+                    }
+                    SExpr::Call { .. } => dynamic_comparison = true,
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(constant_true, folds, "{name}: {body:#?}");
+        assert!(
+            folds || dynamic_comparison,
+            "{name}: missing comparison: {body:#?}"
+        );
+    }
+}
