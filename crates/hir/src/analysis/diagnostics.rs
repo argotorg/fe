@@ -4747,16 +4747,8 @@ impl DiagnosticVoucher for BodyDiag<'_> {
 
             BodyDiag::ConstFnEffectsNotAllowed(primary) => primary_diag(
                 severity,
-                "effects are not allowed in a `const fn`",
-                "remove the `uses (...)` clause",
-                primary.resolve(db),
-                error_code,
-            ),
-
-            BodyDiag::ConstFnWithNotAllowed(primary) => primary_diag(
-                severity,
-                "`with` expressions are not allowed in a `const fn`",
-                "`with` is not supported in const evaluation",
+                "unsupported effects in a `const fn`",
+                "a `const fn` may only use immutable trait providers",
                 primary.resolve(db),
                 error_code,
             ),
@@ -4793,11 +4785,11 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     .unwrap_or("<unknown>");
                 CompleteDiagnostic::new(
                     severity,
-                    "effectful call in `const fn`".to_string(),
+                    "unsupported effectful call in `const fn`".to_string(),
                     vec![
                         SubDiagnostic::new(
                             LabelStyle::Primary,
-                            format!("`{name}` requires effects"),
+                            format!("`{name}` needs effects other than immutable trait providers"),
                             primary.resolve(db),
                         ),
                         SubDiagnostic::new(

@@ -1,0 +1,73 @@
+// Const and runtime calls share provider selection and ordinary trait dispatch.
+trait Compute: Copy {
+    type Item
+    const fn compute(self) -> Self::Item
+}
+
+struct Number { value: u256 }
+struct Twice { value: u256 }
+struct Flag { value: bool }
+impl Copy for Number {}
+impl Copy for Twice {}
+impl Copy for Flag {}
+impl Compute for Number {
+    type Item = u256
+    const fn compute(self) -> u256 { self.value }
+}
+impl Compute for Twice {
+    type Item = u256
+    const fn compute(self) -> u256 { self.value * 2 }
+}
+impl Compute for Flag {
+    type Item = bool
+    const fn compute(self) -> bool { self.value }
+}
+
+const fn consume<T>() -> T uses (evidence: Compute<Item = T>) {
+    evidence.compute()
+}
+const fn forward<T>() -> T uses (evidence: Compute<Item = T>) {
+    consume<T>()
+}
+const fn answer() -> u256 {
+    with (Compute<Item = u256> = Number { value: 11 }) {
+        let before = forward<u256>()
+        let inside = with (Compute<Item = u256> = Twice { value: 7 }) {
+            forward<u256>()
+        }
+        let after = forward<u256>()
+        with (Compute<Item = bool> = Flag { value: true }) {
+            assert!(forward<bool>())
+            assert!(forward<u256>() == 11)
+        }
+        before + inside + after
+    }
+}
+const ANSWER: u256 = answer()
+
+// Effect slots are matched by binding position, independently of ordinary
+// arguments, including a provider the callee never reads.
+const fn unused(_ x: u256) -> u256 uses (number: Compute<Item = u256>, flag: Compute<Item = bool>) {
+    x
+}
+const fn read_both(_ x: u256) -> u256 uses (number: Compute<Item = u256>, flag: Compute<Item = bool>) {
+    if flag.compute() { number.compute() + x } else { x }
+}
+const fn multiple() -> u256 {
+    with (Compute<Item = bool> = Flag { value: true }, Compute<Item = u256> = Number { value: 99 }) {
+        unused(17) + read_both(1)
+    }
+}
+const MULTIPLE: u256 = multiple()
+
+#[test]
+fn const_and_runtime_providers_agree() {
+    assert!(ANSWER == 36)
+    assert!(answer() == ANSWER)
+}
+
+#[test]
+fn const_and_runtime_effect_positions_agree() {
+    assert!(MULTIPLE == 117)
+    assert!(multiple() == MULTIPLE)
+}

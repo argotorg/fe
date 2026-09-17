@@ -172,6 +172,88 @@ fn semantic_const_operands_keep_formal_evidence_distinct() {
 }
 
 #[test]
+fn semantic_ctfe_defers_effectful_calls_like_pure_calls() {
+    use fe_hir::analysis::ty::{
+        const_ty::ConstTyId,
+        ty_def::{PrimTy, TyBase, TyData, TyId},
+    };
+
+    // A call whose input is still generic blocks the whole evaluation, which
+    // is replayed after specialization. A call with a provider behaves the
+    // same way and runs with that provider once the input is known.
+    for fixture in ["symbolic_effectful_call.fe", "symbolic_pure_call.fe"] {
+        let mut db = HirAnalysisTestDb::default();
+        let (path, text) = semantic_ctfe_fixture(fixture);
+        let file = db.new_stand_alone(path, &text);
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let owner = BodyOwner::Func(find_func(&db, top_mod, "symbolic"));
+        let generic = eval_body_owner_const(&db, owner, vec![]);
+        assert!(
+            matches!(generic, EvalOutcome::Blocked(_)),
+            "{fixture}: {generic:?}"
+        );
+        let two = TyId::new(
+            &db,
+            TyData::ConstTy(ConstTyId::integer(
+                &db,
+                TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize))),
+                2.into(),
+            )),
+        );
+        let value = match eval_body_owner_const(&db, owner, vec![two]) {
+            EvalOutcome::Ready(value) => value,
+            outcome => panic!("{fixture}: {outcome:?}"),
+        };
+        assert_eq!(value.pretty_print(&db), "99", "{fixture}");
+    }
+}
+
+#[test]
+fn semantic_ctfe_provider_edits_match_fresh_databases() {
+    use salsa::Setter;
+
+    let path = camino::Utf8PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fe/tests/fixtures/fe_test/const_trait_providers.fe"
+    ));
+    let original = std::fs::read_to_string(&path).expect("fixture should be readable");
+    fn evaluate<'db>(
+        db: &'db HirAnalysisTestDb,
+        top_mod: fe_hir::hir_def::TopLevelMod<'db>,
+    ) -> String {
+        let func = find_func(db, top_mod, "answer");
+        match eval_body_owner_const(db, BodyOwner::Func(func), vec![]) {
+            EvalOutcome::Ready(value) => value.pretty_print(db),
+            outcome => panic!("{outcome:?}"),
+        }
+    }
+    let mut warm = HirAnalysisTestDb::default();
+    let file = warm.new_stand_alone(path.clone(), &original);
+    for (provider, number, expected) in [
+        ("Twice", 7, "36"),
+        ("Number", 7, "29"),
+        ("Twice", 9, "40"),
+        ("Twice", 7, "36"),
+    ] {
+        let source = original.replace(
+            "Twice { value: 7 }",
+            &format!("{provider} {{ value: {number} }}"),
+        );
+        file.set_text(&mut warm).to(source.clone());
+        let (top_mod, _) = warm.top_mod(file);
+        warm.assert_no_diags(top_mod);
+        assert_eq!(evaluate(&warm, top_mod), expected, "{provider} {number}");
+
+        let mut fresh = HirAnalysisTestDb::default();
+        let fresh_file = fresh.new_stand_alone(path.clone(), &source);
+        let (fresh_top, _) = fresh.top_mod(fresh_file);
+        fresh.assert_no_diags(fresh_top);
+        assert_eq!(evaluate(&fresh, fresh_top), expected, "{provider} {number}");
+    }
+}
+
+#[test]
 fn canonicalize_folds_const_calls_into_nested_aggregate_consts() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -694,7 +776,6 @@ fn const_fn_match_has_no_const_body_diagnostic() {
             diag,
             FuncBodyDiag::Body(
                 BodyDiag::ConstFnEffectsNotAllowed(_)
-                    | BodyDiag::ConstFnWithNotAllowed(_)
                     | BodyDiag::ConstFnNonConstCall { .. }
                     | BodyDiag::ConstFnEffectfulCall { .. }
             )

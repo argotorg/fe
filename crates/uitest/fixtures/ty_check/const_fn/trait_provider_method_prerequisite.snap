@@ -1,0 +1,19 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_fn/trait_provider_method_prerequisite.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_provider_method_prerequisite.fe:12:14
+   │
+ 4 │     const fn compute(self) -> u256 where Self: Gate
+   │                                                ---- required by this bound on `compute`
+   ·
+12 │     evidence.compute()
+   │              ^^^^^^^ `evidence` doesn't implement `Gate`
+
+error[6-0005]: trait bound for concrete type is not allowed
+  ┌─ trait_provider_method_prerequisite.fe:8:42
+  │
+8 │     const fn compute(self) -> u256 where Self: Gate { 42 }
+  │                                          ^^^^ `Number` is a concrete type

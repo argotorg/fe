@@ -2,11 +2,29 @@ use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag};
 use crate::analysis::ty::trait_def::resolve_trait_method_instance;
 use crate::analysis::ty::trait_resolution::TraitSolveCx;
-use crate::analysis::ty::ty_check::{Callable, TypedBody};
+use crate::analysis::ty::ty_check::{
+    Callable, EffectArgLayoutView, EffectParamSite, EffectPassMode, TypedBody,
+};
 use crate::hir_def::{
     Body, CallableDef, Cond, CondId, Expr, ExprId, Func, Partial, Pat, Stmt, StmtId,
 };
+use crate::semantic::{EffectEnvView, EffectRequirementKey};
 use crate::span::DynLazySpan;
+
+/// Const transport admits immutable trait dictionaries, not storage providers.
+pub(crate) fn const_effects_supported(db: &dyn HirAnalysisDb, func: Func<'_>) -> bool {
+    if !func.has_effects(db) {
+        return true;
+    }
+    if func.is_extern(db) {
+        return false;
+    }
+    let requirements = EffectEnvView::new(EffectParamSite::Func(func)).requirements(db);
+    requirements.len() == func.effects(db).data(db).len()
+        && requirements.iter().all(|requirement| {
+            !requirement.is_mut && matches!(requirement.key, EffectRequirementKey::Trait(_))
+        })
+}
 
 pub(crate) fn check_const_fn_body<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -24,7 +42,7 @@ pub(crate) fn check_const_fn_body<'db>(
         diags: Vec::new(),
     };
 
-    if func.has_effects(db) {
+    if !const_effects_supported(db, func) {
         checker
             .diags
             .push(BodyDiag::ConstFnEffectsNotAllowed(func.span().effects().into()).into());
@@ -56,7 +74,7 @@ impl<'db> ConstFnChecker<'db, '_> {
                 primary,
                 callee: callable.callable_def(),
             });
-        } else if callee.has_effects(self.db) {
+        } else if !const_effects_supported(self.db, callee) {
             self.push(BodyDiag::ConstFnEffectfulCall {
                 primary,
                 callee: callable.callable_def(),
@@ -86,6 +104,23 @@ impl<'db> ConstFnChecker<'db, '_> {
     fn check_call_target(&mut self, expr: ExprId) {
         if let Some(callable) = self.typed_body.callable_expr(expr) {
             self.check_callable(expr.span(self.body).into(), callable);
+            if self.typed_body.call_effect_args(expr).is_some_and(|args| {
+                args.iter().any(|arg| {
+                    arg.required_mut
+                        || arg.key_kind != super::effects::EffectKeyKind::Trait
+                        || arg.pass_mode != EffectPassMode::ByValue
+                        || arg.layout_view != EffectArgLayoutView::Direct
+                        || arg.provider.is_some_and(|space| {
+                            space != crate::analysis::ty::provider::ProviderAddressSpace::Memory
+                        })
+                        || arg.provider_target_ty.is_some()
+                })
+            }) {
+                self.push(BodyDiag::ConstFnEffectfulCall {
+                    primary: expr.span(self.body).into(),
+                    callee: callable.callable_def(),
+                });
+            }
         }
     }
 
@@ -208,8 +243,11 @@ impl<'db> ConstFnChecker<'db, '_> {
                 self.check_expr(*rhs);
                 self.check_call_target(expr);
             }
-            Expr::With(_bindings, _body) => {
-                self.push(BodyDiag::ConstFnWithNotAllowed(expr.span(self.body).into()));
+            Expr::With(bindings, body) => {
+                for binding in bindings {
+                    self.check_expr(binding.value);
+                }
+                self.check_expr(*body);
             }
             Expr::RecordInit(_path, fields) => {
                 fields.iter().for_each(|field| self.check_expr(field.expr));

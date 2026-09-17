@@ -16,15 +16,16 @@ use crate::{
         },
         semantic::{
             BlockedInfo, ConstDemandKind, ConstDependency, EvalFailure, EvalOutcome, FieldIndex,
-            PrimitiveFault, SConst, SExpr, SLocalId, SOperand, SPlace, SStmt, SStmtKind,
-            STerminatorKind, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody,
-            SemanticConstRef, VariantIndex, array_const, bool_const, bytes_const,
+            PrimitiveFault, SConst, SEffectArgValue, SExpr, SLocalId, SOperand, SPlace, SStmt,
+            SStmtKind, STerminatorKind, SemConstId, SemConstScalar, SemConstValue, SemOrigin,
+            SemanticBody, SemanticConstRef, VariantIndex, array_const, bool_const, bytes_const,
             consts::instantiate_const_template, enum_const, execute_scalar_cast,
             execute_source_int_binary, execute_source_int_unary, instantiate_with_generic_args,
             int_const, int_in_range, int_ty_shape, normalize_int_to_shape, runtime_size_bytes,
             sem_const_eq, sem_const_from_ty, sem_const_ty, struct_const, tuple_const, unit_const,
         },
         ty::{
+            const_check::const_effects_supported,
             const_ty::{ConstTyData, ConstTyId},
             corelib::{
                 CtfeExternIntrinsic, NumericExternIntrinsic, PrimitiveWrapperCallKind,
@@ -32,7 +33,10 @@ use crate::{
             },
             normalize::normalize_ty,
             provider::ProviderAddressSpace,
-            ty_check::{BodyOwner, LocalBinding, ParamSite},
+            ty_check::{
+                BodyOwner, EffectArgLayoutView, EffectParamSite, EffectPassMode, LocalBinding,
+                ParamSite,
+            },
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
@@ -964,7 +968,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             self.frames.pop();
             CtfeValue::Value(result?)
         } else {
-            self.eval_instance(instance, args, origin)?
+            self.eval_instance(instance, args, Vec::new(), origin)?
         };
         let CtfeValue::Value(value) = value else {
             return Err(CtfeError::InvalidBorrow { origin }.into());
@@ -1075,7 +1079,12 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
 
         self.const_stack.push(key);
         let result = self
-            .eval_instance(SemanticInstance::new(self.db, key), Vec::new(), origin)
+            .eval_instance(
+                SemanticInstance::new(self.db, key),
+                Vec::new(),
+                Vec::new(),
+                origin,
+            )
             .and_then(|value| match value {
                 CtfeValue::Value(value) => {
                     let value = value.materialize(self.db);
@@ -1099,6 +1108,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         &mut self,
         instance: SemanticInstance<'db>,
         args: Vec<CtfeValue<'db>>,
+        effects: Vec<(u32, CtfeValue<'db>)>,
         origin: SemOrigin<'db>,
     ) -> EvalResult<'db, CtfeValue<'db>> {
         let body = self.const_evaluable_body(instance, origin)?;
@@ -1153,6 +1163,46 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 .into());
             };
             *slot = CtfeSlot::Init(arg);
+        }
+        // Effect positions use their declaration binding index, independently
+        // of ordinary argument positions. Never silently drop or invent a slot.
+        // A request that supplies no providers (a root evaluation of an
+        // effectful function) is unsupported; any other mismatch is malformed.
+        let mut effect_locals = body
+            .entry_locals
+            .iter()
+            .filter_map(|local| match body.local(*local)?.source? {
+                LocalBinding::EffectParam {
+                    site: EffectParamSite::Func(func),
+                    idx,
+                    ..
+                } if instance.key(self.db).owner(self.db) == BodyOwner::Func(func) => {
+                    Some((idx as u32, *local))
+                }
+                _ => None,
+            })
+            .collect::<FxHashMap<_, _>>();
+        if effects.is_empty() && !effect_locals.is_empty() {
+            return Err(CtfeError::NotConstEvaluable { origin }.into());
+        }
+        let effect_arity_mismatch = || -> EvalStop<'db> {
+            CtfeError::InvalidOperation {
+                origin,
+                message: "CTFE effect arity mismatch".into(),
+            }
+            .into()
+        };
+        if effect_locals.len() != effects.len() {
+            return Err(effect_arity_mismatch());
+        }
+        for (idx, value) in effects {
+            let Some(local) = effect_locals.remove(&idx) else {
+                return Err(effect_arity_mismatch());
+            };
+            if !matches!(value, CtfeValue::Value(_)) {
+                return Err(CtfeError::InvalidBorrow { origin }.into());
+            }
+            locals[local.index()] = CtfeSlot::Init(value);
         }
         let frame_idx = self.frames.len();
         self.frames.push(CtfeFrame {
@@ -1213,6 +1263,9 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         match instance.key(self.db).owner(self.db) {
             BodyOwner::Func(func) if !func.is_const(self.db) => {
                 Err(CtfeError::NonConstCall { origin })
+            }
+            BodyOwner::Func(func) if !const_effects_supported(self.db, func) => {
+                Err(CtfeError::NotConstEvaluable { origin })
             }
             BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
                 Err(CtfeError::NotConstEvaluable { origin })
@@ -1312,14 +1365,57 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 effect_args,
                 ..
             } => {
-                if !effect_args.is_empty() {
-                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                let mut effects = Vec::with_capacity(effect_args.len());
+                for arg in &effect_args {
+                    if arg.required_mut
+                        || !matches!(
+                            arg.pass_mode,
+                            EffectPassMode::ByValue | EffectPassMode::ByPlace
+                        )
+                        || arg.layout_view != EffectArgLayoutView::Direct
+                        || arg
+                            .provider
+                            .is_some_and(|space| space != ProviderAddressSpace::Memory)
+                        || arg.provider_target_ty.is_some()
+                    {
+                        return Err(CtfeError::NotConstEvaluable { origin }.into());
+                    }
+                    let value = match &arg.arg {
+                        SEffectArgValue::Value(operand) => {
+                            let value = self.read_operand(frame_idx, *operand, origin)?;
+                            if !matches!(value, CtfeValue::Value(_)) {
+                                return Err(CtfeError::NotConstEvaluable { origin }.into());
+                            }
+                            value
+                        }
+                        // A `with` provider is captured once as a place and
+                        // passed by place. An immutable provider reads the
+                        // same as a copy of its value.
+                        SEffectArgValue::Place(place) => {
+                            let place = self.resolve_place(frame_idx, place, origin)?;
+                            let r#ref = CtfeRef {
+                                frame: place.frame,
+                                root: place.root,
+                                path: place.path.into_boxed_slice(),
+                            };
+                            CtfeValue::Value(self.load_ref_value(&r#ref, origin)?)
+                        }
+                    };
+                    effects.push((arg.binding_idx, value));
                 }
                 let args = self
                     .eval_args(frame_idx, &args, origin)?
                     .into_iter()
                     .collect::<Vec<_>>();
                 let instance = self.instance_for_key(callee.key);
+                if !effect_args.is_empty() {
+                    let BodyOwner::Func(func) = instance.key(self.db).owner(self.db) else {
+                        return Err(CtfeError::NotConstEvaluable { origin }.into());
+                    };
+                    if !const_effects_supported(self.db, func) {
+                        return Err(CtfeError::NotConstEvaluable { origin }.into());
+                    }
+                }
                 if let Some(value) = self.try_eval_core_primitive_wrapper_call(
                     frame_idx, instance, result_ty, &args, origin,
                 )? {
@@ -1342,7 +1438,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 {
                     return Err(CtfeError::NonConstCall { origin }.into());
                 }
-                match self.eval_instance(instance, args, origin) {
+                match self.eval_instance(instance, args, effects, origin) {
                     Ok(value) => Ok(value),
                     Err(EvalStop::Blocked(mut info)) => {
                         info.trace.push(instance.key(self.db));
