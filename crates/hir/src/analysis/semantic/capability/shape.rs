@@ -1,16 +1,73 @@
-use super::semantics::{CapabilityClass, CapabilitySemantics, capability_semantics};
+use super::{
+    index::{IndexExpr, IndexSubst},
+    semantics::{CapabilityClass, CapabilitySemantics, capability_semantics},
+};
 use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{FieldIndex, VariantIndex},
         ty::{
             adt_def::{AdtRef, instantiate_adt_field_shape},
+            const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
+            fold::TyFoldable,
             trait_resolution::PredicateListId,
-            ty_def::TyId,
+            ty_def::{TyData, TyId},
         },
     },
     hir_def::scope_graph::ScopeId,
 };
+use num_traits::ToPrimitive;
+
+/// Array lengths preserve the complete normalized const expression. They never
+/// share the namespace of runtime values or lexical array-member binders.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ArrayLength<'db> {
+    Known(usize),
+    Symbolic(ConstTyId<'db>),
+}
+
+impl<'db> ArrayLength<'db> {
+    fn from_const(db: &'db dyn HirAnalysisDb, value: ConstTyId<'db>) -> Option<Self> {
+        match value.data(db) {
+            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) => {
+                value.data(db).to_usize().map(Self::Known)
+            }
+            ConstTyData::TyParam(..)
+            | ConstTyData::Abstract(..)
+            | ConstTyData::UnEvaluated { .. } => Some(Self::Symbolic(value)),
+            ConstTyData::TyVar(..) | ConstTyData::Hole(..) | ConstTyData::Evaluated(..) => None,
+        }
+    }
+
+    pub fn known(self) -> Option<usize> {
+        match self {
+            Self::Known(len) => Some(len),
+            Self::Symbolic(_) => None,
+        }
+    }
+
+    pub fn index(self) -> IndexExpr<'db> {
+        match self {
+            Self::Known(len) => IndexExpr::Const(len),
+            Self::Symbolic(value) => IndexExpr::TypeConst(value),
+        }
+    }
+
+    fn substitute(self, db: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
+        match subst.apply(self.index()) {
+            IndexExpr::Const(len) => Self::Known(len),
+            IndexExpr::TypeConst(value) => Self::from_const(db, value)
+                .expect("array length specialization must remain a valid const"),
+            _ => unreachable!("const substitution cannot introduce runtime or bound variables"),
+        }
+    }
+}
+
+impl<'db> From<ArrayLength<'db>> for IndexExpr<'db> {
+    fn from(value: ArrayLength<'db>) -> Self {
+        value.index()
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CapabilityShape<'db> {
@@ -19,11 +76,15 @@ pub struct CapabilityShape<'db> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(super) enum ShapeChildren<'db> {
+pub enum ShapeChildren<'db> {
     None,
+    EmptyArray,
     Product(Box<[(FieldIndex, ShapeId<'db>)]>),
     Sum(Box<[(VariantIndex, ShapeId<'db>)]>),
-    Array { len: usize, element: ShapeId<'db> },
+    Array {
+        len: ArrayLength<'db>,
+        element: ShapeId<'db>,
+    },
 }
 
 #[salsa::interned]
@@ -42,14 +103,58 @@ pub enum ShapeError<'db> {
 }
 
 impl<'db> ShapeId<'db> {
+    pub fn children(self, db: &'db dyn HirAnalysisDb) -> &'db ShapeChildren<'db> {
+        &self.data(db).children
+    }
+
     pub fn direct(self, db: &'db dyn HirAnalysisDb) -> Option<CapabilitySemantics<'db>> {
         self.data(db).direct
+    }
+
+    /// Specialize complete const-expression atoms in both shape lengths and the
+    /// semantic types attached to direct capability leaves.
+    pub fn substitute(self, db: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
+        let direct = self.direct(db).map(|mut semantics| {
+            semantics.target_ty = semantics.target_ty.fold_with(db, &mut subst.clone());
+            semantics.representation_ty = semantics
+                .representation_ty
+                .fold_with(db, &mut subst.clone());
+            semantics
+        });
+        let children = match self.children(db) {
+            ShapeChildren::None => ShapeChildren::None,
+            ShapeChildren::EmptyArray => ShapeChildren::EmptyArray,
+            ShapeChildren::Product(fields) => ShapeChildren::Product(
+                fields
+                    .iter()
+                    .map(|(field, child)| (*field, child.substitute(db, subst)))
+                    .collect(),
+            ),
+            ShapeChildren::Sum(variants) => ShapeChildren::Sum(
+                variants
+                    .iter()
+                    .map(|(variant, child)| (*variant, child.substitute(db, subst)))
+                    .collect(),
+            ),
+            ShapeChildren::Array { len, element } => {
+                let len = len.substitute(db, subst);
+                if len == ArrayLength::Known(0) {
+                    ShapeChildren::EmptyArray
+                } else {
+                    ShapeChildren::Array {
+                        len,
+                        element: element.substitute(db, subst),
+                    }
+                }
+            }
+        };
+        Self::new(db, CapabilityShape { direct, children })
     }
 
     pub fn contains_capability(self, db: &'db dyn HirAnalysisDb) -> bool {
         self.direct(db).is_some()
             || match &self.data(db).children {
-                ShapeChildren::None => false,
+                ShapeChildren::None | ShapeChildren::EmptyArray => false,
                 ShapeChildren::Product(fields) => fields
                     .iter()
                     .any(|(_, child)| child.contains_capability(db)),
@@ -57,7 +162,7 @@ impl<'db> ShapeId<'db> {
                     .iter()
                     .any(|(_, child)| child.contains_capability(db)),
                 ShapeChildren::Array { len, element } => {
-                    *len != 0 && element.contains_capability(db)
+                    *len != ArrayLength::Known(0) && element.contains_capability(db)
                 }
             }
     }
@@ -106,11 +211,13 @@ impl<'db> ShapeCx<'db> {
         let children = if let Some(inner) = ty.as_view(self.db) {
             self.build(inner)?.data(self.db).children.clone()
         } else if ty.is_array(self.db) {
-            let len = ty
-                .array_len(self.db)
+            let TyData::ConstTy(constant) = ty.generic_args(self.db)[1].data(self.db) else {
+                return Err(ShapeError::UnknownArrayLength(ty));
+            };
+            let len = ArrayLength::from_const(self.db, *constant)
                 .ok_or(ShapeError::UnknownArrayLength(ty))?;
-            if len == 0 {
-                ShapeChildren::None
+            if len == ArrayLength::Known(0) {
+                ShapeChildren::EmptyArray
             } else {
                 let element = self.build(ty.generic_args(self.db)[0])?;
                 ShapeChildren::Array { len, element }

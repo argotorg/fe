@@ -1,11 +1,11 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, iter::empty};
 
 use super::{
     guard::{ChoiceKey, Guard, ValueOccurrence},
     index::{BinderScope, IndexError, IndexExpr, IndexNamespace, IndexSubst},
     path::{Projection, StructuralPath},
     semantics::{CapabilityClass, CapabilitySemantics, StorageClass},
-    shape::{CapabilityShape, ShapeChildren, ShapeId, capability_shape},
+    shape::{ArrayLength, CapabilityShape, ShapeChildren, ShapeId, capability_shape},
     value::{Guarded, IndexPayload, ValueId, ValueInterner, ValueLimits},
 };
 use crate::{
@@ -26,18 +26,18 @@ use crate::{
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct Payload {
+struct Payload<'db> {
     tag: u8,
-    indices: Vec<IndexExpr>,
+    indices: Vec<IndexExpr<'db>>,
 }
-impl IndexPayload for Payload {
+impl<'db> IndexPayload<'db> for Payload<'db> {
     fn class(&self) -> CapabilityClass {
         CapabilityClass::Borrow(BorrowKind::Mut)
     }
-    fn indices(&self) -> impl Iterator<Item = IndexExpr> {
+    fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>> {
         self.indices.iter().copied()
     }
-    fn substitute(&self, subst: &IndexSubst) -> Self {
+    fn substitute(&self, subst: &IndexSubst<'db>) -> Self {
         Self {
             tag: self.tag,
             indices: self
@@ -49,13 +49,13 @@ impl IndexPayload for Payload {
     }
 }
 
-fn runtime(index: u32) -> IndexExpr {
+fn runtime<'db>(index: u32) -> IndexExpr<'db> {
     IndexExpr::Runtime(NValueId::from_u32(index))
 }
 fn scope() -> BinderScope {
     BinderScope::default()
 }
-fn path(index: IndexExpr) -> StructuralPath<IndexExpr> {
+fn path<'db>(index: IndexExpr<'db>) -> StructuralPath<IndexExpr<'db>> {
     StructuralPath::new([Projection::Index(index)])
 }
 
@@ -82,21 +82,24 @@ fn array_shape<'db>(db: &'db HirAnalysisTestDb, element: ShapeId<'db>, len: usiz
         CapabilityShape {
             direct: None,
             children: if len == 0 {
-                ShapeChildren::None
+                ShapeChildren::EmptyArray
             } else {
-                ShapeChildren::Array { len, element }
+                ShapeChildren::Array {
+                    len: ArrayLength::Known(len),
+                    element,
+                }
             },
         },
     )
 }
 
 fn leaf<'db>(
-    values: &mut ValueInterner<'db, Payload>,
+    values: &mut ValueInterner<'db, Payload<'db>>,
     shape: ShapeId<'db>,
     scope: &BinderScope,
     tag: u8,
-    indices: Vec<IndexExpr>,
-) -> ValueId<'db, Payload> {
+    indices: Vec<IndexExpr<'db>>,
+) -> ValueId<'db, Payload<'db>> {
     let empty = values.empty(shape, scope);
     values.with_direct(
         &empty,
@@ -425,8 +428,8 @@ enum Action {
 }
 
 fn evaluate<'db>(
-    values: &mut ValueInterner<'db, Payload>,
-    value: &ValueId<'db, Payload>,
+    values: &mut ValueInterner<'db, Payload<'db>>,
+    value: &ValueId<'db, Payload<'db>>,
     valuation: &[usize; 3],
 ) -> BTreeSet<u8> {
     let subst = IndexSubst::new(
@@ -659,9 +662,15 @@ fn inspect(pair: mut Pair, items: [mut u256; 1000000], empty: [mut u256; 0]) {}
     );
     assert!(matches!(
         shapes[1].data(&db).children,
-        ShapeChildren::Array { len: 1_000_000, .. }
+        ShapeChildren::Array {
+            len: ArrayLength::Known(1_000_000),
+            ..
+        }
     ));
-    assert!(matches!(shapes[2].data(&db).children, ShapeChildren::None));
+    assert!(matches!(
+        shapes[2].data(&db).children,
+        ShapeChildren::EmptyArray
+    ));
     assert_eq!(
         shapes[1],
         capability_shape(&db, func.scope(), instance.assumptions(&db), entries[1].ty).unwrap()
@@ -864,4 +873,331 @@ fn indexed_enum_guard_laws_are_independent_of_construction_order() {
             }
         }
     }
+}
+
+#[test]
+fn admitted_generic_array_parameters_have_capability_shapes() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "generic_capability_shape.fe".into(),
+        "fn inspect<const N: usize>(_ values: own [mut u256; N]) {}",
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = top_mod
+        .all_items(&db)
+        .iter()
+        .find_map(|item| match item {
+            ItemKind::Func(func) => Some(*func),
+            _ => None,
+        })
+        .unwrap();
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+    );
+    let artifacts =
+        normalize_semantic_body(&db, instance).expect("generic array body must be admitted");
+    let parameter = artifacts
+        .body
+        .values
+        .iter()
+        .find(|value| matches!(value.definition, NValueDefinition::EntryParam { param: 0 }))
+        .expect("generic array parameter");
+    assert!(
+        parameter.ty.is_array(&db),
+        "expected the actual aggregate value shape"
+    );
+    let shape = capability_shape(&db, func.scope(), instance.assumptions(&db), parameter.ty)
+        .expect("an admitted generic array must retain its nested mutable capability family");
+    assert!(shape.contains_capability(&db));
+}
+
+fn generic_array_shapes(db: &mut HirAnalysisTestDb) -> (&HirAnalysisTestDb, Vec<ShapeId<'_>>) {
+    let file = db.new_stand_alone(
+        "generic_array_algebra.fe".into(),
+        "fn inspect<const N: usize, const M: usize>(_ first: own [mut u256; N], _ second: own [mut u256; M], _ nested: own [[mut u256; M]; N], borrowed: mut [mut u256; N]) {}",
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = top_mod
+        .all_items(db)
+        .iter()
+        .find_map(|item| match item {
+            ItemKind::Func(func) => Some(*func),
+            _ => None,
+        })
+        .unwrap();
+    let instance = get_or_build_semantic_instance(
+        db,
+        identity_semantic_instance_key(db, BodyOwner::Func(func)),
+    );
+    let artifacts = normalize_semantic_body(db, instance).expect("generic body admission");
+    let shapes = artifacts
+        .body
+        .values
+        .iter()
+        .filter(|value| matches!(value.definition, NValueDefinition::EntryParam { .. }))
+        .map(|value| {
+            capability_shape(db, func.scope(), instance.assumptions(db), value.ty).unwrap()
+        })
+        .collect();
+    (db, shapes)
+}
+
+#[test]
+fn symbolic_bounds_preserve_const_identity_and_specialize_as_unsigned_comparisons() {
+    let mut db = HirAnalysisTestDb::default();
+    let (db, shapes) = generic_array_shapes(&mut db);
+    let lengths: Vec<_> = shapes[..2]
+        .iter()
+        .map(|shape| {
+            let ShapeChildren::Array { len, .. } = shape.children(db) else {
+                panic!("generic array")
+            };
+            len.index()
+        })
+        .collect();
+    let [n, m] = lengths[..] else { unreachable!() };
+    assert_ne!(n, m);
+    assert!(matches!(n, IndexExpr::TypeConst(_)));
+    assert_eq!(
+        IndexSubst::new(&scope(), &scope(), [(n, runtime(0))]),
+        Err(IndexError::InvalidConstSubstitution)
+    );
+    let always = Guard::always(&scope());
+    let n_bound = always.with_bound(runtime(0), n).unwrap();
+    let m_bound = always.with_bound(runtime(0), m).unwrap();
+    let ordered = always.with_bound(n, m).unwrap();
+    assert!(always.with_bound(n, n).is_none());
+    assert!(ordered.with_bound(m, n).is_none());
+    assert!(ordered.with_equality(n, m).is_none());
+    assert_eq!(n_bound.or(&m_bound), m_bound.or(&n_bound));
+    for n_value in [0, 1, 2, 4, usize::MAX] {
+        for m_value in [0, 1, 3, usize::MAX] {
+            for index in [0, 1, 2, 4, usize::MAX] {
+                let subst = IndexSubst::new(
+                    &scope(),
+                    &scope(),
+                    [
+                        (n, n_value.into()),
+                        (m, m_value.into()),
+                        (runtime(0), index.into()),
+                    ],
+                )
+                .unwrap();
+                assert_eq!(
+                    n_bound.substitute(&subst),
+                    (index < n_value).then(|| always.clone())
+                );
+                assert_eq!(
+                    ordered.substitute(&subst),
+                    (n_value < m_value).then(|| always.clone())
+                );
+                assert_eq!(
+                    n_bound.or(&m_bound).substitute(&subst),
+                    (index < n_value || index < m_value).then(|| always.clone())
+                );
+                assert_eq!(
+                    n_bound.and(&m_bound).and_then(|g| g.substitute(&subst)),
+                    (index < n_value && index < m_value).then(|| always.clone())
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn symbolic_array_updates_and_projections_commute_with_specialization() {
+    let mut db = HirAnalysisTestDb::default();
+    let (db, shapes) = generic_array_shapes(&mut db);
+    let shape = shapes[0];
+    let ShapeChildren::Array { len, element } = *shape.children(db) else {
+        panic!("array")
+    };
+    let mut values = ValueInterner::new(db, ValueLimits::default());
+    let initial = leaf(&mut values, element, &scope(), 1, vec![]);
+    let exact = leaf(&mut values, element, &scope(), 2, vec![]);
+    let dynamic = leaf(&mut values, element, &scope(), 3, vec![]);
+    let family = values.array_repeat(shape, &initial);
+    let family = values.replace(&family, &path(2.into()), &exact);
+    let family = values.replace(&family, &path(runtime(0)), &dynamic);
+    let selected = values.project(&family, &path(runtime(1)), ValueOccurrence::Summary);
+    let selected_zero = values.project(&family, &path(0.into()), ValueOccurrence::Summary);
+    for length in 0..=4 {
+        let subst = IndexSubst::new(&scope(), &scope(), [(len.index(), length.into())]).unwrap();
+        let specialized = values.substitute(&family, &subst);
+        assert_eq!(specialized.shape(), array_shape(db, element, length));
+        if length == 0 {
+            assert!(specialized.is_empty());
+            assert!(values.substitute(&selected_zero, &subst).is_empty());
+        } else {
+            let mut concrete = values.array_repeat(specialized.shape(), &initial);
+            if length > 2 {
+                concrete = values.replace(&concrete, &path(2.into()), &exact);
+            }
+            concrete = values.replace(&concrete, &path(runtime(0)), &dynamic);
+            assert_eq!(specialized, concrete);
+        }
+        for write in 0..=4 {
+            for read in 0..=4 {
+                let subst = IndexSubst::new(
+                    &scope(),
+                    &scope(),
+                    [
+                        (len.index(), length.into()),
+                        (runtime(0), write.into()),
+                        (runtime(1), read.into()),
+                    ],
+                )
+                .unwrap();
+                let actual = values.substitute(&selected, &subst);
+                let expected = if read >= length {
+                    BTreeSet::new()
+                } else {
+                    BTreeSet::from([if read == write {
+                        3
+                    } else if read == 2 {
+                        2
+                    } else {
+                        1
+                    }])
+                };
+                assert_eq!(
+                    evaluate(&mut values, &actual, &[0, 0, 0]),
+                    expected,
+                    "length={length}, write={write}, read={read}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn nested_generic_families_specialize_shapes_and_capability_types_together() {
+    let mut db = HirAnalysisTestDb::default();
+    let (db, shapes) = generic_array_shapes(&mut db);
+    let ShapeChildren::Array {
+        len: outer_len,
+        element: inner,
+    } = *shapes[2].children(db)
+    else {
+        panic!("outer array")
+    };
+    let ShapeChildren::Array {
+        len: inner_len,
+        element,
+    } = *inner.children(db)
+    else {
+        panic!("inner array")
+    };
+    let mut values = ValueInterner::new(db, ValueLimits::default());
+    let family = values.from_shape(shapes[2], &scope(), |_, path, scope| {
+        vec![Guarded {
+            guard: Guard::always(scope),
+            payload: Payload {
+                tag: 1,
+                indices: path.indices().collect(),
+            },
+        }]
+    });
+    assert_eq!(values.leaves(&family, ValueOccurrence::Summary).len(), 1);
+    for outer in 0..=3 {
+        for inner in 0..=3 {
+            let subst = IndexSubst::new(
+                &scope(),
+                &scope(),
+                [
+                    (outer_len.index(), outer.into()),
+                    (inner_len.index(), inner.into()),
+                ],
+            )
+            .unwrap();
+            let specialized = values.substitute(&family, &subst);
+            let shape = array_shape(db, array_shape(db, element, inner), outer);
+            assert_eq!(specialized.shape(), shape);
+            let concrete = values.from_shape(shape, &scope(), |_, path, scope| {
+                vec![Guarded {
+                    guard: Guard::always(scope),
+                    payload: Payload {
+                        tag: 1,
+                        indices: path.indices().collect(),
+                    },
+                }]
+            });
+            assert_eq!(specialized, concrete);
+            assert_eq!(specialized.is_empty(), outer == 0 || inner == 0);
+            let borrow = shapes[3].substitute(db, &subst).direct(db).unwrap();
+            assert_eq!(borrow.target_ty.array_len(db), Some(outer));
+            assert_eq!(
+                borrow.representation_ty.as_borrow(db).unwrap().1,
+                borrow.target_ty
+            );
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct ViewPayload;
+
+impl<'db> IndexPayload<'db> for ViewPayload {
+    fn class(&self) -> CapabilityClass {
+        CapabilityClass::View
+    }
+    fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>> {
+        empty()
+    }
+    fn substitute(&self, _: &IndexSubst<'db>) -> Self {
+        self.clone()
+    }
+}
+
+#[test]
+fn specializing_an_empty_array_keeps_its_direct_view_capability() {
+    let mut db = HirAnalysisTestDb::default();
+    let (db, shapes) = generic_array_shapes(&mut db);
+    let target_ty = shapes[3].direct(db).unwrap().target_ty;
+    let shape = ShapeId::new(
+        db,
+        CapabilityShape {
+            direct: Some(CapabilitySemantics {
+                class: CapabilityClass::View,
+                target_ty,
+                representation_ty: TyId::view_of(db, target_ty),
+                transport: ProviderTransport::ByValue,
+                storage: StorageClass::Borrowed,
+            }),
+            children: shapes[0].children(db).clone(),
+        },
+    );
+    let ShapeChildren::Array { len, .. } = shape.children(db) else {
+        panic!("array")
+    };
+    let mut values = ValueInterner::new(db, ValueLimits::default());
+    let empty = values.empty(shape, &scope());
+    let view = values.with_direct(
+        &empty,
+        vec![Guarded {
+            guard: Guard::always(&scope()),
+            payload: ViewPayload,
+        }],
+    );
+    let subst = IndexSubst::new(&scope(), &scope(), [(len.index(), 0.into())]).unwrap();
+    let specialized = values.substitute(&view, &subst);
+    assert!(matches!(
+        specialized.shape().children(db),
+        ShapeChildren::EmptyArray
+    ));
+    assert_eq!(
+        specialized
+            .shape()
+            .direct(db)
+            .unwrap()
+            .target_ty
+            .array_len(db),
+        Some(0)
+    );
+    assert_eq!(
+        values.leaves(&specialized, ValueOccurrence::Summary).len(),
+        1
+    );
+    assert_eq!(specialized.direct(), view.direct());
 }

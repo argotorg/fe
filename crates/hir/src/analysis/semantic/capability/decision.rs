@@ -365,6 +365,29 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
 }
 
 impl<V: Clone + Ord + Hash> Decision<V, bool> {
+    pub(super) fn less_bits(bits: impl IntoIterator<Item = (Variable<V>, Variable<V>)>) -> Self {
+        let mut builder = Builder::new();
+        let reject = builder.intern(Node::Leaf(false));
+        let accept = builder.intern(Node::Leaf(true));
+        let mut tail = reject;
+        for (left, right) in bits {
+            let (low, high) = match right {
+                Variable::Constant(false) => (tail, reject),
+                Variable::Constant(true) => (accept, tail),
+                Variable::Symbol(right) => (
+                    builder.select(right.clone(), tail, accept),
+                    builder.select(right, reject, tail),
+                ),
+            };
+            tail = match left {
+                Variable::Constant(false) => low,
+                Variable::Constant(true) => high,
+                Variable::Symbol(left) => builder.select(left, low, high),
+            };
+        }
+        builder.finish(tail)
+    }
+
     pub(super) fn upper_bound_bits(bits: impl IntoIterator<Item = (V, bool)>) -> Self {
         let mut builder = Builder::new();
         let reject = builder.intern(Node::Leaf(false));

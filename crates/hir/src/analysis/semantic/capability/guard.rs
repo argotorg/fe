@@ -29,16 +29,16 @@ pub enum ValueOccurrence {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ChoiceKey {
+pub struct ChoiceKey<'db> {
     occurrence: ValueOccurrence,
-    path: StructuralPath<IndexExpr>,
+    path: StructuralPath<IndexExpr<'db>>,
 }
 
-impl ChoiceKey {
-    pub fn new(occurrence: ValueOccurrence, path: StructuralPath<IndexExpr>) -> Self {
+impl<'db> ChoiceKey<'db> {
+    pub fn new(occurrence: ValueOccurrence, path: StructuralPath<IndexExpr<'db>>) -> Self {
         Self { occurrence, path }
     }
-    fn alias_condition(&self, other: &Self) -> Option<IndexCondition> {
+    fn alias_condition(&self, other: &Self) -> Option<IndexCondition<'db>> {
         if self.occurrence != other.occurrence
             || self.path.as_slice().len() != other.path.as_slice().len()
         {
@@ -57,7 +57,7 @@ impl ChoiceKey {
         (!condition.is_never()).then_some(condition)
     }
 
-    fn map_indices(&self, map: impl FnMut(&IndexExpr) -> IndexExpr) -> Self {
+    fn map_indices(&self, map: impl FnMut(&IndexExpr<'db>) -> IndexExpr<'db>) -> Self {
         Self {
             occurrence: self.occurrence,
             path: self.path.map_indices(map),
@@ -66,20 +66,20 @@ impl ChoiceKey {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct IndexBit {
+struct IndexBit<'db> {
     // Interleaving words avoids an exponential equality graph.
     bit: Reverse<u16>,
-    index: IndexExpr,
+    index: IndexExpr<'db>,
 }
 
-impl IndexBit {
-    fn new(index: IndexExpr, bit: u16) -> Self {
+impl<'db> IndexBit<'db> {
+    fn new(index: IndexExpr<'db>, bit: u16) -> Self {
         Self {
             index,
             bit: Reverse(bit),
         }
     }
-    fn substitute(&self, subst: &IndexSubst) -> Variable<Self> {
+    fn substitute(&self, subst: &IndexSubst<'db>) -> Variable<Self> {
         match subst.apply(self.index) {
             IndexExpr::Const(value) => Variable::Constant(constant_bit(value, self.bit.0)),
             index => Variable::Symbol(Self::new(index, self.bit.0)),
@@ -94,9 +94,9 @@ fn constant_bit(value: usize, bit: u16) -> bool {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct IndexCondition(Decision<IndexBit, bool>);
+struct IndexCondition<'db>(Decision<IndexBit<'db>, bool>);
 
-impl IndexCondition {
+impl<'db> IndexCondition<'db> {
     fn always() -> Self {
         Self(Decision::leaf(true))
     }
@@ -107,7 +107,7 @@ impl IndexCondition {
         self.0.is_leaf(&false)
     }
 
-    fn equal(lhs: IndexExpr, rhs: IndexExpr) -> Self {
+    fn equal(lhs: IndexExpr<'db>, rhs: IndexExpr<'db>) -> Self {
         let (lhs, rhs) = if lhs <= rhs { (lhs, rhs) } else { (rhs, lhs) };
         match (lhs, rhs) {
             (lhs, rhs) if lhs == rhs => Self::always(),
@@ -125,16 +125,28 @@ impl IndexCondition {
         }
     }
 
-    fn bounded(index: IndexExpr, len: usize) -> Self {
-        if let IndexExpr::Const(value) = index {
+    fn bounded(index: IndexExpr<'db>, len: IndexExpr<'db>) -> Self {
+        if index == len {
+            return Self::never();
+        }
+        if let (IndexExpr::Const(value), IndexExpr::Const(len)) = (index, len) {
             return if value < len {
                 Self::always()
             } else {
                 Self::never()
             };
         }
-        Self(Decision::upper_bound_bits((0..INDEX_BITS).map(|bit| {
-            (IndexBit::new(index, bit), constant_bit(len, bit))
+        if let IndexExpr::Const(len) = len {
+            return Self(Decision::upper_bound_bits(
+                (0..INDEX_BITS).map(|bit| (IndexBit::new(index, bit), constant_bit(len, bit))),
+            ));
+        }
+        Self(Decision::less_bits((0..INDEX_BITS).map(|bit| {
+            let word_bit = |index| match index {
+                IndexExpr::Const(value) => Variable::Constant(constant_bit(value, bit)),
+                index => Variable::Symbol(IndexBit::new(index, bit)),
+            };
+            (word_bit(index), word_bit(len))
         })))
     }
 
@@ -173,10 +185,10 @@ impl IndexCondition {
     fn implies(&self, other: &Self) -> bool {
         self.and(&other.not()).is_never()
     }
-    fn substitute(&self, subst: &IndexSubst) -> Self {
+    fn substitute(&self, subst: &IndexSubst<'db>) -> Self {
         Self(self.0.map(|bit| bit.substitute(subst), |value| *value))
     }
-    fn indices(&self) -> BTreeSet<IndexExpr> {
+    fn indices(&self) -> BTreeSet<IndexExpr<'db>> {
         self.0
             .variables()
             .into_iter()
@@ -192,7 +204,10 @@ impl IndexCondition {
 
     // Find a representative only when the complete condition proves equality. Partial
     // known bits and coincident numeric IDs never establish index correlation.
-    fn representatives(&self, indices: &BTreeSet<IndexExpr>) -> BTreeMap<IndexExpr, IndexExpr> {
+    fn representatives(
+        &self,
+        indices: &BTreeSet<IndexExpr<'db>>,
+    ) -> BTreeMap<IndexExpr<'db>, IndexExpr<'db>> {
         let mut representatives = BTreeMap::new();
         let witness = self.0.witness(|value| *value).unwrap_or_default();
         for index in indices {
@@ -230,20 +245,20 @@ impl IndexCondition {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct ChoiceBit {
+struct ChoiceBit<'db> {
     bit: Reverse<u16>,
-    choice: ChoiceKey,
+    choice: ChoiceKey<'db>,
 }
 
-type Condition = Decision<ChoiceBit, IndexCondition>;
+type Condition<'db> = Decision<ChoiceBit<'db>, IndexCondition<'db>>;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Guard {
+pub struct Guard<'db> {
     scope: BinderScope,
-    condition: Condition,
+    condition: Condition<'db>,
 }
 
-impl Guard {
+impl<'db> Guard<'db> {
     pub fn always(scope: &BinderScope) -> Self {
         Self {
             scope: scope.clone(),
@@ -271,24 +286,30 @@ impl Guard {
         .expect("a union of satisfiable guards is satisfiable")
     }
 
-    pub fn with_equality(&self, lhs: IndexExpr, rhs: IndexExpr) -> Option<Self> {
+    pub fn with_equality(&self, lhs: IndexExpr<'db>, rhs: IndexExpr<'db>) -> Option<Self> {
         self.scope.validate(lhs).expect("free equality binder");
         self.scope.validate(rhs).expect("free equality binder");
         self.with_index_condition(&IndexCondition::equal(lhs, rhs))
     }
 
-    pub fn with_disequality(&self, lhs: IndexExpr, rhs: IndexExpr) -> Option<Self> {
+    pub fn with_disequality(&self, lhs: IndexExpr<'db>, rhs: IndexExpr<'db>) -> Option<Self> {
         self.scope.validate(lhs).expect("free disequality binder");
         self.scope.validate(rhs).expect("free disequality binder");
         self.with_index_condition(&IndexCondition::equal(lhs, rhs).not())
     }
 
-    pub fn with_bound(&self, index: IndexExpr, len: usize) -> Option<Self> {
+    pub fn with_bound(
+        &self,
+        index: IndexExpr<'db>,
+        len: impl Into<IndexExpr<'db>>,
+    ) -> Option<Self> {
         self.scope.validate(index).expect("free bound binder");
+        let len = len.into();
+        self.scope.validate(len).expect("free bound length binder");
         self.with_index_condition(&IndexCondition::bounded(index, len))
     }
 
-    pub fn with_variant(&self, choice: ChoiceKey, variant: VariantIndex) -> Option<Self> {
+    pub fn with_variant(&self, choice: ChoiceKey<'db>, variant: VariantIndex) -> Option<Self> {
         for index in choice.path.indices() {
             self.scope.validate(index).expect("free enum choice binder");
         }
@@ -311,7 +332,7 @@ impl Guard {
         )
     }
 
-    pub fn substitute(&self, subst: &IndexSubst) -> Option<Self> {
+    pub fn substitute(&self, subst: &IndexSubst<'db>) -> Option<Self> {
         assert_eq!(
             &self.scope,
             subst.source(),
@@ -331,6 +352,15 @@ impl Guard {
         )
     }
 
+    pub fn difference(&self, other: &Self) -> Option<Self> {
+        assert_eq!(self.scope, other.scope, "guard scopes must match");
+        Self::canonical(
+            &self.scope,
+            self.condition
+                .apply(&other.condition, |left, right| left.and(&right.not())),
+        )
+    }
+
     pub fn implies(&self, other: &Self) -> bool {
         assert_eq!(self.scope, other.scope, "guard scopes must match");
         self.condition
@@ -338,7 +368,7 @@ impl Guard {
             .is_leaf(&IndexCondition::never())
     }
 
-    pub fn proves_equal(&self, lhs: IndexExpr, rhs: IndexExpr) -> bool {
+    pub fn proves_equal(&self, lhs: IndexExpr<'db>, rhs: IndexExpr<'db>) -> bool {
         self.scope.validate(lhs).expect("free equality binder");
         self.scope.validate(rhs).expect("free equality binder");
         let equality = IndexCondition::equal(lhs, rhs);
@@ -347,7 +377,7 @@ impl Guard {
             .all(|condition| condition.implies(&equality))
     }
 
-    pub fn indices(&self) -> BTreeSet<IndexExpr> {
+    pub fn indices(&self) -> BTreeSet<IndexExpr<'db>> {
         let mut indices: BTreeSet<_> = self
             .condition
             .leaves()
@@ -368,7 +398,7 @@ impl Guard {
                 .sum::<usize>()
     }
 
-    fn with_index_condition(&self, condition: &IndexCondition) -> Option<Self> {
+    fn with_index_condition(&self, condition: &IndexCondition<'db>) -> Option<Self> {
         Self::canonical(
             &self.scope,
             self.condition.map(
@@ -381,7 +411,7 @@ impl Guard {
     // Indexed choice keys must also respect equalities proved by their index condition.
     // Identifying choice bits rebuilds the ordered graph and rejects conflicting variants;
     // no map collection is allowed to overwrite a contradictory requirement.
-    fn canonical(scope: &BinderScope, condition: Condition) -> Option<Self> {
+    fn canonical(scope: &BinderScope, condition: Condition<'db>) -> Option<Self> {
         if condition.is_leaf(&IndexCondition::never()) {
             return None;
         }

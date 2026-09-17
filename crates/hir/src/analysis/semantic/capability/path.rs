@@ -55,17 +55,20 @@ macro_rules! path_impl {
             }
         }
         impl<I: Clone> $path<I> {
+            pub fn concat(&self, suffix: &Self) -> Self {
+                Self(self.0.iter().chain(suffix.0.iter()).cloned().collect())
+            }
             pub fn appended(&self, step: Projection<I>) -> Self {
                 let mut steps = self.0.to_vec();
                 steps.push(step);
                 Self(steps.into())
             }
         }
-        impl $path<IndexExpr> {
-            pub fn substitute(&self, subst: &IndexSubst) -> Self {
+        impl<'db> $path<IndexExpr<'db>> {
+            pub fn substitute(&self, subst: &IndexSubst<'db>) -> Self {
                 self.map_indices(|index| subst.apply(*index))
             }
-            pub fn indices(&self) -> impl Iterator<Item = IndexExpr> + '_ {
+            pub fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>> + '_ {
                 self.0.iter().filter_map(|step| match step {
                     Projection::Index(index) => Some(*index),
                     _ => None,

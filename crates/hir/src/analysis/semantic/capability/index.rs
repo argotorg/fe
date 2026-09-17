@@ -1,7 +1,19 @@
 //! Lexically scoped symbolic indices. Binder numbers are lexical levels, never allocator IDs.
+use num_bigint::BigUint;
 use std::collections::BTreeMap;
 
-use crate::analysis::semantic::normalized::{NIndex, NValueId};
+use crate::{
+    analysis::{
+        HirAnalysisDb,
+        semantic::normalized::{NIndex, NValueId},
+        ty::{
+            const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
+            fold::{TyFoldable, TyFolder},
+            ty_def::{TyData, TyId},
+        },
+    },
+    hir_def::IntegerId,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IndexNamespace {
@@ -19,14 +31,15 @@ pub struct BoundIndex {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum IndexExpr {
+pub enum IndexExpr<'db> {
     Const(usize),
     Runtime(NValueId),
     FormalValue(u32),
+    TypeConst(ConstTyId<'db>),
     Bound(BoundIndex),
 }
 
-impl From<NIndex> for IndexExpr {
+impl<'db> From<NIndex> for IndexExpr<'db> {
     fn from(index: NIndex) -> Self {
         match index {
             NIndex::Const(value) => Self::Const(value),
@@ -41,15 +54,16 @@ pub struct BinderScope {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum IndexError {
-    FreeBinder(IndexExpr),
+pub enum IndexError<'db> {
+    FreeBinder(IndexExpr<'db>),
     ConstantSubstitution,
-    ConflictingSubstitution(IndexExpr),
+    InvalidConstSubstitution,
+    ConflictingSubstitution(IndexExpr<'db>),
     ScopeMismatch,
 }
 
 impl BinderScope {
-    pub fn bind(&self, namespace: IndexNamespace) -> (Self, IndexExpr) {
+    pub fn bind<'db>(&self, namespace: IndexNamespace) -> (Self, IndexExpr<'db>) {
         let mut nested = self.clone();
         let level = &mut nested.counts[namespace as usize];
         let index = IndexExpr::Bound(BoundIndex {
@@ -62,7 +76,21 @@ impl BinderScope {
         (nested, index)
     }
 
-    pub fn validate(&self, index: IndexExpr) -> Result<(), IndexError> {
+    /// Give an independently quantified occurrence fresh existential binders.
+    pub fn freshening<'db>(&self, destination: &Self) -> IndexSubst<'db> {
+        let mut destination = destination.clone();
+        let entries: Vec<_> = self
+            .variables()
+            .map(|source| {
+                let (nested, target) = destination.bind(IndexNamespace::Existential);
+                destination = nested;
+                (source, target)
+            })
+            .collect();
+        IndexSubst::new(self, &destination, entries).expect("fresh binders are scoped")
+    }
+
+    pub fn validate<'db>(&self, index: IndexExpr<'db>) -> Result<(), IndexError<'db>> {
         if let IndexExpr::Bound(bound) = index
             && bound.level >= self.counts[bound.namespace as usize]
         {
@@ -71,7 +99,7 @@ impl BinderScope {
         Ok(())
     }
 
-    pub(crate) fn variables(&self) -> impl Iterator<Item = IndexExpr> + '_ {
+    pub(crate) fn variables<'db>(&self) -> impl Iterator<Item = IndexExpr<'db>> + '_ {
         [
             IndexNamespace::Value,
             IndexNamespace::Loan,
@@ -89,24 +117,29 @@ impl BinderScope {
 
 /// A simultaneous, scope-checked substitution. Applying it never follows chains.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IndexSubst {
+pub struct IndexSubst<'db> {
     source: BinderScope,
     destination: BinderScope,
-    entries: BTreeMap<IndexExpr, IndexExpr>,
+    entries: BTreeMap<IndexExpr<'db>, IndexExpr<'db>>,
 }
 
-impl IndexSubst {
+impl<'db> IndexSubst<'db> {
     pub fn new(
         source: &BinderScope,
         destination: &BinderScope,
-        entries: impl IntoIterator<Item = (IndexExpr, IndexExpr)>,
-    ) -> Result<Self, IndexError> {
+        entries: impl IntoIterator<Item = (IndexExpr<'db>, IndexExpr<'db>)>,
+    ) -> Result<Self, IndexError<'db>> {
         let mut map = BTreeMap::new();
         for (from, to) in entries {
             source.validate(from)?;
             destination.validate(to)?;
             if matches!(from, IndexExpr::Const(_)) {
                 return Err(IndexError::ConstantSubstitution);
+            }
+            if matches!(from, IndexExpr::TypeConst(_))
+                && !matches!(to, IndexExpr::Const(_) | IndexExpr::TypeConst(_))
+            {
+                return Err(IndexError::InvalidConstSubstitution);
             }
             if map.insert(from, to).is_some_and(|previous| previous != to) {
                 return Err(IndexError::ConflictingSubstitution(from));
@@ -124,7 +157,7 @@ impl IndexSubst {
         Ok(substitution)
     }
 
-    pub fn apply(&self, index: IndexExpr) -> IndexExpr {
+    pub fn apply(&self, index: IndexExpr<'db>) -> IndexExpr<'db> {
         self.entries.get(&index).copied().unwrap_or(index)
     }
 
@@ -135,7 +168,7 @@ impl IndexSubst {
         &self.destination
     }
 
-    pub fn then(&self, next: &Self) -> Result<Self, IndexError> {
+    pub fn then(&self, next: &Self) -> Result<Self, IndexError<'db>> {
         if self.destination != next.source {
             return Err(IndexError::ScopeMismatch);
         }
@@ -165,5 +198,35 @@ impl IndexSubst {
                 .chain([(from, to)]),
         )
         .expect("lifting a checked substitution preserves binder scope")
+    }
+}
+
+impl<'db> From<usize> for IndexExpr<'db> {
+    fn from(value: usize) -> Self {
+        Self::Const(value)
+    }
+}
+
+// Type-level expressions are atomic identities in this domain. Instantiation
+// supplies a substitution for each complete expression, including derived bounds.
+impl<'db> TyFolder<'db> for IndexSubst<'db> {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        if let TyData::ConstTy(value) = ty.data(db) {
+            return match self.apply(IndexExpr::TypeConst(*value)) {
+                IndexExpr::Const(integer) => TyId::const_ty(
+                    db,
+                    ConstTyId::new(
+                        db,
+                        ConstTyData::Evaluated(
+                            EvaluatedConstTy::LitInt(IntegerId::new(db, BigUint::from(integer))),
+                            value.ty(db),
+                        ),
+                    ),
+                ),
+                IndexExpr::TypeConst(value) => TyId::const_ty(db, value),
+                _ => unreachable!("checked const substitution"),
+            };
+        }
+        ty.super_fold_with(db, self)
     }
 }

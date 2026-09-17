@@ -6,6 +6,7 @@ mod decision;
 pub mod guard;
 pub mod index;
 pub mod path;
+pub mod region;
 pub mod semantics;
 pub mod shape;
 pub mod value;
