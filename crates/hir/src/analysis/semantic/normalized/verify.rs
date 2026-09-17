@@ -5,8 +5,8 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            FieldIndex, Mutability, SConst, SemanticInstance, VariantIndex,
-            get_or_build_semantic_instance,
+            BorrowActivation, CallSiteId, FieldIndex, Mutability, SConst, SemOrigin,
+            SemanticInstance, VariantIndex, get_or_build_semantic_instance,
             lower::{effect_param_site, enum_tag_ty},
             normalized::*,
             sem_const_ty,
@@ -14,7 +14,7 @@ use crate::{
         ty::{
             adt_def::AdtRef,
             provider::{ProviderLayoutEvidence, provider_semantics},
-            ty_check::EffectPassMode,
+            ty_check::{BodyOwner, EffectPassMode},
             ty_def::{BorrowKind, CapabilityKind, PrimTy, TyBase, TyData, TyId},
             ty_is_copy, ty_is_noesc,
         },
@@ -76,6 +76,7 @@ pub enum NormalizedBodyVerifyError {
         actual: Option<BorrowKind>,
         target_matches: bool,
     },
+    InvalidBorrowActivation(NValueId),
     ExpressionType,
     ScalarCapability,
     ScalarOperandCapability(NValueId),
@@ -242,7 +243,55 @@ fn verify_expr<'db>(
             }
             Ok(())
         }
-        NExpr::Borrow { place, kind, .. } => {
+        NExpr::Borrow {
+            place,
+            kind,
+            activation,
+            ..
+        } => {
+            if let BorrowActivation::AtCall { call_site, callee } = *activation {
+                let NValueDefinition::Statement { block, statement } =
+                    body.values[result.index()].definition
+                else {
+                    return Err(NormalizedBodyVerifyError::InvalidBorrowActivation(result));
+                };
+                let origin = body.blocks[block.index()].statements[statement as usize].origin;
+                let valid_receiver = matches!((call_site, origin), (CallSiteId::Expr(call), SemOrigin::Expr(expr)) if call == expr)
+                    && matches!(callee.key.owner(db), BodyOwner::Func(func)
+                        if func.receiver_ty(db).is_some_and(|ty| matches!(ty.skip_binder().as_borrow(db), Some((BorrowKind::Mut, _)))));
+                let mut receivers = 0;
+                let used_elsewhere = body.value_is_used_with(result, |expr| {
+                    let mut uses = 0;
+                    expr.for_each_value_operand(|operand| {
+                        uses += usize::from(operand.value == result)
+                    });
+                    if uses == 0 {
+                        return false;
+                    }
+                    if let NExpr::Call {
+                        call_site: site,
+                        callee: target,
+                        args,
+                        ..
+                    } = expr
+                        && *site == call_site
+                        && *target == callee
+                        && args
+                            .first()
+                            .is_some_and(|receiver| receiver.value == result)
+                    {
+                        receivers += 1;
+                        uses != 1
+                    } else {
+                        true
+                    }
+                });
+                if *kind != BorrowKind::Mut || !valid_receiver || used_elsewhere || receivers > 1
+                    || body.roots.iter().any(|root| matches!(root.kind, NRootKind::CapabilityRepresentation { carrier } if carrier == result))
+                {
+                    return Err(NormalizedBodyVerifyError::InvalidBorrowActivation(result));
+                }
+            }
             let result_borrow = result_ty.as_borrow(db);
             if result_borrow
                 .is_none_or(|(result_kind, target)| result_kind != *kind || target != place.ty)

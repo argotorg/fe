@@ -23,6 +23,19 @@ pub enum Mutability {
     Immutable,
 }
 
+/// When a borrow begins excluding overlapping accesses. Only implicit mutable
+/// call receivers may reserve their target until argument evaluation finishes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum BorrowActivation<'db> {
+    Immediate,
+    /// Keep the intended call even when evaluating another argument diverges
+    /// and lowering never emits the call expression itself.
+    AtCall {
+        call_site: CallSiteId,
+        callee: SemanticCalleeRef<'db>,
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
 pub struct FieldIndex(pub u16);
 
@@ -469,6 +482,7 @@ pub enum SExpr<'db> {
     Borrow {
         place: SPlace<'db>,
         kind: BorrowKind,
+        activation: BorrowActivation<'db>,
         provider: Option<ProviderAddressSpace>,
     },
     GetEnumTag {

@@ -10,12 +10,12 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            CallSiteId, FieldIndex, LayoutBackingPlace, LayoutBackingSource, Mutability, SBlock,
-            SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmt, SStmtId, SStmtKind,
-            STerminator, STerminatorKind, SValueId, SemConstValue, SemOrigin, SemanticBody,
-            SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex, bool_const, bytes_const,
-            int_const, reify_runtime_const_for_ty, runtime_size_bytes, sem_const_from_ty,
-            unit_const,
+            BorrowActivation, CallSiteId, FieldIndex, LayoutBackingPlace, LayoutBackingSource,
+            Mutability, SBlock, SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmt,
+            SStmtId, SStmtKind, STerminator, STerminatorKind, SValueId, SemConstValue, SemOrigin,
+            SemanticBody, SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex, bool_const,
+            bytes_const, int_const, reify_runtime_const_for_ty, runtime_size_bytes,
+            sem_const_from_ty, unit_const,
         },
         ty::{
             const_ty::{
@@ -568,6 +568,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     SExpr::Borrow {
                         place,
                         kind,
+                        activation: BorrowActivation::Immediate,
                         provider: self.typed_body.expr_prop(self.db, expr).borrow_provider,
                     },
                 )
@@ -1121,12 +1122,22 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     fn lower_callable_receiver(&mut self, call_expr: ExprId, receiver: ExprId) -> SValueId {
-        if let Some(plan) = self
+        if let Some(site) = self
             .call_sites
             .get(call_expr.index())
             .and_then(|site| site.as_ref())
-            .and_then(|plan| plan.receiver)
+            && let Some(plan) = site.receiver
         {
+            let activation = if plan.kind == BorrowKind::Mut {
+                BorrowActivation::AtCall {
+                    call_site: CallSiteId::Expr(call_expr),
+                    callee: site
+                        .callee
+                        .expect("receiver reservation must have a callee"),
+                }
+            } else {
+                BorrowActivation::Immediate
+            };
             let receiver_prop = self.typed_body.expr_prop(self.db, receiver);
             let place = if let Some(place) = self.typed_body.expr_place(receiver) {
                 self.lower_place_data(place)
@@ -1156,6 +1167,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 SExpr::Borrow {
                     place,
                     kind: plan.kind,
+                    activation,
                     provider: receiver_prop.borrow_provider,
                 },
             );

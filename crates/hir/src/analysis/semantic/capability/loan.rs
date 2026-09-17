@@ -8,7 +8,10 @@ use super::{
     semantics::CapabilityClass,
     value::{Guarded, IndexPayload},
 };
-use crate::analysis::{semantic::SemOrigin, ty::ty_def::BorrowKind};
+use crate::analysis::{
+    semantic::{BorrowActivation, SemOrigin},
+    ty::ty_def::BorrowKind,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LoanId(pub usize);
@@ -38,12 +41,6 @@ impl<'db> LoanRef<'db> {
         }
         Some(guard)
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BorrowActivation {
-    Immediate,
-    AtCall,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -112,7 +109,7 @@ impl<'db> IndexPayload<'db> for CapabilityRef<'db> {
 #[derive(Clone, Debug)]
 pub struct LoanDef<'db> {
     kind: BorrowKind,
-    activation: BorrowActivation,
+    activation: BorrowActivation<'db>,
     origin: SemOrigin<'db>,
     parameters: BinderScope,
     region: RegionSet<'db>,
@@ -124,7 +121,7 @@ impl<'db> LoanDef<'db> {
     /// binders without capturing runtime values or type-level const expressions.
     pub fn new(
         kind: BorrowKind,
-        activation: BorrowActivation,
+        activation: BorrowActivation<'db>,
         origin: SemOrigin<'db>,
         source: &BinderScope,
     ) -> (Self, Box<[IndexExpr<'db>]>, IndexSubst<'db>) {
@@ -154,7 +151,7 @@ impl<'db> LoanDef<'db> {
     pub fn kind(&self) -> BorrowKind {
         self.kind
     }
-    pub fn activation(&self) -> BorrowActivation {
+    pub fn activation(&self) -> BorrowActivation<'db> {
         self.activation
     }
     pub fn origin(&self) -> SemOrigin<'db> {
@@ -353,7 +350,7 @@ mod tests {
         let scope = BinderScope::default();
         let (mut definition, args, _) = LoanDef::new(
             BorrowKind::Mut,
-            BorrowActivation::AtCall,
+            BorrowActivation::Immediate,
             SemOrigin::Synthetic,
             &scope,
         );
@@ -391,6 +388,6 @@ mod tests {
             }]
         );
         assert_eq!(definition.kind(), BorrowKind::Mut);
-        assert_eq!(definition.activation(), BorrowActivation::AtCall);
+        assert_eq!(definition.activation(), BorrowActivation::Immediate);
     }
 }

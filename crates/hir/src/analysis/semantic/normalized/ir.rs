@@ -3,8 +3,9 @@ use cranelift_entity::{EntityRef, entity_impl};
 use crate::{
     analysis::{
         semantic::{
-            CallSiteId, FieldIndex, Mutability, SConst, SStmtId, SemOrigin, SemanticCalleeRef,
-            SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticInstance, VariantIndex,
+            BorrowActivation, CallSiteId, FieldIndex, Mutability, SConst, SStmtId, SemOrigin,
+            SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticInstance,
+            VariantIndex,
         },
         ty::{
             provider::ProviderAddressSpace,
@@ -290,6 +291,7 @@ pub enum NExpr<'db> {
     Borrow {
         place: NPlace<'db>,
         kind: BorrowKind,
+        activation: BorrowActivation<'db>,
         provider: Option<ProviderAddressSpace>,
     },
     StructuralRepack {

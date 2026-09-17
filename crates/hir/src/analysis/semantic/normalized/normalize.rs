@@ -7,10 +7,10 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            FieldIndex, LayoutBackingPlace, LayoutBackingProjection, PlaceProvenance, SBlockId,
-            SExpr, SLocal, SLocalId, SOperand, SPlace, SStmtId, SStmtKind, STerminatorKind,
-            SemOrigin, SemanticBody, SemanticInstance, SemanticLocalRole, ValueProvenance,
-            VariantIndex,
+            BorrowActivation, FieldIndex, LayoutBackingPlace, LayoutBackingProjection,
+            PlaceProvenance, SBlockId, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmtId,
+            SStmtKind, STerminatorKind, SemOrigin, SemanticBody, SemanticInstance,
+            SemanticLocalRole, ValueProvenance, VariantIndex,
             lower::layout_backing_source_path_is_prefix,
             normalized::{
                 NBlock, NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr,
@@ -556,6 +556,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             SExpr::Borrow {
                 place,
                 kind,
+                activation,
                 provider,
             } => {
                 let mut normalized = self.normalize_place(block, origin, place)?;
@@ -567,6 +568,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 NExpr::Borrow {
                     place: normalized,
                     kind: *kind,
+                    activation: *activation,
                     provider: *provider,
                 }
             }
@@ -810,6 +812,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                         crate::analysis::ty::ty_def::BorrowKind::Ref
                     }
                 },
+                activation: BorrowActivation::Immediate,
                 provider: None,
             });
         }
@@ -2378,7 +2381,7 @@ mod tests {
     use crate::{
         analysis::{
             semantic::{
-                FieldIndex, Mutability, SConst, SStmtId, VariantIndex,
+                BorrowActivation, FieldIndex, Mutability, SConst, SStmtId, VariantIndex,
                 get_or_build_semantic_instance, identity_semantic_instance_key,
                 normalized::{
                     NDataPath, NDataProjection, NEffectArgValue, NExpr, NIndex, NPlace, NPlaceBase,
@@ -2428,6 +2431,175 @@ mod tests {
             .expect("test body should be admitted");
         normalize_raw_body(db, instance, raw, instance.assumptions(db))
             .unwrap_or_else(|error| panic!("test body should normalize: {error:?}\n{raw:#?}"))
+    }
+
+    #[test]
+    fn borrow_activation_distinguishes_receiver_reservations_from_explicit_borrows() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "normalized.fe".into(),
+            r#"
+struct Counter { value: u256 }
+impl Counter {
+    fn set(mut self, value: u256) { self.value = value }
+    fn get(ref self) -> u256 { self.value }
+}
+fn reserved(mut counter: own Counter, flag: bool) -> u256 {
+    counter.set(value: if flag { counter.get() } else { 0 })
+    counter.get()
+}
+fn explicit(counter: mut Counter) -> mut u256 { mut counter.value }
+fn shared(counter: own Counter) -> u256 { counter.get() }
+fn take(_ counter: mut Counter) {}
+fn ordinary(counter: mut Counter) { take(mut counter) }
+fn stop() -> ! { core::panic() }
+fn never_called(mut counter: own Counter) { counter.set(value: stop()) }
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let reserved = normalized_func(&db, top_mod, "reserved").body;
+        let reservation = reserved
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| match statement.kind {
+                NStatementKind::Define {
+                    expr:
+                        NExpr::Borrow {
+                            activation: activation @ BorrowActivation::AtCall { .. },
+                            ..
+                        },
+                    ..
+                } => Some(activation),
+                _ => None,
+            })
+            .expect("implicit receiver reservation");
+        for name in ["reserved", "explicit", "shared", "ordinary", "never_called"] {
+            let body = normalized_func(&db, top_mod, name).body;
+            verify_normalized_body(&db, &body)
+                .unwrap_or_else(|error| panic!("{name}: {error:?}\n{body:#?}"));
+            let borrows = body
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .filter_map(|statement| match statement.kind {
+                    NStatementKind::Define {
+                        result,
+                        expr:
+                            NExpr::Borrow {
+                                kind, activation, ..
+                            },
+                    } => Some((result, kind, activation)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(!borrows.is_empty(), "{name} must exercise a borrow");
+            let reservations = borrows
+                .iter()
+                .filter(|(_, _, activation)| matches!(activation, BorrowActivation::AtCall { .. }))
+                .count();
+            assert_eq!(
+                reservations,
+                usize::from(matches!(name, "reserved" | "never_called")),
+                "{name}"
+            );
+            if name == "reserved" {
+                let receiver = borrows
+                    .iter()
+                    .find(|(_, _, activation)| {
+                        matches!(activation, BorrowActivation::AtCall { .. })
+                    })
+                    .unwrap()
+                    .0;
+                assert_eq!(
+                    borrows
+                        .iter()
+                        .filter(|(_, kind, _)| *kind == BorrowKind::Ref)
+                        .count(),
+                    2
+                );
+                let mut duplicated = body.clone();
+                for block in &mut duplicated.blocks {
+                    for statement in &mut block.statements {
+                        if let NStatementKind::Define {
+                            expr: NExpr::Call { args, .. },
+                            ..
+                        } = &mut statement.kind
+                            && args.first().is_some_and(|arg| arg.value == receiver)
+                        {
+                            args[1] = args[0];
+                        }
+                    }
+                }
+                assert_eq!(
+                    verify_normalized_body(&db, &duplicated),
+                    Err(NormalizedBodyVerifyError::InvalidBorrowActivation(receiver))
+                );
+            } else if name != "never_called" {
+                let mut invalid = body.clone();
+                let (result, activation) = invalid
+                    .blocks
+                    .iter_mut()
+                    .flat_map(|block| &mut block.statements)
+                    .find_map(|statement| match &mut statement.kind {
+                        NStatementKind::Define {
+                            result,
+                            expr: NExpr::Borrow { activation, .. },
+                        } => Some((*result, activation)),
+                        _ => None,
+                    })
+                    .unwrap();
+                *activation = reservation;
+                assert_eq!(
+                    verify_normalized_body(&db, &invalid),
+                    Err(NormalizedBodyVerifyError::InvalidBorrowActivation(result)),
+                    "{name}"
+                );
+                if name == "shared" {
+                    let activation = invalid
+                        .blocks
+                        .iter()
+                        .flat_map(|block| &block.statements)
+                        .find_map(|statement| match statement.kind {
+                            NStatementKind::Define {
+                                expr:
+                                    NExpr::Call {
+                                        call_site, callee, ..
+                                    },
+                                ..
+                            } => Some(BorrowActivation::AtCall { call_site, callee }),
+                            _ => None,
+                        })
+                        .unwrap();
+                    for block in &mut invalid.blocks {
+                        for statement in &mut block.statements {
+                            if let NStatementKind::Define {
+                                result: candidate,
+                                expr:
+                                    NExpr::Borrow {
+                                        kind,
+                                        place,
+                                        activation: candidate_activation,
+                                        ..
+                                    },
+                            } = &mut statement.kind
+                                && *candidate == result
+                            {
+                                *kind = BorrowKind::Mut;
+                                *candidate_activation = activation;
+                                invalid.values[result.index()].ty =
+                                    TyId::borrow_mut_of(&db, place.ty);
+                            }
+                        }
+                    }
+                    assert_eq!(
+                        verify_normalized_body(&db, &invalid),
+                        Err(NormalizedBodyVerifyError::InvalidBorrowActivation(result)),
+                        "a mutable argument cannot reserve a shared receiver"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
