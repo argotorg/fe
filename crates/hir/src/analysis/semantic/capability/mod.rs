@@ -5,6 +5,7 @@
 mod decision;
 pub mod guard;
 pub mod index;
+pub mod loan;
 pub mod path;
 pub mod region;
 pub mod semantics;
