@@ -437,6 +437,13 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 SStmtKind::Store { dst, src } => {
                     let destination = self.normalize_place(raw_block, statement.origin, dst)?;
                     let value = self.read_operand(raw_block, statement.origin, *src, None)?;
+                    let destination = self.dereference_place_to(
+                        raw_block,
+                        statement.origin,
+                        dst.local,
+                        destination,
+                        self.values[value.value.index()].ty,
+                    )?;
                     self.emit_store(
                         raw_block,
                         Some(statement.id),
@@ -552,16 +559,10 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 provider,
             } => {
                 let mut normalized = self.normalize_place(block, origin, place)?;
-                if let Some((_, expected_target)) = dst_ty.as_borrow(self.db)
-                    && normalized.ty != expected_target
-                    && normalized
-                        .ty
-                        .as_capability(self.db)
-                        .is_some_and(|(_, target)| target == expected_target)
-                {
-                    // Reborrowing a capability field accesses its referent. The
-                    // structural place still identifies the slot holding that capability.
-                    normalized = self.dereference_place(block, origin, place.local, normalized)?;
+                if let Some((_, target)) = dst_ty.as_borrow(self.db) {
+                    normalized = self.dereference_place_to(
+                        block, origin, place.local, normalized, target,
+                    )?;
                 }
                 NExpr::Borrow {
                     place: normalized,
@@ -958,6 +959,29 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             }
         }
         Ok(place)
+    }
+
+    /// A typed payload write or reborrow may select the target of the terminal
+    /// capability. Ordinary place traversal preserves its structural slot, so
+    /// materialize that final target transition according to the operation type.
+    fn dereference_place_to(
+        &mut self,
+        block: SBlockId,
+        origin: SemOrigin<'db>,
+        source_local: SLocalId,
+        place: NPlace<'db>,
+        target_ty: TyId<'db>,
+    ) -> Result<NPlace<'db>, NormalizeError<'db>> {
+        if place.ty != target_ty
+            && place
+                .ty
+                .as_capability(self.db)
+                .is_some_and(|(_, target)| target == target_ty)
+        {
+            self.dereference_place(block, origin, source_local, place)
+        } else {
+            Ok(place)
+        }
     }
 
     fn dereference_place(

@@ -2683,3 +2683,171 @@ fn direct(value: mut u256) -> mut u256 { mut value }
         },
     );
 }
+
+#[test]
+fn stores_through_terminal_capability_fields_target_the_referent() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "terminal_capability_store.fe".into(),
+        r#"
+struct Wrap { handle: mut u256 }
+fn inspect() {
+    let mut value: u256 = 0
+    let mut values = [Wrap { handle: mut value }]
+    values[0].handle = 1
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = top_mod
+        .all_items(&db)
+        .iter()
+        .find_map(|item| match item {
+            ItemKind::Func(func) => Some(*func),
+            _ => None,
+        })
+        .expect("inspect function");
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+    );
+    assert!(
+        !matches!(
+            semantic_body_admission(&db, instance),
+            SemanticBodyAdmission::Blocked(_)
+        ),
+        "store body must be HIR-valid"
+    );
+    let raw = instance.body(&db);
+    let artifacts = normalize_raw_body(&db, instance, raw, instance.assumptions(&db))
+        .expect("normalized operations");
+    let stores: Vec<_> = artifacts
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .filter_map(|statement| {
+            let NStatementKind::Store { destination, value } = &statement.kind else {
+                return None;
+            };
+            Some((
+                destination.base,
+                destination.path.clone(),
+                artifacts.body.values[value.value.index()]
+                    .ty
+                    .pretty_print(&db),
+                destination.ty.pretty_print(&db),
+            ))
+        })
+        .collect();
+    assert_eq!(
+        verify_normalized_body(&db, &artifacts.body),
+        Ok(()),
+        "store source/destination types: {stores:#?}"
+    );
+}
+
+#[test]
+fn terminal_capability_stores_preserve_loaded_carriers_and_layout_backings() {
+    for_each_fixture_instance(
+        r#"
+struct Wrap { handle: mut u256 }
+struct Outer { inner: mut Wrap }
+fn local_struct(value: mut u256) {
+    let mut holder = Wrap { handle: value }
+    holder.handle = 1
+}
+fn local_array(value: mut u256) {
+    let mut holders = [Wrap { handle: value }]
+    holders[0].handle = 1
+}
+fn borrowed_struct(holder: mut Wrap) { holder.handle = 1 }
+fn borrowed_array(holders: mut [Wrap; 2]) { holders[0].handle = 1 }
+fn borrowed_handles(handles: mut [mut u256; 2]) { handles[1] = 1 }
+fn nested(outer: mut Outer) { outer.inner.handle = 1 }
+fn dynamic(holders: mut [Wrap; 2], index: usize) { holders[index].handle = 1 }
+"#,
+        |db, instance| {
+            let artifacts =
+                normalize_semantic_body(db, instance).expect("terminal store admission");
+            let body = &artifacts.body;
+            let stores: Vec<_> = body
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .filter_map(|statement| {
+                    let NStatementKind::Store { destination, .. } = &statement.kind else {
+                        return None;
+                    };
+                    statement.source.map(|_| destination)
+                })
+                .collect();
+            assert_eq!(stores.len(), 1);
+            let destination = stores[0];
+            assert!(destination.path.is_empty());
+            let NPlaceBase::CapabilityTarget { carrier } = destination.base else {
+                panic!("terminal store must follow its loaded capability: {destination:?}")
+            };
+            let NValueDefinition::Statement { block, statement } =
+                body.values[carrier.index()].definition
+            else {
+                panic!("terminal store requires an explicit handle load")
+            };
+            let NStatementKind::Define {
+                expr:
+                    NExpr::Load {
+                        place,
+                        mode: ReadMode::Copy,
+                    },
+                ..
+            } = &body.blocks[block.index()].statements[statement as usize].kind
+            else {
+                panic!("terminal carrier must be loaded from its structural slot")
+            };
+            assert_eq!(
+                place.ty.as_borrow(db),
+                Some((BorrowKind::Mut, destination.ty))
+            );
+            assert!(!place.path.is_empty());
+        },
+    );
+}
+
+#[test]
+fn terminal_store_normalization_preserves_direct_targets_and_aggregate_replacement() {
+    for_each_fixture_instance(
+        r#"
+struct Wrap { handle: mut u256 }
+struct Scalar { value: u256 }
+fn direct(value: mut u256) { value = 1 }
+fn scalar_field(value: mut Scalar) { value.value = 1 }
+fn whole_element(values: mut [Wrap; 1], replacement: mut u256) {
+    values[0] = Wrap { handle: replacement }
+}
+fn whole_local_element(replacement: mut u256) {
+    let mut value: u256 = 0
+    let mut values = [Wrap { handle: mut value }]
+    values[0] = Wrap { handle: replacement }
+}
+"#,
+        |db, instance| {
+            let artifacts =
+                normalize_semantic_body(db, instance).expect("ordinary store admission");
+            let body = &artifacts.body;
+            for statement in body.blocks.iter().flat_map(|block| &block.statements) {
+                if let NStatementKind::Store { destination, value } = &statement.kind {
+                    assert_eq!(destination.ty, body.values[value.value.index()].ty);
+                    if let NPlaceBase::CapabilityTarget { carrier } = destination.base {
+                        assert!(
+                            matches!(
+                                body.values[carrier.index()].definition,
+                                NValueDefinition::EntryParam { .. }
+                            ),
+                            "ordinary stores must keep their direct parameter target"
+                        );
+                    }
+                }
+            }
+        },
+    );
+}
