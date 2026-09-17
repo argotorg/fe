@@ -81,13 +81,14 @@ impl<'db> CapabilityRef<'db> {
 }
 
 impl<'db> IndexPayload<'db> for CapabilityRef<'db> {
-    fn class(&self) -> CapabilityClass {
-        match self {
+    fn accepts_class(&self, class: CapabilityClass) -> bool {
+        let expected = match self {
             Self::Shared(_) => CapabilityClass::Borrow(BorrowKind::Ref),
             Self::Mutable(_) => CapabilityClass::Borrow(BorrowKind::Mut),
             Self::View(_) => CapabilityClass::View,
             Self::Handle(_) => CapabilityClass::Handle,
-        }
+        };
+        class == expected
     }
     fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>> {
         match self {
@@ -241,6 +242,7 @@ mod tests {
     use crate::analysis::semantic::{
         capability::path::{Projection, RegionPath},
         capability::region::{OverlapResult, RegionRoot},
+        capability::source::InputSource,
         normalized::{NRootId, NValueId},
     };
 
@@ -259,7 +261,7 @@ mod tests {
         assert_ne!(abstraction.apply(outer), outer);
         let region = RegionSet::singleton(
             &scope,
-            RegionRoot::ParamPlace(0),
+            RegionRoot::Input(InputSource::place(0)),
             RegionPath::new([Projection::Index(outer), Projection::Index(inner)]),
         );
         let guard = Guard::always(&scope)
@@ -287,7 +289,7 @@ mod tests {
             actual,
             RegionSet::singleton(
                 &empty,
-                RegionRoot::ParamPlace(0),
+                RegionRoot::Input(InputSource::place(0)),
                 RegionPath::new([Projection::Index(2.into()), Projection::Index(2.into())])
             )
         );

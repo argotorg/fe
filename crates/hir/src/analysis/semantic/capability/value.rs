@@ -18,7 +18,7 @@ use std::{
 };
 
 pub trait IndexPayload<'db>: Clone + Eq + Ord + Hash {
-    fn class(&self) -> CapabilityClass;
+    fn accepts_class(&self, class: CapabilityClass) -> bool;
     fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>>;
     fn substitute(&self, substitution: &IndexSubst<'db>) -> Self;
 }
@@ -976,41 +976,118 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         }
     }
 
+    /// Preserve structural partitions while transforming semantic payloads. The
+    /// shape supplies the capability class; summary sources need not duplicate it.
     pub fn map_payloads<Q: IndexPayload<'db>>(
         &self,
         value: &ValueId<'db, P>,
         destination: &mut ValueInterner<'db, Q>,
-        mut map: impl FnMut(&Guarded<'db, P>) -> Vec<Guarded<'db, Q>>,
+        mut map: impl FnMut(
+            CapabilitySemantics<'db>,
+            &StructuralPath<IndexExpr<'db>>,
+            &Guarded<'db, P>,
+        ) -> Vec<Guarded<'db, Q>>,
     ) -> ValueId<'db, Q> {
-        Self::map_node(value, destination, &mut map)
+        Self::map_node(value, &StructuralPath::default(), destination, &mut map)
     }
 
     fn map_node<Q: IndexPayload<'db>>(
         value: &ValueId<'db, P>,
+        path: &StructuralPath<IndexExpr<'db>>,
         destination: &mut ValueInterner<'db, Q>,
-        map: &mut impl FnMut(&Guarded<'db, P>) -> Vec<Guarded<'db, Q>>,
+        map: &mut impl FnMut(
+            CapabilitySemantics<'db>,
+            &StructuralPath<IndexExpr<'db>>,
+            &Guarded<'db, P>,
+        ) -> Vec<Guarded<'db, Q>>,
     ) -> ValueId<'db, Q> {
-        let direct = value.0.direct.iter().flat_map(&mut *map).collect();
+        let direct = value
+            .shape()
+            .direct(destination.db)
+            .map_or_else(Vec::new, |semantics| {
+                value
+                    .0
+                    .direct
+                    .iter()
+                    .flat_map(|entry| map(semantics, path, entry))
+                    .collect()
+            });
         let children = match &value.0.children {
             ValueChildren::None => ValueChildren::None,
             ValueChildren::Product(fields) => ValueChildren::Product(
                 fields
                     .iter()
-                    .map(|(field, child)| (*field, Self::map_node(child, destination, map)))
+                    .map(|(field, child)| {
+                        (
+                            *field,
+                            Self::map_node(
+                                child,
+                                &path.appended(Projection::Field(*field)),
+                                destination,
+                                map,
+                            ),
+                        )
+                    })
                     .collect(),
             ),
             ValueChildren::Sum(variants) => ValueChildren::Sum(
                 variants
                     .iter()
-                    .map(|(variant, child)| (*variant, Self::map_node(child, destination, map)))
+                    .map(|(variant, child)| {
+                        let ValueChildren::Product(fields) = &child.0.children else {
+                            unreachable!("enum variant shape")
+                        };
+                        let fields = fields
+                            .iter()
+                            .map(|(field, child)| {
+                                (
+                                    *field,
+                                    Self::map_node(
+                                        child,
+                                        &path.appended(Projection::VariantField {
+                                            variant: *variant,
+                                            field: *field,
+                                        }),
+                                        destination,
+                                        map,
+                                    ),
+                                )
+                            })
+                            .collect();
+                        (
+                            *variant,
+                            destination.intern(StructuredValue {
+                                shape: child.shape(),
+                                scope: child.scope().clone(),
+                                direct: Vec::new(),
+                                children: ValueChildren::Product(fields),
+                            }),
+                        )
+                    })
                     .filter(|(_, child)| !child.is_empty())
                     .collect(),
             ),
             ValueChildren::Array { default, exact } => {
-                let default = Self::map_node(default, destination, map);
+                let (_, binder) = value.scope().bind(IndexNamespace::Value);
+                let default = Self::map_node(
+                    default,
+                    &path.appended(Projection::Index(binder)),
+                    destination,
+                    map,
+                );
                 let exact = exact
                     .iter()
-                    .map(|(key, child)| (*key, Self::map_node(child, destination, map)))
+                    .map(|(key, child)| {
+                        (
+                            *key,
+                            Self::map_node(
+                                child,
+                                &path.appended(Projection::Index(IndexExpr::Const(*key))),
+                                destination,
+                                map,
+                            ),
+                        )
+                    })
                     .collect();
                 return destination.array_parts(
                     value.shape(),
@@ -1118,9 +1195,10 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                 &node.scope,
                 "payload guard scope mismatch"
             );
-            assert_eq!(
-                node.shape.direct(self.db).map(|semantics| semantics.class),
-                Some(entry.payload.class()),
+            assert!(
+                node.shape
+                    .direct(self.db)
+                    .is_some_and(|semantics| entry.payload.accepts_class(semantics.class)),
                 "payload capability class mismatch"
             );
             for index in entry.payload.indices() {

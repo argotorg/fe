@@ -7,7 +7,8 @@ use std::{
 use super::{
     guard::Guard,
     index::{BinderScope, IndexExpr, IndexSubst},
-    path::{Projection, RegionPath, StructuralPath},
+    path::{Projection, RegionPath},
+    source::InputSource,
     value::Guarded,
 };
 use crate::{
@@ -29,11 +30,7 @@ pub struct ProviderRegionId<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RegionRoot<'db> {
-    ParamPlace(u32),
-    ParamSlot {
-        param: u32,
-        slot: StructuralPath<IndexExpr<'db>>,
-    },
+    Input(InputSource<'db>),
     Root(NRootId),
     Value(NValueId),
     Provider(ProviderRegionId<'db>),
@@ -47,37 +44,35 @@ impl<'db> RegionRoot<'db> {
                 .semantics
                 .address_space
                 .unwrap_or(ProviderAddressSpace::Memory),
-            Self::ParamPlace(_) | Self::ParamSlot { .. } | Self::Root(_) | Self::Value(_) => {
-                ProviderAddressSpace::Memory
-            }
+            Self::Input(_) | Self::Root(_) | Self::Value(_) => ProviderAddressSpace::Memory,
         }
     }
 
-    fn substitute(&self, subst: &IndexSubst<'db>) -> Self {
+    pub fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>> + '_ {
         match self {
-            Self::ParamSlot { param, slot } => Self::ParamSlot {
-                param: *param,
-                slot: slot.substitute(subst),
-            },
-            Self::ParamPlace(_) | Self::Root(_) | Self::Value(_) | Self::Provider(_) => {
-                self.clone()
-            }
+            Self::Input(source) => Some(source),
+            _ => None,
+        }
+        .into_iter()
+        .flat_map(InputSource::indices)
+    }
+
+    pub fn substitute(&self, subst: &IndexSubst<'db>) -> Self {
+        match self {
+            Self::Input(source) => Self::Input(source.substitute(subst)),
+            Self::Root(_) | Self::Value(_) | Self::Provider(_) => self.clone(),
         }
     }
 
-    fn alias_guard(&self, other: &Self, guard: Guard<'db>) -> Option<Guard<'db>> {
+    fn alias_guard(
+        &self,
+        other: &Self,
+        guard: Guard<'db>,
+        allow_unknown: bool,
+    ) -> Option<Guard<'db>> {
         match (self, other) {
-            (
-                Self::ParamSlot {
-                    param: left,
-                    slot: left_slot,
-                },
-                Self::ParamSlot {
-                    param: right,
-                    slot: right_slot,
-                },
-            ) if left == right && left_slot.as_slice().len() == right_slot.as_slice().len() => {
-                path_alias_guard(left_slot.as_slice(), right_slot.as_slice(), guard, false)
+            (Self::Input(left), Self::Input(right)) => {
+                left.alias_guard(right, guard, allow_unknown)
             }
             _ => (self == other).then_some(guard),
         }
@@ -130,16 +125,18 @@ impl<'db> RegionSet<'db> {
         clauses: impl IntoIterator<Item = Guarded<'db, SymbolicPlace<'db>>>,
     ) -> Self {
         let mut canonical = BTreeMap::<SymbolicPlace<'db>, Guard<'db>>::new();
-        for clause in clauses {
+        for mut clause in clauses {
+            // A reachable source includes every descendant region. Keeping an
+            // exact final projection would falsely recover precision after widening.
+            if matches!(&clause.payload.root, RegionRoot::Input(source) if source.is_reachable()) {
+                clause.payload.path = RegionPath::default();
+            }
             assert_eq!(clause.guard.scope(), scope, "region guard scope mismatch");
             for index in clause
                 .payload
                 .path
                 .indices()
-                .chain(match &clause.payload.root {
-                    RegionRoot::ParamSlot { slot, .. } => slot.indices().collect::<Vec<_>>(),
-                    _ => Vec::new(),
-                })
+                .chain(clause.payload.root.indices())
             {
                 scope.validate(index).expect("free region binder");
             }
@@ -176,10 +173,7 @@ impl<'db> RegionSet<'db> {
                     .indices()
                     .into_iter()
                     .chain(clause.payload.path.indices())
-                    .chain(match &clause.payload.root {
-                        RegionRoot::ParamSlot { slot, .. } => slot.indices().collect::<Vec<_>>(),
-                        _ => Vec::new(),
-                    })
+                    .chain(clause.payload.root.indices())
             })
             .collect()
     }
@@ -261,7 +255,11 @@ impl<'db> RegionSet<'db> {
                 let Some(guard) = left
                     .guard
                     .and(&right.guard)
-                    .and_then(|guard| left.payload.root.alias_guard(&right.payload.root, guard))
+                    .and_then(|guard| {
+                        left.payload
+                            .root
+                            .alias_guard(&right.payload.root, guard, true)
+                    })
                     .and_then(|guard| {
                         path_alias_guard(
                             left.payload.path.as_slice(),
@@ -273,13 +271,18 @@ impl<'db> RegionSet<'db> {
                 else {
                     continue;
                 };
-                let exact = path_alias_guard(
-                    left.payload.path.as_slice(),
-                    right.payload.path.as_slice(),
-                    guard.clone(),
-                    false,
-                )
-                .is_some();
+                let exact = left
+                    .payload
+                    .root
+                    .alias_guard(&right.payload.root, guard.clone(), false)
+                    .is_some()
+                    && path_alias_guard(
+                        left.payload.path.as_slice(),
+                        right.payload.path.as_slice(),
+                        guard.clone(),
+                        false,
+                    )
+                    .is_some();
                 if exact {
                     let left_len = left.payload.path.as_slice().len();
                     let right_len = right.payload.path.as_slice().len();
@@ -329,7 +332,10 @@ impl<'db> RegionSet<'db> {
                 .iter()
                 .filter_map(|left| {
                     let guard = left.guard.and(&right.guard)?;
-                    let guard = left.payload.root.alias_guard(&right.payload.root, guard)?;
+                    let guard = left
+                        .payload
+                        .root
+                        .alias_guard(&right.payload.root, guard, false)?;
                     if left.payload.path.as_slice().len() > right.payload.path.as_slice().len() {
                         return None;
                     }
@@ -360,7 +366,7 @@ impl<'db> RegionSet<'db> {
                     let guard = write
                         .payload
                         .root
-                        .alias_guard(&moved.payload.root, write.guard.clone())
+                        .alias_guard(&moved.payload.root, write.guard.clone(), false)
                         .and_then(|guard| {
                             path_alias_guard(
                                 write.payload.path.as_slice(),
@@ -382,7 +388,7 @@ impl<'db> RegionSet<'db> {
     }
 }
 
-fn path_alias_guard<'db>(
+pub(super) fn path_alias_guard<'db>(
     left: &[Projection<IndexExpr<'db>>],
     right: &[Projection<IndexExpr<'db>>],
     mut guard: Guard<'db>,
@@ -421,6 +427,7 @@ fn path_alias_guard<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::semantic::capability::path::StructuralPath;
     use crate::{
         analysis::{
             semantic::{FieldIndex, VariantIndex},
@@ -450,16 +457,16 @@ mod tests {
     #[test]
     fn region_unions_use_complete_root_identity_and_obey_lattice_laws() {
         let roots = [
-            RegionRoot::ParamPlace(0),
-            RegionRoot::ParamPlace(1),
-            RegionRoot::ParamSlot {
-                param: 0,
-                slot: StructuralPath::new([Projection::Field(FieldIndex(0))]),
-            },
-            RegionRoot::ParamSlot {
-                param: 0,
-                slot: StructuralPath::new([Projection::Field(FieldIndex(1))]),
-            },
+            RegionRoot::Input(InputSource::place(0)),
+            RegionRoot::Input(InputSource::place(1)),
+            RegionRoot::Input(InputSource::slot(
+                0,
+                StructuralPath::new([Projection::Field(FieldIndex(0))]),
+            )),
+            RegionRoot::Input(InputSource::slot(
+                0,
+                StructuralPath::new([Projection::Field(FieldIndex(1))]),
+            )),
             RegionRoot::Root(NRootId::from_u32(0)),
             RegionRoot::Value(NValueId::from_u32(0)),
         ];
@@ -492,9 +499,11 @@ mod tests {
 
     #[test]
     fn symbolic_slot_and_referent_indices_share_one_constraint_solver() {
-        let root = |selector| RegionRoot::ParamSlot {
-            param: 0,
-            slot: StructuralPath::new([Projection::Index(selector)]),
+        let root = |selector| {
+            RegionRoot::Input(InputSource::slot(
+                0,
+                StructuralPath::new([Projection::Index(selector)]),
+            ))
         };
         let left = region(root(index(0)), path(index(1)));
         let right = region(root(index(1)), path(IndexExpr::Const(0)));

@@ -3,9 +3,10 @@ use std::{collections::BTreeSet, iter::empty};
 use super::{
     guard::{ChoiceKey, Guard, ValueOccurrence},
     index::{BinderScope, IndexError, IndexExpr, IndexNamespace, IndexSubst},
-    path::{Projection, StructuralPath},
+    path::{Projection, RegionPath, StructuralPath},
     semantics::{CapabilityClass, CapabilitySemantics, StorageClass},
     shape::{ArrayLength, CapabilityShape, ShapeChildren, ShapeId, capability_shape},
+    source::{InputSource, SourceExpr},
     value::{Guarded, IndexPayload, ValueId, ValueInterner, ValueLimits},
 };
 use crate::{
@@ -31,8 +32,8 @@ struct Payload<'db> {
     indices: Vec<IndexExpr<'db>>,
 }
 impl<'db> IndexPayload<'db> for Payload<'db> {
-    fn class(&self) -> CapabilityClass {
-        CapabilityClass::Borrow(BorrowKind::Mut)
+    fn accepts_class(&self, class: CapabilityClass) -> bool {
+        class == CapabilityClass::Borrow(BorrowKind::Mut)
     }
     fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>> {
         self.indices.iter().copied()
@@ -588,7 +589,7 @@ fn payload_mapping_preserves_structure_and_uses_checked_substitution() {
         leaf(values, element, scope, 1, vec![binder])
     });
     let mut destination = ValueInterner::new(&db, ValueLimits::default());
-    let mapped = source.map_payloads(&value, &mut destination, |entry| {
+    let mapped = source.map_payloads(&value, &mut destination, |_, _, entry| {
         let mut entry = entry.clone();
         entry.payload.tag = 2;
         vec![entry]
@@ -1139,8 +1140,8 @@ fn nested_generic_families_specialize_shapes_and_capability_types_together() {
 struct ViewPayload;
 
 impl<'db> IndexPayload<'db> for ViewPayload {
-    fn class(&self) -> CapabilityClass {
-        CapabilityClass::View
+    fn accepts_class(&self, class: CapabilityClass) -> bool {
+        class == CapabilityClass::View
     }
     fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>> {
         empty()
@@ -1200,4 +1201,132 @@ fn specializing_an_empty_array_keeps_its_direct_view_capability() {
         1
     );
     assert_eq!(specialized.direct(), view.direct());
+}
+
+#[test]
+fn structural_summary_mapping_retains_nested_sources_and_exact_array_overrides() {
+    let db = HirAnalysisTestDb::default();
+    let element = leaf_shape(&db);
+    let array = array_shape(&db, element, 1_000_000);
+    let mut values = ValueInterner::new(&db, ValueLimits::default());
+    let value = values.array(array, &scope(), |values, scope, binder| {
+        leaf(values, element, scope, 0, vec![binder])
+    });
+    let replacement = leaf(&mut values, element, &scope(), 1, vec![IndexExpr::Const(9)]);
+    let value = values.replace(&value, &path(IndexExpr::Const(3)), &replacement);
+    let mut summaries = ValueInterner::new(&db, ValueLimits::default());
+    let summary = values.map_payloads(&value, &mut summaries, |semantics, slot, entry| {
+        assert_eq!(semantics.class, CapabilityClass::Borrow(BorrowKind::Mut));
+        assert_eq!(slot.as_slice().len(), 1);
+        vec![Guarded {
+            guard: entry.guard.clone(),
+            payload: SourceExpr::Input {
+                source: InputSource::slot(u32::from(entry.payload.tag), StructuralPath::default())
+                    .follow(RegionPath::new([Projection::Field(FieldIndex(0))]))
+                    .follow(RegionPath::new([Projection::Index(
+                        entry.payload.indices[0],
+                    )])),
+                path: RegionPath::new([Projection::Field(FieldIndex(1))]),
+            },
+        }]
+    });
+    assert_eq!(summary.shape(), value.shape());
+    assert!(summaries.metrics().nodes_created < 20);
+    for (member, param, selected) in [(0, 0, 0), (3, 1, 9), (999_999, 0, 999_999)] {
+        let projected = summaries.project(
+            &summary,
+            &path(IndexExpr::Const(member)),
+            ValueOccurrence::Summary,
+        );
+        let leaves = summaries.leaves(&projected, ValueOccurrence::Summary);
+        assert_eq!(leaves.len(), 1);
+        assert_eq!(
+            leaves[0].payload,
+            SourceExpr::Input {
+                source: InputSource::slot(param, StructuralPath::default())
+                    .follow(RegionPath::new([Projection::Field(FieldIndex(0))]))
+                    .follow(RegionPath::new([Projection::Index(IndexExpr::Const(
+                        selected
+                    ))])),
+                path: RegionPath::new([Projection::Field(FieldIndex(1))]),
+            }
+        );
+    }
+    let mut restored = ValueInterner::new(&db, ValueLimits::default());
+    let roundtrip = summaries.map_payloads(&summary, &mut restored, |semantics, _, entry| {
+        assert_eq!(semantics.target_ty, TyId::u256(&db));
+        let SourceExpr::Input { source, .. } = &entry.payload else {
+            panic!("input source")
+        };
+        vec![Guarded {
+            guard: entry.guard.clone(),
+            payload: Payload {
+                tag: u8::try_from(source.param()).unwrap(),
+                indices: source.indices().collect(),
+            },
+        }]
+    });
+    assert_eq!(roundtrip, value);
+}
+
+#[test]
+fn contextual_payload_mapping_reports_variant_fields_and_nested_array_binders() {
+    let db = HirAnalysisTestDb::default();
+    let element = leaf_shape(&db);
+    let inner = array_shape(&db, element, 3);
+    let fields = ShapeId::new(
+        &db,
+        CapabilityShape {
+            direct: None,
+            children: ShapeChildren::Product(vec![(FieldIndex(0), inner)].into()),
+        },
+    );
+    let sum = ShapeId::new(
+        &db,
+        CapabilityShape {
+            direct: None,
+            children: ShapeChildren::Sum(
+                vec![(VariantIndex(0), fields), (VariantIndex(1), fields)].into(),
+            ),
+        },
+    );
+    let outer = array_shape(&db, sum, 4);
+    let mut values = ValueInterner::new(&db, ValueLimits::default());
+    let value = values.from_shape(outer, &scope(), |_, path, scope| {
+        vec![Guarded {
+            guard: Guard::always(scope),
+            payload: Payload {
+                tag: 0,
+                indices: path.indices().collect(),
+            },
+        }]
+    });
+    let mut summaries = ValueInterner::new(&db, ValueLimits::default());
+    let summary = values.map_payloads(&value, &mut summaries, |_, slot, entry| {
+        assert!(matches!(
+            slot.as_slice(),
+            [
+                Projection::Index(_),
+                Projection::VariantField {
+                    field: FieldIndex(0),
+                    ..
+                },
+                Projection::Index(_)
+            ]
+        ));
+        assert_eq!(slot.indices().collect::<Vec<_>>(), entry.payload.indices);
+        vec![Guarded {
+            guard: entry.guard.clone(),
+            payload: SourceExpr::Input {
+                source: InputSource::slot(0, slot.clone()),
+                path: RegionPath::default(),
+            },
+        }]
+    });
+    for leaf in summaries.leaves(&summary, ValueOccurrence::Summary) {
+        let SourceExpr::Input { source, .. } = leaf.payload else {
+            panic!("input source")
+        };
+        assert_eq!(source, InputSource::slot(0, leaf.path));
+    }
 }
