@@ -84,7 +84,7 @@ impl<'db> RuntimeReturnSummary<'db> {
             .blocks
             .iter()
             .filter_map(|block| match &block.terminator.kind {
-                NTerminatorKind::Return(Some(value)) => semantic_body.operand_source(*value),
+                NTerminatorKind::Return(Some(value)) => semantic_body.operand_local(*value),
                 NTerminatorKind::Goto(_)
                 | NTerminatorKind::Branch { .. }
                 | NTerminatorKind::MatchEnum { .. }
@@ -146,7 +146,7 @@ impl<'db> RuntimeReturnSummary<'db> {
             slice_assignment_positions[assign_id] = Some(slice_idx);
         }
 
-        let mut slice_assignments_by_local = vec![Vec::new(); semantic_body.source.locals.len()];
+        let mut slice_assignments_by_local = vec![Vec::new(); semantic_body.locals.len()];
         for (_, &assign_id) in slice_assignment_ids.iter() {
             facts
                 .assignment(assign_id)
@@ -156,8 +156,7 @@ impl<'db> RuntimeReturnSummary<'db> {
             }
         }
 
-        let mut slice_dynamic_dependents_by_local =
-            vec![Vec::new(); semantic_body.source.locals.len()];
+        let mut slice_dynamic_dependents_by_local = vec![Vec::new(); semantic_body.locals.len()];
         for local in needed_locals.iter().copied() {
             for dependency in facts.source_locals(local).iter().copied() {
                 slice_dynamic_dependents_by_local[dependency.index()].push(local);
@@ -1011,11 +1010,21 @@ fn choose(_ flag: bool) -> u256 {
             .return_locals
             .first()
             .expect("choose should return one local");
+        let source_local = summary
+            .facts
+            .source_locals(return_local)
+            .first()
+            .copied()
+            .expect("returned load should depend on the source local");
+        assert_ne!(
+            return_local, source_local,
+            "the final read needs its own carrier"
+        );
         let return_defs = summary
             .facts
             .assignments()
             .iter()
-            .filter(|(_, assignment)| assignment.dst == return_local)
+            .filter(|(_, assignment)| assignment.dst == source_local)
             .count();
         let sliced_return_defs = summary
             .slice_assignment_ids
@@ -1024,17 +1033,17 @@ fn choose(_ flag: bool) -> u256 {
                 summary
                     .facts
                     .assignment(assign_id)
-                    .is_some_and(|assignment| assignment.dst == return_local)
+                    .is_some_and(|assignment| assignment.dst == source_local)
             })
             .count();
 
         assert!(
             return_defs >= 2,
-            "expected `choose` to define the returned local at least twice"
+            "expected `choose` to define the loaded source local at least twice"
         );
         assert_eq!(
             sliced_return_defs, return_defs,
-            "return slice should keep every definition of the returned local"
+            "return slice should keep every definition feeding the returned load"
         );
     }
 
@@ -1272,7 +1281,6 @@ fn first(_ arr: [u8; 4]) -> u8 {
         .solve_carriers();
         let locals = summary
             .semantic_body
-            .source
             .locals
             .iter()
             .enumerate()

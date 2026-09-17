@@ -374,7 +374,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             hir::analysis::semantic::SemanticLocalRole::DirectValue { .. }
         ) || local_data
             .role
-            .root_provider(&self.env.body().source.locals)
+            .root_provider(&self.env.body().locals)
             .is_some()
         {
             return None;
@@ -549,9 +549,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             return Some(SelectedRuntimeArg::local_value(local, class));
         }
         if let Some(value_class) = self.env.semantic_value_class(self.carriers, local) {
-            if let Some(provider) = local_data
-                .role
-                .root_provider(&self.env.body().source.locals)
+            if let Some(provider) = local_data.role.root_provider(&self.env.body().locals)
                 && let Some(root_class) = self
                     .env
                     .actual_runtime_visible_root_provider_class(self.carriers, &provider)
@@ -635,7 +633,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             );
         };
         Some(SelectedRuntimeArg::placeholder(
-            self.env.body().source.locals[local.index()].ty,
+            self.env.body().locals[local.index()].ty,
             class,
         ))
     }
@@ -770,7 +768,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                 .or_else(|| self.select_actual_operand_value(value.local, value))
                 .or_else(|| {
                     Some(SelectedRuntimeArg::placeholder(
-                        self.env.body().source.locals[value.local.index()].ty,
+                        self.env.body().locals[value.local.index()].ty,
                         fallback.clone(),
                     ))
                 }),
@@ -876,13 +874,13 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             return None;
         }
         let local = match place.base {
-            NPlaceBase::CapabilityTarget { carrier } => self.env.source_local(carrier)?,
+            NPlaceBase::CapabilityTarget { carrier } => self.env.value_local(carrier)?,
             NPlaceBase::Root(root) => match &self.env.body().normalized.root(root)?.kind {
                 NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
-                    self.env.body().root_source(root)?
+                    self.env.body().root_local(root)?
                 }
                 NRootKind::CapabilityRepresentation { carrier } => {
-                    self.env.source_local(*carrier)?
+                    self.env.value_local(*carrier)?
                 }
                 NRootKind::Provider { .. } => return None,
             },

@@ -95,7 +95,7 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
         match place.base {
             NPlaceBase::CapabilityTarget { carrier } => self
                 .env
-                .source_local(carrier)
+                .value_local(carrier)
                 .is_some_and(|local| self.local_has_transport_carrier(local)),
             NPlaceBase::Root(root_id) => {
                 let Some(root) = self.env.body().normalized.root(root_id) else {
@@ -105,14 +105,14 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
                     NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => self
                         .env
                         .body()
-                        .root_source(root_id)
+                        .root_local(root_id)
                         .is_some_and(|local| self.local_has_existing_runtime_root(local)),
                     NRootKind::Provider { binding } => {
                         self.provider_place_root_is_lowerable(binding)
                     }
                     NRootKind::CapabilityRepresentation { carrier } => self
                         .env
-                        .source_local(*carrier)
+                        .value_local(*carrier)
                         .is_some_and(|local| self.local_has_transport_carrier(local)),
                 }
             }
@@ -178,7 +178,7 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
             return !matches!(local_data.role.kind(), SemanticLocalKind::PlaceBoundValue)
                 || local_data
                     .role
-                    .root_provider(&self.env.body().source.locals)
+                    .root_provider(&self.env.body().locals)
                     .is_some();
         }
         self.local_root_provider_is_lowerable(local_data)
@@ -257,7 +257,7 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
     fn local_root_provider_is_lowerable(&self, local: &SLocal<'db>) -> bool {
         local
             .role
-            .root_provider(&self.env.body().source.locals)
+            .root_provider(&self.env.body().locals)
             .is_some_and(|provider| self.provider_place_root_is_lowerable(&provider))
     }
 }
@@ -271,7 +271,7 @@ pub(super) fn alias_source_place_for_local<'db>(
         .value_representations
         .iter()
         .rev()
-        .filter(|representation| representation.source_local == local)
+        .filter(|representation| body.value_local(representation.value) == Some(local))
         .find_map(|representation| normalized_value_place(db, body, representation.value))
 }
 
@@ -280,7 +280,7 @@ pub(super) fn declared_root_place_for_local<'db>(
     local: SLocalId,
 ) -> Option<NPlace<'db>> {
     let local_data = body.local(local)?;
-    let provider = local_data.role.root_provider(&body.source.locals);
+    let provider = local_data.role.root_provider(&body.locals);
     let root = body
         .normalized
         .roots
@@ -288,7 +288,7 @@ pub(super) fn declared_root_place_for_local<'db>(
         .enumerate()
         .find_map(|(index, root)| {
             let root_id = hir::analysis::semantic::normalized::NRootId::new(index);
-            let matches_local = body.root_source(root_id) == Some(local);
+            let matches_local = body.root_local(root_id) == Some(local);
             let matches_provider = provider.as_ref().is_some_and(|provider| {
                 matches!(
                     &root.kind,
@@ -324,12 +324,12 @@ fn is_self_rooted_value_place(
         return false;
     }
     match place.base {
-        NPlaceBase::CapabilityTarget { carrier } => body.value_source(carrier) == Some(local),
+        NPlaceBase::CapabilityTarget { carrier } => body.value_local(carrier) == Some(local),
         NPlaceBase::Root(root) => {
             matches!(
                 body.normalized.root(root).map(|root| &root.kind),
                 Some(NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. })
-            ) && body.root_source(root) == Some(local)
+            ) && body.root_local(root) == Some(local)
         }
     }
 }
@@ -420,8 +420,8 @@ pub(super) fn local_read_places_extractable_from_value(
 
 fn place_root_local(body: &RuntimeSemanticBody<'_>, place: &NPlace<'_>) -> Option<SLocalId> {
     match place.base {
-        NPlaceBase::CapabilityTarget { carrier } => body.value_source(carrier),
-        NPlaceBase::Root(root) => body.root_source(root),
+        NPlaceBase::CapabilityTarget { carrier } => body.value_local(carrier),
+        NPlaceBase::Root(root) => body.root_local(root),
     }
 }
 

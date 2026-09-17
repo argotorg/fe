@@ -200,7 +200,7 @@ pub(crate) fn runtime_body_abi_plan<'db>(
         param.local = RLocalId::from_u32(local.index() as u32);
     }
     for (index, evidence) in plan.evidence_params.iter_mut().enumerate() {
-        evidence.param.local = RLocalId::from_u32(body.source.locals.len() as u32 + index as u32);
+        evidence.param.local = RLocalId::from_u32(body.locals.len() as u32 + index as u32);
     }
     plan
 }

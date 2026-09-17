@@ -220,7 +220,7 @@ fn effect_arg_is_runtime_zst<'db>(
     }
     match &arg.arg {
         NEffectArgValue::Value(value) => body
-            .operand_source(*value)
+            .operand_local(*value)
             .and_then(|local| body.local(local))
             .is_some_and(|local| {
                 runtime_zero_sized_transport_ty(db, local.ty, type_env.scope, type_env.assumptions)

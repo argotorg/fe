@@ -141,7 +141,7 @@ pub fn lower_to_rmir<'db>(
             .blocks
             .iter()
             .filter_map(|block| match &block.terminator.kind {
-                NTerminatorKind::Return(Some(value)) => normalized_body.operand_source(*value),
+                NTerminatorKind::Return(Some(value)) => normalized_body.operand_local(*value),
                 NTerminatorKind::Goto(_)
                 | NTerminatorKind::Branch { .. }
                 | NTerminatorKind::MatchEnum { .. }
@@ -477,7 +477,6 @@ impl<'db> RmirEmitter<'db> {
         let const_ref_regions = collect_const_ref_regions(db, env, &semantic_body);
         let terminated_blocks = vec![false; semantic_body.normalized.blocks.len()];
         let mut locals = semantic_body
-            .source
             .locals
             .iter()
             .enumerate()
@@ -1041,14 +1040,14 @@ impl<'db> RmirEmitter<'db> {
         ) {
             return false;
         }
-        let Some(local) = self.semantic_body.root_source(root) else {
+        let Some(local) = self.semantic_body.root_local(root) else {
             return false;
         };
         let runtime_local = self.runtime_value(local);
         let RuntimeLocalRoot::Ref(class) = self.locals[runtime_local.index()].root.clone() else {
             return false;
         };
-        if self.semantic_body.operand_source(value) != Some(local) {
+        if self.semantic_body.operand_local(value) != Some(local) {
             return false;
         }
         if let Some(source) = self.normalized_value_temps[value.value.index()] {
@@ -1107,7 +1106,7 @@ impl<'db> RmirEmitter<'db> {
     ) {
         let dst = self
             .semantic_body
-            .value_source(result)
+            .value_local(result)
             .unwrap_or_else(|| panic!("normalized value {result:?} has no runtime representation"));
         let result_ty = self
             .semantic_body
@@ -1116,7 +1115,11 @@ impl<'db> RmirEmitter<'db> {
             .expect("normalized assignment result must exist")
             .ty;
         let direct_class = self.current_expr_direct_class(bb.index(), stmt_idx, expr);
-        if self.root_provider_value_load_is_lazy(dst, expr) {
+        if self.root_provider_value_load_is_lazy(dst, expr)
+            || (stmt_id.is_none()
+                && matches!(expr, NExpr::Load { place, .. } if place.path.is_empty())
+                && self.load_is_only_used_as_place(result))
+        {
             self.normalized_value_temps[result.index()] = None;
             return;
         }
@@ -1146,12 +1149,12 @@ impl<'db> RmirEmitter<'db> {
                         && matches!(
                             destination.base,
                             NPlaceBase::Root(root)
-                                if self.semantic_body.root_source(root) == Some(dst)
+                                if self.semantic_body.root_local(root) == Some(dst)
                         )
                 });
             let read_from_current_slot = match expr {
                 NExpr::Forward { src } | NExpr::StructuralRepack { value: src, .. } => {
-                    self.semantic_body.operand_source(*src) == Some(dst)
+                    self.semantic_body.operand_local(*src) == Some(dst)
                         && self.normalized_value_temps[src.value.index()].is_none()
                 }
                 NExpr::Load { place, .. } => {
@@ -1159,7 +1162,7 @@ impl<'db> RmirEmitter<'db> {
                         && matches!(
                             place.base,
                             NPlaceBase::Root(root)
-                                if self.semantic_body.root_source(root) == Some(dst)
+                                if self.semantic_body.root_local(root) == Some(dst)
                         )
                 }
                 NExpr::ProjectValue { .. }
@@ -1186,13 +1189,12 @@ impl<'db> RmirEmitter<'db> {
             }
             return;
         }
-        if result_ty != self.semantic_body.source.locals[dst.index()].ty
+        if result_ty != self.semantic_body.locals[dst.index()].ty
             || direct_class
                 .as_ref()
                 .is_some_and(|class| Some(class) != self.local_class(dst))
         {
-            let syncs_direct_carrier = result_ty
-                == self.semantic_body.source.locals[dst.index()].ty
+            let syncs_direct_carrier = result_ty == self.semantic_body.locals[dst.index()].ty
                 && self.semantic_local_is_direct(dst)
                 && direct_class
                     .as_ref()
@@ -1213,7 +1215,7 @@ impl<'db> RmirEmitter<'db> {
                 .is_some_and(|(direct, target)| {
                     merge_runtime_class(self.db, direct, target).as_ref() == Some(target)
                 });
-            if result_ty == self.semantic_body.source.locals[dst.index()].ty
+            if result_ty == self.semantic_body.locals[dst.index()].ty
                 && self.semantic_local_is_direct(dst)
                 && (direct_class.as_ref() == self.local_class(dst) || lowers_into_merged_class)
             {
@@ -2538,7 +2540,7 @@ impl<'db> RmirEmitter<'db> {
     ) -> bool {
         let base = match place.base {
             NPlaceBase::CapabilityTarget { carrier } => {
-                let Some(local) = self.semantic_body.value_source(carrier) else {
+                let Some(local) = self.semantic_body.value_local(carrier) else {
                     return false;
                 };
                 local
@@ -2546,20 +2548,21 @@ impl<'db> RmirEmitter<'db> {
             NPlaceBase::Root(root_id) => match self.semantic_body.normalized.root(root_id) {
                 Some(root) => match &root.kind {
                     NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
-                        let Some(local) = self.semantic_body.root_source(root_id) else {
+                        let Some(local) = self.semantic_body.root_local(root_id) else {
                             return false;
                         };
                         local
                     }
                     NRootKind::Provider { binding } => {
                         let binding = binding.clone();
+                        let value_ty = root.ty;
                         let path = place.path.iter().cloned().collect::<Vec<_>>();
                         return self.lower_effect_handle_provider_extract_path_read(
-                            bb, dst, &binding, &path,
+                            bb, dst, &binding, value_ty, &path,
                         );
                     }
                     NRootKind::CapabilityRepresentation { carrier } => {
-                        let Some(local) = self.semantic_body.value_source(*carrier) else {
+                        let Some(local) = self.semantic_body.value_local(*carrier) else {
                             return false;
                         };
                         local
@@ -2594,8 +2597,14 @@ impl<'db> RmirEmitter<'db> {
         bb: RBlockId,
         dst: RLocalId,
         binding: &ProviderBinding<'db>,
+        value_ty: TyId<'db>,
         path: &[NDataProjection],
     ) -> bool {
+        // Only representation roots reconstruct a handle from its transport.
+        // Target roots load the referent through the provider's address.
+        if value_ty != binding.provider_ty {
+            return false;
+        }
         let Some(local) = self.facts.root_provider_local(binding) else {
             return false;
         };
@@ -2614,12 +2623,11 @@ impl<'db> RmirEmitter<'db> {
         if self.value_class(transport) != Some(&transport_class) {
             return false;
         }
-        let value_ty = self.semantic_body.source.locals[local.index()].ty;
         let class = stored_class_for_ty_in_env(self.db, self.env, value_ty);
         let value = self.coerce_value(bb, transport, &class);
         debug_assert_eq!(
             self.locals[transport.index()].semantic_ty,
-            self.semantic_body.source.locals[local.index()].ty,
+            self.semantic_body.locals[local.index()].ty,
         );
         self.lower_value_extract_from_value(bb, dst, value, class, path)
     }
@@ -3936,7 +3944,7 @@ impl<'db> RmirEmitter<'db> {
         let roots = self.runtime_roots();
         let value_classes = self.normalized_value_classes();
         let selected = self.with_current_body_cx(|cx| {
-            let mut class_cache = InferClassCache::new(self.semantic_body.source.locals.len());
+            let mut class_cache = InferClassCache::new(self.semantic_body.locals.len());
             RuntimeArgSelector::new(cx.env, cx.carriers, Some(&mut class_cache))
                 .with_concrete_roots(&roots)
                 .with_concrete_value_classes(&value_classes)
@@ -3955,7 +3963,7 @@ impl<'db> RmirEmitter<'db> {
         let roots = self.runtime_roots();
         let value_classes = self.normalized_value_classes();
         let selected = self.with_current_body_cx(|cx| {
-            let mut class_cache = InferClassCache::new(self.semantic_body.source.locals.len());
+            let mut class_cache = InferClassCache::new(self.semantic_body.locals.len());
             RuntimeArgSelector::new(cx.env, cx.carriers, Some(&mut class_cache))
                 .with_concrete_roots(&roots)
                 .with_concrete_value_classes(&value_classes)
@@ -4686,8 +4694,8 @@ impl<'db> RmirEmitter<'db> {
             .copied()
             .zip(successor.args.iter().copied())
             .filter_map(|(param, arg)| {
-                let dst = self.semantic_body.value_source(param)?;
-                (self.semantic_body.operand_source(arg) != Some(dst)).then_some((dst, arg))
+                let dst = self.semantic_body.value_local(param)?;
+                (self.semantic_body.operand_local(arg) != Some(dst)).then_some((dst, arg))
             })
             .collect::<Vec<_>>();
         if params.is_empty() {
@@ -4901,6 +4909,7 @@ impl<'db> RmirEmitter<'db> {
             .find_map(|(index, temp)| {
                 (*temp == Some(value)).then(|| {
                     self.semantic_body
+                        .layout_plan
                         .value_source(NValueId::from_u32(index as u32))
                 })
             })?
@@ -5109,7 +5118,6 @@ impl<'db> RmirEmitter<'db> {
 
     fn semantic_local_is_derived_place_bound_alias(&self, local: SLocalId) -> bool {
         self.semantic_body
-            .source
             .locals
             .get(local.index())
             .is_some_and(|local| {
@@ -5123,11 +5131,77 @@ impl<'db> RmirEmitter<'db> {
             })
     }
 
+    fn load_is_only_used_as_place(&self, value: NValueId) -> bool {
+        // A boundary may consume a load's source address without materializing
+        // its value. Preserve the SSA home and omit only those unused snapshots.
+        let local = self
+            .semantic_body
+            .value_local(value)
+            .expect("normalized value home");
+        if effect_handle_transport_class_for_ty_in_env(
+            self.db, self.env, self.semantic_body.locals[local.index()].ty,
+        ).is_some()
+            || self.semantic_body.normalized.roots.iter().any(|root| {
+                matches!(root.kind, NRootKind::CapabilityRepresentation { carrier } if carrier == value)
+            })
+        {
+            return false;
+        }
+        let roots = self.runtime_roots();
+        let value_classes = self.normalized_value_classes();
+        !self.semantic_body.normalized.value_is_used_with(value, |expr| {
+            let mut used = false;
+            expr.for_each_value_operand(|operand| used |= operand.value == value);
+            if !used {
+                return false;
+            }
+            let NExpr::Call { callee, args, effect_args, .. } = expr else {
+                return true;
+            };
+            let caller = self.current_semantic_key();
+            let typed = caller.instantiate_typed_body(self.db);
+            let callee = resolve_runtime_call_key(
+                self.db, caller, &typed, &self.semantic_body, *callee, args,
+            ).expect("admitted call must resolve during runtime value demand");
+            let semantic = get_or_build_semantic_instance(self.db, callee);
+            let mut sites = BoundarySiteAllocator::default();
+            let plan = compile_call_input_plan_for_semantic(
+                self.db, &self.semantic_body, semantic, self.env, effect_args, &mut sites,
+            );
+            self.with_current_body_cx(|cx| {
+                RuntimeArgSelector::new(cx.env, cx.carriers, None)
+                    .with_concrete_roots(&roots)
+                    .with_concrete_value_classes(&value_classes)
+                    .selected_call_inputs(args, effect_args, &plan)
+                    .iter()
+                    .any(|selected| match &selected.source {
+                        RuntimeArgSource::SemanticOperand(operand)
+                        | RuntimeArgSource::AggregateFromRuntimeSource(operand) => {
+                            operand.value == Some(value) || operand.local == local
+                        }
+                        RuntimeArgSource::DirectValueMaterialization { local: source, .. }
+                        | RuntimeArgSource::RuntimeValue(source)
+                        | RuntimeArgSource::HandleLikeValue(source)
+                        | RuntimeArgSource::SemanticPlaceAddress(source, _) => *source == local,
+                        RuntimeArgSource::PlaceAddress(place, _)
+                        | RuntimeArgSource::PlaceValue(place, _)
+                        | RuntimeArgSource::ValueExtract { place, .. } => {
+                            matches!(place.base, NPlaceBase::CapabilityTarget { carrier } if carrier == value)
+                                || matches!(place.base, NPlaceBase::Root(root) if self.semantic_body.root_local(root) == Some(local))
+                                || place.path.iter().any(|projection| matches!(projection,
+                                    NDataProjection::Index(NIndex::Value(index)) if *index == value))
+                        }
+                        RuntimeArgSource::Placeholder(_) => false,
+                    })
+            })
+        })
+    }
+
     fn root_provider_value_load_is_lazy(&self, local: SLocalId, expr: &NExpr<'db>) -> bool {
         let SemanticLocalRole::PlaceBoundValue {
             provenance: hir::analysis::semantic::PlaceProvenance::RootProvider(provider),
             ..
-        } = &self.semantic_body.source.locals[local.index()].role
+        } = &self.semantic_body.locals[local.index()].role
         else {
             return false;
         };
@@ -5169,12 +5243,12 @@ impl<'db> RmirEmitter<'db> {
             NExpr::Load { place, .. } | NExpr::Borrow { place, .. } => place == &dst_place,
             NExpr::Forward { src } => {
                 self.semantic_body
-                    .operand_source(*src)
+                    .operand_local(*src)
                     .and_then(|local| self.alias_source_place_for_local(local))
                     == Some(dst_place)
             }
             NExpr::ProjectValue { value, path } => {
-                let Some(source) = self.semantic_body.operand_source(*value) else {
+                let Some(source) = self.semantic_body.operand_local(*value) else {
                     return false;
                 };
                 let Some(mut place) = self.alias_source_place_for_local(source) else {
@@ -5294,7 +5368,7 @@ impl<'db> RmirEmitter<'db> {
                     .semantic(self.db)
                     .map(|semantic| semantic.key(self.db).owner(self.db)),
                 self.locals[local.index()].semantic_ty.pretty_print(self.db),
-                self.semantic_body.source.locals[local.index()].source,
+                self.semantic_body.locals[local.index()].source,
                 self.semantic_local_lowering(local),
                 self.locals[self.runtime_value(local).index()].root,
                 self.locals[self.runtime_value(local).index()].carrier,
@@ -5305,7 +5379,7 @@ impl<'db> RmirEmitter<'db> {
     fn try_lower_place(&mut self, bb: RBlockId, place: &NPlace<'db>) -> Option<RuntimePlace<'db>> {
         let mut runtime_place = match place.base {
             NPlaceBase::CapabilityTarget { carrier } => {
-                let local = self.semantic_body.value_source(carrier)?;
+                let local = self.semantic_body.value_local(carrier)?;
                 let value = self.normalized_value_temps[carrier.index()]
                     .unwrap_or_else(|| self.runtime_value(local));
                 self.runtime_place_from_addr_value(value)
@@ -5313,7 +5387,7 @@ impl<'db> RmirEmitter<'db> {
             }
             NPlaceBase::Root(root) => match &self.semantic_body.normalized.root(root)?.kind {
                 NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
-                    let root = self.semantic_place_root(self.semantic_body.root_source(root)?)?;
+                    let root = self.semantic_place_root(self.semantic_body.root_local(root)?)?;
                     RuntimePlace {
                         root,
                         path: Box::default(),
@@ -5324,7 +5398,7 @@ impl<'db> RmirEmitter<'db> {
                     path: Box::default(),
                 },
                 NRootKind::CapabilityRepresentation { carrier } => {
-                    self.try_semantic_place(bb, self.semantic_body.value_source(*carrier)?)?
+                    self.try_semantic_place(bb, self.semantic_body.value_local(*carrier)?)?
                 }
             },
         };
@@ -5441,7 +5515,7 @@ impl<'db> RmirEmitter<'db> {
         }
         let local = self
             .semantic_body
-            .value_source(value)
+            .value_local(value)
             .unwrap_or_else(|| panic!("normalized value {value:?} has no runtime representation"));
         self.read_semantic_value(bb, local)
     }
@@ -5717,13 +5791,13 @@ impl<'db> RmirEmitter<'db> {
                 NPlaceBase::CapabilityTarget { carrier } => {
                     format!(
                         "capability target carrier={carrier:?} source={:?}",
-                        self.semantic_body.value_source(carrier)
+                        self.semantic_body.value_local(carrier)
                     )
                 }
                 NPlaceBase::Root(root) => format!(
                     "root={root:?} data={:?} source={:?}",
                     self.semantic_body.normalized.root(root),
-                    self.semantic_body.root_source(root),
+                    self.semantic_body.root_local(root),
                 ),
             };
             panic!(
@@ -6093,7 +6167,7 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
     }
 
     fn semantic_local_ty(&self, local: SLocalId) -> TyId<'db> {
-        self.emitter.semantic_body.source.locals[local.index()].ty
+        self.emitter.semantic_body.locals[local.index()].ty
     }
 
     fn lower_placeholder(&mut self, semantic_ty: TyId<'db>, class: RuntimeClass<'db>) -> RLocalId {

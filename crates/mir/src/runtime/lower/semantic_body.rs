@@ -1,10 +1,13 @@
+use cranelift_entity::EntityRef;
 use hir::analysis::{
     HirAnalysisDb,
     semantic::{
-        SLocal, SLocalId, SemanticBody, SemanticInstance, SemanticNormalizationFailure,
+        PlaceProvenance, SLocal, SLocalId, SemanticBody, SemanticInstance, SemanticLocalRole,
+        SemanticNormalizationFailure, ValueProvenance,
         normalized::{
             NEffectArgValue, NExpr, NLayoutBackingSource, NLayoutPlan, NOperand, NPlace,
-            NPlaceBase, NRootId, NStatementKind, NValueId, NormalizedBody, normalize_semantic_body,
+            NPlaceBase, NRootId, NStatementKind, NValueDefinition, NValueId, NormalizedBody,
+            normalize_semantic_body,
         },
     },
 };
@@ -12,13 +15,18 @@ use hir::hir_def::ExprId;
 
 /// The admitted semantic and representation artifacts consumed by runtime lowering.
 ///
-/// `NormalizedBody` is the semantic authority. `NLayoutPlan` maps its immutable
-/// values and roots onto the mutable runtime-local representation retained by rMIR.
+/// `NormalizedBody` is the semantic authority. `NLayoutPlan` records source and
+/// backing metadata; `value_locals` assigns runtime storage independently of that
+/// source identity. Synthetic values never overwrite their containing source local.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeSemanticBody<'db> {
     pub(crate) normalized: NormalizedBody<'db>,
     pub(crate) layout_plan: NLayoutPlan<'db>,
     pub(crate) source: SemanticBody<'db>,
+    /// Source locals retain their indices for bindings and root metadata. Fresh
+    /// direct locals follow them for values introduced by normalization.
+    pub(crate) locals: Vec<SLocal<'db>>,
+    value_locals: Vec<SLocalId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -74,10 +82,44 @@ impl<'db> RuntimeSemanticBody<'db> {
     ) -> Result<Self, SemanticNormalizationFailure<'db>> {
         let artifacts = normalize_semantic_body(db, instance)?;
         let source = instance.body(db).clone();
+        let mut locals = source.locals.clone();
+        let value_locals = artifacts
+            .body
+            .values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                if let NValueDefinition::Statement { block, statement } = value.definition
+                    && artifacts.body.blocks[block.index()].statements[statement as usize]
+                        .source
+                        .is_none()
+                {
+                    let local = SLocalId::new(locals.len());
+                    locals.push(SLocal {
+                        ty: value.ty,
+                        mutability: value.mutability,
+                        source: None,
+                        role: SemanticLocalRole::DirectValue {
+                            provenance: ValueProvenance::Ordinary,
+                        },
+                        snapshot_source: None,
+                        layout_backing_sources: Vec::new(),
+                    });
+                    local
+                } else {
+                    artifacts
+                        .layout_plan
+                        .value_source(NValueId::new(index))
+                        .expect("verified normalized value must have source metadata")
+                }
+            })
+            .collect();
         Ok(Self {
             normalized: artifacts.body,
             layout_plan: artifacts.layout_plan,
             source,
+            locals,
+            value_locals,
         })
     }
 
@@ -86,33 +128,31 @@ impl<'db> RuntimeSemanticBody<'db> {
     }
 
     pub(crate) fn local(&self, local: SLocalId) -> Option<&SLocal<'db>> {
-        self.source.local(local)
+        self.locals.get(local.index())
     }
 
-    pub(crate) fn value_source(&self, value: NValueId) -> Option<SLocalId> {
-        self.layout_plan.value_source(value)
+    pub(crate) fn value_local(&self, value: NValueId) -> Option<SLocalId> {
+        self.value_locals.get(value.index()).copied()
     }
 
-    pub(crate) fn operand_source(&self, operand: NOperand) -> Option<SLocalId> {
-        self.value_source(operand.value)
+    pub(crate) fn operand_local(&self, operand: NOperand) -> Option<SLocalId> {
+        self.value_local(operand.value)
     }
 
     pub(crate) fn runtime_operand(&self, operand: NOperand) -> Option<RuntimeOperand> {
         Some(RuntimeOperand {
-            local: self.operand_source(operand)?,
+            local: self.operand_local(operand)?,
             value: Some(operand.value),
             origin: operand.origin,
             mode: operand.mode,
         })
     }
 
-    pub(crate) fn root_source(&self, root: NRootId) -> Option<SLocalId> {
+    pub(crate) fn root_local(&self, root: NRootId) -> Option<SLocalId> {
         self.layout_plan.root_source(root)
     }
 
     pub(crate) fn root_demand(&self, local: SLocalId) -> RuntimeRootDemand {
-        use hir::analysis::semantic::{PlaceProvenance, SemanticLocalRole};
-
         let mut demand = RuntimeRootDemand {
             always_rooted: self.local(local).is_some_and(|local| {
                 matches!(
@@ -142,10 +182,10 @@ impl<'db> RuntimeSemanticBody<'db> {
         }
         for backing in &self.layout_plan.use_backings {
             let source = match backing.source {
-                NLayoutBackingSource::Value { value, .. } => self.value_source(value),
-                NLayoutBackingSource::Root { root, .. } => self.root_source(root),
+                NLayoutBackingSource::Value { value, .. } => self.value_local(value),
+                NLayoutBackingSource::Root { root, .. } => self.root_local(root),
             };
-            if source == Some(local) && self.value_source(backing.value) != Some(local) {
+            if source == Some(local) && self.value_local(backing.value) != Some(local) {
                 demand.nonself_backing_place = true;
             }
         }
@@ -186,7 +226,7 @@ impl<'db> RuntimeSemanticBody<'db> {
                                     arg.pass_mode,
                                     hir::analysis::ty::ty_check::EffectPassMode::ByTempPlace
                                 )
-                                && self.operand_source(*value) == Some(local) =>
+                                && self.operand_local(*value) == Some(local) =>
                         {
                             demand.passed_by_place = true;
                             demand.mut_borrowed_or_addr_taken = true;
@@ -215,8 +255,8 @@ impl<'db> RuntimeSemanticBody<'db> {
 
     fn place_source(&self, place: &NPlace<'db>) -> Option<SLocalId> {
         match place.base {
-            NPlaceBase::Root(root) => self.root_source(root),
-            NPlaceBase::CapabilityTarget { carrier } => self.value_source(carrier),
+            NPlaceBase::Root(root) => self.root_local(root),
+            NPlaceBase::CapabilityTarget { carrier } => self.value_local(carrier),
         }
     }
 }

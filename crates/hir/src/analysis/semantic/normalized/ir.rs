@@ -67,6 +67,20 @@ impl<'db> NormalizedBody<'db> {
     }
 
     pub(crate) fn value_is_used(&self, target: NValueId) -> bool {
+        self.value_is_used_with(target, |expr| {
+            let mut used = false;
+            expr.for_each_value_operand(|operand| used |= operand.value == target);
+            used
+        })
+    }
+
+    /// Test uses while allowing a consumer to refine which expression value
+    /// operands it materializes. Place operands and control-flow uses always count.
+    pub fn value_is_used_with(
+        &self,
+        target: NValueId,
+        mut expression_uses_value: impl FnMut(&NExpr<'db>) -> bool,
+    ) -> bool {
         let place_uses_target = |place: &NPlace<'db>| {
             matches!(place.base, NPlaceBase::CapabilityTarget { carrier } if carrier == target)
                 || place.path.iter().any(
@@ -77,8 +91,12 @@ impl<'db> NormalizedBody<'db> {
             for statement in &block.statements {
                 let used = match &statement.kind {
                     NStatementKind::Define { expr, .. } => {
-                        let mut used = false;
-                        expr.for_each_value_operand(|operand| used |= operand.value == target);
+                        let mut used = expression_uses_value(expr);
+                        if let NExpr::ProjectValue { path, .. } = expr {
+                            used |= path.0.iter().any(|projection| {
+                                matches!(projection, NDataProjection::Index(NIndex::Value(value)) if *value == target)
+                            });
+                        }
                         expr.for_each_place_operand(|place| used |= place_uses_target(place));
                         used
                     }

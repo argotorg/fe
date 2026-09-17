@@ -1,0 +1,82 @@
+struct Wrap {
+    handle: mut u256,
+}
+
+struct Outer {
+    inner: mut Wrap,
+}
+
+fn write_array(values: mut [Wrap; 2], index: usize, value: u256) {
+    values[index].handle = value
+}
+
+fn write_nested(outer: mut Outer, value: u256) {
+    outer.inner.handle = value
+}
+
+#[test]
+fn local_fields_and_array_members_write_through_their_handles() {
+    let mut left: u256 = 0
+    let mut right: u256 = 0
+    let mut holder = Wrap { handle: mut left }
+    holder.handle = 7
+    let mut values = [Wrap { handle: mut right }]
+    values[0].handle = 9
+    assert!(left == 7)
+    assert!(right == 9)
+}
+
+#[test]
+fn borrowed_array_dynamic_member_writes_through_its_handle() {
+    let mut left: u256 = 0
+    let mut right: u256 = 0
+    let mut values = [Wrap { handle: mut left }, Wrap { handle: mut right }]
+    write_array(values: mut values, index: 1, value: 11)
+    write_array(values: mut values, index: 0, value: 13)
+    assert!(left == 13)
+    assert!(right == 11)
+}
+
+#[test]
+fn nested_mutable_handles_keep_each_referent() {
+    let mut value: u256 = 0
+    let mut inner = Wrap { handle: mut value }
+    let mut outer = Outer { inner: mut inner }
+    write_nested(outer: mut outer, value: 17)
+    assert!(value == 17)
+}
+
+#[test]
+fn explicit_reborrow_uses_the_loaded_handle_carrier() {
+    let mut value: u256 = 0
+    let mut holder = Wrap { handle: mut value }
+    let alias = mut holder.handle
+    alias = 19
+    assert!(value == 19)
+}
+
+fn replace(values: mut [Wrap; 1], replacement: Wrap) {
+    values[0] = replacement
+}
+
+#[test]
+fn replaced_aggregate_keeps_new_referent() {
+    let mut old: u256 = 0
+    let mut next: u256 = 0
+    let mut values = [Wrap { handle: mut old }]
+    values[0] = Wrap { handle: mut next }
+    values[0].handle = 23
+    assert!(old == 0)
+    assert!(next == 23)
+}
+
+#[test]
+fn call_replaced_aggregate_keeps_new_referent() {
+    let mut old: u256 = 0
+    let mut next: u256 = 0
+    let mut values = [Wrap { handle: mut old }]
+    replace(values: mut values, replacement: Wrap { handle: mut next })
+    values[0].handle = 29
+    assert!(old == 0)
+    assert!(next == 29)
+}

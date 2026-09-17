@@ -157,7 +157,7 @@ impl<'a, 'lookup, 'db> CarrierInferer<'a, 'lookup, 'db, FullBodySpace<'a, 'db>> 
             if !matches!(self.carriers[local.index()], RuntimeCarrier::Erased) {
                 continue;
             }
-            let local_data = &self.env.body().source.locals[local.index()];
+            let local_data = &self.env.body().locals[local.index()];
             let desired = desired_runtime_value_carrier(
                 self.env.db(),
                 self.env.body(),
@@ -188,8 +188,8 @@ impl<'a, 'lookup, 'db> CarrierInferer<'a, 'lookup, 'db, FullBodySpace<'a, 'db>> 
     fn infer_roots(&mut self) -> Vec<RuntimeLocalRoot<'db>> {
         let carriers = self.carriers.clone();
         let cx = self.env.with_carriers(&carriers);
-        let mut roots = Vec::with_capacity(cx.env.body().source.locals.len());
-        for (idx, local) in cx.env.body().source.locals.iter().enumerate() {
+        let mut roots = Vec::with_capacity(cx.env.body().locals.len());
+        for (idx, local) in cx.env.body().locals.iter().enumerate() {
             let local_id = SLocalId::from_u32(idx as u32);
             let mut carrier = carriers[idx].clone();
             let root = if !cx.env.body().root_demand(local_id).needs_runtime_root() {
@@ -224,8 +224,8 @@ impl<'a, 'lookup, 'db, S: AssignmentSpace<'db>> CarrierInferer<'a, 'lookup, 'db,
         param_locals: &[SLocalId],
         lookup: Option<ReturnClassLookup<'lookup, 'db>>,
     ) -> Self {
-        let mut carriers = vec![RuntimeCarrier::Erased; env.body().source.locals.len()];
-        let mut signature_pinned = vec![false; env.body().source.locals.len()];
+        let mut carriers = vec![RuntimeCarrier::Erased; env.body().locals.len()];
+        let mut signature_pinned = vec![false; env.body().locals.len()];
         for (class, local) in params.iter().zip(param_locals.iter().copied()) {
             carriers[local.index()] = RuntimeCarrier::Value(class.clone());
             signature_pinned[local.index()] = true;
@@ -235,7 +235,7 @@ impl<'a, 'lookup, 'db, S: AssignmentSpace<'db>> CarrierInferer<'a, 'lookup, 'db,
             space,
             carriers,
             signature_pinned,
-            class_cache: InferClassCache::new(env.body().source.locals.len()),
+            class_cache: InferClassCache::new(env.body().locals.len()),
             pending_dependents: Vec::new(),
             lookup,
         }
@@ -260,7 +260,7 @@ impl<'a, 'lookup, 'db, S: AssignmentSpace<'db>> CarrierInferer<'a, 'lookup, 'db,
             self.env.db(),
             self.env.body(),
             local,
-            &self.env.body().source.locals[local.index()],
+            &self.env.body().locals[local.index()],
             current,
             desired,
         );
@@ -274,7 +274,7 @@ impl<'a, 'lookup, 'db, S: AssignmentSpace<'db>> CarrierInferer<'a, 'lookup, 'db,
 
     fn collect_local_change_dependents(&mut self, changed_local: SLocalId) {
         let mut pending = vec![changed_local];
-        let mut seen = vec![false; self.env.body().source.locals.len()];
+        let mut seen = vec![false; self.env.body().locals.len()];
         let mut queued = SecondaryMap::with_default(false);
         queued.resize(self.space.node_count());
         self.pending_dependents.clear();
@@ -328,7 +328,7 @@ impl<'db, S: AssignmentSpace<'db>> SparseAnalysis for CarrierInferer<'_, '_, 'db
                 )
             }
         };
-        let local = &self.env.body().source.locals[assign.dst.index()];
+        let local = &self.env.body().locals[assign.dst.index()];
         let db = self.env.db();
         let lookup = &mut self.lookup;
         let mut lookup_return_class = move |key| match lookup.as_deref_mut() {
@@ -371,11 +371,11 @@ pub(crate) fn seed_root_provider_carriers<'a, 'db>(
     env: BodyEnv<'a, 'db>,
     carriers: &mut [RuntimeCarrier<'db>],
 ) {
-    for (idx, local) in env.body().source.locals.iter().enumerate() {
+    for (idx, local) in env.body().locals.iter().enumerate() {
         if !matches!(carriers[idx], RuntimeCarrier::Erased) {
             continue;
         }
-        let provider = local.role.root_provider(&env.body().source.locals);
+        let provider = local.role.root_provider(&env.body().locals);
         if provider.as_ref().is_some_and(|provider| {
             env.actual_runtime_visible_root_provider_class(carriers, provider)
                 .is_none()
@@ -433,7 +433,7 @@ pub(crate) fn desired_runtime_value_carrier<'db>(
     assumptions: PredicateListId<'db>,
 ) -> RuntimeCarrier<'db> {
     let env = RuntimeTypeEnv::new(scope, assumptions);
-    if local_uses_effect_handle_transport(local, &body.source.locals)
+    if local_uses_effect_handle_transport(local, &body.locals)
         && let Some(transport_class) =
             effect_handle_transport_class_for_ty_in_env(db, env, local.ty)
     {
@@ -503,9 +503,9 @@ fn lower_semantic_locals<'db>(
     let scope = cx.env.scope();
     let assumptions = cx.env.assumptions();
     let mut provider_bindings = Vec::new();
-    for (idx, local) in body.source.locals.iter().enumerate() {
+    for (idx, local) in body.locals.iter().enumerate() {
         let local_id = SLocalId::from_u32(idx as u32);
-        let provider = local.role.root_provider(&body.source.locals);
+        let provider = local.role.root_provider(&body.locals);
         if provider.as_ref().is_some_and(|provider| {
             cx.env
                 .actual_runtime_visible_root_provider_class(carriers, provider)
@@ -630,12 +630,11 @@ fn lower_semantic_locals<'db>(
     let lowerings = cx
         .env
         .body()
-        .source
         .locals
         .iter()
         .enumerate()
         .map(|(idx, local)| {
-            let provider = local.role.root_provider(&body.source.locals);
+            let provider = local.role.root_provider(&body.locals);
             if provider.as_ref().is_some_and(|provider| {
                 cx.env
                     .actual_runtime_visible_root_provider_class(carriers, provider)
@@ -826,7 +825,7 @@ fn local_direct_value_lowers_as_unrooted<'db>(
     db: &'db dyn MirDb,
     class: &RuntimeClass<'db>,
 ) -> bool {
-    if local.role.root_provider(&body.source.locals).is_some() {
+    if local.role.root_provider(&body.locals).is_some() {
         return false;
     }
     if !class.contains_transport(db) {
@@ -970,7 +969,6 @@ fn infer_runtime_local_root<'db>(
     let local_data = cx
         .env
         .body()
-        .source
         .locals
         .get(local.index())
         .expect("normalized local exists");
@@ -994,7 +992,7 @@ fn infer_runtime_local_root<'db>(
             .enumerate()
             .find_map(|(index, root)| {
                 (matches!(root.kind, NRootKind::LocalSlot { .. })
-                    && cx.env.body().root_source(NRootId::from_u32(index as u32)) == Some(local))
+                    && cx.env.body().root_local(NRootId::from_u32(index as u32)) == Some(local))
                 .then_some(root)
             })
         && !local_slot_uses_transport_class(root.mutability, transport_class.as_ref())
@@ -1100,7 +1098,7 @@ pub(super) fn fallback_root_transport_class<'db>(
             let local_is_effect_handle =
                 effect_handle_transport_class_for_ty_in_env(db, env, local.ty).is_some();
             if local_is_effect_handle
-                && !local_uses_effect_handle_transport(local, &body.source.locals)
+                && !local_uses_effect_handle_transport(local, &body.locals)
                 && runtime_zero_sized_ty(db, local.ty, scope, assumptions)
             {
                 return None;
@@ -1135,7 +1133,7 @@ pub(super) fn fallback_root_transport_class<'db>(
             let local_is_effect_handle =
                 effect_handle_transport_class_for_ty_in_env(db, env, local.ty).is_some();
             if local_is_effect_handle
-                && !local_uses_effect_handle_transport(local, &body.source.locals)
+                && !local_uses_effect_handle_transport(local, &body.locals)
                 && runtime_zero_sized_ty(db, local.ty, scope, assumptions)
             {
                 return None;
@@ -1211,7 +1209,7 @@ impl RuntimeJoinDemand {
             prefer_transport: matches!(
                 local.role.kind(),
                 SemanticLocalKind::PlaceCarrier | SemanticLocalKind::DirectCarrier
-            ) || local.role.root_provider(&body.source.locals).is_some(),
+            ) || local.role.root_provider(&body.locals).is_some(),
         }
     }
 }

@@ -108,19 +108,19 @@ func private %dispatch() {
         jump block4;
 
     block4:
-        v37.i1 = eq v5 2066295049.i256;
-        br v37 block5 block6;
+        v36.i1 = eq v5 2066295049.i256;
+        br v36 block5 block6;
 
     block5:
-        v38.i256 = call %calldataload 4.i256;
-        v40.@layout_1 = insert_value undef.@layout_1 0.i256 v38;
-        v41.objref<i256> = obj.proj v1 0.i256;
-        v42.i256 = extract_value v40 0.i256;
-        obj.store v41 v42;
-        v43.objref<i256> = obj.proj v1 0.i256;
-        v44.i256 = obj.load v43;
-        (v46.i256, v47.i1) = uaddo v44 3.i256;
-        br v47 block8 block11;
+        v37.i256 = call %calldataload 4.i256;
+        v39.@layout_1 = insert_value undef.@layout_1 0.i256 v37;
+        v40.objref<i256> = obj.proj v1 0.i256;
+        v41.i256 = extract_value v39 0.i256;
+        obj.store v40 v41;
+        v42.objref<i256> = obj.proj v1 0.i256;
+        v43.i256 = obj.load v42;
+        (v45.i256, v46.i1) = uaddo v43 3.i256;
+        br v46 block8 block11;
 
     block6:
         jump block7;
@@ -145,17 +145,15 @@ func private %dispatch() {
     block10:
         v32.objref<i256> = obj.proj v0 1.i256;
         obj.store v32 v30;
-        v33.@layout_0 = obj.load v0;
-        v34.i256 = call %impl_Point__area v0;
-        call %abi_encode v34;
+        v33.i256 = call %impl_Point__area v0;
+        call %abi_encode v33;
         unreachable;
 
     block11:
-        v48.objref<i256> = obj.proj v1 0.i256;
-        obj.store v48 v46;
-        v49.@layout_1 = obj.load v1;
-        v50.i256 = call %impl_Square__area v1;
-        call %abi_encode v50;
+        v47.objref<i256> = obj.proj v1 0.i256;
+        obj.store v47 v45;
+        v48.i256 = call %impl_Square__area v1;
+        call %abi_encode v48;
         unreachable;
 }
 

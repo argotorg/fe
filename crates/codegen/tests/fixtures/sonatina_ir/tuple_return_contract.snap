@@ -417,12 +417,11 @@ func private %encode_single_root_alloc(v0.@layout_1) -> @layout_2 {
         v9.objref<i256> = obj.proj v1 1.i256;
         v10.i256 = extract_value v4 1.i256;
         obj.store v9 v10;
-        v11.@layout_2 = obj.load v1;
-        v12.i256 = call %base v1;
+        v11.i256 = call %base v1;
         call %encode_single_root v0 v1;
-        v15.@layout_2 = insert_value undef.@layout_2 0.i256 v12;
-        v16.@layout_2 = insert_value v15 1.i256 v3;
-        return v16;
+        v14.@layout_2 = insert_value undef.@layout_2 0.i256 v11;
+        v15.@layout_2 = insert_value v14 1.i256 v3;
+        return v15;
 }
 
 func private %impl_trait_u256__encode_to_ptr__gf13e(v0.i256, v1.i256) {

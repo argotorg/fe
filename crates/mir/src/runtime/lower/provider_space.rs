@@ -27,7 +27,7 @@ fn local_provider_address_space<'db>(
     let local = body.local(local)?;
     local
         .role
-        .root_provider(&body.source.locals)
+        .root_provider(&body.locals)
         .and_then(|provider| provider.semantics.address_space)
         .or_else(|| {
             let binding = local.source?;
@@ -44,12 +44,12 @@ pub(super) fn resolved_effect_arg_address_space<'db>(
 ) -> AddressSpaceKind {
     let provider = arg.provider.or_else(|| match &arg.arg {
         NEffectArgValue::Value(value) => {
-            local_provider_address_space(db, body, body.operand_source(*value)?)
+            local_provider_address_space(db, body, body.operand_local(*value)?)
         }
         NEffectArgValue::Place(place) => match place.base {
             NPlaceBase::Root(root) => body.normalized.root(root)?.address_space.into(),
             NPlaceBase::CapabilityTarget { carrier } => {
-                local_provider_address_space(db, body, body.value_source(carrier)?)
+                local_provider_address_space(db, body, body.value_local(carrier)?)
             }
         },
     });

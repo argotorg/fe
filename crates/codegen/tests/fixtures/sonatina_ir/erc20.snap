@@ -3851,12 +3851,11 @@ func inline(always) private %core__lib__abi__encode_alloc__gac80_41de(v0.i256) -
         v9.objref<i256> = obj.proj v1 1.i256;
         v10.i256 = extract_value v4 1.i256;
         obj.store v9 v10;
-        v11.@layout_1 = obj.load v1;
-        v12.i256 = call %impl_trait_SolEncoder__base v1;
+        v11.i256 = call %impl_trait_SolEncoder__base v1;
         call %impl_trait_u256__encode__g426c v0 v1;
-        v15.@layout_1 = insert_value undef.@layout_1 0.i256 v12;
-        v16.@layout_1 = insert_value v15 1.i256 v3;
-        return v16;
+        v14.@layout_1 = insert_value undef.@layout_1 0.i256 v11;
+        v15.@layout_1 = insert_value v14 1.i256 v3;
+        return v15;
 }
 
 func inline(always) private %core__lib__abi__encode_alloc__gac80_ec86(v0.i256) -> @layout_1 {
@@ -3873,12 +3872,11 @@ func inline(always) private %core__lib__abi__encode_alloc__gac80_ec86(v0.i256) -
         v9.objref<i256> = obj.proj v1 1.i256;
         v10.i256 = extract_value v4 1.i256;
         obj.store v9 v10;
-        v11.@layout_1 = obj.load v1;
-        v12.i256 = call %impl_trait_SolEncoder__base v1;
+        v11.i256 = call %impl_trait_SolEncoder__base v1;
         call %impl_trait_u256__encode__g426c v0 v1;
-        v15.@layout_1 = insert_value undef.@layout_1 0.i256 v12;
-        v16.@layout_1 = insert_value v15 1.i256 v3;
-        return v16;
+        v14.@layout_1 = insert_value undef.@layout_1 0.i256 v11;
+        v15.@layout_1 = insert_value v14 1.i256 v3;
+        return v15;
 }
 
 func private %encode__g3cd9(v0.i256, v1.objref<@layout_1>) {
@@ -4219,12 +4217,11 @@ func private %encode_single_root_alloc__g472d(v0.i256) -> @layout_1 {
         v9.objref<i256> = obj.proj v1 1.i256;
         v10.i256 = extract_value v4 1.i256;
         obj.store v9 v10;
-        v11.@layout_1 = obj.load v1;
-        v12.i256 = call %impl_trait_SolEncoder__base v1;
+        v11.i256 = call %impl_trait_SolEncoder__base v1;
         call %encode_single_root__g859f v0 v1;
-        v15.@layout_1 = insert_value undef.@layout_1 0.i256 v12;
-        v16.@layout_1 = insert_value v15 1.i256 v3;
-        return v16;
+        v14.@layout_1 = insert_value undef.@layout_1 0.i256 v11;
+        v15.@layout_1 = insert_value v14 1.i256 v3;
+        return v15;
 }
 
 func private %encode_single_root_alloc__g09ca(v0.i1) -> @layout_1 {
@@ -4241,12 +4238,11 @@ func private %encode_single_root_alloc__g09ca(v0.i1) -> @layout_1 {
         v9.objref<i256> = obj.proj v1 1.i256;
         v10.i256 = extract_value v4 1.i256;
         obj.store v9 v10;
-        v11.@layout_1 = obj.load v1;
-        v12.i256 = call %impl_trait_SolEncoder__base v1;
+        v11.i256 = call %impl_trait_SolEncoder__base v1;
         call %encode_single_root__ge927 v0 v1;
-        v15.@layout_1 = insert_value undef.@layout_1 0.i256 v12;
-        v16.@layout_1 = insert_value v15 1.i256 v3;
-        return v16;
+        v14.@layout_1 = insert_value undef.@layout_1 0.i256 v11;
+        v15.@layout_1 = insert_value v14 1.i256 v3;
+        return v15;
 }
 
 func private %encode_single_root_alloc__gac80(v0.i256) -> @layout_1 {
@@ -4263,12 +4259,11 @@ func private %encode_single_root_alloc__gac80(v0.i256) -> @layout_1 {
         v9.objref<i256> = obj.proj v1 1.i256;
         v10.i256 = extract_value v4 1.i256;
         obj.store v9 v10;
-        v11.@layout_1 = obj.load v1;
-        v12.i256 = call %impl_trait_SolEncoder__base v1;
+        v11.i256 = call %impl_trait_SolEncoder__base v1;
         call %encode_single_root__g2e64 v0 v1;
-        v15.@layout_1 = insert_value undef.@layout_1 0.i256 v12;
-        v16.@layout_1 = insert_value v15 1.i256 v3;
-        return v16;
+        v14.@layout_1 = insert_value undef.@layout_1 0.i256 v11;
+        v15.@layout_1 = insert_value v14 1.i256 v3;
+        return v15;
 }
 
 func private %encode_single_root_alloc__g0c18(v0.i256) -> @layout_1 {
@@ -4285,12 +4280,11 @@ func private %encode_single_root_alloc__g0c18(v0.i256) -> @layout_1 {
         v9.objref<i256> = obj.proj v1 1.i256;
         v10.i256 = extract_value v4 1.i256;
         obj.store v9 v10;
-        v11.@layout_1 = obj.load v1;
-        v12.i256 = call %impl_trait_SolEncoder__base v1;
+        v11.i256 = call %impl_trait_SolEncoder__base v1;
         call %encode_single_root__g6d7e v0 v1;
-        v15.@layout_1 = insert_value undef.@layout_1 0.i256 v12;
-        v16.@layout_1 = insert_value v15 1.i256 v3;
-        return v16;
+        v14.@layout_1 = insert_value undef.@layout_1 0.i256 v11;
+        v15.@layout_1 = insert_value v14 1.i256 v3;
+        return v15;
 }
 
 func private %encode_single_root_alloc__gcb0a(v0.i8) -> @layout_1 {
@@ -4307,12 +4301,11 @@ func private %encode_single_root_alloc__gcb0a(v0.i8) -> @layout_1 {
         v9.objref<i256> = obj.proj v1 1.i256;
         v10.i256 = extract_value v4 1.i256;
         obj.store v9 v10;
-        v11.@layout_1 = obj.load v1;
-        v12.i256 = call %impl_trait_SolEncoder__base v1;
+        v11.i256 = call %impl_trait_SolEncoder__base v1;
         call %encode_single_root__g0a88 v0 v1;
-        v15.@layout_1 = insert_value undef.@layout_1 0.i256 v12;
-        v16.@layout_1 = insert_value v15 1.i256 v3;
-        return v16;
+        v14.@layout_1 = insert_value undef.@layout_1 0.i256 v11;
+        v15.@layout_1 = insert_value v14 1.i256 v3;
+        return v15;
 }
 
 func private %encode_single_root__g2e64(v0.i256, v1.objref<@layout_1>) {
