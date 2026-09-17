@@ -13,7 +13,7 @@ use fe_hir::{
             check_semantic_noesc, collect_semantic_borrow_diagnostic_vouchers,
             contract_init_assigned_fields, get_or_build_semantic_instance,
             identity_semantic_instance_key, layout_evidence_body, normalize_semantic_body,
-            normalized::{normalize_raw_body, verify_normalized_body},
+            normalized::{NLayoutBackingSource, normalize_raw_body, verify_normalized_body},
             semantic_body_admission, semantic_borrow_summary,
         },
         ty::{
@@ -2525,4 +2525,161 @@ fn write(mut tree: Tree, i: usize, h: u256) -> Tree {
     assert!(matches!(path[0], Projection::Field(0)));
     assert!(matches!(path[1], Projection::Index(_)));
     assert!(matches!(path[2], Projection::Field(0)));
+}
+
+#[test]
+fn nested_borrowed_parameter_access_retains_each_capability_target() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "nested_input_referents.fe".into(),
+        r#"
+struct Inner { value: mut u256 }
+struct Outer { inner: mut Inner }
+fn nested(outer: mut Outer) -> mut u256 {
+    mut outer.inner.value
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let artifacts = normalized_func_body(&db, top_mod, "nested");
+    let body = &artifacts.body;
+    let carriers: Vec<_> = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .filter_map(|statement| match &statement.kind {
+            NStatementKind::Define {
+                expr: NExpr::Load { place, .. } | NExpr::Borrow { place, .. },
+                ..
+            } => match place.base {
+                NPlaceBase::CapabilityTarget { carrier } => Some(carrier),
+                NPlaceBase::Root(_) => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(carriers.len(), 3);
+    assert!(carriers.windows(2).all(|pair| pair[0] != pair[1]));
+}
+
+#[test]
+fn projected_capability_reborrows_load_the_handle_before_borrowing_its_referent() {
+    for_each_fixture_instance(
+        r#"
+struct Inner { value: mut u256 }
+struct Outer { inner: mut Inner }
+fn shared(outer: ref Outer) -> ref u256 { ref outer.inner.value }
+fn mutable_array(values: mut [mut u256; 2], index: usize) -> mut u256 { mut values[index] }
+fn shared_array(values: ref [mut u256; 2], index: usize) -> ref u256 { ref values[index] }
+fn local(value: mut u256) -> mut u256 {
+    let mut holder = Inner { value }
+    mut holder.value
+}
+"#,
+        |db, instance| {
+            let artifacts =
+                normalize_semantic_body(db, instance).expect("projected reborrow must be admitted");
+            let body = &artifacts.body;
+            let expected = instance.normalized_result_ty(db);
+            let (kind, target) = expected.as_borrow(db).unwrap();
+            let (result, place) = body
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .find_map(|statement| match &statement.kind {
+                    NStatementKind::Define {
+                        result,
+                        expr:
+                            NExpr::Borrow {
+                                place,
+                                kind: actual,
+                                ..
+                            },
+                    } if *actual == kind && body.values[result.index()].ty == expected => {
+                        Some((*result, place))
+                    }
+                    _ => None,
+                })
+                .expect("returned reborrow");
+            assert_eq!(place.ty, target);
+            assert!(place.path.is_empty());
+            let NPlaceBase::CapabilityTarget { carrier } = place.base else {
+                panic!("reborrow targets the stored handle")
+            };
+            assert_ne!(result, carrier);
+            if owner_name(db, instance.key(db).owner(db)) == "local" {
+                let backings: Vec<_> = artifacts.layout_plan.use_backings(carrier).collect();
+                assert_eq!(
+                    backings.len(),
+                    1,
+                    "the loaded handle retains its parameter backing"
+                );
+                assert!(backings[0].target.is_empty());
+                let NLayoutBackingSource::Value { value, path } = &backings[0].source else {
+                    panic!("the handle came from the incoming parameter")
+                };
+                assert!(path.is_empty());
+                assert!(matches!(
+                    body.values[value.index()].definition,
+                    NValueDefinition::EntryParam { param: 0 }
+                ));
+            }
+            let value = &body.values[carrier.index()];
+            assert_eq!(value.ty.as_borrow(db).unwrap().1, target);
+            let NValueDefinition::Statement { block, statement } = value.definition else {
+                panic!("projected handle must be loaded")
+            };
+            assert!(matches!(
+                &body.blocks[block.index()].statements[statement as usize].kind,
+                NStatementKind::Define {
+                    expr: NExpr::Load { .. },
+                    ..
+                }
+            ));
+        },
+    );
+}
+
+#[test]
+fn borrowing_scalar_fields_and_direct_parameters_keeps_the_existing_target() {
+    for_each_fixture_instance(
+        r#"
+struct Plain { value: u256 }
+fn field(value: mut Plain) -> mut u256 { mut value.value }
+fn direct(value: mut u256) -> mut u256 { mut value }
+"#,
+        |db, instance| {
+            let artifacts =
+                normalize_semantic_body(db, instance).expect("ordinary borrow must be admitted");
+            let body = &artifacts.body;
+            assert!(body.blocks.iter().flat_map(|block| &block.statements).all(
+                |statement| !matches!(
+                    statement.kind,
+                    NStatementKind::Define {
+                        expr: NExpr::Load { .. },
+                        ..
+                    }
+                )
+            ));
+            let place = body
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .find_map(|statement| match &statement.kind {
+                    NStatementKind::Define {
+                        expr: NExpr::Borrow { place, .. },
+                        ..
+                    } => Some(place),
+                    _ => None,
+                })
+                .unwrap();
+            let NPlaceBase::CapabilityTarget { carrier } = place.base else {
+                panic!("incoming parameter target")
+            };
+            assert!(matches!(
+                body.values[carrier.index()].definition,
+                NValueDefinition::EntryParam { param: 0 }
+            ));
+        },
+    );
 }

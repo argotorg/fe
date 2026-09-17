@@ -639,7 +639,7 @@ fn layout_backing_source_projection_matches(
         )
 }
 
-fn layout_backing_source_path_is_prefix(
+pub(crate) fn layout_backing_source_path_is_prefix(
     prefix: &[LayoutBackingProjection],
     path: &[LayoutBackingProjection],
 ) -> bool {

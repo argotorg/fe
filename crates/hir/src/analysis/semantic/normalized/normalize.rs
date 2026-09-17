@@ -7,9 +7,11 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            FieldIndex, LayoutBackingPlace, PlaceProvenance, SBlockId, SExpr, SLocal, SLocalId,
-            SOperand, SPlace, SStmtId, SStmtKind, STerminatorKind, SemanticBody, SemanticInstance,
-            SemanticLocalRole, ValueProvenance, VariantIndex,
+            FieldIndex, LayoutBackingPlace, LayoutBackingProjection, PlaceProvenance, SBlockId,
+            SExpr, SLocal, SLocalId, SOperand, SPlace, SStmtId, SStmtKind, STerminatorKind,
+            SemOrigin, SemanticBody, SemanticInstance, SemanticLocalRole, ValueProvenance,
+            VariantIndex,
+            lower::layout_backing_source_path_is_prefix,
             normalized::{
                 NBlock, NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr,
                 NIndex, NOperand, NPlace, NPlaceBase, NRoot, NRootId, NRootKind, NStatement,
@@ -462,7 +464,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         &mut self,
         block: SBlockId,
         _statement: SStmtId,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
         dst: SLocalId,
         expr: &SExpr<'db>,
     ) -> Result<NExpr<'db>, NormalizeError<'db>> {
@@ -548,11 +550,25 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 place,
                 kind,
                 provider,
-            } => NExpr::Borrow {
-                place: self.normalize_place(block, origin, place)?,
-                kind: *kind,
-                provider: *provider,
-            },
+            } => {
+                let mut normalized = self.normalize_place(block, origin, place)?;
+                if let Some((_, expected_target)) = dst_ty.as_borrow(self.db)
+                    && normalized.ty != expected_target
+                    && normalized
+                        .ty
+                        .as_capability(self.db)
+                        .is_some_and(|(_, target)| target == expected_target)
+                {
+                    // Reborrowing a capability field accesses its referent. The
+                    // structural place still identifies the slot holding that capability.
+                    normalized = self.dereference_place(block, origin, place.local, normalized)?;
+                }
+                NExpr::Borrow {
+                    place: normalized,
+                    kind: *kind,
+                    provider: *provider,
+                }
+            }
             SExpr::CodeRegionRef { region } => NExpr::CodeRegionRef {
                 region: region.clone(),
             },
@@ -769,7 +785,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
 
     fn load_or_borrow_place(
         &self,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
         result_ty: TyId<'db>,
         place: NPlace<'db>,
         load_mode: Option<ReadMode>,
@@ -810,32 +826,16 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     fn normalize_projection_expr(
         &mut self,
         block: SBlockId,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
         base: SOperand,
         projection: NDataProjection,
         result_ty: TyId<'db>,
     ) -> Result<NExpr<'db>, NormalizeError<'db>> {
         if self.local_has_place(base.value) {
             let mut place = self.place_for_local(block, base.sem_origin(origin), base.value)?;
-            if let Some((_, target)) = place.ty.as_capability(self.db) {
-                let carrier_ty = place.ty;
-                let carrier = self.emit_define(
-                    block,
-                    None,
-                    base.sem_origin(origin),
-                    carrier_ty,
-                    base.value,
-                    NExpr::Load {
-                        place,
-                        mode: ReadMode::Copy,
-                    },
-                )?;
-                place = NPlace {
-                    base: NPlaceBase::CapabilityTarget { carrier },
-                    path: NDataPath::empty(),
-                    ty: target,
-                    origin: base.sem_origin(origin),
-                };
+            if place.ty.as_capability(self.db).is_some() {
+                place =
+                    self.dereference_place(block, base.sem_origin(origin), base.value, place)?;
             }
             place.path = place.path.appended(projection);
             place.ty = project_path_ty(
@@ -863,7 +863,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     fn normalize_value_projection(
         &mut self,
         block: SBlockId,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
         source_local: SLocalId,
         mut value: NOperand,
         path: NDataPath,
@@ -924,25 +924,9 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 )
                 .map_err(|_| NormalizeError::InvalidProjection)?;
                 if remaining_index + index + 2 < projections.len()
-                    && let Some((_, target)) = place.ty.as_capability(self.db)
+                    && place.ty.as_capability(self.db).is_some()
                 {
-                    let carrier = self.emit_define(
-                        block,
-                        None,
-                        origin,
-                        place.ty,
-                        source_local,
-                        NExpr::Load {
-                            place,
-                            mode: ReadMode::Copy,
-                        },
-                    )?;
-                    place = NPlace {
-                        base: NPlaceBase::CapabilityTarget { carrier },
-                        path: NDataPath::empty(),
-                        ty: target,
-                        origin,
-                    };
+                    place = self.dereference_place(block, origin, source_local, place)?;
                 }
             }
             return self.load_or_borrow_place(origin, result_ty, place, None);
@@ -959,7 +943,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     fn normalize_place(
         &mut self,
         block: SBlockId,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
         raw: &SPlace<'db>,
     ) -> Result<NPlace<'db>, NormalizeError<'db>> {
         let mut place = self.place_for_local(block, origin, raw.local)?;
@@ -969,36 +953,47 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             let base_ty = self.place_base_ty(place.base)?;
             place.ty = project_path_ty(self.db, self.instance, &self.values, base_ty, &place.path)
                 .map_err(|_| NormalizeError::InvalidProjection)?;
-            if index + 1 < suffix.len()
-                && let Some((_, target)) = place.ty.as_capability(self.db)
-            {
-                let carrier_ty = place.ty;
-                let carrier = self.emit_define(
-                    block,
-                    None,
-                    origin,
-                    carrier_ty,
-                    raw.local,
-                    NExpr::Load {
-                        place,
-                        mode: ReadMode::Copy,
-                    },
-                )?;
-                place = NPlace {
-                    base: NPlaceBase::CapabilityTarget { carrier },
-                    path: NDataPath::empty(),
-                    ty: target,
-                    origin,
-                };
+            if index + 1 < suffix.len() && place.ty.as_capability(self.db).is_some() {
+                place = self.dereference_place(block, origin, raw.local, place)?;
             }
         }
         Ok(place)
     }
 
+    fn dereference_place(
+        &mut self,
+        block: SBlockId,
+        origin: SemOrigin<'db>,
+        source_local: SLocalId,
+        place: NPlace<'db>,
+    ) -> Result<NPlace<'db>, NormalizeError<'db>> {
+        let (_, target) = place
+            .ty
+            .as_capability(self.db)
+            .ok_or(NormalizeError::InvalidProjection)?;
+        let carrier = self.emit_define(
+            block,
+            None,
+            origin,
+            place.ty,
+            source_local,
+            NExpr::Load {
+                place,
+                mode: ReadMode::Copy,
+            },
+        )?;
+        Ok(NPlace {
+            base: NPlaceBase::CapabilityTarget { carrier },
+            path: NDataPath::empty(),
+            ty: target,
+            origin,
+        })
+    }
+
     fn place_for_local(
         &mut self,
         block: SBlockId,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
         local: SLocalId,
     ) -> Result<NPlace<'db>, NormalizeError<'db>> {
         if let Some(root) = self.root_for_local[local.index()] {
@@ -1034,7 +1029,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     fn normalize_path(
         &mut self,
         block: SBlockId,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
         path: &crate::analysis::semantic::SemanticProjectionPath<'db>,
     ) -> Result<NDataPath, NormalizeError<'db>> {
         let mut projections = Vec::with_capacity(path.len());
@@ -1077,7 +1072,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     fn read_operand(
         &mut self,
         block: SBlockId,
-        fallback: crate::analysis::semantic::SemOrigin<'db>,
+        fallback: SemOrigin<'db>,
         operand: SOperand,
         forced_mode: Option<ReadMode>,
     ) -> Result<NOperand, NormalizeError<'db>> {
@@ -1092,7 +1087,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     fn read_scalar_operand(
         &mut self,
         block: SBlockId,
-        fallback: crate::analysis::semantic::SemOrigin<'db>,
+        fallback: SemOrigin<'db>,
         operand: SOperand,
         forced_mode: Option<ReadMode>,
     ) -> Result<NOperand, NormalizeError<'db>> {
@@ -1117,7 +1112,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     fn read_operand_as(
         &mut self,
         block: SBlockId,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
         operand: SOperand,
         target_ty: TyId<'db>,
     ) -> Result<NOperand, NormalizeError<'db>> {
@@ -1128,7 +1123,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     fn repack_operand_as(
         &mut self,
         block: SBlockId,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
         source_local: SLocalId,
         value: NOperand,
         target_ty: TyId<'db>,
@@ -1157,7 +1152,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     fn read_local(
         &mut self,
         block: SBlockId,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
         local: SLocalId,
         forced_mode: Option<ReadMode>,
     ) -> Result<NOperand, NormalizeError<'db>> {
@@ -1234,7 +1229,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     fn successor(
         &mut self,
         block: SBlockId,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
         target: SBlockId,
     ) -> Result<NSuccessor, NormalizeError<'db>> {
         let locals = self.phi_locals[target.index()].clone();
@@ -1258,7 +1253,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         &mut self,
         block: SBlockId,
         source: Option<SStmtId>,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
         ty: TyId<'db>,
         source_local: SLocalId,
         expr: NExpr<'db>,
@@ -1266,6 +1261,20 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         let forwarded = match &expr {
             NExpr::Forward { src } => Some(src.value),
             _ => None,
+        };
+        let projected = if source.is_none() {
+            match &expr {
+                NExpr::Load { place, .. } => Some((place.base, place.path.clone())),
+                NExpr::ProjectValue { value, path } => Some((
+                    NPlaceBase::CapabilityTarget {
+                        carrier: value.value,
+                    },
+                    path.0.clone(),
+                )),
+                _ => None,
+            }
+        } else {
+            None
         };
         if forwarded.is_none() {
             self.prepare_layout_backing_indices(block, origin, source_local)?;
@@ -1305,6 +1314,8 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 })
                 .collect::<Vec<_>>();
             self.use_backings.extend(backings);
+        } else if let Some((base, path)) = projected {
+            self.record_projected_layout_backings(value, base, &path, block, origin)?;
         } else {
             self.record_layout_backings(value, source_local, block, origin)?;
         }
@@ -1315,7 +1326,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         &mut self,
         block: SBlockId,
         source: Option<SStmtId>,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
         destination: NPlace<'db>,
         value: NOperand,
     ) {
@@ -1331,11 +1342,24 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         value: NValueId,
         source_local: SLocalId,
         block: SBlockId,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
     ) -> Result<(), NormalizeError<'db>> {
+        let backings = self.normalize_layout_backings(value, source_local, block, origin)?;
+        self.use_backings.extend(backings);
+        Ok(())
+    }
+
+    fn normalize_layout_backings(
+        &mut self,
+        value: NValueId,
+        source_local: SLocalId,
+        block: SBlockId,
+        origin: SemOrigin<'db>,
+    ) -> Result<Vec<NLayoutUseBacking<'db>>, NormalizeError<'db>> {
         let backings = self.raw.locals[source_local.index()]
             .layout_backing_sources
             .clone();
+        let mut normalized = Vec::new();
         for backing in backings {
             let source = match backing.source {
                 LayoutBackingPlace::Local(place) => {
@@ -1363,12 +1387,75 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     path: self.normalize_layout_path(block, origin, &path)?,
                 },
             };
-            self.use_backings.push(NLayoutUseBacking {
+            normalized.push(NLayoutUseBacking {
                 value,
                 target: backing.target.into_boxed_slice(),
                 source,
                 origin,
             });
+        }
+        Ok(normalized)
+    }
+
+    fn record_projected_layout_backings(
+        &mut self,
+        value: NValueId,
+        base: NPlaceBase,
+        path: &NDataPath,
+        block: SBlockId,
+        origin: SemOrigin<'db>,
+    ) -> Result<(), NormalizeError<'db>> {
+        let backings = match base {
+            NPlaceBase::CapabilityTarget { carrier } => self
+                .use_backings
+                .iter()
+                .filter(|backing| backing.value == carrier)
+                .cloned()
+                .collect(),
+            NPlaceBase::Root(root) => match self.root_sources[root.index()].source_local {
+                Some(local) => self.normalize_layout_backings(value, local, block, origin)?,
+                None => Vec::new(),
+            },
+        };
+        let target: Vec<_> = path
+            .iter()
+            .map(|projection| match projection {
+                NDataProjection::Field(field) => LayoutBackingProjection::Field(*field),
+                NDataProjection::VariantField { variant, field } => {
+                    LayoutBackingProjection::VariantField {
+                        variant: *variant,
+                        field: *field,
+                    }
+                }
+                NDataProjection::Index(index) => LayoutBackingProjection::Index(match index {
+                    NIndex::Const(index) => Some(*index),
+                    NIndex::Value(_) => None,
+                }),
+            })
+            .collect();
+        for mut backing in backings {
+            if layout_backing_source_path_is_prefix(&backing.target, &target) {
+                let suffix = NDataPath::new(
+                    path.iter()
+                        .skip(backing.target.len())
+                        .copied()
+                        .collect::<Vec<_>>(),
+                );
+                match &mut backing.source {
+                    NLayoutBackingSource::Value { path, .. }
+                    | NLayoutBackingSource::Root { path, .. } => *path = path.concat(&suffix),
+                }
+                backing.target = Box::new([]);
+            } else if layout_backing_source_path_is_prefix(&target, &backing.target) {
+                backing.target = backing.target[target.len()..].into();
+            } else {
+                continue;
+            }
+            backing.value = value;
+            backing.origin = origin;
+            if !self.use_backings.contains(&backing) {
+                self.use_backings.push(backing);
+            }
         }
         Ok(())
     }
@@ -1376,7 +1463,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     fn prepare_layout_backing_indices(
         &mut self,
         block: SBlockId,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
         source_local: SLocalId,
     ) -> Result<(), NormalizeError<'db>> {
         let backings = self.raw.locals[source_local.index()]
@@ -1395,7 +1482,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     fn normalize_layout_path(
         &mut self,
         block: SBlockId,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
         path: &crate::analysis::semantic::SemanticProjectionPath<'db>,
     ) -> Result<NDataPath, NormalizeError<'db>> {
         let mut normalized = Vec::with_capacity(path.len());
@@ -1445,7 +1532,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     fn push_value(
         &mut self,
         ty: TyId<'db>,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
         definition: NValueDefinition,
         source: Option<LocalBinding<'db>>,
         source_local: SLocalId,
@@ -1501,12 +1588,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         })
     }
 
-    fn operand(
-        &self,
-        value: NValueId,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
-        mode: ReadMode,
-    ) -> NOperand {
+    fn operand(&self, value: NValueId, origin: SemOrigin<'db>, mode: ReadMode) -> NOperand {
         NOperand {
             value,
             origin: match origin {
@@ -1519,11 +1601,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         }
     }
 
-    fn root_place(
-        &self,
-        root: NRootId,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
-    ) -> NPlace<'db> {
+    fn root_place(&self, root: NRootId, origin: SemOrigin<'db>) -> NPlace<'db> {
         NPlace {
             base: NPlaceBase::Root(root),
             path: NDataPath::empty(),
@@ -1577,7 +1655,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         result
     }
 
-    fn origin_is_implicit_move(&self, origin: crate::analysis::semantic::SemOrigin<'db>) -> bool {
+    fn origin_is_implicit_move(&self, origin: SemOrigin<'db>) -> bool {
         matches!(
             origin,
             crate::analysis::semantic::SemOrigin::Expr(expr)
@@ -1585,11 +1663,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         )
     }
 
-    fn read_mode_for_value(
-        &self,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
-        local: SLocalId,
-    ) -> ReadMode {
+    fn read_mode_for_value(&self, origin: SemOrigin<'db>, local: SLocalId) -> ReadMode {
         let local_id = local;
         let local = &self.raw.locals[local_id.index()];
         let source = self.current_values[local_id.index()]
@@ -1623,7 +1697,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
 
     fn read_mode_for_place(
         &self,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
+        origin: SemOrigin<'db>,
         ty: TyId<'db>,
         place: &NPlace<'db>,
     ) -> ReadMode {
