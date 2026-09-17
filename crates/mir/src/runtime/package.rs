@@ -166,6 +166,18 @@ impl<'db> RuntimeGraphBuilder<'db> {
                 continue;
             }
 
+            if instance.is_external_declaration(self.db) {
+                self.nodes.insert(
+                    instance,
+                    RuntimeGraphNode {
+                        direct_callees: Vec::new(),
+                        referenced_const_regions: Vec::new(),
+                        referenced_code_regions: Vec::new(),
+                    },
+                );
+                continue;
+            }
+
             let lowered = runtime_instance_lowered_body(self.db, instance)
                 .map_err(|err| wrap_runtime_lowering_error(self.db, instance, err))?;
             let direct_callees = lowered
@@ -518,13 +530,12 @@ fn build_contract_package<'db>(
     Ok(package)
 }
 
-/// Build a target-neutral executable package rooted at a public top-level
-/// `main` function while preserving its ordinary function signature.
-pub fn build_native_executable_package<'db>(
+/// Find a public native entry in the root scope, without lowering library helpers.
+pub fn native_executable_entry<'db>(
     db: &'db dyn MirDb,
     top_mod: TopLevelMod<'db>,
-) -> Result<RuntimePackage<'db>, LowerError> {
-    let Some(main) = top_mod
+) -> Option<Func<'db>> {
+    top_mod
         .children_non_nested(db)
         .filter_map(|item| match item {
             ItemKind::Func(func) => Some(func),
@@ -532,11 +543,19 @@ pub fn build_native_executable_package<'db>(
         })
         .filter(|func| !func.is_extern(db) && !is_test_func(db, *func))
         .find(|func| func.vis(db).is_pub() && is_main_func(db, *func))
-    else {
-        return Err(LowerError::Unsupported(
+}
+
+/// Build a target-neutral executable package rooted at a public top-level
+/// `main` function while preserving its ordinary function signature.
+pub fn build_native_executable_package<'db>(
+    db: &'db dyn MirDb,
+    top_mod: TopLevelMod<'db>,
+) -> Result<RuntimePackage<'db>, LowerError> {
+    let main = native_executable_entry(db, top_mod).ok_or_else(|| {
+        LowerError::Unsupported(
             "native executable output requires `pub fn main() -> i32`".to_string(),
-        ));
-    };
+        )
+    })?;
     let semantic = semantic_instance_for_root_owner(db, BodyOwner::Func(main))?;
     let instance = runtime_instance_for_semantic(db, semantic);
     let package = build_sectioned_package(
@@ -1826,7 +1845,11 @@ fn runtime_function_for_instance<'db>(
             db,
             instance,
             symbol,
-            RuntimeLinkage::Private,
+            if instance.is_external_declaration(db) {
+                RuntimeLinkage::External
+            } else {
+                RuntimeLinkage::Private
+            },
             inline_hint_for_semantic(db, semantic),
             RuntimeFunctionOwner::Semantic(semantic),
             referenced_const_regions,
@@ -2559,6 +2582,32 @@ mod tests {
     use crate::runtime::RuntimeExitBehavior;
 
     use super::*;
+
+    #[test]
+    fn native_package_keeps_extern_calls_as_bodyless_declarations() {
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///native_extern.fe").unwrap(),
+            Some(
+                "extern { fn abs(value: i32) -> i32 }\npub fn main() -> i32 { abs(value: -7) }"
+                    .to_string(),
+            ),
+        );
+        let package = build_native_executable_package(&db, db.top_mod(file)).unwrap();
+        let imports = package
+            .functions(&db)
+            .into_iter()
+            .filter(|function| function.linkage(&db) == RuntimeLinkage::External)
+            .collect::<Vec<_>>();
+        assert_eq!(imports.len(), 1);
+        let imported = imports[0].instance(&db);
+        assert!(imported.calls(&db).is_empty());
+        assert!(imported.referenced_const_regions(&db).is_empty());
+        assert!(imported.referenced_code_regions(&db).is_empty());
+        assert_eq!(imported.interface_signature(&db).params.len(), 1);
+        assert!(crate::format_runtime_package(&db, &package).contains("(external,"));
+    }
 
     fn recv_wrapper_plan<'db>(
         db: &'db DriverDataBase,

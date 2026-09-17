@@ -9,6 +9,8 @@ mod doc;
 #[cfg(feature = "doc-server")]
 mod doc_serve;
 mod metadata_input;
+#[cfg(feature = "cranelift")]
+mod native;
 mod report;
 mod test;
 mod trace;
@@ -283,6 +285,9 @@ pub enum Command {
     },
     /// Run Fe tests in a file or directory.
     Test {
+        /// Execution backend for tests.
+        #[arg(long, value_enum, default_value_t = BuildBackend::Sonatina)]
+        backend: BuildBackend,
         /// Path(s) to .fe files or directories containing ingots with tests.
         ///
         /// Supports glob patterns (e.g. `crates/fe/tests/fixtures/fe_test/*.fe`).
@@ -753,6 +758,7 @@ pub fn run(opts: &Options) {
             run_fmt(path.as_ref(), *check);
         }
         Command::Test {
+            backend,
             paths,
             ingot,
             filter,
@@ -800,6 +806,7 @@ pub fn run(opts: &Options) {
                 *show_logs,
                 profile,
                 opt_level,
+                *backend,
                 emit,
                 &debug,
                 (*report).then_some(report_out),

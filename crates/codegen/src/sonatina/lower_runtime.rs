@@ -21,8 +21,8 @@ use mir::{
     Layout, LayoutId, RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem,
     ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction,
     RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot, RuntimeMemoryLayout,
-    RuntimePackage, RuntimePlace, SaturatingBinOp, ScalarClass, ScalarRepr, StructLayout,
-    VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
+    RuntimePackage, RuntimePlace, RuntimeSyntheticSpec, SaturatingBinOp, ScalarClass, ScalarRepr,
+    StructLayout, VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
     scalar_raw_memory_size_bytes,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -284,25 +284,34 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
     }
 
     fn lower_signature(&mut self, function: RuntimeFunction<'db>) -> Result<Signature, LowerError> {
-        let body = function.instance(self.db).body(self.db);
-        let mut args = body
-            .signature
+        let signature = function.instance(self.db).interface_signature(self.db);
+        let mut args = signature
             .params
             .iter()
             .map(|param| self.ty_for_class(&param.class))
             .collect::<Result<Vec<_>, _>>()?;
-        let ret = body
-            .signature
+        let ret = signature
             .ret
             .as_ref()
             .map(|class| self.ty_for_class(class))
             .transpose()?;
         let instance = function.instance(self.db);
         let symbol = self.function_symbol(instance);
+        if function.linkage(self.db) == RuntimeLinkage::External
+            && (!self.is_native_target()
+                || args
+                    .iter()
+                    .chain(ret.iter())
+                    .any(|ty| !matches!(ty, Type::I32 | Type::I64)))
+        {
+            return Err(LowerError::Unsupported(format!(
+                "extern function `{symbol}` requires a native target and i32/i64 ABI values"
+            )));
+        }
         // Sonatina may add an out pointer for a compound return value. Reserve
         // that slot before its aggregate ABI legalization runs.
         let return_slots = usize::from(matches!(ret, Some(Type::Compound(_))));
-        if args.len() + return_slots > MAX_DIRECT_CALL_ARGS {
+        if !self.is_native_target() && args.len() + return_slots > MAX_DIRECT_CALL_ARGS {
             // Keep the fields typed, including object references and aggregates.
             // A fresh object at each call also keeps recursive calls independent.
             let pack = self
@@ -446,6 +455,9 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
 
     fn lower_bodies(&mut self) -> Result<(), LowerError> {
         for function in self.package.functions(self.db) {
+            if function.linkage(self.db) == RuntimeLinkage::External {
+                continue;
+            }
             let instance = function.instance(self.db);
             let body = instance.body(self.db);
             let func_ref = self.func_ref(instance)?;
@@ -731,7 +743,20 @@ fn assign_sonatina_function_symbols<'db>(
             owner: function.owner(db).clone(),
             fixed_symbol: fixed_symbol
                 .filter(|(instance, _)| *instance == function.instance(db))
-                .map(|(_, symbol)| symbol.to_string()),
+                .map(|(_, symbol)| symbol.to_string())
+                .or_else(|| {
+                    let semantic = function.instance(db).key(db).semantic(db)?;
+                    let BodyOwner::Func(func) = semantic.key(db).owner(db) else {
+                        return None;
+                    };
+                    func.is_extern(db).then(|| {
+                        func.name(db)
+                            .to_opt()
+                            .expect("extern name")
+                            .data(db)
+                            .to_string()
+                    })
+                }),
             fallback_symbol: function.symbol(db).clone(),
             variant_suffix: String::new(),
             disambiguator: mir::runtime_instance_symbol_key(db, function.instance(db)),
@@ -1613,7 +1638,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             RExpr::Call { callee, args } => {
                 let callee_ref = self.module.func_ref(*callee)?;
                 let args = self.lower_call_args(*callee, args)?;
-                let ret = callee.body(self.module.db).signature.ret.clone();
+                let ret = callee.interface_signature(self.module.db).ret;
                 match ret {
                     Some(class) => {
                         let ret_ty = self.module.ty_for_class(&class)?;
@@ -2928,8 +2953,23 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     .insert_inst_no_result(Return::new_unit(self.module.inst_set())),
             },
             RTerminator::Stop => {
-                self.fb
-                    .insert_inst_no_result(EvmStop::new(self.module.required_inst::<EvmStop>()?));
+                // Completing a compiler-generated test root returns to the native
+                // harness. Explicit EVM STOP instructions remain target-specific.
+                if self.module.is_native_target()
+                    && let RuntimeInstanceSource::Synthetic(synthetic) =
+                        self.body.owner.key(self.module.db).source(self.module.db)
+                    && matches!(
+                        synthetic.spec(self.module.db),
+                        RuntimeSyntheticSpec::TestRoot { .. }
+                    )
+                {
+                    self.fb
+                        .insert_inst_no_result(Return::new_unit(self.module.inst_set()));
+                } else {
+                    self.fb.insert_inst_no_result(EvmStop::new(
+                        self.module.required_inst::<EvmStop>()?,
+                    ));
+                }
             }
         }
         Ok(())
@@ -5908,6 +5948,7 @@ fn linkage_for_runtime(linkage: RuntimeLinkage) -> Linkage {
     match linkage {
         RuntimeLinkage::Private => Linkage::Private,
         RuntimeLinkage::Internal => Linkage::Public,
+        RuntimeLinkage::External => Linkage::External,
     }
 }
 

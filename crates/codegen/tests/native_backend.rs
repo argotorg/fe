@@ -146,3 +146,25 @@ fn native_object_emission_produces_host_object() {
 
     assert!(!object.is_empty(), "native object must not be empty");
 }
+
+#[test]
+fn native_import_symbols_are_reserved_from_local_helpers() {
+    let ir = with_top_mod_for_source(
+        "native_import_collision.fe",
+        r#"
+extern { fn abs(value: i32) -> i32 }
+mod local { pub fn abs(value: i32) -> i32 { value + 1 } }
+pub fn main() -> i32 { local::abs(value: abs(value: -6)) }
+"#,
+        |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+    )
+    .expect("native imports should retain their host symbol");
+    assert!(
+        ir.contains("declare external %abs(i32) -> i32"),
+        "missing host import:\n{ir}"
+    );
+    assert!(
+        ir.contains("local__abs"),
+        "missing qualified local helper:\n{ir}"
+    );
+}

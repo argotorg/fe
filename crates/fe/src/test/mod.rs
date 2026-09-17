@@ -1,9 +1,11 @@
 //! Test runner for Fe tests.
 //!
 //! Discovers functions marked with `#[test]` attribute, compiles them, and
-//! executes them using revm.
+//! executes them using revm or the native host.
 
-use crate::TestEmit;
+#[cfg(feature = "cranelift")]
+mod native;
+
 use crate::dependency_diagnostics::CompilationDiagnostics;
 use crate::report::{
     PanicReportGuard, ReportStaging, copy_input_into_report, create_dir_all_utf8,
@@ -14,9 +16,10 @@ use crate::report::{
 use crate::workspace_ingot::{
     INGOT_REQUIRES_WORKSPACE_ROOT, WorkspaceMemberRef, select_workspace_member_paths,
 };
+use crate::{BuildBackend, TestEmit};
 use camino::Utf8PathBuf;
 use codegen::{
-    ExpectedRevert, OptLevel, SonatinaTestOptions, TestMetadata, TestModuleOutput,
+    ExpectedRevert, OptLevel, SonatinaTestOptions, TestMetadata,
     emit_runtime_package_sonatina_ir_optimized, emit_test_ingot_sonatina,
     emit_test_module_sonatina,
 };
@@ -144,9 +147,16 @@ struct SuiteRunResult {
 #[derive(Debug, Clone)]
 struct SingleTestJob {
     suite_key: String,
-    case: TestMetadata,
+    case: CompiledTest,
     evm_trace: Option<EvmTraceOptions>,
     report_root: Option<Utf8PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+enum CompiledTest {
+    Evm(Box<TestMetadata>),
+    #[cfg(feature = "cranelift")]
+    Native(native::NativeTestCase),
 }
 
 #[derive(Debug)]
@@ -218,6 +228,7 @@ struct WorkerSharedConfig {
     show_logs: bool,
     profile: String,
     opt_level: OptLevel,
+    backend: BuildBackend,
     emit: TestEmitSelection,
     debug: TestDebugOptions,
     report_failed_only: bool,
@@ -698,6 +709,7 @@ pub fn run_tests(
     show_logs: bool,
     profile: &str,
     opt_level: OptLevel,
+    backend: BuildBackend,
     emit: &[TestEmit],
     debug: &TestDebugOptions,
     report_out: Option<&Utf8PathBuf>,
@@ -706,6 +718,9 @@ pub fn run_tests(
     call_trace: bool,
     use_recovery: bool,
 ) -> Result<bool, String> {
+    if backend.is_native() && (show_logs || debug.trace_evm || call_trace) {
+        return Err("native tests do not support EVM logs or tracing options".to_string());
+    }
     let expanded_paths = expand_test_paths(paths)?;
     if ingot.is_some() && expanded_paths.len() != 1 {
         return Err(INGOT_REQUIRES_WORKSPACE_ROOT.to_string());
@@ -753,6 +768,7 @@ pub fn run_tests(
         show_logs,
         profile: profile.to_string(),
         opt_level,
+        backend,
         emit: TestEmitSelection::from_requested(emit),
         debug: debug.clone(),
         report_failed_only,
@@ -1349,7 +1365,7 @@ fn prepare_suite_job(
     };
 
     let mut suite_debug = shared.debug.clone();
-    if report_ctx.is_some() {
+    if report_ctx.is_some() && !shared.backend.is_native() {
         suite_debug.trace_evm = true;
         suite_debug.debug_dir = report_ctx.as_ref().map(|ctx| ctx.root_dir.join("debug"));
     }
@@ -1385,6 +1401,7 @@ fn prepare_suite_job(
             &plan.suite_key,
             filter,
             shared.opt_level,
+            shared.backend,
             shared.emit,
             &suite_debug,
             sonatina_options,
@@ -1400,6 +1417,7 @@ fn prepare_suite_job(
             &plan.suite_key,
             filter,
             shared.opt_level,
+            shared.backend,
             shared.emit,
             &suite_debug,
             sonatina_options,
@@ -1434,13 +1452,17 @@ fn run_single_test_job(job: SingleTestJob, shared: &WorkerSharedConfig) -> Singl
         root_dir: root.clone(),
     });
     let case = job.case;
-    let outcome = compile_and_run_test(
-        &case,
-        shared.show_logs,
-        job.evm_trace.as_ref(),
-        report_ctx.as_ref(),
-        shared.call_trace,
-    );
+    let outcome = match case {
+        CompiledTest::Evm(case) => compile_and_run_test(
+            &case,
+            shared.show_logs,
+            job.evm_trace.as_ref(),
+            report_ctx.as_ref(),
+            shared.call_trace,
+        ),
+        #[cfg(feature = "cranelift")]
+        CompiledTest::Native(case) => case.run(report_ctx.as_ref()),
+    };
     let elapsed = outcome.elapsed;
     let mut output = String::new();
     write_case_output(&mut output, &outcome, shared.show_logs);
@@ -1523,6 +1545,7 @@ fn prepare_tests_single_file(
     suite_key: &str,
     filter: Option<&str>,
     opt_level: OptLevel,
+    backend: BuildBackend,
     emit: TestEmitSelection,
     debug: &TestDebugOptions,
     sonatina_options: SonatinaTestOptions,
@@ -1634,6 +1657,24 @@ fn prepare_tests_single_file(
         };
     }
 
+    #[cfg(feature = "cranelift")]
+    if backend.is_native() {
+        return native::prepare_tests(
+            db,
+            vec![top_mod],
+            file_path,
+            suite,
+            suite_key,
+            filter,
+            opt_level,
+            emit,
+            report,
+            output,
+        );
+    }
+    #[cfg(not(feature = "cranelift"))]
+    let _ = backend;
+
     maybe_write_suite_ir(db, top_mod, opt_level, report);
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         maybe_write_requested_suite_artifacts_for_top_mod(
@@ -1699,6 +1740,7 @@ fn prepare_tests_ingot(
     suite_key: &str,
     filter: Option<&str>,
     opt_level: OptLevel,
+    backend: BuildBackend,
     emit: TestEmitSelection,
     debug: &TestDebugOptions,
     sonatina_options: SonatinaTestOptions,
@@ -1806,6 +1848,17 @@ fn prepare_tests_ingot(
             single_jobs: Vec::new(),
         };
     }
+
+    #[cfg(feature = "cranelift")]
+    if backend.is_native() {
+        let mut top_mods = ingot.all_modules(db).to_vec();
+        top_mods.sort_by(|left, right| left.name(db).cmp(&right.name(db)));
+        return native::prepare_tests(
+            db, top_mods, dir_path, suite, suite_key, filter, opt_level, emit, report, output,
+        );
+    }
+    #[cfg(not(feature = "cranelift"))]
+    let _ = backend;
 
     maybe_write_suite_ir(db, root_mod, opt_level, report);
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1967,7 +2020,7 @@ fn suite_preparation_from_discovered(
 
         single_jobs.push(SingleTestJob {
             suite_key: suite_key.to_string(),
-            case,
+            case: CompiledTest::Evm(Box::new(case)),
             evm_trace,
             report_root: report_root.clone(),
         });
@@ -1984,13 +2037,13 @@ fn suite_preparation_from_discovered(
 /// Wraps `emit_fn` in `catch_unwind`, writes error/panic info into the report
 /// staging directory when present, and returns the output or an early-return
 /// error result vector.
-pub(super) fn emit_with_catch_unwind<E: std::fmt::Display>(
-    emit_fn: impl FnOnce() -> Result<TestModuleOutput, E>,
+pub(super) fn emit_with_catch_unwind<T, E: std::fmt::Display>(
+    emit_fn: impl FnOnce() -> Result<T, E>,
     backend_label: &str,
     suite: &str,
     report: Option<&ReportContext>,
     output: &mut String,
-) -> Result<TestModuleOutput, Vec<TestResult>> {
+) -> Result<T, Vec<TestResult>> {
     let _hook = report.map(|r| install_report_panic_hook(r, "codegen_panic_full.txt"));
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(emit_fn)) {
         Ok(Ok(output)) => Ok(output),
