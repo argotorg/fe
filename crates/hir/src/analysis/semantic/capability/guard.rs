@@ -1,0 +1,472 @@
+//! Canonical guards, including unions, over semantic indices and scoped enum choices.
+//!
+//! Index conditions use reduced bit decisions over Fe's 256-bit `usize`, so equality,
+//! disequality, and bounds share one Boolean algebra. Enum decisions have index conditions
+//! as leaves. Neither graph enumerates array elements or depends on construction order.
+use std::{
+    cmp::Reverse,
+    collections::{BTreeMap, BTreeSet},
+};
+
+use super::{
+    decision::{Decision, Variable},
+    index::{BinderScope, IndexExpr, IndexSubst},
+    path::{Projection, StructuralPath},
+};
+use crate::analysis::semantic::{
+    VariantIndex,
+    normalized::{NRootId, NValueId},
+};
+
+const INDEX_BITS: u16 = 256;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ValueOccurrence {
+    Value(NValueId),
+    Root(NRootId),
+    Argument(u32),
+    Summary,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ChoiceKey {
+    occurrence: ValueOccurrence,
+    path: StructuralPath<IndexExpr>,
+}
+
+impl ChoiceKey {
+    pub fn new(occurrence: ValueOccurrence, path: StructuralPath<IndexExpr>) -> Self {
+        Self { occurrence, path }
+    }
+    fn alias_condition(&self, other: &Self) -> Option<IndexCondition> {
+        if self.occurrence != other.occurrence
+            || self.path.as_slice().len() != other.path.as_slice().len()
+        {
+            return None;
+        }
+        let mut condition = IndexCondition::always();
+        for (left, right) in self.path.as_slice().iter().zip(other.path.as_slice()) {
+            match (left, right) {
+                (Projection::Index(left), Projection::Index(right)) => {
+                    condition = condition.and(&IndexCondition::equal(*left, *right));
+                }
+                (left, right) if left == right => {}
+                _ => return None,
+            }
+        }
+        (!condition.is_never()).then_some(condition)
+    }
+
+    fn map_indices(&self, map: impl FnMut(&IndexExpr) -> IndexExpr) -> Self {
+        Self {
+            occurrence: self.occurrence,
+            path: self.path.map_indices(map),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct IndexBit {
+    // Interleaving words avoids an exponential equality graph.
+    bit: Reverse<u16>,
+    index: IndexExpr,
+}
+
+impl IndexBit {
+    fn new(index: IndexExpr, bit: u16) -> Self {
+        Self {
+            index,
+            bit: Reverse(bit),
+        }
+    }
+    fn substitute(&self, subst: &IndexSubst) -> Variable<Self> {
+        match subst.apply(self.index) {
+            IndexExpr::Const(value) => Variable::Constant(constant_bit(value, self.bit.0)),
+            index => Variable::Symbol(Self::new(index, self.bit.0)),
+        }
+    }
+}
+
+fn constant_bit(value: usize, bit: u16) -> bool {
+    value
+        .checked_shr(u32::from(bit))
+        .is_some_and(|value| value & 1 != 0)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct IndexCondition(Decision<IndexBit, bool>);
+
+impl IndexCondition {
+    fn always() -> Self {
+        Self(Decision::leaf(true))
+    }
+    fn never() -> Self {
+        Self(Decision::leaf(false))
+    }
+    fn is_never(&self) -> bool {
+        self.0.is_leaf(&false)
+    }
+
+    fn equal(lhs: IndexExpr, rhs: IndexExpr) -> Self {
+        let (lhs, rhs) = if lhs <= rhs { (lhs, rhs) } else { (rhs, lhs) };
+        match (lhs, rhs) {
+            (lhs, rhs) if lhs == rhs => Self::always(),
+            (IndexExpr::Const(_), IndexExpr::Const(_)) => Self::never(),
+            (IndexExpr::Const(value), index) => Self(Decision::chain(
+                (0..INDEX_BITS).map(|bit| (IndexBit::new(index, bit), constant_bit(value, bit))),
+                true,
+                false,
+            )),
+            (lhs, rhs) => Self(Decision::equal_bits(
+                (0..INDEX_BITS).map(|bit| (IndexBit::new(lhs, bit), IndexBit::new(rhs, bit))),
+                true,
+                false,
+            )),
+        }
+    }
+
+    fn bounded(index: IndexExpr, len: usize) -> Self {
+        if let IndexExpr::Const(value) = index {
+            return if value < len {
+                Self::always()
+            } else {
+                Self::never()
+            };
+        }
+        Self(Decision::upper_bound_bits((0..INDEX_BITS).map(|bit| {
+            (IndexBit::new(index, bit), constant_bit(len, bit))
+        })))
+    }
+
+    fn and(&self, other: &Self) -> Self {
+        if self == other || other.0.is_leaf(&true) {
+            return self.clone();
+        }
+        if self.0.is_leaf(&true) {
+            return other.clone();
+        }
+        if self.is_never() || other.is_never() {
+            return Self::never();
+        }
+        Self(self.0.apply(&other.0, |left, right| *left && *right))
+    }
+
+    fn or(&self, other: &Self) -> Self {
+        if self == other || other.is_never() {
+            return self.clone();
+        }
+        if self.is_never() {
+            return other.clone();
+        }
+        if self.0.is_leaf(&true) || other.0.is_leaf(&true) {
+            return Self::always();
+        }
+        Self(self.0.apply(&other.0, |left, right| *left || *right))
+    }
+
+    fn not(&self) -> Self {
+        Self(
+            self.0
+                .map(|bit| Variable::Symbol(bit.clone()), |value| !value),
+        )
+    }
+    fn implies(&self, other: &Self) -> bool {
+        self.and(&other.not()).is_never()
+    }
+    fn substitute(&self, subst: &IndexSubst) -> Self {
+        Self(self.0.map(|bit| bit.substitute(subst), |value| *value))
+    }
+    fn indices(&self) -> BTreeSet<IndexExpr> {
+        self.0
+            .variables()
+            .into_iter()
+            .map(|bit| bit.index)
+            .collect()
+    }
+
+    fn restrict(&self, care: &Self) -> Option<Self> {
+        self.0
+            .restrict(&care.0, &false, |value, care| care.then_some(*value))
+            .map(Self)
+    }
+
+    // Find a representative only when the complete condition proves equality. Partial
+    // known bits and coincident numeric IDs never establish index correlation.
+    fn representatives(&self, indices: &BTreeSet<IndexExpr>) -> BTreeMap<IndexExpr, IndexExpr> {
+        let mut representatives = BTreeMap::new();
+        let witness = self.0.witness(|value| *value).unwrap_or_default();
+        for index in indices {
+            if matches!(index, IndexExpr::Const(_)) {
+                continue;
+            }
+            let mut candidate = Some(0usize);
+            for (bit, value) in &witness {
+                if bit.index == *index && *value {
+                    candidate = candidate.and_then(|candidate| {
+                        1usize
+                            .checked_shl(u32::from(bit.bit.0))
+                            .map(|bit| candidate | bit)
+                    });
+                }
+            }
+            if let Some(candidate) = candidate
+                && self.implies(&Self::equal(*index, IndexExpr::Const(candidate)))
+            {
+                representatives.insert(*index, IndexExpr::Const(candidate));
+                continue;
+            }
+            if let Some(previous) = indices
+                .range(..*index)
+                .find(|previous| self.implies(&Self::equal(**previous, *index)))
+            {
+                representatives.insert(
+                    *index,
+                    representatives.get(previous).copied().unwrap_or(*previous),
+                );
+            }
+        }
+        representatives
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct ChoiceBit {
+    bit: Reverse<u16>,
+    choice: ChoiceKey,
+}
+
+type Condition = Decision<ChoiceBit, IndexCondition>;
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Guard {
+    scope: BinderScope,
+    condition: Condition,
+}
+
+impl Guard {
+    pub fn always(scope: &BinderScope) -> Self {
+        Self {
+            scope: scope.clone(),
+            condition: Decision::leaf(IndexCondition::always()),
+        }
+    }
+    pub fn scope(&self) -> &BinderScope {
+        &self.scope
+    }
+
+    pub fn and(&self, other: &Self) -> Option<Self> {
+        assert_eq!(self.scope, other.scope, "guard scopes must match");
+        Self::canonical(
+            &self.scope,
+            self.condition.apply(&other.condition, IndexCondition::and),
+        )
+    }
+
+    pub fn or(&self, other: &Self) -> Self {
+        assert_eq!(self.scope, other.scope, "guard scopes must match");
+        Self::canonical(
+            &self.scope,
+            self.condition.apply(&other.condition, IndexCondition::or),
+        )
+        .expect("a union of satisfiable guards is satisfiable")
+    }
+
+    pub fn with_equality(&self, lhs: IndexExpr, rhs: IndexExpr) -> Option<Self> {
+        self.scope.validate(lhs).expect("free equality binder");
+        self.scope.validate(rhs).expect("free equality binder");
+        self.with_index_condition(&IndexCondition::equal(lhs, rhs))
+    }
+
+    pub fn with_disequality(&self, lhs: IndexExpr, rhs: IndexExpr) -> Option<Self> {
+        self.scope.validate(lhs).expect("free disequality binder");
+        self.scope.validate(rhs).expect("free disequality binder");
+        self.with_index_condition(&IndexCondition::equal(lhs, rhs).not())
+    }
+
+    pub fn with_bound(&self, index: IndexExpr, len: usize) -> Option<Self> {
+        self.scope.validate(index).expect("free bound binder");
+        self.with_index_condition(&IndexCondition::bounded(index, len))
+    }
+
+    pub fn with_variant(&self, choice: ChoiceKey, variant: VariantIndex) -> Option<Self> {
+        for index in choice.path.indices() {
+            self.scope.validate(index).expect("free enum choice binder");
+        }
+        let condition = Decision::chain(
+            (0..u16::BITS as u16).map(|bit| {
+                (
+                    ChoiceBit {
+                        choice: choice.clone(),
+                        bit: Reverse(bit),
+                    },
+                    variant.0 & (1 << bit) != 0,
+                )
+            }),
+            IndexCondition::always(),
+            IndexCondition::never(),
+        );
+        Self::canonical(
+            &self.scope,
+            self.condition.apply(&condition, IndexCondition::and),
+        )
+    }
+
+    pub fn substitute(&self, subst: &IndexSubst) -> Option<Self> {
+        assert_eq!(
+            &self.scope,
+            subst.source(),
+            "substitution source scope must match"
+        );
+        Self::canonical(
+            subst.destination(),
+            self.condition.map(
+                |bit| {
+                    Variable::Symbol(ChoiceBit {
+                        choice: bit.choice.map_indices(|index| subst.apply(*index)),
+                        bit: bit.bit,
+                    })
+                },
+                |condition| condition.substitute(subst),
+            ),
+        )
+    }
+
+    pub fn implies(&self, other: &Self) -> bool {
+        assert_eq!(self.scope, other.scope, "guard scopes must match");
+        self.condition
+            .apply(&other.condition, |left, right| left.and(&right.not()))
+            .is_leaf(&IndexCondition::never())
+    }
+
+    pub fn proves_equal(&self, lhs: IndexExpr, rhs: IndexExpr) -> bool {
+        self.scope.validate(lhs).expect("free equality binder");
+        self.scope.validate(rhs).expect("free equality binder");
+        let equality = IndexCondition::equal(lhs, rhs);
+        self.condition
+            .leaves()
+            .all(|condition| condition.implies(&equality))
+    }
+
+    pub fn indices(&self) -> BTreeSet<IndexExpr> {
+        let mut indices: BTreeSet<_> = self
+            .condition
+            .leaves()
+            .flat_map(IndexCondition::indices)
+            .collect();
+        for bit in self.condition.variables() {
+            indices.extend(bit.choice.path.indices());
+        }
+        indices
+    }
+
+    pub fn node_count(&self) -> usize {
+        self.condition.node_count()
+            + self
+                .condition
+                .leaves()
+                .map(|leaf| leaf.0.node_count())
+                .sum::<usize>()
+    }
+
+    fn with_index_condition(&self, condition: &IndexCondition) -> Option<Self> {
+        Self::canonical(
+            &self.scope,
+            self.condition.map(
+                |bit| Variable::Symbol(bit.clone()),
+                |old| old.and(condition),
+            ),
+        )
+    }
+
+    // Indexed choice keys must also respect equalities proved by their index condition.
+    // Identifying choice bits rebuilds the ordered graph and rejects conflicting variants;
+    // no map collection is allowed to overwrite a contradictory requirement.
+    fn canonical(scope: &BinderScope, condition: Condition) -> Option<Self> {
+        if condition.is_leaf(&IndexCondition::never()) {
+            return None;
+        }
+        if condition.variables().iter().all(|bit| {
+            bit.choice
+                .path
+                .indices()
+                .all(|index| matches!(index, IndexExpr::Const(_)))
+        }) {
+            return Some(Self {
+                scope: scope.clone(),
+                condition,
+            });
+        }
+        let choice_indices: BTreeSet<_> = condition
+            .variables()
+            .iter()
+            .flat_map(|bit| bit.choice.path.indices())
+            .collect();
+        let mut canonical = Decision::leaf(IndexCondition::never());
+        // Partition by distinct terminal conditions, not graph paths: shared suffixes
+        // can represent exponentially many paths through a compact decision graph.
+        for indices in condition.leaves().filter(|indices| !indices.is_never()) {
+            let terms = choice_indices
+                .iter()
+                .copied()
+                .chain(indices.indices())
+                .collect();
+            let representatives = indices.representatives(&terms);
+            let alternative = condition.map(
+                |bit| {
+                    Variable::Symbol(ChoiceBit {
+                        choice: bit.choice.map_indices(|index| {
+                            representatives.get(index).copied().unwrap_or(*index)
+                        }),
+                        bit: bit.bit,
+                    })
+                },
+                |leaf| {
+                    if leaf == indices {
+                        leaf.clone()
+                    } else {
+                        IndexCondition::never()
+                    }
+                },
+            );
+            canonical = canonical.apply(&alternative, IndexCondition::or);
+        }
+        // Choice occurrences at equal indices must have equal tags. Complete the
+        // graph outside these feasible valuations so equality partitions can reunite
+        // without retaining a spurious dependence on an extra indexed choice.
+        let choices: BTreeSet<_> = canonical
+            .variables()
+            .into_iter()
+            .map(|bit| bit.choice)
+            .collect();
+        let mut care = Decision::leaf(IndexCondition::always());
+        for (position, left) in choices.iter().enumerate() {
+            for right in choices.iter().skip(position + 1) {
+                if let Some(alias) = left.alias_condition(right) {
+                    let equality = Decision::equal_bits(
+                        (0..u16::BITS as u16).map(|bit| {
+                            (
+                                ChoiceBit {
+                                    bit: Reverse(bit),
+                                    choice: left.clone(),
+                                },
+                                ChoiceBit {
+                                    bit: Reverse(bit),
+                                    choice: right.clone(),
+                                },
+                            )
+                        }),
+                        IndexCondition::always(),
+                        alias.not(),
+                    );
+                    care = care.apply(&equality, IndexCondition::and);
+                }
+            }
+        }
+        let canonical =
+            canonical.restrict(&care, &IndexCondition::never(), IndexCondition::restrict)?;
+        (!canonical.is_leaf(&IndexCondition::never())).then(|| Self {
+            scope: scope.clone(),
+            condition: canonical,
+        })
+    }
+}

@@ -1,4 +1,5 @@
 pub mod borrowck;
+pub mod capability;
 pub mod consts;
 pub mod ctfe;
 pub mod definite_assignment;
