@@ -1,0 +1,71 @@
+/// Character I/O capabilities backed by the host C runtime on native targets.
+use core::AsBytes
+
+extern {
+    fn getchar() -> i32
+    fn putchar(c: i32) -> i32
+}
+
+pub trait Read {
+    /// Return an unsigned byte, or -1 at end of input or on an I/O error.
+    fn read_char(mut self) -> i32
+}
+
+pub trait Write {
+    fn write_char(mut self, c: i32)
+}
+
+pub struct HostIo {
+    status: i32,
+}
+
+pub fn host() -> HostIo {
+    HostIo { status: 0 }
+}
+
+impl HostIo {
+    pub fn failed(self) -> bool {
+        self.status < 0
+    }
+}
+
+impl Read for HostIo {
+    fn read_char(mut self) -> i32 {
+        let c = getchar()
+        self.status = c
+        c
+    }
+}
+
+impl Write for HostIo {
+    fn write_char(mut self, c: i32) {
+        self.status = putchar(c)
+    }
+}
+
+pub fn read_char() -> i32 uses (r: mut Read) {
+    r.read_char()
+}
+
+pub fn write_char(_ c: i32) uses (w: mut Write) {
+    w.write_char(c)
+}
+
+pub fn write_bytes<const N: usize>(_ bytes: [u8; N], _ len: usize) uses (w: mut Write) {
+    core::assert(len <= N)
+    let mut i: usize = 0
+    while i < len {
+        write_char(bytes[i] as i32)
+        i += 1
+    }
+}
+
+pub fn write<T: AsBytes>(_ text: T) uses (w: mut Write) {
+    let bytes = text.as_bytes()
+    write_bytes(bytes, T::N)
+}
+
+pub fn writeln<T: AsBytes>(_ text: T) uses (w: mut Write) {
+    write(text)
+    write_char(10)
+}

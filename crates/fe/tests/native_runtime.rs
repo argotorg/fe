@@ -8,8 +8,9 @@
 
 use std::{
     fs,
+    io::Write,
     path::Path,
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
 };
 
 use tempfile::tempdir;
@@ -113,6 +114,53 @@ math = true
                 "{result:?}"
             );
         }
+    }
+}
+
+#[test]
+fn native_host_io_and_assertions_execute_at_o0_and_o1() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("echo.fe");
+    fs::write(
+        &source,
+        r#"
+use std::io::{Read, Write, host, read_char, write_char, writeln}
+pub fn main() -> i32 {
+    with (Read = host(), Write = host()) {
+        writeln("ready")
+        let c = read_char()
+        core::assert(c == 65)
+        write_char(c + 1)
+    }
+    0
+}
+
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let mut child = Command::new(out.join("echo"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(b"A").unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(result.status.success());
+        assert_eq!(result.stdout, b"ready\nB");
+
+        let mut child = Command::new(out.join("echo"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(b"Z").unwrap();
+        assert!(
+            !child.wait().unwrap().success(),
+            "failed assertion must trap"
+        );
     }
 }
 
