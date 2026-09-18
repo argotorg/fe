@@ -814,17 +814,6 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                         fallback.clone(),
                     ))
                 }),
-            CompiledEffectValuePlan::ByPlace {
-                boundary,
-                allow_materialize,
-            } => self
-                .select_boundary_compatible_value(value.local, boundary)
-                .or_else(|| self.select_effect_handle_operand_for_boundary(value, boundary))
-                .or_else(|| {
-                    allow_materialize
-                        .then(|| self.select_materializable_semantic_value(value, boundary))
-                        .flatten()
-                }),
         }
     }
 

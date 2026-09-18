@@ -538,10 +538,7 @@ fn verify_expr<'db>(
                 let shape_matches = matches!(
                     (&arg.pass_mode, &arg.arg),
                     (EffectPassMode::ByPlace, NEffectArgValue::Place(_))
-                        | (
-                            EffectPassMode::ByTempPlace | EffectPassMode::ByValue,
-                            NEffectArgValue::Value(_)
-                        )
+                        | (EffectPassMode::ByValue, NEffectArgValue::Value(_))
                 );
                 if !effect_bindings.insert(arg.binding_idx)
                     || requirement.is_mut != arg.required_mut

@@ -1733,6 +1733,10 @@ impl<'db> TyChecker<'db> {
                         binding_idx: req.binding_idx,
                         key: key_ty,
                         arg,
+                        with_source: match provider.origin {
+                            EffectOrigin::With { value_expr } => Some(value_expr),
+                            EffectOrigin::Param { .. } => None,
+                        },
                         pass_mode,
                         layout_view,
                         required_mut: req.required_mut,

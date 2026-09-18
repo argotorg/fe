@@ -207,3 +207,51 @@ pub fn main() -> i32 {
         .collect::<Vec<_>>();
     assert_eq!(arguments, vec![roots[0], roots[0]], "{ir}");
 }
+
+#[test]
+fn native_trait_effect_calls_share_the_captured_object_before_optimization() {
+    let ir = with_top_mod_for_source(
+        "native_provider_identity.fe",
+        r#"
+trait Tick { fn next(mut self) -> i32 }
+struct Counter { value: i32 }
+impl Tick for Counter {
+    fn next(mut self) -> i32 {
+        self.value += 1
+        self.value
+    }
+}
+fn counter() -> Counter { Counter { value: 0 } }
+fn step_effect() -> i32 uses (tick: mut Tick) { tick.next() }
+pub fn main() -> i32 {
+    with (Tick = counter()) { step_effect() + step_effect() }
+}
+"#,
+        |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+    )
+    .expect("native provider IR");
+    let main = ir
+        .split_once("func public %main()")
+        .expect("main function")
+        .1
+        .split_once("\n}")
+        .expect("main body")
+        .0;
+    let roots = main
+        .lines()
+        .filter(|line| line.contains(" = obj.alloc "))
+        .map(|line| line.trim().split_once('.').expect("object local").0)
+        .collect::<Vec<_>>();
+    assert_eq!(roots.len(), 1, "one captured provider object:\n{main}");
+    let arguments = main
+        .lines()
+        .filter(|line| line.contains(" = call %") && line.contains("step_effect"))
+        .map(|line| {
+            line.rsplit_once(' ')
+                .expect("effect argument")
+                .1
+                .trim_end_matches(';')
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(arguments, vec![roots[0], roots[0]], "{main}");
+}

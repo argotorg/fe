@@ -1,7 +1,9 @@
+use cranelift_entity::EntityRef;
+
 use crate::{
     analysis::{
         place::{Place, PlaceBase, PlaceProjection, projectable_place_ty},
-        semantic::{FieldIndex, SExpr, SPlace, SemOrigin},
+        semantic::{FieldIndex, SExpr, SOperand, SPlace, SemOrigin},
         ty::ty_def::TyId,
     },
     hir_def::{Expr, ExprId, Partial, UnOp, expr::BinOp},
@@ -63,26 +65,51 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     pub(super) fn lower_place_data(&mut self, source_place: &Place<'db>) -> SPlace<'db> {
+        self.lower_place_source(source_place, false)
+    }
+
+    pub(super) fn capture_place(&mut self, source_place: &Place<'db>) -> SPlace<'db> {
+        self.lower_place_source(source_place, true)
+    }
+
+    fn lower_place_source(&mut self, source_place: &Place<'db>, capture: bool) -> SPlace<'db> {
         let PlaceBase::Binding(binding) = source_place.base;
         let local = *self
             .binding_locals
             .get(&binding)
             .expect("binding local should be allocated");
         let mut place = SPlace::new(local);
+        let mut ty = self.locals[local.index()].ty;
 
         for projection in &source_place.projections {
             match *projection {
                 PlaceProjection::Deref { .. } => {
-                    place.push_deref();
+                    if capture {
+                        let ptr_ty = self.projectable_place_ty(ty);
+                        let ptr = self.emit_expr(ptr_ty, SExpr::ReadPlace { place });
+                        place = SPlace::deref(ptr);
+                    } else {
+                        place.push_deref();
+                    }
                 }
                 PlaceProjection::Field { index, .. } => {
                     place.push_field(FieldIndex(index));
                 }
                 PlaceProjection::Index { index_expr, .. } => {
-                    let index = self.lower_expr(index_expr);
+                    let value = self.lower_expr(index_expr);
+                    let index = if capture {
+                        self.emit_expr_with_origin(
+                            SemOrigin::Expr(index_expr),
+                            self.expr_ty(index_expr),
+                            SExpr::UseValue(SOperand::expr(value, index_expr)),
+                        )
+                    } else {
+                        value
+                    };
                     place.push_dynamic_index(index);
                 }
             }
+            ty = projection.result_ty();
         }
 
         place
