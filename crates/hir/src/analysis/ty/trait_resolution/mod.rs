@@ -544,7 +544,11 @@ fn check_const_expr_wf<'db>(
                 }
             }
         }
-        ConstExpr::ArithBinOp { lhs, rhs, .. } => {
+        ConstExpr::ArithBinOp { lhs, rhs, .. }
+        | ConstExpr::ArrayRepeat {
+            value: lhs,
+            len: rhs,
+        } => {
             for ty in [*lhs, *rhs] {
                 let wf = check_ty_wf(db, solve_cx, ty);
                 if !wf.is_wf() {
@@ -552,7 +556,7 @@ fn check_const_expr_wf<'db>(
                 }
             }
         }
-        ConstExpr::UnOp { expr, .. } => {
+        ConstExpr::UnOp { expr, .. } | ConstExpr::ArrayIndex { array: expr, .. } => {
             let wf = check_ty_wf(db, solve_cx, *expr);
             if !wf.is_wf() {
                 return wf;

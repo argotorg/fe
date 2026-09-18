@@ -1283,13 +1283,25 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 Ok(self.make_aggregate_value(result_ty, fields))
             }
             SExpr::ArrayRepeat { ty, value } => {
-                let Some(len) = ty.array_len(self.db) else {
-                    return Err(CtfeError::NotConstEvaluable { origin });
-                };
                 let CtfeValue::Value(value) = self.read_operand(frame_idx, value, origin)? else {
                     return Err(CtfeError::InvalidBorrow { origin });
                 };
-                Ok(self.make_aggregate_value(result_ty, vec![value; len]))
+                if let Some(len) = ty.array_len(self.db)
+                    && (len != 0 || !value.contains_type_level(self.db))
+                {
+                    return Ok(self.make_aggregate_value(result_ty, vec![value; len]));
+                }
+                let len = ty.generic_args(self.db)[1];
+                let deferred_origin = value.deferred_origin.unwrap_or(origin);
+                let value = TyId::const_ty(
+                    self.db,
+                    const_ty_from_sem_const(self.db, value.materialize(self.db)),
+                );
+                Ok(CtfeValue::deferred(
+                    self.db,
+                    self.abstract_const_expr(ConstExpr::ArrayRepeat { value, len }, result_ty),
+                    deferred_origin,
+                ))
             }
             SExpr::EnumMake {
                 variant, fields, ..
@@ -1403,7 +1415,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                                 .collect::<Vec<_>>();
                             Ok(CtfeValue::deferred(
                                 self.db,
-                                self.abstract_const_call(
+                                self.abstract_const_expr(
                                     ConstExpr::ExternConstFnCall {
                                         func,
                                         generic_args: instance
@@ -1446,7 +1458,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                         let value_args = self.materialize_args(args, origin)?;
                         Ok(CtfeValue::deferred(
                             self.db,
-                            self.abstract_const_call(
+                            self.abstract_const_expr(
                                 ConstExpr::UserConstFnCall {
                                     func,
                                     generic_args: instance
@@ -2107,7 +2119,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         Ok(CtfeConstValue::int(self.db, result_ty, BigInt::from(size)))
     }
 
-    fn abstract_const_call(&self, expr: ConstExpr<'db>, result_ty: TyId<'db>) -> SemConstId<'db> {
+    fn abstract_const_expr(&self, expr: ConstExpr<'db>, result_ty: TyId<'db>) -> SemConstId<'db> {
         let const_ty = ConstTyId::new(
             self.db,
             ConstTyData::Abstract(ConstExprId::new(self.db, expr), result_ty),
@@ -3248,6 +3260,20 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     .get(*index)
                     .cloned()
                     .ok_or(CtfeError::OutOfBounds { origin })?,
+                (CtfeConstKind::Interned(interned), CtfePathElem::Index(index))
+                    if let SemConstValue::TypeLevel { ty, const_ty } = interned.value(self.db)
+                        && ty.is_array(self.db) =>
+                {
+                    // Keep the bounds obligation until the symbolic extent is known.
+                    let projected = self.abstract_const_expr(
+                        ConstExpr::ArrayIndex {
+                            array: const_ty,
+                            index: *index,
+                        },
+                        ty.generic_args(self.db)[0],
+                    );
+                    CtfeConstValue::concrete(self.db, projected)
+                }
                 (CtfeConstKind::Interned(interned), _)
                     if matches!(interned.value(self.db), SemConstValue::TypeLevel { .. }) =>
                 {

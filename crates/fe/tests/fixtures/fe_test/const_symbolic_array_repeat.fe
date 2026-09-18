@@ -1,0 +1,28 @@
+struct Repeated<const N: usize> {
+    values: [u8; N],
+}
+
+impl<const N: usize> Repeated<N> {
+    const VALUE: Repeated<N> = Repeated<N> { values: [7; N] }
+    const ROWS: [[u8; N]; 2] = [[9; N]; 2]
+    const FIRST: u8 = Self::VALUE.values[0]
+}
+
+const fn changed_rows() -> [[u8; 3]; 2] {
+    let mut rows = Repeated<3>::ROWS
+    rows[0][1] = 2
+    rows
+}
+
+const CHANGED: [[u8; 3]; 2] = changed_rows()
+
+#[test]
+fn test_symbolic_repeat_specialization() {
+    assert!(Repeated<1>::FIRST == 7)
+    assert!(Repeated<3>::VALUE.values[2] == 7)
+    assert!(Repeated<4>::ROWS[1][3] == 9)
+    assert!(CHANGED[0][1] == 2)
+    assert!(CHANGED[1][1] == 9)
+    let empty: [u8; 0] = Repeated<0>::VALUE.values
+    assert!(empty.len() == 0)
+}
