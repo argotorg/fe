@@ -1,7 +1,7 @@
 //! Shape-checked, hash-consed structural values shared by local state and summaries.
 use super::{
     guard::{ChoiceKey, Guard, ValueOccurrence},
-    index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
+    index::{BinderScope, IndexError, IndexExpr, IndexNamespace, IndexSubst},
     path::{Projection, StructuralPath},
     semantics::{CapabilityClass, CapabilitySemantics},
     shape::{ShapeChildren, ShapeId},
@@ -672,7 +672,58 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         path: &StructuralPath<IndexExpr<'db>>,
         replacement: &ValueId<'db, P>,
     ) -> ValueId<'db, P> {
-        self.replace_steps(value, path.as_slice(), replacement)
+        assert_eq!(
+            value.scope(),
+            replacement.scope(),
+            "replacement scopes must match"
+        );
+        self.replace_family(
+            value,
+            path,
+            replacement,
+            &Guard::always(replacement.scope()),
+            &Guarded {
+                guard: Guard::always(value.scope()),
+                payload: value
+                    .scope()
+                    .variables()
+                    .map(|index| (index, index))
+                    .collect(),
+            },
+        )
+        .expect("an ordinary replacement introduces no free family binders")
+    }
+
+    /// Replace a guarded family without enumerating its members. Source binders
+    /// selected by the destination path bind to the destination array's lexical
+    /// members. Bindings supplied by a referent root stay distinct from those
+    /// introduced by array traversal. Every source binder must be accounted for.
+    pub fn replace_family(
+        &mut self,
+        value: &ValueId<'db, P>,
+        path: &StructuralPath<IndexExpr<'db>>,
+        replacement: &ValueId<'db, P>,
+        guard: &Guard<'db>,
+        context: &Guarded<'db, BTreeMap<IndexExpr<'db>, IndexExpr<'db>>>,
+    ) -> Result<ValueId<'db, P>, IndexError<'db>> {
+        assert_eq!(
+            replacement.scope(),
+            guard.scope(),
+            "replacement guard scope mismatch"
+        );
+        assert_eq!(
+            value.scope(),
+            context.guard.scope(),
+            "destination guard scope mismatch"
+        );
+        for index in path.indices() {
+            replacement.scope().validate(index)?;
+        }
+        for (source, destination) in &context.payload {
+            replacement.scope().validate(*source)?;
+            value.scope().validate(*destination)?;
+        }
+        self.replace_steps(value, path.as_slice(), replacement, guard, context)
     }
 
     fn replace_steps(
@@ -680,15 +731,35 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         value: &ValueId<'db, P>,
         steps: &[Projection<IndexExpr<'db>>],
         replacement: &ValueId<'db, P>,
-    ) -> ValueId<'db, P> {
-        assert_eq!(
-            value.scope(),
-            replacement.scope(),
-            "replacement scopes must match"
-        );
+        guard: &Guard<'db>,
+        context: &Guarded<'db, BTreeMap<IndexExpr<'db>, IndexExpr<'db>>>,
+    ) -> Result<ValueId<'db, P>, IndexError<'db>> {
         let Some((step, rest)) = steps.split_first() else {
-            self.check_child(replacement, value.shape(), value.scope());
-            return replacement.clone();
+            // Never infer correlation from coincident lexical binder numbers.
+            for index in replacement.scope().variables() {
+                if !context.payload.contains_key(&index) {
+                    return Err(IndexError::FreeBinder(index));
+                }
+            }
+            let substitution = IndexSubst::new(
+                replacement.scope(),
+                value.scope(),
+                context.payload.iter().map(|(a, b)| (*a, *b)),
+            )?;
+            let replacement = self.substitute(replacement, &substitution);
+            self.check_child(&replacement, value.shape(), value.scope());
+            let Some(guard) = guard
+                .substitute(&substitution)
+                .and_then(|guard| guard.and(&context.guard))
+            else {
+                return Ok(value.clone());
+            };
+            let kept = Guard::always(value.scope())
+                .difference(&guard)
+                .map(|guard| self.with_guard(value, &guard))
+                .unwrap_or_else(|| self.empty(value.shape(), value.scope()));
+            let changed = self.with_guard(&replacement, &guard);
+            return Ok(self.join(&kept, &changed));
         };
         let mut node = (*value.0).clone();
         match (step, &mut node.children) {
@@ -698,7 +769,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                     .find(|(key, _)| key == field)
                     .expect("invalid replacement field")
                     .1;
-                *child = self.replace_steps(child, rest, replacement);
+                *child = self.replace_steps(child, rest, replacement, guard, context)?;
             }
             (Projection::VariantField { variant, field }, ValueChildren::Sum(variants)) => {
                 let ShapeChildren::Sum(shapes) = &value.shape().data(self.db).children else {
@@ -715,7 +786,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                     .or_insert_with(|| self.empty(shape, value.scope()));
                 let mut path = vec![Projection::Field(*field)];
                 path.extend_from_slice(rest);
-                *child = self.replace_steps(child, &path, replacement);
+                *child = self.replace_steps(child, &path, replacement, guard, context)?;
                 updated.retain(|_, child| !child.is_empty());
                 *variants = updated.into_iter().collect();
             }
@@ -723,57 +794,61 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                 let ShapeChildren::Array { len, .. } = value.shape().data(self.db).children else {
                     unreachable!()
                 };
-                value
-                    .scope()
-                    .validate(*index)
-                    .expect("free replacement index");
-                if let IndexExpr::Const(key) = index {
+                let selector = context.payload.get(index).copied().unwrap_or(*index);
+                let binds_member =
+                    matches!(index, IndexExpr::Bound(_)) && !context.payload.contains_key(index);
+                if let IndexExpr::Const(key) = selector {
                     assert!(
-                        len.known().is_none_or(|len| *key < len),
+                        len.known().is_none_or(|len| key < len),
                         "constant array replacement is out of bounds"
                     );
-                    let old = self.array_member(value, *index);
-                    exact.insert(*key, self.replace_steps(&old, rest, replacement));
+                    let old = self.array_member(value, selector);
+                    exact.insert(
+                        key,
+                        self.replace_steps(&old, rest, replacement, guard, context)?,
+                    );
                 } else {
-                    let lifted = self.lift(replacement, default.scope());
                     let (_, binder) = value.scope().bind(IndexNamespace::Value);
-                    let changed = self.replace_steps(default, rest, &lifted);
-                    *default = self.select_update(default, &changed, binder, *index);
+                    let lift = IndexSubst::new(value.scope(), default.scope(), [])?;
+                    let nested_guard = context.guard.substitute(&lift).expect("scope extension");
+                    let mut nested = Guarded {
+                        guard: nested_guard,
+                        payload: context.payload.clone(),
+                    };
+                    if binds_member {
+                        nested.payload.insert(*index, binder);
+                    } else if let Some(condition) = nested.guard.with_equality(binder, selector) {
+                        nested.guard = condition;
+                    } else {
+                        return Ok(value.clone());
+                    }
+                    *default = self.replace_steps(default, rest, replacement, guard, &nested)?;
                     for (key, old) in exact.iter_mut() {
-                        let changed = self.replace_steps(old, rest, replacement);
-                        *old = self.select_update(old, &changed, IndexExpr::Const(*key), *index);
+                        let mut selected = context.clone();
+                        if binds_member {
+                            selected.payload.insert(*index, IndexExpr::Const(*key));
+                        } else if let Some(condition) = selected
+                            .guard
+                            .with_equality(IndexExpr::Const(*key), selector)
+                        {
+                            selected.guard = condition;
+                        } else {
+                            continue;
+                        }
+                        *old = self.replace_steps(old, rest, replacement, guard, &selected)?;
                     }
                 }
-                return self.array_parts(
+                return Ok(self.array_parts(
                     value.shape(),
                     value.scope(),
                     default.clone(),
                     exact.clone(),
                     node.direct,
-                );
+                ));
             }
             _ => panic!("replacement path does not match capability shape"),
         }
-        self.intern(node)
-    }
-
-    fn select_update(
-        &mut self,
-        old: &ValueId<'db, P>,
-        changed: &ValueId<'db, P>,
-        member: IndexExpr<'db>,
-        selector: IndexExpr<'db>,
-    ) -> ValueId<'db, P> {
-        let scope = old.scope();
-        let kept = Guard::always(scope)
-            .with_disequality(member, selector)
-            .map(|guard| self.with_guard(old, &guard))
-            .unwrap_or_else(|| self.empty(old.shape(), scope));
-        let changed = Guard::always(scope)
-            .with_equality(member, selector)
-            .map(|guard| self.with_guard(changed, &guard))
-            .unwrap_or_else(|| self.empty(old.shape(), scope));
-        self.join(&kept, &changed)
+        Ok(self.intern(node))
     }
 
     fn array_member(&mut self, value: &ValueId<'db, P>, index: IndexExpr<'db>) -> ValueId<'db, P> {

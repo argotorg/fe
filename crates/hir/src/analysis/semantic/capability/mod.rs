@@ -11,6 +11,7 @@ pub mod region;
 pub mod semantics;
 pub mod shape;
 pub mod source;
+pub mod state;
 pub mod value;
 
 #[cfg(test)]

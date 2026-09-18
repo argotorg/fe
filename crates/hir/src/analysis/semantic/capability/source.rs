@@ -1,7 +1,9 @@
 //! External referents retain every load-and-dereference transition.
+use std::collections::BTreeMap;
+
 use super::{
     guard::Guard,
-    index::{IndexExpr, IndexSubst},
+    index::{BinderScope, IndexExpr, IndexSubst},
     path::{RegionPath, StructuralPath},
     region::{ProviderRegionId, RegionRoot, SymbolicPlace, path_alias_guard},
     semantics::CapabilityClass,
@@ -175,6 +177,33 @@ impl<'db> InputSource<'db> {
                 .collect(),
             reachable: self.reachable,
         }
+    }
+
+    /// Match one occurrence against an inventoried family. Family binders are
+    /// instantiated; repeated indices and constant selectors remain guard facts.
+    /// A reachable source is an overapproximation, never a typed storage cell.
+    pub fn match_instance(
+        &self,
+        scope: &BinderScope,
+        instance: &Self,
+        instance_scope: &BinderScope,
+    ) -> Option<(IndexSubst<'db>, Guard<'db>)> {
+        if self.reachable || instance.reachable {
+            return None;
+        }
+        let mut bindings = BTreeMap::new();
+        for (formal, actual) in self.indices().zip(instance.indices()) {
+            if matches!(formal, IndexExpr::Bound(_)) {
+                bindings.entry(formal).or_insert(actual);
+            }
+        }
+        let substitution = IndexSubst::new(scope, instance_scope, bindings).ok()?;
+        let guard = self.substitute(&substitution).alias_guard(
+            instance,
+            Guard::always(instance_scope),
+            false,
+        )?;
+        Some((substitution, guard))
     }
 
     pub(super) fn alias_guard(
