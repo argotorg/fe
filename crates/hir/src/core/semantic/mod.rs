@@ -3758,6 +3758,9 @@ impl<'db> Impl<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> InherentImplAdmissibility<'db> {
         let ty = self.ty(db);
+        if ty.has_invalid(db) {
+            return InherentImplAdmissibility::InvalidTy { ty };
+        }
         let ingot = self.top_mod(db).ingot(db);
         if !ty.is_inherent_impl_allowed(db, ingot) {
             let base = ty.base_ty(db);
@@ -3766,10 +3769,6 @@ impl<'db> Impl<'db> {
                 is_nominal: !base.is_param(db),
             };
         }
-        if ty.has_invalid(db) {
-            return InherentImplAdmissibility::InvalidTy { ty };
-        }
-
         match check_ty_wf(
             db,
             TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),

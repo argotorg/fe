@@ -1,0 +1,87 @@
+trait Length {
+    const LEN: usize
+}
+
+impl Length for bool {
+    const LEN: usize = 2
+}
+
+trait GenericLength<T> {
+    const LEN: usize
+}
+
+impl GenericLength<u256> for bool {
+    const LEN: usize = 2
+}
+
+struct Size<const N: usize> {}
+
+impl<const N: usize> Size<N> {
+    const LEN: usize = N
+}
+
+fn trait_default<T: Length, const N: usize = T::LEN>(_ value: [u8; N]) {}
+
+fn generic_trait_default<T: GenericLength<U>, U, const N: usize = <T as GenericLength<U>>::LEN>(
+    _ value: [u8; N],
+) {}
+
+fn inherent_default<const N: usize, const M: usize = Size<N>::LEN>(_ value: [u8; M]) {}
+
+struct TraitDefault<T: Length, const N: usize = T::LEN> {}
+
+enum TraitEnum<T: Length, const N: usize = { T::LEN }> {
+    Value([T; N]),
+}
+
+type InherentAlias<const N: usize, const M: usize = Size<N>::LEN> = [u8; M]
+
+struct WhereDefault<T, const N: usize = T::LEN>
+where T: Length
+{}
+
+trait WithDefault<T: Length, const N: usize = T::LEN> {
+    const LENGTH: usize = T::LEN
+}
+
+impl WithDefault<bool> for bool {}
+
+struct InherentDefault<const N: usize, const M: usize = Size<N>::LEN> {}
+
+fn take_trait_type(_ value: TraitDefault<bool, 2>) {}
+
+fn take_trait_enum(_ value: TraitEnum<bool, 2>) {}
+
+fn take_inherent_alias(_ value: InherentAlias<2, 2>) {}
+
+fn take_where_type(_ value: WhereDefault<bool, 2>) {}
+
+fn take_trait_length(_ value: [u8; <bool as WithDefault<bool>>::LENGTH]) {}
+
+fn take_inherent_type(_ value: InherentDefault<2, 2>) {}
+
+fn generic_forward<U: Length, const K: usize>(
+    _ trait_value: [u8; U::LEN],
+    _ inherent_value: [u8; K],
+) {
+    trait_default<U>(trait_value)
+    inherent_default<K>(inherent_value)
+}
+
+fn test() {
+    let value: [u8; 2] = [0, 1]
+    trait_default<bool>(value)
+    generic_trait_default<bool, u256>(value)
+    inherent_default<2>(value)
+    let trait_type: TraitDefault<bool> = TraitDefault {}
+    let trait_enum: TraitEnum<bool> = TraitEnum::Value([true, false])
+    let inherent_alias: InherentAlias<2> = value
+    let where_type: WhereDefault<bool> = WhereDefault {}
+    let inherent_type: InherentDefault<2> = InherentDefault {}
+    take_trait_type(trait_type)
+    take_trait_enum(trait_enum)
+    take_inherent_alias(inherent_alias)
+    take_where_type(where_type)
+    take_trait_length(value)
+    take_inherent_type(inherent_type)
+}

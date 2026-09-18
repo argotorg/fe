@@ -91,6 +91,18 @@ fn sonatina_function_body<'a>(ir: &'a str, symbol_segment: &str) -> Option<&'a s
     Some(&body[..end])
 }
 
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "trait_function_item_values_preserve_runtime_dispatch_witnesses.fe")]
+fn trait_function_item_values_preserve_runtime_dispatch_witnesses(fixture: Fixture<&str>) {
+    let ir = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod)
+            .expect("trait function-item values should preserve their dispatch witnesses")
+    });
+    assert!(
+        ir.contains("call") && ir.contains("read"),
+        "trait function-item calls must lower to the selected implementation:\n{ir}"
+    );
+}
+
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "zero_sized_const_aggregates_do_not_emit_const_regions.fe")]
 fn zero_sized_const_aggregates_do_not_emit_const_regions(fixture: Fixture<&str>) {
     let ir = with_top_mod_for_source(&fixture, |db, top_mod| {

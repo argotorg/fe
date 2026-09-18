@@ -16,10 +16,11 @@ use super::{
     binder::Binder,
     const_ty::{ConstBodyLowering, ConstTyId, HoleAnchor, HoleMinter},
     fold::{TyFoldable, TyFolder},
+    generic_defaults::DefaultApplication,
     trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, PrimTy, TyBase, TyId},
-    ty_lower::{ConstDefaultCompletion, lower_hir_ty_with_minter, lower_opt_hir_ty_with_minter},
+    ty_lower::{lower_hir_ty_with_minter, lower_opt_hir_ty_with_minter},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -397,7 +398,6 @@ fn lower_trait_ref_inner<'db>(
         return Err(TraitRefLowerError::Ignored);
     };
 
-    let self_subst = owner_self.unwrap_or(self_ty);
     let minter = match const_bodies {
         ConstBodyLowering::Eager => HoleMinter::new(HoleAnchor::TemplatePath {
             path,
@@ -411,9 +411,33 @@ fn lower_trait_ref_inner<'db>(
         }),
     };
 
-    let resolved = match resolve_path_with_minter(db, path, scope, assumptions, false, &minter) {
+    lower_trait_ref_with_minter(
+        db,
+        self_ty,
+        trait_ref,
+        scope,
+        assumptions,
+        owner_self,
+        &minter,
+    )
+}
+
+pub(crate) fn lower_trait_ref_with_minter<'db>(
+    db: &'db dyn HirAnalysisDb,
+    self_ty: TyId<'db>,
+    trait_ref: TraitRefId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    owner_self: Option<TyId<'db>>,
+    minter: &HoleMinter<'db>,
+) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
+    let Partial::Present(path) = trait_ref.path(db) else {
+        return Err(TraitRefLowerError::Ignored);
+    };
+    let self_subst = owner_self.unwrap_or(self_ty);
+    let resolved = match resolve_path_with_minter(db, path, scope, assumptions, false, minter) {
         Ok(res @ PathRes::Ty(_)) => {
-            match resolve_shadowed_trait_ref(db, &res, path, scope, assumptions, &minter) {
+            match resolve_shadowed_trait_ref(db, &res, path, scope, assumptions, minter) {
                 Some(trait_res) => Ok(trait_res),
                 None => Ok(res),
             }
@@ -615,17 +639,39 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
     }
 
     // Fill trailing defaults using the trait's param set. Bind Self (idx 0).
-    let non_self_completed = t.param_set(db).complete_explicit_args(
-        db,
-        Some(t.self_param(db)),
-        &provided_explicit,
-        assumptions,
-        match minter.const_bodies() {
-            ConstBodyLowering::Eager => ConstDefaultCompletion::evaluate(Some(path)),
-            ConstBodyLowering::Deferred => ConstDefaultCompletion::metadata(Some(path)),
-        },
-        Some(minter),
-    );
+    let non_self_completed = t
+        .param_set(db)
+        .complete_args(
+            db,
+            &[t.self_param(db)],
+            &provided_explicit,
+            match minter.const_bodies() {
+                ConstBodyLowering::Eager => DefaultApplication::Evaluate(minter),
+                ConstBodyLowering::Deferred => DefaultApplication::Metadata(minter),
+            },
+        )
+        .map_err(|error| match error.cause {
+            InvalidCause::TooManyGenericArgs { expected, given } => {
+                TraitArgError::ArgNumMismatch { expected, given }
+            }
+            InvalidCause::KindMismatch {
+                expected: Some(expected),
+                given,
+            } => TraitArgError::ArgKindMisMatch { expected, given },
+            InvalidCause::ConstTyMismatch { expected, given } => TraitArgError::ArgTypeMismatch {
+                expected: Some(expected),
+                given: Some(given),
+            },
+            InvalidCause::ConstTyExpected { expected } => TraitArgError::ArgTypeMismatch {
+                expected: Some(expected),
+                given: None,
+            },
+            InvalidCause::NormalTypeExpected { given } => TraitArgError::ArgTypeMismatch {
+                expected: None,
+                given: Some(given),
+            },
+            _ => TraitArgError::Ignored,
+        })?;
 
     if non_self_completed.len() != trait_params.len() - 1 {
         return Err(TraitArgError::ArgNumMismatch {
@@ -637,49 +683,6 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
     let mut final_args: Vec<TyId<'db>> = Vec::with_capacity(trait_params.len());
     final_args.push(t.self_param(db));
     final_args.extend(non_self_completed);
-
-    for (expected_ty, actual_ty) in trait_params.iter().zip(final_args.iter_mut()).skip(1) {
-        if !expected_ty.kind(db).does_match(actual_ty.kind(db)) {
-            return Err(TraitArgError::ArgKindMisMatch {
-                expected: expected_ty.kind(db).clone(),
-                given: *actual_ty,
-            });
-        }
-
-        let expected_const_ty = match expected_ty.data(db) {
-            TyData::ConstTy(expected_ty) => expected_ty.ty(db).into(),
-            _ => None,
-        };
-
-        let checked = match minter.const_bodies() {
-            ConstBodyLowering::Eager => actual_ty.evaluate_const_ty(db, expected_const_ty),
-            ConstBodyLowering::Deferred => {
-                actual_ty.check_const_ty_without_eval(db, expected_const_ty)
-            }
-        };
-        match checked {
-            Ok(evaluated_ty) => *actual_ty = evaluated_ty,
-            Err(InvalidCause::ConstTyMismatch { expected, given }) => {
-                return Err(TraitArgError::ArgTypeMismatch {
-                    expected: Some(expected),
-                    given: Some(given),
-                });
-            }
-            Err(InvalidCause::ConstTyExpected { expected }) => {
-                return Err(TraitArgError::ArgTypeMismatch {
-                    expected: Some(expected),
-                    given: None,
-                });
-            }
-            Err(InvalidCause::NormalTypeExpected { given }) => {
-                return Err(TraitArgError::ArgTypeMismatch {
-                    expected: None,
-                    given: Some(given),
-                });
-            }
-            _ => return Err(TraitArgError::Ignored),
-        }
-    }
 
     Ok(TraitInstId::new(db, t, final_args, assoc_bindings))
 }

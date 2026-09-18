@@ -1,0 +1,36 @@
+trait Output { type Item }
+impl Output for bool { type Item = u256 }
+
+struct Pair<A, B> {}
+impl<T: Output> Pair<T::Item, T> {
+    fn reversed(self, _ item: T::Item) {}
+    fn associated(_ item: T::Item) {}
+}
+
+struct Nested<A, B> {}
+impl<T: Output> Nested<(T::Item, bool), T> {
+    fn nested(self, _ item: T::Item) {}
+}
+
+struct Holder<T: Output, U = T::Item> {}
+impl<T: Output> Holder<T> {
+    fn defaulted<U = T::Item>(self, _ item: U) {}
+}
+
+fn generic<T: Output<Item = u256>>(pair: Pair<u256, T>, holder: Holder<T>) {
+    pair.reversed(1)
+    Pair<u256, T>::associated(1)
+    holder.defaulted(1)
+}
+
+fn abstract_projection<T: Output>(pair: Pair<T::Item, T>, item: T::Item) {
+    pair.reversed(item)
+}
+
+fn concrete(pair: Pair<u256, bool>, nested: Nested<(u256, bool), bool>, holder: Holder<bool>) {
+    pair.reversed(1)
+    Pair<u256, bool>::associated(1)
+    nested.nested(1)
+    holder.defaulted(1)
+    generic<bool>(pair, holder)
+}

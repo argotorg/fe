@@ -1,0 +1,73 @@
+fn selected<const A: usize, const B: usize, const C: usize = B>() -> usize { C }
+
+fn forwarded<const X: usize, const Y: usize>() -> usize { selected<Y, X>() }
+
+trait Length {
+    const LEN: usize
+    fn value<const N: usize = Self::LEN>() -> usize { N }
+}
+
+impl Length for bool {
+    const LEN: usize = 2
+}
+
+fn trait_value<T: Length, const N: usize = T::LEN>() -> usize { N }
+
+struct Size<const N: usize> {}
+
+impl<const N: usize> Size<N> {
+    const LEN: usize = N
+}
+
+fn inherent_value<const N: usize, const M: usize = Size<N>::LEN>() -> usize { M }
+
+fn identity<T = u256>(_ value: own T) -> T { value }
+
+trait Output { type Item }
+impl Output for bool { type Item = u256 }
+
+fn projected<T: Output, U = T::Item>(_ value: own U) -> U { value }
+
+struct Holder<T: Output, U = T::Item> { value: U }
+impl<T: Output> Holder<T> {
+    fn value(own self) -> T::Item { self.value }
+    fn select<U = T::Item>(_ value: own U) -> U { value }
+}
+
+trait Root { const ROOT: u256 }
+impl Root for bool { const ROOT: u256 = 7 }
+struct Slot<const ROOT: u256, const SALT: u256 = _> { value: u256 }
+
+fn effect_default<T: Root = bool>() -> u256 uses (slot: Slot<T::ROOT>) {
+    slot.value
+}
+
+fn array_tail<const N: usize>(_ value: ([Slot<7>; N], Slot<7>)) -> u256 {
+    value.1.value
+}
+
+#[test]
+fn generic_function_defaults() {
+    assert!(forwarded<2, 3>() == 2)
+    assert!(trait_value<bool>() == 2)
+    assert!(inherent_value<3>() == 3)
+    let defaulted = identity
+    let overridden = identity<bool>
+    let trait_item = <bool as Length>::value
+    assert!(defaulted(7) == 7)
+    assert!(overridden(true))
+    assert!(trait_item() == 2)
+    assert!(projected<bool>(11) == 11)
+    let projected_item = projected<bool>
+    assert!(projected_item(12) == 12)
+    let holder = Holder<bool> { value: 13 }
+    assert!(holder.value() == 13)
+    assert!(Holder<bool>::select(14) == 14)
+    let slot = Slot<7, 9> { value: 15 }
+    with (Slot<7, 9> = slot) {
+        assert!(effect_default() == 15)
+        assert!(effect_default<bool>() == 15)
+    }
+    assert!(array_tail<0>(([], Slot<7, 9> { value: 16 })) == 16)
+    assert!(array_tail<2>(([Slot<7, 9> { value: 17 }, Slot<7, 9> { value: 17 }], Slot<7, 10> { value: 18 })) == 18)
+}

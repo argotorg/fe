@@ -1,0 +1,70 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/generic_type_default_dependencies.fe
+---
+error[3-0022]: cannot reference generic parameter before it is declared
+  ┌─ generic_type_default_dependencies.fe:4:14
+  │
+4 │ fn shorthand<U = T::Item, T: Output = bool>() {}
+  │              ^^^^^^^^^^^ cannot reference `T` before it's declared
+
+error[3-0022]: cannot reference generic parameter before it is declared
+  ┌─ generic_type_default_dependencies.fe:5:14
+  │
+5 │ fn qualified<U = <T as Output>::Item, T: Output = bool>() {}
+  │              ^^^^^^^^^^^^^^^^^^^^^^^ cannot reference `T` before it's declared
+
+error[3-0022]: cannot reference generic parameter before it is declared
+  ┌─ generic_type_default_dependencies.fe:6:19
+  │
+6 │ fn self_shorthand<T: Output = T::Item>() {}
+  │                   ^^^^^^^^^^^^^^^^^^^ cannot reference `T` before it's declared
+
+error[3-0022]: cannot reference generic parameter before it is declared
+  ┌─ generic_type_default_dependencies.fe:7:19
+  │
+7 │ fn self_qualified<T: Output = <T as Output>::Item>() {}
+  │                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot reference `T` before it's declared
+
+error[3-0022]: cannot reference generic parameter before it is declared
+  ┌─ generic_type_default_dependencies.fe:8:11
+  │
+8 │ fn nested<U = (T::Item, [T::Item; 1]), T: Output = bool>() {}
+  │           ^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot reference `T` before it's declared
+
+error[3-0022]: cannot reference generic parameter before it is declared
+   ┌─ generic_type_default_dependencies.fe:10:16
+   │
+10 │ struct Forward<U = T::Item, T: Output = bool> {}
+   │                ^^^^^^^^^^^ cannot reference `T` before it's declared
+
+error[3-0022]: cannot reference generic parameter before it is declared
+   ┌─ generic_type_default_dependencies.fe:11:18
+   │
+11 │ enum ForwardEnum<U = T::Item, T: Output = bool> { Empty }
+   │                  ^^^^^^^^^^^ cannot reference `T` before it's declared
+
+error[3-0022]: cannot reference generic parameter before it is declared
+   ┌─ generic_type_default_dependencies.fe:12:20
+   │
+12 │ trait ForwardTrait<U = T::Item, T: Output = bool> {}
+   │                    ^^^^^^^^^^^ cannot reference `T` before it's declared
+
+error[3-0022]: cannot reference generic parameter before it is declared
+   ┌─ generic_type_default_dependencies.fe:13:19
+   │
+13 │ type ForwardAlias<U = T::Item, T = bool> = U
+   │                   ^^^^^^^^^^^ cannot reference `T` before it's declared
+
+error[3-0022]: cannot reference generic parameter before it is declared
+   ┌─ generic_type_default_dependencies.fe:15:17
+   │
+15 │ fn nested_const<T = [u8; N], const N: usize = 1>() {}
+   │                 ^^^^^^^^^^^ cannot reference `N` before it's declared
+
+error[3-0022]: cannot reference generic parameter before it is declared
+   ┌─ generic_type_default_dependencies.fe:16:16
+   │
+16 │ fn nested_type<T = ForwardAlias<u256, U>, U = bool>() {}
+   │                ^^^^^^^^^^^^^^^^^^^^^^^^^ cannot reference `U` before it's declared

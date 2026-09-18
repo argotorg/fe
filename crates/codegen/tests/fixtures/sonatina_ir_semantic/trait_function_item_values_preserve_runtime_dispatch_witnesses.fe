@@ -1,0 +1,36 @@
+trait Read {
+    type Output
+    fn read(number: Self) -> Self::Output
+    fn default_read(number: Self) -> Self::Output { Self::read(number) }
+}
+
+trait Convert<T> {
+    fn convert(number: Self) -> T
+}
+
+struct Number { value: u256 }
+
+impl Read for Number {
+    type Output = u256
+    fn read(number: Number) -> u256 { number.value }
+}
+
+impl Convert<u256> for Number {
+    fn convert(number: Number) -> u256 { number.value }
+}
+
+fn invoke<T: Read<Output = u256>>(number: T) -> u256 {
+    let function = Read::read
+    function(number)
+}
+
+pub fn main() -> u256 {
+    let read = <Number as Read>::read
+    let default_read = <Number as Read>::default_read
+    let convert = <Number as Convert<u256>>::convert
+    let pair = (read, convert)
+    pair.0(number: Number { value: 10 })
+        + pair.1(number: Number { value: 11 })
+        + default_read(number: Number { value: 12 })
+        + invoke(number: Number { value: 13 })
+}

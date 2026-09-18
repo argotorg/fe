@@ -1150,31 +1150,25 @@ impl<'db> CtfeMachine<'db> {
         instance: SemanticInstance<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<(), CtfeError<'db>> {
-        match instance.key(self.db).owner(self.db) {
+        let typed_body = match instance.key(self.db).owner(self.db) {
             BodyOwner::Func(func) if !func.is_const(self.db) => {
-                Err(CtfeError::NonConstCall { origin })
+                return Err(CtfeError::NonConstCall { origin });
             }
-            owner
-            @ (BodyOwner::Func(_) | BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. }) => {
-                let typed_body = match owner {
-                    BodyOwner::Func(func) => &check_func_body(self.db, func).1,
-                    BodyOwner::Const(const_) => &check_const_body(self.db, const_).1,
-                    BodyOwner::AnonConstBody { body, expected } => {
-                        &check_anon_const_body(self.db, body, expected).1
-                    }
-                    BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
-                        unreachable!("contract bodies are not const-evaluable")
-                    }
-                };
-                if typed_body.has_smir_lowering_blocking_diagnostics(self.db) {
-                    Err(CtfeError::InvalidBody { origin })
-                } else {
-                    Ok(())
-                }
+            BodyOwner::Func(func) => &check_func_body(self.db, func).1,
+            BodyOwner::Const(const_) => &check_const_body(self.db, const_).1,
+            BodyOwner::AnonConstBody { body, expected } => {
+                &check_anon_const_body(self.db, body, expected).1
             }
             BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
-                Err(CtfeError::NotConstEvaluable { origin })
+                return Err(CtfeError::NotConstEvaluable { origin });
             }
+        };
+        // Parser recovery can leave a lowering blocker without a type-check
+        // diagnostic. The validity of the body is the lowering precondition.
+        if typed_body.has_smir_lowering_blocker(self.db) {
+            Err(CtfeError::InvalidBody { origin })
+        } else {
+            Ok(())
         }
     }
 

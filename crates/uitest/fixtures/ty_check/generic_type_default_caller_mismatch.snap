@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/generic_type_default_caller_mismatch.fe
+---
+error[8-0000]: type mismatch
+   ┌─ generic_type_default_caller_mismatch.fe:10:20
+   │
+10 │     selected<bool>(item)
+   │                    ^^^^ expected `u256`, but `bool` is given
+
+error[8-0000]: type mismatch
+   ┌─ generic_type_default_caller_mismatch.fe:11:26
+   │
+11 │     selected<bool, u256>(item)
+   │                          ^^^^ expected `u256`, but `bool` is given
+
+error[8-0000]: type mismatch
+   ┌─ generic_type_default_caller_mismatch.fe:12:21
+   │
+12 │     qualified<bool>(item)
+   │                     ^^^^ expected `u256`, but `bool` is given

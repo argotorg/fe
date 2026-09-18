@@ -1,0 +1,105 @@
+const fn plus_one(_ value: usize) -> usize {
+    value + 1
+}
+
+fn all_type_defaults<T = u256, U = T>() {}
+
+fn all_const_defaults<const N: usize = 1, const M: usize = plus_one(N)>() {}
+
+fn inferred_type_then_default<T, U = T>(_ value: T) {}
+
+fn inferred_const_then_default<
+    const N: usize,
+    const M: usize = plus_one(N),
+>(_ value: [u8; N], _ dependent: [u8; M]) {}
+
+fn partial_type_default<T, U = T>(_ value: U) {}
+
+fn partial_const_default<const N: usize, const M: usize = plus_one(N)>(
+    _ value: [u8; M],
+) {}
+
+fn direct_dependent_explicit_hole<
+    const N: usize,
+    const M: usize = N,
+>(_ value: [u8; M]) {}
+
+fn bounded_mixed_defaults<T: Copy = u256, const N: usize = 1>(
+    _ value: [T; N],
+) {}
+
+struct LayoutCarrier<const ROOT: u256 = _> {}
+
+fn implicit_layout_prefix<T = u256>(_ carrier: LayoutCarrier, _ value: T) {}
+
+fn defaulted_layout_hole<const ROOT: u256 = _>() {}
+
+enum DefaultVariant<T = u256> {
+    Value(T),
+}
+
+struct Receiver<T> {
+    value: T,
+}
+
+impl<T> Receiver<T> {
+    fn inherited_type_default<U = T>(self) {}
+
+    fn generic_inherent_self_default<U = Self>(self, _ value: U) {}
+}
+
+struct PlainReceiver {}
+
+impl PlainReceiver {
+    fn inherent_self_default<T = Self>(self, _ value: T) {}
+
+    fn associated_self_default<T = Self>(_ value: T) {}
+}
+
+trait TraitDefault {
+    type Value
+
+    fn inherited_self_default<U = Self>(self: Self) {}
+
+    fn associated_self_default<U = Self>(_ value: U) {}
+
+    fn associated_projection_default<U = Self::Value>(_ value: U) {}
+}
+
+struct TraitReceiver {}
+
+impl TraitDefault for TraitReceiver {
+    type Value = u256
+}
+
+fn exercise_defaults(
+    receiver: Receiver<u256>,
+    generic_receiver: Receiver<u256>,
+    plain_receiver: PlainReceiver,
+    trait_receiver: TraitReceiver,
+) {
+    all_type_defaults()
+    all_type_defaults<>()
+    all_const_defaults()
+    all_const_defaults<>()
+    inferred_type_then_default(true)
+    inferred_const_then_default([0], [0, 1])
+    partial_type_default<u256>(1)
+    partial_type_default<u256, bool>(true)
+    partial_const_default<1>([0, 1])
+    partial_const_default<1, 3>([0, 1, 2])
+    let dependent_hole_value: [u8; 2] = [0, 1]
+    direct_dependent_explicit_hole<_>(dependent_hole_value)
+    bounded_mixed_defaults([1])
+    implicit_layout_prefix(LayoutCarrier {}, 1)
+    defaulted_layout_hole()
+    defaulted_layout_hole()
+    receiver.inherited_type_default()
+    generic_receiver.generic_inherent_self_default(Receiver { value: 1 })
+    plain_receiver.inherent_self_default(PlainReceiver {})
+    PlainReceiver::associated_self_default(PlainReceiver {})
+    trait_receiver.inherited_self_default()
+    <TraitReceiver as TraitDefault>::associated_self_default(TraitReceiver {})
+    <TraitReceiver as TraitDefault>::associated_projection_default(1)
+    let _variant: DefaultVariant = DefaultVariant::Value(1)
+}

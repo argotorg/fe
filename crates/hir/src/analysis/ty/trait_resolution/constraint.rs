@@ -2,7 +2,10 @@ use crate::core::hir_def::{
     GenericParam, GenericParamOwner, GenericParamView, ItemKind, Trait, TraitRefId, TypeBound,
     WhereClauseOwner, scope_graph::ScopeId, types::TypeId as HirTypeId,
 };
-use crate::hir_def::CallableDef;
+use crate::{
+    hir_def::{CallableDef, Func},
+    semantic::trait_self_predicate,
+};
 use common::indexmap::{IndexMap, IndexSet};
 use either::Either;
 
@@ -11,7 +14,7 @@ use crate::analysis::{
     ty::{
         adt_def::AdtDef,
         binder::Binder,
-        const_ty::ConstBodyLowering,
+        const_ty::{ConstBodyLowering, HoleAnchor, HoleMinter},
         corelib::resolve_core_trait,
         effects::{
             EffectKeyCanonMode, EffectKeyKind, canonical_effect_identity_for_binding,
@@ -19,10 +22,13 @@ use crate::analysis::{
         },
         layout_holes::{collect_layout_hole_tys_in_order, ty_contains_const_hole},
         trait_def::TraitInstId,
-        trait_lower::{lower_impl_trait, lower_trait_ref, lower_trait_ref_deferred},
+        trait_lower::{lower_impl_trait, lower_trait_ref, lower_trait_ref_with_minter},
         trait_resolution::PredicateListId,
         ty_def::{TyBase, TyData, TyId, TyVarSort},
-        ty_lower::{collect_generic_params, lower_hir_ty, lower_hir_ty_deferred},
+        ty_lower::{
+            collect_generic_params, collect_source_generic_params, lower_hir_ty,
+            lower_hir_ty_with_minter,
+        },
         unify::InferenceKey,
     },
 };
@@ -283,7 +289,13 @@ pub(crate) fn collect_func_decl_constraint_pairs<'db>(
         _ => return decl_constraint_pairs(db, hir_func.into()).clone(),
     };
 
-    collect_decl_constraint_pairs_impl(db, hir_func.into(), parent_pairs, ConstBodyLowering::Eager)
+    collect_decl_constraint_pairs_impl(
+        db,
+        hir_func.into(),
+        parent_pairs,
+        ConstBodyLowering::Eager,
+        None,
+    )
 }
 
 #[salsa::tracked(
@@ -380,7 +392,7 @@ pub(crate) fn decl_constraint_pairs<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
 ) -> Vec<(TraitInstId<'db>, PredicateSource<'db>)> {
-    collect_decl_constraint_pairs_impl(db, owner, &[], ConstBodyLowering::Eager)
+    collect_decl_constraint_pairs_impl(db, owner, &[], ConstBodyLowering::Eager, None)
 }
 
 #[salsa::tracked(
@@ -392,7 +404,41 @@ fn candidate_decl_constraint_pairs<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
 ) -> Vec<(TraitInstId<'db>, PredicateSource<'db>)> {
-    collect_decl_constraint_pairs_impl(db, owner, &[], ConstBodyLowering::Deferred)
+    let parent = match owner {
+        GenericParamOwner::Func(func) if func.is_associated_func(db) => owner.parent(db),
+        _ => None,
+    };
+    let initial = parent
+        .map(|parent| candidate_decl_constraint_pairs(db, parent).as_slice())
+        .unwrap_or_default();
+    collect_decl_constraint_pairs_impl(db, owner, initial, ConstBodyLowering::Deferred, None)
+}
+
+/// Layout discovery must use the same declaration-only parameter numbering in
+/// its bounds and input types. Neither may depend on the slots being discovered.
+#[salsa::tracked]
+pub(crate) fn collect_callable_shape_constraints<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> PredicateListId<'db> {
+    let owner = GenericParamOwner::Func(func);
+    let initial = owner
+        .parent(db)
+        .filter(|_| func.is_associated_func(db))
+        .map(|parent| candidate_decl_constraint_pairs(db, parent).as_slice())
+        .unwrap_or_default();
+    let pairs = collect_decl_constraint_pairs_impl(
+        db,
+        owner,
+        initial,
+        ConstBodyLowering::Deferred,
+        Some(owner),
+    );
+    let mut predicates = pairs.into_iter().map(|(inst, _)| inst).collect::<Vec<_>>();
+    if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
+        predicates.push(trait_self_predicate(db, trait_));
+    }
+    PredicateListId::new(db, predicates)
 }
 
 fn decl_constraint_pairs_cycle_initial<'db>(
@@ -416,12 +462,17 @@ fn collect_decl_constraint_pairs_impl<'db>(
     owner: GenericParamOwner<'db>,
     initial: &[(TraitInstId<'db>, PredicateSource<'db>)],
     const_bodies: ConstBodyLowering,
+    source_params: Option<GenericParamOwner<'db>>,
 ) -> Vec<(TraitInstId<'db>, PredicateSource<'db>)> {
     let mut deferred: Vec<Deferred<'db>> = Vec::new();
     let owner_scope = owner.scope();
 
     // Generic parameter bounds
-    let param_set = collect_generic_params(db, owner);
+    let param_set = if source_params == Some(owner) {
+        collect_source_generic_params(db, owner)
+    } else {
+        collect_generic_params(db, owner)
+    };
     let params = owner.params(db);
     for (idx, GenericParamView { param, .. }) in params.enumerate() {
         let GenericParam::Type(hir_param) = param else {
@@ -492,15 +543,15 @@ fn collect_decl_constraint_pairs_impl<'db>(
             PredicateListId::new(db, all_predicates.keys().copied().collect::<Vec<_>>());
 
         let before = deferred.len();
-        deferred.retain(
-            |p| match try_resolve_type_bound(db, p, assumptions, const_bodies) {
+        deferred.retain(|p| {
+            match try_resolve_type_bound(db, p, assumptions, const_bodies, source_params) {
                 Some(inst) => {
                     all_predicates.entry(inst).or_insert(p.source);
                     false
                 }
                 None => true,
-            },
-        );
+            }
+        });
         if deferred.len() == before {
             break;
         }
@@ -541,16 +592,13 @@ pub(crate) fn collect_candidate_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
 ) -> Binder<PredicateListId<'db>> {
-    match owner {
-        GenericParamOwner::Func(func) => collect_func_def_constraints(db, func.into(), true),
-        _ => Binder::bind(PredicateListId::new(
-            db,
-            candidate_decl_constraint_pairs(db, owner)
-                .iter()
-                .map(|(inst, _)| *inst)
-                .collect::<Vec<_>>(),
-        )),
-    }
+    Binder::bind(PredicateListId::new(
+        db,
+        candidate_decl_constraint_pairs(db, owner)
+            .iter()
+            .map(|(inst, _)| *inst)
+            .collect::<Vec<_>>(),
+    ))
 }
 
 struct Deferred<'db> {
@@ -592,13 +640,20 @@ fn try_resolve_type_bound<'db>(
     deferred: &Deferred<'db>,
     assumptions: PredicateListId<'db>,
     const_bodies: ConstBodyLowering,
+    source_params: Option<GenericParamOwner<'db>>,
 ) -> Option<TraitInstId<'db>> {
     let ty = match deferred.bound_ty {
         Either::Left(hir_ty) => {
             let ty = match const_bodies {
                 ConstBodyLowering::Eager => lower_hir_ty(db, hir_ty, deferred.scope, assumptions),
                 ConstBodyLowering::Deferred => {
-                    lower_hir_ty_deferred(db, hir_ty, deferred.scope, assumptions)
+                    let minter = HoleMinter::deferred(HoleAnchor::TemplateTy {
+                        ty: hir_ty,
+                        scope: deferred.scope,
+                        assumptions,
+                    })
+                    .with_source_params(source_params);
+                    lower_hir_ty_with_minter(db, hir_ty, deferred.scope, assumptions, &minter)
                 }
             };
             if ty.has_invalid(db) {
@@ -618,14 +673,23 @@ fn try_resolve_type_bound<'db>(
             assumptions,
             enclosing_trait_self_ty(db, deferred.scope),
         ),
-        ConstBodyLowering::Deferred => lower_trait_ref_deferred(
-            db,
-            ty,
-            deferred.trait_ref,
-            deferred.scope,
-            assumptions,
-            enclosing_trait_self_ty(db, deferred.scope),
-        ),
+        ConstBodyLowering::Deferred => {
+            let minter = HoleMinter::deferred(HoleAnchor::TemplatePath {
+                path: deferred.trait_ref.path(db).to_opt()?,
+                scope: deferred.scope,
+                assumptions,
+            })
+            .with_source_params(source_params);
+            lower_trait_ref_with_minter(
+                db,
+                ty,
+                deferred.trait_ref,
+                deferred.scope,
+                assumptions,
+                enclosing_trait_self_ty(db, deferred.scope),
+                &minter,
+            )
+        }
     }
     .ok()
 }

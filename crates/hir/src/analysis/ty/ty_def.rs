@@ -690,17 +690,7 @@ impl<'db> TyId<'db> {
             );
         };
 
-        let rhs = if matches!(
-            rhs.data(db),
-            TyData::ConstTy(const_ty)
-                if matches!(
-                    const_ty.data(db),
-                    ConstTyData::UnEvaluated {
-                        preserve_unevaluated: true,
-                        ..
-                    }
-                )
-        ) {
+        let rhs = if rhs.preserves_const_arg_metadata(db) {
             rhs.check_const_ty_without_eval(db, applicable_ty.const_ty)
         } else {
             rhs.evaluate_const_ty(db, applicable_ty.const_ty)
@@ -732,6 +722,14 @@ impl<'db> TyId<'db> {
         }
 
         Self::new(db, TyData::TyApp(lhs, rhs))
+    }
+
+    /// Whether application must retain this const argument as deferred metadata.
+    pub(crate) fn preserves_const_arg_metadata(self, db: &'db dyn HirAnalysisDb) -> bool {
+        matches!(self.data(db), TyData::ConstTy(ct)
+        if matches!(ct.data(db), ConstTyData::UnEvaluated {
+            preserve_unevaluated: true, ..
+        }))
     }
 
     pub(crate) fn check_const_ty_without_eval(

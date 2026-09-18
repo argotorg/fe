@@ -6,7 +6,7 @@ use fe_hir::analysis::ty::{
     ty_check::check_func_body,
     ty_def::{TyData, TyId},
 };
-use fe_hir::hir_def::{ItemKind, Partial, Pat};
+use fe_hir::hir_def::{Expr, ItemKind, Partial, Pat};
 use fe_hir::test_db::HirAnalysisTestDb;
 
 fn find_func<'db>(
@@ -143,6 +143,45 @@ fn f() uses (slot: Slot<7>) {}
 
     assert_eq!(generic_args.len(), 1);
     assert_eq!(generic_args[0], base_arg);
+}
+
+#[test]
+fn recursive_default_captures_keep_the_callers_parameter_order() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("recursive_default_captures_keep_the_callers_parameter_order.fe"),
+        r#"
+fn recurse<const A: usize, const B: usize, const C: usize = B>(
+    _ left: [u8; A],
+    _ right: [u8; B],
+) {
+    recurse<B, A>(right, left)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    let func = find_func(&db, top_mod, "recurse");
+    let body = func.body(&db).expect("missing recursive function body");
+    let typed_body = &check_func_body(&db, func).1;
+    let call = body
+        .exprs(&db)
+        .iter()
+        .find_map(|(expr, data)| {
+            matches!(data, Partial::Present(Expr::Call(..)))
+                .then(|| typed_body.callable_expr(expr))
+                .flatten()
+        })
+        .expect("missing recursive call");
+    let args = call.generic_args();
+    let TyData::ConstTy(default) = args[2].data(&db) else {
+        panic!("expected const default");
+    };
+    let ConstTyData::UnEvaluated { generic_args, .. } = default.data(&db) else {
+        panic!("expected captured const default");
+    };
+    assert_ne!(args[0], args[1]);
+    assert_eq!(generic_args.as_slice(), &args[..2]);
 }
 
 #[test]

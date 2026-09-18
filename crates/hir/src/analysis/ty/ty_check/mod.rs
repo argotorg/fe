@@ -27,7 +27,7 @@ use crate::analysis::ty::trait_resolution::constraint::{
     PredicateSource, collect_func_decl_constraint_pairs,
 };
 use crate::analysis::ty::visitor::TyVisitable;
-use crate::hir_def::{CallableDef, ImplTrait, Trait};
+use crate::hir_def::{CallableDef, ConstGenericArgValue, ImplTrait, Trait};
 use crate::{
     hir_def::{
         BinOp, Body, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParamOwner,
@@ -62,12 +62,13 @@ use crate::analysis::place::{Place, PlaceBase, PlaceProjection};
 use super::{
     LayoutBundlePath, LayoutBundlePathStep,
     assoc_const::{AssocConstUse, InherentConstUse},
-    canonical::{Canonical, Canonicalized},
+    canonical::Canonical,
     diagnostics::{
         BodyDiag, CallConstraintDiagInfo, FuncBodyDiag, StaticAssertComparisonValues,
         TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
     },
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key},
+    generic_defaults::{GenericDefault, generic_default},
     layout_holes::merge_equated_layout_holes,
     trait_def::{TraitInstId, resolve_trait_method_instance},
     trait_resolution::{
@@ -256,6 +257,48 @@ pub fn check_trait_const_default_bodies<'db>(
             );
         } else {
             diags.extend(body_diags.iter().cloned());
+        }
+    }
+    diags
+}
+
+/// Type-checks and CTFE-validates generic const parameter defaults at their
+/// declarations. Calls and type applications may never force an unused
+/// default, but its body must still be a valid const expression of the
+/// declared parameter type.
+#[salsa::tracked(return_ref)]
+pub fn check_generic_const_default_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let mut diags = Vec::new();
+    for view in owner.params(db) {
+        let Ok(Some(GenericDefault::Const {
+            value: ConstGenericArgValue::Expr(Partial::Present(body)),
+            expected,
+        })) = generic_default(db, owner, view.idx)
+        else {
+            continue;
+        };
+        let body = *body;
+        let expected = expected.instantiate_identity();
+        if expected.has_invalid(db) {
+            continue;
+        }
+
+        let body_diags = &check_anon_const_body(db, body, expected).0;
+        if expected.has_param(db) {
+            diags.extend(
+                body_diags
+                    .iter()
+                    .filter(|diag| !diag_depends_on_param_instantiation(db, diag))
+                    .cloned(),
+            );
+        } else {
+            diags.extend(body_diags.iter().cloned());
+        }
+        if body_diags.is_empty() {
+            diags.extend(const_body_ctfe_diags(db, body, expected, true));
         }
     }
     diags
@@ -1520,7 +1563,8 @@ impl<'db> TyChecker<'db> {
                     ) {
                         Ok(()) => {}
                         Err(CallGenericArgUnifyError::ArityMismatch { .. })
-                        | Err(CallGenericArgUnifyError::UnificationFailed) => {
+                        | Err(CallGenericArgUnifyError::UnificationFailed)
+                        | Err(CallGenericArgUnifyError::InvalidArgument(_)) => {
                             return Viability::Incompatible;
                         }
                     }
@@ -2637,14 +2681,23 @@ impl<'db> TyChecker<'db> {
     /// lives in the method-table probe; nothing is re-derived here.
     fn extract_inherent_method_to_term(
         &mut self,
-        canonical_receiver: &Canonicalized<'db, TyId<'db>>,
         cand: ProbedMethod<'db>,
         receiver_ty: TyId<'db>,
     ) -> TyId<'db> {
-        let bound = canonical_receiver.extract_solution(&mut self.table, cand.bound);
+        let bound = cand.extract(&mut self.table);
         self.register_effect_provider_args(cand.def, bound.func_ty);
         let snapshot = self.table.snapshot();
-        if self.table.unify(bound.key_ty, receiver_ty).is_err() {
+        let matched = self.table.unify(bound.key_ty, receiver_ty).is_ok()
+            && cand
+                .query
+                .assumptions
+                .list(self.db)
+                .iter()
+                .zip(bound.assumptions.list(self.db))
+                .all(|(&original, &solved)| self.table.unify(original, solved).is_ok());
+        if matched {
+            self.table.commit(snapshot);
+        } else {
             self.table.rollback_to(snapshot);
         }
         bound.func_ty
@@ -2989,6 +3042,7 @@ fn degenerate_return_projection(
 pub enum ValuePathRef<'db> {
     UnitVariant(ResolvedVariant<'db>),
     TypeConst(TyId<'db>),
+    FunctionItem,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -3032,6 +3086,7 @@ impl<'db> TyVisitable<'db> for ValuePathRef<'db> {
         match self {
             Self::UnitVariant(variant) => variant.ty.visit_with(visitor),
             Self::TypeConst(ty) => ty.visit_with(visitor),
+            Self::FunctionItem => {}
         }
     }
 }
@@ -3054,6 +3109,7 @@ impl<'db> TyFoldable<'db> for ValuePathRef<'db> {
             // Folding it here would retain only the actual value and erase
             // which formal const parameter the expression referenced.
             Self::TypeConst(ty) => Self::TypeConst(ty),
+            Self::FunctionItem => Self::FunctionItem,
         }
     }
 }
@@ -3242,7 +3298,7 @@ impl<'db> TypedBody<'db> {
         self.has_diagnostics && self.has_smir_lowering_blocker(db)
     }
 
-    fn has_smir_lowering_blocker(&self, db: &'db dyn HirAnalysisDb) -> bool {
+    pub(crate) fn has_smir_lowering_blocker(&self, db: &'db dyn HirAnalysisDb) -> bool {
         let Some(body) = self.body else {
             return false;
         };

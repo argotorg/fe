@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/inherent_method_projection_target_mismatch.fe
+---
+error[2-0010]: no method named `selected` found for View `View`
+   ┌─ inherent_method_projection_target_mismatch.fe:10:10
+   │
+10 │     pair.selected(true)
+   │          ^^^^^^^^ method not found in `View`
+
+error[2-0010]: no method named `selected` found for View `View`
+   ┌─ inherent_method_projection_target_mismatch.fe:18:10
+   │
+18 │     pair.selected(true)
+   │          ^^^^^^^^ method not found in `View`
+
+error[2-0010]: no method named `selected` found for View `View`
+   ┌─ inherent_method_projection_target_mismatch.fe:22:10
+   │
+22 │     pair.selected(1)
+   │          ^^^^^^^^ method not found in `View`
+
+error[8-0000]: type mismatch
+   ┌─ inherent_method_projection_target_mismatch.fe:14:19
+   │
+14 │     pair.selected(true)
+   │                   ^^^^ expected `u256`, but `bool` is given

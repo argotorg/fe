@@ -10,7 +10,7 @@ use crate::analysis::{
         binder::Binder,
         canonical::{Canonical, Canonicalized, Solution},
         fold::TyFoldable as _,
-        method_table::{ProbedMethod, probe_method},
+        method_table::{MethodProbe, ProbedMethod, probe_method},
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_and_ty, impls_for_ty},
         trait_resolution::{
             CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
@@ -219,7 +219,16 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
             .original()
             .ingot(self.db)
             .unwrap_or_else(|| self.scope.ingot(self.db));
-        for &method in probe_method(self.db, ingot, self.receiver.canonical(), self.method_name) {
+        for method in probe_method(
+            self.db,
+            ingot,
+            MethodProbe {
+                receiver: self.receiver.original(),
+                assumptions: self.assumptions,
+            },
+            self.scope,
+            self.method_name,
+        ) {
             self.candidates.insert_inherent_method(method);
         }
     }

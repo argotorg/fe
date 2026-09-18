@@ -28,16 +28,17 @@ use crate::analysis::{
     ty::{
         adt_def::AdtRef,
         binder::Binder,
-        canonical::{Canonical, Canonicalized},
+        canonical::Canonicalized,
         const_ty::{ConstBodyLowering, HoleAnchor, HoleMinter, LayoutHoleArgSite},
         fold::TyFoldable as _,
-        method_table::probe_method,
+        generic_defaults::DefaultApplication,
+        method_table::{MethodProbe, probe_method},
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_satisfied_constraints},
         trait_lower::{
             TraitArgError, TraitRefLowerError, complete_candidate_impl_assoc_ty,
             complete_impl_assoc_ty, lower_candidate_impl_assoc_ty, lower_checked_impl_assoc_ty,
-            lower_trait_ref, lower_trait_ref_deferred, lower_trait_ref_impl_with_minter,
+            lower_trait_ref, lower_trait_ref_impl_with_minter, lower_trait_ref_with_minter,
         },
         trait_resolution::{
             GoalSatisfiability, PredicateListId, TraitSolveCx, constraint::collect_constraints,
@@ -45,7 +46,7 @@ use crate::analysis::{
         },
         ty_def::{InvalidCause, Kind, TyBase, TyData, TyId},
         ty_lower::{
-            ConstDefaultCompletion, TyAlias, collect_generic_params, lower_generic_arg_list,
+            TyAlias, collect_generic_params, collect_source_generic_params, lower_generic_arg_list,
             lower_hir_ty_with_minter, lower_type_alias, lower_type_alias_deferred,
         },
         unify::UnificationTable,
@@ -901,7 +902,9 @@ where
                     ));
                 }
                 InvalidCause::PathResolutionFailed { path: ty_path } => {
-                    if let Err(inner) = resolve_path(db, ty_path, scope, assumptions, false) {
+                    if let Err(inner) =
+                        resolve_path_with_minter(db, ty_path, scope, assumptions, false, minter)
+                    {
                         return Err(PathResError {
                             kind: PathResErrorKind::QualifiedTypeType(Box::new(Err(inner))),
                             failed_at: path,
@@ -914,7 +917,7 @@ where
         let trait_inst_result = match minter.const_bodies() {
             ConstBodyLowering::Eager => lower_trait_ref(db, ty, trait_, scope, assumptions, None),
             ConstBodyLowering::Deferred => {
-                lower_trait_ref_deferred(db, ty, trait_, scope, assumptions, None)
+                lower_trait_ref_with_minter(db, ty, trait_, scope, assumptions, None, minter)
             }
         };
         let trait_inst = match trait_inst_result {
@@ -1054,7 +1057,11 @@ where
                 }
             }
 
-            if is_tail && resolve_tail_as_value {
+            // Deferred signature lowering resolves type/const shapes, not callable
+            // values. Method discovery checks signatures and their hidden parameters,
+            // so entering it here would make shape discovery depend on validation.
+            if is_tail && resolve_tail_as_value && minter.const_bodies() == ConstBodyLowering::Eager
+            {
                 let receiver_ty = Canonicalized::new(db, ty);
                 match select_method_candidate(
                     db,
@@ -1496,7 +1503,16 @@ pub(crate) fn shadowed_inherent_fn_for_const<'db>(
 ) -> Option<DynLazySpan<'db>> {
     let self_ty = impl_.admissible_inherent_impl_ty(db)?;
     let ingot = impl_.top_mod(db).ingot(db);
-    for &cand in probe_method(db, ingot, Canonical::new(db, self_ty), name) {
+    for cand in probe_method(
+        db,
+        ingot,
+        MethodProbe {
+            receiver: self_ty,
+            assumptions: collect_constraints(db, impl_.into()).instantiate_identity(),
+        },
+        impl_.scope(),
+        name,
+    ) {
         let CallableDef::Func(func) = cand.def else {
             continue;
         };
@@ -1897,14 +1913,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
             ScopeId::Item(item) => match item {
                 ItemKind::Struct(_) | ItemKind::Enum(_) => {
                     let adt_ref = AdtRef::try_from_item(item).unwrap();
-                    PathRes::Ty(ty_from_adtref(
-                        db,
-                        path,
-                        adt_ref,
-                        &args,
-                        assumptions,
-                        minter,
-                    )?)
+                    PathRes::Ty(ty_from_adtref(db, path, adt_ref, &args, minter)?)
                 }
                 ItemKind::Contract(contract) => {
                     // Contracts have no generic parameters
@@ -1963,10 +1972,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                             path,
                         ));
                     }
-                    PathRes::TyAlias(
-                        alias.clone(),
-                        alias.instantiate_from_path(db, path, &args, assumptions, minter),
-                    )
+                    PathRes::TyAlias(alias.clone(), alias.instantiate(db, &args, minter))
                 }
 
                 ItemKind::Impl(impl_) => {
@@ -2069,7 +2075,11 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
             },
             ScopeId::GenericParam(parent, idx) => {
                 let owner = GenericParamOwner::from_item_opt(parent).unwrap();
-                let param_set = collect_generic_params(db, owner);
+                let param_set = if minter.source_params() == Some(owner) {
+                    collect_source_generic_params(db, owner)
+                } else {
+                    collect_generic_params(db, owner)
+                };
                 let ty = param_set
                     .param_by_original_idx(db, idx as usize)
                     .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
@@ -2121,7 +2131,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                 } else {
                     // The variant was imported via `use`.
                     debug_assert!(path.parent(db).is_none());
-                    ty_from_adtref(db, path, var.enum_.into(), &[], assumptions, minter)?
+                    ty_from_adtref(db, path, var.enum_.into(), &[], minter)?
                 };
                 // TODO report error if args isn't empty
                 PathRes::EnumVariant(ResolvedVariant {
@@ -2154,20 +2164,17 @@ fn ty_from_adtref<'db>(
     path: PathId<'db>,
     adt_ref: AdtRef<'db>,
     args: &[TyId<'db>],
-    assumptions: PredicateListId<'db>,
     minter: &HoleMinter<'db>,
 ) -> PathResolutionResult<'db, TyId<'db>> {
     let adt = adt_ref.as_adt(db);
     let ty = TyId::adt(db, adt);
-    let completed_args = adt.param_set(db).complete_explicit_args(
-        db,
-        None,
-        args,
-        assumptions,
-        ConstDefaultCompletion::metadata(Some(path)),
-        Some(minter),
-    );
-    let applied = TyId::foldl(db, ty, &completed_args);
+    let completed_args =
+        adt.param_set(db)
+            .complete_args(db, &[], args, DefaultApplication::Metadata(minter));
+    let applied = match completed_args {
+        Ok(args) => TyId::foldl(db, ty, &args),
+        Err(error) => TyId::invalid(db, error.cause),
+    };
     if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) = applied.data(db)
     {
         Err(PathResError::new(

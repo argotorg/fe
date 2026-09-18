@@ -897,6 +897,21 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     )
                 }
             }
+            Some(ValuePathRef::FunctionItem) => {
+                let ty = self.expr_ty(expr);
+                debug_assert!(
+                    ty.is_func(self.db),
+                    "function-item path has non-function type"
+                );
+                self.emit_expr_with_origin(
+                    SemOrigin::Expr(expr),
+                    ty,
+                    SExpr::AggregateMake {
+                        ty,
+                        fields: Box::new([]),
+                    },
+                )
+            }
             None => panic!(
                 "typed path expression is missing semantic value-path classification: owner={:?} expr={expr:?} data={:?} ty={} ty_data={:?} binding={:?} const_ref={:?} code_region_ref={:?}",
                 self.template_owner,

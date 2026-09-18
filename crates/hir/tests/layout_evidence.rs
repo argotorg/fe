@@ -111,6 +111,57 @@ fn assert_layoutizes_in(name: &str, src: &str, std_module: bool) {
 }
 
 #[test]
+fn function_item_values_layoutize_as_zero_sized_values() {
+    assert_layoutizes(
+        "function_item_values_layoutize_as_zero_sized_values.fe",
+        r#"
+fn answer(value: u256) -> u256 { value }
+
+fn identity<T = u256>(value: own T) -> T { value }
+
+struct Number { value: u256 }
+
+impl Number {
+    fn read(number: Number) -> u256 { number.value }
+    fn identity<T = Self>(value: own T) -> T { value }
+}
+
+trait Read {
+    fn read(number: Self) -> u256
+}
+
+impl Read for Number {
+    fn read(number: Number) -> u256 { number.value }
+}
+
+enum Maybe { Some(u256), None }
+
+fn seed() -> u256 {
+    let answer_value = answer
+    let identity_value = identity
+    let inherent_value = Number::read
+    let defaulted_value = Number::identity
+    let trait_value = Read::read
+    let ufcs_value = <Number as Read>::read
+    let constructor_value = Maybe::Some
+    let maybe = constructor_value(6)
+    let constructed = match maybe {
+        Maybe::Some(value) => value
+        Maybe::None => 0
+    }
+    let number = defaulted_value(value: Number { value: 7 })
+    answer_value(value: 1)
+        + identity_value(value: 2)
+        + inherent_value(number: Number { value: 3 })
+        + trait_value(number: Number { value: 4 })
+        + ufcs_value(number: Number { value: 5 })
+        + constructed + number.value
+}
+"#,
+    );
+}
+
+#[test]
 fn runtime_const_uses_bind_one_explicit_layout_input_port() {
     parse_ok!(
         db,

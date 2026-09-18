@@ -1,0 +1,52 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/generic_type_default_cycles.fe
+---
+error[2-0002]: `Self` is not found
+  ┌─ generic_type_default_cycles.fe:1:18
+  │
+1 │ fn free_self<T = Self>() {}
+  │                  ^^^^ `Self` is not found
+
+error[3-0038]: cycle detected while resolving this type
+  ┌─ generic_type_default_cycles.fe:3:16
+  │
+3 │ type First<T = Second> = T
+  │                ^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+  ┌─ generic_type_default_cycles.fe:4:17
+  │
+4 │ type Second<T = First> = T
+  │                 ^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+  ┌─ generic_type_default_cycles.fe:6:22
+  │
+6 │ struct Recursive<T = Recursive> {}
+  │                      ^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+  ┌─ generic_type_default_cycles.fe:7:21
+  │
+7 │ fn unused_cycle<T = Recursive>() {}
+  │                     ^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ generic_type_default_cycles.fe:11:17
+   │
+11 │     let _value: First = true
+   │                 ^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ generic_type_default_cycles.fe:12:21
+   │
+12 │     let _recursive: Recursive = Recursive {}
+   │                     ^^^^^^^^^ this type's definition depends on itself
+
+error[8-0006]: expected record variant or struct
+   ┌─ generic_type_default_cycles.fe:12:33
+   │
+12 │     let _recursive: Recursive = Recursive {}
+   │                                 ^^^^^^^^^ expected record variant or struct here, but found invalid(TypeLoweringCycle)

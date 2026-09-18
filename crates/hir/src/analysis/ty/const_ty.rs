@@ -15,12 +15,13 @@ use super::{
     binder::Binder,
     diagnostics::{BodyDiag, FuncBodyDiag},
     fold::{AssocTySubst, TyFoldable},
+    generic_defaults::DefaultApplication,
     normalize::normalize_ty,
     trait_def::{ImplementorId, ImplementorOrigin, ResolvedImplInstance, TraitInstId},
     trait_resolution::{Selection, TraitSolveCx, constraint::collect_constraints},
     ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
-    ty_lower::{ConstDefaultCompletion, collect_generic_params},
+    ty_lower::collect_generic_params,
     unify::UnificationTable,
 };
 use crate::analysis::{
@@ -203,6 +204,11 @@ pub enum BodyHoleSite {
 /// template holes at a genuinely unique item position (added in later phases).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum HoleAnchor<'db> {
+    /// A default template is owned by a declaration position, not by a caller.
+    GenericDefault {
+        owner: GenericParamOwner<'db>,
+        param_idx: usize,
+    },
     /// Minted while lowering a HIR type (the `lower_hir_ty` memo key).
     TemplateTy {
         ty: HirTypeId<'db>,
@@ -362,6 +368,7 @@ pub(crate) enum ConstBodyLowering {
 pub(crate) struct HoleMinter<'db> {
     anchor: HoleAnchor<'db>,
     const_bodies: ConstBodyLowering,
+    source_params: Option<GenericParamOwner<'db>>,
     counter: std::cell::Cell<u32>,
     instantiation_counter: std::cell::Cell<u32>,
 }
@@ -371,6 +378,7 @@ impl<'db> HoleMinter<'db> {
         Self {
             anchor,
             const_bodies: ConstBodyLowering::Eager,
+            source_params: None,
             counter: std::cell::Cell::new(0),
             instantiation_counter: std::cell::Cell::new(0),
         }
@@ -383,6 +391,7 @@ impl<'db> HoleMinter<'db> {
         Self {
             anchor,
             const_bodies: ConstBodyLowering::Deferred,
+            source_params: None,
             counter: std::cell::Cell::new(0),
             instantiation_counter: std::cell::Cell::new(0),
         }
@@ -390,6 +399,17 @@ impl<'db> HoleMinter<'db> {
 
     pub(crate) fn const_bodies(&self) -> ConstBodyLowering {
         self.const_bodies
+    }
+
+    /// Slot discovery uses declaration indices, before hidden callable slots
+    /// exist. The same basis must be used for both paths and their predicates.
+    pub(crate) fn with_source_params(mut self, owner: Option<GenericParamOwner<'db>>) -> Self {
+        self.source_params = owner;
+        self
+    }
+
+    pub(crate) fn source_params(&self) -> Option<GenericParamOwner<'db>> {
+        self.source_params
     }
 
     pub(crate) fn anchor(&self) -> HoleAnchor<'db> {
@@ -1062,19 +1082,18 @@ fn canonicalize_const_ty_for_display<'db>(
 pub fn complete_default_const_args_for_identity<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
-    assumptions: PredicateListId<'db>,
 ) -> TyId<'db> {
     let (base, args) = ty.decompose_ty_app(db);
     let TyData::TyBase(base_ty) = base.data(db) else {
         return ty;
     };
-    let (param_set, trait_self) = match base_ty {
+    let param_set = match base_ty {
         TyBase::Adt(adt) => match adt.as_generic_param_owner(db) {
-            Some(owner) => (collect_generic_params(db, owner), None),
+            Some(owner) => collect_generic_params(db, owner),
             None => return ty,
         },
         TyBase::Func(func) => match *func {
-            CallableDef::Func(def) => (collect_generic_params(db, def.into()), None),
+            CallableDef::Func(def) => collect_generic_params(db, def.into()),
             CallableDef::VariantCtor(_) => return ty,
         },
         _ => return ty,
@@ -1083,16 +1102,15 @@ pub fn complete_default_const_args_for_identity<'db>(
     if args.len() <= explicit_offset {
         return ty;
     }
-    let completed_args = param_set.complete_explicit_args(
+    let completed_args = match param_set.complete_args(
         db,
-        trait_self,
+        &args[..explicit_offset],
         &args[explicit_offset..],
-        assumptions,
-        ConstDefaultCompletion::evaluate(None),
-        // No application path: `= _` defaults complete as opaque holes here,
-        // so there is no structural identity to mint.
-        None,
-    );
+        DefaultApplication::Identity,
+    ) {
+        Ok(args) => args,
+        Err(error) => return TyId::invalid(db, error.cause),
+    };
     if completed_args.len() == args.len().saturating_sub(explicit_offset) {
         return ty;
     }
@@ -1258,7 +1276,7 @@ pub fn canonicalize_ty_for_mode<'db>(
         };
 
         if finalize_self && !matches!(mode, ConstCanonMode::Stored) {
-            ty = complete_default_const_args_for_identity(db, ty, env.assumptions);
+            ty = complete_default_const_args_for_identity(db, ty);
             ty = normalize_ty(db, ty, env.scope, env.assumptions);
         }
 
@@ -1340,9 +1358,12 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
     let TyData::ConstTy(const_ty) = ty.data(db) else {
         return ty;
     };
-    if let Some(env) = display_const_canon_env(db, *const_ty) {
-        return canonicalize_ty_for_mode(db, ty, env, ConstCanonMode::Identity);
-    }
+    let canonicalized = display_const_canon_env(db, *const_ty).map_or(ty, |env| {
+        canonicalize_ty_for_mode(db, ty, env, ConstCanonMode::Identity)
+    });
+    let TyData::ConstTy(const_ty) = canonicalized.data(db) else {
+        return canonicalized;
+    };
 
     match const_ty.data(db) {
         ConstTyData::UnEvaluated {
@@ -1351,10 +1372,7 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
         } => {
             let normalized = const_ty.evaluate(db, Some(*expected_ty));
             if normalized.ty(db).invalid_cause(db).is_none()
-                && matches!(
-                    normalized.data(db),
-                    ConstTyData::Evaluated(..) | ConstTyData::Abstract(..)
-                )
+                && !matches!(normalized.data(db), ConstTyData::UnEvaluated { .. })
             {
                 if let ConstTyData::Abstract(expr, expected_ty) = normalized.data(db) {
                     evaluate_abstract_int_const_expr(db, *expr, *expected_ty).map_or_else(
@@ -1365,14 +1383,14 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
                     TyId::const_ty(db, normalized)
                 }
             } else {
-                ty
+                canonicalized
             }
         }
         ConstTyData::Abstract(expr, expected_ty) => {
             evaluate_abstract_int_const_expr(db, *expr, *expected_ty)
-                .map_or(ty, |evaluated| TyId::const_ty(db, evaluated))
+                .map_or(canonicalized, |evaluated| TyId::const_ty(db, evaluated))
         }
-        _ => ty,
+        _ => canonicalized,
     }
 }
 
@@ -1912,9 +1930,7 @@ pub(crate) fn evaluate_const_ty<'db>(
 
     let expr = expr.clone();
 
-    if generic_args.is_empty()
-        && let Expr::Path(path) = &expr
-    {
+    if let Expr::Path(path) = &expr {
         let Some(path) = path.to_opt() else {
             return ConstTyId::new(
                 db,
@@ -1930,8 +1946,7 @@ pub(crate) fn evaluate_const_ty<'db>(
             match resolved_path {
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
                     if let TyData::ConstTy(const_ty) = ty.data(db) {
-                        if !generic_args.is_empty()
-                            && let ConstTyData::TyParam(param, _) = const_ty.data(db)
+                        if let ConstTyData::TyParam(param, _) = const_ty.data(db)
                             && let Some(arg) = generic_args.get(param.idx).copied()
                             && let TyData::ConstTy(arg_const) = arg.data(db)
                         {
@@ -1959,6 +1974,8 @@ pub(crate) fn evaluate_const_ty<'db>(
                         args,
                         inst.assoc_type_bindings(db).clone(),
                     );
+                    let inst = instantiate_with_generic_args(db, inst, &generic_args);
+                    let assumptions = instantiate_with_generic_args(db, assumptions, &generic_args);
 
                     let mk_abstract = |expected_ty: TyId<'db>| {
                         let expr = ConstExprId::new(
@@ -1988,6 +2005,8 @@ pub(crate) fn evaluate_const_ty<'db>(
                     }
                 }
                 PathRes::InherentConst(recv_ty, impl_, name) => {
+                    let recv_ty = instantiate_with_generic_args(db, recv_ty, &generic_args);
+                    let assumptions = instantiate_with_generic_args(db, assumptions, &generic_args);
                     let mk_abstract = |expected_ty: TyId<'db>| {
                         let use_ = super::assoc_const::InherentConstUse::new(
                             body.scope(),
@@ -2027,7 +2046,7 @@ pub(crate) fn evaluate_const_ty<'db>(
         // unevaluated and assume the expected type if available, avoiding
         // spurious diagnostics here. Downstream checks will validate usage.
         if path.parent(db).is_some() {
-            return ConstTyId::from_body(db, body, expected_ty, None);
+            return expected_ty.map_or(const_ty, |expected_ty| const_ty.with_ty(db, expected_ty));
         }
 
         return ConstTyId::new(
@@ -2325,34 +2344,31 @@ pub(crate) fn assumptions_for_body<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
 ) -> PredicateListId<'db> {
-    let containing_func = match body.scope().parent_item(db) {
-        Some(ItemKind::Func(func)) => Some(func),
-        Some(ItemKind::Body(parent)) => parent.containing_func(db),
-        _ => None,
-    };
-    if let Some(func) = containing_func {
-        return crate::semantic::func_body_assumptions(db, func).extend_all_bounds(db);
-    }
+    const_body_assumptions(db, body.scope()).extend_all_bounds(db)
+}
 
-    let mut enclosing = body.scope();
-    let mut parent_item = enclosing.parent_item(db);
+/// Base predicates available to a const body, shared by type checking and CTFE.
+pub(crate) fn const_body_assumptions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+) -> PredicateListId<'db> {
+    let mut parent_item = scope.parent_item(db);
     while let Some(ItemKind::Body(parent)) = parent_item {
-        enclosing = parent.scope();
-        parent_item = enclosing.parent_item(db);
+        parent_item = parent.scope().parent_item(db);
     }
 
     match parent_item {
+        Some(ItemKind::Func(func)) => crate::semantic::func_body_assumptions(db, func),
         Some(ItemKind::Trait(trait_)) => {
-            PredicateListId::new(db, vec![crate::semantic::trait_self_predicate(db, trait_)])
-                .extend_all_bounds(db)
+            let declared = collect_constraints(db, trait_.into()).instantiate_identity();
+            let self_predicate =
+                PredicateListId::new(db, vec![crate::semantic::trait_self_predicate(db, trait_)]);
+            declared.merge(db, self_predicate)
         }
-        Some(ItemKind::ImplTrait(impl_trait)) => collect_constraints(db, impl_trait.into())
-            .instantiate_identity()
-            .extend_all_bounds(db),
-        Some(ItemKind::Impl(impl_)) => collect_constraints(db, impl_.into())
-            .instantiate_identity()
-            .extend_all_bounds(db),
-        _ => PredicateListId::empty_list(db),
+        item => item.and_then(GenericParamOwner::from_item_opt).map_or_else(
+            || PredicateListId::empty_list(db),
+            |owner| collect_constraints(db, owner).instantiate_identity(),
+        ),
     }
 }
 

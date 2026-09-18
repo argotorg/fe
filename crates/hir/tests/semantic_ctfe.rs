@@ -13,10 +13,11 @@ use fe_hir::{
         },
         ty::{
             diagnostics::{BodyDiag, FuncBodyDiag, TyDiagCollection, TyLowerDiag},
-            ty_check::{BodyOwner, check_func_body},
+            ty_check::{BodyOwner, check_anon_const_body, check_func_body},
+            ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
-    hir_def::{ItemKind, Partial},
+    hir_def::{ConstGenericArgValue, GenericParam, GenericParamOwner, ItemKind, Partial},
     span::LazySpan,
 };
 use num_traits::ToPrimitive;
@@ -600,6 +601,51 @@ const fn invalid_call_like_expr() -> u256 {
     let result =
         eval_body_owner_const_with_args(&db, BodyOwner::Func(func), Vec::new(), Vec::new());
 
+    assert!(
+        matches!(result, Err(CtfeError::InvalidBody { .. })),
+        "expected invalid body CTFE error, got {result:?}"
+    );
+}
+
+#[test]
+fn parser_recovered_default_without_type_diags_is_rejected_before_ctfe_lowering() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_ctfe.fe".into(),
+        include_str!(
+            "../../fe/tests/fixtures/crash_regressions/generic_const_default_malformed_arithmetic.fe"
+        ),
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = top_mod
+        .all_funcs(&db)
+        .iter()
+        .find(|func| matches!(func.name(&db), Partial::Present(name) if name.data(&db) == "malformed"))
+        .copied()
+        .expect("missing function with malformed default");
+    let body = GenericParamOwner::Func(func)
+        .params(&db)
+        .find_map(|view| match view.param {
+            GenericParam::Const(param) => match param.default {
+                Some(ConstGenericArgValue::Expr(Partial::Present(body))) => Some(body),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("missing recovered default body");
+    let expected = TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
+    let (diags, _) = check_anon_const_body(&db, body, expected);
+    assert!(
+        diags.is_empty(),
+        "expected no type-check diagnostics: {diags:?}"
+    );
+
+    let result = eval_body_owner_const_with_args(
+        &db,
+        BodyOwner::AnonConstBody { body, expected },
+        Vec::new(),
+        Vec::new(),
+    );
     assert!(
         matches!(result, Err(CtfeError::InvalidBody { .. })),
         "expected invalid body CTFE error, got {result:?}"

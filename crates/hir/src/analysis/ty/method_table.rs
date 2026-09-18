@@ -1,12 +1,14 @@
-use crate::core::hir_def::{HirIngot, IdentId, Impl};
+use crate::core::hir_def::{HirIngot, IdentId, Impl, scope_graph::ScopeId};
 use common::ingot::Ingot;
 use rustc_hash::FxHashMap;
 use salsa::Update;
 
 use super::{
     binder::Binder,
-    canonical::{Canonical, Solution},
+    canonical::{Canonical, Canonicalized, Solution},
     fold::{TyFoldable, TyFolder},
+    normalize::normalize_ty,
+    trait_resolution::PredicateListId,
     ty_def::{TyBase, TyId},
     unify::UnificationTable,
     visitor::{TyVisitable, TyVisitor},
@@ -25,7 +27,38 @@ use crate::hir_def::CallableDef;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub struct ProbedMethod<'db> {
     pub def: CallableDef<'db>,
-    pub bound: Solution<BoundInherentMethod<'db>>,
+    bound: Solution<BoundInherentMethod<'db>>,
+    pub(crate) query: MethodProbe<'db>,
+}
+
+impl<'db> ProbedMethod<'db> {
+    pub(crate) fn extract(self, table: &mut UnificationTable<'db>) -> BoundInherentMethod<'db> {
+        Canonicalized::new(table.db, self.query).extract_solution(table, self.bound)
+    }
+}
+
+/// Canonicalize the receiver and its environment together: predicates may
+/// contain inference variables not present in the receiver itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub(crate) struct MethodProbe<'db> {
+    pub receiver: TyId<'db>,
+    pub assumptions: PredicateListId<'db>,
+}
+
+impl<'db> TyVisitable<'db> for MethodProbe<'db> {
+    fn visit_with<V: TyVisitor<'db> + ?Sized>(&self, visitor: &mut V) {
+        self.receiver.visit_with(visitor);
+        self.assumptions.visit_with(visitor);
+    }
+}
+
+impl<'db> TyFoldable<'db> for MethodProbe<'db> {
+    fn super_fold_with<F: TyFolder<'db>>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self {
+        Self {
+            receiver: self.receiver.fold_with(db, folder),
+            assumptions: self.assumptions.fold_with(db, folder),
+        }
+    }
 }
 
 /// The bound form of an inherent-method candidate.
@@ -34,11 +67,11 @@ pub struct BoundInherentMethod<'db> {
     /// The candidate's function type with all binder args applied (solved
     /// where the receiver determined them, fresh variables otherwise).
     pub func_ty: TyId<'db>,
-    /// The probe key (the method's self-param type, or the impl self type
-    /// for associated functions) under the same binder args. Consumers unify
-    /// this against their receiver to propagate the solution's bindings into
-    /// receiver inference variables.
+    /// The matched receiver, including bindings proved by the probe. Using
+    /// the receiver's form avoids reintroducing the candidate's projections.
     pub key_ty: TyId<'db>,
+    /// Bindings may also solve variables that appear only in caller predicates.
+    pub assumptions: PredicateListId<'db>,
 }
 
 impl<'db> TyVisitable<'db> for BoundInherentMethod<'db> {
@@ -48,6 +81,7 @@ impl<'db> TyVisitable<'db> for BoundInherentMethod<'db> {
     {
         self.func_ty.visit_with(visitor);
         self.key_ty.visit_with(visitor);
+        self.assumptions.visit_with(visitor);
     }
 }
 
@@ -59,6 +93,7 @@ impl<'db> TyFoldable<'db> for BoundInherentMethod<'db> {
         Self {
             func_ty: self.func_ty.fold_with(db, folder),
             key_ty: self.key_ty.fold_with(db, folder),
+            assumptions: self.assumptions.fold_with(db, folder),
         }
     }
 }
@@ -93,15 +128,29 @@ fn collect_methods_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
-#[salsa::tracked(return_ref)]
 pub(crate) fn probe_method<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
-    ty: Canonical<TyId<'db>>,
+    query: MethodProbe<'db>,
+    scope: ScopeId<'db>,
     name: IdentId<'db>,
 ) -> Vec<ProbedMethod<'db>> {
+    probe_canonical_method(db, ingot, Canonical::new(db, query), scope, name)
+        .iter()
+        .map(|&(def, bound)| ProbedMethod { def, bound, query })
+        .collect()
+}
+
+#[salsa::tracked(return_ref)]
+fn probe_canonical_method<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+    query: Canonical<MethodProbe<'db>>,
+    scope: ScopeId<'db>,
+    name: IdentId<'db>,
+) -> Vec<(CallableDef<'db>, Solution<BoundInherentMethod<'db>>)> {
     let table = collect_methods(db, ingot);
-    table.probe(db, ty, name)
+    table.probe(db, query, scope, name)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
@@ -113,20 +162,21 @@ impl<'db> MethodTable<'db> {
     fn probe(
         &self,
         db: &'db dyn HirAnalysisDb,
-        ty: Canonical<TyId<'db>>,
+        query: Canonical<MethodProbe<'db>>,
+        scope: ScopeId<'db>,
         name: IdentId<'db>,
-    ) -> Vec<ProbedMethod<'db>> {
+    ) -> Vec<(CallableDef<'db>, Solution<BoundInherentMethod<'db>>)> {
         let mut table = UnificationTable::new(db);
         // The table is fresh, so the extracted receiver vars share keys with
         // the canonical query vars — the precondition for canonicalizing
-        // solutions against `ty` below.
-        let extracted = ty.extract_identity(&mut table);
-        let Some(base) = Self::extract_ty_base(extracted, db) else {
+        // solutions against `query` below.
+        let extracted = query.extract_identity(&mut table);
+        let Some(base) = Self::extract_ty_base(extracted.receiver, db) else {
             return vec![];
         };
 
         if let Some(bucket) = self.buckets.get(base) {
-            bucket.probe(ty, &mut table, extracted, name)
+            bucket.probe(query, &mut table, extracted, scope, name)
         } else {
             vec![]
         }
@@ -178,14 +228,15 @@ impl<'db> MethodBucket<'db> {
 
     fn probe(
         &self,
-        canonical_ty: Canonical<TyId<'db>>,
+        canonical_query: Canonical<MethodProbe<'db>>,
         table: &mut UnificationTable<'db>,
-        ty: TyId<'db>,
+        query: MethodProbe<'db>,
+        scope: ScopeId<'db>,
         name: IdentId<'db>,
-    ) -> Vec<ProbedMethod<'db>> {
+    ) -> Vec<(CallableDef<'db>, Solution<BoundInherentMethod<'db>>)> {
         let db = table.db;
         let mut methods = vec![];
-        let ty = saturate_ty_for_method_probe(table, ty);
+        let ty = saturate_ty_for_method_probe(table, query.receiver);
         for (&cand_key, funcs) in self.methods.iter() {
             let Some(&func) = funcs.get(&name) else {
                 continue;
@@ -205,18 +256,74 @@ impl<'db> MethodBucket<'db> {
             let key_ty = cand_key.instantiate(db, func_ty.generic_args(db));
             let key_ty = table.instantiate_to_term(key_ty);
 
-            if table.unify(key_ty, ty).is_ok() {
-                let bound = canonical_ty.canonicalize_solution(
+            if match_probe_key(table, key_ty, ty, scope, query.assumptions) {
+                let bound = canonical_query.canonicalize_solution(
                     db,
                     table,
-                    BoundInherentMethod { func_ty, key_ty },
+                    // The matched receiver records the same proven bindings
+                    // without reintroducing projections at the extraction site.
+                    BoundInherentMethod {
+                        func_ty,
+                        key_ty: ty,
+                        assumptions: query.assumptions,
+                    },
                 );
-                methods.push(ProbedMethod { def: func, bound });
+                methods.push((func, bound));
             }
             table.rollback_to(snapshot);
         }
 
         methods
+    }
+}
+
+/// Bind ordinary arguments before normalizing projection equalities. Argument
+/// order must not affect matching `Pair<T::Item, T>` against `Pair<u256, bool>`.
+/// Every deferred equality must succeed; unresolved projections are not holes.
+fn match_probe_key<'db>(
+    table: &mut UnificationTable<'db>,
+    key: TyId<'db>,
+    receiver: TyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> bool {
+    let db = table.db;
+    let mut pending = vec![(key, receiver)];
+    loop {
+        let mut deferred = Vec::new();
+        while let Some((lhs, rhs)) = pending.pop() {
+            let lhs = lhs.fold_with(db, table);
+            let rhs = rhs.fold_with(db, table);
+            if lhs == rhs {
+                continue;
+            }
+            if let (TyData::TyApp(lb, la), TyData::TyApp(rb, ra)) = (lhs.data(db), rhs.data(db)) {
+                pending.extend([(*la, *ra), (*lb, *rb)]);
+            } else if lhs.has_projection(db) || rhs.has_projection(db) {
+                deferred.push((lhs, rhs));
+            } else if table.unify(lhs, rhs).is_err() {
+                return false;
+            }
+        }
+        if deferred.is_empty() {
+            return true;
+        }
+
+        let mut progressed = false;
+        for (lhs, rhs) in deferred {
+            let assumptions = assumptions.fold_with(db, table);
+            let normalized_lhs = normalize_ty(db, lhs.fold_with(db, table), scope, assumptions);
+            let normalized_rhs = normalize_ty(db, rhs.fold_with(db, table), scope, assumptions);
+            if table.unify(normalized_lhs, normalized_rhs).is_ok() {
+                progressed = true;
+            } else {
+                progressed |= (normalized_lhs, normalized_rhs) != (lhs, rhs);
+                pending.push((normalized_lhs, normalized_rhs));
+            }
+        }
+        if !progressed {
+            return false;
+        }
     }
 }
 
@@ -291,12 +398,88 @@ impl<'db> MethodCollector<'db> {
             .method_table
             .probe(
                 self.db,
-                Canonical::new(self.db, ty),
+                Canonical::new(
+                    self.db,
+                    MethodProbe {
+                        receiver: ty,
+                        assumptions: PredicateListId::empty_list(self.db),
+                    },
+                ),
+                func.scope(),
                 func.name(self.db).expect("callable has name"),
             )
             .is_empty()
         {
             self.method_table.insert(self.db, ty, func)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use camino::Utf8PathBuf;
+
+    use super::*;
+    use crate::{
+        analysis::ty::{
+            trait_resolution::constraint::collect_constraints,
+            ty_def::{Kind, TyVarSort},
+            ty_lower::collect_generic_params,
+        },
+        test_db::{HirAnalysisTestDb, find_func},
+    };
+
+    #[test]
+    fn projection_probe_preserves_receiver_and_assumption_bindings() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("projection_probe.fe"),
+            r#"
+trait Output { type Item }
+struct Pair<A, B> {}
+impl<T: Output> Pair<T::Item, T> {
+    fn selected<V>(self, _ value: V) {}
+}
+fn context<T: Output<Item = U>, U>(value: Pair<u256, T>) {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let func = find_func(&db, top_mod, "context");
+        let param = collect_generic_params(&db, func.into()).params(&db)[0];
+        let mut table = UnificationTable::new(&db);
+        table.new_var(TyVarSort::General, &Kind::Star);
+        let item = table.new_var(TyVarSort::General, &Kind::Star);
+        let assumptions = collect_constraints(&db, func.into()).instantiate(&db, &[param, item]);
+        let receiver = func.arg_tys(&db)[0].instantiate_identity();
+        let receiver = receiver
+            .as_capability(&db)
+            .map_or(receiver, |(_, inner)| inner);
+        let candidates = probe_method(
+            &db,
+            top_mod.ingot(&db),
+            MethodProbe {
+                receiver,
+                assumptions,
+            },
+            func.scope(),
+            IdentId::new(&db, "selected"),
+        );
+        assert_eq!(candidates.len(), 1);
+        let bound = candidates[0].extract(&mut table);
+        assert_eq!(bound.key_ty, receiver);
+        assert_eq!(bound.func_ty.generic_args(&db)[0], param);
+        let fresh = bound.func_ty.generic_args(&db)[1];
+        assert!(fresh.is_ty_var(&db));
+        assert_ne!(fresh, item);
+        for (&original, &solved) in assumptions
+            .list(&db)
+            .iter()
+            .zip(bound.assumptions.list(&db))
+        {
+            table.unify(original, solved).unwrap();
+        }
+        assert_eq!(item.fold_with(&db, &mut table), TyId::u256(&db));
+        assert!(fresh.fold_with(&db, &mut table).is_ty_var(&db));
     }
 }

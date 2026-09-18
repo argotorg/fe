@@ -255,7 +255,7 @@ impl<'db> TyFolder<'db> for InstantiateScopedFolder<'db, '_> {
     }
 }
 
-fn backfill_unevaluated_const_generic_args<'db>(
+pub(crate) fn backfill_unevaluated_const_generic_args<'db>(
     db: &'db dyn HirAnalysisDb,
     const_ty: ConstTyId<'db>,
     args: &[TyId<'db>],

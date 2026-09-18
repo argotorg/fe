@@ -3350,7 +3350,7 @@ impl<'db> TyChecker<'db> {
 
         let (func_ty, trait_inst) = match candidate {
             MethodCandidate::InherentMethod(cand) => (
-                self.extract_inherent_method_to_term(&canonical_r_ty, cand, selected_receiver_ty),
+                self.extract_inherent_method_to_term(cand, selected_receiver_ty),
                 None,
             ),
 
@@ -3578,6 +3578,7 @@ impl<'db> TyChecker<'db> {
                     }
                 }
                 PathRes::Func(ty) => {
+                    let ty = self.instantiate_to_term(ty);
                     let mut callable =
                         Callable::new(self.db, ty, expr.span(self.body()).into(), None)
                             .expect("function item path should resolve to callable");
@@ -3585,7 +3586,9 @@ impl<'db> TyChecker<'db> {
                         return ExprProp::invalid(self.db);
                     }
 
-                    ExprProp::new(self.instantiate_to_term(callable.ty(self.db)), true)
+                    self.env
+                        .register_value_path_ref(expr, ValuePathRef::FunctionItem);
+                    ExprProp::new(callable.ty(self.db), true)
                 }
                 PathRes::Trait(trait_) => {
                     let diag = BodyDiag::NotValue {
@@ -3603,6 +3606,8 @@ impl<'db> TyChecker<'db> {
                             variant.ty
                         }
                         VariantKind::Tuple(_) => {
+                            self.env
+                                .register_value_path_ref(expr, ValuePathRef::FunctionItem);
                             let ty = variant.constructor_func_ty(self.db).unwrap();
                             self.instantiate_to_term(ty)
                         }
@@ -3630,11 +3635,7 @@ impl<'db> TyChecker<'db> {
                     let canonical_r_ty = Canonicalized::new(self.db, receiver_ty);
                     let (method_ty, trait_inst) = match candidate {
                         MethodCandidate::InherentMethod(cand) => (
-                            self.extract_inherent_method_to_term(
-                                &canonical_r_ty,
-                                cand,
-                                receiver_ty,
-                            ),
+                            self.extract_inherent_method_to_term(cand, receiver_ty),
                             None,
                         ),
                         MethodCandidate::TraitMethod(cand)
@@ -3695,6 +3696,8 @@ impl<'db> TyChecker<'db> {
 
                     let method_ty = callable.ty(self.db);
                     self.env.register_callable(expr, callable);
+                    self.env
+                        .register_value_path_ref(expr, ValuePathRef::FunctionItem);
                     ExprProp::new(method_ty, true)
                 }
                 PathRes::TraitMethod(trait_inst, method) => {
@@ -3775,6 +3778,8 @@ impl<'db> TyChecker<'db> {
 
                     let func_ty = callable.ty(self.db);
                     self.env.register_callable(expr, callable);
+                    self.env
+                        .register_value_path_ref(expr, ValuePathRef::FunctionItem);
                     ExprProp::new(func_ty, true)
                 }
                 PathRes::TraitConst(recv_ty, inst, name) => {

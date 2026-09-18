@@ -1,0 +1,5 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/inherent_method_projection_target.fe
+---
