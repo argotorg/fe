@@ -168,3 +168,42 @@ pub fn main() -> i32 { local::abs(value: abs(value: -6)) }
         "missing qualified local helper:\n{ir}"
     );
 }
+
+#[test]
+fn native_effect_place_preserves_its_reference_field_layout() {
+    let ir = with_top_mod_for_source(
+        "native_effect_place_layout.fe",
+        r#"
+struct Handle { value: mut i32, calls: i32 }
+fn step() uses (handle: mut Handle) { handle.calls += 1 }
+pub fn main() -> i32 {
+    let mut value: i32 = 20
+    let mut handle = Handle { value: mut value, calls: 0 }
+    with (handle) {
+        step()
+        step()
+    }
+    handle.calls
+}
+"#,
+        |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+    )
+    .expect("effect place must retain the actual layout of its reference field");
+    let roots = ir
+        .lines()
+        .filter(|line| line.contains(" = obj.alloc "))
+        .map(|line| line.trim().split_once('.').expect("object local").0)
+        .collect::<Vec<_>>();
+    assert_eq!(roots.len(), 1, "one provider object:\n{ir}");
+    let arguments = ir
+        .lines()
+        .filter(|line| line.contains("call %step "))
+        .map(|line| {
+            line.rsplit_once(' ')
+                .expect("effect argument")
+                .1
+                .trim_end_matches(';')
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(arguments, vec![roots[0], roots[0]], "{ir}");
+}
