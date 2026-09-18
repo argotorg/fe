@@ -11,15 +11,21 @@ global private const @layout_0 $const_region_0 = {1, 1, 1, 1, 1, 1};
 
 func private %comparison_ops() -> @layout_0 {
     block0:
-        v0.*i256 = alloca i256;
-        v1.*i256 = alloca i256;
-        v2.*i256 = alloca i256;
-        v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        v5.*i256 = alloca i256;
+        v0.objref<i256> = obj.alloc i256;
+        v1.objref<i256> = obj.alloc i256;
+        v2.objref<i256> = obj.alloc i256;
+        v3.objref<i256> = obj.alloc i256;
+        v4.objref<i256> = obj.alloc i256;
+        v5.objref<i256> = obj.alloc i256;
         jump block1;
 
     block1:
+        obj.store v0 1.i256;
+        obj.store v1 2.i256;
+        obj.store v2 2.i256;
+        obj.store v3 2.i256;
+        obj.store v4 2.i256;
+        obj.store v5 3.i256;
         v10.constref<@layout_0> = const.ref $const_region_0;
         v11.objref<@layout_0> = obj.alloc @layout_0;
         obj.init.const v11 v10;

@@ -66,7 +66,7 @@ pub enum TypeMode {
 
 ast_node! {
     /// A pointer type.
-    /// `*i32`
+    /// `*i32` or `**i32`
     pub struct PtrType,
     SK::PtrType,
 }
@@ -74,6 +74,11 @@ impl PtrType {
     /// Returns the `*` token.
     pub fn star(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::Star)
+    }
+
+    /// Returns the `**` token.
+    pub fn star2(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Star2)
     }
 
     /// Returns the type pointed to.
@@ -187,6 +192,15 @@ mod tests {
         let ptr_ty: PtrType = parse_type("*i32");
 
         assert_eq!(ptr_ty.star().unwrap().text(), "*");
+        assert!(matches!(ptr_ty.inner().unwrap().kind(), TypeKind::Path(_)));
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn ptr_ptr_type() {
+        let ptr_ty: PtrType = parse_type("**i32");
+
+        assert_eq!(ptr_ty.star2().unwrap().text(), "**");
         assert!(matches!(ptr_ty.inner().unwrap().kind(), TypeKind::Path(_)));
     }
 

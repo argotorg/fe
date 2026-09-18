@@ -2,20 +2,20 @@ use core::AsBytes
 use core::abi::{
     Abi,
     AbiDecoder,
-    AbiEncoder,
     AbiSize,
     AbiSpan,
     ByteInput,
     Bytes,
     Decode,
     DynString,
+    DynArray,
     Encode,
-    EventAbiEncode,
+    store_word,
 }
 use core::num::IntDowncast
 use ingot::evm::Address
 use ingot::evm::TopicValue
-use ingot::evm::ops::revert
+use ingot::evm::ops::revert_empty
 
 /// Maps a Fe type to its Solidity ABI type name.
 ///
@@ -32,6 +32,56 @@ use ingot::evm::ops::revert
 pub trait SolCompat {
     type S: AsBytes
     const SOL_TYPE: Self::S
+}
+
+/// Marker for Solidity ABI values encoded as one static 32-byte word.
+///
+/// This excludes dynamic values (`Bytes`, `DynString`, and arrays) as well as
+/// static composites whose ABI head occupies more than one word.
+pub(ingot) trait StaticAbiElementSeal {}
+
+pub trait StaticAbiElement: StaticAbiElementSeal {}
+
+const fn decimal_digits(value: usize) -> usize {
+    let mut remaining = value
+    let mut digits: usize = 1
+    while remaining >= 10 {
+        remaining /= 10
+        digits += 1
+    }
+    digits
+}
+
+struct SolArraySuffix<const LEN: usize> {}
+
+impl<const LEN: usize> AsBytes for SolArraySuffix<LEN> {
+    const N: usize = decimal_digits(value: LEN) + 2
+
+    const fn as_bytes(self) -> [u8; Self::N] {
+        let mut out: [u8; Self::N] = [0; Self::N]
+        out[0] = 91
+        out[Self::N - 1] = 93
+
+        let mut value = LEN
+        let mut pos = Self::N - 2
+        while value >= 10 {
+            out[pos] = (48 + value % 10).downcast_unchecked()
+            value /= 10
+            pos -= 1
+        }
+        out[pos] = (48 + value).downcast_unchecked()
+        out
+    }
+}
+
+impl<T, const LEN: usize> SolCompat for [T; LEN] where T: SolCompat {
+    type S = (T::S, SolArraySuffix<LEN>)
+    const SOL_TYPE: Self::S = (T::SOL_TYPE, SolArraySuffix<LEN> {})
+}
+
+impl<T> SolCompat for DynArray<T> where T: SolCompat {
+    type S = (T::S, String<2>)
+    const SOL_TYPE: Self::S = (T::SOL_TYPE, "[]")
 }
 
 // Primitive unsigned integer implementations
@@ -96,6 +146,39 @@ impl SolCompat for bool {
     const SOL_TYPE: Self::S = "bool"
 }
 
+impl StaticAbiElementSeal for bool {}
+impl StaticAbiElement for bool {}
+impl StaticAbiElementSeal for u8 {}
+impl StaticAbiElement for u8 {}
+impl StaticAbiElementSeal for u16 {}
+impl StaticAbiElement for u16 {}
+impl StaticAbiElementSeal for u32 {}
+impl StaticAbiElement for u32 {}
+impl StaticAbiElementSeal for u64 {}
+impl StaticAbiElement for u64 {}
+impl StaticAbiElementSeal for u128 {}
+impl StaticAbiElement for u128 {}
+impl StaticAbiElementSeal for u256 {}
+impl StaticAbiElement for u256 {}
+impl StaticAbiElementSeal for usize {}
+impl StaticAbiElement for usize {}
+impl StaticAbiElementSeal for i8 {}
+impl StaticAbiElement for i8 {}
+impl StaticAbiElementSeal for i16 {}
+impl StaticAbiElement for i16 {}
+impl StaticAbiElementSeal for i32 {}
+impl StaticAbiElement for i32 {}
+impl StaticAbiElementSeal for i64 {}
+impl StaticAbiElement for i64 {}
+impl StaticAbiElementSeal for i128 {}
+impl StaticAbiElement for i128 {}
+impl StaticAbiElementSeal for i256 {}
+impl StaticAbiElement for i256 {}
+impl StaticAbiElementSeal for isize {}
+impl StaticAbiElement for isize {}
+impl StaticAbiElementSeal for Address {}
+impl StaticAbiElement for Address {}
+
 impl<const N: usize> SolCompat for String<N> {
     type S = String<6>
     const SOL_TYPE: Self::S = "string"
@@ -115,7 +198,7 @@ impl SolCompat for Bytes {
 #[inline(always)]
 fn encode_fixed_bytes_word(value: u256, len: u256) -> u256 {
     if len == 0 || len > 32 {
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     if len == 32 {
@@ -126,14 +209,14 @@ fn encode_fixed_bytes_word(value: u256, len: u256) -> u256 {
         return value << ((32 - len) * 8)
     }
 
-    revert(offset: 0, len: 0)
+    revert_empty()
 }
 
 #[arithmetic(unchecked)]
 #[inline(always)]
 fn decode_fixed_bytes_word(word: u256, len: u256) -> u256 {
     if len == 0 || len > 32 {
-        revert(offset: 0, len: 0)
+        revert_empty()
     }
 
     if len == 32 {
@@ -144,7 +227,7 @@ fn decode_fixed_bytes_word(word: u256, len: u256) -> u256 {
         return word >> ((32 - len) * 8)
     }
 
-    revert(offset: 0, len: 0)
+    revert_empty()
 }
 
 /// Solidity `bytesN` for `1 <= N <= 32`.
@@ -161,6 +244,9 @@ pub struct FixedBytes<const N: usize> {
     /// Right-aligned byte value before ABI padding.
     pub val: u256,
 }
+impl<const N: usize> StaticAbiElementSeal for FixedBytes<N> {}
+
+impl<const N: usize> StaticAbiElement for FixedBytes<N> {}
 
 impl<const N: usize> FixedBytes<N> {
     /// Return the canonical ABI word for this fixed-byte value.
@@ -194,15 +280,9 @@ impl<A: Abi, const N: usize> Decode<A> for FixedBytes<N> {
 }
 
 impl<A: Abi, const N: usize> Encode<A> for FixedBytes<N> {
-    const DIRECT_ENCODE: bool = true
-
-    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) { e.write_word(self.word()) }
-
-    fn encode_to_ptr(own self, _ ptr: u256) { A::store_word(ptr: ptr, value: self.word()) }
-}
-
-impl<A: Abi, const N: usize> EventAbiEncode<A> for FixedBytes<N> {
-    const DIRECT_EVENT_ENCODE: bool = true
+    fn encode(own self, _ ptr: *u8) {
+        store_word(ptr: ptr, value: self.word())
+    }
 }
 
 /// Solidity ABI `bytes1`.

@@ -19,8 +19,7 @@ use salsa::Update;
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, LayoutId, RefKind, RefView, RuntimeClass, ScalarClass, ScalarRepr,
-        ScalarRole,
+        AddressSpaceKind, RefKind, RefView, RuntimeClass, ScalarClass, ScalarRepr, ScalarRole,
     },
 };
 
@@ -65,6 +64,7 @@ struct RuntimeTypeModel<'db> {
 enum RuntimeTypeShape<'db> {
     Borrow { kind: BorrowKind, inner: TyId<'db> },
     Capability { inner: TyId<'db> },
+    Pointer { target: TyId<'db> },
     Scalar(ScalarClass<'db>),
     Aggregate,
     Other,
@@ -77,6 +77,8 @@ impl<'db> RuntimeTypeModel<'db> {
             RuntimeTypeShape::Borrow { kind, inner }
         } else if let Some((_, inner)) = repr_ty.as_capability(db) {
             RuntimeTypeShape::Capability { inner }
+        } else if let Some(target) = repr_ty.as_ptr(db) {
+            RuntimeTypeShape::Pointer { target }
         } else if let Some(scalar) = scalar_class_from_repr_ty(db, repr_ty) {
             RuntimeTypeShape::Scalar(scalar)
         } else if repr_ty.as_enum(db).is_some()
@@ -116,6 +118,9 @@ impl<'db> RuntimeTypeModel<'db> {
                 Some(*inner),
                 default_space,
             )),
+            RuntimeTypeShape::Pointer { target } => {
+                Some(raw_addr_class_for_ty_in_env(db, env, *target))
+            }
             RuntimeTypeShape::Scalar(scalar) => {
                 (!runtime_zero_sized_ty(db, self.repr_ty, env.scope, env.assumptions))
                     .then(|| RuntimeClass::Scalar(scalar.clone()))
@@ -136,6 +141,7 @@ impl<'db> RuntimeTypeModel<'db> {
             RuntimeTypeShape::Borrow { inner, .. } | RuntimeTypeShape::Capability { inner } => {
                 provider_class_for_target_in_env(db, env, Some(*inner), AddressSpaceKind::Memory)
             }
+            RuntimeTypeShape::Pointer { target } => raw_addr_class_for_ty_in_env(db, env, *target),
             RuntimeTypeShape::Scalar(scalar) => RuntimeClass::Scalar(scalar.clone()),
             RuntimeTypeShape::Aggregate | RuntimeTypeShape::Other => RuntimeClass::AggregateValue {
                 layout: layout_for_ty_in_env(db, env, self.repr_ty),
@@ -146,7 +152,9 @@ impl<'db> RuntimeTypeModel<'db> {
     fn transport_sensitive_aggregate(&self, db: &'db dyn MirDb, env: RuntimeTypeEnv<'db>) -> bool {
         match &self.shape {
             RuntimeTypeShape::Borrow { .. } => true,
-            RuntimeTypeShape::Capability { .. } | RuntimeTypeShape::Scalar(_) => false,
+            RuntimeTypeShape::Capability { .. }
+            | RuntimeTypeShape::Pointer { .. }
+            | RuntimeTypeShape::Scalar(_) => false,
             RuntimeTypeShape::Aggregate => {
                 if self.repr_ty.is_array(db) {
                     let (_, args) = self.repr_ty.decompose_ty_app(db);
@@ -344,10 +352,7 @@ pub(crate) fn provider_class_for_target_in_env<'db>(
             },
             view: RefView::Whole,
         },
-        None => RuntimeClass::RawAddr {
-            space,
-            target: None,
-        },
+        None => RuntimeClass::opaque_raw_addr(space),
     }
 }
 
@@ -457,7 +462,7 @@ fn effect_handle_transport_class_for_info<'db>(
     if info.space == AddressSpaceKind::Memory {
         return RuntimeClass::RawAddr {
             space: info.space,
-            target: raw_addr_target_for_ty_in_env(
+            pointee: raw_addr_pointee_for_ty_in_env(
                 db,
                 RuntimeTypeEnv::new(Some(effect_scope), assumptions),
                 info.target_ty,
@@ -491,14 +496,26 @@ pub(crate) fn effect_handle_transport_class_for_ty_in_env<'db>(
     ))
 }
 
-fn raw_addr_target_for_ty_in_env<'db>(
+fn raw_addr_pointee_for_ty_in_env<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,
     ty: TyId<'db>,
-) -> Option<LayoutId<'db>> {
-    match stored_class_for_ty_in_env(db, env, ty) {
-        RuntimeClass::AggregateValue { layout } => Some(layout),
-        RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => None,
+) -> Option<Box<RuntimeClass<'db>>> {
+    let ty = runtime_repr_ty_in_env(db, env, ty);
+    if ty.has_param(db) || ty.contains_assoc_ty_of_param(db) {
+        return None;
+    }
+    Some(Box::new(stored_class_for_ty_in_env(db, env, ty)))
+}
+
+fn raw_addr_class_for_ty_in_env<'db>(
+    db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
+    ty: TyId<'db>,
+) -> RuntimeClass<'db> {
+    RuntimeClass::RawAddr {
+        space: AddressSpaceKind::Memory,
+        pointee: raw_addr_pointee_for_ty_in_env(db, env, ty),
     }
 }
 
@@ -623,7 +640,7 @@ fn runtime_transport_sensitive_aggregate_cycle_recover<'db>(
 mod tests {
     use driver::DriverDataBase;
 
-    use crate::runtime::{BorrowAccess, RuntimeBoundarySpec};
+    use crate::runtime::{BorrowAccess, LayoutId, LayoutKey, RuntimeBoundarySpec, StructLayout};
 
     use super::super::boundary::boundary_spec_for_ty_in_env;
     use super::*;
@@ -732,6 +749,51 @@ mod tests {
             RuntimeTypeEnv::new(None, assumptions),
             borrowed_word,
         ));
+    }
+
+    #[test]
+    fn raw_pointer_classes_retain_complete_nested_pointees() {
+        let db = DriverDataBase::default();
+        let assumptions = PredicateListId::new(&db, Vec::new());
+        let env = RuntimeTypeEnv::new(None, assumptions);
+        let word = stored_class_for_ty_in_env(&db, env, TyId::u256(&db));
+        let word_ptr_ty = TyId::ptr_to(&db, TyId::u256(&db));
+        let word_ptr =
+            top_level_class_for_ty_in_env(&db, env, word_ptr_ty, AddressSpaceKind::Memory)
+                .expect("word pointer class");
+
+        assert_eq!(word_ptr.deref_target(), Some(word));
+
+        let word_ptr_ptr = top_level_class_for_ty_in_env(
+            &db,
+            env,
+            TyId::ptr_to(&db, word_ptr_ty),
+            AddressSpaceKind::Memory,
+        )
+        .expect("nested word pointer class");
+
+        assert_eq!(word_ptr_ptr.deref_target(), Some(word_ptr));
+    }
+
+    #[test]
+    fn raw_pointer_pointees_do_not_make_the_pointer_an_aggregate_value() {
+        let db = DriverDataBase::default();
+        let layout = LayoutId::new(
+            &db,
+            LayoutKey::Struct(StructLayout {
+                fields: Vec::new().into(),
+            }),
+        );
+        let aggregate = RuntimeClass::AggregateValue { layout };
+        let pointer = RuntimeClass::raw_addr(AddressSpaceKind::Memory, aggregate);
+
+        assert_eq!(pointer.aggregate_layout(), None);
+        assert_eq!(
+            pointer
+                .deref_target()
+                .and_then(|pointee| pointee.aggregate_layout()),
+            Some(layout),
+        );
     }
 
     fn assert_memory_provider_ref(class: &RuntimeClass<'_>) {

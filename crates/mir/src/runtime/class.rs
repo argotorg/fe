@@ -7,7 +7,7 @@
 //! this derivation cannot survive lowering in debug builds and cannot pass
 //! package verification in any build.
 //!
-//! Some instructions (`RetagRef`, `ProviderToRaw`, arithmetic) are
+//! Some instructions (`RetagRef`, `ProviderRefToRaw`, arithmetic) are
 //! destination-directed: their result class is chosen by the destination
 //! carrier, subject to representation compatibility. For those, this module
 //! validates the destination against the operands and echoes it back; the
@@ -45,14 +45,9 @@ pub fn expr_result_class<'db>(
 ) -> Result<Option<RuntimeClass<'db>>, VerifyError<'db>> {
     let expr_class = match expr {
         RExpr::Use(value) => Some(runtime_value_class(body, *value)?.clone()),
-        RExpr::ConstScalar(value) => match (value, &dst_class) {
-            (
-                crate::runtime::ConstScalar::FixedBytes(bytes),
-                Some(RuntimeClass::Scalar(ScalarClass {
-                    repr: ScalarRepr::FixedBytes { len },
-                    role: ScalarRole::Plain,
-                })),
-            ) if bytes.len() <= usize::from(*len) => dst_class.clone(),
+        RExpr::ConstScalar(value) => match &dst_class {
+            Some(RuntimeClass::Scalar(class)) if value.fits_repr(class.repr) => dst_class.clone(),
+            Some(RuntimeClass::RawAddr { .. }) => dst_class.clone(),
             _ => Some(RuntimeClass::Scalar(scalar_class_from_const(value))),
         },
         RExpr::Placeholder { class } => Some(class.clone()),
@@ -140,14 +135,14 @@ pub fn expr_result_class<'db>(
             }
             dst_class.clone()
         }
-        RExpr::ProviderFromRaw {
+        RExpr::ProviderRefFromRaw {
             raw,
             provider_ty,
             space,
-            target,
         } => {
             let RuntimeClass::RawAddr {
-                space: raw_space, ..
+                space: raw_space,
+                pointee: raw_pointee,
             } = runtime_value_class(body, *raw)?
             else {
                 return Err(VerifyError::InvalidExprClass(dst));
@@ -164,20 +159,19 @@ pub fn expr_result_class<'db>(
                             space: actual_space,
                         },
                     view: crate::runtime::RefView::Whole,
-                }) if pointee.aggregate_layout() == *target
-                    && actual_provider_ty == provider_ty
-                    && *actual_space == *space =>
-                {
+                }) if actual_provider_ty == provider_ty && *actual_space == *space => {
+                    if raw_pointee
+                        .as_deref()
+                        .is_some_and(|raw_pointee| raw_pointee != pointee.as_ref())
+                    {
+                        return Err(VerifyError::InvalidExprClass(dst));
+                    }
                     dst_class.clone()
                 }
                 _ => return Err(VerifyError::InvalidExprClass(dst)),
             }
         }
-        RExpr::WordToRawAddr {
-            value,
-            space,
-            target,
-        } => {
+        RExpr::WordToRawAddr { value, space } => {
             let RuntimeClass::Scalar(ScalarClass {
                 repr:
                     ScalarRepr::Int {
@@ -189,10 +183,13 @@ pub fn expr_result_class<'db>(
             else {
                 return Err(VerifyError::InvalidExprClass(dst));
             };
-            Some(RuntimeClass::RawAddr {
-                space: *space,
-                target: *target,
-            })
+            match &dst_class {
+                Some(RuntimeClass::RawAddr {
+                    space: actual_space,
+                    ..
+                }) if actual_space == space => dst_class.clone(),
+                _ => return Err(VerifyError::InvalidExprClass(dst)),
+            }
         }
         RExpr::AddrOf { place } => {
             let expected = resolve_runtime_place_address_class(db, program, body, place)?;
@@ -223,7 +220,7 @@ pub fn expr_result_class<'db>(
                     .ok_or(VerifyError::MissingRuntimeLocal(*field))?;
                 match body.value_class(*field) {
                     Some(actual) if actual.shares_runtime_rep_with(db, &expected) => {}
-                    None if expected.span_words(db) == 0 => {}
+                    None if expected.is_zero_sized(db) => {}
                     Some(_) | None => return Err(VerifyError::InvalidExprClass(dst)),
                 }
             }
@@ -299,7 +296,7 @@ pub fn expr_result_class<'db>(
             Some(map.class())
         }
         RExpr::Call { callee, .. } => program.interface_signature(*callee).ret.clone(),
-        RExpr::ProviderToRaw { value } => {
+        RExpr::ProviderRefToRaw { value } => {
             if !matches!(
                 (runtime_value_class(body, *value)?, &dst_class),
                 (
@@ -466,6 +463,11 @@ fn builtin_result_class<'db>(
             verify_word_value(body, *len)?;
             Ok(None)
         }
+        RuntimeBuiltin::ZeroMem { dst, len } => {
+            verify_address_operand(body, *dst, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *len)?;
+            Ok(None)
+        }
         RuntimeBuiltin::Msize
         | RuntimeBuiltin::CallValue
         | RuntimeBuiltin::ReturnDataSize
@@ -585,7 +587,17 @@ fn builtin_result_class<'db>(
         }
         RuntimeBuiltin::Malloc { size } => {
             verify_word_value(body, *size)?;
-            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+            Ok(Some(RuntimeClass::opaque_raw_addr(
+                AddressSpaceKind::Memory,
+            )))
+        }
+        RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
+            let class = runtime_value_class(body, *ptr)?.clone();
+            let RuntimeClass::RawAddr { .. } = class else {
+                return Err(VerifyError::InvalidExprClass(*ptr));
+            };
+            verify_word_value(body, *offset)?;
+            Ok(Some(class))
         }
         RuntimeBuiltin::Call {
             gas,

@@ -11,10 +11,10 @@ use crate::{
             capability::{
                 external::{ExternalOrigin, ExternalSource, ReferentContract},
                 guard::{Guard, ValueOccurrence},
-                handle::{OpaqueHandleContract, OpaqueHandleOccurrence, OpaqueHandleRef},
+                handle::{AddressOccurrence, OpaqueHandleContract, OpaqueHandleRef},
                 index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
                 loan::{CapabilityRef, LoanDef, LoanId, LoanRef},
-                path::{Projection, RegionPath, StructuralPath},
+                path::{Projection, RegionPath, StructuralPath, project_referent_ty},
                 region::{RegionRoot, RegionSet, SymbolicPlace},
                 semantics::{CapabilityClass, CapabilitySemantics},
                 shape::ShapeChildren,
@@ -22,15 +22,16 @@ use crate::{
                 state::{BorrowState, CapabilityValue, CapabilityValues},
                 value::{Guarded, IndexPayload, ValueId, ValueInterner, ValueLimits},
             },
-            get_or_build_semantic_instance,
+            get_or_build_semantic_instance, instantiated_effect_env,
             normalized::{
                 NEffectArg, NEffectArgValue, NExpr, NOperand, NRootKind, NStatement,
                 NStatementKind, NTerminatorKind, NValueDefinition, NValueId,
             },
         },
         ty::{
+            corelib::MemoryAccessKind,
             provider::ProviderKind,
-            ty_def::{BorrowKind, CapabilityKind, TyData, TyId},
+            ty_def::{BorrowKind, TyData, TyId},
         },
     },
     semantic::ProviderSource,
@@ -43,7 +44,9 @@ use super::{
         semantic_borrow_summary_voucher,
     },
     inventory::referent_contract,
-    ir::{BorrowSummary, BoundaryRequirement, InputPoststate, SemanticBorrowDiagnostic},
+    ir::{
+        BorrowSummary, BoundaryRequirement, InputPoststate, MemoryAccess, SemanticBorrowDiagnostic,
+    },
     solver::{BorrowSummaryMode, Borrowck, Resolution},
 };
 
@@ -59,6 +62,7 @@ pub(super) struct CallInputs<'a, 'db> {
 
 #[derive(Clone)]
 pub(super) struct CallSummary<'db> {
+    instance: SemanticInstance<'db>,
     pub summary: BorrowSummary<'db>,
     updates: Vec<CapabilityValue<'db>>,
 }
@@ -121,8 +125,8 @@ impl<'db> Borrowck<'db> {
                                 CapabilityClass::View => {
                                     CapabilityRef::view(RegionSet::empty(scope), Vec::new())
                                 }
-                                CapabilityClass::Handle => {
-                                    CapabilityRef::Handle(RegionSet::empty(scope))
+                                CapabilityClass::Handle | CapabilityClass::Pointer => {
+                                    CapabilityRef::Address(RegionSet::empty(scope))
                                 }
                             };
                             vec![Guarded {
@@ -157,10 +161,23 @@ impl<'db> Borrowck<'db> {
                             .map(|source| (source.source, clause.guard.scope().clone()))
                     })
             }));
+            external.extend(
+                summary
+                    .accesses
+                    .iter()
+                    .flat_map(|access| [&access.region, &access.authorizers])
+                    .flat_map(|region| region.clauses())
+                    .filter_map(|clause| {
+                        SourceExpr::from_place(&clause.payload)
+                            .map(|source| (source.source, clause.guard.scope().clone()))
+                    }),
+            );
             for (source, scope) in external {
+                let allocation = matches!(source.origin, ExternalOrigin::Allocation(_));
                 let base = match source.origin {
-                    ExternalOrigin::OpaqueHandle(mut handle) => {
-                        let OpaqueHandleOccurrence::Summary(choice) = handle.occurrence else {
+                    ExternalOrigin::OpaqueHandle(mut handle)
+                    | ExternalOrigin::Allocation(mut handle) => {
+                        let AddressOccurrence::Summary(choice) = handle.occurrence else {
                             return Err(self.internal_diag(
                                 origin,
                                 "summary retains a local handle occurrence".into(),
@@ -177,12 +194,16 @@ impl<'db> Borrowck<'db> {
                                     .map(IndexExpr::Iteration),
                             )
                             .collect();
-                        handle.occurrence = OpaqueHandleOccurrence::Value {
+                        handle.occurrence = AddressOccurrence::Value {
                             instance: self.instance,
                             value: result,
                             choice,
                         };
-                        ExternalSource::opaque(self.db, handle)
+                        if allocation {
+                            ExternalSource::allocation(self.db, handle)
+                        } else {
+                            ExternalSource::opaque(self.db, handle)
+                        }
                     }
                     ExternalOrigin::Provider {
                         provider,
@@ -195,12 +216,20 @@ impl<'db> Borrowck<'db> {
                         ExternalSource::provider(self.db, provider, target_ty)
                     }
                     ExternalOrigin::Input(_)
+                    | ExternalOrigin::Memory { .. }
                     | ExternalOrigin::Provider { .. }
                     | ExternalOrigin::Local(_) => continue,
                 };
                 bases.push((base, scope));
             }
-            self.calls.insert(result, CallSummary { summary, updates });
+            self.calls.insert(
+                result,
+                CallSummary {
+                    instance,
+                    summary,
+                    updates,
+                },
+            );
         }
         self.inventory
             .add_external_sources(self.db, self.instance, bases)
@@ -216,6 +245,13 @@ impl<'db> Borrowck<'db> {
     pub fn borrow_summary(
         mut self,
     ) -> Result<BorrowSummaryComputation<'db>, SemanticBorrowDiagnostic<'db>> {
+        if let Some(summary) = self.intrinsic_summary()? {
+            self.verify_summary(&summary)?;
+            return Ok(BorrowSummaryComputation {
+                summary: Some(summary),
+                blocked: None,
+            });
+        }
         if self
             .instance
             .key(self.db)
@@ -331,12 +367,11 @@ impl<'db> Borrowck<'db> {
             }
         }
         for update in &mut updates {
-            if let ExternalOrigin::OpaqueHandle(handle) = &mut update.destination.source.origin {
+            update.destination.source.map_occurrences(&mut |handle| {
                 let next = handles.len().try_into().expect("summary handle count");
-                handle.occurrence = OpaqueHandleOccurrence::Summary(
-                    *handles.entry(handle.occurrence).or_insert(next),
-                );
-            }
+                handle.occurrence =
+                    AddressOccurrence::Summary(*handles.entry(handle.occurrence).or_insert(next));
+            });
         }
         let mut requirements: Vec<BoundaryRequirement<'db>> = Vec::new();
         for mut requirement in pending {
@@ -367,7 +402,55 @@ impl<'db> Borrowck<'db> {
                 requirements.push(requirement);
             }
         }
+        let pending_accesses = self.body_memory_accesses()?;
+        let mut accesses = Vec::new();
+        for access in pending_accesses {
+            // Occurrences exposed by results, poststates, and requirements stay
+            // shared. An address used only by this effect is existential within
+            // the effect: retaining call-depth identities would grow recursive
+            // summaries forever without distinguishing their possible targets.
+            let mut access_handles = handles.clone();
+            let external = |region: &RegionSet<'db>| {
+                RegionSet::new(
+                    region.scope(),
+                    region
+                        .clauses()
+                        .iter()
+                        .filter(|clause| {
+                            SourceExpr::from_place(&clause.payload)
+                                .is_some_and(|source| !source.source.is_fresh_allocation())
+                        })
+                        .cloned(),
+                )
+            };
+            let region = self.summarize_region(
+                &external(&access.region),
+                SemOrigin::Body(self.body.template_owner),
+                &mut choices,
+                &mut access_handles,
+            )?;
+            if region.is_empty() {
+                continue;
+            }
+            let authorizers = self.summarize_region(
+                &external(&access.authorizers),
+                SemOrigin::Body(self.body.template_owner),
+                &mut choices,
+                &mut access_handles,
+            )?;
+            let access = MemoryAccess {
+                kind: access.kind,
+                region,
+                authorizers,
+            };
+            if !accesses.contains(&access) {
+                accesses.push(access);
+            }
+        }
+        accesses.sort();
+        accesses.dedup();
         let summary = BorrowSummary {
+            accesses,
             may_return,
             result,
             mutable_inputs: updates,
@@ -382,7 +465,7 @@ impl<'db> Borrowck<'db> {
         region: &RegionSet<'db>,
         origin: SemOrigin<'db>,
         choices: &mut BTreeMap<ValueOccurrence, u32>,
-        handles: &mut BTreeMap<OpaqueHandleOccurrence<'db>, u32>,
+        handles: &mut BTreeMap<AddressOccurrence<'db>, u32>,
     ) -> Result<RegionSet<'db>, SemanticBorrowDiagnostic<'db>> {
         let scope = BinderScope::default();
         let mut clauses = Vec::new();
@@ -423,7 +506,7 @@ impl<'db> Borrowck<'db> {
         origin: SemOrigin<'db>,
         values: &mut SourceValues<'db>,
         choices: &mut BTreeMap<ValueOccurrence, u32>,
-        handles: &mut BTreeMap<OpaqueHandleOccurrence<'db>, u32>,
+        handles: &mut BTreeMap<AddressOccurrence<'db>, u32>,
     ) -> Result<SourceValue<'db>, SemanticBorrowDiagnostic<'db>> {
         let mut failure = None;
         let result =
@@ -469,13 +552,13 @@ impl<'db> Borrowck<'db> {
         mut payload: SourceExpr<'db>,
         guard: &Guard<'db>,
         choices: &mut BTreeMap<ValueOccurrence, u32>,
-        handles: &mut BTreeMap<OpaqueHandleOccurrence<'db>, u32>,
+        handles: &mut BTreeMap<AddressOccurrence<'db>, u32>,
     ) -> Option<Guarded<'db, SourceExpr<'db>>> {
-        if let ExternalOrigin::OpaqueHandle(source) = &mut payload.source.origin {
+        payload.source.map_occurrences(&mut |source| {
             let next = handles.len().try_into().expect("summary handle count");
             source.occurrence =
-                OpaqueHandleOccurrence::Summary(*handles.entry(source.occurrence).or_insert(next));
-        }
+                AddressOccurrence::Summary(*handles.entry(source.occurrence).or_insert(next));
+        });
         let mut scope = guard.scope().clone();
         let mut substitutions = BTreeMap::new();
         for index in guard.indices().into_iter().chain(payload.indices()) {
@@ -551,31 +634,47 @@ impl<'db> Borrowck<'db> {
             })
     }
 
-    fn summary_project_ty(
+    fn reachable_source_class(
         &self,
-        mut ty: TyId<'db>,
-        path: &[Projection<IndexExpr<'db>>],
-    ) -> Option<TyId<'db>> {
-        for step in path {
-            if let Some((CapabilityKind::View, target)) = ty.as_capability(self.db) {
-                ty = target;
-            }
-            ty = match step {
-                Projection::Field(field) => *self
-                    .instance
-                    .normalized_field_types(self.db, ty)
-                    .get(usize::from(field.0))?,
-                Projection::VariantField { variant, field } => *self
-                    .instance
-                    .normalized_enum_variant_field_tys(self.db, ty, *variant)
-                    .get(usize::from(field.0))?,
-                Projection::Index(_) if ty.is_array(self.db) => {
-                    *ty.generic_args(self.db).first()?
+        external: &ExternalSource<'db>,
+        requested: Option<CapabilitySemantics<'db>>,
+        writable: bool,
+    ) -> Option<CapabilityClass> {
+        // A widened source denotes any reachable referent. Its final type can
+        // differ from the abstract input that provides its authority.
+        let classes = self
+            .inventory
+            .inputs
+            .iter()
+            .filter(|target| match (&target.source.origin, &external.origin) {
+                (ExternalOrigin::Input(left), ExternalOrigin::Input(right)) => {
+                    left.param() == right.param()
                 }
-                Projection::Index(_) => return None,
-            };
-        }
-        Some(ty)
+                (ExternalOrigin::Provider { .. }, ExternalOrigin::Provider { .. }) => {
+                    target.source.origin == external.origin
+                }
+                _ => false,
+            })
+            .flat_map(|target| target.classes.iter().copied());
+        classes
+            .filter(|class| {
+                !writable
+                    || matches!(
+                        class,
+                        CapabilityClass::Borrow(BorrowKind::Mut)
+                            | CapabilityClass::Handle
+                            | CapabilityClass::Pointer
+                    )
+            })
+            .find(|class| {
+                requested.is_none_or(|semantics| match semantics.class {
+                    CapabilityClass::Borrow(BorrowKind::Mut) => *class == semantics.class,
+                    CapabilityClass::Borrow(BorrowKind::Ref) | CapabilityClass::View => {
+                        !matches!(class, CapabilityClass::Handle | CapabilityClass::Pointer)
+                    }
+                    CapabilityClass::Handle | CapabilityClass::Pointer => *class == semantics.class,
+                })
+            })
     }
 
     fn verify_source(
@@ -603,7 +702,7 @@ impl<'db> Borrowck<'db> {
                 IndexExpr::FormalValue(param)
                     if !self
                         .summary_param_ty(param)
-                        .is_some_and(|ty| ty.is_integral(db)) =>
+                        .is_some_and(|ty| ty.as_view(db).unwrap_or(ty).is_integral(db)) =>
                 {
                     return Err(invalid(
                         "source refers to a missing or nonintegral scalar parameter",
@@ -625,42 +724,20 @@ impl<'db> Borrowck<'db> {
                     .summary_param_ty(input.param())
                     .ok_or_else(|| invalid("source parameter does not exist"))?;
                 if external.is_reachable() {
-                    let candidates = self
-                        .inventory
-                        .inputs
-                        .iter()
-                        .filter(|target| target.source.param() == Some(input.param()));
-                    let can_write = candidates.clone().any(|target| target.writable);
-                    if writable && !can_write {
-                        return Err(invalid("reachable destination is immutable"));
-                    }
-                    let class = requested
-                        .map_or(CapabilityClass::Borrow(BorrowKind::Mut), |semantics| {
-                            semantics.class
-                        });
-                    let compatible = candidates.clone().any(|target| match class {
-                        CapabilityClass::Borrow(BorrowKind::Mut) => {
-                            target.class == CapabilityClass::Borrow(BorrowKind::Mut)
-                        }
-                        CapabilityClass::Borrow(BorrowKind::Ref) | CapabilityClass::View => {
-                            target.class != CapabilityClass::Handle
-                        }
-                        CapabilityClass::Handle => target.class == CapabilityClass::Handle,
-                    });
-                    if !compatible {
-                        return Err(invalid(
-                            "reachable source has no compatible input authority",
-                        ));
-                    }
+                    let class = self
+                        .reachable_source_class(external, requested, writable)
+                        .ok_or_else(|| {
+                            invalid("reachable source has no compatible input authority")
+                        })?;
                     (external.contract.ty, class, external.contract.address_space)
                 } else {
                     let semantics = match input.origin() {
                         InputOrigin::Place(_) => self.shape(param_ty)?.direct(db),
                         InputOrigin::Slot { slot, .. } => {
                             let param_ty = param_ty.as_view(db).unwrap_or(param_ty);
-                            let ty = self
-                                .summary_project_ty(param_ty, slot.as_slice())
-                                .ok_or_else(|| invalid("input slot path is invalid"))?;
+                            let ty =
+                                project_referent_ty(db, self.instance, param_ty, slot.as_slice())
+                                    .ok_or_else(|| invalid("input slot path is invalid"))?;
                             self.shape(ty)?.direct(db)
                         }
                     }
@@ -678,23 +755,45 @@ impl<'db> Borrowck<'db> {
                     ExternalOrigin::Provider { provider: actual, target_ty: actual_ty } if actual == *provider && actual_ty == *target_ty)) {
                     return Err(invalid("provider is not declared by the body or a call"));
                 }
-                let binding = provider.binding(db);
-                let class = if binding.provider_ty.as_capability(db).is_some()
-                    || binding.semantics.kind == ProviderKind::RootObject
-                {
-                    CapabilityClass::Borrow(if binding.is_mut {
-                        BorrowKind::Mut
-                    } else {
-                        BorrowKind::Ref
-                    })
+                if external.is_reachable() {
+                    let class = self
+                        .reachable_source_class(external, requested, writable)
+                        .ok_or_else(|| invalid("reachable provider has no compatible authority"))?;
+                    (external.contract.ty, class, external.contract.address_space)
                 } else {
-                    CapabilityClass::Handle
-                };
-                let base = ExternalSource::provider(db, *provider, *target_ty);
-                (*target_ty, class, base.contract.address_space)
+                    let binding = provider.binding(db);
+                    let class = if binding.provider_ty.as_capability(db).is_some()
+                        || binding.semantics.kind == ProviderKind::RootObject
+                    {
+                        CapabilityClass::Borrow(if binding.is_mut {
+                            BorrowKind::Mut
+                        } else {
+                            BorrowKind::Ref
+                        })
+                    } else {
+                        CapabilityClass::Handle
+                    };
+                    let base = ExternalSource::provider(db, *provider, *target_ty);
+                    (*target_ty, class, base.contract.address_space)
+                }
             }
-            ExternalOrigin::OpaqueHandle(handle) => {
-                if !matches!(handle.occurrence, OpaqueHandleOccurrence::Summary(_)) {
+            ExternalOrigin::Memory {
+                base,
+                element,
+                target_ty,
+            } => {
+                self.verify_source(base, scope, None, false)?;
+                if element.is_some_and(|(_, index)| scope.validate(index).is_err()) {
+                    return Err(invalid("memory element has a free selector"));
+                }
+                (
+                    *target_ty,
+                    CapabilityClass::Pointer,
+                    base.source.contract.address_space,
+                )
+            }
+            ExternalOrigin::OpaqueHandle(handle) | ExternalOrigin::Allocation(handle) => {
+                if !matches!(handle.occurrence, AddressOccurrence::Summary(_)) {
                     return Err(invalid("opaque source contains a callee-local occurrence"));
                 }
                 let declared = OpaqueHandleContract::for_ty(
@@ -711,7 +810,11 @@ impl<'db> Borrowck<'db> {
                 }
                 (
                     handle.contract.target_ty,
-                    CapabilityClass::Handle,
+                    if handle.contract.handle_ty.as_ptr(db).is_some() {
+                        CapabilityClass::Pointer
+                    } else {
+                        CapabilityClass::Handle
+                    },
                     handle.contract.address_space,
                 )
             }
@@ -722,8 +825,7 @@ impl<'db> Borrowck<'db> {
                 _ => &[],
             };
             for path in steps.iter().chain(external.dereferences()) {
-                let slot = self
-                    .summary_project_ty(ty, path.as_slice())
+                let slot = project_referent_ty(db, self.instance, ty, path.as_slice())
                     .ok_or_else(|| invalid("followed source path is invalid"))?;
                 let semantics = self.shape(slot)?.direct(db).ok_or_else(|| {
                     invalid("followed source does not select a stored capability")
@@ -741,7 +843,9 @@ impl<'db> Borrowck<'db> {
         if writable
             && !matches!(
                 class,
-                CapabilityClass::Borrow(BorrowKind::Mut) | CapabilityClass::Handle
+                CapabilityClass::Borrow(BorrowKind::Mut)
+                    | CapabilityClass::Handle
+                    | CapabilityClass::Pointer
             )
         {
             return Err(invalid("poststate destination is immutable"));
@@ -750,35 +854,43 @@ impl<'db> Borrowck<'db> {
             && matches!(requested.class, CapabilityClass::Borrow(BorrowKind::Mut))
             && !matches!(
                 class,
-                CapabilityClass::Borrow(BorrowKind::Mut) | CapabilityClass::Handle
+                CapabilityClass::Borrow(BorrowKind::Mut)
+                    | CapabilityClass::Handle
+                    | CapabilityClass::Pointer
             )
         {
             return Err(invalid("mutable result comes from shared authority"));
         }
-        let mut target = self
-            .summary_project_ty(external.contract.ty, source.path.as_slice())
-            .ok_or_else(|| invalid("referent projection is invalid"))?;
+        let mut target = project_referent_ty(
+            db,
+            self.instance,
+            external.contract.ty,
+            source.path.as_slice(),
+        )
+        .ok_or_else(|| invalid("referent projection is invalid"))?;
         for view in source.views.iter() {
             let suffix = source
                 .path
                 .as_slice()
                 .get(view.depth..)
                 .ok_or_else(|| invalid("referent view anchor is invalid"))?;
-            let original = self
-                .summary_project_ty(view.repack.source_ty(db), suffix)
-                .ok_or_else(|| invalid("referent view source is invalid"))?;
+            let original =
+                project_referent_ty(db, self.instance, view.repack.source_ty(db), suffix)
+                    .ok_or_else(|| invalid("referent view source is invalid"))?;
             if target != original {
                 return Err(invalid("referent view starts at the wrong type"));
             }
-            target = self
-                .summary_project_ty(view.repack.target_ty(db), suffix)
+            target = project_referent_ty(db, self.instance, view.repack.target_ty(db), suffix)
                 .ok_or_else(|| invalid("referent view target is invalid"))?;
         }
         if let Some(requested) = requested {
             if target != requested.target_ty {
                 return Err(invalid("source target differs from its capability slot"));
             }
-            if requested.class == CapabilityClass::Handle {
+            if matches!(
+                requested.class,
+                CapabilityClass::Handle | CapabilityClass::Pointer
+            ) {
                 let contract = referent_contract(db, self.instance, requested)
                     .map_err(|_| invalid("result handle has an unresolved contract"))?;
                 if contract.address_space != external.contract.address_space {
@@ -809,6 +921,20 @@ impl<'db> Borrowck<'db> {
                     SemOrigin::Body(self.body.template_owner),
                     "summary poststate differs from its destination shape".into(),
                 ));
+            }
+        }
+        for access in &summary.accesses {
+            for region in [&access.region, &access.authorizers] {
+                for clause in region.clauses() {
+                    let source = SourceExpr::from_place(&clause.payload).ok_or_else(|| {
+                        self.internal_diag(
+                            SemOrigin::Body(self.body.template_owner),
+                            "memory summary retains local storage".into(),
+                        )
+                    })?;
+                    self.verify_source(&source, clause.guard.scope(), None, false)?;
+                    self.verify_summary_guard(&clause.guard, &source)?;
+                }
             }
         }
         for requirement in &summary.requirements {
@@ -865,7 +991,7 @@ impl<'db> Borrowck<'db> {
             || guard.indices().iter().any(|index| match index {
                 IndexExpr::FormalValue(param) => !self
                     .summary_param_ty(*param)
-                    .is_some_and(|ty| ty.is_integral(self.db)),
+                    .is_some_and(|ty| ty.as_view(self.db).unwrap_or(ty).is_integral(self.db)),
                 _ => guard.scope().validate(*index).is_err(),
             })
         {
@@ -874,7 +1000,7 @@ impl<'db> Borrowck<'db> {
                 "summary guard contains an invalid occurrence or scalar parameter".into(),
             ));
         }
-        if matches!(&source.source.origin, ExternalOrigin::OpaqueHandle(source) if !matches!(source.occurrence, OpaqueHandleOccurrence::Summary(_)))
+        if matches!(&source.source.origin, ExternalOrigin::OpaqueHandle(source) if !matches!(source.occurrence, AddressOccurrence::Summary(_)))
         {
             return Err(self.internal_diag(
                 SemOrigin::Body(self.body.template_owner),
@@ -939,6 +1065,23 @@ impl<'db> Borrowck<'db> {
                 inputs,
             )?;
             updates.push((target.region, value));
+        }
+        let storage = updates
+            .iter()
+            .flat_map(|(region, _)| region.clauses())
+            .filter_map(|clause| match &clause.payload.root {
+                RegionRoot::External(source) => {
+                    Some((source.clone(), clause.guard.scope().clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let accesses = self.call_memory_accesses(state, result, inputs)?;
+        self.ensure_storage(state, storage, statement.origin)?;
+        for access in accesses {
+            if access.access.kind == MemoryAccessKind::Write {
+                state.invalidate_memory(&mut self.inventory.values, &access.access.region);
+            }
         }
         state
             .write_regions(
@@ -1019,7 +1162,9 @@ impl<'db> Borrowck<'db> {
                         CapabilityRef::borrow(kind, reference)
                     }
                     CapabilityClass::View => CapabilityRef::view(region, resolved.parents),
-                    CapabilityClass::Handle => CapabilityRef::Handle(region),
+                    CapabilityClass::Handle | CapabilityClass::Pointer => {
+                        CapabilityRef::Address(region)
+                    }
                 };
                 vec![Guarded { guard, payload }]
             });
@@ -1029,7 +1174,7 @@ impl<'db> Borrowck<'db> {
         Ok(instantiated)
     }
 
-    fn instantiate_guard(
+    pub(super) fn instantiate_guard(
         &self,
         guard: &Guard<'db>,
         result: NValueId,
@@ -1106,7 +1251,7 @@ impl<'db> Borrowck<'db> {
         Ok(instantiated)
     }
 
-    fn instantiate_source(
+    pub(super) fn instantiate_source(
         &mut self,
         state: &BorrowState<'db>,
         source: &SourceExpr<'db>,
@@ -1154,8 +1299,25 @@ impl<'db> Borrowck<'db> {
             ExternalOrigin::Local(_) => {
                 return Err(self.internal_diag(origin, "summary retains local storage".into()));
             }
-            ExternalOrigin::OpaqueHandle(handle) => {
-                let OpaqueHandleOccurrence::Summary(choice) = handle.occurrence else {
+            ExternalOrigin::Memory {
+                base,
+                element,
+                target_ty,
+            } => {
+                let base = self.instantiate_source(state, base, result, scope, inputs)?;
+                let region = self.memory_region(&base.region, *target_ty, *element, origin)?;
+                (
+                    Resolution {
+                        region,
+                        parents: Vec::new(),
+                        traversed: base.traversed.into_iter().chain(base.parents).collect(),
+                    },
+                    *target_ty,
+                )
+            }
+            ExternalOrigin::OpaqueHandle(handle) | ExternalOrigin::Allocation(handle) => {
+                let allocation = matches!(external.origin, ExternalOrigin::Allocation(_));
+                let AddressOccurrence::Summary(choice) = handle.occurrence else {
                     return Err(self.internal_diag(
                         origin,
                         "summary retains a local handle occurrence".into(),
@@ -1173,12 +1335,16 @@ impl<'db> Borrowck<'db> {
                             .map(IndexExpr::Iteration),
                     )
                     .collect();
-                handle.occurrence = OpaqueHandleOccurrence::Value {
+                handle.occurrence = AddressOccurrence::Value {
                     instance: self.instance,
                     value: result,
                     choice,
                 };
-                let source = ExternalSource::opaque(self.db, handle);
+                let source = if allocation {
+                    ExternalSource::allocation(self.db, handle)
+                } else {
+                    ExternalSource::opaque(self.db, handle)
+                };
                 let ty = source.contract.ty;
                 (
                     Resolution {
@@ -1188,6 +1354,7 @@ impl<'db> Borrowck<'db> {
                             RegionPath::default(),
                         ),
                         parents: Vec::new(),
+                        traversed: Vec::new(),
                     },
                     ty,
                 )
@@ -1202,17 +1369,50 @@ impl<'db> Borrowck<'db> {
                     requirement_idx, ..
                 } = provider.binding(self.db).source
                 {
+                    let callee = self.calls.get(&result).expect("prepared call").instance;
+                    let binding = provider.binding(self.db);
+                    let local_requirement = instantiated_effect_env(self.db, callee)
+                        .and_then(|env| {
+                            let local_provider =
+                                env.providers(self.db).iter().find(|candidate| {
+                                    candidate.source == binding.source
+                                        && candidate.provider_ty == binding.provider_ty
+                                })?;
+                            env.resolutions(self.db)
+                                .iter()
+                                .find(|resolution| {
+                                    resolution.provider_idx == local_provider.provider_idx
+                                })
+                                .map(|resolution| resolution.requirement_idx)
+                        })
+                        .unwrap_or(requirement_idx);
                     let effect = effects
                         .iter()
-                        .find(|effect| effect.binding_idx == requirement_idx)
+                        .find(|effect| effect.binding_idx == local_requirement)
                         .ok_or_else(|| {
                             self.internal_diag(
                                 origin,
-                                "summary effect source has no call argument".into(),
+                                format!("summary effect source has no call argument for binding {local_requirement}"),
                             )
                         })?;
                     let mut resolved = match &effect.arg {
                         NEffectArgValue::Place(place) => self.resolve_place(state, place),
+                        NEffectArgValue::Value(value)
+                            if self.body.values[value.value.index()].ty == ty =>
+                        {
+                            // A by-value provider can expose its own fields as
+                            // well as a separate handle target. Reading the
+                            // copied representation must use its structural value.
+                            Resolution {
+                                region: RegionSet::singleton(
+                                    scope,
+                                    RegionRoot::Value(value.value),
+                                    RegionPath::default(),
+                                ),
+                                parents: Vec::new(),
+                                traversed: Vec::new(),
+                            }
+                        }
                         NEffectArgValue::Value(value) => {
                             self.resolve_capability(state.value(value.value))
                         }
@@ -1244,6 +1444,7 @@ impl<'db> Borrowck<'db> {
                                 RegionPath::default(),
                             ),
                             parents: Vec::new(),
+                            traversed: Vec::new(),
                         },
                         ty,
                     )
@@ -1300,10 +1501,13 @@ impl<'db> Borrowck<'db> {
                         }
                     }
                     InputOrigin::Slot { slot, .. } => {
+                        let mut traversed = Vec::new();
                         if let Some(semantics) = value.shape().direct(self.db)
                             && semantics.class == CapabilityClass::View
                         {
-                            let region = self.resolve_capability(&value).region;
+                            let resolved = self.resolve_capability(&value);
+                            traversed.extend(resolved.parents);
+                            let region = resolved.region;
                             let shape = self.shape(semantics.target_ty)?;
                             value = self.read_region(
                                 state,
@@ -1326,7 +1530,9 @@ impl<'db> Borrowck<'db> {
                                 "summary slot does not select a capability".into(),
                             )
                         })?;
-                        (self.resolve_capability(&selected), semantics.target_ty)
+                        let mut resolved = self.resolve_capability(&selected);
+                        resolved.traversed = traversed;
+                        (resolved, semantics.target_ty)
                     }
                 }
             }
@@ -1367,7 +1573,10 @@ impl<'db> Borrowck<'db> {
                         "summary dereference does not select a stored capability".into(),
                     )
                 })?;
-                resolved = self.resolve_capability(&selected);
+                let mut selected = self.resolve_capability(&selected);
+                selected.traversed.extend(resolved.traversed);
+                selected.traversed.extend(resolved.parents);
+                resolved = selected;
                 target_ty = semantics.target_ty;
             }
         }
@@ -1402,7 +1611,7 @@ pub(super) fn signature_summary<'db>(
         for input in &checker.inventory.inputs {
             let mut pending = vec![(input.ty, RegionPath::default(), Guard::always(&input.scope))];
             while let Some((ty, path, guard)) = pending.pop() {
-                candidates.push(Candidate {
+                candidates.extend(input.classes.iter().map(|class| Candidate {
                     source: SourceExpr {
                         views: Default::default(),
                         source: input.source.clone(),
@@ -1410,8 +1619,8 @@ pub(super) fn signature_summary<'db>(
                     },
                     guard: guard.clone(),
                     ty,
-                    class: input.class,
-                });
+                    class: *class,
+                }));
                 let shape = checker.shape(ty)?;
                 if shape.direct(db).is_some() {
                     continue;
@@ -1481,9 +1690,14 @@ pub(super) fn signature_summary<'db>(
                                 candidate.class == CapabilityClass::Borrow(BorrowKind::Mut)
                             }
                             CapabilityClass::Borrow(BorrowKind::Ref) | CapabilityClass::View => {
-                                candidate.class != CapabilityClass::Handle
+                                !matches!(
+                                    candidate.class,
+                                    CapabilityClass::Handle | CapabilityClass::Pointer
+                                )
                             }
-                            CapabilityClass::Handle => candidate.class == CapabilityClass::Handle,
+                            CapabilityClass::Handle | CapabilityClass::Pointer => {
+                                candidate.class == semantics.class
+                            }
                         }
                 })
                 .filter_map(|candidate| {
@@ -1508,7 +1722,12 @@ pub(super) fn signature_summary<'db>(
                     })
                 })
                 .collect();
-            if opaque && semantics.class == CapabilityClass::Handle {
+            if opaque
+                && matches!(
+                    semantics.class,
+                    CapabilityClass::Handle | CapabilityClass::Pointer
+                )
+            {
                 match OpaqueHandleContract::for_ty(
                     db,
                     instance.key(db).impl_env(db).normalization_scope(db),
@@ -1526,7 +1745,7 @@ pub(super) fn signature_summary<'db>(
                                     db,
                                     OpaqueHandleRef {
                                         contract,
-                                        occurrence: OpaqueHandleOccurrence::Summary(choice),
+                                        occurrence: AddressOccurrence::Summary(choice),
                                         arguments: scope.variables().collect(),
                                     },
                                 ),
@@ -1570,6 +1789,11 @@ pub(super) fn signature_summary<'db>(
         result,
         mutable_inputs,
         requirements: Vec::new(),
+        accesses: if opaque {
+            checker.signature_memory_accesses(opaque_choice)?
+        } else {
+            Vec::new()
+        },
     };
     checker.verify_summary(&summary)?;
     Ok(summary)

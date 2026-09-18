@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/event_indexed_dynamic.fe
+---
+error[10-0008]: indexed dynamic event fields are not supported
+  ┌─ event_indexed_dynamic.fe:6:13
+  │
+6 │     values: DynArray<u256>,
+  │             ^^^^^^^^^^^^^^ `DynArray<u256>` requires Solidity's special indexed-value hashing
+  │
+  = remove `#[indexed]` from this field; dynamic event data is supported

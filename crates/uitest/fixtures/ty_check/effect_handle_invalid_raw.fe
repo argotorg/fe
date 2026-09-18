@@ -1,0 +1,13 @@
+use core::effect_ref::{AddressSpace, EffectHandle}
+
+struct BadPtr { raw: bool }
+
+impl EffectHandle for BadPtr {
+    type Target = u256
+    type Raw = bool
+    const SPACE: AddressSpace = AddressSpace::Memory
+
+    fn raw(self) -> bool {
+        self.raw
+    }
+}

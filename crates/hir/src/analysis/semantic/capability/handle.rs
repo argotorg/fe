@@ -12,8 +12,8 @@ use crate::{
             const_ty::{ConstTyId, const_ty_or_abstract_from_assoc_const_use},
             fold::TyFoldable,
             provider::{
-                EffectHandleTargetResolution, ProviderAddressSpace, effect_space_from_const_ty,
-                resolve_effect_handle_target,
+                EffectHandleResolution, ProviderAddressSpace, effect_space_from_const_ty,
+                resolve_effect_handle,
             },
             trait_resolution::PredicateListId,
             ty_def::{TyData, TyId},
@@ -88,9 +88,16 @@ impl<'db> OpaqueHandleContract<'db> {
         assumptions: PredicateListId<'db>,
         ty: TyId<'db>,
     ) -> Result<Option<Self>, UnresolvedCapability<'db>> {
-        match resolve_effect_handle_target(db, scope, assumptions, ty) {
-            EffectHandleTargetResolution::NotHandle => Ok(None),
-            EffectHandleTargetResolution::Resolved {
+        if let Some(target_ty) = ty.as_ptr(db) {
+            return Ok(Some(Self {
+                handle_ty: ty,
+                target_ty,
+                address_space: HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+            }));
+        }
+        match resolve_effect_handle(db, scope, assumptions, ty) {
+            EffectHandleResolution::NotHandle => Ok(None),
+            EffectHandleResolution::Resolved {
                 impl_instance,
                 target_ty,
                 ..
@@ -116,14 +123,13 @@ impl<'db> OpaqueHandleContract<'db> {
                     address_space,
                 }))
             }
-            EffectHandleTargetResolution::Ambiguous
-            | EffectHandleTargetResolution::UnresolvedTarget => Err(UnresolvedCapability(ty)),
+            EffectHandleResolution::Invalid(_) => Err(UnresolvedCapability(ty)),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum OpaqueHandleOccurrence<'db> {
+pub enum AddressOccurrence<'db> {
     Value {
         instance: SemanticInstance<'db>,
         value: NValueId,
@@ -137,7 +143,7 @@ pub enum OpaqueHandleOccurrence<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OpaqueHandleRef<'db> {
     pub contract: OpaqueHandleContract<'db>,
-    pub occurrence: OpaqueHandleOccurrence<'db>,
+    pub occurrence: AddressOccurrence<'db>,
     pub arguments: Box<[IndexExpr<'db>]>,
 }
 

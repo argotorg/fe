@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/aggregate_equality.fe
+---
+error[16-0002]: move conflict in `fn tuple_rhs_is_consumed`
+   ┌─ aggregate_equality.fe:16:26
+   │
+15 │     let same = a == b
+   │                     - value is moved here
+16 │     assert!(same && a == b)
+   │                          ^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn array_rhs_is_consumed`
+   ┌─ aggregate_equality.fe:24:31
+   │
+23 │     let different = a != b
+   │                          - value is moved here
+24 │     assert!(different || a != b)
+   │                               ^ cannot use a value after it was moved

@@ -1,0 +1,5 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/event_shadowed_dynamic_name.fe
+---

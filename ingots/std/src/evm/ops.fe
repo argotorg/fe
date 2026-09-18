@@ -7,9 +7,9 @@ extern {
     // -------------------------------------------------------------------------
     // Memory
     // -------------------------------------------------------------------------
-    pub(ingot) fn mload(_: u256) -> u256
-    pub(ingot) fn mstore(addr: u256, value: u256)
-    pub(ingot) fn mstore8(addr: u256, value: u8)
+    pub(ingot) fn mload(_: *u8) -> u256
+    pub(ingot) fn mstore(addr: *u8, value: u256)
+    pub(ingot) fn mstore8(addr: *u8, value: u8)
     pub(ingot) fn msize() -> u256
 
     // -------------------------------------------------------------------------
@@ -22,20 +22,20 @@ extern {
     // Calldata / returndata
     // -------------------------------------------------------------------------
     pub(ingot) fn calldataload(_: u256) -> u256
-    pub(ingot) fn calldatacopy(dest: u256, offset: u256, len: u256)
+    pub(ingot) fn calldatacopy(dest: *u8, offset: u256, len: u256)
     pub(ingot) fn calldatasize() -> u256
-    pub(ingot) fn returndatacopy(dest: u256, offset: u256, len: u256)
+    pub(ingot) fn returndatacopy(dest: *u8, offset: u256, len: u256)
     pub(ingot) fn returndatasize() -> u256
 
     // -------------------------------------------------------------------------
     // Code / hashing
     // -------------------------------------------------------------------------
-    pub(ingot) fn codecopy(dest: u256, offset: u256, len: u256)
+    pub(ingot) fn codecopy(dest: *u8, offset: u256, len: u256)
     pub(ingot) fn codesize() -> u256
-    pub(ingot) fn extcodecopy(addr: u256, dest: u256, offset: u256, len: u256)
+    pub(ingot) fn extcodecopy(addr: u256, dest: *u8, offset: u256, len: u256)
     pub(ingot) fn extcodesize(_ addr: u256) -> u256
     pub(ingot) fn extcodehash(_ addr: u256) -> u256
-    pub(ingot) fn keccak256(offset: u256, len: u256) -> u256
+    pub(ingot) fn keccak256(offset: *u8, len: u256) -> u256
     pub(ingot) const fn addmod(_ a: u256, _ b: u256, m: u256) -> u256
     pub(ingot) const fn mulmod(_ a: u256, _ b: u256, m: u256) -> u256
     pub fn byte(pos: u256, value: u256) -> u256
@@ -70,44 +70,45 @@ extern {
         gas: u256,
         addr: u256,
         value: u256,
-        args_offset: u256,
+        args_offset: *u8,
         args_len: u256,
-        ret_offset: u256,
+        ret_offset: *u8,
         ret_len: u256,
     ) -> u256
     pub(ingot) fn staticcall(
         gas: u256,
         addr: u256,
-        args_offset: u256,
+        args_offset: *u8,
         args_len: u256,
-        ret_offset: u256,
+        ret_offset: *u8,
         ret_len: u256,
     ) -> u256
     pub(ingot) fn delegatecall(
         gas: u256,
         addr: u256,
-        args_offset: u256,
+        args_offset: *u8,
         args_len: u256,
-        ret_offset: u256,
+        ret_offset: *u8,
         ret_len: u256,
     ) -> u256
-    pub(ingot) fn create(value: u256, offset: u256, len: u256) -> u256
-    pub(ingot) fn create2(value: u256, offset: u256, len: u256, salt: u256) -> u256
+    pub(ingot) fn create(value: u256, offset: *u8, len: u256) -> u256
+    pub(ingot) fn create2(value: u256, offset: *u8, len: u256, salt: u256) -> u256
 
     // -------------------------------------------------------------------------
     // Logs
     // -------------------------------------------------------------------------
-    pub(ingot) fn log0(offset: u256, len: u256)
-    pub(ingot) fn log1(offset: u256, len: u256, topic0: u256)
-    pub(ingot) fn log2(offset: u256, len: u256, topic0: u256, topic1: u256)
-    pub(ingot) fn log3(offset: u256, len: u256, topic0: u256, topic1: u256, topic2: u256)
-    pub(ingot) fn log4(offset: u256, len: u256, topic0: u256, topic1: u256, topic2: u256, topic3: u256)
+    pub(ingot) fn log0(offset: *u8, len: u256)
+    pub(ingot) fn log1(offset: *u8, len: u256, topic0: u256)
+    pub(ingot) fn log2(offset: *u8, len: u256, topic0: u256, topic1: u256)
+    pub(ingot) fn log3(offset: *u8, len: u256, topic0: u256, topic1: u256, topic2: u256)
+    pub(ingot) fn log4(offset: *u8, len: u256, topic0: u256, topic1: u256, topic2: u256, topic3: u256)
 
     // -------------------------------------------------------------------------
     // Control flow
     // -------------------------------------------------------------------------
-    pub(ingot) fn revert(offset: u256, len: u256) -> !
-    pub(ingot) fn return_data(offset: u256, len: u256) -> !
+    pub(ingot) fn revert(offset: *u8, len: u256) -> !
+    pub(ingot) fn revert_empty() -> !
+    pub(ingot) fn return_data(offset: *u8, len: u256) -> !
     pub(ingot) fn selfdestruct(_: u256) -> !
     pub(ingot) fn stop() -> !
 }

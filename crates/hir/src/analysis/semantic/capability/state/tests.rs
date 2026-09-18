@@ -7,8 +7,7 @@ use crate::{
             capability::{
                 external::{ExternalSource, ReferentContract},
                 handle::{
-                    HandleAddressSpace, OpaqueHandleContract, OpaqueHandleOccurrence,
-                    OpaqueHandleRef,
+                    AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
                 },
                 index::IndexNamespace,
                 loan::{LoanId, LoanRef},
@@ -834,7 +833,7 @@ fn unknown_alias_stores_retain_origins_across_offsets_and_respect_address_spaces
                     target_ty: TyId::u256(&db),
                     address_space: HandleAddressSpace::Known(space),
                 },
-                occurrence: OpaqueHandleOccurrence::Summary(choice),
+                occurrence: AddressOccurrence::Summary(choice),
                 arguments: Box::new([]),
             },
         ))

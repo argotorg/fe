@@ -11,20 +11,22 @@ use crate::analysis::{
         capability::{
             external::ExternalSource,
             guard::{ChoiceKey, Guard, ValueOccurrence},
-            handle::{OpaqueHandleOccurrence, OpaqueHandleRef},
+            handle::{AddressOccurrence, OpaqueHandleContract, OpaqueHandleRef},
             index::{BinderScope, IndexExpr},
             loan::{CapabilityRef, LoanRef},
             path::{Projection, RegionPath, StructuralPath},
-            region::{ProviderRegionId, RegionRoot, RegionSet},
+            region::{ProviderRegionId, RegionRoot, RegionSet, SymbolicPlace},
             repack::ReferentRepackId,
             shape::{ShapeChildren, ShapeError, ShapeId, capability_shape},
+            source::SourceExpr,
             state::{BorrowState, CapabilityValue},
             value::Guarded,
         },
         normalized::{
             HandleOrigin, NBlock, NBlockId, NDataPath, NDataProjection, NExpr, NIndex, NOperand,
             NPlace, NPlaceBase, NRootKind, NStatement, NStatementKind, NSuccessor, NTerminatorKind,
-            NValueDefinition, NValueId, NormalizedBody, ReadMode, normalize_semantic_body,
+            NValueDefinition, NValueId, NormalizedBody, ReadMode, literal_allocation,
+            normalize_semantic_body,
         },
     },
     ty::ty_def::TyId,
@@ -50,6 +52,8 @@ pub(super) enum BorrowSummaryMode {
 pub(super) struct Resolution<'db> {
     pub region: RegionSet<'db>,
     pub parents: Vec<Guarded<'db, LoanRef<'db>>>,
+    /// Permissions used to traverse containers, distinct from the final referent's parents.
+    pub traversed: Vec<Guarded<'db, LoanRef<'db>>>,
 }
 
 impl<'db> Resolution<'db> {
@@ -57,6 +61,7 @@ impl<'db> Resolution<'db> {
         Self {
             region: RegionSet::empty(scope),
             parents: Vec::new(),
+            traversed: Vec::new(),
         }
     }
 }
@@ -73,6 +78,7 @@ pub(super) struct Borrowck<'db> {
     pub terminal: Vec<Option<BorrowState<'db>>>,
     pub blocked: Option<BlockedSemanticBody<'db>>,
     pub loan_facts_changed: bool,
+    pub storage_facts_changed: bool,
 }
 
 impl<'db> Borrowck<'db> {
@@ -116,6 +122,7 @@ impl<'db> Borrowck<'db> {
             calls: BTreeMap::new(),
             blocked: None,
             loan_facts_changed: false,
+            storage_facts_changed: false,
         })
     }
 
@@ -182,6 +189,25 @@ impl<'db> Borrowck<'db> {
                 expr: NExpr::Forward { src },
                 ..
             } => self.index(src.value),
+            NStatementKind::Define {
+                expr: NExpr::Load { place, .. },
+                ..
+            } if place.path.is_empty() && place.ty.is_integral(self.db) => match place.base {
+                NPlaceBase::CapabilityTarget { carrier }
+                    if self.body.values[carrier.index()]
+                        .ty
+                        .as_view(self.db)
+                        .is_some()
+                        && matches!(
+                            self.body.values[carrier.index()].definition,
+                            NValueDefinition::EntryParam { .. }
+                        ) =>
+                {
+                    self.index(carrier)
+                }
+                _ => IndexExpr::Runtime(value),
+            },
+
             NStatementKind::Define { .. } | NStatementKind::Store { .. } => {
                 IndexExpr::Runtime(value)
             }
@@ -228,6 +254,7 @@ impl<'db> Borrowck<'db> {
         Resolution {
             region: self.resolve_region(state, place),
             parents,
+            traversed: Vec::new(),
         }
     }
 
@@ -239,6 +266,28 @@ impl<'db> Borrowck<'db> {
         occurrence: ValueOccurrence,
         origin: SemOrigin<'db>,
     ) -> Result<CapabilityValue<'db>, SemanticBorrowDiagnostic<'db>> {
+        // A callee summary can follow a typed cell before its pointer becomes
+        // a caller SSA value. Discover that storage on demand as well as when
+        // transferring values; the fixed point then replays all earlier writes.
+        let sources: Vec<_> = region
+            .clauses()
+            .iter()
+            .filter_map(|clause| {
+                let RegionRoot::External(source) = &clause.payload.root else {
+                    return None;
+                };
+                (!state.has_storage(self.db, &clause.payload.root, clause.guard.scope()))
+                    .then(|| (source.clone(), clause.guard.scope().clone()))
+            })
+            .collect();
+        let completed = if shape.contains_capability(self.db) && !sources.is_empty() {
+            let mut completed = state.clone();
+            self.ensure_storage(&mut completed, sources, origin)?;
+            Some(completed)
+        } else {
+            None
+        };
+        let state = completed.as_ref().unwrap_or(state);
         state
             .read_region(
                 self.db,
@@ -346,11 +395,13 @@ impl<'db> Borrowck<'db> {
         incoming[self.body.entry.index()] = Some(self.inventory.entry.clone());
         loop {
             self.loan_facts_changed = false;
+            self.storage_facts_changed = false;
             let mut state_changed = false;
             for index in 0..self.body.blocks.len() {
                 let Some(mut state) = incoming[index].clone() else {
                     continue;
                 };
+                state.extend_storage(&self.inventory.entry);
                 let block = self.body.blocks[index].clone();
                 let mut returns = true;
                 for statement in &block.statements {
@@ -399,12 +450,18 @@ impl<'db> Borrowck<'db> {
                             |occurrence| self.inventory.loops.repeats_occurrence(iteration, occurrence));
                     }
                     if let Some(previous) = &mut incoming[successor.block.index()] {
+                        previous.extend_storage(&self.inventory.entry);
                         state_changed |= previous.join(&edge, &mut self.inventory.values);
                     } else {
                         incoming[successor.block.index()] = Some(edge);
                         state_changed = true;
                     }
                 }
+            }
+            if self.storage_facts_changed {
+                incoming.fill(None);
+                incoming[self.body.entry.index()] = Some(self.inventory.entry.clone());
+                continue;
             }
             if !state_changed && !self.loan_facts_changed {
                 break;
@@ -430,6 +487,60 @@ impl<'db> Borrowck<'db> {
             !self.loan_facts_changed,
             "publishing an unconverged loan system"
         );
+        Ok(())
+    }
+
+    pub fn memory_region(
+        &self,
+        region: &RegionSet<'db>,
+        target_ty: TyId<'db>,
+        element: Option<(TyId<'db>, IndexExpr<'db>)>,
+        origin: SemOrigin<'db>,
+    ) -> Result<RegionSet<'db>, SemanticBorrowDiagnostic<'db>> {
+        let mut clauses = Vec::new();
+        for clause in region.clauses() {
+            let source = SourceExpr::from_place(&clause.payload).ok_or_else(|| {
+                self.internal_diag(origin, "raw pointer has no address provenance".into())
+            })?;
+            clauses.push(Guarded {
+                guard: clause.guard.clone(),
+                payload: SymbolicPlace {
+                    root: RegionRoot::External(ExternalSource::memory(
+                        self.db, source, target_ty, element,
+                    )),
+                    path: RegionPath::default(),
+                    views: Default::default(),
+                },
+            });
+        }
+        Ok(RegionSet::new(region.scope(), clauses))
+    }
+
+    pub fn ensure_storage(
+        &mut self,
+        state: &mut BorrowState<'db>,
+        sources: impl IntoIterator<Item = (ExternalSource<'db>, BinderScope)>,
+        origin: SemOrigin<'db>,
+    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+        let sources: Vec<_> = sources
+            .into_iter()
+            .filter(|(source, scope)| {
+                !self.inventory.entry.has_storage(
+                    self.db,
+                    &RegionRoot::External(source.clone()),
+                    scope,
+                )
+            })
+            .collect();
+        if !sources.is_empty() {
+            self.inventory
+                .add_external_sources(self.db, self.instance, sources)
+                .map_err(|error| {
+                    self.internal_diag(origin, format!("invalid raw memory storage: {error:?}"))
+                })?;
+            self.storage_facts_changed = true;
+        }
+        state.extend_storage(&self.inventory.entry);
         Ok(())
     }
 
@@ -530,6 +641,61 @@ impl<'db> Borrowck<'db> {
                     }],
                 )
             }
+            NExpr::PointerCast { value, to } => {
+                let empty = self.inventory.values.empty(shape, &scope);
+                if let Some(target_ty) = to.as_ptr(self.db) {
+                    let source = state.value(value.value).clone();
+                    let region = if self.body.values[value.value.index()]
+                        .ty
+                        .as_ptr(self.db)
+                        .is_some()
+                    {
+                        let region = self.resolve_capability(&source).region;
+                        self.memory_region(&region, target_ty, None, statement.origin)?
+                    } else {
+                        let contract = OpaqueHandleContract::for_ty(
+                            self.db,
+                            self.instance
+                                .key(self.db)
+                                .impl_env(self.db)
+                                .normalization_scope(self.db),
+                            self.instance.assumptions(self.db),
+                            *to,
+                        )
+                        .expect("verified pointer cast contract")
+                        .expect("pointer contract");
+                        RegionSet::singleton(
+                            &scope,
+                            RegionRoot::External(ExternalSource::opaque(
+                                self.db,
+                                OpaqueHandleRef {
+                                    contract,
+                                    occurrence: AddressOccurrence::Value {
+                                        instance: self.instance,
+                                        value: *result,
+                                        choice: 0,
+                                    },
+                                    arguments: self
+                                        .inventory
+                                        .loops
+                                        .arguments(&self.body, *result)
+                                        .into_boxed_slice(),
+                                },
+                            )),
+                            RegionPath::default(),
+                        )
+                    };
+                    self.inventory.values.with_direct(
+                        &empty,
+                        vec![Guarded {
+                            guard: Guard::always(&scope),
+                            payload: CapabilityRef::Address(region),
+                        }],
+                    )
+                } else {
+                    empty
+                }
+            }
             NExpr::StructuralRepack { value, .. } => {
                 let repack = ReferentRepackId::new(
                     self.db,
@@ -624,8 +790,57 @@ impl<'db> Borrowck<'db> {
                     .sum(shape, &scope, [(*variant, contents)])
             }
             NExpr::Call { .. } => self.transfer_call(state, *result, statement)?,
-            NExpr::Const(_)
-            | NExpr::CodeRegionRef { .. }
+            NExpr::Const(constant) => {
+                let empty = self.inventory.values.empty(shape, &scope);
+                if let Some((field, contract)) =
+                    literal_allocation(self.db, self.body.values[result.index()].ty, constant)
+                {
+                    let pointer_shape = self.shape(contract.handle_ty)?;
+                    let pointer = self.inventory.values.empty(pointer_shape, &scope);
+                    let source = ExternalSource::allocation(
+                        self.db,
+                        OpaqueHandleRef {
+                            contract,
+                            occurrence: AddressOccurrence::Value {
+                                instance: self.instance,
+                                value: *result,
+                                choice: 0,
+                            },
+                            arguments: self
+                                .inventory
+                                .loops
+                                .for_value(&self.body, *result)
+                                .map(IndexExpr::Iteration)
+                                .into_iter()
+                                .collect(),
+                        },
+                    );
+                    let pointer = self.inventory.values.with_direct(
+                        &pointer,
+                        vec![Guarded {
+                            guard: Guard::always(&scope),
+                            payload: CapabilityRef::Address(RegionSet::singleton(
+                                &scope,
+                                RegionRoot::External(source),
+                                RegionPath::default(),
+                            )),
+                        }],
+                    );
+                    self.inventory.values.replace(
+                        &empty,
+                        &StructuralPath::new([Projection::Field(field)]),
+                        &pointer,
+                    )
+                } else if shape.contains_capability(self.db) {
+                    return Err(self.internal_diag(
+                        statement.origin,
+                        "constant creates a capability without an explicit source".into(),
+                    ));
+                } else {
+                    empty
+                }
+            }
+            NExpr::CodeRegionRef { .. }
             | NExpr::Unary { .. }
             | NExpr::Binary { .. }
             | NExpr::ScalarCast { .. }
@@ -653,7 +868,7 @@ impl<'db> Borrowck<'db> {
                     self.db,
                     OpaqueHandleRef {
                         contract: *contract,
-                        occurrence: OpaqueHandleOccurrence::Value {
+                        occurrence: AddressOccurrence::Value {
                             instance: self.instance,
                             value: *result,
                             choice: 0,
@@ -672,7 +887,7 @@ impl<'db> Borrowck<'db> {
                 &value,
                 vec![Guarded {
                     guard: Guard::always(&scope),
-                    payload: CapabilityRef::Handle(RegionSet::singleton(
+                    payload: CapabilityRef::Address(RegionSet::singleton(
                         &scope,
                         root,
                         RegionPath::default(),
@@ -680,6 +895,23 @@ impl<'db> Borrowck<'db> {
                 }],
             );
         }
+        let sources: Vec<_> = self
+            .inventory
+            .values
+            .leaves(&value, occurrence)
+            .into_iter()
+            .flat_map(|leaf| {
+                leaf.payload
+                    .region(self.db, &self.inventory.loans, leaf.guard.scope())
+                    .clauses()
+                    .to_vec()
+            })
+            .filter_map(|clause| match clause.payload.root {
+                RegionRoot::External(source) => Some((source, clause.guard.scope().clone())),
+                _ => None,
+            })
+            .collect();
+        self.ensure_storage(state, sources, statement.origin)?;
         if !matches!(expr, NExpr::ProjectValue { .. }) {
             expr.for_each_value_operand(|operand| self.consume(state, operand));
         }

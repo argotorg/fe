@@ -1,0 +1,589 @@
+// Regression for #1500: wide calls must work without inlining.
+use std::evm::Evm
+
+#[inline(never)]
+fn weighted16(
+    _ a00: u256,
+    _ a01: u256,
+    _ a02: u256,
+    _ a03: u256,
+    _ a04: u256,
+    _ a05: u256,
+    _ a06: u256,
+    _ a07: u256,
+    _ a08: u256,
+    _ a09: u256,
+    _ a10: u256,
+    _ a11: u256,
+    _ a12: u256,
+    _ a13: u256,
+    _ a14: u256,
+    _ a15: u256,
+) -> u256 {
+    a00 * 1
+        + a01 * 2
+        + a02 * 3
+        + a03 * 4
+        + a04 * 5
+        + a05 * 6
+        + a06 * 7
+        + a07 * 8
+        + a08 * 9
+        + a09 * 10
+        + a10 * 11
+        + a11 * 12
+        + a12 * 13
+        + a13 * 14
+        + a14 * 15
+        + a15 * 16
+}
+
+#[inline(never)]
+fn weighted17(
+    _ a00: u256,
+    _ a01: u256,
+    _ a02: u256,
+    _ a03: u256,
+    _ a04: u256,
+    _ a05: u256,
+    _ a06: u256,
+    _ a07: u256,
+    _ a08: u256,
+    _ a09: u256,
+    _ a10: u256,
+    _ a11: u256,
+    _ a12: u256,
+    _ a13: u256,
+    _ a14: u256,
+    _ a15: u256,
+    _ a16: u256,
+) -> u256 {
+    a00 * 1
+        + a01 * 2
+        + a02 * 3
+        + a03 * 4
+        + a04 * 5
+        + a05 * 6
+        + a06 * 7
+        + a07 * 8
+        + a08 * 9
+        + a09 * 10
+        + a10 * 11
+        + a11 * 12
+        + a12 * 13
+        + a13 * 14
+        + a14 * 15
+        + a15 * 16
+        + a16 * 17
+}
+
+#[inline(never)]
+fn weighted32(
+    _ a00: u256,
+    _ a01: u256,
+    _ a02: u256,
+    _ a03: u256,
+    _ a04: u256,
+    _ a05: u256,
+    _ a06: u256,
+    _ a07: u256,
+    _ a08: u256,
+    _ a09: u256,
+    _ a10: u256,
+    _ a11: u256,
+    _ a12: u256,
+    _ a13: u256,
+    _ a14: u256,
+    _ a15: u256,
+    _ a16: u256,
+    _ a17: u256,
+    _ a18: u256,
+    _ a19: u256,
+    _ a20: u256,
+    _ a21: u256,
+    _ a22: u256,
+    _ a23: u256,
+    _ a24: u256,
+    _ a25: u256,
+    _ a26: u256,
+    _ a27: u256,
+    _ a28: u256,
+    _ a29: u256,
+    _ a30: u256,
+    _ a31: u256,
+) -> u256 {
+    a00 * 1
+        + a01 * 2
+        + a02 * 3
+        + a03 * 4
+        + a04 * 5
+        + a05 * 6
+        + a06 * 7
+        + a07 * 8
+        + a08 * 9
+        + a09 * 10
+        + a10 * 11
+        + a11 * 12
+        + a12 * 13
+        + a13 * 14
+        + a14 * 15
+        + a15 * 16
+        + a16 * 17
+        + a17 * 18
+        + a18 * 19
+        + a19 * 20
+        + a20 * 21
+        + a21 * 22
+        + a22 * 23
+        + a23 * 24
+        + a24 * 25
+        + a25 * 26
+        + a26 * 27
+        + a27 * 28
+        + a28 * 29
+        + a29 * 30
+        + a30 * 31
+        + a31 * 32
+}
+
+msg WideMsg {
+    #[selector = sol(
+        "sum(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)",
+    )]
+    Sum {
+        a00: u256,
+        a01: u256,
+        a02: u256,
+        a03: u256,
+        a04: u256,
+        a05: u256,
+        a06: u256,
+        a07: u256,
+        a08: u256,
+        a09: u256,
+        a10: u256,
+        a11: u256,
+        a12: u256,
+        a13: u256,
+        a14: u256,
+        a15: u256,
+        a16: u256,
+    } -> u256,
+}
+
+pub contract Wide {
+    init() {}
+    recv WideMsg {
+        Sum {
+            a00,
+            a01,
+            a02,
+            a03,
+            a04,
+            a05,
+            a06,
+            a07,
+            a08,
+            a09,
+            a10,
+            a11,
+            a12,
+            a13,
+            a14,
+            a15,
+            a16,
+        } -> u256 {
+            weighted17(
+                a00,
+                a01,
+                a02,
+                a03,
+                a04,
+                a05,
+                a06,
+                a07,
+                a08,
+                a09,
+                a10,
+                a11,
+                a12,
+                a13,
+                a14,
+                a15,
+                a16,
+            )
+        }
+    }
+}
+
+#[test]
+fn wide_recv() uses (evm: mut Evm) {
+    let addr = evm.create2<Wide>(value: 0, args: (), salt: 0)
+    let value: u256 = evm
+        .call(
+            addr,
+            gas: 10000000,
+            value: 0,
+            message: WideMsg::Sum {
+                a00: 1,
+                a01: 2,
+                a02: 3,
+                a03: 4,
+                a04: 5,
+                a05: 6,
+                a06: 7,
+                a07: 8,
+                a08: 9,
+                a09: 10,
+                a10: 11,
+                a11: 12,
+                a12: 13,
+                a13: 14,
+                a14: 15,
+                a15: 16,
+                a16: 17,
+            },
+        )
+    assert!(value == 1785)
+}
+
+#[test]
+fn argument_boundaries() {
+    assert!(
+        weighted16(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16) == 1496,
+    )
+    assert!(
+        weighted17(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17) == 1785,
+    )
+    assert!(
+        weighted32(
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                30,
+                31,
+                32,
+            )
+            == 11440,
+    )
+}
+
+#[inline(never)]
+fn recursive(
+    _ depth: u256,
+    _ a00: u256,
+    _ a01: u256,
+    _ a02: u256,
+    _ a03: u256,
+    _ a04: u256,
+    _ a05: u256,
+    _ a06: u256,
+    _ a07: u256,
+    _ a08: u256,
+    _ a09: u256,
+    _ a10: u256,
+    _ a11: u256,
+    _ a12: u256,
+    _ a13: u256,
+    _ a14: u256,
+    _ a15: u256,
+) -> u256 {
+    if depth == 0 {
+        return weighted16(
+            a00,
+            a01,
+            a02,
+            a03,
+            a04,
+            a05,
+            a06,
+            a07,
+            a08,
+            a09,
+            a10,
+            a11,
+            a12,
+            a13,
+            a14,
+            a15,
+        )
+    }
+    let inner = recursive(
+        depth - 1,
+        a00 + 1,
+        a01 + 1,
+        a02 + 1,
+        a03 + 1,
+        a04 + 1,
+        a05 + 1,
+        a06 + 1,
+        a07 + 1,
+        a08 + 1,
+        a09 + 1,
+        a10 + 1,
+        a11 + 1,
+        a12 + 1,
+        a13 + 1,
+        a14 + 1,
+        a15 + 1,
+    )
+    inner
+        + weighted16(
+            a00,
+            a01,
+            a02,
+            a03,
+            a04,
+            a05,
+            a06,
+            a07,
+            a08,
+            a09,
+            a10,
+            a11,
+            a12,
+            a13,
+            a14,
+            a15,
+        )
+}
+
+#[test]
+fn recursive_calls_preserve_arguments() {
+    assert!(
+        recursive(2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16) == 4896,
+    )
+}
+
+struct Counter { value: u256 }
+
+#[inline(never)]
+fn with_effect(
+    _ a00: u256,
+    _ a01: u256,
+    _ a02: u256,
+    _ a03: u256,
+    _ a04: u256,
+    _ a05: u256,
+    _ a06: u256,
+    _ a07: u256,
+    _ a08: u256,
+    _ a09: u256,
+    _ a10: u256,
+    _ a11: u256,
+    _ a12: u256,
+    _ a13: u256,
+    _ a14: u256,
+    _ a15: u256,
+) -> (u256, u8)
+uses (counter: mut Counter)
+{
+    counter.value += weighted16(
+        a00,
+        a01,
+        a02,
+        a03,
+        a04,
+        a05,
+        a06,
+        a07,
+        a08,
+        a09,
+        a10,
+        a11,
+        a12,
+        a13,
+        a14,
+        a15,
+    )
+    (counter.value, 7)
+}
+
+#[test]
+fn wide_call_preserves_mutable_effect() {
+    let mut counter = Counter { value: 10 }
+    with (Counter = counter) {
+        let pair = with_effect(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
+        assert!(pair.0 == 1506)
+        assert!(pair.1 == 7)
+        let again = with_effect(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
+        assert!(again.0 == 3002)
+    }
+}
+
+#[inline(never)]
+fn wide_result(
+    _ a00: u256,
+    _ a01: u256,
+    _ a02: u256,
+    _ a03: u256,
+    _ a04: u256,
+    _ a05: u256,
+    _ a06: u256,
+    _ a07: u256,
+    _ a08: u256,
+    _ a09: u256,
+    _ a10: u256,
+    _ a11: u256,
+    _ a12: u256,
+    _ a13: u256,
+    _ a14: u256,
+    _ a15: u256,
+) -> [u256; 17] {
+    [a00, a01, a02, a03, a04, a05, a06, a07, a08, a09, a10, a11, a12, a13, a14, a15, 99]
+}
+
+#[test]
+fn wide_result_with_sixteen_arguments() {
+    let result = wide_result(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
+    let mut i: usize = 0
+    while i < 16 {
+        assert!(result[i] == (i as u256) + 1)
+        i += 1
+    }
+    assert!(result[16] == 99)
+}
+
+#[inline(never)]
+fn mixed(
+    _ pair: own (u256, u8),
+    _ signed: i8,
+    _ flag: bool,
+    _ a00: u256,
+    _ a01: u256,
+    _ a02: u256,
+    _ a03: u256,
+    _ a04: u256,
+    _ a05: u256,
+    _ a06: u256,
+    _ a07: u256,
+    _ a08: u256,
+    _ a09: u256,
+    _ a10: u256,
+    _ a11: u256,
+    _ a12: u256,
+    _ a13: u256,
+) -> u256 {
+    assert!(pair.0 == 42)
+    assert!(pair.1 == 255)
+    assert!(signed == -7)
+    assert!(flag)
+    weighted16(
+        a00,
+        a01,
+        a02,
+        a03,
+        a04,
+        a05,
+        a06,
+        a07,
+        a08,
+        a09,
+        a10,
+        a11,
+        a12,
+        a13,
+        pair.0,
+        pair.1 as u256,
+    )
+}
+
+#[test]
+fn packed_arguments_keep_their_types() {
+    assert!(
+        mixed(
+                (42, 255),
+                -7,
+                true,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+            ) == 5725,
+    )
+}
+
+#[inline(never)]
+fn terminal(
+    _ a00: u256,
+    _ a01: u256,
+    _ a02: u256,
+    _ a03: u256,
+    _ a04: u256,
+    _ a05: u256,
+    _ a06: u256,
+    _ a07: u256,
+    _ a08: u256,
+    _ a09: u256,
+    _ a10: u256,
+    _ a11: u256,
+    _ a12: u256,
+    _ a13: u256,
+    _ a14: u256,
+    _ a15: u256,
+    _ a16: u256,
+) -> ! {
+    let value = weighted17(
+        a00,
+        a01,
+        a02,
+        a03,
+        a04,
+        a05,
+        a06,
+        a07,
+        a08,
+        a09,
+        a10,
+        a11,
+        a12,
+        a13,
+        a14,
+        a15,
+        a16,
+    )
+    assert!(value == 1785)
+    let _ = 1 / (value - 1785)
+    core::panic()
+}
+
+#[test(should_revert, panic = 0x12)]
+fn terminal_calls_pack_arguments() {
+    terminal(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
+}

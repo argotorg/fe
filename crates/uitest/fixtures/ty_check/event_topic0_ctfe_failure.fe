@@ -1,0 +1,27 @@
+use core::abi::{Abi, AbiSize, Encode, store_word}
+use std::abi::SolCompat
+
+fn runtime_name() -> String<3> {
+    "bad"
+}
+
+struct Bad { word: u256 }
+
+impl AbiSize for Bad {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl<A: Abi> Encode<A> for Bad {
+    fn encode(own self, _ ptr: *u8) {
+        store_word(ptr: ptr, value: self.word)
+    }
+}
+
+impl SolCompat for Bad {
+    type S = String<3>
+    const SOL_TYPE: Self::S = runtime_name()
+}
+
+#[event]
+struct Broken { value: Bad }

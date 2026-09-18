@@ -62,10 +62,9 @@ pub fn resolve_runtime_place<'db>(
             .ok_or(VerifyError::MissingRuntimeLocal(*local))?
         {
             RuntimeLocalRoot::None | RuntimeLocalRoot::Ref(_) | RuntimeLocalRoot::Ptr { .. } => {
-                return Err(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
-                    space: crate::runtime::AddressSpaceKind::Memory,
-                    target: None,
-                }));
+                return Err(VerifyError::InvalidPlace(RuntimeClass::opaque_raw_addr(
+                    crate::runtime::AddressSpaceKind::Memory,
+                )));
             }
             RuntimeLocalRoot::Slot(class) => class.clone(),
         },
@@ -80,10 +79,9 @@ pub fn resolve_runtime_place<'db>(
         PlaceRoot::Provider(binding) => body
             .place_provider_binding(*binding)
             .map(|binding| binding.place_class.clone())
-            .ok_or(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
-                space: crate::runtime::AddressSpaceKind::Memory,
-                target: None,
-            }))?,
+            .ok_or(VerifyError::InvalidPlace(RuntimeClass::opaque_raw_addr(
+                crate::runtime::AddressSpaceKind::Memory,
+            )))?,
         PlaceRoot::Ptr { addr, space, class } => {
             match body
                 .place_value_class(*addr)
@@ -119,10 +117,9 @@ pub fn resolve_runtime_place<'db>(
         PlaceRoot::Provider(binding) => {
             let provider =
                 body.place_provider_binding(*binding)
-                    .ok_or(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
-                        space: crate::runtime::AddressSpaceKind::Memory,
-                        target: None,
-                    }))?;
+                    .ok_or(VerifyError::InvalidPlace(RuntimeClass::opaque_raw_addr(
+                        crate::runtime::AddressSpaceKind::Memory,
+                    )))?;
             ResolvedPlaceRootKind::Provider {
                 binding: *binding,
                 value: provider.value,
@@ -238,20 +235,20 @@ pub(crate) fn ref_class_for_place_result<'db>(
                     view: RefView::Whole,
                 };
             }
-            RuntimeClass::AggregateValue { .. } => {
+            RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => {
                 return RuntimeClass::Ref {
                     pointee: Box::new(value_class.clone()),
                     kind: RefKind::Object,
                     view: RefView::Whole,
                 };
             }
-            RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {}
+            RuntimeClass::RawAddr { .. } => {}
         }
     }
-    RuntimeClass::RawAddr {
-        space: root_class.address_space().unwrap_or(root_space),
-        target: value_class.aggregate_layout(),
-    }
+    RuntimeClass::raw_addr(
+        root_class.address_space().unwrap_or(root_space),
+        value_class.clone(),
+    )
 }
 
 fn runtime_place_transport_root<'db>(
@@ -268,10 +265,9 @@ fn runtime_place_transport_root<'db>(
                 RuntimeLocalRoot::None
                 | RuntimeLocalRoot::Ref(_)
                 | RuntimeLocalRoot::Ptr { .. } => {
-                    return Err(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
-                        space: crate::runtime::AddressSpaceKind::Memory,
-                        target: None,
-                    }));
+                    return Err(VerifyError::InvalidPlace(RuntimeClass::opaque_raw_addr(
+                        crate::runtime::AddressSpaceKind::Memory,
+                    )));
                 }
             },
             crate::runtime::AddressSpaceKind::Memory,
@@ -288,10 +284,9 @@ fn runtime_place_transport_root<'db>(
             let class = body
                 .place_provider_binding(*binding)
                 .map(|binding| binding.provider_class.clone())
-                .ok_or(VerifyError::InvalidPlace(RuntimeClass::RawAddr {
-                    space: crate::runtime::AddressSpaceKind::Memory,
-                    target: None,
-                }))?;
+                .ok_or(VerifyError::InvalidPlace(RuntimeClass::opaque_raw_addr(
+                    crate::runtime::AddressSpaceKind::Memory,
+                )))?;
             (
                 class.clone(),
                 class
@@ -300,14 +295,9 @@ fn runtime_place_transport_root<'db>(
                 false,
             )
         }
-        PlaceRoot::Ptr { space, class, .. } => (
-            RuntimeClass::RawAddr {
-                space: *space,
-                target: class.aggregate_layout(),
-            },
-            *space,
-            true,
-        ),
+        PlaceRoot::Ptr { space, class, .. } => {
+            (RuntimeClass::raw_addr(*space, class.clone()), *space, true)
+        }
     })
 }
 
@@ -601,7 +591,7 @@ pub(crate) fn project_field_class<'db>(
                 "invalid field projection: field={field:?} fields={:?} class={class:?}",
                 layout.fields,
             ),
-            _ => panic!("invalid field projection class"),
+            _ => panic!("invalid field projection class: {class:?}"),
         }
     })
 }
@@ -629,13 +619,16 @@ pub(crate) fn project_variant_field_class<'db>(
 mod tests {
     use driver::DriverDataBase;
 
-    use super::{PlaceClassEnv, resolve_runtime_place, resolve_runtime_place_address_class};
+    use super::{
+        PlaceClassEnv, ref_class_for_place_result, resolve_runtime_place,
+        resolve_runtime_place_address_class,
+    };
     use crate::{
         db::MirDb,
         runtime::{
-            LayoutId, LayoutKey, PlaceElem, PlaceRoot, RLocalId, RefKind, RefView, RuntimeClass,
-            RuntimeLocalRoot, RuntimePlace, RuntimeProviderBinding, RuntimeProviderBindingId,
-            StructLayout,
+            AddressSpaceKind, LayoutId, LayoutKey, PlaceElem, PlaceRoot, RLocalId, RefKind,
+            RefView, RuntimeClass, RuntimeLocalRoot, RuntimePlace, RuntimeProviderBinding,
+            RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, StructLayout,
         },
     };
 
@@ -654,6 +647,31 @@ mod tests {
         ) -> Option<&RuntimeProviderBinding<'db>> {
             None
         }
+    }
+
+    #[test]
+    fn native_scalar_addresses_preserve_object_layout() {
+        let scalar = RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int {
+                bits: 8,
+                signed: false,
+            },
+            role: ScalarRole::Plain,
+        });
+        let object = RuntimeClass::Ref {
+            pointee: Box::new(scalar.clone()),
+            kind: RefKind::Object,
+            view: RefView::Whole,
+        };
+        assert_eq!(
+            ref_class_for_place_result(&scalar, &scalar, AddressSpaceKind::Memory, false),
+            object
+        );
+        let pointer = RuntimeClass::raw_addr(AddressSpaceKind::Memory, scalar.clone());
+        assert_eq!(
+            ref_class_for_place_result(&pointer, &scalar, AddressSpaceKind::Memory, true),
+            pointer
+        );
     }
 
     #[test]

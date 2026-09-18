@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/aggregate_equality.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ aggregate_equality.fe:4:5
+  │
+4 │     a == b
+  │     ^^^^^^
+  │     │
+  │     `(NoEq)` doesn't implement `Eq<(NoEq)>`
+  │     trait bound `NoEq: Eq<NoEq>` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+  ┌─ aggregate_equality.fe:8:5
+  │
+8 │     a != b
+  │     ^^^^^^
+  │     │
+  │     `[NoEq; 2]` doesn't implement `Eq<[NoEq; 2]>`
+  │     trait bound `NoEq: Eq<NoEq>` is not satisfied
+
+error[8-0000]: type mismatch
+   ┌─ aggregate_equality.fe:12:10
+   │
+12 │     a == b
+   │          ^ expected `[u256; 2]`, but `[u256; 3]` is given
+
+error[8-0000]: type mismatch
+   ┌─ aggregate_equality.fe:16:10
+   │
+16 │     a == b
+   │          ^ expected `(u256, bool)`, but `(u256, u256)` is given

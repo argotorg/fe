@@ -1,0 +1,176 @@
+use core::ops::Eq
+
+fn equal<T: Eq>(_ a: T, _ b: T) -> bool {
+    a == b
+}
+
+fn pair() -> (u256, bool) {
+    (7, true)
+}
+
+#[test]
+fn tuple_arities_and_function_result() {
+    assert!(() == ())
+    assert!(!(() != ()))
+    let t1: (u256,) = (1,)
+    let t2: (u256, bool) = (7, true)
+    let t3: (u256, bool, u8) = (1, true, 3)
+    let t4: (u256, bool, u8, i256) = (1, true, 3, -4)
+    let t5: (u256, bool, u8, i256, u16) = (1, true, 3, -4, 5)
+    let t6: (u256, bool, u8, i256, u16, bool) = (1, true, 3, -4, 5, false)
+    assert!(equal(t1, t1))
+    assert!(t1 != (2,))
+    assert!(pair() == t2)
+    assert!(equal(t3, t3))
+    assert!(equal(t4, t4))
+    assert!(equal(t5, t5))
+    assert!(equal(t6, t6))
+    assert!(!(t6 != t6))
+    assert!(t6 != (2, true, 3, -4, 5, false))
+    assert!(t6 != (1, false, 3, -4, 5, false))
+    assert!(t6 != (1, true, 4, -4, 5, false))
+    assert!(t6 != (1, true, 3, -5, 5, false))
+    assert!(t6 != (1, true, 3, -4, 6, false))
+    assert!(t6 != (1, true, 3, -4, 5, true))
+}
+
+#[test]
+fn arrays_and_empty_arrays() {
+    let a: [u256; 3] = [1, 2, 3]
+    let b: [u256; 3] = [1, 2, 3]
+    assert!(equal(a, b))
+    assert!(!(a != b))
+    assert!(a != [0, 2, 3])
+    assert!(a != [1, 0, 3])
+    assert!(a != [1, 2, 0])
+    let empty: [u256; 0] = []
+    assert!(empty == empty)
+    assert!(!(empty != empty))
+    assert!(empty == [])
+    assert!(empty == [0; 0])
+    let repeated: [u256; 3] = [7; 3]
+    assert!(repeated == [7; 3])
+    assert!(repeated != [8; 3])
+    let one: [bool; 1] = [true]
+    assert!(one == [true])
+    assert!(one != [false])
+}
+
+#[test]
+fn nested_aggregate_equality() {
+    let a: ([u256; 2], (bool, u8)) = ([1, 2], (true, 3))
+    assert!(a == ([1, 2], (true, 3)))
+    assert!(a != ([1, 0], (true, 3)))
+    assert!(a != ([1, 2], (false, 3)))
+    let b: [(u256, bool); 2] = [(1, true), (2, false)]
+    assert!(equal(b, b))
+    assert!(b != [(1, true), (2, true)])
+    let c: [[u256; 2]; 2] = [[1, 2], [3, 4]]
+    assert!(equal(c, c))
+    assert!(c != [[1, 2], [3, 5]])
+    let units: [(); 2] = [(), ()]
+    assert!(units == units)
+}
+
+// Intentionally not Copy, and equality differs from fieldwise equality.
+struct Item { value: u256 }
+
+impl Eq for Item {
+    fn eq(self, _ other: Item) -> bool {
+        self.value % 10 == other.value % 10
+    }
+}
+
+#[test]
+fn custom_noncopy_tuple_elements() {
+    let a = (Item { value: 1 }, Item { value: 2 })
+    let b = (Item { value: 11 }, Item { value: 12 })
+    assert!(a == b)
+    // The left operand remains usable; the right operand has been consumed.
+    assert!(a.0.value == 1)
+    assert!(a != (Item { value: 1 }, Item { value: 3 }))
+}
+
+#[test]
+fn custom_noncopy_array_elements() {
+    let a = [Item { value: 1 }, Item { value: 2 }]
+    let b = [Item { value: 11 }, Item { value: 12 }]
+    assert!(a == b)
+    assert!(a[0].value == 1)
+    assert!(a != [Item { value: 1 }, Item { value: 3 }])
+}
+
+struct Checked { value: u256 }
+
+impl Eq for Checked {
+    fn eq(self, _ other: Checked) -> bool {
+        // Comparing later elements after a mismatch must never reach this.
+        assert!(self.value != 99)
+        self.value == other.value
+    }
+}
+
+#[test]
+fn tuple_equality_short_circuits() {
+    let a = (Checked { value: 1 }, Checked { value: 99 })
+    assert!(!(a == (Checked { value: 2 }, Checked { value: 99 })))
+    assert!(a != (Checked { value: 2 }, Checked { value: 99 }))
+}
+
+#[test]
+fn array_equality_short_circuits() {
+    let a = [Checked { value: 1 }, Checked { value: 99 }]
+    assert!(!(a == [Checked { value: 2 }, Checked { value: 99 }]))
+    assert!(a != [Checked { value: 2 }, Checked { value: 99 }])
+}
+
+#[test]
+fn string_elements_use_core_method_bodies() {
+    let a: String<8> = "hello"
+    let b: String<8> = "hello"
+    let c: String<8> = "world"
+    assert!(a == b)
+    assert!(a != c)
+    assert!((a, true) == (b, true))
+    assert!([a, b] != [a, c])
+}
+
+#[test]
+fn pointer_elements_keep_address_equality() {
+    let a = core::ptr::alloc<u256>()
+    let b = core::ptr::alloc<u256>()
+    *a = 7
+    *b = 7
+    assert!((a,) == (a,))
+    assert!((a,) != (b,))
+    assert!([a, b] == [a, b])
+    assert!([a, b] != [b, a])
+}
+
+struct NeverEqual {}
+
+impl Eq for NeverEqual {
+    fn eq(self, _ other: NeverEqual) -> bool {
+        false
+    }
+}
+
+#[test]
+fn zero_sized_elements_still_use_eq() {
+    assert!((NeverEqual {},) != (NeverEqual {},))
+    assert!([NeverEqual {}] != [NeverEqual {}])
+    let empty: [NeverEqual; 0] = []
+    assert!(empty == [])
+}
+
+fn array_element<T, const N: usize>(_ a: [T; N], _ index: usize) -> u256
+where T: Eq
+{
+    if a[index] == a[index] { 1 } else { 0 }
+}
+
+#[test(should_revert)]
+fn empty_array_dynamic_index_reverts() {
+    let a: [u256; 0] = []
+    let _ = array_element(a, 0)
+}

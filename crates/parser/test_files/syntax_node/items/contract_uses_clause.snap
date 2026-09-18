@@ -1,6 +1,5 @@
 ---
 source: crates/parser/tests/syntax_node.rs
-assertion_line: 15
 expression: node
 input_file: test_files/syntax_node/items/contract_uses_clause.fe
 ---
@@ -23,9 +22,10 @@ Root@0..37
               WhiteSpace@24..25 " "
               MutKw@25..28 "mut"
               WhiteSpace@28..29 " "
-              Path@29..32
-                PathSegment@29..32
-                  Ident@29..32 "Ctx"
+              PathType@29..32
+                Path@29..32
+                  PathSegment@29..32
+                    Ident@29..32 "Ctx"
             RParen@32..33 ")"
         WhiteSpace@33..34 " "
         LBrace@34..35 "{"

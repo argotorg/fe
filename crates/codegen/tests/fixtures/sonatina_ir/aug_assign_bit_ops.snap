@@ -7,49 +7,43 @@ target = "evm-ethereum-osaka"
 
 func private %aug_assign_bit_ops(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.*i256 = alloca i256;
+        v2.objref<i256> = obj.alloc i256;
         jump block1;
 
     block1:
-        mstore v2 v0 i256;
-        v4.i256 = ptr_to_int v2 i256;
-        v6.i256 = mload v4 i256;
+        obj.store v2 v0;
+        v5.i256 = obj.load v2;
         jump block2;
 
     block2:
-        v9.i256 = phi (1.i256 block1) (v12 block6);
-        v10.i256 = phi (0.i256 block1) (v18 block6);
-        v11.i1 = eq v10 v1;
-        br v11 block4 block3;
+        v8.i256 = phi (1.i256 block1) (v11 block6);
+        v9.i256 = phi (0.i256 block1) (v17 block6);
+        v10.i1 = eq v9 v1;
+        br v10 block4 block3;
 
     block3:
-        (v12.i256, v13.i1) = umulo v9 v6;
-        br v13 block5 block6;
+        (v11.i256, v12.i1) = umulo v8 v5;
+        br v12 block5 block6;
 
     block4:
-        mstore v4 v9 i256;
-        v20.i256 = ptr_to_int v2 i256;
-        v22.i256 = mload v20 i256;
-        v23.i256 = shl 3.i256 v22;
-        mstore v20 v23 i256;
-        v24.i256 = ptr_to_int v2 i256;
-        v25.i256 = mload v24 i256;
-        v26.i256 = shr 1.i256 v25;
-        mstore v24 v26 i256;
-        v27.i256 = ptr_to_int v2 i256;
-        v29.i256 = mload v27 i256;
-        v30.i256 = and v29 255.i256;
-        mstore v27 v30 i256;
-        v31.i256 = ptr_to_int v2 i256;
-        v32.i256 = mload v31 i256;
-        v33.i256 = or v32 1.i256;
-        mstore v31 v33 i256;
-        v34.i256 = ptr_to_int v2 i256;
-        v36.i256 = mload v34 i256;
-        v37.i256 = xor v36 2.i256;
-        mstore v34 v37 i256;
-        v38.i256 = mload v2 i256;
-        return v38;
+        obj.store v2 v8;
+        v20.i256 = obj.load v2;
+        v21.i256 = shl 3.i256 v20;
+        obj.store v2 v21;
+        v22.i256 = obj.load v2;
+        v23.i256 = shr 1.i256 v22;
+        obj.store v2 v23;
+        v25.i256 = obj.load v2;
+        v26.i256 = and v25 255.i256;
+        obj.store v2 v26;
+        v27.i256 = obj.load v2;
+        v28.i256 = or v27 1.i256;
+        obj.store v2 v28;
+        v30.i256 = obj.load v2;
+        v31.i256 = xor v30 2.i256;
+        obj.store v2 v31;
+        v32.i256 = obj.load v2;
+        return v32;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -57,7 +51,7 @@ func private %aug_assign_bit_ops(v0.i256, v1.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        v18.i256 = add v10 1.i256;
+        v17.i256 = add v9 1.i256;
         jump block2;
 }
 

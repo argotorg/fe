@@ -12,7 +12,7 @@ use test_runner::*;
 fn test_item_list(fixture: Fixture<&str>) {
     let runner = TestRunner::item_list(false);
     let (cst, _) = runner.run(fixture.content());
-    let node = format! {"{:#?}", cst};
+    let node = format!("{:#?}", cst);
     assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     snap_test!(node, fixture.path());
 }
@@ -24,7 +24,7 @@ fn test_item_list(fixture: Fixture<&str>) {
 fn test_stmt(fixture: Fixture<&str>) {
     let runner = TestRunner::stmt_list(false);
     let (cst, _) = runner.run(fixture.content());
-    let node = format! {"{:#?}", cst};
+    let node = format!("{:#?}", cst);
     assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     snap_test!(node, fixture.path());
 }
@@ -36,7 +36,7 @@ fn test_stmt(fixture: Fixture<&str>) {
 fn test_expr(fixture: Fixture<&str>) {
     let runner = TestRunner::expr_list(false);
     let (cst, _) = runner.run(fixture.content());
-    let node = format! {"{:#?}", cst};
+    let node = format!("{:#?}", cst);
     assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     snap_test!(node, fixture.path());
 }

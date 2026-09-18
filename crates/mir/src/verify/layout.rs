@@ -13,7 +13,11 @@ pub(super) fn verify_class_layouts<'db>(
     visited: &mut FxHashSet<LayoutId<'db>>,
 ) -> Result<(), VerifyError<'db>> {
     match class {
-        RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => Ok(()),
+        RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { pointee: None, .. } => Ok(()),
+        RuntimeClass::RawAddr {
+            pointee: Some(pointee),
+            ..
+        } => verify_class_layouts(db, program, pointee, visited),
         RuntimeClass::AggregateValue { layout } => verify_layout(db, program, *layout, visited),
         RuntimeClass::Ref { pointee, view, .. } => {
             if !matches!(view, RefView::Whole | RefView::EnumVariant(_)) {

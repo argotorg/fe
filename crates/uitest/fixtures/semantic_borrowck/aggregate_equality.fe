@@ -1,0 +1,25 @@
+use core::ops::Eq
+
+struct Item { value: u256 }
+
+impl Eq for Item {
+    fn eq(self, _ other: Item) -> bool {
+        self.value == other.value
+    }
+}
+
+#[test]
+fn tuple_rhs_is_consumed() {
+    let a = (Item { value: 1 },)
+    let b = (Item { value: 1 },)
+    let same = a == b
+    assert!(same && a == b)
+}
+
+#[test]
+fn array_rhs_is_consumed() {
+    let a = [Item { value: 1 }]
+    let b = [Item { value: 1 }]
+    let different = a != b
+    assert!(different || a != b)
+}

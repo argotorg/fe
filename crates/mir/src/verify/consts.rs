@@ -130,17 +130,14 @@ fn verify_const_field<'db>(
     class: &RuntimeClass<'db>,
 ) -> Result<(), VerifyError<'db>> {
     match class {
-        RuntimeClass::Scalar(_) => {
-            if matches!(value, ConstNode::Scalar(_)) {
-                Ok(())
-            } else {
-                Err(VerifyError::InvalidConstRegion(ConstRegionId::new(
-                    db,
-                    expected_layout,
-                    node.clone(),
-                )))
-            }
+        RuntimeClass::Scalar(class) if matches!(value, ConstNode::Scalar(scalar) if scalar.fits_repr(class.repr)) => {
+            Ok(())
         }
+        RuntimeClass::Scalar(_) => Err(VerifyError::InvalidConstRegion(ConstRegionId::new(
+            db,
+            expected_layout,
+            node.clone(),
+        ))),
         RuntimeClass::AggregateValue { layout } => verify_const_node(db, program, *layout, value),
         RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => Err(
             VerifyError::InvalidConstRegion(ConstRegionId::new(db, expected_layout, node.clone())),

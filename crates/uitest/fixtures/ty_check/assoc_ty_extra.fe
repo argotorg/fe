@@ -1,0 +1,43 @@
+trait T {
+    type X
+}
+
+struct Foo {}
+impl T for Foo {
+    type X = u32
+    type Y = u64
+}
+
+trait Empty {}
+struct Bar {}
+impl Empty for Bar {
+    type Extra = u256
+}
+
+trait WithDefault {
+    type X = u32
+}
+struct Baz {}
+impl WithDefault for Baz {
+    type Y = u64
+}
+
+struct ValidDefault {}
+impl WithDefault for ValidDefault {}
+
+struct ValidOverride {}
+impl WithDefault for ValidOverride {
+    type X = u64
+}
+
+trait Super {
+    type X
+}
+trait Sub: Super {}
+struct Child {}
+impl Super for Child {
+    type X = u32
+}
+impl Sub for Child {
+    type X = u32
+}

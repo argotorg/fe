@@ -1,0 +1,9 @@
+use std::abi::DynArray
+
+type Values = [DynArray<u256>; 2]
+
+#[event]
+struct IndexedArray {
+    #[indexed]
+    values: Values,
+}

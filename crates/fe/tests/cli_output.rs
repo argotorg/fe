@@ -186,6 +186,66 @@ fn trigger() {
     );
 }
 
+#[test]
+fn test_cli_build_generic_oversized_size_reports_error_instead_of_panicking() {
+    let temp = tempdir().expect("tempdir");
+    let file = temp.path().join("generic_oversized_size.fe");
+    fs::write(
+        &file,
+        r#"
+fn type_size<T>() -> u256 {
+    core::size_of<T>()
+}
+
+fn trigger() -> u256 {
+    type_size<[u256; 0x8000000000000000]>()
+}
+"#,
+    )
+    .expect("write fixture");
+
+    let (output, exit_code) = run_fe_command("build", file.to_str().expect("fixture path utf8"));
+    assert_eq!(exit_code, 1, "expected build failure:\n{output}");
+    assert!(
+        output.contains("exceeds the supported 64-bit raw-memory layout size"),
+        "expected oversized type error instead of panic:\n{output}"
+    );
+    assert!(
+        !output.contains("panicked at"),
+        "unexpected panic:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_wide_enum_size_uses_widened_tag() {
+    let temp = tempdir().expect("tempdir");
+    let file = temp.path().join("wide_enum_size.fe");
+    let variants = (0..257)
+        .map(|index| format!("    V{index},\n"))
+        .collect::<String>();
+    fs::write(
+        &file,
+        format!(
+            r#"
+enum Wide {{
+{variants}}}
+
+#[test]
+fn test_wide_enum_size() {{
+    assert(core::size_of<Wide>() == 2)
+}}
+"#
+        ),
+    )
+    .expect("write fixture");
+
+    let (output, exit_code) = run_fe_command("test", file.to_str().expect("fixture path utf8"));
+    assert_eq!(
+        exit_code, 0,
+        "expected wide enum size test to pass:\n{output}"
+    );
+}
+
 struct FeOutput {
     stdout: String,
     stderr: String,
@@ -2242,16 +2302,9 @@ impl core::abi::AbiSize for Weird {
 }
 
 impl core::abi::Encode<std::abi::Sol> for Weird {
-    const DIRECT_ENCODE: bool = false
-
-    fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
-        self.flag.encode(e)
-        self.amount.encode(e)
-    }
-
-    fn encode_to_ptr(own self, _ ptr: u256) {
-        std::abi::Sol::store_word(ptr: ptr, value: if self.flag { 1 } else { 0 })
-        std::abi::Sol::store_word(ptr: ptr + 32, value: self.amount as u256)
+    fn encode(own self, _ ptr: *u8) {
+        core::abi::store_word(ptr: ptr, value: if self.flag { 1 } else { 0 })
+        core::abi::store_word(ptr: core::ptr::offset_bytes(ptr, 32), value: self.amount as u256)
     }
 }
 
@@ -3735,4 +3788,65 @@ fn test_cli_workspace_exclude_skips_member() {
     let snapshot_path = root.join("exclude_patterns_skip_member.case");
     let (output, _) = run_fe_main_in_dir(&["check"], &root);
     snap_test!(output, snapshot_path.to_str().unwrap());
+}
+
+#[test]
+fn unsupported_macro_calls_are_cli_errors() {
+    let dir = tempdir().expect("temp dir");
+    let source = dir.path().join("unsupported_macro.fe");
+    fs::write(&source, "#[test]\nfn unsupported() { funsig!(x) }\n")
+        .expect("write unsupported macro fixture");
+    let source = source.to_str().expect("source path utf8");
+
+    for command in ["check", "build", "test"] {
+        for recovery in [false, true] {
+            let mut args = vec![command, source];
+            if command != "test" {
+                args.push("--standalone");
+            }
+            if recovery {
+                args.push("--recovery-mode");
+            }
+            let (output, exit_code) = run_fe_main_in_dir(&args, dir.path());
+            assert_eq!(exit_code, 1, "fe {args:?}:\n{output}");
+            assert!(output.contains("unsupported macro call"), "{output}");
+            assert!(!output.contains("panicked at"), "{output}");
+        }
+    }
+}
+
+#[test]
+fn returned_array_copy_at_all_optimization_levels() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/returned_array_copy.fe");
+    // The fixture test covers the default level (1).
+    for level in ["0", "2", "s"] {
+        let (output, exit_code) = run_fe_main(&[
+            "test",
+            "--jobs",
+            "1",
+            "--optimize",
+            level,
+            fixture.to_str().expect("fixture path utf8"),
+        ]);
+        assert_eq!(exit_code, 0, "array copies failed at -O {level}:\n{output}");
+    }
+}
+
+#[test]
+fn wide_function_arguments_at_all_optimization_levels() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/wide_function_arguments.fe");
+    // The fixture test covers the default level (1).
+    for level in ["0", "2", "s"] {
+        let (output, exit_code) = run_fe_main(&[
+            "test",
+            "--jobs",
+            "1",
+            "--optimize",
+            level,
+            fixture.to_str().expect("fixture path utf8"),
+        ]);
+        assert_eq!(exit_code, 0, "wide calls failed at -O {level}:\n{output}");
+    }
 }

@@ -1,0 +1,46 @@
+use std::abi::{Bytes, DynArray, bytes_from_words_prefix}
+use std::evm::{Log, RawMem, encode_abi_payload}
+
+#[event]
+struct Mixed {
+    #[indexed]
+    provider: Address,
+    values: DynArray<u256>,
+    extra: Bytes,
+    invariant: u256,
+}
+
+#[test]
+fn test_mixed_dynamic_event() uses (log: mut Log, raw: mut RawMem) {
+    assert!(
+        Mixed::TOPIC0 == 0x97cd0165cf79835d3d0313bb5b69cd7cffaba79923a1a4d398385b5c9950a6a2,
+    )
+
+    let array_ptr = core::ptr::alloc_bytes(64)
+    raw.mstore(addr: array_ptr, value: 1)
+    raw.mstore(addr: core::ptr::offset_bytes(array_ptr, 32), value: 7)
+    let values = DynArray::from_abi_tail(data: array_ptr, len: 1, size: 64)
+    let extra = bytes_from_words_prefix<1, 1>(
+        [0xaa00000000000000000000000000000000000000000000000000000000000000],
+    )
+    let buffer = encode_abi_payload((values, extra, 3 as u256))
+    let data = buffer.ptr()
+    let len = buffer.len()
+
+    // Solidity: abi.encode(uint256[](7), bytes(hex"aa"), uint256(3)).
+    assert!(len == 224)
+    assert!(raw.mload(data) == 96)
+    assert!(raw.mload(core::ptr::offset_bytes(data, 32)) == 160)
+    assert!(raw.mload(core::ptr::offset_bytes(data, 64)) == 3)
+    assert!(raw.mload(core::ptr::offset_bytes(data, 96)) == 1)
+    assert!(raw.mload(core::ptr::offset_bytes(data, 128)) == 7)
+    assert!(raw.mload(core::ptr::offset_bytes(data, 160)) == 1)
+    assert!(
+        raw.mload(core::ptr::offset_bytes(data, 192))
+            == 0xaa00000000000000000000000000000000000000000000000000000000000000,
+    )
+
+    log.emit(
+        Mixed { provider: Address::zero(), values: values, extra: extra, invariant: 3 },
+    )
+}

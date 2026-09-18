@@ -1,8 +1,21 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 use cranelift_entity::{EntityRef, PrimaryMap, SecondaryMap, entity_impl};
 use hir::analysis::{
-    semantic::{SLocalId, SemanticInstance, normalized::NTerminatorKind},
+    semantic::{
+        SLocalId, SemanticInstance,
+        capability::{
+            external::{ExternalOrigin, ExternalSource},
+            guard::ValueOccurrence,
+            handle::HandleAddressSpace,
+            path::{Projection, project_referent_ty},
+            semantics::CapabilityClass,
+            source::{InputOrigin, SourceExpr},
+            value::{ValueInterner, ValueLimits},
+        },
+        normalized::NTerminatorKind,
+        semantic_borrow_summary,
+    },
     ty::{
         ty_check::{ReturnProjectionStep, ReturnProvenance},
         ty_def::TyId,
@@ -15,7 +28,8 @@ use crate::{
     db::MirDb,
     instance::{RuntimeInstanceKey, RuntimeInstanceSource},
     runtime::{
-        EnumLayoutKey, Layout, LayoutId, LayoutKey, RefKind, RuntimeClass, RuntimeExitBehavior,
+        AddressSpaceKind, EnumLayoutKey, Layout, LayoutId, LayoutKey, RefKind, RuntimeClass,
+        RuntimeExitBehavior,
     },
 };
 
@@ -26,6 +40,7 @@ use super::{
     },
     infer::{AssignmentSpace, CarrierInferer, ReturnClassLookup, merge_runtime_class},
     interface::{runtime_visible_binding_local, runtime_visible_binding_plans},
+    provider_space::address_space_from_provider,
     semantic_body::RuntimeSemanticBody,
 };
 use crate::runtime::synthetic::runtime_synthetic_exit_behavior;
@@ -244,7 +259,126 @@ pub(crate) fn declaration_runtime_return_class<'db>(
         };
         class = updated;
     }
+    // Native references into raw memory retain the pointer's layout. Type-level
+    // layout forwarding alone cannot describe a pointer loaded from a container.
+    // The shared borrow summary retains those load/dereference transitions.
+    if let Ok(Some(summary)) = semantic_borrow_summary(db, semantic) {
+        let values = ValueInterner::<SourceExpr<'db>>::new(db, ValueLimits::default());
+        let mut transports = BTreeMap::new();
+        for leaf in values.leaves(&summary.result, ValueOccurrence::Summary) {
+            if !matches!(leaf.semantics.class, CapabilityClass::Borrow(_)) {
+                continue;
+            }
+            let projection: Vec<_> = leaf
+                .path
+                .as_slice()
+                .iter()
+                .map(|step| match step {
+                    Projection::Field(field) => ReturnProjectionStep::Field(field.0),
+                    Projection::VariantField { variant, field } => {
+                        ReturnProjectionStep::VariantField {
+                            variant: variant.0,
+                            field: field.0,
+                        }
+                    }
+                    Projection::Index(_) => ReturnProjectionStep::AnyIndex,
+                })
+                .collect();
+            let space = raw_return_space(db, semantic, &leaf.payload.source);
+            transports
+                .entry(projection)
+                .and_modify(|previous| {
+                    if *previous != space {
+                        *previous = None;
+                    }
+                })
+                .or_insert(space);
+        }
+        for (projection, space) in transports {
+            let Some(space) = space else {
+                continue;
+            };
+            let Some(RuntimeClass::Ref { pointee, .. }) =
+                project_declaration_return_source(db, class.clone(), &projection)
+            else {
+                continue;
+            };
+            let source = RuntimeClass::raw_addr(space, *pointee);
+            if let Some(updated) = merge_declaration_return_source(
+                db,
+                class.clone(),
+                &projection,
+                &source,
+                &source,
+                false,
+            ) {
+                class = updated;
+            }
+        }
+    }
     Some(class)
+}
+
+fn raw_return_space<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+    source: &ExternalSource<'db>,
+) -> Option<AddressSpaceKind> {
+    if source.is_reachable() {
+        return None;
+    }
+    let mut steps = Vec::new();
+    let (mut target, mut raw) = match &source.origin {
+        ExternalOrigin::Input(input) => {
+            let binding = semantic
+                .key(db)
+                .typed_body(db)
+                .param_binding(input.param() as usize)?;
+            let param_ty = semantic.normalized_binding_ty(db, binding);
+            let carrier = match input.origin() {
+                InputOrigin::Place(_) => param_ty,
+                InputOrigin::Slot { slot, .. } => project_referent_ty(
+                    db,
+                    semantic,
+                    param_ty.as_view(db).unwrap_or(param_ty),
+                    slot.as_slice(),
+                )?,
+            };
+            steps.extend(input.dereferences().iter());
+            (
+                carrier
+                    .as_ptr(db)
+                    .or_else(|| carrier.as_capability(db).map(|(_, target)| target))?,
+                carrier.as_ptr(db).is_some(),
+            )
+        }
+        ExternalOrigin::Memory { target_ty, .. } => (*target_ty, true),
+        ExternalOrigin::Allocation(handle) | ExternalOrigin::OpaqueHandle(handle) => (
+            handle.contract.target_ty,
+            handle.contract.handle_ty.as_ptr(db).is_some(),
+        ),
+        ExternalOrigin::Provider {
+            target_ty,
+            provider,
+        } => (
+            *target_ty,
+            provider.binding(db).provider_ty.as_ptr(db).is_some(),
+        ),
+        ExternalOrigin::Local(_) => return None,
+    };
+    steps.extend(source.dereferences().iter());
+    for path in steps {
+        let carrier = project_referent_ty(db, semantic, target, path.as_slice())?;
+        raw = carrier.as_ptr(db).is_some();
+        target = carrier
+            .as_ptr(db)
+            .or_else(|| carrier.as_capability(db).map(|(_, target)| target))?;
+    }
+    if raw && let HandleAddressSpace::Known(space) = source.contract.address_space {
+        Some(address_space_from_provider(space))
+    } else {
+        None
+    }
 }
 
 fn project_declaration_return_source<'db>(
@@ -433,18 +567,20 @@ fn retarget_declaration_return_transport<'db>(
             RuntimeClass::Ref { pointee, .. },
             RuntimeClass::RawAddr {
                 space,
-                target: source_target,
+                pointee: source_target,
             },
         ) => RuntimeClass::RawAddr {
             space: *space,
-            target: if projected_transport {
-                source_target.or_else(|| pointee.aggregate_layout())
+            pointee: if projected_transport {
+                source_target.clone().or(Some(pointee))
             } else {
-                pointee.aggregate_layout()
+                Some(pointee)
             },
         },
         (
-            RuntimeClass::RawAddr { target, .. },
+            RuntimeClass::RawAddr {
+                pointee: target, ..
+            },
             RuntimeClass::Ref {
                 pointee,
                 kind: RefKind::Provider { space, .. },
@@ -452,22 +588,24 @@ fn retarget_declaration_return_transport<'db>(
             },
         ) => RuntimeClass::RawAddr {
             space: *space,
-            target: if projected_transport {
-                pointee.aggregate_layout().or(target)
+            pointee: if projected_transport {
+                Some(pointee.clone()).or(target)
             } else {
                 target
             },
         },
         (
-            RuntimeClass::RawAddr { target, .. },
+            RuntimeClass::RawAddr {
+                pointee: target, ..
+            },
             RuntimeClass::RawAddr {
                 space,
-                target: source_target,
+                pointee: source_target,
             },
         ) => RuntimeClass::RawAddr {
             space: *space,
-            target: if projected_transport {
-                source_target.or(target)
+            pointee: if projected_transport {
+                source_target.clone().or(target)
             } else {
                 target
             },
@@ -938,6 +1076,49 @@ fn helper() {}
     }
 
     #[test]
+    fn raw_pointer_borrows_keep_their_return_layout() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///raw_borrow_returns.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Buffer { ptr: *u8 }
+struct Loan { value: mut u8 }
+fn direct(_ ptr: *u8) -> mut u8 { mut *ptr }
+fn nested(_ buffer: Buffer) -> Loan { Loan { value: mut *buffer.ptr } }
+"#
+                .to_string(),
+            ),
+        );
+        let file = db.workspace().get(&db, &file_url).unwrap();
+        let top_mod = db.top_mod(file);
+        for (name, projection) in [
+            ("direct", vec![]),
+            ("nested", vec![ReturnProjectionStep::Field(0)]),
+        ] {
+            let semantic = semantic_instance_for_named_func(&db, top_mod, name);
+            let key = runtime_instance_for_semantic(&db, semantic).key(&db);
+            let declaration = declaration_runtime_return_class(&db, key).unwrap();
+            assert_eq!(
+                Some(declaration.clone()),
+                legacy_return_class_for_key(&db, key)
+            );
+            assert!(
+                matches!(
+                    project_declaration_return_source(&db, declaration, &projection),
+                    Some(RuntimeClass::RawAddr {
+                        space: AddressSpaceKind::Memory,
+                        ..
+                    })
+                ),
+                "{name} must return the raw pointee's layout"
+            );
+        }
+    }
+
+    #[test]
     fn borrow_return_class_remains_dynamic() {
         let mut db = DriverDataBase::default();
         let file_url = Url::parse("file:///borrow_return_class_remains_dynamic.fe").unwrap();
@@ -1307,14 +1488,8 @@ fn first(_ arr: [u8; 4]) -> u8 {
     #[test]
     fn merged_return_class_is_order_independent_for_irreconcilable_sites() {
         let db = DriverDataBase::default();
-        let storage = RuntimeClass::RawAddr {
-            space: AddressSpaceKind::Storage,
-            target: None,
-        };
-        let transient = RuntimeClass::RawAddr {
-            space: AddressSpaceKind::Transient,
-            target: None,
-        };
+        let storage = RuntimeClass::opaque_raw_addr(AddressSpaceKind::Storage);
+        let transient = RuntimeClass::opaque_raw_addr(AddressSpaceKind::Transient);
 
         // Return sites that disagree on a non-Memory space cannot be merged, so the
         // fold reports failure (caller falls back to the default class) regardless of
@@ -1329,18 +1504,9 @@ fn first(_ arr: [u8; 4]) -> u8 {
     #[test]
     fn merged_return_class_folds_memory_into_non_memory_regardless_of_order() {
         let db = DriverDataBase::default();
-        let memory = RuntimeClass::RawAddr {
-            space: AddressSpaceKind::Memory,
-            target: None,
-        };
-        let storage = RuntimeClass::RawAddr {
-            space: AddressSpaceKind::Storage,
-            target: None,
-        };
-        let merged = RuntimeClass::RawAddr {
-            space: AddressSpaceKind::Storage,
-            target: None,
-        };
+        let memory = RuntimeClass::opaque_raw_addr(AddressSpaceKind::Memory);
+        let storage = RuntimeClass::opaque_raw_addr(AddressSpaceKind::Storage);
+        let merged = RuntimeClass::opaque_raw_addr(AddressSpaceKind::Storage);
 
         assert_eq!(
             merged_return_class(&db, vec![memory.clone(), storage.clone()]),

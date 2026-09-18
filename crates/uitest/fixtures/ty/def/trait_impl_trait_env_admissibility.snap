@@ -69,6 +69,18 @@ error[6-0016]: associated const `C` has incompatible type
 114 │     const C: bool = 0
     │              ^^^^ expected `u32`, found `bool`
 
+error[6-0023]: associated type not defined in trait
+    ┌─ trait_impl_trait_env_admissibility.fe:204:10
+    │
+204 │     type Extra = bool
+    │          ^^^^^ associated type `Extra` is not defined in trait `WithDefaultItem`
+
+error[6-0023]: associated type not defined in trait
+    ┌─ trait_impl_trait_env_admissibility.fe:215:10
+    │
+215 │     type Extra = bool
+    │          ^^^^^ associated type `Extra` is not defined in trait `WithItem`
+
 error[8-0000]: type mismatch
    ┌─ trait_impl_trait_env_admissibility.fe:98:20
    │

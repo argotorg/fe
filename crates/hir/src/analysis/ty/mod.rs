@@ -17,14 +17,14 @@ use smallvec1::SmallVec;
 use trait_def::impls_for_trait_def;
 use trait_resolution::constraint::super_trait_cycle;
 use ty_def::{BorrowKind, InvalidCause, TyData, TyId};
-use ty_lower::{collect_generic_params, lower_type_alias};
+use ty_lower::{collect_generic_params, lower_hir_ty, lower_type_alias};
 
 use crate::analysis::name_resolution::{PathRes, resolve_path};
 use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
 };
 use crate::semantic::diagnostics::Diagnosable;
-use crate::span::{DesugaredOrigin, HirOrigin};
+use crate::span::{DesugaredOrigin, EventDesugared, HirOrigin};
 
 pub mod abi_ty;
 pub mod adt_def;
@@ -102,6 +102,8 @@ pub fn ty_is_copy<'db>(
     ty: TyId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
+    let ty = normalize::normalize_ty(db, ty, scope, assumptions);
+
     // Borrow/view handles (`mut`/`ref`/`view`) are always copyable, even without an explicit
     // `Copy` impl.
     if ty.as_capability(db).is_some() {
@@ -109,7 +111,7 @@ pub fn ty_is_copy<'db>(
     }
 
     // Built-in primitives are always `Copy`, independent of trait solving.
-    if ty == TyId::unit(db) || ty.is_bool(db) || ty.is_integral(db) {
+    if ty == TyId::unit(db) || ty.is_bool(db) || ty.is_integral(db) || ty.as_ptr(db).is_some() {
         return true;
     }
 
@@ -305,6 +307,44 @@ fn walk<'db>(
 
 pub struct BodyAnalysisPass {}
 
+fn events_with_indexed_dynamic_fields<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+) -> FxHashSet<EventDesugared> {
+    let mut events = FxHashSet::default();
+
+    for &impl_trait in top_mod.all_impl_traits(db) {
+        let HirOrigin::Desugared(DesugaredOrigin::Event(event_origin)) = impl_trait.origin(db)
+        else {
+            continue;
+        };
+        let Some(self_ty) = impl_trait.type_ref(db).to_opt() else {
+            continue;
+        };
+        let self_ty = lower_hir_ty(
+            db,
+            self_ty,
+            impl_trait.scope(),
+            crate::semantic::constraints_for(db, impl_trait.into()),
+        );
+        let Some(AdtRef::Struct(event_struct)) = self_ty.adt_ref(db) else {
+            continue;
+        };
+        let assumptions = crate::semantic::constraints_for(db, event_struct.into());
+        if event_struct.hir_fields(db).data(db).iter().any(|field| {
+            field.is_event_indexed
+                && field.type_ref().to_opt().is_some_and(|field_ty| {
+                    let field_ty = lower_hir_ty(db, field_ty, event_struct.scope(), assumptions);
+                    abi_ty::is_dynamic_event_ty(db, field_ty)
+                })
+        }) {
+            events.insert(event_origin.clone());
+        }
+    }
+
+    events
+}
+
 impl ModuleAnalysisPass for BodyAnalysisPass {
     fn run_on_module<'db>(
         &mut self,
@@ -313,15 +353,17 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         // Check function and const bodies; contract-specific analysis is handled separately.
         let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = Vec::new();
+        let indexed_dynamic_events = events_with_indexed_dynamic_fields(db, top_mod);
         for func in top_mod
             .all_funcs(db)
             .iter()
-            // Message field ABI requirements are diagnosed once at their source declarations.
-            .filter(|func| {
-                !matches!(
-                    func.origin(db),
-                    HirOrigin::Desugared(DesugaredOrigin::Msg(_))
-                )
+            // Generated ABI body failures are diagnosed once at their source declarations.
+            .filter(|func| match func.origin(db) {
+                HirOrigin::Desugared(DesugaredOrigin::Msg(_)) => false,
+                HirOrigin::Desugared(DesugaredOrigin::Event(event)) => {
+                    !indexed_dynamic_events.contains(event)
+                }
+                _ => true,
             })
         {
             let (body_diags, _) = ty_check::check_func_body(db, *func);
@@ -431,15 +473,11 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
             .first()
             .map(|registration| registration.provider_ty);
             for (idx, effect) in contract.effects(db).data(db).iter().enumerate() {
-                let Some(key_path) = effect
-                    .key_path
-                    .to_opt()
-                    .filter(|path| path.ident(db).is_present())
-                else {
+                let Some(key_ty) = effect.key_ty.to_opt() else {
                     continue;
                 };
 
-                match resolve_effect_key(db, key_path, contract.scope(), assumptions) {
+                match resolve_effect_key(db, key_ty, contract.scope(), assumptions) {
                     ResolvedEffectKey::Trait(schema) => {
                         let Some(root_effect_ty) = root_effect_ty else {
                             continue;
@@ -475,7 +513,7 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                         if !given.is_zero_sized(db) {
                             diags.push(Box::new(BodyDiag::ContractRootEffectTypeNotZeroSized {
                                 owner: EffectParamOwner::Contract(contract),
-                                key: key_path,
+                                key: key_ty,
                                 idx,
                                 given,
                             }) as _);
@@ -484,7 +522,7 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                     ResolvedEffectKey::Invalid | ResolvedEffectKey::Other => {
                         diags.push(Box::new(BodyDiag::InvalidEffectKey {
                             owner: EffectParamOwner::Contract(contract),
-                            key: key_path,
+                            key: key_ty,
                             idx,
                         }) as _);
                     }

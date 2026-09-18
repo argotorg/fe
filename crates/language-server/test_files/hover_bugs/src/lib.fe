@@ -50,9 +50,9 @@ fn create<C: Contract>() {
     let args_len = C::InitArgs::ENCODED_SIZE
     let total_len = init_len + args_len
 
-    let init_ptr = mem::alloc(total_len)
+    let init_ptr = ptr::alloc_bytes(total_len)
 
     let ret_len = ops::returndatasize()
-    let ret_ptr = mem::alloc(ret_len)
+    let ret_ptr = ptr::alloc_bytes(ret_len)
     ops::revert(offset: ret_ptr, len: ret_len)
 }

@@ -1,0 +1,27 @@
+struct PointerPair {
+    left: *u256,
+    right: *u256,
+}
+
+impl Copy for PointerPair {}
+
+fn allocate_pair(_ left_value: u256, _ right_value: u256) -> PointerPair {
+    let left = core::ptr::alloc<u256>()
+    let right = core::ptr::alloc<u256>()
+    *left = left_value
+    *right = right_value
+    PointerPair { left: left, right: right }
+}
+
+#[test]
+fn test_pointer_aggregate_roundtrip() {
+    let pair = allocate_pair(left_value: 13, right_value: 21)
+    let pair_ptr = core::ptr::alloc<PointerPair>()
+    *pair_ptr = pair
+
+    let loaded = *pair_ptr
+    assert(loaded.left == pair.left)
+    assert(loaded.right == pair.right)
+    assert(*loaded.left == 13)
+    assert(*loaded.right == 21)
+}

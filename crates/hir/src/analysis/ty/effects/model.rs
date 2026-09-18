@@ -12,7 +12,7 @@ use crate::{
             visitor::{TyVisitable, TyVisitor, walk_const_ty, walk_ty},
         },
     },
-    hir_def::{IdentId, PathId, Trait, scope_graph::ScopeId},
+    hir_def::{IdentId, PathId, Trait, TypeId as HirTypeId, scope_graph::ScopeId},
     span::DynLazySpan,
 };
 use common::indexmap::IndexMap;
@@ -27,7 +27,7 @@ pub struct EffectRequirementDecl<'db> {
     pub binding_idx: u32,
     pub required_mut: bool,
     pub name: Option<IdentId<'db>>,
-    pub key_path: Option<PathId<'db>>,
+    pub key_ty: HirTypeId<'db>,
     pub key: EffectRequirementKey<'db>,
 }
 
@@ -223,7 +223,7 @@ impl<'db> EffectRequirementDecl<'db> {
             binding_idx: requirement.binding_idx,
             required_mut: requirement.is_mut,
             name: Some(requirement.binding_name),
-            key_path: Some(requirement.binding_path),
+            key_ty: requirement.binding_ty,
             key,
         })
     }

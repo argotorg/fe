@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/static_abi_element_sealed.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ static_abi_element_sealed.fe:9:27
+  │
+9 │ impl StaticAbiElement for Custom {}
+  │                           ^^^^^^ `Custom` doesn't implement `StaticAbiElementSeal`

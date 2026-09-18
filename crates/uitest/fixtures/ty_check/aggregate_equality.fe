@@ -1,0 +1,17 @@
+struct NoEq { value: u256 }
+
+fn missing_tuple_bound(_ a: (NoEq,), _ b: (NoEq,)) -> bool {
+    a == b
+}
+
+fn missing_array_bound(_ a: [NoEq; 2], _ b: [NoEq; 2]) -> bool {
+    a != b
+}
+
+fn different_lengths(_ a: [u256; 2], _ b: [u256; 3]) -> bool {
+    a == b
+}
+
+fn different_tuple_elements(_ a: (u256, bool), _ b: (u256, u256)) -> bool {
+    a == b
+}

@@ -1,0 +1,16 @@
+msg AppMsg {
+    #[selector = 0x01]
+    Get {} -> u32,
+}
+
+struct AppStore {}
+
+pub contract App {
+    store: AppStore
+
+    recv AppMsg {
+        Get {} -> u32 {
+            return 1
+        }
+    }
+}

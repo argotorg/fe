@@ -3,14 +3,16 @@ use salsa::Update;
 
 use crate::{
     analysis::{
+        HirAnalysisDb,
         semantic::{
-            BorrowActivation, CallSiteId, FieldIndex, Mutability, SConst, SStmtId, SemOrigin,
-            SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticInstance,
-            VariantIndex, capability::handle::OpaqueHandleContract,
+            BorrowActivation, CallSiteId, FieldIndex, Mutability, SConst, SStmtId, SemConstScalar,
+            SemConstValue, SemOrigin, SemanticCalleeRef, SemanticCodeRegionRef,
+            SemanticCodeRegionTarget, SemanticInstance, VariantIndex,
+            capability::handle::{HandleAddressSpace, OpaqueHandleContract},
         },
         ty::{
             provider::ProviderAddressSpace,
-            ty_check::{BodyOwner, EffectPassMode, LocalBinding},
+            ty_check::{BodyOwner, EffectArgLayoutView, EffectPassMode, LocalBinding},
             ty_def::{BorrowKind, TyId},
         },
     },
@@ -58,18 +60,17 @@ impl<'db> NormalizedBody<'db> {
         self.blocks.get(id.index())
     }
 
-    pub fn place_base_ty(
-        &self,
-        db: &'db dyn crate::analysis::HirAnalysisDb,
-        base: NPlaceBase,
-    ) -> Option<TyId<'db>> {
+    pub fn place_base_ty(&self, db: &'db dyn HirAnalysisDb, base: NPlaceBase) -> Option<TyId<'db>> {
         match base {
             NPlaceBase::Root(root) => Some(self.root(root)?.ty),
-            NPlaceBase::CapabilityTarget { carrier } => self
-                .value(carrier)?
-                .ty
-                .as_capability(db)
-                .map(|(_, target)| target),
+            NPlaceBase::CapabilityTarget { carrier } => {
+                self.value(carrier)?.ty.as_ptr(db).or_else(|| {
+                    self.value(carrier)?
+                        .ty
+                        .as_capability(db)
+                        .map(|(_, target)| target)
+                })
+            }
         }
     }
 
@@ -303,8 +304,9 @@ pub struct NEffectArg<'db> {
     pub binding_idx: u32,
     pub arg: NEffectArgValue<'db>,
     pub pass_mode: EffectPassMode,
+    pub layout_view: EffectArgLayoutView,
     pub required_mut: bool,
-    pub target_ty: Option<TyId<'db>>,
+    pub provider_target_ty: Option<TyId<'db>>,
     pub provider: Option<ProviderAddressSpace>,
 }
 
@@ -371,6 +373,11 @@ pub enum NExpr<'db> {
         lhs: NOperand,
         rhs: NOperand,
     },
+    /// Raw address conversion is explicit; it is not a scalar-only operation.
+    PointerCast {
+        value: NOperand,
+        to: TyId<'db>,
+    },
     ScalarCast {
         value: NOperand,
         to: TyId<'db>,
@@ -416,6 +423,7 @@ impl<'db> NExpr<'db> {
             | Self::ProjectValue { value: src, .. }
             | Self::StructuralRepack { value: src, .. }
             | Self::Unary { value: src, .. }
+            | Self::PointerCast { value: src, .. }
             | Self::ScalarCast { value: src, .. }
             | Self::ArrayRepeat { value: src, .. }
             | Self::GetEnumTag { value: src }
@@ -470,6 +478,7 @@ impl<'db> NExpr<'db> {
             | Self::Const(_)
             | Self::Unary { .. }
             | Self::Binary { .. }
+            | Self::PointerCast { .. }
             | Self::ScalarCast { .. }
             | Self::ArrayRepeat { .. }
             | Self::AggregateMake { .. }
@@ -593,4 +602,46 @@ impl NTerminatorKind<'_> {
             Self::Assert { .. } | Self::Return(_) => Vec::new(),
         }
     }
+}
+
+/// Primitive scalars and raw pointers cross ordinary argument boundaries by
+/// value. Their implicit frontend views do not borrow the caller's storage.
+pub fn copied_scalar_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+    ty.as_view(db)
+        .filter(|target| {
+            target.as_ptr(db).is_some() || target.is_integral(db) || target.is_bool(db)
+        })
+        .unwrap_or(ty)
+}
+
+/// The runtime representation of a dynamic string literal owns a freshly allocated
+/// ABI payload. Keep its pointer source explicit in the shared constant contract.
+pub fn literal_allocation<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    constant: &SConst<'db>,
+) -> Option<(FieldIndex, OpaqueHandleContract<'db>)> {
+    let SConst::Value(value) = constant else {
+        return None;
+    };
+    if !ty.is_core_dyn_string(db)
+        || !matches!(
+            value.value(db),
+            SemConstValue::Scalar {
+                value: SemConstScalar::Bytes(_),
+                ..
+            }
+        )
+    {
+        return None;
+    }
+    let pointer_ty = *ty.field_types(db).first()?;
+    Some((
+        FieldIndex(0),
+        OpaqueHandleContract {
+            handle_ty: pointer_ty,
+            target_ty: pointer_ty.as_ptr(db)?,
+            address_space: HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+        },
+    ))
 }

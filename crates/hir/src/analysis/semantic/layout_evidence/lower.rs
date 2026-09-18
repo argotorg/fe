@@ -22,10 +22,8 @@ use crate::analysis::{
         LayoutEvidencePathStep, LayoutMapTy, LayoutPortKey,
         adt_def::instantiate_adt_field_shape,
         const_ty::CallableInputLayoutHoleOrigin,
-        provider::{
-            EffectHandleTargetResolution, ProviderLayoutEvidence, resolve_effect_handle_target,
-        },
-        ty_check::LocalBinding,
+        provider::{EffectHandleResolution, ProviderLayoutEvidence, resolve_effect_handle},
+        ty_check::{EffectArgLayoutView, LocalBinding},
         ty_def::TyId,
         ty_lower::layout_bundle_schema_for_semantic_value,
     },
@@ -390,6 +388,7 @@ fn assigned_provider_components<'db>(
             _ if matches!(
                 provider.semantics.evidence,
                 ProviderLayoutEvidence::ResolvedHandle(_)
+                    | ProviderLayoutEvidence::TraitBoundHandle(_)
             ) =>
             {
                 (
@@ -930,7 +929,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         let target =
             LayoutBundleInterface::all_runtime(self.semantic_values[dst.index()].schema.clone());
         let mapping = target
-            .runtime_call_mapping(&self.semantic_values[source.index()].schema)
+            .runtime_call_mapping(&self.semantic_values[source.index()].schema, &[])
             .ok_or(LayoutEvidenceError::InvalidPlace)?;
         self.mapped_transfer_bundle(source, &EvidenceProjection::default(), &target, &mapping)
     }
@@ -1327,7 +1326,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
     fn effect_arg_transfer_bundle(
         &self,
         local: SLocalId,
-        target_ty: TyId<'db>,
+        provider_target_ty: TyId<'db>,
         expected: &LayoutBundleInterface<'db>,
     ) -> Result<LayoutTransferBundle<'db>, LayoutEvidenceError<'db>> {
         let local_data = self
@@ -1337,28 +1336,23 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             .ok_or(LayoutEvidenceError::InvalidPlace)?;
         let source_schema = &self.semantic_values[local.index()].schema;
         let mut path = Vec::new();
-        if let Some(mapping) = expected.runtime_view_mapping(source_schema, &path) {
-            return self.mapped_transfer_bundle(
-                local,
-                &EvidenceProjection::default(),
-                expected,
-                &mapping,
-            );
-        }
         let mut source_ty = local_data
             .ty
             .as_capability(self.db)
             .map_or(local_data.ty, |(_, inner)| inner);
-        let target_ty = self.normalized.owner.normalized_ty(self.db, target_ty);
+        let provider_target_ty = self
+            .normalized
+            .owner
+            .normalized_ty(self.db, provider_target_ty);
         source_ty = self.normalized.owner.normalized_ty(self.db, source_ty);
         let mut seen = FxHashSet::default();
-        while source_ty != target_ty {
+        while source_ty != provider_target_ty {
             if !seen.insert(source_ty) {
                 return Err(LayoutEvidenceError::InvalidPlace);
             }
-            let EffectHandleTargetResolution::Resolved {
+            let EffectHandleResolution::Resolved {
                 target_ty: next_ty, ..
-            } = resolve_effect_handle_target(
+            } = resolve_effect_handle(
                 self.db,
                 self.normalized.owner.key(self.db).owner(self.db).scope(),
                 self.normalized.owner.assumptions(self.db),
@@ -1369,19 +1363,19 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             };
             path.push(LayoutEvidencePathStep::EffectTarget);
             source_ty = self.normalized.owner.normalized_ty(self.db, next_ty);
-            if let Some(mapping) = expected.runtime_view_mapping(source_schema, &path) {
-                return self.mapped_transfer_bundle(
-                    local,
-                    &EvidenceProjection {
-                        path,
-                        indices: Vec::new(),
-                    },
-                    expected,
-                    &mapping,
-                );
-            }
         }
-        Err(LayoutEvidenceError::InvalidPlace)
+        let mapping = expected
+            .runtime_call_mapping(source_schema, &path)
+            .ok_or(LayoutEvidenceError::InvalidPlace)?;
+        self.mapped_transfer_bundle(
+            local,
+            &EvidenceProjection {
+                path,
+                indices: Vec::new(),
+            },
+            expected,
+            &mapping,
+        )
     }
 
     fn call_input_transfer_bundle(
@@ -1395,7 +1389,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             let projection = EvidenceProjection::default();
             let source = &self.semantic_values[local.index()].schema;
             let mapping = interface
-                .runtime_call_mapping(source)
+                .runtime_call_mapping(source, &[])
                 .ok_or(LayoutEvidenceError::InvalidPlace)?;
             self.mapped_transfer_bundle(local, &projection, interface, &mapping)
         };
@@ -1416,12 +1410,15 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                 match &arg.arg {
                     NEffectArgValue::Value(value) => {
                         let local = self.operand_local(*value)?;
-                        arg.target_ty.map_or_else(
-                            || direct(local),
-                            |target_ty| {
-                                self.effect_arg_transfer_bundle(local, target_ty, interface)
-                            },
-                        )
+                        match arg.layout_view {
+                            EffectArgLayoutView::Direct => direct(local),
+                            EffectArgLayoutView::ProviderTarget => self.effect_arg_transfer_bundle(
+                                local,
+                                arg.provider_target_ty
+                                    .ok_or(LayoutEvidenceError::InvalidPlace)?,
+                                interface,
+                            ),
+                        }
                     }
                     NEffectArgValue::Place(place) => LayoutTransferBundle::new(
                         self.place_transfer_bundle(place, &interface.schema)?
@@ -1677,6 +1674,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                     NExpr::CodeRegionRef { .. }
                     | NExpr::Unary { .. }
                     | NExpr::Binary { .. }
+                    | NExpr::PointerCast { .. }
                     | NExpr::ScalarCast { .. }
                     | NExpr::GetEnumTag { .. }
                     | NExpr::IsEnumVariant { .. }

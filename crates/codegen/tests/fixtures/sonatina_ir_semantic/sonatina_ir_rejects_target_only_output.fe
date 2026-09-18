@@ -1,0 +1,4 @@
+
+fn helper(value: u256) -> u256 {
+    value
+}

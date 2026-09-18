@@ -15,7 +15,9 @@ pub fn parse_type<S: TokenStream>(
     checkpoint: Option<Checkpoint>,
 ) -> Result<Checkpoint, Recovery<ErrProof>> {
     match parser.current_kind() {
-        Some(SyntaxKind::Star) => parser.parse_cp(PtrTypeScope::default(), checkpoint),
+        Some(SyntaxKind::Star | SyntaxKind::Star2) => {
+            parser.parse_cp(PtrTypeScope::default(), checkpoint)
+        }
         Some(SyntaxKind::MutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw) => {
             parser.parse_cp(ModeTypeScope::default(), checkpoint)
         }
@@ -30,9 +32,11 @@ pub fn parse_type<S: TokenStream>(
 
 pub(crate) fn is_type_start(kind: SyntaxKind) -> bool {
     match kind {
-        SyntaxKind::Star | SyntaxKind::SelfTypeKw | SyntaxKind::LParen | SyntaxKind::LBracket => {
-            true
-        }
+        SyntaxKind::Star
+        | SyntaxKind::Star2
+        | SyntaxKind::SelfTypeKw
+        | SyntaxKind::LParen
+        | SyntaxKind::LBracket => true,
         SyntaxKind::MutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw => true,
         kind if is_path_segment(kind) => true,
         _ => false,
@@ -44,7 +48,8 @@ impl super::Parse for PtrTypeScope {
     type Error = Recovery<ErrProof>;
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.set_newline_as_trivia(false);
-        parser.bump_expected(SyntaxKind::Star);
+        parser.expect(&[SyntaxKind::Star, SyntaxKind::Star2], None)?;
+        parser.bump();
         parse_type(parser, None).map(|_| ())
     }
 }

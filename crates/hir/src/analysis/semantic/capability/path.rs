@@ -1,5 +1,9 @@
 use super::index::{IndexExpr, IndexSubst};
-use crate::analysis::semantic::{FieldIndex, VariantIndex};
+use crate::analysis::{
+    HirAnalysisDb,
+    semantic::{FieldIndex, SemanticInstance, VariantIndex},
+    ty::ty_def::TyId,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Projection<I> {
@@ -79,3 +83,26 @@ macro_rules! path_impl {
 }
 path_impl!(StructuralPath);
 path_impl!(RegionPath);
+
+/// Project a referent type through structural storage, without following capabilities.
+pub fn project_referent_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    semantic: SemanticInstance<'db>,
+    mut ty: TyId<'db>,
+    path: &[Projection<IndexExpr<'db>>],
+) -> Option<TyId<'db>> {
+    for step in path {
+        ty = ty.as_view(db).unwrap_or(ty);
+        ty = match step {
+            Projection::Field(field) => *semantic
+                .normalized_field_types(db, ty)
+                .get(usize::from(field.0))?,
+            Projection::VariantField { variant, field } => *semantic
+                .normalized_enum_variant_field_tys(db, ty, *variant)
+                .get(usize::from(field.0))?,
+            Projection::Index(_) if ty.is_array(db) => *ty.generic_args(db).first()?,
+            Projection::Index(_) => return None,
+        };
+    }
+    Some(ty)
+}

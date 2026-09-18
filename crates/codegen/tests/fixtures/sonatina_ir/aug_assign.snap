@@ -7,16 +7,14 @@ target = "evm-ethereum-osaka"
 
 func private %aug_assign(v0.i64, v1.i64) -> i64 {
     block0:
-        v2.*i64 = alloca i64;
+        v2.objref<i64> = obj.alloc i64;
         jump block1;
 
     block1:
-        mstore v2 v0 i64;
-        v4.i256 = ptr_to_int v2 i256;
-        v6.i256 = mload v4 i256;
-        v7.i64 = trunc v6 i64;
-        (v8.i64, v9.i1) = uaddo v7 v1;
-        br v9 block2 block3;
+        obj.store v2 v0;
+        v5.i64 = obj.load v2;
+        (v6.i64, v7.i1) = uaddo v5 v1;
+        br v7 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -24,20 +22,16 @@ func private %aug_assign(v0.i64, v1.i64) -> i64 {
         evm_revert 0.i256 36.i256;
 
     block3:
-        v16.i256 = zext v8 i256;
-        mstore v4 v16 i256;
-        v17.i256 = ptr_to_int v2 i256;
-        v19.i256 = mload v17 i256;
-        v20.i64 = trunc v19 i64;
-        (v21.i64, v22.i1) = umulo v20 2.i64;
-        br v22 block2 block4;
+        obj.store v2 v6;
+        v15.i64 = obj.load v2;
+        (v16.i64, v17.i1) = umulo v15 2.i64;
+        br v17 block2 block4;
 
     block4:
-        v24.i256 = zext v21 i256;
-        mstore v17 v24 i256;
-        v25.i64 = mload v2 i64;
-        v27.i1 = eq 2.i64 0.i64;
-        br v27 block5 block6;
+        obj.store v2 v16;
+        v19.i64 = obj.load v2;
+        v21.i1 = eq 2.i64 0.i64;
+        br v21 block5 block6;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -45,11 +39,11 @@ func private %aug_assign(v0.i64, v1.i64) -> i64 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        (v29.i64, v30.i1) = evm_udivo v25 2.i64;
-        br v30 block2 block7;
+        (v23.i64, v24.i1) = evm_udivo v19 2.i64;
+        br v24 block2 block7;
 
     block7:
-        return v29;
+        return v23;
 }
 
 func private %main() -> i64 {

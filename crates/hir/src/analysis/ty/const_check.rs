@@ -187,6 +187,7 @@ impl<'db> ConstFnChecker<'db, '_> {
                 args.iter().for_each(|arg| self.check_expr(arg.expr));
                 self.check_call_target(expr);
             }
+            Expr::UnsupportedMacroCall => {}
             Expr::Assert(args) => args.iter().for_each(|arg| self.check_expr(arg.expr)),
             Expr::MethodCall(receiver, _name, _generic_args, args) => {
                 self.check_expr(*receiver);

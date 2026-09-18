@@ -266,7 +266,10 @@ fn verify_expr<'db>(
                 return Err(NormalizedBodyVerifyError::InvalidHandleOrigin);
             }
         }
-        NExpr::Const(_) if has_capability(db, body, result_ty)? => {
+        NExpr::Const(value)
+            if has_capability(db, body, result_ty)?
+                && literal_allocation(db, result_ty, value).is_none() =>
+        {
             return Err(NormalizedBodyVerifyError::ScalarCapability);
         }
         _ => {}
@@ -407,7 +410,7 @@ fn verify_expr<'db>(
                     value_ty == result_ty && value_ty.is_integral(db)
                 }
                 UnOp::Not => value_ty.is_bool(db) && result_ty.is_bool(db),
-                UnOp::Mut | UnOp::Ref => false,
+                UnOp::Mut | UnOp::Ref | UnOp::Deref => false,
             };
             valid
                 .then_some(())
@@ -439,6 +442,15 @@ fn verify_expr<'db>(
                 BinOp::Logical(_) | BinOp::Index => false,
             };
             valid
+                .then_some(())
+                .ok_or(NormalizedBodyVerifyError::ExpressionType)
+        }
+        NExpr::PointerCast { value, to } => {
+            let from = operand_ty(body, *value)?;
+            let valid = (from.as_ptr(db).is_some()
+                && (to.as_ptr(db).is_some() || to.is_integral(db)))
+                || (from.is_integral(db) && to.as_ptr(db).is_some());
+            (valid && *to == result_ty)
                 .then_some(())
                 .ok_or(NormalizedBodyVerifyError::ExpressionType)
         }
@@ -533,7 +545,7 @@ fn verify_expr<'db>(
                 if !effect_bindings.insert(arg.binding_idx)
                     || requirement.is_mut != arg.required_mut
                     || !shape_matches
-                    || arg.target_ty.is_some_and(|ty| ty.has_invalid(db))
+                    || arg.provider_target_ty.is_some_and(|ty| ty.has_invalid(db))
                 {
                     return Err(NormalizedBodyVerifyError::ExpressionType);
                 }
@@ -548,7 +560,7 @@ fn verify_expr<'db>(
                     arg_ty,
                 );
                 if !matches!(semantics.evidence, ProviderLayoutEvidence::InvalidHandle(_))
-                    && let Some(target_ty) = arg.target_ty
+                    && let Some(target_ty) = arg.provider_target_ty
                     && !structural_types_are_boundary_compatible(
                         db,
                         body.owner,
@@ -995,7 +1007,9 @@ fn verify_mutation<'db>(
                     && matches!(root.kind, NRootKind::LocalSlot { .. }))
         }
         NPlaceBase::CapabilityTarget { carrier } => {
-            capability == Some(CapabilityKind::Mut)
+            body.value(carrier)
+                .is_some_and(|value| value.ty.as_ptr(db).is_some())
+                || capability == Some(CapabilityKind::Mut)
                 || carrier_has_mutable_view_authority(db, body, carrier)
         }
     };
@@ -1068,6 +1082,7 @@ fn value_has_mutable_view_origin<'db>(
         | NExpr::Const(_)
         | NExpr::Unary { .. }
         | NExpr::Binary { .. }
+        | NExpr::PointerCast { .. }
         | NExpr::ScalarCast { .. }
         | NExpr::ArrayRepeat { .. }
         | NExpr::AggregateMake { .. }

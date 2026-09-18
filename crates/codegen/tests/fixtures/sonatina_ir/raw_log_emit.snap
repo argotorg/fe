@@ -5,23 +5,88 @@ input_file: crates/codegen/tests/fixtures/raw_log_emit.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = {i256};
+type @layout_0 = {i256, i256};
 
-func private %from_raw(v0.i256) -> @layout_0 {
+func private %alloc() -> i256 {
     block0:
         jump block1;
 
     block1:
-        v4.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
+        v1.*i8 = evm_malloc 32.i256;
+        v2.i256 = ptr_to_int v1 i256;
+        v3.i256 = call %cast__gcc1f v2;
+        return v3;
+}
+
+func private %byte_ptr(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %cast__gab97 v0;
+        return v2;
+}
+
+func private %cast__gab97(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %cast__gcc1f(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
+func private %from_raw_parts(v0.i256, v1.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
+        v8.@layout_0 = insert_value v6 1.i256 v1;
+        return v8;
+}
+
+func private %len(v0.objref<@layout_0>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.objref<i256> = obj.proj v0 1.i256;
+        v4.i256 = obj.load v3;
         return v4;
 }
 
-func private %log0(v0.i256, v1.i256) {
+func private %log0(v0.objref<@layout_0>) {
     block0:
+        v1.objref<@layout_0> = obj.alloc @layout_0;
+        v2.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
 
     block1:
-        evm_log0 v0 v1;
+        v4.@layout_0 = obj.load v0;
+        v6.objref<i256> = obj.proj v1 0.i256;
+        v7.i256 = extract_value v4 0.i256;
+        obj.store v6 v7;
+        v9.objref<i256> = obj.proj v1 1.i256;
+        v10.i256 = extract_value v4 1.i256;
+        obj.store v9 v10;
+        v11.i256 = call %ptr v1;
+        v12.@layout_0 = obj.load v0;
+        v13.objref<i256> = obj.proj v2 0.i256;
+        v14.i256 = extract_value v12 0.i256;
+        obj.store v13 v14;
+        v15.objref<i256> = obj.proj v2 1.i256;
+        v16.i256 = extract_value v12 1.i256;
+        obj.store v15 v16;
+        v17.i256 = call %len v2;
+        evm_log0 v11 v17;
         return;
 }
 
@@ -43,16 +108,7 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %mem_ptr(v0.i256) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.@layout_0 = call %from_raw v0;
-        return v2;
-}
-
-func private %raw(v0.objref<@layout_0>) -> i256 {
+func private %ptr(v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -68,12 +124,16 @@ func private %raw_emit() {
         jump block1;
 
     block1:
-        v2.@layout_0 = call %mem_ptr 256.i256;
-        v4.objref<i256> = obj.proj v0 0.i256;
-        v5.i256 = extract_value v2 0.i256;
-        obj.store v4 v5;
-        v6.i256 = call %raw v0;
-        call %log0 v6 32.i256;
+        v1.i256 = call %alloc;
+        v2.i256 = call %byte_ptr v1;
+        v4.@layout_0 = call %from_raw_parts v2 32.i256;
+        v6.objref<i256> = obj.proj v0 0.i256;
+        v7.i256 = extract_value v4 0.i256;
+        obj.store v6 v7;
+        v9.objref<i256> = obj.proj v0 1.i256;
+        v10.i256 = extract_value v4 1.i256;
+        obj.store v9 v10;
+        call %log0 v0;
         return;
 }
 

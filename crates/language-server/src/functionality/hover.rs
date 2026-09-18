@@ -70,8 +70,9 @@ fn effect_key_path_at_site<'db>(
             .effects(db)
             .data(db)
             .get(idx)?
-            .key_path
-            .to_opt(),
+            .key_ty
+            .to_opt()?
+            .as_path(db),
         EffectParamSite::ContractRecvArm {
             contract,
             recv_idx,
@@ -82,8 +83,9 @@ fn effect_key_path_at_site<'db>(
             .effects(db)
             .data(db)
             .get(idx)?
-            .key_path
-            .to_opt(),
+            .key_ty
+            .to_opt()?
+            .as_path(db),
     }
 }
 

@@ -1,0 +1,19 @@
+// Exactly one checked addition, so the compiler-generated panic block has a
+// single user and may be attributed to it.
+msg SinglePanicMsg {
+    #[selector = 0x01]
+    Go { a: u32, b: u32 } -> u32,
+}
+
+struct SinglePanicStore {}
+
+pub contract SinglePanic {
+    store: SinglePanicStore
+
+    recv SinglePanicMsg {
+        Go { a, b } -> u32 {
+            let x: u32 = a + b
+            return x
+        }
+    }
+}

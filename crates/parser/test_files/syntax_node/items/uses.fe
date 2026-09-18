@@ -3,3 +3,5 @@ fn f() uses Ctx {}
 fn g() uses mut Ctx {}
 
 fn h() uses (Ctx, mut Storage, c: Ctx, f: mut Foo) {}
+
+fn pointer_effects() uses (data: *Data, words: mut **Word) {}

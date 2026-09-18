@@ -18,7 +18,8 @@ use super::{
     index::{BinderScope, IndexExpr, IndexSubst},
     path::RegionPath,
     region::{ProviderRegionId, RegionRoot, path_alias_guard},
-    source::InputSource,
+    source::{InputSource, SourceExpr},
+    value::IndexPayload,
 };
 
 /// Physical referent typing is independent of a capability's conversion views.
@@ -51,11 +52,16 @@ impl<'db> ReferentContract<'db> {
     }
 
     pub fn is_abstract(self, db: &'db dyn HirAnalysisDb) -> bool {
-        self.ty.has_param(db)
-            || matches!(
-                self.ty.base_ty(db).data(db),
-                TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
-            )
+        // A symbolic length or layout constant does not hide capability fields.
+        // Only unresolved type structure requires conservative reachability.
+        matches!(
+            self.ty.base_ty(db).data(db),
+            TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
+        ) || self
+            .ty
+            .generic_args(db)
+            .iter()
+            .any(|ty| Self { ty: *ty, ..self }.is_abstract(db))
     }
 
     pub fn may_alias(self, other: Self) -> bool {
@@ -73,6 +79,15 @@ pub enum ExternalOrigin<'db> {
         target_ty: TyId<'db>,
     },
     OpaqueHandle(OpaqueHandleRef<'db>),
+    /// An allocator-created object. Its identity is distinct from every older input.
+    Allocation(OpaqueHandleRef<'db>),
+    /// A typed interpretation of raw memory at an element-scaled offset.
+    /// This is a memory location, never a structural Index on a scalar type.
+    Memory {
+        base: Box<SourceExpr<'db>>,
+        element: Option<(TyId<'db>, IndexExpr<'db>)>,
+        target_ty: TyId<'db>,
+    },
 }
 
 /// A source names storage, not the representation of the handle used to reach it.
@@ -161,6 +176,66 @@ impl<'db> ExternalSource<'db> {
         }
     }
 
+    pub fn allocation(db: &'db dyn HirAnalysisDb, allocation: OpaqueHandleRef<'db>) -> Self {
+        let mut source = Self::opaque(db, allocation.clone());
+        source.origin = ExternalOrigin::Allocation(allocation);
+        source.uncertain = false;
+        source
+    }
+
+    pub fn memory(
+        db: &'db dyn HirAnalysisDb,
+        mut base: SourceExpr<'db>,
+        target_ty: TyId<'db>,
+        mut element: Option<(TyId<'db>, IndexExpr<'db>)>,
+    ) -> Self {
+        if element.is_some_and(|(_, index)| index == IndexExpr::Const(0)) {
+            element = None;
+        }
+        // Repeated casts at the same address retain one physical base.
+        if base.path.is_empty()
+            && base.views.iter().next().is_none()
+            && base.source.dereferences.is_empty()
+            && !base.source.reachable
+            && let ExternalOrigin::Memory {
+                base: original,
+                element: old,
+                ..
+            } = &base.source.origin
+            && (element.is_none() || old.is_none())
+        {
+            element = element.or(*old);
+            base = *original.clone();
+        }
+        if element.is_none()
+            && base.path.is_empty()
+            && base.views.iter().next().is_none()
+            && base.source.contract.ty == target_ty
+        {
+            return base.source;
+        }
+        Self {
+            contract: ReferentContract::new(db, target_ty, base.source.contract.address_space),
+            uncertain: base.source.uncertain(),
+            origin: ExternalOrigin::Memory {
+                base: Box::new(base),
+                element,
+                target_ty,
+            },
+            dereferences: Box::new([]),
+            reachable: false,
+        }
+    }
+
+    /// Rewrites construction occurrences through every nested memory base.
+    pub fn map_occurrences(&mut self, f: &mut impl FnMut(&mut OpaqueHandleRef<'db>)) {
+        match &mut self.origin {
+            ExternalOrigin::OpaqueHandle(source) | ExternalOrigin::Allocation(source) => f(source),
+            ExternalOrigin::Memory { base, .. } => base.source.map_occurrences(f),
+            _ => {}
+        }
+    }
+
     pub fn follow(
         &self,
         path: RegionPath<IndexExpr<'db>>,
@@ -189,6 +264,18 @@ impl<'db> ExternalSource<'db> {
         self
     }
 
+    /// Direct bytes in an allocation created by this invocation cannot alias
+    /// any caller loan. Following a pointer stored there loses that guarantee.
+    pub fn is_fresh_allocation(&self) -> bool {
+        !self.is_reachable()
+            && self.dereferences.is_empty()
+            && match &self.origin {
+                ExternalOrigin::Allocation(_) => true,
+                ExternalOrigin::Memory { base, .. } => base.source.is_fresh_allocation(),
+                _ => false,
+            }
+    }
+
     pub fn is_reachable(&self) -> bool {
         self.reachable
     }
@@ -198,27 +285,38 @@ impl<'db> ExternalSource<'db> {
     pub fn dereferences(&self) -> &[RegionPath<IndexExpr<'db>>] {
         &self.dereferences
     }
+    /// Entry pointers cannot refer to storage first created in the callee's
+    /// frame. Once overwritten, their explicit replacement regions take over.
+    pub fn is_incoming(&self) -> bool {
+        match &self.origin {
+            ExternalOrigin::Input(_) => true,
+            ExternalOrigin::Memory { base, .. } => base.source.is_incoming(),
+            _ => false,
+        }
+    }
+
     pub fn param(&self) -> Option<u32> {
         match &self.origin {
             ExternalOrigin::Input(input) => Some(input.param()),
+            ExternalOrigin::Memory { base, .. } => base.source.param(),
             _ => None,
         }
     }
 
     pub fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>> + '_ {
-        let (input, handle) = match &self.origin {
-            ExternalOrigin::Input(input) => (Some(input), None),
-            ExternalOrigin::OpaqueHandle(handle) => (None, Some(handle)),
-            ExternalOrigin::Provider { .. } | ExternalOrigin::Local(_) => (None, None),
+        let indices: Vec<_> = match &self.origin {
+            ExternalOrigin::Input(input) => input.indices().collect(),
+            ExternalOrigin::OpaqueHandle(handle) | ExternalOrigin::Allocation(handle) => {
+                handle.arguments.to_vec()
+            }
+            ExternalOrigin::Memory { base, element, .. } => base
+                .indices()
+                .chain(element.iter().map(|(_, index)| *index))
+                .collect(),
+            ExternalOrigin::Provider { .. } | ExternalOrigin::Local(_) => Vec::new(),
         };
-        input
+        indices
             .into_iter()
-            .flat_map(InputSource::indices)
-            .chain(
-                handle
-                    .into_iter()
-                    .flat_map(|handle| handle.arguments.iter().copied()),
-            )
             .chain(self.dereferences.iter().flat_map(RegionPath::indices))
     }
 
@@ -238,6 +336,22 @@ impl<'db> ExternalSource<'db> {
                     target_ty: target_ty.fold_with(db, &mut subst.clone()),
                 }
             }
+            ExternalOrigin::Allocation(handle) => {
+                result.origin = ExternalOrigin::Allocation(handle.substitute(db, subst));
+            }
+            ExternalOrigin::Memory {
+                base,
+                element,
+                target_ty,
+            } => {
+                result.origin = ExternalOrigin::Memory {
+                    target_ty: target_ty.fold_with(db, &mut subst.clone()),
+                    base: Box::new(base.substitute(db, subst)),
+                    element: element.map(|(ty, index)| {
+                        (ty.fold_with(db, &mut subst.clone()), subst.apply(index))
+                    }),
+                };
+            }
             ExternalOrigin::Input(_) | ExternalOrigin::Local(_) => {}
         }
         result
@@ -254,6 +368,27 @@ impl<'db> ExternalSource<'db> {
                 provider: *provider,
                 target_ty: *target_ty,
             },
+            ExternalOrigin::Memory {
+                base,
+                element,
+                target_ty,
+            } => ExternalOrigin::Memory {
+                target_ty: *target_ty,
+                base: Box::new(SourceExpr {
+                    source: base.source.rename_indices(subst),
+                    path: base.path.substitute(subst),
+                    views: base.views.clone(),
+                }),
+                element: element.map(|(ty, index)| (ty, subst.apply(index))),
+            },
+            ExternalOrigin::Allocation(handle) => ExternalOrigin::Allocation(OpaqueHandleRef {
+                arguments: handle
+                    .arguments
+                    .iter()
+                    .map(|index| subst.apply(*index))
+                    .collect(),
+                ..handle.clone()
+            }),
             ExternalOrigin::OpaqueHandle(handle) => ExternalOrigin::OpaqueHandle(OpaqueHandleRef {
                 arguments: handle
                     .arguments
@@ -323,7 +458,34 @@ impl<'db> ExternalSource<'db> {
                     target_ty: right_ty,
                 },
             ) if left == right && left_ty == right_ty => guard,
+            (
+                ExternalOrigin::Memory {
+                    base: left,
+                    element: left_element,
+                    target_ty: left_ty,
+                },
+                ExternalOrigin::Memory {
+                    base: right,
+                    element: right_element,
+                    target_ty: right_ty,
+                },
+            ) if left_ty == right_ty
+                && left.views == right.views
+                && left.path.as_slice().len() == right.path.as_slice().len() =>
+            {
+                guard = left.source.identity_guard(&right.source, guard)?;
+                guard =
+                    path_alias_guard(left.path.as_slice(), right.path.as_slice(), guard, false)?;
+                match (left_element, right_element) {
+                    (None, None) => guard,
+                    (Some((left_ty, left)), Some((right_ty, right))) if left_ty == right_ty => {
+                        guard.with_equality(*left, *right)?
+                    }
+                    _ => return None,
+                }
+            }
             (ExternalOrigin::OpaqueHandle(left), ExternalOrigin::OpaqueHandle(right))
+            | (ExternalOrigin::Allocation(left), ExternalOrigin::Allocation(right))
                 if left.occurrence == right.occurrence
                     && left.contract == right.contract
                     && left.arguments.len() == right.arguments.len() =>
@@ -355,6 +517,58 @@ impl<'db> ExternalSource<'db> {
             && let Some(exact) = self.identity_guard(other, guard.clone())
         {
             return Some(exact);
+        }
+        if !allow_unknown {
+            return None;
+        }
+        if self.dereferences.is_empty()
+            && !self.reachable
+            && let ExternalOrigin::Memory {
+                base: left,
+                element: left_element,
+                ..
+            } = &self.origin
+        {
+            let other_base = match &other.origin {
+                ExternalOrigin::Memory {
+                    base,
+                    element: right_element,
+                    ..
+                } if other.dereferences.is_empty() && !other.reachable => {
+                    if left.source == base.source
+                        && left.path == base.path
+                        && left.views == base.views
+                        && let (Some((left_ty, left_index)), Some((right_ty, right_index))) =
+                            (left_element, right_element)
+                        && left_ty == right_ty
+                    {
+                        return guard.with_equality(*left_index, *right_index);
+                    }
+                    Some(&**base)
+                }
+                _ => None,
+            };
+            let right = other_base.map_or(other, |base| &base.source);
+            return left.source.alias_guard(right, guard, true);
+        }
+        if other.dereferences.is_empty()
+            && !other.reachable
+            && let ExternalOrigin::Memory { base: right, .. } = &other.origin
+        {
+            return self.alias_guard(&right.source, guard, true);
+        }
+        // Distinct fresh allocations and incoming pointers cannot identify the
+        // same object. Unknown manufactured addresses remain conservative.
+        if matches!(
+            (&self.origin, &other.origin),
+            (
+                ExternalOrigin::Allocation(_),
+                ExternalOrigin::Input(_) | ExternalOrigin::Allocation(_)
+            ) | (ExternalOrigin::Input(_), ExternalOrigin::Allocation(_))
+        ) && self.dereferences.is_empty()
+            && other.dereferences.is_empty()
+        {
+            return None;
         }
         (allow_unknown
             && (self.uncertain() || other.uncertain())

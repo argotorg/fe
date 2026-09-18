@@ -771,8 +771,8 @@ pub fn walk_effect_param<'db, V>(
     if let Some(name) = effect.name {
         ctxt.with_new_ctxt(|span| span.name(), |ctxt| visitor.visit_ident(ctxt, name));
     }
-    if let Some(path) = effect.key_path.to_opt() {
-        ctxt.with_new_ctxt(|span| span.path(), |ctxt| visitor.visit_path(ctxt, path));
+    if let Some(ty) = effect.key_ty.to_opt() {
+        ctxt.with_new_ctxt(|span| span.ty(), |ctxt| visitor.visit_ty(ctxt, ty));
     }
 }
 
@@ -1375,6 +1375,7 @@ pub fn walk_expr<'db, V>(
             );
         }
 
+        Expr::UnsupportedMacroCall => {}
         Expr::Assert(call_args) => {
             ctxt.with_new_ctxt(
                 |span| span.into_macro_call_expr(),

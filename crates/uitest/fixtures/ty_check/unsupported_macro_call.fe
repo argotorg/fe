@@ -1,0 +1,25 @@
+fn statement() {
+    funsig!(x)
+}
+
+fn existing_function() {}
+
+fn function_as_macro() {
+    existing_function!()
+}
+
+fn qualified_assert() {
+    core::assert!(true)
+}
+
+fn returned() -> u256 {
+    return funsig!(x)
+}
+
+const VALUE: u256 = funsig!(x)
+
+const fn const_function() -> u256 {
+    funsig!(x)
+}
+
+const FROM_FUNCTION: u256 = const_function()

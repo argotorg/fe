@@ -9,10 +9,10 @@ use crate::{
         semantic::{SemOrigin, SemanticConstRef},
         ty::{
             assoc_const::{AssocConstUse, InherentConstUse},
-            const_ty::inherent_const_body_and_impl_args,
+            const_ty::{inherent_const_body_and_impl_args, inherent_const_decl_ty},
             effects::place_effect_provider_param_index_map,
             trait_def::{
-                assoc_const_body_and_impl_args_for_trait_inst, complete_resolved_trait_method_args,
+                assoc_const_body_template_for_trait_inst, complete_resolved_trait_method_args,
                 resolve_trait_method_instance,
             },
             trait_resolution::{PredicateListId, TraitSolveCx},
@@ -270,8 +270,8 @@ pub(crate) fn resolve_semantic_const_ref<'db>(
 ) -> Option<SemanticConstRef<'db>> {
     let instance = match const_ref {
         ConstRef::Const(const_) => semantic_const_key_for_const(db, const_),
-        ConstRef::TraitConst(assoc) => semantic_const_key_for_assoc_const(db, assoc, ty),
-        ConstRef::InherentConst(use_) => semantic_const_key_for_inherent_const(db, use_, ty),
+        ConstRef::TraitConst(assoc) => semantic_const_key_for_assoc_const(db, assoc),
+        ConstRef::InherentConst(use_) => semantic_const_key_for_inherent_const(db, use_),
     }?;
     Some(SemanticConstRef::new(db, instance, ty, origin))
 }
@@ -293,10 +293,10 @@ fn semantic_const_key_for_const<'db>(
 fn semantic_const_key_for_inherent_const<'db>(
     db: &'db dyn HirAnalysisDb,
     use_: InherentConstUse<'db>,
-    ty: TyId<'db>,
 ) -> Option<SemanticInstanceKey<'db>> {
     let (body, impl_args) =
         inherent_const_body_and_impl_args(db, use_.impl_(), use_.receiver_ty(), use_.name())?;
+    let ty = inherent_const_decl_ty(db, use_.impl_(), use_.name())?;
     Some(SemanticInstanceKey::new(
         db,
         BodyOwner::AnonConstBody { body, expected: ty },
@@ -309,9 +309,8 @@ fn semantic_const_key_for_inherent_const<'db>(
 fn semantic_const_key_for_assoc_const<'db>(
     db: &'db dyn HirAnalysisDb,
     assoc: AssocConstUse<'db>,
-    ty: TyId<'db>,
 ) -> Option<SemanticInstanceKey<'db>> {
-    let (body, impl_args) = assoc_const_body_and_impl_args_for_trait_inst(
+    let (body, ty, impl_args) = assoc_const_body_template_for_trait_inst(
         db,
         assoc.solve_cx(db),
         assoc.inst(),

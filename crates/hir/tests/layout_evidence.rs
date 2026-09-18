@@ -3,6 +3,7 @@ mod layout_test_support;
 
 use std::collections::HashSet;
 
+use camino::Utf8PathBuf;
 use cranelift_entity::EntityRef;
 use fe_hir::{
     analysis::{
@@ -59,7 +60,23 @@ fn verify_layout_evidence_runtime_compatibility<'db>(
 }
 
 fn assert_layoutizes(name: &str, src: &str) {
-    parse_ok!(db, top_mod, src);
+    assert_layoutizes_in(name, src, false);
+}
+
+fn assert_trusted_layoutizes(name: &str, src: &str) {
+    assert_layoutizes_in(name, src, true);
+}
+
+fn assert_layoutizes_in(name: &str, src: &str, std_module: bool) {
+    let mut db = HirAnalysisTestDb::default();
+    let path = Utf8PathBuf::from(name);
+    let file = if std_module {
+        db.new_trusted_effect_handle_module(path, src)
+    } else {
+        db.new_stand_alone(path, src)
+    };
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
     for item in top_mod.all_items(&db) {
         match item {
             ItemKind::Func(func) if func.body(&db).is_some() => {
@@ -515,15 +532,16 @@ struct Rooted<const ROOT: u256 = _> {}
 
 impl<const ROOT: u256> Copy for Rooted<ROOT> {}
 
-struct Ptr<T> { raw: u256 }
+struct Ptr<T> { raw: *T }
 
 impl<T> Copy for Ptr<T> {}
 
 impl<T> EffectHandle for Ptr<T> {
     type Target = T
+    type Raw = *T
     const SPACE: AddressSpace = AddressSpace::Memory
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
-    fn raw(self) -> u256 { self.raw }
+
+    fn raw(self) -> *T { self.raw }
 }
 
 impl<T> EffectRef<T> for Ptr<T> {}
@@ -559,13 +577,21 @@ fn forward<const ROOT: u256>(ptr: Ptr<Rooted<ROOT>>) -> Rooted<ROOT> {
         if !seen.insert(instance.key(&db)) || instance.key(&db).owner(&db).body(&db).is_none() {
             continue;
         }
+        let owner = instance.key(&db).owner(&db);
+        let name = match owner {
+            BodyOwner::Func(func) => func
+                .name(&db)
+                .to_opt()
+                .map(|name| name.data(&db).to_string()),
+            _ => None,
+        };
         layout_evidence_body(&db, instance).unwrap_or_else(|error| {
             panic!(
-                "failed to layoutize reachable instance {:?}: {error:?}",
+                "failed to layoutize reachable instance {name:?} {:?}: {error:?}",
                 instance.key(&db),
             )
         });
-        if let BodyOwner::Func(func) = instance.key(&db).owner(&db)
+        if let BodyOwner::Func(func) = owner
             && func
                 .name(&db)
                 .to_opt()
@@ -630,7 +656,7 @@ fn take_right(value: Right) {}
 
 #[test]
 fn effect_handle_providers_carry_physical_and_target_views() {
-    assert_layoutizes(
+    assert_trusted_layoutizes(
         "effect_handle_providers_carry_physical_and_target_views.fe",
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -659,11 +685,8 @@ struct Wrapper<const META: u256 = _> {
 
 impl<const META: u256> EffectHandle for Wrapper<META> {
     type Target = Payload
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-
-    fn from_raw(_ raw: u256) -> Self {
-        Self { marker: Rooted {}, raw }
-    }
 
     fn raw(self) -> u256 { self.raw }
 }
@@ -708,8 +731,9 @@ struct Loop<const ROOT: u256 = _> {
 
 impl<const ROOT: u256> EffectHandle for Loop<ROOT> {
     type Target = Loop<ROOT>
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self { marker: Rooted {}, raw } }
+
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -734,8 +758,8 @@ contract C {
     }
 }
 "#;
-    assert_layoutizes("self_recursive_effect_handle_view.fe", src);
-    parse_ok!(db, top_mod, src,);
+    assert_trusted_layoutizes("self_recursive_effect_handle_view.fe", src);
+    parse_ok!(trusted db, top_mod, src,);
     let inspect = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "inspect"))),
@@ -786,7 +810,7 @@ contract C {
 
 #[test]
 fn mutually_recursive_effect_handle_views_have_stable_evidence() {
-    assert_layoutizes(
+    assert_trusted_layoutizes(
         "mutually_recursive_effect_handle_views_have_stable_evidence.fe",
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -809,15 +833,17 @@ struct B<const ROOT: u256> {
 
 impl<const ROOT: u256> EffectHandle for A<ROOT> {
     type Target = B<ROOT>
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self { marker: Rooted {}, raw } }
+
     fn raw(self) -> u256 { self.raw }
 }
 
 impl<const ROOT: u256> EffectHandle for B<ROOT> {
     type Target = A<ROOT>
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self { marker: Rooted {}, raw } }
+
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -865,7 +891,7 @@ contract C {
 
 #[test]
 fn finite_effect_target_chain_can_rejoin_an_older_permutation_family() {
-    assert_layoutizes(
+    assert_trusted_layoutizes(
         "finite_effect_target_chain_can_rejoin_an_older_permutation_family.fe",
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -879,15 +905,17 @@ struct A<T, U, const ROOT: u256 = _> {
 
 impl<const ROOT: u256> EffectHandle for A<A<u8, u16, ROOT>, u8, ROOT> {
     type Target = A<u8, u16, ROOT>
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self { marker: Rooted {}, raw } }
+
     fn raw(self) -> u256 { self.raw }
 }
 
 impl<const ROOT: u256> EffectHandle for A<u8, u16, ROOT> {
     type Target = A<u8, A<u8, u16, ROOT>, ROOT>
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self { marker: Rooted {}, raw } }
+
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -929,19 +957,17 @@ struct B<const LEFT: u256, const RIGHT: u256> {
 
 impl<const LEFT: u256, const RIGHT: u256> EffectHandle for A<LEFT, RIGHT> {
     type Target = B<RIGHT, LEFT>
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self {
-        Self { left: Rooted {}, right: Rooted {}, raw }
-    }
+
     fn raw(self) -> u256 { self.raw }
 }
 
 impl<const LEFT: u256, const RIGHT: u256> EffectHandle for B<LEFT, RIGHT> {
     type Target = A<LEFT, RIGHT>
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self {
-        Self { left: Rooted {}, right: Rooted {}, raw }
-    }
+
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -966,11 +992,11 @@ contract C {
     }
 }
 "#;
-    assert_layoutizes(
+    assert_trusted_layoutizes(
         "permuted_recursive_effect_handle_views_have_stable_evidence.fe",
         src,
     );
-    parse_ok!(db, top_mod, src,);
+    parse_ok!(trusted db, top_mod, src,);
     let inspect = get_or_build_semantic_instance(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "inspect"))),
@@ -991,7 +1017,7 @@ contract C {
 #[test]
 fn non_regular_recursive_effect_handle_views_are_rejected() {
     parse_module!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -1005,8 +1031,9 @@ struct A<const ROOT: u256 = _> {
 
 impl<const ROOT: u256> EffectHandle for A<ROOT> {
     type Target = A<{ ROOT + 1 }>
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Storage
-    fn from_raw(_ raw: u256) -> Self { Self { marker: Rooted {}, raw } }
+
     fn raw(self) -> u256 { self.raw }
 }
 
@@ -1173,7 +1200,7 @@ fn select<const ROOT: u256>(
             .blocks
             .iter()
             .map(|block| block.statements.len())
-            .sum()
+            .sum::<usize>()
     );
     let (source, indices) = evidence
         .statements
@@ -2553,9 +2580,9 @@ fn repeat<const ROOT: u256>(value: Rooted<ROOT>) -> [Rooted<ROOT>; 2] {
 }
 
 #[test]
-fn effect_handle_constructors_use_declared_target_evidence() {
+fn effect_handle_values_use_declared_target_evidence() {
     parse_ok!(
-        db,
+        trusted db,
         top_mod,
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
@@ -2587,12 +2614,9 @@ struct MirrorHandle<T, const PHYSICAL: u256> {
 
 impl<T> EffectHandle for Handle<T> {
     type Target = T
+    type Raw = u256
 
     const SPACE: AddressSpace = AddressSpace::Memory
-
-    fn from_raw(_ raw: u256) -> Self {
-        Self { raw }
-    }
 
     fn raw(self) -> u256 {
         self.raw
@@ -2607,12 +2631,9 @@ impl<T> Handle<T> {
 
 impl<T, const META: u256> EffectHandle for DualHandle<T, META> {
     type Target = T
+    type Raw = u256
 
     const SPACE: AddressSpace = AddressSpace::Memory
-
-    fn from_raw(_ raw: u256) -> Self {
-        Self { marker: Rooted {}, raw }
-    }
 
     fn raw(self) -> u256 {
         self.raw
@@ -2627,12 +2648,9 @@ impl<T, const META: u256> DualHandle<T, META> {
 
 impl<T, const PHYSICAL: u256> EffectHandle for MirrorHandle<T, PHYSICAL> {
     type Target = T
+    type Raw = u256
 
     const SPACE: AddressSpace = AddressSpace::Memory
-
-    fn from_raw(_ raw: u256) -> Self {
-        Self { value: Rooted {}, raw }
-    }
 
     fn raw(self) -> u256 {
         self.raw
@@ -2644,10 +2662,6 @@ fn rebuild<const ROOT: u256>(
     raw: u256,
 ) -> Handle<Rooted<ROOT>> {
     Handle { raw }
-}
-
-fn from_raw_with_nested_target(raw: u256) -> Handle<Pair<1, 2>> {
-    Handle::from_raw(raw)
 }
 
 fn replace_raw_with_nested_target<const LEFT: u256, const RIGHT: u256>(
@@ -2687,31 +2701,6 @@ fn inspect_views<const PHYSICAL: u256, const LOGICAL: u256>(
                 LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Local(source)) if source == *input
             ))
     );
-
-    let from_raw_caller = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(
-            &db,
-            BodyOwner::Func(find_func(&db, top_mod, "from_raw_with_nested_target")),
-        ),
-    );
-    let normalized = normalize_semantic_body(&db, from_raw_caller).expect("normalization failed");
-    let callee = normalized
-        .body
-        .blocks
-        .iter()
-        .flat_map(|block| &block.statements)
-        .find_map(|statement| match statement.kind {
-            NStatementKind::Define {
-                expr: NExpr::Call { callee, .. },
-                ..
-            } => Some(callee),
-            NStatementKind::Define { .. } | NStatementKind::Store { .. } => None,
-        })
-        .expect("missing EffectHandle::from_raw call");
-    let from_raw = get_or_build_semantic_instance(&db, callee.key);
-    layout_evidence_body(&db, from_raw)
-        .expect("specialized EffectHandle::from_raw must preserve its target evidence opaquely");
 
     let replace_raw_caller = get_or_build_semantic_instance(
         &db,

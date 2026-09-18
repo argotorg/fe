@@ -1,0 +1,126 @@
+/// Edge cases for static ABI element access, copying, and allocation.
+use std::abi::{DynArray, MemVec, FixedBytes, Uint24, Int24}
+use core::abi::store_word
+use core::ptr::{self, MemBuffer}
+
+#[test]
+fn test_empty_roundtrip() {
+    let values: MemVec<u256> = MemVec::zeroed(0)
+    let array = values.to_dyn_array()
+    assert!(array.is_empty())
+    assert!(array.encoded_size() == 32)
+    let copy = MemVec::from_dyn_array(DynArray<u256>::empty())
+    assert!(copy.is_empty())
+    assert!(copy.to_dyn_array().is_empty())
+}
+
+#[test]
+fn test_to_dyn_array_snapshot_isolation() {
+    let mut values: MemVec<u256> = MemVec::zeroed(2)
+    values.set(index: 0, value: 11)
+    let first = values.to_dyn_array()
+    values.set(index: 0, value: 99)
+    assert!(first.get(0) == 11)
+    let second = values.to_dyn_array()
+    assert!(second.get(0) == 99)
+    assert!(first.get(1) == 0)
+}
+
+#[test]
+fn test_primitive_elements() {
+    let mut bools: MemVec<bool> = MemVec::zeroed(2)
+    assert!(!bools.get(0))
+    bools.set(index: 1, value: true)
+    assert!(bools.to_dyn_array().get(1))
+    assert!(!bools.get(0))
+
+    let mut unsigned: MemVec<u8> = MemVec::zeroed(2)
+    unsigned.set(index: 0, value: 255)
+    unsigned.set(index: 1, value: 42)
+    assert!(unsigned.to_dyn_array().get(0) == 255)
+    assert!(unsigned.get(1) == 42)
+
+    let mut signed: MemVec<i8> = MemVec::zeroed(2)
+    signed.set(index: 0, value: -128)
+    signed.set(index: 1, value: 127)
+    let array = signed.to_dyn_array()
+    assert!(array.get(0) == -128)
+    assert!(array.get(1) == 127)
+}
+
+#[test]
+fn test_custom_int_elements() {
+    let mut unsigned: MemVec<Uint24> = MemVec::zeroed(2)
+    unsigned.set(index: 0, value: Uint24 { val: 0xffffff })
+    assert!(unsigned.to_dyn_array().get(0).val == 0xffffff)
+    assert!(unsigned.get(1).val == 0)
+
+    let mut signed: MemVec<Int24> = MemVec::zeroed(2)
+    signed.set(index: 1, value: Int24 { val: -8388608 })
+    assert!(signed.to_dyn_array().get(1).val == -8388608)
+    assert!(signed.get(0).val == 0)
+}
+
+#[test]
+fn test_fixed_bytes_elements() {
+    let mut values: MemVec<FixedBytes<4>> = MemVec::zeroed(2)
+    values.set(index: 0, value: FixedBytes { val: 0x12345678 })
+    values.set(index: 1, value: FixedBytes { val: 0xaabbccdd })
+    let array = values.to_dyn_array()
+    assert!(array.get(0).val == 0x12345678)
+    assert!(array.get(1).val == 0xaabbccdd)
+    let copy = MemVec::from_dyn_array(array)
+    assert!(copy.get(1).val == 0xaabbccdd)
+}
+
+fn dirty_bool() -> DynArray<bool> {
+    let data = MemBuffer::alloc(64)
+    store_word(ptr: data.ptr(), value: 1)
+    // The array shape is valid, but 2 is not a canonical ABI bool.
+    store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: 2)
+    DynArray::from_abi_tail(data: data.ptr(), len: 1, size: 64)
+}
+
+#[test(should_revert)]
+fn test_dirty_bool_get_reverts() {
+    let _ = dirty_bool().get(0)
+}
+
+#[test(should_revert)]
+fn test_dirty_bool_copy_get_reverts() {
+    let values = MemVec::from_dyn_array(dirty_bool())
+    let _ = values.get(0)
+}
+
+#[test]
+fn test_dirty_bool_can_be_replaced() {
+    let mut values = MemVec::from_dyn_array(dirty_bool())
+    values.set(index: 0, value: true)
+    assert!(values.to_dyn_array().get(0))
+}
+
+#[test(should_revert, panic = 0x32)]
+fn test_empty_memvec_get_panics() {
+    let values: MemVec<u256> = MemVec::zeroed(0)
+    let _ = values.get(0)
+}
+
+#[test(should_revert, panic = 0x32)]
+fn test_empty_memvec_set_panics() {
+    let mut values: MemVec<u256> = MemVec::zeroed(0)
+    values.set(index: 0, value: 1)
+}
+
+#[test(should_revert, panic = 0x11)]
+fn test_allocation_size_overflow_panics() {
+    let one: u256 = 1
+    // Multiplying the element count by 32 must fail before allocation.
+    let _values: MemVec<u256> = MemVec::zeroed(one << 251)
+}
+
+#[test(should_revert, panic = 0x32)]
+fn test_huge_index_panics_before_offset_calculation() {
+    let values: MemVec<u256> = MemVec::zeroed(1)
+    let one: u256 = 1
+    let _ = values.get(one << 251)
+}

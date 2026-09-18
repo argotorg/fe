@@ -3,20 +3,25 @@
 /// the digest from a typed call must match the digest from a `raw_call` fed
 /// by `encode_msg_calldata`.
 
-use std::evm::{Ctx, Evm, RawOps, encode_msg_calldata, decode_returndata, last_returndata}
+use core::ptr
+use std::evm::{Ctx, Evm, RawOps, copy_returndata, decode_returndata, encode_msg_calldata}
 
 msg EchoMsg {
     #[selector = sol("digestStatic(uint256,address)")]
     DigestStatic { a: u256, b: Address } -> u256,
     #[selector = sol("digestDynamic(bytes)")]
     DigestDynamic { data: Bytes } -> u256,
+    #[selector = 0x01020304]
+    CopyCalldataWindow {} -> u256,
+    #[selector = 0x05060708]
+    CopyCodeWindow {} -> u256,
 }
 
 fn hash_calldata() -> u256 uses (raw: mut RawOps) {
     let len = raw.calldatasize()
-    let ptr = std::evm::mem::alloc(len)
-    raw.calldatacopy(dest: ptr, offset: 0, len: len)
-    raw.keccak256(offset: ptr, len: len)
+    let mut data = ptr::MemBuffer::alloc(len)
+    raw.calldatacopy(dest: mut data, dest_offset: 0, src_offset: 0, len)
+    raw.keccak256(data: data.span())
 }
 
 pub contract Echo uses (raw: mut RawOps) {
@@ -30,6 +35,30 @@ pub contract Echo uses (raw: mut RawOps) {
         DigestDynamic { data } -> u256 uses (mut raw) {
             hash_calldata()
         }
+
+        CopyCalldataWindow {} -> u256 uses (mut raw) {
+            let mut data = ptr::MemBuffer::with_capacity(3)
+            raw.calldatacopy(dest: mut data, dest_offset: 1, src_offset: 1, len: 2)
+            assert!(data.len() == 3)
+            assert!(data.span().byte_at(0) == 0)
+            let mut untouched = ptr::MemBuffer::with_capacity(3)
+            raw.calldatacopy(dest: mut untouched, dest_offset: 2, src_offset: 0, len: 0)
+            assert!(untouched.len() == 0)
+            ((data.span().byte_at(1) as u256) << 8) | (data.span().byte_at(2) as u256)
+        }
+
+        CopyCodeWindow {} -> u256 uses (mut raw) {
+            let mut direct = ptr::MemBuffer::with_capacity(1)
+            raw.codecopy(dest: mut direct, dest_offset: 0, src_offset: 0, len: 1)
+            let mut shifted = ptr::MemBuffer::with_capacity(3)
+            raw.codecopy(dest: mut shifted, dest_offset: 2, src_offset: 0, len: 1)
+            assert!(direct.len() == 1)
+            assert!(shifted.len() == 3)
+            assert!(shifted.span().byte_at(0) == 0)
+            assert!(shifted.span().byte_at(1) == 0)
+            assert!(direct.span().byte_at(0) == shifted.span().byte_at(2))
+            direct.len() + shifted.len()
+        }
     }
 }
 
@@ -38,11 +67,11 @@ pub contract Echo uses (raw: mut RawOps) {
 fn build_bytes() -> Bytes
 uses (mem: mut std::evm::RawMem)
 {
-    let data = std::evm::mem::alloc(96)
+    let data = ptr::alloc_bytes(96)
     mem.mstore(addr: data, value: 64)
-    mem.mstore(addr: data + 32, value: 0x1234)
-    mem.mstore(addr: data + 64, value: 0x5678)
-    Bytes { data: data, len: 64, size: 96 }
+    mem.mstore(addr: ptr::offset_bytes(data, 32), value: 0x1234)
+    mem.mstore(addr: ptr::offset_bytes(data, 64), value: 0x5678)
+    Bytes::from_abi_tail(data: data, len: 64, size: 96)
 }
 
 #[test]
@@ -53,10 +82,11 @@ fn test_encode_msg_calldata_static_args() uses (evm: mut Evm, call: mut Call, ct
     let addr_arg = Address { inner: 0xabcdef }
     let typed_digest: u256 = echo.call(EchoMsg::DigestStatic { a: 42, b: addr_arg })
 
-    let (ptr, len) = encode_msg_calldata(EchoMsg::DigestStatic { a: 42, b: addr_arg })
-    let ok = call.raw_call(addr: echo, gas: ctx.gas(), value: 0, args_offset: ptr, args_len: len)
-    assert!(ok)
-    let raw_digest: u256 = decode_returndata(last_returndata())
+    let data = encode_msg_calldata(EchoMsg::DigestStatic { a: 42, b: addr_arg })
+    let mut ret = ptr::MemBuffer::empty()
+    let outcome = call.raw_call(addr: echo, gas: ctx.gas(), value: 0, args: data.span(), ret: mut ret)
+    assert!(outcome.success())
+    let raw_digest: u256 = decode_returndata(copy_returndata().span())
 
     assert!(typed_digest == raw_digest)
 }
@@ -68,10 +98,49 @@ fn test_encode_msg_calldata_dynamic_bytes() uses (evm: mut Evm, call: mut Call, 
 
     let typed_digest: u256 = echo.call(EchoMsg::DigestDynamic { data: build_bytes() })
 
-    let (ptr, len) = encode_msg_calldata(EchoMsg::DigestDynamic { data: build_bytes() })
-    let ok = call.raw_call(addr: echo, gas: ctx.gas(), value: 0, args_offset: ptr, args_len: len)
-    assert!(ok)
-    let raw_digest: u256 = decode_returndata(last_returndata())
+    let data = encode_msg_calldata(EchoMsg::DigestDynamic { data: build_bytes() })
+    let mut ret = ptr::MemBuffer::empty()
+    let outcome = call.raw_call(addr: echo, gas: ctx.gas(), value: 0, args: data.span(), ret: mut ret)
+    assert!(outcome.success())
+    let raw_digest: u256 = decode_returndata(copy_returndata().span())
 
     assert!(typed_digest == raw_digest)
+}
+
+#[test]
+fn test_raw_copy_apis_use_explicit_source_and_destination_ranges()
+uses (evm: mut Evm, call: mut Call, ctx: Ctx)
+{
+    let echo = evm.create2<Echo>(value: 0, args: (), salt: 0)
+    assert!(echo.inner != 0)
+
+    assert!(echo.call(EchoMsg::CopyCalldataWindow {}) == 0x0203)
+    assert!(echo.call(EchoMsg::CopyCodeWindow {}) == 4)
+
+    let data = encode_msg_calldata(EchoMsg::DigestStatic {
+        a: 42,
+        b: Address { inner: 0xabcdef },
+    })
+    let mut ignored = ptr::MemBuffer::empty()
+    let outcome = call.raw_call(
+        addr: echo,
+        gas: ctx.gas(),
+        value: 0,
+        args: data.span(),
+        ret: mut ignored,
+    )
+    assert!(outcome.success())
+    assert!(evm.returndatasize() == 32)
+
+    let mut direct = ptr::MemBuffer::with_capacity(2)
+    evm.returndatacopy(dest: mut direct, dest_offset: 0, src_offset: 30, len: 2)
+    let mut shifted = ptr::MemBuffer::with_capacity(5)
+    evm.returndatacopy(dest: mut shifted, dest_offset: 3, src_offset: 30, len: 2)
+    assert!(direct.len() == 2)
+    assert!(shifted.len() == 5)
+    assert!(shifted.span().byte_at(0) == 0)
+    assert!(shifted.span().byte_at(1) == 0)
+    assert!(shifted.span().byte_at(2) == 0)
+    assert!(direct.span().byte_at(0) == shifted.span().byte_at(3))
+    assert!(direct.span().byte_at(1) == shifted.span().byte_at(4))
 }

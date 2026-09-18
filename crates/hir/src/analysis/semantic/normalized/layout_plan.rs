@@ -130,8 +130,40 @@ pub struct NLayoutUseBacking<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NLayoutBackingSource {
-    Value { value: NValueId, path: NDataPath },
-    Root { root: NRootId, path: NDataPath },
+    Value {
+        value: NValueId,
+        path: NLayoutSourcePath,
+    },
+    Root {
+        root: NRootId,
+        path: NLayoutSourcePath,
+    },
+}
+
+/// Representation evidence may follow an address. Executable structural paths
+/// remain data-only; layout provenance retains the transition separately.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NLayoutProjection {
+    Data(NDataProjection),
+    PointerTarget,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NLayoutSourcePath(pub Box<[NLayoutProjection]>);
+
+impl NLayoutSourcePath {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn concat_data(&self, suffix: &NDataPath) -> Self {
+        Self(
+            self.0
+                .iter()
+                .copied()
+                .chain(suffix.iter().copied().map(NLayoutProjection::Data))
+                .collect(),
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -398,10 +430,10 @@ fn project_layout_path_ty<'db>(
 fn verify_layout_data_path_indices<'db>(
     db: &'db dyn HirAnalysisDb,
     values: &[crate::analysis::semantic::normalized::NValue<'db>],
-    path: &NDataPath,
+    path: &NLayoutSourcePath,
 ) -> Option<()> {
-    for projection in path.iter() {
-        if let NDataProjection::Index(NIndex::Value(value)) = projection {
+    for projection in &path.0 {
+        if let NLayoutProjection::Data(NDataProjection::Index(NIndex::Value(value))) = projection {
             let value = values.get(value.index())?;
             if !matches!(
                 value.ty.data(db),

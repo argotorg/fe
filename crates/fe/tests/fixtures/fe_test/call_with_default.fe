@@ -3,7 +3,8 @@
 /// instead of a decode revert. Reverts still bubble and non-empty returndata
 /// is still decoded strictly.
 
-use std::evm::{RawMem, RawOps, last_returndata, mem}
+use core::ptr
+use std::evm::{RawMem, RawOps, copy_returndata, decode_returndata}
 
 /// Strict caller-side view of an ERC20-style `transfer`.
 msg TokenMsg {
@@ -55,9 +56,10 @@ pub contract FalseToken {
 pub contract MalformedToken {
     recv TokenMsg {
         Transfer { receiver, amount } -> bool uses (raw: mut RawOps) {
-            let ptr = mem::alloc(32)
-            raw.mstore(addr: ptr, value: 0xaabbccdd << 224)
-            raw.return_data(offset: ptr, len: 4)
+            let mut data = ptr::MemBuffer::alloc(32)
+            raw.mstore(addr: data.ptr(), value: 0xaabbccdd << 224)
+            data.set_len(4)
+            raw.return_data(data: data.span())
         }
     }
 }
@@ -133,6 +135,28 @@ fn test_present_returndata_is_decoded_not_defaulted() uses (evm: mut Evm) {
 }
 
 #[test]
+fn test_try_call_owns_success_and_revert_data() uses (evm: mut Evm, call: mut Call) {
+    let token = evm.create2<CompliantToken>(value: 0, args: (), salt: 0)
+    let success = token.try_call(TokenMsg::Transfer { receiver: receiver(), amount: 1 })
+    assert!(success.success())
+    assert!(success.returndata_len() == 32)
+    let decoded: bool = decode_returndata(success.returndata())
+    assert!(decoded)
+
+    let reverting = evm.create2<RevertingToken>(value: 0, args: (), salt: 1)
+    let failure = evm.try_call(
+        addr: reverting,
+        gas: 100000,
+        value: 0,
+        message: TokenMsg::Transfer { receiver: receiver(), amount: 1 },
+    )
+    assert!(!failure.success())
+    assert!(failure.returndata_len() == 32)
+    let returndata = failure.into_returndata()
+    assert!(evm.mload(returndata.ptr()) == 0xdeadbeefcafebabe << 192)
+}
+
+#[test]
 fn test_empty_returndata_yields_default() uses (evm: mut Evm) {
     let token = evm.create2<NoReturnToken>(value: 0, args: (), salt: 0)
 
@@ -180,16 +204,24 @@ fn test_bubbled_revert_data_survives_verbatim() uses (evm: mut Evm) {
 
     // Hand-encode CallerMsg::DoTransfer { token } so we can observe the
     // wrapped call's revert data instead of reverting the test itself.
-    let ptr = mem::alloc(36)
-    evm.mstore(addr: ptr, value: 1 << 224)
-    evm.mstore(addr: ptr + 4, value: token.inner)
-    assert!(!evm.raw_call(addr: caller, gas: 300000, value: 0, args_offset: ptr, args_len: 36))
+    let data = ptr::MemBuffer::alloc(36)
+    evm.mstore(addr: data.ptr(), value: 1 << 224)
+    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 4), value: token.inner)
+    let mut output = ptr::MemBuffer::empty()
+    let outcome = evm.raw_call(
+        addr: caller,
+        gas: 300000,
+        value: 0,
+        args: data.span(),
+        ret: mut output,
+    )
+    assert!(!outcome.success())
 
     // The token's revert data must arrive untouched: exactly one word
     // holding the marker.
-    let ret = last_returndata()
-    assert!(ret.len == 32)
-    assert!(evm.mload(ret.base) == 0xdeadbeefcafebabe << 192)
+    let ret = copy_returndata()
+    assert!(ret.len() == 32)
+    assert!(evm.mload(ret.ptr()) == 0xdeadbeefcafebabe << 192)
 }
 
 #[test(should_revert)]

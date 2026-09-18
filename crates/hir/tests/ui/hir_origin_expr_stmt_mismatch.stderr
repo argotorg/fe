@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+ --> tests/ui/hir_origin_expr_stmt_mismatch.rs:7:20
+  |
+7 |         takes_expr(stmt);
+  |         ---------- ^^^^ expected `HirExprOrigin<'_>`, found `HirStmtOrigin<'_>`
+  |         |
+  |         arguments to this function are incorrect
+  |
+note: function defined here
+ --> tests/ui/hir_origin_expr_stmt_mismatch.rs:3:4
+  |
+3 | fn takes_expr(_: HirExprOrigin<'_>) {}
+  |    ^^^^^^^^^^ --------------------

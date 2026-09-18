@@ -1,0 +1,16 @@
+
+fn identity<T>(_ value: own T) -> T {
+    value
+}
+
+fn bool_score(value: bool) -> u32 {
+    if value {
+        1
+    } else {
+        0
+    }
+}
+
+pub fn main() -> u32 {
+    identity(7) + bool_score(identity(true))
+}

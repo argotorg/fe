@@ -10,7 +10,12 @@ impl<'db> TypeId<'db> {
         let kind = match ast.kind() {
             ast::TypeKind::Ptr(ty) => {
                 let inner = Self::lower_ast_partial(ctxt, ty.inner());
-                TypeKind::Ptr(inner)
+                if ty.star2().is_some() {
+                    let inner = Partial::Present(TypeId::new(ctxt.db(), TypeKind::Ptr(inner)));
+                    TypeKind::Ptr(inner)
+                } else {
+                    TypeKind::Ptr(inner)
+                }
             }
 
             ast::TypeKind::Mode(ty) => {

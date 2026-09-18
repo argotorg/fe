@@ -23,11 +23,12 @@ use crate::{
                 NEffectArgValue, NExpr, NIndex, NOperand, NPlace, NPlaceBase, NRoot, NRootId,
                 NRootKind, NStatement, NStatementId, NStatementKind, NStructuralPath, NSuccessor,
                 NTerminator, NTerminatorKind, NValue, NValueDefinition, NValueId, NormalizedBody,
-                ReadMode, StructuralRepack, ViewAccess,
+                ReadMode, StructuralRepack, ViewAccess, copied_scalar_ty,
                 layout_plan::{
-                    NLayoutBackingSource, NLayoutPlan, NLayoutUseBacking, NRootRepresentation,
-                    NValueRepresentation,
+                    NLayoutBackingSource, NLayoutPlan, NLayoutProjection, NLayoutSourcePath,
+                    NLayoutUseBacking, NRootRepresentation, NValueRepresentation,
                 },
+                literal_allocation,
                 verify::project_path_ty,
             },
             sem_const_ty,
@@ -227,7 +228,9 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                         }
                     }
                     SStmtKind::Store { dst, .. } => {
-                        self.mark_address_root(dst.local, &mut needs_slot);
+                        if !matches!(dst.path.iter().next(), Some(Projection::Deref)) {
+                            self.mark_address_root(dst.local, &mut needs_slot);
+                        }
                     }
                 }
             }
@@ -447,7 +450,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                             &path.0,
                         )
                         .map_err(|_| NormalizeError::InvalidProjection)?,
-                        NExpr::ScalarCast { to, .. } => *to,
+                        NExpr::ScalarCast { to, .. } | NExpr::PointerCast { to, .. } => *to,
                         _ => self.normalized_local_ty(*dst),
                     };
                     // Reading a stored mutable handle creates a reborrow. Keep the
@@ -586,7 +589,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 }
             }
             SExpr::ReadPlace { place } => {
-                if self.local_has_place(place.local) {
+                if self.local_has_place(place.local) || place.path.iter().any(|projection| matches!(projection, Projection::Deref)) {
                     let place = self.normalize_place(block, origin, place)?;
                     self.load_or_borrow_place(origin, dst_ty, place, None)?
                 } else {
@@ -681,7 +684,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     SemanticLocalRole::PlaceCarrier { .. }
                         | SemanticLocalRole::PlaceBoundValue { .. }
                         | SemanticLocalRole::DirectCarrier { .. }
-                ) && to.as_capability(self.db).is_none();
+                ) && to.as_capability(self.db).is_none() && self.local_has_place(raw_value.value);
                 let (value, from) = if materialize_place {
                     let place = self.place_for_local(
                         block,
@@ -705,6 +708,8 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 };
                 if from == to {
                     NExpr::Forward { src: value }
+                } else if from.as_ptr(self.db).is_some() || to.as_ptr(self.db).is_some() {
+                    NExpr::PointerCast { value, to }
                 } else if self.shape(from)?.contains_capability(self.db) || self.shape(to)?.contains_capability(self.db) {
                     let mapping = structural_repack_mapping(self.db, self.instance, from, to).ok_or(
                         NormalizeError::UnsupportedCapabilityCast { from, to },
@@ -894,9 +899,10 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                                 }
                             },
                             pass_mode: arg.pass_mode,
+                            layout_view: arg.layout_view,
                             required_mut: arg.required_mut,
-                            target_ty: arg
-                                .target_ty
+                            provider_target_ty: arg
+                                .provider_target_ty
                                 .map(|ty| self.instance.normalized_ty(self.db, ty)),
                             provider: arg.provider,
                         })
@@ -1001,6 +1007,10 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             SConst::Ref(reference) => eval_const_ref(self.db, reference)
                 .map_err(|_| NormalizeError::UnresolvedHandleOrigin(ty))?,
         };
+        let constant = SConst::Value(value);
+        if literal_allocation(self.db, ty, &constant).is_some() {
+            return Ok(NExpr::Const(constant));
+        }
         let (variant, fields) = match value.value(self.db) {
             SemConstValue::Struct { fields, .. } => (None, fields),
             SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => {
@@ -1199,14 +1209,49 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         origin: SemOrigin<'db>,
         raw: &SPlace<'db>,
     ) -> Result<NPlace<'db>, NormalizeError<'db>> {
-        let mut place = self.place_for_local(block, origin, raw.local)?;
-        let suffix = self.normalize_path(block, origin, &raw.path)?;
-        for (index, projection) in suffix.iter().copied().enumerate() {
-            place.path.push(projection);
+        let mut projections = raw.path.iter().peekable();
+        let mut place = if matches!(projections.peek(), Some(Projection::Deref)) {
+            projections.next();
+            let value = self.read_scalar_operand(
+                block,
+                origin,
+                SOperand::inherited(raw.local),
+                Some(ReadMode::Copy),
+            )?;
+            let ty = self.values[value.value.index()]
+                .ty
+                .as_ptr(self.db)
+                .ok_or(NormalizeError::InvalidProjection)?;
+            NPlace {
+                base: NPlaceBase::CapabilityTarget {
+                    carrier: value.value,
+                },
+                path: NDataPath::empty(),
+                ty,
+                origin,
+            }
+        } else {
+            self.place_for_local(block, origin, raw.local)?
+        };
+        while let Some(projection) = projections.next() {
+            if matches!(projection, Projection::Deref) {
+                place = self.dereference_place(block, origin, raw.local, place)?;
+                continue;
+            }
+            let suffix = self.normalize_path(
+                block,
+                origin,
+                &crate::analysis::semantic::SemanticProjectionPath::from_projection(
+                    projection.clone(),
+                ),
+            )?;
+            for projection in suffix.iter().copied() {
+                place.path.push(projection);
+            }
             let base_ty = self.place_base_ty(place.base)?;
             place.ty = project_path_ty(self.db, self.instance, &self.values, base_ty, &place.path)
                 .map_err(|_| NormalizeError::InvalidProjection)?;
-            if index + 1 < suffix.len() && place.ty.as_capability(self.db).is_some() {
+            if projections.peek().is_some() && place.ty.as_capability(self.db).is_some() {
                 place = self.dereference_place(block, origin, raw.local, place)?;
             }
         }
@@ -1243,9 +1288,10 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         source_local: SLocalId,
         place: NPlace<'db>,
     ) -> Result<NPlace<'db>, NormalizeError<'db>> {
-        let (_, target) = place
+        let target = place
             .ty
-            .as_capability(self.db)
+            .as_ptr(self.db)
+            .or_else(|| place.ty.as_capability(self.db).map(|(_, target)| target))
             .ok_or(NormalizeError::InvalidProjection)?;
         let carrier = self.emit_define(
             block,
@@ -1300,7 +1346,11 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 provenance: PlaceProvenance::Derived(place),
                 ..
             } => self.normalize_place(block, origin, place),
-            _ if local_data.ty.as_capability(self.db).is_some() => {
+            _ if self
+                .normalized_local_ty(local)
+                .as_capability(self.db)
+                .is_some() =>
+            {
                 let carrier = self.current_value(local)?;
                 let ty = self.values[carrier.index()]
                     .ty
@@ -1353,7 +1403,9 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     self.projection_values[local.index()] = Some(index.value);
                     NDataProjection::Index(NIndex::Value(index.value))
                 }
-                Projection::Deref | Projection::Discriminant => {
+                Projection::Index(IndexSource::Any)
+                | Projection::Deref
+                | Projection::Discriminant => {
                     return Err(NormalizeError::UnsupportedPlaceProjection);
                 }
             });
@@ -1794,7 +1846,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 );
                 match &mut backing.source {
                     NLayoutBackingSource::Value { path, .. }
-                    | NLayoutBackingSource::Root { path, .. } => *path = path.concat(&suffix),
+                    | NLayoutBackingSource::Root { path, .. } => *path = path.concat_data(&suffix),
                 }
                 backing.target = Box::new([]);
             } else if layout_backing_source_path_is_prefix(&target, &backing.target) {
@@ -1835,10 +1887,14 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         block: SBlockId,
         origin: SemOrigin<'db>,
         path: &crate::analysis::semantic::SemanticProjectionPath<'db>,
-    ) -> Result<NDataPath, NormalizeError<'db>> {
+    ) -> Result<NLayoutSourcePath, NormalizeError<'db>> {
         let mut normalized = Vec::with_capacity(path.len());
         for projection in path.iter() {
-            normalized.push(match projection {
+            if matches!(projection, Projection::Deref) {
+                normalized.push(NLayoutProjection::PointerTarget);
+                continue;
+            }
+            normalized.push(NLayoutProjection::Data(match projection {
                 Projection::Field(field) => NDataProjection::Field(
                     u16::try_from(*field)
                         .map(crate::analysis::semantic::FieldIndex)
@@ -1872,12 +1928,14 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     };
                     NDataProjection::Index(NIndex::Value(value))
                 }
-                Projection::Deref | Projection::Discriminant => {
+                Projection::Index(IndexSource::Any)
+                | Projection::Deref
+                | Projection::Discriminant => {
                     return Err(NormalizeError::UnsupportedPlaceProjection);
                 }
-            });
+            }));
         }
-        Ok(NDataPath::new(normalized.into_boxed_slice()))
+        Ok(NLayoutSourcePath(normalized.into_boxed_slice()))
     }
 
     fn push_value(
@@ -1961,7 +2019,10 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             .key(self.db)
             .typed_body(self.db)
             .param_binding(index)?;
-        Some(instance.normalized_binding_ty(self.db, binding))
+        Some(copied_scalar_ty(
+            self.db,
+            instance.normalized_binding_ty(self.db, binding),
+        ))
     }
 
     fn call_arg_mode(
@@ -2020,16 +2081,20 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             NPlaceBase::CapabilityTarget { carrier } => self
                 .values
                 .get(carrier.index())
-                .and_then(|value| value.ty.as_capability(self.db))
-                .map(|(_, target)| target)
+                .and_then(|value| {
+                    value
+                        .ty
+                        .as_ptr(self.db)
+                        .or_else(|| value.ty.as_capability(self.db).map(|(_, target)| target))
+                })
                 .ok_or(NormalizeError::InvalidProjection),
         }
     }
 
     fn local_has_place(&self, local: SLocalId) -> bool {
         self.root_for_local[local.index()].is_some()
-            || self.raw.locals[local.index()]
-                .ty
+            || self
+                .normalized_local_ty(local)
                 .as_capability(self.db)
                 .is_some()
             || matches!(
@@ -2177,7 +2242,15 @@ fn semantic_root_provider<'db>(
 
 fn for_each_address_required_local(expr: &SExpr<'_>, mut f: impl FnMut(SLocalId)) {
     match expr {
-        SExpr::Borrow { place, .. } => f(place.local),
+        SExpr::Borrow { place, .. } => {
+            if !place
+                .path
+                .iter()
+                .any(|projection| matches!(projection, Projection::Deref))
+            {
+                f(place.local);
+            }
+        }
         SExpr::Call { effect_args, .. } => {
             for arg in effect_args {
                 if let crate::analysis::semantic::SEffectArgValue::Place(place) = &arg.arg {
@@ -2742,7 +2815,7 @@ pub(super) fn normalized_source_local_value_ty<'db>(
     } else {
         local.ty
     };
-    instance.normalized_ty(db, ty)
+    copied_scalar_ty(db, instance.normalized_ty(db, ty))
 }
 
 fn expr_used_locals(expr: &SExpr<'_>) -> Vec<SLocalId> {
@@ -2802,7 +2875,8 @@ fn place_used_locals(place: &SPlace<'_>) -> Vec<SLocalId> {
             | Projection::VariantField { .. }
             | Projection::Discriminant
             | Projection::Index(IndexSource::Constant(_))
-            | Projection::Deref => None,
+            | Projection::Deref
+            | Projection::Index(IndexSource::Any) => None,
         }))
         .collect()
 }
@@ -3180,9 +3254,9 @@ fn read_twice(mut _ index: own usize, values: [u256; 2]) -> u256 {
         let file = db.new_stand_alone(
             "normalized.fe".into(),
             r#"
-fn identity(mut _ value: own u256) -> mut u256 {
-    let borrowed: mut u256 = mut value
-    borrowed as mut u256
+struct Cell { value: u256 }
+fn identity(_ value: mut Cell) -> mut Cell {
+    value as mut Cell
 }
 "#,
         );
@@ -3308,22 +3382,22 @@ fn widen(_ value: own u8) -> u256 {
     #[test]
     fn handle_repacks_require_compatible_referents() {
         let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone(
+        let file = db.new_trusted_effect_handle_module(
             "repack_targets.fe".into(),
             r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 struct Ptr<T> { raw: u256 }
 impl<T> EffectHandle for Ptr<T> {
     type Target = T
+    type Raw = u256
     const SPACE: AddressSpace = AddressSpace::Memory
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 struct Spaced<const SP: AddressSpace> { raw: u256 }
 impl<const SP: AddressSpace> EffectHandle for Spaced<SP> {
     type Target = u256
+    type Raw = u256
     const SPACE: AddressSpace = SP
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
     fn raw(self) -> u256 { self.raw }
 }
 fn spaces(
@@ -3932,7 +4006,7 @@ fn generic_boundaries<T>(pair: (T, T), array: [T; 2]) -> (T, T) {
                 _ => None,
             })
             .expect("effectful call argument");
-        effect_arg.target_ty = Some(TyId::bool(&db));
+        effect_arg.provider_target_ty = Some(TyId::bool(&db));
         assert_eq!(
             verify_normalized_body(&db, &invalid_effect_target),
             Err(NormalizedBodyVerifyError::ExpressionType)

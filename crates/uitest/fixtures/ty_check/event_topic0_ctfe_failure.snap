@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/event_topic0_ctfe_failure.fe
+---
+error[8-0089]: failed to evaluate constant `TOPIC0`
+   ┌─ event_topic0_ctfe_failure.fe:26:1
+   │
+26 │ ╭ #[event]
+27 │ │ struct Broken { value: Bad }
+   │ ╰────────────────────────────^ `TOPIC0` from generated `#[event]` implementation failed during compile-time evaluation

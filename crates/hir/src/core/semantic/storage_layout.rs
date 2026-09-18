@@ -26,8 +26,8 @@ use crate::{
             },
             normalize::{normalize_layout_root_uses, normalize_ty},
             provider::{
-                ProviderLayoutResolution, StaticSlotLayoutResolution, resolve_effect_handle_layout,
-                resolve_static_slot_layout,
+                ProviderLayoutFailure, ProviderLayoutResolution, StaticSlotLayoutResolution,
+                resolve_effect_handle_layout, resolve_static_slot_layout,
             },
             trait_def::{ImplementorId, ResolvedImplInstance},
             trait_resolution::PredicateListId,
@@ -573,6 +573,7 @@ pub enum ContractLayoutError<'db> {
     AmbiguousProviderLayout,
     UnresolvedProviderTarget,
     UnresolvedProviderSpace,
+    InvalidProviderRaw { failure: ProviderLayoutFailure },
     NonRegularProviderCycle,
     UnresolvedStaticSlotSpace { owner: TyId<'db> },
     AmbiguousStaticSlot { owner: TyId<'db> },
@@ -603,6 +604,7 @@ impl ContractLayoutError<'_> {
             Self::AmbiguousProviderLayout => "provider layout selection is ambiguous",
             Self::UnresolvedProviderTarget => "provider target type is unresolved",
             Self::UnresolvedProviderSpace => "provider address space is unresolved",
+            Self::InvalidProviderRaw { .. } => "provider raw transport is invalid",
             Self::NonRegularProviderCycle => {
                 "provider target recursion changes its layout arguments"
             }
@@ -1836,16 +1838,8 @@ impl<'db> FieldCollector<'db> {
                     space,
                 },
             ),
-            Some(ProviderLayoutResolution::Ambiguous) => {
-                self.push_error(ContractLayoutError::AmbiguousProviderLayout);
-                WalkOutput::empty()
-            }
-            Some(ProviderLayoutResolution::UnresolvedTarget) => {
-                self.push_error(ContractLayoutError::UnresolvedProviderTarget);
-                WalkOutput::empty()
-            }
-            Some(ProviderLayoutResolution::UnresolvedSpace) => {
-                self.push_error(ContractLayoutError::UnresolvedProviderSpace);
+            Some(ProviderLayoutResolution::Invalid(failure)) => {
+                self.push_error(contract_layout_error_for_provider_failure(failure));
                 WalkOutput::empty()
             }
             Some(ProviderLayoutResolution::NotHandle) | None => {
@@ -3130,22 +3124,10 @@ fn collect_field_plan<'db>(
                 };
                 (true, space, target)
             }
-            ProviderLayoutResolution::Ambiguous => {
+            ProviderLayoutResolution::Invalid(failure) => {
                 return Some((
                     name,
-                    Err(vec![ContractLayoutError::AmbiguousProviderLayout]),
-                ));
-            }
-            ProviderLayoutResolution::UnresolvedTarget => {
-                return Some((
-                    name,
-                    Err(vec![ContractLayoutError::UnresolvedProviderTarget]),
-                ));
-            }
-            ProviderLayoutResolution::UnresolvedSpace => {
-                return Some((
-                    name,
-                    Err(vec![ContractLayoutError::UnresolvedProviderSpace]),
+                    Err(vec![contract_layout_error_for_provider_failure(failure)]),
                 ));
             }
         };
@@ -3209,6 +3191,21 @@ fn collect_field_plan<'db>(
             },
         ),
     ))
+}
+
+fn contract_layout_error_for_provider_failure<'db>(
+    failure: ProviderLayoutFailure,
+) -> ContractLayoutError<'db> {
+    match failure {
+        ProviderLayoutFailure::Ambiguous => ContractLayoutError::AmbiguousProviderLayout,
+        ProviderLayoutFailure::UnresolvedTarget => ContractLayoutError::UnresolvedProviderTarget,
+        ProviderLayoutFailure::UnresolvedSpace => ContractLayoutError::UnresolvedProviderSpace,
+        ProviderLayoutFailure::UnresolvedRaw
+        | ProviderLayoutFailure::UnsupportedRaw
+        | ProviderLayoutFailure::UntrustedRaw => {
+            ContractLayoutError::InvalidProviderRaw { failure }
+        }
+    }
 }
 
 fn allocation_unit_extent<'db>(

@@ -1,0 +1,31 @@
+error[E0308]: mismatched types
+ --> tests/ui/runtime_origin_export_key_raw_strings.rs:5:33
+  |
+5 |         let _ = stmt.export_key("runtime:test");
+  |                      ---------- ^^^^^^^^^^^^^^ expected `&RuntimeInstanceOwnerKey`, found `&str`
+  |                      |
+  |                      arguments to this method are incorrect
+  |
+  = note: expected reference `&RuntimeInstanceOwnerKey`
+             found reference `&'static str`
+note: method defined here
+ --> src/origin.rs
+  |
+  |     pub fn export_key(self, stable_instance_key: &RuntimeInstanceOwnerKey) -> OriginExportKey {
+  |            ^^^^^^^^^^
+
+error[E0308]: mismatched types
+ --> tests/ui/runtime_origin_export_key_raw_strings.rs:6:39
+  |
+6 |         let _ = terminator.export_key("runtime:test");
+  |                            ---------- ^^^^^^^^^^^^^^ expected `&RuntimeInstanceOwnerKey`, found `&str`
+  |                            |
+  |                            arguments to this method are incorrect
+  |
+  = note: expected reference `&RuntimeInstanceOwnerKey`
+             found reference `&'static str`
+note: method defined here
+ --> src/origin.rs
+  |
+  |     pub fn export_key(self, stable_instance_key: &RuntimeInstanceOwnerKey) -> OriginExportKey {
+  |            ^^^^^^^^^^

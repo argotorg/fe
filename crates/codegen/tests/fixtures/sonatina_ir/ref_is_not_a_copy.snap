@@ -42,8 +42,8 @@ func private %main_root() {
 
 func private %test_ref_is_not_a_copy() {
     block0:
-        v0.*i256 = alloca i256;
-        v1.*i256 = alloca i256;
+        v0.objref<i256> = obj.alloc i256;
+        v1.objref<i256> = obj.alloc i256;
         jump block1;
 
     block1:
@@ -53,7 +53,7 @@ func private %test_ref_is_not_a_copy() {
         v8.constref<i256> = extract_value v6 0.i256;
         v10.constref<i256> = extract_value v6 1.i256;
         v11.i256 = const.load v8;
-        mstore v0 10.i256 i256;
+        obj.store v0 10.i256;
         v12.i1 = eq v11 10.i256;
         br v12 block2 block3;
 
@@ -69,7 +69,7 @@ func private %test_ref_is_not_a_copy() {
 
     block4:
         v29.i256 = const.load v10;
-        mstore v1 20.i256 i256;
+        obj.store v1 20.i256;
         v30.i1 = eq v29 20.i256;
         br v30 block5 block6;
 

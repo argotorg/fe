@@ -13,8 +13,8 @@ use crate::{
     hir_def::{
         AssocConstDef, AttrListId, Body, BodyKind, Expr, FieldDef, FieldDefListId, FieldIndex,
         FuncModifiers, FuncParam, FuncParamMode, FuncParamName, GenericParamListId, IdentId,
-        IntegerId, LitKind, Partial, Pat, PathId, Stmt, Struct, TrackedItemVariant, TraitRefId,
-        TupleTypeId, TypeId, TypeKind, TypeMode, Visibility,
+        LitKind, Partial, PathId, PathKind, Struct, TrackedItemVariant, TraitRefId, TypeId,
+        TypeKind, TypeMode, Visibility,
     },
     span::{EventDesugared, HirOrigin},
 };
@@ -35,6 +35,7 @@ pub struct EventError {
 pub enum EventErrorKind {
     GenericEventStruct,
     TooManyIndexedFields { indexed_count: usize },
+    IndexedDynamicField { ty: String },
 }
 
 pub(super) fn is_event_struct(ast: &ast::Struct) -> bool {
@@ -124,7 +125,7 @@ pub(super) fn lower_event_struct<'db>(
 
     let indexed_fields = parsed_fields.indexed_fields.clone();
     let data_fields = parsed_fields.data_fields.clone();
-    let ordered_field_type_paths = parsed_fields.ordered_field_type_paths.clone();
+    let ordered_field_types = parsed_fields.ordered_field_types.clone();
 
     let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
     let trait_ref = Partial::Present(trait_ref);
@@ -136,7 +137,7 @@ pub(super) fn lower_event_struct<'db>(
                 builder.ctxt(),
                 event_desugared.clone(),
                 &struct_name_str,
-                &ordered_field_type_paths,
+                &ordered_field_types,
             );
             let impl_trait = builder.new_impl_trait(
                 id,
@@ -156,9 +157,8 @@ pub(super) fn lower_event_struct<'db>(
 
 struct ParsedEventFields<'db> {
     hir_fields: Vec<FieldDef<'db>>,
-    /// The path of each field's type, used to generate `FieldType::SOL_TYPE`
-    /// expressions in the TOPIC0 keccak tuple.
-    ordered_field_type_paths: Vec<PathId<'db>>,
+    /// Each field's source type, used to generate Solidity signature fragments.
+    ordered_field_types: Vec<TypeId<'db>>,
     /// Indexed fields with their TypeId (for topic encoding).
     indexed_fields: Vec<(IdentId<'db>, TypeId<'db>)>,
     data_fields: Vec<(IdentId<'db>, TypeId<'db>)>,
@@ -174,7 +174,7 @@ fn parse_event_fields<'db>(
     let file = ctxt.top_mod().file(db);
 
     let mut hir_fields = Vec::new();
-    let mut ordered_field_type_paths = Vec::new();
+    let mut ordered_field_types = Vec::new();
     let mut indexed_fields = Vec::new();
     let mut data_fields = Vec::new();
     let mut indexed_ranges = Vec::new();
@@ -185,7 +185,7 @@ fn parse_event_fields<'db>(
     let Some(fields) = ast.fields() else {
         return ParsedEventFields {
             hir_fields,
-            ordered_field_type_paths,
+            ordered_field_types,
             indexed_fields,
             data_fields,
             is_valid,
@@ -240,7 +240,7 @@ fn parse_event_fields<'db>(
         // Extract the type path. We need it to generate `FieldType::SOL_TYPE`
         // in the TOPIC0 computation. Non-path types (tuples, etc.) are not
         // supported as event fields.
-        let TypeKind::Path(Partial::Present(path)) = ty.data(db) else {
+        let TypeKind::Path(Partial::Present(_)) = ty.data(db) else {
             AbiFieldDiagnostic {
                 context: AbiFieldContext::Event,
                 ty: ty.pretty_print(db),
@@ -257,7 +257,7 @@ fn parse_event_fields<'db>(
             continue;
         };
 
-        ordered_field_type_paths.push(*path);
+        ordered_field_types.push(ty);
 
         if is_indexed {
             indexed_fields.push((name_ident, ty));
@@ -284,7 +284,7 @@ fn parse_event_fields<'db>(
 
     ParsedEventFields {
         hir_fields,
-        ordered_field_type_paths,
+        ordered_field_types,
         indexed_fields,
         data_fields,
         is_valid,
@@ -294,13 +294,17 @@ fn parse_event_fields<'db>(
 /// Build TOPIC0 as:
 ///
 /// ```text
-/// keccak(("StructName", "(", Field1Type::SOL_TYPE, ",", Field2Type::SOL_TYPE, ..., ")"))
+/// keccak(("StructName", "(", Field1Type::SOL_TYPE, ..., ")"))
 /// ```
+///
+/// Longer signatures are nested in chunks to stay within `AsBytes`' tuple-arity
+/// implementations. Container types compose their canonical names through
+/// `SolCompat::SOL_TYPE`.
 fn create_topic0_const<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     desugared: EventDesugared,
     struct_name: &str,
-    field_type_paths: &[PathId<'db>],
+    field_types: &[TypeId<'db>],
 ) -> AssocConstDef<'db> {
     let db = ctxt.db();
     let roots = super::hir_builder::LibRoots::for_ctxt(ctxt);
@@ -324,7 +328,7 @@ fn create_topic0_const<'db>(
     let callee = Expr::Path(Partial::Present(keccak_path));
     let callee_id = body_ctxt.push_expr(callee, origin.clone());
 
-    // Build the tuple: ("StructName", "(", Field1::SOL_TYPE, ",", ..., ")")
+    // Build the signature fragments. Long signatures are chunked below.
     let mut tuple_elems = Vec::new();
 
     // Struct name as string literal
@@ -342,7 +346,7 @@ fn create_topic0_const<'db>(
     tuple_elems.push(body_ctxt.push_expr(open_paren, origin.clone()));
 
     // Field types with comma separators
-    for (idx, field_path) in field_type_paths.iter().enumerate() {
+    for (idx, field_ty) in field_types.iter().copied().enumerate() {
         if idx > 0 {
             let comma = Expr::Lit(LitKind::String(crate::hir_def::StringId::new(
                 db,
@@ -351,10 +355,7 @@ fn create_topic0_const<'db>(
             tuple_elems.push(body_ctxt.push_expr(comma, origin.clone()));
         }
 
-        // FieldType::SOL_TYPE
-        let sol_type_path = field_path.push_str(db, "SOL_TYPE");
-        let sol_type_expr = Expr::Path(Partial::Present(sol_type_path));
-        tuple_elems.push(body_ctxt.push_expr(sol_type_expr, origin.clone()));
+        push_sol_type_fragments(&mut body_ctxt, field_ty, &origin, &mut tuple_elems);
     }
 
     // ")"
@@ -418,6 +419,38 @@ fn create_topic0_const<'db>(
     }
 }
 
+fn push_sol_type_fragments<'db>(
+    body: &mut super::body::BodyCtxt<'_, 'db>,
+    ty: TypeId<'db>,
+    origin: &HirOrigin<ast::Expr>,
+    out: &mut Vec<crate::hir_def::ExprId>,
+) {
+    let db = body.f_ctxt.db();
+    let TypeKind::Path(Partial::Present(_)) = ty.data(db) else {
+        return;
+    };
+
+    let roots = super::hir_builder::LibRoots::for_ctxt(body.f_ctxt);
+    let sol_compat = TraitRefId::new(
+        db,
+        Partial::Present(
+            PathId::from_ident(db, roots.std)
+                .push_str(db, "abi")
+                .push_str(db, "SolCompat"),
+        ),
+    );
+    let qualified = PathId::new(
+        db,
+        PathKind::QualifiedType {
+            type_: ty,
+            trait_: sol_compat,
+        },
+        None,
+    );
+    let sol_type_path = qualified.push_str(db, "SOL_TYPE");
+    out.push(body.push_expr(Expr::Path(Partial::Present(sol_type_path)), origin.clone()));
+}
+
 fn lower_emit_method<'db>(
     builder: &mut HirBuilder<'_, 'db, EventDesugared>,
     indexed_fields: &[(IdentId<'db>, TypeId<'db>)],
@@ -428,11 +461,9 @@ fn lower_emit_method<'db>(
 
     let emit_ident = builder.ident("emit");
     let log_provider_ident = builder.ident("log");
-    let offset_ident = builder.ident("offset");
-    let len_ident = builder.ident("len");
-    let data_ptr_ident = builder.ident("data_ptr");
-    let data_len_ident = builder.ident("data_len");
+    let data_ident = builder.ident("data");
     let as_topic_ident = builder.ident("as_topic");
+    let span_ident = builder.ident("span");
     let log_method_ident = builder.ident(&format!("log{}", indexed_fields.len() + 1));
 
     let log_trait_ref = TraitRefId::new(
@@ -480,62 +511,35 @@ fn lower_emit_method<'db>(
         move |body| {
             let self_expr = body.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
 
-            let (data_ptr, data_len) = if data_fields.is_empty() {
-                (int_lit(body, 0), int_lit(body, 0))
+            let data_buffer = if data_fields.is_empty() {
+                let empty_buffer = PathId::from_ident(db, roots.core)
+                    .push_str(db, "ptr")
+                    .push_str(db, "MemBuffer")
+                    .push_str(db, "empty");
+                let empty_expr = body.path_expr(empty_buffer);
+                body.call_expr(empty_expr, vec![])
             } else {
-                let payload_expr = if data_fields.len() == 1 {
-                    self_field_expr(body, self_expr, data_fields[0].0)
-                } else {
-                    let tuple_elems: Vec<Partial<TypeId<'db>>> = data_fields
-                        .iter()
-                        .map(|(_, ty)| Partial::Present(*ty))
-                        .collect();
-                    let _ = TypeId::new(db, TypeKind::Tuple(TupleTypeId::new(db, tuple_elems)));
-                    let mut elems = Vec::with_capacity(data_fields.len());
-                    for (name, _) in data_fields.iter().copied() {
-                        elems.push(self_field_expr(body, self_expr, name));
-                    }
-                    body.push_expr(Expr::Tuple(elems))
-                };
-                let encode_fn = if data_fields.len() == 1 {
-                    "encode_abi_payload"
-                } else {
-                    "encode_event_payload"
-                };
+                let mut elems = Vec::with_capacity(data_fields.len());
+                for (name, _) in data_fields.iter().copied() {
+                    elems.push(self_field_expr(body, self_expr, name));
+                }
+                let payload_expr = body.push_expr(Expr::Tuple(elems));
                 let encode_path = PathId::from_ident(db, roots.std)
                     .push_str(db, "evm")
-                    .push_str(db, encode_fn);
+                    .push_str(db, "encode_abi_payload");
                 let encode_expr = body.path_expr(encode_path);
-                let finish_call = body.call_expr(encode_expr, vec![payload_expr]);
-                let data_ptr_pat = body.push_pat(Pat::Path(
-                    Partial::Present(PathId::from_ident(db, data_ptr_ident)),
-                    false,
-                ));
-                let data_len_pat = body.push_pat(Pat::Path(
-                    Partial::Present(PathId::from_ident(db, data_len_ident)),
-                    false,
-                ));
-                let tuple_pat = body.push_pat(Pat::Tuple(vec![data_ptr_pat, data_len_pat]));
-                body.emit_stmt(Stmt::Let(tuple_pat, None, Some(finish_call)));
-
-                (
-                    body.ident_expr(data_ptr_ident),
-                    body.ident_expr(data_len_ident),
-                )
+                body.call_expr(encode_expr, vec![payload_expr])
             };
+            let data = body.method_call_expr(data_buffer, span_ident, vec![]);
 
             let topic0 = {
                 let path = PathId::from_ident(db, IdentId::make_self_ty(db)).push_str(db, "TOPIC0");
                 body.path_expr(path)
             };
-            let mut args = Vec::with_capacity(3 + indexed_fields.len());
+            let mut args = Vec::with_capacity(2 + indexed_fields.len());
             args.push(crate::hir_def::expr::CallArg {
-                label: Some(offset_ident),
-                expr: data_ptr,
-            });
-            args.push(crate::hir_def::expr::CallArg {
-                label: Some(len_ident),
-                expr: data_len,
+                label: Some(data_ident),
+                expr: data,
             });
             args.push(crate::hir_def::expr::CallArg {
                 label: Some(IdentId::new(db, "topic0".to_string())),
@@ -546,7 +550,7 @@ fn lower_emit_method<'db>(
                 let value = self_field_expr(body, self_expr, name);
                 let topic = body.method_call_expr(value, as_topic_ident, vec![]);
                 args.push(crate::hir_def::expr::CallArg {
-                    label: Some(IdentId::new(db, format!("topic{}", args.len() - 2))),
+                    label: Some(IdentId::new(db, format!("topic{}", args.len() - 1))),
                     expr: topic,
                 });
             }
@@ -567,12 +571,4 @@ fn self_field_expr<'db>(
         receiver,
         Partial::Present(FieldIndex::Ident(field)),
     ))
-}
-
-fn int_lit<'db>(
-    body: &mut super::hir_builder::BodyBuilder<'_, 'db, EventDesugared>,
-    v: usize,
-) -> crate::hir_def::ExprId {
-    let db = body.db();
-    body.push_expr(Expr::Lit(LitKind::Int(IntegerId::from_usize(db, v))))
 }

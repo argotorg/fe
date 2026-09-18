@@ -74,6 +74,9 @@ impl<'db> Expr<'db> {
             }
 
             ast::ExprKind::MacroCall(call) => {
+                if !is_assert_macro_call(&call) {
+                    return ctxt.push_expr(Self::UnsupportedMacroCall, HirOrigin::raw(&ast));
+                }
                 let args = call
                     .args()
                     .map(|args| {
@@ -82,11 +85,7 @@ impl<'db> Expr<'db> {
                             .collect()
                     })
                     .unwrap_or_default();
-                if is_assert_macro_call(&call) {
-                    Self::Assert(args)
-                } else {
-                    return ctxt.push_invalid_expr(HirOrigin::raw(&ast));
-                }
+                Self::Assert(args)
             }
 
             ast::ExprKind::MethodCall(method_call) => {
@@ -382,6 +381,7 @@ impl UnOp {
             ast::UnOp::BitNot(_) => Self::BitNot,
             ast::UnOp::Mut(_) => Self::Mut,
             ast::UnOp::Ref(_) => Self::Ref,
+            ast::UnOp::Deref(_) => Self::Deref,
         }
     }
 }

@@ -638,21 +638,21 @@ pub fn assoc_const_body_for_trait_inst<'db>(
     inst: TraitInstId<'db>,
     const_name: IdentId<'db>,
 ) -> Option<crate::hir_def::Body<'db>> {
-    assoc_const_body_and_impl_args_for_trait_inst(db, solve_cx, inst, const_name)
-        .map(|(body, _)| body)
+    assoc_const_body_template_for_trait_inst(db, solve_cx, inst, const_name)
+        .map(|(body, _, _)| body)
 }
 
 /// Looks up the HIR body for an associated const defined in the selected trait impl, if unique,
-/// returning both the body and the impl's instantiated generic arguments.
+/// returning the body, its declared template type, and the impl's instantiated arguments.
 ///
 /// The returned generic args correspond to the impl's own generic parameters (not the trait's),
 /// and are suitable for CTFE/type checking of the impl const body.
-pub fn assoc_const_body_and_impl_args_for_trait_inst<'db>(
+pub fn assoc_const_body_template_for_trait_inst<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
     const_name: IdentId<'db>,
-) -> Option<(crate::hir_def::Body<'db>, Vec<TyId<'db>>)> {
+) -> Option<(crate::hir_def::Body<'db>, TyId<'db>, Vec<TyId<'db>>)> {
     let resolved = match resolve_trait_impl_instance(db, solve_cx, inst) {
         Selection::Unique(resolved) => resolved,
         Selection::Ambiguous(_ambiguous) => return None,
@@ -664,12 +664,13 @@ pub fn assoc_const_body_and_impl_args_for_trait_inst<'db>(
         ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => return None,
     };
     let def = hir_impl
-        .hir_consts(db)
-        .iter()
-        .find(|c| c.name.to_opt() == Some(const_name))?;
-    let body = def.value.to_opt()?;
+        .assoc_consts(db)
+        .into_iter()
+        .find(|c| c.name(db) == Some(const_name))?;
+    let body = def.value_body(db)?;
+    let declared_ty = def.ty(db)?;
 
-    Some((body, resolved.impl_args(db).to_vec()))
+    Some((body, declared_ty, resolved.impl_args(db).to_vec()))
 }
 
 /// Whether `inst` is satisfied by a uniquely-selected concrete impl rather than
@@ -922,7 +923,7 @@ impl<'db> ImplementorId<'db> {
                 db,
                 impl_m.as_callable(db).unwrap(),
                 trait_m.as_callable(db).unwrap(),
-                self.trait_(db),
+                self.trait_inst(db),
                 &mut diags,
             );
             required_methods.remove(name);
@@ -1067,7 +1068,7 @@ impl<'db> TraitInstId<'db> {
         if as_pred {
             let inst = self.pretty_print(db, false);
             let self_ty = self.self_ty(db);
-            format! {"{}: {}", self_ty.pretty_print(db), inst}
+            format!("{}: {}", self_ty.pretty_print(db), inst)
         } else {
             let mut s = self
                 .def(db)

@@ -21,7 +21,7 @@ pub use crate::analysis::ty::ProviderAddressSpace;
 use crate::analysis::ty::corelib::resolve_lib_type_path;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::method_table::ProbedMethod;
-use crate::analysis::ty::provider::{ProviderKind, ProviderLayoutEvidence, provider_semantics};
+use crate::analysis::ty::provider::{ProviderKind, provider_semantics};
 use crate::analysis::ty::trait_lower::lower_impl_trait;
 use crate::analysis::ty::trait_resolution::constraint::{
     PredicateSource, collect_func_decl_constraint_pairs,
@@ -88,7 +88,11 @@ use super::{
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
 };
 use crate::analysis::semantic::SemanticCodeRegionRef;
-use crate::analysis::semantic::{SemConstId, SemConstScalar, SemConstValue, eval_body_owner_const};
+use crate::analysis::semantic::{
+    EffectProviderSubst, GenericSubst, ImplEnv, SemConstId, SemConstScalar, SemConstValue,
+    SemanticInstanceKey, eval_body_owner_const, get_or_build_semantic_instance,
+    reify_runtime_const_for_ty,
+};
 use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
     const_ty::{
@@ -152,12 +156,16 @@ pub fn check_impl_trait_const_bodies<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
-    // Only check impls the user wrote; attribute-expanded impls (e.g.
-    // `#[event]`) would re-report their cascade failures at the expansion
-    // site on already-diagnosed code.
-    if !matches!(impl_trait.origin(db), crate::span::HirOrigin::Raw(_)) {
-        return Vec::new();
-    }
+    let generated_origin = match impl_trait.origin(db) {
+        crate::span::HirOrigin::Raw(_) => None,
+        crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::Event(_)) => {
+            Some("generated `#[event]` implementation")
+        }
+        crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::Error(_)) => {
+            Some("generated `#[error]` implementation")
+        }
+        _ => return Vec::new(),
+    };
     let Some(implementor) = lower_impl_trait(db, impl_trait) else {
         return Vec::new();
     };
@@ -182,12 +190,28 @@ pub fn check_impl_trait_const_bodies<'db>(
         if expected_ty.has_invalid(db) {
             continue;
         }
-        diags.extend(
-            check_anon_const_body(db, body, expected_ty)
-                .0
-                .iter()
-                .cloned(),
-        );
+        let body_diags = &check_anon_const_body(db, body, expected_ty).0;
+        if generated_origin.is_none() {
+            diags.extend(body_diags.iter().cloned());
+        }
+        if body_diags.is_empty()
+            && let Some(origin) = generated_origin
+        {
+            let const_name = impl_const.name(db).map_or_else(
+                || "<associated const>".to_string(),
+                |name| name.data(db).clone(),
+            );
+            diags.extend(const_body_ctfe_diags_with_context(
+                db,
+                body,
+                expected_ty,
+                false,
+                Some(ConstDiagContext {
+                    const_name,
+                    origin: origin.to_string(),
+                }),
+            ));
+        }
     }
     diags
 }
@@ -404,7 +428,7 @@ pub(super) fn check_body<'db>(
     };
 
     checker.run();
-    let (mut diags, typed_body) = checker.finish();
+    let (mut diags, mut typed_body) = checker.finish();
     if let BodyOwner::Func(func) = owner
         && func.is_const(db)
         && !func.is_extern(db)
@@ -415,6 +439,7 @@ pub(super) fn check_body<'db>(
             &typed_body,
         ));
     }
+    typed_body.has_diagnostics = !diags.is_empty();
 
     (diags, typed_body)
 }
@@ -462,25 +487,90 @@ pub(crate) fn const_body_ctfe_diags<'db>(
     expected: TyId<'db>,
     allow_type_level: bool,
 ) -> Vec<FuncBodyDiag<'db>> {
+    const_body_ctfe_diags_with_context(db, body, expected, allow_type_level, None)
+}
+
+struct ConstDiagContext {
+    const_name: String,
+    origin: String,
+}
+
+fn const_body_ctfe_diags_with_context<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expected: TyId<'db>,
+    allow_type_level: bool,
+    context: Option<ConstDiagContext>,
+) -> Vec<FuncBodyDiag<'db>> {
     let owner = BodyOwner::AnonConstBody { body, expected };
     let mut diags = Vec::new();
     match eval_body_owner_const(db, owner, Vec::new()) {
         Ok(value) => {
             if !allow_type_level && matches!(value.value(db), SemConstValue::TypeLevel { .. }) {
-                diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
+                push_const_eval_diag(&mut diags, body, context, "could not be fully resolved");
+            } else if !allow_type_level {
+                let key = SemanticInstanceKey::new(
+                    db,
+                    owner,
+                    GenericSubst::empty(db),
+                    EffectProviderSubst::empty(db),
+                    ImplEnv::empty(db, owner.scope()),
+                );
+                let semantic = get_or_build_semantic_instance(db, key);
+                if reify_runtime_const_for_ty(db, semantic, expected, value).is_none() {
+                    push_const_eval_diag(
+                        &mut diags,
+                        body,
+                        context,
+                        "could not be reified for runtime lowering",
+                    );
+                }
             }
         }
         Err(crate::analysis::semantic::CtfeError::NotConstEvaluable { .. }) => {
-            diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
+            push_const_eval_diag(&mut diags, body, context, "is not const-evaluable");
         }
         Err(err) => {
-            let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, owner, err));
-            if let Some(diag) = ty.emit_diag(db, body.span().into()) {
-                diags.push(diag.into());
+            if let Some(context) = context {
+                diags.push(
+                    BodyDiag::ConstEvaluationFailed {
+                        primary: body.span().into(),
+                        const_name: context.const_name,
+                        origin: context.origin,
+                        reason: "failed during compile-time evaluation".to_string(),
+                    }
+                    .into(),
+                );
+            } else {
+                let ty = TyId::invalid(db, invalid_cause_from_ctfe_error(db, owner, err));
+                if let Some(diag) = ty.emit_diag(db, body.span().into()) {
+                    diags.push(diag.into());
+                }
             }
         }
     }
     diags
+}
+
+fn push_const_eval_diag<'db>(
+    diags: &mut Vec<FuncBodyDiag<'db>>,
+    body: Body<'db>,
+    context: Option<ConstDiagContext>,
+    reason: &str,
+) {
+    if let Some(context) = context {
+        diags.push(
+            BodyDiag::ConstEvaluationFailed {
+                primary: body.span().into(),
+                const_name: context.const_name,
+                origin: context.origin,
+                reason: reason.to_string(),
+            }
+            .into(),
+        );
+    } else {
+        diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
+    }
 }
 
 fn typed_body_for_bodyless_func<'db>(
@@ -515,6 +605,7 @@ fn typed_body_for_bodyless_func<'db>(
         .collect();
     TypedBody {
         body: None,
+        has_diagnostics: false,
         result_ty,
         assumptions,
         pat_ty: SecondaryMap::new(),
@@ -696,11 +787,7 @@ impl<'db> TyChecker<'db> {
         effects: crate::hir_def::EffectParamListId<'db>,
     ) {
         for (idx, effect) in effects.data(self.db).iter().enumerate() {
-            let Some(key_path) = effect
-                .key_path
-                .to_opt()
-                .filter(|path| path.ident(self.db).is_present())
-            else {
+            let Some(key_ty) = effect.key_ty.to_opt() else {
                 continue;
             };
 
@@ -709,14 +796,14 @@ impl<'db> TyChecker<'db> {
                     self.db,
                     func,
                     idx,
-                    key_path,
+                    key_ty,
                     self.env.assumptions(),
                 ),
                 ResolvedEffectKey::Type(_) | ResolvedEffectKey::Trait(_)
             ) {
                 self.push_diag(BodyDiag::InvalidEffectKey {
                     owner: EffectParamOwner::Func(func),
-                    key: key_path,
+                    key: key_ty,
                     idx,
                 });
             }
@@ -764,17 +851,13 @@ impl<'db> TyChecker<'db> {
         .map(|registration| registration.provider_ty);
 
         for (idx, effect) in effects.data(self.db).iter().enumerate() {
-            let Some(key_path) = effect
-                .key_path
-                .to_opt()
-                .filter(|path| path.ident(self.db).is_present())
-            else {
+            let Some(key_ty) = effect.key_ty.to_opt() else {
                 continue;
             };
 
             // Labeled effects are always type/trait keyed: `name: Type`.
             if effect.name.is_some() {
-                match resolve_effect_key(self.db, key_path, contract.scope(), assumptions) {
+                match resolve_effect_key(self.db, key_ty, contract.scope(), assumptions) {
                     ResolvedEffectKey::Trait(schema) => {
                         let Some(root_effect_ty) = root_effect_ty else {
                             continue;
@@ -806,7 +889,7 @@ impl<'db> TyChecker<'db> {
                         if !given.is_zero_sized(self.db) {
                             self.push_diag(BodyDiag::ContractRootEffectTypeNotZeroSized {
                                 owner,
-                                key: key_path,
+                                key: key_ty,
                                 idx,
                                 given,
                             });
@@ -815,7 +898,7 @@ impl<'db> TyChecker<'db> {
                     ResolvedEffectKey::Invalid | ResolvedEffectKey::Other => {
                         self.push_diag(BodyDiag::InvalidEffectKey {
                             owner,
-                            key: key_path,
+                            key: key_ty,
                             idx,
                         });
                     }
@@ -841,7 +924,7 @@ impl<'db> TyChecker<'db> {
                             binding.provider.source
                     {
                         self.push_diag(BodyDiag::ImmutableContractFieldMutBinding {
-                            primary: owner.effect_param_path_span(self.db, idx),
+                            primary: owner.effect_param_ty_span(self.db, idx),
                             field: binding.requirement.binding_name,
                             field_span: crate::hir_def::FieldParent::Contract(field.contract)
                                 .field_name_span(field.index as usize),
@@ -851,7 +934,7 @@ impl<'db> TyChecker<'db> {
                 _ => {
                     self.push_diag(BodyDiag::InvalidEffectKey {
                         owner,
-                        key: key_path,
+                        key: key_ty,
                         idx,
                     });
                 }
@@ -1905,17 +1988,6 @@ impl<'db> TyChecker<'db> {
                 value_ty: self.normalize_ty(value_ty),
             };
         }
-        let semantics = provider_semantics(self.db, self.env.scope(), self.env.assumptions(), ty);
-        if matches!(
-            semantics.evidence,
-            ProviderLayoutEvidence::ResolvedHandle(_)
-        ) && let Some(target_ty) = semantics.target_ty
-        {
-            return BindingInterfaceShape::DirectCarrier {
-                target_ty: self.normalize_ty(target_ty),
-            };
-        }
-
         let provider = match binding {
             LocalBinding::EffectParam {
                 site, provider_idx, ..
@@ -1927,6 +1999,12 @@ impl<'db> TyChecker<'db> {
             } => self.env.resolved_provider_binding(site, idx),
             LocalBinding::Local { .. } | LocalBinding::Param { .. } => None,
         };
+        let semantics = provider_semantics(self.db, self.env.scope(), self.env.assumptions(), ty);
+        if let Some(target_ty) = semantics.binding_target_ty(self.db, provider.is_some()) {
+            return BindingInterfaceShape::DirectCarrier {
+                target_ty: self.normalize_ty(target_ty),
+            };
+        }
         provider.map_or(BindingInterfaceShape::OrdinaryValue, |provider| {
             BindingInterfaceShape::ProviderValue {
                 kind: provider.semantics.kind,
@@ -2656,13 +2734,20 @@ pub enum EffectPassMode {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum EffectArgLayoutView {
+    Direct,
+    ProviderTarget,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct ResolvedEffectArg<'db> {
     pub param_idx: usize,
     pub binding_idx: u32,
-    pub key: PathId<'db>,
+    pub key: HirTyId<'db>,
     pub arg: EffectArg<'db>,
     pub pass_mode: EffectPassMode,
+    pub layout_view: EffectArgLayoutView,
     pub required_mut: bool,
     pub key_kind: EffectKeyKind,
     pub instantiated_key_ty: Option<TyId<'db>>,
@@ -2734,6 +2819,7 @@ pub(crate) enum SmirLoweringReadiness {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedBody<'db> {
     body: Option<Body<'db>>,
+    has_diagnostics: bool,
     result_ty: TyId<'db>,
     assumptions: PredicateListId<'db>,
     pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
@@ -3250,7 +3336,8 @@ impl<'db> TypedBody<'db> {
             {
                 missing_plan()
             }
-            Expr::Assert(_) if expr_ty.has_invalid(db) => {
+            Expr::UnsupportedMacroCall => Some(SmirLoweringIssue::InvalidExpr(expr)),
+            Expr::Assert(_) | Expr::Cast(..) if expr_ty.has_invalid(db) => {
                 Some(SmirLoweringIssue::InvalidExpr(expr))
             }
             // A resolved constructor plan can survive a failed contextual
@@ -3266,16 +3353,19 @@ impl<'db> TypedBody<'db> {
                 missing_plan()
             }
             Expr::Un(inner, crate::hir_def::expr::UnOp::Mut | crate::hir_def::expr::UnOp::Ref)
-                if self.expr_place(*inner).is_none() =>
+                if !self.has_lowerable_place(db, *inner) =>
             {
                 missing_plan()
             }
-            Expr::Assign(dst, _) if self.expr_place(*dst).is_none() => {
+            Expr::Assign(dst, _)
+                if self.semantic_expr_lowering(*dst).is_none()
+                    && !self.has_lowerable_place(db, *dst) =>
+            {
                 Some(self.missing_place_issue(db, expr, *dst))
             }
             Expr::AugAssign(dst, _, _)
                 if self.semantic_expr_lowering(expr).is_none()
-                    && self.expr_place(*dst).is_none() =>
+                    && !self.has_lowerable_place(db, *dst) =>
             {
                 Some(self.missing_place_issue(db, expr, *dst))
             }
@@ -3322,6 +3412,14 @@ impl<'db> TypedBody<'db> {
             }
             _ => None,
         }
+    }
+
+    /// Pointer rvalues are evaluated once before lowering their target place.
+    fn has_lowerable_place(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> bool {
+        self.expr_place(expr).is_some() || self.body.is_some_and(|body| {
+            matches!(expr.data(db, body), Partial::Present(Expr::Un(inner, crate::hir_def::UnOp::Deref))
+                if { let ty = self.expr_ty(db, *inner); ty.as_capability(db).map_or(ty, |(_, target)| target).as_ptr(db).is_some() })
+        })
     }
 
     fn missing_place_issue(
@@ -4039,10 +4137,13 @@ impl<'db> TypedBody<'db> {
         let projection = place
             .projections
             .iter()
-            .map(|projection| match projection {
-                PlaceProjection::Field { index, .. } => Some(ReturnProjectionStep::Field(*index)),
+            .filter_map(|projection| match projection {
+                PlaceProjection::Deref { .. } => None,
+                PlaceProjection::Field { index, .. } => {
+                    Some(Some(ReturnProjectionStep::Field(*index)))
+                }
                 PlaceProjection::Index { index_expr, .. } => {
-                    self.return_index_projection(db, body, *index_expr)
+                    Some(self.return_index_projection(db, body, *index_expr))
                 }
             })
             .collect::<Option<Vec<_>>>()?;
@@ -4465,7 +4566,7 @@ impl<'db> TypedBody<'db> {
                     seen,
                 );
             }
-            Expr::Lit(_) | Expr::Path(_) => {}
+            Expr::Lit(_) | Expr::Path(_) | Expr::UnsupportedMacroCall => {}
         }
     }
 
@@ -4692,6 +4793,7 @@ impl<'db> TypedBody<'db> {
     fn empty(db: &'db dyn HirAnalysisDb) -> Self {
         Self {
             body: None,
+            has_diagnostics: false,
             result_ty: TyId::unit(db),
             assumptions: PredicateListId::empty_list(db),
             pat_ty: SecondaryMap::new(),

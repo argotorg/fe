@@ -1,0 +1,7 @@
+use std::abi::DynArray as Values
+
+#[event]
+struct IndexedDynamicAlias {
+    #[indexed]
+    values: Values<u256>,
+}

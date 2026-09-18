@@ -1,9 +1,0 @@
-/// Dynamic memory allocation in EVM linear memory.
-///
-/// This is a compiler intrinsic: backend-specific lowering is handled in codegen.
-extern {
-    /// Allocates `size` bytes and returns the start pointer (byte offset).
-    ///
-    /// Lowered to `evm_malloc`.
-    pub fn alloc(_ size: u256) -> u256
-}

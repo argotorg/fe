@@ -10,10 +10,12 @@ use crate::analysis::ty::layout_holes::layout_hole_with_fallback_ty;
 use crate::analysis::ty::trait_def::TraitInstId;
 use crate::analysis::ty::trait_resolution::PredicateListId;
 use crate::analysis::ty::ty_def::{TyBase, TyData, TyId};
-use crate::analysis::ty::ty_lower::{collect_generic_params, func_implicit_param_plan};
+use crate::analysis::ty::ty_lower::{
+    collect_generic_params, func_implicit_param_plan, lower_hir_ty,
+};
 use crate::core::hir_def::GenericParamOwner;
 use crate::hir_def::scope_graph::ScopeId;
-use crate::hir_def::{CallableDef, Func, PathId};
+use crate::hir_def::{CallableDef, Func, PathId, TypeId as HirTypeId, TypeKind};
 
 pub mod elaborate;
 pub mod match_;
@@ -58,7 +60,7 @@ pub struct CanonicalEffectIdentity<'db> {
     pub key_kind: EffectKeyKind,
     pub key_ty: Option<TyId<'db>>,
     pub key_trait: Option<TraitInstId<'db>>,
-    pub key_path: PathId<'db>,
+    pub key_syntax: HirTypeId<'db>,
     pub is_mut: bool,
 }
 
@@ -141,7 +143,7 @@ pub(crate) fn canonical_effect_identity_for_binding<'db>(
         key_trait: binding.key.key_trait().map(|trait_key| {
             canonicalize_effect_trait_key(db, trait_key, scope, assumptions, assoc_ty_subst, mode)
         }),
-        key_path: binding.binding_path,
+        key_syntax: binding.binding_ty,
         is_mut: binding.is_mut,
     }
 }
@@ -158,6 +160,28 @@ pub fn place_effect_provider_param_index_map<'db>(
 }
 
 pub(crate) fn resolve_effect_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key_ty: HirTypeId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> ResolvedEffectKey<'db> {
+    if let TypeKind::Path(path) = key_ty.data(db) {
+        return path.to_opt().map_or(ResolvedEffectKey::Other, |key_path| {
+            resolve_effect_path(db, key_path, scope, assumptions)
+        });
+    }
+
+    let schema = TypeKeySchema {
+        carrier: lower_hir_ty(db, key_ty, scope, assumptions),
+    };
+    if schema.carrier.is_star_kind(db) && type_key_schema_is_well_formed(db, schema) {
+        ResolvedEffectKey::Type(schema)
+    } else {
+        ResolvedEffectKey::Invalid
+    }
+}
+
+pub(crate) fn resolve_effect_path<'db>(
     db: &'db dyn HirAnalysisDb,
     key_path: PathId<'db>,
     scope: ScopeId<'db>,

@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/event_indexed_static_array_alias.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ event_indexed_static_array_alias.fe:3:1
+  │
+3 │ ╭ #[event]
+4 │ │ struct IndexedArray {
+5 │ │     #[indexed]
+6 │ │     values: Values,
+7 │ │ }
+  │ ╰─^ `[[u256; 2]; 3]` doesn't implement `TopicValue`

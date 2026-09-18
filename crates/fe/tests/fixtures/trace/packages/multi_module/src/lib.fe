@@ -1,0 +1,23 @@
+
+msg AlphaMsg {
+    #[selector = 0x01]
+    Get {} -> u32,
+}
+
+struct AlphaStore {
+    value: u32,
+}
+
+pub contract Alpha {
+    mut store: AlphaStore
+
+    init() uses (mut store) {
+        store.value = 1
+    }
+
+    recv AlphaMsg {
+        Get {} -> u32 uses (store) {
+            return store.value
+        }
+    }
+}

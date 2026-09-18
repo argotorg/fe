@@ -28,16 +28,10 @@ mod TokenMsg {
     }
 
     impl core::abi::Encode<std::abi::Sol> for Transfer {
-        const DIRECT_ENCODE: bool = false
-
-        fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
+        fn encode(own self, _ ptr: *u8) {
             let Self { to, amount } = self
-            to.encode(e)
-            amount.encode(e)
-        }
-
-        fn encode_to_ptr(own self, _ ptr: u256) {
-            core::panic()
+            to.encode(ptr)
+            amount.encode(core::ptr::offset_bytes(ptr, 32))
         }
     }
 
@@ -64,15 +58,9 @@ mod TokenMsg {
     }
 
     impl core::abi::Encode<std::abi::Sol> for Balance {
-        const DIRECT_ENCODE: bool = false
-
-        fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
+        fn encode(own self, _ ptr: *u8) {
             let Self { addr } = self
-            addr.encode(e)
-        }
-
-        fn encode_to_ptr(own self, _ ptr: u256) {
-            core::panic()
+            addr.encode(ptr)
         }
     }
 
@@ -102,15 +90,9 @@ impl core::abi::AbiSize for CustomQuery {
 }
 
 impl core::abi::Encode<std::abi::Sol> for CustomQuery {
-    const DIRECT_ENCODE: bool = false
-
-    fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
+    fn encode(own self, _ ptr: *u8) {
         let Self { key } = self
-        key.encode(e)
-    }
-
-    fn encode_to_ptr(own self, _ ptr: u256) {
-        core::panic()
+        key.encode(ptr)
     }
 }
 

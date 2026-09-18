@@ -1,0 +1,5 @@
+
+fn main() -> u256 {
+    let arr: [u256; 2] = [10, 20]
+    return arr[2]
+}

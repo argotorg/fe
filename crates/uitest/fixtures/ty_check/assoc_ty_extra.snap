@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assoc_ty_extra.fe
+---
+error[6-0023]: associated type not defined in trait
+  ┌─ assoc_ty_extra.fe:8:10
+  │
+8 │     type Y = u64
+  │          ^ associated type `Y` is not defined in trait `T`
+
+error[6-0023]: associated type not defined in trait
+   ┌─ assoc_ty_extra.fe:14:10
+   │
+14 │     type Extra = u256
+   │          ^^^^^ associated type `Extra` is not defined in trait `Empty`
+
+error[6-0023]: associated type not defined in trait
+   ┌─ assoc_ty_extra.fe:22:10
+   │
+22 │     type Y = u64
+   │          ^ associated type `Y` is not defined in trait `WithDefault`
+
+error[6-0023]: associated type not defined in trait
+   ┌─ assoc_ty_extra.fe:42:10
+   │
+42 │     type X = u32
+   │          ^ associated type `X` is not defined in trait `Sub`

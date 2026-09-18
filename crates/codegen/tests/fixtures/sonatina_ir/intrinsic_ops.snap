@@ -5,6 +5,16 @@ input_file: crates/codegen/tests/fixtures/intrinsic_ops.fe
 ---
 target = "evm-ethereum-osaka"
 
+func private %alloc_bytes(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.*i8 = evm_malloc v0;
+        v3.i256 = ptr_to_int v2 i256;
+        return v3;
+}
+
 func private %calldataload(v0.i256) -> i256 {
     block0:
         jump block1;
@@ -46,13 +56,15 @@ func private %main() -> i256 {
         jump block1;
 
     block1:
-        call %store_word 128.i256 1.i256;
-        call %store_byte 129.i256 2.i8;
+        v1.i256 = call %alloc_bytes 32.i256;
+        call %store_word v1 1.i256;
+        v4.i256 = add v1 1.i256;
+        call %store_byte v4 2.i8;
         call %store_slot 3.i256 4.i256;
-        v9.i256 = call %load_word 128.i256;
-        v10.i256 = call %load_slot 3.i256;
-        (v11.i256, v12.i1) = uaddo v9 v10;
-        br v12 block2 block3;
+        v10.i256 = call %load_word v1;
+        v11.i256 = call %load_slot 3.i256;
+        (v12.i256, v13.i1) = uaddo v10 v11;
+        br v13 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -60,12 +72,12 @@ func private %main() -> i256 {
         evm_revert 0.i256 36.i256;
 
     block3:
-        v17.i256 = call %load_calldata 0.i256;
-        (v18.i256, v19.i1) = uaddo v11 v17;
-        br v19 block2 block4;
+        v18.i256 = call %load_calldata 0.i256;
+        (v19.i256, v20.i1) = uaddo v12 v18;
+        br v20 block2 block4;
 
     block4:
-        return v18;
+        return v19;
 }
 
 func private %main_root() {

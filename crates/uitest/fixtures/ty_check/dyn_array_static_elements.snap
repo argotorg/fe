@@ -1,0 +1,64 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/dyn_array_static_elements.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ dyn_array_static_elements.fe:4:13
+  │
+4 │     let _ = values.get(0)
+  │             ^^^^^^^^^^^^^
+  │             │
+  │             `DynArray<DynString>` doesn't implement `DynArrayAccess<DynString>`
+  │             trait bound `DynString: StaticAbiElement` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ dyn_array_static_elements.fe:8:38
+   │
+ 8 │     let _values: MemVec<DynString> = MemVec::zeroed(1)
+   │                                      ^^^^^^^^^^^^^^ `DynString` doesn't implement `StaticAbiElement`
+   │
+   ┌─ src/abi/dyn_array.fe:73:14
+   │
+73 │     where T: StaticAbiElement + Decode<Sol> + Encode<Sol> + AbiSize
+   │              ---------------- required by this bound on `zeroed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ dyn_array_static_elements.fe:12:13
+   │
+12 │     let _ = values.get(0)
+   │             ^^^^^^^^^^^^^
+   │             │
+   │             `DynArray<(u256, u256)>` doesn't implement `DynArrayAccess<(u256, u256)>`
+   │             trait bound `(u256, u256): StaticAbiElement` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ dyn_array_static_elements.fe:16:41
+   │
+16 │     let _values: MemVec<(u256, u256)> = MemVec::zeroed(1)
+   │                                         ^^^^^^^^^^^^^^ `(u256, u256)` doesn't implement `StaticAbiElement`
+   │
+   ┌─ src/abi/dyn_array.fe:73:14
+   │
+73 │     where T: StaticAbiElement + Decode<Sol> + Encode<Sol> + AbiSize
+   │              ---------------- required by this bound on `zeroed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ dyn_array_static_elements.fe:20:13
+   │
+20 │     let _ = values.get(0)
+   │             ^^^^^^^^^^^^^
+   │             │
+   │             `DynArray<DynArray<u256>>` doesn't implement `DynArrayAccess<DynArray<u256>>`
+   │             trait bound `DynArray<u256>: StaticAbiElement` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ dyn_array_static_elements.fe:24:34
+   │
+24 │     let _values: MemVec<Bytes> = MemVec::zeroed(1)
+   │                                  ^^^^^^^^^^^^^^ `Bytes` doesn't implement `StaticAbiElement`
+   │
+   ┌─ src/abi/dyn_array.fe:73:14
+   │
+73 │     where T: StaticAbiElement + Decode<Sol> + Encode<Sol> + AbiSize
+   │              ---------------- required by this bound on `zeroed`

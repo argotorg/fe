@@ -1086,15 +1086,9 @@ impl<T> core::abi::AbiSize for GenericMsg<T>
 impl<T> core::abi::Encode<std::abi::Sol> for GenericMsg<T>
     where T: core::abi::Encode<std::abi::Sol>
 {
-    const DIRECT_ENCODE: bool = false
-
-    fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
+    fn encode(own self, _ ptr: *u8) {
         let Self { value } = self
-        value.encode(e)
-    }
-
-    fn encode_to_ptr(own self, _ ptr: u256) {
-        core::panic()
+        value.encode(ptr)
     }
 }
 
@@ -1158,15 +1152,9 @@ struct Weird {
 }
 
 impl core::abi::Encode<std::abi::Sol> for Weird {
-    const DIRECT_ENCODE: bool = false
-
-    fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
-        self.flag.encode(e)
-        self.amount.encode(e)
-    }
-
-    fn encode_to_ptr(own self, _ ptr: u256) {
-        core::panic()
+    fn encode(own self, _ ptr: *u8) {
+        self.flag.encode(ptr)
+        self.amount.encode(core::ptr::offset_bytes(ptr, 32))
     }
 }
 
@@ -1224,15 +1212,9 @@ mod TokenMsg {
     }
 
     impl core::abi::Encode<std::abi::Sol> for Transfer {
-        const DIRECT_ENCODE: bool = false
-
-        fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
-            self.to.encode(e)
-            self.amount.encode(e)
-        }
-
-        fn encode_to_ptr(own self, _ ptr: u256) {
-            core::panic()
+        fn encode(own self, _ ptr: *u8) {
+            self.to.encode(ptr)
+            self.amount.encode(core::ptr::offset_bytes(ptr, 32))
         }
     }
 

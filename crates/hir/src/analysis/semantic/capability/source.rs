@@ -42,7 +42,10 @@ impl<'db> IndexPayload<'db> for SourceExpr<'db> {
     fn accepts_class(&self, class: CapabilityClass) -> bool {
         matches!(
             class,
-            CapabilityClass::Borrow(_) | CapabilityClass::View | CapabilityClass::Handle
+            CapabilityClass::Borrow(_)
+                | CapabilityClass::View
+                | CapabilityClass::Handle
+                | CapabilityClass::Pointer
         )
     }
 

@@ -117,9 +117,16 @@ pub(super) struct ReportContext {
 }
 
 #[derive(Debug, Clone)]
+struct SuiteInput {
+    path: Utf8PathBuf,
+    workspace_url: Option<Url>,
+}
+
+#[derive(Debug, Clone)]
 struct SuitePlan {
     index: usize,
     path: Utf8PathBuf,
+    workspace_url: Option<Url>,
     suite: String,
     suite_key: String,
     suite_report_out: Option<Utf8PathBuf>,
@@ -157,6 +164,7 @@ enum JobOutcome {
     SuitePrepared(PreparedSuite),
     SingleFinished(Box<SingleRunResult>),
     SuiteFinished(SuiteRunResult),
+    WorkerFailed(String),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -467,6 +475,7 @@ impl OutcomeCollectorState {
                     self.finalize_pending_suite(&suite_key, ctx)?;
                 }
             }
+            JobOutcome::WorkerFailed(message) => return Err(message),
         }
         Ok(())
     }
@@ -588,12 +597,16 @@ fn plan_suite_report_path(
 }
 
 fn build_suite_plans(
-    input_paths: Vec<Utf8PathBuf>,
+    inputs: Vec<SuiteInput>,
     report_dir: Option<&Utf8PathBuf>,
 ) -> Result<Vec<SuitePlan>, String> {
-    let mut plans = Vec::with_capacity(input_paths.len());
+    let mut plans = Vec::with_capacity(inputs.len());
     let mut seen_suite_names: FxHashMap<String, usize> = FxHashMap::default();
-    for (index, path) in input_paths.into_iter().enumerate() {
+    for (index, input) in inputs.into_iter().enumerate() {
+        let SuiteInput {
+            path,
+            workspace_url,
+        } = input;
         let suite = suite_name_for_path(&path);
         let seen = seen_suite_names.entry(suite.clone()).or_insert(0);
         *seen += 1;
@@ -605,6 +618,7 @@ fn build_suite_plans(
         plans.push(SuitePlan {
             index,
             path,
+            workspace_url,
             suite,
             suite_key,
             suite_report_out: None,
@@ -773,10 +787,31 @@ pub fn run_tests(
                 single_rx: single_rx.clone(),
                 outcome_tx: outcome_tx.clone(),
             };
+            let panic_tx = outcome_tx.clone();
             if grouped {
-                scope.spawn(move || suite_worker_loop_grouped(channels, cfg));
+                scope.spawn(move || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        suite_worker_loop_grouped(channels, cfg);
+                    }));
+                    if let Err(payload) = result {
+                        let _ = panic_tx.send(JobOutcome::WorkerFailed(format!(
+                            "suite worker panicked: {}",
+                            panic_payload_message(payload)
+                        )));
+                    }
+                });
             } else {
-                scope.spawn(move || suite_worker_loop_parallel(channels, cfg));
+                scope.spawn(move || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        suite_worker_loop_parallel(channels, cfg);
+                    }));
+                    if let Err(payload) = result {
+                        let _ = panic_tx.send(JobOutcome::WorkerFailed(format!(
+                            "suite worker panicked: {}",
+                            panic_payload_message(payload)
+                        )));
+                    }
+                });
             }
         }
 
@@ -789,33 +824,47 @@ pub fn run_tests(
                 single_rx: single_rx.clone(),
                 outcome_tx: outcome_tx.clone(),
             };
-            scope.spawn(move || single_worker_loop(channels, cfg));
+            let panic_tx = outcome_tx.clone();
+            scope.spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    single_worker_loop(channels, cfg);
+                }));
+                if let Err(payload) = result {
+                    let _ = panic_tx.send(JobOutcome::WorkerFailed(format!(
+                        "single-test worker panicked: {}",
+                        panic_payload_message(payload)
+                    )));
+                }
+            });
         }
         drop(outcome_tx);
 
-        let ctx = OutcomeContext {
-            suite_plans: &suite_plans,
-            suite_tx: &suite_tx,
-            single_tx: &single_tx,
-            shared: shared.as_ref(),
-            filter: filter.as_deref(),
-            multi,
-            suite_label_width,
+        let result = {
+            let ctx = OutcomeContext {
+                suite_plans: &suite_plans,
+                suite_tx: &suite_tx,
+                single_tx: &single_tx,
+                shared: shared.as_ref(),
+                filter: filter.as_deref(),
+                multi,
+                suite_label_width,
+            };
+            let mut collector =
+                OutcomeCollectorState::new(&suite_plans, grouped, multi, suite_in_flight_limit);
+            let mut result = collector.queue_initial_suites(&ctx, suite_worker_count);
+
+            while result.is_ok() && collector.suite_runs.len() < suite_plans.len() {
+                result = outcome_rx
+                    .recv()
+                    .map_err(|err| format!("suite worker failed: {err}"))
+                    .and_then(|outcome| collector.handle_outcome(outcome, &ctx));
+            }
+
+            result.map(|()| collector.suite_runs)
         };
-        let mut collector =
-            OutcomeCollectorState::new(&suite_plans, grouped, multi, suite_in_flight_limit);
-        collector.queue_initial_suites(&ctx, suite_worker_count)?;
-
-        while collector.suite_runs.len() < suite_plans.len() {
-            let outcome = outcome_rx
-                .recv()
-                .map_err(|err| format!("suite worker failed: {err}"))?;
-            collector.handle_outcome(outcome, &ctx)?;
-        }
-
         drop(single_tx);
         drop(suite_tx);
-        Ok(collector.suite_runs)
+        result
     })?;
 
     suite_runs.sort_unstable_by_key(|run| run.index);
@@ -1125,6 +1174,16 @@ fn emit_grouped_suite_outcome(
     let _ = outcome_tx.send(JobOutcome::SuiteFinished(suite_run));
 }
 
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
 fn single_worker_loop(channels: SingleWorkerChannels, cfg: SingleWorkerConfig) {
     while let Ok(job) = channels.single_rx.recv() {
         emit_single_outcome(job, &channels.outcome_tx, cfg.shared.as_ref());
@@ -1336,6 +1395,7 @@ fn prepare_suite_job(
         prepare_tests_ingot(
             &mut db,
             &plan.path,
+            plan.workspace_url.as_ref(),
             &plan.suite,
             &plan.suite_key,
             filter,
@@ -1634,6 +1694,7 @@ fn prepare_tests_single_file(
 fn prepare_tests_ingot(
     db: &mut DriverDataBase,
     dir_path: &Utf8PathBuf,
+    workspace_url: Option<&Url>,
     suite: &str,
     suite_key: &str,
     filter: Option<&str>,
@@ -1672,7 +1733,11 @@ fn prepare_tests_ingot(
         }
     };
 
-    let had_init_diagnostics = driver::init_ingot(db, &ingot_url);
+    let had_init_diagnostics = if let Some(workspace_url) = workspace_url {
+        driver::init_workspace(db, workspace_url)
+    } else {
+        driver::init_ingot(db, &ingot_url)
+    };
     if had_init_diagnostics {
         let msg = format!("Compilation errors while initializing ingot `{dir_path}`");
         let _ = writeln!(output, "{msg}");
@@ -2337,13 +2402,21 @@ fn looks_like_glob(pattern: &str) -> bool {
 fn expand_workspace_test_paths(
     inputs: Vec<Utf8PathBuf>,
     ingot: Option<&str>,
-) -> Result<Vec<Utf8PathBuf>, String> {
-    let mut expanded = Vec::new();
-    let mut seen: FxHashSet<String> = FxHashSet::default();
-    let mut push_unique = |path: Utf8PathBuf| {
+) -> Result<Vec<SuiteInput>, String> {
+    let mut expanded: Vec<SuiteInput> = Vec::new();
+    let mut seen: FxHashMap<String, usize> = FxHashMap::default();
+    let mut push_unique = |path: Utf8PathBuf, workspace_url: Option<Url>| {
         let key = path.as_str().to_string();
-        if seen.insert(key) {
-            expanded.push(path);
+        if let Some(index) = seen.get(&key).copied() {
+            if expanded[index].workspace_url.is_none() {
+                expanded[index].workspace_url = workspace_url;
+            }
+        } else {
+            seen.insert(key, expanded.len());
+            expanded.push(SuiteInput {
+                path,
+                workspace_url,
+            });
         }
     };
 
@@ -2352,7 +2425,7 @@ fn expand_workspace_test_paths(
             if ingot.is_some() {
                 return Err(INGOT_REQUIRES_WORKSPACE_ROOT.to_string());
             }
-            push_unique(input);
+            push_unique(input, None);
             continue;
         }
 
@@ -2361,7 +2434,7 @@ fn expand_workspace_test_paths(
             if ingot.is_some() {
                 return Err(INGOT_REQUIRES_WORKSPACE_ROOT.to_string());
             }
-            push_unique(input);
+            push_unique(input, None);
             continue;
         }
 
@@ -2373,7 +2446,7 @@ fn expand_workspace_test_paths(
                         "`--ingot` requires a readable workspace config at `{config_path}`"
                     ));
                 }
-                push_unique(input);
+                push_unique(input, None);
                 continue;
             }
         };
@@ -2385,7 +2458,7 @@ fn expand_workspace_test_paths(
                         "`--ingot` requires a valid workspace config at `{config_path}`"
                     ));
                 }
-                push_unique(input);
+                push_unique(input, None);
                 continue;
             }
         };
@@ -2393,7 +2466,7 @@ fn expand_workspace_test_paths(
             if ingot.is_some() {
                 return Err(INGOT_REQUIRES_WORKSPACE_ROOT.to_string());
             }
-            push_unique(input);
+            push_unique(input, None);
             continue;
         };
 
@@ -2427,12 +2500,12 @@ fn expand_workspace_test_paths(
         )?;
 
         if member_paths.is_empty() {
-            push_unique(input);
+            push_unique(input, None);
             continue;
         }
 
         for member_path in member_paths {
-            push_unique(member_path);
+            push_unique(member_path, Some(workspace_url.clone()));
         }
     }
 

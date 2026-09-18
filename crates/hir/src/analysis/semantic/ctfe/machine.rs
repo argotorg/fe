@@ -2101,8 +2101,9 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 .instantiate_typed_body(self.db)
                 .assumptions(),
         );
-        let size =
-            runtime_size_bytes(self.db, ty).ok_or(CtfeError::NotConstEvaluable { origin })?;
+        let size = runtime_size_bytes(self.db, ty)
+            .map_err(|_| CtfeError::ArithmeticOverflow { origin })?
+            .ok_or(CtfeError::NotConstEvaluable { origin })?;
         Ok(CtfeConstValue::int(self.db, result_ty, BigInt::from(size)))
     }
 
@@ -2296,6 +2297,12 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     CtfePathElem::Index(self.index_from_value(frame_idx, index, origin)?)
                 }
                 Projection::Index(IndexSource::Constant(index)) => CtfePathElem::Index(*index),
+                Projection::Index(IndexSource::Any) => {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "analysis wildcard index is not valid in CTFE".into(),
+                    });
+                }
                 Projection::Deref | Projection::Discriminant => {
                     return Err(CtfeError::InvalidOperation {
                         origin,
@@ -2677,9 +2684,9 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     -int - BigInt::one(),
                 )))
             }
-            UnOp::Mut | UnOp::Ref => Err(CtfeError::InvalidOperation {
+            UnOp::Mut | UnOp::Ref | UnOp::Deref => Err(CtfeError::InvalidOperation {
                 origin,
-                message: "unexpected borrow operator in CTFE unary evaluation".into(),
+                message: "unexpected place operator in CTFE unary evaluation".into(),
             }),
         }
     }

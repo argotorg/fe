@@ -3,12 +3,16 @@ use hir::analysis::{
     semantic::{
         SLocal, SLocalId, SemanticLocalKind,
         normalized::{
-            NDataProjection, NExpr, NIndex, NPlace, NPlaceBase, NRootKind, NStatementKind,
-            NValueDefinition, NValueId,
+            NDataPath, NDataProjection, NExpr, NIndex, NPlace, NPlaceBase, NRootKind,
+            NStatementKind, NValueDefinition, NValueId,
         },
     },
-    ty::ty_def::TyId,
+    ty::{
+        pattern_types::{PatternProjectionStep, project_pattern_child_source_ty},
+        ty_def::TyId,
+    },
 };
+use hir::hir_def::EnumVariant;
 
 use crate::{
     db::MirDb,
@@ -23,6 +27,61 @@ use super::{
     },
     semantic_body::{RuntimeOperand, RuntimeSemanticBody},
 };
+
+/// Index bounds in projection order, stopping at the first empty array.
+/// Both alias erasure and emitted bounds checks must inspect the same path.
+pub(super) fn place_index_bounds<'db>(
+    db: &'db dyn MirDb,
+    body: &RuntimeSemanticBody<'db>,
+    place: &NPlace<'db>,
+) -> Vec<(NIndex, usize)> {
+    body.normalized
+        .place_base_ty(db, place.base)
+        .map(|ty| data_path_index_bounds(db, ty, &place.path))
+        .unwrap_or_default()
+}
+
+pub(super) fn data_path_index_bounds<'db>(
+    db: &'db dyn MirDb,
+    mut ty: TyId<'db>,
+    path: &NDataPath,
+) -> Vec<(NIndex, usize)> {
+    let mut bounds = Vec::new();
+    for projection in path.iter() {
+        while let Some((_, inner)) = ty.as_capability(db) {
+            ty = inner;
+        }
+        ty = match projection {
+            NDataProjection::Field(index) => Some(project_pattern_child_source_ty(
+                db,
+                ty,
+                PatternProjectionStep::Field(usize::from(index.0)),
+            )),
+            NDataProjection::VariantField { variant, field } => ty.as_enum(db).map(|enum_| {
+                project_pattern_child_source_ty(
+                    db,
+                    ty,
+                    PatternProjectionStep::VariantField {
+                        variant: EnumVariant::new(enum_, usize::from(variant.0)),
+                        field_idx: usize::from(field.0),
+                    },
+                )
+            }),
+            NDataProjection::Index(index) => {
+                let len = ty
+                    .array_len(db)
+                    .expect("normalized index projection must retain a concrete array length");
+                bounds.push((*index, len));
+                if len == 0 {
+                    return bounds;
+                }
+                ty.generic_args(db).first().copied()
+            }
+        }
+        .expect("verified normalized data path");
+    }
+    bounds
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum RuntimeSourceMode<'roots, 'db> {

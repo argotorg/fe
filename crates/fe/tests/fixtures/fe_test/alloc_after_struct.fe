@@ -1,7 +1,7 @@
-use std::evm::mem
+use core::ptr
 
 /// Regression test: allocating a struct whose fields land at 0x80 must not
-/// corrupt subsequent calls to mem::alloc.  Previously, mem::alloc read
+/// corrupt subsequent calls to ptr::alloc_bytes.  Previously, ptr::alloc_bytes read
 /// mload(0x80) as a Sonatina stack-pointer guard even though 0x80 can hold
 /// user data, causing wild pointer values.
 struct Pair {
@@ -16,12 +16,14 @@ fn test_alloc_after_struct() uses (evm: Evm) {
         b: Address { inner: 0x2222222222222222222222222222222222222222 },
     }
 
-    // This calls mem::alloc under the hood.  Before the fix it would use the
+    // This calls ptr::alloc_bytes under the hood.  Before the fix it would use the
     // address value at 0x80 as a heap pointer and crash with OutOfGas.
-    let ptr = mem::alloc(32)
+    let ptr = ptr::alloc_bytes(32)
 
-    // Sanity: the allocation should be in a reasonable range, not at 0x1111...
-    assert!(ptr < 0x100000)
+    // Sanity: the allocation should be usable, not a wild pointer derived from
+    // the address value above.
+    *ptr = 7
+    assert!(*ptr == 7)
 
     // Verify original struct is intact.
     assert!(p.a.inner == 0x1111111111111111111111111111111111111111)

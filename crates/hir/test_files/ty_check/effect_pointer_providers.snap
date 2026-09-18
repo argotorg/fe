@@ -4,310 +4,304 @@ expression: res
 input_file: test_files/ty_check/effect_pointer_providers.fe
 ---
 note:
-  ┌─ effect_pointer_providers.fe:1:36
+  ┌─ effect_pointer_providers.fe:3:36
   │
-1 │   fn read_x() -> u256 uses (x: u256) {
+3 │   fn read_x() -> u256 uses (x: u256) {
   │ ╭────────────────────────────────────^
-2 │ │     x
-3 │ │ }
+4 │ │     x
+5 │ │ }
   │ ╰─^ u256
 
 note:
-  ┌─ effect_pointer_providers.fe:2:5
+  ┌─ effect_pointer_providers.fe:4:5
   │
-2 │     x
+4 │     x
   │     ^ u256
 
 note:
-  ┌─ effect_pointer_providers.fe:5:32
+  ┌─ effect_pointer_providers.fe:7:32
   │
-5 │   fn bump_x() uses (x: mut u256) {
+7 │   fn bump_x() uses (x: mut u256) {
   │ ╭────────────────────────────────^
-6 │ │     x += 1
-7 │ │ }
+8 │ │     x += 1
+9 │ │ }
   │ ╰─^ ()
 
 note:
-  ┌─ effect_pointer_providers.fe:6:5
+  ┌─ effect_pointer_providers.fe:8:5
   │
-6 │     x += 1
+8 │     x += 1
   │     ^ u256
 
 note:
-  ┌─ effect_pointer_providers.fe:6:5
+  ┌─ effect_pointer_providers.fe:8:5
   │
-6 │     x += 1
+8 │     x += 1
   │     ^^^^^^ ()
 
 note:
-  ┌─ effect_pointer_providers.fe:6:10
+  ┌─ effect_pointer_providers.fe:8:10
   │
-6 │     x += 1
+8 │     x += 1
   │          ^ u256
 
 note:
-   ┌─ effect_pointer_providers.fe:9:48
+   ┌─ effect_pointer_providers.fe:11:19
    │
- 9 │   fn test_mem_ptr() uses (mem: std::evm::RawMem) {
-   │ ╭────────────────────────────────────────────────^
-10 │ │     let p: std::evm::MemPtr<u256> = mem.mem_ptr(0)
-11 │ │     with (p) {
-12 │ │         let _v = read_x()
-13 │ │         bump_x()
-14 │ │     }
-15 │ │ }
+11 │   fn test_mem_ptr() {
+   │ ╭───────────────────^
+12 │ │     let p = ptr::alloc<u256>()
+13 │ │     with (p) {
+14 │ │         let _v = read_x()
+15 │ │         bump_x()
+16 │ │     }
+17 │ │ }
    │ ╰─^ ()
 
 note:
-   ┌─ effect_pointer_providers.fe:10:9
+   ┌─ effect_pointer_providers.fe:12:9
    │
-10 │     let p: std::evm::MemPtr<u256> = mem.mem_ptr(0)
-   │         ^ MemPtr<u256>
-
-note:
-   ┌─ effect_pointer_providers.fe:10:37
-   │
-10 │     let p: std::evm::MemPtr<u256> = mem.mem_ptr(0)
-   │                                     ^^^ mem
-
-note:
-   ┌─ effect_pointer_providers.fe:10:37
-   │
-10 │     let p: std::evm::MemPtr<u256> = mem.mem_ptr(0)
-   │                                     ^^^^^^^^^^^^^^ MemPtr<u256>
-
-note:
-   ┌─ effect_pointer_providers.fe:10:49
-   │
-10 │     let p: std::evm::MemPtr<u256> = mem.mem_ptr(0)
-   │                                                 ^ u256
-
-note:
-   ┌─ effect_pointer_providers.fe:11:5
-   │
-11 │ ╭     with (p) {
-12 │ │         let _v = read_x()
-13 │ │         bump_x()
-14 │ │     }
-   │ ╰─────^ ()
-
-note:
-   ┌─ effect_pointer_providers.fe:11:11
-   │
-11 │     with (p) {
-   │           ^ MemPtr<u256>
-
-note:
-   ┌─ effect_pointer_providers.fe:11:14
-   │
-11 │       with (p) {
-   │ ╭──────────────^
-12 │ │         let _v = read_x()
-13 │ │         bump_x()
-14 │ │     }
-   │ ╰─────^ ()
+12 │     let p = ptr::alloc<u256>()
+   │         ^ *<u256>
 
 note:
    ┌─ effect_pointer_providers.fe:12:13
    │
-12 │         let _v = read_x()
+12 │     let p = ptr::alloc<u256>()
+   │             ^^^^^^^^^^^^^^^^ fn alloc<u256>
+
+note:
+   ┌─ effect_pointer_providers.fe:12:13
+   │
+12 │     let p = ptr::alloc<u256>()
+   │             ^^^^^^^^^^^^^^^^^^ *<u256>
+
+note:
+   ┌─ effect_pointer_providers.fe:13:5
+   │
+13 │ ╭     with (p) {
+14 │ │         let _v = read_x()
+15 │ │         bump_x()
+16 │ │     }
+   │ ╰─────^ ()
+
+note:
+   ┌─ effect_pointer_providers.fe:13:11
+   │
+13 │     with (p) {
+   │           ^ *<u256>
+
+note:
+   ┌─ effect_pointer_providers.fe:13:14
+   │
+13 │       with (p) {
+   │ ╭──────────────^
+14 │ │         let _v = read_x()
+15 │ │         bump_x()
+16 │ │     }
+   │ ╰─────^ ()
+
+note:
+   ┌─ effect_pointer_providers.fe:14:13
+   │
+14 │         let _v = read_x()
    │             ^^ u256
 
 note:
-   ┌─ effect_pointer_providers.fe:12:18
+   ┌─ effect_pointer_providers.fe:14:18
    │
-12 │         let _v = read_x()
+14 │         let _v = read_x()
    │                  ^^^^^^ fn read_x
 
 note:
-   ┌─ effect_pointer_providers.fe:12:18
+   ┌─ effect_pointer_providers.fe:14:18
    │
-12 │         let _v = read_x()
+14 │         let _v = read_x()
    │                  ^^^^^^^^ u256
 
 note:
-   ┌─ effect_pointer_providers.fe:13:9
+   ┌─ effect_pointer_providers.fe:15:9
    │
-13 │         bump_x()
+15 │         bump_x()
    │         ^^^^^^ fn bump_x
 
 note:
-   ┌─ effect_pointer_providers.fe:13:9
+   ┌─ effect_pointer_providers.fe:15:9
    │
-13 │         bump_x()
+15 │         bump_x()
    │         ^^^^^^^^ ()
 
 note:
-   ┌─ effect_pointer_providers.fe:17:33
+   ┌─ effect_pointer_providers.fe:19:62
    │
-17 │   fn test_calldata_ptr_readonly() {
-   │ ╭─────────────────────────────────^
-18 │ │     let c: std::evm::CalldataPtr<u256> = std::evm::CalldataPtr::from_raw(0)
-19 │ │     with (c) {
-20 │ │         let _v = read_x()
-21 │ │     }
-22 │ │ }
+19 │   fn test_calldata_ptr_readonly() uses (evm: std::evm::RawOps) {
+   │ ╭──────────────────────────────────────────────────────────────^
+20 │ │     let c = evm.calldata_ptr<u256>(0)
+21 │ │     with (c) {
+22 │ │         let _v = read_x()
+23 │ │     }
+24 │ │ }
    │ ╰─^ ()
 
 note:
-   ┌─ effect_pointer_providers.fe:18:9
+   ┌─ effect_pointer_providers.fe:20:9
    │
-18 │     let c: std::evm::CalldataPtr<u256> = std::evm::CalldataPtr::from_raw(0)
+20 │     let c = evm.calldata_ptr<u256>(0)
    │         ^ CalldataPtr<u256>
-
-note:
-   ┌─ effect_pointer_providers.fe:18:42
-   │
-18 │     let c: std::evm::CalldataPtr<u256> = std::evm::CalldataPtr::from_raw(0)
-   │                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ fn from_raw<CalldataPtr<u256>>
-
-note:
-   ┌─ effect_pointer_providers.fe:18:42
-   │
-18 │     let c: std::evm::CalldataPtr<u256> = std::evm::CalldataPtr::from_raw(0)
-   │                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ CalldataPtr<u256>
-
-note:
-   ┌─ effect_pointer_providers.fe:18:74
-   │
-18 │     let c: std::evm::CalldataPtr<u256> = std::evm::CalldataPtr::from_raw(0)
-   │                                                                          ^ u256
-
-note:
-   ┌─ effect_pointer_providers.fe:19:5
-   │
-19 │ ╭     with (c) {
-20 │ │         let _v = read_x()
-21 │ │     }
-   │ ╰─────^ ()
-
-note:
-   ┌─ effect_pointer_providers.fe:19:11
-   │
-19 │     with (c) {
-   │           ^ CalldataPtr<u256>
-
-note:
-   ┌─ effect_pointer_providers.fe:19:14
-   │
-19 │       with (c) {
-   │ ╭──────────────^
-20 │ │         let _v = read_x()
-21 │ │     }
-   │ ╰─────^ ()
 
 note:
    ┌─ effect_pointer_providers.fe:20:13
    │
-20 │         let _v = read_x()
+20 │     let c = evm.calldata_ptr<u256>(0)
+   │             ^^^ evm
+
+note:
+   ┌─ effect_pointer_providers.fe:20:13
+   │
+20 │     let c = evm.calldata_ptr<u256>(0)
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^ CalldataPtr<u256>
+
+note:
+   ┌─ effect_pointer_providers.fe:20:36
+   │
+20 │     let c = evm.calldata_ptr<u256>(0)
+   │                                    ^ u256
+
+note:
+   ┌─ effect_pointer_providers.fe:21:5
+   │
+21 │ ╭     with (c) {
+22 │ │         let _v = read_x()
+23 │ │     }
+   │ ╰─────^ ()
+
+note:
+   ┌─ effect_pointer_providers.fe:21:11
+   │
+21 │     with (c) {
+   │           ^ CalldataPtr<u256>
+
+note:
+   ┌─ effect_pointer_providers.fe:21:14
+   │
+21 │       with (c) {
+   │ ╭──────────────^
+22 │ │         let _v = read_x()
+23 │ │     }
+   │ ╰─────^ ()
+
+note:
+   ┌─ effect_pointer_providers.fe:22:13
+   │
+22 │         let _v = read_x()
    │             ^^ u256
 
 note:
-   ┌─ effect_pointer_providers.fe:20:18
+   ┌─ effect_pointer_providers.fe:22:18
    │
-20 │         let _v = read_x()
+22 │         let _v = read_x()
    │                  ^^^^^^ fn read_x
 
 note:
-   ┌─ effect_pointer_providers.fe:20:18
+   ┌─ effect_pointer_providers.fe:22:18
    │
-20 │         let _v = read_x()
+22 │         let _v = read_x()
    │                  ^^^^^^^^ u256
 
 note:
-   ┌─ effect_pointer_providers.fe:24:92
+   ┌─ effect_pointer_providers.fe:26:92
    │
-24 │   fn read_calldata_triplet_ptr_offset() -> u256 uses (arr: std::evm::CalldataPtr<[u256; 3]>) {
+26 │   fn read_calldata_triplet_ptr_offset() -> u256 uses (arr: std::evm::CalldataPtr<[u256; 3]>) {
    │ ╭────────────────────────────────────────────────────────────────────────────────────────────^
-25 │ │     arr.raw()
-26 │ │ }
+27 │ │     arr.raw()
+28 │ │ }
    │ ╰─^ u256
 
 note:
-   ┌─ effect_pointer_providers.fe:25:5
+   ┌─ effect_pointer_providers.fe:27:5
    │
-25 │     arr.raw()
+27 │     arr.raw()
    │     ^^^ CalldataPtr<[u256; 3]>
 
 note:
-   ┌─ effect_pointer_providers.fe:25:5
+   ┌─ effect_pointer_providers.fe:27:5
    │
-25 │     arr.raw()
+27 │     arr.raw()
    │     ^^^^^^^^^ u256
 
 note:
-   ┌─ effect_pointer_providers.fe:28:39
+   ┌─ effect_pointer_providers.fe:30:68
    │
-28 │   fn test_calldata_ptr_array_provider() {
-   │ ╭───────────────────────────────────────^
-29 │ │     let c: std::evm::CalldataPtr<[u256; 3]> = std::evm::CalldataPtr::from_raw(0)
-30 │ │     with (c) {
-31 │ │         let _v = read_calldata_triplet_ptr_offset()
-32 │ │     }
-33 │ │ }
+30 │   fn test_calldata_ptr_array_provider() uses (evm: std::evm::RawOps) {
+   │ ╭────────────────────────────────────────────────────────────────────^
+31 │ │     let c = evm.calldata_ptr<[u256; 3]>(0)
+32 │ │     with (c) {
+33 │ │         let _v = read_calldata_triplet_ptr_offset()
+34 │ │     }
+35 │ │ }
    │ ╰─^ ()
 
 note:
-   ┌─ effect_pointer_providers.fe:29:9
+   ┌─ effect_pointer_providers.fe:31:9
    │
-29 │     let c: std::evm::CalldataPtr<[u256; 3]> = std::evm::CalldataPtr::from_raw(0)
+31 │     let c = evm.calldata_ptr<[u256; 3]>(0)
    │         ^ CalldataPtr<[u256; 3]>
-
-note:
-   ┌─ effect_pointer_providers.fe:29:47
-   │
-29 │     let c: std::evm::CalldataPtr<[u256; 3]> = std::evm::CalldataPtr::from_raw(0)
-   │                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ fn from_raw<CalldataPtr<[u256; 3]>>
-
-note:
-   ┌─ effect_pointer_providers.fe:29:47
-   │
-29 │     let c: std::evm::CalldataPtr<[u256; 3]> = std::evm::CalldataPtr::from_raw(0)
-   │                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ CalldataPtr<[u256; 3]>
-
-note:
-   ┌─ effect_pointer_providers.fe:29:79
-   │
-29 │     let c: std::evm::CalldataPtr<[u256; 3]> = std::evm::CalldataPtr::from_raw(0)
-   │                                                                               ^ u256
-
-note:
-   ┌─ effect_pointer_providers.fe:30:5
-   │
-30 │ ╭     with (c) {
-31 │ │         let _v = read_calldata_triplet_ptr_offset()
-32 │ │     }
-   │ ╰─────^ ()
-
-note:
-   ┌─ effect_pointer_providers.fe:30:11
-   │
-30 │     with (c) {
-   │           ^ CalldataPtr<[u256; 3]>
-
-note:
-   ┌─ effect_pointer_providers.fe:30:14
-   │
-30 │       with (c) {
-   │ ╭──────────────^
-31 │ │         let _v = read_calldata_triplet_ptr_offset()
-32 │ │     }
-   │ ╰─────^ ()
 
 note:
    ┌─ effect_pointer_providers.fe:31:13
    │
-31 │         let _v = read_calldata_triplet_ptr_offset()
+31 │     let c = evm.calldata_ptr<[u256; 3]>(0)
+   │             ^^^ evm
+
+note:
+   ┌─ effect_pointer_providers.fe:31:13
+   │
+31 │     let c = evm.calldata_ptr<[u256; 3]>(0)
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ CalldataPtr<[u256; 3]>
+
+note:
+   ┌─ effect_pointer_providers.fe:31:41
+   │
+31 │     let c = evm.calldata_ptr<[u256; 3]>(0)
+   │                                         ^ u256
+
+note:
+   ┌─ effect_pointer_providers.fe:32:5
+   │
+32 │ ╭     with (c) {
+33 │ │         let _v = read_calldata_triplet_ptr_offset()
+34 │ │     }
+   │ ╰─────^ ()
+
+note:
+   ┌─ effect_pointer_providers.fe:32:11
+   │
+32 │     with (c) {
+   │           ^ CalldataPtr<[u256; 3]>
+
+note:
+   ┌─ effect_pointer_providers.fe:32:14
+   │
+32 │       with (c) {
+   │ ╭──────────────^
+33 │ │         let _v = read_calldata_triplet_ptr_offset()
+34 │ │     }
+   │ ╰─────^ ()
+
+note:
+   ┌─ effect_pointer_providers.fe:33:13
+   │
+33 │         let _v = read_calldata_triplet_ptr_offset()
    │             ^^ u256
 
 note:
-   ┌─ effect_pointer_providers.fe:31:18
+   ┌─ effect_pointer_providers.fe:33:18
    │
-31 │         let _v = read_calldata_triplet_ptr_offset()
+33 │         let _v = read_calldata_triplet_ptr_offset()
    │                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ fn read_calldata_triplet_ptr_offset
 
 note:
-   ┌─ effect_pointer_providers.fe:31:18
+   ┌─ effect_pointer_providers.fe:33:18
    │
-31 │         let _v = read_calldata_triplet_ptr_offset()
+33 │         let _v = read_calldata_triplet_ptr_offset()
    │                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ u256

@@ -421,13 +421,13 @@ fn func_effect_requirements_canonical<'db>(
         .iter()
         .enumerate()
         .filter_map(|(idx, effect)| {
-            let key_path = effect.key_path.to_opt()?;
+            let key_syntax = effect.key_ty.to_opt()?;
             let binding_name = effect
                 .name
-                .or_else(|| key_path.ident(db).to_opt())
+                .or_else(|| key_syntax.as_path(db)?.ident(db).to_opt())
                 .unwrap_or_else(|| IdentId::new(db, "_effect".to_string()));
             let (key_kind, key_ty, key_trait) =
-                resolve_callable_input_effect_key(db, func, idx, key_path, assumptions)
+                resolve_callable_input_effect_key(db, func, idx, key_syntax, assumptions)
                     .into_parts(db);
             let effect_layout_args = layout_args.get(&CallableInputLayoutHoleOrigin::Effect(idx));
             let key_ty = key_ty.map(|ty| {
@@ -462,7 +462,7 @@ fn func_effect_requirements_canonical<'db>(
                 is_mut: effect.is_mut,
                 binding_site: EffectParamSite::Func(func),
                 binding_idx: idx as u32,
-                binding_path: key_path,
+                binding_ty: key_syntax,
             })
         })
         .collect()
@@ -584,13 +584,13 @@ fn contract_effect_requirements_canonical<'db>(
         .iter()
         .enumerate()
         .filter_map(|(idx, effect)| {
-            let key_path = effect.key_path.to_opt()?;
+            let key_syntax = effect.key_ty.to_opt()?;
             let binding_name = effect
                 .name
-                .or_else(|| key_path.ident(db).to_opt())
+                .or_else(|| key_syntax.as_path(db)?.ident(db).to_opt())
                 .unwrap_or_else(|| IdentId::new(db, "_effect".to_string()));
             let (key_kind, key_ty, key_trait) =
-                resolve_effect_key(db, key_path, contract.scope(), assumptions).into_parts(db);
+                resolve_effect_key(db, key_syntax, contract.scope(), assumptions).into_parts(db);
             let (key_ty, key_trait) =
                 canonicalize_contract_effect_key(db, site, idx as u32, key_ty, key_trait);
             Some(EffectRequirement {
@@ -599,7 +599,7 @@ fn contract_effect_requirements_canonical<'db>(
                 is_mut: effect.is_mut,
                 binding_site: site,
                 binding_idx: idx as u32,
-                binding_path: key_path,
+                binding_ty: key_syntax,
             })
         })
         .collect()
@@ -1712,12 +1712,17 @@ pub struct EffectRequirement<'db> {
     pub is_mut: bool,
     pub binding_site: EffectParamSite<'db>,
     pub binding_idx: u32,
-    /// The path written at the binding site (e.g. `uses (ctx)` or `uses (mut store)`).
+    /// The type syntax written at the binding site.
     ///
-    /// Note: this is not necessarily the semantic "key path" that resolves to a type/trait; for
-    /// contract-scoped named imports, this is the import name, while the resolved key is captured
-    /// by `key`.
-    pub binding_path: PathId<'db>,
+    /// This is not necessarily the semantic key. For contract-scoped named imports, it is the
+    /// import name, while the resolved key is captured by `key`.
+    pub binding_ty: TypeId<'db>,
+}
+
+impl<'db> EffectRequirement<'db> {
+    pub fn binding_path(&self, db: &'db dyn HirDb) -> Option<PathId<'db>> {
+        self.binding_ty.as_path(db)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
@@ -2197,22 +2202,24 @@ fn contract_scoped_effect_requirements_canonical<'db>(
 
     let mut out = Vec::new();
     for (idx, effect) in list.data(db).iter().enumerate() {
-        let Some(key_path) = effect.key_path.to_opt() else {
+        let Some(key_syntax) = effect.key_ty.to_opt() else {
             continue;
         };
+        let key_path = key_syntax.as_path(db);
 
         if let Some(binding_name) = effect.name {
-            let forwarded_key = if key_path.len(db) == 1 {
+            let forwarded_key =
                 key_path
-                    .ident(db)
-                    .to_opt()
-                    .and_then(|name| contract_named_effects.get(&name))
-                    .map(|binding| binding.key.clone())
-            } else {
-                None
-            };
+                    .filter(|key_path| key_path.len(db) == 1)
+                    .and_then(|key_path| {
+                        key_path
+                            .ident(db)
+                            .to_opt()
+                            .and_then(|name| contract_named_effects.get(&name))
+                            .map(|binding| binding.key.clone())
+                    });
             let (key_kind, key_ty, key_trait) = forwarded_key.as_ref().map_or_else(
-                || resolve_effect_key(db, key_path, contract.scope(), assumptions).into_parts(db),
+                || resolve_effect_key(db, key_syntax, contract.scope(), assumptions).into_parts(db),
                 |key| (key.kind(), key.key_ty(), key.key_trait()),
             );
             let (key_ty, key_trait) = forwarded_key.as_ref().map_or_else(
@@ -2226,10 +2233,22 @@ fn contract_scoped_effect_requirements_canonical<'db>(
                 is_mut: effect.is_mut,
                 binding_site: list_site,
                 binding_idx: idx as u32,
-                binding_path: key_path,
+                binding_ty: key_syntax,
             });
             continue;
         }
+
+        let Some(key_path) = key_path else {
+            out.push(EffectRequirement {
+                binding_name: IdentId::new(db, "_effect".to_string()),
+                key: EffectRequirementKey::Other,
+                is_mut: effect.is_mut,
+                binding_site: list_site,
+                binding_idx: idx as u32,
+                binding_ty: key_syntax,
+            });
+            continue;
+        };
 
         if key_path.len(db) == 1
             && let Some(name) = key_path.ident(db).to_opt()
@@ -2249,7 +2268,7 @@ fn contract_scoped_effect_requirements_canonical<'db>(
                 is_mut: effect.is_mut,
                 binding_site: list_site,
                 binding_idx: idx as u32,
-                binding_path: key_path,
+                binding_ty: key_syntax,
             });
             continue;
         }
@@ -2264,7 +2283,7 @@ fn contract_scoped_effect_requirements_canonical<'db>(
                 is_mut: binding.is_mut,
                 binding_site: list_site,
                 binding_idx: idx as u32,
-                binding_path: key_path,
+                binding_ty: key_syntax,
             });
             continue;
         }
@@ -2282,7 +2301,7 @@ fn contract_scoped_effect_requirements_canonical<'db>(
             is_mut: effect.is_mut,
             binding_site: list_site,
             binding_idx: idx as u32,
-            binding_path: key_path,
+            binding_ty: key_syntax,
         });
     }
 
@@ -2410,7 +2429,7 @@ fn contract_effect_resolutions_canonical<'db>(
         .iter()
         .filter_map(|requirement| {
             let effect = list.data(db).get(requirement.binding_idx as usize)?;
-            let key_path = effect.key_path.to_opt()?;
+            let key_path = effect.key_ty.to_opt()?.as_path(db)?;
             let source = if effect.name.is_some() {
                 ContractResolutionSource::RootProvider
             } else if key_path.len(db) == 1
@@ -2899,11 +2918,15 @@ impl<'db> EffectParamView<'db> {
         self.effect(db).name
     }
 
-    /// The path identifying the effect key (trait or type).
+    /// The type syntax identifying the effect key.
+    pub fn key_ty(self, db: &'db dyn HirDb) -> Option<TypeId<'db>> {
+        self.effect(db).key_ty.to_opt()
+    }
+
+    /// The path identifying a nominal effect key, if the key is path-shaped.
     pub fn key_path(self, db: &'db dyn HirDb) -> Option<PathId<'db>> {
-        self.effect(db)
-            .key_path
-            .to_opt()
+        self.key_ty(db)?
+            .as_path(db)
             .filter(|path| path.ident(db).is_present())
     }
 
@@ -5215,6 +5238,13 @@ impl<'db> FieldView<'db> {
                 ContractLayoutError::UnresolvedProviderSpace => {
                     TyLowerDiag::ContractFieldHandleSpaceUnresolved { span, ty }
                 }
+                ContractLayoutError::InvalidProviderRaw { failure } => {
+                    TyLowerDiag::ContractFieldProviderRawInvalid {
+                        span,
+                        ty,
+                        failure: *failure,
+                    }
+                }
                 ContractLayoutError::NonRegularProviderCycle => {
                     TyLowerDiag::ContractFieldProviderCycle { span, ty }
                 }
@@ -5259,6 +5289,7 @@ impl<'db> FieldView<'db> {
                         | ContractLayoutError::AmbiguousProviderLayout
                         | ContractLayoutError::UnresolvedProviderTarget
                         | ContractLayoutError::UnresolvedProviderSpace
+                        | ContractLayoutError::InvalidProviderRaw { .. }
                         | ContractLayoutError::NonRegularProviderCycle
                         | ContractLayoutError::UnresolvedStaticSlotSpace { .. }
                         | ContractLayoutError::AmbiguousStaticSlot { .. }

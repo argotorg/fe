@@ -197,7 +197,7 @@ contract InitViaConditionExitContinueLoop {
 }
 
 contract MemorySpaceField {
-    ptr: std::evm::MemPtr<u256>
+    ptr: *u256
 }
 
 contract CalldataSpaceField {
@@ -305,7 +305,7 @@ contract InitBranchCondMutatedBothArmsAssign {
 struct Empty {}
 
 contract ZeroMemorySpaceField {
-    ptr: std::evm::MemPtr<()>
+    ptr: *()
 }
 
 contract ZeroCalldataSpaceField {
@@ -313,7 +313,7 @@ contract ZeroCalldataSpaceField {
 }
 
 contract EmptyMemorySpaceField {
-    ptr: std::evm::MemPtr<Empty>
+    ptr: *Empty
 }
 
 contract EmptyCalldataSpaceField {

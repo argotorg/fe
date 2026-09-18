@@ -1,0 +1,5 @@
+// Deliberately broken: trace emission must refuse targets the compiler
+// rejects, because a bundle claims compiler-emitted provenance.
+pub contract Broken {
+    store: NoSuchStruct
+}

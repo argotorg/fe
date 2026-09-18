@@ -123,6 +123,73 @@ pub trait Eq<T = Self> {
     }
 }
 
+// Aggregate comparisons use element Eq implementations and short-circuit.
+// As with Eq itself, a non-Copy right-hand operand is consumed.
+impl<T: Eq, const N: usize> Eq for [T; N] {
+    fn eq(self, _ other: [T; N]) -> bool {
+        let mut i: usize = 0
+        while i < N {
+            if !(self[i] == other[i]) {
+                return false
+            }
+            i += 1
+        }
+        true
+    }
+}
+
+impl Eq for () {
+    fn eq(self, _ other: ()) -> bool {
+        true
+    }
+}
+
+impl<T0> Eq for (T0,) where T0: Eq {
+    fn eq(self, _ other: (T0,)) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<T0, T1> Eq for (T0, T1) where T0: Eq, T1: Eq {
+    fn eq(self, _ other: (T0, T1)) -> bool {
+        self.0 == other.0 && self.1 == other.1
+    }
+}
+
+impl<T0, T1, T2> Eq for (T0, T1, T2) where T0: Eq, T1: Eq, T2: Eq {
+    fn eq(self, _ other: (T0, T1, T2)) -> bool {
+        self.0 == other.0 && self.1 == other.1 && self.2 == other.2
+    }
+}
+
+impl<T0, T1, T2, T3> Eq for (T0, T1, T2, T3) where T0: Eq, T1: Eq, T2: Eq, T3: Eq {
+    fn eq(self, _ other: (T0, T1, T2, T3)) -> bool {
+        self.0 == other.0 && self.1 == other.1 && self.2 == other.2 && self.3 == other.3
+    }
+}
+
+impl<T0, T1, T2, T3, T4> Eq for (T0, T1, T2, T3, T4) where T0: Eq, T1: Eq, T2: Eq, T3: Eq, T4: Eq {
+    fn eq(self, _ other: (T0, T1, T2, T3, T4)) -> bool {
+        self.0 == other.0
+            && self.1 == other.1
+            && self.2 == other.2
+            && self.3 == other.3
+            && self.4 == other.4
+    }
+}
+
+impl<T0, T1, T2, T3, T4, T5> Eq for (T0, T1, T2, T3, T4, T5)
+where T0: Eq, T1: Eq, T2: Eq, T3: Eq, T4: Eq, T5: Eq {
+    fn eq(self, _ other: (T0, T1, T2, T3, T4, T5)) -> bool {
+        self.0 == other.0
+            && self.1 == other.1
+            && self.2 == other.2
+            && self.3 == other.3
+            && self.4 == other.4
+            && self.5 == other.5
+    }
+}
+
 pub trait Ord<T = Self> {
     fn lt(self, _ other: T) -> bool
     fn le(self, _ other: T) -> bool
@@ -135,6 +202,12 @@ pub trait Index<I> {
     type Output
 
     fn index(self, _ index: I) -> Self::Output
+}
+
+pub trait IndexMut<I> {
+    type Output
+
+    fn index_mut(self, _ index: I) -> mut Self::Output
 }
 
 // Augmented assignment operators (return unit)

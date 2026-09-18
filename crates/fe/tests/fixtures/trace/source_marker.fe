@@ -1,0 +1,12 @@
+msg MarkerMsg {
+    #[selector = 0x01]
+    Get { n: u256 } -> u256,
+}
+
+pub contract SourceMarker {
+    recv MarkerMsg {
+        Get { n } -> u256 {
+            return n + 0x123456789abcde
+        }
+    }
+}

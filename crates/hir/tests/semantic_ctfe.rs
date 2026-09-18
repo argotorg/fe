@@ -1268,3 +1268,46 @@ fn check_length() {
         assert_eq!(value.to_usize(), Some(expected));
     }
 }
+
+#[test]
+fn generic_associated_const_records_are_typed_before_specialization() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "const_record_template.fe".into(),
+        r#"
+trait Build {
+    type Value
+    const VALUE: Self::Value
+}
+struct Marker<const N: usize> { value: u8 }
+impl<const N: usize> Build for Marker<N> {
+    type Value = Marker<N>
+    const VALUE: Self::Value = Marker<N> { value: 7 }
+}
+impl<const N: usize> Marker<N> {
+    const OTHER: Marker<N> = Marker<N> { value: 9 }
+}
+const fn first() -> u8 { Marker<2>::VALUE.value }
+const fn second() -> u8 { Marker<3>::VALUE.value }
+const fn inherent() -> u8 { Marker<3>::OTHER.value }
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    for (name, expected) in [("first", 7), ("second", 7), ("inherent", 9)] {
+        let value = eval_body_owner_const(
+            &db,
+            BodyOwner::Func(find_func(&db, top_mod, name)),
+            Vec::new(),
+        )
+        .expect("generic const record should evaluate");
+        let SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } = value.value(&db)
+        else {
+            panic!("expected scalar for {name}");
+        };
+        assert_eq!(value.to_usize(), Some(expected));
+    }
+}

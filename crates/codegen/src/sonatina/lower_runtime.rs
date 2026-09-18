@@ -1,6 +1,8 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
+use common::origin::OriginExportKey;
 use driver::DriverDataBase;
 use hir::{
     analysis::{semantic::FieldIndex, ty::ty_check::BodyOwner},
@@ -9,17 +11,19 @@ use hir::{
 };
 use mir::runtime::RefKind;
 use mir::{
-    AddressSpaceKind, ConstNode, ConstRegionId, ConstScalar, IntrinsicArithBinOp, Layout, LayoutId,
-    RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem, ResolvedPlaceRootKind,
-    RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction, RuntimeInlineHint, RuntimeInstance,
-    RuntimeLinkage, RuntimeLocalRoot, RuntimePackage, RuntimePlace, SaturatingBinOp, ScalarClass,
-    ScalarRepr, VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
+    AddressSpaceKind, ArrayLayout, ConstNode, ConstRegionId, ConstScalar, IntrinsicArithBinOp,
+    Layout, LayoutId, RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem,
+    ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction,
+    RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot, RuntimeMemoryLayout,
+    RuntimePackage, RuntimePlace, SaturatingBinOp, ScalarClass, ScalarRepr, StructLayout,
+    VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
+    scalar_raw_memory_size_bytes,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::{SmallVec, smallvec};
 use sonatina_ir::{
-    BlockId, GlobalVariableData, GlobalVariableRef, I256, Immediate, Linkage, Module, Signature,
-    Type, Value, ValueId,
+    BlockId, GlobalVariableData, GlobalVariableRef, I256, Immediate, InstId, Linkage, Module,
+    Signature, Type, Value, ValueId,
     builder::{FunctionBuilder, ModuleBuilder, ObjectBuilder, Variable},
     func_cursor::InstInserter,
     inst::{
@@ -30,8 +34,9 @@ use sonatina_ir::{
         data::{
             Alloca, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
-            EnumSetTag, EnumTag, EnumWriteVariant, InsertValue, Mload, Mstore, ObjAlloc, ObjIndex,
-            ObjInitConst, ObjLoad, ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
+            EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, InsertValue, Memzero, Mload,
+            Mstore, ObjAlloc, ObjIndex, ObjInitConst, ObjLoad, ObjProj, ObjStore, SymAddr, SymSize,
+            SymbolRef,
         },
         evm::{
             EvmAddMod, EvmAddress, EvmBalance, EvmBaseFee, EvmBlobBaseFee, EvmBlobHash,
@@ -55,6 +60,9 @@ use sonatina_ir::{
 
 use super::{LowerError, create_module_ctx};
 use crate::function_symbols::{FunctionSymbolInput, assign_function_symbols};
+
+// Sonatina's EVM calling convention can carry at most 16 arguments.
+const MAX_DIRECT_CALL_ARGS: usize = 16;
 
 const PANIC_OVERFLOW: u64 = 0x11;
 const PANIC_DIVISION_BY_ZERO: u64 = 0x12;
@@ -85,6 +93,7 @@ struct ModuleLowerer<'db, 'a> {
     package: &'a RuntimePackage<'db>,
     func_map: FxHashMap<mir::RuntimeInstance<'db>, FuncRef>,
     func_symbols: FxHashMap<mir::RuntimeInstance<'db>, String>,
+    argument_packs: FxHashMap<mir::RuntimeInstance<'db>, Type>,
     section_membership: FxHashMap<mir::RuntimeInstance<'db>, Vec<mir::RuntimeSectionRef>>,
     type_cache: FxHashMap<LayoutId<'db>, Type>,
     layout_names: FxHashMap<LayoutId<'db>, String>,
@@ -106,6 +115,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             isa,
             package,
             func_map: FxHashMap::default(),
+            argument_packs: FxHashMap::default(),
             func_symbols: assign_sonatina_function_symbols(db, package),
             section_membership: compute_section_membership(db, package),
             type_cache: FxHashMap::default(),
@@ -159,7 +169,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
     fn lower_signature(&mut self, function: RuntimeFunction<'db>) -> Result<Signature, LowerError> {
         let body = function.instance(self.db).body(self.db);
-        let args = body
+        let mut args = body
             .signature
             .params
             .iter()
@@ -171,7 +181,20 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             .as_ref()
             .map(|class| self.ty_for_class(class))
             .transpose()?;
-        let symbol = self.function_symbol(function.instance(self.db));
+        let instance = function.instance(self.db);
+        let symbol = self.function_symbol(instance);
+        // Sonatina may add an out pointer for a compound return value. Reserve
+        // that slot before its aggregate ABI legalization runs.
+        let return_slots = usize::from(matches!(ret, Some(Type::Compound(_))));
+        if args.len() + return_slots > MAX_DIRECT_CALL_ARGS {
+            // Keep the fields typed, including object references and aggregates.
+            // A fresh object at each call also keeps recursive calls independent.
+            let pack = self
+                .builder
+                .declare_struct_type(&format!("{symbol}__args"), &args, false);
+            self.argument_packs.insert(instance, pack);
+            args = vec![self.builder.objref_type(pack)];
+        }
         Ok(match ret {
             Some(ret) => Signature::new_single(
                 &symbol,
@@ -212,8 +235,12 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             return Ok(existing);
         }
 
-        let ty = self.ty_for_layout(region.layout(self.db))?;
-        let init = self.gv_initializer_for_const(region.value(self.db).clone(), None)?;
+        let layout = region.layout(self.db);
+        let ty = self.ty_for_layout(layout)?;
+        let init = self.gv_initializer_for_const(
+            region.value(self.db).clone(),
+            &RuntimeClass::AggregateValue { layout },
+        )?;
         let name = self.const_name(region);
         let gv = self.builder.declare_gv(GlobalVariableData::constant(
             name,
@@ -228,68 +255,75 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     fn gv_initializer_for_const(
         &mut self,
         node: ConstNode<'db>,
-        class: Option<&RuntimeClass<'db>>,
+        expected: &RuntimeClass<'db>,
     ) -> Result<sonatina_ir::global_variable::GvInitializer, LowerError> {
-        Ok(match node {
-            ConstNode::Scalar(scalar) => sonatina_ir::global_variable::GvInitializer::make_imm(
-                self.immediate_for_const(&scalar, class)?,
-            ),
-            ConstNode::Aggregate { layout, fields } => {
-                let ty = self.ty_for_layout(layout)?;
-                let compound = ty.resolve_compound(&self.builder.ctx).ok_or_else(|| {
-                    LowerError::Internal(format!("const aggregate type `{ty:?}` is not compound"))
-                })?;
-                match compound {
-                    CompoundType::Array { .. } => {
-                        let Layout::Array(data) = layout.data(self.db) else {
+        Ok(match (node, expected) {
+            (ConstNode::Scalar(scalar), RuntimeClass::Scalar(_)) => {
+                sonatina_ir::global_variable::GvInitializer::make_imm(
+                    self.immediate_for_const(&scalar, Some(expected))?,
+                )
+            }
+            (ConstNode::Aggregate { layout, fields }, expected) => {
+                let RuntimeClass::AggregateValue {
+                    layout: expected_layout,
+                } = expected
+                else {
+                    return Err(LowerError::Internal(format!(
+                        "const aggregate `{layout:?}` has non-aggregate runtime class `{expected:?}`"
+                    )));
+                };
+                if layout != *expected_layout {
+                    return Err(LowerError::Internal(format!(
+                        "const aggregate layout `{layout:?}` does not match expected layout \
+                         `{expected_layout:?}`"
+                    )));
+                }
+                match layout.data(self.db) {
+                    Layout::Array(data) => {
+                        if fields.len() != data.len as usize {
                             return Err(LowerError::Internal(format!(
-                                "array const global should have an array layout, got `{layout:?}`"
+                                "const array `{layout:?}` has {} fields but its layout requires {}",
+                                fields.len(),
+                                data.len
                             )));
-                        };
-                        let elem_class = data.elem.clone();
+                        }
                         sonatina_ir::global_variable::GvInitializer::make_array(
                             fields
-                                .iter()
-                                .cloned()
-                                .map(|field| {
-                                    self.gv_initializer_for_const(field, Some(&elem_class))
-                                })
+                                .into_vec()
+                                .into_iter()
+                                .map(|field| self.gv_initializer_for_const(field, &data.elem))
                                 .collect::<Result<Vec<_>, _>>()?,
                         )
                     }
-                    CompoundType::Struct(_) => {
-                        let Layout::Struct(data) = layout.data(self.db) else {
+                    Layout::Struct(data) => {
+                        if fields.len() != data.fields.len() {
                             return Err(LowerError::Internal(format!(
-                                "struct const global should have a struct layout, got `{layout:?}`"
+                                "const struct `{layout:?}` has {} fields but its layout requires {}",
+                                fields.len(),
+                                data.fields.len()
                             )));
-                        };
-                        let field_classes = data.fields.clone();
+                        }
                         sonatina_ir::global_variable::GvInitializer::make_struct(
                             fields
-                                .iter()
-                                .cloned()
-                                .enumerate()
-                                .map(|(idx, field)| {
-                                    self.gv_initializer_for_const(field, field_classes.get(idx))
-                                })
+                                .into_vec()
+                                .into_iter()
+                                .zip(data.fields)
+                                .map(|(field, class)| self.gv_initializer_for_const(field, &class))
                                 .collect::<Result<Vec<_>, _>>()?,
                         )
                     }
-                    CompoundType::Enum(_) => {
+                    Layout::Enum(_) => {
                         return Err(LowerError::Unsupported(
                             "enum const globals are not yet supported by Sonatina object data encoding"
                                 .to_string(),
                         ));
                     }
-                    CompoundType::Ptr(_)
-                    | CompoundType::ObjRef(_)
-                    | CompoundType::ConstRef(_)
-                    | CompoundType::Func { .. } => {
-                        return Err(LowerError::Unsupported(
-                            "reference/function const globals are not supported".to_string(),
-                        ));
-                    }
                 }
+            }
+            (ConstNode::Scalar(scalar), expected) => {
+                return Err(LowerError::Internal(format!(
+                    "const scalar `{scalar:?}` has non-scalar runtime class `{expected:?}`"
+                )));
             }
         })
     }
@@ -508,6 +542,26 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 value: bytes_to_i256(words, false),
             });
         }
+        if let Some(RuntimeClass::Scalar(class)) = class {
+            if !scalar.fits_repr(class.repr) {
+                return Err(LowerError::Internal(format!(
+                    "const scalar `{scalar:?}` does not fit runtime class `{class:?}`"
+                )));
+            }
+            let ty = self.scalar_ty(class)?;
+            return Ok(match scalar {
+                ConstScalar::Bool(value) => Immediate::from(*value),
+                ConstScalar::Int { signed, words, .. } => {
+                    Immediate::from_i256(bytes_to_i256(words, *signed), ty)
+                }
+                ConstScalar::FixedBytes(bytes) => {
+                    Immediate::from_i256(bytes_to_i256(bytes, false), ty)
+                }
+                ConstScalar::Address { bytes, .. } => {
+                    Immediate::from_i256(bytes_to_i256(bytes, false), ty)
+                }
+            });
+        }
         Ok(match scalar {
             ConstScalar::Bool(value) => Immediate::from(*value),
             ConstScalar::Int {
@@ -664,6 +718,7 @@ enum CopySource<'db> {
 struct FunctionLowerer<'ctx, 'db, 'a> {
     module: &'ctx mut ModuleLowerer<'db, 'a>,
     body: RuntimeBody<'db>,
+    origin_owner: mir::origin::RuntimeInstanceOwnerKey,
     current_sections: Vec<mir::RuntimeSectionRef>,
     fb: FunctionBuilder<InstInserter>,
     prologue_block: BlockId,
@@ -673,9 +728,27 @@ struct FunctionLowerer<'ctx, 'db, 'a> {
     slot_roots: FxHashMap<RLocalId, SlotRoot>,
     checked_indices: FxHashMap<(RLocalId, u64), ValueId>,
     pending_enum_proof: Option<PendingEnumProof<'db>>,
-    empty_revert_block: Option<BlockId>,
-    overflow_panic_block: Option<BlockId>,
-    division_by_zero_panic_block: Option<BlockId>,
+    shared_helper_blocks: FxHashMap<SharedHelperKind, BlockId>,
+    /// Instructions of shared helper blocks (see [`build_shared_helper`]).
+    shared_helper_insts: FxHashSet<InstId>,
+    shared_helpers: Vec<SharedHelperBlock>,
+    shared_helper_index_by_block: FxHashMap<BlockId, usize>,
+    /// Helpers requested while lowering the current statement.
+    pending_shared_helpers: Vec<usize>,
+}
+
+/// A block that several sites reuse by jumping to it (panic and revert
+/// helpers). Its instructions belong to every requesting statement, so they
+/// are attributed only when every request came from the same one.
+struct SharedHelperBlock {
+    insts: Vec<InstId>,
+    origins: Vec<OriginExportKey>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum SharedHelperKind {
+    EmptyRevert,
+    Panic(u64),
 }
 
 #[derive(Clone, Copy)]
@@ -695,6 +768,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         func_ref: FuncRef,
     ) -> Result<Self, LowerError> {
         let current_sections = module.sections_for_function(body.owner).to_vec();
+        let origin_owner =
+            mir::origin::RuntimeInstanceOwnerKey::for_instance(module.db, body.owner);
         let mut fb = module.builder.func_builder::<InstInserter>(func_ref);
         let prologue_block = fb.append_block();
         let reachable_blocks = compute_reachable_blocks(&body);
@@ -723,6 +798,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         Ok(Self {
             module,
             body,
+            origin_owner,
             current_sections,
             fb,
             prologue_block,
@@ -732,9 +808,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             slot_roots: FxHashMap::default(),
             checked_indices: FxHashMap::default(),
             pending_enum_proof: None,
-            empty_revert_block: None,
-            overflow_panic_block: None,
-            division_by_zero_panic_block: None,
+            shared_helper_blocks: FxHashMap::default(),
+            shared_helper_insts: FxHashSet::default(),
+            shared_helpers: Vec::new(),
+            shared_helper_index_by_block: FxHashMap::default(),
+            pending_shared_helpers: Vec::new(),
         })
     }
 
@@ -764,20 +842,24 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 .switch_to_block(self.block_id(RBlockId::from_u32(idx as u32))?);
             let mut terminated = false;
             for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
-                if matches!(
-                    self.lower_stmt(stmt).map_err(|err| {
-                        self.with_body_context(
-                            format!(
-                                "while lowering `{}` at bb{idx}[{stmt_idx}]",
-                                self.module.function_symbol(self.body.owner)
-                            ),
-                            Some(RBlockId::from_u32(idx as u32)),
-                            Some(stmt_idx),
-                        )
-                        .wrap(err)
-                    })?,
-                    Lowered::Terminated
-                ) {
+                let block_id = RBlockId::from_u32(idx as u32);
+                let watermark = self.inst_watermark();
+                let lowered = self.lower_stmt(stmt).map_err(|err| {
+                    self.with_body_context(
+                        format!(
+                            "while lowering `{}` at bb{idx}[{stmt_idx}]",
+                            self.module.function_symbol(self.body.owner)
+                        ),
+                        Some(block_id),
+                        Some(stmt_idx),
+                    )
+                    .wrap(err)
+                })?;
+                self.attach_origin_to_new_insts(
+                    watermark,
+                    self.runtime_stmt_origin(block_id, stmt_idx),
+                );
+                if matches!(lowered, Lowered::Terminated) {
                     self.pending_enum_proof = None;
                     terminated = true;
                     break;
@@ -787,21 +869,134 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 continue;
             }
             self.pending_enum_proof = None;
+            let block_id = RBlockId::from_u32(idx as u32);
+            let watermark = self.inst_watermark();
             self.lower_terminator(&block.terminator).map_err(|err| {
                 self.with_body_context(
                     format!(
                         "while lowering `{}` terminator at bb{idx}",
                         self.module.function_symbol(self.body.owner)
                     ),
-                    Some(RBlockId::from_u32(idx as u32)),
+                    Some(block_id),
                     None,
                 )
                 .wrap(err)
             })?;
+            self.attach_origin_to_new_insts(watermark, self.runtime_terminator_origin(block_id));
         }
+        self.attribute_single_user_shared_helpers();
         self.fb.seal_all();
         self.fb.finish();
         Ok(())
+    }
+
+    /// Instructions are arena-allocated with monotonically increasing ids and
+    /// never erased during lowering, so the arena length is a watermark: every
+    /// instruction created after it belongs to the statement being lowered.
+    /// This keeps per-statement origin attachment O(new instructions) instead
+    /// of snapshotting the full instruction set per statement.
+    fn inst_watermark(&self) -> usize {
+        self.fb.func.dfg.num_insts()
+    }
+
+    /// Build a block that every later site reuses by jumping to it. Its
+    /// instructions must not inherit the attribution of whichever statement
+    /// happened to create them first: that reports the first overflow site for
+    /// every later one, over an exact attribution chain. They are held back
+    /// here and attributed at the end of lowering only if every request came
+    /// from the same statement (see `attribute_single_user_shared_helpers`).
+    fn build_shared_helper(&mut self, build: impl FnOnce(&mut Self) -> BlockId) -> BlockId {
+        let watermark = self.inst_watermark();
+        let block = build(self);
+        let insts = (watermark..self.fb.func.dfg.num_insts())
+            .map(|index| InstId(index as u32))
+            .inspect(|inst| {
+                self.shared_helper_insts.insert(*inst);
+            })
+            .collect::<Vec<_>>();
+        self.shared_helper_index_by_block
+            .insert(block, self.shared_helpers.len());
+        self.shared_helpers.push(SharedHelperBlock {
+            insts,
+            origins: Vec::new(),
+        });
+        self.request_shared_helper(block);
+        block
+    }
+
+    /// Record that the statement currently being lowered jumps to `block`.
+    fn request_shared_helper(&mut self, block: BlockId) {
+        let &index = self
+            .shared_helper_index_by_block
+            .get(&block)
+            .expect("shared helper requests require registered ownership");
+        if !self.pending_shared_helpers.contains(&index) {
+            self.pending_shared_helpers.push(index);
+        }
+    }
+
+    /// Attribute shared helper blocks whose every request came from one
+    /// statement. A block with two or more requesting statements stays
+    /// unattributed rather than naming one of them.
+    fn attribute_single_user_shared_helpers(&mut self) {
+        for helper in std::mem::take(&mut self.shared_helpers) {
+            let [origin] = helper.origins.as_slice() else {
+                continue;
+            };
+            let frontend_origin: Arc<str> = Arc::from(
+                serde_json::to_string(origin).expect("OriginExportKey serialization cannot fail"),
+            );
+            for inst in helper.insts {
+                self.fb
+                    .func
+                    .set_inst_frontend_origin(inst, Arc::clone(&frontend_origin));
+            }
+        }
+    }
+
+    fn attach_origin_to_new_insts(&mut self, watermark: usize, origin: OriginExportKey) {
+        for index in std::mem::take(&mut self.pending_shared_helpers) {
+            let helper = &mut self.shared_helpers[index];
+            if !helper.origins.contains(&origin) {
+                helper.origins.push(origin.clone());
+            }
+        }
+
+        let new_insts = (watermark..self.fb.func.dfg.num_insts())
+            .map(|index| InstId(index as u32))
+            .filter(|inst| !self.shared_helper_insts.contains(inst))
+            .collect::<Vec<_>>();
+        if new_insts.is_empty() {
+            return;
+        }
+
+        let frontend_origin: Arc<str> = Arc::from(
+            serde_json::to_string(&origin).expect("OriginExportKey serialization cannot fail"),
+        );
+        for inst in new_insts {
+            self.fb
+                .func
+                .set_inst_frontend_origin(inst, Arc::clone(&frontend_origin));
+        }
+    }
+
+    fn runtime_stmt_origin(&self, block: RBlockId, stmt_idx: usize) -> OriginExportKey {
+        mir::origin::RuntimeStmtOrigin::new(
+            self.body.owner,
+            mir::origin::RuntimeStmtSite::new(
+                block,
+                mir::origin::RuntimeStmtIndex::from_u32(stmt_idx as u32),
+            ),
+        )
+        .export_key(&self.origin_owner)
+    }
+
+    fn runtime_terminator_origin(&self, block: RBlockId) -> OriginExportKey {
+        mir::origin::RuntimeTerminatorOrigin::new(
+            self.body.owner,
+            mir::origin::RuntimeTerminatorSite::new(block),
+        )
+        .export_key(&self.origin_owner)
     }
 
     fn block_id(&self, block: RBlockId) -> Result<BlockId, LowerError> {
@@ -842,16 +1037,16 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 RuntimeLocalRoot::Slot(class) => {
                     let class_ty = self.module.ty_for_class(class)?;
                     let root = match class {
-                        RuntimeClass::AggregateValue { .. } => SlotRoot::Object(
-                            self.fb.insert_inst(
-                                ObjAlloc::new(self.module.inst_set(), class_ty),
-                                self.fb.module_builder.objref_type(class_ty),
-                            ),
-                            class_ty,
-                        ),
-                        RuntimeClass::Scalar(_)
-                        | RuntimeClass::Ref { .. }
-                        | RuntimeClass::RawAddr { .. } => SlotRoot::Ptr(
+                        RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => {
+                            SlotRoot::Object(
+                                self.fb.insert_inst(
+                                    ObjAlloc::new(self.module.inst_set(), class_ty),
+                                    self.fb.module_builder.objref_type(class_ty),
+                                ),
+                                class_ty,
+                            )
+                        }
+                        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => SlotRoot::Ptr(
                             {
                                 let ptr_ty = self.fb.ptr_type(class_ty);
                                 self.fb.insert_inst(
@@ -880,13 +1075,53 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         Ok(())
     }
 
-    fn body_signature_arg(&self, idx: usize) -> Result<ValueId, LowerError> {
+    fn body_signature_arg(&mut self, idx: usize) -> Result<ValueId, LowerError> {
+        if self.module.argument_packs.contains_key(&self.body.owner) {
+            let pack = self.fb.func.arg_values[0];
+            let class = self.body.signature.params[idx].class.clone();
+            let ty = self.module.ty_for_class(&class)?;
+            let field = self.argument_pack_field(pack, idx, ty);
+            return Ok(self
+                .fb
+                .insert_inst(ObjLoad::new(self.module.inst_set(), field), ty));
+        }
         self.fb
             .func
             .arg_values
             .get(idx)
             .copied()
             .ok_or_else(|| LowerError::Internal(format!("missing arg value {idx}")))
+    }
+
+    fn argument_pack_field(&mut self, pack: ValueId, idx: usize, ty: Type) -> ValueId {
+        let index = self.index_value(idx as u64);
+        let field_ty = self.fb.module_builder.objref_type(ty);
+        self.fb.insert_inst(
+            ObjProj::new(self.module.inst_set(), smallvec![pack, index]),
+            field_ty,
+        )
+    }
+
+    fn lower_call_args(
+        &mut self,
+        callee: RuntimeInstance<'db>,
+        args: &[RLocalId],
+    ) -> Result<SmallVec<[ValueId; 8]>, LowerError> {
+        let Some(&pack_ty) = self.module.argument_packs.get(&callee) else {
+            return args.iter().map(|arg| self.local_value(*arg)).collect();
+        };
+        let ref_ty = self.fb.module_builder.objref_type(pack_ty);
+        let pack = self
+            .fb
+            .insert_inst(ObjAlloc::new(self.module.inst_set(), pack_ty), ref_ty);
+        for (idx, arg) in args.iter().enumerate() {
+            let value = self.local_value(*arg)?;
+            let ty = self.fb.func.dfg.value_ty(value);
+            let field = self.argument_pack_field(pack, idx, ty);
+            self.fb
+                .insert_inst_no_result(ObjStore::new(self.module.inst_set(), field, value));
+        }
+        Ok(smallvec![pack])
     }
 
     fn lower_stmt(&mut self, stmt: &RStmt<'db>) -> Result<Lowered<()>, LowerError> {
@@ -981,7 +1216,21 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         dst: Option<RLocalId>,
     ) -> Result<Lowered<ValueId>, LowerError> {
         let value = match expr {
-            RExpr::Use(value) => self.local_value(*value)?,
+            RExpr::Use(value) => {
+                let lowered = self.local_value(*value)?;
+                if let Some(dst) = dst
+                    && let (Some(source), Some(target)) = (
+                        self.body.value_class(*value).cloned(),
+                        self.body.value_class(dst).cloned(),
+                    )
+                    && source != target
+                    && source.shares_runtime_rep_with(self.module.db, &target)
+                {
+                    self.retype_value_for_class(lowered, &source, &target)?
+                } else {
+                    lowered
+                }
+            }
             RExpr::ConstScalar(value) => self.fb.make_imm_value(
                 self.module
                     .immediate_for_const(value, dst.and_then(|dst| self.body.value_class(dst)))?,
@@ -1074,7 +1323,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RExpr::MaterializePlaceToObject { place } => {
                 return self.materialize_place_to_object(place, dst);
             }
-            RExpr::ProviderFromRaw { raw, space, .. } => {
+            RExpr::ProviderRefFromRaw { raw, space, .. } => {
                 let value = self.local_value(*raw)?;
                 if *space == AddressSpaceKind::Memory {
                     return Err(LowerError::Unsupported(
@@ -1085,7 +1334,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 value
             }
             RExpr::WordToRawAddr { value, .. } => self.local_value(*value)?,
-            RExpr::ProviderToRaw { value } => self.local_value(*value)?,
+            RExpr::ProviderRefToRaw { value } => self.local_value(*value)?,
             RExpr::RetagRef { value } => self.local_value(*value)?,
             RExpr::AddrOf { place } => return self.addr_of_place(place, dst),
             RExpr::Load { place } => return self.load_from_place(place),
@@ -1122,10 +1371,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             } => self.lower_layout_map_patch(map, *source, *index, *replacement)?,
             RExpr::Call { callee, args } => {
                 let callee_ref = self.module.func_ref(*callee)?;
-                let args = args
-                    .iter()
-                    .map(|arg| self.local_value(*arg))
-                    .collect::<Result<SmallVec<[ValueId; 8]>, _>>()?;
+                let args = self.lower_call_args(*callee, args)?;
                 let ret = callee.body(self.module.db).signature.ret.clone();
                 match ret {
                     Some(class) => {
@@ -1253,7 +1499,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         let word = u64::try_from(word).map_err(|_| {
             LowerError::Internal(format!("layout-map word is not addressable: {word}"))
         })?;
-        self.offset_address(node, word, AddressSpaceKind::Memory)
+        let offset = word.checked_mul(32).ok_or_else(|| {
+            LowerError::Internal(format!("layout-map byte offset overflow: {word} words"))
+        })?;
+        self.offset_address_unscaled(node, offset)
     }
 
     fn store_layout_map_word(
@@ -1631,6 +1880,13 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     .insert_inst_no_result(EvmMcopy::new(self.module.inst_set(), dst, src, len));
                 zero_for_type(&mut self.fb, Type::Unit)
             }
+            RuntimeBuiltin::ZeroMem { dst, len } => {
+                let dst = self.local_value(*dst)?;
+                let len = self.local_value(*len)?;
+                self.fb
+                    .insert_inst_no_result(Memzero::new(self.module.inst_set(), dst, len));
+                zero_for_type(&mut self.fb, Type::Unit)
+            }
             RuntimeBuiltin::Msize => self
                 .fb
                 .insert_inst(EvmMsize::new(self.module.inst_set()), Type::I256),
@@ -1885,6 +2141,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let ptr_ty = self.fb.ptr_type(Type::I8);
                 self.fb
                     .insert_inst(EvmMalloc::new(self.module.inst_set(), size), ptr_ty)
+            }
+            RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
+                let ptr = self.local_value(*ptr)?;
+                let ptr = self.coerce_value_to_ty(ptr, Type::I256)?;
+                let offset = self.local_value(*offset)?;
+                let offset = self.cast_scalar(offset, Type::I256)?;
+                self.fb
+                    .insert_inst(Add::new(self.module.inst_set(), ptr, offset), Type::I256)
             }
             RuntimeBuiltin::Call {
                 gas,
@@ -2252,10 +2516,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ));
             }
             RTerminator::TerminalCall { callee, args } => {
-                let args = args
-                    .iter()
-                    .map(|arg| self.local_value(*arg))
-                    .collect::<Result<SmallVec<[ValueId; 8]>, _>>()?;
+                let args = self.lower_call_args(*callee, args)?;
                 self.fb.insert_inst_no_result(Call::new(
                     self.module.inst_set(),
                     self.module.func_ref(*callee)?,
@@ -2275,6 +2536,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let len = self.local_value(*len)?;
                 self.fb
                     .insert_inst_no_result(EvmRevert::new(self.module.inst_set(), offset, len));
+            }
+            RTerminator::RevertEmpty => {
+                let zero = self.fb.make_imm_value(I256::zero());
+                self.fb
+                    .insert_inst_no_result(EvmRevert::new(self.module.inst_set(), zero, zero));
             }
             RTerminator::SelfDestruct { beneficiary } => {
                 let beneficiary = self.local_value(*beneficiary)?;
@@ -2328,9 +2594,35 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     fn store_whole_local(&mut self, local: RLocalId, value: ValueId) -> Result<(), LowerError> {
         match self.slot_roots.get(&local).copied() {
             Some(SlotRoot::Ptr(ptr, ty)) => {
-                let value = self.coerce_value_to_ty(value, ty)?;
-                self.fb
-                    .insert_inst_no_result(Mstore::new(self.module.inst_set(), ptr, value, ty));
+                let class = self.body.value_class(local).cloned().ok_or_else(|| {
+                    LowerError::Internal(format!("missing runtime class for {local:?}"))
+                })?;
+                match &class {
+                    RuntimeClass::Scalar(_)
+                    | RuntimeClass::RawAddr { .. }
+                    | RuntimeClass::Ref {
+                        kind:
+                            RefKind::Provider {
+                                space:
+                                    AddressSpaceKind::Storage
+                                    | AddressSpaceKind::Transient
+                                    | AddressSpaceKind::Calldata
+                                    | AddressSpaceKind::Code,
+                                ..
+                            },
+                        ..
+                    } => self.store_to_ptr(ptr, AddressSpaceKind::Memory, &class, value)?,
+                    RuntimeClass::Ref { .. } => {
+                        let value = self.coerce_value_to_ty(value, ty)?;
+                        self.fb.insert_inst_no_result(Mstore::new(
+                            self.module.inst_set(),
+                            ptr,
+                            value,
+                            ty,
+                        ));
+                    }
+                    RuntimeClass::AggregateValue { .. } => unreachable!(),
+                }
                 Ok(())
             }
             Some(SlotRoot::Object(object, _)) => {
@@ -2354,10 +2646,30 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
 
     fn local_value(&mut self, local: RLocalId) -> Result<ValueId, LowerError> {
         if let Some(root) = self.slot_roots.get(&local) {
+            let class = self.body.value_class(local).cloned().ok_or_else(|| {
+                LowerError::Internal(format!("missing runtime class for {local:?}"))
+            })?;
             return match root {
-                SlotRoot::Ptr(ptr, ty) => Ok(self
-                    .fb
-                    .insert_inst(Mload::new(self.module.inst_set(), *ptr, *ty), *ty)),
+                SlotRoot::Ptr(ptr, ty) => match &class {
+                    RuntimeClass::Scalar(_)
+                    | RuntimeClass::RawAddr { .. }
+                    | RuntimeClass::Ref {
+                        kind:
+                            RefKind::Provider {
+                                space:
+                                    AddressSpaceKind::Storage
+                                    | AddressSpaceKind::Transient
+                                    | AddressSpaceKind::Calldata
+                                    | AddressSpaceKind::Code,
+                                ..
+                            },
+                        ..
+                    } => self.load_from_ptr(*ptr, AddressSpaceKind::Memory, &class),
+                    RuntimeClass::Ref { .. } => Ok(self
+                        .fb
+                        .insert_inst(Mload::new(self.module.inst_set(), *ptr, *ty), *ty)),
+                    RuntimeClass::AggregateValue { .. } => unreachable!(),
+                },
                 SlotRoot::Object(object, ty) => Ok(self
                     .fb
                     .insert_inst(ObjLoad::new(self.module.inst_set(), *object), *ty)),
@@ -2486,13 +2798,13 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             }),
             RuntimeClass::RawAddr {
                 space,
-                target: Some(layout),
+                pointee: Some(pointee),
             } => Ok(PlaceTerminal::Ptr {
                 addr: value,
                 space: *space,
-                class: RuntimeClass::AggregateValue { layout: *layout },
+                class: pointee.as_ref().clone(),
             }),
-            RuntimeClass::RawAddr { target: None, .. } => Err(LowerError::Unsupported(
+            RuntimeClass::RawAddr { pointee: None, .. } => Err(LowerError::Unsupported(
                 "cannot continue projection through an opaque raw-address carrier".to_string(),
             )),
             RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => {
@@ -2674,18 +2986,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         class: base_class,
                     },
                     ResolvedPlaceElem::Field { field, class },
-                ) => {
-                    let offset = base_class
-                        .field_offset_words(self.module.db, *field)
-                        .ok_or_else(|| {
-                            LowerError::Internal("field projection on non-struct class".to_string())
-                        })?;
-                    PlaceTerminal::Ptr {
-                        addr: self.offset_address(addr, offset, space)?,
-                        space,
-                        class: class.clone(),
-                    }
-                }
+                ) => PlaceTerminal::Ptr {
+                    addr: self.offset_ptr_field_address(addr, &base_class, *field, space)?,
+                    space,
+                    class: class.clone(),
+                },
                 (
                     PlaceTerminal::Ptr {
                         addr,
@@ -2694,15 +2999,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     },
                     ResolvedPlaceElem::Index { index, class },
                 ) => {
-                    let span = base_class
-                        .index_stride_words(self.module.db)
-                        .ok_or_else(|| {
-                            LowerError::Internal("index projection on non-array class".to_string())
-                        })?;
                     let Lowered::Value(idx) = self.checked_index_value(&base_class, index)? else {
                         return Ok(Lowered::Terminated);
                     };
-                    let scale = self.scale_for_space(space, span)?;
+                    let scale = self.ptr_index_stride_for_space(&base_class, space)?;
                     let scaled = if scale == 1 {
                         idx
                     } else {
@@ -2727,15 +3027,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                         class,
                     },
                 ) => PlaceTerminal::Ptr {
-                    addr: self.offset_address(
-                        addr,
-                        variant
-                            .field_offset_words(self.module.db, *field)
-                            .ok_or_else(|| {
-                                LowerError::Internal("variant field layout missing".to_string())
-                            })?,
-                        space,
-                    )?,
+                    addr: self.offset_ptr_variant_field_address(addr, *variant, *field, space)?,
                     space,
                     class: class.clone(),
                 },
@@ -3062,11 +3354,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             class: src_field.clone(),
                         },
                         CopySource::Ptr { addr, space, .. } => CopySource::Ptr {
-                            addr: self.offset_address(
-                                *addr,
-                                src.field_offset_words(self.module.db, idx),
-                                *space,
-                            )?,
+                            addr: self.offset_ptr_struct_field_address(*addr, &src, idx, *space)?,
                             space: *space,
                             class: src_field.clone(),
                         },
@@ -3108,11 +3396,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                             class: src.elem.clone(),
                         },
                         CopySource::Ptr { addr, space, .. } => CopySource::Ptr {
-                            addr: self.offset_address(
-                                *addr,
-                                idx as u64 * src.elem.span_words(self.module.db),
-                                *space,
-                            )?,
+                            addr: self.offset_ptr_array_elem_address(*addr, &src, idx, *space)?,
                             space: *space,
                             class: src.elem.clone(),
                         },
@@ -3491,11 +3775,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                                 self.fb.type_of(src)
                             )));
                         }
-                        let field_addr = self.offset_address(
-                            addr,
-                            data.field_offset_words(self.module.db, idx),
-                            space,
-                        )?;
+                        let field_addr =
+                            self.offset_ptr_struct_field_address(addr, &data, idx, space)?;
                         self.copy_to_ptr(field_addr, space, field, field_value)?;
                     }
                     Ok(())
@@ -3512,11 +3793,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                                 self.fb.type_of(src)
                             )));
                         }
-                        let elem_addr = self.offset_address(
-                            addr,
-                            idx as u64 * data.elem.span_words(self.module.db),
-                            space,
-                        )?;
+                        let elem_addr =
+                            self.offset_ptr_array_elem_address(addr, &data, idx, space)?;
                         self.copy_to_ptr(elem_addr, space, &data.elem, field_value)?;
                     }
                     Ok(())
@@ -3587,13 +3865,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     ),
                     self.module.ty_for_class(field)?,
                 );
-                let field_addr = self.offset_address(
+                let field_addr = self.offset_ptr_variant_field_address(
                     addr,
-                    variant
-                        .field_offset_words(self.module.db, FieldIndex(field_idx as u16))
-                        .ok_or_else(|| {
-                            LowerError::Internal("variant field layout missing".to_string())
-                        })?,
+                    variant,
+                    FieldIndex(field_idx as u16),
                     space,
                 )?;
                 self.copy_to_ptr(field_addr, space, field, field_value)?;
@@ -3631,15 +3906,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ..
             } => self.load_word(addr, space),
             RuntimeClass::RawAddr { .. } => self.load_word(addr, space),
-            RuntimeClass::AggregateValue { layout } => match space {
-                AddressSpaceKind::Memory => Err(LowerError::Unsupported(
-                    "memory aggregate values should be addressed through object refs".to_string(),
-                )),
-                AddressSpaceKind::Storage
-                | AddressSpaceKind::Transient
-                | AddressSpaceKind::Calldata
-                | AddressSpaceKind::Code => self.load_aggregate_from_ptr(addr, space, *layout),
-            },
+            RuntimeClass::AggregateValue { layout } => {
+                self.load_aggregate_from_ptr(addr, space, *layout)
+            }
             RuntimeClass::Ref { .. } => Err(LowerError::Unsupported(
                 "loading handle values from raw-address places is not supported".to_string(),
             )),
@@ -3657,11 +3926,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let ty = self.module.ty_for_layout(layout)?;
                 let mut value = self.fb.make_undef_value(ty);
                 for (idx, field) in data.fields.iter().enumerate() {
-                    let field_addr = self.offset_address(
-                        addr,
-                        data.field_offset_words(self.module.db, idx),
-                        space,
-                    )?;
+                    let field_addr =
+                        self.offset_ptr_struct_field_address(addr, &data, idx, space)?;
                     let field_value = self.load_from_ptr(field_addr, space, field)?;
                     let expected_ty = self.module.ty_for_class(field)?;
                     let actual_ty = self.fb.type_of(field_value);
@@ -3672,12 +3938,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     }
                     let idx = self.index_value(idx as u64);
                     value = self.fb.insert_inst(
-                        sonatina_ir::inst::data::InsertValue::new(
-                            self.module.inst_set(),
-                            value,
-                            idx,
-                            field_value,
-                        ),
+                        InsertValue::new(self.module.inst_set(), value, idx, field_value),
                         ty,
                     );
                 }
@@ -3687,11 +3948,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let ty = self.module.ty_for_layout(layout)?;
                 let mut value = self.fb.make_undef_value(ty);
                 for idx in 0..data.len as usize {
-                    let elem_addr = self.offset_address(
-                        addr,
-                        idx as u64 * data.elem.span_words(self.module.db),
-                        space,
-                    )?;
+                    let elem_addr = self.offset_ptr_array_elem_address(addr, &data, idx, space)?;
                     let elem = self.load_from_ptr(elem_addr, space, &data.elem)?;
                     let expected_ty = self.module.ty_for_class(&data.elem)?;
                     let actual_ty = self.fb.type_of(elem);
@@ -3703,12 +3960,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     }
                     let idx = self.index_value(idx as u64);
                     value = self.fb.insert_inst(
-                        sonatina_ir::inst::data::InsertValue::new(
-                            self.module.inst_set(),
-                            value,
-                            idx,
-                            elem,
-                        ),
+                        InsertValue::new(self.module.inst_set(), value, idx, elem),
                         ty,
                     );
                 }
@@ -3726,18 +3978,21 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         data: &mir::runtime::EnumLayout<'db>,
     ) -> Result<ValueId, LowerError> {
         let layout_ty = self.module.ty_for_layout(layout)?;
-        let object = self.fb.insert_inst(
-            ObjAlloc::new(self.module.inst_set(), layout_ty),
-            self.fb.module_builder.objref_type(layout_ty),
-        );
-        let tag = self.load_word(addr, space)?;
+        let tag = self.load_scalar(addr, space, &data.tag)?;
         let done = self.fb.append_block();
         let invalid = self.fb.append_block();
         let mut cases = Vec::with_capacity(data.variants.len());
         let mut blocks = Vec::with_capacity(data.variants.len());
+        let mut phi_args = Vec::with_capacity(data.variants.len());
+        let tag_ty = self.fb.type_of(tag);
         for (idx, _) in data.variants.iter().enumerate() {
             let block = self.fb.append_block();
-            cases.push((self.index_value(idx as u64), block));
+            let key = match tag_ty {
+                Type::EnumTag(_) => self.module.enum_tag_immediate(layout, idx as u16)?,
+                _ => Immediate::from_i256(I256::from(idx as u64), tag_ty),
+            };
+            let key = self.fb.make_imm_value(key);
+            cases.push((key, block));
             blocks.push(block);
         }
         self.fb.insert_inst_no_result(BrTable::new(
@@ -3758,26 +4013,31 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 .iter()
                 .enumerate()
                 .map(|(field_idx, field)| {
-                    let field_addr = self.offset_address(
+                    let field_addr = self.offset_ptr_variant_field_address(
                         addr,
-                        variant
-                            .field_offset_words(self.module.db, FieldIndex(field_idx as u16))
-                            .ok_or_else(|| {
-                                LowerError::Internal("variant field layout missing".to_string())
-                            })?,
+                        variant,
+                        FieldIndex(field_idx as u16),
                         space,
                     )?;
                     self.load_from_ptr(field_addr, space, field)
                 })
                 .collect::<Result<SmallVec<[ValueId; 2]>, _>>()?;
-            self.fb.insert_inst_no_result(EnumWriteVariant::new(
-                self.module.inst_set(),
-                object,
-                self.variant_ref(variant)?,
-                values,
-            ));
+            let value = self.fb.insert_inst(
+                EnumMake::new(
+                    self.module.inst_set(),
+                    layout_ty,
+                    self.variant_ref(variant)?,
+                    values,
+                ),
+                layout_ty,
+            );
+            let pred = self
+                .fb
+                .current_block()
+                .expect("enum load variant block should remain current");
             self.fb
                 .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
+            phi_args.push((value, pred));
         }
 
         self.fb.switch_to_block(invalid);
@@ -3787,7 +4047,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         self.fb.switch_to_block(done);
         Ok(self
             .fb
-            .insert_inst(ObjLoad::new(self.module.inst_set(), object), layout_ty))
+            .insert_inst(Phi::new(self.module.inst_set(), phi_args), layout_ty))
     }
 
     fn load_word(&mut self, addr: ValueId, space: AddressSpaceKind) -> Result<ValueId, LowerError> {
@@ -3834,7 +4094,19 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         scalar: &ScalarClass<'db>,
     ) -> Result<ValueId, LowerError> {
         let word = self.load_word(addr, space)?;
-        self.cast_scalar(word, scalar_ty(scalar))
+        let value = if space.is_byte_addressed() {
+            let width = scalar_raw_memory_size_bytes(scalar);
+            if width < 32 {
+                let shift = self.index_value((32 - width) * 8);
+                self.fb
+                    .insert_inst(Shr::new(self.module.inst_set(), shift, word), Type::I256)
+            } else {
+                word
+            }
+        } else {
+            word
+        };
+        self.cast_scalar_with_signedness(value, scalar_ty(scalar), scalar.is_signed_int())
     }
 
     fn store_to_ptr(
@@ -3868,12 +4140,39 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             ),
         }?;
         match space {
-            AddressSpaceKind::Memory => self.fb.insert_inst_no_result(Mstore::new(
-                self.module.inst_set(),
-                addr,
-                value,
-                Type::I256,
-            )),
+            AddressSpaceKind::Memory => match class {
+                RuntimeClass::Scalar(scalar) if scalar_raw_memory_size_bytes(scalar) < 32 => {
+                    self.store_memory_scalar_bytes(addr, scalar, value)?
+                }
+                RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. } => {
+                    self.fb.insert_inst_no_result(Mstore::new(
+                        self.module.inst_set(),
+                        addr,
+                        value,
+                        Type::I256,
+                    ));
+                }
+                RuntimeClass::Ref {
+                    kind:
+                        RefKind::Provider {
+                            space:
+                                AddressSpaceKind::Storage
+                                | AddressSpaceKind::Transient
+                                | AddressSpaceKind::Calldata
+                                | AddressSpaceKind::Code,
+                            ..
+                        },
+                    ..
+                } => {
+                    self.fb.insert_inst_no_result(Mstore::new(
+                        self.module.inst_set(),
+                        addr,
+                        value,
+                        Type::I256,
+                    ));
+                }
+                RuntimeClass::AggregateValue { .. } | RuntimeClass::Ref { .. } => unreachable!(),
+            },
             AddressSpaceKind::Storage => {
                 self.fb
                     .insert_inst_no_result(EvmSstore::new(self.module.inst_set(), addr, value))
@@ -3896,6 +4195,30 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         Ok(())
     }
 
+    fn store_memory_scalar_bytes(
+        &mut self,
+        addr: ValueId,
+        scalar: &ScalarClass<'db>,
+        value: ValueId,
+    ) -> Result<(), LowerError> {
+        let width = scalar_raw_memory_size_bytes(scalar);
+        for byte_idx in 0..width {
+            let shift = (width - 1 - byte_idx) * 8;
+            let shifted = if shift == 0 {
+                value
+            } else {
+                let shift = self.index_value(shift);
+                self.fb
+                    .insert_inst(Shr::new(self.module.inst_set(), shift, value), Type::I256)
+            };
+            let byte = self.cast_scalar(shifted, Type::I8)?;
+            let byte_addr = self.offset_address_unscaled(addr, byte_idx)?;
+            self.fb
+                .insert_inst_no_result(EvmMstore8::new(self.module.inst_set(), byte_addr, byte));
+        }
+        Ok(())
+    }
+
     fn extract_aggregate_field(
         &mut self,
         value: ValueId,
@@ -3905,7 +4228,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         let idx = self.index_value(idx as u64);
         self.fb
             .insert_inst(
-                sonatina_ir::inst::data::ExtractValue::new(self.module.inst_set(), value, idx),
+                ExtractValue::new(self.module.inst_set(), value, idx),
                 self.module.ty_for_class(class)?,
             )
             .pipe(Ok)
@@ -3980,6 +4303,226 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             InsertValue::new(self.module.inst_set(), value, idx, field),
             ty,
         )
+    }
+
+    fn retype_value_for_class(
+        &mut self,
+        value: ValueId,
+        source: &RuntimeClass<'db>,
+        target: &RuntimeClass<'db>,
+    ) -> Result<ValueId, LowerError> {
+        if source == target {
+            return Ok(value);
+        }
+        if !source.shares_runtime_rep_with(self.module.db, target) {
+            return Err(LowerError::Internal(format!(
+                "cannot retype value between different runtime representations: source={source:?} target={target:?}"
+            )));
+        }
+        match (source, target) {
+            (
+                RuntimeClass::AggregateValue {
+                    layout: source_layout,
+                },
+                RuntimeClass::AggregateValue {
+                    layout: target_layout,
+                },
+            ) => self.retype_aggregate_value(value, *source_layout, *target_layout),
+            (
+                RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. },
+                RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. },
+            ) => {
+                let ty = self.module.ty_for_class(target)?;
+                self.coerce_value_to_ty(value, ty)
+            }
+            (RuntimeClass::Ref { .. }, RuntimeClass::Ref { .. }) => {
+                let target_ty = self.module.ty_for_class(target)?;
+                if self.fb.type_of(value) == target_ty {
+                    Ok(value)
+                } else {
+                    Err(LowerError::Internal(format!(
+                        "reference retyping is not representable in Sonatina IR: source={source:?} target={target:?}"
+                    )))
+                }
+            }
+            _ => Err(LowerError::Internal(format!(
+                "unsupported runtime class retype: source={source:?} target={target:?}"
+            ))),
+        }
+    }
+
+    fn retype_aggregate_value(
+        &mut self,
+        value: ValueId,
+        source_layout: LayoutId<'db>,
+        target_layout: LayoutId<'db>,
+    ) -> Result<ValueId, LowerError> {
+        let target_ty = self.module.ty_for_layout(target_layout)?;
+        if source_layout == target_layout || self.fb.type_of(value) == target_ty {
+            return Ok(value);
+        }
+        match (
+            source_layout.data(self.module.db),
+            target_layout.data(self.module.db),
+        ) {
+            (Layout::Struct(source), Layout::Struct(target)) => {
+                if source.fields.len() != target.fields.len() {
+                    return Err(LowerError::Internal(format!(
+                        "struct retype field count mismatch: source={source_layout:?} target={target_layout:?}"
+                    )));
+                }
+                let mut retyped = self.fb.make_undef_value(target_ty);
+                for (idx, (source_field, target_field)) in
+                    source.fields.iter().zip(target.fields.iter()).enumerate()
+                {
+                    let field = self.extract_aggregate_field(value, idx, source_field)?;
+                    let field = self.retype_value_for_class(field, source_field, target_field)?;
+                    let idx = self.index_value(idx as u64);
+                    retyped = self.fb.insert_inst(
+                        InsertValue::new(self.module.inst_set(), retyped, idx, field),
+                        target_ty,
+                    );
+                }
+                Ok(retyped)
+            }
+            (Layout::Array(source), Layout::Array(target)) => {
+                if source.len != target.len {
+                    return Err(LowerError::Internal(format!(
+                        "array retype length mismatch: source={source_layout:?} target={target_layout:?}"
+                    )));
+                }
+                let mut retyped = self.fb.make_undef_value(target_ty);
+                for idx in 0..source.len as usize {
+                    let elem = self.extract_aggregate_field(value, idx, &source.elem)?;
+                    let elem = self.retype_value_for_class(elem, &source.elem, &target.elem)?;
+                    let idx = self.index_value(idx as u64);
+                    retyped = self.fb.insert_inst(
+                        InsertValue::new(self.module.inst_set(), retyped, idx, elem),
+                        target_ty,
+                    );
+                }
+                Ok(retyped)
+            }
+            (Layout::Enum(source), Layout::Enum(target)) => {
+                self.retype_enum_value(value, source_layout, &source, target_layout, &target)
+            }
+            _ => Err(LowerError::Internal(format!(
+                "aggregate retype shape mismatch: source={source_layout:?} target={target_layout:?}"
+            ))),
+        }
+    }
+
+    fn retype_enum_value(
+        &mut self,
+        value: ValueId,
+        source_layout: LayoutId<'db>,
+        source: &mir::runtime::EnumLayout<'db>,
+        target_layout: LayoutId<'db>,
+        target: &mir::runtime::EnumLayout<'db>,
+    ) -> Result<ValueId, LowerError> {
+        if source.variants.len() != target.variants.len() {
+            return Err(LowerError::Internal(format!(
+                "enum retype variant count mismatch: source={source_layout:?} target={target_layout:?}"
+            )));
+        }
+        let target_ty = self.module.ty_for_layout(target_layout)?;
+        let source_ty = self.module.ty_for_layout(source_layout)?;
+        if source_ty == target_ty {
+            return Ok(value);
+        }
+
+        self.fb
+            .current_block()
+            .expect("enum retype requires a current block");
+        let tag = self.fb.insert_inst(
+            EnumTag::new(self.module.inst_set(), value),
+            self.module.enum_tag_ty(source_layout)?,
+        );
+        let done = self.fb.append_block();
+        let invalid = self.fb.append_block();
+        let mut cases = Vec::with_capacity(source.variants.len());
+        let mut blocks = Vec::with_capacity(source.variants.len());
+        for (idx, _) in source.variants.iter().enumerate() {
+            let block = self.fb.append_block();
+            cases.push((
+                self.fb
+                    .make_imm_value(self.module.enum_tag_immediate(source_layout, idx as u16)?),
+                block,
+            ));
+            blocks.push(block);
+        }
+        self.fb.insert_inst_no_result(BrTable::new(
+            self.module.inst_set(),
+            tag,
+            Some(invalid),
+            cases,
+        ));
+
+        let mut phi_args = Vec::with_capacity(blocks.len());
+        for (idx, block) in blocks.into_iter().enumerate() {
+            let source_fields = source.variants[idx].fields.as_ref();
+            let target_fields = target.variants[idx].fields.as_ref();
+            if source_fields.len() != target_fields.len() {
+                return Err(LowerError::Internal(format!(
+                    "enum retype field count mismatch: source={source_layout:?} target={target_layout:?} variant={idx}"
+                )));
+            }
+            self.fb.switch_to_block(block);
+            let source_variant = VariantId {
+                enum_layout: source_layout,
+                index: idx as u16,
+            };
+            let target_variant = VariantId {
+                enum_layout: target_layout,
+                index: idx as u16,
+            };
+            self.fb.insert_inst_no_result(EnumAssertVariant::new(
+                self.module.inst_set(),
+                value,
+                self.variant_ref(source_variant)?,
+            ));
+            let mut fields = SmallVec::<[ValueId; 2]>::new();
+            for (field_idx, (source_field, target_field)) in
+                source_fields.iter().zip(target_fields.iter()).enumerate()
+            {
+                let field_idx = self.index_value(field_idx as u64);
+                let field = self.fb.insert_inst(
+                    EnumExtract::new(
+                        self.module.inst_set(),
+                        value,
+                        self.variant_ref(source_variant)?,
+                        field_idx,
+                    ),
+                    self.module.ty_for_class(source_field)?,
+                );
+                fields.push(self.retype_value_for_class(field, source_field, target_field)?);
+            }
+            let retyped = self.fb.insert_inst(
+                EnumMake::new(
+                    self.module.inst_set(),
+                    target_ty,
+                    self.variant_ref(target_variant)?,
+                    fields,
+                ),
+                target_ty,
+            );
+            let pred = self
+                .fb
+                .current_block()
+                .expect("enum retype variant block should remain current");
+            self.fb
+                .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
+            phi_args.push((retyped, pred));
+        }
+
+        self.fb.switch_to_block(invalid);
+        self.fb
+            .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+
+        self.fb.switch_to_block(done);
+        Ok(self
+            .fb
+            .insert_inst(Phi::new(self.module.inst_set(), phi_args), target_ty))
     }
 
     fn cast_scalar(&mut self, value: ValueId, ty: Type) -> Result<ValueId, LowerError> {
@@ -4091,7 +4634,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.fb
                     .insert_inst(Not::new(self.module.inst_set(), value), ty)
             }
-            UnOp::Plus | UnOp::Mut | UnOp::Ref => value,
+            UnOp::Plus | UnOp::Mut | UnOp::Ref | UnOp::Deref => value,
         })
     }
 
@@ -4379,49 +4922,35 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         })
     }
 
-    fn ensure_empty_revert_block(&mut self) -> BlockId {
-        if let Some(block) = self.empty_revert_block {
+    fn get_or_build_shared_helper(&mut self, kind: SharedHelperKind) -> BlockId {
+        if let Some(&block) = self.shared_helper_blocks.get(&kind) {
+            self.request_shared_helper(block);
             return block;
         }
-        let revert_block = self.fb.append_block();
-        let current = self
-            .fb
-            .current_block()
-            .expect("overflow block requires current block");
-        self.fb.switch_to_block(revert_block);
-        let zero = zero_for_type(&mut self.fb, Type::I256);
-        self.fb
-            .insert_inst_no_result(EvmRevert::new(self.module.inst_set(), zero, zero));
-        self.fb.switch_to_block(current);
-        self.empty_revert_block = Some(revert_block);
-        revert_block
-    }
-
-    fn ensure_panic_revert_block(&mut self, code: u64) -> BlockId {
-        if code == PANIC_OVERFLOW
-            && let Some(block) = self.overflow_panic_block
-        {
-            return block;
-        }
-        if code == PANIC_DIVISION_BY_ZERO
-            && let Some(block) = self.division_by_zero_panic_block
-        {
-            return block;
-        }
-        let revert_block = self.fb.append_block();
-        let current = self
-            .fb
-            .current_block()
-            .expect("panic block requires current block");
-        self.fb.switch_to_block(revert_block);
-        self.emit_panic_revert_payload(code);
-        self.fb.switch_to_block(current);
-        match code {
-            PANIC_OVERFLOW => self.overflow_panic_block = Some(revert_block),
-            PANIC_DIVISION_BY_ZERO => self.division_by_zero_panic_block = Some(revert_block),
-            _ => {}
-        }
-        revert_block
+        let block = self.build_shared_helper(|this| {
+            let block = this.fb.append_block();
+            let current = this
+                .fb
+                .current_block()
+                .expect("shared helper requires current block");
+            this.fb.switch_to_block(block);
+            match kind {
+                SharedHelperKind::EmptyRevert => {
+                    let zero = zero_for_type(&mut this.fb, Type::I256);
+                    this.fb.insert_inst_no_result(EvmRevert::new(
+                        this.module.inst_set(),
+                        zero,
+                        zero,
+                    ));
+                }
+                SharedHelperKind::Panic(code) => this.emit_panic_revert_payload(code),
+            }
+            this.fb.switch_to_block(current);
+            block
+        });
+        let replaced = self.shared_helper_blocks.insert(kind, block);
+        debug_assert!(replaced.is_none(), "shared helper was registered twice");
+        block
     }
 
     fn emit_panic_revert_payload(&mut self, code: u64) {
@@ -4447,7 +4976,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     }
 
     fn emit_empty_revert(&mut self, overflow_flag: ValueId) -> Result<(), LowerError> {
-        let revert_block = self.ensure_empty_revert_block();
+        let revert_block = self.get_or_build_shared_helper(SharedHelperKind::EmptyRevert);
         let continue_block = self.fb.append_block();
         self.fb.insert_inst_no_result(Br::new(
             self.module.inst_set(),
@@ -4460,7 +4989,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     }
 
     fn emit_panic_revert(&mut self, overflow_flag: ValueId, code: u64) -> Result<(), LowerError> {
-        let revert_block = self.ensure_panic_revert_block(code);
+        let revert_block = self.get_or_build_shared_helper(SharedHelperKind::Panic(code));
         let continue_block = self.fb.append_block();
         self.fb.insert_inst_no_result(Br::new(
             self.module.inst_set(),
@@ -4481,7 +5010,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     }
 
     fn emit_unconditional_empty_revert<T>(&mut self) -> Lowered<T> {
-        let revert_block = self.ensure_empty_revert_block();
+        let revert_block = self.get_or_build_shared_helper(SharedHelperKind::EmptyRevert);
         self.fb
             .insert_inst_no_result(Jump::new(self.module.inst_set(), revert_block));
         Lowered::Terminated
@@ -4521,6 +5050,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     Lowered::Terminated => Ok(Lowered::Terminated),
                 }
             }
+            IndexSource::Any => Err(LowerError::Internal(
+                "analysis wildcard index reached Sonatina lowering".to_string(),
+            )),
         }
     }
 
@@ -4581,32 +5113,75 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         self.fb.make_imm_value(I256::from(value))
     }
 
-    fn offset_address(
+    fn offset_address_unscaled(
         &mut self,
         base: ValueId,
         units: u64,
-        space: AddressSpaceKind,
     ) -> Result<ValueId, LowerError> {
         if units == 0 {
             return Ok(base);
         }
-        let offset = self.index_value(self.scale_for_space(space, units)?);
+        let base = self.coerce_value_to_ty(base, Type::I256)?;
+        let offset = self.index_value(units);
         Ok(self
             .fb
             .insert_inst(Add::new(self.module.inst_set(), base, offset), Type::I256))
     }
 
-    fn scale_for_space(&self, space: AddressSpaceKind, units: u64) -> Result<u64, LowerError> {
-        match space {
-            AddressSpaceKind::Memory | AddressSpaceKind::Calldata | AddressSpaceKind::Code => {
-                units.checked_mul(32).ok_or_else(|| {
-                    LowerError::Internal(format!(
-                        "byte-addressed runtime place offset overflow: {units} words"
-                    ))
-                })
-            }
-            AddressSpaceKind::Storage | AddressSpaceKind::Transient => Ok(units),
-        }
+    fn offset_ptr_field_address(
+        &mut self,
+        base: ValueId,
+        class: &RuntimeClass<'db>,
+        field: FieldIndex,
+        space: AddressSpaceKind,
+    ) -> Result<ValueId, LowerError> {
+        let offset =
+            RuntimeMemoryLayout::for_space(self.module.db, space).field_offset(class, field)?;
+        self.offset_address_unscaled(base, offset)
+    }
+
+    fn offset_ptr_struct_field_address(
+        &mut self,
+        base: ValueId,
+        layout: &StructLayout<'db>,
+        field: usize,
+        space: AddressSpaceKind,
+    ) -> Result<ValueId, LowerError> {
+        let offset = RuntimeMemoryLayout::for_space(self.module.db, space)
+            .struct_field_offset(layout, field)?;
+        self.offset_address_unscaled(base, offset)
+    }
+
+    fn offset_ptr_array_elem_address(
+        &mut self,
+        base: ValueId,
+        layout: &ArrayLayout<'db>,
+        index: usize,
+        space: AddressSpaceKind,
+    ) -> Result<ValueId, LowerError> {
+        let offset = RuntimeMemoryLayout::for_space(self.module.db, space)
+            .array_element_offset(layout, index as u64)?;
+        self.offset_address_unscaled(base, offset)
+    }
+
+    fn offset_ptr_variant_field_address(
+        &mut self,
+        base: ValueId,
+        variant: VariantId<'db>,
+        field: FieldIndex,
+        space: AddressSpaceKind,
+    ) -> Result<ValueId, LowerError> {
+        let offset = RuntimeMemoryLayout::for_space(self.module.db, space)
+            .variant_field_offset(variant, field)?;
+        self.offset_address_unscaled(base, offset)
+    }
+
+    fn ptr_index_stride_for_space(
+        &self,
+        class: &RuntimeClass<'db>,
+        space: AddressSpaceKind,
+    ) -> Result<u64, LowerError> {
+        Ok(RuntimeMemoryLayout::for_space(self.module.db, space).index_stride(class)?)
     }
 }
 
@@ -4657,6 +5232,7 @@ fn block_successors<'db>(terminator: &RTerminator<'db>) -> SmallVec<[RBlockId; 2
         RTerminator::TerminalCall { .. }
         | RTerminator::ReturnData { .. }
         | RTerminator::Revert { .. }
+        | RTerminator::RevertEmpty
         | RTerminator::SelfDestruct { .. }
         | RTerminator::Trap
         | RTerminator::Return(_)

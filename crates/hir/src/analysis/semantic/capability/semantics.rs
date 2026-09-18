@@ -2,7 +2,7 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         ty::{
-            provider::{EffectHandleTargetResolution, resolve_effect_handle_target},
+            provider::{EffectHandleResolution, resolve_effect_handle},
             trait_resolution::PredicateListId,
             ty_def::{BorrowKind, CapabilityKind, TyId},
         },
@@ -15,6 +15,8 @@ pub enum CapabilityClass {
     Borrow(BorrowKind),
     View,
     Handle,
+    /// A copyable raw memory address. Passing it does not reserve its referent.
+    Pointer,
 }
 
 /// Ordinary argument transport is independent of access authority and storage.
@@ -71,12 +73,20 @@ pub fn capability_semantics<'db>(
             storage: StorageClass::Borrowed,
         }));
     }
+    if let Some(target_ty) = ty.as_ptr(db) {
+        return Ok(Some(CapabilitySemantics {
+            class: CapabilityClass::Pointer,
+            target_ty,
+            representation_ty: ty,
+            transport: TransportClass::ProviderValue,
+            storage: StorageClass::Borrowed,
+        }));
+    }
     // Semantic shapes retain generic targets; allocation layout requires a concrete target.
-    let target_ty = match resolve_effect_handle_target(db, scope, assumptions, ty) {
-        EffectHandleTargetResolution::NotHandle => None,
-        EffectHandleTargetResolution::Resolved { target_ty, .. } => Some(target_ty),
-        EffectHandleTargetResolution::Ambiguous
-        | EffectHandleTargetResolution::UnresolvedTarget => return Err(UnresolvedCapability(ty)),
+    let target_ty = match resolve_effect_handle(db, scope, assumptions, ty) {
+        EffectHandleResolution::NotHandle => None,
+        EffectHandleResolution::Resolved { target_ty, .. } => Some(target_ty),
+        EffectHandleResolution::Invalid(_) => return Err(UnresolvedCapability(ty)),
     };
     Ok(target_ty.map(|target_ty| CapabilitySemantics {
         class: CapabilityClass::Handle,

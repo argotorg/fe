@@ -1,0 +1,79 @@
+#[inline(never)]
+fn returned_bytes<const N: usize>(_ values: [u8; N]) -> [u8; N] {
+    values
+}
+
+#[inline(never)]
+fn returned_words(_ values: [u256; 2]) -> [u256; 2] {
+    values
+}
+
+#[test]
+fn returned_byte_array_copy_preserves_original() {
+    let original = returned_bytes([128])
+    let mut copied = original
+    copied[0] = 7
+    assert!(copied[0] == 7)
+    assert!(original[0] == 128)
+}
+
+#[test]
+fn returned_byte_array_copies_are_independent_across_word_boundary() {
+    let mut original = returned_bytes([128; 33])
+    let mut copied = original
+    copied[0] = 7
+    copied[31] = 8
+    copied[32] = 9
+    original[1] = 10
+    assert!(original[0] == 128)
+    assert!(original[31] == 128)
+    assert!(original[32] == 128)
+    assert!(copied[0] == 7)
+    assert!(copied[1] == 128)
+    assert!(copied[31] == 8)
+    assert!(copied[32] == 9)
+}
+
+#[test]
+fn returned_word_array_copy_preserves_original() {
+    let original = returned_words([128, 201])
+    let mut copied = original
+    copied[0] = 7
+    assert!(copied[0] == 7)
+    assert!(original[0] == 128)
+    assert!(original[1] == 201)
+}
+
+fn write_byte(_ values: mut [u8; 1]) {
+    values[0] = 7
+}
+
+#[test]
+fn returned_array_mut_borrow_still_writes_through() {
+    let mut original = returned_bytes([128])
+    let borrowed = mut original
+    write_byte(borrowed)
+    assert!(original[0] == 7)
+}
+
+#[test]
+fn returned_array_self_assignment_preserves_value() {
+    let mut values = returned_bytes([128, 201])
+    values = values
+    assert!(values[0] == 128)
+    assert!(values[1] == 201)
+}
+
+#[inline(never)]
+fn returned_nested(_ values: [[u8; 2]; 2]) -> [[u8; 2]; 2] {
+    values
+}
+
+#[test]
+fn returned_nested_array_copy_preserves_original() {
+    let original = returned_nested([[128, 201], [254, 255]])
+    let mut copied = original
+    copied[1][0] = 7
+    assert!(copied[1][0] == 7)
+    assert!(original[1][0] == 254)
+}

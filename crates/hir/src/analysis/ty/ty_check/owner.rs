@@ -62,22 +62,18 @@ impl<'db> EffectParamOwner<'db> {
         }
     }
 
-    pub fn effect_param_path_span(
-        self,
-        _db: &'db dyn HirAnalysisDb,
-        idx: usize,
-    ) -> DynLazySpan<'db> {
+    pub fn effect_param_ty_span(self, _db: &'db dyn HirAnalysisDb, idx: usize) -> DynLazySpan<'db> {
         match self {
-            EffectParamOwner::Func(func) => func.span().effects().param_idx(idx).path().into(),
+            EffectParamOwner::Func(func) => func.span().effects().param_idx(idx).ty().into(),
             EffectParamOwner::Contract(contract) => {
-                contract.span().effects().param_idx(idx).path().into()
+                contract.span().effects().param_idx(idx).ty().into()
             }
             EffectParamOwner::ContractInit { contract } => contract
                 .span()
                 .init_block()
                 .effects()
                 .param_idx(idx)
-                .path()
+                .ty()
                 .into(),
             EffectParamOwner::ContractRecvArm {
                 contract,
@@ -90,7 +86,7 @@ impl<'db> EffectParamOwner<'db> {
                 .arm(arm_idx as usize)
                 .effects()
                 .param_idx(idx)
-                .path()
+                .ty()
                 .into(),
         }
     }
@@ -202,20 +198,16 @@ impl<'db> BodyOwner<'db> {
         }
     }
 
-    pub fn effect_param_path_span(
-        self,
-        _db: &'db dyn HirAnalysisDb,
-        idx: usize,
-    ) -> DynLazySpan<'db> {
+    pub fn effect_param_ty_span(self, _db: &'db dyn HirAnalysisDb, idx: usize) -> DynLazySpan<'db> {
         match self {
-            BodyOwner::Func(func) => func.span().effects().param_idx(idx).path().into(),
+            BodyOwner::Func(func) => func.span().effects().param_idx(idx).ty().into(),
             BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => DynLazySpan::invalid(),
             BodyOwner::ContractInit { contract } => contract
                 .span()
                 .init_block()
                 .effects()
                 .param_idx(idx)
-                .path()
+                .ty()
                 .into(),
             BodyOwner::ContractRecvArm {
                 contract,
@@ -229,7 +221,7 @@ impl<'db> BodyOwner<'db> {
                 .arm(arm_idx as usize)
                 .effects()
                 .param_idx(idx)
-                .path()
+                .ty()
                 .into(),
         }
     }

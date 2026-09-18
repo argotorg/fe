@@ -114,7 +114,7 @@ pub(super) enum RuntimeClassShape<'db> {
     },
     RawAddr {
         space: AddressSpaceKind,
-        target: Option<LayoutId<'db>>,
+        pointee: Option<Box<RuntimeClassShape<'db>>>,
     },
 }
 
@@ -132,9 +132,9 @@ impl<'db> RuntimeClassShape<'db> {
                 kind: RefShapeKind::from_kind(kind),
                 view: view.clone(),
             },
-            RuntimeClass::RawAddr { space, target } => Self::RawAddr {
+            RuntimeClass::RawAddr { space, pointee } => Self::RawAddr {
                 space: *space,
-                target: *target,
+                pointee: pointee.as_deref().map(Self::from_class).map(Box::new),
             },
         }
     }
@@ -210,7 +210,11 @@ impl<'db> BoundaryShapeMatcher<'db> {
                     kind: RefShapeKind::Provider(space),
                     view: RefView::Whole,
                 } => provider_spaces.contains(space) && **actual_pointee == *pointee,
-                RuntimeClassShape::RawAddr { .. } => *allow_raw_addr,
+                RuntimeClassShape::RawAddr {
+                    pointee: Some(actual_pointee),
+                    ..
+                } => *allow_raw_addr && **actual_pointee == *pointee,
+                RuntimeClassShape::RawAddr { pointee: None, .. } => false,
                 RuntimeClassShape::Scalar(_)
                 | RuntimeClassShape::AggregateValue { .. }
                 | RuntimeClassShape::Ref {
@@ -229,10 +233,9 @@ pub(super) enum ExactBoundaryShapeMatcher<'db> {
     Ref {
         pointee: RuntimeClassShape<'db>,
         view: RefView<'db>,
-        raw_addr_target: Option<LayoutId<'db>>,
     },
     RawAddr {
-        target: Option<LayoutId<'db>>,
+        pointee: Option<RuntimeClassShape<'db>>,
     },
 }
 
@@ -244,9 +247,10 @@ impl<'db> ExactBoundaryShapeMatcher<'db> {
             RuntimeClass::Ref { pointee, view, .. } => Self::Ref {
                 pointee: RuntimeClassShape::from_class(pointee),
                 view: view.clone(),
-                raw_addr_target: pointee.aggregate_layout(),
             },
-            RuntimeClass::RawAddr { target, .. } => Self::RawAddr { target: *target },
+            RuntimeClass::RawAddr { pointee, .. } => Self::RawAddr {
+                pointee: pointee.as_deref().map(RuntimeClassShape::from_class),
+            },
         }
     }
 
@@ -265,13 +269,13 @@ impl<'db> ExactBoundaryShapeMatcher<'db> {
                 },
             ) => **actual_pointee == *pointee && actual_view == view,
             (
-                Self::Ref {
-                    raw_addr_target, ..
+                Self::Ref { pointee, .. },
+                RuntimeClassShape::RawAddr {
+                    pointee: actual, ..
                 },
-                RuntimeClassShape::RawAddr { target, .. },
-            ) => target == raw_addr_target,
-            (Self::RawAddr { target: expected }, RuntimeClassShape::RawAddr { target, .. }) => {
-                target == expected
+            ) => actual.as_deref() == Some(pointee),
+            (Self::RawAddr { pointee: expected }, RuntimeClassShape::RawAddr { pointee, .. }) => {
+                pointee.as_deref() == expected.as_ref()
             }
             _ => false,
         }
@@ -451,20 +455,16 @@ fn specialize_exact_boundary_for_aggregate_layout<'a, 'db>(
         (
             RuntimeClass::RawAddr {
                 space,
-                target: Some(desired_target),
+                pointee: Some(pointee),
             },
             Some(layout),
-        ) if layout != *desired_target => Cow::Owned(RuntimeClass::RawAddr {
-            space: *space,
-            target: Some(layout),
-        }),
-        (RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { target: None, .. }, Some(_))
-        | (
-            RuntimeClass::RawAddr {
-                target: Some(_), ..
-            },
-            Some(_),
-        ) => Cow::Borrowed(desired),
+        ) if pointee.aggregate_layout().is_some() && pointee.aggregate_layout() != Some(layout) => {
+            Cow::Owned(RuntimeClass::raw_addr(
+                *space,
+                RuntimeClass::AggregateValue { layout },
+            ))
+        }
+        (RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. }, Some(_)) => Cow::Borrowed(desired),
     }
 }
 
@@ -630,7 +630,11 @@ impl BoundaryMatcher {
                     view: RefView::EnumVariant(_),
                     ..
                 } => false,
-                RuntimeClass::RawAddr { .. } => allow.allow_raw_addr,
+                RuntimeClass::RawAddr {
+                    pointee: Some(actual_pointee),
+                    ..
+                } => allow.allow_raw_addr && **actual_pointee == *pointee,
+                RuntimeClass::RawAddr { pointee: None, .. } => false,
                 RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => false,
             },
         }
@@ -661,12 +665,9 @@ impl BoundaryMatcher {
                     view: RefView::Whole,
                 })
             }
-            RuntimeBoundarySpec::BorrowLike { pointee, allow, .. } if allow.allow_raw_addr => {
-                Some(RuntimeClass::RawAddr {
-                    space: AddressSpaceKind::Memory,
-                    target: pointee.aggregate_layout(),
-                })
-            }
+            RuntimeBoundarySpec::BorrowLike { pointee, allow, .. } if allow.allow_raw_addr => Some(
+                RuntimeClass::raw_addr(AddressSpaceKind::Memory, pointee.clone()),
+            ),
             RuntimeBoundarySpec::BorrowLike { .. } => None,
         }
     }
@@ -690,21 +691,21 @@ impl BoundaryMatcher {
             ) => actual_pointee == expected_pointee && actual_view == expected_view,
             (
                 RuntimeClass::RawAddr {
-                    target: actual_target,
+                    pointee: actual_pointee,
                     ..
                 },
                 RuntimeClass::Ref { pointee, .. },
-            ) => actual_target == &pointee.aggregate_layout(),
+            ) => actual_pointee.as_deref() == Some(pointee),
             (
                 RuntimeClass::RawAddr {
-                    target: actual_target,
+                    pointee: actual_pointee,
                     ..
                 },
                 RuntimeClass::RawAddr {
-                    target: expected_target,
+                    pointee: expected_pointee,
                     ..
                 },
-            ) => actual_target == expected_target,
+            ) => actual_pointee == expected_pointee,
             _ => actual == expected,
         }
     }
@@ -734,10 +735,9 @@ impl<'db> RuntimeValueMaterialization<'db> {
     pub(crate) fn class(&self) -> RuntimeClass<'db> {
         match self {
             Self::ObjectRef(layout) => RuntimeClass::object_ref(*layout),
-            Self::RawAddrSlot(pointee) => RuntimeClass::RawAddr {
-                space: AddressSpaceKind::Memory,
-                target: pointee.aggregate_layout(),
-            },
+            Self::RawAddrSlot(pointee) => {
+                RuntimeClass::raw_addr(AddressSpaceKind::Memory, pointee.clone())
+            }
         }
     }
 }
@@ -947,10 +947,7 @@ mod tests {
     }
 
     fn raw_addr_class<'db>(space: AddressSpaceKind) -> RuntimeClass<'db> {
-        RuntimeClass::RawAddr {
-            space,
-            target: None,
-        }
+        RuntimeClass::raw_addr(space, word_class())
     }
 
     fn ref_class<'db>(
@@ -1134,6 +1131,20 @@ mod tests {
                 false,
             ),
             ("raw addr", raw_addr_class(AddressSpaceKind::Memory), true),
+            (
+                "wrong raw pointee",
+                RuntimeClass::raw_addr(
+                    AddressSpaceKind::Memory,
+                    RuntimeClass::Scalar(ScalarClass {
+                        repr: ScalarRepr::Int {
+                            bits: 8,
+                            signed: false,
+                        },
+                        role: ScalarRole::Plain,
+                    }),
+                ),
+                false,
+            ),
             ("plain scalar", word_class(), false),
             (
                 "variant view",

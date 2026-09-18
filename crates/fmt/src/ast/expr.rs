@@ -153,16 +153,22 @@ fn format_bin_expr_inner<'a>(
             None
         };
 
-        if let Some(inner_bin) = higher_prec_bin {
+        let operand_doc = if let Some(inner_bin) = higher_prec_bin {
             // Format inner chain without its own nesting, we control it here
-            let inner_doc = format_bin_expr_inner(&inner_bin, ctx, false);
-            result = result
-                .append(alloc.line())
-                .append(alloc.text(op_str.clone()))
-                .append(alloc.text(" "))
-                .append(inner_doc.nest(indent));
+            format_bin_expr_inner(&inner_bin, ctx, false).nest(indent)
         } else {
-            let operand_doc = operand.to_doc(ctx);
+            operand.to_doc(ctx)
+        };
+
+        if matches!(op_str.as_str(), "*" | "-") {
+            // These operators can also begin unary expressions. Keep them on
+            // the preceding line so formatted output reparses unambiguously.
+            result = result
+                .append(alloc.text(" "))
+                .append(alloc.text(op_str.clone()))
+                .append(alloc.line())
+                .append(operand_doc);
+        } else {
             result = result
                 .append(alloc.line())
                 .append(alloc.text(op_str.clone()))
@@ -413,6 +419,16 @@ impl ToDoc for ast::UnExpr {
 
             let op_doc = alloc.text(op_text);
             return if matches!(op, ast::UnOp::Mut(_) | ast::UnOp::Ref(_)) {
+                op_doc.append(alloc.text(" ")).append(expr.to_doc(ctx))
+            } else if matches!(op, ast::UnOp::Deref(_))
+                && matches!(
+                    expr.kind(),
+                    ExprKind::Un(ref inner)
+                        if matches!(inner.op(), Some(ast::UnOp::Deref(_)))
+                )
+            {
+                // Adjacent `*` tokens lex as exponentiation (`**`), which is
+                // not a prefix operator. Keep nested dereferences separate.
                 op_doc.append(alloc.text(" ")).append(expr.to_doc(ctx))
             } else {
                 op_doc.append(expr.to_doc(ctx))
@@ -1107,8 +1123,8 @@ impl ToDoc for ast::UsesParam {
             doc = doc.append(alloc.text("mut "));
         }
 
-        if let Some(path) = self.path() {
-            doc = doc.append(path.to_doc(ctx));
+        if let Some(ty) = self.ty() {
+            doc = doc.append(ty.to_doc(ctx));
         }
 
         doc

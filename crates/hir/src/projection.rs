@@ -70,6 +70,11 @@ pub enum IndexSource<Idx> {
     Constant(usize),
     /// Runtime index value (typed ID, interpretation depends on context).
     Dynamic(Idx),
+    /// Analysis-only wildcard index.
+    ///
+    /// This must not reach runtime lowering. It is used by analyses that need to
+    /// model an unknown element slot without enumerating every concrete index.
+    Any,
 }
 
 /// A path through nested data via a sequence of projections.

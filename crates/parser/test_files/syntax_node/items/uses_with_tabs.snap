@@ -19,9 +19,10 @@ Root@0..46
             UsesKw@7..11 "uses"
             WhiteSpace@11..12 "\t"
             UsesParam@12..15
-              Path@12..15
-                PathSegment@12..15
-                  Ident@12..15 "Ctx"
+              PathType@12..15
+                Path@12..15
+                  PathSegment@12..15
+                    Ident@12..15 "Ctx"
         WhiteSpace@15..16 " "
         BlockExpr@16..18
           LBrace@16..17 "{"
@@ -43,15 +44,17 @@ Root@0..46
             UsesParamList@32..42
               LParen@32..33 "("
               UsesParam@33..36
-                Path@33..36
-                  PathSegment@33..36
-                    Ident@33..36 "Foo"
+                PathType@33..36
+                  Path@33..36
+                    PathSegment@33..36
+                      Ident@33..36 "Foo"
               Comma@36..37 ","
               WhiteSpace@37..38 " "
               UsesParam@38..41
-                Path@38..41
-                  PathSegment@38..41
-                    Ident@38..41 "Bar"
+                PathType@38..41
+                  Path@38..41
+                    PathSegment@38..41
+                      Ident@38..41 "Bar"
               RParen@41..42 ")"
         WhiteSpace@42..43 " "
         BlockExpr@43..45

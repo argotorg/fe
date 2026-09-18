@@ -1,0 +1,7 @@
+type Values = [[u256; 2]; 3]
+
+#[event]
+struct IndexedArray {
+    #[indexed]
+    values: Values,
+}

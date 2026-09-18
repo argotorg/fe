@@ -6,6 +6,7 @@ use crate::analysis::{
         capability::{region::RegionSet, source::SourceExpr, value::ValueId},
     },
     ty::{
+        corelib::MemoryAccessKind,
         ty_check::{BodyOwner, SmirLoweringIssue},
         ty_def::TyId,
     },
@@ -20,6 +21,16 @@ pub struct BorrowSummary<'db> {
     /// Preconditions on the actual regions supplied by callers. They are
     /// independent of the callee's return value and mutable-input poststates.
     pub requirements: Vec<BoundaryRequirement<'db>>,
+    /// Reads and writes through addresses, including effects of transitive calls.
+    pub accesses: Vec<MemoryAccess<'db>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MemoryAccess<'db> {
+    pub kind: MemoryAccessKind,
+    pub region: RegionSet<'db>,
+    /// Explicit receiver authority for an otherwise unknown memory effect.
+    pub authorizers: RegionSet<'db>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

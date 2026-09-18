@@ -1,0 +1,9 @@
+use std::abi::StaticAbiElement
+
+struct Custom {
+    x: u256,
+    y: u256,
+}
+
+// Downstream types cannot opt into the one-word ABI layout guarantee.
+impl StaticAbiElement for Custom {}

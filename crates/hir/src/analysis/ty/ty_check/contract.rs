@@ -12,7 +12,7 @@ use num_traits::ToPrimitive;
 use crate::{
     analysis::{
         HirAnalysisDb,
-        name_resolution::{ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path},
+        name_resolution::{ExpectedPathKind, PathRes, resolve_path},
         semantic::{
             SemConstScalar, SemConstValue, contract_init_assigned_fields, eval_body_owner_const,
         },
@@ -929,17 +929,25 @@ pub(super) fn resolve_recv_msg_mod<'db>(
             }
             None
         }
-        Ok(PathRes::Mod(scope)) => {
-            // Accept any module as a recv root (both msg-desugared and manually defined)
-            if let ScopeId::Item(ItemKind::Mod(mod_)) = scope {
-                return Some(mod_);
-            }
-            unreachable!();
-        }
+        // Accept any module as a recv root (both msg-desugared and manually defined).
+        // Other module-like scopes (e.g. top-level file modules) fall through to the
+        // `Ok(other)` arm below and are reported as diagnostics instead of panicking.
+        Ok(PathRes::Mod(ScopeId::Item(ItemKind::Mod(mod_)))) => Some(mod_),
         Ok(other) => {
             let ident = msg_path.ident(db).to_opt()?;
             if emit_diag {
-                diags.push(PathResDiag::ExpectedType(span.into(), ident, other.kind_name()).into());
+                let given_kind = match other {
+                    PathRes::Mod(ScopeId::Item(ItemKind::TopMod(_))) => "file module",
+                    _ => other.kind_name(),
+                };
+                diags.push(
+                    BodyDiag::RecvExpectedMsgModule {
+                        primary: span.into(),
+                        given: ident,
+                        given_kind,
+                    }
+                    .into(),
+                );
             }
             None
         }

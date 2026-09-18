@@ -654,6 +654,15 @@ impl DiagnosticVoucher for crate::EventError {
                 format!("EVM supports at most 3 indexed fields (found {indexed_count})"),
                 vec!["remove `#[indexed]` from fields until there are at most 3".to_string()],
             ),
+            EventErrorKind::IndexedDynamicField { ty } => (
+                8,
+                "indexed dynamic event fields are not supported".to_string(),
+                format!("`{ty}` requires Solidity's special indexed-value hashing"),
+                vec![
+                    "remove `#[indexed]` from this field; dynamic event data is supported"
+                        .to_string(),
+                ],
+            ),
         };
 
         let error_code = GlobalErrorCode::new(DiagnosticPass::EventLower, code);
@@ -757,7 +766,7 @@ impl DiagnosticVoucher for DefConflictError<'_> {
                 subs.extend(items.map(|item| {
                     SubDiagnostic::new(
                         LabelStyle::Secondary,
-                        format! {"`{name}` is redefined here"},
+                        format!("`{name}` is redefined here"),
                         item.name_span().unwrap().resolve(db),
                     )
                 }));
@@ -813,7 +822,7 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 for sub_span in spans {
                     diags.push(SubDiagnostic::new(
                         LabelStyle::Secondary,
-                        format! {"`{ident}` is redefined here"},
+                        format!("`{ident}` is redefined here"),
                         Some(sub_span),
                     ));
                 }
@@ -1402,7 +1411,7 @@ impl DiagnosticVoucher for ImportDiag<'_> {
                 for sub_span in spans {
                     diags.push(SubDiagnostic::new(
                         LabelStyle::Secondary,
-                        format! {"`{ident}` is redefined here"},
+                        format!("`{ident}` is redefined here"),
                         Some(sub_span),
                     ));
                 }
@@ -2132,6 +2141,39 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
+            Self::ContractFieldProviderRawInvalid { span, ty, failure } => {
+                let reason = match failure {
+                    crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedRaw => {
+                        "the selected provider's `Raw` type is unresolved"
+                    }
+                    crate::analysis::ty::provider::ProviderLayoutFailure::UnsupportedRaw => {
+                        "the selected provider's `Raw` type is not a pointer or `u256`"
+                    }
+                    crate::analysis::ty::provider::ProviderLayoutFailure::UntrustedRaw => {
+                        "user-defined handles may only use `*Target` in memory"
+                    }
+                    crate::analysis::ty::provider::ProviderLayoutFailure::Ambiguous
+                    | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedTarget
+                    | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedSpace => {
+                        unreachable!("non-raw provider failure reached raw diagnostic")
+                    }
+                };
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "contract field has an invalid effect-handle transport".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: reason.to_string(),
+                        span: span.resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "`{}` cannot carry address-space authority through this `EffectHandle` implementation",
+                        ty.pretty_print(db)
+                    )],
+                    error_code,
+                }
+            }
+
             Self::ContractFieldProviderCycle { span, ty } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -2813,7 +2855,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             Self::InvalidEffectKey { owner, key, idx } => {
                 let idx = *idx;
                 let key_str = key.pretty_print(db);
-                let span = owner.effect_param_path_span(db, idx).resolve(db);
+                let span = owner.effect_param_ty_span(db, idx).resolve(db);
                 let effect = owner.effects(db).data(db).get(idx);
                 let is_labeled = effect.and_then(|e| e.name).is_some();
                 let is_contract_scoped_uses = match owner {
@@ -2867,7 +2909,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 root_ty,
                 trait_req,
             } => {
-                let span = owner.effect_param_path_span(db, *idx).resolve(db);
+                let span = owner.effect_param_ty_span(db, *idx).resolve(db);
                 let root = root_ty.pretty_print(db);
 
                 CompleteDiagnostic {
@@ -2895,7 +2937,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 given,
             } => {
                 let idx = *idx;
-                let span = owner.effect_param_path_span(db, idx).resolve(db);
+                let span = owner.effect_param_ty_span(db, idx).resolve(db);
                 let key_str = key.pretty_print(db);
                 let given_str = given.pretty_print(db);
 
@@ -3298,6 +3340,17 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::TypeSizeOverflow { primary, ty } => primary_diag(
+                severity,
+                "type is too large",
+                &format!(
+                    "`{}` exceeds the supported 64-bit raw-memory layout size",
+                    ty.pretty_print(db)
+                ),
+                primary.resolve(db),
+                error_code,
+            ),
+
             Self::ConstValueMustBeKnown(span) => primary_diag(
                 severity,
                 "const value must be resolvable during type checking",
@@ -3305,6 +3358,23 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 span.resolve(db),
                 error_code,
             ),
+
+            Self::ConstEvaluationFailed {
+                primary,
+                const_name,
+                origin,
+                reason,
+            } => {
+                let message = format!("failed to evaluate constant `{const_name}`");
+                let label = format!("`{const_name}` from {origin} {reason}");
+                primary_diag(
+                    severity,
+                    &message,
+                    &label,
+                    primary.resolve(db),
+                    error_code,
+                )
+            }
 
             Self::StaticAssertFailed {
                 primary,
@@ -3460,6 +3530,17 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 }
             }
+            Self::UnsupportedMacroCall(primary) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "unsupported macro call".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "only `assert!(...)` is supported".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
             Self::UnsupportedUnaryPlus(primary) => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "unary `+` is not supported".to_string(),
@@ -3762,7 +3843,8 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     },
                 ],
                 notes: vec![
-                    "immutable contract fields can only be assigned in `init`; mark the field `mut` to make it mutable contract state".to_string(),
+                    "immutable contract fields can only be assigned in `init`; mark the field `mut` to make it mutable contract state"
+                        .to_string(),
                 ],
                 error_code,
             },
@@ -4305,14 +4387,35 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: format!(
-                        "expected `msg` type, but `{}` is given",
+                        "expected `msg` module, but `{}` is given",
                         given.pretty_print(db)
                     ),
                     span: primary.resolve(db),
                 }];
                 CompleteDiagnostic {
                     severity,
-                    message: "recv block expects a msg type".to_string(),
+                    message: "recv block expects a msg module".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            },
+            BodyDiag::RecvExpectedMsgModule {
+                primary,
+                given,
+                given_kind,
+            } => {
+                let sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "expected `msg` module, but {given_kind} `{}` is given",
+                        given.data(db)
+                    ),
+                    span: primary.resolve(db),
+                }];
+                CompleteDiagnostic {
+                    severity,
+                    message: "recv block expects a msg module".to_string(),
                     sub_diagnostics,
                     notes: vec![],
                     error_code,
@@ -5228,6 +5331,26 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 }
             }
 
+            Self::TypeNotDefinedInTrait {
+                primary,
+                trait_,
+                type_name,
+            } => CompleteDiagnostic {
+                severity,
+                message: "associated type not defined in trait".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "associated type `{}` is not defined in trait `{}`",
+                        type_name.data(db),
+                        trait_.name(db).unwrap().data(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
             Self::MissingAssociatedType {
                 primary,
                 type_name,
@@ -5454,6 +5577,45 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 notes: vec![],
                 error_code,
             },
+
+            Self::InvalidEffectHandleRaw {
+                primary,
+                raw_ty,
+                failure,
+            } => {
+                let message = match failure {
+                    crate::analysis::ty::provider::ProviderLayoutFailure::UnsupportedRaw => {
+                        format!(
+                            "`{}` cannot represent an effect-handle address",
+                            raw_ty.pretty_print(db)
+                        )
+                    }
+                    crate::analysis::ty::provider::ProviderLayoutFailure::UntrustedRaw => {
+                        "integer-backed handles are reserved for compiler-provided libraries"
+                            .to_string()
+                    }
+                    crate::analysis::ty::provider::ProviderLayoutFailure::Ambiguous
+                    | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedTarget
+                    | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedRaw
+                    | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedSpace => {
+                        unreachable!("non-concrete raw failure reached impl diagnostic")
+                    }
+                };
+                CompleteDiagnostic {
+                    severity,
+                    message: "invalid `EffectHandle::Raw` type".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message,
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![
+                        "user-defined effect handles must use `*Target` and can only provide memory effects"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
         }
     }
 }

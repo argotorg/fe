@@ -251,15 +251,21 @@ impl<'db> Borrowck<'db> {
                     .payload
                     .region(self.db, &self.inventory.loans, leaf.guard.scope())
                     .with_guard(&leaf.guard);
-                let access = match leaf.semantics.class {
-                    CapabilityClass::Borrow(kind) => Some(kind),
-                    CapabilityClass::View => Some(BorrowKind::Ref),
-                    CapabilityClass::Handle => match traversal {
-                        CapabilityTraversal::Effect(kind) if leaf.path.as_slice().is_empty() => {
-                            Some(kind)
-                        }
-                        _ => None,
-                    },
+                let access = if leaf.semantics.target_ty.is_zero_sized(self.db) {
+                    None
+                } else {
+                    match leaf.semantics.class {
+                        CapabilityClass::Borrow(kind) => Some(kind),
+                        CapabilityClass::View => Some(BorrowKind::Ref),
+                        CapabilityClass::Handle | CapabilityClass::Pointer => match traversal {
+                            CapabilityTraversal::Effect(kind)
+                                if leaf.path.as_slice().is_empty() =>
+                            {
+                                Some(kind)
+                            }
+                            _ => None,
+                        },
+                    }
                 };
                 result.push(CapabilityOccurrence {
                     semantics: leaf.semantics,
@@ -436,7 +442,7 @@ impl<'db> Borrowck<'db> {
         Ok(resolved)
     }
 
-    fn ancestors(
+    pub(super) fn ancestors(
         &self,
         seeds: impl IntoIterator<Item = Guarded<'db, LoanRef<'db>>>,
     ) -> Vec<Guarded<'db, LoanRef<'db>>> {
@@ -654,8 +660,25 @@ impl<'db> Borrowck<'db> {
                             NExpr::Call {
                                 args, effect_args, ..
                             },
-                        ..
+                        result,
                     } => {
+                        for resolved in self.call_memory_accesses(
+                            &state,
+                            *result,
+                            CallInputs {
+                                args,
+                                effects: effect_args,
+                                origin: statement.origin,
+                            },
+                        )? {
+                            self.check_access(
+                                &active,
+                                resolved.access.kind.borrow_kind(),
+                                &resolved.access.region,
+                                &resolved.authority,
+                                statement.origin,
+                            )?;
+                        }
                         let mut groups = Vec::new();
                         for (argument, operand) in args.iter().enumerate() {
                             groups.push((
@@ -814,6 +837,9 @@ impl<'db> Borrowck<'db> {
         origin: SemOrigin<'db>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         for loan in active {
+            if loan.semantics.target_ty.is_zero_sized(self.db) {
+                continue;
+            }
             let reference = loan.payload.loan().expect("active loan");
             let definition = &self.inventory.loans[reference.id.0];
             let active_kind = definition.kind();
@@ -825,12 +851,36 @@ impl<'db> Borrowck<'db> {
             let lift = IndexSubst::new(region.scope(), fresh.destination(), [])
                 .expect("access comparison scope");
             let accessed = region.substitute(self.db, &lift);
-            let (overlap, uncertain) = accessed.intersect(&loan.region);
+            // Input exclusivity is a precondition checked at each call. Keep
+            // exact alias checks here; unresolved accesses remain in the summary
+            // so a caller cannot use this assumption to hide an actual conflict.
+            let (overlap, uncertain) = if self.inventory.input_loans.contains(&reference.id) {
+                (accessed.proven_intersection(&loan.region), false)
+            } else {
+                accessed.intersect(&loan.region)
+            };
             if !uncertain && (overlap.is_empty() || loan.suspended.provably_covers(&overlap)) {
                 continue;
             }
             let mut permitted = None;
             for parent in self.ancestors(authority.iter().cloned()) {
+                // Access offsets can introduce witnesses unused by the authority.
+                // Drop only those unused binders before comparing exact loan occurrences.
+                let canonical = parent.guard.scope().canonical_existentials(
+                    region.scope(),
+                    parent
+                        .guard
+                        .indices()
+                        .into_iter()
+                        .chain(parent.payload.args.iter().copied()),
+                );
+                let parent = Guarded {
+                    guard: parent
+                        .guard
+                        .substitute(&canonical)
+                        .expect("authority normalization"),
+                    payload: parent.payload.substitute(&canonical),
+                };
                 let subst = lift.under_existentials(parent.guard.scope());
                 let parent = Guarded {
                     guard: parent.guard.substitute(&subst).expect("authority scope"),
@@ -1057,7 +1107,11 @@ impl<'db> Borrowck<'db> {
                                 },
                                 ..
                             }
-                        ) && matches!(place.base, NPlaceBase::CapabilityTarget { .. })
+                        ) && let NPlaceBase::CapabilityTarget { carrier } = place.base
+                            && self.body.values[carrier.index()]
+                                .ty
+                                .as_ptr(self.db)
+                                .is_none()
                         {
                             return Err(self.diag(
                                 SemanticBorrowDiagKind::MoveConflict,

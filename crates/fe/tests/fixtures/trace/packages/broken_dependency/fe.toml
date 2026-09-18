@@ -1,0 +1,7 @@
+[workspace]
+name = "trace_broken_dependency"
+version = "0.1.0"
+members = [
+  { path = "ingots/app", name = "app" },
+  { path = "ingots/dep", name = "dep" },
+]

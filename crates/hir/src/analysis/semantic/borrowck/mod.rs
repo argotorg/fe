@@ -7,6 +7,7 @@ mod events;
 mod facts;
 mod inventory;
 mod ir;
+mod memory;
 mod solver;
 mod summary;
 

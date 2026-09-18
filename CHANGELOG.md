@@ -1,6 +1,76 @@
 # Changelog
 
 [//]: # (towncrier release notes start)
+## 26.3 (2026-09-16)
+
+### Features
+
+- Support `==` and `!=` for fixed-size arrays whose elements implement `Eq`. ([#528](https://github.com/argotorg/fe/issues/528))
+- Support `==` and `!=` for tuples of up to six elements whose types implement `Eq`, including the empty tuple. ([#748](https://github.com/argotorg/fe/issues/748))
+- Added PC-accurate debug information. `fe dev trace emit` compiles a
+  standalone Fe file or a whole ingot and writes a validated stream of typed
+  compiler facts (JSONL) that links EVM bytecode instructions through the
+  backend and MIR to source spans where attribution can be proven, and
+  `fe dev debug emit --format ethdebug`
+  projects that stream into a Fe-specific experimental instruction/source artifact
+  with optional attribution details containing origin/confidence information.
+  The CLI prints a per-program attribution summary without requiring that extra
+  file. Each emitted instruction is classified as source-mapped, ambiguous,
+  synthetic, or unmapped, and only a unique exact mapping in the recorded graph
+  carries source context. This does not establish exhaustive contributing origins
+  or transformation history. Compatibility with stock ethdebug consumers is not
+  established; neither the artifact nor the optional attribution details is a
+  stable public API. ([#1336](https://github.com/argotorg/fe/issues/1336))
+- Added first-class typed memory pointers with `*T`, including allocation helpers, dereference reads and writes, pointer field access, and mutable pointer-backed array indexing. New bounded memory-region APIs—`MemSlice<T>`, `MemSpan`, `MemBuffer`, and `FixedMemBuffer<N>`—distinguish read-only views, owned allocations, and writable capacity across ABI and EVM operations. Pointer-bearing values cannot escape into persistent or transient storage. A bare `*` at the start of a line is interpreted as dereference; multiline multiplication must keep the operator on the preceding line. ([#1469](https://github.com/argotorg/fe/issues/1469))
+- Added `fe build --from-metadata <PATH|->` to rebuild a contract from a `<Contract>.metadata.json` recompilation input (as produced by `fe build --emit metadata`); `-` reads the JSON from stdin. The recorded project is materialized into a temporary directory and built with the settings captured in the metadata: the contract from `settings.compilationTarget` (overridable with `--contract`) and the recorded optimizer level (an explicit `-O` wins, with a warning that the rebuilt bytecode no longer matches the verified artifact). A compiler version mismatch warns on stderr without aborting. Artifacts are written to `--out-dir`, defaulting to `./out`. This lets external toolchains such as Foundry or source verifiers recompile Fe contracts from a single self-contained JSON document. ([#1505](https://github.com/argotorg/fe/issues/1505))
+- Added `core::num::isqrt` for `u256`, returning the integer square root rounded down. The implementation uses a fixed number of Newton iterations without input-dependent loops. ([#1509](https://github.com/argotorg/fe/issues/1509))
+- Added `StorageBytes::to_memory` to copy stored bytes into memory without ending the contract call, allowing further processing such as hashing or contract deployment. Added `StorageBytes::word_at` for indexed access to individual payload words. ([#1510](https://github.com/argotorg/fe/issues/1510))
+- Added `std::evm::encode_msg_calldata` to encode a message selector and arguments into memory for low-level calls. Added `Address::static` for typed `STATICCALL` operations that forward the available gas and propagate the callee's revert data on failure. ([#1511](https://github.com/argotorg/fe/issues/1511))
+- Added `std::evm::packed` for tightly packed byte encoding, with `encode_packed` and `keccak_packed` tuple helpers and a growable `Packed` builder for payloads assembled at runtime. Supported values include integers, addresses, booleans, strings, and byte sequences. Added `std::evm::crypto::eip712_digest` to compute a digest from a domain separator and struct hash. ([#1512](https://github.com/argotorg/fe/issues/1512))
+- Added `Call::call_with_default` and `Address::call_with_default` to return a caller-supplied default when a successful external call returns no data; non-empty returndata is still decoded strictly and reverts are propagated. Added `std::evm::erc20::{safe_transfer, safe_transfer_from, safe_approve}` for tokens that return either `true` or no data. These ERC-20 helpers reject `false` returns and targets without code; the general `call_with_default` helper also returns the default for successful calls to addresses without code. ([#1514](https://github.com/argotorg/fe/issues/1514))
+- Added source-oriented contract layout information to language-server hovers. Hovering a contract name shows its complete layout grouped under Storage, Transient Storage, and Immutable (Code), while hovering a contract field shows only the entries belonging to that field.
+
+  The hover labels inline fields and explicit or inferred layout parameters with their source paths and types, and shows index formulas and dimensions for static arrays. It no longer presents empty allocation cursors as occupied slots or exposes internal "root" terminology, and explains when a field's layout is invalid or unavailable. ([#1515](https://github.com/argotorg/fe/issues/1515))
+- Added typed `DynArray<T>.get(index)` access and `std::abi::MemVec<T>`, a mutable memory array whose length is chosen at creation and remains fixed. `MemVec` supports zero-initialized construction, independent copies of existing `DynArray` values, indexed reads and writes, and conversion to an independent ABI-encodable `DynArray` for contract calls, return values, and event payloads. Supported elements occupy one static ABI word, including integers, `Address`, `bool`, and fixed-byte types. Reads use Solidity ABI decoding rules, and out-of-bounds reads or writes revert with `Panic(0x32)`. ([#1524](https://github.com/argotorg/fe/issues/1524))
+
+### Bugfixes
+
+- Report unsupported macro calls as compiler errors instead of panicking during semantic lowering. ([#1132](https://github.com/argotorg/fe/issues/1132))
+- Reject associated type definitions in trait implementations when the type is not declared in the implemented trait. ([#1193](https://github.com/argotorg/fe/issues/1193))
+- Fixed the bundled Tree-sitter grammar to parse chained `||` conditions consistently with the compiler parser. ([#1469](https://github.com/argotorg/fe/issues/1469))
+- Fixed library modules being lowered into duplicate ingot main objects when building projects with dependencies. ([#1478](https://github.com/argotorg/fe/issues/1478))
+- Improved the parser diagnostic for Rust-style turbofish syntax. Writing `Name::<...>` (for example `StorageMap::<u256, u256, 0>::new()`) now reports a clear "remove the double colons" error pointing at the `::`, instead of a confusing "expected newline or `}`" message. Use the bare `Name<...>` form instead. ([#1498](https://github.com/argotorg/fe/issues/1498))
+- Support functions and recv arms with more than 16 arguments in the Sonatina backend. ([#1500](https://github.com/argotorg/fe/issues/1500))
+- Fixed method selection incorrectly reporting missing trait imports when an inapplicable blanket implementation shadowed a valid concrete implementation. Diagnostics no longer expose unsatisfied bounds involving traits that are not visible at the call site. ([#1501](https://github.com/argotorg/fe/issues/1501))
+- Fixed a compiler error when a mutable `own` aggregate parameter (such as `mut _ s: own [u256; 3]`) is both projected (indexed or field-accessed) and reassigned inside the function. Such functions previously failed to compile with an internal `SlotCarrierMismatch` error; they now compile correctly and keep the parameter's by-value calling convention. ([#1503](https://github.com/argotorg/fe/issues/1503))
+- Fixed a compiler panic when selecting a trait method from an `impl` whose `where` clause constrains an associated-type projection. Satisfied projection bounds now type-check normally, while unsatisfied bounds produce the expected trait-bound diagnostic. ([#1505](https://github.com/argotorg/fe/issues/1505))
+- Fixed a compiler crash when generating bytecode for tuple or struct constants containing string literals of 16 bytes or fewer. ([#1512](https://github.com/argotorg/fe/issues/1512))
+- Fixed a critical contract-layout aliasing bug. Repeating a type with an inferred layout parameter, such as `StorageMap<K, V, const SALT: u256 = _>`, inside a struct, tuple, nested generic argument, type alias, enum, or static array now gives each structural occurrence an independent value. Previously, distinct maps could receive the same salt, causing writes through one field or array element to overwrite data belonging to another.
+
+  Explicit layout values are now reserved before inferred values are assigned, so mixing explicit and inferred parameters cannot collide regardless of declaration order. Static arrays of layout-parameterized types receive checked per-element assignments, including nested arrays and enum payloads, while intentionally shared explicit parameters and enum overlays continue to share.
+
+  Layout assignments are preserved when values flow through aggregates, pattern matching, indexing, control flow, function and effect calls, and returns. Invalid, unresolved, overflowing, cyclic, or unsupported contract layouts now fail with diagnostics instead of producing partial layouts, silently aliasing data, or crashing the compiler. ([#1515](https://github.com/argotorg/fe/issues/1515))
+- Fixed compiler crashes when emitting events with eight or more total fields. Events support up to 16 non-indexed data fields, with a type diagnostic when that limit is exceeded. Unsatisfied trait bounds involving string literals are now reported instead of allowing invalid constants to reach code generation. ([#1516](https://github.com/argotorg/fe/issues/1516))
+- Message declarations now report argument-count and ABI-type mismatches between `sol("...")` selector signatures and their fields during type checking, including builds that do not emit ABI JSON. Diagnostics identify the offending declaration or field and suggest the corresponding standard-library type when available. ([#1520](https://github.com/argotorg/fe/issues/1520))
+- Fix Solidity signatures for dynamic array event fields, including imported aliases and fixed-size array elements. Report unsupported indexed dynamic fields and generated event constant evaluation failures as diagnostics. ([#1522](https://github.com/argotorg/fe/issues/1522))
+- Fixed a compiler error when a mutable `own` enum parameter, such as `mut _ value: own Option<u256>`, is matched with `if let` or `while let` and reassigned. Such functions previously failed to compile with an internal `SlotCarrierMismatch` error. ([#1527](https://github.com/argotorg/fe/issues/1527))
+- Improved pattern coverage checking to detect previously missed unreachable arms, including wildcards after complete boolean matches and redundant arms after irrefutable patterns. Matches over empty enums can now be exhaustive with no arms, and missing-pattern diagnostics report a representative uncovered case. ([#1528](https://github.com/argotorg/fe/issues/1528))
+- Fixed trait resolution across ingots, handling of incomplete solver answers, and method selection by integrating the `tablesolve` trait solver. Improved type-growth limits during trait resolution. ([#1529](https://github.com/argotorg/fe/issues/1529))
+- Fixed spurious "type must be known here" errors when a call's return type is determined only by a trait bound on the callee's generic parameters (for example `Option::map`). Such bounds were previously solved only after the entire function body had been checked, so the result of the call could not be used later in the same function without a redundant type annotation. These bounds are now solved at the call site before the return type is checked against its context, so the annotation is no longer required. The same call-site solving applies when selecting among deferred trait methods: an expected return type can disambiguate candidates after their bounds resolve, and a conflicting return type reports a type mismatch instead of leaving the call unresolved or spuriously ambiguous. ([#1531](https://github.com/argotorg/fe/issues/1531))
+- Fixed clean builds depending on Tree-sitter parser generation order by ensuring parser generation precedes the web asset build. Installing the parser's npm dependencies no longer attempts to build an unused Node addon. ([#1532](https://github.com/argotorg/fe/issues/1532))
+- Aligned runtime ABI argument-size validation with Solidity, fixing differences in whether malformed inputs are accepted or reverted before decoding. ([#1533](https://github.com/argotorg/fe/issues/1533))
+- Fix compiler crashes when indexing empty arrays nested inside arrays, tuples, structs, or enum variants. These accesses now perform the expected bounds-check revert. ([#1547](https://github.com/argotorg/fe/issues/1547))
+- Fix a compiler crash when a `recv` block names a file module instead of a message module. The compiler now reports an error and consistently describes the expected message module. ([#1552](https://github.com/argotorg/fe/issues/1552))
+
+### Performance improvements
+
+- Functions are now deduplicated in MIR after monomorphization. This reduces compile time for large projects. ([#1465](https://github.com/argotorg/fe/issues/1465))
+
+### Deprecations and Removals
+
+- Removed the old integer-address and wrapper-based memory surface, including `MemPtr<T>`, `core::abi::MemoryInput`, `std::evm::MemoryBytes`, `std::evm::mem::alloc`, and the cursor-based `AbiEncoder` API. Migrate typed memory addresses to `*T`, read-only memory regions to `MemSpan`, and owned or writable allocations to `MemBuffer`. The unused `core::convert::Into<T>` trait was also removed; use explicit conversion APIs instead. ([#1469](https://github.com/argotorg/fe/issues/1469))
+
+
 ## 26.2.0 (2026-06-23)
 
 ### Features

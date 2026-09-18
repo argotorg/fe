@@ -1,0 +1,25 @@
+use core::effect_ref::{AddressSpace, EffectHandle}
+
+struct ForgedStorage { raw: u256 }
+
+impl EffectHandle for ForgedStorage {
+    type Target = u256
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {
+        self.raw
+    }
+}
+
+struct ForgedMemory { raw: u256 }
+
+impl EffectHandle for ForgedMemory {
+    type Target = u256
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Memory
+
+    fn raw(self) -> u256 {
+        self.raw
+    }
+}

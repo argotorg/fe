@@ -1,5 +1,5 @@
 //! Immutable structural input and borrow-occurrence inventory.
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use super::control::LoopRegions;
 
@@ -14,8 +14,7 @@ use crate::{
                 external::{ExternalSource, ReferentContract},
                 guard::Guard,
                 handle::{
-                    HandleAddressSpace, OpaqueHandleContract, OpaqueHandleOccurrence,
-                    OpaqueHandleRef,
+                    AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
                 },
                 index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
                 loan::{CapabilityRef, LoanDef, LoanId, LoanRef},
@@ -30,6 +29,7 @@ use crate::{
             normalized::{
                 HandleOrigin, NBlock, NBlockId, NExpr, NRootId, NRootKind, NStatementKind,
                 NTerminator, NTerminatorKind, NValue, NValueDefinition, NValueId, NormalizedBody,
+                copied_scalar_ty,
             },
         },
         ty::{
@@ -47,7 +47,7 @@ pub(super) struct InputTarget<'db> {
     pub ty: TyId<'db>,
     pub shape: ShapeId<'db>,
     pub writable: bool,
-    pub class: CapabilityClass,
+    pub classes: Vec<CapabilityClass>,
 }
 
 pub(super) struct Inventory<'db> {
@@ -56,6 +56,9 @@ pub(super) struct Inventory<'db> {
     pub shapes: Vec<ShapeId<'db>>,
     pub roots: Vec<RegionRoot<'db>>,
     pub loans: Vec<LoanDef<'db>>,
+    /// Native input loans carry a separation precondition. Calls discharge it
+    /// against the exported accesses using the caller's concrete provenance.
+    pub input_loans: BTreeSet<LoanId>,
     pub definitions: BTreeMap<NValueId, CapabilityValue<'db>>,
     pub inputs: Vec<InputTarget<'db>>,
     pub entry: BorrowState<'db>,
@@ -192,7 +195,7 @@ impl<'db> Inventory<'db> {
                     db,
                     OpaqueHandleRef {
                         contract: *contract,
-                        occurrence: OpaqueHandleOccurrence::Value {
+                        occurrence: AddressOccurrence::Value {
                             instance,
                             value: *result,
                             choice: 0,
@@ -239,8 +242,8 @@ impl<'db> Inventory<'db> {
                             CapabilityClass::View => {
                                 CapabilityRef::view(RegionSet::empty(scope), Vec::new())
                             }
-                            CapabilityClass::Handle => {
-                                CapabilityRef::Handle(RegionSet::empty(scope))
+                            CapabilityClass::Handle | CapabilityClass::Pointer => {
+                                CapabilityRef::Address(RegionSet::empty(scope))
                             }
                         };
                         vec![Guarded {
@@ -266,6 +269,11 @@ impl<'db> Inventory<'db> {
             shapes,
             roots,
             loans: inputs.loans,
+            input_loans: inputs
+                .input_loans
+                .iter()
+                .filter_map(|((source, _), loan)| source.is_incoming().then_some(*loan))
+                .collect(),
             definitions,
             inputs: inputs.targets.into_values().collect(),
             external_loans: inputs.input_loans,
@@ -358,7 +366,9 @@ impl<'db> Inventory<'db> {
                     *class,
                     matches!(
                         class,
-                        CapabilityClass::Borrow(BorrowKind::Mut) | CapabilityClass::Handle
+                        CapabilityClass::Borrow(BorrowKind::Mut)
+                            | CapabilityClass::Handle
+                            | CapabilityClass::Pointer
                     ),
                     &[],
                 )?;
@@ -413,6 +423,9 @@ impl<'db> InputBuilder<'db> {
         let (source, scope, _) = canonical_source(self.db, &source, &scope);
         if let Some(target) = self.targets.get_mut(&source) {
             target.writable |= writable;
+            if !target.classes.contains(&class) {
+                target.classes.push(class);
+            }
         } else {
             let shape = self.shape(source.contract.ty)?;
             let target = InputTarget {
@@ -421,7 +434,7 @@ impl<'db> InputBuilder<'db> {
                 scope,
                 shape,
                 writable,
-                class,
+                classes: vec![class],
             };
             self.targets.insert(source.clone(), target.clone());
             self.pending
@@ -468,7 +481,10 @@ impl<'db> InputBuilder<'db> {
                         return Vec::new();
                     }
                 };
-                let uncertain = semantics.class == CapabilityClass::Handle;
+                let uncertain = matches!(
+                    semantics.class,
+                    CapabilityClass::Handle | CapabilityClass::Pointer
+                );
                 let outer_view = matches!(origin, InputOrigin::Parameter(_))
                     && path.is_empty()
                     && semantics.class == CapabilityClass::View;
@@ -524,7 +540,9 @@ impl<'db> InputBuilder<'db> {
                         ),
                     ),
                     CapabilityClass::View => CapabilityRef::view(region, Vec::new()),
-                    CapabilityClass::Handle => CapabilityRef::Handle(region),
+                    CapabilityClass::Handle | CapabilityClass::Pointer => {
+                        CapabilityRef::Address(region)
+                    }
                 };
                 requests.push((source, scope.clone(), semantics, outer_view));
                 vec![Guarded {
@@ -538,7 +556,9 @@ impl<'db> InputBuilder<'db> {
         for (source, scope, semantics, outer_view) in requests {
             let writable = matches!(
                 semantics.class,
-                CapabilityClass::Borrow(BorrowKind::Mut) | CapabilityClass::Handle
+                CapabilityClass::Borrow(BorrowKind::Mut)
+                    | CapabilityClass::Handle
+                    | CapabilityClass::Pointer
             );
             self.register(source.clone(), scope, semantics.class, writable, ancestry)?;
             if outer_view {
@@ -562,7 +582,10 @@ pub(super) fn referent_contract<'db>(
     instance: SemanticInstance<'db>,
     semantics: CapabilitySemantics<'db>,
 ) -> Result<ReferentContract<'db>, ShapeError<'db>> {
-    let space = if semantics.class == CapabilityClass::Handle {
+    let space = if matches!(
+        semantics.class,
+        CapabilityClass::Handle | CapabilityClass::Pointer
+    ) {
         OpaqueHandleContract::for_ty(
             db,
             instance.key(db).impl_env(db).normalization_scope(db),
@@ -648,7 +671,7 @@ pub(super) fn signature_body<'db>(
     let mut values = Vec::new();
     while let Some(binding) = typed.param_binding(values.len()) {
         values.push(NValue {
-            ty: instance.normalized_binding_ty(db, binding),
+            ty: copied_scalar_ty(db, instance.normalized_binding_ty(db, binding)),
             mutability: if binding.is_mut() {
                 Mutability::Mutable
             } else {

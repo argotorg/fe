@@ -5,7 +5,7 @@ use std::{
 };
 
 use super::{
-    external::{ExternalSource, ReferentContract},
+    external::{ExternalOrigin, ExternalSource, ReferentContract},
     guard::{Guard, ValueOccurrence},
     handle::HandleAddressSpace,
     index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
@@ -36,7 +36,8 @@ pub enum RegionRoot<'db> {
         root: NRootId,
         contract: ReferentContract<'db>,
     },
-    /// An SSA holder is a logical move location, never addressable storage.
+    /// An SSA holder is a logical representation and move location, never
+    /// addressable storage. Copies can read its structural fields directly.
     Value(NValueId),
 }
 
@@ -61,8 +62,12 @@ impl<'db> RegionRoot<'db> {
     }
 
     pub fn may_alias_unknown(&self, other: &Self) -> bool {
-        (matches!(self, Self::External(source) if source.uncertain())
-            || matches!(other, Self::External(source) if source.uncertain()))
+        if matches!((self, other), (Self::Root { .. }, Self::External(source)) | (Self::External(source), Self::Root { .. }) if source.is_incoming())
+        {
+            return false;
+        }
+        (matches!(self, Self::External(source) if source.uncertain() || (matches!(other, Self::External(_)) && matches!(source.origin, ExternalOrigin::Memory { .. })))
+            || matches!(other, Self::External(source) if source.uncertain() || (matches!(self, Self::External(_)) && matches!(source.origin, ExternalOrigin::Memory { .. }))))
             && self
                 .contract()
                 .zip(other.contract())
@@ -395,6 +400,14 @@ impl<'db> RegionSet<'db> {
     }
 
     pub fn intersect(&self, other: &Self) -> (Self, bool) {
+        self.intersect_with_unknown(other, true)
+    }
+
+    pub fn proven_intersection(&self, other: &Self) -> Self {
+        self.intersect_with_unknown(other, false).0
+    }
+
+    fn intersect_with_unknown(&self, other: &Self, allow_unknown: bool) -> (Self, bool) {
         assert_eq!(self.scope, other.scope, "region scopes must match");
         let mut clauses = Vec::new();
         let mut uncertain = false;
@@ -418,13 +431,14 @@ impl<'db> RegionSet<'db> {
                 let right = substitute_clause(right, &right_subst);
                 // Distinct raw-handle occurrences can name overlapping bases.
                 // Their field paths cannot prove disjointness without base identity.
-                if left.payload.root.may_alias_unknown(&right.payload.root)
+                if allow_unknown
+                    && left.payload.root.may_alias_unknown(&right.payload.root)
                     && (left.payload.root != right.payload.root || left.payload.root.is_reachable())
                 {
                     if let Some(guard) = left.guard.and(&right.guard).and_then(|guard| {
                         left.payload
                             .root
-                            .alias_guard(&right.payload.root, guard, true)
+                            .alias_guard(&right.payload.root, guard, allow_unknown)
                     }) {
                         uncertain = true;
                         clauses.push(Guarded {
@@ -444,14 +458,14 @@ impl<'db> RegionSet<'db> {
                     .and_then(|guard| {
                         left.payload
                             .root
-                            .alias_guard(&right.payload.root, guard, true)
+                            .alias_guard(&right.payload.root, guard, allow_unknown)
                     })
                     .and_then(|guard| {
                         path_alias_guard(
                             left.payload.path.as_slice(),
                             right.payload.path.as_slice(),
                             guard,
-                            true,
+                            allow_unknown,
                         )
                     })
                 else {

@@ -1,0 +1,10 @@
+use std::abi::DynArray
+
+type Batch = [DynArray<u256>; 2]
+type Values = [Batch; 3]
+
+#[event]
+struct IndexedArray {
+    #[indexed]
+    values: Values,
+}

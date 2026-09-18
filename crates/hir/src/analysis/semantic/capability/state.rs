@@ -34,6 +34,9 @@ pub struct BorrowState<'db> {
     guard: Guard<'db>,
     values: BTreeMap<NValueId, CapabilityValue<'db>>,
     contents: BTreeMap<RegionRoot<'db>, CapabilityValue<'db>>,
+    /// Unknown contents before any definite write, also used after an overlapping
+    /// raw write through an incompatible typed view.
+    initial_contents: BTreeMap<RegionRoot<'db>, CapabilityValue<'db>>,
 }
 
 impl<'db> BorrowState<'db> {
@@ -47,6 +50,7 @@ impl<'db> BorrowState<'db> {
             guard: Guard::always(&scope),
             values: BTreeMap::new(),
             contents: BTreeMap::new(),
+            initial_contents: BTreeMap::new(),
         };
         for (id, shape) in holders {
             assert!(
@@ -73,7 +77,30 @@ impl<'db> BorrowState<'db> {
             }
             assert!(state.contents.insert(root, value).is_none());
         }
+        state.initial_contents = state.contents.clone();
         state
+    }
+
+    pub fn extend_storage(&mut self, inventory: &Self) {
+        for (root, initial) in &inventory.contents {
+            self.initial_contents
+                .entry(root.clone())
+                .or_insert_with(|| initial.clone());
+            self.contents
+                .entry(root.clone())
+                .or_insert_with(|| initial.clone());
+        }
+    }
+
+    pub fn has_storage(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        root: &RegionRoot<'db>,
+        scope: &BinderScope,
+    ) -> bool {
+        self.contents.iter().any(|(candidate, contents)| {
+            storage_instance(db, candidate, contents.scope(), root, scope).is_some()
+        })
     }
 
     pub fn guard(&self) -> &Guard<'db> {
@@ -223,7 +250,12 @@ impl<'db> BorrowState<'db> {
         }
         for clause in region.clauses() {
             let mut covered: Option<Guard<'db>> = None;
-            for (root, contents) in &self.contents {
+            let representation = if let RegionRoot::Value(value) = clause.payload.root {
+                Some((&clause.payload.root, self.value(value)))
+            } else {
+                None
+            };
+            for (root, contents) in self.contents.iter().chain(representation) {
                 let Some((substitution, guard)) = storage_instance(
                     db,
                     root,
@@ -269,6 +301,41 @@ impl<'db> BorrowState<'db> {
         replacement: &CapabilityValue<'db>,
     ) -> Result<(), StateError<'db>> {
         self.write_regions(values, &[(region, replacement)])
+    }
+
+    /// A byte-level call write can destroy values held through another typed
+    /// interpretation. Exact typed cells are handled by structural poststates.
+    pub fn invalidate_memory(
+        &mut self,
+        values: &mut CapabilityValues<'db>,
+        region: &RegionSet<'db>,
+    ) {
+        for (root, contents) in &mut self.contents {
+            if !contents.shape().contains_capability(values.db) {
+                continue;
+            }
+            let candidate =
+                RegionSet::singleton(contents.scope(), root.clone(), RegionPath::default())
+                    .substitute(values.db, &contents.scope().freshening(region.scope()))
+                    .close_existentials(region.scope());
+            if region.clauses().iter().any(|clause| {
+                storage_instance(
+                    values.db,
+                    root,
+                    contents.scope(),
+                    &clause.payload.root,
+                    clause.guard.scope(),
+                )
+                .is_none()
+                    && root.may_alias_unknown(&clause.payload.root)
+                    && !matches!(
+                        candidate.overlap(&RegionSet::new(region.scope(), [clause.clone()])),
+                        OverlapResult::Disjoint
+                    )
+            }) {
+                *contents = values.join(contents, &self.initial_contents[root]);
+            }
+        }
     }
 
     /// Apply one call's complete poststate without imposing an order on aliased
@@ -377,6 +444,41 @@ impl<'db> BorrowState<'db> {
                 }
             }
         }
+        for (region, replacement) in replacements {
+            for clause in region.clauses() {
+                for (root, contents) in &self.contents {
+                    if !contents.shape().contains_capability(values.db)
+                        || storage_instance(
+                            values.db,
+                            root,
+                            contents.scope(),
+                            &clause.payload.root,
+                            clause.guard.scope(),
+                        )
+                        .is_some()
+                        || !root.may_alias_unknown(&clause.payload.root)
+                    {
+                        continue;
+                    }
+                    let candidate =
+                        RegionSet::singleton(contents.scope(), root.clone(), RegionPath::default());
+                    let candidate = candidate
+                        .substitute(values.db, &contents.scope().freshening(region.scope()))
+                        .close_existentials(region.scope());
+                    if matches!(candidate.overlap(region), OverlapResult::Disjoint) {
+                        continue;
+                    }
+                    // Retain the old value because aliasing is only possible. Add
+                    // uninitialized contents whenever the write cannot transport the
+                    // same structural shape (including integer overwrites of pointers).
+                    if replacement.shape() != contents.shape() {
+                        let old = updates.get(root).unwrap_or(contents);
+                        updates
+                            .insert(root.clone(), values.join(old, &self.initial_contents[root]));
+                    }
+                }
+            }
+        }
         // Unknown bases may overlap at different physical offsets. Retain every
         // compatible stored capability, with independent witnesses for the source
         // and destination families; an unknown write never removes prior contents.
@@ -408,6 +510,13 @@ impl<'db> BorrowState<'db> {
                             && !root.is_reachable()
                             && root.indices().next().is_none())
                     {
+                        continue;
+                    }
+                    let candidate =
+                        RegionSet::singleton(contents.scope(), root.clone(), RegionPath::default())
+                            .substitute(values.db, &contents.scope().freshening(region.scope()))
+                            .close_existentials(region.scope());
+                    if matches!(candidate.overlap(region), OverlapResult::Disjoint) {
                         continue;
                     }
                     let added = values.from_shape(

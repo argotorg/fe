@@ -59,7 +59,7 @@ pub enum CapabilityRef<'db> {
         region: RegionSet<'db>,
         authority: Vec<Guarded<'db, LoanRef<'db>>>,
     },
-    Handle(RegionSet<'db>),
+    Address(RegionSet<'db>),
 }
 
 impl<'db> CapabilityRef<'db> {
@@ -91,14 +91,14 @@ impl<'db> CapabilityRef<'db> {
                     })
                     .collect()
             }
-            Self::Handle(_) => Vec::new(),
+            Self::Address(_) => Vec::new(),
         }
     }
 
     pub fn forget_occurrences(&self, repeated: impl Fn(ValueOccurrence) -> bool + Copy) -> Self {
         match self {
             Self::Shared { .. } | Self::Mutable { .. } => self.clone(),
-            Self::Handle(region) => Self::Handle(region.forget_occurrences(repeated)),
+            Self::Address(region) => Self::Address(region.forget_occurrences(repeated)),
             Self::View { region, authority } => Self::view(
                 region.forget_occurrences(repeated),
                 authority
@@ -127,7 +127,7 @@ impl<'db> CapabilityRef<'db> {
     pub fn loan(&self) -> Option<&LoanRef<'db>> {
         match self {
             Self::Shared { reference, .. } | Self::Mutable { reference, .. } => Some(reference),
-            Self::View { .. } | Self::Handle(_) => None,
+            Self::View { .. } | Self::Address(_) => None,
         }
     }
     pub fn region(
@@ -141,7 +141,7 @@ impl<'db> CapabilityRef<'db> {
                 [reference.id.0]
                 .region(db, reference, scope)
                 .with_relative_views(db, views, 0),
-            Self::View { region, .. } | Self::Handle(region) => {
+            Self::View { region, .. } | Self::Address(region) => {
                 let lift =
                     IndexSubst::new(region.scope(), scope, []).expect("capability witness scope");
                 region.substitute(db, &lift)
@@ -156,7 +156,9 @@ impl<'db> IndexPayload<'db> for CapabilityRef<'db> {
             Self::Shared { .. } => CapabilityClass::Borrow(BorrowKind::Ref),
             Self::Mutable { .. } => CapabilityClass::Borrow(BorrowKind::Mut),
             Self::View { .. } => CapabilityClass::View,
-            Self::Handle(_) => CapabilityClass::Handle,
+            Self::Address(_) => {
+                return matches!(class, CapabilityClass::Handle | CapabilityClass::Pointer);
+            }
         };
         class == expected
     }
@@ -180,7 +182,7 @@ impl<'db> IndexPayload<'db> for CapabilityRef<'db> {
                 }
                 indices
             }
-            Self::Handle(region) => region.indices(),
+            Self::Address(region) => region.indices(),
         }
         .into_iter()
     }
@@ -215,10 +217,10 @@ impl<'db> IndexPayload<'db> for CapabilityRef<'db> {
                     authority,
                 )
             }
-            Self::Handle(region) => {
+            Self::Address(region) => {
                 let lift = IndexSubst::new(region.scope(), subst.source(), [])
                     .expect("handle guard scope");
-                Self::Handle(region.substitute(db, &lift).substitute(db, subst))
+                Self::Address(region.substitute(db, &lift).substitute(db, subst))
             }
         }
     }
@@ -229,7 +231,9 @@ impl<'db> RepackPayload<'db> for CapabilityRef<'db> {
         let mut payload = self.clone();
         match &mut payload {
             Self::Shared { views, .. } | Self::Mutable { views, .. } => views.append(db, 0, repack),
-            Self::View { region, .. } | Self::Handle(region) => *region = region.repack(db, repack),
+            Self::View { region, .. } | Self::Address(region) => {
+                *region = region.repack(db, repack)
+            }
         }
         payload
     }

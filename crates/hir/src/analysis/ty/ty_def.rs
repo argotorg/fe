@@ -256,6 +256,16 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Ptr)))
     }
 
+    pub fn ptr_to(db: &'db dyn HirAnalysisDb, inner: TyId<'db>) -> TyId<'db> {
+        Self::app(db, Self::ptr(db), inner)
+    }
+
+    pub fn as_ptr(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+        let (base, args) = self.decompose_ty_app(db);
+        let inner = args.first().copied()?;
+        matches!(base.data(db), TyData::TyBase(TyBase::Prim(PrimTy::Ptr))).then_some(inner)
+    }
+
     pub fn borrow_mut_of(db: &'db dyn HirAnalysisDb, inner: TyId<'db>) -> TyId<'db> {
         let ctor = Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::BorrowMut)));
         Self::app(db, ctor, inner)
@@ -313,6 +323,10 @@ impl<'db> TyId<'db> {
 
     pub fn bool(db: &'db dyn HirAnalysisDb) -> Self {
         Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Bool)))
+    }
+
+    pub fn u8(db: &'db dyn HirAnalysisDb) -> Self {
+        Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U8)))
     }
 
     pub fn u256(db: &'db dyn HirAnalysisDb) -> Self {

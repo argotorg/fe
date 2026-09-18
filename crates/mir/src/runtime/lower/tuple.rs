@@ -117,8 +117,5 @@ fn tuple_extract_source<'db>(
 }
 
 pub(crate) fn memory_fallback_class<'db>() -> RuntimeClass<'db> {
-    RuntimeClass::RawAddr {
-        space: AddressSpaceKind::Memory,
-        target: None,
-    }
+    RuntimeClass::opaque_raw_addr(AddressSpaceKind::Memory)
 }

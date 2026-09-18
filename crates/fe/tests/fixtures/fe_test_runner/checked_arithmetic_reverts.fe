@@ -1,3 +1,5 @@
+use core::ptr
+
 #[test]
 fn test_add_overflow_u8() {
     let x: u8 = 255
@@ -44,4 +46,17 @@ fn test_div_overflow_i8() {
 fn test_pow_negative_exp_i8() {
     let x: i8 = 2
     let y: i8 = x ** -1
+}
+
+#[test]
+fn test_memarray_allocation_size_overflow() {
+    let big: u256 = 3618502788666131106986593281521497120414687020801267626233049500247285301248
+    let _ = ptr::MemArray<u256>::new_uninit(big)
+}
+
+#[test]
+fn test_pointer_offset_size_overflow() {
+    let big: u256 = 3618502788666131106986593281521497120414687020801267626233049500247285301248
+    let p = ptr::alloc<u256>()
+    let _ = ptr::offset(p, big)
 }

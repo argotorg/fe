@@ -1,11 +1,10 @@
-use crate::analysis::semantic::capability::external::ExternalOrigin;
-use crate::analysis::semantic::capability::external::ExternalSource;
 use crate::analysis::semantic::capability::test_roots;
 use std::{collections::BTreeSet, iter::empty};
 
 use super::{
+    external::{ExternalOrigin, ExternalSource, ReferentContract},
     guard::{ChoiceKey, Guard, ValueOccurrence},
-    handle::{HandleAddressSpace, OpaqueHandleContract, OpaqueHandleOccurrence, OpaqueHandleRef},
+    handle::{AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef},
     index::{BinderScope, IndexError, IndexExpr, IndexNamespace, IndexSubst},
     loan::{CapabilityRef, LoanDef, LoanId, LoanRef},
     path::{Projection, RegionPath, StructuralPath},
@@ -1572,7 +1571,7 @@ fn opaque_handle_origins_preserve_copies_but_never_imply_fresh_storage() {
         &db,
         OpaqueHandleRef {
             contract,
-            occurrence: OpaqueHandleOccurrence::Summary(0),
+            occurrence: AddressOccurrence::Summary(0),
             arguments: Box::new([]),
         },
     ));
@@ -1580,7 +1579,7 @@ fn opaque_handle_origins_preserve_copies_but_never_imply_fresh_storage() {
         &db,
         OpaqueHandleRef {
             contract,
-            occurrence: OpaqueHandleOccurrence::Summary(1),
+            occurrence: AddressOccurrence::Summary(1),
             arguments: Box::new([]),
         },
     ));
@@ -1619,7 +1618,7 @@ fn opaque_handle_origins_preserve_copies_but_never_imply_fresh_storage() {
                     address_space: HandleAddressSpace::Known(ProviderAddressSpace::Storage),
                     ..contract
                 },
-                occurrence: OpaqueHandleOccurrence::Summary(0),
+                occurrence: AddressOccurrence::Summary(0),
                 arguments: Box::new([]),
             },
         )),
@@ -1664,12 +1663,12 @@ fn opaque_handle_specialization_keeps_payload_and_shape_contracts_aligned() {
         "opaque_handle_specialization.fe".into(),
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
-struct Ptr<T> { raw: u256 }
+struct Ptr<T> { raw: *T }
 impl<T> EffectHandle for Ptr<T> {
     type Target = T
+    type Raw = *T
     const SPACE: AddressSpace = AddressSpace::Memory
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
-    fn raw(self) -> u256 { self.raw }
+    fn raw(self) -> *T { self.raw }
 }
 fn inspect<const N: usize>(_ ptr: own Ptr<[u256; N]>) {}
 "#,
@@ -1704,7 +1703,7 @@ fn inspect<const N: usize>(_ ptr: own Ptr<[u256; N]>) {}
     };
     let origin = OpaqueHandleRef {
         contract,
-        occurrence: OpaqueHandleOccurrence::Summary(4),
+        occurrence: AddressOccurrence::Summary(4),
         arguments: vec![runtime(2)].into_boxed_slice(),
     };
     let region = RegionSet::singleton(
@@ -1717,7 +1716,7 @@ fn inspect<const N: usize>(_ ptr: own Ptr<[u256; N]>) {}
     let value = values.from_shape(shape, &scope(), |_, _, scope| {
         vec![Guarded {
             guard: Guard::always(scope),
-            payload: CapabilityRef::Handle(region.clone()),
+            payload: CapabilityRef::Address(region.clone()),
         }]
     });
     for length in [0, 3] {
@@ -1747,7 +1746,7 @@ fn inspect<const N: usize>(_ ptr: own Ptr<[u256; N]>) {}
             origin.contract.address_space,
             HandleAddressSpace::Known(ProviderAddressSpace::Memory)
         );
-        assert_eq!(origin.occurrence, OpaqueHandleOccurrence::Summary(4));
+        assert_eq!(origin.occurrence, AddressOccurrence::Summary(4));
         assert_eq!(origin.arguments.as_ref(), &[IndexExpr::Const(5)]);
         assert_eq!(
             source.substitute(&db, &subst),
@@ -1764,12 +1763,12 @@ fn referent_views_preserve_projected_storage_authority_and_nested_handle_origins
         r#"
 use core::effect_ref::{AddressSpace, EffectHandle}
 struct Cell<const ID: u256> { value: u256 }
-struct Ptr<T> { raw: u256 }
+struct Ptr<T> { raw: *T }
 impl<T> EffectHandle for Ptr<T> {
     type Target = T
+    type Raw = *T
     const SPACE: AddressSpace = AddressSpace::Memory
-    fn from_raw(_ raw: u256) -> Self { Self { raw } }
-    fn raw(self) -> u256 { self.raw }
+    fn raw(self) -> *T { self.raw }
 }
 struct Holder<T> { ptr: Ptr<T> }
 fn inspect(
@@ -1806,7 +1805,7 @@ fn inspect(
         values.from_shape(shape(ty), &scope(), |_, _, scope| {
             vec![Guarded {
                 guard: Guard::always(scope),
-                payload: CapabilityRef::Handle(RegionSet::singleton(
+                payload: CapabilityRef::Address(RegionSet::singleton(
                     scope,
                     root(index),
                     RegionPath::default(),
@@ -2004,4 +2003,36 @@ fn inspect(
             .with_relative_views(&db, &views, path.as_slice().len()),
         caller.repack(&db, conversion).project(&path)
     );
+}
+
+#[test]
+fn symbolic_lengths_do_not_hide_capability_structure() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "symbolic_referents.fe".into(),
+        r#"
+fn inspect<T, const N: usize>(_ bytes: own [u8; N], _ generic: own [T; N], _ text: own String<N>) {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "inspect"))),
+    );
+    let artifacts = normalize_semantic_body(&db, instance).unwrap();
+    let abstract_inputs: Vec<_> = artifacts
+        .body
+        .values
+        .iter()
+        .filter(|value| matches!(value.definition, NValueDefinition::EntryParam { .. }))
+        .map(|value| {
+            ReferentContract::new(
+                &db,
+                value.ty,
+                HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+            )
+            .is_abstract(&db)
+        })
+        .collect();
+    assert_eq!(abstract_inputs, [false, true, false]);
 }

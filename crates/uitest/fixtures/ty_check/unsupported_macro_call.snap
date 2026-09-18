@@ -1,0 +1,40 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/unsupported_macro_call.fe
+---
+error[8-0089]: unsupported macro call
+  ┌─ unsupported_macro_call.fe:2:5
+  │
+2 │     funsig!(x)
+  │     ^^^^^^^^^^ only `assert!(...)` is supported
+
+error[8-0089]: unsupported macro call
+  ┌─ unsupported_macro_call.fe:8:5
+  │
+8 │     existing_function!()
+  │     ^^^^^^^^^^^^^^^^^^^^ only `assert!(...)` is supported
+
+error[8-0089]: unsupported macro call
+   ┌─ unsupported_macro_call.fe:12:5
+   │
+12 │     core::assert!(true)
+   │     ^^^^^^^^^^^^^^^^^^^ only `assert!(...)` is supported
+
+error[8-0089]: unsupported macro call
+   ┌─ unsupported_macro_call.fe:16:12
+   │
+16 │     return funsig!(x)
+   │            ^^^^^^^^^^ only `assert!(...)` is supported
+
+error[8-0089]: unsupported macro call
+   ┌─ unsupported_macro_call.fe:19:21
+   │
+19 │ const VALUE: u256 = funsig!(x)
+   │                     ^^^^^^^^^^ only `assert!(...)` is supported
+
+error[8-0089]: unsupported macro call
+   ┌─ unsupported_macro_call.fe:22:5
+   │
+22 │     funsig!(x)
+   │     ^^^^^^^^^^ only `assert!(...)` is supported
