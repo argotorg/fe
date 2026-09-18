@@ -236,6 +236,7 @@ impl<'db> TraitResolutionContext<'db> {
             goal: TraitSolverQuery {
                 goal: next_goal,
                 assumptions,
+                require_impl: false,
             },
             state: branch,
         }
@@ -294,7 +295,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         let mut clauses =
             Vec::with_capacity(implementors.len() + prepared.query.assumptions.list(self.db).len());
         clauses.extend(implementors.iter().copied().map(Clause::Implementor));
-        if self.goal_can_use_assumptions(prepared.normalized_goal) {
+        if !prepared.query.require_impl && self.goal_can_use_assumptions(prepared.normalized_goal) {
             clauses.extend(
                 (0..prepared.query.assumptions.list(self.db).len()).map(Clause::Assumption),
             );
@@ -416,6 +417,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             TraitSolverQuery {
                 goal: resumed_root,
                 assumptions: resumed_assumptions,
+                require_impl: parent.value().require_impl,
             },
         ) {
             return Ok(Transition::Stop(StopReason::MaximumTypeDepth));

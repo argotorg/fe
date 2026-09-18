@@ -1628,34 +1628,52 @@ fn select_assoc_const_candidate<'db>(
         };
     }
 
-    let canonical_receiver = Canonicalized::new(db, receiver_ty).canonical();
+    let receiver = Canonicalized::new(db, receiver_ty);
     let scope_ingot = scope.ingot(db);
-
-    // Find trait impls for the receiver type that define the associated const, searching both:
-    // - the call-site ingot (for local traits implemented for external types), and
-    // - the receiver type's ingot (for external traits implemented in the receiver ingot).
     let search_ingots = [
         Some(scope_ingot),
         receiver_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
     ];
 
     let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
-    for ingot in search_ingots.into_iter().flatten() {
-        for cand in
-            impls_for_ty_with_satisfied_constraints(db, ingot, canonical_receiver, assumptions)
-        {
-            let inst = cand.skip_binder().trait_(db);
-            let trait_ = inst.def(db);
-            if trait_.const_(db, name).is_some() {
-                matches.insert(inst);
+    let mut unresolved = false;
+    receiver.with_materialized(db, |cx| {
+        let receiver_ty = cx.query();
+        for ingot in search_ingots.into_iter().flatten() {
+            for candidate in impls_for_ty_with_satisfied_constraints(
+                db,
+                ingot,
+                receiver.canonical(),
+                assumptions,
+            ) {
+                let declared = candidate.skip_binder().trait_(db);
+                if declared.def(db).const_(db, name).is_none() {
+                    continue;
+                }
+                // Candidate discovery proves applicability but returns the impl's
+                // binder. Recover its arguments from this receiver before the
+                // selected trait instance leaves the inference context.
+                let snapshot = cx.snapshot();
+                let inst = cx.instantiate_with_fresh_vars(Binder::bind(declared));
+                if cx.unify::<TyId<'db>>(receiver_ty, inst.self_ty(db)).is_ok() {
+                    if let Some(inst) = cx.try_extract::<TraitInstId<'db>>(inst) {
+                        matches.insert(inst);
+                    } else {
+                        unresolved = true;
+                        matches.insert(declared);
+                    }
+                }
+                cx.rollback_to(snapshot);
             }
         }
-    }
+    });
 
-    match matches.len() {
-        0 => AssocConstSelection::NotFound,
-        1 => AssocConstSelection::Found(*matches.iter().next().unwrap()),
-        _ => AssocConstSelection::Ambiguous(matches.into_iter().collect()),
+    if unresolved || matches.len() > 1 {
+        AssocConstSelection::Ambiguous(matches.into_iter().collect())
+    } else if let Some(inst) = matches.into_iter().next() {
+        AssocConstSelection::Found(inst)
+    } else {
+        AssocConstSelection::NotFound
     }
 }
 

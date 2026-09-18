@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use cranelift_entity::EntityRef;
 use fe_hir::diagnosable::Diagnosable;
-use fe_hir::test_db::HirAnalysisTestDb;
+use fe_hir::test_db::{HirAnalysisTestDb, find_func};
 use fe_hir::{
     analysis::{
         semantic::{
@@ -1219,5 +1219,52 @@ fn probe(index: usize) -> bool {{
             folds || dynamic_comparison,
             "{name}: missing comparison: {body:#?}"
         );
+    }
+}
+
+#[test]
+fn selected_trait_const_results_keep_the_callers_generic_parameters() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "selected_trait_const.fe".into(),
+        r#"
+trait Pick<const N: usize> {
+    const A: usize = N
+    const B: usize = Self::A
+}
+struct Single<const N: usize> {}
+impl<const N: usize> Pick<N> for Single<N> {}
+struct Marker<const M: usize, const N: usize> {}
+impl<const M: usize, const N: usize> Pick<N> for Marker<M, N> {}
+const fn single() -> usize { Single<7>::B }
+const fn first() -> usize { Marker<3, 7>::B }
+const fn second() -> usize { Marker<7, 3>::B }
+fn exact_length(_ value: [u8; Single<7>::B]) {}
+fn check_length() {
+    let value: [u8; 7] = [0; 7]
+    exact_length(value)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    for (name, expected) in [("single", 7), ("first", 7), ("second", 3)] {
+        let value = eval_body_owner_const(
+            &db,
+            BodyOwner::Func(find_func(&db, top_mod, name)),
+            Vec::new(),
+        )
+        .expect("selected associated constant should evaluate");
+        let SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } = value.value(&db)
+        else {
+            panic!(
+                "expected an integer constant for {name}: {:?}",
+                value.value(&db)
+            );
+        };
+        assert_eq!(value.to_usize(), Some(expected));
     }
 }

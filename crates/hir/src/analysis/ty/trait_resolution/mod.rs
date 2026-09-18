@@ -34,6 +34,8 @@ pub(crate) const TRAIT_SOLVER_ROOT_ANSWER_LIMIT: usize = 2;
 pub struct TraitSolverQuery<'db> {
     pub goal: TraitInstId<'db>,
     pub assumptions: PredicateListId<'db>,
+    /// Select an implementation at this goal; obligations still use assumptions.
+    pub require_impl: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +56,7 @@ impl<'db> CanonicalGoalQuery<'db> {
             TraitSolverQuery {
                 goal,
                 assumptions: assumptions.extend_all_bounds(db),
+                require_impl: false,
             },
         )
     }
@@ -146,7 +149,33 @@ impl<'db> TraitSolveCx<'db> {
     ) -> Selection<ImplementorId<'db>> {
         let scope = self.normalization_scope_for_trait_inst(db, inst);
         let inst = normalize_trait_inst_preserving_validity(db, inst, scope, self.assumptions);
-        match is_goal_satisfiable(db, self, inst) {
+        // An assumption proves a bound; it is not a second implementation.
+        // Keep inference goals on the ordinary proof query: an assumption may
+        // select a different substitution from the implementations in scope.
+        let result = if inst.args(db).iter().any(|ty| ty.has_var(db))
+            || inst
+                .assoc_type_bindings(db)
+                .values()
+                .any(|ty| ty.has_var(db))
+        {
+            is_goal_satisfiable(db, self, inst)
+        } else {
+            let query = CanonicalGoalQuery::from_query(
+                db,
+                TraitSolverQuery {
+                    goal: inst,
+                    assumptions: self.assumptions.extend_all_bounds(db),
+                    require_impl: true,
+                },
+            );
+            match is_goal_query_satisfiable(db, self, &query) {
+                // A bound with no provable implementation can still be supplied
+                // by the caller. Incomplete searches cannot establish this.
+                GoalSatisfiability::UnSat(_) => is_goal_satisfiable(db, self, inst),
+                result => result,
+            }
+        };
+        match result {
             GoalSatisfiability::Satisfied(solution) => {
                 Selection::Unique(solution.value.implementor)
             }
@@ -883,20 +912,21 @@ mod tests {
     use common::indexmap::{IndexMap, IndexSet};
 
     use super::{
-        CanonicalGoalQuery, GoalSatisfiability, TraitInstId, TraitSolveCompletion, TraitSolveCx,
-        goal_query_has_solution, is_goal_query_satisfiable, is_goal_satisfiable,
+        CanonicalGoalQuery, GoalSatisfiability, Selection, TraitInstId, TraitSolveCompletion,
+        TraitSolveCx, goal_query_has_solution, is_goal_query_satisfiable, is_goal_satisfiable,
     };
     use crate::{
         analysis::ty::{
             adt_def::AdtRef,
             canonical::Canonical,
+            trait_def::{ImplementorOrigin, resolve_trait_impl_instance},
             trait_resolution::{PredicateListId, constraint::collect_func_def_constraints},
             ty_def::{Kind, TyId, TyVarSort},
             ty_lower::collect_generic_params,
             unify::UnificationTable,
         },
-        hir_def::{Func, TopLevelMod, Trait},
-        test_db::HirAnalysisTestDb,
+        hir_def::{Func, IdentId, TopLevelMod, Trait},
+        test_db::{HirAnalysisTestDb, find_func},
     };
 
     fn named_trait<'db>(
@@ -1302,5 +1332,120 @@ impl Foo for Third {}
             .expect("the two-answer cutoff must omit one implementation");
 
         assert!(goal_query_has_solution(&db, solve_cx, &query, target));
+    }
+    #[test]
+    fn implementation_selection_uses_assumptions_for_obligations() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "implementation_selection.fe".into(),
+            r#"
+trait Bound {}
+trait Picks { type Output }
+struct Wrap<T> {}
+impl<T: Bound> Picks for Wrap<T> { type Output = T }
+fn supported<T: Bound>() {}
+fn unsupported<T>() {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let picks = named_trait(&db, top_mod, "Picks");
+        let wrap = named_struct_ty(&db, top_mod, "Wrap");
+        for (name, implementation) in [("supported", true), ("unsupported", false)] {
+            let func = find_func(&db, top_mod, name);
+            let parameter = collect_generic_params(&db, func.into()).explicit_params(&db)[0];
+            let self_ty = TyId::app(&db, wrap, parameter);
+            let goal = TraitInstId::new(&db, picks, vec![self_ty], IndexMap::new());
+            let constraints =
+                collect_func_def_constraints(&db, func.into(), true).instantiate_identity();
+            let assumptions = PredicateListId::new(
+                &db,
+                constraints
+                    .list(&db)
+                    .iter()
+                    .copied()
+                    .chain([goal])
+                    .collect::<Vec<_>>(),
+            );
+            let solve = TraitSolveCx::new(&db, func.scope()).with_assumptions(assumptions);
+            let Selection::Unique(resolved) = resolve_trait_impl_instance(&db, solve, goal) else {
+                panic!("{name}: expected unique evidence");
+            };
+            assert_eq!(
+                !matches!(
+                    resolved.selected().origin(&db),
+                    ImplementorOrigin::Assumption
+                ),
+                implementation
+            );
+            if implementation {
+                assert_eq!(
+                    resolved.instantiated_assoc_ty(&db, IdentId::new(&db, "Output")),
+                    Some(parameter)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn implementation_selection_preserves_competing_impls_with_an_assumption() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "competing_implementation_selection.fe".into(),
+            r#"
+trait Picks {}
+struct Wrap<T> {}
+impl<T> Picks for Wrap<T> {}
+impl<T> Picks for Wrap<T> {}
+fn probe<T>() {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let func = find_func(&db, top_mod, "probe");
+        let parameter = collect_generic_params(&db, func.into()).explicit_params(&db)[0];
+        let self_ty = TyId::app(&db, named_struct_ty(&db, top_mod, "Wrap"), parameter);
+        let goal = TraitInstId::new(
+            &db,
+            named_trait(&db, top_mod, "Picks"),
+            vec![self_ty],
+            IndexMap::new(),
+        );
+        let solve = TraitSolveCx::new(&db, func.scope())
+            .with_assumptions(PredicateListId::new(&db, vec![goal]));
+        assert!(
+            matches!(solve.select_impl(&db, goal), Selection::Ambiguous(implementors) if implementors.len() == 2)
+        );
+    }
+
+    #[test]
+    fn implementation_selection_does_not_discard_inference_answers_from_assumptions() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "inferred_implementation_selection.fe".into(),
+            r#"
+trait Picks {}
+struct Concrete {}
+impl Picks for Concrete {}
+fn probe<T: Picks>() {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let func = find_func(&db, top_mod, "probe");
+        let assumptions =
+            collect_func_def_constraints(&db, func.into(), true).instantiate_identity();
+        let mut table = UnificationTable::new(&db);
+        let self_ty = table.new_var(TyVarSort::General, &Kind::Star);
+        let goal = TraitInstId::new(
+            &db,
+            named_trait(&db, top_mod, "Picks"),
+            vec![self_ty],
+            IndexMap::new(),
+        );
+        let solve = TraitSolveCx::new(&db, func.scope()).with_assumptions(assumptions);
+        assert!(matches!(
+            solve.select_impl(&db, goal),
+            Selection::Ambiguous(_)
+        ));
     }
 }

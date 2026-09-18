@@ -16,7 +16,10 @@ use super::{
     diagnostics::{BodyDiag, FuncBodyDiag},
     fold::{AssocTySubst, TyFoldable},
     normalize::normalize_ty,
-    trait_def::{ImplementorId, ImplementorOrigin, ResolvedImplInstance, TraitInstId},
+    trait_def::{
+        ImplementorId, ImplementorOrigin, ResolvedImplInstance, TraitInstId,
+        resolve_trait_impl_instance,
+    },
     trait_resolution::{Selection, TraitSolveCx, constraint::collect_constraints},
     ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
@@ -28,8 +31,7 @@ use crate::analysis::{
     name_resolution::{PathRes, resolve_path},
     semantic::{
         CtfeError, SemConstId, SemConstValue, SemOrigin, VariantIndex, eval_body_owner_const,
-        eval_body_owner_const_with_args, instantiate_with_generic_args, int_ty_shape,
-        normalize_int_to_shape, sem_const_from_ty,
+        eval_body_owner_const_with_args, int_ty_shape, normalize_int_to_shape, sem_const_from_ty,
     },
     ty::trait_resolution::PredicateListId,
     ty::ty_def::{Kind, PrimTy, TyBase, TyData, TyVarSort},
@@ -2139,9 +2141,18 @@ pub(crate) fn evaluate_const_ty<'db>(
         generic_args.clone(),
     )
     .map(|value| {
-        let evaluated = const_ty_from_sem_const(db, value);
-        let instantiated =
-            instantiate_with_generic_args(db, TyId::const_ty(db, evaluated), &generic_args);
+        // Type-level value paths retain formal parameters for runtime ABI
+        // selection. Substitute only this body's binder: nested constant
+        // evaluation can already return parameters from the caller's binder.
+        let evaluated = TyId::const_ty(db, const_ty_from_sem_const(db, value));
+        let instantiated = body
+            .scope()
+            .parent_item(db)
+            .and_then(GenericParamOwner::from_item_opt)
+            .filter(|_| !generic_args.is_empty())
+            .map_or(evaluated, |owner| {
+                Binder::bind(evaluated).instantiate_scoped(db, owner.scope(), &generic_args)
+            });
         let TyData::ConstTy(instantiated) = instantiated.data(db) else {
             unreachable!("instantiating a const value must retain its const type")
         };
@@ -2575,9 +2586,7 @@ pub(super) fn const_ty_from_trait_const<'db>(
     inst: TraitInstId<'db>,
     name: IdentId<'db>,
 ) -> Option<ConstTyId<'db>> {
-    let Selection::Unique(resolved) =
-        crate::analysis::ty::trait_def::resolve_trait_impl_instance(db, solve_cx, inst)
-    else {
+    let Selection::Unique(resolved) = resolve_trait_impl_instance(db, solve_cx, inst) else {
         return None;
     };
     const_ty_from_resolved_trait_const(db, resolved, name)
