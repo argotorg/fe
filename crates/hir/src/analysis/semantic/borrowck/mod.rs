@@ -1,3 +1,4 @@
+mod boundary;
 mod callsite;
 mod check;
 mod control;
@@ -6,10 +7,10 @@ mod events;
 mod facts;
 mod inventory;
 mod ir;
-mod noesc;
 mod solver;
 mod summary;
 
+pub use boundary::check_semantic_boundaries;
 pub(crate) use callsite::provisional_call_site_provider_refinements;
 pub use check::{
     SemanticAnalysisError, SemanticBorrowAnalysisPass, check_semantic_borrows,
@@ -22,4 +23,3 @@ pub(crate) use diagnostics::{
 };
 pub use facts::*;
 pub use ir::*;
-pub use noesc::check_semantic_noesc;

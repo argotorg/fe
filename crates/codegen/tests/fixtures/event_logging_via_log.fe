@@ -15,9 +15,9 @@ fn emit_transfer(evm: mut Evm, from: Address, to: Address, amount: u256) {
 
 pub fn main() uses (evm: mut Evm) {
     emit_transfer(
-        evm,
-        Address { inner: 1 },
-        Address { inner: 2 },
-        100,
+        evm: mut evm,
+        from: Address { inner: 1 },
+        to: Address { inner: 2 },
+        amount: 100,
     )
 }

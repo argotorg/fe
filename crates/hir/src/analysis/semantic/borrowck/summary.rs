@@ -15,7 +15,7 @@ use crate::{
                 index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
                 loan::{CapabilityRef, LoanDef, LoanId, LoanRef},
                 path::{Projection, RegionPath, StructuralPath},
-                region::{RegionRoot, RegionSet},
+                region::{RegionRoot, RegionSet, SymbolicPlace},
                 semantics::{CapabilityClass, CapabilitySemantics},
                 shape::ShapeChildren,
                 source::{InputOrigin, SourceExpr},
@@ -24,8 +24,8 @@ use crate::{
             },
             get_or_build_semantic_instance,
             normalized::{
-                NEffectArg, NEffectArgValue, NExpr, NOperand, NStatement, NStatementKind,
-                NTerminatorKind, NValueDefinition, NValueId,
+                NEffectArg, NEffectArgValue, NExpr, NOperand, NRootKind, NStatement,
+                NStatementKind, NTerminatorKind, NValueDefinition, NValueId,
             },
         },
         ty::{
@@ -37,12 +37,13 @@ use crate::{
 };
 
 use super::{
+    boundary::Boundary,
     check::{
         BorrowSummaryComputation, provisional_borrow_summary_voucher,
         semantic_borrow_summary_voucher,
     },
     inventory::referent_contract,
-    ir::{BorrowSummary, InputPoststate, SemanticBorrowDiagKind, SemanticBorrowDiagnostic},
+    ir::{BorrowSummary, BoundaryRequirement, InputPoststate, SemanticBorrowDiagnostic},
     solver::{BorrowSummaryMode, Borrowck, Resolution},
 };
 
@@ -147,6 +148,15 @@ impl<'db> Borrowck<'db> {
                     update.value.scope().clone(),
                 )
             }));
+            external.extend(summary.requirements.iter().flat_map(|requirement| {
+                std::iter::once(&requirement.region)
+                    .chain(requirement.populated.iter())
+                    .flat_map(|region| region.clauses())
+                    .filter_map(|clause| {
+                        SourceExpr::from_place(&clause.payload)
+                            .map(|source| (source.source, clause.guard.scope().clone()))
+                    })
+            }));
             for (source, scope) in external {
                 let base = match source.origin {
                     ExternalOrigin::OpaqueHandle(mut handle) => {
@@ -229,9 +239,11 @@ impl<'db> Borrowck<'db> {
     pub fn build_summary(&mut self) -> Result<BorrowSummary<'db>, SemanticBorrowDiagnostic<'db>> {
         // Provisional summaries supply provider facts needed for body admission
         // and definite assignment. Boundary policy must not suppress those facts.
-        if self.summary_mode == BorrowSummaryMode::Final {
-            super::noesc::check_solved_body(self)?;
-        }
+        let pending = if self.summary_mode == BorrowSummaryMode::Final {
+            super::boundary::check_solved_body(self)?
+        } else {
+            Vec::new()
+        };
         let scope = BinderScope::default();
         let result_shape = self.shape(self.instance.normalized_result_ty(self.db))?;
         let mut values = SourceValues::new(self.db, ValueLimits::default());
@@ -292,7 +304,7 @@ impl<'db> Borrowck<'db> {
                 }
                 let sources = self.summarize_value(
                     returned,
-                    true,
+                    Boundary::Return,
                     origin,
                     &mut values,
                     &mut choices,
@@ -309,7 +321,7 @@ impl<'db> Borrowck<'db> {
                     .1;
                 let sources = self.summarize_value(
                     contents,
-                    false,
+                    Boundary::Retained,
                     origin,
                     &mut values,
                     &mut choices,
@@ -326,106 +338,217 @@ impl<'db> Borrowck<'db> {
                 );
             }
         }
+        let mut requirements: Vec<BoundaryRequirement<'db>> = Vec::new();
+        for mut requirement in pending {
+            requirement.region = self.summarize_region(
+                &requirement.region,
+                requirement.origin,
+                &mut choices,
+                &mut handles,
+            )?;
+            requirement.populated = requirement
+                .populated
+                .as_ref()
+                .map(|region| {
+                    self.summarize_region(region, requirement.origin, &mut choices, &mut handles)
+                })
+                .transpose()?;
+            if requirement.region.is_empty() {
+                continue;
+            }
+            if let Some(existing) = requirements.iter_mut().find(|existing| {
+                existing.rule == requirement.rule
+                    && existing.instance == requirement.instance
+                    && existing.origin == requirement.origin
+                    && existing.populated == requirement.populated
+            }) {
+                existing.region = existing.region.union(&requirement.region);
+            } else {
+                requirements.push(requirement);
+            }
+        }
         let summary = BorrowSummary {
             may_return,
             result,
             mutable_inputs: updates,
+            requirements,
         };
         self.verify_summary(&summary)?;
         Ok(summary)
     }
 
+    fn summarize_region(
+        &self,
+        region: &RegionSet<'db>,
+        origin: SemOrigin<'db>,
+        choices: &mut BTreeMap<ValueOccurrence, u32>,
+        handles: &mut BTreeMap<OpaqueHandleOccurrence<'db>, u32>,
+    ) -> Result<RegionSet<'db>, SemanticBorrowDiagnostic<'db>> {
+        let scope = BinderScope::default();
+        let mut clauses = Vec::new();
+        for clause in region.clauses() {
+            let source = SourceExpr::from_place(&clause.payload).ok_or_else(|| {
+                self.internal_diag(
+                    origin,
+                    "boundary requirement has no external provenance".into(),
+                )
+            })?;
+            // Requirements quantify over all selected regions, independent
+            // of any result shape that might otherwise bind array families.
+            let fresh = clause.guard.scope().freshening(&scope);
+            let guard = clause
+                .guard
+                .substitute(&fresh)
+                .expect("boundary source scope");
+            if let Some(source) =
+                self.summarize_source(source.substitute(self.db, &fresh), &guard, choices, handles)
+            {
+                clauses.push(Guarded {
+                    guard: source.guard,
+                    payload: SymbolicPlace {
+                        root: RegionRoot::External(source.payload.source),
+                        path: source.payload.path,
+                        views: source.payload.views,
+                    },
+                });
+            }
+        }
+        Ok(RegionSet::new(&scope, clauses))
+    }
+
     fn summarize_value(
         &self,
         value: &CapabilityValue<'db>,
-        returning: bool,
+        boundary: Boundary,
         origin: SemOrigin<'db>,
         values: &mut SourceValues<'db>,
         choices: &mut BTreeMap<ValueOccurrence, u32>,
         handles: &mut BTreeMap<OpaqueHandleOccurrence<'db>, u32>,
     ) -> Result<SourceValue<'db>, SemanticBorrowDiagnostic<'db>> {
         let mut failure = None;
-        let result = self.inventory.values.map_payloads(value, values, |semantics, _, entry, domain| {
-            let region = entry.payload.region(self.db, &self.inventory.loans, entry.guard.scope()).with_guard(domain);
-            let mut sources = Vec::new();
-            for clause in region.clauses() {
-                let Some(mut payload) = SourceExpr::from_place(&clause.payload) else {
-                    failure.get_or_insert_with(|| self.diag(SemanticBorrowDiagKind::InvalidReturnBorrow, origin,
-                        match &clause.payload.root {
-                            RegionRoot::Root { root, .. } => {
-                                let name = match &self.body.roots[root.index()].kind {
-                                    crate::analysis::semantic::normalized::NRootKind::LocalSlot { binding: Some(binding) } => self.body.template_owner.body(self.db)
-                                        .map(|body| binding.pretty_name_in_body(self.db, body)).unwrap_or_else(|| format!("%r{}", root.index())),
-                                    _ => format!("%r{}", root.index()),
-                                };
-                                if !returning { format!("cannot leave a borrow of local `{name}` in caller-accessible storage") }
-                                else if value.shape().direct(self.db).is_some() { format!("cannot return a borrow to local `{name}`") }
-                                else { format!("cannot return a value that holds a borrow of local `{name}`") }
+        let result =
+            self.inventory
+                .values
+                .map_payloads(value, values, |semantics, _, entry, domain| {
+                    let region = entry
+                        .payload
+                        .region(self.db, &self.inventory.loans, entry.guard.scope())
+                        .with_guard(domain);
+                    let mut sources = Vec::new();
+                    for clause in region.clauses() {
+                        let payload = match super::boundary::escape_source(
+                            self,
+                            value,
+                            semantics,
+                            &clause.payload,
+                            boundary,
+                            origin,
+                        ) {
+                            Ok(source) => source,
+                            Err(diag) => {
+                                failure.get_or_insert(diag);
+                                continue;
                             }
-                            _ if !returning => "cannot leave a borrow of local storage in caller-accessible storage".into(),
-                            _ => "cannot return a borrow to local storage".into(),
-                        }));
-                    continue;
-                };
-                if returning && matches!(semantics.class, CapabilityClass::Borrow(_)) && matches!(payload.source.origin, ExternalOrigin::Provider { .. }) {
-                    failure.get_or_insert_with(|| self.diag(SemanticBorrowDiagKind::InvalidReturnBorrow, origin,
-                        "cannot return a borrow derived from an effect parameter".into()));
-                    continue;
-                }
-                if let ExternalOrigin::OpaqueHandle(source) = &mut payload.source.origin {
-                    let next = handles.len().try_into().expect("summary handle count");
-                    source.occurrence = OpaqueHandleOccurrence::Summary(*handles.entry(source.occurrence).or_insert(next));
-                }
-                let mut scope = clause.guard.scope().clone();
-                let mut substitutions = BTreeMap::new();
-                for index in clause.guard.indices().into_iter().chain(payload.indices()) {
-                    if matches!(index, IndexExpr::Runtime(_) | IndexExpr::Iteration(_)) {
-                        substitutions.entry(index).or_insert_with(|| {
-                            match match index { IndexExpr::Runtime(value) => self.index(value), index => index } {
-                                IndexExpr::Runtime(actual) => match self.body.values[actual.index()].definition {
-                                    NValueDefinition::EntryParam { param } => IndexExpr::FormalValue(param),
-                                    NValueDefinition::BlockParam { .. } | NValueDefinition::Statement { .. } => {
-                                        let (nested, witness) = scope.bind(IndexNamespace::Existential);
-                                        scope = nested;
-                                        witness
-                                    }
-                                },
-                                IndexExpr::Iteration(_) => {
-                                    let (nested, witness) = scope.bind(IndexNamespace::Existential);
-                                    scope = nested;
-                                    witness
-                                }
-                                index => index,
-                            }
-                        });
+                        };
+                        if let Some(source) =
+                            self.summarize_source(payload, &clause.guard, choices, handles)
+                        {
+                            sources.push(source);
+                        }
                     }
-                }
-                let subst = IndexSubst::new(clause.guard.scope(), &scope, substitutions).expect("summary local index abstraction");
-                let Some(guard) = clause.guard.substitute(&subst).and_then(|guard| guard.map_occurrences(|occurrence| {
-                    if let ValueOccurrence::Value(value) = occurrence
-                        && let NValueDefinition::EntryParam { param } = self.body.values[value.index()].definition {
-                        return ValueOccurrence::Argument(param);
-                    }
-                    if matches!(occurrence, ValueOccurrence::Argument(_) | ValueOccurrence::Summary) { return occurrence }
-                    let next = choices.len().try_into().expect("summary choice count");
-                    ValueOccurrence::SummaryChoice(*choices.entry(occurrence).or_insert(next))
-                })) else { continue };
-                sources.push(Guarded { guard, payload: payload.substitute(self.db, &subst) });
-            }
-            sources
-        });
+                    sources
+                });
         if let Some(failure) = failure {
             return Err(failure);
         }
         Ok(result)
     }
 
-    fn summary_param_ty(&self, param: u32) -> Option<TyId<'db>> {
-        self.body.values.iter().find_map(|value| {
-            matches!(value.definition,
-            NValueDefinition::EntryParam { param: actual } if actual == param)
-            .then_some(value.ty)
+    fn summarize_source(
+        &self,
+        mut payload: SourceExpr<'db>,
+        guard: &Guard<'db>,
+        choices: &mut BTreeMap<ValueOccurrence, u32>,
+        handles: &mut BTreeMap<OpaqueHandleOccurrence<'db>, u32>,
+    ) -> Option<Guarded<'db, SourceExpr<'db>>> {
+        if let ExternalOrigin::OpaqueHandle(source) = &mut payload.source.origin {
+            let next = handles.len().try_into().expect("summary handle count");
+            source.occurrence =
+                OpaqueHandleOccurrence::Summary(*handles.entry(source.occurrence).or_insert(next));
+        }
+        let mut scope = guard.scope().clone();
+        let mut substitutions = BTreeMap::new();
+        for index in guard.indices().into_iter().chain(payload.indices()) {
+            if matches!(index, IndexExpr::Runtime(_) | IndexExpr::Iteration(_)) {
+                substitutions.entry(index).or_insert_with(|| {
+                    match match index {
+                        IndexExpr::Runtime(value) => self.index(value),
+                        index => index,
+                    } {
+                        IndexExpr::Runtime(actual) => {
+                            match self.body.values[actual.index()].definition {
+                                NValueDefinition::EntryParam { param } => {
+                                    IndexExpr::FormalValue(param)
+                                }
+                                NValueDefinition::BlockParam { .. }
+                                | NValueDefinition::Statement { .. } => {
+                                    let (nested, witness) = scope.bind(IndexNamespace::Existential);
+                                    scope = nested;
+                                    witness
+                                }
+                            }
+                        }
+                        IndexExpr::Iteration(_) => {
+                            let (nested, witness) = scope.bind(IndexNamespace::Existential);
+                            scope = nested;
+                            witness
+                        }
+                        index => index,
+                    }
+                });
+            }
+        }
+        let subst = IndexSubst::new(guard.scope(), &scope, substitutions)
+            .expect("summary local index abstraction");
+        let guard = guard.substitute(&subst).and_then(|guard| {
+            guard.map_occurrences(|occurrence| {
+                if let ValueOccurrence::Value(value) = occurrence
+                    && let NValueDefinition::EntryParam { param } =
+                        self.body.values[value.index()].definition
+                {
+                    return ValueOccurrence::Argument(param);
+                }
+                if matches!(
+                    occurrence,
+                    ValueOccurrence::Argument(_) | ValueOccurrence::Summary
+                ) {
+                    return occurrence;
+                }
+                let next = choices.len().try_into().expect("summary choice count");
+                ValueOccurrence::SummaryChoice(*choices.entry(occurrence).or_insert(next))
+            })
+        })?;
+        Some(Guarded {
+            guard,
+            payload: payload.substitute(self.db, &subst),
         })
+    }
+
+    fn summary_param_ty(&self, param: u32) -> Option<TyId<'db>> {
+        self.body
+            .values
+            .iter()
+            .find_map(|value| {
+                matches!(value.definition,
+            NValueDefinition::EntryParam { param: actual } if actual == param)
+                .then_some(value.ty)
+            })
+            .or_else(|| {
+                self.body.roots.iter().find_map(|root| {
+                    matches!(root.kind, NRootKind::ParamPlace { param: actual } if actual == param)
+                        .then_some(root.ty)
+                })
+            })
     }
 
     fn summary_project_ty(
@@ -688,6 +811,26 @@ impl<'db> Borrowck<'db> {
                 ));
             }
         }
+        for requirement in &summary.requirements {
+            for region in std::iter::once(&requirement.region).chain(requirement.populated.iter()) {
+                if region.scope() != &BinderScope::default() {
+                    return Err(self.internal_diag(
+                        requirement.origin,
+                        "boundary requirement retains a lexical scope".into(),
+                    ));
+                }
+                for clause in region.clauses() {
+                    let source = SourceExpr::from_place(&clause.payload).ok_or_else(|| {
+                        self.internal_diag(
+                            requirement.origin,
+                            "boundary requirement retains local storage".into(),
+                        )
+                    })?;
+                    self.verify_source(&source, clause.guard.scope(), None, false)?;
+                    self.verify_summary_guard(&clause.guard, &source)?;
+                }
+            }
+        }
         for value in std::iter::once(&summary.result)
             .chain(summary.mutable_inputs.iter().map(|input| &input.value))
         {
@@ -698,49 +841,56 @@ impl<'db> Borrowck<'db> {
                     Some(leaf.semantics),
                     false,
                 )?;
-                if leaf
-                    .guard
-                    .occurrences()
-                    .iter()
-                    .any(|occurrence| match occurrence {
-                        ValueOccurrence::Value(_)
-                        | ValueOccurrence::Root(_)
-                        | ValueOccurrence::CallChoice { .. } => true,
-                        ValueOccurrence::Argument(param) => self.summary_param_ty(*param).is_none(),
-                        ValueOccurrence::Summary | ValueOccurrence::SummaryChoice(_) => false,
-                    })
-                    || leaf.guard.indices().iter().any(|index| match index {
-                        IndexExpr::FormalValue(param) => !self
-                            .summary_param_ty(*param)
-                            .is_some_and(|ty| ty.is_integral(self.db)),
-                        _ => leaf.guard.scope().validate(*index).is_err(),
-                    })
-                {
-                    return Err(self.internal_diag(
-                        SemOrigin::Body(self.body.template_owner),
-                        "summary guard contains an invalid occurrence or scalar parameter".into(),
-                    ));
-                }
-                if matches!(&leaf.payload.source.origin, ExternalOrigin::OpaqueHandle(source) if !matches!(source.occurrence, OpaqueHandleOccurrence::Summary(_)))
-                {
-                    return Err(self.internal_diag(
-                        SemOrigin::Body(self.body.template_owner),
-                        "summary retains a callee-local handle occurrence".into(),
-                    ));
-                }
-                if leaf
-                    .guard
-                    .indices()
-                    .into_iter()
-                    .chain(leaf.payload.indices())
-                    .any(|index| matches!(index, IndexExpr::Runtime(_) | IndexExpr::Iteration(_)))
-                {
-                    return Err(self.internal_diag(
-                        SemOrigin::Body(self.body.template_owner),
-                        "summary retains a callee-local value index".into(),
-                    ));
-                }
+                self.verify_summary_guard(&leaf.guard, &leaf.payload)?;
             }
+        }
+        Ok(())
+    }
+
+    fn verify_summary_guard(
+        &self,
+        guard: &Guard<'db>,
+        source: &SourceExpr<'db>,
+    ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+        if guard
+            .occurrences()
+            .iter()
+            .any(|occurrence| match occurrence {
+                ValueOccurrence::Value(_)
+                | ValueOccurrence::Root(_)
+                | ValueOccurrence::CallChoice { .. } => true,
+                ValueOccurrence::Argument(param) => self.summary_param_ty(*param).is_none(),
+                ValueOccurrence::Summary | ValueOccurrence::SummaryChoice(_) => false,
+            })
+            || guard.indices().iter().any(|index| match index {
+                IndexExpr::FormalValue(param) => !self
+                    .summary_param_ty(*param)
+                    .is_some_and(|ty| ty.is_integral(self.db)),
+                _ => guard.scope().validate(*index).is_err(),
+            })
+        {
+            return Err(self.internal_diag(
+                SemOrigin::Body(self.body.template_owner),
+                "summary guard contains an invalid occurrence or scalar parameter".into(),
+            ));
+        }
+        if matches!(&source.source.origin, ExternalOrigin::OpaqueHandle(source) if !matches!(source.occurrence, OpaqueHandleOccurrence::Summary(_)))
+        {
+            return Err(self.internal_diag(
+                SemOrigin::Body(self.body.template_owner),
+                "summary retains a callee-local handle occurrence".into(),
+            ));
+        }
+        if guard
+            .indices()
+            .into_iter()
+            .chain(source.indices())
+            .any(|index| matches!(index, IndexExpr::Runtime(_) | IndexExpr::Iteration(_)))
+        {
+            return Err(self.internal_diag(
+                SemOrigin::Body(self.body.template_owner),
+                "summary retains a callee-local value index".into(),
+            ));
         }
         Ok(())
     }
@@ -815,60 +965,32 @@ impl<'db> Borrowck<'db> {
         result: NValueId,
         inputs: CallInputs<'_, 'db>,
     ) -> Result<CapabilityValue<'db>, SemanticBorrowDiagnostic<'db>> {
-        let CallInputs { args, origin, .. } = inputs;
         let mut values = CapabilityValues::new(self.db, ValueLimits::default());
         let sources = SourceValues::new(self.db, ValueLimits::default());
         let mut error = None;
         let instantiated =
             sources.map_payloads(value, &mut values, |semantics, path, entry, domain| {
-                let subst = IndexSubst::new(
-                    entry.guard.scope(),
-                    entry.guard.scope(),
-                    args.iter().enumerate().map(|(param, arg)| {
-                        (
-                            IndexExpr::FormalValue(param.try_into().expect("parameter count")),
-                            self.index(arg.value),
-                        )
-                    }),
-                )
-                .expect("call index substitution");
-                let source = entry.payload.substitute(self.db, &subst);
-                let Some(guard) = domain.substitute(&subst).and_then(|guard| {
-                    guard.map_occurrences(|occurrence| match occurrence {
-                        ValueOccurrence::Argument(param) => args.get(param as usize).map_or(
-                            ValueOccurrence::CallChoice {
-                                result,
-                                choice: param,
-                            },
-                            |arg| ValueOccurrence::Value(arg.value),
-                        ),
-                        ValueOccurrence::SummaryChoice(choice) => {
-                            ValueOccurrence::CallChoice { result, choice }
-                        }
-                        ValueOccurrence::Summary => ValueOccurrence::Value(result),
-                        ValueOccurrence::Value(_)
-                        | ValueOccurrence::Root(_)
-                        | ValueOccurrence::CallChoice { .. } => {
-                            error.get_or_insert_with(|| {
-                                self.internal_diag(
-                                    origin,
-                                    "summary retains a local enum occurrence".into(),
-                                )
-                            });
-                            occurrence
-                        }
-                    })
-                }) else {
-                    return Vec::new();
+                let guard = match self.instantiate_guard(domain, result, inputs) {
+                    Ok(Some(guard)) => guard,
+                    Ok(None) => return Vec::new(),
+                    Err(failure) => {
+                        error.get_or_insert(failure);
+                        return Vec::new();
+                    }
                 };
-                let resolved =
-                    match self.instantiate_source(state, &source, result, guard.scope(), inputs) {
-                        Ok(resolved) => resolved,
-                        Err(failure) => {
-                            error.get_or_insert(failure);
-                            return Vec::new();
-                        }
-                    };
+                let resolved = match self.instantiate_source(
+                    state,
+                    &entry.payload,
+                    result,
+                    guard.scope(),
+                    inputs,
+                ) {
+                    Ok(resolved) => resolved,
+                    Err(failure) => {
+                        error.get_or_insert(failure);
+                        return Vec::new();
+                    }
+                };
                 let region = resolved.region.with_guard(&guard);
                 let payload = match semantics.class {
                     CapabilityClass::Borrow(kind) => {
@@ -903,6 +1025,83 @@ impl<'db> Borrowck<'db> {
             });
         if let Some(error) = error {
             return Err(error);
+        }
+        Ok(instantiated)
+    }
+
+    fn instantiate_guard(
+        &self,
+        guard: &Guard<'db>,
+        result: NValueId,
+        inputs: CallInputs<'_, 'db>,
+    ) -> Result<Option<Guard<'db>>, SemanticBorrowDiagnostic<'db>> {
+        let subst = IndexSubst::new(
+            guard.scope(),
+            guard.scope(),
+            inputs.args.iter().enumerate().map(|(param, arg)| {
+                (
+                    IndexExpr::FormalValue(param.try_into().expect("parameter count")),
+                    self.index(arg.value),
+                )
+            }),
+        )
+        .expect("call guard substitution");
+        let mut invalid = false;
+        let guard = guard.substitute(&subst).and_then(|guard| {
+            guard.map_occurrences(|occurrence| match occurrence {
+                ValueOccurrence::Argument(param) => inputs.args.get(param as usize).map_or(
+                    ValueOccurrence::CallChoice {
+                        result,
+                        choice: param,
+                    },
+                    |arg| ValueOccurrence::Value(arg.value),
+                ),
+                ValueOccurrence::SummaryChoice(choice) => {
+                    ValueOccurrence::CallChoice { result, choice }
+                }
+                ValueOccurrence::Summary => ValueOccurrence::Value(result),
+                ValueOccurrence::Value(_)
+                | ValueOccurrence::Root(_)
+                | ValueOccurrence::CallChoice { .. } => {
+                    invalid = true;
+                    occurrence
+                }
+            })
+        });
+        if invalid {
+            return Err(self.internal_diag(
+                inputs.origin,
+                "summary retains a local enum occurrence".into(),
+            ));
+        }
+        Ok(guard)
+    }
+
+    pub(super) fn instantiate_requirement(
+        &mut self,
+        state: &BorrowState<'db>,
+        region: &RegionSet<'db>,
+        result: NValueId,
+        inputs: CallInputs<'_, 'db>,
+    ) -> Result<RegionSet<'db>, SemanticBorrowDiagnostic<'db>> {
+        let mut instantiated = RegionSet::empty(region.scope());
+        for clause in region.clauses() {
+            let source = SourceExpr::from_place(&clause.payload).ok_or_else(|| {
+                self.internal_diag(
+                    inputs.origin,
+                    "summary boundary requirement retains local storage".into(),
+                )
+            })?;
+            if let Some(guard) = self.instantiate_guard(&clause.guard, result, inputs)? {
+                let resolved =
+                    self.instantiate_source(state, &source, result, guard.scope(), inputs)?;
+                instantiated = instantiated.union(
+                    &resolved
+                        .region
+                        .with_guard(&guard)
+                        .close_existentials(region.scope()),
+                );
+            }
         }
         Ok(instantiated)
     }
@@ -1370,6 +1569,7 @@ pub(super) fn signature_summary<'db>(
         may_return: opaque && !instance.is_intrinsically_never_returning(db),
         result,
         mutable_inputs,
+        requirements: Vec::new(),
     };
     checker.verify_summary(&summary)?;
     Ok(summary)

@@ -18,7 +18,7 @@ use crate::{
             provider::{ProviderLayoutEvidence, provider_semantics},
             ty_check::{BodyOwner, EffectPassMode},
             ty_def::{BorrowKind, CapabilityKind, PrimTy, TyBase, TyData, TyId},
-            ty_is_copy, ty_is_noesc,
+            ty_is_copy,
         },
     },
     core::semantic::EffectEnvView,
@@ -266,16 +266,7 @@ fn verify_expr<'db>(
                 return Err(NormalizedBodyVerifyError::InvalidHandleOrigin);
             }
         }
-        NExpr::Const(_)
-            if capability_shape(
-                db,
-                body.owner.key(db).impl_env(db).normalization_scope(db),
-                body.owner.assumptions(db),
-                result_ty,
-            )
-            .map_err(|_| NormalizedBodyVerifyError::ScalarCapability)?
-            .contains_capability(db) =>
-        {
+        NExpr::Const(_) if has_capability(db, body, result_ty)? => {
             return Err(NormalizedBodyVerifyError::ScalarCapability);
         }
         _ => {}
@@ -409,7 +400,7 @@ fn verify_expr<'db>(
             .ok_or(NormalizedBodyVerifyError::ExpressionType),
         NExpr::Unary { op, value } => {
             verify_scalar_ty(db, body, *value)?;
-            verify_scalar_result(db, result_ty)?;
+            verify_scalar_result(db, body, result_ty)?;
             let value_ty = operand_ty(body, *value)?;
             let valid = match op {
                 UnOp::Plus | UnOp::Minus | UnOp::BitNot => {
@@ -425,7 +416,7 @@ fn verify_expr<'db>(
         NExpr::Binary { op, lhs, rhs } => {
             verify_scalar_ty(db, body, *lhs)?;
             verify_scalar_ty(db, body, *rhs)?;
-            verify_scalar_result(db, result_ty)?;
+            verify_scalar_result(db, body, result_ty)?;
             let lhs_ty = operand_ty(body, *lhs)?;
             let rhs_ty = operand_ty(body, *rhs)?;
             let valid = match op {
@@ -456,7 +447,7 @@ fn verify_expr<'db>(
             if *to != result_ty {
                 return Err(NormalizedBodyVerifyError::ExpressionType);
             }
-            verify_scalar_result(db, result_ty)
+            verify_scalar_result(db, body, result_ty)
         }
         NExpr::Const(value) => {
             let value_ty = match value {
@@ -586,7 +577,7 @@ fn verify_expr<'db>(
                 .then_some(())
                 .ok_or(NormalizedBodyVerifyError::ExpressionType)
         }
-        NExpr::CodeRegionRef { .. } if ty_is_noesc(db, result_ty) => {
+        NExpr::CodeRegionRef { .. } if has_capability(db, body, result_ty)? => {
             Err(NormalizedBodyVerifyError::ScalarCapability)
         }
         NExpr::StructuralRepack { value, mapping } => {
@@ -917,13 +908,30 @@ fn operand_ty<'db>(
         .ok_or(NormalizedBodyVerifyError::MissingValue(operand.value))
 }
 
+// This is a representation check at normalization, not a runtime escape
+// decision. Boundary policy examines populated leaves of solved values.
+fn has_capability<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: &NormalizedBody<'db>,
+    ty: TyId<'db>,
+) -> Result<bool, NormalizedBodyVerifyError> {
+    capability_shape(
+        db,
+        body.owner.key(db).impl_env(db).normalization_scope(db),
+        body.owner.assumptions(db),
+        ty,
+    )
+    .map(|shape| shape.contains_capability(db))
+    .map_err(|_| NormalizedBodyVerifyError::ScalarCapability)
+}
+
 fn verify_scalar_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     body: &NormalizedBody<'db>,
     operand: NOperand,
 ) -> Result<(), NormalizedBodyVerifyError> {
     let ty = operand_ty(body, operand)?;
-    if ty_is_noesc(db, ty) {
+    if has_capability(db, body, ty)? {
         Err(NormalizedBodyVerifyError::ScalarOperandCapability(
             operand.value,
         ))
@@ -934,11 +942,12 @@ fn verify_scalar_ty<'db>(
     }
 }
 
-fn verify_scalar_result(
-    db: &dyn HirAnalysisDb,
-    result_ty: TyId<'_>,
+fn verify_scalar_result<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: &NormalizedBody<'db>,
+    result_ty: TyId<'db>,
 ) -> Result<(), NormalizedBodyVerifyError> {
-    if ty_is_noesc(db, result_ty) {
+    if has_capability(db, body, result_ty)? {
         Err(NormalizedBodyVerifyError::ScalarCapability)
     } else if !ty_has_scalar_repr(db, result_ty) {
         Err(NormalizedBodyVerifyError::ExpressionType)

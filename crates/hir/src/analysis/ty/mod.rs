@@ -9,7 +9,7 @@ use crate::core::hir_def::{
     IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias,
     scope_graph::{ScopeGraph, ScopeId},
 };
-use adt_def::{AdtDef, AdtRef, instantiate_adt_field_shape};
+use adt_def::{AdtDef, AdtRef};
 use common::indexmap::IndexMap;
 use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -199,70 +199,6 @@ fn copy_impl_self_may_match<'db>(
         return true;
     }
     impl_base == target_base
-}
-
-pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
-    fn inner<'db>(
-        db: &'db dyn HirAnalysisDb,
-        ty: TyId<'db>,
-        visiting: &mut FxHashSet<TyId<'db>>,
-    ) -> bool {
-        if !visiting.insert(ty) {
-            return false;
-        }
-
-        let result = if ty.as_capability(db).is_some() {
-            true
-        } else if ty.is_tuple(db) {
-            ty.field_types(db)
-                .into_iter()
-                .any(|field_ty| inner(db, field_ty, visiting))
-        } else if ty.is_array(db) {
-            let (_, args) = ty.decompose_ty_app(db);
-            args.first()
-                .copied()
-                .is_some_and(|elem_ty| inner(db, elem_ty, visiting))
-        } else if let Some(adt_def) = ty.adt_def(db) {
-            match adt_def.adt_ref(db) {
-                AdtRef::Struct(_) => ty
-                    .field_types(db)
-                    .into_iter()
-                    .any(|field_ty| inner(db, field_ty, visiting)),
-                AdtRef::Enum(_) => {
-                    let args = ty.generic_args(db);
-                    adt_def
-                        .fields(db)
-                        .iter()
-                        .enumerate()
-                        .any(|(variant_idx, variant)| {
-                            variant.iter_types(db).enumerate().any(|(field_idx, _)| {
-                                inner(
-                                    db,
-                                    instantiate_adt_field_shape(
-                                        db,
-                                        adt_def,
-                                        variant_idx,
-                                        field_idx,
-                                        args,
-                                    ),
-                                    visiting,
-                                )
-                            })
-                        })
-                }
-            }
-        } else {
-            false
-        };
-
-        visiting.remove(&ty);
-        result
-    }
-
-    match ty.data(db) {
-        TyData::TyVar(_) | TyData::Invalid(_) => false,
-        _ => inner(db, ty, &mut FxHashSet::default()),
-    }
 }
 
 /// An analysis pass for type definitions.

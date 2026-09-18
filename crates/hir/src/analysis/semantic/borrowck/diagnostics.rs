@@ -217,6 +217,8 @@ impl DiagnosticVoucher for SemanticBorrowDiagnostic<'_> {
             SemanticBorrowDiagKind::Internal => 4,
             SemanticBorrowDiagKind::NoEscViolation => 5,
             SemanticBorrowDiagKind::ProviderProvenanceConflict => 6,
+            SemanticBorrowDiagKind::TransportViolation => 7,
+            SemanticBorrowDiagKind::StorageViolation => 8,
         };
         CompleteDiagnostic::new(
             Severity::Error,
@@ -261,6 +263,12 @@ impl SemanticBorrowDiagKind {
             }
             Self::NoEscViolation => {
                 format!("noesc violation in `fn {}`", checker_name(db, instance))
+            }
+            Self::TransportViolation => {
+                format!("transport violation in `fn {}`", checker_name(db, instance))
+            }
+            Self::StorageViolation => {
+                format!("storage violation in `fn {}`", checker_name(db, instance))
             }
             Self::ProviderProvenanceConflict => {
                 format!(

@@ -14,7 +14,7 @@ use crate::analysis::{
             loan::{CapabilityRef, LoanRef},
             path::{Projection, RegionPath},
             region::{OverlapResult, RegionRoot, RegionSet},
-            semantics::CapabilityClass,
+            semantics::{CapabilityClass, CapabilitySemantics},
             state::{BorrowState, CapabilityValue},
             value::{Guarded, IndexPayload},
         },
@@ -43,27 +43,27 @@ enum OccurrenceStep<'db> {
 }
 
 #[derive(Clone, Copy)]
-enum CapabilityTraversal {
+pub(super) enum CapabilityTraversal {
     Held,
     Reachable,
     Effect(BorrowKind),
 }
 
 #[derive(Clone)]
-struct CapabilityOccurrence<'db> {
-    target_ty: TyId<'db>,
-    access: Option<BorrowKind>,
+pub(super) struct CapabilityOccurrence<'db> {
+    pub semantics: CapabilitySemantics<'db>,
+    pub access: Option<BorrowKind>,
     path: Vec<OccurrenceStep<'db>>,
     guard: Guard<'db>,
     payload: CapabilityRef<'db>,
-    region: RegionSet<'db>,
+    pub region: RegionSet<'db>,
     suspended: RegionSet<'db>,
 }
 
 impl<'db> CapabilityOccurrence<'db> {
     fn substitute(&self, db: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
         Self {
-            target_ty: self.target_ty,
+            semantics: self.semantics,
             access: self.access,
             path: self
                 .path
@@ -150,7 +150,6 @@ impl<'db> Borrowck<'db> {
         }
         self.check_moves()?;
         self.check_conflicts()?;
-        self.build_summary()?;
         Ok(None)
     }
 
@@ -217,7 +216,7 @@ impl<'db> Borrowck<'db> {
         }
     }
 
-    fn capabilities(
+    pub(super) fn capabilities(
         &mut self,
         state: &BorrowState<'db>,
         value: &CapabilityValue<'db>,
@@ -263,7 +262,7 @@ impl<'db> Borrowck<'db> {
                     },
                 };
                 result.push(CapabilityOccurrence {
-                    target_ty: leaf.semantics.target_ty,
+                    semantics: leaf.semantics,
                     access,
                     path: path.clone(),
                     guard: leaf.guard.clone(),
@@ -353,7 +352,7 @@ impl<'db> Borrowck<'db> {
         )? {
             let subst = capability.guard.scope().freshening(scope);
             let mut capability = capability.substitute(self.db, &subst);
-            if capability.target_ty != target_ty {
+            if capability.semantics.target_ty != target_ty {
                 let clauses = capability.region.clauses().iter().filter_map(|clause| {
                     let original = clause.payload.root.contract()?;
                     if !original.is_abstract(self.db) {
@@ -407,7 +406,7 @@ impl<'db> Borrowck<'db> {
         )? {
             let subst = capability.guard.scope().freshening(scope);
             let mut capability = capability.substitute(self.db, &subst);
-            if capability.target_ty != target_ty {
+            if capability.semantics.target_ty != target_ty {
                 let clauses = capability.region.clauses().iter().filter_map(|clause| {
                     let original = clause.payload.root.contract()?;
                     if !original.is_abstract(self.db) {

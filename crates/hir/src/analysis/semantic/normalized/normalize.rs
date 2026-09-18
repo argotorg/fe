@@ -14,7 +14,7 @@ use crate::{
             capability::{
                 handle::OpaqueHandleContract,
                 semantics::{CapabilityClass, CapabilitySemantics, capability_semantics},
-                shape::capability_shape,
+                shape::{ShapeId, capability_shape},
             },
             eval_const_ref, get_or_build_semantic_instance,
             lower::layout_backing_source_path_is_prefix,
@@ -41,7 +41,7 @@ use crate::{
             trait_resolution::PredicateListId,
             ty_check::{BodyOwner, LocalBinding},
             ty_def::{BorrowKind, CapabilityKind, TyData, TyId},
-            ty_is_copy, ty_is_noesc,
+            ty_is_copy,
         },
     },
     hir_def::FuncParamMode,
@@ -705,7 +705,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 };
                 if from == to {
                     NExpr::Forward { src: value }
-                } else if ty_is_noesc(self.db, from) || ty_is_noesc(self.db, to) {
+                } else if self.shape(from)?.contains_capability(self.db) || self.shape(to)?.contains_capability(self.db) {
                     let mapping = structural_repack_mapping(self.db, self.instance, from, to).ok_or(
                         NormalizeError::UnsupportedCapabilityCast { from, to },
                     )?;
@@ -950,6 +950,19 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         })
     }
 
+    fn shape(&self, ty: TyId<'db>) -> Result<ShapeId<'db>, NormalizeError<'db>> {
+        capability_shape(
+            self.db,
+            self.instance
+                .key(self.db)
+                .impl_env(self.db)
+                .normalization_scope(self.db),
+            self.assumptions,
+            ty,
+        )
+        .map_err(|_| NormalizeError::UnresolvedHandleOrigin(ty))
+    }
+
     fn normalize_constant(
         &mut self,
         block: SBlockId,
@@ -979,16 +992,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 CapabilityKind::Mut => unreachable!(),
             });
         }
-        let shape = capability_shape(
-            self.db,
-            self.instance
-                .key(self.db)
-                .impl_env(self.db)
-                .normalization_scope(self.db),
-            self.assumptions,
-            ty,
-        )
-        .map_err(|_| NormalizeError::UnresolvedHandleOrigin(ty))?;
+        let shape = self.shape(ty)?;
         if !shape.contains_capability(self.db) {
             return Ok(NExpr::Const(constant));
         }
@@ -2835,7 +2839,6 @@ mod tests {
             ty::{
                 ty_check::{BodyOwner, EffectPassMode},
                 ty_def::{BorrowKind, CapabilityKind, TyId},
-                ty_is_noesc,
             },
         },
         hir_def::{ArithBinOp, BinOp, ItemKind, LogicalBinOp, UnOp},
@@ -3209,7 +3212,7 @@ fn identity(mut _ value: own u256) -> mut u256 {
             result_ty,
             artifacts.body.value(source).expect("forward source").ty
         );
-        assert!(ty_is_noesc(&db, result_ty));
+        assert!(result_ty.as_capability(&db).is_some());
 
         let mut invalid = artifacts.body.clone();
         invalid.values[result.index()].ty = TyId::borrow_ref_of(&db, TyId::u256(&db));
@@ -3249,14 +3252,22 @@ fn widen(_ value: own u8) -> u256 {
                 _ => None,
             })
             .expect("widening cast must emit ScalarCast");
-        assert!(!ty_is_noesc(
-            &db,
-            artifacts.body.value(source).expect("cast source").ty
-        ));
-        assert!(!ty_is_noesc(
-            &db,
-            artifacts.body.value(result).expect("cast result").ty
-        ));
+        assert!(
+            artifacts
+                .body
+                .value(source)
+                .expect("cast source")
+                .ty
+                .is_integral(&db)
+        );
+        assert!(
+            artifacts
+                .body
+                .value(result)
+                .expect("cast result")
+                .ty
+                .is_integral(&db)
+        );
 
         let mut capability_operand = artifacts.body.clone();
         let source_ty = capability_operand.values[source.index()].ty;

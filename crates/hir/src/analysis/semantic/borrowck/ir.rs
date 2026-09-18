@@ -2,10 +2,13 @@ use salsa::Update;
 
 use crate::analysis::{
     semantic::{
-        SemOrigin,
-        capability::{source::SourceExpr, value::ValueId},
+        SemOrigin, SemanticInstance,
+        capability::{region::RegionSet, source::SourceExpr, value::ValueId},
     },
-    ty::ty_check::{BodyOwner, SmirLoweringIssue},
+    ty::{
+        ty_check::{BodyOwner, SmirLoweringIssue},
+        ty_def::TyId,
+    },
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -14,6 +17,27 @@ pub struct BorrowSummary<'db> {
     pub may_return: bool,
     pub result: ValueId<'db, SourceExpr<'db>>,
     pub mutable_inputs: Vec<InputPoststate<'db>>,
+    /// Preconditions on the actual regions supplied by callers. They are
+    /// independent of the callee's return value and mutable-input poststates.
+    pub requirements: Vec<BoundaryRequirement<'db>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BoundaryRule<'db> {
+    MemoryTransport(TyId<'db>),
+    Writable,
+    BorrowedStore(TyId<'db>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct BoundaryRequirement<'db> {
+    pub rule: BoundaryRule<'db>,
+    pub instance: SemanticInstance<'db>,
+    pub origin: SemOrigin<'db>,
+    pub region: RegionSet<'db>,
+    /// A storage rule applies only if this supplied capability is populated.
+    /// This retains empty-variant precision across forwarding calls.
+    pub populated: Option<RegionSet<'db>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -117,5 +141,7 @@ pub enum SemanticBorrowDiagKind {
     InvalidReturnBorrow,
     Internal,
     NoEscViolation,
+    TransportViolation,
+    StorageViolation,
     ProviderProvenanceConflict,
 }

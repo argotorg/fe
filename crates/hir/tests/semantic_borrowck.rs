@@ -18,7 +18,7 @@ use fe_hir::{
                 source::InputSource,
                 value::{ValueInterner, ValueLimits},
             },
-            check_semantic_borrows, check_semantic_noesc,
+            check_semantic_borrows, check_semantic_boundaries,
             collect_semantic_borrow_diagnostic_vouchers, contract_init_assigned_fields,
             get_or_build_semantic_instance, identity_semantic_instance_key, layout_evidence_body,
             normalize_semantic_body,
@@ -112,7 +112,7 @@ fn caller(result: mut u256) -> mut u256 uses (values: mut [mut u256; 2]) {
         Err(SemanticAnalysisError::Blocked(_))
     ));
     assert!(matches!(
-        check_semantic_noesc(&db, instance),
+        check_semantic_boundaries(&db, instance),
         Err(SemanticAnalysisError::Blocked(_))
     ));
     assert!(matches!(
@@ -779,7 +779,7 @@ fn mixed_returned_borrow_provenance_poison_noesc() {
     let (top_mod, _) = db.top_mod(file);
     let instance = contract_init_instance(&db, top_mod, "Mixed");
 
-    let err = check_semantic_noesc(&db, instance)
+    let err = check_semantic_boundaries(&db, instance)
         .expect_err("mixed provider provenance must poison noesc");
     let SemanticAnalysisError::Diagnostic(err) = err else {
         panic!("provider provenance conflict must produce a diagnostic")
@@ -1172,7 +1172,7 @@ pub contract NoEscCallArg {
     );
 
     assert!(
-        diags.contains("noesc violation in `fn NoEscCallArg::__init__`"),
+        diags.contains("transport violation in `fn NoEscCallArg::__init__`"),
         "{diags:?}"
     );
     assert!(
@@ -1257,7 +1257,7 @@ pub contract GenericNoEsc {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(store_generic)),
     );
-    check_semantic_noesc(&db, identity).expect("generic identity noesc should be accepted");
+    check_semantic_boundaries(&db, identity).expect("generic identity noesc should be accepted");
 
     let init = top_mod
         .all_items(&db)
@@ -1285,7 +1285,7 @@ pub contract GenericNoEsc {
             _ => None,
         })
         .expect("specialized store_generic callee");
-    let err = check_semantic_noesc(&db, specialized)
+    let err = check_semantic_boundaries(&db, specialized)
         .expect_err("specialized noesc store should be rejected");
     let SemanticAnalysisError::Diagnostic(err) = err else {
         panic!("noesc violation must produce a diagnostic")
@@ -4128,6 +4128,102 @@ fn conflict() -> u256 {
     );
 }
 
+#[test]
+fn boundary_storage_uses_populated_capabilities() {
+    for (assignment, rejected) in [
+        ("slot = Maybe::Empty", false),
+        ("slot = Maybe::Full(mut local)", true),
+        (
+            "let mut value = Maybe::Full(mut local)\nvalue = Maybe::Empty\nslot = value",
+            false,
+        ),
+        ("slot = empty()", false),
+    ] {
+        let source = format!(
+            r#"
+enum Maybe {{ Empty, Full(mut u256) }}
+fn empty() -> Maybe {{ Maybe::Empty }}
+pub contract Store {{
+    mut slot: Maybe
+    init() uses (mut slot) {{
+        let mut local: u256 = 0
+        {assignment}
+    }}
+}}
+"#
+        );
+        let diags = checked_borrow_diags(&source);
+        if rejected {
+            assert!(
+                diags.contains("cannot store `Maybe` in storage"),
+                "{assignment}: {diags}"
+            );
+        } else {
+            assert!(diags.is_empty(), "{assignment}: {diags}");
+        }
+    }
+    let diags = checked_borrow_diags(
+        r#"
+pub contract EmptyArray {
+    mut slot: [mut u256; 0]
+    init() uses (mut slot) { slot = [] }
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn boundary_transport_checks_nested_mutable_handles() {
+    for argument in [
+        "owned(Wrap { handle: mut slot })",
+        "viewed(Wrap { handle: mut slot })",
+        "let mut wrapper = Wrap { handle: mut slot }\nborrowed(mut wrapper)",
+        "array([mut slot])",
+        "variant(Maybe::Full(mut slot))",
+    ] {
+        let source = format!(
+            r#"
+struct Wrap {{ handle: mut u256 }}
+enum Maybe {{ Empty, Full(mut u256) }}
+fn owned(_ value: own Wrap) {{}}
+fn viewed(_ value: Wrap) {{}}
+fn borrowed(_ value: mut Wrap) {{}}
+fn array(_ value: own [mut u256; 1]) {{}}
+fn variant(_ value: own Maybe) {{}}
+pub contract Call {{
+    mut slot: u256
+    init() uses (mut slot) {{ {argument} }}
+}}
+"#
+        );
+        let diags = checked_borrow_diags(&source);
+        assert!(
+            diags.contains("transport violation in `fn Call::__init__`"),
+            "{argument}: {diags}"
+        );
+        assert!(
+            diags.contains("from storage as function argument"),
+            "{argument}: {diags}"
+        );
+        assert!(!diags.contains("borrow conflict"), "{argument}: {diags}");
+    }
+    let diags = checked_borrow_diags(
+        r#"
+struct Wrap { handle: mut u256 }
+enum Maybe { Empty, Full(mut u256) }
+fn owned(_ value: own Wrap) {}
+fn variant(_ value: own Maybe) {}
+fn memory() {
+    let mut local: u256 = 0
+    owned(Wrap { handle: mut local })
+    variant(Maybe::Empty)
+}
+"#,
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
 fn boundary_provider_source(space: &str, target: &str, body: &str) -> String {
     format!(
         r#"
@@ -4144,6 +4240,117 @@ impl EffectRefMut<{target}> for Ptr {{}}
 {body}
 "#
     )
+}
+
+#[test]
+fn boundary_effect_access_preserves_all_address_spaces() {
+    for space in ["Memory", "Storage", "TransientStorage", "Calldata", "Code"] {
+        let source = boundary_provider_source(
+            space,
+            "u256",
+            r#"
+fn read() -> u256 uses (value: u256) { value }
+fn write() uses (value: mut u256) { value = 1 }
+fn transport(_ value: Ptr) -> Ptr { value }
+fn allowed() -> Ptr {
+    let ptr = Ptr { addr: 32 }
+    let result = with (ptr) { read() }
+    transport(ptr)
+}
+fn access() {
+    let ptr = Ptr { addr: 32 }
+    with (ptr) { write() }
+}
+"#,
+        );
+        let diags = checked_borrow_diags(&source);
+        if matches!(space, "Calldata" | "Code") {
+            assert!(
+                diags.contains(&format!("cannot write to {}", space.to_lowercase())),
+                "{space}: {diags}"
+            );
+            assert!(!diags.contains("transport violation"), "{space}: {diags}");
+        } else {
+            assert!(diags.is_empty(), "{space}: {diags}");
+        }
+    }
+}
+
+#[test]
+fn boundary_storage_distinguishes_native_borrows_from_provider_values() {
+    for space in ["Memory", "Storage", "TransientStorage", "Calldata", "Code"] {
+        let source = boundary_provider_source(
+            space,
+            "Holder",
+            r#"
+struct Holder { value: Maybe }
+enum Maybe { Empty, Full(ref u256) }
+fn empty() {
+    let ptr = Ptr { addr: 32 }
+    with (ptr) { clear() }
+}
+fn clear() uses (holder: mut Holder) { holder.value = Maybe::Empty }
+fn populated(_ handle: ref u256) {
+    let ptr = Ptr { addr: 32 }
+    with (ptr) { store(handle) }
+}
+fn store(_ handle: ref u256) uses (holder: mut Holder) { holder.value = Maybe::Full(handle) }
+"#,
+        );
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("boundary_store.fe".into(), &source);
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        for name in ["empty", "populated"] {
+            let func = top_mod
+                .all_funcs(&db)
+                .iter()
+                .copied()
+                .find(|func| {
+                    func.name(&db)
+                        .to_opt()
+                        .is_some_and(|ident| ident.data(&db) == name)
+                })
+                .expect("store fixture function");
+            let instance = get_or_build_semantic_instance(
+                &db,
+                identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+            );
+            let boundary = check_semantic_boundaries(&db, instance);
+            match space {
+                "Memory" => {
+                    assert!(boundary.is_ok(), "{space} {name}: {boundary:?}");
+                    // The raw handle and its unknown nested borrow can overlap.
+                    // Boundary legality does not establish disjoint memory.
+                    let conflict = check_semantic_borrows(&db, instance)
+                        .expect_err("opaque memory aliasing remains conservative");
+                    assert!(
+                        conflict.to_string().contains("borrow conflict"),
+                        "{conflict}"
+                    );
+                }
+                "Storage" | "TransientStorage" if name == "empty" => {
+                    assert!(boundary.is_ok(), "{space} {name}: {boundary:?}")
+                }
+                "Storage" | "TransientStorage" => {
+                    let destination = if space == "Storage" {
+                        "storage"
+                    } else {
+                        "transient storage"
+                    };
+                    assert!(
+                        format!("{boundary:?}")
+                            .contains(&format!("cannot store `Maybe` in {destination}")),
+                        "{space} {name}: {boundary:?}"
+                    );
+                }
+                _ => assert!(
+                    format!("{boundary:?}").contains("cannot write to"),
+                    "{space} {name}: {boundary:?}"
+                ),
+            }
+        }
+    }
 }
 
 #[test]
@@ -4185,4 +4392,250 @@ pub contract InvalidHandle {
     let mut passes = initialize_analysis_pass();
     let diags = format_diagnostics(&db, &passes.run_on_module(&db, top_mod));
     assert!(diags.contains("u256") && diags.contains("Ptr"), "{diags}");
+}
+
+#[test]
+fn boundary_nominal_handle_representation_can_be_stored() {
+    for space in ["Memory", "Storage", "TransientStorage", "Calldata", "Code"] {
+        let source = boundary_provider_source(
+            space,
+            "u256",
+            r#"
+struct Holder { handle: Ptr }
+pub contract StoreHandle {
+    mut slot: Holder
+    init() uses (mut slot) { slot = Holder { handle: Ptr { addr: 32 } } }
+}
+"#,
+        );
+        let diags = checked_borrow_diags(&source);
+        assert!(diags.is_empty(), "nominal {space}: {diags}");
+    }
+}
+
+#[test]
+fn borrow_conflicts_and_boundary_policy_are_independent() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "boundaries.fe".into(),
+        r#"
+fn pair(left: mut u256, right: mut u256) {
+    left = 1
+    right = 2
+}
+fn conflict(value: mut u256) { pair(left: value, right: value) }
+fn escape() -> mut u256 {
+    let mut value: u256 = 0
+    mut value
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    for (name, borrow_ok, boundary_ok) in [("conflict", false, true), ("escape", true, false)] {
+        let func = top_mod
+            .all_funcs(&db)
+            .iter()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|ident| ident.data(&db) == name)
+            })
+            .expect("test function");
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+        );
+        let borrows = check_semantic_borrows(&db, instance);
+        let boundaries = check_semantic_boundaries(&db, instance);
+        assert_eq!(borrows.is_ok(), borrow_ok, "{name}: {borrows:?}");
+        assert_eq!(boundaries.is_ok(), boundary_ok, "{name}: {boundaries:?}");
+    }
+}
+
+#[test]
+fn boundary_native_transport_preserves_provider_contracts() {
+    for space in ["Memory", "Storage", "TransientStorage", "Calldata", "Code"] {
+        let source = boundary_provider_source(
+            space,
+            "u256",
+            r#"
+struct Wrap { handle: mut u256 }
+fn consume(_ value: own Wrap) {}
+fn forward() uses (value: mut u256) { consume(Wrap { handle: mut value }) }
+fn caller() {
+    let ptr = Ptr { addr: 32 }
+    with (ptr) { forward() }
+}
+"#,
+        );
+        let diags = checked_borrow_diags(&source);
+        if space == "Memory" {
+            assert!(diags.is_empty(), "{space}: {diags}");
+        } else {
+            assert!(
+                diags.contains("transport violation in `fn forward`"),
+                "{space}: {diags}"
+            );
+        }
+        let source = boundary_provider_source(
+            space,
+            "u256",
+            r#"
+struct Shared { handle: ref u256 }
+fn consume(_ value: own Shared) {}
+fn forward() uses (value: u256) { consume(Shared { handle: ref value }) }
+fn caller() {
+    let ptr = Ptr { addr: 32 }
+    with (ptr) { forward() }
+}
+"#,
+        );
+        let diags = checked_borrow_diags(&source);
+        assert!(diags.is_empty(), "shared {space}: {diags}");
+    }
+}
+
+#[test]
+fn boundary_return_permission_is_distinct_from_handle_transport() {
+    for space in ["Memory", "Storage", "TransientStorage", "Calldata", "Code"] {
+        let source = boundary_provider_source(
+            space,
+            "u256",
+            r#"
+struct Returned { handle: ref u256 }
+fn borrow_provider() -> Returned uses (value: u256) { Returned { handle: ref value } }
+fn caller() -> Returned {
+    let ptr = Ptr { addr: 32 }
+    with (ptr) { borrow_provider() }
+}
+"#,
+        );
+        let diags = checked_borrow_diags(&source);
+        assert!(
+            diags.contains("cannot return a borrow derived from an effect parameter"),
+            "{space}: {diags}"
+        );
+        assert!(!diags.contains("transport violation"), "{space}: {diags}");
+    }
+}
+
+#[test]
+fn boundary_receiver_forwarding_preserves_transport_requirements() {
+    let diags = checked_borrow_diags(
+        r#"
+struct Cell { value: u256 }
+fn ordinary(_ value: mut Cell) { value.value = 1 }
+impl Cell {
+    fn write(mut self) { self.value = 1 }
+    fn forward(mut self) { ordinary(self) }
+}
+pub contract Direct {
+    mut slot: Cell
+    init() uses (mut slot) { slot.write() }
+}
+pub contract Forwarded {
+    mut slot: Cell
+    init() uses (mut slot) { slot.forward() }
+}
+"#,
+    );
+    assert!(
+        !diags.contains("transport violation in `fn Direct::__init__`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("transport violation"),
+        "storage receiver must not erase an ordinary parameter's memory contract: {diags}"
+    );
+}
+
+#[test]
+fn boundary_requirements_follow_receiver_chains_and_nested_inputs() {
+    for space in ["Memory", "Storage", "TransientStorage"] {
+        for call in [
+            "value.chain()",
+            "value.recursive(false)",
+            "value.mutual_a(false)",
+            "let mut wrapper = Wrapper { cell: mut value }
+wrapper.forward()",
+            "let mut wrapper = ArrayWrapper { cells: [mut value] }
+wrapper.forward(0)",
+        ] {
+            let body = format!(
+                r#"
+struct Cell {{ value: u256 }}
+fn ordinary(_ value: mut Cell) {{ value.value = 1 }}
+impl Cell {{
+    fn forward(mut self) {{ ordinary(self) }}
+    fn chain(mut self) {{ self.forward() }}
+    fn recursive(mut self, _ again: bool) {{
+        if again {{ self.recursive(false) }} else {{ ordinary(self) }}
+    }}
+    fn mutual_a(mut self, _ again: bool) {{
+        if again {{ self.mutual_b(false) }} else {{ ordinary(self) }}
+    }}
+    fn mutual_b(mut self, _ again: bool) {{ self.mutual_a(again) }}
+}}
+struct Wrapper {{ cell: mut Cell }}
+impl Wrapper {{ fn forward(mut self) {{ ordinary(self.cell) }} }}
+struct ArrayWrapper {{ cells: [mut Cell; 1] }}
+impl ArrayWrapper {{ fn forward(mut self, _ index: usize) {{ ordinary(self.cells[index]) }} }}
+fn forward() uses (value: mut Cell) {{ {call} }}
+fn caller() {{ let ptr = Ptr {{ addr: 32 }}
+with (ptr) {{ forward() }} }}
+"#
+            );
+            let source = boundary_provider_source(space, "Cell", &body);
+            let diags = checked_borrow_diags(&source);
+            if space == "Memory" {
+                assert!(diags.is_empty(), "{space} {call}: {diags}");
+            } else {
+                assert!(
+                    diags.contains("transport violation") && !diags.contains("internal borrow"),
+                    "{space} {call}: {diags}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn boundary_forwarded_storage_requirements_preserve_empty_variants() {
+    for (value, erase) in [
+        ("Maybe::Empty", ""),
+        ("Maybe::Full(ref local)", ""),
+        ("Maybe::Empty", "self.value = Maybe::Empty"),
+        ("Maybe::Full(ref local)", "self.value = Maybe::Empty"),
+    ] {
+        let source = format!(
+            r#"
+enum Maybe {{ Empty, Full(ref u256) }}
+struct Holder {{ value: Maybe }}
+impl Holder {{
+    fn store(mut self, _ value: own Maybe) {{
+self.value = value
+{erase}
+}}
+    fn forward(mut self, _ value: own Maybe) {{ self.store(value) }}
+}}
+pub contract Store {{
+    mut slot: Holder
+    init() uses (mut slot) {{
+        let local: u256 = 0
+        slot.forward({value})
+    }}
+}}
+"#
+        );
+        let diags = checked_borrow_diags(&source);
+        if value == "Maybe::Empty" {
+            assert!(diags.is_empty(), "{diags}");
+        } else {
+            assert!(
+                diags.contains("cannot store") && !diags.contains("internal borrow"),
+                "{diags}"
+            );
+        }
+    }
 }

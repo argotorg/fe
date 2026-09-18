@@ -3,8 +3,8 @@ use std::fmt;
 use super::{
     ir::{
         BlockedSemanticBody, BorrowDiagnosticId, BorrowSummary, BorrowSummaryId,
-        SemanticBorrowCheckResult, SemanticBorrowDiagnostic, SemanticBorrowSummaryResult,
-        SemanticNormalizationFailure,
+        SemanticBorrowCheckResult, SemanticBorrowDiagKind, SemanticBorrowDiagnostic,
+        SemanticBorrowDiagnosticSpan, SemanticBorrowSummaryResult, SemanticNormalizationFailure,
     },
     solver::{BorrowSummaryMode, Borrowck},
     summary::signature_summary,
@@ -15,8 +15,8 @@ use crate::{
         analysis_pass::ModuleAnalysisPass,
         diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
         semantic::{
-            SemanticInstance, get_or_build_semantic_instance, identity_semantic_instance_key,
-            normalized::normalize_semantic_body_provisional,
+            SemOrigin, SemanticInstance, get_or_build_semantic_instance,
+            identity_semantic_instance_key, normalized::normalize_semantic_body_provisional,
         },
         ty::ty_check::BodyOwner,
     },
@@ -46,7 +46,7 @@ fn semantic_borrow_summary_query<'db>(
 }
 
 #[salsa::tracked(
-    cycle_fn=semantic_borrow_summary_cycle_recover,
+    cycle_fn=provisional_borrow_summary_cycle_recover,
     cycle_initial=semantic_borrow_summary_cycle_initial
 )]
 fn provisional_borrow_summary_query<'db>(
@@ -337,7 +337,7 @@ fn collect_owner<'db>(
         }
         SemanticBorrowCheckResult::Err(_) => {}
     }
-    match super::noesc::semantic_noesc_check_query(db, instance) {
+    match super::boundary::semantic_boundary_check_query(db, instance) {
         SemanticBorrowCheckResult::Ok => {}
         SemanticBorrowCheckResult::Blocked(_) => {}
         SemanticBorrowCheckResult::Err(diag) if seen_diags.insert(diag) => {
@@ -363,6 +363,32 @@ fn semantic_borrow_summary_cycle_initial<'db>(
 }
 
 fn semantic_borrow_summary_cycle_recover<'db>(
+    db: &'db dyn HirAnalysisDb,
+    value: &SemanticBorrowSummaryResult<'db>,
+    count: u32,
+    instance: SemanticInstance<'db>,
+) -> salsa::CycleRecoveryAction<SemanticBorrowSummaryResult<'db>> {
+    if count >= 16 && !matches!(value, SemanticBorrowSummaryResult::Err(_)) {
+        // A signature-only fallback cannot describe body-dependent boundary
+        // requirements. Do not silently discharge those proofs on a cycle.
+        let owner = instance.key(db).owner(db);
+        let diagnostic = SemanticBorrowDiagnostic::new(
+            instance,
+            SemanticBorrowDiagKind::TransportViolation,
+            "recursive boundary requirements did not converge".into(),
+            SemanticBorrowDiagnosticSpan::Origin {
+                owner,
+                origin: SemOrigin::Body(owner),
+            },
+        );
+        return salsa::CycleRecoveryAction::Fallback(SemanticBorrowSummaryResult::Err(
+            BorrowDiagnosticId::new(db, diagnostic),
+        ));
+    }
+    provisional_borrow_summary_cycle_recover(db, value, count, instance)
+}
+
+fn provisional_borrow_summary_cycle_recover<'db>(
     db: &'db dyn HirAnalysisDb,
     value: &SemanticBorrowSummaryResult<'db>,
     count: u32,

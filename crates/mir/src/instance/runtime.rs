@@ -1,4 +1,6 @@
-use hir::analysis::semantic::{SemanticInstance, check_semantic_borrows, check_semantic_noesc};
+use hir::analysis::semantic::{
+    SemanticInstance, check_semantic_borrows, check_semantic_boundaries,
+};
 use salsa::Update;
 
 use crate::{
@@ -122,9 +124,9 @@ fn lower_runtime_body<'db>(
                     diag
                 )));
             }
-            if let Err(diag) = check_semantic_noesc(db, semantic) {
+            if let Err(diag) = check_semantic_boundaries(db, semantic) {
                 return Err(LowerError::Unsupported(format!(
-                    "semantic noesc checking failed for {:?}: {}",
+                    "semantic boundary checking failed for {:?}: {}",
                     semantic.key(db),
                     diag
                 )));

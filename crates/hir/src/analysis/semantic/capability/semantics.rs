@@ -2,9 +2,7 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         ty::{
-            provider::{
-                EffectHandleTargetResolution, ProviderTransport, resolve_effect_handle_target,
-            },
+            provider::{EffectHandleTargetResolution, resolve_effect_handle_target},
             trait_resolution::PredicateListId,
             ty_def::{BorrowKind, CapabilityKind, TyId},
         },
@@ -19,6 +17,18 @@ pub enum CapabilityClass {
     Handle,
 }
 
+/// Ordinary argument transport is independent of access authority and storage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TransportClass {
+    /// Native mutable handles require memory unless a receiver/effect contract
+    /// explicitly preserves the provider's address space.
+    MemoryBorrow,
+    /// Shared borrows and views permit read-only provider transport.
+    ReadOnly,
+    /// A nominal handle transports its representation without accessing its target.
+    ProviderValue,
+}
+
 /// Storage policy is separate from the capability's access authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StorageClass {
@@ -31,7 +41,7 @@ pub struct CapabilitySemantics<'db> {
     pub class: CapabilityClass,
     pub target_ty: TyId<'db>,
     pub representation_ty: TyId<'db>,
-    pub transport: ProviderTransport,
+    pub transport: TransportClass,
     pub storage: StorageClass,
 }
 
@@ -54,7 +64,10 @@ pub fn capability_semantics<'db>(
             class,
             target_ty,
             representation_ty: ty,
-            transport: ProviderTransport::ByValue,
+            transport: match kind {
+                CapabilityKind::Mut => TransportClass::MemoryBorrow,
+                CapabilityKind::Ref | CapabilityKind::View => TransportClass::ReadOnly,
+            },
             storage: StorageClass::Borrowed,
         }));
     }
@@ -69,7 +82,7 @@ pub fn capability_semantics<'db>(
         class: CapabilityClass::Handle,
         target_ty,
         representation_ty: ty,
-        transport: ProviderTransport::ByValue,
+        transport: TransportClass::ProviderValue,
         storage: StorageClass::ProviderValue,
     }))
 }
