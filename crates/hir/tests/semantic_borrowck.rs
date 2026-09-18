@@ -4,6 +4,7 @@ use cranelift_entity::EntityRef;
 use fe_hir::test_db::{HirAnalysisTestDb, format_diagnostics};
 use fe_hir::{
     analysis::{
+        initialize_analysis_pass,
         semantic::{
             CtfeError, LayoutEvidenceError, NDataProjection, NExpr, NIndex, NPlaceBase, NRootKind,
             NStatementKind, NValueDefinition, NormalizedArtifacts, ReadMode, SExpr, SStmtKind,
@@ -4125,4 +4126,63 @@ fn conflict() -> u256 {
         diags.contains("borrow conflict in `fn conflict`"),
         "{diags}"
     );
+}
+
+fn boundary_provider_source(space: &str, target: &str, body: &str) -> String {
+    format!(
+        r#"
+use core::{{AddressSpace, EffectHandle, EffectRef, EffectRefMut}}
+struct Ptr {{ addr: u256 }}
+impl EffectHandle for Ptr {{
+    type Target = {target}
+    const SPACE: AddressSpace = AddressSpace::{space}
+    fn from_raw(_ raw: u256) -> Self {{ Self {{ addr: raw }} }}
+    fn raw(self) -> u256 {{ self.addr }}
+}}
+impl EffectRef<{target}> for Ptr {{}}
+impl EffectRefMut<{target}> for Ptr {{}}
+{body}
+"#
+    )
+}
+
+#[test]
+fn invalid_record_assignment_is_blocked_before_semantic_lowering() {
+    let source = boundary_provider_source(
+        "Memory",
+        "u256",
+        r#"
+pub contract InvalidHandle {
+    mut slot: Ptr
+    init() uses (mut slot) { slot = Ptr { addr: 32 } }
+}
+"#,
+    );
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("invalid_record_assignment.fe".into(), &source);
+    let (top_mod, _) = db.top_mod(file);
+    let instance = contract_init_instance(&db, top_mod, "InvalidHandle");
+    assert!(matches!(
+        semantic_body_admission(&db, instance),
+        SemanticBodyAdmission::Blocked(_)
+    ));
+    assert!(matches!(
+        normalize_semantic_body(&db, instance),
+        Err(SemanticNormalizationFailure::Blocked(_))
+    ));
+    assert!(matches!(
+        semantic_borrow_summary(&db, instance),
+        Err(SemanticAnalysisError::Blocked(_))
+    ));
+    assert!(matches!(
+        layout_evidence_body(&db, instance),
+        Err(LayoutEvidenceError::Blocked(_))
+    ));
+    assert!(matches!(
+        canonicalize_semantic_consts(&db, instance),
+        Err(CtfeError::InvalidBody { .. })
+    ));
+    let mut passes = initialize_analysis_pass();
+    let diags = format_diagnostics(&db, &passes.run_on_module(&db, top_mod));
+    assert!(diags.contains("u256") && diags.contains("Ptr"), "{diags}");
 }

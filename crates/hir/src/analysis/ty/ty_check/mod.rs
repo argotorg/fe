@@ -3253,6 +3253,12 @@ impl<'db> TypedBody<'db> {
             Expr::Assert(_) if expr_ty.has_invalid(db) => {
                 Some(SmirLoweringIssue::InvalidExpr(expr))
             }
+            // A resolved constructor plan can survive a failed contextual
+            // unification. Lowering must not use that invalid expression type
+            // to resolve record fields or select the aggregate representation.
+            Expr::RecordInit(..) if expr_ty.has_invalid(db) || expr_ty.has_var(db) => {
+                Some(SmirLoweringIssue::InvalidExpr(expr))
+            }
             Expr::RecordInit(..) if self.record_init_lowering(expr).is_none() => missing_plan(),
             Expr::Field(..)
                 if self.expr_place(expr).is_none() && self.resolved_field_index(expr).is_none() =>
