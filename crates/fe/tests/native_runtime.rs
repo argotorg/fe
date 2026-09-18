@@ -349,3 +349,46 @@ pub fn main() -> i32 {
         );
     }
 }
+
+#[test]
+fn native_loop_carried_struct_values_reuse_storage_after_reads() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("value_loop.fe");
+    fs::write(
+        &source,
+        r#"
+struct Pair { low: u64, high: u64 }
+impl Copy for Pair {}
+fn next(_ value: Pair) -> Pair {
+    Pair { low: value.low + 1, high: value.high + 3 }
+}
+pub fn main() -> i32 {
+    let mut value = Pair { low: 2, high: 7 }
+    let mut i: u64 = 0
+    while i < 17 {
+        value = next(value)
+        value.low = value.low + 1
+        if (i & 1) == 0 {
+            value = next(value)
+            value.high = value.high + 1
+        }
+        i += 1
+    }
+    core::assert(value.low == 45)
+    core::assert(value.high == 94)
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        assert!(
+            Command::new(out.join("value_loop"))
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+}
