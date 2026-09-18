@@ -1121,6 +1121,8 @@ fn canonicalize_tracks_mutation_through_aggregate_capabilities() {
             false,
         ),
         ("value_call", "write(holder)", false),
+        ("direct_effect", "with (counter) { write_direct() }", false),
+        ("mutable_effect", "with (holder) { write_effect() }", false),
         ("borrowed_call", "write_borrowed(mut holder)", false),
         (
             "returned",
@@ -1149,20 +1151,26 @@ fn canonicalize_tracks_mutation_through_aggregate_capabilities() {
         let mut db = HirAnalysisTestDb::default();
         let result = if matches!(name, "unrelated_control" | "shared_control") {
             "unrelated == 7"
+        } else if name == "direct_effect" {
+            "counter.value == 1"
         } else {
             "value == 1"
         };
         let source = format!(
             r#"
+struct Counter {{ value: u256 }}
 struct Wrap {{ handle: mut u256 }}
+fn write_direct() uses (counter: mut Counter) {{ counter.value = 1 }}
+fn write_effect() uses (holder: mut Wrap) {{ holder.handle = 1 }}
 struct Outer {{ inner: mut Wrap }}
 fn read(_ value: ref u256) -> u256 {{ value }}
-fn write(holder: Wrap) {{ holder.handle = 1 }}
+fn write(mut holder: own Wrap) {{ holder.handle = 1 }}
 fn write_borrowed(_ holder: mut Wrap) {{ holder.handle = 1 }}
 fn returned(holder: Wrap) -> mut u256 {{ holder.handle }}
 fn replace(values: mut [Wrap; 1], replacement: Wrap) {{ values[0] = replacement }}
 fn probe(index: usize) -> bool {{
     let unrelated: u256 = 7
+    let mut counter = Counter {{ value: 0 }}
     let mut value: u256 = 0
     let mut other: u256 = 0
     let mut holder = Wrap {{ handle: mut value }}
@@ -1173,11 +1181,13 @@ fn probe(index: usize) -> bool {{
         );
         let file = db.new_stand_alone(format!("ctfe_{name}.fe").into(), &source);
         let (top_mod, _) = db.top_mod(file);
+        for func in top_mod.all_funcs(&db) {
+            let (diagnostics, _) = check_func_body(&db, *func).clone();
+            assert!(diagnostics.is_empty(), "{name}: {diagnostics:#?}");
+        }
         let func = top_mod.all_funcs(&db).iter().copied().find(|func| {
             matches!(func.name(&db), Partial::Present(name) if name.data(&db) == "probe")
         }).unwrap();
-        let (diagnostics, _) = check_func_body(&db, func).clone();
-        assert!(diagnostics.is_empty(), "{name}: {diagnostics:#?}");
         let instance = get_or_build_semantic_instance(
             &db,
             identity_semantic_instance_key(&db, BodyOwner::Func(func)),
