@@ -233,6 +233,20 @@ where
             let to = folder.fold_ty(db, *to);
             ConstExprId::new(db, ConstExpr::Cast { expr, to })
         }
+        ConstExpr::ArrayRepeat { value, len } => ConstExprId::new(
+            db,
+            ConstExpr::ArrayRepeat {
+                value: folder.fold_ty(db, *value),
+                len: folder.fold_ty(db, *len),
+            },
+        ),
+        ConstExpr::ArrayIndex { array, index } => ConstExprId::new(
+            db,
+            ConstExpr::ArrayIndex {
+                array: folder.fold_ty(db, *array),
+                index: *index,
+            },
+        ),
         ConstExpr::TraitConst(assoc) => {
             let assoc = assoc.fold_with(db, folder);
             ConstExprId::new(db, ConstExpr::TraitConst(assoc))

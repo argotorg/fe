@@ -145,6 +145,11 @@ where
                 expr.visit_with(visitor);
                 to.visit_with(visitor);
             }
+            ConstExpr::ArrayRepeat { value, len } => {
+                value.visit_with(visitor);
+                len.visit_with(visitor);
+            }
+            ConstExpr::ArrayIndex { array, .. } => array.visit_with(visitor),
             ConstExpr::TraitConst(assoc) => {
                 assoc.visit_with(visitor);
             }

@@ -37,6 +37,14 @@ pub enum ConstExpr<'db> {
         expr: TyId<'db>,
         to: TyId<'db>,
     },
+    ArrayRepeat {
+        value: TyId<'db>,
+        len: TyId<'db>,
+    },
+    ArrayIndex {
+        array: TyId<'db>,
+        index: usize,
+    },
     TraitConst(AssocConstUse<'db>),
     InherentConst(InherentConstUse<'db>),
     LocalBinding(LocalBinding<'db>),
@@ -68,6 +76,12 @@ impl<'db> ConstExprId<'db> {
             }
             ConstExpr::Cast { expr, to } => {
                 format!("({} as {})", expr.pretty_print(db), to.pretty_print(db))
+            }
+            ConstExpr::ArrayRepeat { value, len } => {
+                format!("[{}; {}]", value.pretty_print(db), len.pretty_print(db))
+            }
+            ConstExpr::ArrayIndex { array, index } => {
+                format!("{}[{index}]", array.pretty_print(db))
             }
             ConstExpr::TraitConst(assoc) => {
                 let inst = assoc.inst();

@@ -277,6 +277,20 @@ where
                 }
                 self.unify_ty(*inner1, *inner2)
             }
+            (ArrayRepeat { value: v1, len: n1 }, ArrayRepeat { value: v2, len: n2 }) => {
+                self.unify_ty(*n1, *n2)?;
+                self.unify_ty(*v1, *v2)
+            }
+            (
+                ArrayIndex {
+                    array: a1,
+                    index: i1,
+                },
+                ArrayIndex {
+                    array: a2,
+                    index: i2,
+                },
+            ) if i1 == i2 => self.unify_ty(*a1, *a2),
             (Cast { expr: e1, to: t1 }, Cast { expr: e2, to: t2 }) => {
                 self.unify_ty(*t1, *t2)?;
                 self.unify_ty(*e1, *e2)

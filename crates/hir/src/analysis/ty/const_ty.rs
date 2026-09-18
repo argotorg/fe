@@ -870,12 +870,14 @@ fn const_expr_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, expr: ConstExprId
             .chain(args.iter())
             .copied()
             .all(|arg| ty_is_fully_ground(db, arg)),
-        ConstExpr::ArithBinOp { lhs, rhs, .. } => {
-            ty_is_fully_ground(db, *lhs) && ty_is_fully_ground(db, *rhs)
-        }
-        ConstExpr::UnOp { expr, .. } | ConstExpr::Cast { expr, .. } => {
-            ty_is_fully_ground(db, *expr)
-        }
+        ConstExpr::ArithBinOp { lhs, rhs, .. }
+        | ConstExpr::ArrayRepeat {
+            value: lhs,
+            len: rhs,
+        } => ty_is_fully_ground(db, *lhs) && ty_is_fully_ground(db, *rhs),
+        ConstExpr::UnOp { expr, .. }
+        | ConstExpr::Cast { expr, .. }
+        | ConstExpr::ArrayIndex { array: expr, .. } => ty_is_fully_ground(db, *expr),
         ConstExpr::TraitConst(assoc) => trait_inst_is_fully_ground(db, assoc.inst()),
         ConstExpr::InherentConst(use_) => ty_is_fully_ground(db, use_.receiver_ty()),
         ConstExpr::LocalBinding(_) => false,
@@ -951,6 +953,20 @@ fn canonicalize_const_expr_for_mode<'db>(
                 to: canonicalize_ty_for_mode(db, *to, env, mode),
             },
         ),
+        ConstExpr::ArrayRepeat { value, len } => ConstExprId::new(
+            db,
+            ConstExpr::ArrayRepeat {
+                value: canonicalize_ty_for_mode(db, *value, env, mode),
+                len: canonicalize_ty_for_mode(db, *len, env, mode),
+            },
+        ),
+        ConstExpr::ArrayIndex { array, index } => ConstExprId::new(
+            db,
+            ConstExpr::ArrayIndex {
+                array: canonicalize_ty_for_mode(db, *array, env, mode),
+                index: *index,
+            },
+        ),
         ConstExpr::TraitConst(assoc) => ConstExprId::new(
             db,
             ConstExpr::TraitConst(if let Some(inst) = env.assoc_ty_subst {
@@ -1013,6 +1029,9 @@ pub fn evaluate_type_level_const_expr<'db>(
                     )),
                 }
             }
+            ConstExpr::ArrayRepeat { .. } | ConstExpr::ArrayIndex { .. } => {
+                evaluate_array_const_expr(db, expr, expected_ty)
+            }
             ConstExpr::TraitConst(assoc) => const_ty_from_assoc_const_use(db, *assoc)
                 .map(|const_ty| const_ty.evaluate(db, Some(expected_ty))),
             ConstExpr::InherentConst(use_) => const_ty_from_inherent_const_use(db, *use_)
@@ -1024,6 +1043,95 @@ pub fn evaluate_type_level_const_expr<'db>(
             | ConstExpr::LocalBinding(_) => None,
         }
     })
+}
+
+fn evaluate_array_const_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    expr: ConstExprId<'db>,
+    expected_ty: TyId<'db>,
+) -> Option<ConstTyId<'db>> {
+    match expr.data(db) {
+        ConstExpr::ArrayRepeat { value, len } => {
+            // The element is evaluated even when the extent specializes to zero.
+            // Retain the repeat until both operands resolve, including their faults.
+            let value = evaluate_array_operand(db, *value)?;
+            if value.ty(db).has_invalid(db) {
+                return Some(value);
+            }
+            let len = evaluate_array_operand(db, *len)?;
+            let ConstTyData::Evaluated(EvaluatedConstTy::LitInt(len), _) = len.data(db) else {
+                return None;
+            };
+            Some(ConstTyId::new(
+                db,
+                ConstTyData::Evaluated(
+                    EvaluatedConstTy::Array(vec![
+                        TyId::const_ty(db, value);
+                        len.data(db).to_usize()?
+                    ]),
+                    expected_ty,
+                ),
+            ))
+        }
+        ConstExpr::ArrayIndex { array, index } => {
+            let array = evaluate_array_operand(db, *array)?;
+            if array.ty(db).has_invalid(db) {
+                return Some(array);
+            }
+            let ConstTyData::Evaluated(EvaluatedConstTy::Array(elems), _) = array.data(db) else {
+                return None;
+            };
+            let Some(elem) = elems.get(*index) else {
+                return Some(ConstTyId::invalid(db, InvalidCause::Other));
+            };
+            let TyData::ConstTy(elem) = elem.data(db) else {
+                return None;
+            };
+            Some(elem.evaluate(db, Some(expected_ty)))
+        }
+        _ => None,
+    }
+}
+
+fn evaluate_array_operand<'db>(
+    db: &'db dyn HirAnalysisDb,
+    value: TyId<'db>,
+) -> Option<ConstTyId<'db>> {
+    let TyData::ConstTy(value) = value.data(db) else {
+        return None;
+    };
+    let mut value = value.evaluate(db, None);
+    if let ConstTyData::Abstract(expr, ty) = value.data(db) {
+        value = if let Some(env) = const_canon_env(db, value) {
+            evaluate_type_level_const_expr(db, *expr, *ty, env)?
+        } else {
+            evaluate_type_level_int_const_expr(db, *expr, *ty)?
+        };
+    }
+    let ConstTyData::Evaluated(evaluated, ty) = value.data(db) else {
+        return None;
+    };
+    let fields = match evaluated {
+        EvaluatedConstTy::Tuple(fields)
+        | EvaluatedConstTy::Array(fields)
+        | EvaluatedConstTy::Record(fields) => fields,
+        _ => return Some(value),
+    };
+    let mut values = Vec::with_capacity(fields.len());
+    for field in fields {
+        let field = evaluate_array_operand(db, *field)?;
+        if field.ty(db).has_invalid(db) {
+            return Some(field);
+        }
+        values.push(TyId::const_ty(db, field));
+    }
+    let evaluated = match evaluated {
+        EvaluatedConstTy::Tuple(_) => EvaluatedConstTy::Tuple(values),
+        EvaluatedConstTy::Array(_) => EvaluatedConstTy::Array(values),
+        EvaluatedConstTy::Record(_) => EvaluatedConstTy::Record(values),
+        _ => unreachable!(),
+    };
+    Some(ConstTyId::new(db, ConstTyData::Evaluated(evaluated, *ty)))
 }
 
 fn const_ty_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, const_ty: ConstTyId<'db>) -> bool {
@@ -1336,7 +1444,7 @@ pub fn canonicalize_trait_inst_for_mode<'db>(
     )
 }
 
-fn display_const_canon_env<'db>(
+fn const_canon_env<'db>(
     db: &'db dyn HirAnalysisDb,
     const_ty: ConstTyId<'db>,
 ) -> Option<ConstCanonEnv<'db>> {
@@ -1377,7 +1485,7 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
     let TyData::ConstTy(const_ty) = ty.data(db) else {
         return ty;
     };
-    if let Some(env) = display_const_canon_env(db, *const_ty) {
+    if let Some(env) = const_canon_env(db, *const_ty) {
         return canonicalize_ty_for_mode(db, ty, env, ConstCanonMode::Identity);
     }
 
@@ -1872,6 +1980,12 @@ pub(crate) fn evaluate_const_ty<'db>(
     }
     if matches!(const_ty.data(db), ConstTyData::Hole(..)) {
         return const_ty;
+    }
+
+    if let ConstTyData::Abstract(expr, ty) = const_ty.data(db)
+        && let Some(value) = evaluate_array_const_expr(db, *expr, *ty)
+    {
+        return value.evaluate(db, expected_ty);
     }
 
     if let ConstTyData::Abstract(expr, ty) = const_ty.data(db)
@@ -2797,7 +2911,7 @@ impl<'db> ConstTyId<'db> {
 
     pub fn pretty_print_with_mode(self, db: &'db dyn HirAnalysisDb, mode: TypePrintMode) -> String {
         if matches!(mode, TypePrintMode::Concrete)
-            && let Some(env) = display_const_canon_env(db, self)
+            && let Some(env) = const_canon_env(db, self)
         {
             let concretized =
                 canonicalize_const_ty_for_mode(db, self, env, ConstCanonMode::Display);
