@@ -11,29 +11,26 @@ global private const @layout_0 $const_region_0 = {0, 10};
 
 func private %for_range_sum() -> i256 {
     block0:
-        v0.*i256 = alloca i256;
         jump block1;
 
     block1:
-        mstore v0 0.i256 i256;
-        v3.constref<@layout_0> = const.ref $const_region_0;
-        v4.i256 = call %len v3;
+        v2.constref<@layout_0> = const.ref $const_region_0;
+        v3.i256 = call %len v2;
         jump block2;
 
     block2:
-        v5.i256 = phi (0.i256 block1) (v20 block7);
-        v7.i1 = lt v5 v4;
-        br v7 block3 block4;
+        v25.i256 = phi (0.i256 block1) (v11 block7);
+        v4.i256 = phi (0.i256 block1) (v19 block7);
+        v6.i1 = lt v4 v3;
+        br v6 block3 block4;
 
     block3:
-        v10.i256 = call %get v3 v5;
-        v11.i256 = mload v0 i256;
-        (v12.i256, v13.i1) = uaddo v11 v10;
-        br v13 block5 block6;
+        v9.i256 = call %get v2 v4;
+        (v11.i256, v12.i1) = uaddo v25 v9;
+        br v12 block5 block6;
 
     block4:
-        v22.i256 = mload v0 i256;
-        return v22;
+        return v25;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -41,9 +38,8 @@ func private %for_range_sum() -> i256 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        mstore v0 v12 i256;
-        (v20.i256, v21.i1) = uaddo v5 1.i256;
-        br v21 block5 block7;
+        (v19.i256, v20.i1) = uaddo v4 1.i256;
+        br v20 block5 block7;
 
     block7:
         jump block2;
@@ -76,25 +72,24 @@ func private %len(v0.constref<@layout_0>) -> i256 {
         v3.constref<i256> = const.proj v0 1.i256;
         v4.i256 = const.load v3;
         v6.constref<i256> = const.proj v0 0.i256;
-        v7.constref<i256> = const.proj v0 0.i256;
-        v8.i256 = const.load v7;
-        v9.i1 = lt v4 v8;
-        br v9 block2 block3;
+        v7.i256 = const.load v6;
+        v8.i1 = lt v4 v7;
+        br v8 block2 block3;
 
     block2:
         jump block4;
 
     block3:
-        v11.constref<i256> = const.proj v0 1.i256;
-        v12.i256 = const.load v11;
-        v13.constref<i256> = const.proj v0 0.i256;
-        v14.i256 = const.load v13;
-        (v15.i256, v16.i1) = usubo v12 v14;
-        br v16 block5 block6;
+        v10.constref<i256> = const.proj v0 1.i256;
+        v11.i256 = const.load v10;
+        v12.constref<i256> = const.proj v0 0.i256;
+        v13.i256 = const.load v12;
+        (v14.i256, v15.i1) = usubo v11 v13;
+        br v15 block5 block6;
 
     block4:
-        v21.i256 = phi (0.i256 block2) (v15 block6);
-        return v21;
+        v20.i256 = phi (0.i256 block2) (v14 block6);
+        return v20;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;

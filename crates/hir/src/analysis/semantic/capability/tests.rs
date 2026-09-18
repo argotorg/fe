@@ -1,29 +1,38 @@
+use crate::analysis::semantic::capability::external::ExternalOrigin;
+use crate::analysis::semantic::capability::external::ExternalSource;
+use crate::analysis::semantic::capability::test_roots;
 use std::{collections::BTreeSet, iter::empty};
 
 use super::{
     guard::{ChoiceKey, Guard, ValueOccurrence},
+    handle::{HandleAddressSpace, OpaqueHandleContract, OpaqueHandleOccurrence, OpaqueHandleRef},
     index::{BinderScope, IndexError, IndexExpr, IndexNamespace, IndexSubst},
+    loan::{CapabilityRef, LoanDef, LoanId, LoanRef},
     path::{Projection, RegionPath, StructuralPath},
+    region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace},
+    repack::ReferentRepackId,
     semantics::{CapabilityClass, CapabilitySemantics, StorageClass},
     shape::{ArrayLength, CapabilityShape, ShapeChildren, ShapeId, capability_shape},
     source::{InputSource, SourceExpr},
+    state::BorrowState,
     value::{Guarded, IndexPayload, ValueId, ValueInterner, ValueLimits},
 };
 use crate::{
     analysis::{
+        HirAnalysisDb,
         semantic::{
-            FieldIndex, VariantIndex, get_or_build_semantic_instance,
+            BorrowActivation, FieldIndex, SemOrigin, VariantIndex, get_or_build_semantic_instance,
             identity_semantic_instance_key,
-            normalized::{NValueDefinition, NValueId, normalize_semantic_body},
+            normalized::{NRootId, NValueDefinition, NValueId, normalize_semantic_body},
         },
         ty::{
-            provider::ProviderTransport,
+            provider::{ProviderAddressSpace, ProviderTransport},
             ty_check::BodyOwner,
             ty_def::{BorrowKind, TyId},
         },
     },
     hir_def::ItemKind,
-    test_db::HirAnalysisTestDb,
+    test_db::{HirAnalysisTestDb, find_func},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -38,7 +47,7 @@ impl<'db> IndexPayload<'db> for Payload<'db> {
     fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>> {
         self.indices.iter().copied()
     }
-    fn substitute(&self, subst: &IndexSubst<'db>) -> Self {
+    fn substitute(&self, _: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
         Self {
             tag: self.tag,
             indices: self
@@ -267,14 +276,16 @@ fn independently_built_and_nested_arrays_are_alpha_canonical() {
     let same = build(1);
     assert_eq!(left, same);
     assert_eq!(values.join(&left, &right), values.join(&right, &left));
-    let selected = values.project(
-        &left,
-        &StructuralPath::new([
-            Projection::Index(IndexExpr::Const(9)),
-            Projection::Index(IndexExpr::Const(2)),
-        ]),
-        ValueOccurrence::Argument(0),
-    );
+    let selected = values
+        .project(
+            &left,
+            &StructuralPath::new([
+                Projection::Index(IndexExpr::Const(9)),
+                Projection::Index(IndexExpr::Const(2)),
+            ]),
+            ValueOccurrence::Argument(0),
+        )
+        .expect("in-bounds projection");
     let leaves = values.leaves(&selected, ValueOccurrence::Argument(0));
     assert_eq!(
         leaves[0].payload.indices,
@@ -315,10 +326,15 @@ fn structural_join_laws_hold_for_independently_constructed_sparse_arrays() {
                 runtime(0),
                 runtime(1),
             ] {
-                let l = values.project(left, &path(index), ValueOccurrence::Argument(0));
-                let r = values.project(right, &path(index), ValueOccurrence::Argument(0));
-                let projected_join =
-                    values.project(&joined, &path(index), ValueOccurrence::Argument(0));
+                let l = values
+                    .project(left, &path(index), ValueOccurrence::Argument(0))
+                    .expect("in-bounds projection");
+                let r = values
+                    .project(right, &path(index), ValueOccurrence::Argument(0))
+                    .expect("in-bounds projection");
+                let projected_join = values
+                    .project(&joined, &path(index), ValueOccurrence::Argument(0))
+                    .expect("in-bounds projection");
                 assert_eq!(projected_join, values.join(&l, &r));
             }
         }
@@ -357,7 +373,9 @@ fn exact_updates_preserve_product_siblings_and_sparse_remainders() {
     ]);
     let updated = values.replace(&initial, &replaced, &right);
     assert_eq!(
-        values.project(&updated, &replaced, ValueOccurrence::Argument(0)),
+        values
+            .project(&updated, &replaced, ValueOccurrence::Argument(0))
+            .expect("in-bounds projection"),
         right
     );
     let sibling = StructuralPath::new([
@@ -365,7 +383,9 @@ fn exact_updates_preserve_product_siblings_and_sparse_remainders() {
         Projection::Field(FieldIndex(1)),
     ]);
     assert_eq!(
-        values.project(&updated, &sibling, ValueOccurrence::Argument(0)),
+        values
+            .project(&updated, &sibling, ValueOccurrence::Argument(0))
+            .expect("in-bounds projection"),
         right
     );
     let untouched = StructuralPath::new([
@@ -373,7 +393,9 @@ fn exact_updates_preserve_product_siblings_and_sparse_remainders() {
         Projection::Field(FieldIndex(0)),
     ]);
     assert_eq!(
-        values.project(&updated, &untouched, ValueOccurrence::Argument(0)),
+        values
+            .project(&updated, &untouched, ValueOccurrence::Argument(0))
+            .expect("in-bounds projection"),
         left
     );
     assert_eq!(
@@ -541,32 +563,38 @@ fn sparse_arrays_match_concrete_execution_for_small_lengths_and_selector_valuati
                             }
                         }
                         for (index, member) in concrete.iter().enumerate() {
-                            let actual = values.project(
-                                &next,
-                                &path(IndexExpr::Const(index)),
-                                ValueOccurrence::Argument(0),
-                            );
+                            let actual = values
+                                .project(
+                                    &next,
+                                    &path(IndexExpr::Const(index)),
+                                    ValueOccurrence::Argument(0),
+                                )
+                                .expect("in-bounds projection");
                             assert_eq!(
                                 evaluate(&mut values, &actual, valuation),
                                 *member,
                                 "len={len} action={action:?} selectors={valuation:?}"
                             );
-                            let wide = values.project(
-                                &widened,
-                                &path(IndexExpr::Const(index)),
-                                ValueOccurrence::Argument(0),
-                            );
+                            let wide = values
+                                .project(
+                                    &widened,
+                                    &path(IndexExpr::Const(index)),
+                                    ValueOccurrence::Argument(0),
+                                )
+                                .expect("in-bounds projection");
                             assert!(
                                 member.is_subset(&evaluate(&mut values, &wide, valuation)),
                                 "widening removed a concrete possibility"
                             );
                         }
                         for (selector, index) in valuation.iter().take(2).enumerate() {
-                            let actual = values.project(
-                                &next,
-                                &path(runtime(selector as u32)),
-                                ValueOccurrence::Argument(0),
-                            );
+                            let actual = values
+                                .project(
+                                    &next,
+                                    &path(runtime(selector as u32)),
+                                    ValueOccurrence::Argument(0),
+                                )
+                                .expect("in-bounds projection");
                             assert_eq!(evaluate(&mut values, &actual, valuation), concrete[*index]);
                         }
                     }
@@ -589,16 +617,18 @@ fn payload_mapping_preserves_structure_and_uses_checked_substitution() {
         leaf(values, element, scope, 1, vec![binder])
     });
     let mut destination = ValueInterner::new(&db, ValueLimits::default());
-    let mapped = source.map_payloads(&value, &mut destination, |_, _, entry| {
+    let mapped = source.map_payloads(&value, &mut destination, |_, _, entry, _| {
         let mut entry = entry.clone();
         entry.payload.tag = 2;
         vec![entry]
     });
-    let projected = destination.project(
-        &mapped,
-        &path(IndexExpr::Const(5)),
-        ValueOccurrence::Summary,
-    );
+    let projected = destination
+        .project(
+            &mapped,
+            &path(IndexExpr::Const(5)),
+            ValueOccurrence::Summary,
+        )
+        .expect("in-bounds projection");
     let leaves = destination.leaves(&projected, ValueOccurrence::Summary);
     assert_eq!(
         leaves[0].payload,
@@ -1021,8 +1051,12 @@ fn symbolic_array_updates_and_projections_commute_with_specialization() {
     let family = values.array_repeat(shape, &initial);
     let family = values.replace(&family, &path(2.into()), &exact);
     let family = values.replace(&family, &path(runtime(0)), &dynamic);
-    let selected = values.project(&family, &path(runtime(1)), ValueOccurrence::Summary);
-    let selected_zero = values.project(&family, &path(0.into()), ValueOccurrence::Summary);
+    let selected = values
+        .project(&family, &path(runtime(1)), ValueOccurrence::Summary)
+        .expect("in-bounds projection");
+    let selected_zero = values
+        .project(&family, &path(0.into()), ValueOccurrence::Summary)
+        .expect("in-bounds projection");
     for length in 0..=4 {
         let subst = IndexSubst::new(&scope(), &scope(), [(len.index(), length.into())]).unwrap();
         let specialized = values.substitute(&family, &subst);
@@ -1146,7 +1180,7 @@ impl<'db> IndexPayload<'db> for ViewPayload {
     fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>> {
         empty()
     }
-    fn substitute(&self, _: &IndexSubst<'db>) -> Self {
+    fn substitute(&self, _: &'db dyn HirAnalysisDb, _: &IndexSubst<'db>) -> Self {
         self.clone()
     }
 }
@@ -1215,17 +1249,21 @@ fn structural_summary_mapping_retains_nested_sources_and_exact_array_overrides()
     let replacement = leaf(&mut values, element, &scope(), 1, vec![IndexExpr::Const(9)]);
     let value = values.replace(&value, &path(IndexExpr::Const(3)), &replacement);
     let mut summaries = ValueInterner::new(&db, ValueLimits::default());
-    let summary = values.map_payloads(&value, &mut summaries, |semantics, slot, entry| {
+    let summary = values.map_payloads(&value, &mut summaries, |semantics, slot, entry, _| {
         assert_eq!(semantics.class, CapabilityClass::Borrow(BorrowKind::Mut));
         assert_eq!(slot.as_slice().len(), 1);
         vec![Guarded {
             guard: entry.guard.clone(),
-            payload: SourceExpr::Input {
-                source: InputSource::slot(u32::from(entry.payload.tag), StructuralPath::default())
-                    .follow(RegionPath::new([Projection::Field(FieldIndex(0))]))
-                    .follow(RegionPath::new([Projection::Index(
-                        entry.payload.indices[0],
-                    )])),
+            payload: SourceExpr {
+                views: Default::default(),
+                source: test_roots::input(
+                    &db,
+                    InputSource::slot(u32::from(entry.payload.tag), StructuralPath::default())
+                        .follow(RegionPath::new([Projection::Field(FieldIndex(0))]))
+                        .follow(RegionPath::new([Projection::Index(
+                            entry.payload.indices[0],
+                        )])),
+                ),
                 path: RegionPath::new([Projection::Field(FieldIndex(1))]),
             },
         }]
@@ -1233,35 +1271,39 @@ fn structural_summary_mapping_retains_nested_sources_and_exact_array_overrides()
     assert_eq!(summary.shape(), value.shape());
     assert!(summaries.metrics().nodes_created < 20);
     for (member, param, selected) in [(0, 0, 0), (3, 1, 9), (999_999, 0, 999_999)] {
-        let projected = summaries.project(
-            &summary,
-            &path(IndexExpr::Const(member)),
-            ValueOccurrence::Summary,
-        );
+        let projected = summaries
+            .project(
+                &summary,
+                &path(IndexExpr::Const(member)),
+                ValueOccurrence::Summary,
+            )
+            .expect("in-bounds projection");
         let leaves = summaries.leaves(&projected, ValueOccurrence::Summary);
         assert_eq!(leaves.len(), 1);
         assert_eq!(
             leaves[0].payload,
-            SourceExpr::Input {
-                source: InputSource::slot(param, StructuralPath::default())
-                    .follow(RegionPath::new([Projection::Field(FieldIndex(0))]))
-                    .follow(RegionPath::new([Projection::Index(IndexExpr::Const(
-                        selected
-                    ))])),
+            SourceExpr {
+                views: Default::default(),
+                source: test_roots::input(
+                    &db,
+                    InputSource::slot(param, StructuralPath::default())
+                        .follow(RegionPath::new([Projection::Field(FieldIndex(0))]))
+                        .follow(RegionPath::new([Projection::Index(IndexExpr::Const(
+                            selected
+                        ))]))
+                ),
                 path: RegionPath::new([Projection::Field(FieldIndex(1))]),
             }
         );
     }
     let mut restored = ValueInterner::new(&db, ValueLimits::default());
-    let roundtrip = summaries.map_payloads(&summary, &mut restored, |semantics, _, entry| {
+    let roundtrip = summaries.map_payloads(&summary, &mut restored, |semantics, _, entry, _| {
         assert_eq!(semantics.target_ty, TyId::u256(&db));
-        let SourceExpr::Input { source, .. } = &entry.payload else {
-            panic!("input source")
-        };
+        let source = &entry.payload.source;
         vec![Guarded {
             guard: entry.guard.clone(),
             payload: Payload {
-                tag: u8::try_from(source.param()).unwrap(),
+                tag: u8::try_from(source.param().unwrap()).unwrap(),
                 indices: source.indices().collect(),
             },
         }]
@@ -1302,7 +1344,7 @@ fn contextual_payload_mapping_reports_variant_fields_and_nested_array_binders() 
         }]
     });
     let mut summaries = ValueInterner::new(&db, ValueLimits::default());
-    let summary = values.map_payloads(&value, &mut summaries, |_, slot, entry| {
+    let summary = values.map_payloads(&value, &mut summaries, |_, slot, entry, _| {
         assert!(matches!(
             slot.as_slice(),
             [
@@ -1317,16 +1359,649 @@ fn contextual_payload_mapping_reports_variant_fields_and_nested_array_binders() 
         assert_eq!(slot.indices().collect::<Vec<_>>(), entry.payload.indices);
         vec![Guarded {
             guard: entry.guard.clone(),
-            payload: SourceExpr::Input {
-                source: InputSource::slot(0, slot.clone()),
+            payload: SourceExpr {
+                views: Default::default(),
+                source: test_roots::input(&db, InputSource::slot(0, slot.clone())),
                 path: RegionPath::default(),
             },
         }]
     });
     for leaf in summaries.leaves(&summary, ValueOccurrence::Summary) {
-        let SourceExpr::Input { source, .. } = leaf.payload else {
-            panic!("input source")
-        };
-        assert_eq!(source, InputSource::slot(0, leaf.path));
+        let source = leaf.payload.source;
+        assert_eq!(
+            source,
+            test_roots::input(&db, InputSource::slot(0, leaf.path))
+        );
     }
+}
+
+#[test]
+fn summary_alternatives_own_unknown_indices_under_array_members() {
+    let db = HirAnalysisTestDb::default();
+    let leaf = leaf_shape(&db);
+    let shape = array_shape(&db, leaf, 3);
+    let mut values = ValueInterner::new(&db, ValueLimits::default());
+    let unknown = values.from_shape(shape, &scope(), |_, _, scope| {
+        let (witness_scope, selected) = scope.bind(IndexNamespace::Existential);
+        vec![Guarded {
+            guard: Guard::always(&witness_scope)
+                .with_bound(selected, IndexExpr::Const(3))
+                .unwrap(),
+            payload: Payload {
+                tag: 1,
+                indices: vec![selected],
+            },
+        }]
+    });
+    let first = values
+        .project(
+            &unknown,
+            &path(IndexExpr::Const(0)),
+            ValueOccurrence::Summary,
+        )
+        .expect("in-bounds projection");
+    let last = values
+        .project(
+            &unknown,
+            &path(IndexExpr::Const(2)),
+            ValueOccurrence::Summary,
+        )
+        .expect("in-bounds projection");
+    assert_eq!(
+        first, last,
+        "an opaque result does not assert pointwise input/output correlation"
+    );
+    assert_eq!(first.scope(), &scope());
+    assert_eq!(
+        first.direct()[0]
+            .guard
+            .scope()
+            .existential_extension_of(&scope()),
+        Some(1)
+    );
+    assert!(
+        scope()
+            .validate(first.direct()[0].payload.indices[0])
+            .is_err()
+    );
+    let (outer, binder) = scope().bind(IndexNamespace::Result);
+    let lifted = values.substitute(&unknown, &IndexSubst::new(&scope(), &outer, []).unwrap());
+    let selected = values
+        .project(&lifted, &path(binder), ValueOccurrence::Summary)
+        .expect("in-bounds projection");
+    assert_eq!(
+        selected.direct()[0]
+            .guard
+            .scope()
+            .existential_extension_of(&outer),
+        Some(1)
+    );
+}
+
+#[test]
+fn existential_region_witnesses_are_fresh_for_independent_enum_selections() {
+    let db = HirAnalysisTestDb::default();
+    let base = scope();
+    let (witness_scope, selected) = base.bind(IndexNamespace::Existential);
+    let root = test_roots::local(&db, NRootId::from_u32(0));
+    let guarded = |variant| {
+        RegionSet::new(
+            &base,
+            [Guarded {
+                guard: Guard::always(&witness_scope)
+                    .with_bound(selected, IndexExpr::Const(2))
+                    .unwrap()
+                    .with_variant(
+                        ChoiceKey::new(ValueOccurrence::Argument(0), path(selected)),
+                        VariantIndex(variant),
+                    )
+                    .unwrap(),
+                payload: SymbolicPlace {
+                    views: Default::default(),
+                    root: root.clone(),
+                    path: RegionPath::default(),
+                },
+            }],
+        )
+    };
+    let left = guarded(0);
+    let right = guarded(1);
+    assert!(
+        !matches!(left.overlap(&right), OverlapResult::Disjoint),
+        "different selected elements can have different variants while holding the same target"
+    );
+    let whole = RegionSet::singleton(&base, root, RegionPath::default());
+    assert!(whole.provably_covers(&left));
+    assert!(!left.provably_covers(&whole));
+    assert_eq!(
+        whole.remove_covered(&left),
+        whole,
+        "a possible witness is not a definite write"
+    );
+}
+
+#[test]
+fn occurrence_substitution_rechecks_colliding_enum_choices() {
+    let a = ValueOccurrence::SummaryChoice(0);
+    let b = ValueOccurrence::SummaryChoice(1);
+    let guard = Guard::always(&scope())
+        .with_variant(
+            ChoiceKey::new(a, StructuralPath::default()),
+            VariantIndex(0),
+        )
+        .unwrap()
+        .with_variant(
+            ChoiceKey::new(b, StructuralPath::default()),
+            VariantIndex(1),
+        )
+        .unwrap();
+    assert!(
+        guard
+            .map_occurrences(|_| ValueOccurrence::Argument(0))
+            .is_none()
+    );
+    let renamed = guard
+        .map_occurrences(|occurrence| match occurrence {
+            ValueOccurrence::SummaryChoice(choice) => ValueOccurrence::CallChoice {
+                result: NValueId::from_u32(9),
+                choice,
+            },
+            other => other,
+        })
+        .unwrap();
+    assert!(
+        renamed
+            .map_occurrences(|occurrence| match occurrence {
+                ValueOccurrence::CallChoice { choice, .. } =>
+                    ValueOccurrence::SummaryChoice(choice),
+                other => other,
+            })
+            .is_some_and(|restored| restored == guard)
+    );
+}
+
+#[test]
+fn payload_mapping_masks_overwritten_default_members_before_observing_sources() {
+    let db = HirAnalysisTestDb::default();
+    let mut values = ValueInterner::new(&db, ValueLimits::default());
+    let shape = array_shape(&db, leaf_shape(&db), 3);
+    let original = values.from_shape(shape, &scope(), |_, path, scope| {
+        vec![Guarded {
+            guard: Guard::always(scope),
+            payload: Payload {
+                tag: 0,
+                indices: path.indices().collect(),
+            },
+        }]
+    });
+    let replacement = values.from_shape(leaf_shape(&db), &scope(), |_, _, scope| {
+        vec![Guarded {
+            guard: Guard::always(scope),
+            payload: Payload {
+                tag: 1,
+                indices: Vec::new(),
+            },
+        }]
+    });
+    let updated = values.replace(&original, &path(IndexExpr::Const(0)), &replacement);
+    let mut destination = ValueInterner::new(&db, ValueLimits::default());
+    let mut visited_default = false;
+    values.map_payloads(&updated, &mut destination, |_, _, entry, domain| {
+        if entry.payload.tag == 0 {
+            visited_default = true;
+            let index = entry.payload.indices[0];
+            assert!(domain.with_equality(index, IndexExpr::Const(0)).is_none());
+            assert!(domain.with_equality(index, IndexExpr::Const(1)).is_some());
+            assert!(domain.with_equality(index, IndexExpr::Const(3)).is_none());
+        }
+        vec![entry.clone()]
+    });
+    assert!(visited_default);
+}
+
+#[test]
+fn opaque_handle_origins_preserve_copies_but_never_imply_fresh_storage() {
+    let db = HirAnalysisTestDb::default();
+    let scope = scope();
+    let contract = OpaqueHandleContract {
+        handle_ty: TyId::u256(&db),
+        target_ty: TyId::u256(&db),
+        address_space: HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+    };
+    let first = RegionRoot::External(ExternalSource::opaque(
+        &db,
+        OpaqueHandleRef {
+            contract,
+            occurrence: OpaqueHandleOccurrence::Summary(0),
+            arguments: Box::new([]),
+        },
+    ));
+    let second = RegionRoot::External(ExternalSource::opaque(
+        &db,
+        OpaqueHandleRef {
+            contract,
+            occurrence: OpaqueHandleOccurrence::Summary(1),
+            arguments: Box::new([]),
+        },
+    ));
+    let left = RegionSet::singleton(
+        &scope,
+        first.clone(),
+        RegionPath::new([Projection::Field(FieldIndex(0))]),
+    );
+    let same = left.clone();
+    let sibling = RegionSet::singleton(
+        &scope,
+        first,
+        RegionPath::new([Projection::Field(FieldIndex(1))]),
+    );
+    let unknown = RegionSet::singleton(
+        &scope,
+        second,
+        RegionPath::new([Projection::Field(FieldIndex(1))]),
+    );
+    assert!(left.provably_covers(&same));
+    assert_eq!(left.overlap(&sibling), OverlapResult::Disjoint);
+    assert_eq!(left.overlap(&unknown), OverlapResult::Unknown);
+    assert!(!left.provably_covers(&unknown));
+    let local = RegionSet::singleton(
+        &scope,
+        test_roots::local(&db, NRootId::from_u32(0)),
+        RegionPath::default(),
+    );
+    assert_eq!(left.overlap(&local), OverlapResult::Unknown);
+    let storage = RegionSet::singleton(
+        &scope,
+        RegionRoot::External(ExternalSource::opaque(
+            &db,
+            OpaqueHandleRef {
+                contract: OpaqueHandleContract {
+                    address_space: HandleAddressSpace::Known(ProviderAddressSpace::Storage),
+                    ..contract
+                },
+                occurrence: OpaqueHandleOccurrence::Summary(0),
+                arguments: Box::new([]),
+            },
+        )),
+        RegionPath::default(),
+    );
+    assert_eq!(left.overlap(&storage), OverlapResult::Disjoint);
+    assert_eq!(local.overlap(&storage), OverlapResult::Disjoint);
+}
+
+#[test]
+fn out_of_bounds_array_operations_have_no_reachable_capability_effect() {
+    let db = HirAnalysisTestDb::default();
+    let element = leaf_shape(&db);
+    let mut values = ValueInterner::new(&db, ValueLimits::default());
+    let original = leaf(&mut values, element, &scope(), 1, vec![]);
+    let replacement = leaf(&mut values, element, &scope(), 2, vec![]);
+    for len in [0, 2] {
+        let shape = array_shape(&db, element, len);
+        let array = values.array_repeat(shape, &original);
+        for index in [len, usize::MAX] {
+            let selected = path(IndexExpr::Const(index));
+            assert!(
+                values
+                    .project(&array, &selected, ValueOccurrence::Summary)
+                    .is_none()
+            );
+            assert_eq!(values.replace(&array, &selected, &replacement), array);
+        }
+        if len != 0 {
+            assert_eq!(
+                values.project(&array, &path(0.into()), ValueOccurrence::Summary),
+                Some(original.clone())
+            );
+        }
+    }
+}
+
+#[test]
+fn opaque_handle_specialization_keeps_payload_and_shape_contracts_aligned() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "opaque_handle_specialization.fe".into(),
+        r#"
+use core::effect_ref::{AddressSpace, EffectHandle}
+struct Ptr<T> { raw: u256 }
+impl<T> EffectHandle for Ptr<T> {
+    type Target = T
+    const SPACE: AddressSpace = AddressSpace::Memory
+    fn from_raw(_ raw: u256) -> Self { Self { raw } }
+    fn raw(self) -> u256 { self.raw }
+}
+fn inspect<const N: usize>(_ ptr: own Ptr<[u256; N]>) {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = find_func(&db, top_mod, "inspect");
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+    );
+    let artifacts = normalize_semantic_body(&db, instance).expect("generic handle admission");
+    let ty = artifacts
+        .body
+        .values
+        .iter()
+        .find(|value| matches!(value.definition, NValueDefinition::EntryParam { param: 0 }))
+        .expect("handle parameter")
+        .ty;
+    let contract = OpaqueHandleContract::for_ty(&db, func.scope(), instance.assumptions(&db), ty)
+        .unwrap()
+        .expect("declared handle contract");
+    let shape = capability_shape(&db, func.scope(), instance.assumptions(&db), ty).unwrap();
+    let target = capability_shape(
+        &db,
+        func.scope(),
+        instance.assumptions(&db),
+        contract.target_ty,
+    )
+    .unwrap();
+    let ShapeChildren::Array { len, .. } = target.children(&db) else {
+        panic!("array target")
+    };
+    let origin = OpaqueHandleRef {
+        contract,
+        occurrence: OpaqueHandleOccurrence::Summary(4),
+        arguments: vec![runtime(2)].into_boxed_slice(),
+    };
+    let region = RegionSet::singleton(
+        &scope(),
+        RegionRoot::External(ExternalSource::opaque(&db, origin)),
+        RegionPath::default(),
+    );
+    let source = SourceExpr::from_place(&region.clauses()[0].payload).unwrap();
+    let mut values = ValueInterner::new(&db, ValueLimits::default());
+    let value = values.from_shape(shape, &scope(), |_, _, scope| {
+        vec![Guarded {
+            guard: Guard::always(scope),
+            payload: CapabilityRef::Handle(region.clone()),
+        }]
+    });
+    for length in [0, 3] {
+        let subst = IndexSubst::new(
+            &scope(),
+            &scope(),
+            [
+                (len.index(), IndexExpr::Const(length)),
+                (runtime(2), IndexExpr::Const(5)),
+            ],
+        )
+        .unwrap();
+        let specialized = values.substitute(&value, &subst);
+        let semantics = specialized.shape().direct(&db).unwrap();
+        assert_eq!(semantics.target_ty.array_len(&db), Some(length));
+        let selected = specialized.direct()[0].payload.region(&db, &[], &scope());
+        let RegionRoot::External(ExternalSource {
+            origin: ExternalOrigin::OpaqueHandle(origin),
+            ..
+        }) = &selected.clauses()[0].payload.root
+        else {
+            panic!("specialization must preserve the opaque origin")
+        };
+        assert_eq!(origin.contract.handle_ty, semantics.representation_ty);
+        assert_eq!(origin.contract.target_ty, semantics.target_ty);
+        assert_eq!(
+            origin.contract.address_space,
+            HandleAddressSpace::Known(ProviderAddressSpace::Memory)
+        );
+        assert_eq!(origin.occurrence, OpaqueHandleOccurrence::Summary(4));
+        assert_eq!(origin.arguments.as_ref(), &[IndexExpr::Const(5)]);
+        assert_eq!(
+            source.substitute(&db, &subst),
+            SourceExpr::from_place(&selected.clauses()[0].payload).unwrap()
+        );
+    }
+}
+
+#[test]
+fn referent_views_preserve_projected_storage_authority_and_nested_handle_origins() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "referent_views.fe".into(),
+        r#"
+use core::effect_ref::{AddressSpace, EffectHandle}
+struct Cell<const ID: u256> { value: u256 }
+struct Ptr<T> { raw: u256 }
+impl<T> EffectHandle for Ptr<T> {
+    type Target = T
+    const SPACE: AddressSpace = AddressSpace::Memory
+    fn from_raw(_ raw: u256) -> Self { Self { raw } }
+    fn raw(self) -> u256 { self.raw }
+}
+struct Holder<T> { ptr: Ptr<T> }
+fn inspect(
+    _ first: own [Holder<Cell<1>>; 2],
+    _ second: own [Holder<Cell<2>>; 2],
+    _ third: own [Holder<Cell<3>>; 2],
+) {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = find_func(&db, top_mod, "inspect");
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+    );
+    let artifacts = normalize_semantic_body(&db, instance).unwrap();
+    let types: Vec<_> = artifacts
+        .body
+        .values
+        .iter()
+        .filter_map(|value| {
+            matches!(value.definition, NValueDefinition::EntryParam { .. }).then_some(value.ty)
+        })
+        .collect();
+    let [source_ty, target_ty, third_ty]: [TyId<'_>; 3] = types.try_into().unwrap();
+    let shape = |ty| capability_shape(&db, func.scope(), instance.assumptions(&db), ty).unwrap();
+    let proof = |source, target| {
+        ReferentRepackId::new(&db, source, target, func.scope(), instance.assumptions(&db))
+    };
+    let root = |index| test_roots::local(&db, NRootId::from_u32(index));
+    let region = |index| RegionSet::singleton(&scope(), root(index), RegionPath::default());
+    let mut values = ValueInterner::new(&db, ValueLimits::default());
+    let mut contents = |ty, index| {
+        values.from_shape(shape(ty), &scope(), |_, _, scope| {
+            vec![Guarded {
+                guard: Guard::always(scope),
+                payload: CapabilityRef::Handle(RegionSet::singleton(
+                    scope,
+                    root(index),
+                    RegionPath::default(),
+                )),
+            }]
+        })
+    };
+    let original = contents(source_ty, 10);
+    let replacement = contents(target_ty, 11);
+    let mut state = BorrowState::new(&mut values, [], [(root(0), original.clone())]);
+    let conversion = proof(source_ty, target_ty);
+    let converted = region(0).repack(&db, conversion);
+    assert!(matches!(
+        converted.overlap(&region(0)),
+        OverlapResult::Overlap(_)
+    ));
+    assert_eq!(converted.repack(&db, conversion.inverse(&db)), region(0));
+    assert_eq!(
+        converted
+            .repack(&db, proof(target_ty, third_ty))
+            .repack(&db, proof(third_ty, source_ty)),
+        region(0),
+        "a conversion cycle must not grow the fixed-point state",
+    );
+    let selected = RegionPath::new([
+        Projection::Index(IndexExpr::Const(1)),
+        Projection::Field(FieldIndex(0)),
+    ]);
+    let read = state
+        .read_region(
+            &db,
+            &mut values,
+            &converted,
+            shape(target_ty),
+            ValueOccurrence::Summary,
+        )
+        .unwrap();
+    let handle = values
+        .project(
+            &read,
+            &StructuralPath::new(selected.as_slice()),
+            ValueOccurrence::Summary,
+        )
+        .unwrap();
+    let target = handle.direct()[0].payload.region(&db, &[], &scope());
+    assert!(matches!(
+        target.overlap(&region(10)),
+        OverlapResult::Overlap(_)
+    ));
+    assert_ne!(
+        target,
+        region(10),
+        "nested handle keeps its referent conversion"
+    );
+    let projected_read = state
+        .read_region(
+            &db,
+            &mut values,
+            &converted.project(&selected),
+            handle.shape(),
+            ValueOccurrence::Summary,
+        )
+        .unwrap();
+    assert_eq!(projected_read, handle, "projection and conversion commute");
+
+    let new_handle = values
+        .project(
+            &replacement,
+            &StructuralPath::new(selected.as_slice()),
+            ValueOccurrence::Summary,
+        )
+        .unwrap();
+    state
+        .write_region(&mut values, &converted.project(&selected), &new_handle)
+        .unwrap();
+    let reread = state
+        .read_region(
+            &db,
+            &mut values,
+            &converted.project(&selected),
+            new_handle.shape(),
+            ValueOccurrence::Summary,
+        )
+        .unwrap();
+    assert_eq!(
+        reread, new_handle,
+        "inverse writeback and forward load preserve identity"
+    );
+    let original_handle = values
+        .project(
+            &original,
+            &StructuralPath::new(selected.as_slice()),
+            ValueOccurrence::Summary,
+        )
+        .unwrap();
+    let physical = state
+        .read_region(
+            &db,
+            &mut values,
+            &region(0).project(&selected),
+            original_handle.shape(),
+            ValueOccurrence::Summary,
+        )
+        .unwrap();
+    let physical_target = physical.direct()[0].payload.region(&db, &[], &scope());
+    assert!(matches!(
+        physical_target.overlap(&region(11)),
+        OverlapResult::Overlap(_)
+    ));
+    assert_ne!(
+        physical_target,
+        region(11),
+        "physical storage keeps the inverse view"
+    );
+    let sibling = RegionPath::new([
+        Projection::Index(IndexExpr::Const(0)),
+        Projection::Field(FieldIndex(0)),
+    ]);
+    assert_eq!(
+        state
+            .read_region(
+                &db,
+                &mut values,
+                &region(0).project(&sibling),
+                original_handle.shape(),
+                ValueOccurrence::Summary
+            )
+            .unwrap(),
+        original_handle
+    );
+
+    let (mut loan, _, abstraction) = LoanDef::new(
+        BorrowKind::Mut,
+        BorrowActivation::Immediate,
+        SemOrigin::Synthetic,
+        &scope(),
+    );
+    loan.extend(&region(0).substitute(&db, &abstraction), []);
+    let borrow = CapabilityRef::borrow(
+        BorrowKind::Mut,
+        LoanRef {
+            id: LoanId(0),
+            args: Box::new([]),
+        },
+    );
+    let borrowed = values.from_shape(
+        shape(TyId::borrow_mut_of(&db, source_ty)),
+        &scope(),
+        |_, _, scope| {
+            vec![Guarded {
+                guard: Guard::always(scope),
+                payload: borrow.clone(),
+            }]
+        },
+    );
+    let borrowed_conversion = proof(
+        TyId::borrow_mut_of(&db, source_ty),
+        TyId::borrow_mut_of(&db, target_ty),
+    );
+    let converted_borrow = borrowed_conversion
+        .apply(&db, &mut values, &borrowed, &[])
+        .unwrap();
+    let converted_payload = &converted_borrow.direct()[0].payload;
+    assert_eq!(converted_payload.loan(), borrow.loan());
+    assert_eq!(
+        converted_payload.authority(&Guard::always(&scope())),
+        borrow.authority(&Guard::always(&scope()))
+    );
+    assert_eq!(converted_payload.region(&db, &[loan], &scope()), converted);
+    assert_eq!(
+        borrowed_conversion
+            .inverse(&db)
+            .apply(&db, &mut values, &converted_borrow, &[])
+            .unwrap(),
+        borrowed
+    );
+
+    // Summary paths are relative to an input; their views must move with that
+    // input when a call receives an already projected region.
+    let input = RegionSet::singleton(
+        &scope(),
+        RegionRoot::External(test_roots::input(&db, InputSource::place(0))),
+        RegionPath::default(),
+    );
+    let source = SourceExpr::from_place(
+        &input.repack(&db, conversion).project(&selected).clauses()[0].payload,
+    )
+    .unwrap();
+    let SourceExpr { path, views, .. } = source;
+    let caller_prefix = RegionPath::new([Projection::Field(FieldIndex(7))]);
+    let caller = region(0).project(&caller_prefix);
+    assert_eq!(
+        caller
+            .project(&path)
+            .with_relative_views(&db, &views, path.as_slice().len()),
+        caller.repack(&db, conversion).project(&path)
+    );
 }

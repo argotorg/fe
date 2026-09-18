@@ -102,7 +102,9 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
                     return false;
                 };
                 match &root.kind {
-                    NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => self
+                    NRootKind::LocalSlot { .. }
+                    | NRootKind::Temporary { .. }
+                    | NRootKind::ParamPlace { .. } => self
                         .env
                         .body()
                         .root_local(root_id)
@@ -328,7 +330,11 @@ fn is_self_rooted_value_place(
         NPlaceBase::Root(root) => {
             matches!(
                 body.normalized.root(root).map(|root| &root.kind),
-                Some(NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. })
+                Some(
+                    NRootKind::LocalSlot { .. }
+                        | NRootKind::Temporary { .. }
+                        | NRootKind::ParamPlace { .. }
+                )
             ) && body.root_local(root) == Some(local)
         }
     }
@@ -358,7 +364,10 @@ fn normalized_value_place<'db>(
                 .kind
             {
                 NStatementKind::Define {
-                    expr: NExpr::Load { place, .. } | NExpr::Borrow { place, .. },
+                    expr:
+                        NExpr::Load { place, .. }
+                        | NExpr::Borrow { place, .. }
+                        | NExpr::MakeView { place, .. },
                     ..
                 } => Some(place.clone()),
                 NStatementKind::Define {
@@ -407,7 +416,7 @@ pub(super) fn local_read_places_extractable_from_value(
             .iter()
             .all(|statement| match &statement.kind {
                 NStatementKind::Define {
-                    expr: NExpr::Load { place, .. },
+                    expr: NExpr::Load { place, .. } | NExpr::MakeView { place, .. },
                     ..
                 } => {
                     place_root_local(body, place) != Some(local)

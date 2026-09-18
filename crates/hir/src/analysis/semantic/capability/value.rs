@@ -12,7 +12,7 @@ use crate::analysis::{
 };
 use rustc_hash::FxHashMap;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
     hash::Hash,
     sync::Arc,
 };
@@ -20,7 +20,7 @@ use std::{
 pub trait IndexPayload<'db>: Clone + Eq + Ord + Hash {
     fn accepts_class(&self, class: CapabilityClass) -> bool;
     fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>>;
-    fn substitute(&self, substitution: &IndexSubst<'db>) -> Self;
+    fn substitute(&self, db: &'db dyn HirAnalysisDb, substitution: &IndexSubst<'db>) -> Self;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -53,6 +53,7 @@ enum ValueChildren<'db, P> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuardedLeaf<'db, P> {
+    pub semantics: CapabilitySemantics<'db>,
     pub path: StructuralPath<IndexExpr<'db>>,
     pub guard: Guard<'db>,
     pub payload: P,
@@ -88,7 +89,7 @@ pub struct ValueMetrics {
 }
 
 pub struct ValueInterner<'db, P> {
-    db: &'db dyn HirAnalysisDb,
+    pub(super) db: &'db dyn HirAnalysisDb,
     nodes: FxHashMap<StructuredValue<'db, P>, ValueId<'db, P>>,
     limits: ValueLimits,
     metrics: ValueMetrics,
@@ -267,9 +268,33 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
     /// Retype a verifier-approved structural repack. Array mappings describe the
     /// element shape; they never limit transfer to the representative member zero.
     pub fn repack(&mut self, value: &ValueId<'db, P>, shape: ShapeId<'db>) -> ValueId<'db, P> {
+        self.repack_with(value, shape, &mut |payload, _, _| payload.clone())
+    }
+
+    pub fn repack_with(
+        &mut self,
+        value: &ValueId<'db, P>,
+        shape: ShapeId<'db>,
+        map: &mut impl FnMut(&P, CapabilitySemantics<'db>, CapabilitySemantics<'db>) -> P,
+    ) -> ValueId<'db, P> {
         if value.shape() == shape {
             return value.clone();
         }
+        let direct = value
+            .direct()
+            .iter()
+            .map(|entry| Guarded {
+                guard: entry.guard.clone(),
+                payload: map(
+                    &entry.payload,
+                    value
+                        .shape()
+                        .direct(self.db)
+                        .expect("source capability semantics"),
+                    shape.direct(self.db).expect("target capability semantics"),
+                ),
+            })
+            .collect();
         let children = match (&value.0.children, &shape.data(self.db).children) {
             (ValueChildren::None, ShapeChildren::None | ShapeChildren::EmptyArray) => {
                 ValueChildren::None
@@ -282,7 +307,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                         .zip(shapes)
                         .map(|((field, child), (expected, shape))| {
                             assert_eq!(field, expected, "repack field mismatch");
-                            (*field, self.repack(child, *shape))
+                            (*field, self.repack_with(child, *shape, map))
                         })
                         .collect(),
                 )
@@ -296,7 +321,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                             .find(|(key, _)| key == variant)
                             .expect("repack variant mismatch")
                             .1;
-                        (*variant, self.repack(child, shape))
+                        (*variant, self.repack_with(child, shape, map))
                     })
                     .collect(),
             ),
@@ -308,25 +333,19 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                     unreachable!()
                 };
                 assert_eq!(source_len, len, "repack array length mismatch");
-                let default = self.repack(default, *element);
+                let default = self.repack_with(default, *element, map);
                 let exact = exact
                     .iter()
-                    .map(|(index, child)| (*index, self.repack(child, *element)))
+                    .map(|(index, child)| (*index, self.repack_with(child, *element, map)))
                     .collect();
-                return self.array_parts(
-                    shape,
-                    value.scope(),
-                    default,
-                    exact,
-                    value.0.direct.clone(),
-                );
+                return self.array_parts(shape, value.scope(), default, exact, direct);
             }
             _ => panic!("repack structural shape mismatch"),
         };
         self.intern(StructuredValue {
             shape,
             scope: value.scope().clone(),
-            direct: value.0.direct.clone(),
+            direct,
             children,
         })
     }
@@ -506,7 +525,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             .iter()
             .filter_map(|entry| {
                 Some(Guarded {
-                    guard: entry.guard.and(guard)?,
+                    guard: entry.guard.and(&guard.in_scope(entry.guard.scope()))?,
                     payload: entry.payload.clone(),
                 })
             })
@@ -564,9 +583,10 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             .direct
             .iter()
             .filter_map(|entry| {
+                let subst = subst.under_existentials(entry.guard.scope());
                 Some(Guarded {
-                    guard: entry.guard.substitute(subst)?,
-                    payload: entry.payload.substitute(subst),
+                    guard: entry.guard.substitute(&subst)?,
+                    payload: entry.payload.substitute(self.db, &subst),
                 })
             })
             .collect();
@@ -613,12 +633,85 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         })
     }
 
+    /// Close witnesses introduced while resolving one source clause. The node
+    /// keeps its surrounding shape scope; each direct alternative owns its extra
+    /// existential variables, including under array member binders.
+    pub fn close_existentials(
+        &mut self,
+        value: &ValueId<'db, P>,
+        scope: &BinderScope,
+    ) -> ValueId<'db, P> {
+        value
+            .scope()
+            .existential_extension_of(scope)
+            .expect("closing owned witnesses");
+        let children = match &value.0.children {
+            ValueChildren::None => ValueChildren::None,
+            ValueChildren::Product(fields) => ValueChildren::Product(
+                fields
+                    .iter()
+                    .map(|(field, child)| (*field, self.close_existentials(child, scope)))
+                    .collect(),
+            ),
+            ValueChildren::Sum(variants) => ValueChildren::Sum(
+                variants
+                    .iter()
+                    .map(|(variant, child)| (*variant, self.close_existentials(child, scope)))
+                    .collect(),
+            ),
+            ValueChildren::Array { default, exact } => {
+                let (nested, _) = scope.bind(IndexNamespace::Value);
+                let default = self.close_existentials(default, &nested);
+                let exact = exact
+                    .iter()
+                    .map(|(index, child)| (*index, self.close_existentials(child, scope)))
+                    .collect();
+                return self.array_parts(
+                    value.shape(),
+                    scope,
+                    default,
+                    exact,
+                    value.0.direct.clone(),
+                );
+            }
+        };
+        self.intern(StructuredValue {
+            shape: value.shape(),
+            scope: scope.clone(),
+            direct: value.0.direct.clone(),
+            children,
+        })
+    }
+
+    pub fn map_guards(
+        &mut self,
+        value: &ValueId<'db, P>,
+        mut map: impl FnMut(&Guard<'db>) -> Option<Guard<'db>>,
+    ) -> ValueId<'db, P> {
+        Self::map_node(
+            value,
+            &StructuralPath::default(),
+            &Guard::always(value.scope()),
+            self,
+            &mut |_, _, entry, _| {
+                map(&entry.guard)
+                    .map(|guard| Guarded {
+                        guard,
+                        payload: entry.payload.clone(),
+                    })
+                    .into_iter()
+                    .collect()
+            },
+        )
+    }
+
+    /// A statically out-of-bounds selection has no reachable result.
     pub fn project(
         &mut self,
         value: &ValueId<'db, P>,
         path: &StructuralPath<IndexExpr<'db>>,
         occurrence: ValueOccurrence,
-    ) -> ValueId<'db, P> {
+    ) -> Option<ValueId<'db, P>> {
         let mut current = value.clone();
         let mut prefix = StructuralPath::default();
         for step in path.as_slice() {
@@ -657,13 +750,24 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                     self.with_guard(selected, &guard)
                 }
                 (Projection::Index(index), ValueChildren::Array { .. }) => {
+                    if let ShapeChildren::Array { len, .. } = current.shape().children(self.db)
+                        && let IndexExpr::Const(index) = index
+                        && len.known().is_some_and(|len| *index >= len)
+                    {
+                        return None;
+                    }
                     self.array_member(&current, *index)
+                }
+                (Projection::Index(_), ValueChildren::None)
+                    if matches!(current.shape().children(self.db), ShapeChildren::EmptyArray) =>
+                {
+                    return None;
                 }
                 _ => panic!("structural path does not match capability shape"),
             };
             prefix = prefix.appended(*step);
         }
-        current
+        Some(current)
     }
 
     pub fn replace(
@@ -735,30 +839,43 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         context: &Guarded<'db, BTreeMap<IndexExpr<'db>, IndexExpr<'db>>>,
     ) -> Result<ValueId<'db, P>, IndexError<'db>> {
         let Some((step, rest)) = steps.split_first() else {
-            // Never infer correlation from coincident lexical binder numbers.
+            let mut scope = value.scope().clone();
+            let mut bindings = context.payload.clone();
             for index in replacement.scope().variables() {
-                if !context.payload.contains_key(&index) {
-                    return Err(IndexError::FreeBinder(index));
+                if let Entry::Vacant(entry) = bindings.entry(index) {
+                    if index.bound_namespace() != Some(IndexNamespace::Existential) {
+                        return Err(IndexError::FreeBinder(index));
+                    }
+                    let (nested, witness) = scope.bind(IndexNamespace::Existential);
+                    scope = nested;
+                    entry.insert(witness);
                 }
             }
-            let substitution = IndexSubst::new(
-                replacement.scope(),
-                value.scope(),
-                context.payload.iter().map(|(a, b)| (*a, *b)),
-            )?;
+            let substitution = IndexSubst::new(replacement.scope(), &scope, bindings)?;
             let replacement = self.substitute(replacement, &substitution);
-            self.check_child(&replacement, value.shape(), value.scope());
+            assert_eq!(
+                replacement.shape(),
+                value.shape(),
+                "replacement shape mismatch: replacement={:?}; destination={:?}",
+                replacement.shape().data(self.db),
+                value.shape().data(self.db),
+            );
             let Some(guard) = guard
                 .substitute(&substitution)
-                .and_then(|guard| guard.and(&context.guard))
+                .and_then(|guard| guard.and(&context.guard.in_scope(&scope)))
             else {
                 return Ok(value.clone());
             };
-            let kept = Guard::always(value.scope())
-                .difference(&guard)
-                .map(|guard| self.with_guard(value, &guard))
-                .unwrap_or_else(|| self.empty(value.shape(), value.scope()));
+            let kept = if scope != *value.scope() {
+                value.clone()
+            } else {
+                Guard::always(value.scope())
+                    .difference(&guard)
+                    .map(|guard| self.with_guard(value, &guard))
+                    .unwrap_or_else(|| self.empty(value.shape(), value.scope()))
+            };
             let changed = self.with_guard(&replacement, &guard);
+            let changed = self.close_existentials(&changed, value.scope());
             return Ok(self.join(&kept, &changed));
         };
         let mut node = (*value.0).clone();
@@ -798,10 +915,9 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                 let binds_member =
                     matches!(index, IndexExpr::Bound(_)) && !context.payload.contains_key(index);
                 if let IndexExpr::Const(key) = selector {
-                    assert!(
-                        len.known().is_none_or(|len| key < len),
-                        "constant array replacement is out of bounds"
-                    );
+                    if len.known().is_some_and(|len| key >= len) {
+                        return Ok(value.clone());
+                    }
                     let old = self.array_member(value, selector);
                     exact.insert(
                         key,
@@ -845,6 +961,11 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                     exact.clone(),
                     node.direct,
                 ));
+            }
+            (Projection::Index(_), ValueChildren::None)
+                if matches!(value.shape().children(self.db), ShapeChildren::EmptyArray) =>
+            {
+                return Ok(value.clone());
             }
             _ => panic!("replacement path does not match capability shape"),
         }
@@ -972,8 +1093,12 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         leaves: &mut Vec<GuardedLeaf<'db, P>>,
     ) {
         for entry in &value.0.direct {
-            if let Some(guard) = entry.guard.and(guard) {
+            if let Some(guard) = entry.guard.and(&guard.in_scope(entry.guard.scope())) {
                 leaves.push(GuardedLeaf {
+                    semantics: value
+                        .shape()
+                        .direct(self.db)
+                        .expect("capability leaf shape"),
                     path: path.clone(),
                     guard,
                     payload: entry.payload.clone(),
@@ -1061,19 +1186,28 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             CapabilitySemantics<'db>,
             &StructuralPath<IndexExpr<'db>>,
             &Guarded<'db, P>,
+            &Guard<'db>,
         ) -> Vec<Guarded<'db, Q>>,
     ) -> ValueId<'db, Q> {
-        Self::map_node(value, &StructuralPath::default(), destination, &mut map)
+        Self::map_node(
+            value,
+            &StructuralPath::default(),
+            &Guard::always(value.scope()),
+            destination,
+            &mut map,
+        )
     }
 
     fn map_node<Q: IndexPayload<'db>>(
         value: &ValueId<'db, P>,
         path: &StructuralPath<IndexExpr<'db>>,
+        domain: &Guard<'db>,
         destination: &mut ValueInterner<'db, Q>,
         map: &mut impl FnMut(
             CapabilitySemantics<'db>,
             &StructuralPath<IndexExpr<'db>>,
             &Guarded<'db, P>,
+            &Guard<'db>,
         ) -> Vec<Guarded<'db, Q>>,
     ) -> ValueId<'db, Q> {
         let direct = value
@@ -1084,7 +1218,13 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                     .0
                     .direct
                     .iter()
-                    .flat_map(|entry| map(semantics, path, entry))
+                    .flat_map(|entry| {
+                        entry
+                            .guard
+                            .and(&domain.in_scope(entry.guard.scope()))
+                            .map(|domain| map(semantics, path, entry, &domain))
+                            .unwrap_or_default()
+                    })
                     .collect()
             });
         let children = match &value.0.children {
@@ -1098,6 +1238,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                             Self::map_node(
                                 child,
                                 &path.appended(Projection::Field(*field)),
+                                domain,
                                 destination,
                                 map,
                             ),
@@ -1123,6 +1264,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                                             variant: *variant,
                                             field: *field,
                                         }),
+                                        domain,
                                         destination,
                                         map,
                                     ),
@@ -1143,25 +1285,46 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                     .collect(),
             ),
             ValueChildren::Array { default, exact } => {
+                let ShapeChildren::Array { len, .. } = value.shape().children(destination.db)
+                else {
+                    unreachable!()
+                };
                 let (_, binder) = value.scope().bind(IndexNamespace::Value);
-                let default = Self::map_node(
-                    default,
-                    &path.appended(Projection::Index(binder)),
-                    destination,
-                    map,
-                );
+                let mut default_domain = domain
+                    .in_scope(default.scope())
+                    .with_bound(binder, len.index());
+                for key in exact.keys() {
+                    default_domain = default_domain
+                        .and_then(|guard| guard.with_disequality(binder, IndexExpr::Const(*key)));
+                }
+                let default = if let Some(domain) = default_domain {
+                    Self::map_node(
+                        default,
+                        &path.appended(Projection::Index(binder)),
+                        &domain,
+                        destination,
+                        map,
+                    )
+                } else {
+                    destination.empty(default.shape(), default.scope())
+                };
                 let exact = exact
                     .iter()
                     .map(|(key, child)| {
-                        (
-                            *key,
+                        let child = if let Some(domain) =
+                            domain.with_bound(IndexExpr::Const(*key), len.index())
+                        {
                             Self::map_node(
                                 child,
                                 &path.appended(Projection::Index(IndexExpr::Const(*key))),
+                                &domain,
                                 destination,
                                 map,
-                            ),
-                        )
+                            )
+                        } else {
+                            destination.empty(child.shape(), child.scope())
+                        };
+                        (*key, child)
                     })
                     .collect();
                 return destination.array_parts(
@@ -1200,7 +1363,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             .iter()
             .map(|entry| Guarded {
                 guard: if weaken {
-                    Guard::always(value.scope())
+                    Guard::always(entry.guard.scope())
                 } else {
                     entry.guard.clone()
                 },
@@ -1264,12 +1427,20 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
     }
 
     fn intern(&mut self, mut node: StructuredValue<'db, P>) -> ValueId<'db, P> {
-        for entry in &node.direct {
-            assert_eq!(
-                entry.guard.scope(),
+        for entry in &mut node.direct {
+            let subst = entry.guard.scope().canonical_existentials(
                 &node.scope,
-                "payload guard scope mismatch"
+                entry
+                    .guard
+                    .indices()
+                    .into_iter()
+                    .chain(entry.payload.indices()),
             );
+            entry.guard = entry
+                .guard
+                .substitute(&subst)
+                .expect("clause alpha normalization");
+            entry.payload = entry.payload.substitute(self.db, &subst);
             assert!(
                 node.shape
                     .direct(self.db)
@@ -1277,19 +1448,23 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
                 "payload capability class mismatch"
             );
             for index in entry.payload.indices() {
-                node.scope.validate(index).expect("free payload binder");
+                entry
+                    .guard
+                    .scope()
+                    .validate(index)
+                    .expect("free payload binder");
             }
         }
-        let mut canonical = BTreeMap::<P, Guard<'db>>::new();
+        let mut canonical = BTreeMap::<(BinderScope, P), Guard<'db>>::new();
         for entry in node.direct {
             canonical
-                .entry(entry.payload)
+                .entry((entry.guard.scope().clone(), entry.payload))
                 .and_modify(|guard| *guard = guard.or(&entry.guard))
                 .or_insert(entry.guard);
         }
         node.direct = canonical
             .into_iter()
-            .map(|(payload, guard)| Guarded { guard, payload })
+            .map(|((_, payload), guard)| Guarded { guard, payload })
             .collect();
         if let Some(value) = self.nodes.get(&node) {
             return value.clone();

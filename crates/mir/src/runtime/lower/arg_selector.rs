@@ -85,6 +85,17 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         &mut self,
         operand: RuntimeOperand,
     ) -> Option<SelectedRuntimeArg<'db>> {
+        let ty = operand
+            .value
+            .and_then(|value| self.env.body().normalized.value(value))
+            .map_or(self.env.body().local(operand.local)?.ty, |value| value.ty);
+        if ty.as_capability(self.env.db()).is_none()
+            && effect_handle_transport_class_for_ty_in_env(self.env.db(), self.env.type_env(), ty)
+                .is_some()
+        {
+            let class = stored_class_for_ty_in_env(self.env.db(), self.env.type_env(), ty);
+            return self.try_selected_semantic_operand_for_class(operand, &class);
+        }
         self.select_materialized_operand_value(operand.local, operand)
     }
 
@@ -233,11 +244,6 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         {
             return Some(SelectedRuntimeArg::handle_like_value(local, target.clone()));
         }
-        if !target.is_transport()
-            && let Some(selected) = self.select_direct_value_materialization(local, target)
-        {
-            return Some(selected);
-        }
         if target.is_transport() {
             if self
                 .sources()
@@ -248,8 +254,16 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             if let Some(selected) = self.select_semantic_place_address_for_class(arg, target) {
                 return Some(selected);
             }
-        } else if let Some(selected) = self.select_semantic_place_value_for_class(arg, target) {
-            return Some(selected);
+        } else {
+            // Name the source place explicitly when materialization reads it.
+            // This keeps runtime demand aligned with emission: the call needs
+            // the place's contents, but need not materialize the view's address.
+            if let Some(selected) = self.select_semantic_place_value_for_class(arg, target) {
+                return Some(selected);
+            }
+            if let Some(selected) = self.select_direct_value_materialization(local, target) {
+                return Some(selected);
+            }
         }
         self.sources()
             .semantic_operand_value_is_available(local)
@@ -876,9 +890,9 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         let local = match place.base {
             NPlaceBase::CapabilityTarget { carrier } => self.env.value_local(carrier)?,
             NPlaceBase::Root(root) => match &self.env.body().normalized.root(root)?.kind {
-                NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
-                    self.env.body().root_local(root)?
-                }
+                NRootKind::LocalSlot { .. }
+                | NRootKind::Temporary { .. }
+                | NRootKind::ParamPlace { .. } => self.env.body().root_local(root)?,
                 NRootKind::CapabilityRepresentation { carrier } => {
                     self.env.value_local(*carrier)?
                 }

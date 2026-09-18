@@ -1,11 +1,14 @@
-mod analyses;
 mod callsite;
-mod canon;
 mod check;
+mod control;
 mod diagnostics;
+mod events;
 mod facts;
+mod inventory;
 mod ir;
 mod noesc;
+mod solver;
+mod summary;
 
 pub(crate) use callsite::provisional_call_site_provider_refinements;
 pub use check::{

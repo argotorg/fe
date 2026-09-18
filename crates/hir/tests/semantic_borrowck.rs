@@ -5,15 +5,26 @@ use fe_hir::test_db::{HirAnalysisTestDb, format_diagnostics};
 use fe_hir::{
     analysis::{
         semantic::{
-            BorrowInputRef, BorrowTransform, CtfeError, LayoutEvidenceError, NDataPath,
-            NDataProjection, NExpr, NIndex, NPlaceBase, NRootKind, NStatementKind,
-            NValueDefinition, NormalizedArtifacts, ReadMode, SExpr, SStmtKind, STerminatorKind,
-            SemanticAnalysisError, SemanticBodyAdmission, SemanticBorrowDiagKind, SemanticInstance,
-            SemanticNormalizationFailure, canonicalize_semantic_consts, check_semantic_borrows,
-            check_semantic_noesc, collect_semantic_borrow_diagnostic_vouchers,
-            contract_init_assigned_fields, get_or_build_semantic_instance,
-            identity_semantic_instance_key, layout_evidence_body, normalize_semantic_body,
-            normalized::{NLayoutBackingSource, normalize_raw_body, verify_normalized_body},
+            CtfeError, LayoutEvidenceError, NDataProjection, NExpr, NIndex, NPlaceBase, NRootKind,
+            NStatementKind, NValueDefinition, NormalizedArtifacts, ReadMode, SExpr, SStmtKind,
+            STerminatorKind, SemanticAnalysisError, SemanticBodyAdmission, SemanticBorrowDiagKind,
+            SemanticInstance, SemanticNormalizationFailure, canonicalize_semantic_consts,
+            capability::{
+                external::ExternalOrigin,
+                guard::ValueOccurrence,
+                handle::{HandleAddressSpace, OpaqueHandleOccurrence},
+                path::{Projection as CapabilityProjection, RegionPath, StructuralPath},
+                source::InputSource,
+                value::{ValueInterner, ValueLimits},
+            },
+            check_semantic_borrows, check_semantic_noesc,
+            collect_semantic_borrow_diagnostic_vouchers, contract_init_assigned_fields,
+            get_or_build_semantic_instance, identity_semantic_instance_key, layout_evidence_body,
+            normalize_semantic_body,
+            normalized::{
+                HandleOrigin, NLayoutBackingSource, NormalizedBodyVerifyError, normalize_raw_body,
+                verify_normalized_body,
+            },
             semantic_body_admission, semantic_borrow_summary,
         },
         ty::{
@@ -30,6 +41,17 @@ fn borrow_diags(src: &str) -> String {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone("semantic_borrowck.fe".into(), src);
     let (top_mod, _) = db.top_mod(file);
+    format_diagnostics(
+        &db,
+        &collect_semantic_borrow_diagnostic_vouchers(&db, top_mod),
+    )
+}
+
+fn checked_borrow_diags(src: &str) -> String {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("semantic_borrowck.fe".into(), src);
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
     format_diagnostics(
         &db,
         &collect_semantic_borrow_diagnostic_vouchers(&db, top_mod),
@@ -477,21 +499,17 @@ impl Ledger {
     let summary = semantic_borrow_summary(&db, instance)
         .expect("borrow summary")
         .expect("borrow-returning function should produce a summary");
-    assert_eq!(summary.len(), 2, "unexpected summary: {summary:#?}");
-    assert!(summary.iter().any(|transform| {
-        matches!(transform.input, BorrowInputRef::Param(0))
-            && transform.proj.iter().cloned().collect::<Vec<_>>()
-                == vec![NDataProjection::Field(
-                    fe_hir::analysis::semantic::FieldIndex(2),
-                )]
-    }));
-    assert!(summary.iter().any(|transform| {
-        matches!(transform.input, BorrowInputRef::Param(0))
-            && transform.proj.iter().cloned().collect::<Vec<_>>()
-                == vec![NDataProjection::Field(
-                    fe_hir::analysis::semantic::FieldIndex(0),
-                )]
-    }));
+    let values = ValueInterner::new(&db, ValueLimits::default());
+    let leaves = values.leaves(&summary.result, ValueOccurrence::Summary);
+    assert_eq!(leaves.len(), 2, "unexpected summary: {summary:#?}");
+    for field in [0, 2] {
+        assert!(leaves.iter().any(|leaf| leaf.payload.source.origin
+            == ExternalOrigin::Input(InputSource::slot(0, StructuralPath::default()))
+            && leaf.payload.path
+                == RegionPath::new([CapabilityProjection::Field(
+                    fe_hir::analysis::semantic::FieldIndex(field)
+                )])));
+    }
     check_semantic_borrows(&db, instance).expect("borrowck should accept branch-returned borrow");
 }
 
@@ -534,12 +552,12 @@ impl Holder {
     let summary = semantic_borrow_summary(&db, instance)
         .expect("borrow summary")
         .expect("forward should produce a borrow summary");
+    let values = ValueInterner::new(&db, ValueLimits::default());
+    let leaves = values.leaves(&summary.result, ValueOccurrence::Summary);
+    assert_eq!(leaves.len(), 1);
     assert_eq!(
-        summary,
-        vec![BorrowTransform {
-            input: BorrowInputRef::Param(1),
-            proj: NDataPath::empty(),
-        }]
+        leaves[0].payload.source.origin,
+        ExternalOrigin::Input(InputSource::slot(1, StructuralPath::default()))
     );
     check_semantic_borrows(&db, instance).expect("borrowck should accept forwarded borrows");
 }
@@ -853,7 +871,7 @@ impl Choice {
 
 #[test]
 fn mutable_enum_payload_reborrow_still_rejects_independent_aliases() {
-    let diags = borrow_diags(
+    let diags = checked_borrow_diags(
         r#"
 struct Item {
     value: u256,
@@ -863,7 +881,7 @@ enum Choice {
     Item(Item),
 }
 
-fn bad(mut choice: Choice) {
+fn bad(choice: mut Choice) {
     match choice {
         Choice::Item(mut item) => {
             let first: mut u256 = mut item.value
@@ -1360,7 +1378,7 @@ pub fn cast_u8_usize_cmp(indices: [u8; 8], i: usize, j: usize) -> u8 {
 
 #[test]
 fn raw_mem_allocate_does_not_report_move_conflict() {
-    let diags = borrow_diags(
+    let diags = checked_borrow_diags(
         r#"
 use std::evm::RawMem
 
@@ -1369,7 +1387,7 @@ fn allocate(bytes: u256) -> u256 uses (mem: mut RawMem) {
     if ptr == 0 {
         ptr = 0x60
     }
-    mem.mstore(0x40, ptr + bytes)
+    mem.mstore(addr: 0x40, value: ptr + bytes)
     ptr
 }
 "#,
@@ -2849,5 +2867,1262 @@ fn whole_local_element(replacement: mut u256) {
                 }
             }
         },
+    );
+}
+
+#[test]
+fn call_result_aggregate_retains_embedded_borrow_loans() {
+    let diags = checked_borrow_diags(
+        r#"
+struct Wrap {
+    handle: mut u256,
+    tag: u256,
+}
+
+fn wrap(handle: mut u256) -> Wrap {
+    Wrap { handle, tag: 0 }
+}
+
+fn bad() {
+    let mut value = 0
+    let mut wrapped = wrap(handle: mut value)
+    let alias = mut value
+    alias = 1
+    wrapped.handle = 2
+}
+"#,
+    );
+
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags}");
+}
+
+#[test]
+fn aggregate_return_cannot_hide_borrow_of_local() {
+    let diags = borrow_diags(
+        r#"
+struct Wrap {
+    handle: mut u256,
+}
+
+fn bad() -> Wrap {
+    let mut value = 0
+    Wrap { handle: mut value }
+}
+"#,
+    );
+
+    assert!(
+        diags.contains("invalid return borrow in `fn bad`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("cannot return a value that holds a borrow of local `value`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn aggregate_call_arguments_check_embedded_borrow_aliases() {
+    let diags = borrow_diags(
+        r#"
+struct Borrowed {
+    value: mut u256,
+}
+
+fn write_both(mut left: own Borrowed, mut right: own Borrowed) {
+    left.value = 1
+    right.value = 2
+}
+
+fn bad() {
+    let mut value = 0
+    let borrowed = mut value
+    let left = Borrowed { value: borrowed }
+    let right = Borrowed { value: borrowed }
+    write_both(left: left, right: right)
+}
+"#,
+    );
+
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags}");
+    assert!(
+        diags.contains("call arguments require conflicting access"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn array_call_arguments_require_distinct_mutable_members() {
+    let diags = borrow_diags(
+        r#"
+fn write_both(_ values: own [mut u256; 2]) {
+    let first = values[0]
+    let second = values[1]
+    first = 1
+    second = 2
+}
+
+fn read_both(_ values: own [ref u256; 2]) {}
+fn write_one(_ values: own [mut u256; 1]) {}
+
+fn valid() {
+    let mut left = 0
+    let mut right = 0
+    write_both([mut left, mut right])
+}
+
+fn duplicate_mutable() {
+    let mut value = 0
+    let handle = mut value
+    write_both([handle, handle])
+}
+
+fn duplicate_shared_is_valid() {
+    let value = 0
+    read_both([ref value, ref value])
+}
+
+fn length_one_is_valid() {
+    let mut value = 0
+    write_one([mut value])
+}
+"#,
+    );
+
+    assert!(!diags.contains("borrow conflict in `fn valid`"), "{diags}");
+    assert!(
+        diags.contains("borrow conflict in `fn duplicate_mutable`"),
+        "{diags}"
+    );
+    assert!(
+        !diags.contains("borrow conflict in `fn duplicate_shared_is_valid`"),
+        "{diags}"
+    );
+    assert!(
+        !diags.contains("borrow conflict in `fn length_one_is_valid`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn nested_array_and_product_call_arguments_require_injective_borrows() {
+    let diags = borrow_diags(
+        r#"
+struct BorrowArray {
+    values: [mut u256; 2],
+}
+
+fn consume_nested(_ values: own [[mut u256; 2]; 2]) {}
+fn consume_product(_ value: own BorrowArray) {}
+
+fn duplicate_nested() {
+    let mut value = 0
+    let mut other_left = 0
+    let mut other_right = 0
+    let handle = mut value
+    consume_nested([[handle, mut other_left], [mut other_right, handle]])
+}
+
+fn duplicate_in_product() {
+    let mut value = 0
+    let handle = mut value
+    consume_product(BorrowArray { values: [handle, handle] })
+}
+"#,
+    );
+
+    assert!(
+        diags.contains("borrow conflict in `fn duplicate_nested`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn duplicate_in_product`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn borrowed_aggregate_call_arguments_preserve_nested_borrows() {
+    let diags = checked_borrow_diags(
+        r#"
+struct Pair {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn consume_array(_ values: mut [mut u256; 2]) {}
+fn consume_pair(_ pair: mut Pair) {}
+fn consume_view(_ values: [mut u256; 2]) {}
+
+fn valid_array() {
+    let mut left = 0
+    let mut right = 0
+    let mut values = [mut left, mut right]
+    consume_array(values: mut values)
+}
+
+fn duplicate_array() {
+    let mut value = 0
+    let handle = mut value
+    let mut values = [handle, handle]
+    consume_array(values: mut values)
+}
+
+fn valid_pair() {
+    let mut left = 0
+    let mut right = 0
+    let mut pair = Pair { left: mut left, right: mut right }
+    consume_pair(pair: mut pair)
+}
+
+fn duplicate_pair() {
+    let mut value = 0
+    let handle = mut value
+    let mut pair = Pair { left: handle, right: handle }
+    consume_pair(pair: mut pair)
+}
+
+fn duplicate_view_control() {
+    let mut value = 0
+    let handle = mut value
+    let values = [handle, handle]
+    consume_view(values: values)
+}
+
+fn duplicate_local_control() {
+    let mut value: u256 = 0
+    let handle = mut value
+    let values = [handle, handle]
+    let first = values[0]
+    let second = values[1]
+    first = 1
+    second = 2
+}
+"#,
+    );
+
+    assert!(
+        !diags.contains("borrow conflict in `fn valid_array`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn duplicate_array`"),
+        "{diags}"
+    );
+    assert!(
+        !diags.contains("borrow conflict in `fn valid_pair`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn duplicate_pair`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn duplicate_view_control`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn duplicate_local_control`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn borrowed_aggregate_effect_arguments_preserve_nested_borrows() {
+    let source = r#"
+struct Pair {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn consume() uses (pair: mut Pair) {
+    let selected = pair.left
+    selected = 1
+}
+
+fn valid_effect() {
+    let mut left = 0
+    let mut right = 0
+    let mut pair = Pair { left: mut left, right: mut right }
+    let target = mut pair
+    with (target) {
+        consume()
+    }
+}
+
+fn duplicate_effect() {
+    let mut value = 0
+    let handle = mut value
+    let mut pair = Pair { left: handle, right: handle }
+    let target = mut pair
+    with (target) {
+        consume()
+    }
+}
+"#;
+    let diags = borrow_diags(source);
+
+    assert!(
+        !diags.contains("borrow conflict in `fn valid_effect`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn duplicate_effect`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn borrowed_aggregate_call_results_preserve_nested_borrows() {
+    let diags = borrow_diags(
+        r#"
+struct Pair {
+    left: mut u256,
+    right: mut u256,
+}
+
+struct Target {
+    first: u256,
+    second: u256,
+}
+
+struct Carrier {
+    handle: mut Target,
+    plain: u256,
+}
+
+fn forward(_ pair: mut Pair) -> mut Pair {
+    pair
+}
+
+fn forward_carrier(_ carrier: mut Carrier) -> mut Carrier {
+    carrier
+}
+
+fn distinct_wrapper_and_descendant_targets() {
+    let mut target = Target { first: 0, second: 0 }
+    let mut carrier = Carrier { handle: mut target, plain: 0 }
+    let returned = forward_carrier(carrier: mut carrier)
+    let outer_field = mut returned.plain
+    let nested = returned.handle
+    let nested_field = mut nested.second
+    nested_field = 1
+    outer_field = 2
+}
+
+fn conflict_after_forwarding() {
+    let mut left = 0
+    let mut right = 0
+    let mut pair = Pair { left: mut left, right: mut right }
+    let returned = forward(pair: mut pair)
+    let selected = returned.left
+    let alias = mut left
+    alias = 1
+    selected = 2
+}
+"#,
+    );
+
+    assert!(
+        !diags.contains("borrow conflict in `fn distinct_wrapper_and_descendant_targets`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn conflict_after_forwarding`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn array_enum_variants_are_exclusive_only_within_one_element() {
+    let diags = borrow_diags(
+        r#"
+enum Choice {
+    A(mut u256),
+    B(mut u256),
+}
+
+fn consume(_ values: own [Choice; 2]) {}
+
+fn valid() {
+    let mut left = 0
+    let mut right = 0
+    consume([Choice::A(mut left), Choice::B(mut right)])
+}
+
+fn aliases_across_elements() {
+    let mut value = 0
+    let handle = mut value
+    consume([Choice::A(handle), Choice::B(handle)])
+}
+"#,
+    );
+
+    assert!(!diags.contains("borrow conflict in `fn valid`"), "{diags}");
+    assert!(
+        diags.contains("borrow conflict in `fn aliases_across_elements`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn reading_one_returned_aggregate_borrow_does_not_retain_siblings() {
+    let diags = borrow_diags(
+        r#"
+struct Pair {
+    left: mut u256,
+    right: mut u256,
+}
+
+fn forward(_ pair: own Pair) -> Pair {
+    pair
+}
+
+fn valid() {
+    let mut left = 0
+    let mut right = 0
+    let returned = forward(Pair { left: mut left, right: mut right })
+    let selected = returned.left
+    let other = mut right
+    other = 1
+    selected = 2
+}
+"#,
+    );
+
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn returned_array_family_preserves_constant_and_dynamic_aliasing() {
+    let diags = borrow_diags(
+        r#"
+fn forward(_ values: own [mut u256; 2]) -> [mut u256; 2] {
+    values
+}
+
+fn constant_sibling_is_disjoint() {
+    let mut left = 0
+    let mut right = 0
+    let returned = forward([mut left, mut right])
+    let first = returned[0]
+    let other = mut right
+    other = 1
+    first = 2
+}
+
+fn dynamic_index_overlaps(index: usize) {
+    let mut left = 0
+    let mut right = 0
+    let returned = forward([mut left, mut right])
+    let selected = returned[index]
+    let other = mut right
+    other = 1
+    selected = 2
+}
+"#,
+    );
+
+    assert!(
+        !diags.contains("borrow conflict in `fn constant_sibling_is_disjoint`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn dynamic_index_overlaps`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn parameter_array_family_checks_dynamic_member_aliasing() {
+    let diags = borrow_diags(
+        r#"
+fn constant_siblings_are_disjoint(values: own [mut u256; 2]) {
+    let first = values[0]
+    let second = values[1]
+    first = 1
+    second = 2
+}
+
+fn dynamic_overlaps_constant(values: own [mut u256; 2], index: usize) {
+    let selected = values[index]
+    let first = values[0]
+    selected = 1
+    first = 2
+}
+
+fn dynamic_indices_may_alias(
+    values: own [mut u256; 2],
+    left_index: usize,
+    right_index: usize,
+) {
+    let left = values[left_index]
+    let right = values[right_index]
+    left = 1
+    right = 2
+}
+"#,
+    );
+
+    assert!(
+        !diags.contains("borrow conflict in `fn constant_siblings_are_disjoint`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn dynamic_overlaps_constant`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn dynamic_indices_may_alias`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn exact_array_overwrites_partition_symbolic_families() {
+    let diags = borrow_diags(
+        r#"
+struct Wrap {
+    handle: mut u256,
+}
+
+fn forward(_ values: own [Wrap; 2]) -> [Wrap; 2] {
+    values
+}
+
+fn replace_first(
+    mut _ values: own [Wrap; 2],
+    replacement: own Wrap,
+) -> [Wrap; 2] {
+    values[0] = replacement
+    values
+}
+
+fn local_replacement_releases_old_member() {
+    let mut old_left = 0
+    let mut right = 0
+    let mut replacement = 0
+    let mut values = forward(
+        [Wrap { handle: mut old_left }, Wrap { handle: mut right }],
+    )
+    values[0] = Wrap { handle: mut replacement }
+    let released = mut old_left
+    released = 1
+    values[0].handle = 2
+    values[1].handle = 3
+}
+
+fn sibling_remains_borrowed() {
+    let mut old_left = 0
+    let mut right = 0
+    let mut replacement = 0
+    let mut values = forward(
+        [Wrap { handle: mut old_left }, Wrap { handle: mut right }],
+    )
+    values[0] = Wrap { handle: mut replacement }
+    let alias = mut right
+    alias = 1
+    values[1].handle = 2
+}
+
+fn helper_return_preserves_override() {
+    let mut old_left = 0
+    let mut right = 0
+    let mut replacement = 0
+    let mut returned = replace_first(
+        [Wrap { handle: mut old_left }, Wrap { handle: mut right }],
+        replacement: Wrap { handle: mut replacement },
+    )
+    let released = mut old_left
+    released = 1
+    returned[0].handle = 2
+    returned[1].handle = 3
+}
+
+fn conditional_replacement_keeps_old(condition: bool) {
+    let mut old_left = 0
+    let mut right = 0
+    let mut replacement = 0
+    let mut values = forward(
+        [Wrap { handle: mut old_left }, Wrap { handle: mut right }],
+    )
+    if condition {
+        values[0] = Wrap { handle: mut replacement }
+    }
+    let alias = mut old_left
+    alias = 1
+    values[0].handle = 2
+}
+
+fn replace_all_local_members(left: mut u256, right: mut u256) -> [Wrap; 2] {
+    let mut old_left = 0
+    let mut old_right = 0
+    let mut values = forward(
+        [Wrap { handle: mut old_left }, Wrap { handle: mut old_right }],
+    )
+    values[0] = Wrap { handle: left }
+    values[1] = Wrap { handle: right }
+    values
+}
+
+fn retain_one_local_member(left: mut u256) -> [Wrap; 2] {
+    let mut old_left = 0
+    let mut old_right = 0
+    let mut values = forward(
+        [Wrap { handle: mut old_left }, Wrap { handle: mut old_right }],
+    )
+    values[0] = Wrap { handle: left }
+    values
+}
+"#,
+    );
+
+    assert!(
+        !diags.contains("borrow conflict in `fn local_replacement_releases_old_member`"),
+        "{diags}"
+    );
+    assert!(
+        !diags.contains("borrow conflict in `fn helper_return_preserves_override`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn sibling_remains_borrowed`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("borrow conflict in `fn conditional_replacement_keeps_old`"),
+        "{diags}"
+    );
+    assert!(
+        !diags.contains("invalid return borrow in `fn replace_all_local_members`"),
+        "{diags}"
+    );
+    assert!(
+        diags.contains("invalid return borrow in `fn retain_one_local_member`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn array_member_reborrow_suspends_only_that_parent_member() {
+    let diags = checked_borrow_diags(
+        r#"
+fn forward(_ values: own [mut u256; 2]) -> [mut u256; 2] {
+    values
+}
+
+fn reborrow(value: mut u256) -> mut u256 {
+    value
+}
+
+fn valid() {
+    let mut left = 0
+    let mut right = 0
+    let mut returned = forward([mut left, mut right])
+    let first = reborrow(value: returned[0])
+    returned[1] = 1
+    first = 2
+}
+
+fn bad() {
+    let mut left = 0
+    let mut right = 0
+    let mut returned = forward([mut left, mut right])
+    let first = reborrow(value: returned[0])
+    let alias = mut right
+    alias = 1
+    returned[1] = 2
+    first = 3
+}
+
+fn transitive_bad() {
+    let mut left = 0
+    let mut right = 0
+    let mut returned = forward([mut left, mut right])
+    let first = reborrow(value: returned[0])
+    let first_again = reborrow(value: first)
+    let alias = mut right
+    alias = 1
+    returned[1] = 2
+    first_again = 3
+}
+"#,
+    );
+
+    assert!(!diags.contains("borrow conflict in `fn valid`"), "{diags}");
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags}");
+    assert!(
+        diags.contains("borrow conflict in `fn transitive_bad`"),
+        "{diags}"
+    );
+}
+
+#[test]
+fn mutually_exclusive_enum_borrow_slots_do_not_conflict() {
+    let diags = borrow_diags(
+        r#"
+enum Choice {
+    A(mut u256),
+    B(mut u256),
+}
+
+struct Pair {
+    left: Choice,
+    right: Choice,
+}
+
+fn consume(_ choice: own Choice) {}
+fn consume_pair(_ pair: own Pair) {}
+
+fn valid(condition: bool) {
+    let mut value = 0
+    let choice = if condition {
+        Choice::A(mut value)
+    } else {
+        Choice::B(mut value)
+    }
+    consume(choice)
+}
+
+fn bad() {
+    let mut value = 0
+    let borrowed = mut value
+    let pair = Pair {
+        left: Choice::A(borrowed),
+        right: Choice::B(borrowed),
+    }
+    consume_pair(pair)
+}
+"#,
+    );
+
+    assert!(!diags.contains("borrow conflict in `fn valid`"), "{diags}");
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags}");
+}
+
+#[test]
+fn reading_a_forwarded_borrow_as_a_value_drops_loan_state() {
+    let diags = borrow_diags(
+        r#"
+struct Holder {
+    tag: u256,
+}
+
+impl Holder {
+    fn forward(mut self, _ value: mut u256) -> mut u256 {
+        value
+    }
+}
+
+fn valid() -> u256 {
+    let mut holder = Holder { tag: 0 }
+    let mut local = 7
+    let value = holder.forward(mut local)
+    value += 5
+    value
+}
+"#,
+    );
+
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn mutable_receiver_reservation_activates_after_argument_evaluation() {
+    let diags = borrow_diags(
+        r#"
+struct Cell {
+    value: u256,
+}
+
+impl Cell {
+    fn read(self) -> u256 {
+        self.value
+    }
+
+    fn write(mut self, value: u256) {
+        self.value = value
+    }
+
+    fn increment(mut self) -> u256 {
+        self.value += 1
+        self.value
+    }
+}
+
+fn valid() {
+    let mut cell = Cell { value: 1 }
+    cell.write(value: cell.read())
+    cell.write(value: cell.increment())
+}
+
+fn bad() -> u256 {
+    let mut cell = Cell { value: 1 }
+    let borrowed = ref cell.value
+    cell.write(value: cell.read())
+    borrowed
+}
+"#,
+    );
+
+    assert!(!diags.contains("borrow conflict in `fn valid`"), "{diags}");
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags}");
+}
+
+#[test]
+fn recursive_aggregate_borrow_summary_converges() {
+    let diags = checked_borrow_diags(
+        r#"
+struct Owner {
+    value: u256,
+}
+
+struct Borrowed {
+    value: mut u256,
+}
+
+fn borrow_value(owner: mut Owner, recurse: bool) -> Borrowed {
+    if recurse {
+        borrow_value(owner, recurse: false)
+    } else {
+        Borrowed { value: mut owner.value }
+    }
+}
+
+fn bad() {
+    let mut owner = Owner { value: 0 }
+    let mut borrowed = borrow_value(owner: mut owner, recurse: true)
+    let other = mut owner.value
+    other = 1
+    borrowed.value = 2
+}
+"#,
+    );
+
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags}");
+}
+
+#[test]
+fn opaque_aggregate_return_summary_is_conservative() {
+    let diags = checked_borrow_diags(
+        r#"
+struct Borrowed {
+    value: mut u256,
+}
+
+trait BorrowValue {
+    fn borrow_value(mut self) -> Borrowed
+}
+
+fn bad<T: BorrowValue>(value: mut T) {
+    let mut first = value.borrow_value()
+    let mut second = value.borrow_value()
+    first.value = 1
+    second.value = 2
+}
+"#,
+    );
+
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags}");
+}
+
+#[test]
+fn opaque_array_result_does_not_assume_pointwise_family_correlation() {
+    let diags = checked_borrow_diags(
+        r#"
+trait Permute {
+    fn permute(self, values: own [mut u256; 2]) -> [mut u256; 2]
+}
+
+fn bad<T: Permute>(permuter: T) {
+    let mut left = 0
+    let mut right = 0
+    let returned = permuter.permute(values: [mut left, mut right])
+    let selected = returned[0]
+    let alias = mut right
+    alias = 1
+    selected = 2
+}
+"#,
+    );
+
+    assert!(diags.contains("borrow conflict in `fn bad`"), "{diags}");
+}
+
+#[test]
+fn mutable_input_poststates_match_inline_handle_replacement() {
+    let diagnostics = borrow_diags(
+        r#"struct Wrap {
+    handle: mut u256,
+}
+
+fn replace(values: mut [Wrap; 1], replacement: mut u256) {
+    values[0] = Wrap { handle: replacement }
+}
+
+fn call_replaces_nested_handle() {
+    let mut first: u256 = 0
+    let mut second: u256 = 0
+    let mut values = [Wrap { handle: mut first }]
+    replace(values: mut values, replacement: mut second)
+    let competing = mut second
+    values[0].handle = 1
+    competing = 2
+}
+
+fn direct_replaces_nested_handle() {
+    let mut first: u256 = 0
+    let mut second: u256 = 0
+    let mut values = [Wrap { handle: mut first }]
+    values[0] = Wrap { handle: mut second }
+    let competing = mut second
+    values[0].handle = 1
+    competing = 2
+}
+"#,
+    );
+    assert!(
+        diagnostics.contains("borrow conflict in `fn call_replaces_nested_handle`"),
+        "{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains("borrow conflict in `fn direct_replaces_nested_handle`"),
+        "{diagnostics}"
+    );
+    assert!(
+        !diagnostics.contains("internal borrow checking error"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn opaque_handle_construction_and_summary_choices_preserve_declared_contracts() {
+    let source = r#"
+use core::{AddressSpace, EffectHandle}
+struct Ptr { addr: u256 }
+impl EffectHandle for Ptr {
+    type Target = u256
+    const SPACE: AddressSpace = AddressSpace::Memory
+    fn from_raw(_ raw: u256) -> Self { Self { addr: raw } }
+    fn raw(self) -> u256 { self.addr }
+}
+fn copied(_ raw: u256) -> [Ptr; 2] {
+    let ptr = Ptr { addr: raw }
+    [ptr, ptr]
+}
+fn constructed() -> [Ptr; 2] { [Ptr { addr: 32 }, Ptr { addr: 32 }] }
+fn forwarded(_ raw: u256) -> [Ptr; 2] { copied(raw) }
+"#;
+    assert!(checked_borrow_diags(source).is_empty());
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("opaque_handles.fe".into(), source);
+    let (top_mod, _) = db.top_mod(file);
+    for (name, expected_choices) in [("copied", 1), ("constructed", 2), ("forwarded", 1)] {
+        let artifacts = normalized_func_body(&db, top_mod, name);
+        let summary = semantic_borrow_summary(&db, artifacts.body.owner)
+            .unwrap()
+            .unwrap();
+        let values = ValueInterner::new(&db, ValueLimits::default());
+        let mut choices = Vec::new();
+        for leaf in values.leaves(&summary.result, ValueOccurrence::Summary) {
+            let ExternalOrigin::OpaqueHandle(source) = leaf.payload.source.origin else {
+                panic!("missing opaque constructor source")
+            };
+            assert!(matches!(
+                source.occurrence,
+                OpaqueHandleOccurrence::Summary(_)
+            ));
+            assert_eq!(
+                source.contract.address_space,
+                HandleAddressSpace::Known(ProviderAddressSpace::Memory)
+            );
+            assert_eq!(source.contract.target_ty.pretty_print(&db), "u256");
+            choices.push(source.occurrence);
+        }
+        choices.sort();
+        choices.dedup();
+        assert_eq!(choices.len(), expected_choices, "{name}");
+    }
+    let mut artifacts = normalized_func_body(&db, top_mod, "constructed");
+    let expr = artifacts
+        .body
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.statements)
+        .find_map(|statement| {
+            if let NStatementKind::Define {
+                expr: expr @ NExpr::MakeHandle { .. },
+                ..
+            } = &mut statement.kind
+            {
+                Some(expr)
+            } else {
+                None
+            }
+        })
+        .expect("explicit constructor");
+    let NExpr::MakeHandle {
+        origin: HandleOrigin::Opaque(contract),
+        ..
+    } = expr
+    else {
+        panic!("opaque constructor")
+    };
+    contract.address_space = HandleAddressSpace::Known(ProviderAddressSpace::Storage);
+    assert_eq!(
+        verify_normalized_body(&db, &artifacts.body),
+        Err(NormalizedBodyVerifyError::InvalidHandleOrigin)
+    );
+}
+
+#[test]
+fn call_results_used_as_views_have_explicit_materialization() {
+    let source = r#"
+use core::num::IntWord
+fn validate(input_len: u256, head_size: u256) {
+    let args_len = i256::from_word(input_len)
+    if args_len < i256::from_word(head_size) {}
+}
+"#;
+    let diags = checked_borrow_diags(source);
+    assert!(diags.is_empty(), "{diags}");
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("call_result_view.fe".into(), source);
+    let (top_mod, _) = db.top_mod(file);
+    let artifacts = normalized_func_body(&db, top_mod, "validate");
+    assert!(
+        artifacts
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .any(|statement| {
+                let NStatementKind::Define {
+                    expr: NExpr::MakeView { place, .. },
+                    ..
+                } = &statement.kind
+                else {
+                    return false;
+                };
+                let NPlaceBase::Root(root) = place.base else {
+                    return false;
+                };
+                let NRootKind::Temporary { value } = artifacts.body.roots[root.index()].kind else {
+                    return false;
+                };
+                let NValueDefinition::Statement { block, statement } =
+                    artifacts.body.values[value.index()].definition
+                else {
+                    return false;
+                };
+                matches!(
+                    artifacts.body.blocks[block.index()].statements[statement as usize].kind,
+                    NStatementKind::Define {
+                        expr: NExpr::Call { .. },
+                        ..
+                    }
+                )
+            })
+    );
+}
+
+#[test]
+fn shared_member_receivers_create_views_of_the_referent() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+trait Measure { fn size(self) -> usize }
+impl Measure for u256 { fn size(self) -> usize { 1 } }
+struct Wrapped<T> { base: ref T }
+impl<T: Measure> Wrapped<T> {
+    fn size(self) -> usize { self.base.size() }
+}
+fn measure(value: ref u256) -> usize {
+    Wrapped { base: value }.size()
+}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn diverging_calls_do_not_construct_contextual_capability_results() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+struct Wrap { handle: mut u256 }
+fn abort() -> ! { core::panic() }
+fn unreachable_result() -> Wrap { abort() }
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn diverging_calls_still_check_argument_aliasing() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+fn abort(left: mut u256, right: mut u256) -> ! { core::panic() }
+fn invalid(value: mut u256) { abort(left: value, right: value) }
+"#,
+    );
+    assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+}
+
+#[test]
+fn nonreturning_wrappers_use_the_structural_summary_fixed_point() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+fn stop() { core::panic() }
+fn middle() { stop() }
+fn caller() {
+    let mut value: u256 = 0
+    let live = mut value
+    middle()
+    value = 1
+    live = 2
+}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn generic_effect_handle_bounds_retain_their_declared_target() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+use core::{EffectHandle, EffectRef, Copy}
+fn read_generic<H: EffectHandle>(_ handle: H) -> H::Target
+    uses (value: H::Target) where H::Target: Copy { value }
+fn write_generic<H: EffectHandle>(_ handle: H, value: H::Target)
+    uses (target: mut H::Target) { target = value }
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn generic_opaque_handles_preserve_declared_address_spaces() {
+    let source = r#"
+use core::{AddressSpace, EffectHandle}
+struct Ptr<const SP: AddressSpace> { raw: u256 }
+impl<const SP: AddressSpace> EffectHandle for Ptr<SP> {
+    type Target = u256
+    const SPACE: AddressSpace = SP
+    fn from_raw(_ raw: u256) -> Self { Self { raw } }
+    fn raw(self) -> u256 { self.raw }
+}
+fn assumed<H: EffectHandle>(_ raw: u256) -> H { H::from_raw(raw) }
+fn declared<const SP: AddressSpace>(_ raw: u256) -> Ptr<SP> { Ptr { raw } }
+fn memory(_ raw: u256) -> Ptr<AddressSpace::Memory> {
+    declared<AddressSpace::Memory>(raw)
+}
+fn storage(_ raw: u256) -> Ptr<AddressSpace::Storage> {
+    assumed<Ptr<AddressSpace::Storage>>(raw)
+}
+"#;
+    let diagnostics = checked_borrow_diags(source);
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("generic_opaque_spaces.fe".into(), source);
+    let (top_mod, _) = db.top_mod(file);
+    for (name, expected) in [
+        ("assumed", None),
+        ("declared", None),
+        ("memory", Some(ProviderAddressSpace::Memory)),
+        ("storage", Some(ProviderAddressSpace::Storage)),
+    ] {
+        let artifacts = normalized_func_body(&db, top_mod, name);
+        let summary = semantic_borrow_summary(&db, artifacts.body.owner)
+            .unwrap()
+            .unwrap();
+        let values = ValueInterner::new(&db, ValueLimits::default());
+        let leaves = values.leaves(&summary.result, ValueOccurrence::Summary);
+        assert!(!leaves.is_empty(), "missing handle source in {name}");
+        for leaf in leaves {
+            let ExternalOrigin::OpaqueHandle(source) = leaf.payload.source.origin else {
+                panic!("missing opaque source in {name}")
+            };
+            let space = source.contract.address_space;
+            assert_eq!(space.known(), expected, "{name}");
+            if expected.is_none() {
+                assert!(matches!(space, HandleAddressSpace::Declared { .. }));
+                assert!(space.may_alias(HandleAddressSpace::Known(ProviderAddressSpace::Memory)));
+                assert!(space.may_alias(HandleAddressSpace::Known(ProviderAddressSpace::Storage)));
+            }
+        }
+    }
+}
+
+#[test]
+fn loop_carried_borrows_preserve_previous_occurrences() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+struct Wrap { handle: mut u256 }
+fn both(left: mut u256, right: mut u256) {
+    left = 1
+    right = 2
+}
+fn carried(x: mut u256, y: mut u256, again: bool) {
+    let mut holder = Wrap { handle: y }
+    while again {
+        let next = mut x
+        both(left: next, right: holder.handle)
+        holder = Wrap { handle: next }
+    }
+}
+fn independent(x: mut u256, y: mut u256, again: bool) {
+    while again {
+        let next = mut x
+        both(left: next, right: mut y)
+    }
+}
+"#,
+    );
+    assert!(
+        diagnostics.contains("borrow conflict in `fn carried`"),
+        "{diagnostics}"
+    );
+    assert!(
+        !diagnostics.contains("borrow conflict in `fn independent`"),
+        "{diagnostics}"
+    );
+    assert!(!diagnostics.contains("internal"), "{diagnostics}");
+}
+
+#[test]
+fn nominal_handles_only_access_targets_at_effect_boundaries() {
+    let diags = checked_borrow_diags(
+        r#"
+use core::{AddressSpace, EffectHandle, EffectRef, EffectRefMut}
+struct Ptr { addr: u256 }
+impl EffectHandle for Ptr {
+    type Target = u256
+    const SPACE: AddressSpace = AddressSpace::Memory
+    fn from_raw(_ raw: u256) -> Self { Self { addr: raw } }
+    fn raw(self) -> u256 { self.addr }
+}
+impl EffectRef<u256> for Ptr {}
+impl EffectRefMut<u256> for Ptr {}
+fn consume(first: Ptr, second: Ptr) {}
+fn update() uses (value: mut u256) { value = 1 }
+fn inspect() -> u256 uses (value: u256) { value }
+fn valid() {
+    let ptr = Ptr { addr: 32 }
+    consume(first: ptr, second: ptr)
+    with (ptr) { update() }
+}
+fn conflict() -> u256 {
+    let mut value: u256 = 0
+    let borrowed = mut value
+    let ptr = Ptr { addr: 32 }
+    let result = with (ptr) { inspect() }
+    borrowed = 2
+    result
+}
+"#,
+    );
+    assert!(!diags.contains("borrow conflict in `fn valid`"), "{diags}");
+    assert!(
+        diags.contains("borrow conflict in `fn conflict`"),
+        "{diags}"
     );
 }

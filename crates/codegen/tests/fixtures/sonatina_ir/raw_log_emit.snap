@@ -64,15 +64,15 @@ func private %raw(v0.objref<@layout_0>) -> i256 {
 
 func private %raw_emit() {
     block0:
+        v0.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
 
     block1:
-        v1.@layout_0 = call %mem_ptr 256.i256;
-        v2.objref<@layout_0> = obj.alloc @layout_0;
-        v4.objref<i256> = obj.proj v2 0.i256;
-        v5.i256 = extract_value v1 0.i256;
+        v2.@layout_0 = call %mem_ptr 256.i256;
+        v4.objref<i256> = obj.proj v0 0.i256;
+        v5.i256 = extract_value v2 0.i256;
         obj.store v4 v5;
-        v6.i256 = call %raw v2;
+        v6.i256 = call %raw v0;
         call %log0 v6 32.i256;
         return;
 }

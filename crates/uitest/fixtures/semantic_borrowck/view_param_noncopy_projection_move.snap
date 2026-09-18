@@ -8,4 +8,4 @@ error[16-0002]: move conflict in `fn unwrap`
    ┌─ view_param_noncopy_projection_move.fe:11:13
    │
 11 │     let p = w.p
-   │             ^^^ cannot move out of a view parameter
+   │             ^^^ cannot move out of a view parameter or through a borrow handle

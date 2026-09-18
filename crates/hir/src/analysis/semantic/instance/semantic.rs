@@ -973,7 +973,7 @@ impl<'db> SemanticInstance<'db> {
         self.key(db).owner(db).scope()
     }
 
-    fn is_intrinsically_never_returning(self, db: &'db dyn HirAnalysisDb) -> bool {
+    pub(crate) fn is_intrinsically_never_returning(self, db: &'db dyn HirAnalysisDb) -> bool {
         self.is_nonreturning_builtin(db) || self.normalized_result_ty(db).is_never(db)
     }
 

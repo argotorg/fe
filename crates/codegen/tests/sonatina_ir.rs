@@ -445,8 +445,7 @@ pub contract GenericNoEsc {
     );
     let message = err.to_string();
     assert!(
-        message.contains("semantic noesc checking failed")
-            && message.contains("noesc violation in `fn store_generic`"),
+        message.contains("noesc violation in `fn store_generic`"),
         "unexpected error message:\n{message}"
     );
 }

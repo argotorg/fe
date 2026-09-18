@@ -5,17 +5,18 @@ use std::{
 };
 
 use super::{
-    guard::Guard,
-    index::{BinderScope, IndexExpr, IndexSubst},
+    external::{ExternalSource, ReferentContract},
+    guard::{Guard, ValueOccurrence},
+    handle::HandleAddressSpace,
+    index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
     path::{Projection, RegionPath},
-    source::InputSource,
+    repack::{ReferentRepackId, ReferentViews},
     value::Guarded,
 };
 use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::normalized::{NRootId, NValueId},
-        ty::ProviderAddressSpace,
     },
     semantic::ProviderBinding,
 };
@@ -30,37 +31,68 @@ pub struct ProviderRegionId<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RegionRoot<'db> {
-    Input(InputSource<'db>),
-    Root(NRootId),
+    External(ExternalSource<'db>),
+    Root {
+        root: NRootId,
+        contract: ReferentContract<'db>,
+    },
+    /// An SSA holder is a logical move location, never addressable storage.
     Value(NValueId),
-    Provider(ProviderRegionId<'db>),
 }
 
 impl<'db> RegionRoot<'db> {
-    pub fn address_space(&self, db: &'db dyn HirAnalysisDb) -> ProviderAddressSpace {
+    pub fn address_space(&self) -> HandleAddressSpace<'db> {
+        self.contract()
+            .map_or(HandleAddressSpace::Unspecified, |contract| {
+                contract.address_space
+            })
+    }
+
+    pub fn contract(&self) -> Option<ReferentContract<'db>> {
         match self {
-            Self::Provider(provider) => provider
-                .binding(db)
-                .semantics
-                .address_space
-                .unwrap_or(ProviderAddressSpace::Memory),
-            Self::Input(_) | Self::Root(_) | Self::Value(_) => ProviderAddressSpace::Memory,
+            Self::External(source) => Some(source.contract),
+            Self::Root { contract, .. } => Some(*contract),
+            Self::Value(_) => None,
         }
+    }
+
+    pub fn is_reachable(&self) -> bool {
+        matches!(self, Self::External(source) if source.is_reachable())
+    }
+
+    pub fn may_alias_unknown(&self, other: &Self) -> bool {
+        (matches!(self, Self::External(source) if source.uncertain())
+            || matches!(other, Self::External(source) if source.uncertain()))
+            && self
+                .contract()
+                .zip(other.contract())
+                .is_some_and(|(left, right)| left.may_alias(right))
     }
 
     pub fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>> + '_ {
         match self {
-            Self::Input(source) => Some(source),
+            Self::External(source) => Some(source),
             _ => None,
         }
         .into_iter()
-        .flat_map(InputSource::indices)
+        .flat_map(ExternalSource::indices)
     }
 
-    pub fn substitute(&self, subst: &IndexSubst<'db>) -> Self {
+    pub fn substitute(&self, db: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
         match self {
-            Self::Input(source) => Self::Input(source.substitute(subst)),
-            Self::Root(_) | Self::Value(_) | Self::Provider(_) => self.clone(),
+            Self::External(source) => Self::External(source.substitute(db, subst)),
+            Self::Root { root, contract } => Self::Root {
+                root: *root,
+                contract: contract.substitute(db, subst),
+            },
+            Self::Value(_) => self.clone(),
+        }
+    }
+
+    fn rename_indices(&self, subst: &IndexSubst<'db>) -> Self {
+        match self {
+            Self::External(source) => Self::External(source.rename_indices(subst)),
+            Self::Root { .. } | Self::Value(_) => self.clone(),
         }
     }
 
@@ -71,10 +103,12 @@ impl<'db> RegionRoot<'db> {
         allow_unknown: bool,
     ) -> Option<Guard<'db>> {
         match (self, other) {
-            (Self::Input(left), Self::Input(right)) => {
+            (Self::External(left), Self::External(right)) => {
                 left.alias_guard(right, guard, allow_unknown)
             }
-            _ => (self == other).then_some(guard),
+            _ => {
+                (self == other || (allow_unknown && self.may_alias_unknown(other))).then_some(guard)
+            }
         }
     }
 }
@@ -83,6 +117,7 @@ impl<'db> RegionRoot<'db> {
 pub struct SymbolicPlace<'db> {
     pub root: RegionRoot<'db>,
     pub path: RegionPath<IndexExpr<'db>>,
+    pub views: ReferentViews<'db>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -115,7 +150,11 @@ impl<'db> RegionSet<'db> {
             scope,
             [Guarded {
                 guard: Guard::always(scope),
-                payload: SymbolicPlace { root, path },
+                payload: SymbolicPlace {
+                    root,
+                    path,
+                    views: ReferentViews::default(),
+                },
             }],
         )
     }
@@ -124,24 +163,37 @@ impl<'db> RegionSet<'db> {
         scope: &BinderScope,
         clauses: impl IntoIterator<Item = Guarded<'db, SymbolicPlace<'db>>>,
     ) -> Self {
-        let mut canonical = BTreeMap::<SymbolicPlace<'db>, Guard<'db>>::new();
+        let mut canonical = BTreeMap::<(BinderScope, SymbolicPlace<'db>), Guard<'db>>::new();
         for mut clause in clauses {
-            // A reachable source includes every descendant region. Keeping an
-            // exact final projection would falsely recover precision after widening.
-            if matches!(&clause.payload.root, RegionRoot::Input(source) if source.is_reachable()) {
-                clause.payload.path = RegionPath::default();
-            }
-            assert_eq!(clause.guard.scope(), scope, "region guard scope mismatch");
+            let substitution = clause.guard.scope().canonical_existentials(
+                scope,
+                clause
+                    .guard
+                    .indices()
+                    .into_iter()
+                    .chain(clause.payload.path.indices())
+                    .chain(clause.payload.root.indices()),
+            );
+            clause.guard = clause
+                .guard
+                .substitute(&substitution)
+                .expect("clause alpha normalization");
+            clause.payload.root = clause.payload.root.rename_indices(&substitution);
+            clause.payload.path = clause.payload.path.substitute(&substitution);
             for index in clause
                 .payload
                 .path
                 .indices()
                 .chain(clause.payload.root.indices())
             {
-                scope.validate(index).expect("free region binder");
+                clause
+                    .guard
+                    .scope()
+                    .validate(index)
+                    .expect("free region binder");
             }
             canonical
-                .entry(clause.payload)
+                .entry((clause.guard.scope().clone(), clause.payload))
                 .and_modify(|guard| *guard = guard.or(&clause.guard))
                 .or_insert(clause.guard);
         }
@@ -149,7 +201,7 @@ impl<'db> RegionSet<'db> {
             scope: scope.clone(),
             clauses: canonical
                 .into_iter()
-                .map(|(payload, guard)| Guarded { guard, payload })
+                .map(|((_, payload), guard)| Guarded { guard, payload })
                 .collect(),
         }
     }
@@ -160,6 +212,57 @@ impl<'db> RegionSet<'db> {
     pub fn clauses(&self) -> &[Guarded<'db, SymbolicPlace<'db>>] {
         &self.clauses
     }
+    pub fn forget_occurrences(&self, repeated: impl Fn(ValueOccurrence) -> bool + Copy) -> Self {
+        Self::new(
+            &self.scope,
+            self.clauses.iter().map(|clause| Guarded {
+                guard: clause.guard.forget_occurrences(repeated),
+                payload: clause.payload.clone(),
+            }),
+        )
+    }
+
+    /// Previous executions own fresh witnesses, independent of the next execution.
+    pub fn forget_iteration(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        repeated: impl Fn(IndexExpr<'db>) -> bool + Copy,
+        occurrence: impl Fn(ValueOccurrence) -> bool + Copy,
+    ) -> Self {
+        Self::new(
+            &self.scope,
+            self.clauses.iter().filter_map(|clause| {
+                let guard = clause.guard.forget_occurrences(occurrence);
+                let mut scope = guard.scope().clone();
+                let indices: BTreeSet<_> = guard
+                    .indices()
+                    .into_iter()
+                    .chain(clause.payload.root.indices())
+                    .chain(clause.payload.path.indices())
+                    .filter(|index| repeated(*index))
+                    .collect();
+                let bindings: Vec<_> = indices
+                    .into_iter()
+                    .map(|index| {
+                        let (nested, witness) = scope.bind(IndexNamespace::Existential);
+                        scope = nested;
+                        (index, witness)
+                    })
+                    .collect();
+                let subst = IndexSubst::new(guard.scope(), &scope, bindings)
+                    .expect("previous iteration witnesses");
+                Some(Guarded {
+                    guard: guard.substitute(&subst)?,
+                    payload: SymbolicPlace {
+                        root: clause.payload.root.substitute(db, &subst),
+                        path: clause.payload.path.substitute(&subst),
+                        views: clause.payload.views.substitute(db, &subst),
+                    },
+                })
+            }),
+        )
+    }
+
     pub fn is_empty(&self) -> bool {
         self.clauses.is_empty()
     }
@@ -175,6 +278,7 @@ impl<'db> RegionSet<'db> {
                     .chain(clause.payload.path.indices())
                     .chain(clause.payload.root.indices())
             })
+            .filter(|index| self.scope.validate(*index).is_ok())
             .collect()
     }
 
@@ -191,9 +295,46 @@ impl<'db> RegionSet<'db> {
             &self.scope,
             self.clauses.iter().filter_map(|clause| {
                 Some(Guarded {
-                    guard: clause.guard.and(guard)?,
+                    guard: clause.guard.and(&guard.in_scope(clause.guard.scope()))?,
                     payload: clause.payload.clone(),
                 })
+            }),
+        )
+    }
+
+    pub fn repack(&self, db: &'db dyn HirAnalysisDb, repack: ReferentRepackId<'db>) -> Self {
+        Self::new(
+            &self.scope,
+            self.clauses.iter().map(|clause| {
+                let mut clause = clause.clone();
+                clause
+                    .payload
+                    .views
+                    .append(db, clause.payload.path.as_slice().len(), repack);
+                clause
+            }),
+        )
+    }
+
+    pub fn with_relative_views(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        views: &ReferentViews<'db>,
+        source_path_len: usize,
+    ) -> Self {
+        Self::new(
+            &self.scope,
+            self.clauses.iter().map(|clause| {
+                let mut clause = clause.clone();
+                let offset = clause
+                    .payload
+                    .path
+                    .as_slice()
+                    .len()
+                    .checked_sub(source_path_len)
+                    .expect("instantiated source retains its final projection");
+                clause.payload.views.extend_at(db, views, offset);
+                clause
             }),
         )
     }
@@ -205,6 +346,7 @@ impl<'db> RegionSet<'db> {
                 guard: clause.guard.clone(),
                 payload: SymbolicPlace {
                     root: clause.payload.root.clone(),
+                    views: clause.payload.views.clone(),
                     path: RegionPath::new(
                         clause
                             .payload
@@ -220,7 +362,7 @@ impl<'db> RegionSet<'db> {
         )
     }
 
-    pub fn substitute(&self, subst: &IndexSubst<'db>) -> Self {
+    pub fn substitute(&self, db: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
         assert_eq!(
             self.scope(),
             subst.source(),
@@ -229,15 +371,21 @@ impl<'db> RegionSet<'db> {
         Self::new(
             subst.destination(),
             self.clauses.iter().filter_map(|clause| {
+                let subst = subst.under_existentials(clause.guard.scope());
                 Some(Guarded {
-                    guard: clause.guard.substitute(subst)?,
+                    guard: clause.guard.substitute(&subst)?,
                     payload: SymbolicPlace {
-                        root: clause.payload.root.substitute(subst),
-                        path: clause.payload.path.substitute(subst),
+                        root: clause.payload.root.substitute(db, &subst),
+                        views: clause.payload.views.substitute(db, &subst),
+                        path: clause.payload.path.substitute(&subst),
                     },
                 })
             }),
         )
+    }
+
+    pub fn close_existentials(&self, scope: &BinderScope) -> Self {
+        Self::new(scope, self.clauses.iter().cloned())
     }
 
     /// Conservatively intersect regions. Unknown enum overlays retain both paths:
@@ -246,12 +394,50 @@ impl<'db> RegionSet<'db> {
         self.intersect(other).0
     }
 
-    fn intersect(&self, other: &Self) -> (Self, bool) {
+    pub fn intersect(&self, other: &Self) -> (Self, bool) {
         assert_eq!(self.scope, other.scope, "region scopes must match");
         let mut clauses = Vec::new();
         let mut uncertain = false;
         for left in &self.clauses {
             for right in &other.clauses {
+                let left_subst = left
+                    .guard
+                    .scope()
+                    .open_existentials(&self.scope, &self.scope);
+                let right_subst = right
+                    .guard
+                    .scope()
+                    .open_existentials(&self.scope, left_subst.destination());
+                let left_subst = left_subst
+                    .then(
+                        &IndexSubst::new(left_subst.destination(), right_subst.destination(), [])
+                            .expect("combined witness scope"),
+                    )
+                    .expect("fresh witnesses");
+                let left = substitute_clause(left, &left_subst);
+                let right = substitute_clause(right, &right_subst);
+                // Distinct raw-handle occurrences can name overlapping bases.
+                // Their field paths cannot prove disjointness without base identity.
+                if left.payload.root.may_alias_unknown(&right.payload.root)
+                    && (left.payload.root != right.payload.root || left.payload.root.is_reachable())
+                {
+                    if let Some(guard) = left.guard.and(&right.guard).and_then(|guard| {
+                        left.payload
+                            .root
+                            .alias_guard(&right.payload.root, guard, true)
+                    }) {
+                        uncertain = true;
+                        clauses.push(Guarded {
+                            guard: guard.clone(),
+                            payload: left.payload.clone(),
+                        });
+                        clauses.push(Guarded {
+                            guard,
+                            payload: right.payload.clone(),
+                        });
+                    }
+                    continue;
+                }
                 let Some(guard) = left
                     .guard
                     .and(&right.guard)
@@ -331,7 +517,12 @@ impl<'db> RegionSet<'db> {
                 .clauses
                 .iter()
                 .filter_map(|left| {
-                    let guard = left.guard.and(&right.guard)?;
+                    // An existential witness establishes possible overlap, not
+                    // universal coverage of another occurrence.
+                    if left.guard.scope() != &self.scope {
+                        return None;
+                    }
+                    let guard = left.guard.in_scope(right.guard.scope()).and(&right.guard)?;
                     let guard = left
                         .payload
                         .root
@@ -360,13 +551,19 @@ impl<'db> RegionSet<'db> {
             self.clauses.iter().filter_map(|moved| {
                 let mut remaining = Some(moved.guard.clone());
                 for write in &written.clauses {
-                    if write.payload.path.as_slice().len() > moved.payload.path.as_slice().len() {
+                    if write.guard.scope() != &self.scope
+                        || write.payload.path.as_slice().len() > moved.payload.path.as_slice().len()
+                    {
                         continue;
                     }
                     let guard = write
                         .payload
                         .root
-                        .alias_guard(&moved.payload.root, write.guard.clone(), false)
+                        .alias_guard(
+                            &moved.payload.root,
+                            write.guard.in_scope(moved.guard.scope()),
+                            false,
+                        )
                         .and_then(|guard| {
                             path_alias_guard(
                                 write.payload.path.as_slice(),
@@ -385,6 +582,23 @@ impl<'db> RegionSet<'db> {
                 })
             }),
         )
+    }
+}
+
+fn substitute_clause<'db>(
+    clause: &Guarded<'db, SymbolicPlace<'db>>,
+    subst: &IndexSubst<'db>,
+) -> Guarded<'db, SymbolicPlace<'db>> {
+    Guarded {
+        guard: clause
+            .guard
+            .substitute(subst)
+            .expect("fresh witnesses preserve satisfiability"),
+        payload: SymbolicPlace {
+            root: clause.payload.root.rename_indices(subst),
+            views: clause.payload.views.clone(),
+            path: clause.payload.path.substitute(subst),
+        },
     }
 }
 
@@ -426,6 +640,11 @@ pub(super) fn path_alias_guard<'db>(
 
 #[cfg(test)]
 mod tests {
+    use crate::analysis::semantic::capability::external::ExternalSource;
+    use crate::analysis::semantic::capability::source::InputSource;
+    use crate::analysis::semantic::capability::test_roots;
+    use crate::analysis::ty::ProviderAddressSpace;
+
     use super::*;
     use crate::analysis::semantic::capability::path::StructuralPath;
     use crate::{
@@ -456,18 +675,19 @@ mod tests {
 
     #[test]
     fn region_unions_use_complete_root_identity_and_obey_lattice_laws() {
+        let db = HirAnalysisTestDb::default();
         let roots = [
-            RegionRoot::Input(InputSource::place(0)),
-            RegionRoot::Input(InputSource::place(1)),
-            RegionRoot::Input(InputSource::slot(
-                0,
-                StructuralPath::new([Projection::Field(FieldIndex(0))]),
+            RegionRoot::External(test_roots::input(&db, InputSource::place(0))),
+            RegionRoot::External(test_roots::input(&db, InputSource::place(1))),
+            RegionRoot::External(test_roots::input(
+                &db,
+                InputSource::slot(0, StructuralPath::new([Projection::Field(FieldIndex(0))])),
             )),
-            RegionRoot::Input(InputSource::slot(
-                0,
-                StructuralPath::new([Projection::Field(FieldIndex(1))]),
+            RegionRoot::External(test_roots::input(
+                &db,
+                InputSource::slot(0, StructuralPath::new([Projection::Field(FieldIndex(1))])),
             )),
-            RegionRoot::Root(NRootId::from_u32(0)),
+            test_roots::local(&db, NRootId::from_u32(0)),
             RegionRoot::Value(NValueId::from_u32(0)),
         ];
         let regions: Vec<_> = roots
@@ -499,10 +719,11 @@ mod tests {
 
     #[test]
     fn symbolic_slot_and_referent_indices_share_one_constraint_solver() {
+        let db = HirAnalysisTestDb::default();
         let root = |selector| {
-            RegionRoot::Input(InputSource::slot(
-                0,
-                StructuralPath::new([Projection::Index(selector)]),
+            RegionRoot::External(test_roots::input(
+                &db,
+                InputSource::slot(0, StructuralPath::new([Projection::Index(selector)])),
             ))
         };
         let left = region(root(index(0)), path(index(1)));
@@ -523,7 +744,8 @@ mod tests {
 
     #[test]
     fn coverage_and_reinitialization_preserve_disjoint_members() {
-        let root = RegionRoot::Root(NRootId::from_u32(0));
+        let db = HirAnalysisTestDb::default();
+        let root = test_roots::local(&db, NRootId::from_u32(0));
         let all = region(root.clone(), RegionPath::default());
         let zero = region(root.clone(), path(IndexExpr::Const(0)));
         let one = region(root.clone(), path(IndexExpr::Const(1)));
@@ -543,13 +765,14 @@ mod tests {
                 [(index(0), IndexExpr::Const(selected))],
             )
             .unwrap();
-            assert_eq!(remaining.substitute(&subst).is_empty(), selected == 0);
+            assert_eq!(remaining.substitute(&db, &subst).is_empty(), selected == 0);
         }
     }
 
     #[test]
     fn enum_storage_overlap_never_establishes_coverage() {
-        let root = RegionRoot::Root(NRootId::from_u32(0));
+        let db = HirAnalysisTestDb::default();
+        let root = test_roots::local(&db, NRootId::from_u32(0));
         let field = |variant| {
             region(
                 root.clone(),
@@ -612,7 +835,11 @@ mod tests {
             .into_iter()
             .map(|binding| {
                 region(
-                    RegionRoot::Provider(ProviderRegionId::new(&db, binding)),
+                    RegionRoot::External(ExternalSource::provider(
+                        &db,
+                        ProviderRegionId::new(&db, binding),
+                        TyId::u256(&db),
+                    )),
                     RegionPath::default(),
                 )
             })

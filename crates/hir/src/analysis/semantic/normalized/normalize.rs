@@ -8,21 +8,29 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             BorrowActivation, FieldIndex, LayoutBackingPlace, LayoutBackingProjection,
-            PlaceProvenance, SBlockId, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmtId,
-            SStmtKind, STerminatorKind, SemOrigin, SemanticBody, SemanticInstance,
+            PlaceProvenance, SBlockId, SConst, SExpr, SLocal, SLocalId, SOperand, SPlace, SStmtId,
+            SStmtKind, STerminatorKind, SemConstValue, SemOrigin, SemanticBody, SemanticInstance,
             SemanticLocalRole, ValueProvenance, VariantIndex,
+            capability::{
+                handle::OpaqueHandleContract,
+                semantics::{CapabilityClass, CapabilitySemantics, capability_semantics},
+                shape::capability_shape,
+            },
+            eval_const_ref, get_or_build_semantic_instance,
             lower::layout_backing_source_path_is_prefix,
             normalized::{
-                NBlock, NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr,
-                NIndex, NOperand, NPlace, NPlaceBase, NRoot, NRootId, NRootKind, NStatement,
-                NStatementKind, NStructuralPath, NSuccessor, NTerminator, NTerminatorKind, NValue,
-                NValueDefinition, NValueId, NormalizedBody, ReadMode, StructuralRepack,
+                HandleOrigin, NBlock, NBlockId, NDataPath, NDataProjection, NEffectArg,
+                NEffectArgValue, NExpr, NIndex, NOperand, NPlace, NPlaceBase, NRoot, NRootId,
+                NRootKind, NStatement, NStatementId, NStatementKind, NStructuralPath, NSuccessor,
+                NTerminator, NTerminatorKind, NValue, NValueDefinition, NValueId, NormalizedBody,
+                ReadMode, StructuralRepack, ViewAccess,
                 layout_plan::{
                     NLayoutBackingSource, NLayoutPlan, NLayoutUseBacking, NRootRepresentation,
                     NValueRepresentation,
                 },
                 verify::project_path_ty,
             },
+            sem_const_ty,
         },
         ty::{
             adt_def::AdtRef,
@@ -32,7 +40,7 @@ use crate::{
             },
             trait_resolution::PredicateListId,
             ty_check::{BodyOwner, LocalBinding},
-            ty_def::{CapabilityKind, TyData, TyId},
+            ty_def::{BorrowKind, CapabilityKind, TyData, TyId},
             ty_is_copy, ty_is_noesc,
         },
     },
@@ -47,6 +55,7 @@ pub enum NormalizeError<'db> {
     MissingRoot(SLocalId),
     MissingProviderAddressSpace(ProviderBinding<'db>),
     InvalidProjection,
+    UnresolvedHandleOrigin(TyId<'db>),
     UnsupportedPlaceProjection,
     UnsupportedCapabilityCast { from: TyId<'db>, to: TyId<'db> },
     InvalidControlFlow,
@@ -83,6 +92,7 @@ struct NormalizeCx<'a, 'db> {
     root_sources: Vec<NRootRepresentation>,
     use_backings: Vec<NLayoutUseBacking<'db>>,
     blocks: Vec<NBlock<'db>>,
+    statement_count: usize,
     current_values: Vec<Vec<NValueId>>,
     projection_values: Vec<Option<NValueId>>,
     copy_cache: RefCell<FxHashMap<TyId<'db>, bool>>,
@@ -112,6 +122,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             root_sources: Vec::new(),
             use_backings: Vec::new(),
             blocks: Vec::new(),
+            statement_count: 0,
             current_values: vec![Vec::new(); local_count],
             projection_values: vec![None; local_count],
             copy_cache: RefCell::new(FxHashMap::default()),
@@ -202,23 +213,21 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 match &statement.kind {
                     SStmtKind::Assign { expr, .. } => {
                         for_each_address_required_local(expr, |local| {
-                            if self.raw.locals[local.index()]
-                                .ty
-                                .as_capability(self.db)
-                                .is_none()
-                            {
-                                needs_slot[local.index()] = true;
-                            }
+                            self.mark_address_root(local, &mut needs_slot)
                         });
+                        if let SExpr::Call { callee, args, .. } = expr {
+                            for (index, argument) in args.iter().enumerate() {
+                                if self
+                                    .call_view_target(*callee, index, argument.value)
+                                    .is_some()
+                                {
+                                    self.mark_address_root(argument.value, &mut needs_slot);
+                                }
+                            }
+                        }
                     }
                     SStmtKind::Store { dst, .. } => {
-                        if self.raw.locals[dst.local.index()]
-                            .ty
-                            .as_capability(self.db)
-                            .is_none()
-                        {
-                            needs_slot[dst.local.index()] = true;
-                        }
+                        self.mark_address_root(dst.local, &mut needs_slot);
                     }
                 }
             }
@@ -296,7 +305,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 },
                 |param| NRootKind::ParamPlace { param },
             ),
-            ty: self.instance.normalized_ty(self.db, local_data.ty),
+            ty: self.normalized_local_ty(local),
             address_space: ProviderAddressSpace::Memory,
             mutability: local_data.mutability,
             origin: crate::analysis::semantic::SemOrigin::Body(self.raw.template_owner),
@@ -385,8 +394,39 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             self.projection_values.fill(None);
             match &statement.kind {
                 SStmtKind::Assign { dst, expr } => {
-                    let normalized =
-                        self.normalize_expr(raw_block, statement.id, statement.origin, *dst, expr)?;
+                    let mut normalized =
+                        self.normalize_expr(raw_block, statement.origin, *dst, expr)?;
+                    let mut source = Some(statement.id);
+                    if let NExpr::Call { callee, .. } = &normalized
+                        && let Some(target) = self.normalized_local_ty(*dst).as_view(self.db)
+                    {
+                        let callee = get_or_build_semantic_instance(self.db, callee.key);
+                        let returned_ty = callee.normalized_result_ty(self.db);
+                        if returned_ty.as_capability(self.db).is_none()
+                            && !returned_ty.is_never(self.db)
+                        {
+                            if !structural_types_are_boundary_compatible(
+                                self.db,
+                                self.instance,
+                                returned_ty,
+                                target,
+                            ) {
+                                return Err(NormalizeError::InvalidProjection);
+                            }
+                            let returned = self.emit_define(
+                                raw_block,
+                                source.take(),
+                                statement.origin,
+                                returned_ty,
+                                *dst,
+                                normalized,
+                            )?;
+                            normalized = NExpr::MakeView {
+                                place: self.materialize_value(returned, statement.origin),
+                                access: ViewAccess::Read,
+                            };
+                        }
+                    }
                     let result_ty = match &normalized {
                         NExpr::Borrow { place, kind, .. } => match kind {
                             crate::analysis::ty::ty_def::BorrowKind::Mut => {
@@ -396,6 +436,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                                 TyId::borrow_ref_of(self.db, place.ty)
                             }
                         },
+                        NExpr::MakeView { place, .. } => TyId::view_of(self.db, place.ty),
                         NExpr::Forward { src } => self.values[src.value.index()].ty,
                         NExpr::Load { place, .. } => place.ty,
                         NExpr::ProjectValue { value, path } => project_path_ty(
@@ -409,22 +450,70 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                         NExpr::ScalarCast { to, .. } => *to,
                         _ => self.normalized_local_ty(*dst),
                     };
+                    // Reading a stored mutable handle creates a reborrow. Keep the
+                    // structural extraction exact and represent that access explicitly.
+                    if matches!(normalized, NExpr::Load { .. } | NExpr::ProjectValue { .. })
+                        && let Some((BorrowKind::Mut, target)) = result_ty.as_borrow(self.db)
+                    {
+                        let carrier = self.emit_define(
+                            raw_block,
+                            None,
+                            statement.origin,
+                            result_ty,
+                            *dst,
+                            normalized,
+                        )?;
+                        normalized = NExpr::Borrow {
+                            place: NPlace {
+                                base: NPlaceBase::CapabilityTarget { carrier },
+                                path: NDataPath::empty(),
+                                ty: target,
+                                origin: statement.origin,
+                            },
+                            kind: BorrowKind::Mut,
+                            activation: BorrowActivation::Immediate,
+                            provider: None,
+                        };
+                    }
                     if let Some(root) = self.root_for_local[dst.index()] {
                         let result = self.emit_define(
                             raw_block,
-                            Some(statement.id),
+                            source,
                             statement.origin,
                             result_ty,
                             *dst,
                             normalized,
                         )?;
                         let destination = self.root_place(root, statement.origin);
-                        let value = self.operand(result, statement.origin, ReadMode::Move);
+                        let mut value = self.operand(result, statement.origin, ReadMode::Move);
+                        if result_ty != destination.ty {
+                            let mapping = structural_repack_mapping(
+                                self.db,
+                                self.instance,
+                                result_ty,
+                                destination.ty,
+                            )
+                            .ok_or(
+                                NormalizeError::UnsupportedCapabilityCast {
+                                    from: result_ty,
+                                    to: destination.ty,
+                                },
+                            )?;
+                            let result = self.emit_define(
+                                raw_block,
+                                None,
+                                statement.origin,
+                                destination.ty,
+                                *dst,
+                                NExpr::StructuralRepack { value, mapping },
+                            )?;
+                            value = self.operand(result, statement.origin, ReadMode::Move);
+                        }
                         self.emit_store(raw_block, None, statement.origin, destination, value);
                     } else {
                         let value = self.emit_define(
                             raw_block,
-                            Some(statement.id),
+                            source,
                             statement.origin,
                             result_ty,
                             *dst,
@@ -470,13 +559,12 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     fn normalize_expr(
         &mut self,
         block: SBlockId,
-        _statement: SStmtId,
         origin: SemOrigin<'db>,
         dst: SLocalId,
         expr: &SExpr<'db>,
     ) -> Result<NExpr<'db>, NormalizeError<'db>> {
         let dst_ty = self.normalized_local_ty(dst);
-        Ok(match expr {
+        let normalized = match expr {
             SExpr::Forward(value) => NExpr::Forward {
                 src: self.read_operand(block, origin, *value, Some(ReadMode::Copy))?,
             },
@@ -575,7 +663,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             SExpr::CodeRegionRef { region } => NExpr::CodeRegionRef {
                 region: region.clone(),
             },
-            SExpr::Const(value) => NExpr::Const(value.clone()),
+            SExpr::Const(value) => self.normalize_constant(block, origin, dst, dst_ty, value.clone())?,
             SExpr::Unary { op, value } => NExpr::Unary {
                 op: *op,
                 value: self.read_scalar_operand(block, origin, *value, None)?,
@@ -742,12 +830,45 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     .iter()
                     .enumerate()
                     .map(|(index, arg)| {
-                        self.read_operand(
-                            block,
-                            origin,
-                            *arg,
-                            self.call_arg_mode(*callee, index, arg.value),
-                        )
+                        if let Some(target) = self.call_view_target(*callee, index, arg.value) {
+                            let place = self.place_for_local(block, arg.sem_origin(origin), arg.value)?;
+                            let mut place = self.dereference_place_to(block, arg.sem_origin(origin), arg.value, place, target)?;
+                            if structural_repack_mapping(self.db, self.instance, place.ty, target).is_none() {
+                                let value = self.read_operand(block, origin, *arg, Some(ReadMode::Copy))?;
+                                let from = self.values[value.value.index()].ty;
+                                let mapping = structural_repack_mapping(self.db, self.instance, from, target)
+                                    .ok_or(NormalizeError::UnsupportedCapabilityCast { from, to: target })?;
+                                let value_expr = if from == target { NExpr::Forward { src: value } }
+                                    else { NExpr::StructuralRepack { value, mapping } };
+                                let result = self.emit_define(block, None, arg.sem_origin(origin), target, arg.value, value_expr)?;
+                                place = self.materialize_value(result, arg.sem_origin(origin));
+                            }
+                            let from = TyId::view_of(self.db, place.ty);
+                            let to = TyId::view_of(self.db, target);
+                            let mut result = self.emit_define(block, None, origin, from, arg.value,
+                                NExpr::MakeView { place, access: ViewAccess::Read })?;
+                            if from != to {
+                                let mapping = structural_repack_mapping(self.db, self.instance, from, to)
+                                    .ok_or(NormalizeError::UnsupportedCapabilityCast { from, to })?;
+                                let value = self.operand(result, origin, ReadMode::Read);
+                                result = self.emit_define(block, None, origin, to, arg.value, NExpr::StructuralRepack { value, mapping })?;
+                            }
+                            Ok(self.operand(result, origin, ReadMode::Read))
+                        } else {
+                            let value = self.read_operand(block, origin, *arg, self.call_arg_mode(*callee, index, arg.value))?;
+                            let expected = self.call_param_ty(*callee, index).ok_or(NormalizeError::InvalidProjection)?;
+                            let actual = self.values[value.value.index()].ty;
+                            let target = match (actual.as_capability(self.db), expected.as_capability(self.db)) {
+                                (Some((kind, _)), Some((_, target))) => match kind {
+                                    CapabilityKind::Mut => TyId::borrow_mut_of(self.db, target),
+                                    CapabilityKind::Ref => TyId::borrow_ref_of(self.db, target),
+                                    CapabilityKind::View => TyId::view_of(self.db, target),
+                                },
+                                (None, Some((_, target))) => target,
+                                (_, None) => expected,
+                            };
+                            self.coerce_operand_as(block, origin, arg.value, value, target)
+                        }
                     })
                     .collect::<Result<Vec<_>, _>>()?
                     .into_boxed_slice(),
@@ -783,7 +904,126 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     .collect::<Result<Vec<_>, NormalizeError<'db>>>()?
                     .into_boxed_slice(),
             },
+        };
+        match normalized {
+            NExpr::AggregateMake { ty, fields } => self.construct_value(ty, None, fields),
+            NExpr::EnumMake {
+                enum_ty,
+                variant,
+                fields,
+            } => self.construct_value(enum_ty, Some(variant), fields),
+            normalized => Ok(normalized),
+        }
+    }
+
+    fn construct_value(
+        &self,
+        ty: TyId<'db>,
+        variant: Option<VariantIndex>,
+        fields: Box<[NOperand]>,
+    ) -> Result<NExpr<'db>, NormalizeError<'db>> {
+        let contract = OpaqueHandleContract::for_ty(
+            self.db,
+            self.instance
+                .key(self.db)
+                .impl_env(self.db)
+                .normalization_scope(self.db),
+            self.assumptions,
+            ty,
+        )
+        .map_err(|error| NormalizeError::UnresolvedHandleOrigin(error.0))?;
+        Ok(if let Some(contract) = contract {
+            NExpr::MakeHandle {
+                ty,
+                variant,
+                fields,
+                origin: HandleOrigin::Opaque(contract),
+            }
+        } else if let Some(variant) = variant {
+            NExpr::EnumMake {
+                enum_ty: ty,
+                variant,
+                fields,
+            }
+        } else {
+            NExpr::AggregateMake { ty, fields }
         })
+    }
+
+    fn normalize_constant(
+        &mut self,
+        block: SBlockId,
+        origin: SemOrigin<'db>,
+        source: SLocalId,
+        ty: TyId<'db>,
+        constant: SConst<'db>,
+    ) -> Result<NExpr<'db>, NormalizeError<'db>> {
+        if let Some((kind, target)) = ty.as_capability(self.db) {
+            if kind == CapabilityKind::Mut {
+                return Err(NormalizeError::InvalidProjection);
+            }
+            let expr = self.normalize_constant(block, origin, source, target, constant)?;
+            let value = self.emit_define(block, None, origin, target, source, expr)?;
+            let place = self.materialize_value(value, origin);
+            return Ok(match kind {
+                CapabilityKind::View => NExpr::MakeView {
+                    place,
+                    access: ViewAccess::Read,
+                },
+                CapabilityKind::Ref => NExpr::Borrow {
+                    place,
+                    kind: BorrowKind::Ref,
+                    activation: BorrowActivation::Immediate,
+                    provider: None,
+                },
+                CapabilityKind::Mut => unreachable!(),
+            });
+        }
+        let shape = capability_shape(
+            self.db,
+            self.instance
+                .key(self.db)
+                .impl_env(self.db)
+                .normalization_scope(self.db),
+            self.assumptions,
+            ty,
+        )
+        .map_err(|_| NormalizeError::UnresolvedHandleOrigin(ty))?;
+        if !shape.contains_capability(self.db) {
+            return Ok(NExpr::Const(constant));
+        }
+        let value = match constant {
+            SConst::Value(value) => value,
+            SConst::Ref(reference) => eval_const_ref(self.db, reference)
+                .map_err(|_| NormalizeError::UnresolvedHandleOrigin(ty))?,
+        };
+        let (variant, fields) = match value.value(self.db) {
+            SemConstValue::Struct { fields, .. } => (None, fields),
+            SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => {
+                (None, elems)
+            }
+            SemConstValue::Enum {
+                variant, fields, ..
+            } => (Some(variant), fields),
+            SemConstValue::Scalar { .. }
+            | SemConstValue::Unit
+            | SemConstValue::TypeLevel { .. } => {
+                return Err(NormalizeError::UnresolvedHandleOrigin(ty));
+            }
+        };
+        let fields = fields
+            .iter()
+            .map(|field| {
+                let ty = self
+                    .instance
+                    .normalized_ty(self.db, sem_const_ty(self.db, *field));
+                let expr =
+                    self.normalize_constant(block, origin, source, ty, SConst::Value(*field))?;
+                let value = self.emit_define(block, None, origin, ty, source, expr)?;
+                Ok(self.operand(value, origin, ReadMode::Move))
+            })
+            .collect::<Result<Vec<_>, NormalizeError<'db>>>()?;
+        self.construct_value(ty, variant, fields.into_boxed_slice())
     }
 
     fn load_or_borrow_place(
@@ -804,13 +1044,18 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             && (target == place.ty
                 || structural_repack_mapping(self.db, self.instance, place.ty, target).is_some())
         {
+            if kind == CapabilityKind::View {
+                return Ok(NExpr::MakeView {
+                    place,
+                    access: ViewAccess::Read,
+                });
+            }
             return Ok(NExpr::Borrow {
                 place,
                 kind: match kind {
                     CapabilityKind::Mut => crate::analysis::ty::ty_def::BorrowKind::Mut,
-                    CapabilityKind::Ref | CapabilityKind::View => {
-                        crate::analysis::ty::ty_def::BorrowKind::Ref
-                    }
+                    CapabilityKind::Ref => crate::analysis::ty::ty_def::BorrowKind::Ref,
+                    CapabilityKind::View => unreachable!("views are explicit"),
                 },
                 activation: BorrowActivation::Immediate,
                 provider: None,
@@ -1017,6 +1262,22 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         })
     }
 
+    fn materialize_value(&mut self, value: NValueId, origin: SemOrigin<'db>) -> NPlace<'db> {
+        let root = NRootId::new(self.roots.len());
+        self.roots.push(NRoot {
+            kind: NRootKind::Temporary { value },
+            ty: self.values[value.index()].ty,
+            address_space: ProviderAddressSpace::Memory,
+            mutability: self.values[value.index()].mutability,
+            origin,
+        });
+        self.root_sources.push(NRootRepresentation {
+            root,
+            source_local: None,
+        });
+        self.root_place(root, origin)
+    }
+
     fn place_for_local(
         &mut self,
         block: SBlockId,
@@ -1144,7 +1405,42 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         target_ty: TyId<'db>,
     ) -> Result<NOperand, NormalizeError<'db>> {
         let value = self.read_operand(block, origin, operand, None)?;
-        self.repack_operand_as(block, origin, operand.value, value, target_ty)
+        self.coerce_operand_as(block, origin, operand.value, value, target_ty)
+    }
+
+    fn coerce_operand_as(
+        &mut self,
+        block: SBlockId,
+        origin: SemOrigin<'db>,
+        source_local: SLocalId,
+        mut value: NOperand,
+        target_ty: TyId<'db>,
+    ) -> Result<NOperand, NormalizeError<'db>> {
+        if let Some((kind, inner)) = self.values[value.value.index()].ty.as_capability(self.db)
+            && target_ty.as_capability(self.db).is_none()
+            && (kind == CapabilityKind::View || self.ty_is_copy(inner))
+            && structural_repack_mapping(self.db, self.instance, inner, target_ty).is_some()
+        {
+            let place = NPlace {
+                base: NPlaceBase::CapabilityTarget {
+                    carrier: value.value,
+                },
+                path: NDataPath::empty(),
+                ty: inner,
+                origin,
+            };
+            let mode = self.read_mode_for_place(origin, inner, &place);
+            let result = self.emit_define(
+                block,
+                None,
+                origin,
+                inner,
+                source_local,
+                NExpr::Load { place, mode },
+            )?;
+            value = self.operand(result, origin, mode);
+        }
+        self.repack_operand_as(block, origin, source_local, value, target_ty)
     }
 
     fn repack_operand_as(
@@ -1243,7 +1539,14 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             STerminatorKind::Assert { message } => NTerminatorKind::Assert { message: *message },
             STerminatorKind::Return(value) => NTerminatorKind::Return(
                 value
-                    .map(|value| self.read_operand(block, raw.origin, value, None))
+                    .map(|value| {
+                        let target = self.instance.normalized_result_ty(self.db);
+                        if target.has_invalid(self.db) {
+                            self.read_operand(block, raw.origin, value, None)
+                        } else {
+                            self.read_operand_as(block, raw.origin, value, target)
+                        }
+                    })
                     .transpose()?,
             ),
         };
@@ -1285,6 +1588,17 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         source_local: SLocalId,
         expr: NExpr<'db>,
     ) -> Result<NValueId, NormalizeError<'db>> {
+        // A freshly decomposed constant has its own structural representation.
+        // Raw-local backing paths describe the enclosing value, not its new fields.
+        let constructed = source.is_none()
+            && matches!(
+                &expr,
+                NExpr::Const(_)
+                    | NExpr::AggregateMake { .. }
+                    | NExpr::EnumMake { .. }
+                    | NExpr::MakeHandle { .. }
+                    | NExpr::ArrayRepeat { .. }
+            );
         let forwarded = match &expr {
             NExpr::Forward { src } => Some(src.value),
             _ => None,
@@ -1303,7 +1617,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         } else {
             None
         };
-        if forwarded.is_none() {
+        if forwarded.is_none() && !constructed {
             self.prepare_layout_backing_indices(block, origin, source_local)?;
         }
         let statement = self.blocks[block.index()].statements.len() as u32;
@@ -1320,7 +1634,10 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             source_binding,
             source_local,
         );
+        let id = NStatementId::new(self.statement_count);
+        self.statement_count += 1;
         self.blocks[block.index()].statements.push(NStatement {
+            id,
             source,
             origin,
             kind: NStatementKind::Define {
@@ -1343,7 +1660,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             self.use_backings.extend(backings);
         } else if let Some((base, path)) = projected {
             self.record_projected_layout_backings(value, base, &path, block, origin)?;
-        } else {
+        } else if !constructed {
             self.record_layout_backings(value, source_local, block, origin)?;
         }
         Ok(value)
@@ -1357,7 +1674,10 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         destination: NPlace<'db>,
         value: NOperand,
     ) {
+        let id = NStatementId::new(self.statement_count);
+        self.statement_count += 1;
         self.blocks[block.index()].statements.push(NStatement {
+            id,
             source,
             origin,
             kind: NStatementKind::Store { destination, value },
@@ -1589,6 +1909,55 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
 
     fn normalized_local_ty(&self, local: SLocalId) -> TyId<'db> {
         normalized_source_local_value_ty(self.db, self.instance, &self.raw.locals[local.index()])
+    }
+
+    /// Address demand follows semantic derived places before allocating storage.
+    /// A projected snapshot must not receive a new root for its old referent.
+    fn mark_address_root(&self, mut local: SLocalId, needs_slot: &mut [bool]) {
+        let mut visited = FxHashSet::default();
+        while visited.insert(local) {
+            if let SemanticLocalRole::PlaceBoundValue {
+                provenance: PlaceProvenance::Derived(place),
+                ..
+            } = &self.raw.locals[local.index()].role
+            {
+                local = place.local;
+            } else {
+                if self
+                    .normalized_local_ty(local)
+                    .as_capability(self.db)
+                    .is_none()
+                {
+                    needs_slot[local.index()] = true;
+                }
+                return;
+            }
+        }
+    }
+
+    fn call_view_target(
+        &self,
+        callee: crate::analysis::semantic::SemanticCalleeRef<'db>,
+        index: usize,
+        local: SLocalId,
+    ) -> Option<TyId<'db>> {
+        if self.normalized_local_ty(local).as_view(self.db).is_some() {
+            return None;
+        }
+        self.call_param_ty(callee, index)?.as_view(self.db)
+    }
+
+    fn call_param_ty(
+        &self,
+        callee: crate::analysis::semantic::SemanticCalleeRef<'db>,
+        index: usize,
+    ) -> Option<TyId<'db>> {
+        let instance = get_or_build_semantic_instance(self.db, callee.key);
+        let binding = instance
+            .key(self.db)
+            .typed_body(self.db)
+            .param_binding(index)?;
+        Some(instance.normalized_binding_ty(self.db, binding))
     }
 
     fn call_arg_mode(
@@ -1871,23 +2240,94 @@ impl<'db> StructuralRepackCollector<'db> {
                         || ty.has_var(db)
             )
         };
-        let result = if deferred_const_leaf(source)
+        let nominal_targets_match = if source != target
+            && source.as_capability(db).is_none()
+            && target.as_capability(db).is_none()
+            && !deferred_const_leaf(source)
+            && !deferred_const_leaf(target)
+            && !deferred_runtime_leaf(source)
+            && !deferred_runtime_leaf(target)
+        {
+            let scope = instance.key(db).impl_env(db).normalization_scope(db);
+            match (
+                capability_semantics(db, scope, instance.assumptions(db), source),
+                capability_semantics(db, scope, instance.assumptions(db), target),
+            ) {
+                (Ok(None), Ok(None)) => true,
+                (Ok(Some(source)), Ok(Some(target))) if source.class == target.class => {
+                    let spaces_match = if source.class == CapabilityClass::Handle {
+                        let space = |semantics: CapabilitySemantics<'db>| {
+                            OpaqueHandleContract::for_ty(
+                                db,
+                                scope,
+                                instance.assumptions(db),
+                                semantics.representation_ty,
+                            )
+                            .ok()
+                            .flatten()
+                            .map(|contract| contract.address_space)
+                        };
+                        space(source)
+                            .zip(space(target))
+                            .is_some_and(|(source, target)| source == target)
+                    } else {
+                        true
+                    };
+                    let mapping_len = self.mapping.len();
+                    let valid = spaces_match
+                        && self.collect(
+                            source.target_ty,
+                            target.target_ty,
+                            source_path.clone(),
+                            target_path.clone(),
+                        );
+                    self.mapping.truncate(mapping_len);
+                    valid
+                }
+                _ => false,
+            }
+        } else {
+            true
+        };
+        let result = if !nominal_targets_match {
+            false
+        } else if deferred_const_leaf(source)
             || deferred_const_leaf(target)
             || self.allow_deferred_leaves
                 && (deferred_runtime_leaf(source) || deferred_runtime_leaf(target))
         {
             true
         } else if source.as_capability(db).is_some() || target.as_capability(db).is_some() {
-            if source == target {
+            let compatible = source
+                .as_capability(db)
+                .zip(target.as_capability(db))
+                .is_some_and(
+                    |((source_kind, source_target), (target_kind, target_target))| {
+                        let mapping_len = self.mapping.len();
+                        let compatible = source_kind == target_kind
+                            && self.collect(
+                                source_target,
+                                target_target,
+                                source_path.clone(),
+                                target_path.clone(),
+                            );
+                        self.mapping.truncate(mapping_len);
+                        compatible
+                    },
+                );
+            if compatible {
                 self.mapping.push((target_path, source_path));
-                true
-            } else {
-                false
             }
+            compatible
         } else if source.is_array(db) && target.is_array(db) {
             let source_elem = source.decompose_ty_app(db).1.first().copied();
             let target_elem = target.decompose_ty_app(db).1.first().copied();
-            if source.array_len(db) != target.array_len(db) {
+            let lengths_match = match (source.array_len(db), target.array_len(db)) {
+                (Some(source), Some(target)) => source == target,
+                (None, None) => source.generic_args(db)[1] == target.generic_args(db)[1],
+                _ => false,
+            };
+            if !lengths_match {
                 false
             } else if source.array_len(db) == Some(0) {
                 true
@@ -2855,6 +3295,88 @@ fn widen(_ value: own u8) -> u256 {
     }
 
     #[test]
+    fn handle_repacks_require_compatible_referents() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "repack_targets.fe".into(),
+            r#"
+use core::effect_ref::{AddressSpace, EffectHandle}
+struct Ptr<T> { raw: u256 }
+impl<T> EffectHandle for Ptr<T> {
+    type Target = T
+    const SPACE: AddressSpace = AddressSpace::Memory
+    fn from_raw(_ raw: u256) -> Self { Self { raw } }
+    fn raw(self) -> u256 { self.raw }
+}
+struct Spaced<const SP: AddressSpace> { raw: u256 }
+impl<const SP: AddressSpace> EffectHandle for Spaced<SP> {
+    type Target = u256
+    const SPACE: AddressSpace = SP
+    fn from_raw(_ raw: u256) -> Self { Self { raw } }
+    fn raw(self) -> u256 { self.raw }
+}
+fn spaces(
+    _ memory: own Spaced<AddressSpace::Memory>,
+    _ storage: own Spaced<AddressSpace::Storage>,
+) {}
+fn inspect(
+    _ small: own Ptr<u8>,
+    _ large: own Ptr<u256>,
+    _ one: own Ptr<[u256; 1]>,
+    _ two: own Ptr<[u256; 2]>,
+) {}
+fn symbolic<const N: usize, const M: usize>(
+    _ left: own Ptr<[u256; N]>,
+    _ right: own Ptr<[u256; M]>,
+) {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let body = normalized_func(&db, top_mod, "inspect").body;
+        let types: Vec<_> = body
+            .values
+            .iter()
+            .filter_map(|value| {
+                matches!(value.definition, NValueDefinition::EntryParam { .. }).then_some(value.ty)
+            })
+            .collect();
+        let [small, large, one, two]: [TyId<'_>; 4] = types.try_into().unwrap();
+        for (source, target) in [(small, large), (one, two)] {
+            assert!(
+                super::structural_repack_mapping(&db, body.owner, source, target).is_none(),
+                "equal raw-word representations do not prove equal referent layouts"
+            );
+            assert!(super::structural_repack_mapping(&db, body.owner, source, source).is_some());
+        }
+        let body = normalized_func(&db, top_mod, "symbolic").body;
+        let types: Vec<_> = body
+            .values
+            .iter()
+            .filter_map(|value| {
+                matches!(value.definition, NValueDefinition::EntryParam { .. }).then_some(value.ty)
+            })
+            .collect();
+        let [left, right]: [TyId<'_>; 2] = types.try_into().unwrap();
+        assert!(
+            super::structural_repack_mapping(&db, body.owner, left, right).is_none(),
+            "distinct symbolic array lengths are not interchangeable"
+        );
+        let body = normalized_func(&db, top_mod, "spaces").body;
+        let types: Vec<_> = body
+            .values
+            .iter()
+            .filter_map(|value| {
+                matches!(value.definition, NValueDefinition::EntryParam { .. }).then_some(value.ty)
+            })
+            .collect();
+        let [memory, storage]: [TyId<'_>; 2] = types.try_into().unwrap();
+        assert!(
+            super::structural_repack_mapping(&db, body.owner, memory, storage).is_none(),
+            "equal handle representations and targets cannot change address space"
+        );
+    }
+
+    #[test]
     fn scalar_expressions_require_runtime_scalar_operator_signatures() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
@@ -3151,15 +3673,17 @@ fn generic_boundaries<T>(pair: (T, T), array: [T; 2]) -> (T, T) {
             .expect("constant expression");
         borrowed_const.values[borrowed_const_result.index()].ty =
             TyId::view_of(&db, TyId::u256(&db));
-        verify_normalized_body(&db, &borrowed_const)
-            .expect("canonical constants may back view-typed operands");
+        assert_eq!(
+            verify_normalized_body(&db, &borrowed_const),
+            Err(NormalizedBodyVerifyError::ScalarCapability)
+        );
 
         let mut invalid_mutable_const = borrowed_const.clone();
         invalid_mutable_const.values[borrowed_const_result.index()].ty =
             TyId::borrow_mut_of(&db, TyId::u256(&db));
         assert_eq!(
             verify_normalized_body(&db, &invalid_mutable_const),
-            Err(NormalizedBodyVerifyError::ExpressionType)
+            Err(NormalizedBodyVerifyError::ScalarCapability)
         );
 
         let mut invalid_provider_move = normalized_func(&db, top_mod, "read_effect").body;
@@ -3696,11 +4220,29 @@ fn mutate(mut _ value: own u256) {
             .expect("call result");
         let mut invalid_value_type = artifacts.body.clone();
         invalid_value_type.values[call_result.index()].ty = TyId::view_of(&db, TyId::u256(&db));
-        verify_normalized_body(&db, &invalid_value_type)
-            .expect("copy-view call results are valid semantic boundary representations");
         assert_eq!(
-            verify_normalized_layout_plan(&db, &invalid_value_type, source, &artifacts.layout_plan,),
-            Err(NormalizedLayoutPlanVerifyError::ValueType(call_result))
+            verify_normalized_body(&db, &invalid_value_type),
+            Err(NormalizedBodyVerifyError::ExpressionType)
+        );
+
+        let constant_result = artifacts
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| match &statement.kind {
+                NStatementKind::Define {
+                    result,
+                    expr: NExpr::Const(_),
+                } if statement.source.is_some() => Some(*result),
+                _ => None,
+            })
+            .expect("source constant");
+        let mut invalid_value_type = artifacts.body.clone();
+        invalid_value_type.values[constant_result.index()].ty = TyId::bool(&db);
+        assert_eq!(
+            verify_normalized_layout_plan(&db, &invalid_value_type, source, &artifacts.layout_plan),
+            Err(NormalizedLayoutPlanVerifyError::ValueType(constant_result))
         );
 
         let mut invalid_root_mutability = normalized_func(&db, top_mod, "mutate");

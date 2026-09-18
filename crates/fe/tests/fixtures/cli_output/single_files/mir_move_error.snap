@@ -13,7 +13,7 @@ error[16-0002]: move conflict in `fn mir_move_error`
    │ ╭──────────────────────────────────^
 10 │ │     let x = Boxed { value: 0 }
 11 │ │     consume(x)
-   │ │             - `x` is moved here
+   │ │             - value is moved here
 12 │ │     x
 13 │ │ }
    │ ╰─^ cannot use a value after it was moved

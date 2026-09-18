@@ -310,7 +310,8 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
                     }),
                     _ => None,
                 },
-                NRootKind::LocalSlot { .. }
+                NRootKind::Temporary { .. }
+                | NRootKind::LocalSlot { .. }
                 | NRootKind::ParamPlace { .. }
                 | NRootKind::CapabilityRepresentation { .. } => None,
             },

@@ -1,28 +1,32 @@
 use salsa::Update;
 
 use crate::analysis::{
-    semantic::{SemOrigin, normalized::NDataPath},
+    semantic::{
+        SemOrigin,
+        capability::{source::SourceExpr, value::ValueId},
+    },
     ty::ty_check::{BodyOwner, SmirLoweringIssue},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum BorrowInputRef {
-    Param(u32),
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct BorrowSummary<'db> {
+    /// Whether any admitted path reaches a return.
+    pub may_return: bool,
+    pub result: ValueId<'db, SourceExpr<'db>>,
+    pub mutable_inputs: Vec<InputPoststate<'db>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct BorrowTransform {
-    pub input: BorrowInputRef,
-    pub proj: NDataPath,
+pub struct InputPoststate<'db> {
+    pub destination: SourceExpr<'db>,
+    pub value: ValueId<'db, SourceExpr<'db>>,
 }
-
-pub type BorrowSummary = Vec<BorrowTransform>;
 
 #[salsa::interned]
 #[derive(Debug)]
 pub struct BorrowSummaryId<'db> {
     #[return_ref]
-    pub items: Vec<BorrowTransform>,
+    pub items: BorrowSummary<'db>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

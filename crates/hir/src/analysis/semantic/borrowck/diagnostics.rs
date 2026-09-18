@@ -97,6 +97,16 @@ pub(crate) fn normalized_body_error_to_diag<'db>(
                 origin: SemOrigin::Body(owner),
             },
         ),
+        NormalizeError::UnresolvedHandleOrigin(ty) => (
+            format!(
+                "normalized handle has no resolved origin contract: {}",
+                ty.pretty_print(db)
+            ),
+            SemanticBorrowDiagnosticSpan::Origin {
+                owner,
+                origin: SemOrigin::Body(owner),
+            },
+        ),
         NormalizeError::InvalidProjection => (
             "normalized body contains an invalid projection".to_string(),
             SemanticBorrowDiagnosticSpan::Origin {

@@ -53,7 +53,9 @@ use super::{
         compile_value_pass_plan,
     },
     consts::{reified_const_ref_value_for_ty, runtime_const_value_class},
-    infer::{fallback_root_transport_class, local_place_root_class},
+    infer::{
+        fallback_root_transport_class, local_lowers_as_unrooted_read_value, local_place_root_class,
+    },
     interface::{runtime_visible_binding_local, runtime_visible_binding_plans},
     layout::{
         layout_for_aggregate_instance_in_env, layout_for_enum_variant_instance_in_env,
@@ -675,7 +677,18 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                     role: ScalarRole::EnumTag { enum_layout },
                 })
             }
-            NExpr::AggregateMake { fields, .. } | NExpr::EnumMake { fields, .. } => {
+            NExpr::AggregateMake { fields, .. }
+            | NExpr::MakeHandle {
+                fields,
+                variant: None,
+                ..
+            }
+            | NExpr::EnumMake { fields, .. }
+            | NExpr::MakeHandle {
+                fields,
+                variant: Some(_),
+                ..
+            } => {
                 let Some(ExprStaticFacts::AggregateMake(facts)) = expr_facts else {
                     panic!(
                         "missing staged aggregate facts: owner={:?}; expr={expr:?}",
@@ -712,6 +725,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                     self.body.owner().key(self.db),
                 ),
             },
+            NExpr::MakeView { place, .. } => self.normalized_view_class(carriers, place)?,
             NExpr::Borrow { place, .. } => self
                 .normalized_place_address_class(carriers, place)
                 .or_else(|| match expr_facts {
@@ -786,6 +800,45 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         current
     }
 
+    fn normalized_view_class(
+        self,
+        carriers: &[RuntimeCarrier<'db>],
+        place: &NPlace<'db>,
+    ) -> Option<RuntimeClass<'db>> {
+        let local = match place.base {
+            NPlaceBase::Root(root) => match self.body.normalized.root(root)?.kind {
+                NRootKind::LocalSlot { .. }
+                | NRootKind::Temporary { .. }
+                | NRootKind::ParamPlace { .. } => self.body.root_local(root),
+                NRootKind::Provider { .. } | NRootKind::CapabilityRepresentation { .. } => None,
+            },
+            NPlaceBase::CapabilityTarget { carrier } => {
+                let class = normalized_value_runtime_class(self, carrier, carriers)?;
+                (!class.is_transport())
+                    .then(|| self.body.value_local(carrier))
+                    .flatten()
+            }
+        };
+        if let Some(local) = local {
+            let carrier = carriers.get(local.index())?;
+            // Wait for the source's representation before choosing value or
+            // address transport. A provisional address would pin an unnecessary root.
+            carrier.value_class()?;
+            if let Some(value) = local_lowers_as_unrooted_read_value(
+                self.db,
+                self.body,
+                local,
+                self.local(local)?,
+                carrier,
+                self.scope(),
+                self.assumptions(),
+            ) {
+                return Some(self.walk_data_path_class(value.value_class()?.clone(), &place.path));
+            }
+        }
+        self.normalized_place_address_class(carriers, place)
+    }
+
     pub(crate) fn normalized_place_address_class(
         self,
         carriers: &[RuntimeCarrier<'db>],
@@ -802,9 +855,9 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 matches!(&root_class, RuntimeClass::RawAddr { .. }),
             ),
             NPlaceBase::Root(root) => match &self.body.normalized.root(root)?.kind {
-                NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
-                    (AddressSpaceKind::Memory, false)
-                }
+                NRootKind::LocalSlot { .. }
+                | NRootKind::Temporary { .. }
+                | NRootKind::ParamPlace { .. } => (AddressSpaceKind::Memory, false),
                 NRootKind::Provider { binding } => {
                     (provider_root_space(binding, &root_class), false)
                 }
@@ -1219,7 +1272,13 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                 })
             }
             NExpr::GetEnumTag { .. } => return None,
-            NExpr::AggregateMake { ty, fields } => {
+            NExpr::AggregateMake { ty, fields }
+            | NExpr::MakeHandle {
+                ty,
+                variant: None,
+                fields,
+                ..
+            } => {
                 let direct_class =
                     top_level_class_for_ty_in_env(db, type_env, *ty, AddressSpaceKind::Memory)
                         .filter(|class| !matches!(class, RuntimeClass::AggregateValue { .. }));
@@ -1256,6 +1315,12 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                 enum_ty,
                 variant,
                 fields,
+            }
+            | NExpr::MakeHandle {
+                ty: enum_ty,
+                variant: Some(variant),
+                fields,
+                ..
             } => {
                 let enum_ = enum_ty
                     .as_enum(db)
@@ -1298,6 +1363,9 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                 result_ty,
                 AddressSpaceKind::Memory,
             )),
+            NExpr::MakeView { .. } => ExprStaticFacts::Borrow {
+                provider_fallback: None,
+            },
             NExpr::Borrow {
                 provider, place, ..
             } => {
@@ -2531,7 +2599,7 @@ fn normalized_place_root_transport_class_in_context<'db>(
             normalized_value_runtime_class(env, carrier, carriers)
         }
         NPlaceBase::Root(root) => match &env.body.normalized.root(root)?.kind {
-            NRootKind::LocalSlot { .. } => {
+            NRootKind::LocalSlot { .. } | NRootKind::Temporary { .. } => {
                 let local = env.body.root_local(root)?;
                 let root = env.body.normalized.root(root)?;
                 let transport = carrier_value_class(local, carriers).or_else(|| {
@@ -2604,7 +2672,9 @@ fn normalized_place_root_class_in_context<'db>(
             )
         }
         NPlaceBase::Root(root) => match &env.body.normalized.root(root)?.kind {
-            NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
+            NRootKind::LocalSlot { .. }
+            | NRootKind::Temporary { .. }
+            | NRootKind::ParamPlace { .. } => {
                 let local = env.body.root_local(root)?;
                 local_place_root_class(cx, local, env.local(local)?, carriers.get(local.index())?)
             }
@@ -2702,13 +2772,17 @@ fn normalized_value_runtime_class<'db>(
     };
     match expr {
         NExpr::Forward { src } | NExpr::StructuralRepack { value: src, .. } => {
-            normalized_value_runtime_class(env, src.value, carriers)
+            let operand = env.body.runtime_operand(*src)?;
+            RuntimeArgSelector::new(env, carriers, None)
+                .selected_materialized_operand(operand)
+                .map(|selected| selected.class)
         }
         NExpr::ProjectValue { value, path } => Some(env.walk_data_path_class(
             env.normalized_value_structural_class(carriers, value.value)?,
             &path.0,
         )),
         NExpr::Load { place, .. } => env.normalized_place_class(carriers, place),
+        NExpr::MakeView { place, .. } => env.normalized_view_class(carriers, place),
         NExpr::Borrow { place, .. } => env.normalized_place_address_class(carriers, place),
         NExpr::CodeRegionRef { .. }
         | NExpr::Const(_)
@@ -2717,6 +2791,7 @@ fn normalized_value_runtime_class<'db>(
         | NExpr::ScalarCast { .. }
         | NExpr::ArrayRepeat { .. }
         | NExpr::AggregateMake { .. }
+        | NExpr::MakeHandle { .. }
         | NExpr::EnumMake { .. }
         | NExpr::GetEnumTag { .. }
         | NExpr::IsEnumVariant { .. }
@@ -4250,9 +4325,11 @@ uses (slot: Slot<u256>)
         match place.base {
             NPlaceBase::CapabilityTarget { carrier } => body.value_local(carrier),
             NPlaceBase::Root(root) => match body.normalized.root(root).map(|root| &root.kind) {
-                Some(NRootKind::ParamPlace { .. } | NRootKind::LocalSlot { .. }) => {
-                    body.root_local(root)
-                }
+                Some(
+                    NRootKind::ParamPlace { .. }
+                    | NRootKind::LocalSlot { .. }
+                    | NRootKind::Temporary { .. },
+                ) => body.root_local(root),
                 Some(NRootKind::Provider { .. } | NRootKind::CapabilityRepresentation { .. })
                 | None => None,
             },

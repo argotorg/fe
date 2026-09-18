@@ -9,30 +9,27 @@ global private const [i64; 10] $const_region_0 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 func private %for_array_large_sum() -> i64 {
     block0:
-        v0.*i64 = alloca i64;
         jump block1;
 
     block1:
+        v10.constref<[i64; 10]> = const.ref $const_region_0;
         v11.constref<[i64; 10]> = const.ref $const_region_0;
-        v12.constref<[i64; 10]> = const.ref $const_region_0;
-        mstore v0 0.i64 i64;
-        v15.i256 = call %len v12;
+        v14.i256 = call %len v11;
         jump block2;
 
     block2:
-        v16.i256 = phi (0.i256 block1) (v31 block7);
-        v18.i1 = lt v16 v15;
-        br v18 block3 block4;
+        v36.i64 = phi (0.i64 block1) (v22 block7);
+        v15.i256 = phi (0.i256 block1) (v30 block7);
+        v17.i1 = lt v15 v14;
+        br v17 block3 block4;
 
     block3:
-        v21.i64 = call %get v12 v16;
-        v22.i64 = mload v0 i64;
-        (v23.i64, v24.i1) = uaddo v22 v21;
-        br v24 block5 block6;
+        v20.i64 = call %get v11 v15;
+        (v22.i64, v23.i1) = uaddo v36 v20;
+        br v23 block5 block6;
 
     block4:
-        v33.i64 = mload v0 i64;
-        return v33;
+        return v36;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -40,9 +37,8 @@ func private %for_array_large_sum() -> i64 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        mstore v0 v23 i64;
-        (v31.i256, v32.i1) = uaddo v16 1.i256;
-        br v32 block5 block7;
+        (v30.i256, v31.i1) = uaddo v15 1.i256;
+        br v31 block5 block7;
 
     block7:
         jump block2;

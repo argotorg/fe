@@ -25,26 +25,22 @@ func private %main_root() {
 
 func private %while_cond_call() -> i64 {
     block0:
-        v0.*i64 = alloca i64;
         jump block1;
 
     block1:
-        mstore v0 0.i64 i64;
         jump block2;
 
     block2:
-        v2.i64 = mload v0 i64;
-        v3.i1 = call %lt_ten v2;
-        br v3 block3 block4;
+        v1.i64 = phi (0.i64 block1) (v5 block6);
+        v2.i1 = call %lt_ten v1;
+        br v2 block3 block4;
 
     block3:
-        v5.i64 = mload v0 i64;
-        (v6.i64, v7.i1) = uaddo v5 1.i64;
-        br v7 block5 block6;
+        (v5.i64, v6.i1) = uaddo v1 1.i64;
+        br v6 block5 block6;
 
     block4:
-        v13.i64 = mload v0 i64;
-        return v13;
+        return v1;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -52,7 +48,6 @@ func private %while_cond_call() -> i64 {
         evm_revert 0.i256 36.i256;
 
     block6:
-        mstore v0 v6 i64;
         jump block2;
 }
 

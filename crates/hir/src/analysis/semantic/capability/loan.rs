@@ -2,13 +2,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    guard::Guard,
+    guard::{Guard, ValueOccurrence},
     index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
     region::RegionSet,
+    repack::{ReferentRepackId, ReferentViews, RepackPayload},
     semantics::CapabilityClass,
     value::{Guarded, IndexPayload},
 };
 use crate::analysis::{
+    HirAnalysisDb,
     semantic::{BorrowActivation, SemOrigin},
     ty::ty_def::BorrowKind,
 };
@@ -45,33 +47,104 @@ impl<'db> LoanRef<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CapabilityRef<'db> {
-    Shared(LoanRef<'db>),
-    Mutable(LoanRef<'db>),
-    View(RegionSet<'db>),
+    Shared {
+        reference: LoanRef<'db>,
+        views: ReferentViews<'db>,
+    },
+    Mutable {
+        reference: LoanRef<'db>,
+        views: ReferentViews<'db>,
+    },
+    View {
+        region: RegionSet<'db>,
+        authority: Vec<Guarded<'db, LoanRef<'db>>>,
+    },
     Handle(RegionSet<'db>),
 }
 
 impl<'db> CapabilityRef<'db> {
+    pub fn view(region: RegionSet<'db>, mut authority: Vec<Guarded<'db, LoanRef<'db>>>) -> Self {
+        authority.sort();
+        authority.dedup();
+        Self::View { region, authority }
+    }
+
+    /// Views retain the permission used to create them without becoming active loans.
+    pub fn authority(&self, guard: &Guard<'db>) -> Vec<Guarded<'db, LoanRef<'db>>> {
+        match self {
+            Self::Shared { reference, .. } | Self::Mutable { reference, .. } => vec![Guarded {
+                guard: guard.clone(),
+                payload: reference.clone(),
+            }],
+            Self::View { region, authority } => {
+                let lift = IndexSubst::new(region.scope(), guard.scope(), [])
+                    .expect("view authority scope");
+                authority
+                    .iter()
+                    .filter_map(|entry| {
+                        let subst = lift.under_existentials(entry.guard.scope());
+                        let entry_guard = entry.guard.substitute(&subst)?;
+                        Some(Guarded {
+                            guard: entry_guard.and(&guard.in_scope(entry_guard.scope()))?,
+                            payload: entry.payload.substitute(&subst),
+                        })
+                    })
+                    .collect()
+            }
+            Self::Handle(_) => Vec::new(),
+        }
+    }
+
+    pub fn forget_occurrences(&self, repeated: impl Fn(ValueOccurrence) -> bool + Copy) -> Self {
+        match self {
+            Self::Shared { .. } | Self::Mutable { .. } => self.clone(),
+            Self::Handle(region) => Self::Handle(region.forget_occurrences(repeated)),
+            Self::View { region, authority } => Self::view(
+                region.forget_occurrences(repeated),
+                authority
+                    .iter()
+                    .map(|entry| Guarded {
+                        guard: entry.guard.forget_occurrences(repeated),
+                        payload: entry.payload.clone(),
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
     pub fn borrow(kind: BorrowKind, reference: LoanRef<'db>) -> Self {
         match kind {
-            BorrowKind::Mut => Self::Mutable(reference),
-            BorrowKind::Ref => Self::Shared(reference),
+            BorrowKind::Mut => Self::Mutable {
+                reference,
+                views: ReferentViews::default(),
+            },
+            BorrowKind::Ref => Self::Shared {
+                reference,
+                views: ReferentViews::default(),
+            },
         }
     }
     pub fn loan(&self) -> Option<&LoanRef<'db>> {
         match self {
-            Self::Shared(reference) | Self::Mutable(reference) => Some(reference),
-            Self::View(_) | Self::Handle(_) => None,
+            Self::Shared { reference, .. } | Self::Mutable { reference, .. } => Some(reference),
+            Self::View { .. } | Self::Handle(_) => None,
         }
     }
-    pub fn region(&self, loans: &[LoanDef<'db>], scope: &BinderScope) -> RegionSet<'db> {
+    pub fn region(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        loans: &[LoanDef<'db>],
+        scope: &BinderScope,
+    ) -> RegionSet<'db> {
         match self {
-            Self::Shared(reference) | Self::Mutable(reference) => {
-                loans[reference.id.0].region(reference, scope)
-            }
-            Self::View(region) | Self::Handle(region) => {
-                assert_eq!(region.scope(), scope);
-                region.clone()
+            Self::Shared { reference, views } | Self::Mutable { reference, views } => loans
+                [reference.id.0]
+                .region(db, reference, scope)
+                .with_relative_views(db, views, 0),
+            Self::View { region, .. } | Self::Handle(region) => {
+                let lift =
+                    IndexSubst::new(region.scope(), scope, []).expect("capability witness scope");
+                region.substitute(db, &lift)
             }
         }
     }
@@ -80,29 +153,85 @@ impl<'db> CapabilityRef<'db> {
 impl<'db> IndexPayload<'db> for CapabilityRef<'db> {
     fn accepts_class(&self, class: CapabilityClass) -> bool {
         let expected = match self {
-            Self::Shared(_) => CapabilityClass::Borrow(BorrowKind::Ref),
-            Self::Mutable(_) => CapabilityClass::Borrow(BorrowKind::Mut),
-            Self::View(_) => CapabilityClass::View,
+            Self::Shared { .. } => CapabilityClass::Borrow(BorrowKind::Ref),
+            Self::Mutable { .. } => CapabilityClass::Borrow(BorrowKind::Mut),
+            Self::View { .. } => CapabilityClass::View,
             Self::Handle(_) => CapabilityClass::Handle,
         };
         class == expected
     }
     fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>> {
         match self {
-            Self::Shared(reference) | Self::Mutable(reference) => {
+            Self::Shared { reference, .. } | Self::Mutable { reference, .. } => {
                 reference.args.iter().copied().collect::<BTreeSet<_>>()
             }
-            Self::View(region) | Self::Handle(region) => region.indices(),
+            Self::View { region, authority } => {
+                let mut indices = region.indices();
+                for entry in authority {
+                    indices.extend(
+                        entry
+                            .payload
+                            .args
+                            .iter()
+                            .copied()
+                            .chain(entry.guard.indices())
+                            .filter(|index| region.scope().validate(*index).is_ok()),
+                    );
+                }
+                indices
+            }
+            Self::Handle(region) => region.indices(),
         }
         .into_iter()
     }
-    fn substitute(&self, subst: &IndexSubst<'db>) -> Self {
+    fn substitute(&self, db: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
         match self {
-            Self::Shared(reference) => Self::Shared(reference.substitute(subst)),
-            Self::Mutable(reference) => Self::Mutable(reference.substitute(subst)),
-            Self::View(region) => Self::View(region.substitute(subst)),
-            Self::Handle(region) => Self::Handle(region.substitute(subst)),
+            Self::Shared { reference, views } => Self::Shared {
+                reference: reference.substitute(subst),
+                views: views.substitute(db, subst),
+            },
+            Self::Mutable { reference, views } => Self::Mutable {
+                reference: reference.substitute(subst),
+                views: views.substitute(db, subst),
+            },
+            Self::View { region, authority } => {
+                let lift =
+                    IndexSubst::new(region.scope(), subst.source(), []).expect("view guard scope");
+                let authority = authority
+                    .iter()
+                    .filter_map(|entry| {
+                        let lift = lift.under_existentials(entry.guard.scope());
+                        let guard = entry.guard.substitute(&lift)?;
+                        let payload = entry.payload.substitute(&lift);
+                        let subst = subst.under_existentials(guard.scope());
+                        Some(Guarded {
+                            guard: guard.substitute(&subst)?,
+                            payload: payload.substitute(&subst),
+                        })
+                    })
+                    .collect();
+                Self::view(
+                    region.substitute(db, &lift).substitute(db, subst),
+                    authority,
+                )
+            }
+            Self::Handle(region) => {
+                let lift = IndexSubst::new(region.scope(), subst.source(), [])
+                    .expect("handle guard scope");
+                Self::Handle(region.substitute(db, &lift).substitute(db, subst))
+            }
         }
+    }
+}
+
+impl<'db> RepackPayload<'db> for CapabilityRef<'db> {
+    fn repack_referent(&self, db: &'db dyn HirAnalysisDb, repack: ReferentRepackId<'db>) -> Self {
+        let mut payload = self.clone();
+        match &mut payload {
+            Self::Shared { views, .. } | Self::Mutable { views, .. } => views.append(db, 0, repack),
+            Self::View { region, .. } | Self::Handle(region) => *region = region.repack(db, repack),
+        }
+        payload
     }
 }
 
@@ -113,7 +242,7 @@ pub struct LoanDef<'db> {
     origin: SemOrigin<'db>,
     parameters: BinderScope,
     region: RegionSet<'db>,
-    parents: BTreeMap<LoanRef<'db>, Guard<'db>>,
+    parents: BTreeMap<(BinderScope, LoanRef<'db>), Guard<'db>>,
 }
 
 impl<'db> LoanDef<'db> {
@@ -125,8 +254,19 @@ impl<'db> LoanDef<'db> {
         origin: SemOrigin<'db>,
         source: &BinderScope,
     ) -> (Self, Box<[IndexExpr<'db>]>, IndexSubst<'db>) {
+        Self::with_occurrence_arguments(kind, activation, origin, source, [])
+    }
+
+    /// Loop executions contribute explicit occurrence parameters alongside lexical families.
+    pub fn with_occurrence_arguments(
+        kind: BorrowKind,
+        activation: BorrowActivation<'db>,
+        origin: SemOrigin<'db>,
+        source: &BinderScope,
+        occurrence: impl IntoIterator<Item = IndexExpr<'db>>,
+    ) -> (Self, Box<[IndexExpr<'db>]>, IndexSubst<'db>) {
         let mut parameters = BinderScope::default();
-        let arguments: Box<_> = source.variables().collect();
+        let arguments: Box<_> = source.variables().chain(occurrence).collect();
         let entries: Vec<_> = arguments
             .iter()
             .map(|argument| {
@@ -174,26 +314,97 @@ impl<'db> LoanDef<'db> {
         let joined = self.region.union(region);
         let mut changed = joined != self.region;
         self.region = joined;
-        for parent in parents {
-            assert_eq!(
-                parent.guard.scope(),
+        for mut parent in parents {
+            let subst = parent.guard.scope().canonical_existentials(
                 &self.parameters,
-                "loan parent scope mismatch"
+                parent
+                    .guard
+                    .indices()
+                    .into_iter()
+                    .chain(parent.payload.args.iter().copied()),
             );
+            parent.guard = parent
+                .guard
+                .substitute(&subst)
+                .expect("parent witness normalization");
+            parent.payload = parent.payload.substitute(&subst);
             for argument in &parent.payload.args {
-                self.parameters
+                parent
+                    .guard
+                    .scope()
                     .validate(*argument)
                     .expect("free loan parent argument");
             }
-            let guard = self.parents.entry(parent.payload).or_insert_with(|| {
-                changed = true;
-                parent.guard.clone()
-            });
+            let guard = self
+                .parents
+                .entry((parent.guard.scope().clone(), parent.payload))
+                .or_insert_with(|| {
+                    changed = true;
+                    parent.guard.clone()
+                });
             let joined = guard.or(&parent.guard);
             changed |= joined != *guard;
             *guard = joined;
         }
         changed
+    }
+
+    /// Abstract an exact result occurrence into this definition's formal family.
+    /// Unrelated source selectors remain owned existential witnesses; constants
+    /// constrain the result family instead of disappearing during abstraction.
+    pub fn extend_occurrence(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        reference: &LoanRef<'db>,
+        region: &RegionSet<'db>,
+        parents: impl IntoIterator<Item = Guarded<'db, LoanRef<'db>>>,
+    ) -> bool {
+        let parameters: Vec<_> = self.parameters.variables().collect();
+        assert_eq!(
+            parameters.len(),
+            reference.args.len(),
+            "loan argument arity mismatch"
+        );
+        let mut scope = self.parameters.clone();
+        let mut bindings = BTreeMap::new();
+        for (argument, parameter) in reference.args.iter().zip(&parameters) {
+            if matches!(
+                argument,
+                IndexExpr::Bound(_) | IndexExpr::Runtime(_) | IndexExpr::Iteration(_)
+            ) {
+                bindings.entry(*argument).or_insert(*parameter);
+            }
+        }
+        for source in region.scope().variables() {
+            bindings.entry(source).or_insert_with(|| {
+                let (nested, witness) = scope.bind(IndexNamespace::Existential);
+                scope = nested;
+                witness
+            });
+        }
+        let subst =
+            IndexSubst::new(region.scope(), &scope, bindings).expect("loan occurrence abstraction");
+        let mut guard = Some(Guard::always(&scope));
+        for (argument, parameter) in reference.args.iter().zip(parameters) {
+            guard = guard.and_then(|guard| guard.with_equality(parameter, subst.apply(*argument)));
+        }
+        let Some(guard) = guard else { return false };
+        let region = region
+            .substitute(db, &subst)
+            .with_guard(&guard)
+            .close_existentials(&self.parameters);
+        let parents = parents.into_iter().filter_map(|parent| {
+            let subst = subst.under_existentials(parent.guard.scope());
+            let guard = parent
+                .guard
+                .substitute(&subst)?
+                .and(&guard.in_scope(subst.destination()))?;
+            Some(Guarded {
+                guard,
+                payload: parent.payload.substitute(&subst),
+            })
+        });
+        self.extend(&region, parents)
     }
 
     fn substitution(&self, reference: &LoanRef<'db>, scope: &BinderScope) -> IndexSubst<'db> {
@@ -211,8 +422,14 @@ impl<'db> LoanDef<'db> {
         .expect("loan arguments must be in scope")
     }
 
-    pub fn region(&self, reference: &LoanRef<'db>, scope: &BinderScope) -> RegionSet<'db> {
-        self.region.substitute(&self.substitution(reference, scope))
+    pub fn region(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        reference: &LoanRef<'db>,
+        scope: &BinderScope,
+    ) -> RegionSet<'db> {
+        self.region
+            .substitute(db, &self.substitution(reference, scope))
     }
 
     pub fn parents(
@@ -223,7 +440,8 @@ impl<'db> LoanDef<'db> {
         let subst = self.substitution(reference, scope);
         self.parents
             .iter()
-            .filter_map(|(parent, guard)| {
+            .filter_map(|((_, parent), guard)| {
+                let subst = subst.under_existentials(guard.scope());
                 Some(Guarded {
                     guard: guard.substitute(&subst)?,
                     payload: parent.substitute(&subst),
@@ -235,6 +453,8 @@ impl<'db> LoanDef<'db> {
 
 #[cfg(test)]
 mod tests {
+    use crate::analysis::semantic::capability::test_roots;
+
     use super::*;
     use crate::analysis::semantic::{
         capability::path::{Projection, RegionPath},
@@ -242,9 +462,11 @@ mod tests {
         capability::source::InputSource,
         normalized::{NRootId, NValueId},
     };
+    use crate::test_db::HirAnalysisTestDb;
 
     #[test]
     fn loan_families_abstract_and_instantiate_regions_and_guarded_parent_occurrences() {
+        let db = HirAnalysisTestDb::default();
         let empty = BinderScope::default();
         let (scope, outer) = empty.bind(IndexNamespace::Value);
         let (scope, inner) = scope.bind(IndexNamespace::Value);
@@ -258,7 +480,7 @@ mod tests {
         assert_ne!(abstraction.apply(outer), outer);
         let region = RegionSet::singleton(
             &scope,
-            RegionRoot::Input(InputSource::place(0)),
+            RegionRoot::External(test_roots::input(&db, InputSource::place(0))),
             RegionPath::new([Projection::Index(outer), Projection::Index(inner)]),
         );
         let guard = Guard::always(&scope)
@@ -274,19 +496,19 @@ mod tests {
             guard: guard.substitute(&abstraction).unwrap(),
             payload: parent.substitute(&abstraction),
         };
-        let region = region.substitute(&abstraction);
+        let region = region.substitute(&db, &abstraction);
         assert!(definition.extend(&region, [parent.clone()]));
         assert!(!definition.extend(&region, [parent]));
         let reference = LoanRef {
             id: LoanId(8),
             args: [IndexExpr::Const(2), IndexExpr::Const(2)].into(),
         };
-        let actual = definition.region(&reference, &empty);
+        let actual = definition.region(&db, &reference, &empty);
         assert_eq!(
             actual,
             RegionSet::singleton(
                 &empty,
-                RegionRoot::Input(InputSource::place(0)),
+                RegionRoot::External(test_roots::input(&db, InputSource::place(0))),
                 RegionPath::new([Projection::Index(2.into()), Projection::Index(2.into())])
             )
         );
@@ -306,7 +528,7 @@ mod tests {
         };
         assert!(definition.parents(&sibling, &empty).is_empty());
         assert_eq!(
-            actual.overlap(&definition.region(&sibling, &empty)),
+            actual.overlap(&definition.region(&db, &sibling, &empty)),
             OverlapResult::Disjoint
         );
         let out_of_bound = LoanRef {
@@ -347,6 +569,7 @@ mod tests {
 
     #[test]
     fn loan_facts_grow_when_only_parent_relations_change() {
+        let db = HirAnalysisTestDb::default();
         let scope = BinderScope::default();
         let (mut definition, args, _) = LoanDef::new(
             BorrowKind::Mut,
@@ -360,7 +583,7 @@ mod tests {
         };
         let region = RegionSet::singleton(
             &scope,
-            RegionRoot::Root(NRootId::from_u32(0)),
+            test_roots::local(&db, NRootId::from_u32(0)),
             RegionPath::default(),
         );
         assert!(definition.extend(&region, []));
@@ -389,5 +612,71 @@ mod tests {
         );
         assert_eq!(definition.kind(), BorrowKind::Mut);
         assert_eq!(definition.activation(), BorrowActivation::Immediate);
+    }
+
+    #[test]
+    fn views_preserve_guarded_authority_without_becoming_active_loans() {
+        let db = HirAnalysisTestDb::default();
+        let empty = BinderScope::default();
+        let (scope, member) = empty.bind(IndexNamespace::Value);
+        let (owned, witness) = scope.bind(IndexNamespace::Existential);
+        let selector = IndexExpr::Runtime(NValueId::from_u32(3));
+        let region = RegionSet::singleton(
+            &scope,
+            RegionRoot::External(test_roots::input(&db, InputSource::place(0))),
+            RegionPath::new([Projection::Index(member)]),
+        );
+        let view = CapabilityRef::view(
+            region,
+            vec![Guarded {
+                guard: Guard::always(&owned)
+                    .with_bound(witness, 4)
+                    .unwrap()
+                    .with_equality(selector, 0.into())
+                    .unwrap(),
+                payload: LoanRef {
+                    id: LoanId(7),
+                    args: [member, witness].into(),
+                },
+            }],
+        );
+        assert!(view.loan().is_none());
+        assert!(!view.indices().any(|index| index == witness));
+        let subst = IndexSubst::new(&scope, &empty, [(member, 2.into())]).unwrap();
+        let selected = view.substitute(&db, &subst);
+        let authority = selected.authority(&Guard::always(&empty));
+        assert_eq!(authority.len(), 1);
+        assert_eq!(authority[0].payload.args[0], 2.into());
+        assert!(
+            authority[0]
+                .guard
+                .scope()
+                .existential_extension_of(&empty)
+                .is_some()
+        );
+        assert!(
+            authority[0]
+                .guard
+                .scope()
+                .validate(authority[0].payload.args[1])
+                .is_ok()
+        );
+        assert!(
+            selected
+                .authority(
+                    &Guard::always(&empty)
+                        .with_disequality(selector, 0.into())
+                        .unwrap()
+                )
+                .is_empty()
+        );
+        assert_eq!(
+            selected.region(&db, &[], &empty),
+            RegionSet::singleton(
+                &empty,
+                RegionRoot::External(test_roots::input(&db, InputSource::place(0))),
+                RegionPath::new([Projection::Index(2.into())])
+            )
+        );
     }
 }

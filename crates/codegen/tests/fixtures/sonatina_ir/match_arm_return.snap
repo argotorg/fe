@@ -27,7 +27,10 @@ func private %f(v0.@layout_0) -> i256 {
         v12.objref<i256> = enum.proj v11 #variant_0 0.i256;
         v13.i256 = obj.load v12;
         mstore v2 v13 i256;
-        return v13;
+        v14.objref<@layout_0> = enum.assert_variant_ref v1 #variant_0;
+        v15.objref<i256> = enum.proj v14 #variant_0 0.i256;
+        v16.i256 = obj.load v15;
+        return v16;
 
     block3:
         return 0.i256;

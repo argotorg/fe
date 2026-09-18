@@ -2,7 +2,9 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         ty::{
-            provider::{ProviderKind, ProviderTransport, provider_semantics},
+            provider::{
+                EffectHandleTargetResolution, ProviderTransport, resolve_effect_handle_target,
+            },
             trait_resolution::PredicateListId,
             ty_def::{BorrowKind, CapabilityKind, TyId},
         },
@@ -56,15 +58,18 @@ pub fn capability_semantics<'db>(
             storage: StorageClass::Borrowed,
         }));
     }
-    let provider = provider_semantics(db, scope, assumptions, ty);
-    if provider.kind == ProviderKind::InvalidHandle {
-        return Err(UnresolvedCapability(ty));
-    }
-    Ok(provider.target_ty.map(|target_ty| CapabilitySemantics {
+    // Semantic shapes retain generic targets; allocation layout requires a concrete target.
+    let target_ty = match resolve_effect_handle_target(db, scope, assumptions, ty) {
+        EffectHandleTargetResolution::NotHandle => None,
+        EffectHandleTargetResolution::Resolved { target_ty, .. } => Some(target_ty),
+        EffectHandleTargetResolution::Ambiguous
+        | EffectHandleTargetResolution::UnresolvedTarget => return Err(UnresolvedCapability(ty)),
+    };
+    Ok(target_ty.map(|target_ty| CapabilitySemantics {
         class: CapabilityClass::Handle,
         target_ty,
         representation_ty: ty,
-        transport: provider.transport,
+        transport: ProviderTransport::ByValue,
         storage: StorageClass::ProviderValue,
     }))
 }

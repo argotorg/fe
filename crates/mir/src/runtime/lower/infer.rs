@@ -850,7 +850,7 @@ fn local_is_read_only_view_param<'db>(local: &SLocal<'db>) -> bool {
     )
 }
 
-fn local_lowers_as_unrooted_read_value<'db>(
+pub(super) fn local_lowers_as_unrooted_read_value<'db>(
     db: &'db dyn MirDb,
     body: &RuntimeSemanticBody<'db>,
     local_id: SLocalId,

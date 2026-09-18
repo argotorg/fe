@@ -267,6 +267,35 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         builder.finish(mapped[self.root()])
     }
 
+    /// Existentially quantify selected decisions using the terminal join.
+    pub(super) fn exists(
+        &self,
+        mut selected: impl FnMut(&V) -> bool,
+        join: impl Fn(&T, &T) -> T,
+    ) -> Self {
+        let mut result = self.clone();
+        for variable in self
+            .variables()
+            .into_iter()
+            .filter(|variable| selected(variable))
+        {
+            let cofactor = |assignment| {
+                result.map(
+                    |key| {
+                        if *key == variable {
+                            Variable::Constant(assignment)
+                        } else {
+                            Variable::Symbol(key.clone())
+                        }
+                    },
+                    Clone::clone,
+                )
+            };
+            result = cofactor(false).apply(&cofactor(true), &join);
+        }
+        result
+    }
+
     pub(super) fn apply(&self, other: &Self, leaf: impl Fn(&T, &T) -> T) -> Self {
         let mut builder = Builder::new();
         let root = self.apply_nodes(

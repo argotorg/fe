@@ -808,6 +808,24 @@ fn entry() -> u256 {
 }
 
 #[test]
+fn loop_value_arguments_do_not_force_scalar_storage() {
+    with_runtime_package!(
+        "loop_value_arguments_do_not_force_scalar_storage.fe",
+        include_str!("fixtures/for_array.fe"),
+        |db, package| {
+            let body = runtime_body_for_symbol(&db, package, "for_array_sum");
+            assert!(
+                body.locals.iter().all(|local| !matches!(
+                    local.root,
+                    RuntimeLocalRoot::Slot(RuntimeClass::Scalar(_))
+                )),
+                "value reads and whole-local assignments must keep the loop index and sum in SSA:\n{body:#?}"
+            );
+        }
+    );
+}
+
+#[test]
 fn mutated_scalar_locals_stay_rooted() {
     with_runtime_package!(
         "mutated_scalar_locals_stay_rooted.fe",
@@ -1852,15 +1870,16 @@ fn test_readonly_with_provider() {
 }
 
 #[test]
-fn borrow_typed_aggregate_literals_can_lower_as_const_refs() {
+fn borrows_of_aggregate_constant_locals_lower_as_const_refs() {
     with_runtime_package!(
-        "borrow_typed_aggregate_literals_can_lower_as_const_refs.fe",
+        "borrows_of_aggregate_constant_locals_lower_as_const_refs.fe",
         r#"fn first(xs: ref [u256; 2]) -> u256 {
     xs[0]
 }
 
 fn entry() -> u256 {
-    first([10, 20])
+    let xs: [u256; 2] = [10, 20]
+    first(xs: ref xs)
 }"#,
         |db, package| {
             let first = package

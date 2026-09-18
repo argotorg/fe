@@ -1,12 +1,11 @@
-use cranelift_entity::EntityRef;
-use rustc_hash::FxHashSet;
+use crate::analysis::semantic::capability::{region::RegionSet, state::BorrowState};
 
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
         CallSiteProviderRefinement, SemOrigin, SemanticInstance,
         normalized::{
-            NBlockId, NEffectArg, NEffectArgValue, NExpr, NOperand, NStatement, NStatementKind,
+            NEffectArg, NEffectArgValue, NExpr, NOperand, NStatement, NStatementKind,
             normalize_semantic_body_provisional,
         },
         provisional_provider_idx_for_requirement,
@@ -18,10 +17,9 @@ use crate::analysis::{
 };
 
 use super::{
-    canon::{CanonPlace, State, address_space_for_borrow_root},
-    check::Borrowck,
     diagnostics::operand_origin,
     ir::{SemanticBorrowDiagnostic, SemanticNormalizationFailure},
+    solver::Borrowck,
 };
 
 pub(crate) fn provisional_call_site_provider_refinements<'db>(
@@ -33,14 +31,13 @@ pub(crate) fn provisional_call_site_provider_refinements<'db>(
         db,
         instance,
         body,
-        super::analyses::BorrowSummaryMode::Provisional,
+        super::solver::BorrowSummaryMode::Provisional,
     )
     .map_err(SemanticNormalizationFailure::InternalFailure)?;
-    borrowck.compute_entry_states();
-    if let Some(blocked) = borrowck
-        .compute_loan_targets()
-        .map_err(SemanticNormalizationFailure::InternalFailure)?
-    {
+    borrowck
+        .solve()
+        .map_err(SemanticNormalizationFailure::InternalFailure)?;
+    if let Some(blocked) = borrowck.blocked.clone() {
         return Err(SemanticNormalizationFailure::Blocked(blocked));
     }
     CallSiteProviderRefiner { borrowck }
@@ -56,12 +53,8 @@ impl<'db> CallSiteProviderRefiner<'db> {
     fn refine(&self) -> Result<Vec<CallSiteProviderRefinement>, SemanticBorrowDiagnostic<'db>> {
         let mut out = Vec::new();
         for (bb_idx, block) in self.borrowck.body.blocks.iter().enumerate() {
-            let mut state = self.borrowck.entry_state[NBlockId::new(bb_idx)].clone();
-            for statement in &block.statements {
-                self.refine_statement(&state, statement, &mut out)?;
-                self.borrowck
-                    .canon()
-                    .apply_statement_state(&mut state, statement);
+            for (statement, state) in block.statements.iter().zip(&self.borrowck.before[bb_idx]) {
+                self.refine_statement(state, statement, &mut out)?;
             }
         }
         Ok(out)
@@ -69,7 +62,7 @@ impl<'db> CallSiteProviderRefiner<'db> {
 
     fn refine_statement(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         statement: &NStatement<'db>,
         out: &mut Vec<CallSiteProviderRefinement>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
@@ -107,50 +100,47 @@ impl<'db> CallSiteProviderRefiner<'db> {
 
     fn effect_arg_address_space(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         origin: SemOrigin<'db>,
         arg: &NEffectArg<'db>,
     ) -> Result<Option<ProviderAddressSpace>, SemanticBorrowDiagnostic<'db>> {
         let targets = match &arg.arg {
-            NEffectArgValue::Place(place) => self
-                .borrowck
-                .canon()
-                .canonicalize_place(state, place, origin)?,
+            NEffectArgValue::Place(place) => self.borrowck.resolve_region(state, place),
             NEffectArgValue::Value(value) => self.value_targets(state, *value),
         };
         if targets.is_empty() {
             return Ok(arg.provider);
         }
         self.address_space_for_targets(&targets, self.effect_arg_origin(arg, origin))
-            .map(Some)
     }
 
-    fn value_targets(&self, state: &State, value: NOperand) -> FxHashSet<CanonPlace<'db>> {
+    fn value_targets(&self, state: &BorrowState<'db>, value: NOperand) -> RegionSet<'db> {
         self.borrowck
-            .canon()
-            .canonicalize_value_base(state, value.value)
+            .resolve_capability(state.value(value.value))
+            .region
     }
 
     fn address_space_for_targets(
         &self,
-        targets: &FxHashSet<CanonPlace<'db>>,
+        targets: &RegionSet<'db>,
         origin: SemOrigin<'db>,
-    ) -> Result<ProviderAddressSpace, SemanticBorrowDiagnostic<'db>> {
+    ) -> Result<Option<ProviderAddressSpace>, SemanticBorrowDiagnostic<'db>> {
         let mut spaces = Vec::new();
-        for target in targets {
-            let space = address_space_for_borrow_root(
-                self.borrowck.db,
-                self.borrowck.instance,
-                &self.borrowck.body,
-                &target.root,
-                origin,
-            )?;
+        let mut symbolic = false;
+        for target in targets.clauses() {
+            let Some(space) = target.payload.root.address_space().known() else {
+                symbolic = true;
+                continue;
+            };
             if !spaces.contains(&space) {
                 spaces.push(space);
             }
         }
+        if spaces.len() <= 1 && symbolic {
+            return Ok(None);
+        }
         if let [space] = spaces.as_slice() {
-            return Ok(*space);
+            return Ok(Some(*space));
         }
         spaces.sort_by_key(|space| address_space_rank(*space));
         Err(self.borrowck.diag(

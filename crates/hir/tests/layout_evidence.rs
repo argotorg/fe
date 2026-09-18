@@ -1,6 +1,8 @@
 #[path = "support/layout.rs"]
 mod layout_test_support;
 
+use std::collections::HashSet;
+
 use cranelift_entity::EntityRef;
 use fe_hir::{
     analysis::{
@@ -9,9 +11,10 @@ use fe_hir::{
             EffectProviderSubst, GenericSubst, ImplEnv, LayoutEvidenceBase, LayoutEvidenceBody,
             LayoutEvidenceComponentValue, LayoutEvidenceError, LayoutEvidenceExpr,
             LayoutEvidenceIndex, LayoutEvidenceOperand, LayoutEvidenceVerifyError, NExpr,
-            NStatementKind, NormalizedArtifacts, SExpr, SStmtId, SStmtKind, SemanticInstanceKey,
+            NStatementKind, NormalizedArtifacts, SExpr, SStmtKind, SemanticInstanceKey,
             collect_layout_evidence_diagnostic_vouchers, get_or_build_semantic_instance,
             identity_semantic_instance_key, layout_evidence_body, normalize_semantic_body,
+            normalized::{NLayoutLocals, NStatementId},
             verify_layout_evidence_body as verify_normalized_layout_evidence_body,
             verify_layout_evidence_runtime_compatibility as verify_normalized_layout_evidence_runtime_compatibility,
         },
@@ -146,9 +149,9 @@ fn root<const ROOT: u256>(map: StorageMap<u256, u256, ROOT>) -> u256 {
         layout_evidence_body(&db, instance).expect("cached layoutization failed")
     ));
     let bindings = evidence
-        .statements
+        .constant_bindings
         .iter()
-        .flat_map(|statement| &statement.const_bindings)
+        .flatten()
         .collect::<Vec<_>>();
     let [binding] = bindings.as_slice() else {
         panic!("root use must have one explicit layout binding")
@@ -221,9 +224,9 @@ fn first<const FIRST: u256, const SECOND: u256>(
     let instance = get_or_build_semantic_instance(&db, key);
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
     let bindings = evidence
-        .statements
+        .constant_bindings
         .iter()
-        .flat_map(|statement| &statement.const_bindings)
+        .flatten()
         .collect::<Vec<_>>();
     let [binding] = bindings.as_slice() else {
         panic!("FIRST must bind exactly one formal layout component")
@@ -1157,14 +1160,20 @@ fn select<const ROOT: u256>(
     assert_eq!(value.schema.components[0].rank(), 2);
     assert_eq!(evidence.params, [*descriptor]);
     assert_eq!(evidence.locals[descriptor.index()].map_ty.rank(), 2);
-    assert_eq!(evidence.semantic_values.len(), source.locals.len());
+    let representations = NLayoutLocals::new(&normalized.body, &normalized.layout_plan, source);
+    assert_eq!(evidence.semantic_values.len(), representations.locals.len());
     assert_eq!(evidence.output.schema.components.len(), 1);
     assert_eq!(evidence.output.schema.components[0].rank(), 0);
     assert_eq!(evidence.output.runtime_descriptor_count(), 1);
     assert_eq!(evidence.terminators.len(), normalized.body.blocks.len());
     assert_eq!(
         evidence.statements.len(),
-        source.blocks.iter().map(|block| block.stmts.len()).sum()
+        normalized
+            .body
+            .blocks
+            .iter()
+            .map(|block| block.statements.len())
+            .sum()
     );
     let (source, indices) = evidence
         .statements
@@ -1313,18 +1322,20 @@ fn read<const ROOT: u256>(
     let forwarded = family_call
         .args
         .iter()
-        .map(|arg| match &arg.value {
-            LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Local(local)) => assignments
-                .iter()
-                .find_map(|assignment| (assignment.dst == *local).then_some(&assignment.expr))
-                .cloned()
-                .unwrap_or_else(|| arg.value.clone()),
-            LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Constant(_))
-            | LayoutEvidenceExpr::Project { .. }
-            | LayoutEvidenceExpr::Array { .. }
-            | LayoutEvidenceExpr::Repeat { .. }
-            | LayoutEvidenceExpr::Update { .. }
-            | LayoutEvidenceExpr::CallResult { .. } => arg.value.clone(),
+        .map(|arg| {
+            let mut value = &arg.value;
+            let mut seen = HashSet::new();
+            while let LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Local(local)) = value {
+                assert!(seen.insert(*local), "forwarded evidence must not cycle");
+                let Some(assignment) = assignments
+                    .iter()
+                    .find(|assignment| assignment.dst == *local)
+                else {
+                    break;
+                };
+                value = &assignment.expr;
+            }
+            value.clone()
         })
         .collect::<Vec<_>>();
     assert_eq!(
@@ -1631,7 +1642,8 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
         .blocks
         .iter()
         .flat_map(|block| &block.statements)
-        .find_map(|statement| statement.source)
+        .map(|statement| statement.id)
+        .next()
         .expect("fixture must contain a statement");
     duplicate
         .body
@@ -1641,7 +1653,7 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
         .filter(|statement| statement.source.is_some())
         .nth(1)
         .expect("fixture must contain another statement")
-        .source = Some(duplicate_id);
+        .id = duplicate_id;
     assert_eq!(
         verify_layout_evidence_runtime_compatibility(&db, &duplicate, evidence),
         Err(LayoutEvidenceVerifyError::DuplicateStatementId(
@@ -1650,7 +1662,7 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
     );
 
     let mut invalid = normalized.clone();
-    let invalid_id = SStmtId::from_u32(evidence.statements.len() as u32);
+    let invalid_id = NStatementId::from_u32(evidence.statements.len() as u32);
     invalid
         .body
         .blocks
@@ -1658,7 +1670,7 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
         .flat_map(|block| &mut block.statements)
         .find(|statement| statement.source.is_some())
         .expect("fixture must contain a statement")
-        .source = Some(invalid_id);
+        .id = invalid_id;
     assert!(matches!(
         verify_layout_evidence_runtime_compatibility(&db, &invalid, evidence),
         Err(LayoutEvidenceVerifyError::InvalidStatementId { id, .. }) if id == invalid_id
@@ -2118,19 +2130,11 @@ fn branch<const ROOT: u256>(
                 .iter()
                 .enumerate()
                 .find(|(_, statement)| {
-                    statement
-                        .source
-                        .and_then(|source| evidence.statement(source))
+                    evidence
+                        .statement(statement.id)
                         .is_some_and(|statement| statement.call.is_some())
                 })
-                .map(|(statement, data)| {
-                    (
-                        block,
-                        statement,
-                        data.source
-                            .expect("evidence call must have a source statement"),
-                    )
-                })
+                .map(|(statement, data)| (block, statement, data.id))
         })
         .expect("missing post-merge layout call");
 
@@ -2212,9 +2216,8 @@ fn replace<const ROOT: usize>(
             .find_map(|(block_idx, block)| {
                 block.statements.iter().enumerate().find_map(
                     |(statement_idx, normalized_statement)| {
-                        normalized_statement
-                            .source
-                            .and_then(|source| evidence.statement(source))
+                        evidence
+                            .statement(normalized_statement.id)
                             .and_then(|statement| statement.call.as_ref())
                             .and_then(|call| {
                                 call.args.iter().find_map(|arg| match &arg.value {
@@ -2237,6 +2240,11 @@ fn replace<const ROOT: usize>(
                 )
             })
             .expect("fresh call must receive a dynamically projected output witness");
+    let representations = NLayoutLocals::new(
+        &normalized.body,
+        &normalized.layout_plan,
+        instance.body(&db),
+    );
     let index_definition = normalized.body.blocks[block_idx]
         .statements
         .iter()
@@ -2244,7 +2252,7 @@ fn replace<const ROOT: usize>(
             matches!(
                 statement.kind,
                 NStatementKind::Define { result, .. }
-                    if normalized.layout_plan.value_source(result) == Some(index_local)
+                    if representations.value_local(result) == Some(index_local)
             )
         })
         .expect("destination index must have a semantic definition");
@@ -2253,7 +2261,6 @@ fn replace<const ROOT: usize>(
         "destination index must be evaluated before the witnessed RHS call"
     );
 
-    let source = instance.body(&db);
     let future_index = normalized.body.blocks[block_idx]
         .statements
         .iter()
@@ -2263,19 +2270,15 @@ fn replace<const ROOT: usize>(
             NStatementKind::Define {
                 result,
                 expr: NExpr::Call { .. },
-            } => normalized
-                .layout_plan
-                .value_source(*result)
-                .filter(|local| {
-                    source.locals[local.index()].ty == source.locals[index_local.index()].ty
-                }),
+            } => representations.value_local(*result).filter(|local| {
+                representations.locals[local.index()].ty
+                    == representations.locals[index_local.index()].ty
+            }),
             NStatementKind::Define { .. } | NStatementKind::Store { .. } => None,
         })
         .expect("fixture must define another usize call result after fresh");
     let mut malformed = (*evidence).clone();
-    let statement_id = normalized.body.blocks[block_idx].statements[statement_idx]
-        .source
-        .expect("witnessed call must have a source statement");
+    let statement_id = normalized.body.blocks[block_idx].statements[statement_idx].id;
     let index = malformed.statements[statement_id.index()]
         .call
         .as_mut()
@@ -2739,11 +2742,8 @@ fn inspect_views<const PHYSICAL: u256, const LOGICAL: u256>(
     let mut stores = 0;
     for block in &normalized.body.blocks {
         for statement in &block.statements {
-            let Some(source) = statement.source else {
-                continue;
-            };
             let evidence_statement = evidence
-                .statement(source)
+                .statement(statement.id)
                 .expect("missing statement evidence");
             if matches!(statement.kind, NStatementKind::Store { .. }) {
                 stores += 1;
@@ -3170,9 +3170,9 @@ fn specialized_array_enum_leaf_methods_bind_runtime_layout_consts() {
             found = true;
             assert!(
                 evidence
-                    .statements
+                    .constant_bindings
                     .iter()
-                    .any(|statement| !statement.const_bindings.is_empty()),
+                    .any(|bindings| !bindings.is_empty()),
                 "specialized Slot::root must bind ROOT from receiver evidence: {evidence:#?}",
             );
         }

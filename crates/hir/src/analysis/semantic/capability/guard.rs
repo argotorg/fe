@@ -26,6 +26,8 @@ pub enum ValueOccurrence {
     Root(NRootId),
     Argument(u32),
     Summary,
+    SummaryChoice(u32),
+    CallChoice { result: NValueId, choice: u32 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -350,6 +352,91 @@ impl<'db> Guard<'db> {
                 |condition| condition.substitute(subst),
             ),
         )
+    }
+
+    pub fn in_scope(&self, scope: &BinderScope) -> Self {
+        self.substitute(&IndexSubst::new(&self.scope, scope, []).expect("guard scope extension"))
+            .expect("scope extension preserves satisfiability")
+    }
+
+    pub fn occurrences(&self) -> BTreeSet<ValueOccurrence> {
+        self.condition
+            .variables()
+            .iter()
+            .map(|bit| bit.choice.occurrence)
+            .collect()
+    }
+
+    pub fn map_occurrences(
+        &self,
+        mut map: impl FnMut(ValueOccurrence) -> ValueOccurrence,
+    ) -> Option<Self> {
+        let occurrences: BTreeSet<_> = self
+            .condition
+            .variables()
+            .into_iter()
+            .map(|bit| bit.choice.occurrence)
+            .collect();
+        let mappings: BTreeMap<_, _> = occurrences
+            .into_iter()
+            .map(|occurrence| (occurrence, map(occurrence)))
+            .collect();
+        Self::canonical(
+            &self.scope,
+            self.condition.map(
+                |bit| {
+                    Variable::Symbol(ChoiceBit {
+                        choice: ChoiceKey::new(
+                            mappings[&bit.choice.occurrence],
+                            bit.choice.path.clone(),
+                        ),
+                        bit: bit.bit,
+                    })
+                },
+                Clone::clone,
+            ),
+        )
+    }
+
+    /// A new execution of a loop may choose another enum alternative.
+    pub fn forget_occurrences(&self, mut repeated: impl FnMut(ValueOccurrence) -> bool) -> Self {
+        Self::canonical(
+            &self.scope,
+            self.condition
+                .exists(|bit| repeated(bit.choice.occurrence), IndexCondition::or),
+        )
+        .expect("existential quantification preserves feasibility")
+    }
+
+    /// Forget old scalar selectors without identifying them with a new execution.
+    pub fn forget_indices(&self, mut repeated: impl FnMut(IndexExpr<'db>) -> bool) -> Self {
+        let indices: BTreeSet<_> = self
+            .indices()
+            .into_iter()
+            .filter(|index| repeated(*index))
+            .collect();
+        let condition = self
+            .condition
+            .exists(
+                |bit| {
+                    bit.choice
+                        .path
+                        .indices()
+                        .any(|index| indices.contains(&index))
+                },
+                IndexCondition::or,
+            )
+            .map(
+                |bit| Variable::Symbol(bit.clone()),
+                |condition| {
+                    IndexCondition(condition.0.exists(
+                        |bit| indices.contains(&bit.index),
+                        |left, right| *left || *right,
+                    ))
+                },
+            );
+        Self::canonical(&self.scope, condition)
+            .expect("existential quantification preserves feasibility")
     }
 
     pub fn difference(&self, other: &Self) -> Option<Self> {

@@ -524,8 +524,9 @@ func inline(always) private %validate_runtime_head(v0.i256, v1.i256, v2.i256) {
         v11.i256 = call %from_word v10;
         v13.i256 = call %from_word v2;
         mstore v3 v13 i256;
-        v14.i1 = slt v11 v13;
-        br v14 block5 block6;
+        v14.i256 = mload v3 i256;
+        v15.i1 = slt v11 v14;
+        br v15 block5 block6;
 
     block3:
         jump block4;

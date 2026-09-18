@@ -6,13 +6,13 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        SConst, SLocalId, SemConstId, SemOrigin, SemanticBody, SemanticCalleeRef, SemanticInstance,
+        SConst, SLocalId, SemConstId, SemanticBody, SemanticCalleeRef, SemanticInstance,
         SemanticNormalizationFailure, get_or_build_semantic_instance,
         identity_semantic_instance_key,
         normalized::{
-            NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NIndex, NLayoutPlan,
-            NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementKind, NTerminatorKind,
-            NValueId, NormalizedBody, normalize_semantic_body,
+            NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NIndex, NLayoutLocals,
+            NLayoutPlan, NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId,
+            NStatementKind, NTerminatorKind, NValueId, NormalizedBody, normalize_semantic_body,
         },
     },
     ty::{
@@ -268,7 +268,6 @@ enum LayoutTransfer<'db> {
         dst: SLocalId,
         value: LayoutTransferBundle<'db>,
         call: Option<LayoutTransferCall<'db>>,
-        const_binding: Option<(SemConstId<'db>, SemOrigin<'db>)>,
         result_used: bool,
     },
     Store {
@@ -473,6 +472,7 @@ struct LayoutEvidenceBuilder<'a, 'db> {
     normalized: &'a NormalizedBody<'db>,
     layout_plan: &'a NLayoutPlan<'db>,
     source: &'a SemanticBody<'db>,
+    representations: &'a NLayoutLocals<'db>,
     locals: Vec<LayoutEvidenceLocal<'db>>,
     semantic_values: Vec<LayoutEvidenceValue<'db>>,
     declared_sources: Vec<DeclaredComponentSource<'db>>,
@@ -481,8 +481,8 @@ struct LayoutEvidenceBuilder<'a, 'db> {
 
 impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
     fn value_local(&self, value: NValueId) -> Result<SLocalId, LayoutEvidenceError<'db>> {
-        self.layout_plan
-            .value_source(value)
+        self.representations
+            .value_local(value)
             .ok_or(LayoutEvidenceError::InvalidPlace)
     }
 
@@ -1331,8 +1331,9 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         expected: &LayoutBundleInterface<'db>,
     ) -> Result<LayoutTransferBundle<'db>, LayoutEvidenceError<'db>> {
         let local_data = self
-            .source
-            .local(local)
+            .representations
+            .locals
+            .get(local.index())
             .ok_or(LayoutEvidenceError::InvalidPlace)?;
         let source_schema = &self.semantic_values[local.index()].schema;
         let mut path = Vec::new();
@@ -1615,7 +1616,6 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             NStatementKind::Define { result, expr } => {
                 let dst = self.value_local(*result)?;
                 let result_used = self.normalized.value_is_used(*result);
-                let mut const_value = None;
                 let (value, call) = match expr {
                     NExpr::Forward { src: value } => (
                         self.source_transfer_bundle(
@@ -1625,7 +1625,9 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                         )?,
                         None,
                     ),
-                    NExpr::Load { place, .. } | NExpr::Borrow { place, .. } => (
+                    NExpr::Load { place, .. }
+                    | NExpr::Borrow { place, .. }
+                    | NExpr::MakeView { place, .. } => (
                         self.place_transfer_bundle(
                             place,
                             &self.semantic_values[dst.index()].schema,
@@ -1644,24 +1646,33 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                         self.structural_repack_transfer_bundle(dst, self.operand_local(*value)?)?,
                         None,
                     ),
-                    NExpr::AggregateMake { ty, fields } if ty.is_array(self.db) => {
-                        (self.array_transfer_bundle(dst, fields)?, None)
-                    }
-                    NExpr::AggregateMake { fields, .. } => {
-                        (self.aggregate_transfer_bundle(dst, fields)?, None)
-                    }
+                    NExpr::AggregateMake { ty, fields }
+                    | NExpr::MakeHandle {
+                        ty,
+                        variant: None,
+                        fields,
+                        ..
+                    } if ty.is_array(self.db) => (self.array_transfer_bundle(dst, fields)?, None),
+                    NExpr::AggregateMake { fields, .. }
+                    | NExpr::MakeHandle {
+                        fields,
+                        variant: None,
+                        ..
+                    } => (self.aggregate_transfer_bundle(dst, fields)?, None),
                     NExpr::ArrayRepeat { value, .. } => (
                         self.repeat_transfer_bundle(dst, self.operand_local(*value)?)?,
                         None,
                     ),
                     NExpr::EnumMake {
                         variant, fields, ..
+                    }
+                    | NExpr::MakeHandle {
+                        variant: Some(variant),
+                        fields,
+                        ..
                     } => (self.enum_transfer_bundle(dst, variant.0, fields)?, None),
                     NExpr::Const(_) if !result_used => (LayoutTransferBundle::default(), None),
-                    NExpr::Const(SConst::Value(value)) => {
-                        const_value = Some(*value);
-                        (self.ambient_transfer_bundle(dst)?, None)
-                    }
+                    NExpr::Const(SConst::Value(_)) => (self.ambient_transfer_bundle(dst)?, None),
                     NExpr::Const(SConst::Ref(_)) => (self.ambient_transfer_bundle(dst)?, None),
                     NExpr::CodeRegionRef { .. }
                     | NExpr::Unary { .. }
@@ -1685,7 +1696,6 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                     dst,
                     value,
                     call,
-                    const_binding: const_value.map(|value| (value, statement.origin)),
                     result_used,
                 })
             }
@@ -1720,7 +1730,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
 
     fn index_declared_sources(&mut self) -> Result<(), LayoutEvidenceError<'db>> {
         let mut sources = Vec::new();
-        for (local_idx, local) in self.source.locals.iter().enumerate() {
+        for (local_idx, local) in self.representations.locals.iter().enumerate() {
             let Some(origin) = local
                 .source
                 .and_then(|source| source.callable_input_origin(self.db))
@@ -2062,7 +2072,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             .filter(|source| matches!(source.source, CallableLayoutParamPort::OutputWitness(_)))
             .map(|source| source.value.clone())
             .collect::<Vec<_>>();
-        let mut sites = vec![Vec::new(); self.source.locals.len()];
+        let mut sites = vec![Vec::new(); self.representations.locals.len()];
         let mut store_seeds = Vec::new();
         for transfer in transfers {
             match transfer {
@@ -2230,9 +2240,10 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         let root = match place.base {
             NPlaceBase::CapabilityTarget { carrier } => {
                 let local = self.value_local(carrier)?;
-                self.source
-                    .local(local)
-                    .and_then(|local| local.role.root_provider(&self.source.locals))
+                self.representations
+                    .locals
+                    .get(local.index())
+                    .and_then(|local| local.role.root_provider(&self.representations.locals))
                     .map(EvidencePlaceRoot::Provider)
                     .unwrap_or(EvidencePlaceRoot::Local(local))
             }
@@ -2250,7 +2261,8 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                     )
                 }
                 NRootKind::Provider { binding } => EvidencePlaceRoot::Provider(binding.clone()),
-                NRootKind::CapabilityRepresentation { carrier } => {
+                NRootKind::CapabilityRepresentation { carrier }
+                | NRootKind::Temporary { value: carrier } => {
                     EvidencePlaceRoot::Local(self.value_local(*carrier)?)
                 }
             },
@@ -2328,7 +2340,11 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                         .source
                         .and_then(|source| source.callable_input_origin(self.db))
                         .is_some()
-                        && local.role.root_provider(&self.source.locals).as_ref() == Some(provider)
+                        && local
+                            .role
+                            .root_provider(&self.representations.locals)
+                            .as_ref()
+                            == Some(provider)
                 })
                 .map(|local| SLocalId::from_u32(local as u32))
                 .ok_or(LayoutEvidenceError::ProviderPlace)?;
@@ -2409,7 +2425,6 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                 callee: call.callee,
                 args: args.into_boxed_slice(),
             }),
-            const_bindings: Box::new([]),
         })
     }
 
@@ -2429,7 +2444,6 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                 dst,
                 value,
                 call: None,
-                const_binding,
                 result_used,
             } => Ok(LayoutEvidenceStatement {
                 assignments: if *result_used {
@@ -2438,10 +2452,6 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                     Box::new([])
                 },
                 call: None,
-                const_bindings: match const_binding {
-                    Some((value, origin)) => self.const_bindings(*value, *origin)?,
-                    None => Box::new([]),
-                },
             }),
             LayoutTransfer::Store {
                 dst: Some(dst),
@@ -2450,7 +2460,6 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             } => Ok(LayoutEvidenceStatement {
                 assignments: self.transfer_assignments(*dst, value, false)?,
                 call: None,
-                const_bindings: Box::new([]),
             }),
             LayoutTransfer::Store { dst: None, .. } => Ok(LayoutEvidenceStatement::default()),
         }
@@ -2496,6 +2505,7 @@ fn layout_evidence_body_query<'db>(
     let normalized = artifacts.body;
     let layout_plan = artifacts.layout_plan;
     let source = owner.body(db);
+    let representations = NLayoutLocals::new(&normalized, &layout_plan, source);
     let template_owner = normalized.template_owner;
     let hir_body = template_owner.body(db);
     let identity_key = identity_semantic_instance_key(db, template_owner);
@@ -2529,16 +2539,19 @@ fn layout_evidence_body_query<'db>(
         normalized: &normalized,
         layout_plan: &layout_plan,
         source,
+        representations: &representations,
         locals: Vec::new(),
-        semantic_values: Vec::with_capacity(source.locals.len()),
+        semantic_values: Vec::with_capacity(representations.locals.len()),
         declared_sources: Vec::new(),
-        contextual_sources: vec![Vec::new(); source.locals.len()],
+        contextual_sources: vec![Vec::new(); representations.locals.len()],
     };
     let mut input_values = FxHashMap::default();
-    for (idx, local) in source.locals.iter().enumerate() {
+    for (idx, local) in representations.locals.iter().enumerate() {
         let semantic_local = SLocalId::from_u32(idx as u32);
         let layout_ty = local.ty;
-        let template_ty = template_source.map_or(layout_ty, |template| template.locals[idx].ty);
+        let template_ty = template_source
+            .and_then(|template| template.locals.get(idx))
+            .map_or(layout_ty, |local| local.ty);
         let origin = local
             .source
             .and_then(|source| source.callable_input_origin(db));
@@ -2613,17 +2626,18 @@ fn layout_evidence_body_query<'db>(
                 .ok_or(LayoutEvidenceError::InvalidPlace),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let statement_count = source.blocks.iter().map(|block| block.stmts.len()).sum();
+    let statement_count = normalized
+        .blocks
+        .iter()
+        .map(|block| block.statements.len())
+        .sum();
     let mut transfers = vec![None; statement_count];
     for statement in normalized.blocks.iter().flat_map(|block| &block.statements) {
-        let Some(source) = statement.source else {
-            continue;
-        };
         let slot = transfers
-            .get_mut(source.index())
-            .ok_or(LayoutEvidenceError::InvalidStatementIdentity(source))?;
+            .get_mut(statement.id.index())
+            .ok_or(LayoutEvidenceError::InvalidStatementIdentity(statement.id))?;
         if slot.is_some() {
-            return Err(LayoutEvidenceError::InvalidStatementIdentity(source));
+            return Err(LayoutEvidenceError::InvalidStatementIdentity(statement.id));
         }
         *slot = Some(builder.build_layout_transfer(statement)?);
     }
@@ -2632,7 +2646,7 @@ fn layout_evidence_body_query<'db>(
         .enumerate()
         .map(|(idx, transfer)| {
             transfer.ok_or(LayoutEvidenceError::InvalidStatementIdentity(
-                crate::analysis::semantic::SStmtId::from_u32(idx as u32),
+                NStatementId::new(idx),
             ))
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -2658,6 +2672,16 @@ fn layout_evidence_body_query<'db>(
             Ok(LayoutEvidenceTerminator { returns })
         })
         .collect::<Result<Vec<_>, LayoutEvidenceError<'db>>>()?;
+    let mut constant_bindings = vec![Box::new([]) as Box<[_]>; normalized.values.len()];
+    for statement in normalized.blocks.iter().flat_map(|block| &block.statements) {
+        if let NStatementKind::Define {
+            result,
+            expr: NExpr::Const(SConst::Value(value)),
+        } = &statement.kind
+        {
+            constant_bindings[result.index()] = builder.const_bindings(*value, statement.origin)?;
+        }
+    }
     let evidence = LayoutEvidenceBody {
         owner,
         template_owner,
@@ -2666,6 +2690,7 @@ fn layout_evidence_body_query<'db>(
         params,
         output: signature.output,
         statements,
+        constant_bindings,
         terminators,
     };
     verify_layout_evidence_body(db, &normalized, &layout_plan, source, &evidence)

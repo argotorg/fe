@@ -1,11 +1,12 @@
 use cranelift_entity::{EntityRef, entity_impl};
+use salsa::Update;
 
 use crate::{
     analysis::{
         semantic::{
             BorrowActivation, CallSiteId, FieldIndex, Mutability, SConst, SStmtId, SemOrigin,
             SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticInstance,
-            VariantIndex,
+            VariantIndex, capability::handle::OpaqueHandleContract,
         },
         ty::{
             provider::ProviderAddressSpace,
@@ -28,6 +29,11 @@ entity_impl!(NRootId);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NBlockId(u32);
 entity_impl!(NBlockId);
+
+/// Stable identity for every normalized operation, including synthetic operations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+pub struct NStatementId(u32);
+entity_impl!(NStatementId);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NormalizedBody<'db> {
@@ -67,6 +73,31 @@ impl<'db> NormalizedBody<'db> {
         }
     }
 
+    /// Values required to access a place, including the value that initializes
+    /// temporary storage or supplies a handle's representation root.
+    pub fn place_values<'a>(
+        &'a self,
+        place: &'a NPlace<'db>,
+    ) -> impl Iterator<Item = NValueId> + 'a {
+        let base = match place.base {
+            NPlaceBase::CapabilityTarget { carrier } => Some(carrier),
+            NPlaceBase::Root(root) => self.root(root).and_then(|root| match root.kind {
+                NRootKind::CapabilityRepresentation { carrier }
+                | NRootKind::Temporary { value: carrier } => Some(carrier),
+                NRootKind::LocalSlot { .. }
+                | NRootKind::ParamPlace { .. }
+                | NRootKind::Provider { .. } => None,
+            }),
+        };
+        base.into_iter()
+            .chain(place.path.iter().filter_map(|projection| match projection {
+                NDataProjection::Index(NIndex::Value(value)) => Some(*value),
+                NDataProjection::Field(_)
+                | NDataProjection::VariantField { .. }
+                | NDataProjection::Index(NIndex::Const(_)) => None,
+            }))
+    }
+
     pub(crate) fn value_is_used(&self, target: NValueId) -> bool {
         self.value_is_used_with(target, |expr| {
             let mut used = false;
@@ -82,12 +113,8 @@ impl<'db> NormalizedBody<'db> {
         target: NValueId,
         mut expression_uses_value: impl FnMut(&NExpr<'db>) -> bool,
     ) -> bool {
-        let place_uses_target = |place: &NPlace<'db>| {
-            matches!(place.base, NPlaceBase::CapabilityTarget { carrier } if carrier == target)
-                || place.path.iter().any(
-                    |projection| matches!(projection, NDataProjection::Index(NIndex::Value(value)) if *value == target),
-                )
-        };
+        let place_uses_target =
+            |place: &NPlace<'db>| self.place_values(place).any(|value| value == target);
         for block in &self.blocks {
             for statement in &block.statements {
                 let used = match &statement.kind {
@@ -161,10 +188,22 @@ pub struct NRoot<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NRootKind<'db> {
-    LocalSlot { binding: Option<LocalBinding<'db>> },
-    ParamPlace { param: u32 },
-    Provider { binding: ProviderBinding<'db> },
-    CapabilityRepresentation { carrier: NValueId },
+    LocalSlot {
+        binding: Option<LocalBinding<'db>>,
+    },
+    ParamPlace {
+        param: u32,
+    },
+    Provider {
+        binding: ProviderBinding<'db>,
+    },
+    CapabilityRepresentation {
+        carrier: NValueId,
+    },
+    /// Addressable storage initialized from a normalized temporary value.
+    Temporary {
+        value: NValueId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -275,6 +314,17 @@ pub enum NEffectArgValue<'db> {
     Value(NOperand),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ViewAccess {
+    Read,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum HandleOrigin<'db> {
+    Provider(ProviderBinding<'db>),
+    Opaque(OpaqueHandleContract<'db>),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NExpr<'db> {
     Forward {
@@ -293,6 +343,16 @@ pub enum NExpr<'db> {
         kind: BorrowKind,
         activation: BorrowActivation<'db>,
         provider: Option<ProviderAddressSpace>,
+    },
+    MakeView {
+        place: NPlace<'db>,
+        access: ViewAccess,
+    },
+    MakeHandle {
+        ty: TyId<'db>,
+        variant: Option<VariantIndex>,
+        fields: Box<[NOperand]>,
+        origin: HandleOrigin<'db>,
     },
     StructuralRepack {
         value: NOperand,
@@ -364,7 +424,9 @@ impl<'db> NExpr<'db> {
                 f(*lhs);
                 f(*rhs);
             }
-            Self::AggregateMake { fields, .. } | Self::EnumMake { fields, .. } => {
+            Self::AggregateMake { fields, .. }
+            | Self::EnumMake { fields, .. }
+            | Self::MakeHandle { fields, .. } => {
                 fields.iter().copied().for_each(f);
             }
             Self::Call {
@@ -381,6 +443,7 @@ impl<'db> NExpr<'db> {
             }
             Self::Load { .. }
             | Self::Borrow { .. }
+            | Self::MakeView { .. }
             | Self::CodeRegionRef { .. }
             | Self::Const(_)
             | Self::CodeRegionOffset { .. }
@@ -390,7 +453,9 @@ impl<'db> NExpr<'db> {
 
     pub fn for_each_place_operand(&self, mut f: impl FnMut(&NPlace<'db>)) {
         match self {
-            Self::Load { place, .. } | Self::Borrow { place, .. } => f(place),
+            Self::Load { place, .. }
+            | Self::Borrow { place, .. }
+            | Self::MakeView { place, .. } => f(place),
             Self::Call { effect_args, .. } => effect_args
                 .iter()
                 .filter_map(|arg| match &arg.arg {
@@ -408,6 +473,7 @@ impl<'db> NExpr<'db> {
             | Self::ScalarCast { .. }
             | Self::ArrayRepeat { .. }
             | Self::AggregateMake { .. }
+            | Self::MakeHandle { .. }
             | Self::EnumMake { .. }
             | Self::GetEnumTag { .. }
             | Self::IsEnumVariant { .. }
@@ -457,6 +523,7 @@ pub struct NBlock<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NStatement<'db> {
+    pub id: NStatementId,
     /// Stable raw-SMIR identity when this operation directly corresponds to a
     /// source semantic statement. Normalization-introduced loads have no raw
     /// statement identity.

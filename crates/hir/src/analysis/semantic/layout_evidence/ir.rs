@@ -4,8 +4,8 @@ use salsa::Update;
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        BlockedSemanticBody, SBlockId, SLocalId, SStmtId, SemConstId, SemConstValue,
-        SemanticBorrowDiagnostic, SemanticCalleeRef, SemanticInstance,
+        BlockedSemanticBody, SBlockId, SLocalId, SemConstId, SemConstValue,
+        SemanticBorrowDiagnostic, SemanticCalleeRef, SemanticInstance, normalized::NStatementId,
     },
     ty::{
         CallableLayoutParamPort, LayoutBundleComponentId, LayoutBundleInterface,
@@ -174,7 +174,6 @@ pub struct LayoutEvidenceConstBinding<'db> {
 pub struct LayoutEvidenceStatement<'db> {
     pub assignments: Box<[LayoutEvidenceAssignment<'db>]>,
     pub call: Option<LayoutEvidenceCall<'db>>,
-    pub const_bindings: Box<[LayoutEvidenceConstBinding<'db>]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update, Default)]
@@ -196,14 +195,16 @@ pub struct LayoutEvidenceBody<'db> {
     pub semantic_values: Vec<LayoutEvidenceValue<'db>>,
     pub params: Vec<LayoutEvidenceLocalId>,
     pub output: LayoutBundleInterface<'db>,
-    /// Evidence operations indexed by stable semantic statement identity.
+    /// Evidence operations indexed by stable normalized statement identity, including synthetic operations.
     pub statements: Vec<LayoutEvidenceStatement<'db>>,
+    /// Constant layout inputs indexed by normalized SSA value, including synthetic constants.
+    pub constant_bindings: Vec<Box<[LayoutEvidenceConstBinding<'db>]>>,
     /// Return evidence indexed by semantic block identity.
     pub terminators: Vec<LayoutEvidenceTerminator<'db>>,
 }
 
 impl<'db> LayoutEvidenceBody<'db> {
-    pub fn statement(&self, id: SStmtId) -> Option<&LayoutEvidenceStatement<'db>> {
+    pub fn statement(&self, id: NStatementId) -> Option<&LayoutEvidenceStatement<'db>> {
         self.statements.get(id.index())
     }
 
@@ -221,7 +222,7 @@ pub enum LayoutEvidenceError<'db> {
         expected: usize,
         actual: usize,
     },
-    InvalidStatementIdentity(SStmtId),
+    InvalidStatementIdentity(NStatementId),
     InvalidSchema {
         local: Option<SLocalId>,
         error: LayoutBundleSchemaError,
@@ -299,9 +300,9 @@ pub enum LayoutEvidenceVerifyError {
     InvalidStatementId {
         block: usize,
         statement: usize,
-        id: SStmtId,
+        id: NStatementId,
     },
-    DuplicateStatementId(SStmtId),
+    DuplicateStatementId(NStatementId),
     InvalidSchema {
         local: Option<SLocalId>,
         error: LayoutBundleSchemaError,

@@ -1,43 +1,40 @@
 //! External referents retain every load-and-dereference transition.
 use std::collections::BTreeMap;
 
+use crate::analysis::HirAnalysisDb;
+
 use super::{
+    external::{ExternalOrigin, ExternalSource},
     guard::Guard,
     index::{BinderScope, IndexExpr, IndexSubst},
     path::{RegionPath, StructuralPath},
-    region::{ProviderRegionId, RegionRoot, SymbolicPlace, path_alias_guard},
+    region::{RegionRoot, SymbolicPlace, path_alias_guard},
+    repack::{ReferentRepackId, ReferentViews, RepackPayload},
     semantics::CapabilityClass,
     value::IndexPayload,
 };
 
-/// A returned capability's source. Its class, target type, and transport live
-/// in the structural result shape, never in a parallel leaf descriptor.
+/// A structural result's source retains typed storage identity and conversion anchors.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum SourceExpr<'db> {
-    Input {
-        source: InputSource<'db>,
-        path: RegionPath<IndexExpr<'db>>,
-    },
-    Provider {
-        provider: ProviderRegionId<'db>,
-        path: RegionPath<IndexExpr<'db>>,
-    },
+pub struct SourceExpr<'db> {
+    pub source: ExternalSource<'db>,
+    pub path: RegionPath<IndexExpr<'db>>,
+    pub views: ReferentViews<'db>,
 }
 
 impl<'db> SourceExpr<'db> {
-    /// Ordinary locals cannot become external summary sources.
     pub fn from_place(place: &SymbolicPlace<'db>) -> Option<Self> {
-        match &place.root {
-            RegionRoot::Input(source) => Some(Self::Input {
-                source: source.clone(),
-                path: place.path.clone(),
-            }),
-            RegionRoot::Provider(provider) => Some(Self::Provider {
-                provider: *provider,
-                path: place.path.clone(),
-            }),
-            RegionRoot::Root(_) | RegionRoot::Value(_) => None,
+        let RegionRoot::External(source) = &place.root else {
+            return None;
+        };
+        if matches!(source.origin, ExternalOrigin::Local(_)) {
+            return None;
         }
+        Some(Self {
+            source: source.clone(),
+            path: place.path.clone(),
+            views: place.views.clone(),
+        })
     }
 }
 
@@ -50,27 +47,25 @@ impl<'db> IndexPayload<'db> for SourceExpr<'db> {
     }
 
     fn indices(&self) -> impl Iterator<Item = IndexExpr<'db>> {
-        let (source, path) = match self {
-            Self::Input { source, path } => (Some(source), path),
-            Self::Provider { path, .. } => (None, path),
-        };
-        source
-            .into_iter()
-            .flat_map(InputSource::indices)
-            .chain(path.indices())
+        self.source.indices().chain(self.path.indices())
     }
 
-    fn substitute(&self, subst: &IndexSubst<'db>) -> Self {
-        match self {
-            Self::Input { source, path } => Self::Input {
-                source: source.substitute(subst),
-                path: path.substitute(subst),
-            },
-            Self::Provider { provider, path } => Self::Provider {
-                provider: *provider,
-                path: path.substitute(subst),
-            },
+    fn substitute(&self, db: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
+        Self {
+            source: self.source.substitute(db, subst),
+            path: self.path.substitute(subst),
+            views: self.views.substitute(db, subst),
         }
+    }
+}
+
+impl<'db> RepackPayload<'db> for SourceExpr<'db> {
+    fn repack_referent(&self, db: &'db dyn HirAnalysisDb, repack: ReferentRepackId<'db>) -> Self {
+        let mut source = self.clone();
+        source
+            .views
+            .append(db, source.path.as_slice().len(), repack);
+        source
     }
 }
 
@@ -242,6 +237,9 @@ impl<'db> InputSource<'db> {
 
 #[cfg(test)]
 mod tests {
+    use crate::analysis::semantic::capability::test_roots;
+    use crate::test_db::HirAnalysisTestDb;
+
     use super::*;
     use crate::analysis::semantic::{
         FieldIndex,
@@ -257,24 +255,34 @@ mod tests {
         RegionPath::new([Projection::Field(FieldIndex(field))])
     }
 
-    fn region<'db>(source: InputSource<'db>, path: RegionPath<IndexExpr<'db>>) -> RegionSet<'db> {
-        RegionSet::singleton(&BinderScope::default(), RegionRoot::Input(source), path)
+    fn region<'db>(
+        db: &'db HirAnalysisTestDb,
+        source: InputSource<'db>,
+        path: RegionPath<IndexExpr<'db>>,
+    ) -> RegionSet<'db> {
+        RegionSet::singleton(
+            &BinderScope::default(),
+            RegionRoot::External(test_roots::input(db, source)),
+            path,
+        )
     }
 
     #[test]
     fn stored_handle_slots_are_distinct_from_each_followed_referent() {
+        let db = HirAnalysisTestDb::default();
         let outer = InputSource::slot(0, StructuralPath::default());
         let inner = outer.follow(field(0));
         let value = inner.follow(field(1));
         let regions = [
-            region(outer.clone(), field(0)),
-            region(inner.clone(), field(1)),
-            region(value, RegionPath::default()),
+            region(&db, outer.clone(), field(0)),
+            region(&db, inner.clone(), field(1)),
+            region(&db, value, RegionPath::default()),
             region(
+                &db,
                 outer.follow(field(0).concat(&field(1))),
                 RegionPath::default(),
             ),
-            region(InputSource::place(0), field(0)),
+            region(&db, InputSource::place(0), field(0)),
         ];
         for (index, left) in regions.iter().enumerate() {
             assert!(left.provably_covers(left));
@@ -319,14 +327,16 @@ mod tests {
 
     #[test]
     fn all_dereference_indices_share_the_region_guard_solver() {
+        let db = HirAnalysisTestDb::default();
         let left_index = IndexExpr::Runtime(NValueId::from_u32(0));
         let right_index = IndexExpr::Runtime(NValueId::from_u32(1));
         let source = |first, second| {
             InputSource::slot(0, StructuralPath::new([Projection::Index(first)]))
                 .follow(RegionPath::new([Projection::Index(second)]))
         };
-        let left = region(source(left_index, right_index), RegionPath::default());
+        let left = region(&db, source(left_index, right_index), RegionPath::default());
         let right = region(
+            &db,
             source(right_index, IndexExpr::Const(0)),
             RegionPath::default(),
         );
@@ -346,6 +356,7 @@ mod tests {
 
     #[test]
     fn recursive_sources_widen_without_inventing_coverage_or_disjointness() {
+        let db = HirAnalysisTestDb::default();
         let mut source = InputSource::slot(0, StructuralPath::default());
         let mut descendants = vec![source.clone()];
         for _ in 0..=InputSource::MAX_DEREFERENCES {
@@ -354,18 +365,18 @@ mod tests {
         }
         assert_eq!(source, InputSource::reachable(0));
         assert_eq!(source.follow(field(7)), source);
-        let widened = region(source, field(7));
-        assert!(widened.clauses()[0].payload.path.is_empty());
+        let widened = region(&db, source, field(7));
+        assert_eq!(widened.clauses()[0].payload.path, field(7));
         for descendant in descendants {
-            let exact = region(descendant, field(3));
+            let exact = region(&db, descendant, field(3));
             assert_eq!(widened.overlap(&exact), OverlapResult::Unknown);
             assert!(!widened.provably_covers(&exact));
             assert!(!exact.provably_covers(&widened));
             assert_eq!(exact.remove_covered(&widened), exact);
         }
         assert_eq!(
-            widened.overlap(&region(InputSource::place(1), field(0))),
-            OverlapResult::Disjoint
+            widened.overlap(&region(&db, InputSource::place(1), field(0))),
+            OverlapResult::Unknown
         );
     }
 }

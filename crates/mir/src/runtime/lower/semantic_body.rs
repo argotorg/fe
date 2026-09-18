@@ -3,10 +3,10 @@ use hir::analysis::{
     HirAnalysisDb,
     semantic::{
         PlaceProvenance, SLocal, SLocalId, SemanticBody, SemanticInstance, SemanticLocalRole,
-        SemanticNormalizationFailure, ValueProvenance,
+        SemanticNormalizationFailure,
         normalized::{
-            NEffectArgValue, NExpr, NLayoutBackingSource, NLayoutPlan, NOperand, NPlace,
-            NPlaceBase, NRootId, NStatementKind, NValueDefinition, NValueId, NormalizedBody,
+            NEffectArgValue, NExpr, NLayoutBackingSource, NLayoutLocals, NLayoutPlan, NOperand,
+            NPlace, NPlaceBase, NRootId, NRootKind, NStatementKind, NValueId, NormalizedBody,
             normalize_semantic_body,
         },
     },
@@ -82,44 +82,13 @@ impl<'db> RuntimeSemanticBody<'db> {
     ) -> Result<Self, SemanticNormalizationFailure<'db>> {
         let artifacts = normalize_semantic_body(db, instance)?;
         let source = instance.body(db).clone();
-        let mut locals = source.locals.clone();
-        let value_locals = artifacts
-            .body
-            .values
-            .iter()
-            .enumerate()
-            .map(|(index, value)| {
-                if let NValueDefinition::Statement { block, statement } = value.definition
-                    && artifacts.body.blocks[block.index()].statements[statement as usize]
-                        .source
-                        .is_none()
-                {
-                    let local = SLocalId::new(locals.len());
-                    locals.push(SLocal {
-                        ty: value.ty,
-                        mutability: value.mutability,
-                        source: None,
-                        role: SemanticLocalRole::DirectValue {
-                            provenance: ValueProvenance::Ordinary,
-                        },
-                        snapshot_source: None,
-                        layout_backing_sources: Vec::new(),
-                    });
-                    local
-                } else {
-                    artifacts
-                        .layout_plan
-                        .value_source(NValueId::new(index))
-                        .expect("verified normalized value must have source metadata")
-                }
-            })
-            .collect();
+        let representations = NLayoutLocals::new(&artifacts.body, &artifacts.layout_plan, &source);
         Ok(Self {
             normalized: artifacts.body,
             layout_plan: artifacts.layout_plan,
             source,
-            locals,
-            value_locals,
+            locals: representations.locals,
+            value_locals: representations.value_locals,
         })
     }
 
@@ -149,7 +118,10 @@ impl<'db> RuntimeSemanticBody<'db> {
     }
 
     pub(crate) fn root_local(&self, root: NRootId) -> Option<SLocalId> {
-        self.layout_plan.root_source(root)
+        match self.normalized.root(root)?.kind {
+            NRootKind::Temporary { value } => self.value_local(value),
+            _ => self.layout_plan.root_source(root),
+        }
     }
 
     pub(crate) fn root_demand(&self, local: SLocalId) -> RuntimeRootDemand {
@@ -174,7 +146,15 @@ impl<'db> RuntimeSemanticBody<'db> {
                     }
                     NStatementKind::Store { destination, .. } => {
                         if self.place_source(destination) == Some(local) {
-                            demand.written_by_place = true;
+                            // Whole-local assignments update its value binding.
+                            // They need physical storage only when another use
+                            // requires an address, including across loop iterations.
+                            let assigns_local = statement.source.is_none()
+                                && destination.path.is_empty()
+                                && matches!(destination.base, NPlaceBase::Root(root)
+                                    if matches!(self.normalized.roots[root.index()].kind,
+                                        NRootKind::LocalSlot { .. }));
+                            demand.written_by_place |= !assigns_local;
                         }
                     }
                 }
@@ -211,6 +191,13 @@ impl<'db> RuntimeSemanticBody<'db> {
                         matches!(kind, hir::analysis::ty::ty_def::BorrowKind::Mut);
                 }
             }
+            NExpr::MakeView { place, .. } => {
+                if self.place_source(place) == Some(local) {
+                    // Read-only views may carry an immutable value directly.
+                    // Other writes, borrows, or address consumers still demand storage.
+                    demand.read_by_place = true;
+                }
+            }
             NExpr::Call { effect_args, .. } => {
                 for arg in effect_args {
                     match &arg.arg {
@@ -245,6 +232,7 @@ impl<'db> RuntimeSemanticBody<'db> {
             | NExpr::ScalarCast { .. }
             | NExpr::ArrayRepeat { .. }
             | NExpr::AggregateMake { .. }
+            | NExpr::MakeHandle { .. }
             | NExpr::EnumMake { .. }
             | NExpr::GetEnumTag { .. }
             | NExpr::IsEnumVariant { .. }

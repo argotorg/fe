@@ -1,12 +1,12 @@
+use crate::analysis::semantic::capability::{region::RegionSet, state::BorrowState};
 use cranelift_entity::EntityRef;
-use rustc_hash::FxHashSet;
 
 use crate::analysis::{
     HirAnalysisDb,
     diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
     semantic::{
         SemOrigin, SemanticCalleeRef, SemanticInstance,
-        normalized::{NBlockId, NExpr, NOperand, NPlace, NStatement, NStatementKind},
+        normalized::{NExpr, NOperand, NPlace, NStatement, NStatementKind},
     },
     ty::{
         ProviderAddressSpace,
@@ -17,13 +17,13 @@ use crate::analysis::{
 };
 
 use super::{
-    canon::{BorrowRoot, CanonPlace, State, address_space_for_borrow_root},
-    check::{Borrowck, SemanticAnalysisError},
+    check::SemanticAnalysisError,
     diagnostics::{normalized_body_internal_diag, operand_origin},
     ir::{
         BlockedSemanticBody, BorrowDiagnosticId, SemanticBorrowCheckResult, SemanticBorrowDiagKind,
         SemanticBorrowDiagnostic, SemanticBorrowDiagnosticSpan, SemanticNormalizationFailure,
     },
+    solver::Borrowck,
 };
 
 pub fn check_semantic_noesc<'db>(
@@ -60,29 +60,31 @@ pub(super) fn semantic_noesc_check_query<'db>(
     }
 }
 
-struct NoEsc<'db> {
-    borrowck: Borrowck<'db>,
+struct NoEsc<'a, 'db> {
+    borrowck: &'a Borrowck<'db>,
 }
 
-impl<'db> NoEsc<'db> {
+pub(super) fn check_solved_body<'db>(
+    borrowck: &Borrowck<'db>,
+) -> Result<(), SemanticBorrowDiagnostic<'db>> {
+    NoEsc { borrowck }.check_body()
+}
+
+impl<'db> NoEsc<'_, 'db> {
     fn check(
         mut borrowck: Borrowck<'db>,
     ) -> Result<Option<BlockedSemanticBody<'db>>, SemanticBorrowDiagnostic<'db>> {
-        borrowck.compute_entry_states();
-        if let Some(blocked) = borrowck.compute_loan_targets()? {
+        borrowck.solve()?;
+        if let Some(blocked) = borrowck.blocked.clone() {
             return Ok(Some(blocked));
         }
-        Self { borrowck }.check_body().map(|()| None)
+        check_solved_body(&borrowck).map(|()| None)
     }
 
     fn check_body(&self) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         for (bb_idx, block) in self.borrowck.body.blocks.iter().enumerate() {
-            let mut state = self.borrowck.entry_state[NBlockId::new(bb_idx)].clone();
-            for statement in &block.statements {
-                self.check_statement(&state, statement)?;
-                self.borrowck
-                    .canon()
-                    .apply_statement_state(&mut state, statement);
+            for (statement, state) in block.statements.iter().zip(&self.borrowck.before[bb_idx]) {
+                self.check_statement(state, statement)?;
             }
         }
         Ok(())
@@ -90,7 +92,7 @@ impl<'db> NoEsc<'db> {
 
     fn check_statement(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         statement: &NStatement<'db>,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
         match &statement.kind {
@@ -107,16 +109,13 @@ impl<'db> NoEsc<'db> {
 
     fn check_store(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         origin: SemOrigin<'db>,
         dst: &NPlace<'db>,
         src: NOperand,
     ) -> Result<(), SemanticBorrowDiagnostic<'db>> {
-        let targets = self
-            .borrowck
-            .canon()
-            .canonicalize_place(state, dst, origin)?;
-        let spaces = self.address_spaces_for_targets(&targets, origin)?;
+        let targets = self.borrowck.resolve_region(state, dst);
+        let spaces = self.address_spaces_for_targets(&targets);
         if spaces.contains(&ProviderAddressSpace::Calldata) {
             return Err(self.noesc_diag(origin, "cannot write to calldata".to_string()));
         }
@@ -148,7 +147,7 @@ impl<'db> NoEsc<'db> {
 
     fn check_call_args(
         &self,
-        state: &State,
+        state: &BorrowState<'db>,
         origin: SemOrigin<'db>,
         callee: SemanticCalleeRef<'db>,
         args: &[NOperand],
@@ -158,8 +157,11 @@ impl<'db> NoEsc<'db> {
             if !matches!(ty.as_borrow(self.borrowck.db), Some((BorrowKind::Mut, _))) {
                 continue;
             }
-            let targets = self.borrowck.canon().borrow_value_targets(state, arg.value);
-            let spaces = self.address_spaces_for_targets(&targets, operand_origin(arg, origin))?;
+            let targets = self
+                .borrowck
+                .resolve_capability(state.value(arg.value))
+                .region;
+            let spaces = self.address_spaces_for_targets(&targets);
             let Some(space) = spaces
                 .iter()
                 .copied()
@@ -206,34 +208,19 @@ impl<'db> NoEsc<'db> {
             })
     }
 
-    fn address_spaces_for_targets(
-        &self,
-        targets: &FxHashSet<CanonPlace<'db>>,
-        origin: SemOrigin<'db>,
-    ) -> Result<Vec<ProviderAddressSpace>, SemanticBorrowDiagnostic<'db>> {
-        let mut spaces = Vec::with_capacity(targets.len());
-        for target in targets {
-            let space = self.address_space_for_root(&target.root, origin)?;
+    fn address_spaces_for_targets(&self, targets: &RegionSet<'db>) -> Vec<ProviderAddressSpace> {
+        let mut spaces = Vec::with_capacity(targets.clauses().len());
+        for target in targets.clauses() {
+            // Generic contracts are checked again in the specialized instance.
+            let Some(space) = target.payload.root.address_space().known() else {
+                continue;
+            };
             if !spaces.contains(&space) {
                 spaces.push(space);
             }
         }
         spaces.sort_by_key(|space| address_space_rank(*space));
-        Ok(spaces)
-    }
-
-    fn address_space_for_root(
-        &self,
-        root: &BorrowRoot<'db>,
-        origin: SemOrigin<'db>,
-    ) -> Result<ProviderAddressSpace, SemanticBorrowDiagnostic<'db>> {
-        address_space_for_borrow_root(
-            self.borrowck.db,
-            self.borrowck.instance,
-            &self.borrowck.body,
-            root,
-            origin,
-        )
+        spaces
     }
 
     fn noesc_diag(&self, origin: SemOrigin<'db>, message: String) -> SemanticBorrowDiagnostic<'db> {

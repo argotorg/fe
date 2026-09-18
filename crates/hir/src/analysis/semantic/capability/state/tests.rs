@@ -1,12 +1,19 @@
 use super::*;
+use crate::analysis::semantic::capability::test_roots;
 use crate::{
     analysis::{
         semantic::{
             BorrowActivation, FieldIndex, SemOrigin,
             capability::{
+                external::{ExternalSource, ReferentContract},
+                handle::{
+                    HandleAddressSpace, OpaqueHandleContract, OpaqueHandleOccurrence,
+                    OpaqueHandleRef,
+                },
                 index::IndexNamespace,
                 loan::{LoanId, LoanRef},
                 path::Projection,
+                region::SymbolicPlace,
                 semantics::{CapabilityClass, CapabilitySemantics, StorageClass},
                 shape::{ArrayLength, CapabilityShape, ShapeChildren},
                 source::InputSource,
@@ -15,6 +22,7 @@ use crate::{
             normalized::NRootId,
         },
         ty::{
+            ProviderAddressSpace,
             provider::ProviderTransport,
             ty_def::{BorrowKind, TyId},
         },
@@ -80,8 +88,8 @@ impl<'db> Shapes<'db> {
     }
 }
 
-fn root<'db>(index: u32) -> RegionRoot<'db> {
-    RegionRoot::Root(NRootId::from_u32(index))
+fn root(db: &dyn HirAnalysisDb, index: u32) -> RegionRoot<'_> {
+    test_roots::local(db, NRootId::from_u32(index))
 }
 
 fn region<'db>(root: RegionRoot<'db>) -> RegionSet<'db> {
@@ -96,22 +104,25 @@ fn handle<'db>(
     values.from_shape(shape, &BinderScope::default(), |_, _, scope| {
         vec![Guarded {
             guard: Guard::always(scope),
-            payload: CapabilityRef::Mutable(LoanRef {
-                id: LoanId(id),
-                args: Box::new([]),
-            }),
+            payload: CapabilityRef::borrow(
+                BorrowKind::Mut,
+                LoanRef {
+                    id: LoanId(id),
+                    args: Box::new([]),
+                },
+            ),
         }]
     })
 }
 
-fn loan<'db>(region: &RegionSet<'db>) -> LoanDef<'db> {
+fn loan<'db>(db: &'db HirAnalysisTestDb, region: &RegionSet<'db>) -> LoanDef<'db> {
     let (mut loan, _, abstraction) = LoanDef::new(
         BorrowKind::Mut,
         BorrowActivation::Immediate,
         SemOrigin::Synthetic,
         region.scope(),
     );
-    loan.extend(&region.substitute(&abstraction), []);
+    loan.extend(&region.substitute(db, &abstraction), []);
     loan
 }
 
@@ -156,23 +167,23 @@ fn outer_borrow_tracks_contents_without_conflating_handle_slot_and_referent() {
             (NValueId::from_u32(0), shapes.handle),
             (NValueId::from_u32(1), shapes.handle),
         ],
-        [(root(0), pair)],
+        [(root(&db, 0), pair)],
     );
     state.set_value(NValueId::from_u32(0), outer.clone());
     let loans = [
-        loan(&region(root(1))),
-        loan(&region(root(2))),
-        loan(&region(root(0))),
+        loan(&db, &region(root(&db, 1))),
+        loan(&db, &region(root(&db, 2))),
+        loan(&db, &region(root(&db, 0))),
     ];
     let field = RegionPath::new([Projection::Field(FieldIndex(0))]);
-    let slot = state.referent_region(NValueId::from_u32(0), &field, &loans);
+    let slot = state.referent_region(&db, NValueId::from_u32(0), &field, &loans);
     let loaded = read(&db, &mut values, &state, &slot, shapes.handle);
     state.set_value(NValueId::from_u32(1), loaded);
     assert_eq!(
-        state.referent_region(NValueId::from_u32(1), &RegionPath::default(), &loans),
-        region(root(1))
+        state.referent_region(&db, NValueId::from_u32(1), &RegionPath::default(), &loans),
+        region(root(&db, 1))
     );
-    assert!(slot.intersection(&region(root(1))).is_empty());
+    assert!(slot.intersection(&region(root(&db, 1))).is_empty());
     state.write_region(&mut values, &slot, &second).unwrap();
     assert_eq!(state.value(NValueId::from_u32(0)), &outer);
     assert_eq!(
@@ -181,7 +192,8 @@ fn outer_borrow_tracks_contents_without_conflating_handle_slot_and_referent() {
         "an existing load keeps its old referent"
     );
     assert_eq!(read(&db, &mut values, &state, &slot, shapes.handle), second);
-    let sibling = region(root(0)).project(&RegionPath::new([Projection::Field(FieldIndex(1))]));
+    let sibling =
+        region(root(&db, 0)).project(&RegionPath::new([Projection::Field(FieldIndex(1))]));
     assert_eq!(
         read(&db, &mut values, &state, &sibling, shapes.handle),
         first
@@ -197,14 +209,15 @@ fn dynamic_stores_partition_array_members_and_exact_overwrites_remove_old_handle
     let old = handle(&mut values, shapes.handle, 0);
     let new = handle(&mut values, shapes.handle, 1);
     let array = values.array_repeat(shapes.array, &old);
-    let mut state = BorrowState::new(&mut values, [], [(root(0), array)]);
+    let mut state = BorrowState::new(&mut values, [], [(root(&db, 0), array)]);
     let index = IndexExpr::Runtime(NValueId::from_u32(0));
-    let selected = region(root(0)).project(&RegionPath::new([Projection::Index(index)]));
+    let selected = region(root(&db, 0)).project(&RegionPath::new([Projection::Index(index)]));
     state.write_region(&mut values, &selected, &new).unwrap();
     let loaded = read(&db, &mut values, &state, &selected, shapes.handle);
     assert_eq!(loaded.direct().len(), 1);
     assert_eq!(loaded.direct()[0].payload, new.direct()[0].payload);
-    let zero = region(root(0)).project(&RegionPath::new([Projection::Index(IndexExpr::Const(0))]));
+    let zero =
+        region(root(&db, 0)).project(&RegionPath::new([Projection::Index(IndexExpr::Const(0))]));
     let loaded = read(&db, &mut values, &state, &zero, shapes.handle);
     let entries = loaded.direct();
     assert_eq!(entries.len(), 2);
@@ -219,7 +232,16 @@ fn dynamic_stores_partition_array_members_and_exact_overwrites_remove_old_handle
     let absent = values.empty(shapes.handle, &scope);
     state.write_region(&mut values, &zero, &absent).unwrap();
     assert!(read(&db, &mut values, &state, &zero, shapes.handle).is_empty());
-    assert!(!read(&db, &mut values, &state, &region(root(0)), shapes.array).is_empty());
+    assert!(
+        !read(
+            &db,
+            &mut values,
+            &state,
+            &region(root(&db, 0)),
+            shapes.array
+        )
+        .is_empty()
+    );
 }
 
 #[test]
@@ -234,21 +256,30 @@ fn symbolic_external_referents_preserve_member_identity_and_followed_handle_iden
     let initial = values.from_shape(shapes.handle, &family_scope, |_, _, scope| {
         vec![Guarded {
             guard: Guard::always(scope),
-            payload: CapabilityRef::Mutable(LoanRef {
-                id: LoanId(0),
-                args: [member].into(),
-            }),
+            payload: CapabilityRef::borrow(
+                BorrowKind::Mut,
+                LoanRef {
+                    id: LoanId(0),
+                    args: [member].into(),
+                },
+            ),
         }]
     });
     let mut state = BorrowState::new(
         &mut values,
         [],
-        [(RegionRoot::Input(source.clone()), initial)],
+        [(
+            RegionRoot::External(test_roots::input(&db, source.clone())),
+            initial,
+        )],
     );
     let index = IndexExpr::Runtime(NValueId::from_u32(0));
     let instantiate = |index| {
         let subst = IndexSubst::new(&family_scope, &scope, [(member, index)]).unwrap();
-        region(RegionRoot::Input(source.substitute(&subst)))
+        region(RegionRoot::External(test_roots::input(
+            &db,
+            source.substitute(&subst),
+        )))
     };
     let selected = instantiate(index);
     let loaded = read(&db, &mut values, &state, &selected, shapes.handle);
@@ -280,9 +311,9 @@ fn symbolic_external_referents_preserve_member_identity_and_followed_handle_iden
             .guard
             .proves_equal(index, IndexExpr::Const(0))
     );
-    let slot = region(RegionRoot::Input(InputSource::slot(
-        0,
-        StructuralPath::new([Projection::Index(index)]),
+    let slot = region(RegionRoot::External(test_roots::input(
+        &db,
+        InputSource::slot(0, StructuralPath::new([Projection::Index(index)])),
     )));
     assert!(matches!(
         state.read_region(
@@ -307,16 +338,26 @@ fn conditional_and_ambiguous_stores_keep_unwritten_contents() {
     let mut state = BorrowState::new(
         &mut values,
         [],
-        [(root(0), old.clone()), (root(1), old.clone())],
+        [(root(&db, 0), old.clone()), (root(&db, 1), old.clone())],
     );
     let selector = IndexExpr::Runtime(NValueId::from_u32(0));
     let condition = Guard::always(&scope)
         .with_equality(selector, IndexExpr::Const(0))
         .unwrap();
     state
-        .write_region(&mut values, &region(root(0)).with_guard(&condition), &new)
+        .write_region(
+            &mut values,
+            &region(root(&db, 0)).with_guard(&condition),
+            &new,
+        )
         .unwrap();
-    let loaded = read(&db, &mut values, &state, &region(root(0)), shapes.handle);
+    let loaded = read(
+        &db,
+        &mut values,
+        &state,
+        &region(root(&db, 0)),
+        shapes.handle,
+    );
     assert_eq!(loaded.direct().len(), 2);
     assert!(
         loaded
@@ -327,10 +368,16 @@ fn conditional_and_ambiguous_stores_keep_unwritten_contents() {
             .guard
             .implies(&condition)
     );
-    let ambiguous = region(root(0)).union(&region(root(1)));
+    let ambiguous = region(root(&db, 0)).union(&region(root(&db, 1)));
     state.write_region(&mut values, &ambiguous, &new).unwrap();
     assert_eq!(
-        read(&db, &mut values, &state, &region(root(1)), shapes.handle),
+        read(
+            &db,
+            &mut values,
+            &state,
+            &region(root(&db, 1)),
+            shapes.handle
+        ),
         values.join(&old, &new)
     );
 }
@@ -343,37 +390,49 @@ fn missing_capability_storage_is_an_error_and_failed_writes_are_atomic() {
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
     let old = handle(&mut values, shapes.handle, 0);
     let new = handle(&mut values, shapes.handle, 1);
-    let mut state = BorrowState::new(&mut values, [], [(root(0), old)]);
+    let mut state = BorrowState::new(&mut values, [], [(root(&db, 0), old)]);
     let before = state.clone();
-    let destination = region(root(0)).union(&region(root(1)));
+    let destination = region(root(&db, 0)).union(&region(root(&db, 1)));
     assert_eq!(
         state.write_region(&mut values, &destination, &new),
-        Err(StateError::MissingStorage(root(1)))
+        Err(StateError::MissingStorage(root(&db, 1)))
     );
     assert_eq!(state, before);
     assert_eq!(
         state.read_region(
             &db,
             &mut values,
-            &region(root(1)),
+            &region(root(&db, 1)),
             shapes.handle,
             ValueOccurrence::Summary
         ),
-        Err(StateError::MissingStorage(root(1)))
+        Err(StateError::MissingStorage(root(&db, 1)))
     );
     assert_eq!(
-        read(&db, &mut values, &state, &region(root(1)), shapes.scalar),
+        read(
+            &db,
+            &mut values,
+            &state,
+            &region(root(&db, 1)),
+            shapes.scalar
+        ),
         values.empty(shapes.scalar, &scope)
     );
 
-    let exact_source = RegionRoot::Input(InputSource::slot(
-        0,
-        StructuralPath::new([Projection::Index(IndexExpr::Const(0))]),
+    let exact_source = RegionRoot::External(test_roots::input(
+        &db,
+        InputSource::slot(
+            0,
+            StructuralPath::new([Projection::Index(IndexExpr::Const(0))]),
+        ),
     ));
     let exact = BorrowState::new(&mut values, [], [(exact_source, new)]);
-    let unknown = region(RegionRoot::Input(InputSource::slot(
-        0,
-        StructuralPath::new([Projection::Index(IndexExpr::Runtime(NValueId::from_u32(0)))]),
+    let unknown = region(RegionRoot::External(test_roots::input(
+        &db,
+        InputSource::slot(
+            0,
+            StructuralPath::new([Projection::Index(IndexExpr::Runtime(NValueId::from_u32(0)))]),
+        ),
     )));
     assert!(
         matches!(
@@ -401,13 +460,13 @@ fn joins_include_storage_contents_and_are_independent_of_predecessor_order() {
     let mut left = BorrowState::new(
         &mut values,
         [(holder, shapes.handle)],
-        [(root(0), first.clone())],
+        [(root(&db, 0), first.clone())],
     );
     left.set_value(holder, first);
     let mut right = left.clone();
     right.set_value(holder, second.clone());
     right
-        .write_region(&mut values, &region(root(0)), &second)
+        .write_region(&mut values, &region(root(&db, 0)), &second)
         .unwrap();
     let mut left_first = left.clone();
     assert!(left_first.join(&right, &mut values));
@@ -420,7 +479,7 @@ fn joins_include_storage_contents_and_are_independent_of_predecessor_order() {
             &db,
             &mut values,
             &left_first,
-            &region(root(0)),
+            &region(root(&db, 0)),
             shapes.handle
         ),
         *left_first.value(holder)
@@ -446,20 +505,23 @@ fn symbolic_array_writes_are_pointwise_and_can_select_a_diagonal() {
         },
     );
     let matrix = values.array_repeat(matrix_shape, &row);
-    let mut state = BorrowState::new(&mut values, [], [(root(0), matrix)]);
+    let mut state = BorrowState::new(&mut values, [], [(root(&db, 0), matrix)]);
     let (write_scope, member) = scope.bind(IndexNamespace::Result);
     let replacement = values.from_shape(shapes.handle, &write_scope, |_, _, scope| {
         vec![Guarded {
             guard: Guard::always(scope),
-            payload: CapabilityRef::Mutable(LoanRef {
-                id: LoanId(1),
-                args: [member].into(),
-            }),
+            payload: CapabilityRef::borrow(
+                BorrowKind::Mut,
+                LoanRef {
+                    id: LoanId(1),
+                    args: [member].into(),
+                },
+            ),
         }]
     });
     let diagonal = RegionSet::singleton(
         &write_scope,
-        root(0),
+        root(&db, 0),
         RegionPath::new([Projection::Index(member), Projection::Index(member)]),
     );
     state
@@ -467,7 +529,7 @@ fn symbolic_array_writes_are_pointwise_and_can_select_a_diagonal() {
         .unwrap();
     for row in [0, 1, 2] {
         for column in [0, 1, 2] {
-            let element = region(root(0)).project(&RegionPath::new([
+            let element = region(root(&db, 0)).project(&RegionPath::new([
                 Projection::Index(IndexExpr::Const(row)),
                 Projection::Index(IndexExpr::Const(column)),
             ]));
@@ -496,7 +558,10 @@ fn family_writes_keep_input_slot_and_destination_array_binders_independent() {
     let mut state = BorrowState::new(
         &mut values,
         [],
-        [(RegionRoot::Input(source.clone()), initial)],
+        [(
+            RegionRoot::External(test_roots::input(&db, source.clone())),
+            initial,
+        )],
     );
     let (write_scope, input_member) = scope.bind(IndexNamespace::Value);
     let (write_scope, result_member) = write_scope.bind(IndexNamespace::Result);
@@ -506,15 +571,18 @@ fn family_writes_keep_input_slot_and_destination_array_binders_independent() {
     let replacement = values.from_shape(shapes.handle, &write_scope, |_, _, scope| {
         vec![Guarded {
             guard: Guard::always(scope),
-            payload: CapabilityRef::Mutable(LoanRef {
-                id: LoanId(0),
-                args: [input_member, result_member].into(),
-            }),
+            payload: CapabilityRef::borrow(
+                BorrowKind::Mut,
+                LoanRef {
+                    id: LoanId(0),
+                    args: [input_member, result_member].into(),
+                },
+            ),
         }]
     });
     let destination = RegionSet::singleton(
         &write_scope,
-        RegionRoot::Input(write_source),
+        RegionRoot::External(test_roots::input(&db, write_source)),
         RegionPath::new([Projection::Index(result_member)]),
     );
     state
@@ -523,8 +591,11 @@ fn family_writes_keep_input_slot_and_destination_array_binders_independent() {
     let selected_source = source.substitute(
         &IndexSubst::new(&storage_scope, &scope, [(slot, IndexExpr::Const(7))]).unwrap(),
     );
-    let element = region(RegionRoot::Input(selected_source))
-        .project(&RegionPath::new([Projection::Index(IndexExpr::Const(2))]));
+    let element = region(RegionRoot::External(test_roots::input(
+        &db,
+        selected_source,
+    )))
+    .project(&RegionPath::new([Projection::Index(IndexExpr::Const(2))]));
     let loaded = read(&db, &mut values, &state, &element, shapes.handle);
     assert_eq!(loaded.direct().len(), 1);
     assert_eq!(
@@ -540,27 +611,30 @@ fn a_family_write_cannot_capture_an_unbound_source_index() {
     let scope = BinderScope::default();
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
     let initial = values.empty(shapes.array, &scope);
-    let mut state = BorrowState::new(&mut values, [], [(root(0), initial)]);
+    let mut state = BorrowState::new(&mut values, [], [(root(&db, 0), initial)]);
     let (write_scope, unrelated) = scope.bind(IndexNamespace::Value);
     let replacement = values.from_shape(shapes.handle, &write_scope, |_, _, scope| {
         vec![Guarded {
             guard: Guard::always(scope),
-            payload: CapabilityRef::Mutable(LoanRef {
-                id: LoanId(0),
-                args: [unrelated].into(),
-            }),
+            payload: CapabilityRef::borrow(
+                BorrowKind::Mut,
+                LoanRef {
+                    id: LoanId(0),
+                    args: [unrelated].into(),
+                },
+            ),
         }]
     });
     let index = IndexExpr::Runtime(NValueId::from_u32(0));
     let destination = RegionSet::singleton(
         &write_scope,
-        root(0),
+        root(&db, 0),
         RegionPath::new([Projection::Index(index)]),
     );
     let before = state.clone();
     assert_eq!(
         state.write_region(&mut values, &destination, &replacement),
-        Err(StateError::UnrepresentableWrite(root(0)))
+        Err(StateError::UnrepresentableWrite(root(&db, 0)))
     );
     assert_eq!(state, before);
 }
@@ -571,9 +645,12 @@ fn a_guarded_family_write_specializes_an_exact_input_referent() {
     let shapes = Shapes::new(&db);
     let scope = BinderScope::default();
     let mut values = CapabilityValues::new(&db, ValueLimits::default());
-    let exact = RegionRoot::Input(InputSource::slot(
-        0,
-        StructuralPath::new([Projection::Index(IndexExpr::Const(0))]),
+    let exact = RegionRoot::External(test_roots::input(
+        &db,
+        InputSource::slot(
+            0,
+            StructuralPath::new([Projection::Index(IndexExpr::Const(0))]),
+        ),
     ));
     let initial = values.empty(shapes.handle, &scope);
     let mut state = BorrowState::new(&mut values, [], [(exact.clone(), initial)]);
@@ -581,15 +658,18 @@ fn a_guarded_family_write_specializes_an_exact_input_referent() {
     let replacement = values.from_shape(shapes.handle, &write_scope, |_, _, scope| {
         vec![Guarded {
             guard: Guard::always(scope),
-            payload: CapabilityRef::Mutable(LoanRef {
-                id: LoanId(0),
-                args: [member].into(),
-            }),
+            payload: CapabilityRef::borrow(
+                BorrowKind::Mut,
+                LoanRef {
+                    id: LoanId(0),
+                    args: [member].into(),
+                },
+            ),
         }]
     });
-    let source = RegionRoot::Input(InputSource::slot(
-        0,
-        StructuralPath::new([Projection::Index(member)]),
+    let source = RegionRoot::External(test_roots::input(
+        &db,
+        InputSource::slot(0, StructuralPath::new([Projection::Index(member)])),
     ));
     let guard = Guard::always(&write_scope)
         .with_equality(member, IndexExpr::Const(0))
@@ -618,6 +698,276 @@ fn storage_families_cannot_own_unrelated_binders() {
     BorrowState::new(
         &mut values,
         [],
-        [(RegionRoot::Input(InputSource::place(0)), initial)],
+        [(
+            RegionRoot::External(test_roots::input(&db, InputSource::place(0))),
+            initial,
+        )],
     );
+}
+
+#[test]
+fn uncertain_member_write_preserves_old_handles_and_scopes_unknown_sources() {
+    let db = HirAnalysisTestDb::default();
+    let shapes = Shapes::new(&db);
+    let scope = BinderScope::default();
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let old = handle(&mut values, shapes.handle, 0);
+    let array = values.array_repeat(shapes.array, &old);
+    let mut state = BorrowState::new(&mut values, [], [(root(&db, 0), array)]);
+    let (witness_scope, selected) = scope.bind(IndexNamespace::Existential);
+    let destination = RegionSet::new(
+        &scope,
+        [Guarded {
+            guard: Guard::always(&witness_scope)
+                .with_bound(selected, 3)
+                .unwrap(),
+            payload: SymbolicPlace {
+                views: Default::default(),
+                root: root(&db, 0),
+                path: RegionPath::new([Projection::Index(selected)]),
+            },
+        }],
+    );
+    let replacement = handle(&mut values, shapes.handle, 1);
+    state
+        .write_region(&mut values, &destination, &replacement)
+        .unwrap();
+    for index in [0, 1, 2] {
+        let selected = read(
+            &db,
+            &mut values,
+            &state,
+            &region(root(&db, 0)).project(&RegionPath::new([Projection::Index(IndexExpr::Const(
+                index,
+            ))])),
+            shapes.handle,
+        );
+        let ids: Vec<_> = selected
+            .direct()
+            .iter()
+            .map(|entry| entry.payload.loan().unwrap().id)
+            .collect();
+        assert_eq!(ids, [LoanId(0), LoanId(1)]);
+    }
+}
+
+#[test]
+fn simultaneous_poststates_join_overlaps_without_update_order() {
+    let db = HirAnalysisTestDb::default();
+    let shapes = Shapes::new(&db);
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let old = handle(&mut values, shapes.handle, 0);
+    let first = handle(&mut values, shapes.handle, 1);
+    let second = handle(&mut values, shapes.handle, 2);
+    let initial = values.array_repeat(shapes.array, &old);
+    let whole_replacement = values.array_repeat(shapes.array, &first);
+    let initial = BorrowState::new(&mut values, [], [(root(&db, 0), initial)]);
+    let whole = region(root(&db, 0));
+    let selected = whole.project(&RegionPath::new([Projection::Index(IndexExpr::Const(1))]));
+    let mut forward = initial.clone();
+    forward
+        .write_regions(
+            &mut values,
+            &[(&whole, &whole_replacement), (&selected, &second)],
+        )
+        .unwrap();
+    let mut reverse = initial;
+    reverse
+        .write_regions(
+            &mut values,
+            &[(&selected, &second), (&whole, &whole_replacement)],
+        )
+        .unwrap();
+    assert_eq!(
+        forward, reverse,
+        "summary aliases do not specify a sequential store order"
+    );
+    let result = read(&db, &mut values, &forward, &selected, shapes.handle);
+    let expected = values.join(&old, &first);
+    let expected = values.join(&expected, &second);
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn simultaneous_disjoint_poststates_replace_exactly_and_fail_atomically() {
+    let db = HirAnalysisTestDb::default();
+    let shapes = Shapes::new(&db);
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let old = handle(&mut values, shapes.handle, 0);
+    let first = handle(&mut values, shapes.handle, 1);
+    let second = handle(&mut values, shapes.handle, 2);
+    let initial = values.array_repeat(shapes.array, &old);
+    let mut state = BorrowState::new(&mut values, [], [(root(&db, 0), initial)]);
+    let whole = region(root(&db, 0));
+    let left = whole.project(&RegionPath::new([Projection::Index(IndexExpr::Const(0))]));
+    let right = whole.project(&RegionPath::new([Projection::Index(IndexExpr::Const(1))]));
+    state
+        .write_regions(&mut values, &[(&left, &first), (&right, &second)])
+        .unwrap();
+    assert_eq!(read(&db, &mut values, &state, &left, shapes.handle), first);
+    assert_eq!(
+        read(&db, &mut values, &state, &right, shapes.handle),
+        second
+    );
+    let before = state.clone();
+    assert_eq!(
+        state.write_regions(
+            &mut values,
+            &[(&left, &old), (&region(root(&db, 99)), &old)]
+        ),
+        Err(StateError::MissingStorage(root(&db, 99)))
+    );
+    assert_eq!(state, before);
+}
+
+#[test]
+fn unknown_alias_stores_retain_origins_across_offsets_and_respect_address_spaces() {
+    let db = HirAnalysisTestDb::default();
+    let shapes = Shapes::new(&db);
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let scope = BinderScope::default();
+    let opaque = |choice, space| {
+        RegionRoot::External(ExternalSource::opaque(
+            &db,
+            OpaqueHandleRef {
+                contract: OpaqueHandleContract {
+                    handle_ty: TyId::u256(&db),
+                    target_ty: TyId::u256(&db),
+                    address_space: HandleAddressSpace::Known(space),
+                },
+                occurrence: OpaqueHandleOccurrence::Summary(choice),
+                arguments: Box::new([]),
+            },
+        ))
+    };
+    let first = opaque(0, ProviderAddressSpace::Memory);
+    let second = opaque(1, ProviderAddressSpace::Memory);
+    let storage = opaque(2, ProviderAddressSpace::Storage);
+    let original = handle(&mut values, shapes.handle, 0);
+    let pair = values.product(
+        shapes.pair,
+        &scope,
+        [
+            (FieldIndex(0), original.clone()),
+            (FieldIndex(1), original.clone()),
+        ],
+    );
+    let mut state = BorrowState::new(
+        &mut values,
+        [],
+        [
+            (first.clone(), pair.clone()),
+            (second.clone(), pair.clone()),
+            (storage.clone(), pair),
+        ],
+    );
+    let replacement = handle(&mut values, shapes.handle, 1);
+    let field = |root, index| {
+        region(root).project(&RegionPath::new([Projection::Field(FieldIndex(index))]))
+    };
+    state
+        .write_region(&mut values, &field(first.clone(), 0), &replacement)
+        .unwrap();
+    assert_eq!(
+        read(
+            &db,
+            &mut values,
+            &state,
+            &field(first.clone(), 0),
+            shapes.handle
+        ),
+        replacement
+    );
+    assert_eq!(
+        read(&db, &mut values, &state, &field(first, 1), shapes.handle),
+        original
+    );
+    for index in [0, 1] {
+        let loaded = read(
+            &db,
+            &mut values,
+            &state,
+            &field(second.clone(), index),
+            shapes.handle,
+        );
+        let ids: Vec<_> = loaded
+            .direct()
+            .iter()
+            .map(|entry| entry.payload.loan().unwrap().id)
+            .collect();
+        assert_eq!(ids, [LoanId(0), LoanId(1)]);
+        assert_eq!(
+            read(
+                &db,
+                &mut values,
+                &state,
+                &field(storage.clone(), index),
+                shapes.handle
+            ),
+            original
+        );
+    }
+}
+
+#[test]
+fn typed_reachable_storage_can_be_read_but_never_overwritten_exactly() {
+    let db = HirAnalysisTestDb::default();
+    let shapes = Shapes::new(&db);
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let source = ExternalSource::input(
+        InputSource::reachable(0),
+        ReferentContract::new(
+            &db,
+            TyId::borrow_mut_of(&db, TyId::u256(&db)),
+            HandleAddressSpace::Unspecified,
+        ),
+        true,
+    );
+    let root = RegionRoot::External(source);
+    let original = handle(&mut values, shapes.handle, 0);
+    let replacement = handle(&mut values, shapes.handle, 1);
+    let mut state = BorrowState::new(&mut values, [], [(root.clone(), original.clone())]);
+    state
+        .write_region(&mut values, &region(root.clone()), &replacement)
+        .unwrap();
+    let loaded = read(&db, &mut values, &state, &region(root), shapes.handle);
+    assert_eq!(loaded, values.join(&original, &replacement));
+}
+
+#[test]
+fn loop_feedback_separates_old_selectors_from_current_execution() {
+    let db = HirAnalysisTestDb::default();
+    let shapes = Shapes::new(&db);
+    let mut values = CapabilityValues::new(&db, ValueLimits::default());
+    let scope = BinderScope::default();
+    let selector = IndexExpr::Runtime(NValueId::from_u32(5));
+    let initial = values.from_shape(shapes.handle, &scope, |_, _, scope| {
+        vec![Guarded {
+            guard: Guard::always(scope).with_bound(selector, 2).unwrap(),
+            payload: CapabilityRef::borrow(
+                BorrowKind::Mut,
+                LoanRef {
+                    id: LoanId(0),
+                    args: [selector].into(),
+                },
+            ),
+        }]
+    });
+    let mut state = BorrowState::new(&mut values, [], [(root(&db, 0), initial)]);
+    state.forget_iteration(&mut values, |index| index == selector, |_| false);
+    let previous = state.storage().next().unwrap().1;
+    let entry = &previous.direct()[0];
+    let old = entry.payload.loan().unwrap().args[0];
+    assert_eq!(old.bound_namespace(), Some(IndexNamespace::Existential));
+    assert!(
+        entry
+            .guard
+            .with_equality(selector, IndexExpr::Const(0))
+            .unwrap()
+            .with_equality(old, IndexExpr::Const(1))
+            .is_some()
+    );
+    let stable = state.clone();
+    state.forget_iteration(&mut values, |index| index == selector, |_| false);
+    assert_eq!(state, stable);
 }

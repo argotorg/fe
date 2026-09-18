@@ -12,8 +12,8 @@ use hir::analysis::{
         layout_evidence_body,
         normalized::{
             NBlockId, NDataPath, NDataProjection, NEffectArg, NExpr, NIndex, NOperand, NPlace,
-            NPlaceBase, NRootKind, NStatement, NStatementKind, NSuccessor, NTerminator,
-            NTerminatorKind, NValueId, ReadMode,
+            NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind, NSuccessor,
+            NTerminator, NTerminatorKind, NValueId, ReadMode,
         },
         reify_runtime_const_for_ty, sem_const_ty, verify_layout_evidence_runtime_compatibility,
     },
@@ -285,8 +285,10 @@ fn expr_requires_runtime_eval_when_erased(expr: &NExpr<'_>) -> bool {
         | NExpr::Binary { .. }
         | NExpr::ScalarCast { .. }
         | NExpr::AggregateMake { .. }
+        | NExpr::MakeHandle { .. }
         | NExpr::EnumMake { .. }
         | NExpr::Borrow { .. }
+        | NExpr::MakeView { .. }
         | NExpr::GetEnumTag { .. }
         | NExpr::IsEnumVariant { .. }
         | NExpr::CodeRegionOffset { .. }
@@ -996,7 +998,9 @@ impl<'db> RmirEmitter<'db> {
                 self.lower_assign(bb, stmt_idx, stmt.source, *result, expr)
             }
             NStatementKind::Store { destination, value } => {
-                if !self.lower_reference_root_store(bb, destination, *value) {
+                if !(stmt.source.is_none()
+                    && self.lower_local_root_assignment(bb, destination, *value))
+                {
                     let place_class = self.with_current_body_cx(|cx| {
                         cx.env.normalized_place_class(cx.carriers, destination)
                     });
@@ -1016,13 +1020,12 @@ impl<'db> RmirEmitter<'db> {
                 ..
             }
         ) && !self.terminated_blocks[bb.index()]
-            && let Some(source) = stmt.source
         {
-            self.lower_layout_evidence_statement(bb, source);
+            self.lower_layout_evidence_statement(bb, stmt.id);
         }
     }
 
-    fn lower_reference_root_store(
+    fn lower_local_root_assignment(
         &mut self,
         bb: RBlockId,
         destination: &NPlace<'db>,
@@ -1031,45 +1034,53 @@ impl<'db> RmirEmitter<'db> {
         let NPlaceBase::Root(root) = destination.base else {
             return false;
         };
-        if !destination.path.is_empty() {
-            return false;
-        }
-        if !matches!(
-            destination.origin,
-            hir::analysis::semantic::SemOrigin::Synthetic
-        ) {
+        if !destination.path.is_empty()
+            || !matches!(
+                self.semantic_body
+                    .normalized
+                    .root(root)
+                    .map(|root| &root.kind),
+                Some(NRootKind::LocalSlot { .. })
+            )
+        {
             return false;
         }
         let Some(local) = self.semantic_body.root_local(root) else {
             return false;
         };
         let runtime_local = self.runtime_value(local);
-        let RuntimeLocalRoot::Ref(class) = self.locals[runtime_local.index()].root.clone() else {
-            return false;
-        };
-        if self.semantic_body.operand_local(value) != Some(local) {
-            return false;
-        }
-        if let Some(source) = self.normalized_value_temps[value.value.index()] {
-            let source = self.coerce_value(bb, source, &class);
-            if source != runtime_local {
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst: runtime_local,
-                        expr: RExpr::Use(source),
-                    },
-                );
+        let class = match &self.locals[runtime_local.index()].root {
+            RuntimeLocalRoot::Ref(class) => class.clone(),
+            RuntimeLocalRoot::None => {
+                let Some(class) = self.value_class(runtime_local).cloned() else {
+                    return true;
+                };
+                class
             }
+            RuntimeLocalRoot::Slot(_) | RuntimeLocalRoot::Ptr { .. } => return false,
+        };
+        // A normalized assignment initializes the root's representation. Its
+        // source span may name an expression; it does not make this a write
+        // through the reference (which may point into immutable constant data).
+        let source = self.read_semantic_operand(bb, value);
+        let source = self.coerce_value(bb, source, &class);
+        if source != runtime_local {
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst: runtime_local,
+                    expr: RExpr::Use(source),
+                },
+            );
         }
         true
     }
 
-    fn lower_layout_evidence_statement(&mut self, bb: RBlockId, stmt_id: SStmtId) {
+    fn lower_layout_evidence_statement(&mut self, bb: RBlockId, stmt_id: NStatementId) {
         let statement = self
             .layout_evidence
             .statement(stmt_id)
-            .expect("verified layout evidence must contain every semantic statement")
+            .expect("verified layout evidence must contain every normalized statement")
             .clone();
         debug_assert!(statement.call.is_none());
         for assignment in statement.assignments {
@@ -1114,11 +1125,14 @@ impl<'db> RmirEmitter<'db> {
             .value(result)
             .expect("normalized assignment result must exist")
             .ty;
+        let normalized_id =
+            self.semantic_body.normalized.blocks[bb.index()].statements[stmt_idx].id;
         let direct_class = self.current_expr_direct_class(bb.index(), stmt_idx, expr);
         if self.root_provider_value_load_is_lazy(dst, expr)
-            || (stmt_id.is_none()
-                && matches!(expr, NExpr::Load { place, .. } if place.path.is_empty())
-                && self.load_is_only_used_as_place(result))
+            || ((matches!(expr, NExpr::MakeView { .. })
+                || (stmt_id.is_none()
+                    && matches!(expr, NExpr::Load { place, .. } if place.path.is_empty())))
+                && self.runtime_value_is_unused(result))
         {
             self.normalized_value_temps[result.index()] = None;
             return;
@@ -1133,7 +1147,7 @@ impl<'db> RmirEmitter<'db> {
                 .unwrap_or(RuntimeCarrier::Erased);
             let temp = self.alloc_runtime_temp(result_ty, carrier);
             self.normalized_value_temps[result.index()] = Some(temp);
-            self.lower_expr_into(bb, stmt_id, temp, expr);
+            self.lower_expr_into(bb, normalized_id, result, temp, expr);
             let stored_by_normalized_root = self
                 .semantic_body
                 .normalized
@@ -1173,8 +1187,10 @@ impl<'db> RmirEmitter<'db> {
                 | NExpr::ScalarCast { .. }
                 | NExpr::ArrayRepeat { .. }
                 | NExpr::AggregateMake { .. }
+                | NExpr::MakeHandle { .. }
                 | NExpr::EnumMake { .. }
                 | NExpr::Borrow { .. }
+                | NExpr::MakeView { .. }
                 | NExpr::GetEnumTag { .. }
                 | NExpr::IsEnumVariant { .. }
                 | NExpr::Call { .. }
@@ -1208,6 +1224,7 @@ impl<'db> RmirEmitter<'db> {
                 NExpr::Const(_)
                     | NExpr::ArrayRepeat { .. }
                     | NExpr::AggregateMake { .. }
+                    | NExpr::MakeHandle { .. }
                     | NExpr::EnumMake { .. }
             ) && direct_class
                 .as_ref()
@@ -1221,7 +1238,7 @@ impl<'db> RmirEmitter<'db> {
             {
                 let dst = self.runtime_value(dst);
                 self.normalized_value_temps[result.index()] = Some(dst);
-                self.lower_expr_into(bb, stmt_id, dst, expr);
+                self.lower_expr_into(bb, normalized_id, result, dst, expr);
                 return;
             }
             let carrier = direct_class
@@ -1229,7 +1246,7 @@ impl<'db> RmirEmitter<'db> {
                 .unwrap_or(RuntimeCarrier::Erased);
             let temp = self.alloc_runtime_temp(result_ty, carrier);
             self.normalized_value_temps[result.index()] = Some(temp);
-            self.lower_expr_into(bb, stmt_id, temp, expr);
+            self.lower_expr_into(bb, normalized_id, result, temp, expr);
             if syncs_direct_carrier {
                 self.write_semantic_value(bb, dst, temp);
             }
@@ -1248,7 +1265,7 @@ impl<'db> RmirEmitter<'db> {
                     .unwrap_or(RuntimeCarrier::Erased);
                 let sink = self.alloc_runtime_temp(result_ty, RuntimeCarrier::Erased);
                 self.locals[sink.index()].carrier = carrier;
-                self.lower_expr_into(bb, stmt_id, sink, expr);
+                self.lower_expr_into(bb, normalized_id, result, sink, expr);
             }
             Some(desired) => {
                 if self.semantic_local_is_derived_place_bound_alias(dst) {
@@ -1258,7 +1275,7 @@ impl<'db> RmirEmitter<'db> {
                 if self.semantic_local_is_direct(dst) {
                     let dst = self.runtime_value(dst);
                     self.normalized_value_temps[result.index()] = Some(dst);
-                    self.lower_expr_into(bb, stmt_id, dst, expr);
+                    self.lower_expr_into(bb, normalized_id, result, dst, expr);
                     return;
                 }
                 let temp = self.alloc_runtime_temp(
@@ -1266,7 +1283,7 @@ impl<'db> RmirEmitter<'db> {
                     RuntimeCarrier::Value(desired),
                 );
                 self.normalized_value_temps[result.index()] = Some(temp);
-                self.lower_expr_into(bb, stmt_id, temp, expr);
+                self.lower_expr_into(bb, normalized_id, result, temp, expr);
                 self.write_semantic_value(bb, dst, temp);
             }
         }
@@ -1297,7 +1314,8 @@ impl<'db> RmirEmitter<'db> {
     fn lower_expr_into(
         &mut self,
         bb: RBlockId,
-        stmt_id: Option<SStmtId>,
+        stmt_id: NStatementId,
+        result: NValueId,
         dst: RLocalId,
         expr: &NExpr<'db>,
     ) {
@@ -1309,7 +1327,6 @@ impl<'db> RmirEmitter<'db> {
                 ..
             } = expr
             {
-                let stmt_id = stmt_id.expect("normalized call must retain source statement");
                 let _ = self.lower_call(bb, stmt_id, *callee, args, effect_args);
             }
             return;
@@ -1352,20 +1369,10 @@ impl<'db> RmirEmitter<'db> {
                 }
             }
             NExpr::Load { place, .. } => {
-                if self.lower_value_extract_place_read(bb, dst, place) {
-                    return;
-                }
-                let place = self.lower_place(bb, place);
-                self.lower_runtime_place_read_into(bb, dst, place, &dst_class);
+                self.lower_semantic_place_read_into(bb, dst, place, &dst_class);
             }
             NExpr::Const(const_) => {
-                let stmt_id = stmt_id.expect("normalized constant must retain source statement");
-                let bindings = self
-                    .layout_evidence
-                    .statement(stmt_id)
-                    .expect("verified layout evidence must contain every semantic statement")
-                    .const_bindings
-                    .clone();
+                let bindings = self.layout_evidence.constant_bindings[result.index()].clone();
                 self.lower_const_into(bb, dst, const_, &bindings);
             }
             NExpr::Unary { op, value } => {
@@ -1403,13 +1410,29 @@ impl<'db> RmirEmitter<'db> {
                 );
             }
             NExpr::ArrayRepeat { ty, value } => self.lower_array_repeat(bb, dst, *ty, *value),
-            NExpr::AggregateMake { ty, fields } => self.lower_aggregate_make(bb, dst, *ty, fields),
+            NExpr::AggregateMake { ty, fields }
+            | NExpr::MakeHandle {
+                ty,
+                variant: None,
+                fields,
+                ..
+            } => self.lower_aggregate_make(bb, dst, *ty, fields),
             NExpr::EnumMake {
                 enum_ty,
                 variant,
                 fields,
+            }
+            | NExpr::MakeHandle {
+                ty: enum_ty,
+                variant: Some(variant),
+                fields,
+                ..
             } => self.lower_enum_make(bb, dst, *enum_ty, *variant, fields),
-            NExpr::Borrow { place, .. } => {
+            NExpr::Borrow { place, .. } | NExpr::MakeView { place, .. } => {
+                if matches!(expr, NExpr::MakeView { .. }) && !dst_class.is_transport() {
+                    self.lower_semantic_place_read_into(bb, dst, place, &dst_class);
+                    return;
+                }
                 let place = self.lower_place(bb, place);
                 let value = self.lower_place_addr_of_for_class(
                     self.locals[dst.index()].semantic_ty,
@@ -1467,7 +1490,6 @@ impl<'db> RmirEmitter<'db> {
                 effect_args,
                 ..
             } => {
-                let stmt_id = stmt_id.expect("normalized call must retain source statement");
                 let value = self.lower_call(bb, stmt_id, *callee, args, effect_args);
                 if self.terminated_blocks[bb.index()] {
                     return;
@@ -2532,6 +2554,20 @@ impl<'db> RmirEmitter<'db> {
         }
     }
 
+    fn lower_semantic_place_read_into(
+        &mut self,
+        bb: RBlockId,
+        dst: RLocalId,
+        place: &NPlace<'db>,
+        class: &RuntimeClass<'db>,
+    ) {
+        if self.lower_value_extract_place_read(bb, dst, place) {
+            return;
+        }
+        let place = self.lower_place(bb, place);
+        self.lower_runtime_place_read_into(bb, dst, place, class);
+    }
+
     fn lower_value_extract_place_read(
         &mut self,
         bb: RBlockId,
@@ -2547,7 +2583,9 @@ impl<'db> RmirEmitter<'db> {
             }
             NPlaceBase::Root(root_id) => match self.semantic_body.normalized.root(root_id) {
                 Some(root) => match &root.kind {
-                    NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
+                    NRootKind::LocalSlot { .. }
+                    | NRootKind::Temporary { .. }
+                    | NRootKind::ParamPlace { .. } => {
                         let Some(local) = self.semantic_body.root_local(root_id) else {
                             return false;
                         };
@@ -3220,7 +3258,7 @@ impl<'db> RmirEmitter<'db> {
     fn lower_call(
         &mut self,
         bb: RBlockId,
-        stmt_id: SStmtId,
+        stmt_id: NStatementId,
         callee: SemanticCalleeRef<'db>,
         args: &[NOperand],
         effect_args: &[NEffectArg<'db>],
@@ -3228,7 +3266,7 @@ impl<'db> RmirEmitter<'db> {
         let layout_statement = self
             .layout_evidence
             .statement(stmt_id)
-            .expect("verified layout evidence must contain every semantic statement")
+            .expect("verified layout evidence must contain every normalized statement")
             .clone();
         let layout_call = layout_statement.call.as_ref();
         for assignment in &layout_statement.assignments {
@@ -5131,9 +5169,9 @@ impl<'db> RmirEmitter<'db> {
             })
     }
 
-    fn load_is_only_used_as_place(&self, value: NValueId) -> bool {
-        // A boundary may consume a load's source address without materializing
-        // its value. Preserve the SSA home and omit only those unused snapshots.
+    fn runtime_value_is_unused(&self, value: NValueId) -> bool {
+        // A boundary can consume the defining place directly. Preserve the SSA
+        // home, but omit a snapshot or view address that no runtime consumer uses.
         let local = self
             .semantic_body
             .value_local(value)
@@ -5240,7 +5278,9 @@ impl<'db> RmirEmitter<'db> {
             return false;
         };
         match expr {
-            NExpr::Load { place, .. } | NExpr::Borrow { place, .. } => place == &dst_place,
+            NExpr::Load { place, .. }
+            | NExpr::Borrow { place, .. }
+            | NExpr::MakeView { place, .. } => place == &dst_place,
             NExpr::Forward { src } => {
                 self.semantic_body
                     .operand_local(*src)
@@ -5266,6 +5306,7 @@ impl<'db> RmirEmitter<'db> {
             | NExpr::ScalarCast { .. }
             | NExpr::ArrayRepeat { .. }
             | NExpr::AggregateMake { .. }
+            | NExpr::MakeHandle { .. }
             | NExpr::EnumMake { .. }
             | NExpr::GetEnumTag { .. }
             | NExpr::IsEnumVariant { .. }
@@ -5386,7 +5427,9 @@ impl<'db> RmirEmitter<'db> {
                     .or_else(|| self.try_semantic_place(bb, local))?
             }
             NPlaceBase::Root(root) => match &self.semantic_body.normalized.root(root)?.kind {
-                NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
+                NRootKind::LocalSlot { .. }
+                | NRootKind::Temporary { .. }
+                | NRootKind::ParamPlace { .. } => {
                     let root = self.semantic_place_root(self.semantic_body.root_local(root)?)?;
                     RuntimePlace {
                         root,

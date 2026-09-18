@@ -139,11 +139,11 @@ fn compile_effect_arg_plan<'db>(
     arg: &NEffectArg<'db>,
     boundary_sites: &mut BoundarySiteAllocator,
 ) -> CompiledEffectArgPlan<'db> {
-    let space = resolved_effect_arg_address_space(db, body, arg);
     let binding_plan = runtime_effect_binding_plan_for_binding_idx(db, semantic, arg.binding_idx);
     if binding_plan.is_none() && effect_arg_is_runtime_zst(db, body, type_env, arg) {
         return CompiledEffectArgPlan::Erased;
     }
+    let space = resolved_effect_arg_address_space(db, body, arg);
     let boundary =
         desired_runtime_effect_arg_boundary(db, type_env, arg, binding_plan.as_ref(), space);
     if boundary.is_none() && arg.provider.is_none() && arg.target_ty.is_none() {

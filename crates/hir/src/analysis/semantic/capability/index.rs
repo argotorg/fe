@@ -1,11 +1,11 @@
 //! Lexically scoped symbolic indices. Binder numbers are lexical levels, never allocator IDs.
 use num_bigint::BigUint;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     analysis::{
         HirAnalysisDb,
-        semantic::normalized::{NIndex, NValueId},
+        semantic::normalized::{NBlockId, NIndex, NValueId},
         ty::{
             const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
             fold::{TyFoldable, TyFolder},
@@ -34,9 +34,19 @@ pub struct BoundIndex {
 pub enum IndexExpr<'db> {
     Const(usize),
     Runtime(NValueId),
+    Iteration(NBlockId),
     FormalValue(u32),
     TypeConst(ConstTyId<'db>),
     Bound(BoundIndex),
+}
+
+impl IndexExpr<'_> {
+    pub fn bound_namespace(self) -> Option<IndexNamespace> {
+        match self {
+            Self::Bound(index) => Some(index.namespace),
+            _ => None,
+        }
+    }
 }
 
 impl<'db> From<NIndex> for IndexExpr<'db> {
@@ -88,6 +98,68 @@ impl BinderScope {
             })
             .collect();
         IndexSubst::new(self, &destination, entries).expect("fresh binders are scoped")
+    }
+
+    /// Extra existential variables are owned by a clause, not by its surrounding
+    /// value or loan family. Other namespaces must match the lexical parent.
+    pub fn existential_extension_of(&self, parent: &Self) -> Option<u32> {
+        self.counts
+            .iter()
+            .zip(parent.counts)
+            .enumerate()
+            .all(|(namespace, (count, parent))| {
+                namespace == IndexNamespace::Existential as usize || *count == parent
+            })
+            .then(|| {
+                self.counts[IndexNamespace::Existential as usize]
+                    .checked_sub(parent.counts[IndexNamespace::Existential as usize])
+            })
+            .flatten()
+    }
+
+    pub fn canonical_existentials<'db>(
+        &self,
+        parent: &Self,
+        used: impl IntoIterator<Item = IndexExpr<'db>>,
+    ) -> IndexSubst<'db> {
+        self.existential_extension_of(parent)
+            .expect("clause scope must extend its owner");
+        let used: BTreeSet<_> = used.into_iter().collect();
+        let mut destination = parent.clone();
+        let entries = self
+            .variables()
+            .filter(|index| parent.validate(*index).is_err())
+            .map(|index| {
+                let target = if used.contains(&index) {
+                    let (scope, target) = destination.bind(IndexNamespace::Existential);
+                    destination = scope;
+                    target
+                } else {
+                    // This variable occurs in neither the guard nor the payload.
+                    IndexExpr::Const(0)
+                };
+                (index, target)
+            })
+            .collect::<Vec<_>>();
+        IndexSubst::new(self, &destination, entries).expect("canonical clause binders")
+    }
+
+    /// Open a clause with fresh witnesses while preserving all surrounding
+    /// lexical variables. Independent clauses never share an existential by ID.
+    pub fn open_existentials<'db>(&self, parent: &Self, destination: &Self) -> IndexSubst<'db> {
+        self.existential_extension_of(parent)
+            .expect("clause scope must extend its owner");
+        let mut destination = destination.clone();
+        let entries = self
+            .variables()
+            .filter(|index| parent.validate(*index).is_err())
+            .map(|index| {
+                let (scope, target) = destination.bind(IndexNamespace::Existential);
+                destination = scope;
+                (index, target)
+            })
+            .collect::<Vec<_>>();
+        IndexSubst::new(self, &destination, entries).expect("fresh clause witnesses")
     }
 
     pub fn validate<'db>(&self, index: IndexExpr<'db>) -> Result<(), IndexError<'db>> {
@@ -183,6 +255,15 @@ impl<'db> IndexSubst<'db> {
             &next.destination,
             keys.map(|index| (index, next.apply(self.apply(index)))),
         )
+    }
+
+    pub fn under_existentials(&self, scope: &BinderScope) -> Self {
+        let count = scope
+            .existential_extension_of(&self.source)
+            .expect("owned existential scope");
+        (0..count).fold(self.clone(), |substitution, _| {
+            substitution.under_binder(IndexNamespace::Existential)
+        })
     }
 
     /// Lift through a new lexical binder without capturing destination variables.

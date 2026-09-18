@@ -10,6 +10,7 @@ use crate::{
             adt_def::{AdtRef, instantiate_adt_field_shape},
             const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
             fold::TyFoldable,
+            normalize::normalize_ty,
             trait_resolution::PredicateListId,
             ty_def::{TyData, TyId},
         },
@@ -192,6 +193,9 @@ struct ShapeCx<'db> {
 
 impl<'db> ShapeCx<'db> {
     fn build(&mut self, ty: TyId<'db>) -> Result<ShapeId<'db>, ShapeError<'db>> {
+        // Fields may contain associated projections even when their enclosing
+        // nominal type is normalized. Use the same semantic types as the IR.
+        let ty = normalize_ty(self.db, ty, self.scope, self.assumptions);
         let direct = capability_semantics(self.db, self.scope, self.assumptions, ty)
             .map_err(|error| ShapeError::UnresolvedCapability(error.0))?;
         if direct.is_some_and(|semantics| matches!(semantics.class, CapabilityClass::Borrow(_))) {

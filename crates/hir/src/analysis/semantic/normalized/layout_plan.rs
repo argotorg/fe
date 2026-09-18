@@ -4,7 +4,8 @@ use rustc_hash::FxHashSet;
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        LayoutBackingProjection, SLocalId, SStmtId, SemOrigin, SemanticBody,
+        LayoutBackingProjection, SLocal, SLocalId, SStmtId, SemOrigin, SemanticBody,
+        SemanticLocalRole, ValueProvenance,
         normalized::{
             NDataPath, NDataProjection, NExpr, NIndex, NRootId, NRootKind, NStatementKind,
             NValueDefinition, NValueId, NormalizedBody,
@@ -50,6 +51,60 @@ impl NLayoutPlan<'_> {
         self.use_backings
             .iter()
             .filter(move |backing| backing.value == value)
+    }
+}
+
+/// Shared runtime homes for semantic values and their layout evidence.
+/// Source provenance never gives a synthetic value permission to overwrite its source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NLayoutLocals<'db> {
+    pub locals: Vec<SLocal<'db>>,
+    pub value_locals: Vec<SLocalId>,
+}
+
+impl<'db> NLayoutLocals<'db> {
+    pub fn new(
+        body: &NormalizedBody<'db>,
+        plan: &NLayoutPlan<'db>,
+        source: &SemanticBody<'db>,
+    ) -> Self {
+        let mut locals = source.locals.clone();
+        let value_locals = body
+            .values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                if let NValueDefinition::Statement { block, statement } = value.definition
+                    && body.blocks[block.index()].statements[statement as usize]
+                        .source
+                        .is_none()
+                {
+                    let local = SLocalId::new(locals.len());
+                    locals.push(SLocal {
+                        ty: value.ty,
+                        mutability: value.mutability,
+                        source: None,
+                        role: SemanticLocalRole::DirectValue {
+                            provenance: ValueProvenance::Ordinary,
+                        },
+                        snapshot_source: None,
+                        layout_backing_sources: Vec::new(),
+                    });
+                    local
+                } else {
+                    plan.value_source(NValueId::new(index))
+                        .expect("verified normalized value must have source metadata")
+                }
+            })
+            .collect();
+        Self {
+            locals,
+            value_locals,
+        }
+    }
+
+    pub fn value_local(&self, value: NValueId) -> Option<SLocalId> {
+        self.value_locals.get(value.index()).copied()
     }
 }
 
@@ -178,17 +233,24 @@ pub fn verify_normalized_layout_plan<'db>(
         }
         if let Some(local) = representation.source_local {
             verify_source_local(source, local)?;
-            if body.roots[index].ty
-                != body
+            let expected = match body.roots[index].kind {
+                NRootKind::Temporary { value } => body.values[value.index()].ty,
+                NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
+                    normalized_source_value_ty(db, body, source, local)
+                }
+                NRootKind::Provider { .. } | NRootKind::CapabilityRepresentation { .. } => body
                     .owner
-                    .normalized_ty(db, source.locals[local.index()].ty)
-            {
+                    .normalized_ty(db, source.locals[local.index()].ty),
+            };
+            if body.roots[index].ty != expected {
                 return Err(NormalizedLayoutPlanVerifyError::RootType(root));
             }
         }
         let root_kind = &body.roots[index].kind;
         let valid_source = match root_kind {
-            NRootKind::Provider { .. } => representation.source_local.is_none(),
+            NRootKind::Provider { .. } | NRootKind::Temporary { .. } => {
+                representation.source_local.is_none()
+            }
             NRootKind::LocalSlot { .. } | NRootKind::ParamPlace { .. } => {
                 representation.source_local.is_some()
             }
@@ -265,10 +327,10 @@ fn value_retains_source_type(body: &NormalizedBody<'_>, value: NValueId) -> bool
                                 | NExpr::Binary { .. }
                                 | NExpr::ArrayRepeat { .. }
                                 | NExpr::AggregateMake { .. }
+                                | NExpr::MakeHandle { .. }
                                 | NExpr::EnumMake { .. }
                                 | NExpr::GetEnumTag { .. }
                                 | NExpr::IsEnumVariant { .. }
-                                | NExpr::Call { .. }
                                 | NExpr::CodeRegionOffset { .. }
                                 | NExpr::CodeRegionLen { .. }
                                 | NExpr::StructuralRepack { .. },
