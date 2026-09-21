@@ -1,10 +1,12 @@
+use cranelift_entity::EntityRef;
+
 use crate::{
     analysis::{
         HirAnalysisDb,
         place::PlaceBase,
         semantic::{
-            Mutability, SEffectArg, SEffectArgValue, SExpr, SOperand, SPlace, SStmtKind, SValueId,
-            SemOrigin, provisional_provider_binding_for_instance_effect,
+            Mutability, SEffectArg, SEffectArgValue, SExpr, SLocalId, SOperand, SPlace, SStmtKind,
+            SValueId, SemOrigin, provisional_provider_binding_for_instance_effect,
             provisional_provider_idx_for_requirement,
             resolved_provider_binding_for_instance_effect,
         },
@@ -31,6 +33,7 @@ use super::body::SmirLowerCtxt;
 #[derive(Clone)]
 pub(super) enum WithBindingSource<'db> {
     Place(SPlace<'db>),
+    Temporary(SLocalId),
     Value(SOperand),
 }
 
@@ -44,12 +47,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         for binding in bindings {
             let value_expr = binding.value;
             let source = if self.is_root_provider_expr(value_expr) {
-                let place = if let Some(place) = self.typed_body.expr_place(value_expr) {
-                    self.capture_place(place)
+                if let Some(place) = self.typed_body.expr_place(value_expr) {
+                    WithBindingSource::Place(self.capture_place(place))
                 } else {
                     let value = self.lower_expr(value_expr);
                     let local =
-                        self.alloc_local(self.expr_ty(value_expr), Mutability::Mutable, None);
+                        self.alloc_local(self.expr_ty(value_expr), Mutability::Immutable, None);
                     self.push_stmt(
                         SemOrigin::Expr(value_expr),
                         SStmtKind::Assign {
@@ -57,9 +60,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                             expr: SExpr::UseValue(SOperand::expr(value, value_expr)),
                         },
                     );
-                    SPlace::new(local)
-                };
-                WithBindingSource::Place(place)
+                    WithBindingSource::Temporary(local)
+                }
             } else {
                 let value = self.lower_expr(value_expr);
                 WithBindingSource::Value(SOperand::expr(value, value_expr))
@@ -144,6 +146,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         });
         let value = match source {
             Some(WithBindingSource::Place(place)) => SEffectArgValue::Place(place),
+            Some(WithBindingSource::Temporary(local)) => {
+                // Only owned temporaries acquire mutability from their uses. Read-only
+                // providers can remain const-backed, and captured places keep their access.
+                if arg.required_mut {
+                    self.locals[local.index()].mutability = Mutability::Mutable;
+                }
+                SEffectArgValue::Place(SPlace::new(local))
+            }
             Some(WithBindingSource::Value(value)) => {
                 if matches!(
                     arg.pass_mode,
