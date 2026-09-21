@@ -4345,3 +4345,54 @@ fn wide_function_arguments_at_all_optimization_levels() {
         assert_eq!(exit_code, 0, "wide calls failed at -O {level}:\n{output}");
     }
 }
+
+#[test]
+fn payable_returns_at_all_optimization_levels() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fe_test/payable_return.fe");
+    // The fixture test covers the default level (1).
+    for level in ["0", "2", "s"] {
+        let (output, exit_code) = run_fe_main(&[
+            "test",
+            "--jobs",
+            "1",
+            "--optimize",
+            level,
+            fixture.to_str().expect("fixture path utf8"),
+        ]);
+        assert_eq!(
+            exit_code, 0,
+            "payable returns failed at -O {level}:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_build_payable_return_abi() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fe_test/payable_return.fe");
+    let out = tempdir().expect("output directory");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--standalone",
+        "--out-dir",
+        out.path().to_str().unwrap(),
+        fixture.to_str().unwrap(),
+    ]);
+    assert_eq!(exit_code, 0, "payable build failed:\n{output}");
+    let abi: Value = serde_json::from_str(
+        &fs::read_to_string(out.path().join("PayableReturnBox.abi.json")).unwrap(),
+    )
+    .unwrap();
+    let deposit = abi
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["type"] == "function" && entry["name"] == "deposit")
+        .expect("deposit ABI entry");
+    assert_eq!(deposit["stateMutability"], "payable");
+    assert_eq!(
+        deposit["outputs"],
+        serde_json::json!([{"name": "", "type": "uint256"}])
+    );
+}

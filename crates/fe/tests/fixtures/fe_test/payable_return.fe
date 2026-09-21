@@ -1,0 +1,58 @@
+use std::evm::{Ctx, Evm}
+
+msg PayableReturnMsg {
+    #[selector = sol("deposit()")]
+    Deposit -> u256,
+    #[selector = sol("pair(uint256)")]
+    Pair { value: u256 } -> (u256, u256),
+    #[selector = sol("label()")]
+    Label -> String<7>,
+}
+
+pub contract PayableReturnBox uses (ctx: Ctx) {
+    recv PayableReturnMsg {
+        #[payable]
+        Deposit -> u256 uses ctx { ctx.value() }
+
+        #[payable]
+        Pair { value } -> (u256, u256) uses ctx { (value, ctx.value()) }
+
+        #[payable]
+        Label -> String<7> { "deposit" }
+    }
+}
+
+#[test]
+fn test_payable_scalar_zero_value() uses (evm: mut Evm) {
+    let addr = evm.create2<PayableReturnBox>(value: 0, args: (), salt: 0)
+    let received = evm.call(addr, gas: 100000, value: 0, message: PayableReturnMsg::Deposit {})
+    assert!(received == 0)
+}
+
+#[test(balance = 1000)]
+fn test_payable_scalar_with_value() uses (evm: mut Evm) {
+    let addr = evm.create2<PayableReturnBox>(value: 0, args: (), salt: 0)
+    let received = evm.call(addr, gas: 100000, value: 123, message: PayableReturnMsg::Deposit {})
+    assert!(received == 123)
+    assert!(evm.balance(addr) == 123)
+}
+
+#[test(balance = 1000)]
+fn test_payable_tuple_with_value() uses (evm: mut Evm) {
+    let addr = evm.create2<PayableReturnBox>(value: 0, args: (), salt: 0)
+    let (value, received) = evm.call(
+        addr, gas: 100000, value: 456, message: PayableReturnMsg::Pair { value: 42 },
+    )
+    assert!(value == 42)
+    assert!(received == 456)
+    assert!(evm.balance(addr) == 456)
+}
+
+#[test(balance = 1000)]
+fn test_payable_dynamic_return() uses (evm: mut Evm) {
+    let addr = evm.create2<PayableReturnBox>(value: 0, args: (), salt: 0)
+    let label = evm.call(addr, gas: 100000, value: 7, message: PayableReturnMsg::Label {})
+    let expected: String<7> = "deposit"
+    assert!(label == expected)
+    assert!(evm.balance(addr) == 7)
+}
