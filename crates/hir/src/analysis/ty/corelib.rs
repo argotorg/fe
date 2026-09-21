@@ -649,16 +649,16 @@ pub fn intrinsic_contract<'db>(
                 if (*name == "__bitcast" || numeric_extern_intrinsic(name).is_some())
                     && lib_func_matches(db, func, &format!("core::{}::{name}", path[0])))
         });
-    // These exact std declarations call the host C character-I/O interface.
-    // They can change host stream state, but cannot access or retain Fe memory.
+    // These exact std declarations call host C I/O and process accounting.
+    // They can observe/change host state, but cannot access or retain Fe memory.
     // A same-named user extern or a scalar-only signature carries no such trust.
-    let host_io = func.top_mod(db).ingot(db).kind(db) == IngotKind::Std
+    let host_import = func.top_mod(db).ingot(db).kind(db) == IngotKind::Std
         && func.body(db).is_none()
-        && ["std::io::getchar", "std::io::putchar"]
+        && ["std::io::getchar", "std::io::putchar", "std::native::clock"]
             .iter()
             .any(|path| lib_func_matches(db, func, path));
     if numeric
-        || host_io
+        || host_import
         || [
             "core::intrinsic::size_of",
             "core::intrinsic::contract_field_slot",
