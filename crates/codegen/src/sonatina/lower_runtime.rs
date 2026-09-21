@@ -40,9 +40,9 @@ use sonatina_ir::{
         data::{
             Alloca, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
-            EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, InsertValue, Memzero, Mload,
-            Mstore, ObjAlloc, ObjIndex, ObjInitConst, ObjLoad, ObjMaterializeHeap, ObjProj,
-            ObjStore, SymAddr, SymSize, SymbolRef,
+            EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, InsertValue, MemAllocDynamic,
+            Memzero, Mload, Mstore, ObjAlloc, ObjIndex, ObjInitConst, ObjLoad, ObjMaterializeHeap,
+            ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
         },
         evm::{
             EvmAddMod, EvmAddress, EvmBalance, EvmBaseFee, EvmBlobBaseFee, EvmBlobHash,
@@ -1794,6 +1794,21 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         Ok(Lowered::Value(value))
     }
 
+    fn allocate_bytes(&mut self, size: ValueId, pointee: Type) -> Result<ValueId, LowerError> {
+        let ptr_ty = self.fb.ptr_type(pointee);
+        Ok(if self.module.is_native_target() {
+            self.fb.insert_inst(
+                MemAllocDynamic::new(self.module.required_inst::<MemAllocDynamic>()?, size),
+                ptr_ty,
+            )
+        } else {
+            self.fb.insert_inst(
+                EvmMalloc::new(self.module.required_inst::<EvmMalloc>()?, size),
+                ptr_ty,
+            )
+        })
+    }
+
     fn alloc_layout_map_words(&mut self, words: usize) -> Result<ValueId, LowerError> {
         let bytes = words.checked_mul(32).ok_or_else(|| {
             LowerError::Internal(format!("layout-map allocation overflow: {words} words"))
@@ -1804,11 +1819,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             ))
         })?;
         let size = self.index_value(bytes);
-        let ptr_ty = self.fb.ptr_type(Type::I8);
-        let ptr = self.fb.insert_inst(
-            EvmMalloc::new(self.module.required_inst::<EvmMalloc>()?, size),
-            ptr_ty,
-        );
+        let ptr = self.allocate_bytes(size, Type::I8)?;
         self.coerce_value_to_ty(ptr, Type::I256)
     }
 
@@ -2495,11 +2506,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             RuntimeBuiltin::Malloc { size } => {
                 let size = self.local_value(*size)?;
-                let ptr_ty = self.fb.ptr_type(Type::I8);
-                self.fb.insert_inst(
-                    EvmMalloc::new(self.module.required_inst::<EvmMalloc>()?, size),
-                    ptr_ty,
-                )
+                self.allocate_bytes(size, Type::I8)?
             }
             RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
                 let ptr = self.local_value(*ptr)?;
@@ -4554,11 +4561,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             )),
             AddressSpaceKind::Code => {
                 let len = self.fb.make_imm_value(I256::from(32u64));
-                let ptr_ty = self.fb.ptr_type(Type::I8);
-                let ptr = self.fb.insert_inst(
-                    EvmMalloc::new(self.module.required_inst::<EvmMalloc>()?, len),
-                    ptr_ty,
-                );
+                let ptr = self.allocate_bytes(len, Type::I8)?;
                 let ptr = self.coerce_value_to_ty(ptr, Type::I256)?;
                 self.fb.insert_inst_no_result(EvmCodeCopy::new(
                     self.module.required_inst::<EvmCodeCopy>()?,

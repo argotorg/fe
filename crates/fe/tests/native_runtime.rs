@@ -295,3 +295,57 @@ fn native_runner_rejects_evm_attributes_and_trace_options() {
         );
     }
 }
+
+#[test]
+fn native_reference_fields_and_slots_preserve_referent_identity() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("reference_identity.fe");
+    fs::write(
+        &source,
+        r#"
+use core::ptr
+struct Handle { value: mut i32, calls: i32 }
+fn step() uses (handle: mut Handle) {
+    handle.value += 1
+    handle.calls += 1
+}
+fn replace(slot: *mut i32, value: mut i32) { *slot = value }
+fn increment(slot: *mut i32) { *slot += 1 }
+pub fn main() -> i32 {
+    let mut first: i32 = 20
+    let mut second: i32 = 40
+    let mut handle = Handle { value: mut first, calls: 0 }
+    with (handle) {
+        step()
+        step()
+    }
+    core::assert(handle.calls == 2)
+    core::assert(handle.value == 22)
+    let slot = ptr::alloc<mut i32>()
+    *slot = mut first
+    increment(slot)
+    replace(slot, value: mut second)
+    increment(slot)
+    // The heap slot must not retain a reference to a local when main returns.
+    let retained = ptr::alloc<i32>()
+    *retained = 0
+    replace(slot, value: mut *retained)
+    core::assert(first == 23)
+    core::assert(second == 41)
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        assert!(
+            Command::new(out.join("reference_identity"))
+                .status()
+                .unwrap()
+                .success(),
+            "reference identity at O{level}"
+        );
+    }
+}

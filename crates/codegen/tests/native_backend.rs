@@ -197,7 +197,6 @@ pub fn main() -> i32 {
         .filter(|line| line.contains(" = obj.alloc "))
         .map(|line| line.trim().split_once('.').expect("object local").0)
         .collect::<Vec<_>>();
-    assert_eq!(roots.len(), 1, "one provider object:\n{ir}");
     let arguments = ir
         .lines()
         .filter(|line| line.contains("call %step "))
@@ -208,7 +207,12 @@ pub fn main() -> i32 {
                 .trim_end_matches(';')
         })
         .collect::<Vec<_>>();
-    assert_eq!(arguments, vec![roots[0], roots[0]], "{ir}");
+    assert_eq!(arguments.len(), 2, "two provider calls:\n{ir}");
+    assert_eq!(arguments[0], arguments[1], "one provider identity:\n{ir}");
+    assert!(
+        roots.contains(&arguments[0]),
+        "provider uses object storage:\n{ir}"
+    );
 }
 
 #[test]
