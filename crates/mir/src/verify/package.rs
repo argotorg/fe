@@ -5,6 +5,7 @@ use crate::{
     runtime::{
         DispatchDefault, RExpr, RStmt, RTerminator, ResolvedCodeRegion, RuntimeCodeRegion,
         RuntimeFunctionOwner, RuntimeLinkage, RuntimeObject, RuntimePackage, RuntimeProgramView,
+        RuntimeReturnPlan,
         RuntimeSyntheticSpec,
         code_region::{code_region_runtime_entry, code_region_section_name, code_region_symbol},
     },
@@ -83,7 +84,7 @@ pub fn verify_runtime_package<'db>(
         let body = function.instance(db).body(db);
         verify_runtime_body(db, &view, &body)?;
         verify_code_region_refs(&view, &body)?;
-        verify_synthetic_function(owner, &body)?;
+        verify_synthetic_function(db, owner, &body)?;
     }
     for region in package.code_regions(db) {
         if !seen_symbols.insert(region.symbol(db).clone()) {
@@ -134,6 +135,7 @@ fn verify_code_region_refs<'db>(
 }
 
 fn verify_synthetic_function<'db>(
+    db: &'db dyn MirDb,
     owner: RuntimeFunctionOwner<'db>,
     body: &crate::runtime::RuntimeBody<'db>,
 ) -> Result<(), VerifyError<'db>> {
@@ -200,14 +202,42 @@ fn verify_synthetic_function<'db>(
             RuntimeSyntheticSpec::ContractInitRoot { .. } => {
                 verify_has_terminator(body, |term| matches!(term, RTerminator::ReturnData { .. }))
             }
-            RuntimeSyntheticSpec::ContractRecvAbi { .. } => verify_has_terminator(body, |term| {
-                matches!(
-                    term,
-                    RTerminator::ReturnData { .. }
-                        | RTerminator::Revert { .. }
-                        | RTerminator::RevertEmpty
-                )
-            }),
+            RuntimeSyntheticSpec::ContractRecvAbi { plan } => {
+                // Call preparation may specialize runtime carriers, but must retain
+                // the planned semantic helper, including its return type arguments.
+                let expected = match plan.ret {
+                    RuntimeReturnPlan::Value { return_value, .. } => {
+                        return_value.key(db).semantic(db)
+                    }
+                    RuntimeReturnPlan::Unit => None,
+                };
+                for block in &body.blocks {
+                    if matches!(plan.ret, RuntimeReturnPlan::Value { .. })
+                        && matches!(block.terminator, RTerminator::ReturnData { .. })
+                    {
+                        return Err(VerifyError::InvalidReturnClass);
+                    }
+                    if let RTerminator::TerminalCall { callee, .. } = &block.terminator
+                        && (expected.is_none() || callee.key(db).semantic(db) != expected)
+                    {
+                        return Err(VerifyError::InvalidReturnClass);
+                    }
+                }
+                if matches!(plan.ret, RuntimeReturnPlan::Value { .. }) {
+                    return verify_has_terminator(body, |term| {
+                        matches!(term, RTerminator::TerminalCall { .. })
+                    });
+                }
+                verify_has_terminator(body, |term| {
+                    matches!(
+                        term,
+                        RTerminator::ReturnData { .. }
+                            | RTerminator::TerminalCall { .. }
+                            | RTerminator::Revert { .. }
+                            | RTerminator::RevertEmpty
+                    )
+                })
+            }
             RuntimeSyntheticSpec::MainRoot { .. }
             | RuntimeSyntheticSpec::TestRoot { .. }
             | RuntimeSyntheticSpec::ManualContractRoot { .. }
@@ -332,4 +362,135 @@ fn resolve_package_object<'db>(
         .iter()
         .find(|candidate| candidate.name(db) == name)
         .copied()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::InputDb;
+    use driver::DriverDataBase;
+    use url::Url;
+
+    #[test]
+    fn recv_terminal_calls_must_use_the_planned_semantic_return_helper() {
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///recv_return_verifier.fe").unwrap(),
+            Some(
+                r#"
+use std::abi::sol
+msg M {
+    #[selector = sol("wide()")]
+    Wide -> String<8>,
+    #[selector = sol("narrow()")]
+    Narrow -> String<4>,
+    #[selector = sol("paid()")]
+    Paid -> String<8>,
+}
+pub contract C {
+    recv M {
+        Wide -> String<8> { "COOL" }
+        Narrow -> String<4> { "COOL" }
+        #[payable]
+        Paid -> String<8> { "COOL" }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let package = crate::build_runtime_package(&db, db.top_mod(file)).unwrap();
+        let functions = package.functions(&db);
+        let wrappers: Vec<_> = functions
+            .iter()
+            .filter(|f| {
+                matches!(
+                    f.owner(&db),
+                    RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::ContractRecvAbi { .. })
+                )
+            })
+            .collect();
+        assert_eq!(wrappers.len(), 3);
+        let root = functions
+            .iter()
+            .find(|f| {
+                matches!(
+                    f.owner(&db),
+                    RuntimeFunctionOwner::Synthetic(
+                        RuntimeSyntheticSpec::ContractRuntimeRoot { .. }
+                    )
+                )
+            })
+            .unwrap()
+            .instance(&db);
+        let view = PackageView { db: &db, package };
+        let mut guarded = false;
+        let mut payable = false;
+        for wrapper in &wrappers {
+            let owner = wrapper.owner(&db);
+            let original = wrapper.instance(&db).body(&db).clone();
+            assert!(verify_synthetic_function(&db, owner.clone(), &original).is_ok());
+            guarded |= original
+                .blocks
+                .iter()
+                .any(|b| matches!(b.terminator, RTerminator::RevertEmpty));
+            payable |= !original
+                .blocks
+                .iter()
+                .any(|b| matches!(b.terminator, RTerminator::RevertEmpty));
+            let index = original
+                .blocks
+                .iter()
+                .position(|b| matches!(b.terminator, RTerminator::TerminalCall { .. }))
+                .unwrap();
+            let RTerminator::TerminalCall { callee, ref args } = original.blocks[index].terminator
+            else {
+                unreachable!()
+            };
+            let other = wrappers
+                .iter()
+                .filter_map(|f| {
+                    f.instance(&db)
+                        .body(&db)
+                        .blocks
+                        .iter()
+                        .find_map(|b| match b.terminator {
+                            RTerminator::TerminalCall { callee: other, .. }
+                                if other.key(&db).semantic(&db)
+                                    != callee.key(&db).semantic(&db) =>
+                            {
+                                Some(other)
+                            }
+                            _ => None,
+                        })
+                })
+                .next()
+                .unwrap();
+            for replacement in [
+                RTerminator::ReturnData {
+                    offset: crate::runtime::RLocalId::from_u32(0),
+                    len: crate::runtime::RLocalId::from_u32(0),
+                },
+                RTerminator::RevertEmpty,
+                RTerminator::Stop,
+            ] {
+                let mut body = original.clone();
+                body.blocks[index].terminator = replacement;
+                assert!(verify_synthetic_function(&db, owner.clone(), &body).is_err());
+            }
+            for (wrong, wrong_args) in [(root, Box::default()), (other, args.clone())] {
+                let mut body = original.clone();
+                body.blocks[index].terminator = RTerminator::TerminalCall {
+                    callee: wrong,
+                    args: wrong_args,
+                };
+                // These calls are structurally valid; only the wrapper's return
+                // plan reveals the wrong helper or generic specialization.
+                assert!(verify_runtime_body(&db, &view, &body).is_ok());
+                assert!(verify_synthetic_function(&db, owner.clone(), &body).is_err());
+            }
+        }
+        assert!(guarded && payable);
+    }
 }
