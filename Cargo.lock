@@ -2255,6 +2255,7 @@ dependencies = [
  "gix",
  "glob",
  "hex",
+ "num-bigint",
  "petgraph",
  "protobuf",
  "rayon",
