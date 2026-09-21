@@ -85,16 +85,15 @@ math = true
     .unwrap();
     fs::write(
         root.join("app/src/helper.fe"),
-        "extern { fn abs(value: i32) -> i32 }\npub fn answer() -> i32 { abs(value: -math::answer()) }\n#[test]\nfn nested_test() { core::assert(answer() == 42) }\n",
+        "use std::io::{Write, host, write_char}\npub fn answer() -> i32 {\n with (Write = host()) { write_char(65) }\n math::answer()\n}\n#[test]\nfn nested_test() { core::assert(answer() == 42) }\n",
     )
     .unwrap();
     for level in ["0", "1"] {
         let out = root.join(format!("out-{level}"));
         build(root, &out, level, &["--ingot", "app"]);
-        assert_eq!(
-            Command::new(out.join("app")).status().unwrap().code(),
-            Some(42)
-        );
+        let result = Command::new(out.join("app")).output().unwrap();
+        assert_eq!(result.status.code(), Some(42));
+        assert_eq!(result.stdout, b"A");
         let ir = fs::read_to_string(out.join("app.native.sona")).unwrap();
         assert!(!ir.contains("unused"));
         build(root, &out, level, &[]);

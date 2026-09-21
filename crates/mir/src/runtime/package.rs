@@ -2590,8 +2590,12 @@ mod tests {
             &mut db,
             Url::parse("file:///native_extern.fe").unwrap(),
             Some(
-                "extern { fn abs(value: i32) -> i32 }\npub fn main() -> i32 { abs(value: -7) }"
-                    .to_string(),
+                r#"use std::io::{Write, host, write_char}
+pub fn main() -> i32 {
+    with (Write = host()) { write_char(65) }
+    0
+}"#
+                .to_string(),
             ),
         );
         let package = build_native_executable_package(&db, db.top_mod(file)).unwrap();

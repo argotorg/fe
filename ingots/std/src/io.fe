@@ -2,6 +2,8 @@
 use core::AsBytes
 
 extern {
+    // The compiler assigns these exact declarations a contract that permits
+    // host stream effects and excludes access to Fe-managed memory.
     fn getchar() -> i32
     fn putchar(c: i32) -> i32
 }

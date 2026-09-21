@@ -152,19 +152,22 @@ fn native_import_symbols_are_reserved_from_local_helpers() {
     let ir = with_top_mod_for_source(
         "native_import_collision.fe",
         r#"
-extern { fn abs(value: i32) -> i32 }
-mod local { pub fn abs(value: i32) -> i32 { value + 1 } }
-pub fn main() -> i32 { local::abs(value: abs(value: -6)) }
+use std::io::{Write, host, write_char}
+mod local { pub fn putchar(value: i32) -> i32 { value + 1 } }
+pub fn main() -> i32 {
+    with (Write = host()) { write_char(65) }
+    local::putchar(value: 41)
+}
 "#,
         |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
     )
     .expect("native imports should retain their host symbol");
     assert!(
-        ir.contains("declare external %abs(i32) -> i32"),
+        ir.contains("declare external %putchar(i32) -> i32"),
         "missing host import:\n{ir}"
     );
     assert!(
-        ir.contains("local__abs"),
+        ir.contains("local__putchar"),
         "missing qualified local helper:\n{ir}"
     );
 }
