@@ -1,0 +1,10 @@
+// `Growing<T>` embeds `Growing<(T, T)>`, so its layout grows without bound
+// and must be reported as a non-regular cycle rather than expanded forever.
+struct Rooted<const ROOT: u256 = _> {}
+
+struct Growing<T, const ROOT: u256 = _> {
+    marker: Rooted<ROOT>,
+    next: Growing<(T, T), ROOT>,
+}
+
+fn inspect(value: Growing<u256>) {}
