@@ -2,3 +2,4 @@ pub use abi::{self, *}
 pub use evm
 pub use prelude
 pub use io
+pub use native

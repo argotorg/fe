@@ -175,13 +175,14 @@ fn classifies_core_and_std_runtime_builtins() {
 }
 
 #[test]
-fn host_io_memory_contracts_require_standard_library_identity() {
+fn host_import_memory_contracts_require_standard_library_identity() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "host_io_contracts.fe".into(),
         r#"
-extern { fn getchar() -> i32 fn putchar(c: i32) -> i32 fn abs(value: i32) -> i32 }
-mod std { pub mod io { extern { pub fn getchar() -> i32 pub fn putchar(c: i32) -> i32 } } }
+extern { fn getchar() -> i32 fn putchar(c: i32) -> i32 fn abs(value: i32) -> i32 fn clock() -> i64 }
+mod std { pub mod io { extern { pub fn getchar() -> i32 pub fn putchar(c: i32) -> i32 } }
+ pub mod native { extern { pub fn clock() -> i64 } } }
 fn anchor() {}
 "#,
     );
@@ -196,9 +197,9 @@ fn anchor() {}
     let file = db.new_stand_alone("host_io_trusted.fe".into(), "fn trusted() {}");
     let (trusted, _) = db.top_mod(file);
     db.assert_no_diags(trusted);
-    for path in ["std::io::getchar", "std::io::putchar"] {
+    for path in ["std::io::getchar", "std::io::putchar", "std::native::clock"] {
         let func = resolve_lib_func_path(&db, trusted.all_funcs(&db)[0].scope(), path).unwrap();
-        let contract = intrinsic_contract(&db, func).expect("trusted host I/O contract");
+        let contract = intrinsic_contract(&db, func).expect("trusted host import contract");
         assert_eq!(contract.memory, Some(&[][..]), "{path}");
         assert_eq!(contract.pointer_return, None, "{path}");
     }
