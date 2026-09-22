@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/record_requirements_reject_bad_formation_and_preserve_ground_checks/ground_false.fe
+---
+error[8-0091]: const where predicate failed
+  ┌─ ground_false.fe:2:38
+  │
+2 │ struct Invalid<const N: usize> where false { value: u256 }
+  │                                      ^^^^^ condition evaluated to `false`

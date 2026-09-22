@@ -1,0 +1,7 @@
+trait Flag { const ALLOWED: bool }
+struct No {}
+impl Flag for No { const ALLOWED: bool = false }
+struct Bounded<T: Flag> where T::ALLOWED { value: u256 }
+const fn hidden<F: * -> *>() -> u256 { let unused: F<No>
+ 42 }
+const fn answer() -> u256 { hidden<Bounded>() }

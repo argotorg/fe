@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/record_type_parameter_predicates_use_declared_trait_bounds/record_type_parameter.fe
+---
+answer() = 42

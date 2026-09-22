@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/record_requirements_check_construction_and_type_uses/parameter.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ parameter.fe:2:20
+  │
+1 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+  │                                      ----- required by this predicate
+2 │ fn invalid(_ item: Bounded<0>) {}
+  │                    ^^^^^^^^^^ condition evaluated to `false`

@@ -1,0 +1,3 @@
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+trait Marker<T> {}
+trait Has { type Item: Marker<Bounded<1>> }

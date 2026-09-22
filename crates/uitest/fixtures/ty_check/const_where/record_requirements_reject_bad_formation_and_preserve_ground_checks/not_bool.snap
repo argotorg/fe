@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/record_requirements_reject_bad_formation_and_preserve_ground_checks/not_bool.fe
+---
+error[8-0000]: type mismatch
+  ┌─ not_bool.fe:2:38
+  │
+2 │ struct Invalid<const N: usize> where N + 1 { value: u256 }
+  │                                      ^^^^^ expected `bool`, but `usize` is given

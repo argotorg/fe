@@ -1,0 +1,4 @@
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+const fn make<const M: usize>() -> Bounded<M> where M > 0 { Bounded { value: 42 } }
+const fn answer() -> u256 { let item = make<1>()
+ item.value }

@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/record_type_parameter_predicates_use_declared_trait_bounds/record_type_false.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ record_type_false.fe:8:16
+  │
+6 │ struct Bounded<T: Flag> where T::ALLOWED { value: u256 }
+  │                               ---------- required by this predicate
+7 │ const fn make<U: Flag>() -> Bounded<U> where U::ALLOWED { Bounded { value: 42 } }
+8 │ type Invalid = Bounded<No>
+  │                ^^^^^^^^^^^ condition evaluated to `false`

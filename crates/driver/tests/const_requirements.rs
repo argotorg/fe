@@ -333,3 +333,81 @@ fn scoped_premise_edits_match_fresh_databases() {
         }
     }
 }
+
+#[test]
+fn record_forwarding_and_edits_match_fresh_compilation() {
+    use hir::analysis::ty::ty_check::check_func_body;
+    use salsa::Setter;
+    let (path, base) =
+        fixture("relational/record_forwarding_and_edits_match_fresh_compilation/base.fe");
+    for first in ["make", "answer"] {
+        let mut db = database();
+        let file = input(&mut db, &path, "");
+        for (source, valid) in [
+            (base.clone(), true),
+            (edited(&base, "M > 0", "M > 1"), false),
+            (edited(&base, "<1>", "<0>"), false),
+            (base.clone(), true),
+        ] {
+            file.set_text(&mut db).to(source.clone());
+            let _ = check_func_body(&db, named(&db, file, first));
+            let warm = diagnostics(&db, file);
+            assert_eq!(warm.is_empty(), valid, "{first}: {warm}");
+            let mut fresh = database();
+            let fresh_file = input(&mut fresh, &path, &source);
+            assert_eq!(warm, diagnostics(&fresh, fresh_file));
+            if valid {
+                assert_eq!(evaluate(&db, file, "answer"), "42");
+            }
+        }
+    }
+}
+
+#[test]
+fn record_formation_cycles_reject_across_query_orders_and_edits() {
+    use hir::analysis::ty::{
+        ty_check::{check_anon_const_body, check_func_body},
+        ty_def::TyId,
+    };
+    use hir::hir_def::{ItemKind, WhereClauseOwner};
+    use salsa::Setter;
+    let (path, base) =
+        fixture("relational/record_formation_cycles_reject_across_query_orders_and_edits/base.fe");
+    for predicate_first in [false, true] {
+        let mut db = database();
+        let file = input(&mut db, &path, "");
+        for (source, cyclic) in [
+            (base.clone(), true),
+            (edited(&base, "Bounded<N>", "u256"), false),
+            (base.clone(), true),
+        ] {
+            file.set_text(&mut db).to(source.clone());
+            if predicate_first {
+                let record = db
+                    .top_mod(file)
+                    .all_items(&db)
+                    .iter()
+                    .find_map(|item| match item {
+                        ItemKind::Struct(record) => Some(*record),
+                        _ => None,
+                    })
+                    .unwrap();
+                let predicate = WhereClauseOwner::Struct(record)
+                    .clause(&db)
+                    .id
+                    .const_predicates(&db)[0];
+                let _ = check_anon_const_body(&db, predicate, TyId::bool(&db));
+            } else {
+                let _ = check_func_body(&db, named(&db, file, "use_it"));
+            }
+            let warm = diagnostics(&db, file);
+            assert_eq!(warm.is_empty(), !cyclic, "{warm}");
+            if cyclic {
+                assert!(warm.contains("const requirement"), "{warm}");
+            }
+            let mut fresh = database();
+            let fresh_file = input(&mut fresh, &path, &source);
+            assert_eq!(warm, diagnostics(&fresh, fresh_file));
+        }
+    }
+}

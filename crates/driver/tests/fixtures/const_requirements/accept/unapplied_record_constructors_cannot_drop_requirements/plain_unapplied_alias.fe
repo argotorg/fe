@@ -1,0 +1,2 @@
+struct Bounded<const N: usize>  { value: u256 }
+type Constructor = Bounded

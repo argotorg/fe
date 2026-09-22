@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/higher_kind_helpers_cannot_hide_record_requirements/plain_constructor.fe
+---
+answer() = 42

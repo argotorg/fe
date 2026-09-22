@@ -381,6 +381,12 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
         );
 
         diags.extend(
+            ty_check::check_declared_type_requirements(db, top_mod)
+                .iter()
+                .map(|diag| diag.to_voucher()),
+        );
+
+        diags.extend(
             top_mod
                 .all_items(db)
                 .iter()

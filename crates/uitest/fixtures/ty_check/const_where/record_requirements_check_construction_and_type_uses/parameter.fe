@@ -1,0 +1,2 @@
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+fn invalid(_ item: Bounded<0>) {}

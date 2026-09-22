@@ -23,8 +23,9 @@ limits are errors. Conditions go through ordinary semantic borrow and layout
 checking as anonymous const bodies. They add no solver assumptions and do not
 filter impl candidates.
 
-Const conditions in generic types, traits, impls and associated functions are
-rejected, including a trait's implicit `Self` scope.
+Generic functions and records support conditions on their parameters, as
+described below. Const conditions in generic enums, traits, impls and
+associated functions are rejected, including a trait's implicit `Self` scope.
 
 A predicate that is a lone path naming a type, as in `where T`, is almost
 always a missing trait bound, so it is reported as one.
@@ -86,3 +87,40 @@ read a completed inference while a condition is being checked. Neither
 inference results nor evaluation results certify that a program meets its
 requirements; the compiler's diagnostics do. The checks are shared front-end
 logic, and no backend has its own evaluator for them.
+
+## Generic records
+
+A generic struct can state conditions. Every concrete use must satisfy them,
+including construction, unused type annotations, defaults, aliases, fields and
+trait arguments. A generic use needs an exactly matching condition after
+substitution, as with generic function calls.
+
+```fe
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+
+const fn make<const COUNT: usize>() -> Bounded<COUNT> where COUNT > 0 {
+    Bounded { value: 42 }
+}
+const fn answer() -> u256 {
+    let item = make<1>()
+    item.value
+}
+```
+
+`Bounded<0>` is rejected even when no value of it is constructed. Mentioning
+`Bounded<N>` does not establish `N > 0`: a generic function that uses the type
+states the matching condition. A containing record can state its own condition
+and forward it into its fields. A predicate cannot use the record's conditions
+to justify itself, including in nested anonymous constants.
+
+Declared type positions and inferred body types use the same checker; inferred
+types are checked after inference. An unmet condition is reported once, where
+the type enters: at the innermost written type, or at the expression that
+instantiates it. An enclosing type, a call's generic arguments, and a binding,
+block, or branch that only carries the type do not report it again.
+
+A record with conditions must be fully applied where it is used as a type.
+Passing the unapplied constructor through a higher-kinded parameter is
+rejected, because nothing would carry its conditions to later applications.
+Fully applied aliases work, and a generic alias cannot acquire or drop the
+record's obligations.
