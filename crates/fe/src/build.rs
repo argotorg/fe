@@ -1,5 +1,5 @@
 #[cfg(feature = "cranelift")]
-use std::process::Command;
+use crate::native::link_executable;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs,
@@ -99,22 +99,17 @@ fn create_build_report_staging() -> Result<ReportStaging, String> {
 
 fn validate_build_request(
     backend: BuildBackend,
-    ingot: Option<&str>,
     contract: Option<&str>,
     emit: EmitSelection,
 ) -> Result<(), String> {
     #[cfg(not(feature = "cranelift"))]
-    let _ = (ingot, contract);
+    let _ = contract;
 
     match backend {
         BuildBackend::Sonatina if emit.executable => {
             Err("`--emit executable` requires `--backend native`".to_string())
         }
         BuildBackend::Sonatina => Ok(()),
-        #[cfg(feature = "cranelift")]
-        BuildBackend::Native if ingot.is_some() => {
-            Err("native executable output does not support `--ingot`".to_string())
-        }
         #[cfg(feature = "cranelift")]
         BuildBackend::Native if contract.is_some() => {
             Err("native executable output does not support `--contract`".to_string())
@@ -209,7 +204,7 @@ pub fn build(
     use_recovery_mode: bool,
 ) {
     let emit = EmitSelection::from_requested(emit);
-    if let Err(err) = validate_build_request(backend, ingot, contract, emit) {
+    if let Err(err) = validate_build_request(backend, contract, emit) {
         eprintln!("Error: {err}");
         std::process::exit(1);
     }
@@ -321,24 +316,18 @@ pub fn build(
             out_dir,
             report_ctx.as_ref(),
         ),
-        CliTarget::Directory(dir_path) => {
-            if backend.is_native() {
-                eprintln!("Error: native executable output only supports standalone `.fe` files");
-                true
-            } else {
-                build_directory(
-                    &mut db,
-                    &dir_path,
-                    ingot,
-                    contract,
-                    None,
-                    opt_level,
-                    emit,
-                    out_dir,
-                    report_ctx.as_ref(),
-                )
-            }
-        }
+        CliTarget::Directory(dir_path) => build_directory(
+            &mut db,
+            &dir_path,
+            ingot,
+            contract,
+            None,
+            backend,
+            opt_level,
+            emit,
+            out_dir,
+            report_ctx.as_ref(),
+        ),
     };
 
     if let Some((out, staging)) = report_root {
@@ -388,7 +377,7 @@ pub fn build_from_metadata(
     use_recovery_mode: bool,
 ) {
     let emit = EmitSelection::from_requested(emit);
-    if let Err(err) = validate_build_request(BuildBackend::Sonatina, None, contract, emit) {
+    if let Err(err) = validate_build_request(BuildBackend::Sonatina, contract, emit) {
         eprintln!("Error: {err}");
         std::process::exit(1);
     }
@@ -527,6 +516,7 @@ pub fn build_from_metadata(
         None,
         contract.as_deref(),
         target_source.as_deref(),
+        BuildBackend::Sonatina,
         opt_level,
         emit,
         Some(&out_dir),
@@ -646,6 +636,7 @@ fn build_directory(
     ingot: Option<&str>,
     contract: Option<&str>,
     target_source: Option<&str>,
+    backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: Option<&Utf8PathBuf>,
@@ -696,7 +687,7 @@ fn build_directory(
 
     match config {
         Config::Workspace(_) => build_workspace(
-            db, &canonical, url, ingot, contract, opt_level, emit, out_dir, report,
+            db, &canonical, url, ingot, contract, backend, opt_level, emit, out_dir, report,
         ),
         Config::Ingot(_) => {
             if ingot.is_some() {
@@ -720,6 +711,7 @@ fn build_directory(
                 &url,
                 contract,
                 target_source,
+                backend,
                 opt_level,
                 emit,
                 &out_dir,
@@ -740,6 +732,7 @@ fn build_workspace(
     workspace_url: Url,
     ingot: Option<&str>,
     contract: Option<&str>,
+    backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: Option<&Utf8PathBuf>,
@@ -776,6 +769,59 @@ fn build_workspace(
     let out_dir = out_dir
         .cloned()
         .unwrap_or_else(|| workspace_root.join("out"));
+
+    #[cfg(feature = "cranelift")]
+    if backend.is_native() {
+        let mut executables = Vec::new();
+        let mut artifact_names = BTreeSet::new();
+        for member in members {
+            if !selected_member_paths.contains(&workspace_root.join(member.path.as_str())) {
+                continue;
+            }
+            if analyze_ingot_build_artifacts(db, &member.url, false).is_err() {
+                return true;
+            }
+            let member_ingot = db
+                .workspace()
+                .containing_ingot(db, member.url.clone())
+                .expect("analyzed member must resolve");
+            if ingot.is_none()
+                && mir::native_executable_entry(db, member_ingot.root_mod(db)).is_none()
+            {
+                continue;
+            }
+            let artifact = sanitize_name_with_default(member.name.as_str(), "main");
+            if !artifact_names.insert(artifact.to_ascii_lowercase()) {
+                eprintln!("Error: Native executable names collide: {artifact}");
+                return true;
+            }
+            executables.push(member);
+        }
+        if executables.is_empty() {
+            eprintln!("Error: No native executable entry points found to build");
+            return true;
+        }
+        let mut had_errors = false;
+        for member in executables {
+            let report_dir = report_scope_dir(report, &format!("member-{}", member.name));
+            had_errors |= build_ingot_url(
+                db,
+                &member.url,
+                None,
+                None,
+                backend,
+                opt_level,
+                emit,
+                &out_dir,
+                None,
+                Some(member.name.as_str()),
+                true,
+                report_dir.as_ref(),
+            )
+            .had_errors;
+        }
+        return had_errors;
+    }
 
     let abi_collision_check_needs_filtering =
         emit.abi && !emit.writes_any_bytecode() && contract.is_none();
@@ -836,6 +882,7 @@ fn build_workspace(
                     &matches[0].url,
                     Some(contract),
                     None,
+                    backend,
                     opt_level,
                     emit,
                     &out_dir,
@@ -889,6 +936,7 @@ fn build_workspace(
             &member.url,
             None,
             None,
+            backend,
             opt_level,
             emit,
             &out_dir,
@@ -1093,6 +1141,7 @@ fn build_ingot_url(
     ingot_url: &Url,
     contract: Option<&str>,
     target_source: Option<&str>,
+    backend: BuildBackend,
     opt_level: OptLevel,
     emit: EmitSelection,
     out_dir: &Utf8Path,
@@ -1130,6 +1179,21 @@ fn build_ingot_url(
     let ir_file_stem = ir_file_stem
         .map(|name| sanitize_name_with_default(name, "module"))
         .unwrap_or_else(|| derive_ingot_ir_file_stem(db, ingot));
+
+    #[cfg(feature = "cranelift")]
+    if backend.is_native() {
+        return build_native_top_mod(
+            db,
+            ingot.root_mod(db),
+            opt_level,
+            emit,
+            out_dir,
+            &ir_file_stem,
+            report_dir,
+        );
+    }
+    #[cfg(not(feature = "cranelift"))]
+    let _ = backend;
 
     build_ingot(
         db,
@@ -2139,21 +2203,7 @@ fn link_native_executable_artifact(
     let linked_path = temp.path().join(&executable_name);
     fs::write(&object_path, object)
         .map_err(|err| format!("Failed to write temporary native object: {err}"))?;
-    // Cranelift emits a relocatable object. Use the system C compiler driver
-    // to supply the host startup objects and platform linker configuration.
-    let output = Command::new("cc")
-        .arg(&object_path)
-        .arg("-o")
-        .arg(&linked_path)
-        .output()
-        .map_err(|err| format!("Failed to run host linker `cc`: {err}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "host linker failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
+    link_executable(&[&object_path], &linked_path)?;
 
     let executable_path = out_dir.join(&executable_name);
     fs::copy(&linked_path, executable_path.as_std_path())

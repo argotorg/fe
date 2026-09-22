@@ -1,0 +1,394 @@
+#![cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+
+use std::{
+    fs,
+    io::Write,
+    path::Path,
+    process::{Command, Output, Stdio},
+};
+
+use tempfile::tempdir;
+
+fn build(source: &Path, out: &Path, level: &str, extra: &[&str]) -> Output {
+    let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+        .args([
+            "build",
+            "--backend",
+            "native",
+            "--emit",
+            "ir,executable",
+            "-O",
+            level,
+        ])
+        .arg("--out-dir")
+        .arg(out)
+        .args(extra)
+        .arg(source)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "native build failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    result
+}
+
+#[test]
+fn native_workspace_build_selects_root_entries_and_reachable_dependencies() {
+    let temp = tempdir().unwrap();
+    let root = temp.path();
+    fs::create_dir_all(root.join("app/src")).unwrap();
+    fs::create_dir_all(root.join("math/src")).unwrap();
+    fs::write(
+        root.join("fe.toml"),
+        r#"
+[workspace]
+name = "native_workspace"
+version = "0.1.0"
+members = [{ path = "app", name = "app" }, { path = "math", name = "math" }]
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("app/fe.toml"),
+        r#"
+[ingot]
+name = "app"
+version = "0.1.0"
+[dependencies]
+math = true
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("math/fe.toml"),
+        "[ingot]\nname = \"math\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("math/src/lib.fe"),
+        "pub fn answer() -> i32 { 42 }\npub fn unused<T>(x: own T) -> T { x }\n#[test]\nfn math_test() { core::assert(answer() == 42) }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("app/src/lib.fe"),
+        "pub fn main() -> i32 { helper::answer() }\n#[test]\nfn root_test() { core::assert(main() == 42) }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("app/src/helper.fe"),
+        "use std::io::{Write, host, write_char}\npub fn answer() -> i32 {\n with (Write = host()) { write_char(65) }\n math::answer()\n}\n#[test]\nfn nested_test() { core::assert(answer() == 42) }\n",
+    )
+    .unwrap();
+    for level in ["0", "1"] {
+        let out = root.join(format!("out-{level}"));
+        build(root, &out, level, &["--ingot", "app"]);
+        let result = Command::new(out.join("app")).output().unwrap();
+        assert_eq!(result.status.code(), Some(42));
+        assert_eq!(result.stdout, b"A");
+        let ir = fs::read_to_string(out.join("app.native.sona")).unwrap();
+        assert!(!ir.contains("unused"));
+        build(root, &out, level, &[]);
+        assert!(!out.join("math").exists());
+        build(&root.join("app"), &out, level, &[]);
+        for (selection, expected_count) in [(&["--ingot", "app"][..], 2), (&[][..], 3)] {
+            let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+                .args(["test", "--backend", "native", "-O", level])
+                .args(selection)
+                .arg(root)
+                .output()
+                .unwrap();
+            assert!(result.status.success(), "{result:?}");
+            assert!(
+                String::from_utf8_lossy(&result.stdout)
+                    .contains(&format!("{expected_count} passed; 0 failed")),
+                "{result:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_host_io_and_assertions_execute_at_o0_and_o1() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("echo.fe");
+    fs::write(
+        &source,
+        r#"
+use std::io::{Read, Write, host, read_char, write_char, writeln}
+pub fn main() -> i32 {
+    with (Read = host(), Write = host()) {
+        writeln("ready")
+        let c = read_char()
+        core::assert(c == 65)
+        write_char(c + 1)
+    }
+    0
+}
+
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let mut child = Command::new(out.join("echo"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(b"A").unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(result.status.success());
+        assert_eq!(result.stdout, b"ready\nB");
+
+        let mut child = Command::new(out.join("echo"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(b"Z").unwrap();
+        assert!(
+            !child.wait().unwrap().success(),
+            "failed assertion must trap"
+        );
+    }
+}
+
+#[test]
+fn native_runner_executes_tests_filters_and_retains_only_requested_artifacts() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("cases.fe");
+    let scratch = temp.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    fs::write(
+        &source,
+        r#"
+fn difference(left: u256, right: u256) -> u256 { left - right }
+#[test]
+fn pass_arithmetic() { core::assert(difference(left: 11, right: 3) == 8) }
+#[test]
+fn pass_wide() {
+    let high: u256 = 1 << 192
+    core::assert(difference(left: high + 7, right: high) == 7)
+}
+#[test]
+fn fail_assertion() { core::assert(false) }
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", "--jobs", "2", "-O", level])
+            .env("TMPDIR", &scratch)
+            .arg(&source)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        assert!(
+            !result.status.success(),
+            "false assertion must fail the suite"
+        );
+        assert!(stdout.contains("2 passed; 1 failed"), "{result:?}");
+        assert!(stdout.contains("fail_assertion"), "{result:?}");
+        assert!(fs::read_dir(&scratch).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("fe-native-test-")
+        }));
+
+        let report = temp.path().join(format!("report-{level}.tar.gz"));
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args([
+                "test",
+                "--backend",
+                "native",
+                "--grouped",
+                "--filter",
+                "pass_",
+                "--emit",
+                "ir,rmir",
+                "--report",
+                "--report-out",
+            ])
+            .arg(&report)
+            .args(["-O", level])
+            .env("TMPDIR", &scratch)
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert!(String::from_utf8_lossy(&result.stdout).contains("2 passed; 0 failed"));
+        assert!(fs::read_dir(&scratch).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("fe-native-test-")
+        }));
+        let ir = fs::read_to_string(temp.path().join("out/cases.native-0.test.sona")).unwrap();
+        assert!(
+            !ir.contains("fail_assertion"),
+            "filtered test must not be compiled"
+        );
+        assert!(temp.path().join("out/cases.native-0.test.rmir").exists());
+        let listing = Command::new("tar")
+            .arg("-tzf")
+            .arg(&report)
+            .output()
+            .unwrap();
+        assert!(listing.status.success(), "{listing:?}");
+        let listing = String::from_utf8_lossy(&listing.stdout);
+        assert_eq!(
+            listing
+                .lines()
+                .filter(|line| line.ends_with("/tests.o"))
+                .count(),
+            1
+        );
+        assert!(listing.contains("test-0/status.txt"), "{listing}");
+        assert!(listing.contains("test-1/status.txt"), "{listing}");
+    }
+}
+
+#[test]
+fn native_runner_rejects_evm_attributes_and_trace_options() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("unsupported.fe");
+    for attribute in ["should_revert", "balance = 10"] {
+        fs::write(
+            &source,
+            format!("#[test({attribute})]\nfn evm_test() {{}}\n"),
+        )
+        .unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native"])
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("cannot use EVM"),
+            "{result:?}"
+        );
+    }
+    for option in ["--trace-evm", "--show-logs", "--call-trace"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", option])
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("EVM logs or tracing"),
+            "{result:?}"
+        );
+    }
+}
+
+#[test]
+fn native_reference_fields_and_slots_preserve_referent_identity() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("reference_identity.fe");
+    fs::write(
+        &source,
+        r#"
+use core::ptr
+struct Handle { value: mut i32, calls: i32 }
+fn step() uses (handle: mut Handle) {
+    handle.value += 1
+    handle.calls += 1
+}
+fn replace(slot: *mut i32, value: mut i32) { *slot = value }
+fn increment(slot: *mut i32) { *slot += 1 }
+pub fn main() -> i32 {
+    let mut first: i32 = 20
+    let mut second: i32 = 40
+    let mut handle = Handle { value: mut first, calls: 0 }
+    with (handle) {
+        step()
+        step()
+    }
+    core::assert(handle.calls == 2)
+    core::assert(handle.value == 22)
+    let slot = ptr::alloc<mut i32>()
+    *slot = mut first
+    increment(slot)
+    replace(slot, value: mut second)
+    increment(slot)
+    // The heap slot must not retain a reference to a local when main returns.
+    let retained = ptr::alloc<i32>()
+    *retained = 0
+    replace(slot, value: mut *retained)
+    core::assert(first == 23)
+    core::assert(second == 41)
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        assert!(
+            Command::new(out.join("reference_identity"))
+                .status()
+                .unwrap()
+                .success(),
+            "reference identity at O{level}"
+        );
+    }
+}
+
+#[test]
+fn native_loop_carried_struct_values_reuse_storage_after_reads() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("value_loop.fe");
+    fs::write(
+        &source,
+        r#"
+struct Pair { low: u64, high: u64 }
+impl Copy for Pair {}
+fn next(_ value: Pair) -> Pair {
+    Pair { low: value.low + 1, high: value.high + 3 }
+}
+pub fn main() -> i32 {
+    let mut value = Pair { low: 2, high: 7 }
+    let mut i: u64 = 0
+    while i < 17 {
+        value = next(value)
+        value.low = value.low + 1
+        if (i & 1) == 0 {
+            value = next(value)
+            value.high = value.high + 1
+        }
+        i += 1
+    }
+    core::assert(value.low == 45)
+    core::assert(value.high == 94)
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        assert!(
+            Command::new(out.join("value_loop"))
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+}

@@ -146,3 +146,119 @@ fn native_object_emission_produces_host_object() {
 
     assert!(!object.is_empty(), "native object must not be empty");
 }
+
+#[test]
+fn native_import_symbols_are_reserved_from_local_helpers() {
+    let ir = with_top_mod_for_source(
+        "native_import_collision.fe",
+        r#"
+use std::io::{Write, host, write_char}
+mod local { pub fn putchar(value: i32) -> i32 { value + 1 } }
+pub fn main() -> i32 {
+    with (Write = host()) { write_char(65) }
+    local::putchar(value: 41)
+}
+"#,
+        |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+    )
+    .expect("native imports should retain their host symbol");
+    assert!(
+        ir.contains("declare external %putchar(i32) -> i32"),
+        "missing host import:\n{ir}"
+    );
+    assert!(
+        ir.contains("local__putchar"),
+        "missing qualified local helper:\n{ir}"
+    );
+}
+
+#[test]
+fn native_effect_place_preserves_its_reference_field_layout() {
+    let ir = with_top_mod_for_source(
+        "native_effect_place_layout.fe",
+        r#"
+struct Handle { value: mut i32, calls: i32 }
+fn step() uses (handle: mut Handle) { handle.calls += 1 }
+pub fn main() -> i32 {
+    let mut value: i32 = 20
+    let mut handle = Handle { value: mut value, calls: 0 }
+    with (handle) {
+        step()
+        step()
+    }
+    handle.calls
+}
+"#,
+        |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+    )
+    .expect("effect place must retain the actual layout of its reference field");
+    let roots = ir
+        .lines()
+        .filter(|line| line.contains(" = obj.alloc "))
+        .map(|line| line.trim().split_once('.').expect("object local").0)
+        .collect::<Vec<_>>();
+    let arguments = ir
+        .lines()
+        .filter(|line| line.contains("call %step "))
+        .map(|line| {
+            line.rsplit_once(' ')
+                .expect("effect argument")
+                .1
+                .trim_end_matches(';')
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(arguments.len(), 2, "two provider calls:\n{ir}");
+    assert_eq!(arguments[0], arguments[1], "one provider identity:\n{ir}");
+    assert!(
+        roots.contains(&arguments[0]),
+        "provider uses object storage:\n{ir}"
+    );
+}
+
+#[test]
+fn native_trait_effect_calls_share_the_captured_object_before_optimization() {
+    let ir = with_top_mod_for_source(
+        "native_provider_identity.fe",
+        r#"
+trait Tick { fn next(mut self) -> i32 }
+struct Counter { value: i32 }
+impl Tick for Counter {
+    fn next(mut self) -> i32 {
+        self.value += 1
+        self.value
+    }
+}
+fn counter() -> Counter { Counter { value: 0 } }
+fn step_effect() -> i32 uses (tick: mut Tick) { tick.next() }
+pub fn main() -> i32 {
+    with (Tick = counter()) { step_effect() + step_effect() }
+}
+"#,
+        |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+    )
+    .expect("native provider IR");
+    let main = ir
+        .split_once("func public %main()")
+        .expect("main function")
+        .1
+        .split_once("\n}")
+        .expect("main body")
+        .0;
+    let roots = main
+        .lines()
+        .filter(|line| line.contains(" = obj.alloc "))
+        .map(|line| line.trim().split_once('.').expect("object local").0)
+        .collect::<Vec<_>>();
+    assert_eq!(roots.len(), 1, "one captured provider object:\n{main}");
+    let arguments = main
+        .lines()
+        .filter(|line| line.contains(" = call %") && line.contains("step_effect"))
+        .map(|line| {
+            line.rsplit_once(' ')
+                .expect("effect argument")
+                .1
+                .trim_end_matches(';')
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(arguments, vec![roots[0], roots[0]], "{main}");
+}

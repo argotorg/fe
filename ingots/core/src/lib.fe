@@ -22,3 +22,10 @@ extern {
     pub fn panic_with_value<T>(_: own T) -> !
     pub fn todo() -> !
 }
+
+/// Trap when a target-neutral assertion fails.
+pub fn assert(_ condition: bool) {
+    if !condition {
+        panic()
+    }
+}

@@ -603,6 +603,59 @@ fn native_exit_code(source: &str, level: &str) -> Option<i32> {
     )
 ))]
 #[test]
+fn test_cli_native_trait_provider_repeated_calls_retain_state() {
+    for copy_impl in ["impl Copy for Counter {}", ""] {
+        let source = format!(
+            r#"
+trait Tick {{ fn next(mut self) -> i32 }}
+struct Counter {{ value: i32 }}
+{copy_impl}
+impl Tick for Counter {{
+    fn next(mut self) -> i32 {{
+        self.value += 1
+        self.value
+    }}
+}}
+fn counter() -> Counter {{ Counter {{ value: 0 }} }}
+fn next() -> i32 uses (tick: mut Tick) {{ tick.next() }}
+pub fn main() -> i32 {{
+    with (Tick = counter()) {{ next() + next() }}
+}}
+"#
+        );
+        for level in ["0", "2"] {
+            assert_eq!(
+                native_exit_code(&source, level),
+                Some(3),
+                "{copy_impl}, O{level}"
+            );
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
+fn test_cli_native_trait_provider_source_capture() {
+    let source = include_str!("fixtures/fe_test/trait_provider_identity.fe");
+    for level in ["0", "2"] {
+        assert_eq!(native_exit_code(source, level), Some(42), "O{level}");
+    }
+}
+
+#[cfg(all(
+    feature = "cranelift",
+    any(
+        all(target_arch = "x86_64", target_os = "linux"),
+        all(target_arch = "aarch64", target_os = "macos")
+    )
+))]
+#[test]
 fn test_cli_build_native_unchecked_div_rem_integer_widths() {
     for bits in [8, 16, 32, 64, 128, 256] {
         let sign_bit = bits - 1;

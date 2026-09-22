@@ -7,7 +7,6 @@ use sonatina_ir::{
         cmp::Eq,
         control_flow::{BrTable, Jump, Phi, Unreachable},
         data::{ConstLoad, Mload, Mstore, ObjLoad, ObjMaterializeHeap},
-        evm::EvmMalloc,
         logic::Or,
     },
     types::CompoundType,
@@ -41,11 +40,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         reference: MemoryReference,
     ) -> Result<ValueId, LowerError> {
         let size = self.index_value(64);
-        let ptr_ty = self.fb.ptr_type(Type::I256);
-        let descriptor = self.fb.insert_inst(
-            EvmMalloc::new(self.module.required_inst::<EvmMalloc>()?, size),
-            ptr_ty,
-        );
+        let descriptor = self.allocate_bytes(size, Type::I256)?;
         let descriptor = self.coerce_value_to_ty(descriptor, Type::I256)?;
         let addr = self.coerce_value_to_ty(reference.addr, Type::I256)?;
         self.fb.insert_inst_no_result(Mstore::new(
@@ -126,11 +121,16 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         };
         let done = self.fb.append_block();
         let invalid = self.fb.append_block();
-        let blocks = REFERENCE_LAYOUTS.map(|space| (self.fb.append_block(), space));
-        let cases = blocks
+        let native = self.module.is_native_target();
+        let blocks = REFERENCE_LAYOUTS
             .iter()
             .enumerate()
-            .map(|(tag, (block, _))| (self.index_value(tag as u64), *block))
+            .filter(|(_, space)| !native || matches!(space, None | Some(AddressSpaceKind::Memory)))
+            .map(|(tag, space)| (tag, self.fb.append_block(), *space))
+            .collect::<Vec<_>>();
+        let cases = blocks
+            .iter()
+            .map(|(tag, block, _)| (self.index_value(*tag as u64), *block))
             .collect::<Vec<_>>();
         self.fb.insert_inst_no_result(BrTable::new(
             self.module.inst_set(),
@@ -139,7 +139,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
             cases,
         ));
         let mut values = Vec::with_capacity(blocks.len());
-        for (block, space) in blocks {
+        for (_, block, space) in blocks {
             self.fb.switch_to_block(block);
             let value = if let Some(space) = space {
                 self.load_from_ptr(reference.addr, space, class)?
@@ -177,14 +177,16 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         let value = self.coerce_value_to_ty(value, ty)?;
         let done = self.fb.append_block();
         let invalid = self.fb.append_block();
+        let native = self.module.is_native_target();
         let blocks = REFERENCE_LAYOUTS
             .iter()
             .enumerate()
             .filter(|(_, space)| {
-                !matches!(
-                    space,
-                    Some(AddressSpaceKind::Code | AddressSpaceKind::Calldata)
-                )
+                (!native || matches!(space, None | Some(AddressSpaceKind::Memory)))
+                    && !matches!(
+                        space,
+                        Some(AddressSpaceKind::Code | AddressSpaceKind::Calldata)
+                    )
             })
             .map(|(tag, space)| (tag, self.fb.append_block(), *space))
             .collect::<Vec<_>>();

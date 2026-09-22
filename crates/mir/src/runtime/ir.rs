@@ -818,6 +818,7 @@ pub struct RuntimeFunction<'db> {
 pub enum RuntimeLinkage {
     Private,
     Internal,
+    External,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]

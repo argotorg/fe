@@ -772,6 +772,10 @@ impl<'db> CallableDef<'db> {
             .is_some_and(|core_keccak| func == core_keccak)
             || resolve_lib_func_path(db, scope, "std::abi::sol")
                 .is_some_and(|std_sol| func == std_sol)
+            || resolve_lib_func_path(db, scope, "std::io::write")
+                .is_some_and(|std_write| func == std_write)
+            || resolve_lib_func_path(db, scope, "std::io::writeln")
+                .is_some_and(|std_writeln| func == std_writeln)
     }
 }
 
