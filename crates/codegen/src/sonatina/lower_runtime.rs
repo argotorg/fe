@@ -2348,19 +2348,37 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let lhs = self.local_value(*lhs)?;
                 let rhs = self.local_value(*rhs)?;
                 let modulus = self.local_value(*modulus)?;
-                self.fb.insert_inst(
-                    EvmAddMod::new(self.module.required_inst::<EvmAddMod>()?, lhs, rhs, modulus),
-                    Type::I256,
-                )
+                if self.module.is_native_target() {
+                    self.lower_modular_arithmetic(lhs, rhs, modulus, false)
+                } else {
+                    self.fb.insert_inst(
+                        EvmAddMod::new(
+                            self.module.required_inst::<EvmAddMod>()?,
+                            lhs,
+                            rhs,
+                            modulus,
+                        ),
+                        Type::I256,
+                    )
+                }
             }
             RuntimeBuiltin::MulMod { lhs, rhs, modulus } => {
                 let lhs = self.local_value(*lhs)?;
                 let rhs = self.local_value(*rhs)?;
                 let modulus = self.local_value(*modulus)?;
-                self.fb.insert_inst(
-                    EvmMulMod::new(self.module.required_inst::<EvmMulMod>()?, lhs, rhs, modulus),
-                    Type::I256,
-                )
+                if self.module.is_native_target() {
+                    self.lower_modular_arithmetic(lhs, rhs, modulus, true)
+                } else {
+                    self.fb.insert_inst(
+                        EvmMulMod::new(
+                            self.module.required_inst::<EvmMulMod>()?,
+                            lhs,
+                            rhs,
+                            modulus,
+                        ),
+                        Type::I256,
+                    )
+                }
             }
             RuntimeBuiltin::Byte { pos, value } => {
                 let pos = self.local_value(*pos)?;
@@ -5354,6 +5372,146 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         } else {
             result
         })
+    }
+
+    /// Modular addition of reduced operands without losing the carry bit.
+    fn add_reduced(&mut self, lhs: ValueId, rhs: ValueId, modulus: ValueId) -> ValueId {
+        let inst_set = self.module.inst_set();
+        let gap = self
+            .fb
+            .insert_inst(Sub::new(inst_set, modulus, rhs), Type::I256);
+        let below = self.fb.insert_inst(Lt::new(inst_set, lhs, gap), Type::I1);
+        let add = self.fb.append_block();
+        let subtract = self.fb.append_block();
+        let done = self.fb.append_block();
+        self.fb
+            .insert_inst_no_result(Br::new(inst_set, below, add, subtract));
+        self.fb.switch_to_block(add);
+        let sum = self
+            .fb
+            .insert_inst(Add::new(inst_set, lhs, rhs), Type::I256);
+        self.fb.insert_inst_no_result(Jump::new(inst_set, done));
+        self.fb.switch_to_block(subtract);
+        let difference = self
+            .fb
+            .insert_inst(Sub::new(inst_set, lhs, gap), Type::I256);
+        self.fb.insert_inst_no_result(Jump::new(inst_set, done));
+        self.fb.switch_to_block(done);
+        self.fb.insert_inst(
+            Phi::new(inst_set, vec![(sum, add), (difference, subtract)]),
+            Type::I256,
+        )
+    }
+
+    /// Full-width mathematical sum/product modulo m, including m == 0 -> 0.
+    /// Reducing operands first and keeping the accumulator below m preserves
+    /// the high product bits without requiring a target-specific 512-bit type.
+    fn lower_modular_arithmetic(
+        &mut self,
+        lhs: ValueId,
+        rhs: ValueId,
+        modulus: ValueId,
+        multiply: bool,
+    ) -> ValueId {
+        let inst_set = self.module.inst_set();
+        let entry = self
+            .fb
+            .current_block()
+            .expect("modular arithmetic requires a block");
+        let reduce = self.fb.append_block();
+        let done = self.fb.append_block();
+        let zero = self.fb.make_imm_value(I256::zero());
+        let is_zero = self
+            .fb
+            .insert_inst(IsZero::new(inst_set, modulus), Type::I1);
+        self.fb
+            .insert_inst_no_result(Br::new(inst_set, is_zero, done, reduce));
+        self.fb.switch_to_block(reduce);
+        let lhs = self
+            .fb
+            .insert_inst(Umod::new(inst_set, lhs, modulus), Type::I256);
+        let rhs = self
+            .fb
+            .insert_inst(Umod::new(inst_set, rhs, modulus), Type::I256);
+        let result = if multiply {
+            let one = self.fb.make_imm_value(I256::one());
+            let header = self.fb.append_block();
+            let test_bit = self.fb.append_block();
+            let add = self.fb.append_block();
+            let advance = self.fb.append_block();
+            let double = self.fb.append_block();
+            let exit = self.fb.append_block();
+            self.fb.insert_inst_no_result(Jump::new(inst_set, header));
+            self.fb.switch_to_block(header);
+            let result = self
+                .fb
+                .insert_inst(Phi::new(inst_set, vec![(zero, reduce)]), Type::I256);
+            let factor = self
+                .fb
+                .insert_inst(Phi::new(inst_set, vec![(lhs, reduce)]), Type::I256);
+            let remaining = self
+                .fb
+                .insert_inst(Phi::new(inst_set, vec![(rhs, reduce)]), Type::I256);
+            let finished = self
+                .fb
+                .insert_inst(IsZero::new(inst_set, remaining), Type::I1);
+            self.fb
+                .insert_inst_no_result(Br::new(inst_set, finished, exit, test_bit));
+            self.fb.switch_to_block(test_bit);
+            let bit = self
+                .fb
+                .insert_inst(And::new(inst_set, remaining, one), Type::I256);
+            let even = self.fb.insert_inst(IsZero::new(inst_set, bit), Type::I1);
+            self.fb
+                .insert_inst_no_result(Br::new(inst_set, even, advance, add));
+            self.fb.switch_to_block(add);
+            let sum = self.add_reduced(result, factor, modulus);
+            let add_exit = self
+                .fb
+                .current_block()
+                .expect("modular sum requires a block");
+            self.fb.insert_inst_no_result(Jump::new(inst_set, advance));
+            self.fb.switch_to_block(advance);
+            let next_result = self.fb.insert_inst(
+                Phi::new(inst_set, vec![(result, test_bit), (sum, add_exit)]),
+                Type::I256,
+            );
+            let next_remaining = self
+                .fb
+                .insert_inst(Shr::new(inst_set, one, remaining), Type::I256);
+            let finished = self
+                .fb
+                .insert_inst(IsZero::new(inst_set, next_remaining), Type::I1);
+            self.fb
+                .insert_inst_no_result(Br::new(inst_set, finished, exit, double));
+            self.fb.switch_to_block(double);
+            let next_factor = self.add_reduced(factor, factor, modulus);
+            let back = self
+                .fb
+                .current_block()
+                .expect("modular doubling requires a block");
+            self.fb.append_phi_arg(result, next_result, back);
+            self.fb.append_phi_arg(factor, next_factor, back);
+            self.fb.append_phi_arg(remaining, next_remaining, back);
+            self.fb.insert_inst_no_result(Jump::new(inst_set, header));
+            self.fb.switch_to_block(exit);
+            self.fb.insert_inst(
+                Phi::new(inst_set, vec![(result, header), (next_result, advance)]),
+                Type::I256,
+            )
+        } else {
+            self.add_reduced(lhs, rhs, modulus)
+        };
+        let exit = self
+            .fb
+            .current_block()
+            .expect("modular arithmetic requires a block");
+        self.fb.insert_inst_no_result(Jump::new(inst_set, done));
+        self.fb.switch_to_block(done);
+        self.fb.insert_inst(
+            Phi::new(inst_set, vec![(zero, entry), (result, exit)]),
+            Type::I256,
+        )
     }
 
     fn lower_pow(
