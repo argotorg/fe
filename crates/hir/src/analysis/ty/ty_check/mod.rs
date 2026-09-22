@@ -55,6 +55,7 @@ pub(super) use expr::TraitOps;
 use num_traits::ToPrimitive;
 pub use owner::BodyOwner;
 pub use owner::EffectParamOwner;
+use std::sync::Arc;
 pub use stmt::ForLoopSeq;
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -994,9 +995,8 @@ fn typed_body_for_bodyless_func<'db>(
             }
         })
         .collect();
-    TypedBody {
+    TypedBodyTables {
         body: None,
-        has_diagnostics: false,
         result_ty,
         assumptions,
         pat_ty: SecondaryMap::new(),
@@ -1018,6 +1018,7 @@ fn typed_body_for_bodyless_func<'db>(
         expr_place: SecondaryMap::new(),
         expr_places: PrimaryMap::new(),
     }
+    .into()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3209,35 +3210,53 @@ pub(crate) enum SmirLoweringReadiness {
     IncompletePlan,
 }
 
+/// The result of type checking one body.
+///
+/// Cloning is cheap: the inferred tables are shared. The checked-body queries
+/// (`check_func_body` and friends) return a clone of the `infer_body`
+/// template, so each body's tables are stored once rather than twice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedBody<'db> {
-    body: Option<Body<'db>>,
     has_diagnostics: bool,
-    result_ty: TyId<'db>,
-    assumptions: PredicateListId<'db>,
-    pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
-    expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
-    implicit_moves: FxHashSet<ExprId>,
-    const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
-    value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
-    semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
-    record_init_lowering: SecondaryMap<ExprId, Option<RecordInitLowering<'db>>>,
-    resolved_field_index: SecondaryMap<ExprId, Option<u16>>,
-    call_effect_args: SecondaryMap<ExprId, Option<Vec<ResolvedEffectArg<'db>>>>,
-    return_borrow_provider: Option<ProviderAddressSpace>,
-    /// Bindings for function parameters (indexed by param position)
-    param_bindings: Vec<LocalBinding<'db>>,
-    /// Bindings for local variables (keyed by the pattern that introduces them)
-    pat_bindings: SecondaryMap<PatId, Option<LocalBinding<'db>>>,
-    /// Binding capture mode for local variables (keyed by the pattern that introduces them)
-    pat_binding_modes: SecondaryMap<PatId, Option<PatBindingMode>>,
-    pattern_store: PatternStore<'db>,
-    pattern_status: SecondaryMap<PatId, PatternAnalysisStatus>,
-    /// Resolved Seq trait methods for for-loops
-    for_loop_seq: SecondaryMap<StmtId, Option<ForLoopSeq<'db>>>,
-    expr_place: SecondaryMap<ExprId, PackedOption<ExprPlaceId>>,
-    expr_places: PrimaryMap<ExprPlaceId, Place<'db>>,
+    tables: Arc<TypedBodyTables<'db>>,
 }
+
+// A private module keeps the shared tables type out of the crate's public
+// API while `TypedBody` can still deref to it.
+mod typed_body_tables {
+    use super::*;
+
+    /// Shared storage behind [`TypedBody`]; its fields are private to type checking.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct TypedBodyTables<'db> {
+        pub(super) body: Option<Body<'db>>,
+        pub(super) result_ty: TyId<'db>,
+        pub(super) assumptions: PredicateListId<'db>,
+        pub(super) pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
+        pub(super) expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
+        pub(super) implicit_moves: FxHashSet<ExprId>,
+        pub(super) const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
+        pub(super) value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
+        pub(super) semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
+        pub(super) record_init_lowering: SecondaryMap<ExprId, Option<RecordInitLowering<'db>>>,
+        pub(super) resolved_field_index: SecondaryMap<ExprId, Option<u16>>,
+        pub(super) call_effect_args: SecondaryMap<ExprId, Option<Vec<ResolvedEffectArg<'db>>>>,
+        pub(super) return_borrow_provider: Option<ProviderAddressSpace>,
+        /// Bindings for function parameters (indexed by param position)
+        pub(super) param_bindings: Vec<LocalBinding<'db>>,
+        /// Bindings for local variables (keyed by the pattern that introduces them)
+        pub(super) pat_bindings: SecondaryMap<PatId, Option<LocalBinding<'db>>>,
+        /// Binding capture mode for local variables (keyed by the pattern that introduces them)
+        pub(super) pat_binding_modes: SecondaryMap<PatId, Option<PatBindingMode>>,
+        pub(super) pattern_store: PatternStore<'db>,
+        pub(super) pattern_status: SecondaryMap<PatId, PatternAnalysisStatus>,
+        /// Resolved Seq trait methods for for-loops
+        pub(super) for_loop_seq: SecondaryMap<StmtId, Option<ForLoopSeq<'db>>>,
+        pub(super) expr_place: SecondaryMap<ExprId, PackedOption<ExprPlaceId>>,
+        pub(super) expr_places: PrimaryMap<ExprPlaceId, Place<'db>>,
+    }
+}
+use typed_body_tables::TypedBodyTables;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BindingSource {
@@ -3619,7 +3638,7 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .values_mut()
             .flatten()
             .for_each(|binding| *binding = binding.fold_with(db, folder));
-        this.pattern_store = this.pattern_store.fold_with(db, folder);
+        this.pattern_store = std::mem::take(&mut this.pattern_store).fold_with(db, folder);
         this.for_loop_seq
             .values_mut()
             .flatten()
@@ -3628,6 +3647,30 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .values_mut()
             .for_each(|place| *place = place.clone().fold_with(db, folder));
         this
+    }
+}
+
+impl<'db> std::ops::Deref for TypedBody<'db> {
+    type Target = TypedBodyTables<'db>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.tables
+    }
+}
+
+// Mutation copies the tables only while they are still shared.
+impl<'db> std::ops::DerefMut for TypedBody<'db> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.tables)
+    }
+}
+
+impl<'db> From<TypedBodyTables<'db>> for TypedBody<'db> {
+    fn from(tables: TypedBodyTables<'db>) -> Self {
+        Self {
+            has_diagnostics: false,
+            tables: Arc::new(tables),
+        }
     }
 }
 
@@ -5184,9 +5227,8 @@ impl<'db> TypedBody<'db> {
     }
 
     fn empty(db: &'db dyn HirAnalysisDb) -> Self {
-        Self {
+        TypedBodyTables {
             body: None,
-            has_diagnostics: false,
             result_ty: TyId::unit(db),
             assumptions: PredicateListId::empty_list(db),
             pat_ty: SecondaryMap::new(),
@@ -5208,6 +5250,7 @@ impl<'db> TypedBody<'db> {
             expr_place: SecondaryMap::new(),
             expr_places: PrimaryMap::new(),
         }
+        .into()
     }
 }
 
