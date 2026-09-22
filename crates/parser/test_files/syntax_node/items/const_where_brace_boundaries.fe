@@ -1,0 +1,35 @@
+trait Decode<A> {
+    fn decode_from<I>(_ input: I) -> Self
+        where I: Copy
+    {
+        Self::decode(input)
+    }
+
+    fn declared<I>(_ input: I) -> Self
+        where I: Copy
+
+    fn braced() where { true } {}
+}
+
+fn free<T>(_ value: T) -> u256
+    where T: Copy
+{
+    42
+}
+
+fn trailing<T>(_ value: T) -> u256
+    where T: Copy,
+{
+    42
+}
+
+fn braced<const N: usize>() -> u256 where {
+    N > 0
+} {
+    42
+}
+
+struct Bounded<T> where T: Copy
+{
+    value: T,
+}

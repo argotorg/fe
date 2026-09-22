@@ -37,3 +37,15 @@ where
         n > 0
     })
 {}
+
+fn braced()
+where
+    {
+        let n: u256 = 3
+        n > 0
+    }
+{}
+
+fn braced_after_bound<T>() where T: Copy, { true } {}
+
+struct Braced where { true } { value: u256 }

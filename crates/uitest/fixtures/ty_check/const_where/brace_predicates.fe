@@ -1,0 +1,20 @@
+// A braced predicate is a block condition, like `where ({ ... })`.
+const LIMIT: u256 = 8
+
+fn accepted() where {
+    let size: u256 = 3
+    size < LIMIT
+} {}
+
+fn rejected() where {
+    let size: u256 = 9
+    size < LIMIT
+} {}
+
+fn mixed() where true, {
+    LIMIT > 100
+} {}
+
+struct Record where { LIMIT == 7 } {
+    value: u256,
+}

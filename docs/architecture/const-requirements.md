@@ -10,9 +10,23 @@ const fn allowed(_ size: u256) -> bool { size < LIMIT }
 fn operation() where allowed(3), !false {}
 ```
 
-Type and trait predicates keep their existing syntax and meaning. Parenthesize
-a block condition, as in `where ({ ... })`, to distinguish it from the item's
-body.
+Type and trait predicates keep their existing syntax and meaning. A condition
+that needs several lines can be written as a block:
+
+```fe
+fn bounded<const N: usize>() where {
+    let limit: usize = 8
+    N < limit
+} {}
+```
+
+A `{` right after a completed predicate is always the item's body, field
+list or item list. A `{` right after `where` or after a `,` opens a braced
+condition when what follows the block continues the header: a `,`, another
+predicate, or the item's own `{`. So `where T: Copy { body }` and
+`where T: Copy, { body }` keep their meaning. In trait and extern function
+declarations, whose bodies are optional, a block right after `where` is always
+a condition. `where ({ ... })` also works.
 
 ## Ground conditions
 

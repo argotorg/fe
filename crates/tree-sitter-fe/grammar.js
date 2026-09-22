@@ -587,6 +587,8 @@ module.exports = grammar({
       $.literal,
       $.if_expression,
       $.match_expression,
+      // A braced predicate, as in `where { N > 0 } { body }`.
+      $.block,
     ),
 
     // ==================== TYPES ====================

@@ -6,7 +6,7 @@ use super::{
     define_scope,
     func::FuncScope,
     item::parse_vis_restriction,
-    param::{parse_generic_params_opt, parse_where_clause_opt},
+    param::{WhereBracePolicy, parse_generic_params_opt, parse_where_clause_opt},
     parse_list,
     token_stream::TokenStream,
     type_::parse_type,
@@ -34,7 +34,7 @@ impl super::Parse for StructScope {
         parse_generic_params_opt(parser, false)?;
 
         parser.expect_and_pop_recovery_stack()?;
-        parse_where_clause_opt(parser)?;
+        parse_where_clause_opt(parser, WhereBracePolicy::Lookahead)?;
 
         if parser.find_and_pop(SyntaxKind::LBrace, ExpectedKind::Body(SyntaxKind::Struct))? {
             parser.parse(RecordFieldDefListScope::default())?;
