@@ -1092,8 +1092,13 @@ impl<'db> Borrowck<'db> {
                         }
                     }
                     .ok_or_else(|| invalid("input source does not select a capability"))?;
-                    let contract = referent_contract(db, self.instance, semantics)
-                        .map_err(|_| invalid("input referent contract is unresolved"))?;
+                    let contract = super::inventory::input_referent_contract(
+                        db,
+                        self.instance,
+                        semantics,
+                        input.param(),
+                    )
+                    .map_err(|_| invalid("input referent contract is unresolved"))?;
                     (contract.ty, semantics.class, contract.address_space)
                 }
             }
