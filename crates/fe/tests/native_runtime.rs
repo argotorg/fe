@@ -11,7 +11,7 @@ use std::{
     ffi::OsString,
     fs,
     io::Write,
-    os::unix::ffi::OsStringExt,
+    os::unix::{ffi::OsStringExt, process::ExitStatusExt},
     path::Path,
     process::{Command, Output, Stdio},
 };
@@ -654,6 +654,78 @@ pub fn main() -> i32 {
             .enumerate()
         {
             assert_eq!(actual, expected, "case {index} at O{level}");
+        }
+    }
+}
+
+#[test]
+fn native_memory_copy_preserves_overlaps_and_reserves_the_host_symbol() {
+    let temp = tempdir().unwrap();
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fe_test/raw_memory_copy.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("raw_memory_copy")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        let ir = fs::read_to_string(out.join("raw_memory_copy.native.sona")).unwrap();
+        assert!(ir.contains("declare external %memmove"), "{ir}");
+        if level == "0" {
+            assert!(ir.contains("local__memmove"), "{ir}");
+        }
+        assert!(!ir.contains("evm_mcopy"), "{ir}");
+    }
+}
+
+#[test]
+fn native_memory_copy_checks_native_ranges_and_ignores_empty_addresses() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("copy_range.fe");
+    for (name, operation, success) in [
+        (
+            "empty",
+            "let invalid = ptr::offset(data, 1 << 128)\nptr::copy_raw(dest: invalid, source: invalid, len: 0)",
+            true,
+        ),
+        (
+            "wide_length",
+            "ptr::copy_raw(dest: data, source: data, len: (1 << 64) + 1)",
+            false,
+        ),
+        (
+            "wide_destination",
+            "ptr::copy_raw(dest: ptr::offset(data, 1 << 64), source: data, len: 1)",
+            false,
+        ),
+        (
+            "wide_source",
+            "ptr::copy_raw(dest: data, source: ptr::offset(data, 1 << 64), len: 1)",
+            false,
+        ),
+        (
+            "wrapping_range",
+            "ptr::copy_raw(dest: ptr::offset(data, 1 << 63), source: data, len: 1 << 63)",
+            false,
+        ),
+    ] {
+        fs::write(&source, format!("use core::ptr\npub fn main() -> i32 {{\nlet data = ptr::alloc_bytes(8)\n*data = 42\n{operation}\ncore::assert(*data == 42)\n0\n}}\n")).unwrap();
+        for level in ["0", "1", "2"] {
+            let out = temp.path().join(format!("{name}-{level}"));
+            build(&source, &out, level, &[]);
+            let result = Command::new(out.join("copy_range")).output().unwrap();
+            assert_eq!(
+                result.status.success(),
+                success,
+                "{name}/O{level}: {result:?}"
+            );
+            if !success {
+                // Unreachable traps are SIGILL/SIGTRAP on the supported hosts;
+                // an invalid libc access would instead be SIGSEGV/SIGBUS.
+                assert!(
+                    matches!(result.status.signal(), Some(4 | 5)),
+                    "{name}/O{level}: {result:?}"
+                );
+            }
         }
     }
 }

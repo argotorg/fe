@@ -1,0 +1,31 @@
+use core::ptr
+mod local { pub fn memmove() -> u8 { 42 } }
+fn exercise() {
+    let data = ptr::alloc_bytes(512)
+    let other = ptr::alloc_bytes(512)
+    let mut i: u256 = 0
+    while i < 512 {
+        *ptr::offset(data, i) = (i % 251).downcast_truncate()
+        i += 1
+    }
+    ptr::copy_raw(dest: other, source: data, len: 512)
+    ptr::copy_raw(dest: ptr::offset(data, 3), source: data, len: 257)
+    i = 0
+    while i < 257 {
+        core::assert(*ptr::offset(data, i + 3) == *ptr::offset(other, i))
+        i += 1
+    }
+    ptr::copy_raw(dest: data, source: ptr::offset(data, 3), len: 257)
+    ptr::copy_raw(dest: data, source: data, len: 257)
+    i = 0
+    while i < 257 {
+        core::assert(*ptr::offset(data, i) == *ptr::offset(other, i))
+        i += 1
+    }
+    *data = local::memmove()
+    core::assert(*data == 42)
+}
+#[test]
+fn raw_memory_copy_preserves_overlaps() { exercise() }
+pub fn main() -> i32 { exercise()
+0 }

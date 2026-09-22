@@ -208,6 +208,10 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         package: &'a RuntimePackage<'db>,
         fixed_symbol: Option<(RuntimeInstance<'db>, &str)>,
     ) -> Self {
+        let native = matches!(
+            builder.ctx.triple.architecture,
+            Architecture::X86_64 | Architecture::Aarch64
+        );
         Self {
             db,
             builder,
@@ -215,7 +219,12 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             package,
             func_map: FxHashMap::default(),
             argument_packs: FxHashMap::default(),
-            func_symbols: assign_sonatina_function_symbols(db, package, fixed_symbol),
+            func_symbols: assign_sonatina_function_symbols(
+                db,
+                package,
+                fixed_symbol,
+                if native { &["memmove"] } else { &[] },
+            ),
             section_membership: compute_section_membership(db, package),
             type_cache: FxHashMap::default(),
             layout_names: FxHashMap::default(),
@@ -735,6 +744,7 @@ fn assign_sonatina_function_symbols<'db>(
     db: &'db DriverDataBase,
     package: &RuntimePackage<'db>,
     fixed_symbol: Option<(RuntimeInstance<'db>, &str)>,
+    reserved: &[&str],
 ) -> FxHashMap<mir::RuntimeInstance<'db>, String> {
     let functions = package.functions(db);
     let inputs = functions
@@ -764,7 +774,7 @@ fn assign_sonatina_function_symbols<'db>(
         .collect::<Vec<_>>();
     functions
         .into_iter()
-        .zip(assign_function_symbols(db, &inputs))
+        .zip(assign_function_symbols(db, &inputs, reserved))
         .map(|(function, symbol)| (function.instance(db), symbol))
         .collect()
 }
@@ -2208,12 +2218,73 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let dst = self.local_value(*dst)?;
                 let src = self.local_value(*src)?;
                 let len = self.local_value(*len)?;
-                self.fb.insert_inst_no_result(EvmMcopy::new(
-                    self.module.required_inst::<EvmMcopy>()?,
-                    dst,
-                    src,
-                    len,
-                ));
+                if self.module.is_native_target() {
+                    // An empty raw copy does not access either address. Avoid
+                    // passing potentially null pointers to the host C routine.
+                    let copy = self.fb.append_block();
+                    let done = self.fb.append_block();
+                    let empty = self
+                        .fb
+                        .insert_inst(IsZero::new(self.module.inst_set(), len), Type::I1);
+                    self.fb.insert_inst_no_result(Br::new(
+                        self.module.inst_set(),
+                        empty,
+                        done,
+                        copy,
+                    ));
+                    self.fb.switch_to_block(copy);
+                    // Fe raw addresses and lengths are words; native addresses
+                    // are 64 bits. Reject truncation and wrapping byte ranges.
+                    let max = self.fb.make_imm_value(I256::from(u64::MAX));
+                    for value in [dst, src, len] {
+                        let invalid = self
+                            .fb
+                            .insert_inst(Gt::new(self.module.inst_set(), value, max), Type::I1);
+                        self.emit_empty_revert(invalid)?;
+                    }
+                    for address in [dst, src] {
+                        let available = self.fb.insert_inst(
+                            Sub::new(self.module.inst_set(), max, address),
+                            Type::I256,
+                        );
+                        let invalid = self
+                            .fb
+                            .insert_inst(Gt::new(self.module.inst_set(), len, available), Type::I1);
+                        self.emit_empty_revert(invalid)?;
+                    }
+                    let pointer = self.fb.ptr_type(Type::I8);
+                    let memmove = self
+                        .module
+                        .builder
+                        .declare_function(Signature::new_single(
+                            "memmove",
+                            Linkage::External,
+                            &[pointer, pointer, Type::I64],
+                            pointer,
+                        ))
+                        .map_err(|error| {
+                            LowerError::Internal(format!(
+                                "failed to declare native memmove: {error}"
+                            ))
+                        })?;
+                    let dst = self.coerce_value_to_ty(dst, pointer)?;
+                    let src = self.coerce_value_to_ty(src, pointer)?;
+                    let len = self.coerce_value_to_ty(len, Type::I64)?;
+                    self.fb.insert_inst(
+                        Call::new(self.module.inst_set(), memmove, smallvec![dst, src, len]),
+                        pointer,
+                    );
+                    self.fb
+                        .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
+                    self.fb.switch_to_block(done);
+                } else {
+                    self.fb.insert_inst_no_result(EvmMcopy::new(
+                        self.module.required_inst::<EvmMcopy>()?,
+                        dst,
+                        src,
+                        len,
+                    ));
+                }
                 zero_for_type(&mut self.fb, Type::Unit)
             }
             RuntimeBuiltin::ZeroMem { dst, len } => {
