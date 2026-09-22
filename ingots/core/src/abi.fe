@@ -241,22 +241,24 @@ pub const fn abi_single_root_head_size<T: AbiSize>() -> u256 {
     abi_field_head_size<T>()
 }
 
+// Explicit bounds below make the final addition safe without panic checks.
+#[arithmetic(unchecked)]
 #[inline(always)]
 pub fn checked_frame_end<A: Abi>(_ pos: u256, _ head_size: u256, _ input_len: u256) -> u256 {
-    let end = pos + head_size
-    if end < pos || end > input_len {
+    if pos > input_len || head_size > input_len - pos {
         A::decode_error()
     }
-    end
+    pos + head_size
 }
 
+// Overflow is reported through the ABI decoder rather than arithmetic panic.
+#[arithmetic(unchecked)]
 #[inline(always)]
 pub fn checked_tail<A: Abi>(_ base: u256, _ tail_rel: u256) -> u256 {
-    let tail_at = base + tail_rel
-    if tail_at < base {
+    if tail_rel > (!(0 as u256)) - base {
         A::decode_error()
     }
-    tail_at
+    base + tail_rel
 }
 
 #[inline(always)]
@@ -2238,20 +2240,20 @@ fn dyn_array_payload_end_scan_with_input_len<A: Abi, T, I>(_ input: I, elems_bas
     end
 }
 
+// The head bounds prove the products and positions fit; tail offset wrapping
+// is checked explicitly before falling back to the checked field scan.
+#[arithmetic(unchecked)]
 fn dyn_array_payload_end_with_input_len<A: Abi, T, I>(_ input: I, tail_at: u256, elem_count: u256, input_len: u256) -> u256
     where T: AbiSpan<A> + AbiSize,
           I: ByteInput
 {
-    let elems_base = tail_at + 32
-    let head_size = elem_count * abi_field_head_size<T>()
-    if elems_base < tail_at || (abi_field_head_size<T>() != 0 && head_size / abi_field_head_size<T>() != elem_count) {
+    let elems_base = checked_frame_end<A>(tail_at, 32, input_len)
+    let element_head_size = abi_field_head_size<T>()
+    if element_head_size != 0 && elem_count > (input_len - elems_base) / element_head_size {
         A::decode_error()
     }
-
+    let head_size = elem_count * element_head_size
     let head_end = elems_base + head_size
-    if head_end < elems_base || head_end > input_len {
-        A::decode_error()
-    }
 
     if elem_count == 0 || !T::IS_DYNAMIC {
         return head_end

@@ -286,11 +286,12 @@ func private %core__lib__ptr__cast__g5f1e_f94f(v0.i256) -> i256 {
 
 func inline(always) private %checked_frame_end(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
+        v3.objref<i256> = obj.alloc i256;
         jump block1;
 
     block1:
-        (v5.i256, v6.i1) = uaddo v0 v1;
-        br v6 block6 block7;
+        v6.i1 = gt v0 v2;
+        br v6 block2 block5;
 
     block2:
         call %decode_error;
@@ -300,29 +301,26 @@ func inline(always) private %checked_frame_end(v0.i256, v1.i256, v2.i256) -> i25
         jump block4;
 
     block4:
-        return v5;
+        v9.i256 = add v0 v1;
+        return v9;
 
     block5:
-        v17.i1 = gt v5 v2;
-        br v17 block2 block3;
-
-    block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block7:
-        v13.i1 = lt v5 v0;
-        br v13 block2 block5;
+        v13.i256 = sub v2 v0;
+        obj.store v3 v13;
+        v14.i1 = gt v1 v13;
+        br v14 block2 block3;
 }
 
 func inline(always) private %core__lib__abi__checked_tail__gf13e_3b06(v0.i256, v1.i256) -> i256 {
     block0:
+        v2.objref<i256> = obj.alloc i256;
         jump block1;
 
     block1:
-        (v4.i256, v5.i1) = uaddo v0 v1;
-        br v5 block5 block6;
+        v7.i256 = sub -1.i256 v0;
+        obj.store v2 v7;
+        v8.i1 = gt v1 v7;
+        br v8 block2 block3;
 
     block2:
         call %decode_error;
@@ -332,25 +330,20 @@ func inline(always) private %core__lib__abi__checked_tail__gf13e_3b06(v0.i256, v
         jump block4;
 
     block4:
-        return v4;
-
-    block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block6:
-        v12.i1 = lt v4 v0;
-        br v12 block2 block3;
+        v11.i256 = add v0 v1;
+        return v11;
 }
 
 func inline(always) private %core__lib__abi__checked_tail__gf13e_3cee(v0.i256, v1.i256) -> i256 {
     block0:
+        v2.objref<i256> = obj.alloc i256;
         jump block1;
 
     block1:
-        (v4.i256, v5.i1) = uaddo v0 v1;
-        br v5 block5 block6;
+        v7.i256 = sub -1.i256 v0;
+        obj.store v2 v7;
+        v8.i1 = gt v1 v7;
+        br v8 block2 block3;
 
     block2:
         call %decode_error;
@@ -360,16 +353,8 @@ func inline(always) private %core__lib__abi__checked_tail__gf13e_3cee(v0.i256, v
         jump block4;
 
     block4:
-        return v4;
-
-    block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block6:
-        v12.i1 = lt v4 v0;
-        br v12 block2 block3;
+        v11.i256 = add v0 v1;
+        return v11;
 }
 
 func inline(always) private %contract_init_abi_Child() {
