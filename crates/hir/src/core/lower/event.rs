@@ -141,7 +141,7 @@ pub(super) fn lower_event_struct<'db>(
                     IdentId::new(db, "u256".to_string()),
                 ))),
             );
-            let topic0_const = create_sol_signature_const(
+            let mut topic0_const = create_sol_signature_const(
                 builder.ctxt(),
                 event_desugared.clone(),
                 "TOPIC0",
@@ -150,6 +150,11 @@ pub(super) fn lower_event_struct<'db>(
                 &struct_name_str,
                 &ordered_field_types,
             );
+            // A fieldless event has no field-source errors to cascade from.
+            if ordered_field_types.is_empty() {
+                topic0_const.body_check_policy =
+                    crate::hir_def::AssocConstBodyCheckPolicy::BodyAnalysis;
+            }
             let impl_trait = builder.new_impl_trait(
                 id,
                 trait_ref,
@@ -312,7 +317,8 @@ fn parse_event_fields<'db>(
 /// `callee` is `core::keccak` for events and `std::abi::sol::sol` for errors.
 /// Longer signatures are nested in chunks to stay within `AsBytes`' tuple-arity
 /// implementations. Container types compose their canonical names through
-/// `SolCompat::SOL_TYPE`.
+/// `SolCompat::SOL_TYPE`. The body is checked with
+/// `ExpansionSourceCompatibility`; a caller may relax that.
 pub(super) fn create_sol_signature_const<'db, O: Clone + Into<DesugaredOrigin>>(
     ctxt: &mut FileLowerCtxt<'db>,
     desugared: O,
@@ -422,6 +428,7 @@ pub(super) fn create_sol_signature_const<'db, O: Clone + Into<DesugaredOrigin>>(
         name: Partial::Present(const_name),
         ty: Partial::Present(const_ty),
         value: Partial::Present(body),
+        body_check_policy: crate::hir_def::AssocConstBodyCheckPolicy::ExpansionSourceCompatibility,
         vis: crate::hir_def::Visibility::Public,
     }
 }

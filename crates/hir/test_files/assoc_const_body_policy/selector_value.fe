@@ -1,0 +1,6 @@
+const SELECTOR_VALUE: u32 = 1
+
+msg Calls {
+    #[selector = ingot::SELECTOR_VALUE]
+    Ping {} -> bool,
+}

@@ -156,6 +156,13 @@ pub fn check_impl_trait_const_bodies<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
+    // Producers explicitly record any other diagnostic owner or compatibility
+    // exception. A generated origin alone never exempts a new constant body.
+    if !impl_trait.hir_consts(db).iter().any(|constant| {
+        constant.body_check_policy != crate::hir_def::AssocConstBodyCheckPolicy::MsgSelectorAnalysis
+    }) {
+        return Vec::new();
+    }
     let generated_origin = match impl_trait.origin(db) {
         crate::span::HirOrigin::Raw(_) => None,
         crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::Event(_)) => {
@@ -164,7 +171,7 @@ pub fn check_impl_trait_const_bodies<'db>(
         crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::Error(_)) => {
             Some("generated `#[error]` implementation")
         }
-        _ => return Vec::new(),
+        _ => None,
     };
     let Some(implementor) = lower_impl_trait(db, impl_trait) else {
         return Vec::new();
@@ -182,6 +189,11 @@ pub fn check_impl_trait_const_bodies<'db>(
 
     let mut diags = Vec::new();
     for impl_const in impl_trait.assoc_consts(db) {
+        if impl_const.body_check_policy(db)
+            == crate::hir_def::AssocConstBodyCheckPolicy::MsgSelectorAnalysis
+        {
+            continue;
+        }
         let Some(body) = impl_const.value_body(db) else {
             continue;
         };
@@ -198,7 +210,9 @@ pub fn check_impl_trait_const_bodies<'db>(
             continue;
         }
         let body_diags = &check_anon_const_body(db, body, expected_ty).0;
-        if generated_origin.is_none() {
+        if impl_const.body_check_policy(db)
+            == crate::hir_def::AssocConstBodyCheckPolicy::BodyAnalysis
+        {
             diags.extend(body_diags.iter().cloned());
         }
         if body_diags.is_empty() {

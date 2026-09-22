@@ -1,0 +1,3 @@
+trait Sample { const VALUE: u256 }
+struct Target {}
+impl Sample for Target { const VALUE: u256 = 7 }

@@ -902,6 +902,7 @@ impl<'db> AssocConstDef<'db> {
             name: IdentId::lower_token_partial(ctxt, ast.name()),
             ty: TypeId::lower_ast_partial(ctxt, ast.ty()),
             value,
+            body_check_policy: Default::default(),
             vis: super::lower_visibility(&ast),
         }
     }

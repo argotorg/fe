@@ -1,0 +1,10 @@
+// A local `std::evm::Event` changes the expected type of the generated
+// TOPIC0 constant, while the event producer still emits a u256 body.
+mod std {
+    pub mod evm {
+        pub trait Event { const TOPIC0: u256 }
+    }
+}
+
+#[event]
+struct Empty {}
