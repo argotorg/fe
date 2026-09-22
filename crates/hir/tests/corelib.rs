@@ -403,6 +403,65 @@ pub fn root() {
 }
 
 #[test]
+fn string_literal_types_use_decoded_utf8_bytes() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///string_escapes.fe").unwrap();
+    let src = r#"
+pub fn root() {
+    let controls: [u8; 5] = "\"\\\n\r\t"
+    let unicode: String<3> = "é\n"
+    let backslash: [u8; 2] = "\\n"
+}
+"#;
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+    let diags = db.run_on_top_mod(top_mod);
+    assert!(diags.is_empty(), "{}", diags.format_diags(&db));
+    let func = top_mod.all_funcs(&db)[0];
+    let body = func.body(&db).unwrap();
+    let typed_body = &check_func_body(&db, func).1;
+    let literals: Vec<_> = body
+        .exprs(&db)
+        .keys()
+        .filter_map(|expr| {
+            if let Partial::Present(Expr::Lit(LitKind::String(value))) = expr.data(&db, body) {
+                Some((
+                    value.data(&db).as_str(),
+                    typed_body.expr_ty(&db, expr).pretty_print(&db).as_str(),
+                ))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(
+        literals,
+        [
+            ("\"\\\n\r\t", "[u8; 5]"),
+            ("é\n", "String<3>"),
+            ("\\n", "[u8; 2]"),
+        ]
+    );
+}
+
+#[test]
+fn invalid_string_escapes_do_not_become_semantic_strings() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///invalid_string_escape.fe").unwrap();
+    let src = r#"pub fn root() { let text = "\q" }"#;
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+    let func = top_mod.all_funcs(&db)[0];
+    let body = func.body(&db).unwrap();
+    assert!(!body.exprs(&db).keys().any(|expr| matches!(
+        expr.data(&db, body),
+        Partial::Present(Expr::Lit(LitKind::String(_)))
+    )));
+    let diags = db.run_on_top_mod(top_mod);
+    assert!(diags.format_diags(&db).contains("invalid string escape"));
+}
+
+#[test]
 fn string_literals_can_pick_up_dynstring_api_from_later_use() {
     let mut db = DriverDataBase::default();
     let url = Url::parse("file:///string_dynstring_api.fe").unwrap();

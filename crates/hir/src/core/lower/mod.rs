@@ -344,22 +344,20 @@ impl<'db> IdentId<'db> {
 }
 
 impl<'db> LitKind<'db> {
-    fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Lit) -> Self {
-        match ast.kind() {
+    fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Lit) -> Option<Self> {
+        Some(match ast.kind() {
             ast::LitKind::Int(int) => Self::Int(IntegerId::lower_ast(ctxt, int)),
             ast::LitKind::String(string) => {
-                let text = string.token().text();
-                Self::String(StringId::new(
-                    ctxt.db(),
-                    text[1..text.len() - 1].to_string(),
-                ))
+                // Parsing diagnosed invalid escapes; recovery must not intern
+                // their source spelling as a valid semantic string.
+                Self::String(StringId::new(ctxt.db(), string.value().ok()?))
             }
             ast::LitKind::Bool(bool) => match bool.token().text() {
                 "true" => Self::Bool(true),
                 "false" => Self::Bool(false),
                 _ => unreachable!(),
             },
-        }
+        })
     }
 }
 

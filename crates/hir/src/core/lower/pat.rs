@@ -16,7 +16,7 @@ impl<'db> Pat<'db> {
             ast::PatKind::Lit(lit_pat) => {
                 let lit_kind = lit_pat
                     .lit()
-                    .map(|lit| LitKind::lower_ast(ctxt.f_ctxt, lit))
+                    .and_then(|lit| LitKind::lower_ast(ctxt.f_ctxt, lit))
                     .into();
                 Pat::Lit(lit_kind)
             }
