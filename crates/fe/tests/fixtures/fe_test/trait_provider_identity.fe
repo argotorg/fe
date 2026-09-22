@@ -1,0 +1,123 @@
+trait Tick {
+    fn next(mut self) -> i32
+    fn peek(self) -> i32
+}
+
+struct Counter { value: i32 }
+
+impl Tick for Counter {
+    fn next(mut self) -> i32 {
+        self.value += 1
+        self.value
+    }
+    fn peek(self) -> i32 { self.value }
+}
+
+fn next() -> i32 uses (tick: mut Tick) { tick.next() }
+fn peek() -> i32 uses (tick: Tick) { tick.peek() }
+fn forwarded() -> i32 uses (tick: mut Tick) { next() + next() }
+fn generic<T: Tick>(mut _ value: own T) -> i32 {
+    with (Tick = value) { forwarded() }
+}
+
+struct Factory { calls: i32 }
+fn counter() -> Counter uses (factory: mut Factory) {
+    factory.calls += 1
+    Counter { value: 0 }
+}
+
+struct Selection { calls: usize }
+fn index() -> usize uses (selection: mut Selection) {
+    selection.calls += 1
+    0
+}
+
+struct Holder { counter: Counter }
+
+fn named_and_field() -> bool {
+    let mut value = Counter { value: 0 }
+    let sum = with (value) {
+        let first = next()
+        value.value += 10
+        first + next() + peek()
+    }
+    let mut holder = Holder { counter: Counter { value: 0 } }
+    let field_sum = with (Tick = holder.counter) { forwarded() }
+    sum == 25 && value.value == 12 && field_sum == 3 && holder.counter.value == 2
+}
+
+fn indexed() -> bool {
+    let mut values = [Counter { value: 0 }, Counter { value: 10 }]
+    let mut selection = Selection { calls: 0 }
+    let sum = with (selection) {
+        with (Tick = values[index()]) { forwarded() }
+    }
+    let mut lane: usize = 1
+    let second = with (Tick = values[lane]) {
+        lane = 0
+        forwarded()
+    }
+    sum == 3 && second == 23 && selection.calls == 1
+        && values[0].value == 2 && values[1].value == 12 && lane == 0
+}
+
+fn constructors_and_reentry() -> bool {
+    let mut factory = Factory { calls: 0 }
+    let total = with (factory) {
+        let mut i: i32 = 0
+        let mut sum: i32 = 0
+        while i < 3 {
+            sum += with (Tick = counter()) { forwarded() }
+            i += 1
+        }
+        // Even an unused provider is evaluated when the block is entered.
+        with (Tick = counter()) { sum }
+    }
+    total == 9 && factory.calls == 4
+}
+
+fn loops_and_shadowing() -> bool {
+    let mut value = Counter { value: 0 }
+    let total = with (Tick = value) {
+        let mut i: i32 = 0
+        let mut sum: i32 = 0
+        while i < 3 {
+            if i == 1 { sum += next() } else { sum += next() }
+            i += 1
+        }
+        let inner = with (Tick = Counter { value: 10 }) { forwarded() }
+        sum + inner + next()
+    }
+    total == 33 && value.value == 4 && generic(Counter { value: 0 }) == 3
+}
+
+trait Empty {
+    fn ping(self) -> i32
+    fn bump(mut self) -> i32
+}
+struct EmptyProvider {}
+impl Empty for EmptyProvider {
+    fn ping(self) -> i32 { 1 }
+    fn bump(mut self) -> i32 { 2 }
+}
+fn ping() -> i32 uses (empty: Empty) { empty.ping() }
+fn bump() -> i32 uses (empty: mut Empty) { empty.bump() }
+fn empty() -> bool {
+    with (Empty = EmptyProvider {}) { ping() + ping() + bump() + bump() == 6 }
+}
+
+pub fn main() -> i32 {
+    if named_and_field() && indexed() && constructors_and_reentry()
+        && loops_and_shadowing() && empty() { 42 } else { 1 }
+}
+
+#[test]
+fn test_named_and_field() { assert!(named_and_field()) }
+#[test]
+fn test_indexed() { assert!(indexed()) }
+#[test]
+fn test_constructors_and_reentry() { assert!(constructors_and_reentry()) }
+#[test]
+fn test_loops_and_shadowing() { assert!(loops_and_shadowing()) }
+#[test]
+fn test_empty() { assert!(empty()) }

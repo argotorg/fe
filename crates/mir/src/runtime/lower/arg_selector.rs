@@ -17,6 +17,7 @@ use crate::runtime::{
 use super::{
     boundary::{
         BoundaryMatcher, BoundaryRef, RuntimeValueMaterialization, StagedBoundary,
+        specialize_boundary_for_aggregate_layout,
         specialize_boundary_for_runtime_source_in_context,
     },
     call_input::{
@@ -813,17 +814,6 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                         fallback.clone(),
                     ))
                 }),
-            CompiledEffectValuePlan::ByPlace {
-                boundary,
-                allow_materialize,
-            } => self
-                .select_boundary_compatible_value(value.local, boundary)
-                .or_else(|| self.select_effect_handle_operand_for_boundary(value, boundary))
-                .or_else(|| {
-                    allow_materialize
-                        .then(|| self.select_materializable_semantic_value(value, boundary))
-                        .flatten()
-                }),
         }
     }
 
@@ -893,6 +883,14 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         if let Some(selected) = self.select_effect_handle_value_for_boundary(place, &boundary) {
             return selected;
         }
+        // Like value arguments, place arguments carry their actual aggregate
+        // layout. Project the whole place: a field or indexed provider need not
+        // have the same layout as its containing root.
+        let layout = self
+            .env
+            .normalized_place_class(self.carriers, place)
+            .and_then(|class| class.aggregate_layout());
+        let boundary = specialize_boundary_for_aggregate_layout(&boundary, layout).into_owned();
         self.select_place_for_boundary(
             place.clone(),
             self.effect_arg_target_ty(arg),

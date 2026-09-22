@@ -6,9 +6,9 @@ use fe_hir::{
     analysis::{
         initialize_analysis_pass,
         semantic::{
-            BorrowSummary, CtfeError, FieldIndex, LayoutEvidenceError, NDataProjection, NExpr,
-            NIndex, NPlace, NPlaceBase, NRootKind, NStatementKind, NValueDefinition,
-            NormalizedArtifacts, ReadMode, SExpr, SStmtKind, STerminatorKind,
+            BorrowSummary, CtfeError, FieldIndex, LayoutEvidenceError, NDataProjection,
+            NEffectArgValue, NExpr, NIndex, NPlace, NPlaceBase, NRootKind, NStatementKind,
+            NValueDefinition, NormalizedArtifacts, ReadMode, SExpr, SStmtKind, STerminatorKind,
             SemanticAnalysisError, SemanticBodyAdmission, SemanticDiagnosticKind, SemanticInstance,
             SemanticNormalizationFailure, canonicalize_semantic_consts,
             capability::{
@@ -34,7 +34,7 @@ use fe_hir::{
         ty::{
             ProviderAddressSpace,
             corelib::{MemoryAccessKind, resolve_lib_func_path},
-            ty_check::{BodyOwner, LocalBinding},
+            ty_check::{BodyOwner, EffectPassMode, LocalBinding},
             ty_def::{BorrowKind, TyData},
         },
     },
@@ -9846,5 +9846,152 @@ fn run(_ count: u256, _ initialize: bool) -> u256 {
     staged(mut cursor, count, initialize)
 }
 "#,
+    );
+}
+
+#[test]
+fn repeated_trait_provider_calls_borrow_the_same_noncopy_binding() {
+    for binding in [
+        "Tick = counter()",
+        "Tick = Counter { value: 0 }",
+        "Tick = { counter() }",
+        "Tick = { local }",
+        "Tick = local",
+        "local",
+    ] {
+        let source = format!(
+            r#"
+trait Tick {{ fn next(mut self) -> i32 }}
+struct Counter {{ value: i32 }}
+impl Tick for Counter {{
+    fn next(mut self) -> i32 {{
+        self.value += 1
+        self.value
+    }}
+}}
+fn counter() -> Counter {{ Counter {{ value: 0 }} }}
+fn next() -> i32 uses (tick: mut Tick) {{ tick.next() }}
+fn run() -> i32 {{
+    let mut local = counter()
+    with ({binding}) {{ next() + next() }}
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        assert!(diagnostics.is_empty(), "{binding}: {diagnostics}");
+    }
+}
+
+#[test]
+fn trait_provider_calls_preserve_real_moves_and_alias_conflicts() {
+    let prefix = r#"
+trait Tick { fn next(mut self) -> i32 }
+struct Counter { value: i32 }
+impl Tick for Counter {
+    fn next(mut self) -> i32 {
+        self.value += 1
+        self.value
+    }
+}
+fn next() -> i32 uses (tick: mut Tick) { tick.next() }
+fn consume(_ value: own Counter) {}
+fn pass(_ value: own Counter) -> Counter { value }
+"#;
+    for (body, message) in [
+        ("next()\n consume(value)\n next()", "move conflict"),
+        (
+            "let borrowed = mut value\n next()\n borrowed.value = 9",
+            "borrow conflict",
+        ),
+    ] {
+        let source = format!(
+            "{prefix}\nfn bad() {{\n let mut value = Counter {{ value: 0 }}\n with (Tick = value) {{ {body} }}\n}}"
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        assert!(diagnostics.contains(message), "{message}: {diagnostics}");
+    }
+    let source = format!(
+        "{prefix}\nfn bad() {{\n let mut value = Counter {{ value: 0 }}\n with (Tick = pass(value)) {{ next() }}\n consume(value)\n}}"
+    );
+    let diagnostics = checked_borrow_diags(&source);
+    assert!(diagnostics.contains("move conflict"), "{diagnostics}");
+}
+
+#[test]
+fn trait_provider_borrows_cannot_escape() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+trait View { fn view(ref self) -> ref i32 }
+struct Counter { value: i32 }
+impl View for Counter {
+    fn view(ref self) -> ref i32 { ref self.value }
+}
+fn bad() -> ref i32 uses (value: View) { value.view() }
+fn root() {
+    with (View = Counter { value: 0 }) { bad() }
+}
+"#,
+    );
+    assert!(
+        diagnostics.contains("cannot return a borrow derived from an effect parameter"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn normalized_effect_places_have_coherent_transport() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+trait Tick { fn next(mut self) -> i32 }
+struct Counter { value: i32 }
+impl Tick for Counter {
+    fn next(mut self) -> i32 {
+        self.value += 1
+        self.value
+    }
+}
+fn next() -> i32 uses (tick: mut Tick) { tick.next() }
+fn run() -> i32 {
+    with (Tick = Counter { value: 0 }) { next() + next() }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let instance = func_instance(&db, top_mod, "run");
+    let mut normalized = normalize_semantic_body(&db, instance)
+        .expect("normalized body")
+        .body;
+    let arguments = normalized
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.statements)
+        .filter_map(|stmt| match &mut stmt.kind {
+            NStatementKind::Define {
+                expr: NExpr::Call { effect_args, .. },
+                ..
+            } => Some(effect_args),
+            _ => None,
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    assert_eq!(arguments.len(), 2);
+    let NEffectArgValue::Place(first) = arguments[0].arg.clone() else {
+        panic!("provider must be a place");
+    };
+    for arg in arguments {
+        let NEffectArgValue::Place(place) = &arg.arg else {
+            panic!("provider must be a place");
+        };
+        assert_eq!(place.base, first.base);
+        assert_eq!(place.path, first.path);
+        assert_eq!(arg.pass_mode, EffectPassMode::ByPlace);
+        assert!(arg.required_mut);
+        arg.pass_mode = EffectPassMode::ByValue;
+    }
+    assert_eq!(
+        verify_normalized_body(&db, &normalized),
+        Err(NormalizedBodyVerifyError::ExpressionType),
     );
 }

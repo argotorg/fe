@@ -41,7 +41,7 @@ use crate::{
 };
 
 use super::{
-    effects::{owner_effect_bindings, provisional_owner_effect_bindings},
+    effects::{WithBindingSource, owner_effect_bindings, provisional_owner_effect_bindings},
     local_facts::{initial_snapshot_source, ordinary_direct_value_role},
 };
 
@@ -194,7 +194,7 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     pub(super) assigned_layout_backing_sources: Vec<bool>,
     pub(super) blocks: Vec<BlockState<'db>>,
     pub(super) binding_locals: FxHashMap<LocalBinding<'db>, SLocalId>,
-    pub(super) with_binding_values: FxHashMap<ExprId, SValueId>,
+    pub(super) with_binding_sources: FxHashMap<ExprId, WithBindingSource<'db>>,
     pub(super) current: SBlockId,
     pub(super) next_stmt_id: u32,
     pub(super) loop_stack: Vec<LoopScope>,
@@ -267,7 +267,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             assigned_layout_backing_sources: Vec::new(),
             blocks: Vec::new(),
             binding_locals: FxHashMap::default(),
-            with_binding_values: FxHashMap::default(),
+            with_binding_sources: FxHashMap::default(),
             current: SBlockId::from_u32(0),
             next_stmt_id: 0,
             loop_stack: Vec::new(),
@@ -355,7 +355,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         local
     }
 
-    fn alloc_local(
+    pub(super) fn alloc_local(
         &mut self,
         ty: TyId<'db>,
         mutability: Mutability,

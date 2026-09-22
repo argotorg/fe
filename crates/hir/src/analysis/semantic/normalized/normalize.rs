@@ -611,7 +611,14 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                         SemanticLocalRole::PlaceCarrier { .. }
                     )
                     .then_some(ReadMode::Copy);
-                    self.load_or_borrow_place(block, value.sem_origin(origin), value.value, dst_ty, place, mode)?
+                    self.load_or_borrow_place(
+                        block,
+                        value.sem_origin(origin),
+                        value.value,
+                        dst_ty,
+                        place,
+                        mode,
+                    )?
                 } else {
                     NExpr::Forward {
                         src: self.read_operand(block, origin, *value, None)?,
@@ -619,16 +626,17 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 }
             }
             SExpr::ReadPlace { place } => {
-                if self.local_has_place(place.local) || place.path.iter().any(|projection| matches!(projection, Projection::Deref)) {
+                if self.local_has_place(place.local)
+                    || place
+                        .path
+                        .iter()
+                        .any(|projection| matches!(projection, Projection::Deref))
+                {
                     let normalized = self.normalize_place(block, origin, place)?;
                     self.load_or_borrow_place(block, origin, place.local, dst_ty, normalized, None)?
                 } else {
-                    let value = self.read_operand(
-                        block,
-                        origin,
-                        SOperand::inherited(place.local),
-                        None,
-                    )?;
+                    let value =
+                        self.read_operand(block, origin, SOperand::inherited(place.local), None)?;
                     let path = self.normalize_path(block, origin, &place.path)?;
                     self.normalize_value_projection(
                         block,
@@ -682,9 +690,8 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             } => {
                 let mut normalized = self.normalize_place(block, origin, place)?;
                 if let Some((_, target)) = dst_ty.as_borrow(self.db) {
-                    normalized = self.dereference_place_to(
-                        block, origin, place.local, normalized, target,
-                    )?;
+                    normalized =
+                        self.dereference_place_to(block, origin, place.local, normalized, target)?;
                 }
                 NExpr::Borrow {
                     place: normalized,
@@ -696,7 +703,9 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             SExpr::CodeRegionRef { region } => NExpr::CodeRegionRef {
                 region: region.clone(),
             },
-            SExpr::Const(value) => self.normalize_constant(block, origin, dst, dst_ty, value.clone())?,
+            SExpr::Const(value) => {
+                self.normalize_constant(block, origin, dst, dst_ty, value.clone())?
+            }
             SExpr::Unary { op, value } => NExpr::Unary {
                 op: *op,
                 value: self.read_scalar_operand(block, origin, *value, None)?,
@@ -714,13 +723,11 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     SemanticLocalRole::PlaceCarrier { .. }
                         | SemanticLocalRole::PlaceBoundValue { .. }
                         | SemanticLocalRole::DirectCarrier { .. }
-                ) && to.as_capability(self.db).is_none() && self.local_has_place(raw_value.value);
+                ) && to.as_capability(self.db).is_none()
+                    && self.local_has_place(raw_value.value);
                 let (value, from) = if materialize_place {
-                    let place = self.place_for_local(
-                        block,
-                        raw_value.sem_origin(origin),
-                        raw_value.value,
-                    )?;
+                    let place =
+                        self.place_for_local(block, raw_value.sem_origin(origin), raw_value.value)?;
                     let mode = self.read_mode_for_place(origin, place.ty, &place);
                     let loaded = self.emit_define(
                         block,
@@ -730,7 +737,10 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                         raw_value.value,
                         NExpr::Load { place, mode },
                     )?;
-                    (self.operand(loaded, origin, mode), self.values[loaded.index()].ty)
+                    (
+                        self.operand(loaded, origin, mode),
+                        self.values[loaded.index()].ty,
+                    )
                 } else {
                     let value = self.read_operand(block, origin, raw_value, None)?;
                     let from = self.values[value.value.index()].ty;
@@ -740,10 +750,11 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     NExpr::Forward { src: value }
                 } else if from.as_ptr(self.db).is_some() || to.as_ptr(self.db).is_some() {
                     NExpr::PointerCast { value, to }
-                } else if self.shape(from)?.contains_capability(self.db) || self.shape(to)?.contains_capability(self.db) {
-                    let mapping = structural_repack_mapping(self.db, self.instance, from, to).ok_or(
-                        NormalizeError::UnsupportedCapabilityCast { from, to },
-                    )?;
+                } else if self.shape(from)?.contains_capability(self.db)
+                    || self.shape(to)?.contains_capability(self.db)
+                {
+                    let mapping = structural_repack_mapping(self.db, self.instance, from, to)
+                        .ok_or(NormalizeError::UnsupportedCapabilityCast { from, to })?;
                     NExpr::StructuralRepack { value, mapping }
                 } else {
                     NExpr::ScalarCast { value, to }
@@ -776,9 +787,9 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                         .ok_or(NormalizeError::InvalidProjection)?;
                     vec![element_ty; fields.len()]
                 } else if ty.is_tuple(self.db)
-                    || ty.adt_def(self.db).is_some_and(|adt| {
-                        matches!(adt.adt_ref(self.db), AdtRef::Struct(_))
-                    })
+                    || ty
+                        .adt_def(self.db)
+                        .is_some_and(|adt| matches!(adt.adt_ref(self.db), AdtRef::Struct(_)))
                 {
                     self.instance.normalized_field_types(self.db, ty).to_vec()
                 } else {
@@ -829,11 +840,9 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                                 block,
                                 origin,
                                 field,
-                                self.instance.normalized_enum_variant_field_tys(
-                                    self.db,
-                                    enum_ty,
-                                    *variant,
-                                )[index],
+                                self.instance
+                                    .normalized_enum_variant_field_tys(self.db, enum_ty, *variant)
+                                    [index],
                             )
                         })
                         .collect::<Result<Vec<_>, _>>()?
@@ -866,34 +875,88 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     .enumerate()
                     .map(|(index, arg)| {
                         if let Some(target) = self.call_view_target(*callee, index, arg.value) {
-                            let place = self.place_for_local(block, arg.sem_origin(origin), arg.value)?;
-                            let mut place = self.dereference_place_to(block, arg.sem_origin(origin), arg.value, place, target)?;
-                            if structural_repack_mapping(self.db, self.instance, place.ty, target).is_none() {
-                                let value = self.read_operand(block, origin, *arg, Some(ReadMode::Copy))?;
+                            let place =
+                                self.place_for_local(block, arg.sem_origin(origin), arg.value)?;
+                            let mut place = self.dereference_place_to(
+                                block,
+                                arg.sem_origin(origin),
+                                arg.value,
+                                place,
+                                target,
+                            )?;
+                            if structural_repack_mapping(self.db, self.instance, place.ty, target)
+                                .is_none()
+                            {
+                                let value =
+                                    self.read_operand(block, origin, *arg, Some(ReadMode::Copy))?;
                                 let from = self.values[value.value.index()].ty;
-                                let mapping = structural_repack_mapping(self.db, self.instance, from, target)
-                                    .ok_or(NormalizeError::UnsupportedCapabilityCast { from, to: target })?;
-                                let value_expr = if from == target { NExpr::Forward { src: value } }
-                                    else { NExpr::StructuralRepack { value, mapping } };
-                                let result = self.emit_define(block, None, arg.sem_origin(origin), target, arg.value, value_expr)?;
+                                let mapping =
+                                    structural_repack_mapping(self.db, self.instance, from, target)
+                                        .ok_or(NormalizeError::UnsupportedCapabilityCast {
+                                            from,
+                                            to: target,
+                                        })?;
+                                let value_expr = if from == target {
+                                    NExpr::Forward { src: value }
+                                } else {
+                                    NExpr::StructuralRepack { value, mapping }
+                                };
+                                let result = self.emit_define(
+                                    block,
+                                    None,
+                                    arg.sem_origin(origin),
+                                    target,
+                                    arg.value,
+                                    value_expr,
+                                )?;
                                 place = self.materialize_value(result, arg.sem_origin(origin));
                             }
                             let from = TyId::view_of(self.db, place.ty);
                             let to = TyId::view_of(self.db, target);
-                            let mut result = self.emit_define(block, None, origin, from, arg.value,
-                                NExpr::MakeView { place, access: ViewAccess::Read })?;
+                            let mut result = self.emit_define(
+                                block,
+                                None,
+                                origin,
+                                from,
+                                arg.value,
+                                NExpr::MakeView {
+                                    place,
+                                    access: ViewAccess::Read,
+                                },
+                            )?;
                             if from != to {
-                                let mapping = structural_repack_mapping(self.db, self.instance, from, to)
-                                    .ok_or(NormalizeError::UnsupportedCapabilityCast { from, to })?;
+                                let mapping =
+                                    structural_repack_mapping(self.db, self.instance, from, to)
+                                        .ok_or(NormalizeError::UnsupportedCapabilityCast {
+                                            from,
+                                            to,
+                                        })?;
                                 let value = self.operand(result, origin, ReadMode::Read);
-                                result = self.emit_define(block, None, origin, to, arg.value, NExpr::StructuralRepack { value, mapping })?;
+                                result = self.emit_define(
+                                    block,
+                                    None,
+                                    origin,
+                                    to,
+                                    arg.value,
+                                    NExpr::StructuralRepack { value, mapping },
+                                )?;
                             }
                             Ok(self.operand(result, origin, ReadMode::Read))
                         } else {
-                            let value = self.read_operand(block, origin, *arg, self.call_arg_mode(*callee, index, arg.value))?;
-                            let expected = self.call_param_ty(*callee, index).ok_or(NormalizeError::InvalidProjection)?;
+                            let value = self.read_operand(
+                                block,
+                                origin,
+                                *arg,
+                                self.call_arg_mode(*callee, index, arg.value),
+                            )?;
+                            let expected = self
+                                .call_param_ty(*callee, index)
+                                .ok_or(NormalizeError::InvalidProjection)?;
                             let actual = self.values[value.value.index()].ty;
-                            let target = match (actual.as_capability(self.db), expected.as_capability(self.db)) {
+                            let target = match (
+                                actual.as_capability(self.db),
+                                expected.as_capability(self.db),
+                            ) {
                                 (Some((kind, _)), Some((_, target))) => match kind {
                                     CapabilityKind::Mut => TyId::borrow_mut_of(self.db, target),
                                     CapabilityKind::Ref => TyId::borrow_ref_of(self.db, target),
@@ -914,18 +977,14 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                             binding_idx: arg.binding_idx,
                             arg: match &arg.arg {
                                 crate::analysis::semantic::SEffectArgValue::Place(place) => {
-                                    NEffectArgValue::Place(self.normalize_place(
-                                        block, origin, place,
-                                    )?)
+                                    NEffectArgValue::Place(
+                                        self.normalize_place(block, origin, place)?,
+                                    )
                                 }
                                 crate::analysis::semantic::SEffectArgValue::Value(value) => {
-                                    NEffectArgValue::Value(self.read_operand(
-                                        block,
-                                        origin,
-                                        *value,
-                                        matches!(arg.pass_mode, crate::analysis::ty::ty_check::EffectPassMode::ByTempPlace)
-                                            .then_some(ReadMode::Copy),
-                                    )?)
+                                    NEffectArgValue::Value(
+                                        self.read_operand(block, origin, *value, None)?,
+                                    )
                                 }
                             },
                             pass_mode: arg.pass_mode,

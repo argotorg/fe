@@ -54,10 +54,6 @@ pub(super) enum CompiledEffectValuePlan<'db> {
     ErasedPlainValue,
     ByValue(CompiledValuePassPlan<'db>),
     ByValueFallback(RuntimeClass<'db>),
-    ByPlace {
-        boundary: StagedBoundary<'db>,
-        allow_materialize: bool,
-    },
 }
 
 #[derive(Clone, Debug)]
@@ -192,13 +188,7 @@ fn compile_effect_arg_plan<'db>(
                 },
             ),
         (EffectPassMode::ByPlace | EffectPassMode::ByTempPlace, NEffectArgValue::Value(_)) => {
-            let boundary = boundary.unwrap_or_else(|| {
-                default_by_place_boundary(db, type_env, arg.provider_target_ty, space)
-            });
-            CompiledEffectArgPlan::Value(CompiledEffectValuePlan::ByPlace {
-                boundary: boundary_sites.stage(boundary),
-                allow_materialize: matches!(arg.pass_mode, EffectPassMode::ByTempPlace),
-            })
+            panic!("borrowed effect argument must already have a stable provider place: {arg:?}")
         }
         (EffectPassMode::ByPlace | EffectPassMode::ByTempPlace, NEffectArgValue::Place(_)) => {
             let boundary = boundary.unwrap_or_else(|| {
