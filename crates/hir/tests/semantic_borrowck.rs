@@ -10049,3 +10049,69 @@ fn user_clock_extern_still_requires_effect_contract() {
         "{diagnostics}"
     );
 }
+
+#[test]
+fn native_byte_buffer_contracts_preserve_unrelated_live_borrows() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+use std::native::ByteBuffer
+fn run() -> u8 {
+    let mut value: u8 = 0
+    let borrowed = mut value
+    let mut buffer = ByteBuffer::new()
+    if buffer.try_resize(64) {
+        buffer.set_byte(index: 0, value: 42)
+        buffer.copy_within(dest: 1, source: 0, len: 1)
+        borrowed = buffer.byte_at(1)
+        buffer.clear()
+    }
+    buffer.release()
+    borrowed += 1
+    value
+}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn native_byte_buffer_owner_cannot_be_reused_or_released_while_borrowed() {
+    for (body, expected) in [
+        ("buffer.release()\nbuffer.release()", "move conflict"),
+        ("buffer.release()\nlet size = buffer.len()", "move conflict"),
+        (
+            "let view = ref buffer\nbuffer.release()\nlet size = view.len()",
+            "borrow conflict",
+        ),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            "use std::native::ByteBuffer\nfn run() {{ let buffer = ByteBuffer::new()\n{body} }}"
+        ));
+        assert!(diagnostics.contains(expected), "{body}: {diagnostics}");
+    }
+}
+
+#[test]
+fn user_allocator_externs_still_require_effect_contracts() {
+    for (declaration, body) in [
+        (
+            "fn malloc(size: u64) -> *u8",
+            "let pointer = malloc(size: 64)",
+        ),
+        ("fn free(_ address: *u8)", "free(pointer)"),
+        (
+            "fn is_null(_ address: *u8) -> bool",
+            "let empty = is_null(pointer)",
+        ),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            "extern {{ {declaration} }}\nfn run(pointer: *u8) {{ {body} }}"
+        ));
+        assert!(
+            diagnostics.contains(
+                "executable calls require concrete implementations or verified effect contracts"
+            ),
+            "{declaration}: {diagnostics}"
+        );
+    }
+}

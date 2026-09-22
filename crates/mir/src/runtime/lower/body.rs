@@ -4265,6 +4265,16 @@ impl<'db> RmirEmitter<'db> {
                     ),
                 )
             }
+            RuntimeBuiltinFuncKind::NativePtrIsNull => {
+                let [ptr] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::NativePtrIsNull { ptr: *ptr },
+                    self.top_level_class_for_ty(
+                        semantic_return_ty(self.db, semantic),
+                        AddressSpaceKind::Memory,
+                    ),
+                )
+            }
             RuntimeBuiltinFuncKind::PtrOffsetBytes => {
                 let [ptr, offset] = args else { return None };
                 let RuntimeClass::RawAddr { space, pointee } = self.value_class(*ptr)? else {

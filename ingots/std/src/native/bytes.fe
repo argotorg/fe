@@ -1,0 +1,109 @@
+use core::Option
+use core::ptr
+
+// These private declarations have compiler-owned memory contracts. Raw addresses
+// never leave this module: ByteBuffer is the allocation owner.
+extern {
+    fn malloc(size: u64) -> *u8
+    fn free(_ address: *u8)
+    fn is_null(_ address: *u8) -> bool
+}
+
+// Supported native hosts have 64-bit pointers. Keep each object within PTRDIFF_MAX.
+const MAX_CAPACITY: u64 = 0x7fffffffffffffff
+
+/// A native heap byte buffer with explicit ownership and release.
+///
+/// Growth is fallible, preserves existing bytes, and initializes new bytes to zero.
+/// Shrinking or clearing retains capacity; later growth zeroes the exposed range.
+/// Call `release` exactly once when the owner is no longer needed. Dropping the
+/// value does not implicitly release memory. No borrowed/raw byte views escape.
+pub struct ByteBuffer {
+    allocation: Option<*u8>,
+    len: u64,
+    capacity: u64,
+}
+
+impl ByteBuffer {
+    pub fn new() -> Self {
+        Self { allocation: Option::None, len: 0, capacity: 0 }
+    }
+
+    pub fn len(self) -> u64 { self.len }
+
+    pub fn capacity(self) -> u64 { self.capacity }
+
+    fn data(self) -> *u8 {
+        match self.allocation {
+            Option::Some(address) => address
+            Option::None => core::panic()
+        }
+    }
+
+    /// Resize without changing the buffer when the request or allocation fails.
+    pub fn try_resize(mut self, _ len: u64) -> bool {
+        if len > MAX_CAPACITY { return false }
+        if len > self.capacity {
+            let mut capacity: u64 = if self.capacity == 0 { 32 } else { self.capacity }
+            while capacity < len {
+                if capacity > MAX_CAPACITY / 2 {
+                    capacity = len
+                } else {
+                    capacity *= 2
+                }
+            }
+            let replacement = malloc(size: capacity)
+            if is_null(replacement) { return false }
+            match self.allocation {
+                Option::Some(address) => {
+                    ptr::copy_raw(dest: replacement, source: address, len: self.len as u256)
+                    free(address)
+                }
+                Option::None => {}
+            }
+            self.allocation = Option::Some(replacement)
+            self.capacity = capacity
+        }
+        if len > self.len {
+            ptr::zero_bytes(
+                ptr: ptr::offset(self.data(), self.len as u256),
+                len: (len - self.len) as u256,
+            )
+        }
+        self.len = len
+        true
+    }
+
+    pub fn byte_at(self, _ index: u64) -> u8 {
+        core::assert(index < self.len)
+        *ptr::offset(self.data(), index as u256)
+    }
+
+    pub fn set_byte(mut self, index: u64, value: u8) {
+        core::assert(index < self.len)
+        *ptr::offset(self.data(), index as u256) = value
+    }
+
+    /// Copy within the initialized extent, preserving overlapping source bytes.
+    pub fn copy_within(mut self, dest: u64, source: u64, len: u64) {
+        core::assert(dest <= self.len && len <= self.len - dest)
+        core::assert(source <= self.len && len <= self.len - source)
+        if len == 0 { return }
+        ptr::copy_raw(
+            dest: ptr::offset(self.data(), dest as u256),
+            source: ptr::offset(self.data(), source as u256),
+            len: len as u256,
+        )
+    }
+
+    /// Reset the logical extent while retaining reusable storage.
+    pub fn clear(mut self) { self.len = 0 }
+
+    /// Release the allocation and consume the owner.
+    pub fn release(own self) {
+        match self.allocation {
+            Option::Some(address) => free(address)
+            Option::None => {}
+        }
+    }
+}

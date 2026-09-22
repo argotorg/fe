@@ -690,3 +690,169 @@ fn native_memory_copy_checks_native_ranges_and_ignores_empty_addresses() {
         }
     }
 }
+
+#[test]
+fn native_byte_buffer_preserves_contents_and_reuses_zeroed_storage() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("byte_buffer.fe");
+    fs::write(
+        &source,
+        r#"
+use std::native::ByteBuffer
+fn consume(buffer: own ByteBuffer) { buffer.release() }
+pub fn main() -> i32 {
+    let mut empty = ByteBuffer::new()
+    core::assert(empty.len() == 0 && empty.capacity() == 0)
+    empty.copy_within(dest: 0, source: 0, len: 0)
+    empty.release()
+    let mut round: u64 = 0
+    while round < 8 {
+        let mut buffer = ByteBuffer::new()
+        core::assert(buffer.try_resize(33))
+        let mut i: u64 = 0
+        while i < 33 {
+            core::assert(buffer.byte_at(i) == 0)
+            buffer.set_byte(index: i, value: (i + 1).downcast_truncate())
+            i += 1
+        }
+        core::assert(buffer.try_resize(3000))
+        i = 0
+        while i < 3000 {
+            let expected: u8 = if i < 33 { (i + 1).downcast_truncate() } else { 0 }
+            core::assert(buffer.byte_at(i) == expected)
+            i += 1
+        }
+        buffer.copy_within(dest: 5, source: 0, len: 33)
+        i = 0
+        while i < 33 {
+            core::assert(buffer.byte_at(i + 5) == (i + 1).downcast_truncate())
+            i += 1
+        }
+        buffer.copy_within(dest: 0, source: 5, len: 33)
+        buffer.copy_within(dest: 0, source: 0, len: 33)
+        i = 0
+        while i < 33 {
+            core::assert(buffer.byte_at(i) == (i + 1).downcast_truncate())
+            i += 1
+        }
+        let capacity = buffer.capacity()
+        core::assert(!buffer.try_resize(0xffffffffffffffff))
+        core::assert(buffer.len() == 3000 && buffer.capacity() == capacity)
+        core::assert(buffer.byte_at(32) == 33)
+        core::assert(buffer.try_resize(8))
+        core::assert(buffer.try_resize(40))
+        i = 0
+        while i < 40 {
+            let expected: u8 = if i < 8 { (i + 1).downcast_truncate() } else { 0 }
+            core::assert(buffer.byte_at(i) == expected)
+            i += 1
+        }
+        buffer.clear()
+        core::assert(buffer.len() == 0 && buffer.capacity() == capacity)
+        core::assert(buffer.try_resize(3000))
+        i = 0
+        while i < 3000 {
+            core::assert(buffer.byte_at(i) == 0)
+            i += 1
+        }
+        consume(buffer)
+        round += 1
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("byte_buffer")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_byte_buffer_allocation_failure_is_atomic_and_storage_is_released() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("allocation_failure.fe");
+    fs::write(
+        &source,
+        r#"
+use std::native::ByteBuffer
+pub fn main() -> i32 {
+    let mut empty = ByteBuffer::new()
+    core::assert(!empty.try_resize(3000))
+    core::assert(empty.len() == 0 && empty.capacity() == 0)
+    empty.release()
+    let mut buffer = ByteBuffer::new()
+    core::assert(buffer.try_resize(513))
+    core::assert(buffer.capacity() == 1024)
+    let mut i: u64 = 0
+    while i < 513 {
+        core::assert(buffer.byte_at(i) == 0)
+        buffer.set_byte(index: i, value: (i % 251).downcast_truncate())
+        i += 1
+    }
+    core::assert(buffer.try_resize(1500))
+    core::assert(buffer.capacity() == 2048)
+    core::assert(!buffer.try_resize(3000))
+    core::assert(buffer.len() == 1500 && buffer.capacity() == 2048)
+    i = 0
+    while i < 1500 {
+        let expected: u8 = if i < 513 { (i % 251).downcast_truncate() } else { 0 }
+        core::assert(buffer.byte_at(i) == expected)
+        i += 1
+    }
+    buffer.clear()
+    buffer.release()
+    0
+}
+"#,
+    )
+    .unwrap();
+    let allocator =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/byte_buffer_allocator.c");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        let report = temp.path().join(format!("report-{level}.tar.gz"));
+        build(
+            &source,
+            &out,
+            level,
+            &["--report", "--report-out", report.to_str().unwrap()],
+        );
+        let listing = Command::new("tar")
+            .arg("-tzf")
+            .arg(&report)
+            .output()
+            .unwrap();
+        assert!(listing.status.success(), "{listing:?}");
+        let listing = String::from_utf8(listing.stdout).unwrap();
+        let objects: Vec<_> = listing
+            .lines()
+            .filter(|name| name.ends_with("/allocation_failure.o"))
+            .collect();
+        assert_eq!(objects.len(), 1, "{listing}");
+        let extracted = Command::new("tar")
+            .arg("-xOf")
+            .arg(&report)
+            .arg(objects[0])
+            .output()
+            .unwrap();
+        assert!(extracted.status.success(), "{extracted:?}");
+        let object = out.join("allocation_failure.o");
+        fs::write(&object, extracted.stdout).unwrap();
+        let executable = out.join("controlled_allocator");
+        let linked = Command::new("cc")
+            .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-fno-builtin"])
+            .arg(&object)
+            .arg(&allocator)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(linked.status.success(), "{linked:?}");
+        let result = Command::new(&executable).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}

@@ -292,28 +292,27 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
     }
 
     fn lower_signature(&mut self, function: RuntimeFunction<'db>) -> Result<Signature, LowerError> {
-        let signature = function.instance(self.db).interface_signature(self.db);
+        let instance = function.instance(self.db);
+        let signature = instance.interface_signature(self.db);
         let mut args = signature
             .params
             .iter()
-            .map(|param| self.ty_for_class(&param.class))
+            .map(|param| self.ty_for_signature_class(instance, &param.class))
             .collect::<Result<Vec<_>, _>>()?;
         let ret = signature
             .ret
             .as_ref()
-            .map(|class| self.ty_for_class(class))
+            .map(|class| self.ty_for_signature_class(instance, class))
             .transpose()?;
-        let instance = function.instance(self.db);
         let symbol = self.function_symbol(instance);
         if function.linkage(self.db) == RuntimeLinkage::External
             && (!self.is_native_target()
-                || args
-                    .iter()
-                    .chain(ret.iter())
-                    .any(|ty| !matches!(ty, Type::I32 | Type::I64)))
+                || args.iter().chain(ret.iter()).any(|ty| {
+                    !matches!(ty, Type::I32 | Type::I64) && !ty.is_pointer(&self.builder.ctx)
+                }))
         {
             return Err(LowerError::Unsupported(format!(
-                "extern function `{symbol}` requires a native target and i32/i64 ABI values"
+                "extern function `{symbol}` requires a native target and i32/i64 or raw-pointer ABI values"
             )));
         }
         // Sonatina may add an out pointer for a compound return value. Reserve
@@ -611,6 +610,23 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         let name = format!("layout_{}", self.layout_names.len());
         self.layout_names.insert(layout, name.clone());
         name
+    }
+
+    // Runtime raw addresses use word values internally. Host calls instead pass
+    // machine pointers directly, without the native i256 indirect-value ABI.
+    fn ty_for_signature_class(
+        &mut self,
+        instance: RuntimeInstance<'db>,
+        class: &RuntimeClass<'db>,
+    ) -> Result<Type, LowerError> {
+        if self.is_native_target()
+            && instance.is_external_declaration(self.db)
+            && matches!(class, RuntimeClass::RawAddr { .. })
+        {
+            Ok(self.builder.ptr_type(Type::I8))
+        } else {
+            self.ty_for_class(class)
+        }
     }
 
     fn ty_for_class(&mut self, class: &RuntimeClass<'db>) -> Result<Type, LowerError> {
@@ -1273,7 +1289,16 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         args: &[RLocalId],
     ) -> Result<SmallVec<[ValueId; 8]>, LowerError> {
         let Some(&pack_ty) = self.module.argument_packs.get(&callee) else {
-            return args.iter().map(|arg| self.local_value(*arg)).collect();
+            let signature = callee.interface_signature(self.module.db);
+            return args
+                .iter()
+                .zip(&signature.params)
+                .map(|(arg, param)| {
+                    let value = self.local_value(*arg)?;
+                    let ty = self.module.ty_for_signature_class(callee, &param.class)?;
+                    self.coerce_value_to_ty(value, ty)
+                })
+                .collect();
         };
         let ref_ty = self.fb.module_builder.objref_type(pack_ty);
         let pack = self
@@ -1650,7 +1675,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let ret = callee.interface_signature(self.module.db).ret;
                 match ret {
                     Some(class) => {
-                        let ret_ty = self.module.ty_for_class(&class)?;
+                        let ret_ty = self.module.ty_for_signature_class(*callee, &class)?;
                         let value = self.fb.insert_inst(
                             Call::new(self.module.inst_set(), callee_ref, args),
                             ret_ty,
@@ -2595,6 +2620,16 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             RuntimeBuiltin::Malloc { size } => {
                 let size = self.local_value(*size)?;
                 self.allocate_bytes(size, Type::I8)?
+            }
+            RuntimeBuiltin::NativePtrIsNull { ptr } => {
+                if !self.module.is_native_target() {
+                    return Err(LowerError::Unsupported(
+                        "native pointer null checks require a native target".into(),
+                    ));
+                }
+                let ptr = self.local_value(*ptr)?;
+                self.fb
+                    .insert_inst(IsZero::new(self.module.inst_set(), ptr), Type::I1)
             }
             RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
                 let ptr = self.local_value(*ptr)?;
