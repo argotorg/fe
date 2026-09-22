@@ -808,7 +808,23 @@ fn derive_state_mutability(
         return "payable".to_string();
     }
 
+    // EVM memory is local to the call. Reading or writing RawMem cannot
+    // observe or mutate chain state and must not change ABI mutability.
+    let raw_mem = resolve_lib_trait_path(
+        db,
+        arm_view.contract(db).scope(),
+        "std::evm::effects::RawMem",
+    );
     let effects = arm_view.effective_effect_requirements(db);
+    let effects: Vec<_> = effects
+        .iter()
+        .filter(|effect| {
+            !effect
+                .key
+                .key_trait()
+                .is_some_and(|inst| Some(inst.def(db)) == raw_mem)
+        })
+        .collect();
     if effects.is_empty() {
         "pure".to_string()
     } else if effects.iter().any(|effect| effect.is_mut) {
@@ -1936,5 +1952,40 @@ pub contract C {
             !entries.iter().any(|entry| entry["type"] == "error"),
             "{entries:?}"
         );
+    }
+    #[test]
+    fn memory_effects_do_not_change_abi_state_mutability() {
+        let code = r#"
+use std::abi::sol
+use std::evm::{RawMem, RawStorage}
+msg M {
+    #[selector = sol("memoryOnly()")]
+    MemoryOnly {},
+    #[selector = sol("readMemory()")]
+    ReadMemory {},
+    #[selector = sol("readStorage()")]
+    ReadStorage {},
+    #[selector = sol("writeStorage()")]
+    WriteStorage {},
+}
+pub contract C {
+    recv M {
+        MemoryOnly {} uses (mem: mut RawMem) {}
+        ReadMemory {} uses (mem: RawMem) {}
+        ReadStorage {} uses (mem: mut RawMem, storage: RawStorage) {}
+        WriteStorage {} uses (mem: mut RawMem, storage: mut RawStorage) {}
+    }
+}
+"#;
+        let entries = abi_entries(code, "C");
+        for (name, expected) in [
+            ("memoryOnly", "pure"),
+            ("readMemory", "pure"),
+            ("readStorage", "view"),
+            ("writeStorage", "nonpayable"),
+        ] {
+            let entry = entries.iter().find(|entry| entry["name"] == name).unwrap();
+            assert_eq!(entry["stateMutability"], expected);
+        }
     }
 }
