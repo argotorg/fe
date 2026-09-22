@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/symbolic_blocks_are_explicitly_bounded_but_concrete_blocks_evaluate/concrete_block.fe
+---
+answer() = 42

@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/forwarding_uses_substituted_semantic_identity/false_root.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ false_root.fe:3:29
+  │
+2 │ const fn forward<const RENAMED: usize>() -> u256 where RENAMED > 0 { bounded<RENAMED>() }
+  │                                                        ----------- required by this predicate
+3 │ const fn answer() -> u256 { forward<0>() }
+  │                             ^^^^^^^^^^^^ condition evaluated to `false`

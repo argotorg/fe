@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/ground_and_boolean_requirements_work_in_generic_functions/boolean.fe
+---
+answer() = 42

@@ -1,0 +1,5 @@
+const fn allowed(_ n: usize) -> bool { n > 0 }
+const fn different(_ n: usize) -> bool { n > 0 }
+const fn bounded<const N: usize>() -> u256 where allowed(N) { 42 }
+const fn forward<const A: usize, const B: usize>() -> u256 where allowed(B) { bounded<B>() }
+const fn answer() -> u256 { forward<0, 1>() }

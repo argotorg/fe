@@ -1,4 +1,5 @@
 mod callable;
+mod const_requirements;
 mod contract;
 mod effect_env;
 pub(crate) mod env;
@@ -297,8 +298,8 @@ fn diag_depends_on_param_instantiation<'db>(
     }
 }
 
-/// Ground predicates are declaration obligations, never solver assumptions.
-/// Reject all generic scopes until substitution and every use-site gate exist.
+/// Ground predicates are declaration obligations. Top-level generic functions
+/// retain parameter-dependent predicates for substitution at each use site.
 /// A failed or unsupported evaluation must never count as a satisfied condition.
 pub(crate) fn check_where_const_predicates<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -321,10 +322,15 @@ pub(crate) fn check_where_const_predicates<'db>(
     if predicates.is_empty() {
         return diags;
     }
+    let generic_function = match owner {
+        WhereClauseOwner::Func(func) if !func.is_associated_func(db) => Some(func),
+        _ => None,
+    };
     let mut item = Some(crate::hir_def::ItemKind::from(owner));
     while let Some(current) = item {
         if let Some(params) = GenericParamOwner::from_item_opt(current)
             && !collect_generic_params(db, params).params(db).is_empty()
+            && generic_function.is_none_or(|func| current != crate::hir_def::ItemKind::Func(func))
         {
             diags.extend(
                 predicates.iter().map(|body| {
@@ -339,9 +345,17 @@ pub(crate) fn check_where_const_predicates<'db>(
     for &body in &predicates {
         let expected = TyId::bool(db);
         let body_owner = BodyOwner::AnonConstBody { body, expected };
-        let (body_diags, _) = check_anon_const_body(db, body, expected);
+        let (body_diags, _) = const_requirements::check_predicate_formation(db, body);
         if !body_diags.is_empty() && !static_assert_ignorable_type_diags(db, body_diags) {
             diags.extend(body_diags.iter().cloned());
+            continue;
+        }
+        if let Some(func) = generic_function
+            && !collect_generic_params(db, func.into())
+                .params(db)
+                .is_empty()
+            && const_requirements::predicate_may_depend_on_params(db, body)
+        {
             continue;
         }
         let outcome = eval_body_owner_const(db, body_owner, Vec::new());
@@ -563,6 +577,40 @@ pub(super) fn check_body<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    let (mut diags, mut typed_body) = infer_body(db, owner).clone();
+    if diags.is_empty() || static_assert_ignorable_type_diags(db, &diags) {
+        diags.extend(const_requirements::check_body_requirements(
+            db,
+            owner,
+            &typed_body,
+        ));
+    }
+    typed_body.has_diagnostics = !diags.is_empty();
+    (diags, typed_body)
+}
+
+/// Inference and const-language checking, without requirement discharge.
+/// CTFE consumes this completed template. It must not re-enter the enclosing
+/// discharge query by requesting a checked body while evaluating a predicate.
+/// Compiler diagnostics still use the checked body entry points above.
+pub(crate) fn infer_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> &'db (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    infer_body_query(db, BodyInferenceKey::new(db, owner))
+}
+
+#[salsa::interned]
+struct BodyInferenceKey<'db> {
+    owner: BodyOwner<'db>,
+}
+
+#[salsa::tracked(return_ref, cycle_initial=infer_body_cycle_initial, cycle_fn=infer_body_cycle_recover)]
+fn infer_body_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: BodyInferenceKey<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    let owner = key.owner(db);
     let Ok(mut checker) = TyChecker::new(db, owner) else {
         return (
             Vec::new(),
@@ -591,6 +639,55 @@ pub(super) fn check_body<'db>(
     typed_body.has_diagnostics = !diags.is_empty();
 
     (diags, typed_body)
+}
+
+// A requirement evaluated from a type expression can depend on the body
+// currently being inferred. Start that cycle with a failed template, never a
+// provisional successful value; existing query handlers may still iterate.
+fn infer_body_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: BodyInferenceKey<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    let mut typed = TypedBody::empty(db);
+    typed.has_diagnostics = true;
+    typed.result_ty = TyId::invalid(db, InvalidCause::TypeLoweringCycle);
+    let span = key
+        .owner(db)
+        .body(db)
+        .map(|body| body.span().into())
+        .unwrap_or_else(DynLazySpan::invalid);
+    (
+        vec![FuncBodyDiag::Ty(
+            TyLowerDiag::TypeLoweringCycle(span).into(),
+        )],
+        typed,
+    )
+}
+
+fn infer_body_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &(Vec<FuncBodyDiag<'db>>, TypedBody<'db>),
+    _count: u32,
+    _key: BodyInferenceKey<'db>,
+) -> salsa::CycleRecoveryAction<(Vec<FuncBodyDiag<'db>>, TypedBody<'db>)> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+/// A failed requirement in a type expression must not supply a CTFE value
+/// that could make the same requirement succeed on a later cycle iteration.
+pub(crate) fn inference_has_failed_const_requirements(diags: &[FuncBodyDiag<'_>]) -> bool {
+    diags.iter().any(|diag| {
+        matches!(
+            diag,
+            FuncBodyDiag::Body(
+                BodyDiag::ConstRequirementNotSatisfied { .. }
+                    | BodyDiag::RecursiveConstRequirement(_)
+            ) | FuncBodyDiag::Ty(TyDiagCollection::Ty(
+                TyLowerDiag::ConstRequirementNotSatisfied { .. }
+                    | TyLowerDiag::TypeLoweringCycle(_)
+            ))
+        )
+    })
 }
 
 /// Forces evaluation of a const item's value and reports failures
@@ -3158,7 +3255,7 @@ pub enum ReturnProvenance {
     cycle_initial=func_return_provenance_cycle_initial
 )]
 fn func_return_provenance<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> ReturnProvenance {
-    let (diags, typed_body) = check_func_body(db, func);
+    let (diags, typed_body) = infer_body(db, BodyOwner::Func(func));
     if !diags.is_empty() {
         return ReturnProvenance::Unknown;
     }
@@ -4015,7 +4112,7 @@ impl<'db> TypedBody<'db> {
             return None;
         }
 
-        let (diags, typed_body) = check_func_body(db, func);
+        let (diags, typed_body) = infer_body(db, BodyOwner::Func(func));
         if !diags.is_empty() {
             seen.remove(&func);
             return None;

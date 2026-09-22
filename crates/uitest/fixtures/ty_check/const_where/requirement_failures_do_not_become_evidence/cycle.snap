@@ -1,0 +1,18 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/requirement_failures_do_not_become_evidence/cycle.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ cycle.fe:2:23
+  │
+1 │ const fn bounded<const N: usize>() -> bool where bounded<N>() { true }
+  │                                                  ------------ required by this predicate
+2 │ fn answer() -> bool { bounded<0>() }
+  │                       ^^^^^^^^^^^^ recursive const requirement cannot establish itself
+
+error[8-0094]: recursive const requirement
+  ┌─ cycle.fe:1:50
+  │
+1 │ const fn bounded<const N: usize>() -> bool where bounded<N>() { true }
+  │                                                  ^^^^^^^^^^^^ a requirement cannot establish itself

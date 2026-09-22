@@ -23,8 +23,48 @@ limits are errors. Conditions go through ordinary semantic borrow and layout
 checking as anonymous const bodies. They add no solver assumptions and do not
 filter impl candidates.
 
-Const conditions in generic scopes are rejected, including conditions that
-happen to look constant and a trait's implicit `Self` scope.
+Const conditions in generic types, traits, impls and associated functions are
+rejected, including a trait's implicit `Self` scope.
 
 A predicate that is a lone path naming a type, as in `where T`, is almost
 always a missing trait bound, so it is reported as one.
+
+## Generic functions
+
+A top-level generic function can state conditions on its parameters:
+
+```fe
+const fn bounded<const N: usize>() -> u256 where N > 0 { 42 }
+
+const fn forward<const COUNT: usize>() -> u256 where COUNT > 0 {
+    bounded<COUNT>()
+}
+
+const fn answer() -> u256 { forward<1>() }
+```
+
+The declaration checks each condition's type and that it uses only const
+operations. Each use of the function discharges its conditions after
+inference, so `bounded<0>()` is rejected even though the body never reads `N`.
+Function values and calls inside constant initializers, array lengths and other
+anonymous constant bodies use the same check. A ground condition on an unused
+generic function is still checked at its declaration; conditions that mention
+parameters become obligations of the callers.
+
+A concrete condition is evaluated with ordinary compile-time evaluation and its
+limits. A generic caller discharges a condition only by stating the same
+condition itself: after substituting the call's arguments, the two resolved,
+typed expressions must be identical. Parameter names do not matter; declaration
+identities, parameter positions, operations and arithmetic mode do. Forwarded
+expressions may use literals, const paths, unary and binary operations, casts
+and calls to const functions. This is exact forwarding, not implication:
+`N > 1` does not establish `N > 0`. Blocks and control flow can be evaluated
+with concrete arguments but cannot be forwarded. Anonymous constants do not
+inherit the enclosing function's conditions, and a requirement cannot
+establish itself.
+
+Inference and requirement discharge are separate queries, so evaluation can
+read a completed inference while a condition is being checked. Neither
+inference results nor evaluation results certify that a program meets its
+requirements; the compiler's diagnostics do. The checks are shared front-end
+logic, and no backend has its own evaluator for them.

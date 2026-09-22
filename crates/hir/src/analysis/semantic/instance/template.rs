@@ -6,11 +6,7 @@ use crate::{
             fold::{TyFoldable, TyFolder},
             trait_def::TraitInstId,
             trait_resolution::PredicateListId,
-            ty_check::{
-                BodyOwner, EffectProviderSpecialization, TypedBody, check_anon_const_body,
-                check_const_body, check_contract_init_body, check_contract_recv_arm_body,
-                check_func_body,
-            },
+            ty_check::{BodyOwner, EffectProviderSpecialization, TypedBody, infer_body},
             ty_def::{TyData, TyId},
         },
     },
@@ -27,21 +23,7 @@ pub fn typed_body_template<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> TypedBodyTemplate<'db> {
-    let typed_body = match owner {
-        BodyOwner::Func(func) => check_func_body(db, func).1.clone(),
-        BodyOwner::Const(const_) => check_const_body(db, const_).1.clone(),
-        BodyOwner::AnonConstBody { body, expected } => {
-            check_anon_const_body(db, body, expected).1.clone()
-        }
-        BodyOwner::ContractInit { contract } => check_contract_init_body(db, contract).1.clone(),
-        BodyOwner::ContractRecvArm {
-            contract,
-            recv_idx,
-            arm_idx,
-        } => check_contract_recv_arm_body(db, contract, recv_idx, arm_idx)
-            .1
-            .clone(),
-    };
+    let typed_body = infer_body(db, owner).1.clone();
 
     TypedBodyTemplate {
         owner,

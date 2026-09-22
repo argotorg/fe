@@ -1,0 +1,2 @@
+fn flag(_ n: usize) -> bool { n > 0 }
+fn unused<const N: usize>() where flag(N) {}

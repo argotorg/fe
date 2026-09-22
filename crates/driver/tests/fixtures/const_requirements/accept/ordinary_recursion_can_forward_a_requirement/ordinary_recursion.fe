@@ -1,0 +1,2 @@
+const fn repeat<const N: usize>(_ count: usize) -> u256 where N > 0 { if count == 0 { 42 } else { repeat<N>(count - 1) } }
+const fn answer() -> u256 { repeat<1>(3) }

@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/nested_const_contexts_check_requirements_with_positive_controls/return_type_0.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ return_type_0.fe:2:23
+  │
+1 │ const fn length<const N: usize>() -> usize where N > 0 { 0 }
+  │                                                  ----- required by this predicate
+2 │ fn answer() -> [u8; { length<0>() }] { [] }
+  │                       ^^^^^^^^^^^ condition evaluated to `false`

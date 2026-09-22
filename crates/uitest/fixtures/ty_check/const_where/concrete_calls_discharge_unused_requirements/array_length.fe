@@ -1,0 +1,2 @@
+const fn bounded<const N: usize>() -> u256 where N > 0 { 42 }
+fn use_it() { let values: [u256; { bounded<0>() as usize }] = [] }

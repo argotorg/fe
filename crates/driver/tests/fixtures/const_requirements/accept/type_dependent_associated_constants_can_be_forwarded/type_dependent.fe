@@ -1,0 +1,8 @@
+trait Flag { const ALLOWED: bool }
+struct Yes {}
+struct No {}
+impl Flag for Yes { const ALLOWED: bool = true }
+impl Flag for No { const ALLOWED: bool = false }
+const fn bounded<T: Flag>() -> u256 where T::ALLOWED { 42 }
+const fn forward<U: Flag>() -> u256 where U::ALLOWED { bounded<U>() }
+const fn answer() -> u256 { forward<Yes>() }

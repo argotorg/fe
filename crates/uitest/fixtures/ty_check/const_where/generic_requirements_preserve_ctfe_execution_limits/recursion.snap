@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/generic_requirements_preserve_ctfe_execution_limits/recursion.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ recursion.fe:3:23
+  │
+2 │ const fn bounded<const N: usize>() -> u256 where condition(N) { 42 }
+  │                                                  ------------ required by this predicate
+3 │ fn answer() -> u256 { bounded<1>() }
+  │                       ^^^^^^^^^^^^ constant evaluation exceeded its recursion limit

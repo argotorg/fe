@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/identical_spelling_does_not_identify_a_predicate/same_declaration.fe
+---
+answer() = 42

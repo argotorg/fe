@@ -1,0 +1,21 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/concrete_calls_discharge_unused_requirements/array_length.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ array_length.fe:2:36
+  │
+1 │ const fn bounded<const N: usize>() -> u256 where N > 0 { 42 }
+  │                                                  ----- required by this predicate
+2 │ fn use_it() { let values: [u256; { bounded<0>() as usize }] = [] }
+  │                                    ^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0031]: type annotation is needed
+  ┌─ array_length.fe:2:19
+  │
+2 │ fn use_it() { let values: [u256; { bounded<0>() as usize }] = [] }
+  │                   ^^^^^^
+  │                   │
+  │                   type annotation is needed
+  │                   consider giving `: [_; 0]` here

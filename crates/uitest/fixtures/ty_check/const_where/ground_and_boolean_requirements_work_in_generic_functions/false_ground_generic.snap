@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/ground_and_boolean_requirements_work_in_generic_functions/false_ground_generic.fe
+---
+error[8-0091]: const where predicate failed
+  ┌─ false_ground_generic.fe:1:22
+  │
+1 │ fn unused<T>() where false {}
+  │                      ^^^^^ condition evaluated to `false`

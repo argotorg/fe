@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/forwarding_preserves_arithmetic_mode/arithmetic_mode.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ arithmetic_mode.fe:3:45
+  │
+2 │ mod first { pub fn bounded<const N: u8>() where N + 1 > N {} }
+  │                                                 --------- required by this predicate
+3 │ fn forward<const M: u8>() where M + 1 > M { first::bounded<M>() }
+  │                                             ^^^^^^^^^^^^^^^^^^^ no matching const requirement in the caller after substitution

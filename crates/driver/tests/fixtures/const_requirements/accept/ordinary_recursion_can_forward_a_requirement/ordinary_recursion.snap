@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/ordinary_recursion_can_forward_a_requirement/ordinary_recursion.fe
+---
+answer() = 42

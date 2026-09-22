@@ -1,0 +1,3 @@
+const fn bounded<const N: usize>() -> u256 where ({ let value = N
+ value > 0 }) { 42 }
+const fn answer() -> u256 { bounded<1>() }

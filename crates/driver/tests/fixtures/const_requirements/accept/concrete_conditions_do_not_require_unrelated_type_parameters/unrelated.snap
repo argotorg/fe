@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/concrete_conditions_do_not_require_unrelated_type_parameters/unrelated.fe
+---
+answer() = 42

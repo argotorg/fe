@@ -31,7 +31,10 @@ use crate::{
                 SaturatingArithmetic, core_primitive_wrapper_call_kind, ctfe_extern_intrinsic_kind,
             },
             normalize::normalize_ty,
-            ty_check::{BodyOwner, LocalBinding, ParamSite},
+            ty_check::{
+                BodyOwner, LocalBinding, ParamSite, infer_body,
+                inference_has_failed_const_requirements,
+            },
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
@@ -1173,12 +1176,25 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             BodyOwner::Func(func) if !func.is_const(self.db) => {
                 Err(CtfeError::NonConstCall { origin })
             }
+
             BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
                 Err(CtfeError::NotConstEvaluable { origin })
             }
-            BodyOwner::Func(_) | BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => instance
-                .admitted_body(self.db)
-                .map_err(|_| CtfeError::InvalidBody { origin }),
+            owner
+            @ (BodyOwner::Func(_) | BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. }) => {
+                let (diags, typed_body) = infer_body(self.db, owner);
+                if inference_has_failed_const_requirements(diags)
+                    || matches!(
+                        typed_body.result_ty().invalid_cause(self.db),
+                        Some(crate::analysis::ty::ty_def::InvalidCause::TypeLoweringCycle)
+                    )
+                {
+                    return Err(CtfeError::InvalidBody { origin });
+                }
+                instance
+                    .admitted_body(self.db)
+                    .map_err(|_| CtfeError::InvalidBody { origin })
+            }
         }
     }
 

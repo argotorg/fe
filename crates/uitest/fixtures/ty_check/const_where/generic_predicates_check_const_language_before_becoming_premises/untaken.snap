@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/generic_predicates_check_const_language_before_becoming_premises/untaken.fe
+---
+error[8-0062]: non-const call in `const fn`
+  ┌─ untaken.fe:2:47
+  │
+1 │ fn flag(_ n: usize) -> bool { n > 0 }
+  │    ---- callee defined here
+2 │ fn unused<const N: usize>() where (if false { flag(N) } else { true }) {}
+  │                                               ^^^^^^^ `flag` is not a `const fn`

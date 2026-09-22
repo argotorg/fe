@@ -1,0 +1,2 @@
+const fn length<const N: usize>() -> usize where N > 0 { 0 }
+fn answer() { let values: [u8; { length<0>() }] = [] }

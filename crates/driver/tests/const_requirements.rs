@@ -178,3 +178,128 @@ fn predicate_edits_match_fresh_compilation() {
         assert_eq!(warm.is_empty(), is_true);
     }
 }
+
+#[test]
+fn generic_requirement_edits_match_fresh_compilation_in_both_query_orders() {
+    use hir::analysis::ty::ty_check::check_func_body;
+    use salsa::Setter;
+    let (path, base) = fixture(
+        "relational/generic_requirement_edits_match_fresh_compilation_in_both_query_orders/edit_generic.fe",
+    );
+    for caller_first in [false, true] {
+        let mut db = database();
+        let file = input(&mut db, &path, &base);
+        for (condition, n) in [("N > 0", 1), ("N > 1", 1), ("N > 0", 1), ("N > 0", 0)] {
+            let source = if condition == "N > 1" {
+                edited(&base, "N > 0", "N > 1")
+            } else if n == 0 {
+                edited(&base, "bounded<1>()", "bounded<0>()")
+            } else {
+                base.clone()
+            };
+            file.set_text(&mut db).to(source.clone());
+            let func = named(&db, file, if caller_first { "answer" } else { "bounded" });
+            let _ = check_func_body(&db, func);
+            let warm = diagnostics(&db, file);
+            let mut fresh = database();
+            let fresh_file = input(&mut fresh, &path, &source);
+            assert_eq!(warm, diagnostics(&fresh, fresh_file));
+            assert_eq!(warm.is_empty(), condition == "N > 0" && n == 1);
+        }
+    }
+}
+
+#[test]
+fn cyclic_requirements_reject_independently_of_query_order() {
+    use hir::analysis::ty::ty_check::{check_anon_const_body, check_func_body};
+    use hir::analysis::ty::ty_def::TyId;
+    use hir::hir_def::WhereClauseOwner;
+    let (path, source) = fixture(
+        "relational/cyclic_requirements_reject_independently_of_query_order/cyclic_order.fe",
+    );
+    for predicate_first in [true, false] {
+        let mut db = database();
+        let file = input(&mut db, &path, &source);
+        let func = named(&db, file, "cyclic");
+        if predicate_first {
+            let body = WhereClauseOwner::Func(func)
+                .clause(&db)
+                .id
+                .const_predicates(&db)[0];
+            let _ = check_anon_const_body(&db, body, TyId::bool(&db));
+        } else {
+            let _ = check_func_body(&db, named(&db, file, "answer"));
+        }
+        let warm = diagnostics(&db, file);
+        assert!(warm.contains("recursive const requirement"), "{warm}");
+        let mut fresh = database();
+        let fresh_file = input(&mut fresh, &path, &source);
+        assert_eq!(warm, diagnostics(&fresh, fresh_file));
+    }
+}
+
+#[test]
+fn cached_evaluation_is_not_requirement_evidence() {
+    let (path, source) =
+        fixture("relational/cached_evaluation_is_not_requirement_evidence/evaluation_first.fe");
+    let mut db = database();
+    let file = input(&mut db, &path, &source);
+    let _ = eval_body_owner_const_with_args(
+        &db,
+        BodyOwner::Func(named(&db, file, "answer")),
+        Vec::new(),
+        Vec::new(),
+    );
+    let warm = diagnostics(&db, file);
+    assert!(
+        warm.contains("const requirement") && warm.contains("false"),
+        "{warm}"
+    );
+    let mut fresh = database();
+    let fresh_file = input(&mut fresh, &path, &source);
+    assert_eq!(warm, diagnostics(&fresh, fresh_file));
+}
+
+#[test]
+fn mutually_recursive_requirements_have_stable_diagnostics() {
+    use hir::analysis::ty::ty_check::check_func_body;
+    let (path, source) =
+        fixture("relational/mutually_recursive_requirements_have_stable_diagnostics/mutual.fe");
+    for first in ["first", "second", "answer"] {
+        let mut db = database();
+        let file = input(&mut db, &path, &source);
+        let _ = check_func_body(&db, named(&db, file, first));
+        let warm = diagnostics(&db, file);
+        assert!(warm.contains("recursive const requirement"), "{warm}");
+        let mut fresh = database();
+        let fresh_file = input(&mut fresh, &path, &source);
+        assert_eq!(warm, diagnostics(&fresh, fresh_file));
+    }
+}
+
+#[test]
+fn requirement_evaluation_cannot_reenter_an_unfinished_type_expression() {
+    use hir::analysis::ty::ty_check::check_func_body;
+    use salsa::Setter;
+    let (path, base) = fixture(
+        "relational/requirement_evaluation_cannot_reenter_an_unfinished_type_expression/type_cycle.fe",
+    );
+    for first in ["count", "answer"] {
+        let mut db = database();
+        let file = input(&mut db, &path, "");
+        for cyclic in [true, false, true] {
+            let source = if cyclic {
+                base.clone()
+            } else {
+                edited(&base, "if flag<1>()", "if true")
+            };
+            file.set_text(&mut db).to(source.clone());
+            let _ = check_func_body(&db, named(&db, file, first));
+            let warm = diagnostics(&db, file);
+            assert_eq!(warm.is_empty(), !cyclic, "{first}: {warm}");
+            let mut fresh = database();
+            let fresh_file = input(&mut fresh, &path, &source);
+            assert_eq!(warm, diagnostics(&fresh, fresh_file));
+        }
+    }
+}

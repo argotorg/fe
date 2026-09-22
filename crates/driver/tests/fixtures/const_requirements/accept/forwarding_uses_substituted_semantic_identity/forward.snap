@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/forwarding_uses_substituted_semantic_identity/forward.fe
+---
+answer() = 42

@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/forwarding_distinguishes_declarations_and_parameter_positions/positions.fe
+---
+answer() = 42

@@ -1,0 +1,3 @@
+const fn bounded<T, const N: usize>() -> u256 where N > 0 { 42 }
+const fn forward<T>() -> u256 { bounded<T, 1>() }
+const fn answer() -> u256 { forward<u256>() }

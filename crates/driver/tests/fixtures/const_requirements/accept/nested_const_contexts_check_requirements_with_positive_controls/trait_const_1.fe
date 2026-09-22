@@ -1,0 +1,4 @@
+const fn length<const N: usize>() -> usize where N > 0 { 0 }
+trait HasValue { const VALUE: usize }
+struct S {}
+impl HasValue for S { const VALUE: usize = length<1>() }
