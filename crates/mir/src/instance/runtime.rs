@@ -1,5 +1,6 @@
-use hir::analysis::semantic::{
-    SemanticInstance, check_semantic_borrows, check_semantic_boundaries,
+use hir::analysis::{
+    semantic::{SemanticInstance, check_semantic_borrows, check_semantic_boundaries},
+    ty::ty_check::BodyOwner,
 };
 use salsa::Update;
 
@@ -75,6 +76,9 @@ impl<'db> RuntimeInstance<'db> {
 
     #[salsa::tracked(return_ref)]
     pub fn calls(self, db: &'db dyn MirDb) -> Vec<RuntimeCallEdge<'db>> {
+        if self.is_external_declaration(db) {
+            return Vec::new();
+        }
         expect_lowered_runtime_body(db, self).direct_callees(db)
     }
 
@@ -83,6 +87,9 @@ impl<'db> RuntimeInstance<'db> {
         self,
         db: &'db dyn MirDb,
     ) -> Vec<crate::runtime::ConstRegionId<'db>> {
+        if self.is_external_declaration(db) {
+            return Vec::new();
+        }
         expect_lowered_runtime_body(db, self).referenced_const_regions(db)
     }
 
@@ -91,7 +98,18 @@ impl<'db> RuntimeInstance<'db> {
         self,
         db: &'db dyn MirDb,
     ) -> Vec<crate::runtime::RuntimeCodeRegion<'db>> {
+        if self.is_external_declaration(db) {
+            return Vec::new();
+        }
         expect_lowered_runtime_body(db, self).referenced_code_regions(db)
+    }
+}
+
+impl<'db> RuntimeInstance<'db> {
+    pub fn is_external_declaration(self, db: &'db dyn MirDb) -> bool {
+        self.key(db).semantic(db).is_some_and(|semantic| {
+            matches!(semantic.key(db).owner(db), BodyOwner::Func(func) if func.is_extern(db))
+        })
     }
 }
 

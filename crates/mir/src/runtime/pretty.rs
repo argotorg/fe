@@ -226,6 +226,7 @@ fn write_function_summary<'db>(
     let linkage = match function.linkage(db) {
         RuntimeLinkage::Private => "private",
         RuntimeLinkage::Internal => "internal",
+        RuntimeLinkage::External => "external",
     };
     let _ = writeln!(
         out,
@@ -242,6 +243,9 @@ fn write_function_summary<'db>(
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(out, "      const_refs: [{refs}]");
+    }
+    if function.linkage(db) == RuntimeLinkage::External {
+        return;
     }
     let body = function.instance(db).body(db);
     for line in format_runtime_body(db, &body).lines() {

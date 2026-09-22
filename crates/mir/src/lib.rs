@@ -27,8 +27,9 @@ pub use runtime::{
     ScalarClass, ScalarRepr, ScalarRole, StructLayout, VariantId,
     build_ingot_module_runtime_package, build_native_executable_package, build_runtime_package,
     build_test_runtime_package, format_runtime_body, format_runtime_body_excerpt,
-    format_runtime_package, format_runtime_verify_failure, runtime_instance_stable_key,
-    runtime_instance_symbol_key, scalar_raw_memory_size_bytes, serialize_const_region_bytes,
+    format_runtime_package, format_runtime_verify_failure, native_executable_entry,
+    runtime_instance_stable_key, runtime_instance_symbol_key, scalar_raw_memory_size_bytes,
+    serialize_const_region_bytes,
 };
 pub use verify::{
     VerifyError, resolve_runtime_place, resolve_runtime_place_address_class, verify_const_region,

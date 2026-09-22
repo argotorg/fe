@@ -9995,3 +9995,44 @@ fn run() -> i32 {
         Err(NormalizedBodyVerifyError::ExpressionType),
     );
 }
+
+#[test]
+fn host_io_contracts_preserve_live_native_borrows() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "host_io_borrows.fe".into(),
+        r#"
+use std::io::{Read, Write, host, read_char, write_char}
+fn run() -> i32 {
+    let mut value: i32 = 0
+    let borrowed = mut value
+    with (Read = host(), Write = host()) {
+        write_char(read_char())
+        borrowed = 42
+    }
+    value
+}
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let instance = func_instance(&db, module, "run");
+    check_semantic_borrows(&db, instance).unwrap();
+    check_semantic_boundaries(&db, instance).unwrap();
+    semantic_borrow_summary(&db, instance).unwrap().unwrap();
+}
+
+#[test]
+fn user_scalar_externs_still_require_effect_contracts() {
+    for name in ["getchar", "putchar", "abs", "unknown"] {
+        let diagnostics = checked_borrow_diags(&format!(
+            "extern {{ fn {name}(value: i32) -> i32 }}\nfn run() -> i32 {{ {name}(value: 42) }}"
+        ));
+        assert!(
+            diagnostics.contains(
+                "executable calls require concrete implementations or verified effect contracts"
+            ),
+            "{name}: {diagnostics}"
+        );
+    }
+}

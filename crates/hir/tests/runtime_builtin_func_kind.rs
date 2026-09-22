@@ -173,3 +173,33 @@ fn classifies_core_and_std_runtime_builtins() {
     );
     assert_eq!(array_elem_contract.memory, None);
 }
+
+#[test]
+fn host_io_memory_contracts_require_standard_library_identity() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "host_io_contracts.fe".into(),
+        r#"
+extern { fn getchar() -> i32 fn putchar(c: i32) -> i32 fn abs(value: i32) -> i32 }
+mod std { pub mod io { extern { pub fn getchar() -> i32 pub fn putchar(c: i32) -> i32 } } }
+fn anchor() {}
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    for func in module.all_funcs(&db) {
+        assert!(intrinsic_contract(&db, *func).is_none());
+    }
+
+    // Resolve via a separate module so the adversarial local `std` cannot shadow
+    // the real standard library when selecting the positive controls.
+    let file = db.new_stand_alone("host_io_trusted.fe".into(), "fn trusted() {}");
+    let (trusted, _) = db.top_mod(file);
+    db.assert_no_diags(trusted);
+    for path in ["std::io::getchar", "std::io::putchar"] {
+        let func = resolve_lib_func_path(&db, trusted.all_funcs(&db)[0].scope(), path).unwrap();
+        let contract = intrinsic_contract(&db, func).expect("trusted host I/O contract");
+        assert_eq!(contract.memory, Some(&[][..]), "{path}");
+        assert_eq!(contract.pointer_return, None, "{path}");
+    }
+}
