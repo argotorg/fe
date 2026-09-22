@@ -3,7 +3,7 @@
 //! resolved, typed expressions after scoped substitution, without evaluating
 //! unknown parameters or assuming the obligation being checked.
 use super::*;
-use crate::analysis::ty::binder::Binder;
+use crate::analysis::ty::{binder::Binder, fold::TyFoldable};
 use crate::hir_def::{ItemKind, UnOp, scope_graph::ScopeId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +31,32 @@ enum PredicateTerm<'db> {
     Call(Vec<PredicateKey<'db>>),
 }
 
+// Lexical lookup can retain impl-owned parameters, while callable arguments use
+// the method's flattened parameter list. Rebind only that impl into the method
+// before substitution, so inserted caller arguments are never substituted twice.
+fn canonical_method_params<'db, T: TyFoldable<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    scope: ScopeId<'db>,
+) -> T {
+    if let ItemKind::Func(func) = scope.item()
+        && let Some(ItemKind::Impl(impl_)) = scope.parent_item(db)
+    {
+        let params = collect_generic_params(db, func.into()).params(db);
+        return Binder::bind(value).instantiate_scoped(db, impl_.scope(), params);
+    }
+    value
+}
+
+fn substitute_requirement<'db, T: TyFoldable<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    scope: ScopeId<'db>,
+    args: &[TyId<'db>],
+) -> T {
+    Binder::bind(canonical_method_params(db, value, scope)).instantiate_scoped(db, scope, args)
+}
+
 fn predicate_key<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
@@ -39,7 +65,7 @@ fn predicate_key<'db>(
     scope: ScopeId<'db>,
     args: &[TyId<'db>],
 ) -> Option<PredicateKey<'db>> {
-    let subst = |ty| Binder::bind(ty).instantiate_scoped(db, scope, args);
+    let subst = |ty| substitute_requirement(db, ty, scope, args);
     let child = |expr| predicate_key(db, body, typed, expr, scope, args);
     let term = match expr.data(db, body).borrowed().to_opt()? {
         Expr::Lit(lit) => PredicateTerm::Literal(*lit),
@@ -52,7 +78,7 @@ fn predicate_key<'db>(
                 match typed.expr_const_ref(expr)? {
                     ConstRef::Const(constant) => PredicateTerm::Const(constant),
                     ConstRef::TraitConst(reference) => PredicateTerm::TraitConst(
-                        Binder::bind(reference.inst()).instantiate_scoped(db, scope, args),
+                        substitute_requirement(db, reference.inst(), scope, args),
                         reference.name(),
                     ),
                     ConstRef::InherentConst(reference) => PredicateTerm::InherentConst(
@@ -89,7 +115,7 @@ fn predicate_key<'db>(
         operation: typed
             .callable_expr(expr)
             .cloned()
-            .map(|callable| Binder::bind(callable).instantiate_scoped(db, scope, args)),
+            .map(|callable| substitute_requirement(db, callable, scope, args)),
         term,
     })
 }
@@ -137,6 +163,12 @@ pub(super) fn predicate_may_depend_on_params<'db>(
     predicate_flags(db, typed.clone()).contains(TyFlags::HAS_PARAM)
 }
 
+// Inherent calls keep ordinary method resolution. Requirements constrain the
+// resolved call; they do not participate in candidate selection.
+pub(super) fn function_requirements_supported(db: &dyn HirAnalysisDb, func: Func<'_>) -> bool {
+    !func.is_associated_func(db) || matches!(func.scope().parent_item(db), Some(ItemKind::Impl(_)))
+}
+
 // Requirements scope over function signatures/bodies and ADT fields, but
 // their formation must be checked without those assumptions. In particular,
 // nested anonymous constants inside a predicate are part of its formation.
@@ -158,7 +190,8 @@ fn premise_owner_in_scope<'db>(
     while let Some(scope) = current {
         match scope.item() {
             item @ (ItemKind::Func(_) | ItemKind::Struct(_) | ItemKind::Enum(_)) => {
-                if matches!(item, ItemKind::Func(func) if func.is_associated_func(db)) {
+                if matches!(item, ItemKind::Func(func) if !function_requirements_supported(db, func))
+                {
                     return None;
                 }
                 let candidate = WhereClauseOwner::from_item_opt(item)?;
@@ -244,7 +277,7 @@ pub(super) fn check_body_requirements<'db>(
             .where_clause(db)
             .const_predicates(db);
         if predicates.is_empty()
-            || func.is_associated_func(db)
+            || !function_requirements_supported(db, func)
             || collect_generic_params(db, func.into())
                 .params(db)
                 .is_empty()
@@ -418,8 +451,14 @@ fn discharge_requirement<'db>(
     if !diags.is_empty() && !static_assert_ignorable_type_diags(db, diags) {
         return diags.clone();
     }
-    let mut instantiated = Binder::bind(typed.clone()).instantiate_scoped(
+    let args = if let Some(caller) = caller {
+        canonical_method_params(db, args, ItemKind::from(caller).scope())
+    } else {
+        args
+    };
+    let mut instantiated = substitute_requirement(
         db,
+        typed.clone(),
         ItemKind::from(declaration).scope(),
         &args,
     );
@@ -427,11 +466,7 @@ fn discharge_requirement<'db>(
     // selection. Substitute these references only in this dependency view.
     for reference in instantiated.value_path_refs.values_mut().flatten() {
         if let ValuePathRef::TypeConst(ty) = reference {
-            *ty = Binder::bind(*ty).instantiate_scoped(
-                db,
-                ItemKind::from(declaration).scope(),
-                &args,
-            );
+            *ty = substitute_requirement(db, *ty, ItemKind::from(declaration).scope(), &args);
         }
     }
     let symbolic = predicate_flags(db, instantiated).contains(TyFlags::HAS_PARAM);

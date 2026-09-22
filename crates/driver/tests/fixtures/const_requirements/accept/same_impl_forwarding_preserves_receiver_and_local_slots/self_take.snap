@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/same_impl_forwarding_preserves_receiver_and_local_slots/self_take.fe
+---
+answer() = 3

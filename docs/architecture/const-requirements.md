@@ -23,9 +23,10 @@ limits are errors. Conditions go through ordinary semantic borrow and layout
 checking as anonymous const bodies. They add no solver assumptions and do not
 filter impl candidates.
 
-Generic functions, records and enums support conditions on their parameters,
-as described below. Const conditions in generic traits, impls and associated
-functions are rejected, including a trait's implicit `Self` scope.
+Generic functions, records, enums and inherent methods support conditions on
+their parameters, as described below. Const conditions in traits, trait impls
+with generic parameters and generic `impl` blocks themselves are rejected,
+including a trait's implicit `Self` scope.
 
 A predicate that is a lone path naming a type, as in `where T`, is almost
 always a missing trait bound, so it is reported as one.
@@ -67,7 +68,7 @@ Anonymous constants in an ordinary function's signature or body can forward
 that function's conditions. A predicate cannot use any of the function's
 conditions to justify itself, including through constants nested inside it,
 whatever the clause order. Nested declarations do not inherit the function's
-conditions. For example, a constrained helper can compute an array length in a
+conditions. Inherent methods follow the same rules. For example, a constrained helper can compute an array length in a
 signature:
 
 ```fe
@@ -153,3 +154,32 @@ records, enums and array lengths. A predicate cannot use the enum's conditions
 to justify itself, but ordinary trait bounds are available when it is formed,
 as in `where T::ALLOWED`. Like records, constrained enums must be fully
 applied.
+
+## Inherent methods
+
+Inherent methods and associated functions can state conditions on both the
+impl's parameters and their own:
+
+```fe
+struct Window<const N: usize> { value: u256 }
+impl<const N: usize> Window<N> {
+    const fn take<const M: usize>(self) -> u256 where N > 0, M > N {
+        self.value
+    }
+}
+const fn answer() -> u256 { Window<1> { value: 42 }.take<2>() }
+```
+
+The checker discharges the conditions of the method that ordinary resolution
+picked. Conditions do not select methods, resolve ambiguity or provide a
+fallback. Receiver calls and qualified calls use the same conditions, even when
+the body does not use the parameters. Exact conditions can be forwarded between
+free functions and methods, including within signatures.
+
+The impl's parameters keep their identity in the method's leading generic
+slots, and the method's own parameters follow them. The checker maps the
+impl's parameters onto the method's before applying the call's arguments. This
+is only a view used for checking, not a change to the runtime ABI.
+
+Conditions on generic `impl` blocks themselves and on trait methods remain
+unsupported.

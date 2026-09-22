@@ -324,11 +324,23 @@ pub(crate) fn check_where_const_predicates<'db>(
         return diags;
     }
     let generic_declaration = match owner {
-        WhereClauseOwner::Func(func) if !func.is_associated_func(db) => {
+        WhereClauseOwner::Func(func)
+            if const_requirements::function_requirements_supported(db, func) =>
+        {
             Some(GenericParamOwner::Func(func))
         }
         WhereClauseOwner::Struct(record) => Some(GenericParamOwner::Struct(record)),
         WhereClauseOwner::Enum(enum_) => Some(GenericParamOwner::Enum(enum_)),
+        _ => None,
+    };
+    // Inherent method parameter lists include their impl's generic parameters.
+    // Requirement substitution reconciles their owners. Other generic contexts remain
+    // unsupported, including trait methods and nested generic declarations.
+    let inherited_impl = match owner {
+        WhereClauseOwner::Func(func) => func
+            .scope()
+            .parent_item(db)
+            .filter(|item| matches!(item, crate::hir_def::ItemKind::Impl(_))),
         _ => None,
     };
     let mut item = Some(crate::hir_def::ItemKind::from(owner));
@@ -337,6 +349,7 @@ pub(crate) fn check_where_const_predicates<'db>(
             && !collect_generic_params(db, params).params(db).is_empty()
             && generic_declaration
                 .is_none_or(|declaration| current != crate::hir_def::ItemKind::from(declaration))
+            && Some(current) != inherited_impl
         {
             diags.extend(
                 predicates.iter().map(|body| {

@@ -488,3 +488,231 @@ fn enum_formation_cycles_reject_across_query_orders_and_edits() {
         }
     }
 }
+
+#[test]
+fn inherent_methods_check_receiver_and_method_arguments() {
+    use salsa::Setter;
+    for case in ["associated", "receiver", "qualified", "method_generic"] {
+        let mut db = database();
+        let (path, source) = fixture(&format!(
+            "relational/inherent_methods_check_receiver_and_method_arguments/{case}.fe"
+        ));
+        let file = input(&mut db, &path, &source);
+        let errors = diagnostics(&db, file);
+        assert!(errors.is_empty(), "unexpected diagnostics:\n{errors}");
+        assert_eq!(evaluate(&db, file, "answer"), "42");
+        let edited_source = edited(&source, "Window<1>", "Window<0>");
+        file.set_text(&mut db).to(edited_source);
+        let errors = diagnostics(&db, file);
+        assert!(
+            errors.contains("const requirement") && errors.contains("false"),
+            "{case}: {errors}"
+        );
+    }
+    let mut db = database();
+    let (path, source) =
+        fixture("relational/inherent_methods_check_receiver_and_method_arguments/method_false.fe");
+    let file = input(&mut db, &path, &source);
+    let errors = diagnostics(&db, file);
+    assert!(
+        errors.contains("const requirement") && errors.contains("false"),
+        "{errors}"
+    );
+}
+
+#[test]
+fn methods_forward_explicit_premises_across_binders() {
+    use salsa::Setter;
+    let mut db = database();
+    let (forward_path, forward_base) =
+        fixture("relational/methods_forward_explicit_premises_across_binders/forward.fe");
+    let forward_file = input(&mut db, &forward_path, &forward_base);
+    let errors = diagnostics(&db, forward_file);
+    assert!(errors.is_empty(), "unexpected diagnostics:\n{errors}");
+    assert_eq!(evaluate(&db, forward_file, "answer"), "42");
+    let forward_edited = edited(&forward_base, "where A > 0, B > A", "where A > 0");
+    forward_file.set_text(&mut db).to(forward_edited);
+    assert!(diagnostics(&db, forward_file).contains("const requirement"));
+
+    let (method_path, method_base) =
+        fixture("relational/methods_forward_explicit_premises_across_binders/method_forward.fe");
+    let method_file = input(&mut db, &method_path, &method_base);
+    let errors = diagnostics(&db, method_file);
+    assert!(errors.is_empty(), "unexpected diagnostics:\n{errors}");
+    assert_eq!(evaluate(&db, method_file, "answer"), "42");
+    let method_edited = edited(&method_base, "where N > 0", "");
+    method_file.set_text(&mut db).to(method_edited);
+    assert!(diagnostics(&db, method_file).contains("const requirement"));
+}
+
+#[test]
+fn method_signatures_can_forward_but_formation_cannot() {
+    use salsa::Setter;
+    let mut db = database();
+    let (signature_path, signature_base) =
+        fixture("relational/method_signatures_can_forward_but_formation_cannot/signature.fe");
+    let signature_file = input(&mut db, &signature_path, &signature_base);
+    let errors = diagnostics(&db, signature_file);
+    assert!(errors.is_empty(), "unexpected diagnostics:\n{errors}");
+    assert_eq!(evaluate(&db, signature_file, "answer"), "42");
+    let signature_edited = edited(&signature_base, "Window<1>", "Window<0>");
+    signature_file.set_text(&mut db).to(signature_edited);
+    assert!(diagnostics(&db, signature_file).contains("const requirement"));
+
+    let (formation_path, formation_base) =
+        fixture("relational/method_signatures_can_forward_but_formation_cannot/formation.fe");
+    let formation_n = edited(&formation_base, "length<1>()", "length<N>()");
+    let formation_file = input(&mut db, &formation_path, &formation_base);
+    for (source, argument_is_one) in [(formation_base.clone(), true), (formation_n.clone(), false)]
+    {
+        formation_file.set_text(&mut db).to(source);
+        let errors = diagnostics(&db, formation_file);
+        assert_eq!(errors.is_empty(), argument_is_one, "{errors}");
+        if !argument_is_one {
+            assert!(errors.contains("const requirement"), "{errors}");
+        }
+    }
+}
+
+#[test]
+fn method_signature_parameter_collection_is_query_order_independent() {
+    use hir::analysis::ty::ty_check::check_func_body;
+    use salsa::Setter;
+    let (path, base) = fixture(
+        "relational/method_signature_parameter_collection_is_query_order_independent/signature_order.fe",
+    );
+    let m0 = edited(&base, "read<2>(", "read<0>(");
+    let n0 = edited(&base, "Window<1>", "Window<0>");
+    for first in ["read", "answer"] {
+        let mut db = database();
+        let file = input(&mut db, &path, &base);
+        for (source, valid) in [
+            (base.clone(), true),
+            (m0.clone(), false),
+            (n0.clone(), false),
+            (base.clone(), true),
+        ] {
+            file.set_text(&mut db).to(source.clone());
+            let _ = check_func_body(&db, named(&db, file, first));
+            let warm = diagnostics(&db, file);
+            assert_eq!(warm.is_empty(), valid, "{first}: {warm}");
+            let mut fresh = database();
+            let fresh_file = input(&mut fresh, &path, &source);
+            assert_eq!(warm, diagnostics(&fresh, fresh_file));
+            if valid {
+                assert_eq!(evaluate(&db, file, "answer"), "42");
+            }
+        }
+    }
+}
+
+#[test]
+fn method_requirement_edits_match_fresh_databases() {
+    use hir::analysis::ty::ty_check::check_func_body;
+    use salsa::Setter;
+    let (path, base) =
+        fixture("relational/method_requirement_edits_match_fresh_databases/edits.fe");
+    let m1 = edited(&base, "take<2>()", "take<1>()");
+    let n0 = edited(&base, "Window<1>", "Window<0>");
+    for first in ["take", "answer"] {
+        let mut db = database();
+        let file = input(&mut db, &path, &base);
+        for (source, valid) in [
+            (base.clone(), true),
+            (m1.clone(), false),
+            (n0.clone(), false),
+            (base.clone(), true),
+        ] {
+            file.set_text(&mut db).to(source.clone());
+            let _ = check_func_body(&db, named(&db, file, first));
+            let warm = diagnostics(&db, file);
+            assert_eq!(warm.is_empty(), valid, "{first}: {warm}");
+            let mut fresh = database();
+            let fresh_file = input(&mut fresh, &path, &source);
+            assert_eq!(warm, diagnostics(&fresh, fresh_file));
+            if valid {
+                assert_eq!(evaluate(&db, file, "answer"), "42");
+            }
+        }
+    }
+}
+
+#[test]
+fn method_type_parameters_and_self_constants_keep_their_identity() {
+    use salsa::Setter;
+    let mut db = database();
+    let (type_param_path, type_param_base) = fixture(
+        "relational/method_type_parameters_and_self_constants_keep_their_identity/type_param.fe",
+    );
+    let type_param_no = edited(&type_param_base, "Holder<Yes>", "Holder<No>");
+    let type_param_file = input(&mut db, &type_param_path, &type_param_base);
+    for (source, valid) in [
+        (type_param_base.clone(), true),
+        (type_param_no.clone(), false),
+    ] {
+        type_param_file.set_text(&mut db).to(source);
+        let errors = diagnostics(&db, type_param_file);
+        assert_eq!(errors.is_empty(), valid, "{errors}");
+        if valid {
+            assert_eq!(evaluate(&db, type_param_file, "answer"), "42");
+        } else {
+            assert!(
+                errors.contains("const requirement") && errors.contains("false"),
+                "{errors}"
+            );
+        }
+    }
+
+    let (self_const_path, self_const_base) = fixture(
+        "relational/method_type_parameters_and_self_constants_keep_their_identity/self_const.fe",
+    );
+    let self_const_zero = edited(&self_const_base, "Window<1>", "Window<0>");
+    let self_const_file = input(&mut db, &self_const_path, &self_const_base);
+    for (source, valid) in [
+        (self_const_base.clone(), true),
+        (self_const_zero.clone(), false),
+    ] {
+        self_const_file.set_text(&mut db).to(source);
+        let errors = diagnostics(&db, self_const_file);
+        assert_eq!(errors.is_empty(), valid, "{errors}");
+        if valid {
+            assert_eq!(evaluate(&db, self_const_file, "answer"), "42");
+        } else {
+            assert!(
+                errors.contains("const requirement") && errors.contains("false"),
+                "{errors}"
+            );
+        }
+    }
+}
+
+#[test]
+fn method_formation_cycles_do_not_become_evidence() {
+    use hir::analysis::ty::ty_check::check_func_body;
+    use salsa::Setter;
+    let (path, base) =
+        fixture("relational/method_formation_cycles_do_not_become_evidence/cycle.fe");
+    let non_cyclic = edited(&base, "where Window<N>::allowed()", "where true");
+    for first in ["allowed", "answer"] {
+        let mut db = database();
+        let file = input(&mut db, &path, &base);
+        for (source, cyclic) in [
+            (base.clone(), true),
+            (non_cyclic.clone(), false),
+            (base.clone(), true),
+        ] {
+            file.set_text(&mut db).to(source.clone());
+            let _ = check_func_body(&db, named(&db, file, first));
+            let warm = diagnostics(&db, file);
+            assert_eq!(warm.is_empty(), !cyclic, "{warm}");
+            if cyclic {
+                assert!(warm.contains("const requirement"), "{warm}");
+            } else {
+                assert_eq!(evaluate(&db, file, "answer"), "true");
+            }
+            let mut fresh = database();
+            let fresh_file = input(&mut fresh, &path, &source);
+            assert_eq!(warm, diagnostics(&fresh, fresh_file));
+        }
+    }
+}

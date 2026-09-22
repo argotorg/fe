@@ -1,0 +1,2 @@
+struct S<const N: usize> {}
+impl<const N: usize> S<N> where N > 0 { fn read(self) {} }

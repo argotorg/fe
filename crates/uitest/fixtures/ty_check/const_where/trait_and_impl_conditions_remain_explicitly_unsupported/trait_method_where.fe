@@ -1,0 +1,1 @@
+trait Read<const N: usize> { fn read(self) where N > 0 {} }

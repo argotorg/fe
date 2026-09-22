@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/trait_and_impl_conditions_remain_explicitly_unsupported/trait_impl_method_where.fe
+---
+error[8-0092]: const where predicates are not supported here yet
+  ┌─ trait_impl_method_where.fe:3:58
+  │
+3 │ impl<const N: usize> Read<N> for S { fn read(self) where N > 0 {} }
+  │                                                          ^^^^^ not yet supported in traits, trait impls with generic parameters, generic `impl` blocks, or items nested in generic items
+  │
+  = const where predicates are supported on functions, structs, enums, and inherent methods, including methods of generic `impl` blocks

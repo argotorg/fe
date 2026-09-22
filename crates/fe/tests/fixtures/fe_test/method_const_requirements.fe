@@ -1,0 +1,31 @@
+struct Window<const N: usize> {
+    value: u256,
+}
+
+impl<const N: usize> Window<N> {
+    fn make(_ value: u256) -> Self where N > 0 {
+        Self { value }
+    }
+
+    fn read(self) -> u256 where N > 0 {
+        self.value
+    }
+
+    fn extend<const M: usize>(self) -> u256 where N > 0, M > N {
+        self.read() + (M as u256)
+    }
+}
+
+fn forward<const A: usize, const B: usize>(_ value: u256) -> u256
+    where A > 0, B > A
+{
+    Window<A>::make(value).extend<B>()
+}
+
+#[test]
+fn checked_method_calls() {
+    assert!(Window<1>::make(39).read() == 39)
+    assert!(Window<1>::read(Window { value: 40 }) == 40)
+    assert!(forward<1, 2>(40) == 42)
+    assert!(forward<2, 5>(40) == 45)
+}

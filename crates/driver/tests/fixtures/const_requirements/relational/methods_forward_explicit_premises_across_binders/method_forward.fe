@@ -1,0 +1,4 @@
+const fn helper<const K: usize>() -> u256 where K > 0 { 42 }
+struct Window<const N: usize> {}
+impl<const N: usize> Window<N> { const fn read(self) -> u256 where N > 0 { helper<N>() } }
+const fn answer() -> u256 { Window<1> {}.read() }

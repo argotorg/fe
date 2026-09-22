@@ -3464,13 +3464,22 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 span.resolve(db),
                 error_code,
             ),
-            Self::GenericConstPredicateUnsupported(span) => primary_diag(
-                severity,
-                "const where predicates in generic scopes are not supported yet",
-                "requires generic predicate substitution and use-site checking",
-                span.resolve(db),
-                error_code,
-            ),
+            Self::GenericConstPredicateUnsupported(span) => {
+                let mut diag = primary_diag(
+                    severity,
+                    "const where predicates are not supported here yet",
+                    "not yet supported in traits, trait impls with generic parameters, \
+                     generic `impl` blocks, or items nested in generic items",
+                    span.resolve(db),
+                    error_code,
+                );
+                diag.notes.push(
+                    "const where predicates are supported on functions, structs, enums, and \
+                     inherent methods, including methods of generic `impl` blocks"
+                        .to_string(),
+                );
+                diag
+            }
             Self::WhereTypeBoundMissing(span) => {
                 let mut diag = primary_diag(
                     severity,

@@ -1,0 +1,8 @@
+trait Flag { const ALLOWED: bool }
+struct Yes {}
+struct No {}
+impl Flag for Yes { const ALLOWED: bool = true }
+impl Flag for No { const ALLOWED: bool = false }
+struct Holder<T: Flag> {}
+impl<T: Flag> Holder<T> { const fn read(self) -> u256 where T::ALLOWED { 42 } }
+const fn answer() -> u256 { Holder<Yes> {}.read() }
