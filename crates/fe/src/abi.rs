@@ -8,7 +8,6 @@ use hir::{
         ty::{
             abi_ty::{self, AbiComponent, AbiTypeDesc, ParsedFunctionSignature},
             adt_def::AdtRef,
-            binder::Binder,
             corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
             fold::{AssocTySubst, TyFoldable},
             trait_def::{
@@ -449,7 +448,11 @@ fn instantiate_callable_typed_body<'db>(
     typed_body: hir::analysis::ty::ty_check::TypedBody<'db>,
     target: &VisitedFuncBody<'db>,
 ) -> hir::analysis::ty::ty_check::TypedBody<'db> {
-    let mut typed_body = Binder::bind(typed_body).instantiate(db, &target.generic_args);
+    let mut typed_body = hir::analysis::semantic::instantiate_with_generic_args(
+        db,
+        typed_body,
+        &target.generic_args,
+    );
     if let Some(trait_inst) = target.trait_inst {
         let mut subst = AssocTySubst::new(trait_inst);
         typed_body = typed_body.fold_with(db, &mut subst);
@@ -1987,5 +1990,34 @@ pub contract C {
             let entry = entries.iter().find(|entry| entry["name"] == name).unwrap();
             assert_eq!(entry["stateMutability"], expected);
         }
+    }
+
+    #[test]
+    fn abi_export_traverses_typed_calldata_encoding() {
+        let entries = abi_entries(
+            r#"// ABI-only export panics in instantiate_callable_typed_body on Fe aad737010.
+use std::abi::sol
+use std::evm::{Address, encode_msg_calldata}
+msg TokenMsg {
+    #[selector = sol("transfer(address,uint256)")]
+    Transfer { to: Address, amount: u256 } -> bool,
+}
+msg ProbeMsg {
+    #[selector = sol("probe()")]
+    Probe {},
+}
+pub contract EncodeMsgAbiProbe {
+    recv ProbeMsg {
+        Probe {} {
+            let encoded = encode_msg_calldata(
+                TokenMsg::Transfer { to: Address { inner: 1 }, amount: 1 },
+            )
+        }
+    }
+}
+"#,
+            "EncodeMsgAbiProbe",
+        );
+        assert!(entries.iter().any(|e| e["name"] == "probe"));
     }
 }
