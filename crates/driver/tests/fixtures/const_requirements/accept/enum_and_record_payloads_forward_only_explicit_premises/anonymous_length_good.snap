@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/enum_and_record_payloads_forward_only_explicit_premises/anonymous_length_good.fe
+---
+

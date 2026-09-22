@@ -1,0 +1,2 @@
+enum Choice<const N: usize> where N > 0 { Value(u256) }
+fn unused() { let constructor = Choice<1>::Value }

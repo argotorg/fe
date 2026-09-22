@@ -1,0 +1,7 @@
+trait Flag { const ALLOWED: bool }
+struct Yes {}
+struct No {}
+impl Flag for Yes { const ALLOWED: bool = true }
+impl Flag for No { const ALLOWED: bool = false }
+enum Choice<T: Flag> where T::ALLOWED { Empty }
+type Invalid = Choice<No>

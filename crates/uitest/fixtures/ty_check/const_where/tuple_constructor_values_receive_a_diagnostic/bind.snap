@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/tuple_constructor_values_receive_a_diagnostic/bind.fe
+---
+error[8-0095]: tuple-variant constructors cannot be used as values
+  ┌─ bind.fe:2:33
+  │
+2 │ fn unused() { let constructor = Choice<1>::Value }
+  │                                 ^^^^^^^^^^^^^^^^ call the constructor directly

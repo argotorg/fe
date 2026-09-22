@@ -1,0 +1,19 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/tuple_constructor_values_receive_a_diagnostic/pair.fe
+---
+error[8-0031]: type annotation is needed
+  ┌─ pair.fe:2:19
+  │
+2 │ fn unused() { let pair = (Choice<1>::Value, 0) }
+  │                   ^^^^
+  │                   │
+  │                   type annotation is needed
+  │                   consider giving `: (fn Value<1>, {integer})` here
+
+error[8-0095]: tuple-variant constructors cannot be used as values
+  ┌─ pair.fe:2:27
+  │
+2 │ fn unused() { let pair = (Choice<1>::Value, 0) }
+  │                           ^^^^^^^^^^^^^^^^ call the constructor directly

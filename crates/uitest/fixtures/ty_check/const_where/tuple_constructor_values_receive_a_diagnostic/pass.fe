@@ -1,0 +1,3 @@
+enum Choice<const N: usize> where N > 0 { Value(u256) }
+fn ignore<T>(_ item: T) {}
+fn unused() { ignore(Choice<1>::Value) }

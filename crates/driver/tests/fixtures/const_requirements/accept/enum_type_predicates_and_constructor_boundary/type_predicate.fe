@@ -1,0 +1,9 @@
+trait Flag { const ALLOWED: bool }
+struct Yes {}
+struct No {}
+impl Flag for Yes { const ALLOWED: bool = true }
+impl Flag for No { const ALLOWED: bool = false }
+enum Choice<T: Flag> where T::ALLOWED { Empty }
+const fn make<U: Flag>() -> Choice<U> where U::ALLOWED { Choice::Empty }
+const fn answer() -> u256 { let item = make<Yes>()
+ match item { Choice::Empty => 42 } }

@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/enum_type_predicates_and_constructor_boundary/type_alias.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ type_alias.fe:7:16
+  │
+6 │ enum Choice<T: Flag> where T::ALLOWED { Empty }
+  │                            ---------- required by this predicate
+7 │ type Invalid = Choice<No>
+  │                ^^^^^^^^^^ condition evaluated to `false`

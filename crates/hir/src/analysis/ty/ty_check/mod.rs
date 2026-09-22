@@ -300,7 +300,7 @@ fn diag_depends_on_param_instantiation<'db>(
 }
 
 /// Ground predicates are declaration obligations. Ordinary generic functions
-/// and records retain parameter-dependent predicates for substitution at uses.
+/// and ADTs retain parameter-dependent predicates for substitution at uses.
 /// A failed or unsupported evaluation must never count as a satisfied condition.
 pub(crate) fn check_where_const_predicates<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -328,6 +328,7 @@ pub(crate) fn check_where_const_predicates<'db>(
             Some(GenericParamOwner::Func(func))
         }
         WhereClauseOwner::Struct(record) => Some(GenericParamOwner::Struct(record)),
+        WhereClauseOwner::Enum(enum_) => Some(GenericParamOwner::Enum(enum_)),
         _ => None,
     };
     let mut item = Some(crate::hir_def::ItemKind::from(owner));

@@ -1,0 +1,3 @@
+enum Choice<const N: usize> where N > 0 { Empty, Tuple(u256), Record { value: u256 } }
+const fn length<const K: usize>() -> usize where K > 0 { 0 }
+enum Outer<const M: usize>  { Value([u8; { length<M>() }]) }

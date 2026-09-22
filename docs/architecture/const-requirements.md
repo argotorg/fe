@@ -23,9 +23,9 @@ limits are errors. Conditions go through ordinary semantic borrow and layout
 checking as anonymous const bodies. They add no solver assumptions and do not
 filter impl candidates.
 
-Generic functions and records support conditions on their parameters, as
-described below. Const conditions in generic enums, traits, impls and
-associated functions are rejected, including a trait's implicit `Self` scope.
+Generic functions, records and enums support conditions on their parameters,
+as described below. Const conditions in generic traits, impls and associated
+functions are rejected, including a trait's implicit `Self` scope.
 
 A predicate that is a lone path naming a type, as in `where T`, is almost
 always a missing trait bound, so it is reported as one.
@@ -124,3 +124,32 @@ Passing the unapplied constructor through a higher-kinded parameter is
 rejected, because nothing would carry its conditions to later applications.
 Fully applied aliases work, and a generic alias cannot acquire or drop the
 record's obligations.
+
+## Generic enums
+
+Generic enums follow the same rules as records. Conditions apply to the whole
+type, including unit variants and unused type positions:
+
+```fe
+enum Choice<const N: usize> where N > 0 {
+    Empty,
+    Value(u256),
+}
+const fn read<const M: usize>(_ item: Choice<M>) -> u256 where M > 0 {
+    match item {
+        Choice::Empty => 42,
+        Choice::Value(value) => value,
+    }
+}
+const fn answer() -> u256 { read(Choice<1>::Value(42)) }
+```
+
+Constructing `Choice<0>::Empty` fails even though it has no payload. Matching
+a valid enum does not grant new conditions, so generic consumers state theirs.
+
+Every variant's payload types must be valid, including variants that are never
+constructed. Payloads can forward the enum's conditions into nested constrained
+records, enums and array lengths. A predicate cannot use the enum's conditions
+to justify itself, but ordinary trait bounds are available when it is formed,
+as in `where T::ALLOWED`. Like records, constrained enums must be fully
+applied.

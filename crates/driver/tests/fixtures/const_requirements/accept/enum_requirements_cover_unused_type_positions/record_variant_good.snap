@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/enum_requirements_cover_unused_type_positions/record_variant_good.fe
+---
+
