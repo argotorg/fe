@@ -56,6 +56,7 @@ tokio = { version = "1.43.0", default-features = false, features = ["rt-multi-th
 axum = { version = "0.8", optional = true }
 
 [dev-dependencies]
+num-bigint.workspace = true
 dir-test.workspace = true
 test-utils.workspace = true
 semantic-indexing.workspace = true

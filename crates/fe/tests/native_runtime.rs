@@ -7,6 +7,7 @@
 ))]
 
 use std::{
+    array,
     ffi::OsString,
     fs,
     io::Write,
@@ -17,6 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use num_bigint::BigUint;
 use tempfile::tempdir;
 
 fn build(source: &Path, out: &Path, level: &str, extra: &[&str]) -> Output {
@@ -558,6 +560,129 @@ pub fn main(argc: i32, argv: **u8) -> i32 {
                 !result.status.success(),
                 "out-of-bounds argument access must trap"
             );
+        }
+    }
+}
+
+#[test]
+fn native_modular_arithmetic_matches_full_precision_runtime_inputs() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("modular.fe");
+    fs::write(
+        &source,
+        r#"
+use std::io::{HostIo, Read, Write, host, read_char}
+use std::evm::crypto::{addmod, mulmod}
+fn read_word() -> u256 uses (input: mut Read) {
+    let mut value: u256 = 0
+    let mut i: u256 = 0
+    while i < 32 {
+        let byte = read_char()
+        core::assert(byte >= 0)
+        let bits: u256 = byte.downcast_unchecked()
+        value = value | (bits << (i * 8))
+        i += 1
+    }
+    value
+}
+fn write_word(_ value: u256) uses (output: mut HostIo) {
+    let mut i: u256 = 0
+    while i < 32 {
+        output.write_char(c: ((value >> (i * 8)) & 255).downcast_unchecked())
+        core::assert(!output.failed())
+        i += 1
+    }
+}
+pub fn main() -> i32 {
+    with (Read = host(), HostIo = host()) {
+        let mut marker = read_char()
+        while marker != -1 {
+            core::assert(marker == 64)
+            let lhs = read_word()
+            let rhs = read_word()
+            let modulus = read_word()
+            write_word(addmod(lhs, rhs, modulus))
+            write_word(mulmod(lhs, rhs, modulus))
+            marker = read_char()
+        }
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    let one = BigUint::from(1u8);
+    let max = (&one << 256usize) - &one;
+    let boundaries = [
+        BigUint::from(0u8),
+        one.clone(),
+        BigUint::from(2u8),
+        (&one << 64usize) - &one,
+        &one << 64usize,
+        &one << 128usize,
+        &one << 255usize,
+        &max - &one,
+        max,
+    ];
+    let mut cases = Vec::new();
+    for lhs in &boundaries {
+        for rhs in &boundaries {
+            for modulus in &boundaries {
+                cases.push([lhs.clone(), rhs.clone(), modulus.clone()]);
+            }
+        }
+    }
+    let mut seed = 0x8932_1227_55ab_011du64;
+    for _ in 0..128 {
+        cases.push(array::from_fn(|_| {
+            let mut bytes = [0u8; 32];
+            for chunk in bytes.as_chunks_mut::<8>().0 {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                chunk.copy_from_slice(&seed.to_le_bytes());
+            }
+            BigUint::from_bytes_le(&bytes)
+        }));
+    }
+    let mut input = Vec::new();
+    let mut expected = Vec::new();
+    for [lhs, rhs, modulus] in cases {
+        input.push(64);
+        for value in [&lhs, &rhs, &modulus] {
+            let mut bytes = value.to_bytes_le();
+            bytes.resize(32, 0);
+            input.extend(bytes);
+        }
+        for value in [&lhs + &rhs, &lhs * &rhs] {
+            let result = if modulus == BigUint::from(0u8) {
+                BigUint::from(0u8)
+            } else {
+                value % &modulus
+            };
+            let mut bytes = result.to_bytes_le();
+            bytes.resize(32, 0);
+            expected.extend(bytes);
+        }
+    }
+    let input_path = temp.path().join("input.bin");
+    fs::write(&input_path, input).unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("modular"))
+            .stdin(fs::File::open(&input_path).unwrap())
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(result.stdout.len(), expected.len());
+        for (index, (actual, expected)) in result
+            .stdout
+            .as_chunks::<64>()
+            .0
+            .iter()
+            .zip(expected.as_chunks::<64>().0)
+            .enumerate()
+        {
+            assert_eq!(actual, expected, "case {index} at O{level}");
         }
     }
 }

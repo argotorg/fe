@@ -2256,6 +2256,7 @@ dependencies = [
  "glob",
  "hex",
  "libc",
+ "num-bigint",
  "petgraph",
  "protobuf",
  "rayon",
