@@ -407,7 +407,7 @@ impl<'db> AttrArgValue<'db> {
             Some(ast::AttrArgValueKind::Ident(token)) => {
                 Some(Self::Ident(IdentId::lower_token(ctxt, token)))
             }
-            Some(ast::AttrArgValueKind::Lit(lit)) => Some(Self::Lit(LitKind::lower_ast(ctxt, lit))),
+            Some(ast::AttrArgValueKind::Lit(lit)) => LitKind::lower_ast(ctxt, lit).map(Self::Lit),
             Some(ast::AttrArgValueKind::Expr(_)) => None,
             None => None,
         }

@@ -13,8 +13,10 @@ impl<'db> Expr<'db> {
     pub(super) fn lower_ast(ctxt: &mut BodyCtxt<'_, 'db>, ast: ast::Expr) -> ExprId {
         let expr = match ast.kind() {
             ast::ExprKind::Lit(lit) => {
-                if let Some(lit) = lit.lit() {
-                    let lit = LitKind::lower_ast(ctxt.f_ctxt, lit);
+                if let Some(lit) = lit
+                    .lit()
+                    .and_then(|lit| LitKind::lower_ast(ctxt.f_ctxt, lit))
+                {
                     Self::Lit(lit)
                 } else {
                     return ctxt.push_invalid_expr(HirOrigin::raw(&ast));

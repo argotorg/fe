@@ -674,14 +674,15 @@ fn parse_selector_attr<'db>(
                         Some(lit) => {
                             let lit_kind = LitKind::lower_ast(ctxt, lit);
                             match &lit_kind {
-                                LitKind::Int(int_id) => {
+                                Some(LitKind::Int(int_id)) => {
                                     let u32_max = BigUint::from(u32::MAX);
                                     let v = int_id.data(ctxt.db());
                                     (v > &u32_max).then_some(MsgDiagnosticKind::Overflow)
                                 }
-                                LitKind::String(_) | LitKind::Bool(_) => {
+                                Some(LitKind::String(_) | LitKind::Bool(_)) => {
                                     Some(MsgDiagnosticKind::InvalidType)
                                 }
+                                None => None,
                             }
                         }
                         None => Some(MsgDiagnosticKind::InvalidType),

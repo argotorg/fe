@@ -167,7 +167,7 @@ impl<'db> IntegerId<'db> {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct StringId<'db> {
-    /// The text of the string literal, without the quotes.
+    /// The decoded UTF-8 text of the string literal, without the quotes.
     #[return_ref]
     pub data: String,
 }
