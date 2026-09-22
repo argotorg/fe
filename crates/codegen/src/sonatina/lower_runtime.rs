@@ -33,7 +33,7 @@ use sonatina_ir::{
     builder::{FunctionBuilder, ModuleBuilder, ObjectBuilder, Variable},
     func_cursor::InstInserter,
     inst::{
-        arith::{Add, Mul, Neg, Sar, Shl, Shr, Sub},
+        arith::{Add, Mul, Sar, Shl, Shr, Sub},
         cast::{Bitcast, IntToPtr, PtrToInt, Sext, Trunc, Zext},
         cmp::{Eq, Gt, IsZero, Lt, Ne, Slt},
         control_flow::{Br, BrTable, Call, Jump, Phi, Return, Unreachable},
@@ -4893,8 +4893,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             }
             UnOp::Minus => {
                 let value = self.cast_scalar(value, ty)?;
+                // EVM has no native neg instruction. Keep wrapping negation in
+                // the supported arithmetic set, including signed MIN values.
+                let zero = self.fb.make_imm_value(Immediate::zero(ty));
                 self.fb
-                    .insert_inst(Neg::new(self.module.inst_set(), value), ty)
+                    .insert_inst(Sub::new(self.module.inst_set(), zero, value), ty)
             }
             UnOp::BitNot => {
                 let value = self.cast_scalar(value, ty)?;

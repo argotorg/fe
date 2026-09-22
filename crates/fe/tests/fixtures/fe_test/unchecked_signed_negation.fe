@@ -1,0 +1,78 @@
+use std::evm::Evm
+msg NegMsg {
+    #[selector = 0x01020304]
+    Wide { value: i256 } -> i256,
+    #[selector = 0x01020305]
+    Narrow { value: i8 } -> i8,
+}
+#[arithmetic(unchecked)]
+fn wide(_ value: i256) -> i256 {
+    -value
+}
+#[arithmetic(unchecked)]
+fn narrow(_ value: i8) -> i8 {
+    -value
+}
+pub contract Negation {
+    recv NegMsg {
+        Wide { value } -> i256 {
+            wide(value)
+        }
+        Narrow { value } -> i8 {
+            narrow(value)
+        }
+    }
+}
+#[test]
+fn wrapping_negation_roundtrip() uses (evm: mut Evm) {
+    let addr = evm.create2<Negation>(value: 0, args: (), salt: 0)
+    let min: i256 = ((1 as u256) << 255).downcast_truncate()
+    assert!(
+        evm.call(
+                addr,
+                gas: 100000,
+                value: 0,
+                message: NegMsg::Wide { value: min },
+            ) == min,
+    )
+    assert!(
+        evm.call(
+                addr,
+                gas: 100000,
+                value: 0,
+                message: NegMsg::Wide { value: 0 },
+            ) == 0,
+    )
+    assert!(
+        evm.call(
+                addr,
+                gas: 100000,
+                value: 0,
+                message: NegMsg::Wide { value: 7 },
+            ) == -7,
+    )
+    assert!(
+        evm.call(
+                addr,
+                gas: 100000,
+                value: 0,
+                message: NegMsg::Wide { value: -7 },
+            ) == 7,
+    )
+    assert!(
+        evm.call(
+                addr,
+                gas: 100000,
+                value: 0,
+                message: NegMsg::Narrow { value: -128 },
+            ) == -128,
+    )
+    assert!(
+        evm.call(
+                addr,
+                gas: 100000,
+                value: 0,
+                message: NegMsg::Narrow { value: 127 },
+            ) == -127,
+    )
+}
