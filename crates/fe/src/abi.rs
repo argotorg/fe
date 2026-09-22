@@ -9,9 +9,12 @@ use hir::{
             abi_ty::{self, AbiComponent, AbiTypeDesc, ParsedFunctionSignature},
             adt_def::AdtRef,
             binder::Binder,
+            corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
             fold::{AssocTySubst, TyFoldable},
-            trait_def::TraitInstId,
-            trait_resolution::PredicateListId,
+            trait_def::{
+                TraitInstId, complete_resolved_trait_method_args, resolve_trait_method_instance,
+            },
+            trait_resolution::{PredicateListId, TraitSolveCx},
             ty_def::{TyBase, TyData, TyId},
         },
     },
@@ -149,8 +152,18 @@ pub fn generate_contract_abi(
         }
     }
 
-    for struct_ in collect_contract_event_structs(db, contract) {
+    for struct_ in collect_contract_event_structs(db, contract, false) {
         entries.push(event_struct_to_abi_entry(db, struct_)?);
+    }
+
+    for struct_ in collect_contract_event_structs(db, contract, true) {
+        let mut entry = event_struct_to_abi_entry(db, struct_)?;
+        entry.entry_type = "error".to_string();
+        entry.anonymous = None;
+        for input in entry.inputs.iter_mut().flatten() {
+            input.indexed = None;
+        }
+        entries.push(entry);
     }
 
     let entry_count = entries.len();
@@ -286,11 +299,17 @@ fn event_struct_to_abi_entry(db: &DriverDataBase, struct_: Struct<'_>) -> Result
 fn collect_contract_event_structs<'db>(
     db: &'db DriverDataBase,
     contract: hir::hir_def::Contract<'db>,
+    errors: bool,
 ) -> Vec<Struct<'db>> {
     let mut events = Vec::new();
     let mut seen = HashSet::new();
     let mut visited_funcs = HashSet::new();
     let emit_traits = resolve_event_emit_traits(db, contract.scope());
+    let error_func = hir::analysis::ty::corelib::resolve_lib_func_path(
+        db,
+        contract.scope(),
+        "std::evm::effects::revert_error",
+    );
 
     if contract.init(db).is_some() {
         let (_, typed_body) = hir::analysis::ty::ty_check::check_contract_init_body(db, contract);
@@ -298,6 +317,8 @@ fn collect_contract_event_structs<'db>(
             db,
             typed_body,
             &emit_traits,
+            errors,
+            error_func,
             &mut events,
             &mut seen,
             &mut visited_funcs,
@@ -316,6 +337,8 @@ fn collect_contract_event_structs<'db>(
                 db,
                 typed_body,
                 &emit_traits,
+                errors,
+                error_func,
                 &mut events,
                 &mut seen,
                 &mut visited_funcs,
@@ -326,10 +349,13 @@ fn collect_contract_event_structs<'db>(
     events
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_typed_body_event_structs<'db>(
     db: &'db DriverDataBase,
     typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
     emit_traits: &EventEmitTraits<'db>,
+    errors: bool,
+    error_func: Option<Func<'db>>,
     out: &mut Vec<Struct<'db>>,
     seen: &mut HashSet<Struct<'db>>,
     visited_funcs: &mut HashSet<VisitedFuncBody<'db>>,
@@ -339,28 +365,57 @@ fn collect_typed_body_event_structs<'db>(
     };
 
     for (expr_id, partial_expr) in body.exprs(db).iter() {
-        let hir::hir_def::Partial::Present(expr) = partial_expr else {
+        let hir::hir_def::Partial::Present(_) = partial_expr else {
             continue;
         };
-        if let Some(struct_) = emitted_event_struct(db, typed_body, body, expr_id, emit_traits) {
+        if errors {
+            if let Some(struct_) = reverted_error_struct(db, typed_body, body, expr_id, error_func)
+                && seen.insert(struct_)
+            {
+                out.push(struct_);
+            }
+        } else if let Some(struct_) =
+            emitted_event_struct(db, typed_body, body, expr_id, emit_traits)
+        {
             push_event_struct(db, out, seen, struct_);
         }
 
-        if matches!(
-            expr,
-            hir::hir_def::Expr::Call(..) | hir::hir_def::Expr::MethodCall(..)
-        ) && let Some(callable) = typed_body.callable_expr(expr_id)
+        // Operators also have semantic callees, even without call syntax.
+        if let Some(callable) = typed_body.callable_expr(expr_id)
             && let hir::hir_def::CallableDef::Func(func) = callable.callable_def
-            && visited_funcs.insert(VisitedFuncBody::from_callable(func, callable))
-            && func.body(db).is_some()
         {
-            let (_, func_typed_body) = hir::analysis::ty::ty_check::check_func_body(db, func);
+            let mut target = VisitedFuncBody::from_callable(func, callable);
+            if let Some(inst) = callable.trait_inst()
+                && let Some(name) = func.name(db).to_opt()
+                && let Some((impl_func, impl_args)) = resolve_trait_method_instance(
+                    db,
+                    TraitSolveCx::new(db, body.scope()).with_assumptions(typed_body.assumptions()),
+                    inst,
+                    name,
+                )
+            {
+                target.func = impl_func;
+                target.generic_args = complete_resolved_trait_method_args(
+                    db,
+                    impl_func,
+                    impl_args,
+                    callable.generic_args(),
+                    inst.args(db).len(),
+                );
+            }
+            if target.func.body(db).is_none() || !visited_funcs.insert(target.clone()) {
+                continue;
+            }
+            let (_, func_typed_body) =
+                hir::analysis::ty::ty_check::check_func_body(db, target.func);
             let func_typed_body =
-                instantiate_callable_typed_body(db, func_typed_body.clone(), callable);
+                instantiate_callable_typed_body(db, func_typed_body.clone(), &target);
             collect_typed_body_event_structs(
                 db,
                 &func_typed_body,
                 emit_traits,
+                errors,
+                error_func,
                 out,
                 seen,
                 visited_funcs,
@@ -392,10 +447,10 @@ impl<'db> VisitedFuncBody<'db> {
 fn instantiate_callable_typed_body<'db>(
     db: &'db DriverDataBase,
     typed_body: hir::analysis::ty::ty_check::TypedBody<'db>,
-    callable: &hir::analysis::ty::ty_check::Callable<'db>,
+    target: &VisitedFuncBody<'db>,
 ) -> hir::analysis::ty::ty_check::TypedBody<'db> {
-    let mut typed_body = Binder::bind(typed_body).instantiate(db, callable.generic_args());
-    if let Some(trait_inst) = callable.trait_inst() {
+    let mut typed_body = Binder::bind(typed_body).instantiate(db, &target.generic_args);
+    if let Some(trait_inst) = target.trait_inst {
         let mut subst = AssocTySubst::new(trait_inst);
         typed_body = typed_body.fold_with(db, &mut subst);
     }
@@ -464,6 +519,34 @@ fn emitted_event_struct<'db>(
     }
 
     None
+}
+
+fn reverted_error_struct<'db>(
+    db: &'db DriverDataBase,
+    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
+    body: hir::hir_def::Body<'db>,
+    expr_id: hir::hir_def::ExprId,
+    error_func: Option<Func<'db>>,
+) -> Option<Struct<'db>> {
+    let hir::hir_def::Partial::Present(hir::hir_def::Expr::Call(_, args)) = expr_id.data(db, body)
+    else {
+        return None;
+    };
+    let callable = typed_body.callable_expr(expr_id)?;
+    let hir::hir_def::CallableDef::Func(func) = callable.callable_def else {
+        return None;
+    };
+    if Some(func) != error_func
+        && runtime_builtin_func_kind(db, func) != Some(RuntimeBuiltinFuncKind::PanicWithValue)
+    {
+        return None;
+    }
+    let struct_ = struct_from_ty(db, typed_body.expr_ty(db, args.first()?.expr))?;
+    matches!(
+        hir::span::struct_ast(db, struct_),
+        hir::span::HirOrigin::Desugared(hir::span::DesugaredOrigin::Error(_))
+    )
+    .then_some(struct_)
 }
 
 fn push_event_struct<'db>(
@@ -1635,5 +1718,223 @@ pub contract Foo {
         assert_eq!(function["inputs"][0]["name"], "addr");
         assert_eq!(function["inputs"][1]["type"], "int24");
         assert_eq!(function["inputs"][1]["name"], "value");
+    }
+    #[test]
+    fn custom_errors_include_reachable_reverts_only() {
+        let code = r#"
+use std::abi::sol
+use std::evm::revert_error
+#[error]
+struct Failure { code: u256 }
+#[error]
+struct InitFailure {}
+#[error]
+struct Unused { code: u256 }
+fn fail() { revert_error(Failure { code: 7 }) }
+msg M {
+    #[selector = sol("fail()")]
+    Fail {},
+}
+pub contract C {
+    init(fail: bool) { if fail { revert_error(InitFailure {}) } }
+    recv M {
+        Fail {} {
+            let _ = Unused { code: 3 }
+            fail()
+        }
+    }
+}
+"#;
+        let entries = abi_entries(code, "C");
+        let errors: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry["type"] == "error")
+            .collect();
+        assert_eq!(errors.len(), 2, "{entries:?}");
+        let failure = errors
+            .iter()
+            .find(|entry| entry["name"] == "Failure")
+            .unwrap();
+        assert_eq!(
+            failure["inputs"],
+            serde_json::json!([{"name":"code","type":"uint256"}])
+        );
+        assert!(failure.get("anonymous").is_none());
+        assert!(failure.get("stateMutability").is_none());
+    }
+    #[test]
+    fn custom_errors_include_panic_with_value() {
+        let entries = abi_entries(
+            r#"
+use std::abi::sol
+#[error]
+struct Failure { code: u256 }
+msg M {
+    #[selector = sol("fail()")]
+    Fail {}
+}
+pub contract C {
+    recv M { Fail {} { core::panic_with_value(Failure { code: 7 }) } }
+}
+"#,
+            "C",
+        );
+        let errors: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry["type"] == "error")
+            .collect();
+        assert_eq!(errors.len(), 1, "{entries:?}");
+        assert_eq!(errors[0]["name"], "Failure");
+        assert_eq!(
+            errors[0]["inputs"],
+            serde_json::json!([{"name":"code","type":"uint256"}])
+        );
+    }
+
+    #[test]
+    fn custom_errors_include_result_unwrap() {
+        let entries = abi_entries(
+            r#"
+use core::Result
+use std::abi::sol
+#[error]
+struct Failure { code: u256 }
+fn result() -> Result<Failure, u256> { Result::Err(Failure { code: 7 }) }
+msg M {
+    #[selector = sol("fail()")]
+    Fail {} -> u256
+}
+pub contract C {
+    recv M { Fail {} -> u256 { result().unwrap() } }
+}
+"#,
+            "C",
+        );
+        let errors: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry["type"] == "error")
+            .collect();
+        assert_eq!(errors.len(), 1, "{entries:?}");
+        assert_eq!(errors[0]["name"], "Failure");
+        assert_eq!(
+            errors[0]["inputs"],
+            serde_json::json!([{"name":"code","type":"uint256"}])
+        );
+    }
+
+    #[test]
+    fn custom_errors_include_overloaded_operators() {
+        let entries = abi_entries(
+            r#"
+use core::ops::Add
+use std::abi::sol
+use std::evm::revert_error
+#[error]
+struct AddFailure { code: u256 }
+struct Number { value: u256 }
+impl Add for Number {
+    fn add(own self, _ other: own Number) -> Number {
+        revert_error(AddFailure { code: self.value })
+    }
+}
+msg M {
+    #[selector = sol("fail()")]
+    Fail {} -> u256
+}
+pub contract C {
+    recv M {
+        Fail {} -> u256 {
+            let a = Number { value: 1 }
+            let b = Number { value: 2 }
+            (a + b).value
+        }
+    }
+}
+"#,
+            "C",
+        );
+        let errors: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry["type"] == "error")
+            .collect();
+        assert_eq!(errors.len(), 1, "{entries:?}");
+        assert_eq!(errors[0]["name"], "AddFailure");
+        assert_eq!(
+            errors[0]["inputs"],
+            serde_json::json!([{"name":"code","type":"uint256"}])
+        );
+    }
+
+    #[test]
+    fn custom_errors_include_generic_operator_helpers() {
+        let entries = abi_entries(
+            r#"
+use core::ops::Add
+use std::abi::sol
+use std::evm::revert_error
+#[error]
+struct AddFailure { code: u256 }
+struct Number<T> { value: u256, tag: T }
+impl<T> Add for Number<T> {
+    fn add(own self, _ other: own Number<T>) -> Number<T> {
+        revert_error(AddFailure { code: self.value })
+    }
+}
+fn add<T: Add>(_ lhs: own T, _ rhs: own T) -> T::Output { lhs + rhs }
+msg M {
+    #[selector = sol("fail()")]
+    Fail {} -> u256
+}
+pub contract C {
+    recv M {
+        Fail {} -> u256 {
+            let a = Number { value: 1, tag: true }
+            let b = Number { value: 2, tag: false }
+            add(a, b).value
+        }
+    }
+}
+"#,
+            "C",
+        );
+        let errors: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry["type"] == "error")
+            .collect();
+        assert_eq!(errors.len(), 1, "{entries:?}");
+        assert_eq!(errors[0]["name"], "AddFailure");
+        assert_eq!(
+            errors[0]["inputs"],
+            serde_json::json!([{"name":"code","type":"uint256"}])
+        );
+    }
+
+    #[test]
+    fn custom_errors_ignore_non_error_panics_and_user_named_helpers() {
+        let entries = abi_entries(
+            r#"
+use std::abi::sol
+#[error]
+struct Unused {}
+fn panic_with_value(_ value: own Unused) {}
+msg M {
+    #[selector = sol("fail()")]
+    Fail {}
+}
+pub contract C {
+    recv M {
+        Fail {} {
+            panic_with_value(Unused {})
+            core::panic_with_value(7 as u256)
+        }
+    }
+}
+"#,
+            "C",
+        );
+        assert!(
+            !entries.iter().any(|entry| entry["type"] == "error"),
+            "{entries:?}"
+        );
     }
 }
