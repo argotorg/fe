@@ -27,6 +27,7 @@ petgraph.workspace = true
 glob.workspace = true
 
 [dev-dependencies]
+dir-test.workspace = true
 tempfile = "3.13"
 
 [[example]]

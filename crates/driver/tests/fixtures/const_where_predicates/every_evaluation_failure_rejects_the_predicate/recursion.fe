@@ -1,0 +1,2 @@
+const fn again() -> bool { again() }
+fn unused() where again() {}

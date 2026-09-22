@@ -2175,6 +2175,7 @@ version = "26.2.0"
 dependencies = [
  "camino",
  "codespan-reporting",
+ "dir-test",
  "fe-common",
  "fe-hir",
  "fe-parser",

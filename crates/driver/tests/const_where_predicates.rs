@@ -95,103 +95,49 @@ const fn consume() -> u256 { answer() }
     assert_eq!(evaluate(&db, copy, "consume"), "42");
 }
 
-#[test]
-fn unused_false_predicates_fail_at_their_declarations() {
+#[dir_test::dir_test(
+    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/const_where_predicates",
+    glob: "**/*.fe"
+)]
+fn rejected_predicate(fixture: dir_test::Fixture<&str>) {
+    let path = std::path::Path::new(fixture.path());
+    let group = path
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let name = path.file_stem().unwrap().to_str().unwrap();
     let mut db = database();
-    for (name, source) in [
-        ("function", "fn unused() where false {}"),
-        ("record", "struct Unused where false { value: u256 }"),
-        ("enum", "enum Unused where false { Value }"),
-        ("impl", "struct S {}\nimpl S where false {}"),
-        (
-            "trait_impl",
-            "trait Marker {}\nstruct S {}\nimpl Marker for S where false {}",
-        ),
-        ("second", "fn unused() where true, false {}"),
-        ("first", "fn unused() where false, true {}"),
-    ] {
-        let file = input(&mut db, name, source);
-        let errors = diagnostics(&db, file);
-        assert!(
-            errors.contains("const where predicate failed"),
-            "{name}: {errors}"
-        );
-        assert_eq!(errors.matches("error[8-0089]").count(), 1, "{errors}");
-    }
-}
-
-#[test]
-fn predicates_require_bool_and_check_untaken_code() {
-    let mut db = database();
-    for (name, source) in [
-        ("integer", "fn unused() where 42 {}"),
-        (
-            "dead_type_error",
-            "fn unused() where (if true { true } else { 42 }) {}",
-        ),
-        (
-            "nonconst",
-            "fn flag() -> bool { true }\nfn unused() where flag() {}",
-        ),
-        ("runtime_parameter", "fn unused(flag: bool) where flag {}"),
-    ] {
-        let file = input(&mut db, name, source);
-        let errors = diagnostics(&db, file);
-        assert!(!errors.is_empty(), "{name} was accepted");
-        assert!(
-            !errors.contains("const where predicate failed"),
-            "{name}: {errors}"
-        );
-    }
-}
-
-#[test]
-fn every_evaluation_failure_rejects_the_predicate() {
-    let mut db = database();
-    for (name, source, reason) in [
-        (
-            "division",
-            "const fn divide(_ n: u256) -> bool { 1 / n == 0 }\nfn unused() where divide(0) {}",
-            "division by zero",
-        ),
-        (
-            "recursive_constant",
-            "const A: bool = A\nfn unused() where A {}",
-            "recursive",
-        ),
-        (
-            "recursion",
-            "const fn again() -> bool { again() }\nfn unused() where again() {}",
-            "recursion",
-        ),
-        (
-            "steps",
-            "const fn forever() -> bool { while true {}\n true }\nfn unused() where forever() {}",
-            "step limit",
-        ),
-    ] {
-        let file = input(&mut db, name, source);
-        let errors = diagnostics(&db, file);
-        assert!(errors.to_lowercase().contains(reason), "{name}: {errors}");
-    }
-}
-
-#[test]
-fn generic_scopes_are_rejected_instead_of_dropping_obligations() {
-    let mut db = database();
-    for (name, source) in [
-        ("trait_self", "trait Marker where true {}"),
-        (
-            "inherited",
-            "trait Has { fn unused() }\nstruct S<T> { value: T }\nimpl<T> Has for S<T> { fn unused() where true {} }",
-        ),
-    ] {
-        let file = input(&mut db, name, source);
-        let errors = diagnostics(&db, file);
-        assert!(
-            errors.contains("const where predicates in generic scopes are not supported yet"),
-            "{name}: {errors}"
-        );
+    let file = input(&mut db, name, fixture.content());
+    let errors = diagnostics(&db, file);
+    match group {
+        "unused_false_predicates_fail_at_their_declarations" => {
+            assert!(errors.contains("const where predicate failed"), "{errors}");
+            assert_eq!(errors.matches("error[8-0089]").count(), 1, "{errors}");
+        }
+        "predicates_require_bool_and_check_untaken_code" => {
+            assert!(!errors.is_empty(), "{name} was accepted");
+            assert!(!errors.contains("const where predicate failed"), "{errors}");
+        }
+        "every_evaluation_failure_rejects_the_predicate" => {
+            let reason = match name {
+                "division" => "division by zero",
+                "recursive_constant" => "recursive",
+                "recursion" => "recursion",
+                "steps" => "step limit",
+                _ => panic!("unknown evaluation failure fixture: {name}"),
+            };
+            assert!(errors.to_lowercase().contains(reason), "{errors}");
+        }
+        "generic_scopes_are_rejected_instead_of_dropping_obligations" => {
+            assert!(
+                errors.contains("const where predicates in generic scopes are not supported yet"),
+                "{errors}"
+            );
+        }
+        _ => panic!("unknown predicate fixture group: {group}"),
     }
 }
 
