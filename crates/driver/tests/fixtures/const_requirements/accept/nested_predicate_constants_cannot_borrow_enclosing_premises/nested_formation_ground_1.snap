@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/nested_predicate_constants_cannot_borrow_enclosing_premises/nested_formation_ground_1.fe
+---
+

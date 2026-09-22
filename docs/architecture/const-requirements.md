@@ -59,9 +59,27 @@ identities, parameter positions, operations and arithmetic mode do. Forwarded
 expressions may use literals, const paths, unary and binary operations, casts
 and calls to const functions. This is exact forwarding, not implication:
 `N > 1` does not establish `N > 0`. Blocks and control flow can be evaluated
-with concrete arguments but cannot be forwarded. Anonymous constants do not
-inherit the enclosing function's conditions, and a requirement cannot
+with concrete arguments but cannot be forwarded. A requirement cannot
 establish itself.
+
+Anonymous constants in an ordinary function's signature or body can forward
+that function's conditions. A predicate cannot use any of the function's
+conditions to justify itself, including through constants nested inside it,
+whatever the clause order. Nested declarations do not inherit the function's
+conditions. For example, a constrained helper can compute an array length in a
+signature:
+
+```fe
+const fn empty_length<const N: usize>() -> usize where N > 0 { 0 }
+const fn consume<const COUNT: usize>(
+    _ values: [u8; { empty_length<COUNT>() }]
+) -> u256 where COUNT > 0 { 42 }
+const fn answer() -> u256 { consume<1>([]) }
+```
+
+The matching condition permits the helper call in the signature, and
+`consume<0>([])` still fails even though the helper returns zero for every
+input.
 
 Inference and requirement discharge are separate queries, so evaluation can
 read a completed inference while a condition is being checked. Neither

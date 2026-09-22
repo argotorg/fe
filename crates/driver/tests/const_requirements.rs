@@ -303,3 +303,33 @@ fn requirement_evaluation_cannot_reenter_an_unfinished_type_expression() {
         }
     }
 }
+
+#[test]
+fn scoped_premise_edits_match_fresh_databases() {
+    use hir::analysis::ty::ty_check::check_func_body;
+    use salsa::Setter;
+    let (path, base) =
+        fixture("relational/scoped_premise_edits_match_fresh_databases/scoped_edits.fe");
+    for first in ["forward", "answer"] {
+        let mut db = database();
+        let file = input(&mut db, &path, "");
+        for premise in ["M > 0", "M > 1", "M > 0"] {
+            let source = if premise == "M > 1" {
+                edited(&base, "M > 0", "M > 1")
+            } else {
+                base.clone()
+            };
+            file.set_text(&mut db).to(source.clone());
+            let _ = check_func_body(&db, named(&db, file, first));
+            let warm = diagnostics(&db, file);
+            assert_eq!(
+                warm.is_empty(),
+                premise == "M > 0",
+                "{first}, {premise}: {warm}"
+            );
+            let mut fresh = database();
+            let fresh_file = input(&mut fresh, &path, &source);
+            assert_eq!(warm, diagnostics(&fresh, fresh_file));
+        }
+    }
+}

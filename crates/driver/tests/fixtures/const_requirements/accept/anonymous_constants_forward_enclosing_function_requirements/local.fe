@@ -1,0 +1,3 @@
+const fn length<const N: usize>() -> usize where N > 0 { 0 }
+const fn forward<const M: usize>() -> usize where M > 0 { let values: [u8; { length<M>() }] = []
+ 42 }
