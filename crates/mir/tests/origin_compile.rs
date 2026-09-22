@@ -1,11 +1,8 @@
+// All compile-fail cases run from one test. trybuild shares a scratch project
+// per crate, and separate test processes (as under nextest) can clobber it when
+// its lockfile heartbeat goes stale, which has been flaky on Windows CI.
 #[test]
-fn runtime_stmt_and_terminator_origins_do_not_cross() {
+fn ui() {
     let tests = trybuild::TestCases::new();
-    tests.compile_fail("tests/ui/runtime_origin_stmt_terminator_mismatch.rs");
-}
-
-#[test]
-fn runtime_export_keys_reject_raw_owner_strings() {
-    let tests = trybuild::TestCases::new();
-    tests.compile_fail("tests/ui/runtime_origin_export_key_raw_strings.rs");
+    tests.compile_fail("tests/ui/*.rs");
 }
