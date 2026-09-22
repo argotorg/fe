@@ -3457,6 +3457,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 span.resolve(db),
                 error_code,
             ),
+            Self::VariantConstructorValueUnsupported(span) => primary_diag(
+                severity,
+                "tuple-variant constructors cannot be used as values",
+                "call the constructor directly",
+                span.resolve(db),
+                error_code,
+            ),
             Self::GenericConstPredicateUnsupported(span) => primary_diag(
                 severity,
                 "const where predicates in generic scopes are not supported yet",

@@ -559,6 +559,7 @@ pub enum BodyDiag<'db> {
     WhereTypeBoundMissing(DynLazySpan<'db>),
     GenericConstPredicateUnsupported(DynLazySpan<'db>),
     RecursiveConstRequirement(DynLazySpan<'db>),
+    VariantConstructorValueUnsupported(DynLazySpan<'db>),
     ConstRequirementNotSatisfied {
         primary: DynLazySpan<'db>,
         predicate: DynLazySpan<'db>,
@@ -995,6 +996,7 @@ impl<'db> BodyDiag<'db> {
             Self::WhereConstPredicateFailed(..) => 91,
             Self::GenericConstPredicateUnsupported(..) => 92,
             Self::RecursiveConstRequirement(..) => 94,
+            Self::VariantConstructorValueUnsupported(..) => 95,
             Self::ConstRequirementNotSatisfied { .. } => 93,
             Self::WhereTypeBoundMissing(..) => 96,
             Self::StaticAssertFailed { .. } => 81,

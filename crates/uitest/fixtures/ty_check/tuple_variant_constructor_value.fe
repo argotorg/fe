@@ -1,0 +1,21 @@
+enum Choice {
+    Value(u256),
+}
+
+fn ignore<T>(_ item: T) {}
+
+fn bind() {
+    let constructor = Choice::Value
+}
+
+fn pair() {
+    let pair = (Choice::Value, 0)
+}
+
+fn pass() {
+    ignore(Choice::Value)
+}
+
+fn call() -> Choice {
+    Choice::Value(1)
+}
