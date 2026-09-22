@@ -1315,6 +1315,9 @@ pub enum RuntimeBuiltin<'db> {
     Malloc {
         size: RValueId,
     },
+    NativePtrIsNull {
+        ptr: RValueId,
+    },
     PtrOffsetBytes {
         ptr: RValueId,
         offset: RValueId,

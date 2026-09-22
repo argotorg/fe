@@ -620,6 +620,18 @@ fn builtin_result_class<'db>(
                 AddressSpaceKind::Memory,
             )))
         }
+        RuntimeBuiltin::NativePtrIsNull { ptr } => {
+            if !matches!(
+                runtime_value_class(body, *ptr)?,
+                RuntimeClass::RawAddr { .. }
+            ) {
+                return Err(VerifyError::InvalidExprClass(*ptr));
+            }
+            Ok(Some(RuntimeClass::Scalar(ScalarClass {
+                repr: ScalarRepr::Bool,
+                role: ScalarRole::Plain,
+            })))
+        }
         RuntimeBuiltin::PtrOffsetBytes { ptr, offset } => {
             let class = runtime_value_class(body, *ptr)?.clone();
             let RuntimeClass::RawAddr { .. } = class else {

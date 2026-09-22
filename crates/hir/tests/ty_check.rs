@@ -1259,3 +1259,30 @@ fn collect_body_props<'db>(
         );
     }
 }
+
+#[test]
+fn native_byte_buffer_storage_and_allocator_are_private() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "native_byte_buffer_privacy.fe".into(),
+        r#"
+use core::Option
+use std::native::ByteBuffer
+fn forge(pointer: *u8) -> ByteBuffer {
+    ByteBuffer { allocation: Option::Some(pointer), len: 64, capacity: 64 }
+}
+fn expose(buffer: ByteBuffer) -> Option<*u8> { buffer.allocation }
+fn deallocate(pointer: *u8) { std::native::bytes::free(pointer) }
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    for name in ["allocation", "len", "capacity", "free"] {
+        assert!(
+            diags
+                .iter()
+                .any(|diag| diag.message == format!("`{name}` is not visible")),
+            "{diags:#?}"
+        );
+    }
+}

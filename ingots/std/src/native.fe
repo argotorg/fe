@@ -1,5 +1,6 @@
 /// Interfaces to the native host runtime.
 use core::ptr
+pub use bytes::ByteBuffer
 
 extern {
     // Trusted by the compiler: reads process accounting without accessing Fe memory.

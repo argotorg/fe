@@ -228,6 +228,13 @@ const RAW_MEM_BYTE_WRITES: &[IntrinsicMemoryAccess] = &[
     IntrinsicMemoryAccess::value(0, MemoryAccessKind::MutAccess),
     IntrinsicMemoryAccess::pointee(1, MemoryAccessKind::Write, IntrinsicMemoryExtent::Bytes(1)),
 ];
+// Releasing an allocation requires exclusive access, but does not read its bytes.
+// The private std wrapper consumes its owner and never exports the raw address.
+const RELEASE_ALLOCATION: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
+    0,
+    MemoryAccessKind::Write,
+    IntrinsicMemoryExtent::Unknown,
+)];
 const READ_POINTEE_0: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::pointee(
     0,
     MemoryAccessKind::Read,
@@ -465,6 +472,7 @@ define_runtime_intrinsics! {
     Malloc => (Core, ["ptr", "alloc_raw"], NO_MEMORY_ACCESSES, Some(IntrinsicPointerReturn::FreshMemory)),
     PtrOffsetBytes => (Core, ["ptr", "offset_bytes"], NO_MEMORY_ACCESSES, Some(IntrinsicPointerReturn::InputPointee)),
     PtrEq => (Core, ["ptr", "addr_eq"], NO_MEMORY_ACCESSES, None),
+    NativePtrIsNull => (Std, ["native", "bytes", "is_null"], NO_MEMORY_ACCESSES, None),
     Mload => (Std, ["evm", "ops", "mload"], READ_WORD_0, None),
     Mstore => (Std, ["evm", "ops", "mstore"], WRITE_WORD_0, None),
     Mstore8 => (Std, ["evm", "ops", "mstore8"], WRITE_BYTE_0, None),
@@ -649,6 +657,20 @@ pub fn intrinsic_contract<'db>(
                 if (*name == "__bitcast" || numeric_extern_intrinsic(name).is_some())
                     && lib_func_matches(db, func, &format!("core::{}::{name}", path[0])))
         });
+    if func.top_mod(db).ingot(db).kind(db) == IngotKind::Std && func.body(db).is_none() {
+        if lib_func_matches(db, func, "std::native::bytes::malloc") {
+            return Some(IntrinsicContract {
+                pointer_return: Some(IntrinsicPointerReturn::FreshMemory),
+                memory: Some(NO_MEMORY_ACCESSES),
+            });
+        }
+        if lib_func_matches(db, func, "std::native::bytes::free") {
+            return Some(IntrinsicContract {
+                pointer_return: None,
+                memory: Some(RELEASE_ALLOCATION),
+            });
+        }
+    }
     // These exact std declarations call host C I/O and process accounting.
     // They can observe/change host state, but cannot access or retain Fe memory.
     // A same-named user extern or a scalar-only signature carries no such trust.
