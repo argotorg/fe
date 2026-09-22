@@ -2746,6 +2746,8 @@ pub struct ResolvedEffectArg<'db> {
     pub binding_idx: u32,
     pub key: HirTyId<'db>,
     pub arg: EffectArg<'db>,
+    /// The with-binding whose source was evaluated on entry to the block.
+    pub with_source: Option<ExprId>,
     pub pass_mode: EffectPassMode,
     pub layout_view: EffectArgLayoutView,
     pub required_mut: bool,

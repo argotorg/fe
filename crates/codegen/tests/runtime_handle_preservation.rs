@@ -1958,17 +1958,25 @@ fn test_readonly_with_provider() {
     let out: u256 = with (Counter = Counter { value: 7 }) {
         read() + read()
     }
+    let other: u256 = with (Counter = { Counter { value: 9 } }) {
+        read() + read()
+    }
 
     assert!(out == 14)
+    assert!(other == 18)
 }"#,
         |db, package| {
-            let read = package
+            let reads = package
                 .functions(&db)
                 .iter()
                 .copied()
-                .find(|function| function.symbol(&db) == "read")
-                .expect("read runtime function")
-                .instance(&db);
+                .filter(|function| {
+                    let symbol = function.symbol(&db);
+                    symbol == "read" || symbol.starts_with("read_")
+                })
+                .map(|function| function.instance(&db))
+                .collect::<Vec<_>>();
+            assert!(!reads.is_empty(), "read runtime functions");
             let test = package
                 .functions(&db)
                 .iter()
@@ -1984,15 +1992,15 @@ fn test_readonly_with_provider() {
                     RStmt::Assign {
                         expr: RExpr::Call { callee, args },
                         ..
-                    } if *callee == read => Some(args[0]),
+                    } if reads.contains(callee) => Some(args[0]),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
 
             assert_eq!(
                 read_args.len(),
-                2,
-                "readonly with-provider test should call read twice:\n{body:#?}"
+                4,
+                "readonly with-provider test should read each provider twice:\n{body:#?}"
             );
             assert!(
                 read_args.iter().all(|arg| matches!(
