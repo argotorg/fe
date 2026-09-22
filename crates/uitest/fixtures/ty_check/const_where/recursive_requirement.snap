@@ -1,0 +1,31 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/recursive_requirement.fe
+---
+error[8-0093]: const requirement is not satisfied
+   ┌─ recursive_requirement.fe:16:5
+   │
+ 3 │ const fn cyclic<const N: usize>() -> bool where cyclic<N>() {
+   │                                                 ----------- required by this predicate
+   ·
+16 │     cyclic<1>()
+   │     ^^^^^^^^^^^ recursive const requirement cannot establish itself
+
+error[8-0094]: recursive const requirement
+  ┌─ recursive_requirement.fe:3:49
+  │
+3 │ const fn cyclic<const N: usize>() -> bool where cyclic<N>() {
+  │                                                 ^^^^^^^^^^^ a requirement cannot establish itself
+
+error[8-0094]: recursive const requirement
+  ┌─ recursive_requirement.fe:7:48
+  │
+7 │ const fn first<const N: usize>() -> bool where second<N>() {
+  │                                                ^^^^^^^^^^^ a requirement cannot establish itself
+
+error[8-0094]: recursive const requirement
+   ┌─ recursive_requirement.fe:11:49
+   │
+11 │ const fn second<const M: usize>() -> bool where first<M>() {
+   │                                                 ^^^^^^^^^^ a requirement cannot establish itself

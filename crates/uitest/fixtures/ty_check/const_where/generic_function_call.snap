@@ -1,0 +1,31 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/generic_function_call.fe
+---
+error[8-0093]: const requirement is not satisfied
+   ┌─ generic_function_call.fe:12:5
+   │
+ 3 │ const fn bounded<const N: usize>() -> u256 where N > 0 {
+   │                                                  ----- required by this predicate
+   ·
+12 │     bounded<0>()
+   │     ^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ generic_function_call.fe:17:5
+   │
+ 7 │ const fn sized<const N: usize>(_ values: [u8; N]) -> u256 where N > 0 {
+   │                                                                 ----- required by this predicate
+   ·
+17 │     sized(values)
+   │     ^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ generic_function_call.fe:21:5
+   │
+ 3 │ const fn bounded<const N: usize>() -> u256 where N > 0 {
+   │                                                  ----- required by this predicate
+   ·
+21 │     bounded<M>()
+   │     ^^^^^^^^^^^^ no matching const requirement in the caller after substitution

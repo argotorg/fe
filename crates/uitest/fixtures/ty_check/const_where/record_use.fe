@@ -1,0 +1,16 @@
+// Record requirements apply to every use of the type, including uses that
+// never construct a value.
+struct Bounded<const N: usize> where N > 0 {
+    value: u256,
+}
+
+fn parameter(_ item: Bounded<0>) {}
+
+fn construct() -> u256 {
+    let item = Bounded<0> { value: 1 }
+    item.value
+}
+
+struct Outer {
+    inner: Bounded<0>,
+}

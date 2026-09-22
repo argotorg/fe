@@ -1,0 +1,31 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/record_use.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ record_use.fe:7:22
+  │
+3 │ struct Bounded<const N: usize> where N > 0 {
+  │                                      ----- required by this predicate
+  ·
+7 │ fn parameter(_ item: Bounded<0>) {}
+  │                      ^^^^^^^^^^ condition evaluated to `false`
+
+error[3-0057]: const requirement is not satisfied
+   ┌─ record_use.fe:10:16
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 {
+   │                                      ----- required by this predicate
+   ·
+10 │     let item = Bounded<0> { value: 1 }
+   │                ^^^^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[3-0057]: const requirement is not satisfied
+   ┌─ record_use.fe:15:12
+   │
+ 3 │ struct Bounded<const N: usize> where N > 0 {
+   │                                      ----- required by this predicate
+   ·
+15 │     inner: Bounded<0>,
+   │            ^^^^^^^^^^ condition evaluated to `false`

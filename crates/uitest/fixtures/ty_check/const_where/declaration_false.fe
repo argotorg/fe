@@ -1,0 +1,12 @@
+// Ground predicates are checked at their declarations, even when unused.
+const LIMIT: u256 = 8
+
+fn unused() where LIMIT < 4 {}
+
+struct Record where true, LIMIT == 0 {
+    value: u256,
+}
+
+enum Choice where false {
+    Yes,
+}
