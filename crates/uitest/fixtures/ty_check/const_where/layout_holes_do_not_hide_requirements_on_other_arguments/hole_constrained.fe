@@ -1,0 +1,3 @@
+struct Pair<const M: usize, const N: usize> where M > 0 { value: u256 }
+fn take(_ item: Pair<_, 1>) -> u256 { item.value }
+fn call() -> u256 { take(Pair<1, 1> { value: 1 }) }

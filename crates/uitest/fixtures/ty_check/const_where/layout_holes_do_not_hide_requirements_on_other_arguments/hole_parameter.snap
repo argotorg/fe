@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/layout_holes_do_not_hide_requirements_on_other_arguments/hole_parameter.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ hole_parameter.fe:2:17
+  │
+1 │ struct Pair<const M: usize, const N: usize> where N > 0 { value: u256 }
+  │                                                   ----- required by this predicate
+2 │ fn take(_ item: Pair<_, 0>) -> u256 { item.value }
+  │                 ^^^^^^^^^^ condition evaluated to `false`

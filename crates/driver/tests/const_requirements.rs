@@ -716,3 +716,21 @@ fn method_formation_cycles_do_not_become_evidence() {
         }
     }
 }
+
+#[test]
+fn record_requirement_cycles_converge_in_every_query_order() {
+    use hir::analysis::ty::ty_check::check_func_body;
+    let (path, source) = fixture(
+        "relational/record_requirement_cycles_converge_in_every_query_order/record_cycle.fe",
+    );
+    for first in ["check", "holds", "use_it"] {
+        let mut db = database();
+        let file = input(&mut db, &path, &source);
+        let _ = check_func_body(&db, named(&db, file, first));
+        let warm = diagnostics(&db, file);
+        assert!(warm.contains("const requirement"), "{first}: {warm}");
+        let mut fresh = database();
+        let fresh_file = input(&mut fresh, &path, &source);
+        assert_eq!(warm, diagnostics(&fresh, fresh_file), "{first}");
+    }
+}

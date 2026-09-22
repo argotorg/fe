@@ -1,0 +1,2 @@
+struct Pair<const M: usize, const N: usize> where N > 0 { value: u256 }
+fn call() -> u256 { Pair<_, 0> { value: 1 }.value }

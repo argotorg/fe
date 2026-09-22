@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/layout_holes_do_not_hide_requirements_on_other_arguments/hole_valid.fe
+---
+
