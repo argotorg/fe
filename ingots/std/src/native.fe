@@ -1,0 +1,55 @@
+/// Interfaces to the native host runtime.
+use core::ptr
+
+extern {
+    // Trusted by the compiler: reads process accounting without accessing Fe memory.
+    fn clock() -> i64
+}
+
+/// Process CPU time in host clock ticks. Negative readings are unavailable.
+///
+/// The origin is unspecified. Subtract readings to measure CPU work, excluding
+/// time waiting for input. Tick frequency is the host C CLOCKS_PER_SEC constant;
+/// it is not necessarily the same on different platforms. Supported native hosts
+/// (AArch64 macOS and x86_64 Linux) use a 64-bit clock_t. Its bits are read
+/// as i64: the C failure sentinel is -1, and counts beyond i64::MAX are negative.
+pub fn cpu_clock_ticks() -> i64 {
+    clock()
+}
+
+/// Read-only view of the process argument vector supplied to native main.
+/// The entry bridge translates C pointer slots into ordinary Fe pointer slots.
+/// Construct this only from that argc/argv pair, or equivalent valid raw parts.
+pub struct Args { argc: i32, argv: **u8 }
+
+/// A process argument, including empty strings and arbitrary nonzero bytes.
+pub struct Arg { ptr: *u8, len: usize }
+
+impl Args {
+    pub fn new(_ argc: i32, _ argv: **u8) -> Self {
+        core::assert(argc >= 0)
+        Self { argc, argv }
+    }
+    pub fn len(self) -> usize {
+        self.argc.downcast_unchecked()
+    }
+    pub fn get(self, _ index: usize) -> Arg {
+        core::assert(index < self.len())
+        let bytes = *ptr::offset(self.argv, index as u256)
+        let mut len: usize = 0
+        while *ptr::offset(bytes, len as u256) != 0 {
+            len += 1
+        }
+        Arg { ptr: bytes, len }
+    }
+}
+
+impl Arg {
+    pub fn len(self) -> usize {
+        self.len
+    }
+    pub fn byte_at(self, _ index: usize) -> u8 {
+        core::assert(index < self.len)
+        *ptr::offset(self.ptr, index as u256)
+    }
+}

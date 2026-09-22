@@ -9997,7 +9997,7 @@ fn run() -> i32 {
 }
 
 #[test]
-fn host_io_contracts_preserve_live_native_borrows() {
+fn host_import_contracts_preserve_live_native_borrows() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "host_io_borrows.fe".into(),
@@ -10007,8 +10007,9 @@ fn run() -> i32 {
     let mut value: i32 = 0
     let borrowed = mut value
     with (Read = host(), Write = host()) {
+        let start = std::native::cpu_clock_ticks()
         write_char(read_char())
-        borrowed = 42
+        borrowed = if std::native::cpu_clock_ticks() >= start { 42 } else { 0 }
     }
     value
 }
@@ -10035,4 +10036,16 @@ fn user_scalar_externs_still_require_effect_contracts() {
             "{name}: {diagnostics}"
         );
     }
+}
+
+#[test]
+fn user_clock_extern_still_requires_effect_contract() {
+    let diagnostics =
+        checked_borrow_diags("extern { fn clock() -> i64 }\nfn run() -> i64 { clock() }");
+    assert!(
+        diagnostics.contains(
+            "executable calls require concrete implementations or verified effect contracts"
+        ),
+        "{diagnostics}"
+    );
 }

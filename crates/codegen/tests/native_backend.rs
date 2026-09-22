@@ -262,3 +262,45 @@ pub fn main() -> i32 {
         .collect::<Vec<_>>();
     assert_eq!(arguments, vec![roots[0], roots[0]], "{main}");
 }
+
+#[test]
+fn native_argv_entry_has_a_host_pointer_bridge() {
+    for mode in ["", "own "] {
+        let ir = with_top_mod_for_source(
+            "native_argv.fe",
+            &format!("pub fn main(argc: {mode}i32, argv: **u8) -> i32 {{ argc }}"),
+            |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+        )
+        .unwrap();
+        assert!(ir.contains("func public %main("), "{ir}");
+        assert!(ir.contains("**i8"), "{ir}");
+        assert!(ir.contains("ptr_to_int"), "{ir}");
+        assert!(ir.contains("zext"), "{ir}");
+    }
+}
+
+#[test]
+fn native_entry_checks_fe_types_before_accepting_the_lowered_abi() {
+    for signature in [
+        "(argc: i32, argv: u256) -> i32",
+        "(argc: u32, argv: **u8) -> i32",
+        "(argc: i32, argv: *u8) -> i32",
+        "(argc: i32, argv: **u16) -> i32",
+        "() -> u32",
+    ] {
+        let error = with_top_mod_for_source(
+            "invalid_native_argv.fe",
+            &format!("pub fn main{signature} {{ 0 }}"),
+            |db, top_mod| {
+                fe_codegen::emit_module_native_object(db, top_mod, fe_codegen::OptLevel::O0)
+            },
+        )
+        .expect_err("Fe type distinctions must survive entry validation");
+        assert!(
+            error
+                .to_string()
+                .contains("native executable `main` must have signature"),
+            "{signature}: {error}"
+        );
+    }
+}

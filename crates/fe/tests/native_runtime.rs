@@ -7,8 +7,10 @@
 ))]
 
 use std::{
+    ffi::OsString,
     fs,
     io::Write,
+    os::unix::ffi::OsStringExt,
     path::Path,
     process::{Command, Output, Stdio},
 };
@@ -390,5 +392,104 @@ pub fn main() -> i32 {
                 .unwrap()
                 .success()
         );
+    }
+}
+
+#[test]
+fn native_process_clock_preserves_borrows_and_host_io() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("clock.fe");
+    fs::write(
+        &source,
+        r#"
+use std::io::{HostIo, Read, Write, host}
+use std::native::cpu_clock_ticks
+pub fn main() -> i32 {
+    let mut input = host()
+    let mut output = host()
+    let mut value: i32 = 0
+    let borrowed = mut value
+    let start = cpu_clock_ticks()
+    borrowed = input.read_char()
+    let end = cpu_clock_ticks()
+    core::assert(start >= 0 && end >= start)
+    output.write_char(c: value)
+    core::assert(!output.failed())
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let mut child = Command::new(out.join("clock"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(b"A").unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(result.stdout, b"A");
+    }
+}
+
+#[test]
+fn native_arguments_preserve_bytes_bounds_and_internal_entry_calls() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("arguments.fe");
+    fs::write(
+        &source,
+        r#"
+use std::io::{Write, host, write_char}
+use std::native::Args
+fn __fe_native_main() -> i32 { 42 }
+pub fn main(argc: i32, argv: **u8) -> i32 {
+    if argc == 0 { return __fe_native_main() }
+    let args = Args::new(argc, argv)
+    core::assert(args.len() == argc.downcast_unchecked())
+    if argc == 1 { args.get(args.len()) }
+    if argc == 2 {
+        let arg = args.get(1)
+        arg.byte_at(arg.len())
+    }
+    core::assert(main(argc: 0, argv) == 42)
+    with (Write = host()) {
+        let mut i: usize = 1
+        while i < args.len() {
+            let arg = args.get(i)
+            let mut j: usize = 0
+            while j < arg.len() {
+                write_char(arg.byte_at(j) as i32)
+                j += 1
+            }
+            write_char(124)
+            i += 1
+        }
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let executable = out.join("arguments");
+        let result = Command::new(&executable)
+            .args(["", "Fe", "λ"])
+            .arg(OsString::from_vec(vec![0x80, 0xff]))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(result.stdout, b"|Fe|\xce\xbb|\x80\xff|");
+        for args in [&[][..], &[""][..], &["bounds"][..]] {
+            let result = Command::new(&executable).args(args).output().unwrap();
+            assert!(
+                !result.status.success(),
+                "out-of-bounds argument access must trap"
+            );
+        }
     }
 }
