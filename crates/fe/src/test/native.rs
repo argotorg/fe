@@ -194,10 +194,10 @@ impl NativeTestCase {
             let kill_result = unsafe { libc::killpg(child_pid, libc::SIGKILL) };
             let kill_error = io::Error::last_os_error();
             let status = child.wait()?;
-            if kill_result != 0 && kill_error.raw_os_error() != Some(libc::ESRCH) {
+            if kill_result != 0 && !process_group_is_gone(&kill_error) {
                 let group_probe = unsafe { libc::killpg(child_pid, 0) };
                 let group_probe_error = io::Error::last_os_error();
-                if group_probe == 0 || group_probe_error.raw_os_error() != Some(libc::ESRCH) {
+                if group_probe == 0 || !process_group_is_gone(&group_probe_error) {
                     return Err(io::Error::new(
                         kill_error.kind(),
                         format!("terminate native test process group: {kill_error}"),
@@ -419,11 +419,38 @@ pub(super) fn prepare_tests(
     }
 }
 
+/// Whether a failed `killpg` means the test's process group has no member left to stop.
+/// Every member runs as our user, so a permission error cannot mean a live process we may
+/// not signal. Linux reports `ESRCH` once the group is empty; macOS can report `EPERM`
+/// while exited members are still waiting to be reaped.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn process_group_is_gone(error: &io::Error) -> bool {
+    match error.raw_os_error() {
+        Some(libc::ESRCH) => true,
+        Some(libc::EPERM) => cfg!(target_os = "macos"),
+        _ => false,
+    }
+}
+
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use std::{os::unix::fs::PermissionsExt, thread, time::Duration};
 
     use super::*;
+
+    #[test]
+    fn process_group_cleanup_accepts_only_errors_that_mean_the_group_is_gone() {
+        assert!(process_group_is_gone(&io::Error::from_raw_os_error(
+            libc::ESRCH
+        )));
+        assert_eq!(
+            process_group_is_gone(&io::Error::from_raw_os_error(libc::EPERM)),
+            cfg!(target_os = "macos")
+        );
+        assert!(!process_group_is_gone(&io::Error::from_raw_os_error(
+            libc::EINVAL
+        )));
+    }
 
     #[test]
     fn native_runner_stops_descendants_after_launcher_exits() {
