@@ -960,6 +960,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         _: Partial<PathId<'db>>,
         fields: &[HirField<'db>],
     ) -> SValueId {
+        // An implicit borrow applies to the constructed value, not to the
+        // aggregate representation used for field lookup and initialization.
+        let ty = self.expr_ty(expr);
+        let ty = ty.as_view(self.db).unwrap_or(ty);
         match self
             .typed_body
             .record_init_lowering(expr)
@@ -978,9 +982,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
                 self.emit_expr_with_origin(
                     SemOrigin::Expr(expr),
-                    self.expr_ty(expr),
+                    ty,
                     SExpr::EnumMake {
-                        enum_ty: self.expr_ty(expr),
+                        enum_ty: ty,
                         variant: VariantIndex(variant.variant.idx),
                         fields: values
                             .into_iter()
@@ -990,7 +994,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 )
             }
             RecordInitLowering::Struct => {
-                let ty = self.expr_ty(expr);
                 let mut values = vec![None; fields.len()];
                 for field in fields {
                     let Some(label) = field.label_eagerly(self.db, self.body) else {

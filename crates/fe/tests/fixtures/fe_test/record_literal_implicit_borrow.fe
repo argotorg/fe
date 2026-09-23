@@ -1,0 +1,32 @@
+use core::ops::Eq
+use std::evm::Address
+
+#[test]
+fn address_equality_borrows_record_literal() {
+    let zero = Address { inner: 0 }
+    let other = Address { inner: 17 }
+    assert!(zero == (Address { inner: 0 }))
+    assert!(other != (Address { inner: 0 }))
+    assert!((Address { inner: 17 }) == other)
+}
+
+struct Pair { first: u256, second: u256 }
+impl Pair {
+    fn difference(self) -> u256 { self.second - self.first }
+}
+enum Choice { Pair { first: u256, second: u256 } }
+impl Choice {
+    fn difference(self) -> u256 {
+        match self {
+            Self::Pair { first, second } => second - first,
+        }
+    }
+}
+#[test]
+fn borrowed_record_literal_preserves_field_order() {
+    assert!(Pair { second: 23, first: 19 }.difference() == 4)
+}
+#[test]
+fn borrowed_record_variant_preserves_field_order() {
+    assert!(Choice::Pair { second: 23, first: 19 }.difference() == 4)
+}

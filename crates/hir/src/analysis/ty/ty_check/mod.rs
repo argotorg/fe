@@ -3913,7 +3913,10 @@ impl<'db> TypedBody<'db> {
                 .forwarded_return_param_sources_from_expr(db, body, *inner, seen, visited_locals),
             Expr::RecordInit(_, fields) => {
                 let (record_like, variant) = match self.record_init_lowering(expr)? {
-                    RecordInitLowering::Struct => (RecordLike::Type(self.expr_ty(db, expr)), None),
+                    RecordInitLowering::Struct => {
+                        let ty = self.expr_ty(db, expr);
+                        (RecordLike::Type(ty.as_view(db).unwrap_or(ty)), None)
+                    }
                     RecordInitLowering::EnumVariant(variant) => {
                         (RecordLike::from_variant(variant), Some(variant.variant.idx))
                     }
