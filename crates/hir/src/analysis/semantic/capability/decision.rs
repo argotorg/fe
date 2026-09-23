@@ -233,14 +233,14 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         })
     }
 
-    pub(super) fn variables(&self) -> BTreeSet<V> {
-        self.nodes
-            .iter()
-            .filter_map(|node| match node {
-                Node::Branch { variable, .. } => Some(variable.clone()),
-                _ => None,
-            })
-            .collect()
+    /// Borrow decision variables without cloning or sorting their payloads.
+    /// A variable may occur at more than one node; consumers needing unique
+    /// variables collect only those keys they actually use.
+    pub(super) fn variables(&self) -> impl Iterator<Item = &V> {
+        self.nodes.iter().filter_map(|node| match node {
+            Node::Branch { variable, .. } => Some(variable),
+            _ => None,
+        })
     }
 
     pub(super) fn map<W: Clone + Ord + Hash, U: Clone + Eq + Hash>(
@@ -276,13 +276,14 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         let mut result = self.clone();
         for variable in self
             .variables()
+            .collect::<BTreeSet<_>>()
             .into_iter()
             .filter(|variable| selected(variable))
         {
             let cofactor = |assignment| {
                 result.map(
                     |key| {
-                        if *key == variable {
+                        if key == variable {
                             Variable::Constant(assignment)
                         } else {
                             Variable::Symbol(key.clone())
@@ -483,5 +484,28 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash, F: Fn(&T, &T) -> Option<T>>
         };
         self.memo.insert((source, care), result);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quantification_visits_shared_variables_once_in_order() {
+        let first = Decision::chain([(0u8, true)], true, false);
+        let second = Decision::chain([(1u8, true)], true, false);
+        let parity = first.apply(&second, |left, right| left ^ right);
+        assert_eq!(parity.variables().count(), 3);
+        let mut observed = Vec::new();
+        let quantified = parity.exists(
+            |variable| {
+                observed.push(*variable);
+                *variable == 1
+            },
+            |left, right| *left || *right,
+        );
+        assert_eq!(observed, [0, 1]);
+        assert!(quantified.is_leaf(&true));
     }
 }

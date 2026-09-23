@@ -2520,3 +2520,35 @@ fn caller_and_callee_choice_unions_stay_compact_through_summary_renaming() {
         instantiated.node_count()
     );
 }
+
+#[test]
+fn guard_identity_operations_preserve_indexed_choice_constraints() {
+    let always = Guard::always(&scope());
+    let choice = |index| {
+        ChoiceKey::new(
+            ValueOccurrence::Argument(0),
+            StructuralPath::new([Projection::Index(index)]),
+        )
+    };
+    let guard = always
+        .with_variant(choice(runtime(0)), VariantIndex(0))
+        .unwrap()
+        .with_variant(choice(runtime(1)), VariantIndex(u16::MAX))
+        .unwrap();
+    assert_eq!(always.and(&guard), Some(guard.clone()));
+    assert_eq!(guard.and(&always), Some(guard.clone()));
+    assert_eq!(guard.and(&guard), Some(guard.clone()));
+    assert_eq!(guard.or(&always), always);
+    assert_eq!(always.or(&guard), always);
+    assert_eq!(guard.or(&guard), guard);
+    let mut observed = Vec::new();
+    let identity = guard
+        .map_occurrences(|occurrence| {
+            observed.push(occurrence);
+            occurrence
+        })
+        .unwrap();
+    assert_eq!(observed, [ValueOccurrence::Argument(0)]);
+    assert_eq!(identity, guard);
+    assert!(identity.with_equality(runtime(0), runtime(1)).is_none());
+}
