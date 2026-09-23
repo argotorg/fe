@@ -1,6 +1,14 @@
 //! Reduced ordered decision graphs with canonical, allocation-independent node numbering.
+#[cfg(test)]
+use std::cell::Cell;
+
 use rustc_hash::FxHashMap;
 use std::{collections::BTreeSet, hash::Hash, sync::Arc};
+
+#[cfg(test)]
+thread_local! {
+    static INTERN_ATTEMPTS: Cell<usize> = const { Cell::new(0) };
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Node<V, T> {
@@ -40,6 +48,8 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
     }
 
     fn intern(&mut self, node: Node<V, T>) -> usize {
+        #[cfg(test)]
+        INTERN_ATTEMPTS.set(INTERN_ATTEMPTS.get() + 1);
         if let Some(id) = self.interned.get(&node) {
             return *id;
         }
@@ -109,6 +119,44 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
         };
         let result = self.branch(first, low, high);
         self.selections.insert(key, result);
+        result
+    }
+
+    // Join two already quantified subgraphs without finishing and importing a
+    // separate decision graph for each selected variable. The terminal operation
+    // is a semilattice join, so equal nodes and unordered pairs share work.
+    fn join(
+        &mut self,
+        lhs: usize,
+        rhs: usize,
+        terminal: &impl Fn(&T, &T) -> T,
+        memo: &mut FxHashMap<(usize, usize), usize>,
+    ) -> usize {
+        if lhs == rhs {
+            return lhs;
+        }
+        let key = (lhs.min(rhs), lhs.max(rhs));
+        if let Some(result) = memo.get(&key) {
+            return *result;
+        }
+        let result = match (&self.nodes[lhs], &self.nodes[rhs]) {
+            (Node::Leaf(left), Node::Leaf(right)) => self.intern(Node::Leaf(terminal(left, right))),
+            _ => {
+                let variable = self
+                    .variable(lhs)
+                    .into_iter()
+                    .chain(self.variable(rhs))
+                    .min()
+                    .unwrap()
+                    .clone();
+                let (left_low, left_high) = self.cofactors(lhs, &variable);
+                let (right_low, right_high) = self.cofactors(rhs, &variable);
+                let low = self.join(left_low, right_low, terminal, memo);
+                let high = self.join(left_high, right_high, terminal, memo);
+                self.branch(variable, low, high)
+            }
+        };
+        memo.insert(key, result);
         result
     }
 
@@ -267,34 +315,46 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         builder.finish(mapped[self.root()])
     }
 
-    /// Existentially quantify selected decisions using the terminal join.
+    /// Existentially quantify selected decisions using an associative,
+    /// commutative, idempotent terminal join. Visit the selection predicate once
+    /// per variable in order, then quantify all selected variables bottom-up.
     pub(super) fn exists(
         &self,
         mut selected: impl FnMut(&V) -> bool,
         join: impl Fn(&T, &T) -> T,
     ) -> Self {
-        let mut result = self.clone();
-        for variable in self
+        let selected: BTreeSet<_> = self
             .variables()
             .collect::<BTreeSet<_>>()
             .into_iter()
             .filter(|variable| selected(variable))
-        {
-            let cofactor = |assignment| {
-                result.map(
-                    |key| {
-                        if key == variable {
-                            Variable::Constant(assignment)
-                        } else {
-                            Variable::Symbol(key.clone())
-                        }
-                    },
-                    Clone::clone,
-                )
-            };
-            result = cofactor(false).apply(&cofactor(true), &join);
+            .collect();
+        if selected.is_empty() {
+            return self.clone();
         }
-        result
+        let mut builder = Builder::new();
+        let mut memo = FxHashMap::default();
+        let mut mapped = Vec::with_capacity(self.nodes.len());
+        for node in self.nodes.iter() {
+            let id = match node {
+                Node::Leaf(value) => builder.intern(Node::Leaf(value.clone())),
+                Node::Branch {
+                    variable,
+                    low,
+                    high,
+                } => {
+                    if selected.contains(variable) {
+                        builder.join(mapped[*low], mapped[*high], &join, &mut memo)
+                    } else {
+                        // Quantification only removes variables. The surviving
+                        // children still follow this variable in the order.
+                        builder.branch(variable.clone(), mapped[*low], mapped[*high])
+                    }
+                }
+            };
+            mapped.push(id);
+        }
+        builder.finish(mapped[self.root()])
     }
 
     pub(super) fn apply(&self, other: &Self, leaf: impl Fn(&T, &T) -> T) -> Self {
@@ -489,7 +549,83 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash, F: Fn(&T, &T) -> Option<T>>
 
 #[cfg(test)]
 mod tests {
+    use std::array;
+
     use super::*;
+
+    #[test]
+    fn quantification_shares_work_across_selected_variables() {
+        let decision = Decision::chain((0..256).map(|variable| (variable, true)), true, false);
+        for select_all in [true, false] {
+            let before = INTERN_ATTEMPTS.get();
+            let quantified = decision.exists(
+                |variable| select_all || variable % 2 == 0,
+                |left, right| *left || *right,
+            );
+            let attempts = INTERN_ATTEMPTS.get() - before;
+            let expected = Decision::chain(
+                (0..256)
+                    .filter(|variable| !select_all && variable % 2 != 0)
+                    .map(|variable| (variable, true)),
+                true,
+                false,
+            );
+            assert_eq!(quantified, expected);
+            assert!(
+                attempts <= decision.node_count() * 8,
+                "{attempts} interning attempts for {} source nodes",
+                decision.node_count()
+            );
+        }
+    }
+
+    #[test]
+    fn quantification_matches_exhaustive_terminal_unions() {
+        // Every Boolean function of three variables, plus distinct singleton
+        // sets at all eight terminals to exercise non-Boolean joins.
+        let tables = (0u16..256)
+            .map(|bits| array::from_fn::<_, 8, _>(|assignment| ((bits >> assignment) & 1) as u8))
+            .chain([array::from_fn(|assignment| 1u8 << assignment)]);
+        for table in tables {
+            let mut builder = Builder::new();
+            let mut level: Vec<_> = table
+                .iter()
+                .map(|value| builder.intern(Node::Leaf(*value)))
+                .collect();
+            for variable in (0u8..3).rev() {
+                level = level
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|children| builder.branch(variable, children[0], children[1]))
+                    .collect();
+            }
+            let decision = builder.finish(level[0]);
+            for selected in 0u8..8 {
+                let quantified = decision.exists(
+                    |variable| selected & (1 << (2 - variable)) != 0,
+                    |left, right| left | right,
+                );
+                for assignment in 0u8..8 {
+                    let expected = table
+                        .iter()
+                        .enumerate()
+                        .filter(|(other, _)| *other as u8 & !selected == assignment & !selected)
+                        .fold(0, |union, (_, value)| union | value);
+                    let actual = quantified.map(
+                        |variable| {
+                            Variable::<u8>::Constant(assignment & (1 << (2 - variable)) != 0)
+                        },
+                        Clone::clone,
+                    );
+                    assert!(
+                        actual.is_leaf(&expected),
+                        "table={table:?}, selected={selected}, assignment={assignment}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn quantification_visits_shared_variables_once_in_order() {
