@@ -432,6 +432,9 @@ impl<'db> Borrowck<'db> {
     pub fn solve(&mut self) -> Result<(), SemanticDiagnostic<'db>> {
         self.prepare_calls()?;
         self.prepare_validation_dependencies();
+        // Normalization can allocate joins before their predecessors. Use the
+        // existing DFS order so forward facts propagate within each sweep.
+        let order = self.inventory.loops.reverse_postorder().to_vec();
         loop {
             self.before.fill(Vec::new());
             self.terminal.fill(None);
@@ -443,7 +446,7 @@ impl<'db> Borrowck<'db> {
                 self.loan_facts_changed = false;
                 self.storage_facts_changed = false;
                 let mut state_changed = false;
-                for index in 0..self.body.blocks.len() {
+                for &index in &order {
                     let Some(mut state) = incoming[index].clone() else {
                         continue;
                     };
