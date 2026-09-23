@@ -229,6 +229,10 @@ impl<'db> IndexSubst<'db> {
         Ok(substitution)
     }
 
+    pub fn is_identity(&self) -> bool {
+        self.source == self.destination && self.entries.is_empty()
+    }
+
     pub fn apply(&self, index: IndexExpr<'db>) -> IndexExpr<'db> {
         self.entries.get(&index).copied().unwrap_or(index)
     }

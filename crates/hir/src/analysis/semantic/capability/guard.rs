@@ -375,6 +375,9 @@ impl<'db> Guard<'db> {
             subst.source(),
             "substitution source scope must match"
         );
+        if subst.is_identity() {
+            return Some(self.clone());
+        }
         Self::canonical(
             subst.destination(),
             self.condition.map(
