@@ -757,9 +757,50 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         path: &StructuralPath<IndexExpr<'db>>,
         occurrence: ValueOccurrence,
     ) -> Option<ValueId<'db, P>> {
+        self.project_from(
+            value,
+            path.as_slice(),
+            occurrence,
+            StructuralPath::default(),
+        )
+    }
+
+    /// Select index-independent fields before substituting. Rebuilding siblings
+    /// that the projection discards can dominate reads from large aggregates.
+    /// Array selectors are already in the destination scope, so substitute before
+    /// the first index. Retain the full prefix for subsequent enum observations.
+    pub fn project_substituted(
+        &mut self,
+        value: &ValueId<'db, P>,
+        subst: &IndexSubst<'db>,
+        path: &StructuralPath<IndexExpr<'db>>,
+        occurrence: ValueOccurrence,
+    ) -> Option<ValueId<'db, P>> {
+        assert_eq!(
+            value.scope(),
+            subst.source(),
+            "substitution source scope must match"
+        );
+        let split = path
+            .as_slice()
+            .iter()
+            .position(|step| matches!(step, Projection::Index(_)))
+            .unwrap_or(path.as_slice().len());
+        let (prefix, suffix) = path.as_slice().split_at(split);
+        let selected = self.project_from(value, prefix, occurrence, StructuralPath::default())?;
+        let selected = self.substitute(&selected, subst);
+        self.project_from(&selected, suffix, occurrence, StructuralPath::new(prefix))
+    }
+
+    fn project_from(
+        &mut self,
+        value: &ValueId<'db, P>,
+        path: &[Projection<IndexExpr<'db>>],
+        occurrence: ValueOccurrence,
+        mut prefix: StructuralPath<IndexExpr<'db>>,
+    ) -> Option<ValueId<'db, P>> {
         let mut current = value.clone();
-        let mut prefix = StructuralPath::default();
-        for step in path.as_slice() {
+        for step in path {
             current = match (step, &current.0.children) {
                 (Projection::Field(field), ValueChildren::Product(fields)) => fields
                     .iter()
