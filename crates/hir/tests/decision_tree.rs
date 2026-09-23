@@ -7,7 +7,6 @@ use fe_hir::analysis::ty::{
     pattern_ir::ConstructorKind,
     ty_check::{TypedBody, check_func_body},
 };
-use fe_hir::hir_def::LitKind;
 use fe_hir::test_db::{HirAnalysisTestDb, HirPropertyFormatter};
 use fe_hir::{
     hir_def::{Expr, ExprId},
@@ -122,11 +121,7 @@ fn render_constructor<'db>(
                 "record{}".to_string()
             }
         }
-        ConstructorKind::Literal(lit, _) => match lit {
-            LitKind::Bool(b) => b.to_string(),
-            LitKind::Int(int_id) => int_id.data(db).to_string(),
-            LitKind::String(string_id) => format!("\"{}\"", string_id.data(db)),
-        },
+        ConstructorKind::Literal(lit, _) => lit.pretty_print(db),
     }
 }
 

@@ -818,11 +818,7 @@ fn place_expr_hint<'db>(
 fn expr_hint<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>, expr: ExprId) -> Option<String> {
     match expr.data(db, body) {
         Partial::Present(Expr::Path(Partial::Present(path))) => Some(path.pretty_print(db)),
-        Partial::Present(Expr::Lit(lit)) => match lit {
-            LitKind::Int(int_id) => Some(int_id.data(db).to_string()),
-            LitKind::Bool(value) => Some(value.to_string()),
-            LitKind::String(value) => Some(format!("{:?}", value.data(db))),
-        },
+        Partial::Present(Expr::Lit(lit)) => Some(lit.pretty_print(db)),
         _ => None,
     }
 }

@@ -1,0 +1,19 @@
+const CONTROLS: [u8; 5] = "\"\\\n\r\t"
+
+#[test]
+fn string_escapes() {
+    core::assert(CONTROLS[0] == 34)
+    core::assert(CONTROLS[1] == 92)
+    core::assert(CONTROLS[2] == 10)
+    core::assert(CONTROLS[3] == 13)
+    core::assert(CONTROLS[4] == 9)
+    let text: String<3> = "é\n"
+    core::assert(text.len() == 3)
+    let bytes = text.as_bytes()
+    core::assert(bytes[0] == 195)
+    core::assert(bytes[1] == 169)
+    core::assert(bytes[2] == 10)
+    let literal: [u8; 2] = "\\n"
+    core::assert(literal[0] == 92)
+    core::assert(literal[1] == 110)
+}

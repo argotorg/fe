@@ -1,6 +1,8 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use std::path::{Path, PathBuf};
+
+use fe_parser::{RecoveryMode, parse_source_file};
 use tree_sitter::Parser;
 
 const MAX_ERRORS_PER_FILE: usize = 5;
@@ -378,4 +380,29 @@ fn tree_sitter_parse_coverage() {
         pass_rate >= MINIMUM_PASS_RATE,
         "tree-sitter coverage regressed: {pass_rate:.1}% < {MINIMUM_PASS_RATE}%\n{report}",
     );
+}
+
+#[test]
+fn tree_sitter_matches_string_escape_policy() {
+    let mut parser = new_parser();
+    for (literal, valid) in [
+        (r#""\"\\\n\r\t""#, true),
+        (r#""\\n""#, true),
+        (r#""tail\\""#, true),
+        (r#""'é🦀""#, true),
+        ("\"first\nsecond\"", true),
+        (r#""""#, true),
+        (r#""\'""#, false),
+        (r#""\0""#, false),
+        (r#""\x41""#, false),
+        (r#""\u{41}""#, false),
+        (r#""\q""#, false),
+        (r#""\é""#, false),
+    ] {
+        let source = format!("fn literal() {{ let text = {literal} }}");
+        let (_, errors) = parse_source_file(&source, RecoveryMode::Recover);
+        assert_eq!(errors.is_empty(), valid, "{source}: {errors:?}");
+        let errors = parse_errors(&mut parser, &source);
+        assert_eq!(errors.is_empty(), valid, "{source}: {errors:?}");
+    }
 }

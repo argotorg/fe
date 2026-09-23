@@ -161,7 +161,22 @@ impl<'db> LitKind<'db> {
     pub fn pretty_print(self, db: &dyn HirDb) -> String {
         match self {
             LitKind::Int(i) => i.data(db).to_string(),
-            LitKind::String(s) => format!("\"{}\"", s.data(db)),
+            LitKind::String(s) => {
+                let mut literal = String::from("\"");
+                for ch in s.data(db).chars() {
+                    // Emit only escapes accepted by the Fe string decoder.
+                    match ch {
+                        '"' => literal.push_str("\\\""),
+                        '\\' => literal.push_str("\\\\"),
+                        '\n' => literal.push_str("\\n"),
+                        '\r' => literal.push_str("\\r"),
+                        '\t' => literal.push_str("\\t"),
+                        _ => literal.push(ch),
+                    }
+                }
+                literal.push('"');
+                literal
+            }
             LitKind::Bool(b) => if b { "true" } else { "false" }.to_string(),
         }
     }

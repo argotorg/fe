@@ -304,11 +304,7 @@ fn display_missing_pattern<'db>(
                     format!("{} {{ .. }}", ty.pretty_print(db))
                 }
             }
-            ConstructorKind::Literal(lit, _) => match lit {
-                LitKind::Bool(b) => b.to_string(),
-                LitKind::Int(i) => i.data(db).to_string(),
-                LitKind::String(s) => format!("\"{}\"", s.data(db)),
-            },
+            ConstructorKind::Literal(lit, _) => lit.pretty_print(db),
         },
     }
 }

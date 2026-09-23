@@ -9,7 +9,7 @@ use fe_hir::analysis::ty::{
     trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable},
     ty_check::check_func_body,
 };
-use fe_hir::hir_def::{Expr, HirIngot, LitKind, Partial};
+use fe_hir::hir_def::{Expr, HirIngot, ItemKind, LitKind, Partial, Pat, attr::Attr};
 use fe_hir::test_db::HirAnalysisTestDb;
 use salsa::Setter;
 use url::Url;
@@ -400,6 +400,106 @@ pub fn root() {
         "unexpected MIR diagnostics: {}",
         db.format_complete_diagnostics(&mir_diags)
     );
+}
+
+#[test]
+fn string_literal_types_use_decoded_utf8_bytes() {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///string_escapes.fe").unwrap();
+    let src = r#"
+pub fn root() {
+    let controls: [u8; 5] = "\"\\\n\r\t"
+    let unicode: String<3> = "é\n"
+    let backslash: [u8; 2] = "\\n"
+}
+"#;
+    let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+    let top_mod = db.top_mod(file);
+    let diags = db.run_on_top_mod(top_mod);
+    assert!(diags.is_empty(), "{}", diags.format_diags(&db));
+    let func = top_mod.all_funcs(&db)[0];
+    let body = func.body(&db).unwrap();
+    let typed_body = &check_func_body(&db, func).1;
+    let literals: Vec<_> = body
+        .exprs(&db)
+        .keys()
+        .filter_map(|expr| {
+            if let Partial::Present(Expr::Lit(LitKind::String(value))) = expr.data(&db, body) {
+                Some((
+                    value.data(&db).as_str(),
+                    typed_body.expr_ty(&db, expr).pretty_print(&db).as_str(),
+                ))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(
+        literals,
+        [
+            ("\"\\\n\r\t", "[u8; 5]"),
+            ("é\n", "String<3>"),
+            ("\\n", "[u8; 2]"),
+        ]
+    );
+}
+
+#[test]
+fn invalid_string_escapes_do_not_become_semantic_strings() {
+    for src in [
+        r#"pub fn root() { let text = "\q" }"#,
+        r#"pub fn root(text: String<1>) { match text { "\q" => (), _ => () } }"#,
+        r#"#[example(value = "\q")]
+pub fn root() {}"#,
+        r#"#[example = "\q"]
+pub fn root() {}"#,
+        r#"msg M {
+#[selector = "\q"]
+Bad,
+#[selector = 1]
+Good
+}"#,
+    ] {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///invalid_string_escape.fe").unwrap();
+        let src = format!("{src}\npub fn following() {{ let number: u256 = 1 }}");
+        let file = db.workspace().touch(&mut db, url, Some(src.clone()));
+        let top_mod = db.top_mod(file);
+        for func in top_mod.all_funcs(&db) {
+            if let Some(body) = func.body(&db) {
+                assert!(
+                    !body.exprs(&db).keys().any(|expr| matches!(
+                        expr.data(&db, body),
+                        Partial::Present(Expr::Lit(LitKind::String(_)))
+                    )),
+                    "{src}"
+                );
+                assert!(
+                    !body.pats(&db).keys().any(|pat| matches!(
+                        pat.data(&db, body),
+                        Partial::Present(Pat::Lit(Partial::Present(LitKind::String(_))))
+                    )),
+                    "{src}"
+                );
+            }
+            for attr in ItemKind::Func(*func).attrs(&db).unwrap().data(&db) {
+                if let Attr::Normal(attr) = attr {
+                    assert!(attr.value.is_none(), "{src}");
+                    assert!(attr.args.iter().all(|arg| arg.value.is_none()), "{src}");
+                }
+            }
+        }
+        let diags = db.run_on_top_mod(top_mod);
+        assert!(
+            diags.format_diags(&db).contains("invalid string escape"),
+            "{src}"
+        );
+        assert!(top_mod.all_funcs(&db).iter().any(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "following")
+        }));
+    }
 }
 
 #[test]

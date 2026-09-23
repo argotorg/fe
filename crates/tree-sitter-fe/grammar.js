@@ -1396,11 +1396,7 @@ module.exports = grammar({
 
     escape_sequence: $ => token.immediate(seq(
       '\\',
-      choice(
-        /[\\'"nrt0]/,
-        /x[0-9a-fA-F]{2}/,
-        /u\{[0-9a-fA-F]+\}/,
-      ),
+      /[\\"nrt]/,
     )),
 
     boolean_literal: $ => choice('true', 'false'),

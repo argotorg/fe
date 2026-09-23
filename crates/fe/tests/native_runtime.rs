@@ -856,3 +856,42 @@ pub fn main() -> i32 {
         assert!(result.status.success(), "O{level}: {result:?}");
     }
 }
+
+#[test]
+fn native_string_escapes_preserve_decoded_bytes_at_all_optimization_levels() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("escapes.fe");
+    fs::write(
+        &source,
+        r#"
+use std::io::{Write, host, write}
+pub fn main() -> i32 {
+    with (Write = host()) {
+        write("{\"text\":\"é\"}\\\n\r\t")
+        write("\\n")
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fe_test/string_escapes.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("escapes")).output().unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(result.stdout, "{\"text\":\"é\"}\\\n\r\t\\n".as_bytes());
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", "-O", level])
+            .arg(&fixture)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("1 passed; 0 failed"),
+            "{result:?}"
+        );
+    }
+}
