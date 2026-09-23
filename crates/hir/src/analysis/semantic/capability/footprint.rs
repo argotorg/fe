@@ -57,10 +57,17 @@ impl<'a, 'db> AccessFootprint<'a, 'db> {
     }
 
     pub fn overlap(self, db: &'db dyn HirAnalysisDb, other: Self) -> OverlapResult<'db> {
-        let (region, uncertain) = self.intersect(db, other);
-        if uncertain {
-            OverlapResult::Unknown
-        } else if region.is_empty() {
+        let mut clauses = Vec::new();
+        for (common, uncertain) in self.intersections(db, other) {
+            // One uncertain pair determines this result. Constructing the union
+            // of every remaining pair cannot provide any additional precision.
+            if uncertain {
+                return OverlapResult::Unknown;
+            }
+            clauses.extend(common.clauses().iter().cloned());
+        }
+        let region = RegionSet::new(self.region.scope(), clauses);
+        if region.is_empty() {
             OverlapResult::Disjoint
         } else {
             OverlapResult::Overlap(region)
@@ -68,16 +75,26 @@ impl<'a, 'db> AccessFootprint<'a, 'db> {
     }
 
     pub fn intersect(self, db: &'db dyn HirAnalysisDb, other: Self) -> (RegionSet<'db>, bool) {
+        let mut clauses = Vec::new();
+        let mut uncertain = false;
+        for (common, unknown) in self.intersections(db, other) {
+            clauses.extend(common.clauses().iter().cloned());
+            uncertain |= unknown;
+        }
+        (RegionSet::new(self.region.scope(), clauses), uncertain)
+    }
+
+    fn intersections(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        other: Self,
+    ) -> impl Iterator<Item = (RegionSet<'db>, bool)> {
         let scope = self.region.scope();
         assert_eq!(scope, other.region.scope(), "footprint scopes must match");
-        let mut overlap = RegionSet::empty(scope);
-        let mut uncertain = false;
-        for left in self.region.clauses() {
-            for right in other.region.clauses() {
+        self.region.clauses().iter().flat_map(move |left| {
+            other.region.clauses().iter().filter_map(move |right| {
                 let (left, right, left_subst, right_subst) = open_clause_pair(left, right, scope);
-                let Some(guard) = left.guard.and(&right.guard) else {
-                    continue;
-                };
+                let guard = left.guard.and(&right.guard)?;
                 let left_address = LinearAddress::new(db, &left.payload);
                 let right_address = LinearAddress::new(db, &right.payload);
                 let length =
@@ -114,7 +131,7 @@ impl<'a, 'db> AccessFootprint<'a, 'db> {
                     &right_address,
                 );
                 if left_len == Some(0) || right_len == Some(0) {
-                    continue;
+                    return None;
                 }
                 if let (Some(left), Some(right), Some(left_len), Some(right_len)) =
                     (&left_address, &right_address, left_len, right_len)
@@ -126,15 +143,12 @@ impl<'a, 'db> AccessFootprint<'a, 'db> {
                     )
                     && (left_end <= right_start || right_end <= left_start)
                 {
-                    continue;
+                    return None;
                 }
                 if self.extent == AccessExtent::Typed && other.extent == AccessExtent::Typed {
                     // Structural separation is valid for typed subobjects. Raw
                     // byte spans may cross a field boundary and cannot use it.
-                    let (common, unknown) =
-                        RegionSet::new(scope, [left]).intersect(&RegionSet::new(scope, [right]));
-                    overlap = overlap.union(&common);
-                    uncertain |= unknown;
+                    Some(RegionSet::new(scope, [left]).intersect(&RegionSet::new(scope, [right])))
                 } else {
                     let left_object = left_address
                         .as_ref()
@@ -142,9 +156,9 @@ impl<'a, 'db> AccessFootprint<'a, 'db> {
                     let right_object = right_address
                         .as_ref()
                         .map_or(&right.payload.root, |address| &address.object);
-                    if let Some(guard) = left_object.alias_guard(right_object, guard, true) {
-                        uncertain = true;
-                        overlap = overlap.union(&RegionSet::new(
+                    let guard = left_object.alias_guard(right_object, guard, true)?;
+                    Some((
+                        RegionSet::new(
                             scope,
                             [
                                 Guarded {
@@ -156,12 +170,12 @@ impl<'a, 'db> AccessFootprint<'a, 'db> {
                                     payload: right.payload,
                                 },
                             ],
-                        ));
-                    }
+                        ),
+                        true,
+                    ))
                 }
-            }
-        }
-        (overlap, uncertain)
+            })
+        })
     }
 }
 
@@ -280,11 +294,15 @@ impl<'db> LinearAddress<'db> {
 mod tests {
     use super::*;
     use crate::{
-        analysis::semantic::capability::{
-            external::{ExternalSource, ReferentContract},
-            index::BinderScope,
-            path::{RegionPath, StructuralPath},
-            source::{InputSource, SourceExpr},
+        analysis::semantic::{
+            VariantIndex,
+            capability::{
+                external::{ExternalSource, ReferentContract},
+                guard::{ChoiceKey, Guard, ValueOccurrence},
+                index::BinderScope,
+                path::{RegionPath, StructuralPath},
+                source::{InputSource, SourceExpr},
+            },
         },
         test_db::HirAnalysisTestDb,
     };
@@ -373,6 +391,74 @@ mod tests {
                     disjoint, !concrete_overlap,
                     "typed width {width} vs ({start}, {len})"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn overlap_classification_matches_complete_guarded_intersections() {
+        let db = HirAnalysisTestDb::default();
+        let scope = BinderScope::default();
+        let roots: Vec<_> = (0..2)
+            .map(|param| {
+                RegionSet::singleton(
+                    &scope,
+                    RegionRoot::External(ExternalSource::input(
+                        InputSource::slot(param, StructuralPath::default()),
+                        ReferentContract::new(
+                            &db,
+                            TyId::u256(&db),
+                            HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+                        ),
+                        false,
+                    )),
+                    RegionPath::default(),
+                )
+            })
+            .collect();
+        let selected = |variant| {
+            Guard::always(&scope)
+                .with_variant(
+                    ChoiceKey::new(ValueOccurrence::Argument(0), StructuralPath::default()),
+                    VariantIndex(variant),
+                )
+                .unwrap()
+        };
+        let regions = [
+            RegionSet::empty(&scope),
+            roots[0].clone(),
+            roots[1].clone(),
+            roots[0].union(&roots[1]),
+            roots[0].with_guard(&selected(0)),
+            roots[1].with_guard(&selected(1)),
+            roots[0]
+                .with_guard(&selected(0))
+                .union(&roots[1].with_guard(&selected(1))),
+        ];
+        let footprints: Vec<_> = regions
+            .iter()
+            .flat_map(|region| {
+                [
+                    AccessExtent::Typed,
+                    AccessExtent::Unknown,
+                    AccessExtent::Bytes(0.into()),
+                    AccessExtent::Bytes(1.into()),
+                    AccessExtent::Bytes(IndexExpr::FormalValue(0)),
+                ]
+                .map(|extent| AccessFootprint { region, extent })
+            })
+            .collect();
+        for &left in &footprints {
+            for &right in &footprints {
+                let (common, uncertain) = left.intersect(&db, right);
+                let expected = if uncertain {
+                    OverlapResult::Unknown
+                } else if common.is_empty() {
+                    OverlapResult::Disjoint
+                } else {
+                    OverlapResult::Overlap(common)
+                };
+                assert_eq!(left.overlap(&db, right), expected);
             }
         }
     }
