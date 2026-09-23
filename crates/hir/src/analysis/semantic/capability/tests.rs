@@ -2552,3 +2552,52 @@ fn guard_identity_operations_preserve_indexed_choice_constraints() {
     assert_eq!(identity, guard);
     assert!(identity.with_equality(runtime(0), runtime(1)).is_none());
 }
+
+#[test]
+fn batched_region_union_preserves_guarded_existential_alternatives() {
+    let db = HirAnalysisTestDb::default();
+    let base = scope();
+    let (nested, selected) = base.bind(IndexNamespace::Existential);
+    let root = test_roots::local(&db, NRootId::from_u32(0));
+    let regions: Vec<_> = [runtime(0), runtime(1), selected]
+        .into_iter()
+        .flat_map(|index| {
+            let root = &root;
+            let nested = &nested;
+            let base = &base;
+            [0, u16::MAX].into_iter().map(move |variant| {
+                RegionSet::new(
+                    base,
+                    [Guarded {
+                        guard: Guard::always(nested)
+                            .with_variant(
+                                ChoiceKey::new(ValueOccurrence::Argument(0), path(index)),
+                                VariantIndex(variant),
+                            )
+                            .unwrap(),
+                        payload: SymbolicPlace {
+                            root: root.clone(),
+                            path: RegionPath::new([Projection::Index(index)]),
+                            views: Default::default(),
+                        },
+                    }],
+                )
+            })
+        })
+        .chain([RegionSet::empty(&base)])
+        .collect();
+    // Include missing alternatives, repeated regions, and differently ordered
+    // prefixes. Compare the complete guarded result, not just overlap status.
+    for first in &regions {
+        for second in &regions {
+            for third in &regions {
+                let expected = first.union(second).union(third);
+                assert_eq!(
+                    RegionSet::union_all(&base, [first.clone(), second.clone(), third.clone()]),
+                    expected,
+                );
+            }
+        }
+    }
+    assert_eq!(RegionSet::union_all(&base, []), RegionSet::empty(&base));
+}

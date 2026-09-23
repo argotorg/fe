@@ -251,20 +251,21 @@ impl<'db> Borrowck<'db> {
 
     pub fn resolve_capability(&self, value: &CapabilityValue<'db>) -> Resolution<'db> {
         let mut result = Resolution::empty(value.scope());
-        for entry in value.direct() {
-            let region = entry
-                .payload
-                .region(self.db, &self.inventory.loans, entry.guard.scope())
-                .with_guard(&entry.guard);
-            if matches!(entry.payload, CapabilityRef::Invalidated { .. }) {
-                result.invalidated |= NativeValidity::from_region(&region);
-                continue;
-            }
-            result.region = result
-                .region
-                .union(&region.close_existentials(value.scope()));
-            result.parents.extend(entry.payload.authority(&entry.guard));
-        }
+        result.region = RegionSet::union_all(
+            value.scope(),
+            value.direct().iter().filter_map(|entry| {
+                let region = entry
+                    .payload
+                    .region(self.db, &self.inventory.loans, entry.guard.scope())
+                    .with_guard(&entry.guard);
+                if matches!(entry.payload, CapabilityRef::Invalidated { .. }) {
+                    result.invalidated |= NativeValidity::from_region(&region);
+                    return None;
+                }
+                result.parents.extend(entry.payload.authority(&entry.guard));
+                Some(region.close_existentials(value.scope()))
+            }),
+        );
         result
     }
 
