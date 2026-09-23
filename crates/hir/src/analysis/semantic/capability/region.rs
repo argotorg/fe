@@ -1,4 +1,6 @@
 //! Canonical guarded referent regions. Structural slots and storage paths are distinct.
+#[cfg(test)]
+use std::cell::Cell;
 use std::{
     cmp::{Ordering, min},
     collections::{BTreeMap, BTreeSet},
@@ -21,6 +23,11 @@ use crate::{
     },
     semantic::ProviderBinding,
 };
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CANONICALIZED_REGION_CLAUSES: Cell<usize> = const { Cell::new(0) };
+}
 
 /// Interning uses the complete binding, including its source and semantic contract.
 #[salsa::interned]
@@ -192,6 +199,8 @@ impl<'db> RegionSet<'db> {
     ) -> Self {
         let mut canonical = BTreeMap::<(BinderScope, SymbolicPlace<'db>), Guard<'db>>::new();
         for mut clause in clauses {
+            #[cfg(test)]
+            CANONICALIZED_REGION_CLAUSES.set(CANONICALIZED_REGION_CLAUSES.get() + 1);
             // A clause owns its extra existential witnesses. Keeping witnesses
             // used only in guards accumulates an unbounded history of previous
             // generations (old != previous != ...), despite denoting the same

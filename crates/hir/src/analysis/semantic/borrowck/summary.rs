@@ -856,7 +856,7 @@ impl<'db> Borrowck<'db> {
         exposed_handles: &BTreeMap<AddressOccurrence<'db>, u32>,
         definite: bool,
     ) -> Result<RegionSet<'db>, SemanticDiagnostic<'db>> {
-        let mut summary = RegionSet::empty(&BinderScope::default());
+        let mut summaries = Vec::new();
         for clause in region.clauses() {
             let mut source =
                 SourceExpr::from_place(&clause.payload).expect("filtered availability source");
@@ -887,14 +887,14 @@ impl<'db> Borrowck<'db> {
                     },
                 }],
             );
-            summary = summary.union(&self.summarize_region(
+            summaries.push(self.summarize_region(
                 &region,
                 origin,
                 choices,
                 &mut exposed_handles.clone(),
             )?);
         }
-        Ok(summary)
+        Ok(RegionSet::union_all(&BinderScope::default(), summaries))
     }
 
     fn summarize_region(
@@ -2645,7 +2645,10 @@ mod tests {
     use crate::{
         analysis::{
             semantic::{
-                capability::{handle::HandleAddressSpace, source::InputSource, test_roots},
+                capability::{
+                    handle::HandleAddressSpace, region::CANONICALIZED_REGION_CLAUSES,
+                    source::InputSource, test_roots,
+                },
                 identity_semantic_instance_key,
                 normalized::{NRootId, ReadMode},
             },
@@ -2671,6 +2674,74 @@ mod tests {
                 },
             }],
         )
+    }
+
+    #[test]
+    fn availability_summary_canonicalizes_regions_in_linear_work() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "availability_union.fe".into(),
+            "fn inspect(_ pointer: *u256) {}",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "inspect"))),
+        );
+        let checker = Borrowck::new(&db, instance).unwrap();
+        let scope = BinderScope::default();
+        let ty = TyId::u256(&db);
+        let base = SourceExpr {
+            invalidated: false,
+            source: ExternalSource::input(
+                InputSource::slot(0, StructuralPath::default()),
+                ReferentContract::new(
+                    &db,
+                    ty,
+                    HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+                ),
+                false,
+            ),
+            path: RegionPath::default(),
+            views: Default::default(),
+        };
+        let count = 256;
+        let region = RegionSet::new(
+            &scope,
+            (0..count).map(|index| Guarded {
+                guard: Guard::always(&scope),
+                payload: SymbolicPlace {
+                    root: RegionRoot::External(ExternalSource::memory(
+                        &db,
+                        base.clone(),
+                        ty,
+                        Some((ty, IndexExpr::Const(index))),
+                    )),
+                    path: RegionPath::default(),
+                    views: Default::default(),
+                },
+            }),
+        );
+        assert_eq!(region.clauses().len(), count);
+        for definite in [false, true] {
+            let before = CANONICALIZED_REGION_CLAUSES.get();
+            let summarized = checker
+                .summarize_availability_region(
+                    &region,
+                    SemOrigin::Body(checker.body.template_owner),
+                    &mut BTreeSet::new(),
+                    &BTreeMap::new(),
+                    definite,
+                )
+                .unwrap();
+            let visits = CANONICALIZED_REGION_CLAUSES.get() - before;
+            assert_eq!(summarized, region);
+            assert!(
+                visits <= count * 4,
+                "processed {visits} clauses for {count} alternatives"
+            );
+        }
     }
 
     #[test]
