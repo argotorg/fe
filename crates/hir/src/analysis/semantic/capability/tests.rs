@@ -2601,3 +2601,111 @@ fn batched_region_union_preserves_guarded_existential_alternatives() {
     }
     assert_eq!(RegionSet::union_all(&base, []), RegionSet::empty(&base));
 }
+
+#[test]
+fn substituted_projection_prunes_siblings_and_preserves_enum_and_index_domains() {
+    let db = HirAnalysisTestDb::default();
+    let element = leaf_shape(&db);
+    let variant = ShapeId::new(
+        &db,
+        CapabilityShape {
+            direct: None,
+            children: ShapeChildren::Product([(FieldIndex(0), element)].into()),
+        },
+    );
+    let sum = ShapeId::new(
+        &db,
+        CapabilityShape {
+            direct: None,
+            children: ShapeChildren::Sum(
+                [(VariantIndex(0), variant), (VariantIndex(1), variant)].into(),
+            ),
+        },
+    );
+    let array = array_shape(&db, sum, 2);
+    let pair = ShapeId::new(
+        &db,
+        CapabilityShape {
+            direct: None,
+            children: ShapeChildren::Product([(FieldIndex(0), array), (FieldIndex(1), sum)].into()),
+        },
+    );
+    let wide = ShapeId::new(
+        &db,
+        CapabilityShape {
+            direct: None,
+            children: ShapeChildren::Product(
+                (0..32).map(|field| (FieldIndex(field), pair)).collect(),
+            ),
+        },
+    );
+    let (source, input) = scope().bind(IndexNamespace::Value);
+    let (destination, output) = scope().bind(IndexNamespace::Result);
+    let subst = IndexSubst::new(
+        &source,
+        &destination,
+        [(input, output), (runtime(0), IndexExpr::Const(1))],
+    )
+    .unwrap();
+    let mut values = ValueInterner::new(
+        &db,
+        ValueLimits {
+            interned_nodes: 0,
+            ..ValueLimits::default()
+        },
+    );
+    let value = values.from_shape(wide, &source, |_, _, scope| {
+        vec![Guarded {
+            guard: Guard::always(scope),
+            payload: Payload {
+                tag: 1,
+                indices: vec![input, runtime(0)],
+            },
+        }]
+    });
+    let before = values.metrics().nodes_created;
+    let full = values.substitute(&value, &subst);
+    assert!(values.metrics().nodes_created - before > 200);
+    for field in [FieldIndex(0), FieldIndex(31)] {
+        for variant in [VariantIndex(0), VariantIndex(1)] {
+            let paths = [
+                IndexExpr::Const(0),
+                IndexExpr::Const(1),
+                IndexExpr::Const(2),
+                runtime(0),
+                output,
+            ]
+            .into_iter()
+            .map(|index| {
+                StructuralPath::new([
+                    Projection::Field(field),
+                    Projection::Field(FieldIndex(0)),
+                    Projection::Index(index),
+                    Projection::VariantField {
+                        variant,
+                        field: FieldIndex(0),
+                    },
+                ])
+            })
+            .chain([StructuralPath::new([
+                Projection::Field(field),
+                Projection::Field(FieldIndex(1)),
+                Projection::VariantField {
+                    variant,
+                    field: FieldIndex(0),
+                },
+            ])]);
+            for path in paths {
+                let occurrence = ValueOccurrence::Argument(3);
+                let expected = values.project(&full, &path, occurrence);
+                let before = values.metrics().nodes_created;
+                let selected = values.project_substituted(&value, &subst, &path, occurrence);
+                assert_eq!(selected, expected, "{path:?}");
+                assert!(
+                    values.metrics().nodes_created - before < 32,
+                    "unselected siblings were rebuilt"
+                );
+            }
+        }
+    }
+}
