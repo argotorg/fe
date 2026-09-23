@@ -64,7 +64,7 @@ impl<'db> Borrowck<'db> {
             let mut authority = Vec::new();
             let mut regions = Vec::new();
             for source_region in [&access.region, &access.authorizers] {
-                let mut region = RegionSet::empty(source_region.scope());
+                let mut alternatives = Vec::new();
                 for clause in source_region.clauses() {
                     let Some(guard) = self.instantiate_guard(&clause.guard, result, inputs)? else {
                         continue;
@@ -104,14 +104,14 @@ impl<'db> Borrowck<'db> {
                                 })
                             }),
                     );
-                    region = region.union(
-                        &target
+                    alternatives.push(
+                        target
                             .region
                             .with_guard(&guard)
                             .close_existentials(source_region.scope()),
                     );
                 }
-                regions.push(region);
+                regions.push(RegionSet::union_all(source_region.scope(), alternatives));
             }
             let authorizers = regions.pop().expect("authorizers");
             let region = regions.pop().expect("access target");

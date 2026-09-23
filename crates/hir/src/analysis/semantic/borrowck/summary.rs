@@ -2745,6 +2745,188 @@ mod tests {
     }
 
     #[test]
+    fn call_memory_regions_preserve_guards_authority_and_linear_work() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "call_memory_unions.fe".into(),
+            "fn native(_ value: mut u256, _ index: u256) {}\nfn raw(_ value: *u256, _ index: u256) {}",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let scope = BinderScope::default();
+        let ty = TyId::u256(&db);
+        let count = 256;
+        for (name, invalidated) in [("native", false), ("native", true), ("raw", false)] {
+            let instance = get_or_build_semantic_instance(
+                &db,
+                identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, name))),
+            );
+            let mut summary = Borrowck::new(&db, instance)
+                .unwrap()
+                .borrow_summary()
+                .unwrap()
+                .summary
+                .unwrap();
+            let mut checker = Borrowck::new(&db, instance).unwrap();
+            let params: BTreeMap<_, _> = checker
+                .body
+                .values
+                .iter()
+                .enumerate()
+                .filter_map(|(index, value)| {
+                    if let NValueDefinition::EntryParam { param } = value.definition {
+                        Some((param, NValueId::new(index)))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let args = [params[&0], params[&1]].map(|value| NOperand {
+                value,
+                origin: None,
+                mode: ReadMode::Read,
+            });
+            let result = args[0].value;
+            let mut state = checker.inventory.entry.clone();
+            if invalidated {
+                // A weak byte overwrite retains the valid alternative and
+                // adds invalidated native provenance without loan authority.
+                let original = state.value(result).clone();
+                let region = checker.resolve_capability(&original).region;
+                let damaged = checker.inventory.values.from_shape(
+                    original.shape(),
+                    original.scope(),
+                    |semantics, _, scope| {
+                        vec![Guarded {
+                            guard: Guard::always(scope),
+                            payload: CapabilityRef::Invalidated {
+                                class: semantics.class,
+                                region: region.clone(),
+                            },
+                        }]
+                    },
+                );
+                let mixed = checker.inventory.values.join(&original, &damaged);
+                state.set_value(result, mixed);
+            }
+            let origin = SemOrigin::Body(checker.body.template_owner);
+            let inputs = CallInputs {
+                args: &args,
+                effects: &[],
+                origin,
+            };
+            let base = SourceExpr {
+                invalidated: false,
+                source: ExternalSource::input(
+                    InputSource::slot(0, StructuralPath::default()),
+                    ReferentContract::new(
+                        &db,
+                        ty,
+                        HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+                    ),
+                    false,
+                ),
+                path: RegionPath::default(),
+                views: Default::default(),
+            };
+            let region = RegionSet::new(
+                &scope,
+                (0..count).map(|index| Guarded {
+                    guard: Guard::always(&scope)
+                        .with_equality(IndexExpr::FormalValue(1), IndexExpr::Const(index % 2))
+                        .unwrap(),
+                    payload: SymbolicPlace {
+                        root: RegionRoot::External(ExternalSource::memory(
+                            &db,
+                            base.clone(),
+                            ty,
+                            Some((ty, IndexExpr::Const(index))),
+                        )),
+                        path: RegionPath::default(),
+                        views: Default::default(),
+                    },
+                }),
+            );
+            assert_eq!(region.clauses().len(), count);
+            let base = checker
+                .instantiate_source(&state, &base, result, &scope, inputs)
+                .unwrap();
+            assert_eq!(base.invalidated.invalid, invalidated);
+            let expected_regions = (0..count).map(|index| {
+                let guard = Guard::always(&scope)
+                    .with_equality(checker.index(args[1].value), IndexExpr::Const(index % 2))
+                    .unwrap();
+                checker
+                    .memory_region(
+                        &base.region,
+                        ty,
+                        Some((ty, IndexExpr::Const(index))),
+                        origin,
+                    )
+                    .unwrap()
+                    .with_guard(&guard)
+            });
+            let mut expected_authority = Vec::new();
+            for clause in region.clauses() {
+                let guard = checker
+                    .instantiate_guard(&clause.guard, result, inputs)
+                    .unwrap()
+                    .unwrap();
+                expected_authority.extend(base.traversed.iter().chain(&base.parents).map(
+                    |parent| Guarded {
+                        guard: parent.guard.and(&guard).unwrap(),
+                        payload: parent.payload.clone(),
+                    },
+                ));
+            }
+            let expected_region = RegionSet::union_all(&scope, expected_regions);
+            assert_eq!(expected_region.clauses().len(), count);
+            assert_eq!(expected_authority.is_empty(), name == "raw");
+            expected_authority.extend(expected_authority.clone());
+            summary.accesses = vec![MemoryAccess {
+                kind: MemoryAccessKind::Write,
+                extent: AccessExtent::Bytes(IndexExpr::FormalValue(1)),
+                region: region.clone(),
+                authorizers: region,
+            }];
+            checker.calls.insert(
+                result,
+                CallSummary {
+                    instance,
+                    summary,
+                    pending: false,
+                    updates: Vec::new(),
+                    births: Vec::new(),
+                },
+            );
+            let before = CANONICALIZED_REGION_CLAUSES.get();
+            let resolved = checker
+                .call_memory_accesses(&state, result, inputs)
+                .unwrap();
+            let visits = CANONICALIZED_REGION_CLAUSES.get() - before;
+            assert_eq!(resolved.len(), 1);
+            let resolved = &resolved[0];
+            assert_eq!(resolved.access.region, expected_region);
+            assert_eq!(resolved.access.authorizers, expected_region);
+            assert_eq!(resolved.access.kind, MemoryAccessKind::Write);
+            assert_eq!(
+                resolved.access.extent,
+                AccessExtent::Bytes(checker.index(args[1].value))
+            );
+            assert_eq!(resolved.authority, expected_authority);
+            assert_eq!(resolved.invalidated.invalid, invalidated);
+            assert_eq!(
+                resolved.invalidated.requirements,
+                base.invalidated.requirements
+            );
+            assert!(
+                visits <= count * 64,
+                "{name}, invalidated={invalidated}: processed {visits} clauses for {count} alternatives"
+            );
+        }
+    }
+
+    #[test]
     fn call_source_reuse_tracks_state_scopes_and_inventory_growth() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
