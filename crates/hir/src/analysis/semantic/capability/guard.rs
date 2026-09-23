@@ -20,7 +20,7 @@ use crate::analysis::semantic::{
 
 const INDEX_BITS: u16 = 256;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ValueOccurrence {
     Value(NValueId),
     Root(NRootId),
@@ -28,6 +28,29 @@ pub enum ValueOccurrence {
     Summary,
     SummaryChoice(u32),
     CallChoice { result: NValueId, choice: u32 },
+}
+
+impl Ord for ValueOccurrence {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Keep callee-local observations next to the caller values at that call.
+        // Separating all Value and CallChoice occurrences makes unions of related
+        // conditions exponential, including after they become SummaryChoices.
+        let key = |occurrence: &Self| match *occurrence {
+            Self::Value(value) => (0, value.as_u32(), None),
+            Self::CallChoice { result, choice } => (0, result.as_u32(), Some(choice)),
+            Self::Root(root) => (1, root.as_u32(), None),
+            Self::Argument(argument) => (2, argument, None),
+            Self::Summary => (3, 0, None),
+            Self::SummaryChoice(choice) => (4, choice, None),
+        };
+        key(self).cmp(&key(other))
+    }
+}
+
+impl PartialOrd for ValueOccurrence {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

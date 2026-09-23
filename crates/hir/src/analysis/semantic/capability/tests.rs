@@ -1,5 +1,8 @@
 use crate::analysis::semantic::capability::test_roots;
-use std::{collections::BTreeSet, iter::empty};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    iter::empty,
+};
 
 use super::{
     birth::AllocationBirth,
@@ -2446,4 +2449,74 @@ fn identity_substitution_reuses_nested_values_without_interning() {
     let changed = values.substitute(&value, &changed);
     let leaves = values.leaves(&changed, ValueOccurrence::Argument(0));
     assert_eq!(leaves[0].payload.indices[2], IndexExpr::Const(7));
+}
+
+#[test]
+fn caller_and_callee_choice_unions_stay_compact_through_summary_renaming() {
+    let scope = scope();
+    let alternatives: Vec<_> = (0..10)
+        .map(|index| {
+            Guard::always(&scope)
+                .with_variant(
+                    ChoiceKey::new(
+                        ValueOccurrence::Value(NValueId::from_u32(index * 2)),
+                        StructuralPath::default(),
+                    ),
+                    VariantIndex(1),
+                )
+                .unwrap()
+                .with_variant(
+                    ChoiceKey::new(
+                        ValueOccurrence::CallChoice {
+                            result: NValueId::from_u32(index * 2 + 1),
+                            choice: 0,
+                        },
+                        StructuralPath::default(),
+                    ),
+                    VariantIndex(1),
+                )
+                .unwrap()
+        })
+        .collect();
+    let union = alternatives
+        .iter()
+        .cloned()
+        .reduce(|left, right| left.or(&right))
+        .unwrap();
+    assert!(
+        union.node_count() <= alternatives.len() * 64,
+        "{} caller/callee nodes",
+        union.node_count()
+    );
+    for alternative in &alternatives {
+        assert!(alternative.implies(&union));
+    }
+    let mut choices = BTreeMap::new();
+    let summary = union
+        .map_occurrences(|occurrence| {
+            let next = choices.len() as u32;
+            ValueOccurrence::SummaryChoice(*choices.entry(occurrence).or_insert(next))
+        })
+        .unwrap();
+    assert!(
+        summary.node_count() <= alternatives.len() * 64,
+        "{} summary nodes",
+        summary.node_count()
+    );
+    let instantiated = summary
+        .map_occurrences(|occurrence| {
+            let ValueOccurrence::SummaryChoice(choice) = occurrence else {
+                panic!("summary choice")
+            };
+            ValueOccurrence::CallChoice {
+                result: NValueId::from_u32(100),
+                choice,
+            }
+        })
+        .unwrap();
+    assert!(
+        instantiated.node_count() <= alternatives.len() * 64,
+        "{} instantiated nodes",
+        instantiated.node_count()
+    );
 }
