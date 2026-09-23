@@ -895,3 +895,21 @@ pub fn main() -> i32 {
         );
     }
 }
+
+#[test]
+fn native_shared_field_receivers_preserve_ownership_at_all_optimization_levels() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/shared_field_receiver.fe");
+    for level in ["0", "1", "2"] {
+        let result = Command::new(env!("CARGO_BIN_EXE_fe"))
+            .args(["test", "--backend", "native", "-O", level])
+            .arg(&fixture)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("3 passed; 0 failed"),
+            "{result:?}"
+        );
+    }
+}

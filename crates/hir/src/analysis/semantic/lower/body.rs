@@ -31,6 +31,7 @@ use crate::{
                 ValuePathRef,
             },
             ty_def::{BorrowKind, TyData, TyId},
+            ty_is_copy,
         },
     },
     hir_def::{
@@ -1092,12 +1093,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let mut values = Vec::with_capacity(args.len() + usize::from(receiver.is_some()));
         if let Some(receiver) = receiver {
             values.push(SOperand::expr(
-                self.lower_callable_receiver(expr, receiver),
+                self.lower_callable_receiver(expr, receiver, callable.arg_ty(self.db, 0)),
                 receiver,
             ));
         }
-        for arg in args {
-            values.push(self.lower_expr_operand(*arg));
+        for (index, &arg) in args.iter().enumerate() {
+            let expected = callable.arg_ty(self.db, index + usize::from(receiver.is_some()));
+            values.push(SOperand::expr(
+                self.lower_callable_argument(arg, expected),
+                arg,
+            ));
         }
 
         match callable.callable_def() {
@@ -1136,7 +1141,35 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
     }
 
-    fn lower_callable_receiver(&mut self, call_expr: ExprId, receiver: ExprId) -> SValueId {
+    fn lower_callable_argument(&mut self, expr: ExprId, expected: Option<TyId<'db>>) -> SValueId {
+        let actual = self.expr_ty(expr);
+        if !ty_is_copy(self.db, self.body.scope(), actual, self.assumptions)
+            && expected.is_some_and(|ty| {
+                normalize_ty(self.db, ty, self.body.scope(), self.assumptions)
+                    .as_view(self.db)
+                    .is_some()
+            })
+            && let Some(place) = self.try_lower_place(expr)
+            && !place.path.is_empty()
+        {
+            // Root values can be viewed directly at the call. A non-Copy
+            // projection must form its view before loading the owned field:
+            // coercing the loaded value cannot undo its ownership move.
+            return self.emit_expr_with_origin(
+                SemOrigin::Expr(expr),
+                TyId::view_of(self.db, actual),
+                SExpr::ReadPlace { place },
+            );
+        }
+        self.lower_expr(expr)
+    }
+
+    fn lower_callable_receiver(
+        &mut self,
+        call_expr: ExprId,
+        receiver: ExprId,
+        expected: Option<TyId<'db>>,
+    ) -> SValueId {
         if let Some(site) = self
             .call_sites
             .get(call_expr.index())
@@ -1188,7 +1221,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             );
         }
 
-        self.lower_expr(receiver)
+        self.lower_callable_argument(receiver, expected)
     }
 
     fn lower_const_intrinsic(

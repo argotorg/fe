@@ -212,10 +212,18 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         for block in &self.raw.blocks {
             for statement in &block.stmts {
                 match &statement.kind {
-                    SStmtKind::Assign { expr, .. } => {
+                    SStmtKind::Assign { dst, expr } => {
                         for_each_address_required_local(expr, |local| {
                             self.mark_address_root(local, &mut needs_slot)
                         });
+                        if let SExpr::ReadPlace { place } = expr
+                            && self.normalized_local_ty(*dst).as_view(self.db).is_some()
+                            && !matches!(place.path.iter().next(), Some(Projection::Deref))
+                        {
+                            // A contextual view borrows the projected storage;
+                            // it must not materialize an owned field snapshot.
+                            self.mark_address_root(place.local, &mut needs_slot);
+                        }
                         if let SExpr::Call { callee, args, .. } = expr {
                             for (index, argument) in args.iter().enumerate() {
                                 if self

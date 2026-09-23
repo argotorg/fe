@@ -26,8 +26,8 @@ use fe_hir::{
             get_or_build_semantic_instance, identity_semantic_instance_key, layout_evidence_body,
             normalize_semantic_body,
             normalized::{
-                HandleOrigin, NLayoutBackingSource, NormalizedBodyVerifyError, normalize_raw_body,
-                verify_normalized_body,
+                HandleOrigin, NLayoutBackingSource, NormalizedBodyVerifyError, ViewAccess,
+                normalize_raw_body, verify_normalized_body,
             },
             root_semantic_instance_key, semantic_body_admission, semantic_borrow_summary,
         },
@@ -6436,20 +6436,28 @@ fn find_empty(board: Board, row: usize, col: usize) -> bool {
     );
 
     let normalized = normalized_func_body(&db, top_mod, "read_board");
-    let row_read_mode = normalized
+    let row_view = normalized
         .body
         .blocks
         .iter()
         .flat_map(|block| block.statements.iter())
         .find_map(|stmt| match &stmt.kind {
             NStatementKind::Define {
-                result,
-                expr: NExpr::Load { mode, .. },
-            } if normalized.body.values[result.index()].ty.pretty_print(&db) == "Row" => Some(mode),
+                expr:
+                    NExpr::MakeView {
+                        place,
+                        access: ViewAccess::Read,
+                    },
+                ..
+            } if place.ty.pretty_print(&db) == "Row" => Some(place),
             _ => None,
         })
-        .expect("row projection read");
-    assert_eq!(*row_read_mode, ReadMode::Read);
+        .expect("read-only view of the row projection");
+    assert!(matches!(row_view.base, NPlaceBase::CapabilityTarget { .. }));
+    assert!(matches!(
+        row_view.path.iter().copied().collect::<Vec<_>>().as_slice(),
+        [NDataProjection::Field(_), NDataProjection::Index(_)]
+    ));
 }
 
 #[test]
@@ -10114,4 +10122,130 @@ fn user_allocator_externs_still_require_effect_contracts() {
             "{declaration}: {diagnostics}"
         );
     }
+}
+
+#[test]
+fn shared_field_receiver_preserves_constructor_returned_owner() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+struct Buffer { size: u64 }
+impl Buffer {
+    fn new() -> Self { Self { size: 42 } }
+    fn capacity(self) -> u64 { self.size }
+    fn clear(mut self) { self.size = 0 }
+}
+struct Frame { memory: Buffer }
+impl Frame {
+    fn clear(mut self) { self.memory.clear() }
+}
+fn run() -> u64 {
+    let mut frame = Frame { memory: Buffer::new() }
+    let capacity = frame.memory.capacity()
+    frame.clear()
+    capacity
+}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn shared_field_receiver_and_arguments_preserve_owned_projections() {
+    for access in [
+        "frame.memory.capacity()",
+        "Buffer::capacity(frame.memory)",
+        "inspect(frame.memory)",
+        "nested.0.memory.capacity()",
+        "inspect(nested.0.memory)",
+        "buffers[index].capacity()",
+        "inspect(buffers[index])",
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+mod storage {{
+    pub struct Buffer {{ size: u64 }}
+    impl Buffer {{
+        pub fn capacity(self) -> u64 {{ self.size }}
+        pub fn clear(mut self) {{ self.size = 0 }}
+    }}
+}}
+use storage::Buffer
+struct Frame {{ memory: Buffer }}
+fn inspect(_ buffer: Buffer) -> u64 {{ buffer.capacity() }}
+fn run(mut frame: own Frame, mut nested: own (Frame,), mut buffers: own [Buffer; 2], index: usize) -> u64 {{
+    let first = {access}
+    let second = {access}
+    frame.memory.clear()
+    nested.0.memory.clear()
+    buffers[index].clear()
+    first + second
+}}
+"#
+        ));
+        assert!(diagnostics.is_empty(), "{access}: {diagnostics}");
+    }
+}
+
+#[test]
+fn shared_field_receiver_keeps_real_moves_and_borrow_conflicts() {
+    for (body, expected) in [
+        (
+            "let consumed = frame.memory.consume()\nframe.memory.capacity()",
+            "move conflict",
+        ),
+        (
+            "consume(frame.memory)\nframe.memory.capacity()",
+            "move conflict",
+        ),
+        (
+            "let moved = frame.memory\nframe.memory.capacity()",
+            "move conflict",
+        ),
+        (
+            "let borrowed = ref frame.memory\nframe.memory.clear()\nborrowed.capacity()",
+            "borrow conflict",
+        ),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Buffer {{ size: u64 }}
+impl Buffer {{
+    fn capacity(self) -> u64 {{ self.size }}
+    fn consume(own self) -> u64 {{ self.size }}
+    fn clear(mut self) {{ self.size = 0 }}
+}}
+struct Frame {{ memory: Buffer }}
+fn consume(_ buffer: own Buffer) {{}}
+fn run(mut frame: own Frame) -> u64 {{ {body} }}
+"#
+        ));
+        assert!(diagnostics.contains(expected), "{body}: {diagnostics}");
+    }
+}
+
+#[test]
+fn shared_field_receiver_preserves_immutable_owner_and_pointer_contents() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+use core::ptr
+struct Buffer { data: *u256 }
+impl Buffer {
+    fn new() -> Self {
+        let data = ptr::alloc<u256>()
+        *data = 42
+        Self { data }
+    }
+    fn read(self) -> u256 { *self.data }
+    fn consume(own self) -> u256 { *self.data }
+}
+struct Frame { memory: Buffer }
+fn run() -> u256 {
+    let frame = Frame { memory: Buffer::new() }
+    let first = frame.memory.read()
+    let second = frame.memory.read()
+    first + second + frame.memory.consume()
+}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
 }
