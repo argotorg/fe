@@ -598,7 +598,7 @@ pub trait Call: EvmCapabilitySeal {
     /// The output buffer receives at most its capacity; the outcome retains
     /// the full returndata length.
     fn raw_staticcall(
-        mut self,
+        self,
         addr: Address,
         gas: u256,
         args: MemSpan,

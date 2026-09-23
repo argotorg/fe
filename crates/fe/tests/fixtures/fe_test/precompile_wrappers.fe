@@ -221,10 +221,10 @@ uses (evm: mut Evm)
 
 #[test]
 fn test_raw_staticcall_copies_to_output_buffer()
-uses (evm: mut Evm)
+uses (evm: Evm)
 {
     let ptr = ptr::alloc_bytes(64)
-    zero_memory(ptr, len: 64)
+    ptr::zero_bytes(ptr, 64)
     let mut ret = MemBuffer::with_capacity(32)
     let outcome = evm.raw_staticcall(
         addr: Address { inner: 4 },

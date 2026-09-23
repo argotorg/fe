@@ -1567,6 +1567,34 @@ pub contract Bar {
     }
 
     #[test]
+    fn raw_staticcall_supports_view_abi_with_readonly_call_effect() {
+        let code = r#"
+use core::ptr::MemBuffer
+use std::abi::sol
+use std::evm::{Address, Call}
+msg ProbeMsg {
+    #[selector = sol("probe(address)")]
+    Probe { target: Address } -> bool,
+}
+pub contract Probe {
+    recv ProbeMsg {
+        Probe { target } -> bool uses (call: Call) {
+            let args = MemBuffer::alloc(0)
+            let mut ret = MemBuffer::with_capacity(64)
+            call.raw_staticcall(addr: target, gas: 30000, args: args.span(), ret: mut ret).success()
+        }
+    }
+}
+"#;
+        let entries = abi_entries(code, "Probe");
+        let probe = entries
+            .iter()
+            .find(|e| e["name"] == "probe")
+            .expect("probe entry");
+        assert_eq!(probe["stateMutability"], "view");
+    }
+
+    #[test]
     fn payable_constructor_and_recv_arms_preserve_abi_mutability_and_array_inputs() {
         let code = r#"
 use std::abi::sol
