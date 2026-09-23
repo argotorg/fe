@@ -619,6 +619,9 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             subst.source(),
             "substitution source scope must match"
         );
+        if subst.is_identity() {
+            return value.clone();
+        }
         let shape = value.shape().substitute(self.db, subst);
         let direct = value
             .0

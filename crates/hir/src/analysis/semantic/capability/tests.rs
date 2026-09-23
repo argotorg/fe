@@ -2412,3 +2412,38 @@ fn grouped_enum_choices_preserve_index_aliases_and_full_tags() {
         );
     }
 }
+
+#[test]
+fn identity_substitution_reuses_nested_values_without_interning() {
+    let db = HirAnalysisTestDb::default();
+    let element = leaf_shape(&db);
+    let shape = array_shape(&db, array_shape(&db, element, 3), 1_000_000);
+    let mut values = ValueInterner::new(
+        &db,
+        ValueLimits {
+            interned_nodes: 0,
+            ..ValueLimits::default()
+        },
+    );
+    let ShapeChildren::Array { element: inner, .. } = shape.children(&db) else {
+        panic!("array")
+    };
+    let value = values.array(shape, &scope(), |values, outer, i| {
+        values.array(*inner, outer, |values, inner, j| {
+            leaf(values, element, inner, 1, vec![i, j, runtime(0)])
+        })
+    });
+    let identity = IndexSubst::new(&scope(), &scope(), [(runtime(0), runtime(0))]).unwrap();
+    let before = values.metrics();
+    assert_eq!(values.substitute(&value, &identity), value);
+    assert_eq!(values.metrics(), before);
+
+    let (extended, _) = scope().bind(IndexNamespace::Result);
+    let extension = IndexSubst::new(&scope(), &extended, []).unwrap();
+    let lifted = values.substitute(&value, &extension);
+    assert_eq!(lifted.scope(), &extended);
+    let changed = IndexSubst::new(&scope(), &scope(), [(runtime(0), 7.into())]).unwrap();
+    let changed = values.substitute(&value, &changed);
+    let leaves = values.leaves(&changed, ValueOccurrence::Argument(0));
+    assert_eq!(leaves[0].payload.indices[2], IndexExpr::Const(7));
+}

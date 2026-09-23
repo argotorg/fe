@@ -410,6 +410,9 @@ impl<'db> RegionSet<'db> {
             subst.source(),
             "region substitution scope mismatch"
         );
+        if subst.is_identity() {
+            return self.clone();
+        }
         Self::new(
             subst.destination(),
             self.clauses.iter().filter_map(|clause| {
