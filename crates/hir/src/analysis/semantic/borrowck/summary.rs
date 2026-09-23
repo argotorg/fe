@@ -3,6 +3,14 @@ use super::validity::NativeValidity;
 use crate::analysis::semantic::diagnostics::SemanticDiagnostic;
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    static GUARD_INSTANTIATIONS: Cell<usize> = const { Cell::new(0) };
+}
+
 use cranelift_entity::EntityRef;
 use rustc_hash::FxHashMap;
 
@@ -154,14 +162,17 @@ impl CallInputs<'_, '_> {
 }
 
 /// Resolutions share one immutable pre-call state and one argument mapping.
-/// Inventory discovery and loan growth invalidate the entire local cache; a
+/// Inventory discovery and loan growth invalidate source resolutions; a
 /// resolution computed while those facts change is never cached.
+/// Guard substitutions depend only on the fixed body and call mapping, so they
+/// remain reusable across inventory changes. Errors are never cached.
 pub(super) struct SourceInstantiations<'a, 'db> {
     state: &'a BorrowState<'db>,
     result: NValueId,
     inputs: CallInputs<'a, 'db>,
     generation: Option<usize>,
     resolved: BTreeMap<BinderScope, FxHashMap<SourceExpr<'db>, Resolution<'db>>>,
+    guards: FxHashMap<Guard<'db>, Option<Guard<'db>>>,
     #[cfg(test)]
     evaluations: usize,
 }
@@ -178,9 +189,23 @@ impl<'a, 'db> SourceInstantiations<'a, 'db> {
             inputs,
             generation: None,
             resolved: BTreeMap::new(),
+            guards: FxHashMap::default(),
             #[cfg(test)]
             evaluations: 0,
         }
+    }
+
+    pub(super) fn guard(
+        &mut self,
+        checker: &Borrowck<'db>,
+        guard: &Guard<'db>,
+    ) -> Result<Option<Guard<'db>>, SemanticDiagnostic<'db>> {
+        if let Some(instantiated) = self.guards.get(guard) {
+            return Ok(instantiated.clone());
+        }
+        let instantiated = checker.instantiate_guard(guard, self.result, self.inputs)?;
+        self.guards.insert(guard.clone(), instantiated.clone());
+        Ok(instantiated)
     }
 
     pub(super) fn resolve(
@@ -1702,7 +1727,7 @@ impl<'db> Borrowck<'db> {
         let mut error = None;
         let instantiated =
             sources.map_payloads(value, &mut values, |semantics, path, entry, domain| {
-                let guard = match self.instantiate_guard(domain, result, inputs) {
+                let guard = match instantiations.guard(self, domain) {
                     Ok(Some(guard)) => guard,
                     Ok(None) => return Vec::new(),
                     Err(failure) => {
@@ -1826,6 +1851,8 @@ impl<'db> Borrowck<'db> {
         result: NValueId,
         inputs: CallInputs<'_, 'db>,
     ) -> Result<Option<Guard<'db>>, SemanticDiagnostic<'db>> {
+        #[cfg(test)]
+        GUARD_INSTANTIATIONS.set(GUARD_INSTANTIATIONS.get() + 1);
         let subst = IndexSubst::new(
             guard.scope(),
             guard.scope(),
@@ -2645,9 +2672,10 @@ mod tests {
     use crate::{
         analysis::{
             semantic::{
+                VariantIndex,
                 capability::{
-                    handle::HandleAddressSpace, region::CANONICALIZED_REGION_CLAUSES,
-                    source::InputSource, test_roots,
+                    guard::ChoiceKey, handle::HandleAddressSpace,
+                    region::CANONICALIZED_REGION_CLAUSES, source::InputSource, test_roots,
                 },
                 identity_semantic_instance_key,
                 normalized::{NRootId, ReadMode},
@@ -2655,7 +2683,7 @@ mod tests {
             ty::{
                 ProviderAddressSpace,
                 corelib::{resolve_core_trait, resolve_lib_func_path},
-                ty_check::BodyOwner,
+                ty_check::{BodyOwner, EffectArgLayoutView, EffectPassMode},
             },
         },
         hir_def::ItemKind,
@@ -2900,6 +2928,7 @@ mod tests {
                 },
             );
             let before = CANONICALIZED_REGION_CLAUSES.get();
+            let guards_before = GUARD_INSTANTIATIONS.get();
             let resolved = checker
                 .call_memory_accesses(&state, result, inputs)
                 .unwrap();
@@ -2923,6 +2952,166 @@ mod tests {
                 visits <= count * 64,
                 "{name}, invalidated={invalidated}: processed {visits} clauses for {count} alternatives"
             );
+            assert_eq!(
+                GUARD_INSTANTIATIONS.get() - guards_before,
+                2,
+                "each distinct call guard should be instantiated once"
+            );
+        }
+    }
+
+    #[test]
+    fn call_guard_reuse_preserves_scopes_mappings_and_errors() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "call_guard_cache.fe".into(),
+            "fn inspect(_ first: u256, _ second: u256) -> u256 { 1 }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "inspect"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        let params: BTreeMap<_, _> = checker
+            .body
+            .values
+            .iter()
+            .enumerate()
+            .filter_map(|(index, value)| {
+                if let NValueDefinition::EntryParam { param } = value.definition {
+                    Some((param, NValueId::new(index)))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let constant = checker
+            .body
+            .values
+            .iter()
+            .enumerate()
+            .find_map(|(index, _)| {
+                let value = NValueId::new(index);
+                (checker.index(value) == IndexExpr::Const(1)).then_some(value)
+            })
+            .unwrap();
+        let scope = BinderScope::default();
+        let (nested, _) = scope.bind(IndexNamespace::Existential);
+        let state = checker.inventory.entry.clone();
+        for argument in [params[&0], constant] {
+            let args = [NOperand {
+                value: argument,
+                origin: None,
+                mode: ReadMode::Read,
+            }];
+            for effect in [params[&0], params[&1]] {
+                let effects = [NEffectArg {
+                    binding_idx: 0,
+                    arg: NEffectArgValue::Value(NOperand {
+                        value: effect,
+                        origin: None,
+                        mode: ReadMode::Read,
+                    }),
+                    pass_mode: EffectPassMode::ByValue,
+                    layout_view: EffectArgLayoutView::Direct,
+                    required_mut: false,
+                    provider_target_ty: None,
+                    provider: None,
+                }];
+                for result in [params[&0], params[&1]] {
+                    let inputs = CallInputs {
+                        args: &args,
+                        effects: &effects,
+                        origin: SemOrigin::Body(checker.body.template_owner),
+                    };
+                    let mut instantiations = SourceInstantiations::new(&state, result, inputs);
+                    for scope in [&scope, &nested] {
+                        let scalar = Guard::always(scope)
+                            .with_equality(IndexExpr::FormalValue(0), IndexExpr::Const(0))
+                            .unwrap();
+                        let expected = Guard::always(scope)
+                            .with_equality(checker.index(argument), IndexExpr::Const(0));
+                        let before = GUARD_INSTANTIATIONS.get();
+                        for _ in 0..4 {
+                            assert_eq!(instantiations.guard(&checker, &scalar).unwrap(), expected);
+                        }
+                        assert_eq!(
+                            GUARD_INSTANTIATIONS.get() - before,
+                            1,
+                            "cache feasible and infeasible guards separately in each scope"
+                        );
+                        for (formal, actual) in [
+                            (
+                                ValueOccurrence::Argument(0),
+                                ValueOccurrence::Value(argument),
+                            ),
+                            (ValueOccurrence::Argument(1), ValueOccurrence::Value(effect)),
+                            (
+                                ValueOccurrence::Argument(9),
+                                ValueOccurrence::CallChoice { result, choice: 9 },
+                            ),
+                            (ValueOccurrence::Summary, ValueOccurrence::Value(result)),
+                            (
+                                ValueOccurrence::SummaryChoice(7),
+                                ValueOccurrence::CallChoice { result, choice: 7 },
+                            ),
+                        ] {
+                            let guard = Guard::always(scope)
+                                .with_variant(
+                                    ChoiceKey::new(
+                                        formal,
+                                        StructuralPath::new([Projection::Index(
+                                            IndexExpr::FormalValue(0),
+                                        )]),
+                                    ),
+                                    VariantIndex(1),
+                                )
+                                .unwrap();
+                            let expected = Guard::always(scope).with_variant(
+                                ChoiceKey::new(
+                                    actual,
+                                    StructuralPath::new([Projection::Index(
+                                        checker.index(argument),
+                                    )]),
+                                ),
+                                VariantIndex(1),
+                            );
+                            let before = GUARD_INSTANTIATIONS.get();
+                            assert_eq!(instantiations.guard(&checker, &guard).unwrap(), expected);
+                            checker.source_generation += 1;
+                            assert_eq!(instantiations.guard(&checker, &guard).unwrap(), expected);
+                            assert_eq!(
+                                GUARD_INSTANTIATIONS.get() - before,
+                                1,
+                                "inventory changes do not change pure guard substitution"
+                            );
+                        }
+                        for occurrence in [
+                            ValueOccurrence::Value(argument),
+                            ValueOccurrence::Root(NRootId::from_u32(0)),
+                            ValueOccurrence::CallChoice { result, choice: 0 },
+                        ] {
+                            let guard = Guard::always(scope)
+                                .with_variant(
+                                    ChoiceKey::new(occurrence, StructuralPath::default()),
+                                    VariantIndex(0),
+                                )
+                                .unwrap();
+                            let before = GUARD_INSTANTIATIONS.get();
+                            assert!(instantiations.guard(&checker, &guard).is_err());
+                            assert!(instantiations.guard(&checker, &guard).is_err());
+                            assert_eq!(
+                                GUARD_INSTANTIATIONS.get() - before,
+                                2,
+                                "invalid local occurrences must still be rejected, without caching errors"
+                            );
+                            assert!(!instantiations.guards.contains_key(&guard));
+                        }
+                    }
+                }
+            }
         }
     }
 

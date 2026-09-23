@@ -66,7 +66,7 @@ impl<'db> Borrowck<'db> {
             for source_region in [&access.region, &access.authorizers] {
                 let mut alternatives = Vec::new();
                 for clause in source_region.clauses() {
-                    let Some(guard) = self.instantiate_guard(&clause.guard, result, inputs)? else {
+                    let Some(guard) = instantiations.guard(self, &clause.guard)? else {
                         continue;
                     };
                     let source = SourceExpr::from_place(&clause.payload)
