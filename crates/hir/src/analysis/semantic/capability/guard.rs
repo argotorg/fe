@@ -4,7 +4,7 @@
 //! disequality, and bounds share one Boolean algebra. Enum decisions have index conditions
 //! as leaves. Neither graph enumerates array elements or depends on construction order.
 use std::{
-    cmp::Reverse,
+    cmp::{Ordering, Reverse},
     collections::{BTreeMap, BTreeSet},
 };
 
@@ -246,10 +246,45 @@ impl<'db> IndexCondition<'db> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ChoiceBit<'db> {
     bit: Reverse<u16>,
     choice: ChoiceKey<'db>,
+}
+
+impl Ord for ChoiceBit<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Interleaving unrelated enum words makes unions of tag tests exponential.
+        // Keep each independent occurrence/structural slot together. Within one
+        // slot, indexed selections may alias, so interleave their bits to keep
+        // the exact tag-equality relations in Guard::canonical compact as well.
+        self.choice
+            .occurrence
+            .cmp(&other.choice.occurrence)
+            .then_with(|| {
+                self.choice
+                    .path
+                    .as_slice()
+                    .iter()
+                    .map(|step| step.map_index(|_| ()))
+                    .cmp(
+                        other
+                            .choice
+                            .path
+                            .as_slice()
+                            .iter()
+                            .map(|step| step.map_index(|_| ())),
+                    )
+            })
+            .then_with(|| self.bit.cmp(&other.bit))
+            .then_with(|| self.choice.path.cmp(&other.choice.path))
+    }
+}
+
+impl PartialOrd for ChoiceBit<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 type Condition<'db> = Decision<ChoiceBit<'db>, IndexCondition<'db>>;
