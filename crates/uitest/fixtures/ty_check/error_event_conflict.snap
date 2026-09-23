@@ -3,7 +3,7 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/error_event_conflict.fe
 ---
-error[16-0005]: `#[error]` cannot be combined with `#[event]`
+error[13-0005]: `#[error]` cannot be combined with `#[event]`
   ┌─ error_event_conflict.fe:2:1
   │
 2 │ #[error]
