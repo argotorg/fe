@@ -1,7 +1,7 @@
 //! Structural return values and mutable-input poststates use the same algebra.
 use super::validity::NativeValidity;
 use crate::analysis::semantic::diagnostics::SemanticDiagnostic;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cranelift_entity::EntityRef;
 
@@ -65,6 +65,71 @@ use super::{
 
 pub type SourceValue<'db> = ValueId<'db, SourceExpr<'db>>;
 type SourceValues<'db> = ValueInterner<'db, SourceExpr<'db>>;
+
+impl<'db> BorrowSummary<'db> {
+    /// Number choices only after assembling all summary components. Assigning
+    /// numbers on first encounter separates related observations when poststates
+    /// and access requirements encounter them in different orders. Preserve the
+    /// local order through this injective renaming and subsequent call expansion.
+    fn abstract_choices(
+        mut self,
+        values: &mut SourceValues<'db>,
+        choices: BTreeSet<ValueOccurrence>,
+    ) -> Self {
+        let choices: BTreeMap<_, _> = choices
+            .into_iter()
+            .enumerate()
+            .map(|(index, occurrence)| {
+                (occurrence, index.try_into().expect("summary choice count"))
+            })
+            .collect();
+        let map = |guard: &Guard<'db>| {
+            guard.map_occurrences(|occurrence| match occurrence {
+                ValueOccurrence::Argument(_) | ValueOccurrence::Summary => occurrence,
+                _ => ValueOccurrence::SummaryChoice(choices[&occurrence]),
+            })
+        };
+        for value in std::iter::once(&mut self.result)
+            .chain(self.mutable_inputs.iter_mut().map(|input| &mut input.value))
+        {
+            *value = values.map_guards(value, map);
+        }
+        for region in self
+            .requirements
+            .iter_mut()
+            .flat_map(|requirement| {
+                std::iter::once(&mut requirement.region).chain(requirement.populated.iter_mut())
+            })
+            .chain(
+                self.accesses
+                    .iter_mut()
+                    .flat_map(|access| [&mut access.region, &mut access.authorizers]),
+            )
+            .chain(
+                self.availability
+                    .incoming
+                    .iter_mut()
+                    .map(|requirement| &mut requirement.region),
+            )
+            .chain([
+                &mut self.availability.reinitialized,
+                &mut self.availability.unavailable,
+                &mut self.native_requirements,
+            ])
+        {
+            *region = RegionSet::new(
+                region.scope(),
+                region.clauses().iter().map(|clause| Guarded {
+                    guard: map(&clause.guard).expect("injective summary choice renaming"),
+                    payload: clause.payload.clone(),
+                }),
+            );
+        }
+        self.accesses.sort();
+        self.availability.incoming.sort();
+        self
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct CallInputs<'a, 'db> {
@@ -403,7 +468,7 @@ impl<'db> Borrowck<'db> {
     /// complete boundary proof obligation, even in a pending template.
     fn validate_pending_exports(&self) -> Result<(), SemanticDiagnostic<'db>> {
         let mut values = SourceValues::new(self.db, ValueLimits::default());
-        let mut choices = BTreeMap::new();
+        let mut choices = BTreeSet::new();
         let mut handles = BTreeMap::new();
         for (index, block) in self.body.blocks.iter().enumerate() {
             let NTerminatorKind::Return(returned) = block.terminator.kind else {
@@ -503,7 +568,7 @@ impl<'db> Borrowck<'db> {
             }
         }
         let mut may_return = false;
-        let mut choices = BTreeMap::new();
+        let mut choices = BTreeSet::new();
         let mut handles = BTreeMap::new();
         for index in 0..self.body.blocks.len() {
             let block = &self.body.blocks[index];
@@ -713,6 +778,7 @@ impl<'db> Borrowck<'db> {
             mutable_inputs: updates,
             requirements,
         };
+        let summary = summary.abstract_choices(&mut values, choices);
         self.verify_summary(&summary)?;
         Ok(summary)
     }
@@ -721,7 +787,7 @@ impl<'db> Borrowck<'db> {
         &self,
         region: &RegionSet<'db>,
         origin: SemOrigin<'db>,
-        choices: &mut BTreeMap<ValueOccurrence, u32>,
+        choices: &mut BTreeSet<ValueOccurrence>,
         exposed_handles: &BTreeMap<AddressOccurrence<'db>, u32>,
         definite: bool,
     ) -> Result<RegionSet<'db>, SemanticDiagnostic<'db>> {
@@ -770,7 +836,7 @@ impl<'db> Borrowck<'db> {
         &self,
         region: &RegionSet<'db>,
         origin: SemOrigin<'db>,
-        choices: &mut BTreeMap<ValueOccurrence, u32>,
+        choices: &mut BTreeSet<ValueOccurrence>,
         handles: &mut BTreeMap<AddressOccurrence<'db>, u32>,
     ) -> Result<RegionSet<'db>, SemanticDiagnostic<'db>> {
         let scope = BinderScope::default();
@@ -811,7 +877,7 @@ impl<'db> Borrowck<'db> {
         boundary: Boundary,
         origin: SemOrigin<'db>,
         values: &mut SourceValues<'db>,
-        choices: &mut BTreeMap<ValueOccurrence, u32>,
+        choices: &mut BTreeSet<ValueOccurrence>,
         handles: &mut BTreeMap<AddressOccurrence<'db>, u32>,
     ) -> Result<SourceValue<'db>, SemanticDiagnostic<'db>> {
         let mut failure = None;
@@ -867,7 +933,7 @@ impl<'db> Borrowck<'db> {
         &self,
         mut payload: SourceExpr<'db>,
         guard: &Guard<'db>,
-        choices: &mut BTreeMap<ValueOccurrence, u32>,
+        choices: &mut BTreeSet<ValueOccurrence>,
         handles: &mut BTreeMap<AddressOccurrence<'db>, u32>,
     ) -> Option<Guarded<'db, SourceExpr<'db>>> {
         if payload.invalidated
@@ -930,8 +996,8 @@ impl<'db> Borrowck<'db> {
                 ) {
                     return occurrence;
                 }
-                let next = choices.len().try_into().expect("summary choice count");
-                ValueOccurrence::SummaryChoice(*choices.entry(occurrence).or_insert(next))
+                choices.insert(occurrence);
+                occurrence
             })
         })?;
         Some(Guarded {
@@ -2533,6 +2599,73 @@ mod tests {
                 },
             }],
         )
+    }
+
+    #[test]
+    fn summary_choice_order_stays_compact_across_poststates_and_accesses() {
+        for arms in [4, 8, 16] {
+            let branches = (0..arms)
+                .map(|index| format!("if op == {index} {{ frame.memory.set(value: {index}) }}"))
+                .collect::<Vec<_>>()
+                .join(" else ");
+            let source = format!(
+                r#"
+use core::Option
+struct Buffer {{ allocation: Option<*u256> }}
+impl Buffer {{
+    fn data(self) -> *u256 {{
+        match self.allocation {{
+            Option::Some(address) => address
+            Option::None => core::panic()
+        }}
+    }}
+    fn set(mut self, value: u256) {{ *self.data() = value }}
+}}
+struct Frame {{ memory: Buffer, output: Buffer }}
+fn dispatch(frame: mut Frame, op: u256) {{ {branches} }}
+fn caller(frame: mut Frame, op: u256) {{ dispatch(frame, op) }}
+"#
+            );
+            let mut db = HirAnalysisTestDb::default();
+            let file = db.new_stand_alone("summary_choice_order.fe".into(), &source);
+            let (module, _) = db.top_mod(file);
+            db.assert_no_diags(module);
+            for name in ["dispatch", "caller"] {
+                let instance = get_or_build_semantic_instance(
+                    &db,
+                    identity_semantic_instance_key(
+                        &db,
+                        BodyOwner::Func(find_func(&db, module, name)),
+                    ),
+                );
+                let checker = Borrowck::new(&db, instance).unwrap();
+                let summary = checker.borrow_summary().unwrap().summary.unwrap();
+                assert!(!summary.accesses.is_empty());
+                let maximum = summary
+                    .accesses
+                    .iter()
+                    .flat_map(|access| [&access.region, &access.authorizers])
+                    .chain(
+                        summary
+                            .availability
+                            .incoming
+                            .iter()
+                            .map(|requirement| &requirement.region),
+                    )
+                    .chain([
+                        &summary.availability.reinitialized,
+                        &summary.availability.unavailable,
+                    ])
+                    .flat_map(|region| region.clauses())
+                    .map(|clause| clause.guard.node_count())
+                    .max()
+                    .unwrap();
+                assert!(
+                    maximum <= arms * 128,
+                    "{name} with {arms} arms: {maximum} nodes"
+                );
+            }
+        }
     }
 
     #[test]
