@@ -91,6 +91,8 @@ pub(super) struct Borrowck<'db> {
     pub validation_dependencies: Vec<Vec<bool>>,
     pub loan_facts_changed: bool,
     pub storage_facts_changed: bool,
+    /// Invalidates call-local source resolutions when their inventory changes.
+    pub(super) source_generation: usize,
 }
 
 impl<'db> Borrowck<'db> {
@@ -143,6 +145,7 @@ impl<'db> Borrowck<'db> {
             pending: PendingSemanticValidation::default(),
             loan_facts_changed: false,
             storage_facts_changed: false,
+            source_generation: 0,
         })
     }
 
@@ -426,8 +429,12 @@ impl<'db> Borrowck<'db> {
             } else {
                 (region.clone(), parents)
             };
-        self.loan_facts_changed |= self.inventory.loans[reference.id.0]
-            .extend_occurrence(self.db, reference, &region, parents);
+        if self.inventory.loans[reference.id.0]
+            .extend_occurrence(self.db, reference, &region, parents)
+        {
+            self.loan_facts_changed = true;
+            self.source_generation += 1;
+        }
     }
 
     pub fn solve(&mut self) -> Result<(), SemanticDiagnostic<'db>> {
@@ -588,6 +595,7 @@ impl<'db> Borrowck<'db> {
             })
             .collect();
         if !sources.is_empty() {
+            self.source_generation += 1;
             self.inventory
                 .add_external_sources(self.db, self.instance, sources)
                 .map_err(|error| {
