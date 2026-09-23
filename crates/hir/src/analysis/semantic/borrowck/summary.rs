@@ -4,6 +4,7 @@ use crate::analysis::semantic::diagnostics::SemanticDiagnostic;
 use std::collections::{BTreeMap, BTreeSet};
 
 use cranelift_entity::EntityRef;
+use rustc_hash::FxHashMap;
 
 use crate::{
     analysis::{
@@ -152,6 +153,69 @@ impl CallInputs<'_, '_> {
     }
 }
 
+/// Resolutions share one immutable pre-call state and one argument mapping.
+/// Inventory discovery and loan growth invalidate the entire local cache; a
+/// resolution computed while those facts change is never cached.
+pub(super) struct SourceInstantiations<'a, 'db> {
+    state: &'a BorrowState<'db>,
+    result: NValueId,
+    inputs: CallInputs<'a, 'db>,
+    generation: Option<usize>,
+    resolved: BTreeMap<BinderScope, FxHashMap<SourceExpr<'db>, Resolution<'db>>>,
+    #[cfg(test)]
+    evaluations: usize,
+}
+
+impl<'a, 'db> SourceInstantiations<'a, 'db> {
+    pub(super) fn new(
+        state: &'a BorrowState<'db>,
+        result: NValueId,
+        inputs: CallInputs<'a, 'db>,
+    ) -> Self {
+        Self {
+            state,
+            result,
+            inputs,
+            generation: None,
+            resolved: BTreeMap::new(),
+            #[cfg(test)]
+            evaluations: 0,
+        }
+    }
+
+    pub(super) fn resolve(
+        &mut self,
+        checker: &mut Borrowck<'db>,
+        source: &SourceExpr<'db>,
+        scope: &BinderScope,
+    ) -> Result<Resolution<'db>, SemanticDiagnostic<'db>> {
+        let generation = checker.source_generation;
+        if self.generation != Some(generation) {
+            self.resolved.clear();
+            self.generation = Some(generation);
+        }
+        if let Some(resolved) = self
+            .resolved
+            .get(scope)
+            .and_then(|sources| sources.get(source))
+        {
+            return Ok(resolved.clone());
+        }
+        #[cfg(test)]
+        {
+            self.evaluations += 1;
+        }
+        let resolved = checker.instantiate_source_uncached(source, scope, self)?;
+        if checker.source_generation == generation {
+            self.resolved
+                .entry(scope.clone())
+                .or_default()
+                .insert(source.clone(), resolved.clone());
+        }
+        Ok(resolved)
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct CallSummary<'db> {
     pub instance: SemanticInstance<'db>,
@@ -199,6 +263,7 @@ impl<'db> Borrowck<'db> {
     }
 
     pub fn prepare_calls(&mut self) -> Result<(), SemanticDiagnostic<'db>> {
+        self.source_generation += 1;
         let calls: Vec<_> = self
             .body
             .blocks
@@ -1633,6 +1698,7 @@ impl<'db> Borrowck<'db> {
     ) -> Result<CapabilityValue<'db>, SemanticDiagnostic<'db>> {
         let mut values = CapabilityValues::new(self.db, ValueLimits::default());
         let sources = SourceValues::new(self.db, ValueLimits::default());
+        let mut instantiations = SourceInstantiations::new(state, result, inputs);
         let mut error = None;
         let instantiated =
             sources.map_payloads(value, &mut values, |semantics, path, entry, domain| {
@@ -1644,13 +1710,7 @@ impl<'db> Borrowck<'db> {
                         return Vec::new();
                     }
                 };
-                let resolved = match self.instantiate_source(
-                    state,
-                    &entry.payload,
-                    result,
-                    guard.scope(),
-                    inputs,
-                ) {
+                let resolved = match instantiations.resolve(self, &entry.payload, guard.scope()) {
                     Ok(resolved) => resolved,
                     Err(failure) => {
                         error.get_or_insert(failure);
@@ -1846,6 +1906,18 @@ impl<'db> Borrowck<'db> {
         scope: &BinderScope,
         inputs: CallInputs<'_, 'db>,
     ) -> Result<Resolution<'db>, SemanticDiagnostic<'db>> {
+        SourceInstantiations::new(state, result, inputs).resolve(self, source, scope)
+    }
+
+    fn instantiate_source_uncached(
+        &mut self,
+        source: &SourceExpr<'db>,
+        scope: &BinderScope,
+        instantiations: &mut SourceInstantiations<'_, 'db>,
+    ) -> Result<Resolution<'db>, SemanticDiagnostic<'db>> {
+        let state = instantiations.state;
+        let result = instantiations.result;
+        let inputs = instantiations.inputs;
         let CallInputs {
             args,
             effects,
@@ -1867,9 +1939,8 @@ impl<'db> Borrowck<'db> {
         let path = &source.path;
         let external = &source.source;
         let clobber = if let Some(clobber) = &external.clobber {
-            let target = self.instantiate_source(state, &clobber.target, result, scope, inputs)?;
-            let written =
-                self.instantiate_source(state, &clobber.written, result, scope, inputs)?;
+            let target = instantiations.resolve(self, &clobber.target, scope)?;
+            let written = instantiations.resolve(self, &clobber.written, scope)?;
             if matches!(
                 AccessFootprint::typed(&target.region).overlap(
                     self.db,
@@ -1906,7 +1977,7 @@ impl<'db> Borrowck<'db> {
                 element,
                 target_ty,
             } => {
-                let base = self.instantiate_source(state, base, result, scope, inputs)?;
+                let base = instantiations.resolve(self, base, scope)?;
                 let region = self.memory_region(&base.region, *target_ty, *element, origin)?;
                 (
                     Resolution {
@@ -2574,8 +2645,9 @@ mod tests {
     use crate::{
         analysis::{
             semantic::{
-                capability::{handle::HandleAddressSpace, source::InputSource},
+                capability::{handle::HandleAddressSpace, source::InputSource, test_roots},
                 identity_semantic_instance_key,
+                normalized::{NRootId, ReadMode},
             },
             ty::{
                 ProviderAddressSpace,
@@ -2599,6 +2671,159 @@ mod tests {
                 },
             }],
         )
+    }
+
+    #[test]
+    fn call_source_reuse_tracks_state_scopes_and_inventory_growth() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "call_source_cache.fe".into(),
+            "fn native(_ value: mut u256) {}\nfn raw(_ value: *u256) {}",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        for name in ["native", "raw"] {
+            let instance = get_or_build_semantic_instance(
+                &db,
+                identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, name))),
+            );
+            let mut checker = Borrowck::new(&db, instance).unwrap();
+            let value = checker
+                .body
+                .values
+                .iter()
+                .enumerate()
+                .find_map(|(index, value)| {
+                    matches!(value.definition, NValueDefinition::EntryParam { param: 0 })
+                        .then(|| NValueId::new(index))
+                })
+                .unwrap();
+            let state = checker.inventory.entry.clone();
+            let scope = BinderScope::default();
+            let origin = SemOrigin::Body(checker.body.template_owner);
+            let args = [NOperand {
+                value,
+                origin: None,
+                mode: ReadMode::Read,
+            }];
+            let inputs = CallInputs {
+                args: &args,
+                effects: &[],
+                origin,
+            };
+            let contract = ReferentContract::new(
+                &db,
+                TyId::u256(&db),
+                HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+            );
+            let source = SourceExpr {
+                invalidated: false,
+                source: ExternalSource::input(
+                    InputSource::slot(0, StructuralPath::default()),
+                    contract,
+                    false,
+                ),
+                path: RegionPath::default(),
+                views: Default::default(),
+            };
+            let mut sources = SourceInstantiations::new(&state, value, inputs);
+            let initial = sources.resolve(&mut checker, &source, &scope).unwrap();
+            assert!(!initial.region.is_empty());
+            let evaluations = sources.evaluations;
+            let reused = sources.resolve(&mut checker, &source, &scope).unwrap();
+            assert_eq!(
+                sources.evaluations, evaluations,
+                "identical source was evaluated twice"
+            );
+            assert_eq!(reused.region, initial.region);
+            assert_eq!(reused.parents, initial.parents);
+            assert_eq!(reused.traversed, initial.traversed);
+
+            let (nested, _) = scope.bind(IndexNamespace::Existential);
+            let lifted = sources.resolve(&mut checker, &source, &nested).unwrap();
+            assert_eq!(lifted.region.scope(), &nested);
+            assert!(
+                sources.evaluations > evaluations,
+                "different scopes shared a resolution"
+            );
+            let evaluations = sources.evaluations;
+            sources.resolve(&mut checker, &source, &scope).unwrap();
+            assert_eq!(sources.evaluations, evaluations);
+
+            if name == "native" {
+                let reference = state.value(value).direct()[0]
+                    .payload
+                    .loan()
+                    .unwrap()
+                    .clone();
+                let extra = RegionSet::singleton(
+                    &scope,
+                    test_roots::local(&db, NRootId::from_u32(0)),
+                    RegionPath::default(),
+                );
+                checker.extend_loan(value, &reference, &extra, Vec::new());
+                let changed = sources.resolve(&mut checker, &source, &scope).unwrap();
+                assert!(
+                    sources.evaluations > evaluations,
+                    "loan growth retained a stale resolution"
+                );
+                assert_eq!(changed.region, initial.region.union(&extra));
+                let evaluations = sources.evaluations;
+                checker.extend_loan(value, &reference, &extra, Vec::new());
+                sources.resolve(&mut checker, &source, &scope).unwrap();
+                assert_eq!(
+                    sources.evaluations, evaluations,
+                    "unchanged loan facts invalidated reuse"
+                );
+            } else {
+                // Following a newly discovered pointer cell changes the storage
+                // inventory during resolution. Cache only a subsequent stable read.
+                let memory = SourceExpr {
+                    source: ExternalSource::memory(
+                        &db,
+                        source.clone(),
+                        TyId::ptr_to(&db, contract.ty),
+                        None,
+                    )
+                    .follow(RegionPath::default(), contract, false),
+                    ..source.clone()
+                };
+                let generation = checker.source_generation;
+                sources.resolve(&mut checker, &memory, &scope).unwrap();
+                assert!(checker.source_generation > generation);
+                assert!(
+                    sources
+                        .resolved
+                        .get(&scope)
+                        .is_none_or(|entries| !entries.contains_key(&memory))
+                );
+                let evaluations = sources.evaluations;
+                let discovered = sources.resolve(&mut checker, &memory, &scope).unwrap();
+                assert!(sources.evaluations > evaluations);
+                let evaluations = sources.evaluations;
+                assert_eq!(
+                    sources
+                        .resolve(&mut checker, &memory, &scope)
+                        .unwrap()
+                        .region,
+                    discovered.region
+                );
+                assert_eq!(sources.evaluations, evaluations);
+            }
+
+            // A new pre-call state always starts a new cache, even with the same
+            // source expression, arguments, and unchanged inventory generation.
+            let mut moved = state.clone();
+            let empty = checker
+                .inventory
+                .values
+                .empty(state.value(value).shape(), &scope);
+            moved.set_value(value, empty);
+            let resolved = SourceInstantiations::new(&moved, value, inputs)
+                .resolve(&mut checker, &source, &scope)
+                .unwrap();
+            assert!(resolved.region.is_empty());
+        }
     }
 
     #[test]

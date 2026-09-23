@@ -5,7 +5,7 @@ use super::validity::NativeValidity;
 use super::{
     ir::{AvailabilityRequirement, AvailabilitySummary, BorrowSummary, MemoryAccess},
     solver::Borrowck,
-    summary::CallInputs,
+    summary::{CallInputs, SourceInstantiations},
 };
 use crate::analysis::semantic::diagnostics::SemanticDiagnostic;
 use crate::analysis::{
@@ -58,6 +58,7 @@ impl<'db> Borrowck<'db> {
             return Ok(Vec::new());
         };
         let mut resolved = Vec::new();
+        let mut instantiations = SourceInstantiations::new(state, result, inputs);
         for access in &call.summary.accesses {
             let mut invalidated = NativeValidity::default();
             let mut authority = Vec::new();
@@ -80,8 +81,7 @@ impl<'db> Borrowck<'db> {
                         continue;
                     }
 
-                    let target =
-                        self.instantiate_source(state, &source, result, guard.scope(), inputs)?;
+                    let target = instantiations.resolve(self, &source, guard.scope())?;
                     invalidated |= target.invalidated;
                     authority.extend(
                         target
