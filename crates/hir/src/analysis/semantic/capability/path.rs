@@ -15,6 +15,19 @@ pub enum Projection<I> {
     Index(I),
 }
 
+impl<I> Projection<I> {
+    pub fn map_index<J>(&self, map: impl FnOnce(&I) -> J) -> Projection<J> {
+        match self {
+            Self::Field(field) => Projection::Field(*field),
+            Self::VariantField { variant, field } => Projection::VariantField {
+                variant: *variant,
+                field: *field,
+            },
+            Self::Index(index) => Projection::Index(map(index)),
+        }
+    }
+}
+
 /// Slots within a semantic value. A path never implicitly dereferences a capability.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StructuralPath<I>(Box<[Projection<I>]>);
@@ -41,21 +54,7 @@ macro_rules! path_impl {
                 self.0.is_empty()
             }
             pub fn map_indices<J>(&self, mut map: impl FnMut(&I) -> J) -> $path<J> {
-                $path(
-                    self.0
-                        .iter()
-                        .map(|step| match step {
-                            Projection::Field(field) => Projection::Field(*field),
-                            Projection::VariantField { variant, field } => {
-                                Projection::VariantField {
-                                    variant: *variant,
-                                    field: *field,
-                                }
-                            }
-                            Projection::Index(index) => Projection::Index(map(index)),
-                        })
-                        .collect(),
-                )
+                $path(self.0.iter().map(|step| step.map_index(&mut map)).collect())
             }
         }
         impl<I: Clone> $path<I> {

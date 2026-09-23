@@ -913,3 +913,64 @@ fn native_shared_field_receivers_preserve_ownership_at_all_optimization_levels()
         );
     }
 }
+
+#[test]
+fn native_owned_buffer_fields_preserve_values_across_copy_loops_and_reuse() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("buffer_fields.fe");
+    fs::write(
+        &source,
+        r#"
+use std::native::ByteBuffer
+struct Frame { memory: ByteBuffer, output: ByteBuffer }
+impl Frame {
+    fn new() -> Self { Self { memory: ByteBuffer::new(), output: ByteBuffer::new() } }
+    fn run(mut self, len: u64) {
+        self.memory.clear()
+        self.output.clear()
+        core::assert(self.memory.try_resize(len))
+        core::assert(self.output.try_resize(len))
+        let mut i: u64 = 0
+        while i < len {
+            core::assert(self.memory.byte_at(i) == 0 && self.output.byte_at(i) == 0)
+            self.memory.set_byte(index: i, value: (i % 251).downcast_unchecked())
+            i += 1
+        }
+        i = 0
+        while i < len {
+            self.output.set_byte(index: i, value: self.memory.byte_at(i))
+            i += 1
+        }
+    }
+    fn into_output(own self) -> ByteBuffer {
+        self.memory.release()
+        self.output
+    }
+}
+pub fn main() -> i32 {
+    let mut frame = Frame::new()
+    frame.run(len: 32)
+    frame.run(len: 9000)
+    let capacity = frame.memory.capacity()
+    frame.run(len: 33)
+    core::assert(frame.memory.capacity() == capacity)
+    let output = frame.into_output()
+    core::assert(output.len() == 33)
+    let mut i: u64 = 0
+    while i < output.len() {
+        core::assert(output.byte_at(i) == (i % 251).downcast_unchecked())
+        i += 1
+    }
+    output.release()
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("buffer_fields")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}

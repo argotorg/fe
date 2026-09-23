@@ -2330,3 +2330,85 @@ fn guard_projection_agrees_with_finite_witness_enumeration() {
         }
     }
 }
+
+#[test]
+fn independent_enum_choice_unions_have_linear_size() {
+    let scope = scope();
+    // Both different roots and different fields within one root are independent.
+    for fields in [false, true] {
+        let choice = |index| {
+            if fields {
+                ChoiceKey::new(
+                    ValueOccurrence::Argument(0),
+                    StructuralPath::new([Projection::Field(FieldIndex(index as u16))]),
+                )
+            } else {
+                ChoiceKey::new(ValueOccurrence::Argument(index), StructuralPath::default())
+            }
+        };
+        let alternatives: Vec<_> = (0..10)
+            .map(|index| {
+                Guard::always(&scope)
+                    .with_variant(choice(index), VariantIndex(1))
+                    .unwrap()
+            })
+            .collect();
+        let union = alternatives
+            .iter()
+            .cloned()
+            .reduce(|left, right| left.or(&right))
+            .unwrap();
+        assert!(
+            union.node_count() <= alternatives.len() * 32,
+            "{} nodes for {} choices",
+            union.node_count(),
+            alternatives.len()
+        );
+        for alternative in &alternatives {
+            assert!(alternative.implies(&union));
+        }
+        let excluded = (0..10).fold(Guard::always(&scope), |guard, index| {
+            guard.with_variant(choice(index), VariantIndex(2)).unwrap()
+        });
+        assert!(union.and(&excluded).is_none());
+    }
+}
+
+#[test]
+fn grouped_enum_choices_preserve_index_aliases_and_full_tags() {
+    let scope = scope();
+    let choice = |field, index| {
+        ChoiceKey::new(
+            ValueOccurrence::Argument(0),
+            StructuralPath::new([
+                Projection::Field(FieldIndex(field)),
+                Projection::Index(index),
+            ]),
+        )
+    };
+    for (left_tag, right_tag) in [(0, 1), (0, 32768), (1, u16::MAX)] {
+        let left = Guard::always(&scope)
+            .with_variant(choice(0, runtime(0)), VariantIndex(left_tag))
+            .unwrap();
+        let right = Guard::always(&scope)
+            .with_variant(choice(0, runtime(1)), VariantIndex(right_tag))
+            .unwrap();
+        let pair = left.and(&right).unwrap();
+        assert!(pair.with_equality(runtime(0), runtime(1)).is_none());
+        assert!(pair.with_disequality(runtime(0), runtime(1)).is_some());
+        let separate_field = Guard::always(&scope)
+            .with_variant(choice(1, runtime(1)), VariantIndex(right_tag))
+            .unwrap();
+        assert!(
+            left.and(&separate_field)
+                .unwrap()
+                .with_equality(runtime(0), runtime(1))
+                .is_some()
+        );
+        let partition = left.with_equality(runtime(0), runtime(1)).unwrap();
+        assert_eq!(
+            partition.or(&left.with_disequality(runtime(0), runtime(1)).unwrap()),
+            left
+        );
+    }
+}
