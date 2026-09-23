@@ -332,6 +332,18 @@ impl<'db> RegionSet<'db> {
         )
     }
 
+    /// Canonicalize a collection of regions once, rather than repeatedly
+    /// copying and normalizing an ever-growing prefix of alternatives.
+    pub fn union_all(scope: &BinderScope, regions: impl IntoIterator<Item = Self>) -> Self {
+        Self::new(
+            scope,
+            regions.into_iter().flat_map(|region| {
+                assert_eq!(&region.scope, scope, "region scopes must match");
+                region.clauses.into_vec()
+            }),
+        )
+    }
+
     pub fn with_guard(&self, guard: &Guard<'db>) -> Self {
         Self::new(
             &self.scope,

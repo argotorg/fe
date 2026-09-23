@@ -245,20 +245,21 @@ impl<'db> BorrowState<'db> {
         loans: &[LoanDef<'db>],
     ) -> RegionSet<'db> {
         let value = self.value(carrier);
-        value
-            .direct()
-            .iter()
-            .filter(|entry| !matches!(entry.payload, CapabilityRef::Invalidated { .. }))
-            .fold(RegionSet::empty(value.scope()), |region, entry| {
-                region.union(
-                    &entry
+        RegionSet::union_all(
+            value.scope(),
+            value
+                .direct()
+                .iter()
+                .filter(|entry| !matches!(entry.payload, CapabilityRef::Invalidated { .. }))
+                .map(|entry| {
+                    entry
                         .payload
                         .region(db, loans, entry.guard.scope())
                         .with_guard(&entry.guard)
-                        .close_existentials(value.scope()),
-                )
-            })
-            .project(path)
+                        .close_existentials(value.scope())
+                }),
+        )
+        .project(path)
     }
 
     /// Load structural contents from the selected storage, preserving guards and
