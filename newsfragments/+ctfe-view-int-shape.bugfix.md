@@ -1,0 +1,1 @@
+Fix a compiler panic ("optional CTFE fold invariant failed: constant integer exceeds its declared type") when constant evaluation folded bitwise-not or other integer operations whose result has a view type, such as `x == !(0 as u256)`. Integer views now keep the width and signedness of the viewed integer during constant evaluation.

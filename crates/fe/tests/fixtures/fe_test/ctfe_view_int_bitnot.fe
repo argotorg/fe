@@ -1,0 +1,44 @@
+// Bitwise-not of a cast literal is folded while its result has a view type.
+// The folded constant must keep the width of the viewed integer.
+
+fn is_u8_max(_ x: u8) -> bool {
+    x == !(0 as u8)
+}
+
+fn is_u16_max(_ x: u16) -> bool {
+    x == !(0 as u16)
+}
+
+fn is_u128_max(_ x: u128) -> bool {
+    x == !(0 as u128)
+}
+
+fn is_u256_max(_ x: u256) -> bool {
+    x != 0 && x == !(0 as u256)
+}
+
+fn is_i8_minus_one(_ x: i8) -> bool {
+    x == !(0 as i8)
+}
+
+fn is_not_five(_ x: i256) -> bool {
+    x == !(5 as i256)
+}
+
+fn clear_low_byte(_ x: u16) -> u16 {
+    x & !(255 as u16)
+}
+
+#[test]
+fn bitnot_of_cast_literal_uses_viewed_width() {
+    assert(is_u8_max(255))
+    assert(!is_u8_max(254))
+    assert(is_u16_max(65535))
+    assert(is_u128_max(340282366920938463463374607431768211455))
+    assert(is_u256_max(115792089237316195423570985008687907853269984665640564039457584007913129639935))
+    assert(!is_u256_max(1))
+    assert(is_i8_minus_one(-1))
+    assert(!is_i8_minus_one(127))
+    assert(is_not_five(-6))
+    assert(clear_low_byte(0x1234) == 0x1200)
+}

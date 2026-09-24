@@ -878,6 +878,8 @@ pub fn normalize_int_to_shape(value: BigInt, bits: u16, signed: bool) -> BigInt 
 }
 
 pub fn int_ty_shape<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<(u16, bool)> {
+    // A view of an integer has the integer's value shape.
+    let ty = ty.as_view(db).unwrap_or(ty);
     let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) else {
         return None;
     };
