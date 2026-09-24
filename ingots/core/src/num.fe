@@ -991,6 +991,107 @@ pub const fn trailing_zeros(_ x: u256) -> u256 {
     255 - leading_zeros(x & (0 - x))
 }
 
+extern {
+    /// Returns `(a + b) % m` with a 257-bit intermediate sum, or 0 if `m == 0`.
+    pub const fn addmod(_ a: u256, _ b: u256, _ m: u256) -> u256
+    /// Returns `(a * b) % m` with a 512-bit intermediate product, or 0 if `m == 0`.
+    pub const fn mulmod(_ a: u256, _ b: u256, _ m: u256) -> u256
+}
+
+/// Returns the full 512-bit product `a * b` as `(high, low)` words.
+#[arithmetic(unchecked)]
+pub const fn full_mul(_ a: u256, _ b: u256) -> (u256, u256) {
+    let low = a * b
+    let mm = mulmod(a, b, u256::max())
+    (mm - low - ((mm < low) as u256), low)
+}
+
+/// Returns `floor(a * b / d)` computed with a 512-bit intermediate product,
+/// or `None` if `d == 0` or the result does not fit in a `u256`.
+///
+/// Algorithm by Remco Bloemen (https://xn--2-umb.com/21/muldiv), as used in
+/// Uniswap's MIT-licensed FullMath.
+#[arithmetic(unchecked)]
+pub const fn checked_mul_div(_ a: u256, _ b: u256, _ d: u256) -> Option<u256> {
+    let (mut high, mut low) = full_mul(a, b)
+    // Also rejects `d == 0`.
+    if d <= high {
+        return None
+    }
+    if high == 0 {
+        return Some(low / d)
+    }
+
+    // Make the division exact by subtracting the remainder from [high low].
+    let remainder = mulmod(a, b, d)
+    high = high - ((remainder > low) as u256)
+    low = low - remainder
+
+    // Factor powers of two out of `d` and shift them out of [high low].
+    let twos = (0 - d) & d
+    let odd = d / twos
+    low = low / twos
+    let shift = (0 - twos) / twos + 1
+    low = low | (high * shift)
+
+    // `odd` is invertible modulo 2^256; Newton-Raphson doubles the correct
+    // bits per step, starting from 4 correct bits.
+    let mut inverse = (3 * odd) ^ 2
+    inverse = inverse * (2 - odd * inverse)
+    inverse = inverse * (2 - odd * inverse)
+    inverse = inverse * (2 - odd * inverse)
+    inverse = inverse * (2 - odd * inverse)
+    inverse = inverse * (2 - odd * inverse)
+    inverse = inverse * (2 - odd * inverse)
+    Some(low * inverse)
+}
+
+/// Returns `ceil(a * b / d)` computed with a 512-bit intermediate product,
+/// or `None` if `d == 0` or the result does not fit in a `u256`.
+pub const fn checked_mul_div_ceil(_ a: u256, _ b: u256, _ d: u256) -> Option<u256> {
+    match checked_mul_div(a, b, d) {
+        Some(result) => {
+            if mulmod(a, b, d) == 0 {
+                Some(result)
+            } else if result == u256::max() {
+                None
+            } else {
+                Some(result + 1)
+            }
+        }
+        None => None,
+    }
+}
+
+/// Returns `floor(a * b / d)` computed with a 512-bit intermediate product.
+///
+/// Fails like checked arithmetic: division by zero if `d == 0`, overflow if
+/// the result does not fit in a `u256`.
+pub const fn mul_div(_ a: u256, _ b: u256, _ d: u256) -> u256 {
+    match checked_mul_div(a, b, d) {
+        Some(result) => result,
+        None => mul_div_failure(d),
+    }
+}
+
+/// Returns `ceil(a * b / d)` computed with a 512-bit intermediate product.
+///
+/// Fails like checked arithmetic: division by zero if `d == 0`, overflow if
+/// the result does not fit in a `u256`.
+pub const fn mul_div_ceil(_ a: u256, _ b: u256, _ d: u256) -> u256 {
+    match checked_mul_div_ceil(a, b, d) {
+        Some(result) => result,
+        None => mul_div_failure(d),
+    }
+}
+
+// Raises the checked-arithmetic failure of a rejected `mul_div`.
+const fn mul_div_failure(_ d: u256) -> u256 {
+    let _ = 1 / d
+    // Only reached for `d != 0`, so this addition overflows.
+    d + u256::max()
+}
+
 const fn pow_checked<T>(_ base: own T, _ exp: own T) -> T
     where T: IntWord, T: Mul<Output = T>
 {

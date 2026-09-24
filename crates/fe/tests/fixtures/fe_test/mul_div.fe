@@ -1,0 +1,436 @@
+// Tests for `core::num::{mul_div, mul_div_ceil, checked_mul_div, checked_mul_div_ceil, full_mul}`.
+// Expected values were computed with Python arbitrary-precision integers.
+
+use std::evm::{Address, Evm}
+use core::num::{
+    checked_mul_div,
+    checked_mul_div_ceil,
+    full_mul,
+    mul_div,
+    mul_div_ceil,
+    mulmod,
+    addmod,
+}
+
+const MAX: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+// Bits in `fits`: 1 = floor result fits in a u256, 2 = ceil result fits.
+const FLOOR_FITS: u8 = 1
+const CEIL_FITS: u8 = 2
+
+// (a, b, d, floor, ceil, fits)
+const CASES: [(u256, u256, u256, u256, u256, u8); 44] = [
+    (0x0, 0x0, 0x1, 0x0, 0x0, 3),
+    (0x0, MAX, MAX, 0x0, 0x0, 3),
+    (MAX, 0x1, 0x1, MAX, MAX, 3),
+    (MAX, MAX, MAX, MAX, MAX, 3),
+    (MAX, MAX, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe, 0x0, 0x0, 0),
+    (0x1, 0x1, 0x0, 0x0, 0x0, 0),
+    (0x0, 0x0, 0x0, 0x0, 0x0, 0),
+    (
+        0x100000000000000000000000000000000,
+        0x100000000000000000000000000000000,
+        0x2,
+        0x8000000000000000000000000000000000000000000000000000000000000000,
+        0x8000000000000000000000000000000000000000000000000000000000000000,
+        3,
+    ),
+    (0x100000000000000000000000000000000, 0x100000000000000000000000000000000, 0x1, 0x0, 0x0, 0),
+    (
+        MAX,
+        0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe,
+        MAX,
+        0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe,
+        0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe,
+        3,
+    ),
+    (
+        0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe,
+        0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe,
+        0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd,
+        MAX,
+        0x0,
+        1,
+    ),
+    (0x1, 0x1, 0x2, 0x0, 0x1, 3),
+    (0x6, 0x7, 0x3, 0xe, 0xe, 3),
+    (0x7, 0x3, 0x2, 0xa, 0xb, 3),
+    (0x8000000000000000000000000000000000000000000000000000000000000000, 0x6, 0x3, 0x0, 0x0, 0),
+    (
+        0x8000000000000000000000000000000000000000000000000000000000000000,
+        0x4,
+        0x8,
+        0x4000000000000000000000000000000000000000000000000000000000000000,
+        0x4000000000000000000000000000000000000000000000000000000000000000,
+        3,
+    ),
+    (
+        0xfbafb635f596f3fd078fee9905b95768870f9ec7b99edb14c9bbf4c95f790e7b,
+        0x4c7601718216b7576bf80869565cdabcb7bdb445680eaba291e5281f953909b7,
+        0x4b2c2e8149f337ac30ed74504296dc4e968646c75a1f01d00c75544a61b0666b,
+        0x0,
+        0x0,
+        0,
+    ),
+    (
+        0xfbafb635f596f3fd078fee9905b95768870f9ec7b99edb14c9bbf4c95f790e7b,
+        0x4c7601718216b7576bf80869565cdabcb7bdb445680eaba291e5281f953909b7,
+        0x4b2c2e8149f337ac30ed74504296dc4e968646c75a1f01d00c75544a61b0666c,
+        MAX,
+        0x0,
+        1,
+    ),
+    (
+        0xfbafb635f596f3fd078fee9905b95768870f9ec7b99edb14c9bbf4c95f790e7b,
+        0x4c7601718216b7576bf80869565cdabcb7bdb445680eaba291e5281f953909b7,
+        0x6641552cff0f1f5e829737a9972cc65471fbb4749f0f9156ef3c99ed0cee9740,
+        0xbc329431aa812ae2c2ddd0a8fb07f0b2373ffdfa2f4bfc0357549b1c70f131ab,
+        0xbc329431aa812ae2c2ddd0a8fb07f0b2373ffdfa2f4bfc0357549b1c70f131ac,
+        3,
+    ),
+    (
+        0xba50cb2005afc6354a46f6fe98e6fd935cf6daa9be1f6008eb1f2662327ea425,
+        0x7b8c69070fb79dceec2d95f1328416d73d2830444a7ea10152ebc6b48d1480fc,
+        0x59eb0237bf349f1379a21b8284500780623cbf4b97d3f7bad7a07a2f1fc55f87,
+        0x0,
+        0x0,
+        0,
+    ),
+    (
+        0xba50cb2005afc6354a46f6fe98e6fd935cf6daa9be1f6008eb1f2662327ea425,
+        0x7b8c69070fb79dceec2d95f1328416d73d2830444a7ea10152ebc6b48d1480fc,
+        0x59eb0237bf349f1379a21b8284500780623cbf4b97d3f7bad7a07a2f1fc55f88,
+        MAX,
+        0x0,
+        1,
+    ),
+    (
+        0xba50cb2005afc6354a46f6fe98e6fd935cf6daa9be1f6008eb1f2662327ea425,
+        0x7b8c69070fb79dceec2d95f1328416d73d2830444a7ea10152ebc6b48d1480fc,
+        0x9eef0289722dc9217b26dc909b3bb41d3def63efac2c0e1ee84227941b5bdf2c,
+        0x90d5872f2a86d46aeba21d02cc9e6cd9009262011761dcf19fc27810e9a4b621,
+        0x90d5872f2a86d46aeba21d02cc9e6cd9009262011761dcf19fc27810e9a4b622,
+        3,
+    ),
+    (
+        0xe6a7d9fd97447afc4b57208a8e7e79069feb3c0832c8a7c1116fb588ee9bd963,
+        0x3a3a73b9d7ff4c6b4e6404240b8bb377f622f5d65ff0c782bdb9912104eed9cb,
+        0x3476b1afb0903ab7bb1bdd65d088df99ceba95590bcaa6e153f915a022384c06,
+        0x0,
+        0x0,
+        0,
+    ),
+    (
+        0xe6a7d9fd97447afc4b57208a8e7e79069feb3c0832c8a7c1116fb588ee9bd963,
+        0x3a3a73b9d7ff4c6b4e6404240b8bb377f622f5d65ff0c782bdb9912104eed9cb,
+        0x3476b1afb0903ab7bb1bdd65d088df99ceba95590bcaa6e153f915a022384c07,
+        0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd,
+        0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe,
+        3,
+    ),
+    (
+        0xe6a7d9fd97447afc4b57208a8e7e79069feb3c0832c8a7c1116fb588ee9bd963,
+        0x3a3a73b9d7ff4c6b4e6404240b8bb377f622f5d65ff0c782bdb9912104eed9cb,
+        0xdeee82bd61f85afcf89346fc817f8cab3583c20693a17141d7f0832936eb5e9,
+        0x0,
+        0x0,
+        0,
+    ),
+    (
+        0x5c1ebdbae64c71a6a6d8fe22c529a53071d1e86da54c735c6e027578755045f0,
+        0x57bff58267bfd1895ea11605e5f03976bb368371d0c86f46fe7a6b2907345ab6,
+        0x1f9385c26b3b69a4d221634b0944dd92184753bf24e8c4ff851f9cb6752d27b5,
+        0x0,
+        0x0,
+        0,
+    ),
+    (
+        0x5c1ebdbae64c71a6a6d8fe22c529a53071d1e86da54c735c6e027578755045f0,
+        0x57bff58267bfd1895ea11605e5f03976bb368371d0c86f46fe7a6b2907345ab6,
+        0x1f9385c26b3b69a4d221634b0944dd92184753bf24e8c4ff851f9cb6752d27b6,
+        MAX,
+        0x0,
+        1,
+    ),
+    (
+        0x5c1ebdbae64c71a6a6d8fe22c529a53071d1e86da54c735c6e027578755045f0,
+        0x57bff58267bfd1895ea11605e5f03976bb368371d0c86f46fe7a6b2907345ab6,
+        0xaf9384d3240bee87338a22bb3e34ffbd24be9ac9bd421680628c204f83837897,
+        0x2e0a3a8308a3f388db5516f6f8d4632863fcf777cc93910f115a3732270d7fb4,
+        0x2e0a3a8308a3f388db5516f6f8d4632863fcf777cc93910f115a3732270d7fb5,
+        3,
+    ),
+    (
+        0xb97dc9226a487965c28eab2a77474f0963081197e21982a69ccbb1251cac7989,
+        0x4acc644f2ffc2dc01f76d61b62cd330d9b3197b216138b98bc09d51858081925,
+        0x3632750ebd4cf8e0e3ffa829f2844d0cdf847dad8b8f8ffea330ebc9b277f22c,
+        0x0,
+        0x0,
+        0,
+    ),
+    (
+        0xb97dc9226a487965c28eab2a77474f0963081197e21982a69ccbb1251cac7989,
+        0x4acc644f2ffc2dc01f76d61b62cd330d9b3197b216138b98bc09d51858081925,
+        0x3632750ebd4cf8e0e3ffa829f2844d0cdf847dad8b8f8ffea330ebc9b277f22d,
+        0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc,
+        0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd,
+        3,
+    ),
+    (
+        0xb97dc9226a487965c28eab2a77474f0963081197e21982a69ccbb1251cac7989,
+        0x4acc644f2ffc2dc01f76d61b62cd330d9b3197b216138b98bc09d51858081925,
+        0x48b0f6d4b18d1e85b5e6902dbaffbb2c9a0a3af1f8a2eacea2cc1c534298e0a8,
+        0xbede47d979e9dc671ca24ef232e93a493256f232593ff6366f34035c0feedbf9,
+        0xbede47d979e9dc671ca24ef232e93a493256f232593ff6366f34035c0feedbfa,
+        3,
+    ),
+    (
+        0x2416570bb5070e97a5f867477cd365d5fbb0d09e6d585d55a6c11509850f6aff,
+        0xb7ba1c66bebb3b761bb5fa704c9752dfd56651837eefef01a6111d6137a2c50,
+        0x19e634758a388253fa67dc4424f544eafe0ee28c457ff112e44f2540858d660,
+        0x0,
+        0x0,
+        0,
+    ),
+    (
+        0x2416570bb5070e97a5f867477cd365d5fbb0d09e6d585d55a6c11509850f6aff,
+        0xb7ba1c66bebb3b761bb5fa704c9752dfd56651837eefef01a6111d6137a2c50,
+        0x19e634758a388253fa67dc4424f544eafe0ee28c457ff112e44f2540858d661,
+        0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc,
+        0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd,
+        3,
+    ),
+    (
+        0x2416570bb5070e97a5f867477cd365d5fbb0d09e6d585d55a6c11509850f6aff,
+        0xb7ba1c66bebb3b761bb5fa704c9752dfd56651837eefef01a6111d6137a2c50,
+        0xa77528c224e3d3c9ae2126c7d951748742dbe700fd26d19cfb4d515b6606ae7c,
+        0x2797e400e1ed3345e2ecf30fff45a9f70a0d85f7d27387f6133922c8f6abe1f,
+        0x2797e400e1ed3345e2ecf30fff45a9f70a0d85f7d27387f6133922c8f6abe20,
+        3,
+    ),
+    (
+        0xdef153170a423894b198c70a82cfc565633bad163e7a019c0174bb9f68082011,
+        0x753741e145bf9f887a1f1798082d49740e851dd54c667c90bae12dbc2931402f,
+        0x66146a31d6944551e2cc80357189f2cf02db2e8ecb67857bce7d067c2bbfb638,
+        0x0,
+        0x0,
+        0,
+    ),
+    (
+        0xdef153170a423894b198c70a82cfc565633bad163e7a019c0174bb9f68082011,
+        0x753741e145bf9f887a1f1798082d49740e851dd54c667c90bae12dbc2931402f,
+        0x66146a31d6944551e2cc80357189f2cf02db2e8ecb67857bce7d067c2bbfb639,
+        MAX,
+        0x0,
+        1,
+    ),
+    (
+        0xdef153170a423894b198c70a82cfc565633bad163e7a019c0174bb9f68082011,
+        0x753741e145bf9f887a1f1798082d49740e851dd54c667c90bae12dbc2931402f,
+        0x254bfafc7540329a4860ffd968d68b4cf407e91f1343b5419c1d367fd411516b,
+        0x0,
+        0x0,
+        0,
+    ),
+    (
+        0x503ca3a21862cdbad3259c4345b1d6d03f3edbc92955c409b48779ab5f005f3c,
+        0xe182d7caf2afd503497b3af2d4e453fc33f7e09a316149a076f004101d250799,
+        0x46ae4e3f1915e84677f149ab19ee52c0e1fa3e5a856033fb50fdab0c08ab9997,
+        0x0,
+        0x0,
+        0,
+    ),
+    (
+        0x503ca3a21862cdbad3259c4345b1d6d03f3edbc92955c409b48779ab5f005f3c,
+        0xe182d7caf2afd503497b3af2d4e453fc33f7e09a316149a076f004101d250799,
+        0x46ae4e3f1915e84677f149ab19ee52c0e1fa3e5a856033fb50fdab0c08ab9998,
+        0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe,
+        MAX,
+        3,
+    ),
+    (
+        0x503ca3a21862cdbad3259c4345b1d6d03f3edbc92955c409b48779ab5f005f3c,
+        0xe182d7caf2afd503497b3af2d4e453fc33f7e09a316149a076f004101d250799,
+        0xac9b13b9bac912c5677063b258720e0796eaa661c357d6b7cbc6e19012904f13,
+        0x68d48b2245d77761ef37d262486e2167832aeca9f80409beffc9def57707946c,
+        0x68d48b2245d77761ef37d262486e2167832aeca9f80409beffc9def57707946d,
+        3,
+    ),
+    (MAX, 0x1, 0x1, MAX, MAX, 3),
+    (MAX, 0x2, 0x2, MAX, MAX, 3),
+    (MAX, 0x100000000000000000000000000000000, 0x100000000000000000000000000000000, MAX, MAX, 3),
+    (
+        MAX,
+        0x8000000000000000000000000000000000000000000000000000000000000000,
+        0x8000000000000000000000000000000000000000000000000000000000000000,
+        MAX,
+        MAX,
+        3,
+    ),
+]
+
+// (a, b, high, low)
+const PRODUCTS: [(u256, u256, u256, u256); 8] = [
+    (0x0, 0x0, 0x0, 0x0),
+    (MAX, MAX, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe, 0x1),
+    (MAX, 0x2, 0x1, 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe),
+    (0x100000000000000000000000000000000, 0x100000000000000000000000000000000, 0x1, 0x0),
+    (
+        0xbdb0be1decee75639b3d36d2e619992e5e5196bd443fe79d9ecca29593bc38ed,
+        0xcb9b84e7e3b9576a4866b26bfb7235d490901494633945c38b52bd5a289a8a03,
+        0x96de633fcc3f94b68d442de270dd6909c57ace5cf85028cfdf4d5c12c9ae5d9c,
+        0xcf7b75cb13284423a8d9435b7c35d4a7e49ddfcfffd288562a37cdd578766cc7,
+    ),
+    (
+        0xa936c6849de232f3a343f7757ff2408ea6c365b36f67871282098bba974b7638,
+        0x1eb57f9dfaf567a0776ff0dda3e5048ed31d43996ca26c8f4ab0790586de0ebd,
+        0x144c63587f396057388c655a879ef6b8f432d74c9aded9c3f57c57c50147c4d2,
+        0x590abced46fc9eb1912de9024b1f5fd8c47be5f990a4e8ae738ad771a7bd5758,
+    ),
+    (
+        0xa3699c738ea8f11146962c4402db1a5e34ff6f4d57b929620497692dd56b7f2c,
+        0x2d4fd55f3a0ca198a6dcf1c7fc9f7fb514e0c414025467d782425cdd8696f65c,
+        0x1cec864b4027eaa34f5c0fad633810551c2c86018e859aa79e3d26e11b52dfbb,
+        0x49bd972960d16810ab3251c1c8ed5b8340c1ee0656bb64ebc4e5c2178a9dfbd0,
+    ),
+    (
+        0xeefadeb2d00b62169b34cb60723aa401fea1112fb7410d9016edfc28a07f34bf,
+        0xbad3d3ce9da78bd244ca2edd927b95d1512b8b3a769daaa0ed8f5aa0ec09931,
+        0xae68044d1f2296c48191b179f0d0466c2000c9d514896963c4ed304c2a7ef42,
+        0xa3349cb340159d196376b01b564067bc9d5517311c064e313b9cb1d2c01f3f8f,
+    ),
+]
+
+fn matches(_ value: Option<u256>, _ expected: u256, _ fits: bool) -> bool {
+    match value {
+        Option::Some(got,) => fits && got == expected,
+        Option::None => !fits,
+    }
+}
+
+#[test]
+fn checked_mul_div_cases() {
+    for (a, b, d, floor, ceil, fits) in CASES {
+        let floor_fits = fits & FLOOR_FITS != 0
+        let ceil_fits = fits & CEIL_FITS != 0
+        assert!(matches(checked_mul_div(a, b, d), floor, floor_fits))
+        assert!(matches(checked_mul_div_ceil(a, b, d), ceil, ceil_fits))
+        if floor_fits {
+            assert!(mul_div(a, b, d) == floor)
+        }
+        if ceil_fits {
+            assert!(mul_div_ceil(a, b, d) == ceil)
+        }
+    }
+}
+
+#[test]
+fn full_mul_cases() {
+    for (a, b, high, low) in PRODUCTS {
+        assert!(full_mul(a, b) == (high, low))
+    }
+}
+
+#[test]
+fn modular_intrinsics_in_core() {
+    assert!(mulmod(MAX, MAX, 13) == 4)
+    assert!(addmod(MAX, 2, 13) == 4)
+    assert!(mulmod(5, 8, 0) == 0)
+}
+
+const COMPILE_TIME: u256 = mul_div(MAX, 3, 6)
+
+#[test]
+fn mul_div_is_const() {
+    assert!(COMPILE_TIME == MAX / 2)
+}
+
+#[test(should_revert, panic = 0x12)]
+fn mul_div_by_zero_panics() {
+    let _ = mul_div(1, 1, 0)
+}
+
+#[test(should_revert, panic = 0x12)]
+fn mul_div_ceil_by_zero_panics() {
+    let _ = mul_div_ceil(0, 0, 0)
+}
+
+#[test(should_revert, panic = 0x11)]
+fn mul_div_overflow_panics() {
+    let _ = mul_div(MAX, MAX, 1)
+}
+
+#[test(should_revert, panic = 0x11)]
+fn mul_div_ceil_rounding_overflow_panics() {
+    // The floor result fits; only rounding up overflows.
+    let _ = mul_div_ceil(MAX - 1, MAX - 1, MAX - 2)
+}
+
+// Calldata arguments keep the operands out of constant evaluation, so these
+// cases exercise the runtime lowering.
+msg MulDivMsg {
+    #[selector = 0x11111111]
+    Floor { a: u256, b: u256, d: u256 } -> u256,
+    #[selector = 0x22222222]
+    Ceil { a: u256, b: u256, d: u256 } -> u256,
+}
+
+pub contract MulDivProbe {
+    recv MulDivMsg {
+        Floor { a, b, d } -> u256 {
+            mul_div(a, b, d)
+        }
+        Ceil { a, b, d } -> u256 {
+            mul_div_ceil(a, b, d)
+        }
+    }
+}
+
+fn runtime_floor(_ probe: Address, _ a: u256, _ b: u256, _ d: u256) -> u256
+uses (evm: mut Evm)
+{
+    evm.call(
+        addr: probe,
+        gas: 1000000,
+        value: 0,
+        message: MulDivMsg::Floor { a, b, d },
+    )
+}
+
+fn runtime_ceil(_ probe: Address, _ a: u256, _ b: u256, _ d: u256) -> u256
+uses (evm: mut Evm)
+{
+    evm.call(
+        addr: probe,
+        gas: 1000000,
+        value: 0,
+        message: MulDivMsg::Ceil { a, b, d },
+    )
+}
+
+#[test]
+fn mul_div_runtime_cases() uses (evm: mut Evm) {
+    let probe = evm.create2<MulDivProbe>(value: 0, args: (), salt: 0)
+    for (a, b, d, floor, ceil, fits) in CASES {
+        let floor_fits = fits & FLOOR_FITS != 0
+        let ceil_fits = fits & CEIL_FITS != 0
+        if floor_fits {
+            assert!(runtime_floor(probe, a, b, d) == floor)
+        }
+        if ceil_fits {
+            assert!(runtime_ceil(probe, a, b, d) == ceil)
+        }
+    }
+}
+
+#[test(should_revert, panic = 0x12)]
+fn mul_div_runtime_by_zero_panics() uses (evm: mut Evm) {
+    let probe = evm.create2<MulDivProbe>(value: 0, args: (), salt: 0)
+    let _ = runtime_floor(probe, 1, 1, 0)
+}
+
+#[test(should_revert, panic = 0x11)]
+fn mul_div_runtime_ceil_overflow_panics() uses (evm: mut Evm) {
+    let probe = evm.create2<MulDivProbe>(value: 0, args: (), salt: 0)
+    let _ = runtime_ceil(probe, MAX - 1, MAX - 1, MAX - 2)
+}

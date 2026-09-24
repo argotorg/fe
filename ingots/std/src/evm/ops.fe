@@ -36,8 +36,6 @@ extern {
     pub(ingot) fn extcodesize(_ addr: u256) -> u256
     pub(ingot) fn extcodehash(_ addr: u256) -> u256
     pub(ingot) fn keccak256(offset: *u8, len: u256) -> u256
-    pub(ingot) const fn addmod(_ a: u256, _ b: u256, m: u256) -> u256
-    pub(ingot) const fn mulmod(_ a: u256, _ b: u256, m: u256) -> u256
     pub fn byte(pos: u256, value: u256) -> u256
     pub fn signextend(byte: u256, value: u256) -> u256
 
