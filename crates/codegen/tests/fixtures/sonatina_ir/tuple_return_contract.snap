@@ -12,8 +12,11 @@ type @layout_3 = {i256, i256, i256};
 type @layout_4 = {};
 type @layout_5 = {@layout_4};
 type @layout_6 = {i256, i256};
+type @layout_7 = {[i256; 2], i256};
 
-global private const @layout_0 $const_region_0 = {0};
+global private const @layout_7 $const_region_0 = {[0, 32], 64};
+global private const [i256; 2] $const_region_1 = [0, 32];
+global private const @layout_0 $const_region_2 = {0};
 
 func private %__TupleReturnContract_recv_0_0() -> @layout_1 {
     block0:
@@ -282,8 +285,10 @@ func inline(always) private %encode__g753b(v0.@layout_1, v1.i256) {
     block1:
         v4.i256 = extract_value v0 0.i256;
         v6.@layout_0 = extract_value v0 1.i256;
-        v10.i256 = call %encode_field_at__gac80 v4 v1 0.i256 64.i256;
-        v11.i256 = call %encode_field_at__g2917 v6 v1 32.i256 v10;
+        v9.i256 = call %encode_field_at__gac80 v4 v1 0.i256 64.i256;
+        v10.constref<@layout_7> = const.ref $const_region_0;
+        v11.constref<[i256; 2]> = const.ref $const_region_1;
+        v13.i256 = call %encode_field_at__g2917 v6 v1 32.i256 v9;
         return;
 }
 
@@ -479,7 +484,7 @@ func inline(always) private %new() -> @layout_0 {
         jump block1;
 
     block1:
-        v1.constref<@layout_0> = const.ref $const_region_0;
+        v1.constref<@layout_0> = const.ref $const_region_2;
         v2.objref<@layout_0> = obj.alloc @layout_0;
         obj.init.const v2 v1;
         v3.@layout_0 = obj.load v2;
@@ -830,7 +835,7 @@ func private %zero() -> @layout_0 {
         jump block1;
 
     block1:
-        v1.constref<@layout_0> = const.ref $const_region_0;
+        v1.constref<@layout_0> = const.ref $const_region_2;
         v2.objref<@layout_0> = obj.alloc @layout_0;
         obj.init.const v2 v1;
         v3.@layout_0 = obj.load v2;
@@ -846,5 +851,7 @@ object @TupleReturnContract {
     section runtime {
         entry %contract_runtime_root_TupleReturnContract;
         data $const_region_0;
+        data $const_region_1;
+        data $const_region_2;
     }
 }

@@ -12,6 +12,10 @@ type @layout_2 = {i256, i256};
 type @layout_3 = {@layout_2, i256};
 type @layout_4 = {@layout_3, i256};
 type @layout_5 = {i256};
+type @layout_6 = {[i256; 2], i256};
+
+global private const @layout_6 $const_region_0 = {[0, 32], 64};
+global private const [i256; 2] $const_region_1 = [0, 32];
 
 func private %__Child_init(v0.i256, v1.i256) {
     block0:
@@ -698,8 +702,10 @@ func inline(always) private %encode__g4d3d(v0.@layout_0, v1.i256) {
     block1:
         v4.i256 = extract_value v0 0.i256;
         v6.i256 = extract_value v0 1.i256;
-        v10.i256 = call %encode_field_at v4 v1 0.i256 64.i256;
-        v11.i256 = call %encode_field_at v6 v1 32.i256 v10;
+        v9.i256 = call %encode_field_at v4 v1 0.i256 64.i256;
+        v10.constref<@layout_6> = const.ref $const_region_0;
+        v11.constref<[i256; 2]> = const.ref $const_region_1;
+        v13.i256 = call %encode_field_at v6 v1 32.i256 v9;
         return;
 }
 

@@ -4,7 +4,7 @@ expression: diags
 input_file: fixtures/ty_check/abi_record_layout_overflow.fe
 ---
 error[3-0034]: arithmetic overflow in const context
-    ┌─ src/abi.fe:263:9
+    ┌─ src/abi.fe:265:9
     │
-263 │         head_size += sizes[index]
+265 │         head_size += sizes[index]
     │         ^^^^^^^^^^^^^^^^^^^^^^^^^ checked arithmetic overflowed during const evaluation

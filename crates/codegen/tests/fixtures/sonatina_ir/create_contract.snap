@@ -1319,8 +1319,10 @@ func inline(always) private %encode__g4d3d(v0.@layout_1, v1.i256) {
     block1:
         v4.i256 = extract_value v0 0.i256;
         v6.i256 = extract_value v0 1.i256;
-        v10.i256 = call %encode_field_at__gac80 v4 v1 0.i256 64.i256;
-        v11.i256 = call %encode_field_at__gac80 v6 v1 32.i256 v10;
+        v9.i256 = call %encode_field_at__gac80 v4 v1 0.i256 64.i256;
+        v10.constref<@layout_10> = const.ref $const_region_0;
+        v11.constref<[i256; 2]> = const.ref $const_region_1;
+        v13.i256 = call %encode_field_at__gac80 v6 v1 32.i256 v9;
         return;
 }
 
