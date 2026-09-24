@@ -133,7 +133,13 @@ pub fn check_const_body<'db>(
     db: &'db dyn HirAnalysisDb,
     const_: Const<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
-    check_body(db, BodyOwner::Const(const_))
+    let (mut diags, body) = check_body(db, BodyOwner::Const(const_));
+    // An invalid declared type suppresses body/value checking. Diagnose the
+    // declaration itself rather than passing an invalid constant to CTFE.
+    if let Some(diag) = const_.ty(db).emit_diag(db, const_.span().ty().into()) {
+        diags.push(diag.into());
+    }
+    (diags, body)
 }
 
 #[salsa::tracked(return_ref)]
