@@ -12,9 +12,9 @@ error[6-0003]: trait bound is not satisfied
   6 │ │ }
     │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `AbiSize`
     │
-    ┌─ src/abi.fe:330:32
+    ┌─ src/abi.fe:332:32
     │
-330 │ pub fn dynamic_payload_size<T: AbiSize>(_ value: T) -> u256 {
+332 │ pub fn dynamic_payload_size<T: AbiSize>(_ value: T) -> u256 {
     │                                ------- required by this bound on `dynamic_payload_size`
 
 error[6-0003]: trait bound is not satisfied
@@ -26,9 +26,9 @@ error[6-0003]: trait bound is not satisfied
   6 │ │ }
     │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `Encode<Sol>`
     │
-    ┌─ src/abi.fe:429:14
+    ┌─ src/abi.fe:431:14
     │
-429 │     where T: Encode<A> + AbiSize
+431 │     where T: Encode<A> + AbiSize
     │              --------- required by this bound on `encode_field_at`
 
 error[6-0003]: trait bound is not satisfied
@@ -40,7 +40,7 @@ error[6-0003]: trait bound is not satisfied
   6 │ │ }
     │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `AbiSize`
     │
-    ┌─ src/abi.fe:429:26
+    ┌─ src/abi.fe:431:26
     │
-429 │     where T: Encode<A> + AbiSize
+431 │     where T: Encode<A> + AbiSize
     │                          ------- required by this bound on `encode_field_at`
