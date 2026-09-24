@@ -8,12 +8,12 @@ use std::prelude::*
 
 pub struct Unauthorized {}
 
-impl core::abi::AbiRecord<0> for Unauthorized {
-    const LAYOUT: core::abi::AbiRecordLayout<0> = core::abi::abi_record_layout<0>([])
-}
-
 impl core::error::ErrorVariant<std::abi::Sol> for Unauthorized {
     const SELECTOR: u32 = std::abi::sol::sol(("Unauthorized", "(", ")"))
+}
+
+impl core::abi::AbiRecord<0> for Unauthorized {
+    const LAYOUT: core::abi::AbiRecordLayout<0> = core::abi::abi_record_layout<0>([])
 }
 
 impl core::abi::AbiSize for Unauthorized {
