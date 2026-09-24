@@ -11,12 +11,12 @@ pub struct InsufficientBalance {
     pub required: u256,
 }
 
-impl core::abi::AbiRecord<2> for InsufficientBalance {
-    const LAYOUT: core::abi::AbiRecordLayout<2> = core::abi::abi_record_layout<2>([core::abi::abi_field_head_size<u256>(), core::abi::abi_field_head_size<u256>()])
-}
-
 impl core::error::ErrorVariant<std::abi::Sol> for InsufficientBalance {
     const SELECTOR: u32 = std::abi::sol::sol(("InsufficientBalance", "(", <u256 as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ")"))
+}
+
+impl core::abi::AbiRecord<2> for InsufficientBalance {
+    const LAYOUT: core::abi::AbiRecordLayout<2> = core::abi::abi_record_layout<2>([core::abi::abi_field_head_size<u256>(), core::abi::abi_field_head_size<u256>()])
 }
 
 impl core::abi::AbiSize for InsufficientBalance {

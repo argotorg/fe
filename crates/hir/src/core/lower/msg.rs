@@ -124,9 +124,6 @@ fn lower_msg_variant_encode_decode_impls<'db>(
     variant: &ast::MsgVariant,
     struct_: Struct<'db>,
 ) {
-    let field_specs = lower_msg_variant_field_specs(builder.ctxt(), variant);
-    let self_ty = variant_struct_ty(builder.db(), struct_);
-    lower_abi_record_impl(builder, self_ty, &field_specs);
     lower_msg_variant_abi_size_impl(builder, variant, struct_);
     lower_msg_variant_encode_impl(builder, variant, struct_);
     lower_msg_variant_decode_trait_impl(builder, variant, struct_);
@@ -142,13 +139,16 @@ fn lower_msg_variant_abi_size_impl<'db>(
     lower_abi_size_impl(builder, self_ty, &field_specs)
 }
 
-/// Generate `impl core::abi::AbiSize for SelfTy` over the given fields, in
-/// declaration order. Shared by `msg` variants and `#[error]` structs.
+/// Generate `impl core::abi::AbiRecord<N> for SelfTy` and
+/// `impl core::abi::AbiSize for SelfTy` over the given fields, in declaration
+/// order. `HEAD_SIZE` reads the record layout, so the two are emitted together.
+/// Shared by `msg` variants and `#[error]` structs.
 pub(super) fn lower_abi_size_impl<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
     builder: &mut HirBuilder<'_, 'db, O>,
     self_ty: TypeId<'db>,
     field_specs: &[(IdentId<'db>, TypeId<'db>)],
 ) -> ImplTrait<'db> {
+    lower_abi_record_impl(builder, self_ty, field_specs);
     let db = builder.db();
     let roots = builder.roots();
     let trait_path = PathId::from_ident(db, roots.core)
@@ -161,7 +161,7 @@ pub(super) fn lower_abi_size_impl<'db, O: Clone + Into<crate::span::DesugaredOri
         TrackedItemVariant::ImplTrait(impl_trait_idx),
         |builder, id| {
             let consts = vec![
-                create_head_size_assoc_const(builder, field_specs),
+                create_head_size_assoc_const(builder, field_specs.len()),
                 create_is_dynamic_assoc_const(builder, field_specs),
             ];
             let impl_trait =
@@ -172,7 +172,7 @@ pub(super) fn lower_abi_size_impl<'db, O: Clone + Into<crate::span::DesugaredOri
     )
 }
 
-pub(super) fn create_payload_size_func<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
+fn create_payload_size_func<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
     builder: &mut HirBuilder<'_, 'db, O>,
     field_specs: &[(IdentId<'db>, TypeId<'db>)],
 ) {
@@ -301,7 +301,7 @@ fn abi_size_assoc_expr<'db>(
     )
 }
 
-pub(super) fn create_is_dynamic_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
+fn create_is_dynamic_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
     builder: &mut HirBuilder<'_, 'db, O>,
     fields: &[(IdentId<'db>, TypeId<'db>)],
 ) -> AssocConstDef<'db> {
@@ -337,14 +337,8 @@ pub(super) fn create_is_dynamic_assoc_const<'db, O: Clone + Into<crate::span::De
     }
 }
 
-pub(super) fn create_head_size_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
-    builder: &mut HirBuilder<'_, 'db, O>,
-    fields: &[(IdentId<'db>, TypeId<'db>)],
-) -> AssocConstDef<'db> {
-    create_abi_record_head_size_const(builder, fields.len())
-}
-
-fn create_abi_record_head_size_const<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
+/// `HEAD_SIZE = <Self as AbiRecord<N>>::LAYOUT.head_size`.
+fn create_head_size_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
     builder: &mut HirBuilder<'_, 'db, O>,
     field_count: usize,
 ) -> AssocConstDef<'db> {
