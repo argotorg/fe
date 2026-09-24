@@ -184,6 +184,20 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
         .zip(current_args.iter_mut())
         .enumerate()
     {
+        // An explicit const argument is lowered without an expected type. Evaluate
+        // it against the parameter's type, as type application does, so a method or
+        // associated function receives the same value as a free function.
+        let given = match current.const_ty_ty(db) {
+            Some(expected) if given.const_ty_ty(db).is_some() => {
+                let expected = expected.fold_with(db, &mut tc.table);
+                if expected.has_var(db) {
+                    given
+                } else {
+                    given.evaluate_const_ty(db, Some(expected)).unwrap_or(given)
+                }
+            }
+            _ => given,
+        };
         if !unify_arg(tc, idx, given, current) {
             return Err(CallGenericArgUnifyError::UnificationFailed);
         }

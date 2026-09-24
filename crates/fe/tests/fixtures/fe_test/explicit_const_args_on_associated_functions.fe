@@ -1,0 +1,35 @@
+// Explicit const arguments of method and associated function calls are
+// evaluated against the parameter's type, as for free functions, so a
+// constant can read them.
+
+struct Window<const N: usize> {}
+
+impl<const N: usize> Window<N> {
+    const fn take<const M: usize>(self) -> usize {
+        M
+    }
+
+    const fn sum<const M: usize>() -> usize {
+        N + M
+    }
+}
+
+struct Plain {}
+
+impl Plain {
+    const fn width<const M: usize>(self) -> usize {
+        M
+    }
+}
+
+const TAKE: usize = Window<1> {}.take<3>()
+const SUM: usize = Window<1>::sum<3>()
+const WIDTH: usize = Plain {}.width<5>()
+
+#[test]
+fn explicit_const_args_evaluate_in_constants() {
+    assert(TAKE == 3)
+    assert(SUM == 4)
+    assert(WIDTH == 5)
+    assert(Window<2> {}.take<7>() == 7)
+}
