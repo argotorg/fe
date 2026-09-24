@@ -373,6 +373,17 @@ impl<'db> TyChecker<'db> {
             Expr::Lit(LitKind::String(string_id)) => {
                 ExprProp::new(self.string_literal_ty(*string_id, expected), true)
             }
+            Expr::Lit(LitKind::Int(integer)) if integer.data(self.db).bits() > 256 => {
+                // No primitive integer type can represent more than one EVM word.
+                // Reject before lowering can silently discard the high bits, even
+                // when the literal's contextual type has not been inferred yet.
+                self.push_diag(BodyDiag::IntLiteralOutOfRange {
+                    primary: expr.span(self.body()).into(),
+                    literal: integer.data(self.db).to_string(),
+                    ty: TyId::u256(self.db),
+                });
+                ExprProp::invalid(self.db)
+            }
             Expr::Lit(lit) => ExprProp::new(self.lit_ty_for_expected(lit, expected), true),
             Expr::Block(..) => self.check_block(expr, expr_data, expected, result_discarded),
             Expr::Un(..) => self.check_unary(expr, expr_data),
