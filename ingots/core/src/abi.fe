@@ -243,11 +243,11 @@ pub struct AbiRecordLayout<const N: usize> {
     pub head_size: u256,
 }
 
-/// Head layout of an ordered ABI record. Built-in tuples and generated `msg`
-/// variants and `#[error]` structs implement it with `abi_record_layout`, and
-/// their `HEAD_SIZE`, encoders and decoders read offsets from `LAYOUT`.
-/// It takes no ABI parameter because `AbiSize` takes none. Dynamic
-/// classification stays independent so field sizes can depend on it.
+/// Head layout of an ordered ABI record. Built-in tuples, generated `msg`
+/// variants and `#[error]` structs, and `#[event]` data fields implement it
+/// with `abi_record_layout`; `HEAD_SIZE`, encoders and decoders read offsets
+/// from `LAYOUT`. It takes no ABI parameter because `AbiSize` takes none.
+/// Dynamic classification stays independent so field sizes can depend on it.
 pub trait AbiRecord<const N: usize> {
     const LAYOUT: AbiRecordLayout<N>
 }

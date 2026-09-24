@@ -95,3 +95,45 @@ fn add_liquidity_log_matches_solidity_vector() {
     );
     assert_eq!(log.data.data.as_ref(), hex::decode(word(11)).unwrap());
 }
+
+#[test]
+fn event_with_seventeen_data_fields_matches_solidity_vector() {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/event_many_data_fields.fe");
+    let source = std::fs::read_to_string(fixture).expect("read wide event fixture");
+    let bytecode = compile_fe_sonatina_bytecode(&source, "event_many_data_fields", "Probe")
+        .expect("compile wide event fixture");
+    let mut instance =
+        RuntimeInstance::deploy(&hex::encode(bytecode.deploy)).expect("deploy Probe");
+
+    let outcome = instance
+        .call_raw_with_logs(&selector("emitWide()"), ExecutionOptions::default())
+        .expect("call emitWide()");
+    assert_eq!(outcome.raw_logs.len(), 1);
+    let log = &outcome.raw_logs[0];
+    let topics = log.data.topics();
+    assert_eq!(topics.len(), 2);
+    assert_eq!(
+        topics[0].as_slice(),
+        keccak(concat!(
+            "Wide(address,uint256,bytes,bool,uint256,uint8,uint256,uint256,uint256,",
+            "address,uint256[],uint256,uint256,uint256,uint256,uint256,uint256,uint256)",
+        )),
+    );
+    assert_eq!(topics[1].as_slice(), &[0u8; 32]);
+
+    // `cast abi-encode "f(uint256,bytes,bool,uint256,uint8,uint256,uint256,uint256,address,
+    // uint256[],uint256,uint256,uint256,uint256,uint256,uint256,uint256)" 1 0xaa true 3 4 5 6 7
+    // 0x0000000000000000000000000000000000000000 "[7]" 10 11 12 13 14 15 16`
+    let mut expected = String::new();
+    for value in [
+        1, 0x220, 1, 3, 4, 5, 6, 7, 0, 0x260, 10, 11, 12, 13, 14, 15, 16,
+    ] {
+        expected.push_str(&format!("{value:064x}"));
+    }
+    expected.push_str(&word(1));
+    expected.push_str(&format!("{:0<64}", "aa"));
+    expected.push_str(&word(1));
+    expected.push_str(&word(7));
+    assert_eq!(log.data.data.as_ref(), hex::decode(expected).unwrap());
+}

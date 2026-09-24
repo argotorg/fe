@@ -188,7 +188,6 @@ fn create_payload_size_func<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
         self_ty_fallback: true,
     }]);
     let ret_ty = builder.ty_ident(builder.ident("u256"));
-    let roots = builder.roots();
     builder.func_with_body_inline_always(
         payload_size_ident,
         builder.empty_generic_params(),
@@ -196,25 +195,12 @@ fn create_payload_size_func<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
         Some(ret_ty),
         FuncModifiers::new(Visibility::Private, false, false, false),
         |body| {
-            let db = body.db();
-            let dynamic_payload_size_path = PathId::from_ident(db, roots.core)
-                .push_str(db, "abi")
-                .push_str(db, "dynamic_payload_size");
-            let mut expr = body
-                .abi_size_assoc_expr(TypeId::fallback_self_ty(db), generated_abi_const::HEAD_SIZE);
-            let self_expr = (!field_specs.is_empty())
-                .then(|| body.path_expr(PathId::from_ident(db, IdentId::make_self(db))));
-
-            for (field_name, _) in field_specs.iter().copied() {
-                let field_expr = body.push_expr(Expr::Field(
-                    self_expr.expect("message payload fields require a receiver"),
-                    Partial::Present(FieldIndex::Ident(field_name)),
-                ));
-                let dynamic_payload_size = body.path_expr(dynamic_payload_size_path);
-                let field_size = body.call_expr(dynamic_payload_size, vec![field_expr]);
-                expr = body.push_expr(Expr::Bin(expr, field_size, BinOp::Arith(ArithBinOp::Add)));
-            }
-
+            let head_size = body.abi_size_assoc_expr(
+                TypeId::fallback_self_ty(body.db()),
+                generated_abi_const::HEAD_SIZE,
+            );
+            let fields = body.self_field_exprs(field_specs);
+            let expr = body.record_payload_size_expr(head_size, fields);
             body.emit_return(Some(expr));
         },
     );

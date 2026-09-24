@@ -351,12 +351,12 @@ fn events_with_indexed_dynamic_fields<'db>(
 // Generated ABI metadata bodies remain fully checked. An unsatisfied core
 // AbiSize goal for an actual source-record field repeats a requirement already
 // owned by message field analysis, the analyses that own invalid and recursive
-// field types, or the generated error encode/payload bodies.
+// field types, or the generated error and event encode/payload bodies.
 fn present_generated_abi_const_diag<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
     diag: &FuncBodyDiag<'db>,
-    reported_error_function_goals: &FxHashSet<TraitInstId<'db>>,
+    reported_generated_function_goals: &FxHashSet<TraitInstId<'db>>,
 ) -> bool {
     let primary_goal =
         match diag {
@@ -373,7 +373,9 @@ fn present_generated_abi_const_diag<'db>(
         };
     if !matches!(
         impl_trait.origin(db),
-        HirOrigin::Desugared(DesugaredOrigin::Msg(_) | DesugaredOrigin::Error(_))
+        HirOrigin::Desugared(
+            DesugaredOrigin::Msg(_) | DesugaredOrigin::Error(_) | DesugaredOrigin::Event(_)
+        )
     ) {
         return true;
     }
@@ -439,7 +441,7 @@ fn present_generated_abi_const_diag<'db>(
                 !msg_owns_field_issue(&all_fields)
             }
             HirOrigin::Desugared(DesugaredOrigin::Error(_)) => {
-                !reported_error_function_goals.iter().any(|goal| {
+                !reported_generated_function_goals.iter().any(|goal| {
                     goal.def(db) == abi_size_trait
                         && record_ty.field_types(db).contains(&goal.self_ty(db))
                 })
@@ -462,8 +464,8 @@ fn present_generated_abi_const_diag<'db>(
         HirOrigin::Desugared(DesugaredOrigin::Msg(_)) => {
             !msg_owns_field_issue(&matching_field_indices)
         }
-        HirOrigin::Desugared(DesugaredOrigin::Error(_)) => {
-            !reported_error_function_goals.contains(primary_goal)
+        HirOrigin::Desugared(DesugaredOrigin::Error(_) | DesugaredOrigin::Event(_)) => {
+            !reported_generated_function_goals.contains(primary_goal)
         }
         _ => true,
     }
@@ -478,7 +480,7 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
         // Check function and const bodies; contract-specific analysis is handled separately.
         let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = Vec::new();
         let indexed_dynamic_events = events_with_indexed_dynamic_fields(db, top_mod);
-        let mut reported_error_function_goals = FxHashSet::default();
+        let mut reported_generated_function_goals = FxHashSet::default();
         for func in top_mod
             .all_funcs(db)
             .iter()
@@ -494,9 +496,9 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
             let (body_diags, _) = ty_check::check_func_body(db, *func);
             if matches!(
                 func.origin(db),
-                HirOrigin::Desugared(DesugaredOrigin::Error(_))
+                HirOrigin::Desugared(DesugaredOrigin::Error(_) | DesugaredOrigin::Event(_))
             ) {
-                reported_error_function_goals.extend(body_diags.iter().filter_map(|diag| {
+                reported_generated_function_goals.extend(body_diags.iter().filter_map(|diag| {
                     let FuncBodyDiag::Ty(TyDiagCollection::Satisfiability(
                         diagnostics::TraitConstraintDiag::TraitBoundNotSat { primary_goal, .. },
                     )) = diag
@@ -509,7 +511,7 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
             diags.extend(body_diags.iter().map(|diag| diag.to_voucher()));
         }
 
-        let reported_error_function_goals = &reported_error_function_goals;
+        let reported_generated_function_goals = &reported_generated_function_goals;
         diags.extend(
             top_mod
                 .all_items(db)
@@ -539,7 +541,7 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
                                 db,
                                 *impl_trait,
                                 diag,
-                                reported_error_function_goals,
+                                reported_generated_function_goals,
                             )
                         })
                 })

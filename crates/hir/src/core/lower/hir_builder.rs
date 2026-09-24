@@ -5,7 +5,7 @@ use parser::ast::prelude::AstNode;
 use crate::{
     HirDb,
     hir_def::{
-        AssocConstDef, AssocTyDef, Attr, AttrArg, AttrListId, BinOp, Body, BodyKind,
+        ArithBinOp, AssocConstDef, AssocTyDef, Attr, AttrArg, AttrListId, BinOp, Body, BodyKind,
         ConstGenericArg, ConstGenericArgValue, EffectParamListId, Expr, ExprId, FieldDefListId,
         FieldIndex, Func, FuncModifiers, FuncParam, FuncParamListId, FuncParamMode, FuncParamName,
         GenericArg, GenericArgListId, GenericParam, GenericParamListId, IdentId, ImplTrait,
@@ -54,13 +54,13 @@ where
     desugared: O,
 }
 
-struct FuncBodySpec<'db> {
-    name: IdentId<'db>,
-    attrs: AttrListId<'db>,
-    generic_params: GenericParamListId<'db>,
-    params: FuncParamListId<'db>,
-    ret_ty: Option<TypeId<'db>>,
-    modifiers: FuncModifiers,
+pub(super) struct FuncBodySpec<'db> {
+    pub(super) name: IdentId<'db>,
+    pub(super) attrs: AttrListId<'db>,
+    pub(super) generic_params: GenericParamListId<'db>,
+    pub(super) params: FuncParamListId<'db>,
+    pub(super) ret_ty: Option<TypeId<'db>>,
+    pub(super) modifiers: FuncModifiers,
 }
 
 impl<'ctxt, 'db, O> HirBuilder<'ctxt, 'db, O>
@@ -123,21 +123,34 @@ where
     }
 
     pub(super) fn inline_always_attrs(&self) -> AttrListId<'db> {
-        let db = self.db();
+        AttrListId::new(self.db(), vec![self.flag_attr("inline", "always")])
+    }
+
+    /// `#[inline(always)]` and `#[arithmetic(unchecked)]`.
+    pub(super) fn inline_always_unchecked_attrs(&self) -> AttrListId<'db> {
         AttrListId::new(
-            db,
-            vec![Attr::Normal(NormalAttr {
-                path: Partial::Present(PathId::from_ident(db, self.ident("inline"))),
+            self.db(),
+            vec![
+                self.flag_attr("inline", "always"),
+                self.flag_attr("arithmetic", "unchecked"),
+            ],
+        )
+    }
+
+    /// `#[name(arg)]`
+    fn flag_attr(&self, name: &str, arg: &str) -> Attr<'db> {
+        let db = self.db();
+        Attr::Normal(NormalAttr {
+            path: Partial::Present(PathId::from_ident(db, self.ident(name))),
+            value: None,
+            has_value: false,
+            has_args: true,
+            args: vec![AttrArg {
+                key: Partial::Present(PathId::from_ident(db, self.ident(arg))),
                 value: None,
                 has_value: false,
-                has_args: true,
-                args: vec![AttrArg {
-                    key: Partial::Present(PathId::from_ident(db, self.ident("always"))),
-                    value: None,
-                    has_value: false,
-                }],
-            })],
-        )
+            }],
+        })
     }
 
     pub(super) fn empty_generic_params(&self) -> GenericParamListId<'db> {
@@ -510,7 +523,7 @@ where
         )
     }
 
-    fn func_with_body_spec(
+    pub(super) fn func_with_body_spec(
         &mut self,
         spec: FuncBodySpec<'db>,
         build_body: impl FnOnce(&mut BodyBuilder<'_, 'db, O>),
@@ -772,18 +785,114 @@ where
         ))
     }
 
+    /// `let <ident> = <value>`
+    pub(super) fn emit_let(&mut self, ident: IdentId<'db>, value: ExprId) -> StmtId {
+        let pat = self.push_pat(Pat::Path(
+            Partial::Present(PathId::from_ident(self.db(), ident)),
+            false,
+        ));
+        self.emit_stmt(Stmt::Let(pat, None, Some(value)))
+    }
+
+    /// `self.f0, self.f1, ...`
+    pub(super) fn self_field_exprs(
+        &mut self,
+        fields: &[(IdentId<'db>, TypeId<'db>)],
+    ) -> Vec<ExprId> {
+        if fields.is_empty() {
+            return Vec::new();
+        }
+        let db = self.db();
+        let self_expr = self.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
+        fields
+            .iter()
+            .map(|(field, _)| {
+                self.push_expr(Expr::Field(
+                    self_expr,
+                    Partial::Present(FieldIndex::Ident(*field)),
+                ))
+            })
+            .collect()
+    }
+
+    /// `head_size + core::abi::dynamic_payload_size(v0) + ...`, the exact
+    /// payload size of a record whose field values are `values`.
+    pub(super) fn record_payload_size_expr(
+        &mut self,
+        head_size: ExprId,
+        values: Vec<ExprId>,
+    ) -> ExprId {
+        let db = self.db();
+        let dynamic_payload_size = PathId::from_ident(db, self.roots.core)
+            .push_str(db, "abi")
+            .push_str(db, "dynamic_payload_size");
+        let mut expr = head_size;
+        for value in values {
+            let callee = self.path_expr(dynamic_payload_size);
+            let field_size = self.call_expr(callee, vec![value]);
+            expr = self.push_expr(Expr::Bin(expr, field_size, BinOp::Arith(ArithBinOp::Add)));
+        }
+        expr
+    }
+
+    /// `let __field_{i} = self.<field>` for each field, in order. The locals
+    /// are the ones `encode_bound_fields` reads.
+    pub(super) fn bind_self_fields(
+        &mut self,
+        fields: &[(IdentId<'db>, TypeId<'db>)],
+    ) -> Vec<IdentId<'db>> {
+        let values = self.self_field_exprs(fields);
+        values
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let local = Self::field_local(self.db(), index);
+                self.emit_let(local, value);
+                local
+            })
+            .collect()
+    }
+
+    fn field_local(db: &'db dyn HirDb, index: usize) -> IdentId<'db> {
+        IdentId::new(db, format!("__field_{index}"))
+    }
+
+    /// Encode `self`'s fields as an ABI record at `ptr`, moving each field
+    /// into a local just before encoding it.
     pub(super) fn encode_fields(
         &mut self,
         fields: &[(IdentId<'db>, TypeId<'db>)],
         ptr_ident: IdentId<'db>,
         abi_record_trait: TraitRefId<'db>,
     ) {
+        self.encode_record(fields, ptr_ident, abi_record_trait, true);
+    }
+
+    /// Like `encode_fields`, for fields already moved into locals by
+    /// `bind_self_fields`.
+    pub(super) fn encode_bound_fields(
+        &mut self,
+        fields: &[(IdentId<'db>, TypeId<'db>)],
+        ptr_ident: IdentId<'db>,
+        abi_record_trait: TraitRefId<'db>,
+    ) {
+        self.encode_record(fields, ptr_ident, abi_record_trait, false);
+    }
+
+    fn encode_record(
+        &mut self,
+        fields: &[(IdentId<'db>, TypeId<'db>)],
+        ptr_ident: IdentId<'db>,
+        abi_record_trait: TraitRefId<'db>,
+        bind_fields: bool,
+    ) {
         if fields.is_empty() {
             return;
         }
 
         let db = self.db();
-        let self_expr = self.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
+        let self_expr =
+            bind_fields.then(|| self.path_expr(PathId::from_ident(db, IdentId::make_self(db))));
         let tail_ident = IdentId::new(db, "__tail".to_string());
         let head_size = self.abi_record_layout_field_expr(abi_record_trait, "head_size");
         let tail_pat = self.push_pat(Pat::Path(
@@ -792,16 +901,14 @@ where
         ));
         self.emit_stmt(Stmt::Let(tail_pat, None, Some(head_size)));
         for (index, (field, field_ty)) in fields.iter().copied().enumerate() {
-            let field_ident = IdentId::new(db, format!("__field_{index}"));
-            let field_pat = self.push_pat(Pat::Path(
-                Partial::Present(PathId::from_ident(db, field_ident)),
-                false,
-            ));
-            let receiver = self.push_expr(Expr::Field(
-                self_expr,
-                Partial::Present(FieldIndex::Ident(field)),
-            ));
-            self.emit_stmt(Stmt::Let(field_pat, None, Some(receiver)));
+            let field_ident = Self::field_local(db, index);
+            if let Some(self_expr) = self_expr {
+                let receiver = self.push_expr(Expr::Field(
+                    self_expr,
+                    Partial::Present(FieldIndex::Ident(field)),
+                ));
+                self.emit_let(field_ident, receiver);
+            }
             let encode_field_args = GenericArgListId::given(
                 db,
                 vec![

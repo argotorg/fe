@@ -5,37 +5,31 @@ input_file: crates/codegen/tests/fixtures/event_logging.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = {i256};
-type @layout_1 = {i256, i256, i256};
-type @layout_2 = {@layout_0, @layout_0, i256};
+type @layout_0 = {i256, i256, i256};
+type @layout_1 = {i256};
+type @layout_2 = {@layout_1, @layout_1, i256};
 type @layout_3 = {i256, i256};
+type @layout_4 = {[i256; 1], i256};
 
-global private const @layout_0 $const_region_0 = {1};
-global private const @layout_0 $const_region_1 = {2};
+global private const @layout_4 $const_region_0 = {[0], 32};
+global private const [i256; 1] $const_region_1 = [0];
+global private const @layout_1 $const_region_2 = {1};
+global private const @layout_1 $const_region_3 = {2};
 
-func private %abi_payload_size(v0.@layout_0) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = call %impl_trait_____payload_size__ge513 v0;
-        return v2;
-}
-
-func private %alloc(v0.i256) -> @layout_1 {
+func private %alloc(v0.i256) -> @layout_0 {
     block0:
         jump block1;
 
     block1:
         v2.*i8 = evm_malloc v0;
         v3.i256 = ptr_to_int v2 i256;
-        v6.@layout_1 = insert_value undef.@layout_1 0.i256 v3;
-        v8.@layout_1 = insert_value v6 1.i256 v0;
-        v10.@layout_1 = insert_value v8 2.i256 v0;
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v3;
+        v8.@layout_0 = insert_value v6 1.i256 v0;
+        v10.@layout_0 = insert_value v8 2.i256 v0;
         return v10;
 }
 
-func private %as_topic(v0.@layout_0) -> i256 {
+func private %as_topic(v0.@layout_1) -> i256 {
     block0:
         jump block1;
 
@@ -44,7 +38,7 @@ func private %as_topic(v0.@layout_0) -> i256 {
         return v3;
 }
 
-func private %core__lib__ptr__cast__g5f1e_d784(v0.i256) -> i256 {
+func private %core__lib__ptr__cast__g5f1e_3e5d(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -68,7 +62,7 @@ func private %dynamic_payload_size(v0.i256) -> i256 {
         br 0.i1 block2 block3;
 
     block2:
-        v3.i256 = call %trait_AbiSize__payload_size__ge513 v0;
+        v3.i256 = call %payload_size v0;
         return v3;
 
     block3:
@@ -80,49 +74,56 @@ func private %dynamic_payload_size(v0.i256) -> i256 {
 
 func inline(always) private %emit(v0.@layout_2) {
     block0:
-        v1.objref<@layout_1> = obj.alloc @layout_1;
+        v1.objref<@layout_0> = obj.alloc @layout_0;
         v2.objref<@layout_3> = obj.alloc @layout_3;
         jump block1;
 
     block1:
         v5.i256 = extract_value v0 2.i256;
-        v8.@layout_0 = insert_value undef.@layout_0 0.i256 v5;
-        v9.@layout_1 = call %encode_abi_payload v8;
-        v10.objref<i256> = obj.proj v1 0.i256;
-        v11.i256 = extract_value v9 0.i256;
-        obj.store v10 v11;
-        v13.objref<i256> = obj.proj v1 1.i256;
-        v14.i256 = extract_value v9 1.i256;
-        obj.store v13 v14;
-        v15.objref<i256> = obj.proj v1 2.i256;
-        v16.i256 = extract_value v9 2.i256;
+        v6.constref<@layout_4> = const.ref $const_region_0;
+        v8.i256 = call %dynamic_payload_size v5;
+        v9.i256 = add 32.i256 v8;
+        v10.@layout_0 = call %alloc v9;
+        v12.objref<i256> = obj.proj v1 0.i256;
+        v13.i256 = extract_value v10 0.i256;
+        obj.store v12 v13;
+        v15.objref<i256> = obj.proj v1 1.i256;
+        v16.i256 = extract_value v10 1.i256;
         obj.store v15 v16;
-        v17.@layout_3 = call %span v1;
-        v18.objref<i256> = obj.proj v2 0.i256;
-        v19.i256 = extract_value v17 0.i256;
-        obj.store v18 v19;
-        v20.objref<i256> = obj.proj v2 1.i256;
-        v21.i256 = extract_value v17 1.i256;
-        obj.store v20 v21;
-        v23.@layout_0 = extract_value v0 0.i256;
-        v24.i256 = call %as_topic v23;
-        v25.@layout_0 = extract_value v0 1.i256;
-        v26.i256 = call %as_topic v25;
-        call %log3 v2 -15402802100530019096323380498944738953123845089667699673314898783681816316945.i256 v24 v26;
+        v17.objref<i256> = obj.proj v1 2.i256;
+        v18.i256 = extract_value v10 2.i256;
+        obj.store v17 v18;
+        v19.i256 = call %impl_MemBuffer__ptr v1;
+        v20.constref<@layout_4> = const.ref $const_region_0;
+        v21.constref<@layout_4> = const.ref $const_region_0;
+        v22.constref<[i256; 1]> = const.ref $const_region_1;
+        v23.i256 = call %encode_field_at v5 v19 0.i256 32.i256;
+        v24.@layout_3 = call %span v1;
+        v25.objref<i256> = obj.proj v2 0.i256;
+        v26.i256 = extract_value v24 0.i256;
+        obj.store v25 v26;
+        v27.objref<i256> = obj.proj v2 1.i256;
+        v28.i256 = extract_value v24 1.i256;
+        obj.store v27 v28;
+        v30.@layout_1 = extract_value v0 0.i256;
+        v31.i256 = call %as_topic v30;
+        v32.@layout_1 = extract_value v0 1.i256;
+        v33.i256 = call %as_topic v32;
+        call %log3 v2 -15402802100530019096323380498944738953123845089667699673314898783681816316945.i256 v31 v33;
         return;
 }
 
-func private %emit_transfer(v0.constref<@layout_0>, v1.constref<@layout_0>, v2.i256) {
+func private %emit_transfer(v0.constref<@layout_1>, v1.constref<@layout_1>, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        v4.objref<@layout_0> = obj.alloc @layout_0;
+        v4.objref<@layout_1> = obj.alloc @layout_1;
         obj.init.const v4 v0;
-        v5.@layout_0 = obj.load v4;
-        v7.objref<@layout_0> = obj.alloc @layout_0;
+        v5.@layout_1 = obj.load v4;
+        v7.objref<@layout_1> = obj.alloc @layout_1;
         obj.init.const v7 v1;
-        v8.@layout_0 = obj.load v7;
+        v8.@layout_1 = obj.load v7;
         v12.@layout_2 = insert_value undef.@layout_2 0.i256 v5;
         v14.@layout_2 = insert_value v12 1.i256 v8;
         v16.@layout_2 = insert_value v14 2.i256 v2;
@@ -130,49 +131,7 @@ func private %emit_transfer(v0.constref<@layout_0>, v1.constref<@layout_0>, v2.i
         return;
 }
 
-func inline(always) private %encode__gac80(v0.@layout_0, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = extract_value v0 0.i256;
-        v7.i256 = call %encode_field_at v4 v1 0.i256 32.i256;
-        return;
-}
-
-func inline(always) private %encode_abi_payload(v0.@layout_0) -> @layout_1 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.@layout_1 = call %encode_alloc v0;
-        return v2;
-}
-
-func inline(always) private %encode_alloc(v0.@layout_0) -> @layout_1 {
-    block0:
-        v1.objref<@layout_1> = obj.alloc @layout_1;
-        jump block1;
-
-    block1:
-        v3.i256 = call %abi_payload_size v0;
-        v4.@layout_1 = call %alloc v3;
-        v6.objref<i256> = obj.proj v1 0.i256;
-        v7.i256 = extract_value v4 0.i256;
-        obj.store v6 v7;
-        v9.objref<i256> = obj.proj v1 1.i256;
-        v10.i256 = extract_value v4 1.i256;
-        obj.store v9 v10;
-        v12.objref<i256> = obj.proj v1 2.i256;
-        v13.i256 = extract_value v4 2.i256;
-        obj.store v12 v13;
-        v14.i256 = call %impl_MemBuffer__ptr v1;
-        call %encode__gac80 v0 v14;
-        v16.@layout_1 = obj.load v1;
-        return v16;
-}
-
-func private %encode__gf13e(v0.i256, v1.i256) {
+func private %encode(v0.i256, v1.i256) {
     block0:
         jump block1;
 
@@ -189,11 +148,11 @@ func inline(always) private %encode_field_at(v0.i256, v1.i256, v2.i256, v3.i256)
         br 0.i1 block2 block3;
 
     block2:
-        v7.i256 = call %trait_AbiSize__payload_size__ge513 v0;
+        v7.i256 = call %payload_size v0;
         v10.i256 = call %ptr_offset v1 v2;
-        call %core__lib__abi__store_word_9397 v10 v3;
+        call %core__lib__abi__store_word_7dcf v10 v3;
         v12.i256 = call %ptr_offset v1 v3;
-        call %encode__gf13e v0 v12;
+        call %encode v0 v12;
         v14.i256 = add v3 v7;
         return v14;
 
@@ -202,7 +161,7 @@ func inline(always) private %encode_field_at(v0.i256, v1.i256, v2.i256, v3.i256)
 
     block4:
         v17.i256 = call %ptr_offset v1 v2;
-        call %encode__gf13e v0 v17;
+        call %encode v0 v17;
         return v3;
 }
 
@@ -258,8 +217,8 @@ func private %main() {
         jump block1;
 
     block1:
-        v1.constref<@layout_0> = const.ref $const_region_0;
-        v3.constref<@layout_0> = const.ref $const_region_1;
+        v1.constref<@layout_1> = const.ref $const_region_2;
+        v3.constref<@layout_1> = const.ref $const_region_3;
         call %emit_transfer v1 v3 100.i256;
         return;
 }
@@ -273,18 +232,7 @@ func private %main_root() {
         evm_stop;
 }
 
-func inline(always) private %impl_trait_____payload_size__ge513(v0.@layout_0) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = extract_value v0 0.i256;
-        v5.i256 = call %dynamic_payload_size v4;
-        v6.i256 = add 32.i256 v5;
-        return v6;
-}
-
-func private %trait_AbiSize__payload_size__ge513(v0.i256) -> i256 {
+func private %payload_size(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -292,7 +240,7 @@ func private %trait_AbiSize__payload_size__ge513(v0.i256) -> i256 {
         return 32.i256;
 }
 
-func private %impl_MemBuffer__ptr(v0.objref<@layout_1>) -> i256 {
+func private %impl_MemBuffer__ptr(v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -321,7 +269,7 @@ func private %ptr_offset(v0.i256, v1.i256) -> i256 {
         return v4;
 }
 
-func private %span(v0.objref<@layout_1>) -> @layout_3 {
+func private %span(v0.objref<@layout_0>) -> @layout_3 {
     block0:
         jump block1;
 
@@ -344,12 +292,12 @@ func private %core__lib__abi__store_word_0f18(v0.i256, v1.i256) {
         return;
 }
 
-func private %core__lib__abi__store_word_9397(v0.i256, v1.i256) {
+func private %core__lib__abi__store_word_7dcf(v0.i256, v1.i256) {
     block0:
         jump block1;
 
     block1:
-        v3.i256 = call %core__lib__ptr__cast__g5f1e_d784 v0;
+        v3.i256 = call %core__lib__ptr__cast__g5f1e_3e5d v0;
         mstore v3 v1 i256;
         return;
 }
