@@ -1,0 +1,35 @@
+// An `#[error]` SELECTOR hashes a tuple of `2 * fields + 2` string pieces,
+// and `AsBytes` covers tuples of up to 16 elements, so an error with 8 or
+// more fields needs the pieces nested in chunks. `Narrow` (7 fields) stays
+// flat. Expected: no diagnostics.
+
+#[error]
+pub struct Narrow {
+    pub f0: u256,
+    pub f1: u256,
+    pub f2: u256,
+    pub f3: u256,
+    pub f4: u256,
+    pub f5: u256,
+    pub f6: u256,
+}
+
+#[error]
+pub struct Wide {
+    pub f0: u256,
+    pub f1: u256,
+    pub f2: u256,
+    pub f3: u256,
+    pub f4: u256,
+    pub f5: u256,
+    pub f6: u256,
+    pub f7: u256,
+}
+
+// cast sig "Narrow(uint256,uint256,uint256,uint256,uint256,uint256,uint256)" = 0x7e2e85c7
+static_assert(<Narrow as core::error::ErrorVariant<std::abi::Sol>>::SELECTOR == std::abi::sol("Narrow(uint256,uint256,uint256,uint256,uint256,uint256,uint256)"))
+static_assert(<Narrow as core::error::ErrorVariant<std::abi::Sol>>::SELECTOR == 0x7e2e85c7)
+
+// cast sig "Wide(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)" = 0xd8ceb2a2
+static_assert(<Wide as core::error::ErrorVariant<std::abi::Sol>>::SELECTOR == std::abi::sol("Wide(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)"))
+static_assert(<Wide as core::error::ErrorVariant<std::abi::Sol>>::SELECTOR == 0xd8ceb2a2)

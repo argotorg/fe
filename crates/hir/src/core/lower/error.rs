@@ -4,16 +4,16 @@ use salsa::Accumulator as _;
 use super::{
     AbiFieldContext, AbiFieldDiagnostic, FileLowerCtxt,
     attr::{has_named_attr, lower_attrs_without_named, named_attr_specs},
+    event::create_sol_signature_const,
     hir_builder::HirBuilder,
-    msg::{create_head_size_assoc_const, create_is_dynamic_assoc_const, create_payload_size_func},
+    msg::{lower_abi_size_impl, lower_sol_encode_impl},
 };
 use crate::{
     hir_def::{
-        AssocConstDef, AttrListId, Body, BodyKind, Expr, FieldDef, FieldDefListId, FuncModifiers,
-        GenericParamListId, IdentId, LitKind, Partial, PathId, Struct, TrackedItemVariant,
-        TraitRefId, TypeId, TypeKind, Visibility,
+        AttrListId, FieldDef, FieldDefListId, GenericParamListId, IdentId, Partial, PathId, Struct,
+        TrackedItemVariant, TraitRefId, TypeId, TypeKind,
     },
-    span::{ErrorDesugared, HirOrigin},
+    span::ErrorDesugared,
 };
 
 /// Error-related diagnostics accumulated during `#[error]` lowering / validation.
@@ -140,18 +140,32 @@ pub(super) fn lower_error_struct<'db>(
         ),
     );
 
-    let field_type_paths = parsed_fields.field_type_paths.clone();
     let field_specs = parsed_fields.field_specs.clone();
+    let field_types: Vec<_> = field_specs.iter().map(|(_, ty)| *ty).collect();
 
     let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
     builder.with_item_scope(
         TrackedItemVariant::ImplTrait(impl_trait_idx),
         move |builder, id| {
-            let selector_const = create_selector_const(
+            let sol_path = PathId::from_ident(db, builder.roots().std)
+                .push_str(db, "abi")
+                .push_str(db, "sol")
+                .push_str(db, "sol");
+            let u32_ty = TypeId::new(
+                db,
+                TypeKind::Path(Partial::Present(PathId::from_ident(
+                    db,
+                    IdentId::new(db, "u32".to_string()),
+                ))),
+            );
+            let selector_const = create_sol_signature_const(
                 builder.ctxt(),
                 error_desugared.clone(),
+                "SELECTOR",
+                u32_ty,
+                sol_path,
                 &struct_name_str,
-                &field_type_paths,
+                &field_types,
             );
             builder.new_impl_trait(
                 id,
@@ -165,17 +179,16 @@ pub(super) fn lower_error_struct<'db>(
     );
 
     // Generate impl AbiSize
-    lower_error_abi_size_impl(&mut builder, self_ty, &field_specs);
+    lower_abi_size_impl(&mut builder, self_ty, &field_specs);
 
     // Generate impl Encode<Sol>
-    lower_error_encode_impl(&mut builder, self_ty, &field_specs);
+    lower_sol_encode_impl(&mut builder, self_ty, &field_specs);
 
     struct_
 }
 
 struct ParsedErrorFields<'db> {
     hir_fields: Vec<FieldDef<'db>>,
-    field_type_paths: Vec<PathId<'db>>,
     field_specs: Vec<(IdentId<'db>, TypeId<'db>)>,
     is_valid: bool,
 }
@@ -189,14 +202,12 @@ fn parse_error_fields<'db>(
     let file = ctxt.top_mod().file(db);
 
     let mut hir_fields = Vec::new();
-    let mut field_type_paths = Vec::new();
     let mut field_specs = Vec::new();
     let mut is_valid = true;
 
     let Some(fields) = ast.fields() else {
         return ParsedErrorFields {
             hir_fields,
-            field_type_paths,
             field_specs,
             is_valid,
         };
@@ -217,7 +228,7 @@ fn parse_error_fields<'db>(
             continue;
         };
 
-        let TypeKind::Path(Partial::Present(path)) = ty.data(db) else {
+        let TypeKind::Path(Partial::Present(_)) = ty.data(db) else {
             AbiFieldDiagnostic {
                 context: AbiFieldContext::Error,
                 ty: ty.pretty_print(db),
@@ -234,215 +245,12 @@ fn parse_error_fields<'db>(
             continue;
         };
 
-        field_type_paths.push(*path);
         field_specs.push((name_ident, ty));
     }
 
     ParsedErrorFields {
         hir_fields,
-        field_type_paths,
         field_specs,
         is_valid,
     }
-}
-
-/// Build SELECTOR as:
-///
-/// ```text
-/// sol(("StructName", "(", Field1Type::SOL_TYPE, ",", Field2Type::SOL_TYPE, ..., ")"))
-/// ```
-///
-/// This produces a `u32` value matching the Solidity custom error selector.
-fn create_selector_const<'db>(
-    ctxt: &mut FileLowerCtxt<'db>,
-    desugared: ErrorDesugared,
-    struct_name: &str,
-    field_type_paths: &[PathId<'db>],
-) -> AssocConstDef<'db> {
-    let db = ctxt.db();
-    let roots = super::hir_builder::LibRoots::for_ctxt(ctxt);
-
-    let selector_name = IdentId::new(db, "SELECTOR".to_string());
-    let selector_ty = TypeId::new(
-        db,
-        TypeKind::Path(Partial::Present(PathId::from_ident(
-            db,
-            IdentId::new(db, "u32".to_string()),
-        ))),
-    );
-
-    let origin: HirOrigin<ast::Expr> = HirOrigin::desugared(desugared.clone());
-
-    let id = ctxt.joined_id(TrackedItemVariant::NamelessBody);
-    let mut body_ctxt = super::body::BodyCtxt::new(ctxt, id);
-
-    // sol() callee — std::abi::sol::sol
-    let sol_path = PathId::from_ident(db, roots.std)
-        .push_str(db, "abi")
-        .push_str(db, "sol")
-        .push_str(db, "sol");
-    let callee = Expr::Path(Partial::Present(sol_path));
-    let callee_id = body_ctxt.push_expr(callee, origin.clone());
-
-    // Build the tuple: ("StructName", "(", Field1::SOL_TYPE, ",", ..., ")")
-    let mut tuple_elems = Vec::new();
-
-    // A name can exceed String<32>; hash word-sized fragments in order.
-    for chunk in super::signature_name_chunks(struct_name) {
-        let name_lit = Expr::Lit(LitKind::String(crate::hir_def::StringId::new(
-            db,
-            chunk.to_string(),
-        )));
-        tuple_elems.push(body_ctxt.push_expr(name_lit, origin.clone()));
-    }
-
-    // "("
-    let open_paren = Expr::Lit(LitKind::String(crate::hir_def::StringId::new(
-        db,
-        "(".to_string(),
-    )));
-    tuple_elems.push(body_ctxt.push_expr(open_paren, origin.clone()));
-
-    // Field types with comma separators
-    for (idx, field_path) in field_type_paths.iter().enumerate() {
-        if idx > 0 {
-            let comma = Expr::Lit(LitKind::String(crate::hir_def::StringId::new(
-                db,
-                ",".to_string(),
-            )));
-            tuple_elems.push(body_ctxt.push_expr(comma, origin.clone()));
-        }
-
-        // FieldType::SOL_TYPE
-        let sol_type_path = field_path.push_str(db, "SOL_TYPE");
-        let sol_type_expr = Expr::Path(Partial::Present(sol_type_path));
-        tuple_elems.push(body_ctxt.push_expr(sol_type_expr, origin.clone()));
-    }
-
-    // ")"
-    let close_paren = Expr::Lit(LitKind::String(crate::hir_def::StringId::new(
-        db,
-        ")".to_string(),
-    )));
-    tuple_elems.push(body_ctxt.push_expr(close_paren, origin.clone()));
-
-    // The `AsBytes` tuple impls in `core` stop at arity 16, so nest the
-    // elements into chunks when the signature is longer. Byte concatenation is
-    // associative, so the nesting doesn't change the hashed bytes.
-    const MAX_TUPLE_ARITY: usize = 16;
-    while tuple_elems.len() > MAX_TUPLE_ARITY {
-        tuple_elems = tuple_elems
-            .chunks(MAX_TUPLE_ARITY)
-            .map(|chunk| {
-                if let [single] = chunk {
-                    *single
-                } else {
-                    body_ctxt.push_expr(Expr::Tuple(chunk.to_vec()), origin.clone())
-                }
-            })
-            .collect();
-    }
-
-    // Build the tuple expression and wrap in sol() call
-    let tuple_expr = Expr::Tuple(tuple_elems);
-    let tuple_id = body_ctxt.push_expr(tuple_expr, origin.clone());
-
-    let call = Expr::Call(
-        callee_id,
-        vec![crate::hir_def::expr::CallArg {
-            label: None,
-            expr: tuple_id,
-        }],
-    );
-    let call_id = body_ctxt.push_expr(call, origin.clone());
-
-    let body = Body::new(
-        db,
-        id,
-        call_id,
-        BodyKind::Anonymous,
-        body_ctxt.stmts,
-        body_ctxt.exprs,
-        body_ctxt.conds,
-        body_ctxt.pats,
-        body_ctxt.f_ctxt.top_mod(),
-        body_ctxt.source_map,
-        origin,
-    );
-    body_ctxt.f_ctxt.leave_item_scope(body);
-
-    AssocConstDef {
-        attributes: AttrListId::new(db, vec![]),
-        name: Partial::Present(selector_name),
-        ty: Partial::Present(selector_ty),
-        value: Partial::Present(body),
-        vis: crate::hir_def::Visibility::Public,
-    }
-}
-
-fn lower_error_abi_size_impl<'db>(
-    builder: &mut HirBuilder<'_, 'db, ErrorDesugared>,
-    self_ty: TypeId<'db>,
-    field_specs: &[(IdentId<'db>, TypeId<'db>)],
-) {
-    let db = builder.db();
-    let roots = builder.roots();
-    let trait_path = PathId::from_ident(db, roots.core)
-        .push_str(db, "abi")
-        .push_str(db, "AbiSize");
-    let trait_ref = Partial::Present(TraitRefId::new(db, Partial::Present(trait_path)));
-    let ty = Partial::Present(self_ty);
-    let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
-    builder.with_item_scope(
-        TrackedItemVariant::ImplTrait(impl_trait_idx),
-        |builder, id| {
-            let consts = vec![
-                create_head_size_assoc_const(builder, field_specs),
-                create_is_dynamic_assoc_const(builder, field_specs),
-            ];
-            let impl_trait =
-                builder.new_impl_trait(id, trait_ref, ty, vec![], consts, builder.origin());
-            create_payload_size_func(builder, field_specs);
-            impl_trait
-        },
-    );
-}
-
-fn lower_error_encode_impl<'db>(
-    builder: &mut HirBuilder<'_, 'db, ErrorDesugared>,
-    self_ty: TypeId<'db>,
-    field_specs: &[(IdentId<'db>, TypeId<'db>)],
-) {
-    let field_specs = field_specs.to_vec();
-
-    let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
-    let trait_ref = Partial::Present(builder.core_abi_trait_ref_sol("Encode"));
-    let ty = Partial::Present(self_ty);
-    builder.with_item_scope(
-        TrackedItemVariant::ImplTrait(impl_trait_idx),
-        |builder, id| {
-            let impl_trait =
-                builder.new_impl_trait(id, trait_ref, ty, vec![], vec![], builder.origin());
-
-            let ptr_ident = builder.ident("ptr");
-            let u8_ty = builder.ty_ident(builder.ident("u8"));
-            let ptr_ty = builder.ty_ptr(u8_ty);
-            let params = builder.params([
-                builder.param_own_self(),
-                builder.param_underscore_named(ptr_ident, ptr_ty),
-            ]);
-
-            builder.func_with_body_inline_always(
-                builder.ident("encode"),
-                builder.empty_generic_params(),
-                params,
-                None,
-                FuncModifiers::new(Visibility::Private, false, false, false),
-                |body| {
-                    body.encode_fields(&field_specs, ptr_ident);
-                },
-            );
-            impl_trait
-        },
-    );
 }

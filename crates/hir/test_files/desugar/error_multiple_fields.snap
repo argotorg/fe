@@ -12,7 +12,7 @@ pub struct InsufficientBalance {
 }
 
 impl core::error::ErrorVariant<std::abi::Sol> for InsufficientBalance {
-    const SELECTOR: u32 = std::abi::sol::sol(("InsufficientBalance", "(", u256::SOL_TYPE, ",", u256::SOL_TYPE, ")"))
+    const SELECTOR: u32 = std::abi::sol::sol(("InsufficientBalance", "(", <u256 as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ")"))
 }
 
 impl core::abi::AbiSize for InsufficientBalance {

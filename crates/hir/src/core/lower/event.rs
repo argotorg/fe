@@ -16,7 +16,7 @@ use crate::{
         LitKind, Partial, PathId, PathKind, Struct, TrackedItemVariant, TraitRefId, TypeId,
         TypeKind, TypeMode, Visibility,
     },
-    span::{EventDesugared, HirOrigin},
+    span::{DesugaredOrigin, EventDesugared, HirOrigin},
 };
 
 /// Event-related errors accumulated during `#[event]` lowering / validation.
@@ -133,9 +133,20 @@ pub(super) fn lower_event_struct<'db>(
     builder.with_item_scope(
         TrackedItemVariant::ImplTrait(impl_trait_idx),
         move |builder, id| {
-            let topic0_const = create_topic0_const(
+            let keccak_path = PathId::from_ident(db, builder.roots().core).push_str(db, "keccak");
+            let u256_ty = TypeId::new(
+                db,
+                TypeKind::Path(Partial::Present(PathId::from_ident(
+                    db,
+                    IdentId::new(db, "u256".to_string()),
+                ))),
+            );
+            let topic0_const = create_sol_signature_const(
                 builder.ctxt(),
                 event_desugared.clone(),
+                "TOPIC0",
+                u256_ty,
+                keccak_path,
                 &struct_name_str,
                 &ordered_field_types,
             );
@@ -291,41 +302,35 @@ fn parse_event_fields<'db>(
     }
 }
 
-/// Build TOPIC0 as:
+/// Build a Solidity signature const (`TOPIC0` for events, `SELECTOR` for
+/// errors) as:
 ///
 /// ```text
-/// keccak(("StructName", "(", Field1Type::SOL_TYPE, ..., ")"))
+/// callee(("StructName", "(", <Field1Type as std::abi::SolCompat>::SOL_TYPE, ",", ..., ")"))
 /// ```
 ///
+/// `callee` is `core::keccak` for events and `std::abi::sol::sol` for errors.
 /// Longer signatures are nested in chunks to stay within `AsBytes`' tuple-arity
 /// implementations. Container types compose their canonical names through
 /// `SolCompat::SOL_TYPE`.
-fn create_topic0_const<'db>(
+pub(super) fn create_sol_signature_const<'db, O: Clone + Into<DesugaredOrigin>>(
     ctxt: &mut FileLowerCtxt<'db>,
-    desugared: EventDesugared,
+    desugared: O,
+    const_name: &str,
+    const_ty: TypeId<'db>,
+    callee_path: PathId<'db>,
     struct_name: &str,
     field_types: &[TypeId<'db>],
 ) -> AssocConstDef<'db> {
     let db = ctxt.db();
-    let roots = super::hir_builder::LibRoots::for_ctxt(ctxt);
+    let const_name = IdentId::new(db, const_name.to_string());
 
-    let topic0_name = IdentId::new(db, "TOPIC0".to_string());
-    let topic0_ty = TypeId::new(
-        db,
-        TypeKind::Path(Partial::Present(PathId::from_ident(
-            db,
-            IdentId::new(db, "u256".to_string()),
-        ))),
-    );
-
-    let origin: HirOrigin<ast::Expr> = HirOrigin::desugared(desugared.clone());
+    let origin: HirOrigin<ast::Expr> = HirOrigin::desugared(desugared);
 
     let id = ctxt.joined_id(TrackedItemVariant::NamelessBody);
     let mut body_ctxt = super::body::BodyCtxt::new(ctxt, id);
 
-    // keccak callee
-    let keccak_path = PathId::from_ident(db, roots.core).push_str(db, "keccak");
-    let callee = Expr::Path(Partial::Present(keccak_path));
+    let callee = Expr::Path(Partial::Present(callee_path));
     let callee_id = body_ctxt.push_expr(callee, origin.clone());
 
     // Build the signature fragments. Long signatures are chunked below.
@@ -384,7 +389,7 @@ fn create_topic0_const<'db>(
             .collect();
     }
 
-    // Build the tuple expression and wrap in keccak call
+    // Build the tuple expression and wrap in the callee call
     let tuple_expr = Expr::Tuple(tuple_elems);
     let tuple_id = body_ctxt.push_expr(tuple_expr, origin.clone());
 
@@ -414,8 +419,8 @@ fn create_topic0_const<'db>(
 
     AssocConstDef {
         attributes: AttrListId::new(db, vec![]),
-        name: Partial::Present(topic0_name),
-        ty: Partial::Present(topic0_ty),
+        name: Partial::Present(const_name),
+        ty: Partial::Present(const_ty),
         value: Partial::Present(body),
         vis: crate::hir_def::Visibility::Public,
     }
