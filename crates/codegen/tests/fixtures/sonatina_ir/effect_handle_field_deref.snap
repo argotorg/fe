@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 444
 expression: output
 input_file: crates/codegen/tests/fixtures/effect_handle_field_deref.fe
 ---
@@ -552,24 +553,16 @@ func inline(always) private %core__lib__abi__decode_field_from__g5385_011a(v0.@l
 
     block2:
         v6.i256 = call %word_at v0 v2;
-        (v8.i256, v9.i1) = uaddo v1 v6;
-        br v9 block5 block6;
+        v8.i256 = call %core__lib__abi__checked_tail__gf13e_0cf3 v1 v6;
+        v9.i256 = call %decode_from__g72ab v0 v8;
+        return v9;
 
     block3:
         jump block4;
 
     block4:
-        v19.i256 = call %decode_from__g72ab v0 v2;
-        return v19;
-
-    block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block6:
-        v16.i256 = call %decode_from__g72ab v0 v8;
-        return v16;
+        v12.i256 = call %decode_from__g72ab v0 v2;
+        return v12;
 }
 
 func inline(always) private %core__lib__abi__decode_field_from__g5385_2036(v0.@layout_3, v1.i256, v2.i256) -> i256 {
@@ -581,24 +574,16 @@ func inline(always) private %core__lib__abi__decode_field_from__g5385_2036(v0.@l
 
     block2:
         v6.i256 = call %word_at v0 v2;
-        (v8.i256, v9.i1) = uaddo v1 v6;
-        br v9 block5 block6;
+        v8.i256 = call %core__lib__abi__checked_tail__gf13e_585d v1 v6;
+        v9.i256 = call %decode_from__g72ab v0 v8;
+        return v9;
 
     block3:
         jump block4;
 
     block4:
-        v19.i256 = call %decode_from__g72ab v0 v2;
-        return v19;
-
-    block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block6:
-        v16.i256 = call %decode_from__g72ab v0 v8;
-        return v16;
+        v12.i256 = call %decode_from__g72ab v0 v2;
+        return v12;
 }
 
 func inline(always) private %core__lib__abi__decode_field_from__g5385_fac0(v0.@layout_3, v1.i256, v2.i256) -> i256 {
@@ -610,24 +595,16 @@ func inline(always) private %core__lib__abi__decode_field_from__g5385_fac0(v0.@l
 
     block2:
         v6.i256 = call %word_at v0 v2;
-        (v8.i256, v9.i1) = uaddo v1 v6;
-        br v9 block5 block6;
+        v8.i256 = call %core__lib__abi__checked_tail__gf13e_d160 v1 v6;
+        v9.i256 = call %decode_from__g72ab v0 v8;
+        return v9;
 
     block3:
         jump block4;
 
     block4:
-        v19.i256 = call %decode_from__g72ab v0 v2;
-        return v19;
-
-    block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block6:
-        v16.i256 = call %decode_from__g72ab v0 v8;
-        return v16;
+        v12.i256 = call %decode_from__g72ab v0 v2;
+        return v12;
 }
 
 func inline(always) private %core__lib__abi__decode_field_from_prechecked_head__g5385_664f(v0.@layout_3, v1.i256, v2.i256, v3.i256) -> i256 {

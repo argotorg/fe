@@ -319,7 +319,7 @@ pub fn decode_field<A: Abi, T, D>(_ d: mut D) -> T
         let tail_rel = d.read_word()
         let parent_base = d.base()
         let parent_pos = d.pos()
-        d.set_base(parent_base + tail_rel)
+        d.set_base(checked_tail<A>(parent_base, tail_rel))
         d.set_pos(d.base())
         let value = T::decode_payload(mut d)
         d.set_base(parent_base)
@@ -338,7 +338,7 @@ pub fn decode_field_from<A: Abi, T, I>(_ input: I, base: u256, head_pos: u256) -
 {
     if T::IS_DYNAMIC {
         let tail_rel = input.word_at(head_pos)
-        return T::decode_from(input, base + tail_rel)
+        return T::decode_from(input, checked_tail<A>(base, tail_rel))
     }
 
     T::decode_from(input, head_pos)
@@ -448,7 +448,7 @@ pub fn abi_field_end<A: Abi, T, I>(_ input: I, base: u256, pos: u256) -> u256
 {
     if T::IS_DYNAMIC {
         let tail_rel = input.word_at(pos)
-        let tail_at = base + tail_rel
+        let tail_at = checked_tail<A>(base, tail_rel)
         return T::payload_end(input, base: tail_at, pos: tail_at)
     }
 
@@ -497,11 +497,7 @@ fn checked_dynamic_payload<A: Abi, I: ByteInput>(_ input: I, _ pos: u256) -> (u2
 
 #[inline(always)]
 fn checked_dynamic_payload_with_input_len<A: Abi, I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> (u256, u256) {
-    let len_end = pos + 32
-    if len_end < pos || len_end > input_len {
-        A::decode_error()
-    }
-
+    checked_frame_end<A>(pos, 32, input_len)
     checked_dynamic_payload_after_head<A, I>(input, pos, input_len)
 }
 

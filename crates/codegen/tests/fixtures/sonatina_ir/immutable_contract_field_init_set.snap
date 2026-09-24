@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 444
 expression: output
 input_file: crates/codegen/tests/fixtures/immutable_contract_field_init_set.fe
 ---
@@ -140,6 +141,29 @@ func private %core__lib__ptr__cast__g5f1e_f94f(v0.i256) -> i256 {
 
     block1:
         return v0;
+}
+
+func inline(always) private %checked_tail(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.objref<i256> = obj.alloc i256;
+        jump block1;
+
+    block1:
+        v7.i256 = sub -1.i256 v0;
+        obj.store v2 v7;
+        v8.i1 = gt v1 v7;
+        br v8 block2 block3;
+
+    block2:
+        call %decode_error;
+        unreachable;
+
+    block3:
+        jump block4;
+
+    block4:
+        v11.i256 = add v0 v1;
+        return v11;
 }
 
 func inline(always) private %contract_init_abi_ImmutableContractFieldInitSet() {
@@ -296,6 +320,14 @@ func private %contract_runtime_root_ImmutableContractFieldInitSet() {
         unreachable;
 }
 
+func private %decode_error() {
+    block0:
+        jump block1;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+}
+
 func inline(always) private %decode_field(v0.objref<@layout_4>) -> i256 {
     block0:
         jump block1;
@@ -307,29 +339,21 @@ func inline(always) private %decode_field(v0.objref<@layout_4>) -> i256 {
         v3.i256 = call %read_word v0;
         v4.i256 = call %base v0;
         v5.i256 = call %pos v0;
-        (v6.i256, v7.i1) = uaddo v4 v3;
-        br v7 block5 block6;
+        v6.i256 = call %checked_tail v4 v3;
+        call %set_base v0 v6;
+        v8.i256 = call %base v0;
+        call %set_pos v0 v8;
+        v10.i256 = call %decode_payload__g1344 v0;
+        call %set_base v0 v4;
+        call %set_pos v0 v5;
+        return v10;
 
     block3:
         jump block4;
 
     block4:
-        v23.i256 = call %decode_payload__g1344 v0;
-        return v23;
-
-    block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block6:
-        call %set_base v0 v6;
-        v15.i256 = call %base v0;
-        call %set_pos v0 v15;
-        v17.i256 = call %decode_payload__g1344 v0;
-        call %set_base v0 v4;
-        call %set_pos v0 v5;
-        return v17;
+        v14.i256 = call %decode_payload__g1344 v0;
+        return v14;
 }
 
 func inline(always) private %decode_from(v0.@layout_5, v1.i256) {

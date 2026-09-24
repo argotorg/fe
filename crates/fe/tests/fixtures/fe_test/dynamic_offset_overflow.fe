@@ -1,0 +1,62 @@
+use core::abi::{Abi, AbiDecoder, Bytes, Decode, abi_field_end, decode_field, decode_field_from}
+use core::ptr::{self, MemBuffer, MemSpan}
+use std::abi::{Sol, SolDecoder}
+use std::evm::{Evm, RawMem, Call}
+
+msg OffsetMsg {
+    #[selector = 0x11223344]
+    Read { mode: u256, offset: u256 } -> u256,
+}
+pub contract OffsetProbe {
+    recv OffsetMsg {
+        Read { mode, offset } -> u256 uses (mem: mut RawMem) {
+            let data = MemBuffer::alloc(160)
+            mem.mstore(addr: data.ptr(), value: offset)
+            mem.mstore(addr: ptr::offset_bytes(data.ptr(), 32), value: offset)
+            mem.mstore(addr: ptr::offset_bytes(data.ptr(), 64), value: 0)
+            mem.mstore(addr: ptr::offset_bytes(data.ptr(), 96), value: 0)
+            mem.mstore(addr: ptr::offset_bytes(data.ptr(), 128), value: 0)
+            if mode == 0 {
+                return <Bytes as Decode<Sol>>::decode_from_bounded(data.span(), offset, 160).len()
+            } else if mode == 1 {
+                return decode_field_from<Sol, Bytes, MemSpan>(data.span(), base: 32, head_pos: 0).len()
+            } else if mode == 2 {
+                return abi_field_end<Sol, Bytes, MemSpan>(data.span(), base: 32, pos: 0)
+            } else {
+                let mut decoder = Sol::decoder_with_base(data.span(), 32)
+                return decode_field<Sol, Bytes, SolDecoder<MemSpan>>(mut decoder).len()
+            }
+        }
+    }
+}
+fn check_offset(_ mode: u256, _ offset: u256, _ valid: bool) uses (evm: mut Evm) {
+    let target = evm.create2<OffsetProbe>(value: 0, args: (), salt: mode)
+    let data = MemBuffer::alloc(68)
+    evm.mstore(addr: data.ptr(), value: (0x11223344 as u256) << 224)
+    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 4), value: mode)
+    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 36), value: offset)
+    let mut ret = MemBuffer::alloc(64)
+    let result = evm.raw_call(addr: target, gas: 1000000, value: 0, args: data.span(), ret: mut ret)
+    assert!(result.success() == valid)
+    if valid {
+        assert!(result.returndata_len() == 32)
+        assert!(evm.mload(ret.ptr()) == if mode == 2 { 128 } else { 0 })
+    } else {
+        assert!(result.returndata_len() == 0)
+    }
+}
+#[test]
+fn valid_dynamic_offsets() uses (evm: mut Evm) {
+    check_offset(0, 96, true)
+    check_offset(1, 64, true)
+    check_offset(2, 64, true)
+    check_offset(3, 64, true)
+}
+#[test]
+fn dynamic_length_head_overflow_is_abi_error() uses (evm: mut Evm) { check_offset(0, !(0 as u256) - 31, false) }
+#[test]
+fn field_from_offset_overflow_is_abi_error() uses (evm: mut Evm) { check_offset(1, !(0 as u256), false) }
+#[test]
+fn field_end_offset_overflow_is_abi_error() uses (evm: mut Evm) { check_offset(2, !(0 as u256), false) }
+#[test]
+fn cursor_offset_overflow_is_abi_error() uses (evm: mut Evm) { check_offset(3, !(0 as u256), false) }
