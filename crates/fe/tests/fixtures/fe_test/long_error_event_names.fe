@@ -1,0 +1,76 @@
+use std::evm::{Address, Evm, Log, revert_error}
+
+#[error]
+struct Errrrrrrrrrrrrrrrrrrrrrrrrrrrrr { pub account: Address }
+#[test(should_revert, selector = 0xb3a46319)]
+fn error_name_31() uses (evm: mut Evm) {
+    revert_error(Errrrrrrrrrrrrrrrrrrrrrrrrrrrrr { account: Address::zero() })
+}
+
+#[event]
+struct Evvvvvvvvvvvvvvvvvvvvvvvvvvvvvv { pub account: Address }
+#[test]
+fn event_name_31() uses (evm: mut Evm) {
+    assert!(Evvvvvvvvvvvvvvvvvvvvvvvvvvvvvv::TOPIC0 == 0x45ba29ae2a35b8c462ce5765d303d10b34b7a3c6ee9044f3ec68aa26e8a69d8d)
+    evm.emit(Evvvvvvvvvvvvvvvvvvvvvvvvvvvvvv { account: Address::zero() })
+}
+
+#[error]
+struct Errrrrrrrrrrrrrrrrrrrrrrrrrrrrrr { pub account: Address }
+#[test(should_revert, selector = 0xc2af6c48)]
+fn error_name_32() uses (evm: mut Evm) {
+    revert_error(Errrrrrrrrrrrrrrrrrrrrrrrrrrrrrr { account: Address::zero() })
+}
+
+#[event]
+struct Evvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv { pub account: Address }
+#[test]
+fn event_name_32() uses (evm: mut Evm) {
+    assert!(Evvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv::TOPIC0 == 0x5ef4f1d52e25fd553ece0ab2b4be512a4c8f4138fe56254b884e8d6a53b0a346)
+    evm.emit(Evvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv { account: Address::zero() })
+}
+
+#[error]
+struct Errrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr { pub account: Address }
+#[test(should_revert, selector = 0xba851014)]
+fn error_name_33() uses (evm: mut Evm) {
+    revert_error(Errrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr { account: Address::zero() })
+}
+
+#[event]
+struct Evvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv { pub account: Address }
+#[test]
+fn event_name_33() uses (evm: mut Evm) {
+    assert!(Evvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv::TOPIC0 == 0x43de65c7474790273fd3c2c9864849d3b8dba99307ac9f627f97b4e4e00ca806)
+    evm.emit(Evvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv { account: Address::zero() })
+}
+
+#[error]
+struct Errrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr { pub account: Address }
+#[test(should_revert, selector = 0x12b2dbd5)]
+fn error_name_64() uses (evm: mut Evm) {
+    revert_error(Errrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr { account: Address::zero() })
+}
+
+#[event]
+struct Evvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv { pub account: Address }
+#[test]
+fn event_name_64() uses (evm: mut Evm) {
+    assert!(Evvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv::TOPIC0 == 0xef6f3f9c3bc5d20c91e02f431e3049e90b117452e5e27d85073989c370aec831)
+    evm.emit(Evvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv { account: Address::zero() })
+}
+
+#[error]
+struct Errrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr { pub account: Address }
+#[test(should_revert, selector = 0xb1e7d15c)]
+fn error_name_65() uses (evm: mut Evm) {
+    revert_error(Errrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr { account: Address::zero() })
+}
+
+#[event]
+struct Evvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv { pub account: Address }
+#[test]
+fn event_name_65() uses (evm: mut Evm) {
+    assert!(Evvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv::TOPIC0 == 0x4515ae7f7a3776806a7e20777fc7f81ae7ae1df325c595bd884f16dca56966cb)
+    evm.emit(Evvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv { account: Address::zero() })
+}

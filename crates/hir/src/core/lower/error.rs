@@ -287,12 +287,14 @@ fn create_selector_const<'db>(
     // Build the tuple: ("StructName", "(", Field1::SOL_TYPE, ",", ..., ")")
     let mut tuple_elems = Vec::new();
 
-    // Struct name as string literal
-    let name_lit = Expr::Lit(LitKind::String(crate::hir_def::StringId::new(
-        db,
-        struct_name.to_string(),
-    )));
-    tuple_elems.push(body_ctxt.push_expr(name_lit, origin.clone()));
+    // A name can exceed String<32>; hash word-sized fragments in order.
+    for chunk in super::signature_name_chunks(struct_name) {
+        let name_lit = Expr::Lit(LitKind::String(crate::hir_def::StringId::new(
+            db,
+            chunk.to_string(),
+        )));
+        tuple_elems.push(body_ctxt.push_expr(name_lit, origin.clone()));
+    }
 
     // "("
     let open_paren = Expr::Lit(LitKind::String(crate::hir_def::StringId::new(
@@ -323,6 +325,23 @@ fn create_selector_const<'db>(
         ")".to_string(),
     )));
     tuple_elems.push(body_ctxt.push_expr(close_paren, origin.clone()));
+
+    // The `AsBytes` tuple impls in `core` stop at arity 16, so nest the
+    // elements into chunks when the signature is longer. Byte concatenation is
+    // associative, so the nesting doesn't change the hashed bytes.
+    const MAX_TUPLE_ARITY: usize = 16;
+    while tuple_elems.len() > MAX_TUPLE_ARITY {
+        tuple_elems = tuple_elems
+            .chunks(MAX_TUPLE_ARITY)
+            .map(|chunk| {
+                if let [single] = chunk {
+                    *single
+                } else {
+                    body_ctxt.push_expr(Expr::Tuple(chunk.to_vec()), origin.clone())
+                }
+            })
+            .collect();
+    }
 
     // Build the tuple expression and wrap in sol() call
     let tuple_expr = Expr::Tuple(tuple_elems);

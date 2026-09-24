@@ -331,12 +331,14 @@ fn create_topic0_const<'db>(
     // Build the signature fragments. Long signatures are chunked below.
     let mut tuple_elems = Vec::new();
 
-    // Struct name as string literal
-    let name_lit = Expr::Lit(LitKind::String(crate::hir_def::StringId::new(
-        db,
-        struct_name.to_string(),
-    )));
-    tuple_elems.push(body_ctxt.push_expr(name_lit, origin.clone()));
+    // A name can exceed String<32>; hash word-sized fragments in order.
+    for chunk in super::signature_name_chunks(struct_name) {
+        let name_lit = Expr::Lit(LitKind::String(crate::hir_def::StringId::new(
+            db,
+            chunk.to_string(),
+        )));
+        tuple_elems.push(body_ctxt.push_expr(name_lit, origin.clone()));
+    }
 
     // "("
     let open_paren = Expr::Lit(LitKind::String(crate::hir_def::StringId::new(
