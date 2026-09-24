@@ -19,7 +19,7 @@ note:
    · │
 12 │ │     value: u256,
 13 │ │ }
-   │ ╰─^ () | (u256) | MemBuffer | MemSlice<u8> | Transfer | fn encode_abi_payload<(u256)> | mut L | u256
+   │ ╰─^ () | *<u8> | AbiRecordLayout<1> | MemBuffer | MemSlice<u8> | Transfer | [u256; 1] | fn alloc | fn dynamic_payload_size<u256> | fn encode_field_at<Sol, u256> | mut L | u256 | usize
 
 note:
    ┌─ contract_recv_msg_event_name_collision.fe:17:9
