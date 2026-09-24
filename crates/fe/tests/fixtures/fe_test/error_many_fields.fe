@@ -1,0 +1,31 @@
+// Reverting with `#[error]` structs that have many fields.
+//
+// The `#[error]` desugar computes SELECTOR over a tuple of `2 * fields + 2`
+// signature fragments, and the `AsBytes` tuple impls stop at arity 16, so an
+// error with 8 or more fields needs its signature nested into chunks, as
+// `#[event]` TOPIC0 does.
+//
+// Selectors computed externally with `cast sig`.
+
+#[error]
+pub struct Wide {
+    pub f0: u256,
+    pub f1: u256,
+    pub f2: u256,
+    pub f3: u256,
+    pub f4: u256,
+    pub f5: u256,
+    pub f6: u256,
+    pub f7: u256,
+}
+
+#[test(should_revert)]
+fn test_revert_error_eight_fields() uses (evm: mut Evm) {
+    revert_error(Wide { f0: 0, f1: 1, f2: 2, f3: 3, f4: 4, f5: 5, f6: 6, f7: 7 })
+}
+
+// selector for Wide(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256) = 0xd8ceb2a2
+#[test(should_revert, selector = 0xd8ceb2a2)]
+fn test_revert_error_eight_fields_selector() uses (evm: mut Evm) {
+    revert_error(Wide { f0: 0, f1: 1, f2: 2, f3: 3, f4: 4, f5: 5, f6: 6, f7: 7 })
+}

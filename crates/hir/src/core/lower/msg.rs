@@ -135,25 +135,36 @@ fn lower_msg_variant_abi_size_impl<'db>(
     variant: &ast::MsgVariant,
     struct_: Struct<'db>,
 ) -> ImplTrait<'db> {
+    let field_specs = lower_msg_variant_field_specs(builder.ctxt(), variant);
+    let self_ty = variant_struct_ty(builder.db(), struct_);
+    lower_abi_size_impl(builder, self_ty, &field_specs)
+}
+
+/// Generate `impl core::abi::AbiSize for SelfTy` over the given fields, in
+/// declaration order. Shared by `msg` variants and `#[error]` structs.
+pub(super) fn lower_abi_size_impl<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
+    builder: &mut HirBuilder<'_, 'db, O>,
+    self_ty: TypeId<'db>,
+    field_specs: &[(IdentId<'db>, TypeId<'db>)],
+) -> ImplTrait<'db> {
     let db = builder.db();
     let roots = builder.roots();
-    let field_specs = lower_msg_variant_field_specs(builder.ctxt(), variant);
     let trait_path = PathId::from_ident(db, roots.core)
         .push_str(db, "abi")
         .push_str(db, "AbiSize");
     let trait_ref = Partial::Present(TraitRefId::new(db, Partial::Present(trait_path)));
-    let ty = Partial::Present(variant_struct_ty(db, struct_));
+    let ty = Partial::Present(self_ty);
     let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
     builder.with_item_scope(
         TrackedItemVariant::ImplTrait(impl_trait_idx),
         |builder, id| {
             let consts = vec![
-                create_head_size_assoc_const(builder, &field_specs),
-                create_is_dynamic_assoc_const(builder, &field_specs),
+                create_head_size_assoc_const(builder, field_specs),
+                create_is_dynamic_assoc_const(builder, field_specs),
             ];
             let impl_trait =
                 builder.new_impl_trait(id, trait_ref, ty, vec![], consts, builder.origin());
-            create_payload_size_func(builder, &field_specs);
+            create_payload_size_func(builder, field_specs);
             impl_trait
         },
     )
@@ -212,10 +223,20 @@ fn lower_msg_variant_encode_impl<'db>(
     struct_: Struct<'db>,
 ) -> ImplTrait<'db> {
     let field_specs = lower_msg_variant_field_specs(builder.ctxt(), variant);
+    let self_ty = variant_struct_ty(builder.db(), struct_);
+    lower_sol_encode_impl(builder, self_ty, &field_specs)
+}
 
+/// Generate `impl core::abi::Encode<std::abi::Sol> for SelfTy` over the given
+/// fields, in declaration order. Shared by `msg` variants and `#[error]` structs.
+pub(super) fn lower_sol_encode_impl<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
+    builder: &mut HirBuilder<'_, 'db, O>,
+    self_ty: TypeId<'db>,
+    field_specs: &[(IdentId<'db>, TypeId<'db>)],
+) -> ImplTrait<'db> {
     let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
     let trait_ref = Partial::Present(builder.core_abi_trait_ref_sol("Encode"));
-    let ty = Partial::Present(variant_struct_ty(builder.db(), struct_));
+    let ty = Partial::Present(self_ty);
     builder.with_item_scope(
         TrackedItemVariant::ImplTrait(impl_trait_idx),
         |builder, id| {
@@ -237,7 +258,7 @@ fn lower_msg_variant_encode_impl<'db>(
                 None,
                 FuncModifiers::new(Visibility::Private, false, false, false),
                 |body| {
-                    body.encode_fields(&field_specs, ptr_ident);
+                    body.encode_fields(field_specs, ptr_ident);
                 },
             );
 
