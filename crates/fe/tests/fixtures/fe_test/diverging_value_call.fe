@@ -1,0 +1,15 @@
+// A function that declares a value but always diverges can be called in
+// value position; the call must still match the callee's signature.
+fn fail() -> u256 {
+    core::panic()
+}
+
+fn pick(_ x: u256) -> u256 {
+    if x > 10 { return fail() }
+    x
+}
+
+#[test]
+fn diverging_value_function_call_compiles() {
+    assert!(pick(3) == 3)
+}

@@ -3040,11 +3040,18 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             RTerminator::TerminalCall { callee, args } => {
                 let args = self.lower_call_args(*callee, args)?;
-                self.fb.insert_inst_no_result(Call::new(
-                    self.module.inst_set(),
-                    self.module.func_ref(*callee)?,
-                    args,
-                ));
+                let call = Call::new(self.module.inst_set(), self.module.func_ref(*callee)?, args);
+                // A diverging callee may still declare a return value; the call
+                // must match its signature even though the result is unused.
+                match callee.interface_signature(self.module.db).ret {
+                    Some(class) => {
+                        let ret_ty = self.module.ty_for_class(&class)?;
+                        self.fb.insert_inst(call, ret_ty);
+                    }
+                    None => {
+                        self.fb.insert_inst_no_result(call);
+                    }
+                }
                 self.fb
                     .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
             }
