@@ -136,8 +136,18 @@ pub fn check_const_body<'db>(
     let (mut diags, body) = check_body(db, BodyOwner::Const(const_));
     // An invalid declared type suppresses body/value checking. Diagnose the
     // declaration itself rather than passing an invalid constant to CTFE.
-    if let Some(diag) = const_.ty(db).emit_diag(db, const_.span().ty().into()) {
-        diags.push(diag.into());
+    if let Some(hir_ty) = const_.hir_ty(db) {
+        diags.extend(
+            super::ty_error::collect_hir_ty_diags(
+                db,
+                const_.scope(),
+                hir_ty,
+                const_.span().ty(),
+                PredicateListId::empty_list(db),
+            )
+            .into_iter()
+            .map(Into::into),
+        );
     }
     (diags, body)
 }

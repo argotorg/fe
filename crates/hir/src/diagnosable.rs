@@ -1737,6 +1737,18 @@ impl<'db> Diagnosable<'db> for Trait<'db> {
 
     fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
         let mut out = Vec::new();
+        let assumptions = constraints_for(db, self.into());
+        for assoc in self.assoc_consts(db) {
+            if let Some(hir_ty) = assoc.hir_ty(db) {
+                out.extend(ty::ty_error::collect_hir_ty_diags(
+                    db,
+                    self.scope(),
+                    hir_ty,
+                    assoc.span().ty(),
+                    assumptions,
+                ));
+            }
+        }
         out.extend(self.diags_assoc_defaults(db));
         out.extend(self.diags_super_traits(db));
 

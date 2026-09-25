@@ -4553,6 +4553,10 @@ impl<'db> ImplAssocTypeView<'db> {
 // Const / Use ---------------------------------------------------------------
 
 impl<'db> Const<'db> {
+    pub fn hir_ty(self, db: &'db dyn HirDb) -> Option<TypeId<'db>> {
+        self.type_ref(db).to_opt()
+    }
+
     // Planned semantic surface:
     // - additional const semantics/diags as needed
 
@@ -4882,9 +4886,13 @@ impl<'db> TraitAssocConstView<'db> {
         self.decl(db).default.and_then(|body| body.to_opt())
     }
 
+    pub fn hir_ty(self, db: &'db dyn HirDb) -> Option<TypeId<'db>> {
+        self.decl(db).ty.to_opt()
+    }
+
     /// Semantic type of this associated const, lowered in the trait's scope.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
-        let hir = self.decl(db).ty.to_opt()?;
+        let hir = self.hir_ty(db)?;
         let trait_ = self.owner;
         let assumptions = constraints_for(db, trait_.into());
         Some(lower_hir_ty(db, hir, trait_.scope(), assumptions))
