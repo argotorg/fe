@@ -1,0 +1,77 @@
+use core::abi::{AbiSize, AbiSpan, AbiDecoder, ByteInput, Decode, Encode}
+use std::abi::{Sol, sol}
+use std::evm::Address
+pub struct Pair { pub a: Address, pub b: Address }
+impl Copy for Pair {}
+impl AbiSize for Pair {
+    const HEAD_SIZE: u256 = 64
+    const IS_DYNAMIC: bool = false
+}
+impl AbiSpan<Sol> for Pair {
+    fn payload_end<I: ByteInput>(_: I, base: u256, pos: u256) -> u256 {
+        pos + 64
+    }
+}
+impl Decode<Sol> for Pair {
+    fn decode_payload<D: AbiDecoder<Sol>>(_ d: mut D) -> Self {
+        let a = <Address as Decode<Sol>>::decode_payload(mut d)
+        let b = <Address as Decode<Sol>>::decode_payload(mut d)
+        Self { a, b }
+    }
+}
+impl Encode<Sol> for Pair {
+    fn encode(own self, _ ptr: *u8) {
+        <(Address, Address) as Encode<Sol>>::encode((self.a, self.b), ptr)
+    }
+}
+msg PairMsg {
+    #[selector = 0x11223344]
+    Echo { pair: Pair } -> Pair,
+}
+pub contract PairProbe {
+    recv PairMsg {
+        Echo { pair } -> Pair {
+            pair
+        }
+    }
+}
+
+use core::ptr::{self, MemBuffer}
+use std::evm::{Evm, RawMem, Call}
+fn check_pair(_ a: u256, _ b: u256, _ valid: bool) uses (evm: mut Evm) {
+    let receiver = evm.create2<PairProbe>(value: 0, args: (), salt: 0)
+    assert!(receiver.inner != 0)
+    let data = MemBuffer::alloc(68)
+    evm.mstore(addr: data.ptr(), value: (0x11223344 as u256) << 224)
+    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 4), value: a)
+    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 36), value: b)
+    let mut ret = MemBuffer::alloc(64)
+    let outcome = evm
+        .raw_call(
+            addr: receiver,
+            gas: 1000000,
+            value: 0,
+            args: data.span(),
+            ret: mut ret,
+        )
+    assert!(outcome.success() == valid)
+    if valid {
+        assert!(outcome.returndata_len() == 64)
+        assert!(evm.mload(ret.ptr()) == a)
+        assert!(evm.mload(ptr::offset_bytes(ret.ptr(), 32)) == b)
+    } else {
+        assert!(outcome.returndata_len() == 0)
+    }
+}
+#[test]
+fn composed_addresses_roundtrip() uses (evm: mut Evm) {
+    check_pair(0x1234, ((1 as u256) << 160) - 1, true)
+}
+#[test]
+fn composed_first_address_rejects_noncanonical_word() uses (evm: mut Evm) {
+    check_pair((1 as u256) << 160, 0, false)
+}
+#[test]
+fn composed_second_address_rejects_noncanonical_word() uses (evm: mut Evm) {
+    check_pair(0, (1 as u256) << 160, false)
+}

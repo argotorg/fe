@@ -1,0 +1,35 @@
+//! ERC-165 interface detection with OpenZeppelin `ERC165Checker` semantics.
+//!
+//! Queries forward at most 30,000 gas and read at most one word of
+//! returndata, so a misbehaving account cannot exhaust the caller's gas.
+use core::ptr::MemBuffer
+use ingot::abi::{Bytes4, sol::sol}
+use super::effects::{Address, Call}
+
+const INTERFACE_ID_ERC165: u32 = 0x01ffc9a7
+const INTERFACE_ID_INVALID: u32 = 0xffffffff
+
+msg Erc165Msg {
+    #[selector = sol("supportsInterface(bytes4)")]
+    SupportsInterface { interfaceId: Bytes4 } -> bool,
+}
+
+/// `supportsInterface(interface_id)` without checking ERC-165 support first:
+/// true for a successful call returning at least one nonzero word.
+pub fn supports_interface_unchecked(_ account: Address, interface_id: u32) -> bool uses (call: Call) {
+    let mut ret = MemBuffer::with_capacity(32)
+    let message = Erc165Msg::SupportsInterface { interfaceId: Bytes4 { val: interface_id as u256 } }
+    let outcome = call.try_static_into(addr: account, gas: 30000, message, ret: mut ret)
+    outcome.success() && outcome.returndata_len() >= 32 && ret.span().word_at(0) != 0
+}
+
+/// Whether `account` implements ERC-165 itself.
+pub fn supports_erc165(_ account: Address) -> bool uses (call: Call) {
+    supports_interface_unchecked(account, interface_id: INTERFACE_ID_ERC165)
+        && !supports_interface_unchecked(account, interface_id: INTERFACE_ID_INVALID)
+}
+
+/// Whether `account` implements ERC-165 and `interface_id`.
+pub fn supports_interface(_ account: Address, interface_id: u32) -> bool uses (call: Call) {
+    supports_erc165(account) && supports_interface_unchecked(account, interface_id)
+}
