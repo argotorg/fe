@@ -58,29 +58,32 @@ func private %sum_const() -> i256 {
         jump block2;
 
     block2:
-        v20.i256 = phi (0.i256 block1) (v9 block7);
-        v3.i256 = phi (0.i256 block1) (v16 block7);
+        v20.i256 = phi (0.i256 block1) (v9 block8);
+        v3.i256 = phi (0.i256 block1) (v16 block8);
         v5.i1 = lt v3 v2;
-        br v5 block3 block4;
+        br v5 block3 block5;
 
     block3:
         v7.i256 = call %get v3;
         (v9.i256, v10.i1) = uaddo v20 v7;
-        br v10 block5 block6;
+        br v10 block6 block7;
 
     block4:
-        return v20;
+        (v16.i256, v17.i1) = uaddo v3 1.i256;
+        br v17 block6 block8;
 
     block5:
+        return v20;
+
+    block6:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
 
-    block6:
-        (v16.i256, v17.i1) = uaddo v3 1.i256;
-        br v17 block5 block7;
-
     block7:
+        jump block4;
+
+    block8:
         jump block2;
 }
 

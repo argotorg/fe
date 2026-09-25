@@ -19,29 +19,32 @@ func private %for_range_sum() -> i256 {
         jump block2;
 
     block2:
-        v25.i256 = phi (0.i256 block1) (v11 block7);
-        v4.i256 = phi (0.i256 block1) (v19 block7);
+        v25.i256 = phi (0.i256 block1) (v11 block8);
+        v4.i256 = phi (0.i256 block1) (v19 block8);
         v6.i1 = lt v4 v3;
-        br v6 block3 block4;
+        br v6 block3 block5;
 
     block3:
         v9.i256 = call %get v2 v4;
         (v11.i256, v12.i1) = uaddo v25 v9;
-        br v12 block5 block6;
+        br v12 block6 block7;
 
     block4:
-        return v25;
+        (v19.i256, v20.i1) = uaddo v4 1.i256;
+        br v20 block6 block8;
 
     block5:
+        return v25;
+
+    block6:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
 
-    block6:
-        (v19.i256, v20.i1) = uaddo v4 1.i256;
-        br v20 block5 block7;
-
     block7:
+        jump block4;
+
+    block8:
         jump block2;
 }
 
