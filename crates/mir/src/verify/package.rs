@@ -5,7 +5,7 @@ use crate::{
     runtime::{
         DispatchDefault, RExpr, RStmt, RTerminator, ResolvedCodeRegion, RuntimeCodeRegion,
         RuntimeFunctionOwner, RuntimeLinkage, RuntimeObject, RuntimePackage, RuntimeProgramView,
-        RuntimeReturnPlan, RuntimeSyntheticSpec,
+        RuntimeSyntheticSpec,
         code_region::{code_region_runtime_entry, code_region_section_name, code_region_symbol},
     },
     verify::{VerifyError, storage_layout::verify_contract_storage_seam, verify_runtime_body},
@@ -202,25 +202,7 @@ fn verify_synthetic_function<'db>(
                 verify_has_terminator(body, |term| matches!(term, RTerminator::ReturnData { .. }))
             }
             RuntimeSyntheticSpec::ContractRecvAbi { plan } => {
-                if matches!(plan.ret, RuntimeReturnPlan::Value { .. }) {
-                    return verify_value_recv_exits(db, body, &plan);
-                }
-                if body
-                    .blocks
-                    .iter()
-                    .any(|block| matches!(block.terminator, RTerminator::TerminalCall { .. }))
-                {
-                    return Err(VerifyError::InvalidReturnClass);
-                }
-                verify_has_terminator(body, |term| {
-                    matches!(
-                        term,
-                        RTerminator::ReturnData { .. }
-                            | RTerminator::TerminalCall { .. }
-                            | RTerminator::Revert { .. }
-                            | RTerminator::RevertEmpty
-                    )
-                })
+                verify_recv_wrapper_plan(db, body, plan)
             }
             RuntimeSyntheticSpec::MainRoot { .. }
             | RuntimeSyntheticSpec::TestRoot { .. }
@@ -230,176 +212,35 @@ fn verify_synthetic_function<'db>(
     }
 }
 
-/// Synthetic recv wrappers keep the handler call and return preparation in one
-/// block. Follow only value-preserving carrier conversions in that block, so a
-/// same-class decoded input cannot stand in for the handler result or host.
-fn verify_recv_return_args<'db>(
+/// Package verification runs before optimization: recv wrappers must be the
+/// canonical expansion of their ABI plan. Re-expand from the plan (not the
+/// cached instance body) so checking a modified body cannot validate it against
+/// itself. This includes decoded inputs, effect/layout arguments, the payment
+/// guard, and every statement between the handler and its return helper.
+///
+/// Comparing the executable structure also rejects writes through fresh aliases
+/// and additional calls with side effects, without an incomplete alias analysis.
+/// Source origins are diagnostic metadata and do not participate in this check.
+fn verify_recv_wrapper_plan<'db>(
     db: &'db dyn MirDb,
     body: &crate::runtime::RuntimeBody<'db>,
-    block: &crate::runtime::RBlock<'db>,
-    plan: &crate::runtime::ContractRecvAbiPlan<'db>,
-    args: &[crate::runtime::RLocalId],
-) -> bool {
-    use crate::runtime::{
-        PlaceRoot, RLocalId, RuntimeBuiltin, RuntimeMemoryLayout,
-        TargetRootProviderMaterialization, lower::interface::runtime_visible_binding_plans,
-    };
-    use hir::analysis::ty::ty_check::LocalBinding;
-
-    let RuntimeReturnPlan::Value {
-        host, return_value, ..
-    } = &plan.ret
-    else {
-        return false;
-    };
-    let Some(semantic) = return_value.key(db).semantic(db) else {
-        return false;
-    };
-    let bindings = runtime_visible_binding_plans(db, semantic);
-    if args.len() != bindings.len() {
-        return false;
-    }
-    let source = |mut value: RLocalId| {
-        let mut before = block.stmts.len();
-        loop {
-            let (index, expr) = block.stmts[..before].iter().enumerate().rev().find_map(
-                |(i, stmt)| match stmt {
-                    RStmt::Assign { dst, expr } if *dst == value => Some((i, expr)),
-                    _ => None,
-                },
-            )?;
-            // The generated return preparation does not mutate the source
-            // through a place after defining it.
-            if block.stmts[index + 1..].iter().any(|stmt| match stmt {
-                RStmt::Store { dst, .. } | RStmt::CopyInto { dst, .. } => match dst.root {
-                    PlaceRoot::Slot(root) | PlaceRoot::Ref(root) => root == value,
-                    PlaceRoot::Ptr { addr, .. } => addr == value,
-                    PlaceRoot::Provider(_) => false,
-                },
-                _ => false,
-            }) {
-                return None;
-            }
-            value = match expr {
-                RExpr::Use(src)
-                | RExpr::MaterializeToObject { src }
-                | RExpr::NativeRef { value: src }
-                | RExpr::RetagRef { value: src }
-                | RExpr::ProviderRefFromRaw { raw: src, .. }
-                | RExpr::ProviderRefToRaw { value: src } => *src,
-                RExpr::AddrOf { place } | RExpr::Load { place } if place.path.is_empty() => {
-                    match place.root {
-                        PlaceRoot::Slot(root) | PlaceRoot::Ref(root) => root,
-                        PlaceRoot::Ptr { addr, .. } => addr,
-                        PlaceRoot::Provider(_) => return None,
-                    }
-                }
-                _ => return Some((value, expr, index)),
-            };
-            before = index;
-        }
-    };
-    args.iter().zip(bindings).all(|(&arg, binding)| {
-        let Some((local, expr, index)) = source(arg) else {
-            return false;
-        };
-        match binding.binding {
-            LocalBinding::Param { idx: 1, .. } => matches!(expr,
-                RExpr::Call { callee, .. }
-                    if callee.key(db).semantic(db).is_some()
-                        && callee.key(db).semantic(db) == plan.user_recv.key(db).semantic(db)),
-            LocalBinding::Param { idx: 0, .. } => {
-                if body
-                    .local(local)
-                    .is_none_or(|local| local.semantic_ty != host.declared_ty)
-                {
-                    return false;
-                }
-                match (&host.materialization, expr) {
-                    (
-                        TargetRootProviderMaterialization::MemoryObject { layout },
-                        RExpr::AllocObject { layout: actual },
-                    ) => layout == actual,
-                    (
-                        TargetRootProviderMaterialization::MemoryRawAddr { layout },
-                        RExpr::Builtin(RuntimeBuiltin::Malloc { size }),
-                    ) => {
-                        let Ok(expected_size) = RuntimeMemoryLayout::raw(db).layout_size(*layout)
-                        else {
-                            return false;
-                        };
-                        block.stmts[..index]
-                            .iter()
-                            .rev()
-                            .find_map(|stmt| match stmt {
-                                RStmt::Assign { dst, expr } if dst == size => Some(expr),
-                                _ => None,
-                            })
-                            == Some(&RExpr::ConstScalar(crate::runtime::ConstScalar::Int {
-                                bits: 256,
-                                signed: false,
-                                words: expected_size
-                                    .to_be_bytes()
-                                    .into_iter()
-                                    .skip_while(|byte| *byte == 0)
-                                    .collect(),
-                            }))
-                    }
-                    _ => false,
-                }
-            }
-            _ => false,
-        }
-    })
-}
-
-fn verify_value_recv_exits<'db>(
-    db: &'db dyn MirDb,
-    body: &crate::runtime::RuntimeBody<'db>,
-    plan: &crate::runtime::ContractRecvAbiPlan<'db>,
+    plan: crate::runtime::ContractRecvAbiPlan<'db>,
 ) -> Result<(), VerifyError<'db>> {
-    use crate::runtime::RBlockId;
-    let RuntimeReturnPlan::Value { return_value, .. } = plan.ret else {
-        unreachable!()
-    };
-    let expected = return_value.key(db).semantic(db);
-    let mut pending = vec![RBlockId::from_u32(0)];
-    let mut visited = FxHashSet::default();
-    let mut has_return = false;
-    while let Some(id) = pending.pop() {
-        if !visited.insert(id) {
-            continue;
-        }
-        let block = body.block(id).ok_or(VerifyError::MissingRuntimeBlock(id))?;
-        match &block.terminator {
-            RTerminator::Goto(next) => pending.push(*next),
-            RTerminator::Branch {
-                then_bb, else_bb, ..
-            } => pending.extend([*then_bb, *else_bb]),
-            RTerminator::SwitchScalar { cases, default, .. } => {
-                pending.extend(cases.iter().map(|(_, target)| *target));
-                pending.push(*default);
-            }
-            RTerminator::MatchEnumTag { cases, default, .. } => {
-                pending.extend(cases.iter().map(|(_, target)| *target));
-                pending.extend(default);
-            }
-            RTerminator::TerminalCall { callee, args }
-                if expected.is_some()
-                    && callee.key(db).semantic(db) == expected
-                    && verify_recv_return_args(db, body, block, plan, args) =>
-            {
-                has_return = true;
-            }
-            RTerminator::Revert { .. } | RTerminator::RevertEmpty | RTerminator::Trap => {}
-            _ => return Err(VerifyError::InvalidReturnClass),
-        }
+    let expected = crate::runtime::synthetic::lower_synthetic_runtime_body(
+        db,
+        body.owner,
+        RuntimeSyntheticSpec::ContractRecvAbi { plan },
+    )
+    .map_err(|_| VerifyError::InvalidReturnClass)?;
+    if body.key != expected.key
+        || body.signature != expected.signature
+        || body.provider_bindings != expected.provider_bindings
+        || body.locals != expected.locals
+        || body.blocks != expected.blocks
+    {
+        return Err(VerifyError::InvalidReturnClass);
     }
-    if has_return {
-        Ok(())
-    } else {
-        Err(VerifyError::InvalidReturnClass)
-    }
+    Ok(())
 }
 
 fn verify_has_terminator<'db>(
@@ -528,10 +369,9 @@ mod tests {
     use driver::DriverDataBase;
     use url::Url;
 
-    #[test]
-    fn recv_terminal_calls_must_use_the_planned_semantic_return_helper() {
+    fn recv_test_db() -> DriverDataBase {
         let mut db = DriverDataBase::default();
-        let file = db.workspace().touch(
+        db.workspace().touch(
             &mut db,
             Url::parse("file:///recv_return_verifier.fe").unwrap(),
             Some(
@@ -546,22 +386,41 @@ msg M {
     Paid -> String<8>,
     #[selector = sol("scalar(uint256)")]
     Scalar { value: u256 } -> u256,
+    #[selector = sol("aggregate()")]
+    Aggregate -> [u256; 2],
 }
 pub contract C {
+    count: u256,
     recv M {
         Wide -> String<8> { "COOL" }
         Narrow -> String<4> { "COOL" }
         #[payable]
         Paid -> String<8> { "COOL" }
         #[payable]
-        Scalar { value } -> u256 { value + 1 }
+        Scalar { value } -> u256 uses (count) { value + count }
+        #[payable]
+        Aggregate -> [u256; 2] { [1, 2] }
     }
 }
 "#
                 .to_string(),
             ),
         );
-        let package = crate::build_runtime_package(&db, db.top_mod(file)).unwrap();
+        db
+    }
+
+    fn recv_test_package(db: &DriverDataBase) -> RuntimePackage<'_> {
+        let file = db
+            .workspace()
+            .get(db, &Url::parse("file:///recv_return_verifier.fe").unwrap())
+            .unwrap();
+        crate::build_runtime_package(db, db.top_mod(file)).unwrap()
+    }
+
+    #[test]
+    fn recv_terminal_calls_must_use_the_planned_semantic_return_helper() {
+        let db = recv_test_db();
+        let package = recv_test_package(&db);
         let functions = package.functions(&db);
         let wrappers: Vec<_> = functions
             .iter()
@@ -572,7 +431,7 @@ pub contract C {
                 )
             })
             .collect();
-        assert_eq!(wrappers.len(), 4);
+        assert_eq!(wrappers.len(), 5);
         let root = functions
             .iter()
             .find(|f| {
@@ -761,5 +620,258 @@ pub contract C {
             }
         }
         assert!(guarded && payable && checked_decoded_input && checked_specialization);
+    }
+
+    #[test]
+    fn recv_rejects_writes_through_return_aliases() {
+        use crate::runtime::{PlaceRoot, RLocalId, RuntimeClass, RuntimePlace};
+        let db = recv_test_db();
+        let package = recv_test_package(&db);
+        let view = PackageView { db: &db, package };
+        let mut checked = 0;
+        for wrapper in package.functions(&db) {
+            let owner = wrapper.owner(&db);
+            let RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::ContractRecvAbi { ref plan }) =
+                owner
+            else {
+                continue;
+            };
+            let original = wrapper.instance(&db).body(&db).clone();
+            for (block_index, block) in original.blocks.iter().enumerate() {
+                for stmt in &block.stmts {
+                    let RStmt::Assign {
+                        dst: result,
+                        expr: RExpr::Call { callee, .. },
+                    } = stmt
+                    else {
+                        continue;
+                    };
+                    if callee.key(&db).semantic(&db) != plan.user_recv.key(&db).semantic(&db)
+                        || matches!(original.value_class(*result), Some(RuntimeClass::Scalar(_)))
+                    {
+                        continue;
+                    }
+                    // Add a fresh alias that is not on the return argument's
+                    // backwards provenance chain, then overwrite through it.
+                    for copy in [false, true] {
+                        let mut body = original.clone();
+                        let alias = RLocalId::from_u32(body.locals.len() as u32);
+                        body.locals.push(body.locals[result.index()].clone());
+                        let replacement = RLocalId::from_u32(body.locals.len() as u32);
+                        body.locals.push(body.locals[result.index()].clone());
+                        let class = body.value_class(*result).unwrap().clone();
+                        let stmts = &mut body.blocks[block_index].stmts;
+                        stmts.push(RStmt::Assign {
+                            dst: alias,
+                            expr: RExpr::Use(*result),
+                        });
+                        stmts.push(RStmt::Assign {
+                            dst: replacement,
+                            expr: RExpr::Placeholder { class },
+                        });
+                        let dst = RuntimePlace {
+                            root: PlaceRoot::Ref(alias),
+                            path: Box::default(),
+                        };
+                        stmts.push(if copy {
+                            RStmt::CopyInto {
+                                dst,
+                                src: replacement,
+                            }
+                        } else {
+                            RStmt::Store {
+                                dst,
+                                src: replacement,
+                            }
+                        });
+                        assert!(verify_runtime_body(&db, &view, &body).is_ok());
+                        assert!(verify_synthetic_function(&db, owner.clone(), &body).is_err());
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 2);
+    }
+
+    #[test]
+    fn recv_rejects_wrong_handler_inputs() {
+        use crate::runtime::RLocalId;
+        let db = recv_test_db();
+        let package = recv_test_package(&db);
+        let view = PackageView { db: &db, package };
+        let mut checked = false;
+        for wrapper in package.functions(&db) {
+            let owner = wrapper.owner(&db);
+            let RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::ContractRecvAbi { ref plan }) =
+                owner
+            else {
+                continue;
+            };
+            let mut body = wrapper.instance(&db).body(&db).clone();
+            let zero = RLocalId::from_u32(0);
+            let zero_class = body.value_class(zero).unwrap().clone();
+            let mut replaced = false;
+            for block in &mut body.blocks {
+                for stmt in &mut block.stmts {
+                    if let RStmt::Assign {
+                        expr: RExpr::Call { callee, args },
+                        ..
+                    } = stmt
+                        && callee.key(&db).semantic(&db) == plan.user_recv.key(&db).semantic(&db)
+                        && let Some(arg) = args.first_mut()
+                        && body.locals[arg.index()].carrier.value_class() == Some(&zero_class)
+                    {
+                        assert_ne!(*arg, zero);
+                        *arg = zero;
+                        replaced = true;
+                    }
+                }
+            }
+            if replaced {
+                assert!(verify_runtime_body(&db, &view, &body).is_ok());
+                assert!(verify_synthetic_function(&db, owner, &body).is_err());
+                checked = true;
+            }
+        }
+        assert!(checked);
+    }
+
+    #[test]
+    fn recv_rejects_wrong_handler_effect_arguments() {
+        use crate::runtime::RLocalId;
+        let db = recv_test_db();
+        let package = recv_test_package(&db);
+        let view = PackageView { db: &db, package };
+        let mut checked = 0;
+        for wrapper in package.functions(&db) {
+            let owner = wrapper.owner(&db);
+            let RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::ContractRecvAbi { ref plan }) =
+                owner
+            else {
+                continue;
+            };
+            if plan.entry_args.effects.is_empty() {
+                continue;
+            }
+            let original = wrapper.instance(&db).body(&db).clone();
+            for (bi, block) in original.blocks.iter().enumerate() {
+                for (si, stmt) in block.stmts.iter().enumerate() {
+                    let RStmt::Assign {
+                        expr: RExpr::Call { callee, args },
+                        ..
+                    } = stmt
+                    else {
+                        continue;
+                    };
+                    if callee.key(&db).semantic(&db) != plan.user_recv.key(&db).semantic(&db) {
+                        continue;
+                    }
+                    // This fixture supplies a decoded scalar followed by its
+                    // storage effect. A same-class placeholder is not the
+                    // planned storage binding.
+                    assert_eq!(args.len(), 2);
+                    let mut body = original.clone();
+                    let replacement = RLocalId::from_u32(body.locals.len() as u32);
+                    let local = body.locals[args[1].index()].clone();
+                    let class = local.carrier.value_class().unwrap().clone();
+                    body.locals.push(local);
+                    if let RStmt::Assign {
+                        expr: RExpr::Call { args, .. },
+                        ..
+                    } = &mut body.blocks[bi].stmts[si]
+                    {
+                        args[1] = replacement;
+                    }
+                    body.blocks[bi].stmts.insert(
+                        si,
+                        RStmt::Assign {
+                            dst: replacement,
+                            expr: RExpr::Placeholder { class },
+                        },
+                    );
+                    assert!(verify_runtime_body(&db, &view, &body).is_ok());
+                    assert!(verify_synthetic_function(&db, owner.clone(), &body).is_err());
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 1);
+    }
+
+    #[test]
+    fn recv_rejects_missing_inverted_or_unplanned_payment_guards() {
+        let db = recv_test_db();
+        let package = recv_test_package(&db);
+        let view = PackageView { db: &db, package };
+        let mut checked = 0;
+        for wrapper in package.functions(&db) {
+            let owner = wrapper.owner(&db);
+            let RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::ContractRecvAbi { ref plan }) =
+                owner
+            else {
+                continue;
+            };
+            let original = wrapper.instance(&db).body(&db).clone();
+            assert!(verify_synthetic_function(&db, owner.clone(), &original).is_ok());
+            if let RTerminator::Branch {
+                cond,
+                then_bb,
+                else_bb,
+            } = original.blocks[0].terminator
+            {
+                for replacement in [
+                    RTerminator::Goto(else_bb),
+                    RTerminator::Branch {
+                        cond,
+                        then_bb: else_bb,
+                        else_bb: then_bb,
+                    },
+                ] {
+                    let mut body = original.clone();
+                    body.blocks[0].terminator = replacement;
+                    assert!(verify_runtime_body(&db, &view, &body).is_ok());
+                    assert!(verify_synthetic_function(&db, owner.clone(), &body).is_err());
+                    checked += 1;
+                }
+            }
+            if !plan.payable {
+                let mut body = original.clone();
+                let mut replaced = false;
+                for stmt in &mut body.blocks[0].stmts {
+                    if let RStmt::Assign { expr, .. } = stmt
+                        && matches!(
+                            expr,
+                            RExpr::Builtin(crate::runtime::RuntimeBuiltin::CallValue)
+                        )
+                    {
+                        *expr = RExpr::ConstScalar(crate::runtime::ConstScalar::Int {
+                            bits: 256,
+                            signed: false,
+                            words: Vec::new(),
+                        });
+                        replaced = true;
+                    }
+                }
+                assert!(replaced);
+                assert!(verify_runtime_body(&db, &view, &body).is_ok());
+                assert!(verify_synthetic_function(&db, owner.clone(), &body).is_err());
+                checked += 1;
+            }
+            // A well-typed wrapper built with the opposite payment policy
+            // must not satisfy the original plan (in either direction).
+            let mut wrong_plan = plan.clone();
+            wrong_plan.payable = !wrong_plan.payable;
+            let body = crate::runtime::synthetic::lower_synthetic_runtime_body(
+                &db,
+                original.owner,
+                RuntimeSyntheticSpec::ContractRecvAbi { plan: wrong_plan },
+            )
+            .unwrap();
+            assert!(verify_runtime_body(&db, &view, &body).is_ok());
+            assert!(verify_synthetic_function(&db, owner, &body).is_err());
+            checked += 1;
+        }
+        assert_eq!(checked, 11);
     }
 }
