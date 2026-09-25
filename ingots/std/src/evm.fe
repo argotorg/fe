@@ -1,4 +1,5 @@
 pub use address::{self, checksum_address}
+pub use clones::{self}
 pub use calldata::{self, *}
 pub use crypto::{self, *}
 pub use effects::{self, *}
@@ -6,11 +7,7 @@ pub use erc20::{self}
 pub use erc165::{self}
 pub use event::{self, *}
 pub use panic::{self, *}
-pub use ops::{
-    self,
-    byte,
-    signextend,
-}
+pub use ops::{self, byte, signextend}
 pub use target::{self, *}
 pub use intrinsic::{code_region_len, code_region_offset, contract_field_slot}
 pub use mutex::{self, *}

@@ -1,0 +1,190 @@
+use std::evm::{clones, Create, RawMem}
+
+msg ProxyMsg {
+    #[selector = sol("set(uint256)")]
+    Set { next: u256 },
+    #[selector = sol("get()")]
+    Get -> u256,
+    #[selector = sol("context()")]
+    Context -> (Address, Address),
+    #[selector = sol("fail()")]
+    Fail,
+}
+
+pub contract Implementation {
+    mut value: u256,
+    init() uses (mut value) { value = 99 }
+    recv ProxyMsg {
+        Set { next } uses (mut value) {
+            value = next
+        }
+        Get -> u256 uses (value) {
+            value
+        }
+        Context -> (Address, Address) uses (ctx: Ctx) {
+            (ctx.address(), ctx.caller())
+        }
+        Fail {} {
+            revert((0xdeadbeef as u256) << 224)
+        }
+    }
+}
+
+#[test]
+fn deterministic_address_and_isolated_storage()
+uses (evm: mut Evm, ctx: Ctx, create: mut Create, mem: mut RawMem)
+{
+    let implementation = evm.create2<Implementation>(value: 0, args: (), salt: 0)
+    let predicted = clones::predict_deterministic_address(
+        implementation,
+        salt: 42,
+        deployer: ctx.address(),
+    )
+    let proxy = clones::clone_deterministic(implementation, salt: 42, value: 0)
+    assert!(proxy == predicted)
+    assert!(ctx.extcodesize(proxy) == 45)
+    let initial: u256 = evm.call(
+            addr: proxy,
+            gas: 100000,
+            value: 0,
+            message: ProxyMsg::Get {},
+        )
+    assert!(initial == 0)
+    evm.call(
+        addr: proxy,
+        gas: 100000,
+        value: 0,
+        message: ProxyMsg::Set { next: 17 },
+    )
+    let stored: u256 = evm.call(
+            addr: proxy,
+            gas: 100000,
+            value: 0,
+            message: ProxyMsg::Get {},
+        )
+    let original: u256 = evm
+        .call(
+            addr: implementation,
+            gas: 100000,
+            value: 0,
+            message: ProxyMsg::Get {},
+        )
+    assert!(stored == 17)
+    assert!(original == 99)
+    let context: (Address, Address) = evm
+        .call(
+            addr: proxy,
+            gas: 100000,
+            value: 0,
+            message: ProxyMsg::Context {},
+        )
+    assert!(context.0 == proxy)
+    assert!(context.1 == ctx.address())
+    let other = clones::clone_deterministic(implementation, salt: 43, value: 0)
+    assert!(other != proxy)
+    let other_value: u256 = evm.call(
+            addr: other,
+            gas: 100000,
+            value: 0,
+            message: ProxyMsg::Get {},
+        )
+    assert!(other_value == 0)
+}
+
+#[test(balance = 1000)]
+fn create_and_value_forwarding()
+uses (evm: mut Evm, ctx: Ctx, create: mut Create)
+{
+    let implementation = evm.create2<Implementation>(value: 0, args: (), salt: 0)
+    let first = clones::clone(implementation, value: 11)
+    let second = clones::clone(implementation, value: 0)
+    assert!(first != second)
+    assert!(ctx.extcodesize(first) == 45)
+    assert!(ctx.balance(first) == 11)
+    assert!(ctx.balance(second) == 0)
+}
+
+#[test(should_revert, selector = 0xc2f868f4)]
+fn duplicate_salt_reverts() uses (evm: mut Evm, create: mut Create) {
+    let implementation = evm.create2<Implementation>(value: 0, args: (), salt: 0)
+    let _ = clones::clone_deterministic(implementation, salt: 1, value: 0)
+    let _ = clones::clone_deterministic(implementation, salt: 1, value: 0)
+}
+
+#[test(should_revert, selector = 0xdeadbeef)]
+fn implementation_revert_is_forwarded()
+uses (evm: mut Evm, create: mut Create)
+{
+    let implementation = evm.create2<Implementation>(value: 0, args: (), salt: 0)
+    let proxy = clones::clone(implementation, value: 0)
+    evm.call(
+        addr: proxy,
+        gas: 100000,
+        value: 0,
+        message: ProxyMsg::Fail {},
+    )
+}
+
+#[test(should_revert)]
+fn rejects_dirty_implementation() {
+    let _ = clones::clone_initcode(Address { inner: 1 << 160 })
+}
+
+// Independent CREATE2 vectors computed with cast from the standard byte sequence.
+#[test]
+fn initcode_and_prediction_vectors() uses (mem: mut RawMem) {
+    let code = clones::clone_initcode(Address { inner: 0x0 })
+    assert!(code.len() == 55)
+    assert!(
+        std::evm::crypto::keccak256(code)
+            == 0x3df3da56b3ea8de108a8606dea387d6535fca78db07a7d90f7a05ad323dd43c7,
+    )
+    assert!(
+        clones::predict_deterministic_address(
+                Address { inner: 0x0 },
+                salt: 0x0,
+                deployer: Address { inner: 0x0 },
+            )
+                .inner
+            == 0x581044648ac97323e1b73267e6efefc5e4df7296,
+    )
+    let code = clones::clone_initcode(
+        Address { inner: 0x1234567890123456789012345678901234567890 },
+    )
+    assert!(code.len() == 55)
+    assert!(
+        std::evm::crypto::keccak256(code)
+            == 0xe7971b4c6044c35b70d5a08ab3392419fc58f7b81f0d040f361f845230bfc4f6,
+    )
+    assert!(
+        clones::predict_deterministic_address(
+                Address { inner: 0x1234567890123456789012345678901234567890 },
+                salt: 0x2a,
+                deployer: Address { inner: 0xdeadbeef },
+            )
+                .inner
+            == 0x941382bbe12b952f70c4a06171d222574c8ae0b5,
+    )
+    let code = clones::clone_initcode(
+        Address { inner: 0xffffffffffffffffffffffffffffffffffffffff },
+    )
+    assert!(code.len() == 55)
+    assert!(
+        std::evm::crypto::keccak256(code)
+            == 0xda14c3403f303db48130d52dd0067668bffdab48a7bca92d8aad6944f62ea9f2,
+    )
+    assert!(
+        clones::predict_deterministic_address(
+                Address { inner: 0xffffffffffffffffffffffffffffffffffffffff },
+                salt: 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+                deployer: Address { inner: 0xffffffffffffffffffffffffffffffffffffffff },
+            )
+                .inner
+            == 0x32384a86f842e859fdead08acc219b0cd0de23d9,
+    )
+}
+
+#[test(should_revert, selector = 0xc2f868f4)]
+fn insufficient_balance_reverts() uses (create: mut Create, ctx: Ctx) {
+    let _ = clones::clone(Address::zero(), value: ctx.selfbalance() + 1)
+}

@@ -1,0 +1,68 @@
+//! ERC-1167 minimal proxy creation and deterministic address prediction.
+//! The implementation is immutable in the proxy bytecode. These helpers do
+//! not initialize the proxy, validate implementation code, or impose ownership.
+use core::ptr::{self, MemSpan}
+use core::abi::store_word
+use super::effects::{Address, Create, revert, revert_error}
+use super::crypto::keccak256
+use super::packed::keccak_packed
+
+#[error]
+pub struct ERC1167FailedCreateClone {}
+
+/// The standard 55-byte creation code for an ERC-1167 proxy.
+/// A noncanonical implementation address is rejected rather than truncated.
+pub fn clone_initcode(_ implementation: Address) -> MemSpan {
+    if implementation.inner >> 160 != 0 {
+        revert(())
+    }
+    let p = ptr::alloc_bytes(64)
+    store_word(
+        ptr: p,
+        value: (implementation.inner << 96 >> 232)
+            | 0x3d602d80600a3d3981f3363d3d373d3d3d363d73000000,
+    )
+    store_word(
+        ptr: ptr::offset_bytes(p, 32),
+        value: (implementation.inner << 120) | 0x5af43d82803e903d91602b57fd5bf3,
+    )
+    MemSpan::from_raw_parts(ptr: ptr::offset_bytes(p, 9), len: 55)
+}
+
+/// Predict a CREATE2 proxy address without deploying it. `deployer` is the
+/// account executing CREATE2, including the caller context when delegated.
+pub fn predict_deterministic_address(
+    _ implementation: Address,
+    salt: u256,
+    deployer: Address,
+) -> Address
+uses (mem: mut super::effects::RawMem)
+{
+    let code_hash = keccak256(clone_initcode(implementation))
+    let hash = keccak_packed((255 as u8, deployer, salt, code_hash))
+    Address { inner: hash & ((1 << 160) - 1) }
+}
+
+/// Deploy a proxy using CREATE, forwarding `value` to its creation.
+/// Failure (including insufficient balance) reverts with ERC1167FailedCreateClone.
+pub fn clone(_ implementation: Address, value: u256) -> Address
+uses (create: mut Create)
+{
+    let proxy = create.create_raw(value, init_code: clone_initcode(implementation))
+    if proxy == Address::zero() {
+        revert_error(ERC1167FailedCreateClone {})
+    }
+    proxy
+}
+
+/// Deploy a proxy using CREATE2. Reusing an occupied implementation/salt/deployer
+/// address fails; this helper deliberately does not return an existing proxy.
+pub fn clone_deterministic(_ implementation: Address, salt: u256, value: u256) -> Address
+uses (create: mut Create)
+{
+    let proxy = create.create2_raw(value, init_code: clone_initcode(implementation), salt)
+    if proxy == Address::zero() {
+        revert_error(ERC1167FailedCreateClone {})
+    }
+    proxy
+}
