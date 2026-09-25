@@ -1,0 +1,13 @@
+pub trait T<A> {
+    type Out
+    fn f(_ a: A) -> Self::Out
+}
+
+pub struct Wrap<P> {}
+
+impl<A: core::marker::Copy, P: T<A>> T<A> for Wrap<P> {
+    type Out = (<P as T<A>>::Out, A)
+    fn f(_ a: A) -> A {
+        a
+    }
+}

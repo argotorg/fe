@@ -1,0 +1,57 @@
+#[test]
+fn unconditional_continue_advances_sequence() {
+    let mut visits: usize = 0
+    for i in 0..5 {
+        visits += 1
+        assert!(visits <= 5)
+        continue
+    }
+    assert!(visits == 5)
+}
+
+#[test]
+fn nested_continue_advances_only_inner_sequence() {
+    let mut visits: usize = 0
+    let mut sum: usize = 0
+    for outer in 0..3 {
+        for inner in 0..4 {
+            visits += 1
+            assert!(visits <= 12)
+            if inner % 2 == 0 { continue }
+            sum += outer + inner
+        }
+    }
+    assert!(visits == 12)
+    assert!(sum == 18)
+}
+
+#[test]
+fn continue_and_break_preserve_sequence_order() {
+    let mut visits: usize = 0
+    for i in 0..8 {
+        visits += 1
+        assert!(visits <= 5)
+        if i < 4 { continue }
+        assert!(i == 4)
+        break
+    }
+    assert!(visits == 5)
+}
+
+#[test]
+fn while_continue_does_not_advance_enclosing_sequence() {
+    let mut visits: usize = 0
+    let mut sum: usize = 0
+    for outer in 0..3 {
+        let mut inner: usize = 0
+        while inner < 3 {
+            inner += 1
+            visits += 1
+            assert!(visits <= 9)
+            if inner < 3 { continue }
+            sum += outer
+        }
+    }
+    assert!(visits == 9)
+    assert!(sum == 3)
+}

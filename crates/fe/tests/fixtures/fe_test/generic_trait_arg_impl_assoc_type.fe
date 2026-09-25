@@ -1,0 +1,34 @@
+pub trait T<A> {
+    type Out
+    fn f(_ a: A) -> Self::Out
+}
+
+pub struct X {}
+
+pub struct Wrap<P> {}
+
+impl T<u256> for X {
+    type Out = u256
+    fn f(_ a: u256) -> u256 {
+        a + 1
+    }
+}
+
+// The impl stays generic over the trait's own parameter `A`.
+impl<A: core::marker::Copy, P: T<A>> T<A> for Wrap<P> {
+    type Out = (<P as T<A>>::Out, A)
+    fn f(_ a: A) -> Self::Out {
+        (P::f(a), a)
+    }
+}
+
+pub fn use_it() -> (u256, u256) {
+    <Wrap<X> as T<u256>>::f(4)
+}
+
+#[test]
+fn generic_trait_arg_impl_normalizes_self_out() {
+    let r = use_it()
+    assert!(r.0 == 5)
+    assert!(r.1 == 4)
+}

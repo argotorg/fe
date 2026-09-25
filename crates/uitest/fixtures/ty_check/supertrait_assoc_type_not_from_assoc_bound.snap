@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/supertrait_assoc_type_not_from_assoc_bound.fe
+---
+error[2-0002]: `Dom` is not found
+  ┌─ supertrait_assoc_type_not_from_assoc_bound.fe:9:28
+  │
+9 │     fn take(_ value: Self::Dom)
+  │                            ^^^ `Dom` is not found

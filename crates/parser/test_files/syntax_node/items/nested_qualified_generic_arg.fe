@@ -1,0 +1,2 @@
+type A = Wrapped<<T as Model>::Point>
+type B = Pair<<T as Model>::Point, <T as Model>::Scalar>

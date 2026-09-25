@@ -1,0 +1,1 @@
+Accept trait impls that stay generic over the trait's own parameter, such as `impl<A, P: T<A>> T<A> for Wrap<P>`, when their methods use `Self::Out`. Inside a generic trait, `Self::Out` now keeps the trait's parameters, so it normalizes to the impl's definition instead of staying as `Wrap<P>::Out`. A genuinely wrong return type is still reported.

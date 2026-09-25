@@ -1,0 +1,11 @@
+pub trait Left {
+    type Dom
+}
+
+pub trait Right {
+    type Dom
+}
+
+pub trait Both: Left + Right {
+    fn use_dom(_ value: Self::Dom)
+}

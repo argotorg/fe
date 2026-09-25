@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/impl_generic_trait_arg_wrong_return.fe
+---
+error[6-0008]: method `f` has incompatible return type
+   ┌─ impl_generic_trait_arg_wrong_return.fe:10:8
+   │
+ 3 │     fn f(_ a: A) -> Self::Out
+   │        - trait requires this return type
+   ·
+10 │     fn f(_ a: A) -> A {
+   │        ^ expected `(P::Out, A)`, found `A`

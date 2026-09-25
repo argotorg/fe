@@ -1,0 +1,104 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/nested_qualified_generic_arg.fe
+---
+Root@0..95
+  ItemList@0..94
+    Item@0..37
+      TypeAlias@0..37
+        TypeKw@0..4 "type"
+        WhiteSpace@4..5 " "
+        Ident@5..6 "A"
+        WhiteSpace@6..7 " "
+        Eq@7..8 "="
+        WhiteSpace@8..9 " "
+        PathType@9..37
+          Path@9..37
+            PathSegment@9..37
+              Ident@9..16 "Wrapped"
+              GenericArgList@16..37
+                Lt@16..17 "<"
+                TypeGenericArg@17..36
+                  PathType@17..36
+                    Path@17..36
+                      PathSegment@17..29
+                        QualifiedType@17..29
+                          Lt@17..18 "<"
+                          PathType@18..19
+                            Path@18..19
+                              PathSegment@18..19
+                                Ident@18..19 "T"
+                          WhiteSpace@19..20 " "
+                          AsKw@20..22 "as"
+                          WhiteSpace@22..23 " "
+                          TraitRef@23..28
+                            Path@23..28
+                              PathSegment@23..28
+                                Ident@23..28 "Model"
+                          Gt@28..29 ">"
+                      Colon2@29..31 "::"
+                      PathSegment@31..36
+                        Ident@31..36 "Point"
+                Gt@36..37 ">"
+    Newline@37..38 "\n"
+    Item@38..94
+      TypeAlias@38..94
+        TypeKw@38..42 "type"
+        WhiteSpace@42..43 " "
+        Ident@43..44 "B"
+        WhiteSpace@44..45 " "
+        Eq@45..46 "="
+        WhiteSpace@46..47 " "
+        PathType@47..94
+          Path@47..94
+            PathSegment@47..94
+              Ident@47..51 "Pair"
+              GenericArgList@51..94
+                Lt@51..52 "<"
+                TypeGenericArg@52..71
+                  PathType@52..71
+                    Path@52..71
+                      PathSegment@52..64
+                        QualifiedType@52..64
+                          Lt@52..53 "<"
+                          PathType@53..54
+                            Path@53..54
+                              PathSegment@53..54
+                                Ident@53..54 "T"
+                          WhiteSpace@54..55 " "
+                          AsKw@55..57 "as"
+                          WhiteSpace@57..58 " "
+                          TraitRef@58..63
+                            Path@58..63
+                              PathSegment@58..63
+                                Ident@58..63 "Model"
+                          Gt@63..64 ">"
+                      Colon2@64..66 "::"
+                      PathSegment@66..71
+                        Ident@66..71 "Point"
+                Comma@71..72 ","
+                WhiteSpace@72..73 " "
+                TypeGenericArg@73..93
+                  PathType@73..93
+                    Path@73..93
+                      PathSegment@73..85
+                        QualifiedType@73..85
+                          Lt@73..74 "<"
+                          PathType@74..75
+                            Path@74..75
+                              PathSegment@74..75
+                                Ident@74..75 "T"
+                          WhiteSpace@75..76 " "
+                          AsKw@76..78 "as"
+                          WhiteSpace@78..79 " "
+                          TraitRef@79..84
+                            Path@79..84
+                              PathSegment@79..84
+                                Ident@79..84 "Model"
+                          Gt@84..85 ">"
+                      Colon2@85..87 "::"
+                      PathSegment@87..93
+                        Ident@87..93 "Scalar"
+                Gt@93..94 ">"
+  Newline@94..95 "\n"

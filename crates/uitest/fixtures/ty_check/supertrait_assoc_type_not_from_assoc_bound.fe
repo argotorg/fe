@@ -1,0 +1,10 @@
+pub trait Arrow {
+    type Dom
+}
+
+// `Self::Inner` implements `Arrow`, but `Self` does not, so `Self::Dom`
+// must not resolve through the bound on `Inner`.
+pub trait Holder {
+    type Inner: Arrow
+    fn take(_ value: Self::Dom)
+}
