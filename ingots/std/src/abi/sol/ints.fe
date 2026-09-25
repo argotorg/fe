@@ -1,7 +1,7 @@
 use core::abi::{Abi, AbiDecoder, AbiSize, AbiSpan, ByteInput, Decode, Encode, store_word}
 use core::num::IntDowncast
 use core::ops::{WrappingAdd, WrappingMul, WrappingSub}
-use ingot::evm::{SolPacked, StorageKey, TopicValue, ops::{revert_empty, signextend}}
+use ingot::evm::{EncodePacked, Packed, RawMem, packed::write_word_prefix, SolPacked, StorageKey, TopicValue, ops::{revert_empty, signextend}}
 
 use super::types::{SolCompat, StaticAbiElement, StaticAbiElementSeal}
 
@@ -1582,6 +1582,24 @@ impl<T: SolWordRepr + SolInt> StorageKey for T {
 
     fn write_key(ptr: *u8, self) {
         store_word(ptr: ptr, value: self.canonical_word())
+    }
+}
+
+// `abi.encodePacked` uses the type's exact byte width, e.g. 3 bytes for int24.
+impl<T: SolWordRepr + SolInt> EncodePacked for T {
+    #[inline(always)]
+    fn packed_width(self) -> u256 {
+        T::BITS / 8
+    }
+
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        p.append_word(value: self.canonical_word(), width: T::BITS / 8)
+        p
+    }
+    #[inline(always)]
+    fn write_packed(own self, _ dest: *u8) -> u256 uses (mem: mut RawMem) {
+        write_word_prefix(dest, self.canonical_word(), T::BITS / 8)
+
     }
 }
 
