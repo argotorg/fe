@@ -1,0 +1,93 @@
+// Bounded typed calls, value sends, raw calls and ERC-165 probes.
+use core::abi::ByteInput
+use core::ptr::{MemBuffer, MemSpan}
+use std::abi::{Bytes4, sol}
+use std::evm::{Address, Call, Ctx, Evm, erc165, encode_msg_calldata}
+
+msg TargetMsg {
+    #[selector = sol("words(uint256)")]
+    Words { n: u256 } -> u256,
+    #[selector = sol("fail()")]
+    Fail {} -> u256,
+    #[selector = sol("supportsInterface(bytes4)")]
+    Supports { id: Bytes4 } -> bool,
+}
+
+pub contract Target {
+    recv TargetMsg {
+        // Returns `n` (a single word) as the ABI result.
+        Words { n } -> u256 { n }
+        Fail {} -> u256 {
+            assert!(false, "no")
+            0
+        }
+        Supports { id } -> bool { id.val == 0x01ffc9a7 || id.val == 0x12345678 }
+    }
+}
+
+pub contract Plain {
+    recv TargetMsg {
+        Words { n } -> u256 { n }
+        Fail {} -> u256 { 0 }
+        Supports { id } -> bool { false }
+    }
+}
+
+#[test]
+fn bounded_calls_copy_at_most_capacity() uses (evm: mut Evm) {
+    let target = evm.create2<Target>(value: 0, args: (), salt: 0)
+    with (Call = evm, Ctx = evm) {
+        let mut ret = MemBuffer::with_capacity(0)
+        let outcome = evm.try_call_into(addr: target, gas: 100000, value: 0, message: TargetMsg::Words { n: 7 }, ret: mut ret)
+        assert(outcome.success())
+        assert(outcome.returndata_len() == 32)
+        assert(ret.len() == 0)
+
+        let mut word = MemBuffer::with_capacity(32)
+        let outcome = evm.try_static_into(addr: target, gas: 100000, message: TargetMsg::Words { n: 9 }, ret: mut word)
+        assert(outcome.success())
+        assert(word.span().word_at(0) == 9)
+
+        let mut ignored = MemBuffer::with_capacity(0)
+        let failed = evm.try_call_into(addr: target, gas: 100000, value: 0, message: TargetMsg::Fail {}, ret: mut ignored)
+        assert(!failed.success())
+
+        let raw = evm.try_call_raw(addr: target, gas: 100000, value: 0, args: encode_msg_calldata(TargetMsg::Words { n: 3 }).span())
+        assert(raw.success())
+        assert(raw.returndata().word_at(0) == 3)
+
+        // A read-only `Call` is enough for a typed static call.
+        let n: u256 = target.static(TargetMsg::Words { n: 11 })
+        assert(n == 11)
+    }
+}
+
+#[test]
+fn send_value_transfers_ether() uses (evm: mut Evm) {
+    let receiver = Address { inner: 0xbeef }
+    with (Call = evm, Ctx = evm) {
+        let outcome = evm.send_value(addr: receiver, gas: 100000, value: 0)
+        assert(outcome.success())
+        assert(outcome.returndata_len() == 0)
+    }
+}
+
+#[test]
+fn erc165_probes() uses (evm: mut Evm) {
+    let target = evm.create2<Target>(value: 0, args: (), salt: 1)
+    let plain = evm.create2<Plain>(value: 0, args: (), salt: 2)
+    with (Call = evm) {
+        assert(erc165::supports_erc165(target))
+        assert(erc165::supports_interface(target, interface_id: 0x12345678))
+        assert(!erc165::supports_interface(target, interface_id: 0xffffffff))
+        assert(!erc165::supports_erc165(plain))
+        assert(!erc165::supports_interface(plain, interface_id: 0x12345678))
+        assert(!erc165::supports_erc165(Address { inner: 0x1234 }))
+    }
+}
+
+#[test]
+fn address_from_word_truncates() {
+    assert(Address::from_word_truncate(u256::max()).inner == (1 << 160) - 1)
+    assert(Address::from_word_truncate((5 << 160) | 7).inner == 7)
+}
