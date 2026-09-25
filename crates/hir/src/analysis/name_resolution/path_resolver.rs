@@ -1718,11 +1718,12 @@ fn find_associated_type_in_mode<'db>(
         // Trait self, in trait or impl trait. Associated type must be in this trait.
         if param.is_trait_self() {
             if let Some(trait_) = param.owner.resolve_to::<Trait>(db) {
+                let mut args = trait_.params(db).to_vec();
+                args[0] = original_ty;
+                let owner = TraitInstId::new_simple(db, trait_, args);
                 if trait_.assoc_ty(db, name).is_some() {
-                    let trait_inst =
-                        TraitInstId::new(db, trait_, vec![original_ty], IndexMap::new());
-                    let assoc_ty = TyId::assoc_ty(db, trait_inst, name);
-                    return Ok(smallvec![(trait_inst, assoc_ty)]);
+                    let assoc_ty = TyId::assoc_ty(db, owner, name);
+                    return Ok(smallvec![(owner, assoc_ty)]);
                 }
             } else if let Some(impl_trait) = param.owner.resolve_to::<ImplTrait>(db)
                 && let Some(trait_inst) = impl_trait.trait_inst(db)
