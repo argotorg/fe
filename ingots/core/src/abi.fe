@@ -455,6 +455,15 @@ pub fn abi_field_end<A: Abi, T, I>(_ input: I, base: u256, pos: u256) -> u256
     T::payload_end(input, base: base, pos: pos)
 }
 
+/// Folds one field of a record at `frame` into the record's payload end.
+#[inline(always)]
+pub fn abi_record_field_end<A: Abi, T, I>(_ input: I, _ frame: u256, _ head_pos: u256, _ input_len: u256, _ end: u256) -> u256
+    where T: AbiSpan<A> + AbiSize,
+          I: ByteInput
+{
+    max_u256(a: end, b: abi_field_end_with_input_len<A, T, I>(input, base: frame, pos: head_pos, input_len: input_len))
+}
+
 pub fn abi_field_end_with_input_len<A: Abi, T, I>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256
     where T: AbiSpan<A> + AbiSize,
           I: ByteInput

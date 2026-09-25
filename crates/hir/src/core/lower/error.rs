@@ -31,6 +31,8 @@ pub struct ErrorDiagnostic {
 pub enum ErrorDiagnosticKind {
     GenericErrorStruct,
     EventErrorAttrConflict,
+    GenericAbiStruct,
+    AbiAttrConflict,
 }
 
 pub(super) fn is_error_struct(ast: &ast::Struct) -> bool {

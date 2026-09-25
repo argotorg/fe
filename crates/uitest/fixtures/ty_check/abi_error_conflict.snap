@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/abi_error_conflict.fe
+---
+error[16-0007]: `#[abi]` cannot be combined with `#[event]` or `#[error]`
+  ┌─ abi_error_conflict.fe:1:1
+  │
+1 │ #[abi]
+  │ ^^^^^^ this struct already gets an ABI encoding from `#[event]` or `#[error]`
+  │
+  = remove `#[abi]`

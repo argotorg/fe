@@ -30,6 +30,7 @@ pub use parse::parse_file_impl;
 pub(crate) mod parse;
 
 mod abi_field;
+mod abi_struct;
 mod attr;
 mod body;
 mod contract;

@@ -164,6 +164,9 @@ pub fn check_impl_trait_const_bodies<'db>(
         crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::Error(_)) => {
             Some("generated `#[error]` implementation")
         }
+        crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::AbiStruct(_)) => {
+            Some("generated `#[abi]` implementation")
+        }
         _ => return Vec::new(),
     };
     let Some(implementor) = lower_impl_trait(db, impl_trait) else {

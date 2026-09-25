@@ -1,0 +1,143 @@
+// `#[abi]` structs encode and decode like the Solidity tuple of their fields.
+use core::abi::{AbiSize, Decode, store_word}
+use core::ptr::{self, MemBuffer}
+use std::abi::{Bytes, DynArray, MemVec, Sol, canonical_dyn_array, dyn_array_from, sol}
+use std::abi::sol::{Int24, Uint24}
+use std::evm::{Address, Evm, RawMem, encode_abi_payload}
+
+#[abi]
+pub struct Key {
+    pub currency0: Address,
+    pub fee: Uint24,
+    pub tick_spacing: Int24,
+}
+impl Copy for Key {}
+
+#[abi]
+pub struct Hop {
+    pub key: Key,
+    pub data: Bytes,
+}
+impl Copy for Hop {}
+
+#[abi]
+struct Empty {}
+
+msg M {
+    #[selector = sol("key((address,uint24,int24))")]
+    RoundTrip { key: Key } -> Key,
+    #[selector = sol("hops((address,uint24,int24),((address,uint24,int24),bytes)[])")]
+    Hops { first: Key, hops: DynArray<Hop> } -> u256,
+}
+
+pub contract C {
+    recv M {
+        RoundTrip { key } -> Key {
+            key
+        }
+        Hops { first, hops } -> u256 {
+            let mut sum = first.fee.val as u256
+            let mut i: u256 = 0
+            while i < hops.len() {
+                let hop = hops.get(i)
+                sum += hop.key.fee.val as u256 + hop.data.len()
+                i += 1
+            }
+            sum
+        }
+    }
+}
+
+fn key(_ fee: u32) -> Key {
+    Key { currency0: Address { inner: 0xabc }, fee: Uint24 { val: fee }, tick_spacing: Int24 { val: -60 } }
+}
+
+#[test]
+fn static_struct_encodes_like_tuple() uses (mem: mut RawMem) {
+    assert(<Key as AbiSize>::HEAD_SIZE == 96)
+    assert(!<Key as AbiSize>::IS_DYNAMIC)
+    assert(<Empty as AbiSize>::HEAD_SIZE == 0)
+    let encoded = encode_abi_payload(key(3000))
+    let tuple = encode_abi_payload((Address { inner: 0xabc }, Uint24 { val: 3000 }, Int24 { val: -60 }))
+    assert(encoded.len() == 96)
+    assert(encoded.span().word_at(0) == tuple.span().word_at(0))
+    assert(encoded.span().word_at(32) == tuple.span().word_at(32))
+    assert(encoded.span().word_at(64) == tuple.span().word_at(64))
+}
+
+#[test]
+fn dynamic_struct_round_trips() uses (mem: mut RawMem) {
+    assert(<Hop as AbiSize>::IS_DYNAMIC)
+    let data = Bytes::from_word_prefix(word: 0x1122 << 240, len: 2)
+    let encoded = encode_abi_payload(Hop { key: key(500), data })
+    let decoded = <Hop as Decode<Sol>>::decode_from(encoded.span(), 0)
+    assert(decoded.key.fee.val == 500)
+    assert(decoded.key.tick_spacing.val == -60)
+    assert(decoded.data.len() == 2)
+    assert(decoded.data.byte_at(1) == 0x22)
+}
+
+#[test]
+fn struct_messages_round_trip() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+    let out: Key = evm.call(addr: c, gas: 1000000, value: 0, message: M::RoundTrip { key: key(3000) })
+    assert(out.currency0.inner == 0xabc)
+    assert(out.fee.val == 3000)
+    assert(out.tick_spacing.val == -60)
+
+    let hops = dyn_array_from([
+        Hop { key: key(10), data: Bytes::from_word_prefix(word: 0, len: 3) },
+        Hop { key: key(20), data: Bytes::from_word_prefix(word: 0, len: 32) },
+    ])
+    assert(hops.get(1).data.len() == 32)
+    let sum: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: M::Hops { first: key(1), hops })
+    assert(sum == 1 + 10 + 3 + 20 + 32)
+}
+
+#[test]
+fn mem_vec_holds_static_structs() uses (mem: mut RawMem) {
+    let mut keys = MemVec<Key>::zeroed(3)
+    keys.set(index: 1, value: key(500))
+    keys.set(index: 2, value: key(3000))
+    assert(keys.get(0).fee.val == 0)
+    assert(keys.get(1).fee.val == 500)
+    let frozen = keys.to_dyn_array()
+    assert(frozen.encoded_size() == 32 + 3 * 96)
+    assert(frozen.get(2).fee.val == 3000)
+    assert(frozen.get(2).tick_spacing.val == -60)
+}
+
+#[test]
+fn dyn_array_from_encodes_dynamic_elements() uses (mem: mut RawMem) {
+    let parts = dyn_array_from([
+        Bytes::from_word_prefix(word: 0xaa << 248, len: 1),
+        Bytes::from_word_prefix(word: 0, len: 0),
+    ])
+    // bytes[]: length word, two head offsets, then each element's tail.
+    assert(parts.encoded_size() == 32 + 2 * 32 + 64 + 32)
+    assert(parts.encoded_span().word_at(0) == 2)
+    assert(parts.encoded_span().word_at(32) == 64)
+    assert(parts.encoded_span().word_at(64) == 128)
+    assert(parts.get(0).byte_at(0) == 0xaa)
+    assert(parts.get(1).len() == 0)
+}
+
+#[test]
+fn canonical_dyn_array_reorders_tails() uses (mem: mut RawMem) {
+    // bytes[2] whose second element's tail precedes the first one's.
+    let data = MemBuffer::alloc(32 + 64 + 64 + 64)
+    let p = data.ptr()
+    store_word(ptr: p, value: 2)
+    store_word(ptr: ptr::offset_bytes(p, 32), value: 128)
+    store_word(ptr: ptr::offset_bytes(p, 64), value: 64)
+    store_word(ptr: ptr::offset_bytes(p, 96), value: 1)
+    store_word(ptr: ptr::offset_bytes(p, 128), value: 0xbb << 248)
+    store_word(ptr: ptr::offset_bytes(p, 160), value: 1)
+    store_word(ptr: ptr::offset_bytes(p, 192), value: 0xaa << 248)
+    let odd = DynArray<Bytes>::from_abi_tail(data: p, len: 2, size: 224)
+    let fixed = canonical_dyn_array(odd)
+    assert(fixed.encoded_span().word_at(32) == 64)
+    assert(fixed.encoded_span().word_at(64) == 128)
+    assert(fixed.get(0).byte_at(0) == 0xaa)
+    assert(fixed.get(1).byte_at(0) == 0xbb)
+}
