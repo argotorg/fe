@@ -1,0 +1,7 @@
+pub trait Arrow {
+    type Dom
+}
+
+pub trait Eval: Arrow {
+    fn eval(_ value: Self::Dom) -> Self::Dom
+}

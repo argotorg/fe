@@ -1,0 +1,18 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/supertrait_assoc_type_ambiguous.fe
+---
+error[2-0009]: ambiguous associated type `Dom`
+   ┌─ supertrait_assoc_type_ambiguous.fe:10:31
+   │
+ 1 │ pub trait Left {
+   │           ---- candidate: `Left`
+   ·
+ 5 │ pub trait Right {
+   │           ----- candidate: `Right`
+   ·
+10 │     fn use_dom(_ value: Self::Dom)
+   │                               ^^^ associated type `Dom` is ambiguous
+   │
+   = hint: specify the trait explicitly: `<Self as Left>::Dom`
