@@ -2,7 +2,7 @@ use crate::{ParseError, SyntaxKind, TextRange, TextSize};
 
 use super::{
     Parser, define_scope,
-    expr::{is_lshift, is_lt_eq},
+    expr::is_lt_eq,
     param::{GenericArgListScope, TraitRefScope},
     token_stream::TokenStream,
     type_::parse_type,
@@ -42,9 +42,11 @@ impl super::Parse for PathSegmentScope {
                 let is_turbofish = parser.current_kind_same_line() == Some(SyntaxKind::Colon2)
                     && parser.peek_two() == (Some(SyntaxKind::Colon2), Some(SyntaxKind::Lt));
 
+                // `Container<<T as Trait>::Item>` also starts with `<<`.
+                // Let the generic argument dry run distinguish it from a shift.
                 if (is_turbofish
                     || (parser.current_kind_same_line() == Some(SyntaxKind::Lt)
-                        && !(is_lt_eq(parser) || is_lshift(parser))))
+                        && !is_lt_eq(parser)))
                     && parser.dry_run(|parser| {
                         parser.bump_if(SyntaxKind::Colon2);
                         parser.parses_without_error(GenericArgListScope::new(self.is_expr))

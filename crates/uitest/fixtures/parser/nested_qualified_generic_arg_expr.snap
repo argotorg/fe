@@ -1,0 +1,6 @@
+---
+source: crates/uitest/tests/parser.rs
+expression: diags
+input_file: fixtures/parser/nested_qualified_generic_arg_expr.fe
+---
+

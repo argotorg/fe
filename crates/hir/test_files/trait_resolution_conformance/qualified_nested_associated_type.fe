@@ -1,0 +1,27 @@
+trait Model {
+    type Point
+}
+
+struct Wrapped<T> {
+    value: T,
+}
+
+trait Admit: Model {
+    fn admit(_ point: Wrapped<<Self as Model>::Point>) -> Wrapped<<Self as Model>::Point>
+}
+
+struct Plane {}
+
+impl Model for Plane {
+    type Point = u32
+}
+
+impl Admit for Plane {
+    fn admit(_ point: Wrapped<u32>) -> Wrapped<u32> {
+        point
+    }
+}
+
+fn main() -> u32 {
+    Plane::admit(Wrapped { value: 7 }).value
+}

@@ -1,0 +1,21 @@
+trait Model {
+    type Point
+}
+
+struct Wrapped<T> {
+    value: T,
+}
+
+impl<T> Wrapped<T> {
+    fn new(_ value: T) -> Self {
+        Wrapped { value }
+    }
+}
+
+fn wrap<M: Model>(_ point: M::Point) -> Wrapped<<M as Model>::Point> {
+    Wrapped<<M as Model>::Point>::new(point)
+}
+
+fn rewrap<M: Model>(_ point: M::Point) -> Wrapped<<M as Model>::Point> {
+    Wrapped<<M as Model>::Point> { value: point }
+}

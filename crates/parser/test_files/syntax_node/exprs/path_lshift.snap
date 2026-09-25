@@ -1,0 +1,64 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/exprs/path_lshift.fe
+---
+Root@0..53
+  BinExpr@0..10
+    PathExpr@0..5
+      Path@0..5
+        PathSegment@0..5
+          Ident@0..5 "value"
+    WhiteSpace@5..6 " "
+    LShift@6..8
+      Lt@6..7 "<"
+      Lt@7..8 "<"
+    WhiteSpace@8..9 " "
+    LitExpr@9..10
+      Lit@9..10
+        Int@9..10 "2"
+  Newline@10..11 "\n"
+  BinExpr@11..24
+    PathExpr@11..16
+      Path@11..16
+        PathSegment@11..16
+          Ident@11..16 "value"
+    LShift@16..18
+      Lt@16..17 "<"
+      Lt@17..18 "<"
+    PathExpr@18..24
+      Path@18..24
+        PathSegment@18..24
+          Ident@18..24 "amount"
+  Newline@24..25 "\n"
+  BinExpr@25..52
+    PathExpr@25..30
+      Path@25..30
+        PathSegment@25..30
+          Ident@25..30 "value"
+    WhiteSpace@30..31 " "
+    LShift@31..33
+      Lt@31..32 "<"
+      Lt@32..33 "<"
+    WhiteSpace@33..34 " "
+    PathExpr@34..52
+      Path@34..52
+        PathSegment@34..46
+          QualifiedType@34..46
+            Lt@34..35 "<"
+            PathType@35..36
+              Path@35..36
+                PathSegment@35..36
+                  Ident@35..36 "T"
+            WhiteSpace@36..37 " "
+            AsKw@37..39 "as"
+            WhiteSpace@39..40 " "
+            TraitRef@40..45
+              Path@40..45
+                PathSegment@40..45
+                  Ident@40..45 "Model"
+            Gt@45..46 ">"
+        Colon2@46..48 "::"
+        PathSegment@48..52
+          Ident@48..52 "BITS"
+  Newline@52..53 "\n"

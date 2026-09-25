@@ -1,0 +1,3 @@
+value << 2
+value<<amount
+value << <T as Model>::BITS
