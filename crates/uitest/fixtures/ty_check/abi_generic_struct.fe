@@ -1,0 +1,4 @@
+#[abi]
+struct Generic<T> {
+    value: u256,
+}

@@ -36,6 +36,7 @@ use crate::{
             },
         },
         ty::{
+            ProviderAddressSpace,
             corelib::{is_std_evm_effect_method, is_std_evm_effect_trait},
             ty_check::BodyOwner,
             ty_def::{BorrowKind, TyId},
@@ -584,7 +585,12 @@ impl<'db> InputBuilder<'db> {
         let value = self
             .values
             .from_shape(shape, scope, |semantics, path, scope| {
-                let contract = match referent_contract(db, instance, semantics) {
+                let contract = match match &origin {
+                    InputOrigin::Parameter(param) => {
+                        input_referent_contract(db, instance, semantics, *param)
+                    }
+                    InputOrigin::Referent(_) => referent_contract(db, instance, semantics),
+                } {
                     Ok(contract) => contract,
                     Err(error) => {
                         failure = Some(error);
@@ -685,6 +691,25 @@ impl<'db> InputBuilder<'db> {
         }
         Ok(value)
     }
+}
+
+/// Ordinary mutable arguments carry the memory transport precondition checked
+/// at each call. Receivers and effects retain their provider's address space.
+pub(super) fn input_referent_contract<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    semantics: CapabilitySemantics<'db>,
+    param: u32,
+) -> Result<ReferentContract<'db>, ShapeError<'db>> {
+    let mut contract = referent_contract(db, instance, semantics)?;
+    if semantics.class == CapabilityClass::Borrow(BorrowKind::Mut)
+        && let BodyOwner::Func(func) = instance.key(db).owner(db)
+        && (param as usize) < func.params(db).count()
+        && !(param == 0 && func.receiver_ty(db).is_some())
+    {
+        contract.address_space = HandleAddressSpace::Known(ProviderAddressSpace::Memory);
+    }
+    Ok(contract)
 }
 
 pub(super) fn referent_contract<'db>(

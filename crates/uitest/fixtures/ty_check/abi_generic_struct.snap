@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/abi_generic_struct.fe
+---
+error[16-0006]: `#[abi]` structs must be non-generic
+  ┌─ abi_generic_struct.fe:2:15
+  │
+2 │ struct Generic<T> {
+  │               ^^^ generics are not supported on `#[abi]` structs
+  │
+  = remove generic parameters from the struct

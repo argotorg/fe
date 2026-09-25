@@ -369,7 +369,7 @@ pub(super) fn create_head_size_assoc_const<'db, O: Clone + Into<crate::span::Des
     }
 }
 
-fn build_decode_head_pos_expr<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
+pub(super) fn build_decode_head_pos_expr<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
     body: &mut BodyBuilder<'_, 'db, O>,
     base_ident: IdentId<'db>,
     prior_fields: &[(IdentId<'db>, TypeId<'db>)],

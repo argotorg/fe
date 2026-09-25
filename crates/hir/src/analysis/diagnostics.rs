@@ -727,6 +727,19 @@ impl DiagnosticVoucher for crate::ErrorDiagnostic {
                 "`#[error]` conflicts with `#[event]` on the same struct".to_string(),
                 vec!["split this into separate structs or remove one attribute".to_string()],
             ),
+            ErrorDiagnosticKind::GenericAbiStruct => (
+                6,
+                "`#[abi]` structs must be non-generic".to_string(),
+                "generics are not supported on `#[abi]` structs".to_string(),
+                vec!["remove generic parameters from the struct".to_string()],
+            ),
+            ErrorDiagnosticKind::AbiAttrConflict => (
+                7,
+                "`#[abi]` cannot be combined with `#[event]` or `#[error]`".to_string(),
+                "this struct already gets an ABI encoding from `#[event]` or `#[error]`"
+                    .to_string(),
+                vec!["remove `#[abi]`".to_string()],
+            ),
         };
 
         let error_code = GlobalErrorCode::new(DiagnosticPass::ErrorLower, code);

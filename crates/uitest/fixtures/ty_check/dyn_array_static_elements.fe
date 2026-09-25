@@ -1,5 +1,6 @@
 use std::abi::{Bytes, DynArray, DynString, MemVec}
 
+// `DynArray::get` decodes any element type; `MemVec` needs static elements.
 fn dyn_array_dynamic_get(values: DynArray<DynString>) {
     let _ = values.get(0)
 }
@@ -22,4 +23,24 @@ fn dyn_array_nested_get(values: DynArray<DynArray<u256>>) {
 
 fn mem_vec_bytes_element() {
     let _values: MemVec<Bytes> = MemVec::zeroed(1)
+}
+
+#[abi]
+struct StaticPair {
+    a: u256,
+    b: bool,
+}
+
+#[abi]
+struct WithBytes {
+    a: u256,
+    data: Bytes,
+}
+
+fn mem_vec_static_abi_struct() {
+    let _values: MemVec<StaticPair> = MemVec::zeroed(1)
+}
+
+fn mem_vec_dynamic_abi_struct() {
+    let _values: MemVec<WithBytes> = MemVec::zeroed(1)
 }

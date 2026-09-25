@@ -3,9 +3,13 @@ use core::abi::{
     Decode,
     DynArray,
     Encode,
+    abi_field_head_size,
+    decode_field_from_prechecked_head,
+    dynamic_payload_size,
+    encode_field_at,
     store_word,
 }
-use ingot::abi::{Sol, StaticAbiElement}
+use ingot::abi::{Sol, StaticAbi}
 use core::ptr::{self, MemSpan}
 use ingot::evm::panic::{PANIC_INDEX_OUT_OF_BOUNDS, Panic}
 use ingot::evm::revert_error
@@ -31,14 +35,14 @@ pub trait DynArrayAccess<T> {
     /// bits only reverts once it is read here — exactly as it would when
     /// decoded as a standalone parameter.
     ///
-    /// Only elements represented by one static ABI word are supported.
-    /// Dynamic elements (`Bytes`, `DynString`, and nested arrays) do not
-    /// implement `StaticAbiElement`, so calling `get` on them does not compile.
+    /// Any ABI element works: one-word values, multi-word static structs
+    /// and tuples, and dynamic elements such as `Bytes` or structs holding
+    /// them, whose tail offset is validated against the array payload.
     fn get(self, _ index: u256) -> T
 }
 
 impl<T> DynArrayAccess<T> for DynArray<T>
-    where T: StaticAbiElement + Decode<Sol> + AbiSize
+    where T: Decode<Sol> + AbiSize
 {
     #[inline(always)]
     #[arithmetic(unchecked)]
@@ -47,13 +51,60 @@ impl<T> DynArrayAccess<T> for DynArray<T>
             revert_error(Panic::from(PANIC_INDEX_OUT_OF_BOUNDS))
         }
 
-        // DynArray construction validates the entire static-element frame:
-        // size = 32 + len * 32, without overflow. StaticAbiElement is sealed
-        // to one-word types, so index < len proves both this offset arithmetic
-        // and the complete element read are in bounds. Keep the normal decode
-        // path to validate the element's canonical ABI representation.
-        T::decode_from(self.encoded_span(), 32 + index * 32)
+        // DynArray construction validates the element heads:
+        // size >= 32 + len * head, without overflow, so index < len proves
+        // this head position is in bounds. Static elements decode in place;
+        // dynamic ones check their tail offset against the payload. Both keep
+        // the normal decode path to validate the canonical ABI representation.
+        decode_field_from_prechecked_head<Sol, T, MemSpan>(
+            self.encoded_span(),
+            base: 32,
+            head_pos: 32 + index * abi_field_head_size<T>(),
+            input_len: self.encoded_size(),
+        )
     }
+}
+
+/// A `DynArray` holding `values` in order.
+///
+/// Works for every ABI element type, including dynamic ones: the
+/// `bytes[]` built by `dyn_array_from([a, b])` encodes like Solidity's
+/// `new bytes[](2)` filled with `a` and `b`.
+pub fn dyn_array_from<T, const N: usize>(_ values: [T; N]) -> DynArray<T>
+    where T: Encode<Sol> + AbiSize + Copy
+{
+    let size = 32 + values.payload_size()
+    let data = ptr::alloc_bytes(size)
+    store_word(ptr: data, value: N as u256)
+    values.encode(ptr::offset_bytes(data, 32))
+    DynArray::from_abi_tail(data, len: N as u256, size)
+}
+
+/// A canonically encoded copy of `values`.
+///
+/// A decoded `DynArray` keeps the wire layout it was sent with, including
+/// unusual tail offsets or gaps between dynamic elements. The copy re-encodes
+/// every element in order, as Solidity does when it re-encodes a memory array.
+pub fn canonical_dyn_array<T>(_ values: DynArray<T>) -> DynArray<T>
+    where T: Decode<Sol> + Encode<Sol> + AbiSize
+{
+    let count = values.len()
+    let head = abi_field_head_size<T>()
+    let mut size = 32 + count * head
+    let mut i: u256 = 0
+    while i < count {
+        size += dynamic_payload_size(values.get(i))
+        i += 1
+    }
+    let data = ptr::alloc_bytes(size)
+    store_word(ptr: data, value: count)
+    let mut tail = count * head
+    i = 0
+    while i < count {
+        tail = encode_field_at<Sol, T>(values.get(i), ptr::offset_bytes(data, 32), head_pos: i * head, tail)
+        i += 1
+    }
+    DynArray::from_abi_tail(data, len: count, size)
 }
 
 /// A fixed-length mutable array of static-size ABI elements in linear memory.
@@ -62,22 +113,23 @@ impl<T> DynArrayAccess<T> for DynArray<T>
 /// `zeroed` (or copy an ABI array with `from_dyn_array`), mutate with `set`,
 /// and freeze into an ABI-encodable `DynArray` with `to_dyn_array`.
 ///
-/// The length is fixed at creation; there is no `push`/growth API. Element
-/// types must occupy one static ABI word (`u256`, ints, `Address`, `bool`, and
-/// fixed-bytes wrappers). Dynamic values and multi-word composites do not
-/// implement `StaticAbiElement`, so constructing a `MemVec` of them does not
-/// compile.
+/// The length is fixed at creation; there is no `push`/growth API. Elements
+/// are stored at their ABI head size, so any `StaticAbi` type works: one-word
+/// values as well as tuples, fixed arrays and `#[abi]` structs of static
+/// types. Dynamic values (`Bytes`, `DynString`, arrays, or structs holding
+/// them) do not implement `StaticAbi`, so constructing a `MemVec` of them does
+/// not compile.
 pub struct MemVec<T> {
     ptr: *u8,
     len: u256,
 }
 
 impl<T> MemVec<T>
-    where T: StaticAbiElement + Decode<Sol> + Encode<Sol> + AbiSize
+    where T: StaticAbi + Decode<Sol> + Encode<Sol> + AbiSize
 {
     /// A zero-initialized array of `len` elements.
     pub fn zeroed(_ len: u256) -> Self {
-        let total = len * 32
+        let total = len * T::HEAD_SIZE
         let ptr = ptr::alloc_bytes(total)
         ptr::zero_bytes(ptr, total)
         MemVec { ptr, len }
@@ -87,7 +139,7 @@ impl<T> MemVec<T>
     ///
     /// Mutating the copy leaves `source` untouched.
     pub fn from_dyn_array(_ source: DynArray<T>) -> Self {
-        let total = source.len() * 32
+        let total = source.len() * T::HEAD_SIZE
         let ptr = ptr::alloc_bytes(total)
         ptr::copy(ptr, source.encoded_span().slice(offset: 32, len: total))
         MemVec { ptr, len: source.len() }
@@ -113,8 +165,8 @@ impl<T> MemVec<T>
             revert_error(Panic::from(PANIC_INDEX_OUT_OF_BOUNDS))
         }
 
-        let input = MemSpan::from_raw_parts(ptr: self.ptr, len: self.len * 32)
-        T::decode_from(input, index * 32)
+        let input = MemSpan::from_raw_parts(ptr: self.ptr, len: self.len * T::HEAD_SIZE)
+        T::decode_from(input, index * T::HEAD_SIZE)
     }
 
     /// Write `value` at `index`. Reverts with Solidity `Panic(0x32)` if
@@ -124,7 +176,7 @@ impl<T> MemVec<T>
             revert_error(Panic::from(PANIC_INDEX_OUT_OF_BOUNDS))
         }
 
-        let at = ptr::offset_bytes(self.ptr, index * 32)
+        let at = ptr::offset_bytes(self.ptr, index * T::HEAD_SIZE)
         value.encode(at)
     }
 
@@ -133,7 +185,7 @@ impl<T> MemVec<T>
     /// This is a fresh allocation holding the length word followed by the
     /// element words; later `set` calls on the `MemVec` do not affect it.
     pub fn to_dyn_array(self) -> DynArray<T> {
-        let payload = self.len * 32
+        let payload = self.len * T::HEAD_SIZE
         let size = 32 + payload
         let data = ptr::alloc_bytes(size)
         store_word(ptr: data, value: self.len)

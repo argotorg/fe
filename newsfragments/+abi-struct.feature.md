@@ -1,0 +1,1 @@
+Added the `#[abi]` struct attribute. An `#[abi]` struct gets `AbiSize`, `AbiSpan<Sol>`, `Encode<Sol>` and `Decode<Sol>` implementations that encode it like the Solidity tuple of its fields, so Solidity structs such as `PoolKey` can be used in `msg` fields and return types, in arrays and inside other `#[abi]` structs without hand-written codecs.

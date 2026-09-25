@@ -8,7 +8,7 @@ pub type Text = DynString
 /// Solidity ABI dynamic array.
 pub type Vec<T> = DynArray<T>
 pub use sol::{self, *}
-pub use dyn_array::{DynArrayAccess, MemVec}
+pub use dyn_array::{DynArrayAccess, MemVec, canonical_dyn_array, dyn_array_from}
 
 use core::ptr
 use super::evm::effects::RawMem

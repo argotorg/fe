@@ -1,0 +1,5 @@
+#[abi]
+#[error]
+struct Both {
+    code: u256,
+}

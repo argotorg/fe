@@ -1,0 +1,8 @@
+struct Plain {
+    value: u256,
+}
+
+#[abi]
+struct Wrapper {
+    inner: Plain,
+}

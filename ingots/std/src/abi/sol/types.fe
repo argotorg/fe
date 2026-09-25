@@ -42,6 +42,22 @@ pub(ingot) trait StaticAbiElementSeal {}
 
 pub trait StaticAbiElement: StaticAbiElementSeal {}
 
+/// Marker for Solidity ABI types with a static encoding: one-word values, and
+/// tuples, fixed-size arrays and `#[abi]` structs built only from static
+/// types. `MemVec` stores elements at their fixed ABI head size, so it
+/// requires this.
+pub trait StaticAbi {}
+
+impl<T: StaticAbiElement> StaticAbi for T {}
+impl<T0: StaticAbi, T1: StaticAbi> StaticAbi for (T0, T1) {}
+impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi> StaticAbi for (T0, T1, T2) {}
+impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi> StaticAbi for (T0, T1, T2, T3) {}
+impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi, T4: StaticAbi> StaticAbi for (T0, T1, T2, T3, T4) {}
+impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi, T4: StaticAbi, T5: StaticAbi> StaticAbi for (T0, T1, T2, T3, T4, T5) {}
+impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi, T4: StaticAbi, T5: StaticAbi, T6: StaticAbi> StaticAbi for (T0, T1, T2, T3, T4, T5, T6) {}
+impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi, T4: StaticAbi, T5: StaticAbi, T6: StaticAbi, T7: StaticAbi> StaticAbi for (T0, T1, T2, T3, T4, T5, T6, T7) {}
+impl<T: StaticAbi, const N: usize> StaticAbi for [T; N] {}
+
 const fn decimal_digits(value: usize) -> usize {
     let mut remaining = value
     let mut digits: usize = 1

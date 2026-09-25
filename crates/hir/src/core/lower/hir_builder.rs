@@ -584,7 +584,11 @@ where
         self.body.f_ctxt.db()
     }
 
-    fn sol_ty(&self) -> TypeId<'db> {
+    pub(super) fn roots(&self) -> LibRoots<'db> {
+        self.roots
+    }
+
+    pub(super) fn sol_ty(&self) -> TypeId<'db> {
         let path = PathId::from_ident(self.db(), self.roots.std)
             .push_str(self.db(), "abi")
             .push_str(self.db(), "Sol");
