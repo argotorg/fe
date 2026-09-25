@@ -1,0 +1,250 @@
+//! Solidity-packed state variables in a storage slot.
+//!
+//! Solidity packs consecutive small state variables into one slot, each at a
+//! byte offset counted from the low end of the word. `SolSlot` reads and
+//! writes one such field without disturbing its neighbours:
+//!
+//! ```fe
+//! // `address owner; bool paused;` share slot 0: owner at byte 0, paused at 20.
+//! let owner: Address = SolSlot::at(0).read(offset: 0)
+//! SolSlot::at(0).write(offset: 20, value: true)
+//! ```
+//!
+//! `read_bytes`/`write_bytes` (and the `string` variants) use Solidity's
+//! layout for a `bytes` or `string` state variable in the slot.
+use core::abi::{ByteInput, Bytes, DynString, store_word}
+use core::num::IntDowncast
+use core::ptr::{self, MemBuffer, MemSpan}
+use super::crypto::keccak256
+use super::effects::{Address, RawStorage}
+use super::ops::{mstore, signextend}
+
+/// A value with a fixed-width Solidity storage representation.
+///
+/// `to_packed` returns the low `BITS` bits of the stored field and
+/// `from_packed` rebuilds the value from them (sign-extending signed types).
+pub trait SolPacked {
+    const BITS: u256
+    fn to_packed(own self) -> u256
+    fn from_packed(_ bits: u256) -> Self
+}
+
+pub struct SolSlot {
+    pub slot: u256,
+}
+
+impl Copy for SolSlot {}
+
+impl SolSlot {
+    /// The storage slot `slot`.
+    pub fn at(_ slot: u256) -> Self {
+        SolSlot { slot }
+    }
+
+    /// Reads the `T` stored `offset` bytes above the low end of the slot.
+    pub fn read<T: SolPacked>(self, offset: u256) -> T uses (storage: RawStorage) {
+        T::from_packed((storage.sload(self.slot) >> (offset * 8)) & field_mask(T::BITS))
+    }
+
+    /// Writes `value` `offset` bytes above the low end of the slot, keeping
+    /// the other bytes of the slot.
+    pub fn write<T: SolPacked>(self, offset: u256, value: own T) uses (storage: mut RawStorage) {
+        let shift = offset * 8
+        let mask = field_mask(T::BITS) << shift
+        let bits = (value.to_packed() << shift) & mask
+        storage.sstore(slot: self.slot, value: (storage.sload(self.slot) & !mask) | bits)
+    }
+}
+
+// Solidity `bytes`/`string` storage: a short value (< 32 bytes) lives in the
+// slot's high bytes with `2 * len` in the low byte; a long one stores
+// `2 * len + 1` in the slot and its words from `keccak256(slot)` on.
+impl SolSlot {
+    /// Reads the Solidity `bytes` stored in this slot.
+    pub fn read_bytes(self) -> Bytes uses (storage: RawStorage) {
+        let (data, len, size) = self.load_payload()
+        Bytes::from_abi_tail(data, len, size)
+    }
+
+    /// Reads the Solidity `string` stored in this slot.
+    pub fn read_string(self) -> DynString uses (storage: RawStorage) {
+        let (data, len, size) = self.load_payload()
+        DynString::from_abi_tail(data, len, size)
+    }
+
+    /// Assigns Solidity `bytes` to this slot, clearing words a previous,
+    /// longer value left behind.
+    pub fn write_bytes(self, _ value: Bytes) uses (storage: mut RawStorage) {
+        self.store_payload(value.payload_span())
+    }
+
+    /// Assigns a Solidity `string` to this slot; see `write_bytes`.
+    pub fn write_string(self, _ value: DynString) uses (storage: mut RawStorage) {
+        self.store_payload(value.payload_span())
+    }
+
+    fn load_payload(self) -> (*u8, u256, u256) uses (storage: RawStorage) {
+        let head = storage.sload(self.slot)
+        let len = stored_len(head)
+        let size = 32 + word_count(len) * 32
+        let data = ptr::alloc_bytes(size)
+        store_word(ptr: data, value: len)
+        if head & 1 == 0 {
+            if len != 0 {
+                store_word(ptr: ptr::offset_bytes(data, 32), value: head & !(0xff as u256))
+            }
+        } else {
+            let base = data_slot(self.slot)
+            let mut i: u256 = 0
+            while i < word_count(len) {
+                store_word(ptr: ptr::offset_bytes(data, 32 + i * 32), value: storage.sload(base + i))
+                i += 1
+            }
+        }
+        (data, len, size)
+    }
+
+    fn store_payload(self, _ payload: MemSpan) uses (storage: mut RawStorage) {
+        let old = storage.sload(self.slot)
+        let old_words = if old & 1 == 0 { 0 } else { word_count(stored_len(old)) }
+        let len = payload.len()
+        let mut words: u256 = 0
+        if len < 32 {
+            storage.sstore(slot: self.slot, value: payload_word(payload, 0) | (len * 2))
+        } else {
+            storage.sstore(slot: self.slot, value: len * 2 + 1)
+            let base = data_slot(self.slot)
+            words = word_count(len)
+            let mut i: u256 = 0
+            while i < words {
+                storage.sstore(slot: base + i, value: payload_word(payload, i * 32))
+                i += 1
+            }
+        }
+        if old_words > words {
+            let base = data_slot(self.slot)
+            let mut i = words
+            while i < old_words {
+                storage.sstore(slot: base + i, value: 0)
+                i += 1
+            }
+        }
+    }
+}
+
+// First data slot of a long value: `keccak256(abi.encode(slot))`.
+fn data_slot(_ slot: u256) -> u256 {
+    let buffer = MemBuffer::alloc(32)
+    mstore(addr: buffer.ptr(), value: slot)
+    keccak256(buffer.span())
+}
+
+fn stored_len(_ head: u256) -> u256 {
+    if head & 1 == 0 { (head & 0xff) / 2 } else { head / 2 }
+}
+
+fn word_count(_ len: u256) -> u256 {
+    (len + 31) / 32
+}
+
+// The payload word at `offset`, with bytes past the end of `payload` zeroed.
+fn payload_word(_ payload: MemSpan, _ offset: u256) -> u256 {
+    if offset >= payload.len() {
+        return 0
+    }
+    let word = payload.word_at(offset)
+    let remaining = payload.len() - offset
+    if remaining >= 32 { word } else { word & !(u256::max() >> (remaining * 8)) }
+}
+
+fn field_mask(_ bits: u256) -> u256 {
+    if bits >= 256 { u256::max() } else { ((1 as u256) << bits) - 1 }
+}
+
+fn sign_extended(_ bits: u256, width: u256) -> u256 {
+    signextend(byte: width / 8 - 1, value: bits)
+}
+
+impl SolPacked for bool {
+    const BITS: u256 = 8
+    fn to_packed(own self) -> u256 { if self { 1 } else { 0 } }
+    fn from_packed(_ bits: u256) -> Self { bits != 0 }
+}
+
+impl SolPacked for Address {
+    const BITS: u256 = 160
+    fn to_packed(own self) -> u256 { self.inner }
+    fn from_packed(_ bits: u256) -> Self { Address { inner: bits } }
+}
+
+impl SolPacked for u8 {
+    const BITS: u256 = 8
+    fn to_packed(own self) -> u256 { self as u256 }
+    fn from_packed(_ bits: u256) -> Self { bits.downcast_truncate() }
+}
+
+impl SolPacked for u16 {
+    const BITS: u256 = 16
+    fn to_packed(own self) -> u256 { self as u256 }
+    fn from_packed(_ bits: u256) -> Self { bits.downcast_truncate() }
+}
+
+impl SolPacked for u32 {
+    const BITS: u256 = 32
+    fn to_packed(own self) -> u256 { self as u256 }
+    fn from_packed(_ bits: u256) -> Self { bits.downcast_truncate() }
+}
+
+impl SolPacked for u64 {
+    const BITS: u256 = 64
+    fn to_packed(own self) -> u256 { self as u256 }
+    fn from_packed(_ bits: u256) -> Self { bits.downcast_truncate() }
+}
+
+impl SolPacked for u128 {
+    const BITS: u256 = 128
+    fn to_packed(own self) -> u256 { self as u256 }
+    fn from_packed(_ bits: u256) -> Self { bits.downcast_truncate() }
+}
+
+impl SolPacked for u256 {
+    const BITS: u256 = 256
+    fn to_packed(own self) -> u256 { self }
+    fn from_packed(_ bits: u256) -> Self { bits }
+}
+
+impl SolPacked for i8 {
+    const BITS: u256 = 8
+    fn to_packed(own self) -> u256 { self.downcast_unchecked() }
+    fn from_packed(_ bits: u256) -> Self { sign_extended(bits, width: 8).downcast_truncate() }
+}
+
+impl SolPacked for i16 {
+    const BITS: u256 = 16
+    fn to_packed(own self) -> u256 { self.downcast_unchecked() }
+    fn from_packed(_ bits: u256) -> Self { sign_extended(bits, width: 16).downcast_truncate() }
+}
+
+impl SolPacked for i32 {
+    const BITS: u256 = 32
+    fn to_packed(own self) -> u256 { self.downcast_unchecked() }
+    fn from_packed(_ bits: u256) -> Self { sign_extended(bits, width: 32).downcast_truncate() }
+}
+
+impl SolPacked for i64 {
+    const BITS: u256 = 64
+    fn to_packed(own self) -> u256 { self.downcast_unchecked() }
+    fn from_packed(_ bits: u256) -> Self { sign_extended(bits, width: 64).downcast_truncate() }
+}
+
+impl SolPacked for i128 {
+    const BITS: u256 = 128
+    fn to_packed(own self) -> u256 { self.downcast_unchecked() }
+    fn from_packed(_ bits: u256) -> Self { sign_extended(bits, width: 128).downcast_truncate() }
+}
+
+impl SolPacked for i256 {
+    const BITS: u256 = 256
+    fn to_packed(own self) -> u256 { self.downcast_unchecked() }
+    fn from_packed(_ bits: u256) -> Self { bits.downcast_truncate() }
+}
