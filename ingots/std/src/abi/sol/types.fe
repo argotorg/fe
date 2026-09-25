@@ -524,3 +524,22 @@ impl TopicValue for bool {
 impl<const N: usize> TopicValue for FixedBytes<N> {
     fn as_topic(self) -> u256 { self.word() }
 }
+
+impl<const N: usize> ingot::evm::SolPacked for FixedBytes<N> {
+    const BITS: u256 = N as u256 * 8
+    fn to_packed(own self) -> u256 {
+        checked_fixed_bytes(value: self.val, len: N as u256)
+    }
+    fn from_packed(_ bits: u256) -> Self {
+        FixedBytes { val: checked_fixed_bytes(value: bits, len: N as u256) }
+    }
+}
+
+// `value` if it is a valid right-aligned `bytes{len}`; reverts otherwise,
+// like `FixedBytes::word`.
+fn checked_fixed_bytes(value: u256, len: u256) -> u256 {
+    if len == 0 || len > 32 || (len < 32 && value >> (len * 8) != 0) {
+        revert_empty()
+    }
+    value
+}

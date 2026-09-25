@@ -12,6 +12,8 @@ pub use ops::{
 pub use target::{self, *}
 pub use intrinsic::{code_region_len, code_region_offset, contract_field_slot}
 pub use mutex::{self, *}
+pub use mapping::SolMapping
+pub use sol_slot::{SolPacked, SolSlot}
 pub use packed::{self, *}
 pub use ssz::{self, *}
 pub use storage_bytes::{self, *}
