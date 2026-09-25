@@ -1,7 +1,7 @@
 use core::abi::{Abi, AbiDecoder, AbiSize, AbiSpan, ByteInput, Decode, Encode, store_word}
 use core::num::IntDowncast
 use core::ops::{WrappingAdd, WrappingMul, WrappingSub}
-use ingot::evm::{TopicValue, ops::{revert_empty, signextend}}
+use ingot::evm::{EncodePacked, Packed, RawMem, packed::write_word_prefix, TopicValue, ops::{revert_empty, signextend}}
 
 use super::types::{SolCompat, StaticAbiElement, StaticAbiElementSeal}
 
@@ -89,6 +89,8 @@ fn decode_int_i256(word: u256, bits: u256) -> i256 {
 }
 
 pub trait SolWordRepr {
+    /// Solidity bit width of the type.
+    const BITS: u256
     fn canonical_word(self) -> u256
 }
 
@@ -178,6 +180,7 @@ impl SolCompat for Uint24 {
 }
 impl SolWordRepr for Uint24 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val as u256, bits: 24) }
+    const BITS: u256 = 24
 }
 
 // Unsigned newtypes wrapping u64
@@ -188,6 +191,7 @@ impl SolCompat for Uint40 {
 }
 impl SolWordRepr for Uint40 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val as u256, bits: 40) }
+    const BITS: u256 = 40
 }
 pub struct Uint48 { pub val: u64 }
 impl SolCompat for Uint48 {
@@ -196,6 +200,7 @@ impl SolCompat for Uint48 {
 }
 impl SolWordRepr for Uint48 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val as u256, bits: 48) }
+    const BITS: u256 = 48
 }
 pub struct Uint56 { pub val: u64 }
 impl SolCompat for Uint56 {
@@ -204,6 +209,7 @@ impl SolCompat for Uint56 {
 }
 impl SolWordRepr for Uint56 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val as u256, bits: 56) }
+    const BITS: u256 = 56
 }
 
 // Unsigned newtypes wrapping u128
@@ -214,6 +220,7 @@ impl SolCompat for Uint72 {
 }
 impl SolWordRepr for Uint72 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val as u256, bits: 72) }
+    const BITS: u256 = 72
 }
 pub struct Uint80 { pub val: u128 }
 impl SolCompat for Uint80 {
@@ -222,6 +229,7 @@ impl SolCompat for Uint80 {
 }
 impl SolWordRepr for Uint80 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val as u256, bits: 80) }
+    const BITS: u256 = 80
 }
 pub struct Uint88 { pub val: u128 }
 impl SolCompat for Uint88 {
@@ -230,6 +238,7 @@ impl SolCompat for Uint88 {
 }
 impl SolWordRepr for Uint88 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val as u256, bits: 88) }
+    const BITS: u256 = 88
 }
 pub struct Uint96 { pub val: u128 }
 impl SolCompat for Uint96 {
@@ -238,6 +247,7 @@ impl SolCompat for Uint96 {
 }
 impl SolWordRepr for Uint96 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val as u256, bits: 96) }
+    const BITS: u256 = 96
 }
 pub struct Uint104 { pub val: u128 }
 impl SolCompat for Uint104 {
@@ -246,6 +256,7 @@ impl SolCompat for Uint104 {
 }
 impl SolWordRepr for Uint104 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val as u256, bits: 104) }
+    const BITS: u256 = 104
 }
 pub struct Uint112 { pub val: u128 }
 impl SolCompat for Uint112 {
@@ -254,6 +265,7 @@ impl SolCompat for Uint112 {
 }
 impl SolWordRepr for Uint112 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val as u256, bits: 112) }
+    const BITS: u256 = 112
 }
 pub struct Uint120 { pub val: u128 }
 impl SolCompat for Uint120 {
@@ -262,6 +274,7 @@ impl SolCompat for Uint120 {
 }
 impl SolWordRepr for Uint120 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val as u256, bits: 120) }
+    const BITS: u256 = 120
 }
 
 // Unsigned newtypes wrapping u256
@@ -272,6 +285,7 @@ impl SolCompat for Uint136 {
 }
 impl SolWordRepr for Uint136 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val, bits: 136) }
+    const BITS: u256 = 136
 }
 pub struct Uint144 { pub val: u256 }
 impl SolCompat for Uint144 {
@@ -280,6 +294,7 @@ impl SolCompat for Uint144 {
 }
 impl SolWordRepr for Uint144 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val, bits: 144) }
+    const BITS: u256 = 144
 }
 pub struct Uint152 { pub val: u256 }
 impl SolCompat for Uint152 {
@@ -288,6 +303,7 @@ impl SolCompat for Uint152 {
 }
 impl SolWordRepr for Uint152 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val, bits: 152) }
+    const BITS: u256 = 152
 }
 pub struct Uint160 { pub val: u256 }
 impl SolCompat for Uint160 {
@@ -296,6 +312,7 @@ impl SolCompat for Uint160 {
 }
 impl SolWordRepr for Uint160 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val, bits: 160) }
+    const BITS: u256 = 160
 }
 pub struct Uint168 { pub val: u256 }
 impl SolCompat for Uint168 {
@@ -304,6 +321,7 @@ impl SolCompat for Uint168 {
 }
 impl SolWordRepr for Uint168 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val, bits: 168) }
+    const BITS: u256 = 168
 }
 pub struct Uint176 { pub val: u256 }
 impl SolCompat for Uint176 {
@@ -312,6 +330,7 @@ impl SolCompat for Uint176 {
 }
 impl SolWordRepr for Uint176 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val, bits: 176) }
+    const BITS: u256 = 176
 }
 pub struct Uint184 { pub val: u256 }
 impl SolCompat for Uint184 {
@@ -320,6 +339,7 @@ impl SolCompat for Uint184 {
 }
 impl SolWordRepr for Uint184 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val, bits: 184) }
+    const BITS: u256 = 184
 }
 pub struct Uint192 { pub val: u256 }
 impl SolCompat for Uint192 {
@@ -328,6 +348,7 @@ impl SolCompat for Uint192 {
 }
 impl SolWordRepr for Uint192 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val, bits: 192) }
+    const BITS: u256 = 192
 }
 pub struct Uint200 { pub val: u256 }
 impl SolCompat for Uint200 {
@@ -336,6 +357,7 @@ impl SolCompat for Uint200 {
 }
 impl SolWordRepr for Uint200 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val, bits: 200) }
+    const BITS: u256 = 200
 }
 pub struct Uint208 { pub val: u256 }
 impl SolCompat for Uint208 {
@@ -344,6 +366,7 @@ impl SolCompat for Uint208 {
 }
 impl SolWordRepr for Uint208 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val, bits: 208) }
+    const BITS: u256 = 208
 }
 pub struct Uint216 { pub val: u256 }
 impl SolCompat for Uint216 {
@@ -352,6 +375,7 @@ impl SolCompat for Uint216 {
 }
 impl SolWordRepr for Uint216 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val, bits: 216) }
+    const BITS: u256 = 216
 }
 pub struct Uint224 { pub val: u256 }
 impl SolCompat for Uint224 {
@@ -360,6 +384,7 @@ impl SolCompat for Uint224 {
 }
 impl SolWordRepr for Uint224 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val, bits: 224) }
+    const BITS: u256 = 224
 }
 pub struct Uint232 { pub val: u256 }
 impl SolCompat for Uint232 {
@@ -368,6 +393,7 @@ impl SolCompat for Uint232 {
 }
 impl SolWordRepr for Uint232 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val, bits: 232) }
+    const BITS: u256 = 232
 }
 pub struct Uint240 { pub val: u256 }
 impl SolCompat for Uint240 {
@@ -376,6 +402,7 @@ impl SolCompat for Uint240 {
 }
 impl SolWordRepr for Uint240 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val, bits: 240) }
+    const BITS: u256 = 240
 }
 pub struct Uint248 { pub val: u256 }
 impl SolCompat for Uint248 {
@@ -384,6 +411,7 @@ impl SolCompat for Uint248 {
 }
 impl SolWordRepr for Uint248 {
     fn canonical_word(self) -> u256 { canonical_unsigned_word(word: self.val, bits: 248) }
+    const BITS: u256 = 248
 }
 
 // Signed newtypes wrapping i32
@@ -394,6 +422,7 @@ impl SolCompat for Int24 {
 }
 impl SolWordRepr for Int24 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 24) }
+    const BITS: u256 = 24
 }
 
 // Signed newtypes wrapping i64
@@ -404,6 +433,7 @@ impl SolCompat for Int40 {
 }
 impl SolWordRepr for Int40 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 40) }
+    const BITS: u256 = 40
 }
 pub struct Int48 { pub val: i64 }
 impl SolCompat for Int48 {
@@ -412,6 +442,7 @@ impl SolCompat for Int48 {
 }
 impl SolWordRepr for Int48 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 48) }
+    const BITS: u256 = 48
 }
 pub struct Int56 { pub val: i64 }
 impl SolCompat for Int56 {
@@ -420,6 +451,7 @@ impl SolCompat for Int56 {
 }
 impl SolWordRepr for Int56 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 56) }
+    const BITS: u256 = 56
 }
 
 // Signed newtypes wrapping i128
@@ -430,6 +462,7 @@ impl SolCompat for Int72 {
 }
 impl SolWordRepr for Int72 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 72) }
+    const BITS: u256 = 72
 }
 pub struct Int80 { pub val: i128 }
 impl SolCompat for Int80 {
@@ -438,6 +471,7 @@ impl SolCompat for Int80 {
 }
 impl SolWordRepr for Int80 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 80) }
+    const BITS: u256 = 80
 }
 pub struct Int88 { pub val: i128 }
 impl SolCompat for Int88 {
@@ -446,6 +480,7 @@ impl SolCompat for Int88 {
 }
 impl SolWordRepr for Int88 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 88) }
+    const BITS: u256 = 88
 }
 pub struct Int96 { pub val: i128 }
 impl SolCompat for Int96 {
@@ -454,6 +489,7 @@ impl SolCompat for Int96 {
 }
 impl SolWordRepr for Int96 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 96) }
+    const BITS: u256 = 96
 }
 pub struct Int104 { pub val: i128 }
 impl SolCompat for Int104 {
@@ -462,6 +498,7 @@ impl SolCompat for Int104 {
 }
 impl SolWordRepr for Int104 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 104) }
+    const BITS: u256 = 104
 }
 pub struct Int112 { pub val: i128 }
 impl SolCompat for Int112 {
@@ -470,6 +507,7 @@ impl SolCompat for Int112 {
 }
 impl SolWordRepr for Int112 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 112) }
+    const BITS: u256 = 112
 }
 pub struct Int120 { pub val: i128 }
 impl SolCompat for Int120 {
@@ -478,6 +516,7 @@ impl SolCompat for Int120 {
 }
 impl SolWordRepr for Int120 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 120) }
+    const BITS: u256 = 120
 }
 
 // Signed newtypes wrapping i256
@@ -488,6 +527,7 @@ impl SolCompat for Int136 {
 }
 impl SolWordRepr for Int136 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 136) }
+    const BITS: u256 = 136
 }
 pub struct Int144 { pub val: i256 }
 impl SolCompat for Int144 {
@@ -496,6 +536,7 @@ impl SolCompat for Int144 {
 }
 impl SolWordRepr for Int144 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 144) }
+    const BITS: u256 = 144
 }
 pub struct Int152 { pub val: i256 }
 impl SolCompat for Int152 {
@@ -504,6 +545,7 @@ impl SolCompat for Int152 {
 }
 impl SolWordRepr for Int152 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 152) }
+    const BITS: u256 = 152
 }
 pub struct Int160 { pub val: i256 }
 impl SolCompat for Int160 {
@@ -512,6 +554,7 @@ impl SolCompat for Int160 {
 }
 impl SolWordRepr for Int160 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 160) }
+    const BITS: u256 = 160
 }
 pub struct Int168 { pub val: i256 }
 impl SolCompat for Int168 {
@@ -520,6 +563,7 @@ impl SolCompat for Int168 {
 }
 impl SolWordRepr for Int168 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 168) }
+    const BITS: u256 = 168
 }
 pub struct Int176 { pub val: i256 }
 impl SolCompat for Int176 {
@@ -528,6 +572,7 @@ impl SolCompat for Int176 {
 }
 impl SolWordRepr for Int176 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 176) }
+    const BITS: u256 = 176
 }
 pub struct Int184 { pub val: i256 }
 impl SolCompat for Int184 {
@@ -536,6 +581,7 @@ impl SolCompat for Int184 {
 }
 impl SolWordRepr for Int184 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 184) }
+    const BITS: u256 = 184
 }
 pub struct Int192 { pub val: i256 }
 impl SolCompat for Int192 {
@@ -544,6 +590,7 @@ impl SolCompat for Int192 {
 }
 impl SolWordRepr for Int192 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 192) }
+    const BITS: u256 = 192
 }
 pub struct Int200 { pub val: i256 }
 impl SolCompat for Int200 {
@@ -552,6 +599,7 @@ impl SolCompat for Int200 {
 }
 impl SolWordRepr for Int200 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 200) }
+    const BITS: u256 = 200
 }
 pub struct Int208 { pub val: i256 }
 impl SolCompat for Int208 {
@@ -560,6 +608,7 @@ impl SolCompat for Int208 {
 }
 impl SolWordRepr for Int208 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 208) }
+    const BITS: u256 = 208
 }
 pub struct Int216 { pub val: i256 }
 impl SolCompat for Int216 {
@@ -568,6 +617,7 @@ impl SolCompat for Int216 {
 }
 impl SolWordRepr for Int216 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 216) }
+    const BITS: u256 = 216
 }
 pub struct Int224 { pub val: i256 }
 impl SolCompat for Int224 {
@@ -576,6 +626,7 @@ impl SolCompat for Int224 {
 }
 impl SolWordRepr for Int224 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 224) }
+    const BITS: u256 = 224
 }
 pub struct Int232 { pub val: i256 }
 impl SolCompat for Int232 {
@@ -584,6 +635,7 @@ impl SolCompat for Int232 {
 }
 impl SolWordRepr for Int232 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 232) }
+    const BITS: u256 = 232
 }
 pub struct Int240 { pub val: i256 }
 impl SolCompat for Int240 {
@@ -592,6 +644,7 @@ impl SolCompat for Int240 {
 }
 impl SolWordRepr for Int240 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 240) }
+    const BITS: u256 = 240
 }
 pub struct Int248 { pub val: i256 }
 impl SolCompat for Int248 {
@@ -600,6 +653,7 @@ impl SolCompat for Int248 {
 }
 impl SolWordRepr for Int248 {
     fn canonical_word(self) -> u256 { canonical_custom_signed_word(word: self.val.downcast_unchecked(), bits: 248) }
+    const BITS: u256 = 248
 }
 
 impl SolWrappingInt for Uint24 {
@@ -1517,6 +1571,23 @@ impl<T: SolInt> StaticAbiElementSeal for T {}
 
 impl<T: SolInt, A: Abi> AbiSpan<A> for T {
     fn payload_end<I: core::abi::ByteInput>(_: I, base: u256, pos: u256) -> u256 { pos + 32 }
+}
+
+// `abi.encodePacked` uses the type's exact byte width, e.g. 3 bytes for int24.
+impl<T: SolWordRepr + SolInt> EncodePacked for T {
+    #[inline(always)]
+    fn packed_width(self) -> u256 {
+        T::BITS / 8
+    }
+
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        p.append_word(value: self.canonical_word(), width: T::BITS / 8)
+        p
+    }
+    #[inline(always)]
+    fn write_packed(own self, _ dest: *u8) -> u256 uses (mem: mut RawMem) {
+        write_word_prefix(dest, self.canonical_word(), T::BITS / 8)
+    }
 }
 
 impl<T: SolWordRepr + SolInt> TopicValue for T {
