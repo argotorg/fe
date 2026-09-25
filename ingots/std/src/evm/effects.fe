@@ -593,6 +593,41 @@ pub trait Call: EvmCapabilitySeal {
         finish_raw_call(success, mut ret)
     }
 
+    /// Call with an explicit gas allotment and a caller reserve. An Err means
+    /// the budget was insufficient and no external call was made. Ok contains
+    /// EVM success/failure; it does not imply target code exists.
+    ///
+    /// Input is copied before measuring gas to pay memory expansion up front.
+    /// No returndata is copied, so an adversarial return cannot consume the
+    /// reserve. The outcome reports its full length. Revert data is not bubbled.
+    ///
+    /// See calls::has_min_gas for the EIP-150 admission rule and gas-schedule
+    /// assumptions. The requested gas is forwarded exactly (plus the EVM's
+    /// value stipend); admission is conservative and may reject feasible calls.
+    fn call_with_min_gas(
+        mut self,
+        addr: Address,
+        minimum: u256,
+        reserved: u256,
+        value: u256,
+        args: MemSpan,
+    ) -> Result<super::calls::InsufficientGas, RawCallOutcome> {
+        let input = MemBuffer::from_span(args)
+        let mut output = MemBuffer::empty()
+        if !super::calls::has_min_gas(ops::gas(), minimum, reserved) {
+            return Result::Err(super::calls::InsufficientGas {})
+        }
+        Result::Ok(
+            self.raw_call(
+                addr,
+                gas: minimum,
+                value,
+                args: input.span(),
+                ret: mut output,
+            ),
+        )
+    }
+
     /// Low-level `STATICCALL` opcode with explicit input and output buffers.
     ///
     /// The output buffer receives at most its capacity; the outcome retains

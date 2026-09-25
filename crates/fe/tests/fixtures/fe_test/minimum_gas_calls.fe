@@ -1,0 +1,217 @@
+use core::ptr
+use std::evm::{calls::has_min_gas, Create, RawOps}
+
+#[test]
+fn admission_boundaries_and_overflow() {
+    assert!(has_min_gas(40000, 0, 0))
+    assert!(!has_min_gas(39999, 0, 0))
+    assert!(has_min_gas(40002, 1, 0))
+    assert!(!has_min_gas(40001, 1, 0))
+    assert!(has_min_gas(41064, 63, 1000))
+    assert!(!has_min_gas(41063, 63, 1000))
+    assert!(has_min_gas(41066, 64, 1000))
+    assert!(!has_min_gas(41065, 64, 1000))
+    let max = !0 as u256
+    assert!(!has_min_gas(max, max, 0))
+    assert!(!has_min_gas(max, 1, max))
+    assert!(!has_min_gas(max, max, max))
+    assert!(has_min_gas(max, 0, max - 40000))
+    assert!(!has_min_gas(max, 0, max - 39999))
+}
+
+// Deploy tiny independent EVM programs so the first GAS instruction measures
+// the forwarded allotment without compiler-generated dispatch overhead.
+fn deploy(_ runtime: u256, _ length: u256, _ salt: u256) -> Address
+uses (create: mut Create)
+{
+    let p = ptr::alloc_bytes(64)
+    core::abi::store_word(
+        ptr: p,
+        value: (0x6000600c60003960006000f3 as u256) << 160 | length << 240 | length << 184,
+    )
+    core::abi::store_word(
+        ptr: ptr::offset_bytes(p, 12),
+        value: runtime << (256 - length * 8),
+    )
+    let target = create
+        .create2_raw(
+            value: 0,
+            init_code: ptr::MemSpan::from_raw_parts(ptr: p, len: 12 + length),
+            salt,
+        )
+    assert!(target != Address::zero())
+    target
+}
+
+#[test]
+fn full_allotment()
+uses (call: mut Call, create: mut Create, raw: mut RawOps, ctx: Ctx)
+{
+    // GAS; PUSH0; MSTORE; PUSH1 32; PUSH0; RETURN
+    let target = deploy(0x5a5f5260205ff3, 7, 0)
+    let mut output = ptr::MemBuffer::alloc(32)
+    let result = call
+        .call_with_min_gas(
+            addr: target,
+            minimum: 50000,
+            reserved: 20000,
+            value: 0,
+            args: ptr::MemSpan::empty(),
+        )
+    match result {
+        Result::Err(_,) => assert!(false),
+        Result::Ok(outcome,) => {
+            assert!(outcome.success() && outcome.returndata_len() == 32)
+            raw.returndatacopy(dest: mut output, dest_offset: 0, src_offset: 0, len: 32)
+            assert!(raw.mload(output.ptr()) == 49998)
+            assert!(ctx.gas() > 20000)
+        },
+    }
+}
+
+#[test(balance = 1000)]
+fn value_forwarding_to_cold_new_account() uses (call: mut Call, ctx: Ctx) {
+    let target = Address { inner: 0x12345678 }
+    match call.call_with_min_gas(
+        addr: target,
+        minimum: 10000,
+        reserved: 20000,
+        value: 7,
+        args: ptr::MemSpan::empty(),
+    ) {
+        Result::Err(_,) => assert!(false),
+        Result::Ok(outcome,) => assert!(outcome.success() && outcome.returndata_len() == 0),
+    }
+    assert!(ctx.balance(target) == 7)
+}
+
+msg RunMsg {
+    #[selector = 1]
+    Run { target: Address, minimum: u256, reserved: u256 } -> (bool, bool, u256, u256),
+}
+pub contract Runner {
+    recv RunMsg {
+        Run { target, minimum, reserved } -> (bool, bool, u256, u256)
+        uses (call: mut Call, ctx: Ctx)
+        {
+            match call.call_with_min_gas(
+                addr: target,
+                minimum,
+                reserved,
+                value: 0,
+                args: ptr::MemSpan::empty(),
+            ) {
+                Result::Err(_,) => (false, false, 0, ctx.gas()),
+                Result::Ok(outcome,) => (
+                    true,
+                    outcome.success(),
+                    outcome.returndata_len(),
+                    ctx.gas(),
+                ),
+            }
+        }
+    }
+}
+
+#[test]
+fn exhausted_callee_preserves_reserve()
+uses (evm: mut Evm, create: mut Create)
+{
+    // JUMPDEST; PUSH1 0; JUMP: consume the entire allotment.
+    let burner = deploy(0x5b600056, 4, 1)
+    let runner = evm.create2<Runner>(value: 0, args: (), salt: 2)
+    let answer: (bool, bool, u256, u256) = evm
+        .call(
+            addr: runner,
+            gas: 120000,
+            value: 0,
+            message: RunMsg::Run { target: burner, minimum: 50000, reserved: 20000 },
+        )
+    assert!(
+        answer.0 && !answer.1 && answer.2 == 0 && answer.3 >= 20000,
+    )
+}
+
+#[test]
+fn insufficient_budget_skips_external_call()
+uses (evm: mut Evm, create: mut Create)
+{
+    // Increment slot 0 and return its new value.
+    let target = deploy(0x5f54600101805f555f5260205ff3, 13, 1)
+    let runner = evm.create2<Runner>(value: 0, args: (), salt: 2)
+    let answer: (bool, bool, u256, u256) = evm
+        .call(
+            addr: runner,
+            gas: 90000,
+            value: 0,
+            message: RunMsg::Run { target, minimum: 50000, reserved: 20000 },
+        )
+    assert!(
+        !answer.0 && !answer.1 && answer.2 == 0 && answer.3 > 50000,
+    )
+}
+
+#[test]
+fn large_return_is_not_copied() uses (evm: mut Evm, create: mut Create) {
+    // PUSH3 196608; PUSH0; RETURN.
+    let target = deploy(0x620300005ff3, 6, 1)
+    let runner = evm.create2<Runner>(value: 0, args: (), salt: 2)
+    let answer: (bool, bool, u256, u256) = evm
+        .call(
+            addr: runner,
+            gas: 170000,
+            value: 0,
+            message: RunMsg::Run { target, minimum: 100000, reserved: 20000 },
+        )
+    assert!(
+        answer.0 && answer.1 && answer.2 == 196608 && answer.3 >= 20000,
+    )
+}
+
+#[test(balance = 1000)]
+fn value_stipend_and_balance()
+uses (call: mut Call, create: mut Create, raw: mut RawOps, ctx: Ctx)
+{
+    let target = deploy(0x5a5f5260205ff3, 7, 0)
+    let mut output = ptr::MemBuffer::alloc(32)
+    match call.call_with_min_gas(
+        addr: target,
+        minimum: 50000,
+        reserved: 20000,
+        value: 7,
+        args: ptr::MemSpan::empty(),
+    ) {
+        Result::Err(_,) => assert!(false),
+        Result::Ok(outcome,) => {
+            assert!(outcome.success())
+            raw.returndatacopy(dest: mut output, dest_offset: 0, src_offset: 0, len: 32)
+            assert!(raw.mload(output.ptr()) == 52298)
+            assert!(ctx.balance(target) == 7)
+        },
+    }
+}
+
+#[test]
+fn input_is_forwarded_and_revert_is_not_bubbled()
+uses (call: mut Call, create: mut Create, raw: mut RawOps)
+{
+    // CALLDATALOAD(0); MSTORE(0); REVERT(0,32).
+    let target = deploy(0x5f355f5260205ffd, 8, 0)
+    let input = ptr::MemBuffer::alloc(4096)
+    core::abi::store_word(ptr: input.ptr(), value: 0xdeadbeef)
+    let mut output = ptr::MemBuffer::alloc(32)
+    match call.call_with_min_gas(
+        addr: target,
+        minimum: 50000,
+        reserved: 20000,
+        value: 0,
+        args: input.span(),
+    ) {
+        Result::Err(_,) => assert!(false),
+        Result::Ok(outcome,) => {
+            assert!(!outcome.success() && outcome.returndata_len() == 32)
+            raw.returndatacopy(dest: mut output, dest_offset: 0, src_offset: 0, len: 32)
+            assert!(raw.mload(output.ptr()) == 0xdeadbeef)
+        },
+    }
+}

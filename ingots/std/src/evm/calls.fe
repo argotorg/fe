@@ -1,0 +1,33 @@
+//! Gas-budget admission for EIP-150 calls.
+//! This uses a conservative 40,000 gas overhead allowance: 36,600 for a
+//! cold CALL sending value to a new account under Berlin and later schedules,
+//! and 3,400 for helper execution. Memory expansion must already be paid.
+//! Gas repricing or unusually expensive generated helper code requires
+//! revisiting this allowance. Use Call::call_with_min_gas to keep the check
+//! adjacent to the call and prepay input memory; a standalone check becomes
+//! stale as soon as the caller performs further work.
+
+#[must_use]
+pub struct InsufficientGas {}
+
+/// Whether available >= ceil(minimum * 64 / 63) + reserved + 40,000.
+/// Implements the conservative EIP-150 inequality without multiplication or
+/// addition overflow, including arbitrary u256 inputs. The reserve is extra
+/// gas beyond the 1/64 retained by EIP-150. This checks gas only, not balance,
+/// call depth, target code, or the success of callee execution.
+pub fn has_min_gas(_ available: u256, _ minimum: u256, _ reserved: u256) -> bool {
+    if available < 40000 {
+        return false
+    }
+    let after_overhead = available - 40000
+    if reserved > after_overhead {
+        return false
+    }
+    let budget = after_overhead - reserved
+    if minimum > budget {
+        return false
+    }
+    let remainder = budget - minimum
+    let extra = minimum / 63 + if minimum % 63 == 0 { 0 } else { 1 }
+    remainder >= extra
+}
