@@ -44,6 +44,12 @@ impl Address {
     pub fn zero() -> Self {
         Address { inner: 0 }
     }
+
+    /// The address in the low 160 bits of `word`, like Solidity's
+    /// `address(uint160(word))`. Higher bits are discarded.
+    pub fn from_word_truncate(_ word: u256) -> Self {
+        Address { inner: word & 0xffffffffffffffffffffffffffffffffffffffff }
+    }
 }
 
 impl core::ops::Eq for Address {
@@ -637,6 +643,15 @@ pub trait Call: EvmCapabilitySeal {
         finish_raw_call(success, mut ret)
     }
 
+    /// `CALL` with pre-encoded calldata without bubbling failure.
+    ///
+    /// The returned owner contains the complete success or revert payload.
+    fn try_call_raw(mut self, addr: own Address, gas: u256, value: u256, args: MemSpan) -> CallOutcome {
+        let mut ret = MemBuffer::empty()
+        let raw = self.raw_call(addr, gas, value, args, ret: mut ret)
+        copy_call_outcome(raw)
+    }
+
     /// Perform a typed `CALL` without bubbling failure.
     ///
     /// The returned owner contains the complete success or revert payload.
@@ -656,13 +671,55 @@ pub trait Call: EvmCapabilitySeal {
     }
 
     /// Perform a typed `STATICCALL` without bubbling failure.
-    fn try_static<M>(mut self, addr: own Address, gas: u256, message: own M) -> CallOutcome
+    fn try_static<M>(self, addr: own Address, gas: u256, message: own M) -> CallOutcome
     where M: MsgVariant<Sol> + Encode<Sol>
     {
         let args = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
         let mut ret = MemBuffer::empty()
         let raw = self.raw_staticcall(addr, gas, args: args.span(), ret: mut ret)
         copy_call_outcome(raw)
+    }
+
+    /// Send `value` wei to `addr` with empty calldata (Solidity
+    /// `addr.call{value: value}("")`), without copying returndata or
+    /// bubbling failure.
+    fn send_value(mut self, addr: own Address, gas: u256, value: u256) -> RawCallOutcome {
+        let mut ret = MemBuffer::empty()
+        self.raw_call(addr, gas, value, args: MemSpan::empty(), ret: mut ret)
+    }
+
+    /// Perform a typed `CALL`, copying at most `ret.capacity()` bytes of
+    /// returndata into `ret` without bubbling failure.
+    ///
+    /// Bounding the copy protects against callees that return oversized data.
+    /// The outcome still reports the full returndata length.
+    fn try_call_into<M>(
+        mut self,
+        addr: own Address,
+        gas: u256,
+        value: u256,
+        message: own M,
+        ret: mut MemBuffer,
+    ) -> RawCallOutcome
+    where M: MsgVariant<Sol> + Encode<Sol>
+    {
+        let args = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
+        self.raw_call(addr, gas, value, args: args.span(), ret: mut ret)
+    }
+
+    /// Perform a typed `STATICCALL`, copying at most `ret.capacity()` bytes of
+    /// returndata into `ret` without bubbling failure.
+    fn try_static_into<M>(
+        self,
+        addr: own Address,
+        gas: u256,
+        message: own M,
+        ret: mut MemBuffer,
+    ) -> RawCallOutcome
+    where M: MsgVariant<Sol> + Encode<Sol>
+    {
+        let args = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
+        self.raw_staticcall(addr, gas, args: args.span(), ret: mut ret)
     }
 
     /// Perform a typed `DELEGATECALL` without bubbling failure.
@@ -706,7 +763,7 @@ pub trait Call: EvmCapabilitySeal {
         outcome.decode()
     }
 
-    fn static<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
+    fn static<M>(self, addr: own Address, gas: u256, message: own M) -> M::Return
     where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
     {
         self.try_static(addr, gas, message).decode()
@@ -733,7 +790,7 @@ impl Address {
     ///
     /// Forwards all available gas. Bubbles the callee's revert data on failure.
     pub fn static<M>(self, _ message: own M) -> M::Return
-    uses (call: mut Call) where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+    uses (call: Call) where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
     {
         call.static(addr: self, gas: ops::gas(), message)
     }
@@ -749,7 +806,7 @@ impl Address {
     /// `STATICCALL` this address with a typed message and preserve success or
     /// revert returndata for inspection.
     pub fn try_static<M>(self, _ message: own M) -> CallOutcome
-    uses (call: mut Call) where M: MsgVariant<Sol> + Encode<Sol>
+    uses (call: Call) where M: MsgVariant<Sol> + Encode<Sol>
     {
         call.try_static(addr: self, gas: ops::gas(), message)
     }
