@@ -1,0 +1,71 @@
+use core::num::IntDowncast
+use core::ptr::{self, MemArray, MemSlice}
+use std::abi::DynString
+use std::text::{concat_slice, TextBuilder}
+
+#[test]
+fn runtime_slice_and_empty() {
+    assert!(concat_slice(MemSlice::empty()) == "")
+    let mut parts = MemArray<DynString>::new_uninit(4)
+    *parts.ptr_at(0) = "ab"
+    *parts.ptr_at(1) = ""
+    *parts.ptr_at(2) = "cde"
+    *parts.ptr_at(3) = "f"
+    assert!(concat_slice(parts.as_slice()) == "abcdef")
+    assert!(
+        concat_slice(parts.as_slice().slice(offset: 1, len: 2)) == "cde",
+    )
+    assert!(*parts.ptr_at(0) == "ab")
+}
+
+#[test]
+fn builder_empty_and_capacity() {
+    assert!(TextBuilder::new().finish() == "")
+    let mut b = TextBuilder::with_capacity(1)
+    assert!(b.is_empty())
+    b = b.push("")
+    b = b.push("a")
+    b = b.push("bc")
+    assert!(b.len() == 3)
+    assert!(!b.is_empty())
+    assert!(b.finish() == "abc")
+}
+
+#[test]
+fn growth_and_arbitrary_bytes() {
+    let input = ptr::MemBuffer::alloc(65)
+    let mut i = 0
+    while i < 65 {
+        *ptr::offset_bytes(input.ptr(), i) = i.downcast_truncate()
+        i += 1
+    }
+    *ptr::offset_bytes(input.ptr(), 64) = 255
+    let mut b = TextBuilder::new()
+    b = b.push_bytes(input.slice(offset: 0, len: 31))
+    b = b.push_bytes(input.slice(offset: 31, len: 1))
+    b = b.push_bytes(input.slice(offset: 32, len: 33))
+    let output = b.finish()
+    assert!(output.len() == 65)
+    i = 0
+    while i < 65 {
+        assert!(output.byte_at(i) == input.span().byte_at(i))
+        i += 1
+    }
+}
+
+#[test]
+fn many_fragments() {
+    let mut b = TextBuilder::new()
+    let mut i = 0
+    while i < 100 {
+        b = b.push("abcd")
+        i += 1
+    }
+    let output = b.finish()
+    assert!(output.len() == 400)
+    i = 0
+    while i < 100 {
+        assert!(output.slice(start: i * 4, len: 4) == "abcd")
+        i += 1
+    }
+}

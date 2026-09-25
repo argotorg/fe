@@ -115,3 +115,65 @@ fn base64_digit(_ value: u8) -> u8 {
         47
     }
 }
+
+/// Concatenate a runtime-length slice of strings with one output allocation.
+/// Payloads are copied as bytes; no UTF-8 validation or normalization is done.
+pub fn concat_slice(_ parts: ptr::MemSlice<DynString>) -> DynString {
+    let mut len: u256 = 0
+    let mut i: u256 = 0
+    while i < parts.len() {
+        len += (*parts.ptr_at(i)).len()
+        i += 1
+    }
+    let out = DynString::zeroed(len)
+    let mut offset: u256 = 0
+    i = 0
+    while i < parts.len() {
+        let part = (*parts.ptr_at(i)).payload_span()
+        ptr::copy(
+            dest: ptr::offset_bytes(out.payload_span().ptr(), offset),
+            source: part,
+        )
+        offset += part.len()
+        i += 1
+    }
+    out
+}
+
+/// Incremental byte-preserving text construction. Capacity grows geometrically
+/// through `MemBuffer`; finishing copies the result into an ABI string once.
+/// No reference into the growable backing allocation is exposed.
+/// Append operations consume and return the builder: `builder = builder.push(part)`.
+#[must_use]
+pub struct TextBuilder { buffer: ptr::MemBuffer }
+
+impl TextBuilder {
+    pub fn new() -> Self {
+        Self { buffer: ptr::MemBuffer::empty() }
+    }
+    pub fn with_capacity(_ capacity: u256) -> Self {
+        Self { buffer: ptr::MemBuffer::with_capacity(capacity) }
+    }
+    pub fn len(self) -> u256 {
+        self.buffer.len()
+    }
+    pub fn is_empty(self) -> bool {
+        self.buffer.is_empty()
+    }
+
+    /// Append a string without copying the already accumulated prefix unless
+    /// the buffer must grow.
+    pub fn push(own self, _ value: DynString) -> Self {
+        self.push_bytes(value.payload_span())
+    }
+
+    /// Append arbitrary bytes, including zero bytes and non-UTF-8 sequences.
+    pub fn push_bytes(own self, _ value: MemSpan) -> Self {
+        let mut buffer = self.buffer
+        buffer.extend_from(value)
+        Self { buffer }
+    }
+    pub fn finish(own self) -> DynString {
+        DynString::from_payload(source: self.buffer.span())
+    }
+}
