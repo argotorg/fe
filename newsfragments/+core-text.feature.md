@@ -1,0 +1,1 @@
+Added `core::text` (re-exported as `std::text`) with `concat`, `decimal`, `hex`, `hex_upper` and `base64` for building `DynString` values, plus `DynString::slice`, `DynString::from_word_prefix`, `DynString::zeroed` and `Eq` for `Bytes` and `DynString`.

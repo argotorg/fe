@@ -1,0 +1,117 @@
+//! Formatting helpers that build `DynString` values.
+//!
+//! String literals can be used directly as `DynString`:
+//! `let s: DynString = "<svg>"`.
+use super::abi::DynString
+use super::num::IntDowncast
+use super::ptr::{self, MemSpan}
+
+/// Returns the concatenation of `parts` (Solidity `string.concat`).
+pub fn concat<const N: usize>(_ parts: [DynString; N]) -> DynString {
+    let mut len: u256 = 0
+    let mut i: usize = 0
+    while i < N {
+        len += parts[i].len()
+        i += 1
+    }
+    let out = DynString::zeroed(len)
+    let data = out.payload_span().ptr()
+    let mut offset: u256 = 0
+    i = 0
+    while i < N {
+        let part = parts[i].payload_span()
+        ptr::copy(dest: ptr::offset_bytes(data, offset), source: part)
+        offset += part.len()
+        i += 1
+    }
+    out
+}
+
+/// Returns the decimal representation of `value` (Solidity `Strings.toString`).
+pub fn decimal(_ value: u256) -> DynString {
+    let mut digits: u256 = 1
+    let mut rest = value / 10
+    while rest != 0 {
+        digits += 1
+        rest /= 10
+    }
+    let out = DynString::zeroed(digits)
+    let data = out.payload_span().ptr()
+    let mut remaining = value
+    let mut i = digits
+    while i > 0 {
+        i -= 1
+        *ptr::offset_bytes(data, i) = ((remaining % 10) + 48).downcast_truncate()
+        remaining /= 10
+    }
+    out
+}
+
+/// Returns the lowest `bytes` bytes of `value` as `2 * bytes` lowercase hex
+/// digits, without a `0x` prefix. Higher bytes of `value` are ignored.
+pub fn hex(_ value: u256, _ bytes: u256) -> DynString {
+    let digits = bytes * 2
+    let out = DynString::zeroed(digits)
+    let data = out.payload_span().ptr()
+    let mut remaining = value
+    let mut i = digits
+    while i > 0 {
+        i -= 1
+        let nibble: u8 = (remaining & 15).downcast_truncate()
+        *ptr::offset_bytes(data, i) = if nibble < 10 { nibble + 48 } else { nibble + 87 }
+        remaining >>= 4
+    }
+    out
+}
+
+/// Like `hex`, with uppercase digits.
+pub fn hex_upper(_ value: u256, _ bytes: u256) -> DynString {
+    let digits = bytes * 2
+    let out = DynString::zeroed(digits)
+    let data = out.payload_span().ptr()
+    let mut remaining = value
+    let mut i = digits
+    while i > 0 {
+        i -= 1
+        let nibble: u8 = (remaining & 15).downcast_truncate()
+        *ptr::offset_bytes(data, i) = if nibble < 10 { nibble + 48 } else { nibble + 55 }
+        remaining >>= 4
+    }
+    out
+}
+
+/// Returns the standard base64 encoding of `data`, with `=` padding
+/// (Solidity `Base64.encode`).
+pub fn base64(_ data: MemSpan) -> DynString {
+    let len = data.len()
+    let out = DynString::zeroed(4 * ((len + 2) / 3))
+    let dest = out.payload_span().ptr()
+    let mut i: u256 = 0
+    let mut j: u256 = 0
+    while i < len {
+        let a = data.byte_at(i)
+        let b = if i + 1 < len { data.byte_at(i + 1) } else { 0 }
+        let c = if i + 2 < len { data.byte_at(i + 2) } else { 0 }
+        *ptr::offset_bytes(dest, j) = base64_digit(a >> 2)
+        *ptr::offset_bytes(dest, j + 1) = base64_digit(((a & 3) << 4) | (b >> 4))
+        *ptr::offset_bytes(dest, j + 2) = if i + 1 < len { base64_digit(((b & 15) << 2) | (c >> 6)) } else { 61 }
+        *ptr::offset_bytes(dest, j + 3) = if i + 2 < len { base64_digit(c & 63) } else { 61 }
+        i += 3
+        j += 4
+    }
+    out
+}
+
+fn base64_digit(_ value: u8) -> u8 {
+    if value < 26 {
+        value + 65
+    } else if value < 52 {
+        value + 71
+    } else if value < 62 {
+        value - 4
+    } else if value == 62 {
+        43
+    } else {
+        47
+    }
+}

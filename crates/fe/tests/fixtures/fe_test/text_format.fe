@@ -1,0 +1,71 @@
+// Tests for `core::text` formatting, `DynString` literals and equality.
+use std::abi::{Bytes, DynString}
+use std::text
+
+#[test]
+fn literals_and_equality() {
+    let long: DynString = "<svg width=\"290\" height=\"500\" viewBox=\"0 0 290 500\" xmlns=\"http://www.w3.org/2000/svg\""
+    assert!(long.len() == 86)
+    assert!(
+        long
+            == "<svg width=\"290\" height=\"500\" viewBox=\"0 0 290 500\" xmlns=\"http://www.w3.org/2000/svg\"",
+    )
+    assert!(
+        long
+            != "<svg width=\"290\" height=\"500\" viewBox=\"0 0 290 500\" xmlns=\"http://www.w3.org/2000/svh\"",
+    )
+    assert!(long != "<svg")
+    let unicode: DynString = "a\"b\\c\n•"
+    assert!(unicode.len() == 9)
+    assert!(unicode.byte_at(6) == 0xe2)
+    let empty: DynString = ""
+    assert!(empty == DynString::empty())
+    assert!(unicode.as_bytes() == unicode.as_bytes())
+}
+
+#[test]
+fn concat_parts() {
+    let middle = text::decimal(42)
+    assert!(text::concat(["<g>", middle, "</g>"]) == "<g>42</g>")
+    let empty: DynString = ""
+    assert!(text::concat([empty, empty]) == "")
+}
+
+#[test]
+fn decimal_values() {
+    assert!(text::decimal(0) == "0")
+    assert!(text::decimal(9) == "9")
+    assert!(text::decimal(10) == "10")
+    assert!(
+        text::decimal(
+                115792089237316195423570985008687907853269984665640564039457584007913129639935,
+            )
+            == "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+    )
+}
+
+#[test]
+fn hex_digits() {
+    assert!(text::hex(0xabcdef, 3) == "abcdef")
+    assert!(text::hex(0x1abcdef, 3) == "abcdef")
+    assert!(text::hex(0x0f, 2) == "000f")
+    assert!(text::hex(0, 0) == "")
+}
+
+#[test]
+fn base64_padding() {
+    assert!(text::base64(("").payload_span()) == "")
+    assert!(text::base64(("M").payload_span()) == "TQ==")
+    assert!(text::base64(("Ma").payload_span()) == "TWE=")
+    assert!(text::base64(("Man").payload_span()) == "TWFu")
+    assert!(text::base64(("<svg>?").payload_span()) == "PHN2Zz4/")
+}
+
+#[test]
+fn upper_hex_and_slices() {
+    assert!(text::hex_upper(0xabcdef, 3) == "ABCDEF")
+    let s: DynString = "0123456789"
+    assert!(s.slice(start: 2, len: 3) == "234")
+    assert!(s.slice(start: 10, len: 0) == "")
+    assert!(DynString::from_word_prefix(word: 0x6869 << 240, len: 2) == "hi")
+}

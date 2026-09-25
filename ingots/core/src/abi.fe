@@ -2,6 +2,7 @@ use ingot::Copy
 use ingot::Option
 use ingot::num::{IntDowncast, WordValue}
 use ingot::ptr
+use ingot::ops::Eq
 
 /// Errors returned by ABI decoding/encoding helpers.
 pub enum AbiError {
@@ -761,6 +762,29 @@ impl DynString {
         Self::from_validated_abi_tail(data, len, size)
     }
 
+    /// Allocates a string of `len` zero bytes, to be filled through `payload_span`.
+    pub fn zeroed(_ len: u256) -> Self {
+        let size = 32 + round_up_words(len)
+        let data = ptr::alloc_bytes(size)
+        ptr::zero_bytes(data, size)
+        store_word(ptr: data, value: len)
+        Self::from_validated_abi_tail(data: data, len: len, size: size)
+    }
+
+    /// Returns the string made of the first `len` bytes of `word` (at most 32),
+    /// e.g. a `bytes32` label.
+    pub fn from_word_prefix(word: u256, len: u256) -> Self {
+        let bytes = Bytes::from_word_prefix(word, len)
+        Self::from_validated_abi_tail(data: bytes.data, len: bytes.len, size: bytes.size)
+    }
+
+    /// Returns a copy of the `len` bytes starting at `start`.
+    ///
+    /// Fails with an index-out-of-bounds panic if the range exceeds the string.
+    pub fn slice(self, start: u256, len: u256) -> Self {
+        Self::from_payload(source: self.payload_span().slice(offset: start, len))
+    }
+
     pub fn from_payload(source: ptr::MemSpan) -> Self {
         let len = source.len()
         let size = 32 + round_up_words(len)
@@ -921,6 +945,40 @@ fn mem_word_load() -> u256
     uses (slot: u256)
 {
     slot
+}
+
+// Compares byte payloads a word at a time. Payloads of `Bytes` and `DynString`
+// are padded to whole words, so the final word read stays inside the value.
+fn payload_eq(_ a: ptr::MemSpan, _ b: ptr::MemSpan) -> bool {
+    let len = a.len()
+    if len != b.len() {
+        return false
+    }
+    let mut offset: u256 = 0
+    while offset + 32 <= len {
+        if mem_word_at(base: a.ptr(), offset) != mem_word_at(base: b.ptr(), offset) {
+            return false
+        }
+        offset += 32
+    }
+    let tail = len - offset
+    if tail == 0 {
+        return true
+    }
+    let shift = (32 - tail) * 8
+    (mem_word_at(base: a.ptr(), offset) >> shift) == (mem_word_at(base: b.ptr(), offset) >> shift)
+}
+
+impl Eq for Bytes {
+    fn eq(self, _ other: Bytes) -> bool {
+        payload_eq(self.payload_span(), other.payload_span())
+    }
+}
+
+impl Eq for DynString {
+    fn eq(self, _ other: DynString) -> bool {
+        payload_eq(self.payload_span(), other.payload_span())
+    }
 }
 
 #[inline(always)]
