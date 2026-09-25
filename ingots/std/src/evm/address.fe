@@ -1,0 +1,31 @@
+//! Ethereum address formatting.
+use core::abi::DynString
+use core::ptr
+use core::text
+use super::effects::{Address, revert}
+use super::crypto::keccak256
+
+/// Format a canonical address as `0x` and 40 ERC-55 checksum-cased hex digits.
+/// This is the chain-independent ERC-55 encoding, not the ERC-1191 variant.
+/// Rejects noncanonical Address values with high bits set, without truncation.
+/// Specification: https://eips.ethereum.org/EIPS/eip-55
+pub fn checksum_address(_ address: Address) -> DynString {
+    if address.inner >> 160 != 0 {
+        revert(())
+    }
+    let lower = text::hex(address.inner, 20)
+    let hash = keccak256(lower.payload_span())
+    let data = ptr::alloc_bytes(42)
+    *data = 48
+    *ptr::offset_bytes(data, 1) = 120
+    let digits = ptr::offset_bytes(data, 2)
+    let mut i: u256 = 0
+    while i < 40 {
+        let digit = lower.byte_at(i)
+        let uppercase = digit >= 97 && ((hash >> ((63 - i) * 4)) & 15) >= 8
+        let cased = if uppercase { digit - 32 } else { digit }
+        *ptr::offset_bytes(digits, i) = cased
+        i += 1
+    }
+    DynString::from_payload(source: ptr::MemSpan::from_raw_parts(ptr: data, len: 42))
+}

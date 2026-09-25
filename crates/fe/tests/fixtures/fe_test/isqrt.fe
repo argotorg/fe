@@ -58,3 +58,27 @@ fn isqrt_arbitrary_values() {
     // 2^255
     assert(isqrt(57896044618658097711785492504343953926634992332820282019728792003956564819968) == 240615969168004511545033772477625056927)
 }
+
+// Cover every power-of-two root boundary, including seed bit-length transitions.
+#[test]
+fn isqrt_all_power_of_two_square_boundaries() {
+    let mut bit: u256 = 1
+    while bit < 128 {
+        let root: u256 = 1 << bit
+        let square = root * root
+        assert!(isqrt(square - 1) == root - 1)
+        assert!(isqrt(square) == root)
+        assert!(isqrt(square + 1) == root)
+        bit += 1
+    }
+}
+
+#[test]
+fn isqrt_largest_square_boundary() {
+    let root: u256 = (1 << 128) - 1
+    let square = root * root
+    assert!(isqrt(square - 1) == root - 1)
+    assert!(isqrt(square) == root)
+    assert!(isqrt(square + 1) == root)
+    assert!(isqrt(u256::max() - 1) == root)
+}

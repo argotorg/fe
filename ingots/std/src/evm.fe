@@ -1,3 +1,4 @@
+pub use address::{self, checksum_address}
 pub use calldata::{self, *}
 pub use crypto::{self, *}
 pub use effects::{self, *}
