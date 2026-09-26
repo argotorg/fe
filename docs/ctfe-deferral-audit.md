@@ -121,13 +121,15 @@ Remaining adapters have explicit policies:
 
 ## Borrowing scope
 
-Source-level local references carrying provider metadata remain rejected by the
-previously scoped `InvalidProviderUse` restriction. Internal machine tests cover
-admitted reference lifetime, typed reads, mutation and discard/replay behavior.
-The generic stdlib `SolArraySuffix` declaration is covered, but its additional
-concrete execution probe reached this borrowing restriction while resolving an
-array extent. It is recorded in the existing borrowing issue and is not claimed
-as a passing concrete CTFE case. Provider admission has not been broadened.
+Borrows of a local in an evaluating frame (`ref x`, `mut x`, a projection of
+one, or such a borrow passed to or returned from a callee) are admitted since
+#1582. A borrow through a pointer or of a provider-backed local still fails with
+`InvalidProviderUse`, since CTFE has no memory outside its frames. Internal
+machine tests cover admitted reference lifetime, typed reads, mutation,
+discard/replay behavior and the pointer rejection. The generic stdlib
+`SolArraySuffix` declaration is covered; before #1582 its additional concrete
+execution probe reached the borrowing restriction while resolving an array
+extent, and it is not claimed as a passing concrete CTFE case.
 
 ## Verification and performance
 

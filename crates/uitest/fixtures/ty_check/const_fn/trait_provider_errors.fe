@@ -1,0 +1,64 @@
+// Const functions may take immutable trait providers. Each function below is
+// rejected on its own; the shared declarations are valid.
+trait Compute: Copy {
+    type Item
+    const fn compute(self) -> Self::Item
+}
+
+struct Number { value: u256 }
+struct Flag { value: bool }
+impl Copy for Number {}
+impl Copy for Flag {}
+impl Compute for Number {
+    type Item = u256
+    const fn compute(self) -> u256 { self.value }
+}
+impl Compute for Flag {
+    type Item = bool
+    const fn compute(self) -> bool { self.value }
+}
+
+const fn consume<T>() -> T uses (evidence: Compute<Item = T>) {
+    evidence.compute()
+}
+
+// No provider is in scope.
+const fn missing() -> u256 {
+    consume<u256>()
+}
+
+// The provider's associated output does not match the requested one.
+const fn wrong_output() -> u256 {
+    with (Compute<Item = u256> = Flag { value: true }) {
+        consume<u256>()
+    }
+}
+
+// Provider blocks are checked even when the branch is never taken.
+const fn untaken_type_error() -> u256 {
+    if false {
+        with (Compute<Item = u256> = Number { value: 1 }) {
+            let invalid: bool = 42
+        }
+    }
+    0
+}
+
+fn runtime() -> Number {
+    Number { value: 1 }
+}
+
+// A provider value must itself be a const expression.
+const fn untaken_runtime_provider() -> u256 {
+    if false {
+        with (Compute<Item = u256> = runtime()) {
+            consume<u256>()
+        }
+    }
+    0
+}
+
+// Mutable effects and type-keyed (storage) effects are not supported.
+const fn mutable() uses (evidence: mut Compute<Item = u256>) {}
+
+const fn storage() uses (number: Number) {}

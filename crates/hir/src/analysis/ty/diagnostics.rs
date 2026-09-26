@@ -855,7 +855,6 @@ pub enum BodyDiag<'db> {
 
     // Const fn / const-check diagnostics -----------------------------------
     ConstFnEffectsNotAllowed(DynLazySpan<'db>),
-    ConstFnWithNotAllowed(DynLazySpan<'db>),
     ConstFnNonConstCall {
         primary: DynLazySpan<'db>,
         callee: CallableDef<'db>,
@@ -1032,7 +1031,6 @@ impl<'db> BodyDiag<'db> {
             Self::RecvDuplicateFallback { .. } => 79,
             Self::RecvFallbackReturnTypeNotAllowed { .. } => 80,
             Self::ConstFnEffectsNotAllowed(_) => 55,
-            Self::ConstFnWithNotAllowed(_) => 56,
             Self::ConstFnNonConstCall { .. } => 62,
             Self::ConstFnEffectfulCall { .. } => 63,
         }

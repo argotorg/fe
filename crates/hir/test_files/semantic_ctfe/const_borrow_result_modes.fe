@@ -1,0 +1,9 @@
+const VALUE: u8 = {
+    let x: u8 = 42
+    let a = ref x
+    a
+}
+const BORROW: ref u8 = {
+    let x: u8 = 42
+    ref x
+}

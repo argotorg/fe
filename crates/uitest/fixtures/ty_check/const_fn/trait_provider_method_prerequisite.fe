@@ -1,0 +1,19 @@
+// A provider transports the trait, not the prerequisites of its methods.
+trait Gate {}
+trait Compute {
+    const fn compute(self) -> u256 where Self: Gate
+}
+struct Number {}
+impl Compute for Number {
+    const fn compute(self) -> u256 where Self: Gate { 42 }
+}
+
+const fn consume() -> u256 uses (evidence: Compute) {
+    evidence.compute()
+}
+
+const fn answer() -> u256 {
+    with (Compute = Number {}) {
+        consume()
+    }
+}

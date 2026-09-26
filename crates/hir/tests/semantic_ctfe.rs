@@ -21,6 +21,126 @@ use fe_hir::{
 };
 use num_traits::ToPrimitive;
 
+/// Reads a fixture from `test_files/semantic_ctfe`, returning its real path
+/// (so the file gets a real `file:` URL) and its text.
+fn semantic_ctfe_fixture(name: &str) -> (camino::Utf8PathBuf, String) {
+    let path = camino::Utf8PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test_files/semantic_ctfe"
+    ))
+    .join(name);
+    let text = std::fs::read_to_string(&path).expect("fixture should be readable");
+    (path, text)
+}
+
+/// Each fixture's `answer` borrows one of its own frame locals, possibly
+/// through a call, and evaluates to 42.
+#[dir_test::dir_test(
+    dir: "$CARGO_MANIFEST_DIR/test_files/semantic_ctfe/frame_local_borrows",
+    glob: "*.fe"
+)]
+fn semantic_ctfe_evaluates_frame_local_borrows(fixture: dir_test::Fixture<&str>) {
+    use fe_hir::analysis::ty::provider::ProviderAddressSpace;
+    use fe_hir::projection::Projection;
+
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(fixture.path().into(), fixture.content());
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+    let func = find_func(&db, top_mod, "answer");
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+    );
+    let borrows_frame_local = instance
+        .body(&db)
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .any(|stmt| {
+            matches!(
+                &stmt.kind,
+                SStmtKind::Assign {
+                    expr: SExpr::Borrow {
+                        provider: Some(ProviderAddressSpace::Memory),
+                        place,
+                        ..
+                    },
+                    ..
+                } if !place.path.iter().any(|projection| matches!(projection, Projection::Deref))
+            )
+        });
+    assert!(borrows_frame_local, "`answer` must borrow a frame local");
+    let value = match eval_body_owner_const(&db, BodyOwner::Func(func), vec![]) {
+        EvalOutcome::Ready(value) => value,
+        outcome => panic!("{outcome:?}"),
+    };
+    assert_eq!(value.pretty_print(&db), "42");
+}
+
+#[test]
+fn semantic_ctfe_rejects_references_to_a_returning_frame() {
+    let mut db = HirAnalysisTestDb::default();
+    let (path, text) = semantic_ctfe_fixture("returning_frame_borrow.fe");
+    let file = db.new_stand_alone(path, &text);
+    let (top_mod, _) = db.top_mod(file);
+    let func = find_func(&db, top_mod, "use_dangling");
+    // Even direct evaluator clients that omit borrow analysis must get an
+    // error, not a stale frame reference or a panic when that reference is read.
+    let EvalOutcome::Failed(EvalFailure::Ctfe(error)) =
+        eval_body_owner_const(&db, BodyOwner::Func(func), vec![])
+    else {
+        panic!("a dangling frame reference must fail evaluation");
+    };
+    // The failure happens in the callee and reaches the caller wrapped.
+    let mut root = &error;
+    while let CtfeError::CalleeError { source, .. } = root {
+        root = &**source;
+    }
+    assert!(matches!(root, CtfeError::InvalidBorrow { .. }), "{error:?}");
+}
+
+#[test]
+fn semantic_ctfe_preserves_const_and_anonymous_result_modes() {
+    let mut db = HirAnalysisTestDb::default();
+    let (path, text) = semantic_ctfe_fixture("const_borrow_result_modes.fe");
+    let file = db.new_stand_alone(path, &text);
+    let (top_mod, _) = db.top_mod(file);
+    let constants = top_mod
+        .all_items(&db)
+        .iter()
+        .copied()
+        .filter_map(|item| match item {
+            ItemKind::Const(const_) => Some(const_),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(constants.len(), 2);
+    for const_ in constants {
+        let expected = const_.ty(&db);
+        for owner in [
+            BodyOwner::Const(const_),
+            BodyOwner::AnonConstBody {
+                body: const_.body(&db).to_opt().unwrap(),
+                expected,
+            },
+        ] {
+            let result = eval_body_owner_const(&db, owner, vec![]);
+            if expected.as_capability(&db).is_some() {
+                assert!(
+                    matches!(
+                        result,
+                        EvalOutcome::Failed(EvalFailure::Ctfe(CtfeError::InvalidBorrow { .. }))
+                    ),
+                    "{result:?}"
+                );
+            } else {
+                assert_eq!(result.into_ready().unwrap().pretty_print(&db), "42");
+            }
+        }
+    }
+}
+
 #[test]
 fn semantic_const_operands_keep_formal_evidence_distinct() {
     let mut db = HirAnalysisTestDb::default();
@@ -49,6 +169,88 @@ fn semantic_const_operands_keep_formal_evidence_distinct() {
                 }
             ))
     );
+}
+
+#[test]
+fn semantic_ctfe_defers_effectful_calls_like_pure_calls() {
+    use fe_hir::analysis::ty::{
+        const_ty::ConstTyId,
+        ty_def::{PrimTy, TyBase, TyData, TyId},
+    };
+
+    // A call whose input is still generic blocks the whole evaluation, which
+    // is replayed after specialization. A call with a provider behaves the
+    // same way and runs with that provider once the input is known.
+    for fixture in ["symbolic_effectful_call.fe", "symbolic_pure_call.fe"] {
+        let mut db = HirAnalysisTestDb::default();
+        let (path, text) = semantic_ctfe_fixture(fixture);
+        let file = db.new_stand_alone(path, &text);
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let owner = BodyOwner::Func(find_func(&db, top_mod, "symbolic"));
+        let generic = eval_body_owner_const(&db, owner, vec![]);
+        assert!(
+            matches!(generic, EvalOutcome::Blocked(_)),
+            "{fixture}: {generic:?}"
+        );
+        let two = TyId::new(
+            &db,
+            TyData::ConstTy(ConstTyId::integer(
+                &db,
+                TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize))),
+                2.into(),
+            )),
+        );
+        let value = match eval_body_owner_const(&db, owner, vec![two]) {
+            EvalOutcome::Ready(value) => value,
+            outcome => panic!("{fixture}: {outcome:?}"),
+        };
+        assert_eq!(value.pretty_print(&db), "99", "{fixture}");
+    }
+}
+
+#[test]
+fn semantic_ctfe_provider_edits_match_fresh_databases() {
+    use salsa::Setter;
+
+    let path = camino::Utf8PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fe/tests/fixtures/fe_test/const_trait_providers.fe"
+    ));
+    let original = std::fs::read_to_string(&path).expect("fixture should be readable");
+    fn evaluate<'db>(
+        db: &'db HirAnalysisTestDb,
+        top_mod: fe_hir::hir_def::TopLevelMod<'db>,
+    ) -> String {
+        let func = find_func(db, top_mod, "answer");
+        match eval_body_owner_const(db, BodyOwner::Func(func), vec![]) {
+            EvalOutcome::Ready(value) => value.pretty_print(db),
+            outcome => panic!("{outcome:?}"),
+        }
+    }
+    let mut warm = HirAnalysisTestDb::default();
+    let file = warm.new_stand_alone(path.clone(), &original);
+    for (provider, number, expected) in [
+        ("Twice", 7, "36"),
+        ("Number", 7, "29"),
+        ("Twice", 9, "40"),
+        ("Twice", 7, "36"),
+    ] {
+        let source = original.replace(
+            "Twice { value: 7 }",
+            &format!("{provider} {{ value: {number} }}"),
+        );
+        file.set_text(&mut warm).to(source.clone());
+        let (top_mod, _) = warm.top_mod(file);
+        warm.assert_no_diags(top_mod);
+        assert_eq!(evaluate(&warm, top_mod), expected, "{provider} {number}");
+
+        let mut fresh = HirAnalysisTestDb::default();
+        let fresh_file = fresh.new_stand_alone(path.clone(), &source);
+        let (fresh_top, _) = fresh.top_mod(fresh_file);
+        fresh.assert_no_diags(fresh_top);
+        assert_eq!(evaluate(&fresh, fresh_top), expected, "{provider} {number}");
+    }
 }
 
 #[test]
@@ -574,7 +776,6 @@ fn const_fn_match_has_no_const_body_diagnostic() {
             diag,
             FuncBodyDiag::Body(
                 BodyDiag::ConstFnEffectsNotAllowed(_)
-                    | BodyDiag::ConstFnWithNotAllowed(_)
                     | BodyDiag::ConstFnNonConstCall { .. }
                     | BodyDiag::ConstFnEffectfulCall { .. }
             )

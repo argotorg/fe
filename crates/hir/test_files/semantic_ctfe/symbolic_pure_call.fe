@@ -1,0 +1,8 @@
+const fn undecided<const N: usize>() -> u256 {
+    let values: [u256; N] = [0; N]
+    99
+}
+
+const fn symbolic<const N: usize>() -> u256 {
+    undecided<N>()
+}

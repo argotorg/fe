@@ -1,0 +1,7 @@
+const fn set(value: mut u8) { value = 42 }
+
+const fn answer() -> u8 {
+    let mut x: u8 = 0
+    set(value: mut x)
+    x
+}

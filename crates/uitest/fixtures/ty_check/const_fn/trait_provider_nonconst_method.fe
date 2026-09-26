@@ -1,0 +1,17 @@
+// A provider does not make its trait's non-const methods callable at compile
+// time.
+trait Compute: Copy {
+    type Item
+    fn compute(self) -> Self::Item
+}
+
+struct Number { value: u256 }
+impl Copy for Number {}
+impl Compute for Number {
+    type Item = u256
+    fn compute(self) -> u256 { self.value }
+}
+
+const fn consume<T>() -> T uses (evidence: Compute<Item = T>) {
+    evidence.compute()
+}

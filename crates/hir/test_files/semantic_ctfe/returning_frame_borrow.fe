@@ -1,0 +1,9 @@
+const fn dangling() -> mut u8 {
+    let mut x: u8 = 0
+    mut x
+}
+
+const fn use_dangling() -> u8 {
+    let a = dangling()
+    a
+}

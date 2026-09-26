@@ -1,0 +1,6 @@
+const fn answer() -> u8 {
+    let mut values: [u8; 2] = [0, 1]
+    let a = mut values[1]
+    a = 42
+    values[1]
+}

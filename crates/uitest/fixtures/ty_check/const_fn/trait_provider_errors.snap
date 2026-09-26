@@ -1,0 +1,45 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_fn/trait_provider_errors.fe
+---
+error[8-0000]: type mismatch
+   ┌─ trait_provider_errors.fe:41:33
+   │
+41 │             let invalid: bool = 42
+   │                                 ^^ expected `bool`, but `{integer}` is given
+
+error[8-0036]: missing effect `Compute<Item = T>` required by `consume`
+   ┌─ trait_provider_errors.fe:27:5
+   │
+27 │     consume<u256>()
+   │     ^^^^^^^^^^^^^^^ `consume` requires effect `Compute<Item = T>` to be in scope
+   │
+   = provide it with `with (Compute<Item = T> = value)` or require it via `uses Compute<Item = T>`
+
+error[8-0055]: unsupported effects in a `const fn`
+   ┌─ trait_provider_errors.fe:62:20
+   │
+62 │ const fn mutable() uses (evidence: mut Compute<Item = u256>) {}
+   │                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a `const fn` may only use immutable trait providers
+
+error[8-0055]: unsupported effects in a `const fn`
+   ┌─ trait_provider_errors.fe:64:20
+   │
+64 │ const fn storage() uses (number: Number) {}
+   │                    ^^^^^^^^^^^^^^^^^^^^^ a `const fn` may only use immutable trait providers
+
+error[8-0062]: non-const call in `const fn`
+   ┌─ trait_provider_errors.fe:54:38
+   │
+47 │ fn runtime() -> Number {
+   │    ------- callee defined here
+   ·
+54 │         with (Compute<Item = u256> = runtime()) {
+   │                                      ^^^^^^^^^ `runtime` is not a `const fn`
+
+error[8-0075]: keyed effect binding `Compute<Item = u256>` requires `Flag` to implement `Compute<Item = u256>`
+   ┌─ trait_provider_errors.fe:32:34
+   │
+32 │     with (Compute<Item = u256> = Flag { value: true }) {
+   │                                  ^^^^^^^^^^^^^^^^^^^^ `Flag` does not implement `Compute<Item = u256>` for effect `Compute<Item = u256>`

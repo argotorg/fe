@@ -1,0 +1,22 @@
+trait Compute: Copy {
+    type Item
+    const fn compute(self) -> Self::Item
+}
+
+struct Number { value: u256 }
+impl Copy for Number {}
+impl Compute for Number {
+    type Item = u256
+    const fn compute(self) -> u256 { self.value }
+}
+
+const fn undecided<const N: usize>() -> u256 uses (evidence: Compute<Item = u256>) {
+    let values: [u256; N] = [0; N]
+    evidence.compute()
+}
+
+const fn symbolic<const N: usize>() -> u256 {
+    with (Compute<Item = u256> = Number { value: 99 }) {
+        undecided<N>()
+    }
+}

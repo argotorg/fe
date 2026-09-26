@@ -10,7 +10,7 @@ impl Logger for Silent {
     }
 }
 
-pub const fn bad_with() -> u8 {
+pub const fn unused_provider() -> u8 {
     with (Logger = Silent {}) {
         1
     }
