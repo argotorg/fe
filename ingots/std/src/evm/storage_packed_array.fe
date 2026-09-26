@@ -2,9 +2,25 @@ use core::keccak
 use core::option::Option
 
 use super::effects::RawStorage
-use super::ops::{sload, sstore}
+use super::ops::{mstore, revert, sload, sstore}
+use super::panic::PANIC_INDEX_OUT_OF_BOUNDS
 
 const U256_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+/// First word of a Solidity `Panic(uint256)` revert payload: the ABI selector
+/// `keccak256("Panic(uint256)")[0..4]` left-aligned in a 32-byte word.
+const PANIC_SELECTOR_WORD: u256 =
+    0x4e487b7100000000000000000000000000000000000000000000000000000000
+
+/// Revert with Solidity's standard `Panic(uint256)` payload carrying code
+/// `0x32` (`IndexOutOfBounds`) — the same encoding the compiler emits for a
+/// failed fixed-array bounds check, so callers observe one uniform signal.
+#[inline(always)]
+fn revert_panic_index_out_of_bounds() {
+    mstore(addr: 0, value: PANIC_SELECTOR_WORD)
+    mstore(addr: 4, value: PANIC_INDEX_OUT_OF_BOUNDS)
+    revert(offset: 0, len: 36)
+}
 
 /// A storage-backed packed array of fixed-bit-width integer lanes.
 ///
@@ -116,6 +132,40 @@ impl<const BITS: u256, const SALT: u256> StoragePackedArray<BITS, SALT>
         let cleared: u256 = sload(slot) & (U256_MASK ^ lane_mask_shifted)
         let inserted: u256 = (value & Self::LANE_MASK) << bit_pos
         sstore(slot: slot, value: cleared | inserted)
+    }
+
+    /// Read the lane at index `i`, reverting with Solidity panic code
+    /// `0x32` (`IndexOutOfBounds`) unless `i < LEN`.
+    ///
+    /// The plain `get`/`set` pair is deliberately unbounded: indices map to
+    /// slots arithmetically and spill into consecutive storage slots. That
+    /// matches the type's contract ("dense integer indices"), but it means
+    /// the compiler cannot catch a caller whose *modeled* domain is smaller —
+    /// e.g. a 16-cell board backed by `StoragePackedArray<4>` still accepts
+    /// `set(16, v)` and writes a lane into the second slot word. When the
+    /// modeled length is known statically, prefer these checked accessors so
+    /// an out-of-domain index reverts instead of silently corrupting a
+    /// neighboring region of the layout.
+    #[inline(always)]
+    pub fn get_checked<const LEN: u256>(self, i: u256) -> u256 {
+        if i >= LEN {
+            revert_panic_index_out_of_bounds()
+        }
+        self.get(i)
+    }
+
+    /// Overwrite the lane at index `i` with `value`, reverting with Solidity
+    /// panic code `0x32` (`IndexOutOfBounds`) unless `i < LEN`. Bits above
+    /// `BITS` in `value` are silently dropped, as with `set`.
+    ///
+    /// See `get_checked` for why a statically-known bound must be enforced
+    /// by the caller rather than by the array type itself.
+    #[inline(always)]
+    pub fn set_checked<const LEN: u256>(mut self, i: u256, value: u256) {
+        if i >= LEN {
+            revert_panic_index_out_of_bounds()
+        }
+        self.set(i, value)
     }
 
     /// Linear search in `[start, end)` for the first lane equal to `needle`.
