@@ -1,0 +1,47 @@
+// Word hashing, packed hashing and CREATE2 addresses.
+use core::abi::ByteInput
+use std::abi::Bytes4
+use std::abi::sol::{Int24, Uint24}
+use std::evm::{Address, RawMem, create2_address, keccak256, keccak_words}
+use std::evm::packed::{EncodePacked, Packed, encode_packed, keccak_packed}
+use core::ptr::{self, MemSpan}
+
+fn hash_words(_ a: u256, _ b: u256) -> u256 uses (mem: mut RawMem) {
+    let buffer = ptr::alloc_bytes(64)
+    mem.mstore(addr: buffer, value: a)
+    mem.mstore(addr: ptr::offset_bytes(buffer, 32), value: b)
+    keccak256(MemSpan::from_raw_parts(ptr: buffer, len: 64))
+}
+
+#[test]
+fn keccak_words_matches_abi_encode() uses (mem: mut RawMem) {
+    assert(keccak_words([1, 2]) == hash_words(1, 2))
+    // keccak256(abi.encode(uint256(0))) and keccak256("")
+    assert(keccak_words([0]) == 0x290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563)
+    assert(keccak_words([]) == 0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470)
+}
+
+#[test]
+fn keccak_packed_writes_each_type_at_its_width() uses (mem: mut RawMem) {
+    // abi.encodePacked(address(0xabc), int24(-60), uint24(3000), true, uint256(7))
+    let owner = Address { inner: 0xabc }
+    let packed = encode_packed((owner, Int24 { val: -60 }, Uint24 { val: 3000 }, true, 7 as u256))
+    assert(packed.len() == 20 + 3 + 3 + 1 + 32)
+    let span = packed.as_bytes().payload_span()
+    assert(span.word_at(0) == (0xabc << 96) | (0xffffc4 << 72) | (0x000bb8 << 48) | (1 << 40))
+    assert(span.word_at(27) == 7)
+    // The direct `write_packed` path hashes the same bytes as the builder.
+    let built = (owner, Int24 { val: -60 }, Uint24 { val: 3000 }, true, 7 as u256).pack_into(Packed::new())
+    assert(keccak_packed((owner, Int24 { val: -60 }, Uint24 { val: 3000 }, true, 7 as u256)) == built.keccak256())
+    let small = (-1 as i8, 2 as u16, Bytes4 { val: 0xdeadbeef }).pack_into(Packed::new())
+    assert(keccak_packed((-1 as i8, 2 as u16, Bytes4 { val: 0xdeadbeef })) == small.keccak256())
+}
+
+#[test]
+fn create2_address_matches_eip1014() uses (mem: mut RawMem) {
+    // EIP-1014 example 2: deployer 0xdeadbeef00000000000000000000000000000000,
+    // salt 0, init code 0x00 -> 0xB928f69Bb1D91Cd65274e3c79d8986362984fDA3
+    let deployer = Address { inner: 0xdeadbeef00000000000000000000000000000000 }
+    let init_code_hash = 0xbc36789e7a1e281436464229828f817d6612f7b477d66591ff96a9e064bcc98a
+    assert(create2_address(deployer, salt: 0, init_code_hash).inner == 0xB928f69Bb1D91Cd65274e3c79d8986362984fDA3)
+}

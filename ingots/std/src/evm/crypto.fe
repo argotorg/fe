@@ -12,7 +12,7 @@
 use core::option::Option
 use core::ptr::{self, FixedMemBuffer, MemBuffer, MemSpan}
 use core::result::Result
-use super::effects::RawMem
+use super::effects::{Address, RawMem}
 use super::ops
 use super::packed
 
@@ -192,6 +192,33 @@ pub const fn mulmod(_ a: u256, _ b: u256, _ m: u256) -> u256 {
 pub fn keccak256(_ data: MemSpan) -> u256 {
     ops::keccak256(offset: data.ptr(), len: data.len())
 }
+
+/// Keccak256 of the concatenated 32-byte words, e.g. `keccak_words([a, b])`
+/// for Solidity's `keccak256(abi.encode(a, b))` over word-sized values.
+///
+/// Much cheaper than `keccak_packed` for word tuples: the words are written
+/// into one buffer without the packed builder's per-field bookkeeping.
+pub fn keccak_words<const N: usize>(_ words: [u256; N]) -> u256 {
+    let buffer = MemBuffer::alloc(N as u256 * 32)
+    let mut i: usize = 0
+    while i < N {
+        ops::mstore(addr: offset(buffer.ptr(), i as u256 * 32), value: words[i])
+        i += 1
+    }
+    ops::keccak256(offset: buffer.ptr(), len: N as u256 * 32)
+}
+
+/// Address of a contract created with `CREATE2` by `deployer`:
+/// the low 20 bytes of `keccak256(0xff ++ deployer ++ salt ++ init_code_hash)`.
+pub fn create2_address(deployer: Address, salt: u256, init_code_hash: u256) -> Address {
+    let preimage = MemBuffer::alloc(85)
+    ops::mstore(addr: preimage.ptr(), value: (0xff << 248) | (deployer.inner << 88))
+    ops::mstore(addr: offset(preimage.ptr(), 21), value: salt)
+    ops::mstore(addr: offset(preimage.ptr(), 53), value: init_code_hash)
+    Address { inner: ops::keccak256(offset: preimage.ptr(), len: 85) & ADDRESS_MASK }
+}
+
+const ADDRESS_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffff
 
 /// SHA256 hash of a memory region (precompile 0x02).
 pub fn sha256(_ data: MemSpan) -> Result<PrecompileError, u256> {
