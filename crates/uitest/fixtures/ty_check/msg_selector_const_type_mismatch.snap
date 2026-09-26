@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/msg_selector_const_type_mismatch.fe
+---
+error[8-0000]: type mismatch
+  ┌─ msg_selector_const_type_mismatch.fe:6:18
+  │
+6 │     #[selector = ingot::SELECTOR_VALUE]
+  │                  ^^^^^^^^^^^^^^^^^^^^^ expected `u32`, but `bool` is given

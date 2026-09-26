@@ -1,4 +1,3 @@
-use num_bigint::BigUint;
 use parser::ast::{self, AttrListOwner as _};
 use salsa::Accumulator as _;
 
@@ -12,15 +11,15 @@ use crate::{
     hir_def::{
         ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, ExprId, FieldDef,
         FieldDefListId, FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName,
-        GenericArgListId, IdentId, ImplTrait, IntegerId, LitKind, LogicalBinOp, Mod, Partial,
-        PathId, PathKind, Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind,
+        GenericArgListId, IdentId, ImplTrait, LitKind, LogicalBinOp, Mod, Partial, PathId,
+        PathKind, Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind,
         Visibility,
     },
     lower::FileLowerCtxt,
     span::{MsgDesugared, MsgDesugaredFocus},
 };
 
-use super::body::BodyCtxt;
+use super::{body::BodyCtxt, generated_abi_const};
 
 /// Desugars a `msg` block into a module containing structs and trait impls.
 ///
@@ -135,31 +134,45 @@ fn lower_msg_variant_abi_size_impl<'db>(
     variant: &ast::MsgVariant,
     struct_: Struct<'db>,
 ) -> ImplTrait<'db> {
+    let field_specs = lower_msg_variant_field_specs(builder.ctxt(), variant);
+    let self_ty = variant_struct_ty(builder.db(), struct_);
+    lower_abi_size_impl(builder, self_ty, &field_specs)
+}
+
+/// Generate `impl core::abi::AbiRecord<N> for SelfTy` and
+/// `impl core::abi::AbiSize for SelfTy` over the given fields, in declaration
+/// order. `HEAD_SIZE` reads the record layout, so the two are emitted together.
+/// Shared by `msg` variants and `#[error]` structs.
+pub(super) fn lower_abi_size_impl<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
+    builder: &mut HirBuilder<'_, 'db, O>,
+    self_ty: TypeId<'db>,
+    field_specs: &[(IdentId<'db>, TypeId<'db>)],
+) -> ImplTrait<'db> {
+    lower_abi_record_impl(builder, self_ty, field_specs);
     let db = builder.db();
     let roots = builder.roots();
-    let field_specs = lower_msg_variant_field_specs(builder.ctxt(), variant);
     let trait_path = PathId::from_ident(db, roots.core)
         .push_str(db, "abi")
         .push_str(db, "AbiSize");
     let trait_ref = Partial::Present(TraitRefId::new(db, Partial::Present(trait_path)));
-    let ty = Partial::Present(variant_struct_ty(db, struct_));
+    let ty = Partial::Present(self_ty);
     let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
     builder.with_item_scope(
         TrackedItemVariant::ImplTrait(impl_trait_idx),
         |builder, id| {
             let consts = vec![
-                create_head_size_assoc_const(builder, &field_specs),
-                create_is_dynamic_assoc_const(builder, &field_specs),
+                create_head_size_assoc_const(builder, field_specs.len()),
+                create_is_dynamic_assoc_const(builder, field_specs),
             ];
             let impl_trait =
                 builder.new_impl_trait(id, trait_ref, ty, vec![], consts, builder.origin());
-            create_payload_size_func(builder, &field_specs);
+            create_payload_size_func(builder, field_specs);
             impl_trait
         },
     )
 }
 
-pub(super) fn create_payload_size_func<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
+fn create_payload_size_func<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
     builder: &mut HirBuilder<'_, 'db, O>,
     field_specs: &[(IdentId<'db>, TypeId<'db>)],
 ) {
@@ -175,7 +188,6 @@ pub(super) fn create_payload_size_func<'db, O: Clone + Into<crate::span::Desugar
         self_ty_fallback: true,
     }]);
     let ret_ty = builder.ty_ident(builder.ident("u256"));
-    let roots = builder.roots();
     builder.func_with_body_inline_always(
         payload_size_ident,
         builder.empty_generic_params(),
@@ -183,24 +195,12 @@ pub(super) fn create_payload_size_func<'db, O: Clone + Into<crate::span::Desugar
         Some(ret_ty),
         FuncModifiers::new(Visibility::Private, false, false, false),
         |body| {
-            let db = body.db();
-            let dynamic_payload_size_path = PathId::from_ident(db, roots.core)
-                .push_str(db, "abi")
-                .push_str(db, "dynamic_payload_size");
-            let mut expr = body.abi_size_assoc_expr(TypeId::fallback_self_ty(db), "HEAD_SIZE");
-            let self_expr = (!field_specs.is_empty())
-                .then(|| body.path_expr(PathId::from_ident(db, IdentId::make_self(db))));
-
-            for (field_name, _) in field_specs.iter().copied() {
-                let field_expr = body.push_expr(Expr::Field(
-                    self_expr.expect("message payload fields require a receiver"),
-                    Partial::Present(FieldIndex::Ident(field_name)),
-                ));
-                let dynamic_payload_size = body.path_expr(dynamic_payload_size_path);
-                let field_size = body.call_expr(dynamic_payload_size, vec![field_expr]);
-                expr = body.push_expr(Expr::Bin(expr, field_size, BinOp::Arith(ArithBinOp::Add)));
-            }
-
+            let head_size = body.abi_size_assoc_expr(
+                TypeId::fallback_self_ty(body.db()),
+                generated_abi_const::HEAD_SIZE,
+            );
+            let fields = body.self_field_exprs(field_specs);
+            let expr = body.record_payload_size_expr(head_size, fields);
             body.emit_return(Some(expr));
         },
     );
@@ -212,13 +212,24 @@ fn lower_msg_variant_encode_impl<'db>(
     struct_: Struct<'db>,
 ) -> ImplTrait<'db> {
     let field_specs = lower_msg_variant_field_specs(builder.ctxt(), variant);
+    let self_ty = variant_struct_ty(builder.db(), struct_);
+    lower_sol_encode_impl(builder, self_ty, &field_specs)
+}
 
+/// Generate `impl core::abi::Encode<std::abi::Sol> for SelfTy` over the given
+/// fields, in declaration order. Shared by `msg` variants and `#[error]` structs.
+pub(super) fn lower_sol_encode_impl<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
+    builder: &mut HirBuilder<'_, 'db, O>,
+    self_ty: TypeId<'db>,
+    field_specs: &[(IdentId<'db>, TypeId<'db>)],
+) -> ImplTrait<'db> {
     let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
     let trait_ref = Partial::Present(builder.core_abi_trait_ref_sol("Encode"));
-    let ty = Partial::Present(variant_struct_ty(builder.db(), struct_));
+    let ty = Partial::Present(self_ty);
     builder.with_item_scope(
         TrackedItemVariant::ImplTrait(impl_trait_idx),
         |builder, id| {
+            let abi_record_trait = builder.abi_record_trait_ref(field_specs.len());
             let impl_trait =
                 builder.new_impl_trait(id, trait_ref, ty, vec![], vec![], builder.origin());
 
@@ -237,31 +248,13 @@ fn lower_msg_variant_encode_impl<'db>(
                 None,
                 FuncModifiers::new(Visibility::Private, false, false, false),
                 |body| {
-                    body.encode_fields(&field_specs, ptr_ident);
+                    body.encode_fields(field_specs, ptr_ident, abi_record_trait);
                 },
             );
 
             impl_trait
         },
     )
-}
-
-fn push_bool_expr<'db>(
-    body_ctxt: &mut BodyCtxt<'_, 'db>,
-    origin: crate::span::HirOrigin<ast::Expr>,
-    value: bool,
-) -> crate::hir_def::ExprId {
-    body_ctxt.push_expr(Expr::Lit(LitKind::Bool(value)), origin)
-}
-
-fn push_int_expr<'db>(
-    body_ctxt: &mut BodyCtxt<'_, 'db>,
-    origin: crate::span::HirOrigin<ast::Expr>,
-    value: u64,
-) -> crate::hir_def::ExprId {
-    let db = body_ctxt.f_ctxt.db();
-    let value = BigUint::from(value);
-    body_ctxt.push_expr(Expr::Lit(LitKind::Int(IntegerId::new(db, value))), origin)
 }
 
 fn abi_size_trait_ref<'db>(ctxt: &FileLowerCtxt<'db>) -> TraitRefId<'db> {
@@ -294,29 +287,25 @@ fn abi_size_assoc_expr<'db>(
     )
 }
 
-pub(super) fn create_is_dynamic_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
+fn create_is_dynamic_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
     builder: &mut HirBuilder<'_, 'db, O>,
-    fields: &[(IdentId<'db>, TypeId<'db>)],
-) -> AssocConstDef<'db> {
-    create_bool_assoc_const(builder, "IS_DYNAMIC", fields)
-}
-
-fn create_bool_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
-    builder: &mut HirBuilder<'_, 'db, O>,
-    name: &str,
     fields: &[(IdentId<'db>, TypeId<'db>)],
 ) -> AssocConstDef<'db> {
     let db = builder.db();
-    let name = builder.ident(name);
+    let name = builder.ident(generated_abi_const::IS_DYNAMIC);
     let ty = builder.ty_ident(builder.ident("bool"));
     let id = builder.ctxt().joined_id(TrackedItemVariant::NamelessBody);
     let origin = builder.origin();
     let mut body_ctxt = BodyCtxt::new(builder.ctxt(), id);
-    let mut expr = push_bool_expr(&mut body_ctxt, origin.clone(), false);
+    let mut expr = body_ctxt.push_expr(Expr::Lit(LitKind::Bool(false)), origin.clone());
 
     for (_, field_ty) in fields.iter().copied() {
-        let field_is_dynamic =
-            abi_size_assoc_expr(&mut body_ctxt, origin.clone(), field_ty, "IS_DYNAMIC");
+        let field_is_dynamic = abi_size_assoc_expr(
+            &mut body_ctxt,
+            origin.clone(),
+            field_ty,
+            generated_abi_const::IS_DYNAMIC,
+        );
         expr = body_ctxt.push_expr(
             Expr::Bin(expr, field_is_dynamic, BinOp::Logical(LogicalBinOp::Or)),
             origin.clone(),
@@ -329,35 +318,44 @@ fn create_bool_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
         name: Partial::Present(name),
         ty: Partial::Present(ty),
         value: Partial::Present(body),
+        body_check_policy: crate::hir_def::AssocConstBodyCheckPolicy::BodyAnalysis,
         vis: crate::hir_def::Visibility::Public,
     }
 }
 
-pub(super) fn create_head_size_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
+/// `HEAD_SIZE = <Self as AbiRecord<N>>::LAYOUT.head_size`.
+fn create_head_size_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
     builder: &mut HirBuilder<'_, 'db, O>,
-    fields: &[(IdentId<'db>, TypeId<'db>)],
+    field_count: usize,
 ) -> AssocConstDef<'db> {
     let db = builder.db();
-    let core = builder.roots().core;
-    let name = builder.ident("HEAD_SIZE");
+    let name = builder.ident(generated_abi_const::HEAD_SIZE);
     let ty = builder.ty_ident(builder.ident("u256"));
+    let record_trait = builder.abi_record_trait_ref(field_count);
     let id = builder.ctxt().joined_id(TrackedItemVariant::NamelessBody);
     let origin = builder.origin();
     let mut body_ctxt = BodyCtxt::new(builder.ctxt(), id);
-    let mut expr = push_int_expr(&mut body_ctxt, origin.clone(), 0);
-
-    for (_, field_ty) in fields.iter().copied() {
-        let args = GenericArgListId::given1_type(db, field_ty);
-        let path = PathId::from_ident(db, core)
-            .push_str(db, "abi")
-            .push_str_args(db, "abi_field_head_size", args);
-        let callee = body_ctxt.push_expr(Expr::Path(Partial::Present(path)), origin.clone());
-        let field_size = body_ctxt.push_expr(Expr::Call(callee, vec![]), origin.clone());
-        expr = body_ctxt.push_expr(
-            Expr::Bin(expr, field_size, BinOp::Arith(ArithBinOp::Add)),
-            origin.clone(),
-        );
-    }
+    let qualified = PathId::new(
+        db,
+        PathKind::QualifiedType {
+            type_: TypeId::fallback_self_ty(db),
+            trait_: record_trait,
+        },
+        None,
+    );
+    let layout = body_ctxt.push_expr(
+        Expr::Path(Partial::Present(
+            qualified.push_str(db, generated_abi_const::LAYOUT),
+        )),
+        origin.clone(),
+    );
+    let expr = body_ctxt.push_expr(
+        Expr::Field(
+            layout,
+            Partial::Present(FieldIndex::Ident(IdentId::new(db, "head_size".to_owned()))),
+        ),
+        origin,
+    );
 
     let body = body_ctxt.build(None, expr, BodyKind::Anonymous);
     AssocConstDef {
@@ -365,25 +363,103 @@ pub(super) fn create_head_size_assoc_const<'db, O: Clone + Into<crate::span::Des
         name: Partial::Present(name),
         ty: Partial::Present(ty),
         value: Partial::Present(body),
+        body_check_policy: crate::hir_def::AssocConstBodyCheckPolicy::BodyAnalysis,
         vis: crate::hir_def::Visibility::Public,
     }
+}
+
+pub(super) fn lower_abi_record_impl<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
+    builder: &mut HirBuilder<'_, 'db, O>,
+    self_ty: TypeId<'db>,
+    fields: &[(IdentId<'db>, TypeId<'db>)],
+) -> ImplTrait<'db> {
+    let db = builder.db();
+    let core = builder.roots().core;
+    let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
+    builder.with_item_scope(
+        TrackedItemVariant::ImplTrait(impl_trait_idx),
+        |builder, id| {
+            let args = builder.abi_record_args(fields.len());
+            let trait_path = PathId::from_ident(db, core)
+                .push_str(db, "abi")
+                .push_str_args(db, "AbiRecord", args);
+            let trait_ref = Partial::Present(TraitRefId::new(db, Partial::Present(trait_path)));
+            let layout_ty = TypeId::new(
+                db,
+                TypeKind::Path(Partial::Present(
+                    PathId::from_ident(db, core)
+                        .push_str(db, "abi")
+                        .push_str_args(db, "AbiRecordLayout", args),
+                )),
+            );
+            let origin = builder.origin();
+            let body_id = builder.ctxt().joined_id(TrackedItemVariant::NamelessBody);
+            let mut body = BodyCtxt::new(builder.ctxt(), body_id);
+            let mut field_values = Vec::with_capacity(fields.len());
+            for (_, field_ty) in fields.iter().copied() {
+                let field_args = GenericArgListId::given1_type(db, field_ty);
+                let callee = body.push_expr(
+                    Expr::Path(Partial::Present(
+                        PathId::from_ident(db, core)
+                            .push_str(db, "abi")
+                            .push_str_args(db, "abi_field_head_size", field_args),
+                    )),
+                    origin.clone(),
+                );
+                field_values.push(body.push_expr(Expr::Call(callee, vec![]), origin.clone()));
+            }
+            let fields_array = body.push_expr(Expr::Array(field_values), origin.clone());
+            let layout_callee = body.push_expr(
+                Expr::Path(Partial::Present(
+                    PathId::from_ident(db, core)
+                        .push_str(db, "abi")
+                        .push_str_args(db, "abi_record_layout", args),
+                )),
+                origin.clone(),
+            );
+            let layout = body.push_expr(
+                Expr::Call(
+                    layout_callee,
+                    vec![crate::hir_def::expr::CallArg {
+                        label: None,
+                        expr: fields_array,
+                    }],
+                ),
+                origin,
+            );
+            let body = body.build(None, layout, BodyKind::Anonymous);
+            let layout_const = AssocConstDef {
+                attributes: AttrListId::new(db, vec![]),
+                name: Partial::Present(IdentId::new(db, generated_abi_const::LAYOUT.to_owned())),
+                ty: Partial::Present(layout_ty),
+                value: Partial::Present(body),
+                body_check_policy: crate::hir_def::AssocConstBodyCheckPolicy::BodyAnalysis,
+                vis: crate::hir_def::Visibility::Public,
+            };
+            builder.new_impl_trait(
+                id,
+                trait_ref,
+                Partial::Present(self_ty),
+                vec![],
+                vec![layout_const],
+                builder.origin(),
+            )
+        },
+    )
 }
 
 fn build_decode_head_pos_expr<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
     body: &mut BodyBuilder<'_, 'db, O>,
     base_ident: IdentId<'db>,
-    prior_fields: &[(IdentId<'db>, TypeId<'db>)],
+    abi_record_trait: TraitRefId<'db>,
+    field_index: usize,
 ) -> ExprId {
-    let mut expr = body.ident_expr(base_ident);
-    for (_, ty) in prior_fields.iter().copied() {
-        let field_head_size = body.abi_field_head_size_expr(ty);
-        expr = body.push_expr(Expr::Bin(
-            expr,
-            field_head_size,
-            BinOp::Arith(ArithBinOp::Add),
-        ));
+    let base = body.ident_expr(base_ident);
+    if field_index == 0 {
+        return base;
     }
-    expr
+    let offset = body.abi_record_offset_expr(abi_record_trait, field_index);
+    body.push_expr(Expr::Bin(base, offset, BinOp::Arith(ArithBinOp::Add)))
 }
 
 fn emit_msg_decode_from_fields<'db>(
@@ -391,9 +467,11 @@ fn emit_msg_decode_from_fields<'db>(
     fields: &[(IdentId<'db>, TypeId<'db>)],
     field_names: &[IdentId<'db>],
     decode_input: DecodeInputBindings<'db>,
+    abi_record_trait: TraitRefId<'db>,
 ) {
     for (idx, (name, ty)) in fields.iter().copied().enumerate() {
-        let head_pos = build_decode_head_pos_expr(body, decode_input.base_ident, &fields[..idx]);
+        let head_pos =
+            build_decode_head_pos_expr(body, decode_input.base_ident, abi_record_trait, idx);
         body.decode_from_into(name, ty, decode_input, head_pos);
     }
     body.return_record_self(field_names);
@@ -412,6 +490,7 @@ fn lower_msg_variant_decode_trait_impl<'db>(
     let ty = variant_struct_ty(db, struct_);
 
     builder.impl_trait(trait_ref, ty, |builder| {
+        let abi_record_trait = builder.abi_record_trait_ref(fields.len());
         let abi_decoder_trait_ref = builder.core_abi_trait_ref_sol("AbiDecoder");
         let (d_generic_params, d_ty) =
             builder.type_param_with_trait_bound("D", abi_decoder_trait_ref);
@@ -462,7 +541,13 @@ fn lower_msg_variant_decode_trait_impl<'db>(
                 if !fields.is_empty() {
                     body.bind_input_len(input_len_ident, input_ident);
                 }
-                emit_msg_decode_from_fields(body, &fields, &field_names, decode_input);
+                emit_msg_decode_from_fields(
+                    body,
+                    &fields,
+                    &field_names,
+                    decode_input,
+                    abi_record_trait,
+                );
             },
         );
     })
@@ -646,6 +731,7 @@ fn create_selector_const<'db>(
         name: Partial::Present(selector_name),
         ty: Partial::Present(selector_ty),
         value: Partial::Present(body),
+        body_check_policy: crate::hir_def::AssocConstBodyCheckPolicy::MsgSelectorAnalysis,
         vis: crate::hir_def::Visibility::Public,
     }
 }

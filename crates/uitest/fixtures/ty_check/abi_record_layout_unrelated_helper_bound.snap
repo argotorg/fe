@@ -1,0 +1,27 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/abi_record_layout_unrelated_helper_bound.fe
+---
+error[2-0002]: `error` is not found
+   ┌─ abi_record_layout_unrelated_helper_bound.fe:21:1
+   │
+21 │ ╭ #[error]
+22 │ │ pub struct Empty {}
+   │ ╰───────────────────^ `error` is not found
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ abi_record_layout_unrelated_helper_bound.fe:21:1
+   │
+15 │           ) -> AbiRecordLayout<N> where bool: Unexpected {
+   │                                               ---------- required by this bound on `abi_record_layout`
+   ·
+21 │ ╭ #[error]
+22 │ │ pub struct Empty {}
+   │ ╰───────────────────^ `bool` doesn't implement `Unexpected`
+
+error[6-0005]: trait bound for concrete type is not allowed
+   ┌─ abi_record_layout_unrelated_helper_bound.fe:15:39
+   │
+15 │         ) -> AbiRecordLayout<N> where bool: Unexpected {
+   │                                       ^^^^ `bool` is a concrete type

@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/abi_record_layout_overflow.fe
+---
+error[3-0034]: arithmetic overflow in const context
+    ┌─ src/abi.fe:265:9
+    │
+265 │         head_size += sizes[index]
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^ checked arithmetic overflowed during const evaluation

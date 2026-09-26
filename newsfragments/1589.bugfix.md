@@ -1,0 +1,1 @@
+Fix layout checking rejecting types that repeat a generic type through ordinary fields, such as a struct holding `Option<Argument>` where `Argument` holds `Option<u256>`. Such layouts are finite. Types whose arguments grow, such as `Growing<T>` containing `Growing<(T, T)>`, are still reported as expanding.

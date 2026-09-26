@@ -1,0 +1,2 @@
+#[error]
+pub struct Failure { pub code: u256 }

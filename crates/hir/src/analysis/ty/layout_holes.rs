@@ -368,6 +368,52 @@ fn layout_view_state_is_strict_subterm<'db>(
     })
 }
 
+/// Whether structural expansion must still be checked against an earlier
+/// type. Repeating a constructor with unrelated arguments is not by itself
+/// growth: `Option<Argument>` can contain `Option<String<31>>` through a
+/// declared field of `Argument`.
+///
+/// Coupling matching constructors and descending into arguments detects
+/// expansion even when new wrappers are inserted. Const values are treated as
+/// one class here so changing numeric arguments cannot evade the recurrence
+/// check. This is only a growth guard, not semantic type equality; the ordinary
+/// recurrence classifier still checks exact states and finite permutations.
+/// Opaque or invalid types retain the conservative check: their internal
+/// arguments are not exposed by `decompose_ty_app`.
+pub(crate) fn structural_layout_type_embeds<'db>(
+    db: &'db dyn HirAnalysisDb,
+    earlier: TyId<'db>,
+    later: TyId<'db>,
+) -> bool {
+    if layout_view_ty_descends_from(db, later, earlier)
+        || matches!(
+            (earlier.data(db), later.data(db)),
+            (TyData::ConstTy(_), TyData::ConstTy(_))
+        )
+    {
+        return true;
+    }
+    let (earlier_base, earlier_args) = earlier.decompose_ty_app(db);
+    let (later_base, later_args) = later.decompose_ty_app(db);
+    if [earlier_base, later_base].into_iter().any(|base| {
+        matches!(
+            base.data(db),
+            TyData::AssocTy(_) | TyData::QualifiedTy(_) | TyData::TyVar(_) | TyData::Invalid(_)
+        )
+    }) {
+        return true;
+    }
+    (earlier_base == later_base
+        && earlier_args.len() == later_args.len()
+        && earlier_args
+            .iter()
+            .zip(later_args)
+            .all(|(earlier, later)| structural_layout_type_embeds(db, *earlier, *later)))
+        || later_args
+            .iter()
+            .any(|later| structural_layout_type_embeds(db, earlier, *later))
+}
+
 /// The action required when a semantic layout-view walk reaches `value`.
 ///
 /// Provider targets and callable layout schemas must make this decision from

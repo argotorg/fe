@@ -1,0 +1,8 @@
+// The generated selector constant has exactly one diagnostic owner: the
+// selector analysis reports the mismatch once.
+const SELECTOR_VALUE: bool = true
+
+msg Calls {
+    #[selector = ingot::SELECTOR_VALUE]
+    Ping {} -> bool,
+}

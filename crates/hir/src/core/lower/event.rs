@@ -7,7 +7,8 @@ use super::{
         AttrForm, AttrRule, AttrTarget, has_named_attr, lower_attrs_without_named,
         named_attr_specs, validate_attr_rules,
     },
-    hir_builder::HirBuilder,
+    hir_builder::{FuncBodySpec, HirBuilder},
+    msg::lower_abi_record_impl,
 };
 use crate::{
     hir_def::{
@@ -16,7 +17,7 @@ use crate::{
         LitKind, Partial, PathId, PathKind, Struct, TrackedItemVariant, TraitRefId, TypeId,
         TypeKind, TypeMode, Visibility,
     },
-    span::{EventDesugared, HirOrigin},
+    span::{DesugaredOrigin, EventDesugared, HirOrigin},
 };
 
 /// Event-related errors accumulated during `#[event]` lowering / validation.
@@ -127,18 +128,35 @@ pub(super) fn lower_event_struct<'db>(
     let data_fields = parsed_fields.data_fields.clone();
     let ordered_field_types = parsed_fields.ordered_field_types.clone();
 
+    let record_ty = self_ty;
     let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
     let trait_ref = Partial::Present(trait_ref);
     let self_ty = Partial::Present(self_ty);
     builder.with_item_scope(
         TrackedItemVariant::ImplTrait(impl_trait_idx),
         move |builder, id| {
-            let topic0_const = create_topic0_const(
+            let keccak_path = PathId::from_ident(db, builder.roots().core).push_str(db, "keccak");
+            let u256_ty = TypeId::new(
+                db,
+                TypeKind::Path(Partial::Present(PathId::from_ident(
+                    db,
+                    IdentId::new(db, "u256".to_string()),
+                ))),
+            );
+            let mut topic0_const = create_sol_signature_const(
                 builder.ctxt(),
                 event_desugared.clone(),
+                "TOPIC0",
+                u256_ty,
+                keccak_path,
                 &struct_name_str,
                 &ordered_field_types,
             );
+            // A fieldless event has no field-source errors to cascade from.
+            if ordered_field_types.is_empty() {
+                topic0_const.body_check_policy =
+                    crate::hir_def::AssocConstBodyCheckPolicy::BodyAnalysis;
+            }
             let impl_trait = builder.new_impl_trait(
                 id,
                 trait_ref,
@@ -151,6 +169,12 @@ pub(super) fn lower_event_struct<'db>(
             impl_trait
         },
     );
+
+    // The data fields form the log's ABI record; `emit` encodes them with the
+    // layout this impl provides.
+    if !parsed_fields.data_fields.is_empty() {
+        lower_abi_record_impl(&mut builder, record_ty, &parsed_fields.data_fields);
+    }
 
     struct_
 }
@@ -291,41 +315,36 @@ fn parse_event_fields<'db>(
     }
 }
 
-/// Build TOPIC0 as:
+/// Build a Solidity signature const (`TOPIC0` for events, `SELECTOR` for
+/// errors) as:
 ///
 /// ```text
-/// keccak(("StructName", "(", Field1Type::SOL_TYPE, ..., ")"))
+/// callee(("StructName", "(", <Field1Type as std::abi::SolCompat>::SOL_TYPE, ",", ..., ")"))
 /// ```
 ///
+/// `callee` is `core::keccak` for events and `std::abi::sol::sol` for errors.
 /// Longer signatures are nested in chunks to stay within `AsBytes`' tuple-arity
 /// implementations. Container types compose their canonical names through
-/// `SolCompat::SOL_TYPE`.
-fn create_topic0_const<'db>(
+/// `SolCompat::SOL_TYPE`. The body is checked with
+/// `ExpansionSourceCompatibility`; a caller may relax that.
+pub(super) fn create_sol_signature_const<'db, O: Clone + Into<DesugaredOrigin>>(
     ctxt: &mut FileLowerCtxt<'db>,
-    desugared: EventDesugared,
+    desugared: O,
+    const_name: &str,
+    const_ty: TypeId<'db>,
+    callee_path: PathId<'db>,
     struct_name: &str,
     field_types: &[TypeId<'db>],
 ) -> AssocConstDef<'db> {
     let db = ctxt.db();
-    let roots = super::hir_builder::LibRoots::for_ctxt(ctxt);
+    let const_name = IdentId::new(db, const_name.to_string());
 
-    let topic0_name = IdentId::new(db, "TOPIC0".to_string());
-    let topic0_ty = TypeId::new(
-        db,
-        TypeKind::Path(Partial::Present(PathId::from_ident(
-            db,
-            IdentId::new(db, "u256".to_string()),
-        ))),
-    );
-
-    let origin: HirOrigin<ast::Expr> = HirOrigin::desugared(desugared.clone());
+    let origin: HirOrigin<ast::Expr> = HirOrigin::desugared(desugared);
 
     let id = ctxt.joined_id(TrackedItemVariant::NamelessBody);
     let mut body_ctxt = super::body::BodyCtxt::new(ctxt, id);
 
-    // keccak callee
-    let keccak_path = PathId::from_ident(db, roots.core).push_str(db, "keccak");
-    let callee = Expr::Path(Partial::Present(keccak_path));
+    let callee = Expr::Path(Partial::Present(callee_path));
     let callee_id = body_ctxt.push_expr(callee, origin.clone());
 
     // Build the signature fragments. Long signatures are chunked below.
@@ -384,7 +403,7 @@ fn create_topic0_const<'db>(
             .collect();
     }
 
-    // Build the tuple expression and wrap in keccak call
+    // Build the tuple expression and wrap in the callee call
     let tuple_expr = Expr::Tuple(tuple_elems);
     let tuple_id = body_ctxt.push_expr(tuple_expr, origin.clone());
 
@@ -414,9 +433,10 @@ fn create_topic0_const<'db>(
 
     AssocConstDef {
         attributes: AttrListId::new(db, vec![]),
-        name: Partial::Present(topic0_name),
-        ty: Partial::Present(topic0_ty),
+        name: Partial::Present(const_name),
+        ty: Partial::Present(const_ty),
         value: Partial::Present(body),
+        body_check_policy: crate::hir_def::AssocConstBodyCheckPolicy::ExpansionSourceCompatibility,
         vis: crate::hir_def::Visibility::Public,
     }
 }
@@ -467,6 +487,11 @@ fn lower_emit_method<'db>(
     let as_topic_ident = builder.ident("as_topic");
     let span_ident = builder.ident("span");
     let log_method_ident = builder.ident(&format!("log{}", indexed_fields.len() + 1));
+    let buffer_ident = builder.ident("__data");
+    let ptr_ident = builder.ident("__ptr");
+    let ptr_method_ident = builder.ident("ptr");
+    let abi_record_trait =
+        (!data_fields.is_empty()).then(|| builder.abi_record_trait_ref(data_fields.len()));
 
     let log_trait_ref = TraitRefId::new(
         db,
@@ -504,64 +529,87 @@ fn lower_emit_method<'db>(
     let params = builder.params([self_param, log_param]);
     let modifiers = FuncModifiers::new(Visibility::Private, false, false, false);
 
-    builder.func_with_body_inline_always(
-        emit_ident,
+    // Unchecked like the tuple `payload_size` and `encode` it replaces: the
+    // only arithmetic here sums in-memory payload sizes.
+    let spec = FuncBodySpec {
+        name: emit_ident,
+        attrs: builder.inline_always_unchecked_attrs(),
         generic_params,
         params,
-        None,
+        ret_ty: None,
         modifiers,
-        move |body| {
-            let self_expr = body.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
-
-            let data_buffer = if data_fields.is_empty() {
+    };
+    builder.func_with_body_spec(spec, move |body| {
+        let data_buffer = match abi_record_trait {
+            None => {
                 let empty_buffer = PathId::from_ident(db, roots.core)
                     .push_str(db, "ptr")
                     .push_str(db, "MemBuffer")
                     .push_str(db, "empty");
                 let empty_expr = body.path_expr(empty_buffer);
                 body.call_expr(empty_expr, vec![])
-            } else {
-                let mut elems = Vec::with_capacity(data_fields.len());
-                for (name, _) in data_fields.iter().copied() {
-                    elems.push(self_field_expr(body, self_expr, name));
-                }
-                let payload_expr = body.push_expr(Expr::Tuple(elems));
-                let encode_path = PathId::from_ident(db, roots.std)
-                    .push_str(db, "evm")
-                    .push_str(db, "encode_abi_payload");
-                let encode_expr = body.path_expr(encode_path);
-                body.call_expr(encode_expr, vec![payload_expr])
-            };
-            let data = body.method_call_expr(data_buffer, span_ident, vec![]);
-
-            let topic0 = {
-                let path = PathId::from_ident(db, IdentId::make_self_ty(db)).push_str(db, "TOPIC0");
-                body.path_expr(path)
-            };
-            let mut args = Vec::with_capacity(2 + indexed_fields.len());
-            args.push(crate::hir_def::expr::CallArg {
-                label: Some(data_ident),
-                expr: data,
-            });
-            args.push(crate::hir_def::expr::CallArg {
-                label: Some(IdentId::new(db, "topic0".to_string())),
-                expr: topic0,
-            });
-
-            for (name, _ty) in indexed_fields.iter().copied() {
-                let value = self_field_expr(body, self_expr, name);
-                let topic = body.method_call_expr(value, as_topic_ident, vec![]);
-                args.push(crate::hir_def::expr::CallArg {
-                    label: Some(IdentId::new(db, format!("topic{}", args.len() - 1))),
-                    expr: topic,
-                });
             }
+            Some(abi_record_trait) => {
+                // Encode the data fields as one ABI record, with the same
+                // head layout and tail rules as a tuple of those fields.
+                // They move into locals first, so sizing them borrows the
+                // locals instead of moving out of `self`.
+                let locals = body.bind_self_fields(data_fields);
+                let values = locals
+                    .into_iter()
+                    .map(|local| body.ident_expr(local))
+                    .collect();
+                let head_size = body.abi_record_layout_field_expr(abi_record_trait, "head_size");
+                let size = body.record_payload_size_expr(head_size, values);
+                let alloc_path = PathId::from_ident(db, roots.core)
+                    .push_str(db, "ptr")
+                    .push_str(db, "MemBuffer")
+                    .push_str(db, "alloc");
+                let alloc_expr = body.path_expr(alloc_path);
+                let buffer = body.call_expr(alloc_expr, vec![size]);
+                body.emit_let(buffer_ident, buffer);
+                let buffer_expr = body.ident_expr(buffer_ident);
+                let ptr = body.method_call_expr(buffer_expr, ptr_method_ident, vec![]);
+                body.emit_let(ptr_ident, ptr);
+                body.encode_bound_fields(data_fields, ptr_ident, abi_record_trait);
+                body.ident_expr(buffer_ident)
+            }
+        };
+        let data = body.method_call_expr(data_buffer, span_ident, vec![]);
 
-            let log_expr = body.ident_expr(log_provider_ident);
-            let log_call = body.method_call_expr_with_args(log_expr, log_method_ident, args);
-            body.emit_expr_stmt(log_call);
-        },
-    );
+        let topic0 = {
+            let path = PathId::from_ident(db, IdentId::make_self_ty(db)).push_str(db, "TOPIC0");
+            body.path_expr(path)
+        };
+        let mut args = Vec::with_capacity(2 + indexed_fields.len());
+        args.push(crate::hir_def::expr::CallArg {
+            label: Some(data_ident),
+            expr: data,
+        });
+        args.push(crate::hir_def::expr::CallArg {
+            label: Some(IdentId::new(db, "topic0".to_string())),
+            expr: topic0,
+        });
+
+        let self_expr = (!indexed_fields.is_empty())
+            .then(|| body.path_expr(PathId::from_ident(db, IdentId::make_self(db))));
+        for (name, _ty) in indexed_fields.iter().copied() {
+            let value = self_field_expr(
+                body,
+                self_expr.expect("indexed fields require a receiver"),
+                name,
+            );
+            let topic = body.method_call_expr(value, as_topic_ident, vec![]);
+            args.push(crate::hir_def::expr::CallArg {
+                label: Some(IdentId::new(db, format!("topic{}", args.len() - 1))),
+                expr: topic,
+            });
+        }
+
+        let log_expr = body.ident_expr(log_provider_ident);
+        let log_call = body.method_call_expr_with_args(log_expr, log_method_ident, args);
+        body.emit_expr_stmt(log_call);
+    });
 }
 
 fn self_field_expr<'db>(

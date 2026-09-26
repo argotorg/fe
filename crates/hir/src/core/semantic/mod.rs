@@ -4975,6 +4975,13 @@ impl<'db> ImplAssocConstView<'db> {
         self.def(db).value.to_opt()
     }
 
+    pub(crate) fn body_check_policy(
+        self,
+        db: &'db dyn HirDb,
+    ) -> crate::core::hir_def::AssocConstBodyCheckPolicy {
+        self.def(db).body_check_policy
+    }
+
     /// Semantic type of this associated const implementation.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
         let hir = self.def(db).ty.to_opt()?;

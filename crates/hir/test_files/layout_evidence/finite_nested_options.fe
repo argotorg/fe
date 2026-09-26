@@ -1,0 +1,11 @@
+// The same nominal type (`Option`) repeats through ordinary fields, but the
+// enclosed types are unrelated, so the layout is finite.
+struct Argument {
+    label: Option<u256>,
+}
+
+struct Call {
+    argument: Option<Argument>,
+}
+
+fn inspect(value: Call) {}

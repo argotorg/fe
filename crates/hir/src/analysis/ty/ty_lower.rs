@@ -36,7 +36,8 @@ use super::{
         collect_unique_layout_placeholders_in_order, instantiate_layout_template,
         layout_hole_fallback_ty, layout_root_descends_from, layout_root_id,
         reanchor_template_holes, rewrite_structural_holes, structural_hole_id,
-        substitute_layout_holes_by_placeholder, substitute_layout_holes_by_placeholder_in,
+        structural_layout_type_embeds, substitute_layout_holes_by_placeholder,
+        substitute_layout_holes_by_placeholder_in,
     },
     provider::{EffectHandleResolution, resolve_effect_handle},
     trait_def::{ImplementorId, TraitInstId},
@@ -1058,6 +1059,19 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                 .iter()
                 .enumerate()
                 .rev()
+                // Nominal repetition through ordinary fields can be finite
+                // even when the enclosed types are unrelated. Keep structural
+                // ancestors that exhibit growth. Provider families retain the
+                // stricter selected-implementation recurrence contract.
+                .filter(|(_, frame)| {
+                    !matches!(
+                        (family, frame.family),
+                        (
+                            CallableLayoutExpansionFamily::Adt(_),
+                            CallableLayoutExpansionFamily::Adt(_)
+                        )
+                    ) || structural_layout_type_embeds(self.db, frame.ty, ty)
+                })
                 .map(|(idx, frame)| (idx, frame.ty, frame.family)),
         ) {
             LayoutViewRecurrence::BackEdge { ancestor } => {

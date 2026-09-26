@@ -1,0 +1,48 @@
+struct Inner { code: u16, ready: bool }
+struct Packet { tag: u8, inner: Inner, samples: [u16; 3], tail: u8 }
+
+impl Copy for Inner {}
+impl Copy for Packet {}
+
+#[test]
+fn packed_record_bytes_and_stride() {
+    assert!(core::size_of<Inner>() == 3)
+    assert!(core::size_of<Packet>() == 11)
+    let mut packets = core::ptr::MemArray<Packet>::new_zeroed(2)
+    packets[0] = Packet {
+        tag: 0xa1,
+        inner: Inner { code: 0x1234, ready: true },
+        samples: [0x5678, 0x9abc, 0xdef0],
+        tail: 0x7e,
+    }
+    packets[1] = Packet {
+        tag: 0xb2,
+        inner: Inner { code: 0x4321, ready: false },
+        samples: [0x1112, 0x1314, 0x1516],
+        tail: 0x6d,
+    }
+    assert!(packets.byte_len() == 22)
+    let bytes = packets.span()
+    let expected: [u8; 22] = [
+        0xa1, 0x12, 0x34, 1, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x7e,
+        0xb2, 0x43, 0x21, 0, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x6d,
+    ]
+    let mut i: usize = 0
+    while i < 22 {
+        assert!(bytes[i] == expected[i])
+        i += 1
+    }
+    let second = packets.ptr_at(1)
+    second.inner.code = 0x2468
+    second.samples[1] = 0xabcd
+    assert!(packets[1].inner.code == 0x2468)
+    assert!(packets[1].samples[1] == 0xabcd)
+    assert!(packets[0].inner.code == 0x1234)
+    assert!(packets[0].tail == 0x7e)
+    let bytes = packets.span()
+    assert!(bytes[12] == 0x24)
+    assert!(bytes[13] == 0x68)
+    assert!(bytes[17] == 0xab)
+    assert!(bytes[18] == 0xcd)
+    assert!(bytes[21] == 0x6d)
+}

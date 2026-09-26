@@ -63,6 +63,15 @@ fn signature_name_chunks(name: &str) -> Vec<&str> {
     chunks
 }
 
+/// Names of the associated constants that generated `msg` and `#[error]`
+/// ABI impls define. Lowering creates them and analysis recognizes them
+/// through these names only.
+pub(crate) mod generated_abi_const {
+    pub(crate) const LAYOUT: &str = "LAYOUT";
+    pub(crate) const HEAD_SIZE: &str = "HEAD_SIZE";
+    pub(crate) const IS_DYNAMIC: &str = "IS_DYNAMIC";
+}
+
 pub(super) fn lower_visibility(owner: &impl ItemModifierOwner) -> Visibility {
     if owner.pub_kw().is_none() {
         return Visibility::Private;

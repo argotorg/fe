@@ -236,6 +236,38 @@ pub const fn abi_field_head_size<T: AbiSize>() -> u256 {
     <T as AbiSize>::HEAD_SIZE
 }
 
+/// Compile-time head positions for an ordered ABI record.
+/// Dynamic payloads follow this head and retain their ordinary encoding rules.
+pub struct AbiRecordLayout<const N: usize> {
+    pub offsets: [u256; N],
+    pub head_size: u256,
+}
+
+/// Head layout of an ordered ABI record. Built-in tuples, generated `msg`
+/// variants and `#[error]` structs, and `#[event]` data fields implement it
+/// with `abi_record_layout`; `HEAD_SIZE`, encoders and decoders read offsets
+/// from `LAYOUT`. It takes no ABI parameter because `AbiSize` takes none.
+/// Dynamic classification stays independent so field sizes can depend on it.
+pub trait AbiRecord<const N: usize> {
+    const LAYOUT: AbiRecordLayout<N>
+}
+
+/// Accumulate embedded field head sizes without introducing padding.
+/// `abi_field_head_size` supplies each field's contribution. This function checks
+/// arithmetic, not the validity of arbitrary user-defined ABI metadata.
+#[arithmetic(checked)]
+pub const fn abi_record_layout<const N: usize>(_ sizes: [u256; N]) -> AbiRecordLayout<N> {
+    let mut offsets: [u256; N] = [0; N]
+    let mut head_size: u256 = 0
+    let mut index: usize = 0
+    while index < N {
+        offsets[index] = head_size
+        head_size += sizes[index]
+        index += 1
+    }
+    AbiRecordLayout { offsets, head_size }
+}
+
 pub const fn abi_payload_head_size<T: AbiSize>() -> u256 {
     <T as AbiSize>::HEAD_SIZE
 }
@@ -1204,10 +1236,16 @@ impl AbiSize for () {
     const IS_DYNAMIC: bool = false
 }
 
+impl<T0> AbiRecord<1> for (T0,)
+    where T0: AbiSize
+{
+    const LAYOUT: AbiRecordLayout<1> = abi_record_layout([abi_field_head_size<T0>()])
+}
+
 impl<T0> AbiSize for (T0,)
     where T0: AbiSize
 {
-    const HEAD_SIZE: u256 = abi_field_head_size<T0>()
+    const HEAD_SIZE: u256 = <Self as AbiRecord<1>>::LAYOUT.head_size
     const IS_DYNAMIC: bool = T0::IS_DYNAMIC
 
     #[arithmetic(unchecked)]
@@ -1217,10 +1255,16 @@ impl<T0> AbiSize for (T0,)
     }
 }
 
+impl<T0, T1> AbiRecord<2> for (T0, T1)
+    where T0: AbiSize, T1: AbiSize
+{
+    const LAYOUT: AbiRecordLayout<2> = abi_record_layout([abi_field_head_size<T0>(), abi_field_head_size<T1>()])
+}
+
 impl<T0, T1> AbiSize for (T0, T1)
     where T0: AbiSize, T1: AbiSize
 {
-    const HEAD_SIZE: u256 = abi_field_head_size<T0>() + abi_field_head_size<T1>()
+    const HEAD_SIZE: u256 = <Self as AbiRecord<2>>::LAYOUT.head_size
     const IS_DYNAMIC: bool = T0::IS_DYNAMIC || T1::IS_DYNAMIC
 
     #[arithmetic(unchecked)]
@@ -1230,10 +1274,22 @@ impl<T0, T1> AbiSize for (T0, T1)
     }
 }
 
+impl<T0, T1, T2> AbiRecord<3> for (T0, T1, T2)
+    where T0: AbiSize, T1: AbiSize, T2: AbiSize
+{
+    const LAYOUT: AbiRecordLayout<3> = abi_record_layout(
+        [
+            abi_field_head_size<T0>(),
+            abi_field_head_size<T1>(),
+            abi_field_head_size<T2>(),
+        ],
+    )
+}
+
 impl<T0, T1, T2> AbiSize for (T0, T1, T2)
     where T0: AbiSize, T1: AbiSize, T2: AbiSize
 {
-    const HEAD_SIZE: u256 = abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>()
+    const HEAD_SIZE: u256 = <Self as AbiRecord<3>>::LAYOUT.head_size
     const IS_DYNAMIC: bool = T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC
 
     #[arithmetic(unchecked)]
@@ -1246,11 +1302,23 @@ impl<T0, T1, T2> AbiSize for (T0, T1, T2)
     }
 }
 
+impl<T0, T1, T2, T3> AbiRecord<4> for (T0, T1, T2, T3)
+    where T0: AbiSize, T1: AbiSize, T2: AbiSize, T3: AbiSize
+{
+    const LAYOUT: AbiRecordLayout<4> = abi_record_layout(
+        [
+            abi_field_head_size<T0>(),
+            abi_field_head_size<T1>(),
+            abi_field_head_size<T2>(),
+            abi_field_head_size<T3>(),
+        ],
+    )
+}
+
 impl<T0, T1, T2, T3> AbiSize for (T0, T1, T2, T3)
     where T0: AbiSize, T1: AbiSize, T2: AbiSize, T3: AbiSize
 {
-    const HEAD_SIZE: u256 =
-        abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>()
+    const HEAD_SIZE: u256 = <Self as AbiRecord<4>>::LAYOUT.head_size
     const IS_DYNAMIC: bool = T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC
 
     #[arithmetic(unchecked)]
@@ -1264,6 +1332,24 @@ impl<T0, T1, T2, T3> AbiSize for (T0, T1, T2, T3)
     }
 }
 
+impl<T0, T1, T2, T3, T4> AbiRecord<5> for (T0, T1, T2, T3, T4)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize
+{
+    const LAYOUT: AbiRecordLayout<5> = abi_record_layout(
+        [
+            abi_field_head_size<T0>(),
+            abi_field_head_size<T1>(),
+            abi_field_head_size<T2>(),
+            abi_field_head_size<T3>(),
+            abi_field_head_size<T4>(),
+        ],
+    )
+}
+
 impl<T0, T1, T2, T3, T4> AbiSize for (T0, T1, T2, T3, T4)
     where T0: AbiSize,
           T1: AbiSize,
@@ -1271,8 +1357,7 @@ impl<T0, T1, T2, T3, T4> AbiSize for (T0, T1, T2, T3, T4)
           T3: AbiSize,
           T4: AbiSize
 {
-    const HEAD_SIZE: u256 =
-        abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>()
+    const HEAD_SIZE: u256 = <Self as AbiRecord<5>>::LAYOUT.head_size
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC
 
@@ -1288,6 +1373,26 @@ impl<T0, T1, T2, T3, T4> AbiSize for (T0, T1, T2, T3, T4)
     }
 }
 
+impl<T0, T1, T2, T3, T4, T5> AbiRecord<6> for (T0, T1, T2, T3, T4, T5)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize
+{
+    const LAYOUT: AbiRecordLayout<6> = abi_record_layout(
+        [
+            abi_field_head_size<T0>(),
+            abi_field_head_size<T1>(),
+            abi_field_head_size<T2>(),
+            abi_field_head_size<T3>(),
+            abi_field_head_size<T4>(),
+            abi_field_head_size<T5>(),
+        ],
+    )
+}
+
 impl<T0, T1, T2, T3, T4, T5> AbiSize for (T0, T1, T2, T3, T4, T5)
     where T0: AbiSize,
           T1: AbiSize,
@@ -1296,8 +1401,7 @@ impl<T0, T1, T2, T3, T4, T5> AbiSize for (T0, T1, T2, T3, T4, T5)
           T4: AbiSize,
           T5: AbiSize
 {
-    const HEAD_SIZE: u256 =
-        abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>()
+    const HEAD_SIZE: u256 = <Self as AbiRecord<6>>::LAYOUT.head_size
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC
 
@@ -1314,6 +1418,28 @@ impl<T0, T1, T2, T3, T4, T5> AbiSize for (T0, T1, T2, T3, T4, T5)
     }
 }
 
+impl<T0, T1, T2, T3, T4, T5, T6> AbiRecord<7> for (T0, T1, T2, T3, T4, T5, T6)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize
+{
+    const LAYOUT: AbiRecordLayout<7> = abi_record_layout(
+        [
+            abi_field_head_size<T0>(),
+            abi_field_head_size<T1>(),
+            abi_field_head_size<T2>(),
+            abi_field_head_size<T3>(),
+            abi_field_head_size<T4>(),
+            abi_field_head_size<T5>(),
+            abi_field_head_size<T6>(),
+        ],
+    )
+}
+
 impl<T0, T1, T2, T3, T4, T5, T6> AbiSize for (T0, T1, T2, T3, T4, T5, T6)
     where T0: AbiSize,
           T1: AbiSize,
@@ -1323,8 +1449,7 @@ impl<T0, T1, T2, T3, T4, T5, T6> AbiSize for (T0, T1, T2, T3, T4, T5, T6)
           T5: AbiSize,
           T6: AbiSize
 {
-    const HEAD_SIZE: u256 =
-        abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>()
+    const HEAD_SIZE: u256 = <Self as AbiRecord<7>>::LAYOUT.head_size
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC
 
@@ -1342,6 +1467,30 @@ impl<T0, T1, T2, T3, T4, T5, T6> AbiSize for (T0, T1, T2, T3, T4, T5, T6)
     }
 }
 
+impl<T0, T1, T2, T3, T4, T5, T6, T7> AbiRecord<8> for (T0, T1, T2, T3, T4, T5, T6, T7)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize
+{
+    const LAYOUT: AbiRecordLayout<8> = abi_record_layout(
+        [
+            abi_field_head_size<T0>(),
+            abi_field_head_size<T1>(),
+            abi_field_head_size<T2>(),
+            abi_field_head_size<T3>(),
+            abi_field_head_size<T4>(),
+            abi_field_head_size<T5>(),
+            abi_field_head_size<T6>(),
+            abi_field_head_size<T7>(),
+        ],
+    )
+}
+
 impl<T0, T1, T2, T3, T4, T5, T6, T7> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7)
     where T0: AbiSize,
           T1: AbiSize,
@@ -1352,8 +1501,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7
           T6: AbiSize,
           T7: AbiSize
 {
-    const HEAD_SIZE: u256 =
-        abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>()
+    const HEAD_SIZE: u256 = <Self as AbiRecord<8>>::LAYOUT.head_size
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC
 
@@ -1372,6 +1520,32 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7
     }
 }
 
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8> AbiRecord<9> for (T0, T1, T2, T3, T4, T5, T6, T7, T8)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize,
+          T8: AbiSize
+{
+    const LAYOUT: AbiRecordLayout<9> = abi_record_layout(
+        [
+            abi_field_head_size<T0>(),
+            abi_field_head_size<T1>(),
+            abi_field_head_size<T2>(),
+            abi_field_head_size<T3>(),
+            abi_field_head_size<T4>(),
+            abi_field_head_size<T5>(),
+            abi_field_head_size<T6>(),
+            abi_field_head_size<T7>(),
+            abi_field_head_size<T8>(),
+        ],
+    )
+}
+
 impl<T0, T1, T2, T3, T4, T5, T6, T7, T8> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8)
     where T0: AbiSize,
           T1: AbiSize,
@@ -1383,8 +1557,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8> AbiSize for (T0, T1, T2, T3, T4, T5, T6
           T7: AbiSize,
           T8: AbiSize
 {
-    const HEAD_SIZE: u256 =
-        abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>()
+    const HEAD_SIZE: u256 = <Self as AbiRecord<9>>::LAYOUT.head_size
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC
 
@@ -1404,6 +1577,34 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8> AbiSize for (T0, T1, T2, T3, T4, T5, T6
     }
 }
 
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> AbiRecord<10> for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize,
+          T8: AbiSize,
+          T9: AbiSize
+{
+    const LAYOUT: AbiRecordLayout<10> = abi_record_layout(
+        [
+            abi_field_head_size<T0>(),
+            abi_field_head_size<T1>(),
+            abi_field_head_size<T2>(),
+            abi_field_head_size<T3>(),
+            abi_field_head_size<T4>(),
+            abi_field_head_size<T5>(),
+            abi_field_head_size<T6>(),
+            abi_field_head_size<T7>(),
+            abi_field_head_size<T8>(),
+            abi_field_head_size<T9>(),
+        ],
+    )
+}
+
 impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)
     where T0: AbiSize,
           T1: AbiSize,
@@ -1416,8 +1617,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> AbiSize for (T0, T1, T2, T3, T4, T5
           T8: AbiSize,
           T9: AbiSize
 {
-    const HEAD_SIZE: u256 =
-        abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>()
+    const HEAD_SIZE: u256 = <Self as AbiRecord<10>>::LAYOUT.head_size
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC
 
@@ -1438,6 +1638,36 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> AbiSize for (T0, T1, T2, T3, T4, T5
     }
 }
 
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> AbiRecord<11> for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize,
+          T8: AbiSize,
+          T9: AbiSize,
+          T10: AbiSize
+{
+    const LAYOUT: AbiRecordLayout<11> = abi_record_layout(
+        [
+            abi_field_head_size<T0>(),
+            abi_field_head_size<T1>(),
+            abi_field_head_size<T2>(),
+            abi_field_head_size<T3>(),
+            abi_field_head_size<T4>(),
+            abi_field_head_size<T5>(),
+            abi_field_head_size<T6>(),
+            abi_field_head_size<T7>(),
+            abi_field_head_size<T8>(),
+            abi_field_head_size<T9>(),
+            abi_field_head_size<T10>(),
+        ],
+    )
+}
+
 impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)
     where T0: AbiSize,
           T1: AbiSize,
@@ -1451,8 +1681,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> AbiSize for (T0, T1, T2, T3, T
           T9: AbiSize,
           T10: AbiSize
 {
-    const HEAD_SIZE: u256 =
-        abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>() + abi_field_head_size<T10>()
+    const HEAD_SIZE: u256 = <Self as AbiRecord<11>>::LAYOUT.head_size
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC
 
@@ -1474,6 +1703,38 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> AbiSize for (T0, T1, T2, T3, T
     }
 }
 
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> AbiRecord<12> for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize,
+          T8: AbiSize,
+          T9: AbiSize,
+          T10: AbiSize,
+          T11: AbiSize
+{
+    const LAYOUT: AbiRecordLayout<12> = abi_record_layout(
+        [
+            abi_field_head_size<T0>(),
+            abi_field_head_size<T1>(),
+            abi_field_head_size<T2>(),
+            abi_field_head_size<T3>(),
+            abi_field_head_size<T4>(),
+            abi_field_head_size<T5>(),
+            abi_field_head_size<T6>(),
+            abi_field_head_size<T7>(),
+            abi_field_head_size<T8>(),
+            abi_field_head_size<T9>(),
+            abi_field_head_size<T10>(),
+            abi_field_head_size<T11>(),
+        ],
+    )
+}
+
 impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)
     where T0: AbiSize,
           T1: AbiSize,
@@ -1488,8 +1749,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> AbiSize for (T0, T1, T2, 
           T10: AbiSize,
           T11: AbiSize
 {
-    const HEAD_SIZE: u256 =
-        abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>() + abi_field_head_size<T10>() + abi_field_head_size<T11>()
+    const HEAD_SIZE: u256 = <Self as AbiRecord<12>>::LAYOUT.head_size
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC || T11::IS_DYNAMIC
 
@@ -1512,6 +1772,40 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> AbiSize for (T0, T1, T2, 
     }
 }
 
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> AbiRecord<13> for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize,
+          T8: AbiSize,
+          T9: AbiSize,
+          T10: AbiSize,
+          T11: AbiSize,
+          T12: AbiSize
+{
+    const LAYOUT: AbiRecordLayout<13> = abi_record_layout(
+        [
+            abi_field_head_size<T0>(),
+            abi_field_head_size<T1>(),
+            abi_field_head_size<T2>(),
+            abi_field_head_size<T3>(),
+            abi_field_head_size<T4>(),
+            abi_field_head_size<T5>(),
+            abi_field_head_size<T6>(),
+            abi_field_head_size<T7>(),
+            abi_field_head_size<T8>(),
+            abi_field_head_size<T9>(),
+            abi_field_head_size<T10>(),
+            abi_field_head_size<T11>(),
+            abi_field_head_size<T12>(),
+        ],
+    )
+}
+
 impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)
     where T0: AbiSize,
           T1: AbiSize,
@@ -1527,8 +1821,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> AbiSize for (T0, T1,
           T11: AbiSize,
           T12: AbiSize
 {
-    const HEAD_SIZE: u256 =
-        abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>() + abi_field_head_size<T10>() + abi_field_head_size<T11>() + abi_field_head_size<T12>()
+    const HEAD_SIZE: u256 = <Self as AbiRecord<13>>::LAYOUT.head_size
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC || T11::IS_DYNAMIC || T12::IS_DYNAMIC
 
@@ -1552,6 +1845,42 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> AbiSize for (T0, T1,
     }
 }
 
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13> AbiRecord<14> for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize,
+          T8: AbiSize,
+          T9: AbiSize,
+          T10: AbiSize,
+          T11: AbiSize,
+          T12: AbiSize,
+          T13: AbiSize
+{
+    const LAYOUT: AbiRecordLayout<14> = abi_record_layout(
+        [
+            abi_field_head_size<T0>(),
+            abi_field_head_size<T1>(),
+            abi_field_head_size<T2>(),
+            abi_field_head_size<T3>(),
+            abi_field_head_size<T4>(),
+            abi_field_head_size<T5>(),
+            abi_field_head_size<T6>(),
+            abi_field_head_size<T7>(),
+            abi_field_head_size<T8>(),
+            abi_field_head_size<T9>(),
+            abi_field_head_size<T10>(),
+            abi_field_head_size<T11>(),
+            abi_field_head_size<T12>(),
+            abi_field_head_size<T13>(),
+        ],
+    )
+}
+
 impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)
     where T0: AbiSize,
           T1: AbiSize,
@@ -1568,8 +1897,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13> AbiSize for (T0
           T12: AbiSize,
           T13: AbiSize
 {
-    const HEAD_SIZE: u256 =
-        abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>() + abi_field_head_size<T10>() + abi_field_head_size<T11>() + abi_field_head_size<T12>() + abi_field_head_size<T13>()
+    const HEAD_SIZE: u256 = <Self as AbiRecord<14>>::LAYOUT.head_size
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC || T11::IS_DYNAMIC || T12::IS_DYNAMIC || T13::IS_DYNAMIC
 
@@ -1594,6 +1922,44 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13> AbiSize for (T0
     }
 }
 
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14> AbiRecord<15> for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize,
+          T8: AbiSize,
+          T9: AbiSize,
+          T10: AbiSize,
+          T11: AbiSize,
+          T12: AbiSize,
+          T13: AbiSize,
+          T14: AbiSize
+{
+    const LAYOUT: AbiRecordLayout<15> = abi_record_layout(
+        [
+            abi_field_head_size<T0>(),
+            abi_field_head_size<T1>(),
+            abi_field_head_size<T2>(),
+            abi_field_head_size<T3>(),
+            abi_field_head_size<T4>(),
+            abi_field_head_size<T5>(),
+            abi_field_head_size<T6>(),
+            abi_field_head_size<T7>(),
+            abi_field_head_size<T8>(),
+            abi_field_head_size<T9>(),
+            abi_field_head_size<T10>(),
+            abi_field_head_size<T11>(),
+            abi_field_head_size<T12>(),
+            abi_field_head_size<T13>(),
+            abi_field_head_size<T14>(),
+        ],
+    )
+}
+
 impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14)
     where T0: AbiSize,
           T1: AbiSize,
@@ -1611,8 +1977,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14> AbiSize fo
           T13: AbiSize,
           T14: AbiSize
 {
-    const HEAD_SIZE: u256 =
-        abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>() + abi_field_head_size<T10>() + abi_field_head_size<T11>() + abi_field_head_size<T12>() + abi_field_head_size<T13>() + abi_field_head_size<T14>()
+    const HEAD_SIZE: u256 = <Self as AbiRecord<15>>::LAYOUT.head_size
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC || T11::IS_DYNAMIC || T12::IS_DYNAMIC || T13::IS_DYNAMIC || T14::IS_DYNAMIC
 
@@ -1638,6 +2003,46 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14> AbiSize fo
     }
 }
 
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15> AbiRecord<16> for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)
+    where T0: AbiSize,
+          T1: AbiSize,
+          T2: AbiSize,
+          T3: AbiSize,
+          T4: AbiSize,
+          T5: AbiSize,
+          T6: AbiSize,
+          T7: AbiSize,
+          T8: AbiSize,
+          T9: AbiSize,
+          T10: AbiSize,
+          T11: AbiSize,
+          T12: AbiSize,
+          T13: AbiSize,
+          T14: AbiSize,
+          T15: AbiSize
+{
+    const LAYOUT: AbiRecordLayout<16> = abi_record_layout(
+        [
+            abi_field_head_size<T0>(),
+            abi_field_head_size<T1>(),
+            abi_field_head_size<T2>(),
+            abi_field_head_size<T3>(),
+            abi_field_head_size<T4>(),
+            abi_field_head_size<T5>(),
+            abi_field_head_size<T6>(),
+            abi_field_head_size<T7>(),
+            abi_field_head_size<T8>(),
+            abi_field_head_size<T9>(),
+            abi_field_head_size<T10>(),
+            abi_field_head_size<T11>(),
+            abi_field_head_size<T12>(),
+            abi_field_head_size<T13>(),
+            abi_field_head_size<T14>(),
+            abi_field_head_size<T15>(),
+        ],
+    )
+}
+
 impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)
     where T0: AbiSize,
           T1: AbiSize,
@@ -1656,8 +2061,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15> AbiSi
           T14: AbiSize,
           T15: AbiSize
 {
-    const HEAD_SIZE: u256 =
-        abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>() + abi_field_head_size<T10>() + abi_field_head_size<T11>() + abi_field_head_size<T12>() + abi_field_head_size<T13>() + abi_field_head_size<T14>() + abi_field_head_size<T15>()
+    const HEAD_SIZE: u256 = <Self as AbiRecord<16>>::LAYOUT.head_size
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC || T11::IS_DYNAMIC || T12::IS_DYNAMIC || T13::IS_DYNAMIC || T14::IS_DYNAMIC || T15::IS_DYNAMIC
 
@@ -2531,10 +2935,8 @@ impl<A: Abi, T0, T1> Decode<A> for (T0, T1)
     fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: head_pos)
+        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: pos)
+        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<2>>::LAYOUT.offsets[1])
         (v0, v1)
     }
 
@@ -2542,10 +2944,8 @@ impl<A: Abi, T0, T1> Decode<A> for (T0, T1)
     fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: pos, input_len: input_len)
+        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<2>>::LAYOUT.offsets[1], input_len: input_len)
         (v0, v1)
     }
 
@@ -2566,9 +2966,8 @@ impl<A: Abi, T0, T1> Encode<A> for (T0, T1)
     fn encode(own self, _ ptr: *u8) {
         let (v0, v1) = self
         let mut tail = Self::HEAD_SIZE
-        let head1 = abi_field_head_size<T0>()
         tail = encode_field_at<A, T0>(v0, ptr, head_pos: 0, tail)
-        encode_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
+        encode_field_at<A, T1>(v1, ptr, head_pos: <Self as AbiRecord<2>>::LAYOUT.offsets[1], tail)
     }
 }
 
@@ -2577,18 +2976,18 @@ impl<A: Abi, T0, T1> AbiSpan<A> for (T0, T1)
           T1: AbiSpan<A> + AbiSize
 {
     fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
-        let mut end = pos + abi_field_head_size<T0>() + abi_field_head_size<T1>()
+        let mut end = pos + Self::HEAD_SIZE
         end = max_u256(a: end, b: abi_field_end<A, T0, I>(input, base: pos, pos: pos))
-        end = max_u256(a: end, b: abi_field_end<A, T1, I>(input, base: pos, pos: pos + abi_field_head_size<T0>()))
+        end = max_u256(a: end, b: abi_field_end<A, T1, I>(input, base: pos, pos: pos + <Self as AbiRecord<2>>::LAYOUT.offsets[1]))
         end
     }
 
     fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
         let _ = base
         checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
-        let mut end = pos + abi_field_head_size<T0>() + abi_field_head_size<T1>()
+        let mut end = pos + Self::HEAD_SIZE
         end = max_u256(a: end, b: abi_field_end_with_input_len<A, T0, I>(input, base: pos, pos: pos, input_len: input_len))
-        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T1, I>(input, base: pos, pos: pos + abi_field_head_size<T0>(), input_len: input_len))
+        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T1, I>(input, base: pos, pos: pos + <Self as AbiRecord<2>>::LAYOUT.offsets[1], input_len: input_len))
         end
     }
 }
@@ -2607,12 +3006,9 @@ impl<A: Abi, T0, T1, T2> Decode<A> for (T0, T1, T2)
     fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: head_pos)
+        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: pos)
+        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<3>>::LAYOUT.offsets[1])
+        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<3>>::LAYOUT.offsets[2])
         (v0, v1, v2)
     }
 
@@ -2620,12 +3016,9 @@ impl<A: Abi, T0, T1, T2> Decode<A> for (T0, T1, T2)
     fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: pos, input_len: input_len)
+        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<3>>::LAYOUT.offsets[1], input_len: input_len)
+        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<3>>::LAYOUT.offsets[2], input_len: input_len)
         (v0, v1, v2)
     }
 
@@ -2646,11 +3039,9 @@ impl<A: Abi, T0, T1, T2> Encode<A> for (T0, T1, T2)
     fn encode(own self, _ ptr: *u8) {
         let (v0, v1, v2) = self
         let mut tail = Self::HEAD_SIZE
-        let head1 = abi_field_head_size<T0>()
-        let head2 = head1 + abi_field_head_size<T1>()
         tail = encode_field_at<A, T0>(v0, ptr, head_pos: 0, tail)
-        tail = encode_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
-        encode_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
+        tail = encode_field_at<A, T1>(v1, ptr, head_pos: <Self as AbiRecord<3>>::LAYOUT.offsets[1], tail)
+        encode_field_at<A, T2>(v2, ptr, head_pos: <Self as AbiRecord<3>>::LAYOUT.offsets[2], tail)
     }
 }
 
@@ -2660,24 +3051,20 @@ impl<A: Abi, T0, T1, T2> AbiSpan<A> for (T0, T1, T2)
           T2: AbiSpan<A> + AbiSize
 {
     fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
-        let field1 = pos + abi_field_head_size<T0>()
-        let field2 = field1 + abi_field_head_size<T1>()
-        let mut end = field2 + abi_field_head_size<T2>()
+        let mut end = pos + Self::HEAD_SIZE
         end = max_u256(a: end, b: abi_field_end<A, T0, I>(input, base: pos, pos: pos))
-        end = max_u256(a: end, b: abi_field_end<A, T1, I>(input, base: pos, pos: field1))
-        end = max_u256(a: end, b: abi_field_end<A, T2, I>(input, base: pos, pos: field2))
+        end = max_u256(a: end, b: abi_field_end<A, T1, I>(input, base: pos, pos: pos + <Self as AbiRecord<3>>::LAYOUT.offsets[1]))
+        end = max_u256(a: end, b: abi_field_end<A, T2, I>(input, base: pos, pos: pos + <Self as AbiRecord<3>>::LAYOUT.offsets[2]))
         end
     }
 
     fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
         let _ = base
         checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
-        let field1 = pos + abi_field_head_size<T0>()
-        let field2 = field1 + abi_field_head_size<T1>()
-        let mut end = field2 + abi_field_head_size<T2>()
+        let mut end = pos + Self::HEAD_SIZE
         end = max_u256(a: end, b: abi_field_end_with_input_len<A, T0, I>(input, base: pos, pos: pos, input_len: input_len))
-        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T1, I>(input, base: pos, pos: field1, input_len: input_len))
-        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T2, I>(input, base: pos, pos: field2, input_len: input_len))
+        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T1, I>(input, base: pos, pos: pos + <Self as AbiRecord<3>>::LAYOUT.offsets[1], input_len: input_len))
+        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T2, I>(input, base: pos, pos: pos + <Self as AbiRecord<3>>::LAYOUT.offsets[2], input_len: input_len))
         end
     }
 }
@@ -2697,14 +3084,10 @@ impl<A: Abi, T0, T1, T2, T3> Decode<A> for (T0, T1, T2, T3)
     fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: head_pos)
+        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: pos)
+        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<4>>::LAYOUT.offsets[1])
+        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<4>>::LAYOUT.offsets[2])
+        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<4>>::LAYOUT.offsets[3])
         (v0, v1, v2, v3)
     }
 
@@ -2712,14 +3095,10 @@ impl<A: Abi, T0, T1, T2, T3> Decode<A> for (T0, T1, T2, T3)
     fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: pos, input_len: input_len)
+        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<4>>::LAYOUT.offsets[1], input_len: input_len)
+        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<4>>::LAYOUT.offsets[2], input_len: input_len)
+        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<4>>::LAYOUT.offsets[3], input_len: input_len)
         (v0, v1, v2, v3)
     }
 
@@ -2743,13 +3122,10 @@ impl<A: Abi, T0, T1, T2, T3> Encode<A> for (T0, T1, T2, T3)
     fn encode(own self, _ ptr: *u8) {
         let (v0, v1, v2, v3) = self
         let mut tail = Self::HEAD_SIZE
-        let head1 = abi_field_head_size<T0>()
-        let head2 = head1 + abi_field_head_size<T1>()
-        let head3 = head2 + abi_field_head_size<T2>()
         tail = encode_field_at<A, T0>(v0, ptr, head_pos: 0, tail)
-        tail = encode_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
-        tail = encode_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
-        encode_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
+        tail = encode_field_at<A, T1>(v1, ptr, head_pos: <Self as AbiRecord<4>>::LAYOUT.offsets[1], tail)
+        tail = encode_field_at<A, T2>(v2, ptr, head_pos: <Self as AbiRecord<4>>::LAYOUT.offsets[2], tail)
+        encode_field_at<A, T3>(v3, ptr, head_pos: <Self as AbiRecord<4>>::LAYOUT.offsets[3], tail)
     }
 }
 
@@ -2760,28 +3136,22 @@ impl<A: Abi, T0, T1, T2, T3> AbiSpan<A> for (T0, T1, T2, T3)
           T3: AbiSpan<A> + AbiSize
 {
     fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
-        let field1 = pos + abi_field_head_size<T0>()
-        let field2 = field1 + abi_field_head_size<T1>()
-        let field3 = field2 + abi_field_head_size<T2>()
-        let mut end = field3 + abi_field_head_size<T3>()
+        let mut end = pos + Self::HEAD_SIZE
         end = max_u256(a: end, b: abi_field_end<A, T0, I>(input, base: pos, pos: pos))
-        end = max_u256(a: end, b: abi_field_end<A, T1, I>(input, base: pos, pos: field1))
-        end = max_u256(a: end, b: abi_field_end<A, T2, I>(input, base: pos, pos: field2))
-        end = max_u256(a: end, b: abi_field_end<A, T3, I>(input, base: pos, pos: field3))
+        end = max_u256(a: end, b: abi_field_end<A, T1, I>(input, base: pos, pos: pos + <Self as AbiRecord<4>>::LAYOUT.offsets[1]))
+        end = max_u256(a: end, b: abi_field_end<A, T2, I>(input, base: pos, pos: pos + <Self as AbiRecord<4>>::LAYOUT.offsets[2]))
+        end = max_u256(a: end, b: abi_field_end<A, T3, I>(input, base: pos, pos: pos + <Self as AbiRecord<4>>::LAYOUT.offsets[3]))
         end
     }
 
     fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
         let _ = base
         checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
-        let field1 = pos + abi_field_head_size<T0>()
-        let field2 = field1 + abi_field_head_size<T1>()
-        let field3 = field2 + abi_field_head_size<T2>()
-        let mut end = field3 + abi_field_head_size<T3>()
+        let mut end = pos + Self::HEAD_SIZE
         end = max_u256(a: end, b: abi_field_end_with_input_len<A, T0, I>(input, base: pos, pos: pos, input_len: input_len))
-        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T1, I>(input, base: pos, pos: field1, input_len: input_len))
-        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T2, I>(input, base: pos, pos: field2, input_len: input_len))
-        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T3, I>(input, base: pos, pos: field3, input_len: input_len))
+        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T1, I>(input, base: pos, pos: pos + <Self as AbiRecord<4>>::LAYOUT.offsets[1], input_len: input_len))
+        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T2, I>(input, base: pos, pos: pos + <Self as AbiRecord<4>>::LAYOUT.offsets[2], input_len: input_len))
+        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T3, I>(input, base: pos, pos: pos + <Self as AbiRecord<4>>::LAYOUT.offsets[3], input_len: input_len))
         end
     }
 }
@@ -2808,16 +3178,11 @@ impl<A: Abi, T0, T1, T2, T3, T4> Decode<A> for (T0, T1, T2, T3, T4)
     fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T3>()
-        let v4: T4 = decode_field_from<A, T4, I>(input, base: pos, head_pos: head_pos)
+        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: pos)
+        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<5>>::LAYOUT.offsets[1])
+        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<5>>::LAYOUT.offsets[2])
+        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<5>>::LAYOUT.offsets[3])
+        let v4: T4 = decode_field_from<A, T4, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<5>>::LAYOUT.offsets[4])
         (v0, v1, v2, v3, v4)
     }
 
@@ -2825,16 +3190,11 @@ impl<A: Abi, T0, T1, T2, T3, T4> Decode<A> for (T0, T1, T2, T3, T4)
     fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T3>()
-        let v4: T4 = decode_field_from_prechecked_head<A, T4, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: pos, input_len: input_len)
+        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<5>>::LAYOUT.offsets[1], input_len: input_len)
+        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<5>>::LAYOUT.offsets[2], input_len: input_len)
+        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<5>>::LAYOUT.offsets[3], input_len: input_len)
+        let v4: T4 = decode_field_from_prechecked_head<A, T4, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<5>>::LAYOUT.offsets[4], input_len: input_len)
         (v0, v1, v2, v3, v4)
     }
 
@@ -2859,15 +3219,11 @@ impl<A: Abi, T0, T1, T2, T3, T4> Encode<A> for (T0, T1, T2, T3, T4)
     fn encode(own self, _ ptr: *u8) {
         let (v0, v1, v2, v3, v4) = self
         let mut tail = Self::HEAD_SIZE
-        let head1 = abi_field_head_size<T0>()
-        let head2 = head1 + abi_field_head_size<T1>()
-        let head3 = head2 + abi_field_head_size<T2>()
-        let head4 = head3 + abi_field_head_size<T3>()
         tail = encode_field_at<A, T0>(v0, ptr, head_pos: 0, tail)
-        tail = encode_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
-        tail = encode_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
-        tail = encode_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
-        encode_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
+        tail = encode_field_at<A, T1>(v1, ptr, head_pos: <Self as AbiRecord<5>>::LAYOUT.offsets[1], tail)
+        tail = encode_field_at<A, T2>(v2, ptr, head_pos: <Self as AbiRecord<5>>::LAYOUT.offsets[2], tail)
+        tail = encode_field_at<A, T3>(v3, ptr, head_pos: <Self as AbiRecord<5>>::LAYOUT.offsets[3], tail)
+        encode_field_at<A, T4>(v4, ptr, head_pos: <Self as AbiRecord<5>>::LAYOUT.offsets[4], tail)
     }
 }
 
@@ -2895,18 +3251,12 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5> Decode<A> for (T0, T1, T2, T3, T4, T5)
     fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T3>()
-        let v4: T4 = decode_field_from<A, T4, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T4>()
-        let v5: T5 = decode_field_from<A, T5, I>(input, base: pos, head_pos: head_pos)
+        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: pos)
+        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<6>>::LAYOUT.offsets[1])
+        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<6>>::LAYOUT.offsets[2])
+        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<6>>::LAYOUT.offsets[3])
+        let v4: T4 = decode_field_from<A, T4, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<6>>::LAYOUT.offsets[4])
+        let v5: T5 = decode_field_from<A, T5, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<6>>::LAYOUT.offsets[5])
         (v0, v1, v2, v3, v4, v5)
     }
 
@@ -2914,18 +3264,12 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5> Decode<A> for (T0, T1, T2, T3, T4, T5)
     fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T3>()
-        let v4: T4 = decode_field_from_prechecked_head<A, T4, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T4>()
-        let v5: T5 = decode_field_from_prechecked_head<A, T5, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: pos, input_len: input_len)
+        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<6>>::LAYOUT.offsets[1], input_len: input_len)
+        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<6>>::LAYOUT.offsets[2], input_len: input_len)
+        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<6>>::LAYOUT.offsets[3], input_len: input_len)
+        let v4: T4 = decode_field_from_prechecked_head<A, T4, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<6>>::LAYOUT.offsets[4], input_len: input_len)
+        let v5: T5 = decode_field_from_prechecked_head<A, T5, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<6>>::LAYOUT.offsets[5], input_len: input_len)
         (v0, v1, v2, v3, v4, v5)
     }
 
@@ -2951,17 +3295,12 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5> Encode<A> for (T0, T1, T2, T3, T4, T5)
     fn encode(own self, _ ptr: *u8) {
         let (v0, v1, v2, v3, v4, v5) = self
         let mut tail = Self::HEAD_SIZE
-        let head1 = abi_field_head_size<T0>()
-        let head2 = head1 + abi_field_head_size<T1>()
-        let head3 = head2 + abi_field_head_size<T2>()
-        let head4 = head3 + abi_field_head_size<T3>()
-        let head5 = head4 + abi_field_head_size<T4>()
         tail = encode_field_at<A, T0>(v0, ptr, head_pos: 0, tail)
-        tail = encode_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
-        tail = encode_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
-        tail = encode_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
-        tail = encode_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
-        encode_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
+        tail = encode_field_at<A, T1>(v1, ptr, head_pos: <Self as AbiRecord<6>>::LAYOUT.offsets[1], tail)
+        tail = encode_field_at<A, T2>(v2, ptr, head_pos: <Self as AbiRecord<6>>::LAYOUT.offsets[2], tail)
+        tail = encode_field_at<A, T3>(v3, ptr, head_pos: <Self as AbiRecord<6>>::LAYOUT.offsets[3], tail)
+        tail = encode_field_at<A, T4>(v4, ptr, head_pos: <Self as AbiRecord<6>>::LAYOUT.offsets[4], tail)
+        encode_field_at<A, T5>(v5, ptr, head_pos: <Self as AbiRecord<6>>::LAYOUT.offsets[5], tail)
     }
 }
 
@@ -2991,20 +3330,13 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6> Decode<A> for (T0, T1, T2, T3, T4, T5, 
     fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T3>()
-        let v4: T4 = decode_field_from<A, T4, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T4>()
-        let v5: T5 = decode_field_from<A, T5, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T5>()
-        let v6: T6 = decode_field_from<A, T6, I>(input, base: pos, head_pos: head_pos)
+        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: pos)
+        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<7>>::LAYOUT.offsets[1])
+        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<7>>::LAYOUT.offsets[2])
+        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<7>>::LAYOUT.offsets[3])
+        let v4: T4 = decode_field_from<A, T4, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<7>>::LAYOUT.offsets[4])
+        let v5: T5 = decode_field_from<A, T5, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<7>>::LAYOUT.offsets[5])
+        let v6: T6 = decode_field_from<A, T6, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<7>>::LAYOUT.offsets[6])
         (v0, v1, v2, v3, v4, v5, v6)
     }
 
@@ -3012,20 +3344,13 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6> Decode<A> for (T0, T1, T2, T3, T4, T5, 
     fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T3>()
-        let v4: T4 = decode_field_from_prechecked_head<A, T4, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T4>()
-        let v5: T5 = decode_field_from_prechecked_head<A, T5, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T5>()
-        let v6: T6 = decode_field_from_prechecked_head<A, T6, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: pos, input_len: input_len)
+        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<7>>::LAYOUT.offsets[1], input_len: input_len)
+        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<7>>::LAYOUT.offsets[2], input_len: input_len)
+        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<7>>::LAYOUT.offsets[3], input_len: input_len)
+        let v4: T4 = decode_field_from_prechecked_head<A, T4, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<7>>::LAYOUT.offsets[4], input_len: input_len)
+        let v5: T5 = decode_field_from_prechecked_head<A, T5, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<7>>::LAYOUT.offsets[5], input_len: input_len)
+        let v6: T6 = decode_field_from_prechecked_head<A, T6, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<7>>::LAYOUT.offsets[6], input_len: input_len)
         (v0, v1, v2, v3, v4, v5, v6)
     }
 
@@ -3052,19 +3377,13 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6> Encode<A> for (T0, T1, T2, T3, T4, T5, 
     fn encode(own self, _ ptr: *u8) {
         let (v0, v1, v2, v3, v4, v5, v6) = self
         let mut tail = Self::HEAD_SIZE
-        let head1 = abi_field_head_size<T0>()
-        let head2 = head1 + abi_field_head_size<T1>()
-        let head3 = head2 + abi_field_head_size<T2>()
-        let head4 = head3 + abi_field_head_size<T3>()
-        let head5 = head4 + abi_field_head_size<T4>()
-        let head6 = head5 + abi_field_head_size<T5>()
         tail = encode_field_at<A, T0>(v0, ptr, head_pos: 0, tail)
-        tail = encode_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
-        tail = encode_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
-        tail = encode_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
-        tail = encode_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
-        tail = encode_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
-        encode_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
+        tail = encode_field_at<A, T1>(v1, ptr, head_pos: <Self as AbiRecord<7>>::LAYOUT.offsets[1], tail)
+        tail = encode_field_at<A, T2>(v2, ptr, head_pos: <Self as AbiRecord<7>>::LAYOUT.offsets[2], tail)
+        tail = encode_field_at<A, T3>(v3, ptr, head_pos: <Self as AbiRecord<7>>::LAYOUT.offsets[3], tail)
+        tail = encode_field_at<A, T4>(v4, ptr, head_pos: <Self as AbiRecord<7>>::LAYOUT.offsets[4], tail)
+        tail = encode_field_at<A, T5>(v5, ptr, head_pos: <Self as AbiRecord<7>>::LAYOUT.offsets[5], tail)
+        encode_field_at<A, T6>(v6, ptr, head_pos: <Self as AbiRecord<7>>::LAYOUT.offsets[6], tail)
     }
 }
 
@@ -3096,22 +3415,14 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> Decode<A> for (T0, T1, T2, T3, T4, 
     fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T3>()
-        let v4: T4 = decode_field_from<A, T4, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T4>()
-        let v5: T5 = decode_field_from<A, T5, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T5>()
-        let v6: T6 = decode_field_from<A, T6, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T6>()
-        let v7: T7 = decode_field_from<A, T7, I>(input, base: pos, head_pos: head_pos)
+        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: pos)
+        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<8>>::LAYOUT.offsets[1])
+        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<8>>::LAYOUT.offsets[2])
+        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<8>>::LAYOUT.offsets[3])
+        let v4: T4 = decode_field_from<A, T4, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<8>>::LAYOUT.offsets[4])
+        let v5: T5 = decode_field_from<A, T5, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<8>>::LAYOUT.offsets[5])
+        let v6: T6 = decode_field_from<A, T6, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<8>>::LAYOUT.offsets[6])
+        let v7: T7 = decode_field_from<A, T7, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<8>>::LAYOUT.offsets[7])
         (v0, v1, v2, v3, v4, v5, v6, v7)
     }
 
@@ -3119,22 +3430,14 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> Decode<A> for (T0, T1, T2, T3, T4, 
     fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T3>()
-        let v4: T4 = decode_field_from_prechecked_head<A, T4, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T4>()
-        let v5: T5 = decode_field_from_prechecked_head<A, T5, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T5>()
-        let v6: T6 = decode_field_from_prechecked_head<A, T6, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T6>()
-        let v7: T7 = decode_field_from_prechecked_head<A, T7, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: pos, input_len: input_len)
+        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<8>>::LAYOUT.offsets[1], input_len: input_len)
+        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<8>>::LAYOUT.offsets[2], input_len: input_len)
+        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<8>>::LAYOUT.offsets[3], input_len: input_len)
+        let v4: T4 = decode_field_from_prechecked_head<A, T4, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<8>>::LAYOUT.offsets[4], input_len: input_len)
+        let v5: T5 = decode_field_from_prechecked_head<A, T5, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<8>>::LAYOUT.offsets[5], input_len: input_len)
+        let v6: T6 = decode_field_from_prechecked_head<A, T6, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<8>>::LAYOUT.offsets[6], input_len: input_len)
+        let v7: T7 = decode_field_from_prechecked_head<A, T7, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<8>>::LAYOUT.offsets[7], input_len: input_len)
         (v0, v1, v2, v3, v4, v5, v6, v7)
     }
 
@@ -3162,21 +3465,14 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> Encode<A> for (T0, T1, T2, T3, T4, 
     fn encode(own self, _ ptr: *u8) {
         let (v0, v1, v2, v3, v4, v5, v6, v7) = self
         let mut tail = Self::HEAD_SIZE
-        let head1 = abi_field_head_size<T0>()
-        let head2 = head1 + abi_field_head_size<T1>()
-        let head3 = head2 + abi_field_head_size<T2>()
-        let head4 = head3 + abi_field_head_size<T3>()
-        let head5 = head4 + abi_field_head_size<T4>()
-        let head6 = head5 + abi_field_head_size<T5>()
-        let head7 = head6 + abi_field_head_size<T6>()
         tail = encode_field_at<A, T0>(v0, ptr, head_pos: 0, tail)
-        tail = encode_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
-        tail = encode_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
-        tail = encode_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
-        tail = encode_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
-        tail = encode_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
-        tail = encode_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
-        encode_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
+        tail = encode_field_at<A, T1>(v1, ptr, head_pos: <Self as AbiRecord<8>>::LAYOUT.offsets[1], tail)
+        tail = encode_field_at<A, T2>(v2, ptr, head_pos: <Self as AbiRecord<8>>::LAYOUT.offsets[2], tail)
+        tail = encode_field_at<A, T3>(v3, ptr, head_pos: <Self as AbiRecord<8>>::LAYOUT.offsets[3], tail)
+        tail = encode_field_at<A, T4>(v4, ptr, head_pos: <Self as AbiRecord<8>>::LAYOUT.offsets[4], tail)
+        tail = encode_field_at<A, T5>(v5, ptr, head_pos: <Self as AbiRecord<8>>::LAYOUT.offsets[5], tail)
+        tail = encode_field_at<A, T6>(v6, ptr, head_pos: <Self as AbiRecord<8>>::LAYOUT.offsets[6], tail)
+        encode_field_at<A, T7>(v7, ptr, head_pos: <Self as AbiRecord<8>>::LAYOUT.offsets[7], tail)
     }
 }
 
@@ -3210,24 +3506,15 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> Decode<A> for (T0, T1, T2, T3, 
     fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T3>()
-        let v4: T4 = decode_field_from<A, T4, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T4>()
-        let v5: T5 = decode_field_from<A, T5, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T5>()
-        let v6: T6 = decode_field_from<A, T6, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T6>()
-        let v7: T7 = decode_field_from<A, T7, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T7>()
-        let v8: T8 = decode_field_from<A, T8, I>(input, base: pos, head_pos: head_pos)
+        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: pos)
+        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<9>>::LAYOUT.offsets[1])
+        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<9>>::LAYOUT.offsets[2])
+        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<9>>::LAYOUT.offsets[3])
+        let v4: T4 = decode_field_from<A, T4, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<9>>::LAYOUT.offsets[4])
+        let v5: T5 = decode_field_from<A, T5, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<9>>::LAYOUT.offsets[5])
+        let v6: T6 = decode_field_from<A, T6, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<9>>::LAYOUT.offsets[6])
+        let v7: T7 = decode_field_from<A, T7, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<9>>::LAYOUT.offsets[7])
+        let v8: T8 = decode_field_from<A, T8, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<9>>::LAYOUT.offsets[8])
         (v0, v1, v2, v3, v4, v5, v6, v7, v8)
     }
 
@@ -3235,24 +3522,15 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> Decode<A> for (T0, T1, T2, T3, 
     fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T3>()
-        let v4: T4 = decode_field_from_prechecked_head<A, T4, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T4>()
-        let v5: T5 = decode_field_from_prechecked_head<A, T5, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T5>()
-        let v6: T6 = decode_field_from_prechecked_head<A, T6, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T6>()
-        let v7: T7 = decode_field_from_prechecked_head<A, T7, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T7>()
-        let v8: T8 = decode_field_from_prechecked_head<A, T8, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: pos, input_len: input_len)
+        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<9>>::LAYOUT.offsets[1], input_len: input_len)
+        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<9>>::LAYOUT.offsets[2], input_len: input_len)
+        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<9>>::LAYOUT.offsets[3], input_len: input_len)
+        let v4: T4 = decode_field_from_prechecked_head<A, T4, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<9>>::LAYOUT.offsets[4], input_len: input_len)
+        let v5: T5 = decode_field_from_prechecked_head<A, T5, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<9>>::LAYOUT.offsets[5], input_len: input_len)
+        let v6: T6 = decode_field_from_prechecked_head<A, T6, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<9>>::LAYOUT.offsets[6], input_len: input_len)
+        let v7: T7 = decode_field_from_prechecked_head<A, T7, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<9>>::LAYOUT.offsets[7], input_len: input_len)
+        let v8: T8 = decode_field_from_prechecked_head<A, T8, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<9>>::LAYOUT.offsets[8], input_len: input_len)
         (v0, v1, v2, v3, v4, v5, v6, v7, v8)
     }
 
@@ -3281,23 +3559,15 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> Encode<A> for (T0, T1, T2, T3, 
     fn encode(own self, _ ptr: *u8) {
         let (v0, v1, v2, v3, v4, v5, v6, v7, v8) = self
         let mut tail = Self::HEAD_SIZE
-        let head1 = abi_field_head_size<T0>()
-        let head2 = head1 + abi_field_head_size<T1>()
-        let head3 = head2 + abi_field_head_size<T2>()
-        let head4 = head3 + abi_field_head_size<T3>()
-        let head5 = head4 + abi_field_head_size<T4>()
-        let head6 = head5 + abi_field_head_size<T5>()
-        let head7 = head6 + abi_field_head_size<T6>()
-        let head8 = head7 + abi_field_head_size<T7>()
         tail = encode_field_at<A, T0>(v0, ptr, head_pos: 0, tail)
-        tail = encode_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
-        tail = encode_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
-        tail = encode_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
-        tail = encode_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
-        tail = encode_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
-        tail = encode_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
-        tail = encode_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
-        encode_field_at<A, T8>(v8, ptr, head_pos: head8, tail)
+        tail = encode_field_at<A, T1>(v1, ptr, head_pos: <Self as AbiRecord<9>>::LAYOUT.offsets[1], tail)
+        tail = encode_field_at<A, T2>(v2, ptr, head_pos: <Self as AbiRecord<9>>::LAYOUT.offsets[2], tail)
+        tail = encode_field_at<A, T3>(v3, ptr, head_pos: <Self as AbiRecord<9>>::LAYOUT.offsets[3], tail)
+        tail = encode_field_at<A, T4>(v4, ptr, head_pos: <Self as AbiRecord<9>>::LAYOUT.offsets[4], tail)
+        tail = encode_field_at<A, T5>(v5, ptr, head_pos: <Self as AbiRecord<9>>::LAYOUT.offsets[5], tail)
+        tail = encode_field_at<A, T6>(v6, ptr, head_pos: <Self as AbiRecord<9>>::LAYOUT.offsets[6], tail)
+        tail = encode_field_at<A, T7>(v7, ptr, head_pos: <Self as AbiRecord<9>>::LAYOUT.offsets[7], tail)
+        encode_field_at<A, T8>(v8, ptr, head_pos: <Self as AbiRecord<9>>::LAYOUT.offsets[8], tail)
     }
 }
 
@@ -3334,26 +3604,16 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Decode<A>
     fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T3>()
-        let v4: T4 = decode_field_from<A, T4, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T4>()
-        let v5: T5 = decode_field_from<A, T5, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T5>()
-        let v6: T6 = decode_field_from<A, T6, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T6>()
-        let v7: T7 = decode_field_from<A, T7, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T7>()
-        let v8: T8 = decode_field_from<A, T8, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T8>()
-        let v9: T9 = decode_field_from<A, T9, I>(input, base: pos, head_pos: head_pos)
+        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: pos)
+        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[1])
+        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[2])
+        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[3])
+        let v4: T4 = decode_field_from<A, T4, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[4])
+        let v5: T5 = decode_field_from<A, T5, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[5])
+        let v6: T6 = decode_field_from<A, T6, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[6])
+        let v7: T7 = decode_field_from<A, T7, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[7])
+        let v8: T8 = decode_field_from<A, T8, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[8])
+        let v9: T9 = decode_field_from<A, T9, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[9])
         (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9)
     }
 
@@ -3361,26 +3621,16 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Decode<A>
     fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T3>()
-        let v4: T4 = decode_field_from_prechecked_head<A, T4, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T4>()
-        let v5: T5 = decode_field_from_prechecked_head<A, T5, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T5>()
-        let v6: T6 = decode_field_from_prechecked_head<A, T6, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T6>()
-        let v7: T7 = decode_field_from_prechecked_head<A, T7, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T7>()
-        let v8: T8 = decode_field_from_prechecked_head<A, T8, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T8>()
-        let v9: T9 = decode_field_from_prechecked_head<A, T9, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: pos, input_len: input_len)
+        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[1], input_len: input_len)
+        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[2], input_len: input_len)
+        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[3], input_len: input_len)
+        let v4: T4 = decode_field_from_prechecked_head<A, T4, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[4], input_len: input_len)
+        let v5: T5 = decode_field_from_prechecked_head<A, T5, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[5], input_len: input_len)
+        let v6: T6 = decode_field_from_prechecked_head<A, T6, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[6], input_len: input_len)
+        let v7: T7 = decode_field_from_prechecked_head<A, T7, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[7], input_len: input_len)
+        let v8: T8 = decode_field_from_prechecked_head<A, T8, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[8], input_len: input_len)
+        let v9: T9 = decode_field_from_prechecked_head<A, T9, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<10>>::LAYOUT.offsets[9], input_len: input_len)
         (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9)
     }
 
@@ -3411,25 +3661,16 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Encode<A>
     fn encode(own self, _ ptr: *u8) {
         let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9) = self
         let mut tail = Self::HEAD_SIZE
-        let head1 = abi_field_head_size<T0>()
-        let head2 = head1 + abi_field_head_size<T1>()
-        let head3 = head2 + abi_field_head_size<T2>()
-        let head4 = head3 + abi_field_head_size<T3>()
-        let head5 = head4 + abi_field_head_size<T4>()
-        let head6 = head5 + abi_field_head_size<T5>()
-        let head7 = head6 + abi_field_head_size<T6>()
-        let head8 = head7 + abi_field_head_size<T7>()
-        let head9 = head8 + abi_field_head_size<T8>()
         tail = encode_field_at<A, T0>(v0, ptr, head_pos: 0, tail)
-        tail = encode_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
-        tail = encode_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
-        tail = encode_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
-        tail = encode_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
-        tail = encode_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
-        tail = encode_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
-        tail = encode_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
-        tail = encode_field_at<A, T8>(v8, ptr, head_pos: head8, tail)
-        encode_field_at<A, T9>(v9, ptr, head_pos: head9, tail)
+        tail = encode_field_at<A, T1>(v1, ptr, head_pos: <Self as AbiRecord<10>>::LAYOUT.offsets[1], tail)
+        tail = encode_field_at<A, T2>(v2, ptr, head_pos: <Self as AbiRecord<10>>::LAYOUT.offsets[2], tail)
+        tail = encode_field_at<A, T3>(v3, ptr, head_pos: <Self as AbiRecord<10>>::LAYOUT.offsets[3], tail)
+        tail = encode_field_at<A, T4>(v4, ptr, head_pos: <Self as AbiRecord<10>>::LAYOUT.offsets[4], tail)
+        tail = encode_field_at<A, T5>(v5, ptr, head_pos: <Self as AbiRecord<10>>::LAYOUT.offsets[5], tail)
+        tail = encode_field_at<A, T6>(v6, ptr, head_pos: <Self as AbiRecord<10>>::LAYOUT.offsets[6], tail)
+        tail = encode_field_at<A, T7>(v7, ptr, head_pos: <Self as AbiRecord<10>>::LAYOUT.offsets[7], tail)
+        tail = encode_field_at<A, T8>(v8, ptr, head_pos: <Self as AbiRecord<10>>::LAYOUT.offsets[8], tail)
+        encode_field_at<A, T9>(v9, ptr, head_pos: <Self as AbiRecord<10>>::LAYOUT.offsets[9], tail)
     }
 }
 
@@ -3468,28 +3709,17 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Decode<A>
     fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T3>()
-        let v4: T4 = decode_field_from<A, T4, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T4>()
-        let v5: T5 = decode_field_from<A, T5, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T5>()
-        let v6: T6 = decode_field_from<A, T6, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T6>()
-        let v7: T7 = decode_field_from<A, T7, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T7>()
-        let v8: T8 = decode_field_from<A, T8, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T8>()
-        let v9: T9 = decode_field_from<A, T9, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T9>()
-        let v10: T10 = decode_field_from<A, T10, I>(input, base: pos, head_pos: head_pos)
+        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: pos)
+        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[1])
+        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[2])
+        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[3])
+        let v4: T4 = decode_field_from<A, T4, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[4])
+        let v5: T5 = decode_field_from<A, T5, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[5])
+        let v6: T6 = decode_field_from<A, T6, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[6])
+        let v7: T7 = decode_field_from<A, T7, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[7])
+        let v8: T8 = decode_field_from<A, T8, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[8])
+        let v9: T9 = decode_field_from<A, T9, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[9])
+        let v10: T10 = decode_field_from<A, T10, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[10])
         (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10)
     }
 
@@ -3497,28 +3727,17 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Decode<A>
     fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T3>()
-        let v4: T4 = decode_field_from_prechecked_head<A, T4, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T4>()
-        let v5: T5 = decode_field_from_prechecked_head<A, T5, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T5>()
-        let v6: T6 = decode_field_from_prechecked_head<A, T6, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T6>()
-        let v7: T7 = decode_field_from_prechecked_head<A, T7, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T7>()
-        let v8: T8 = decode_field_from_prechecked_head<A, T8, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T8>()
-        let v9: T9 = decode_field_from_prechecked_head<A, T9, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T9>()
-        let v10: T10 = decode_field_from_prechecked_head<A, T10, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: pos, input_len: input_len)
+        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[1], input_len: input_len)
+        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[2], input_len: input_len)
+        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[3], input_len: input_len)
+        let v4: T4 = decode_field_from_prechecked_head<A, T4, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[4], input_len: input_len)
+        let v5: T5 = decode_field_from_prechecked_head<A, T5, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[5], input_len: input_len)
+        let v6: T6 = decode_field_from_prechecked_head<A, T6, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[6], input_len: input_len)
+        let v7: T7 = decode_field_from_prechecked_head<A, T7, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[7], input_len: input_len)
+        let v8: T8 = decode_field_from_prechecked_head<A, T8, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[8], input_len: input_len)
+        let v9: T9 = decode_field_from_prechecked_head<A, T9, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[9], input_len: input_len)
+        let v10: T10 = decode_field_from_prechecked_head<A, T10, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<11>>::LAYOUT.offsets[10], input_len: input_len)
         (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10)
     }
 
@@ -3550,27 +3769,17 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Encode<A>
     fn encode(own self, _ ptr: *u8) {
         let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10) = self
         let mut tail = Self::HEAD_SIZE
-        let head1 = abi_field_head_size<T0>()
-        let head2 = head1 + abi_field_head_size<T1>()
-        let head3 = head2 + abi_field_head_size<T2>()
-        let head4 = head3 + abi_field_head_size<T3>()
-        let head5 = head4 + abi_field_head_size<T4>()
-        let head6 = head5 + abi_field_head_size<T5>()
-        let head7 = head6 + abi_field_head_size<T6>()
-        let head8 = head7 + abi_field_head_size<T7>()
-        let head9 = head8 + abi_field_head_size<T8>()
-        let head10 = head9 + abi_field_head_size<T9>()
         tail = encode_field_at<A, T0>(v0, ptr, head_pos: 0, tail)
-        tail = encode_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
-        tail = encode_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
-        tail = encode_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
-        tail = encode_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
-        tail = encode_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
-        tail = encode_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
-        tail = encode_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
-        tail = encode_field_at<A, T8>(v8, ptr, head_pos: head8, tail)
-        tail = encode_field_at<A, T9>(v9, ptr, head_pos: head9, tail)
-        encode_field_at<A, T10>(v10, ptr, head_pos: head10, tail)
+        tail = encode_field_at<A, T1>(v1, ptr, head_pos: <Self as AbiRecord<11>>::LAYOUT.offsets[1], tail)
+        tail = encode_field_at<A, T2>(v2, ptr, head_pos: <Self as AbiRecord<11>>::LAYOUT.offsets[2], tail)
+        tail = encode_field_at<A, T3>(v3, ptr, head_pos: <Self as AbiRecord<11>>::LAYOUT.offsets[3], tail)
+        tail = encode_field_at<A, T4>(v4, ptr, head_pos: <Self as AbiRecord<11>>::LAYOUT.offsets[4], tail)
+        tail = encode_field_at<A, T5>(v5, ptr, head_pos: <Self as AbiRecord<11>>::LAYOUT.offsets[5], tail)
+        tail = encode_field_at<A, T6>(v6, ptr, head_pos: <Self as AbiRecord<11>>::LAYOUT.offsets[6], tail)
+        tail = encode_field_at<A, T7>(v7, ptr, head_pos: <Self as AbiRecord<11>>::LAYOUT.offsets[7], tail)
+        tail = encode_field_at<A, T8>(v8, ptr, head_pos: <Self as AbiRecord<11>>::LAYOUT.offsets[8], tail)
+        tail = encode_field_at<A, T9>(v9, ptr, head_pos: <Self as AbiRecord<11>>::LAYOUT.offsets[9], tail)
+        encode_field_at<A, T10>(v10, ptr, head_pos: <Self as AbiRecord<11>>::LAYOUT.offsets[10], tail)
     }
 }
 
@@ -3611,30 +3820,18 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Decode<A>
     fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T3>()
-        let v4: T4 = decode_field_from<A, T4, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T4>()
-        let v5: T5 = decode_field_from<A, T5, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T5>()
-        let v6: T6 = decode_field_from<A, T6, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T6>()
-        let v7: T7 = decode_field_from<A, T7, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T7>()
-        let v8: T8 = decode_field_from<A, T8, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T8>()
-        let v9: T9 = decode_field_from<A, T9, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T9>()
-        let v10: T10 = decode_field_from<A, T10, I>(input, base: pos, head_pos: head_pos)
-        head_pos += abi_field_head_size<T10>()
-        let v11: T11 = decode_field_from<A, T11, I>(input, base: pos, head_pos: head_pos)
+        let v0: T0 = decode_field_from<A, T0, I>(input, base: pos, head_pos: pos)
+        let v1: T1 = decode_field_from<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[1])
+        let v2: T2 = decode_field_from<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[2])
+        let v3: T3 = decode_field_from<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[3])
+        let v4: T4 = decode_field_from<A, T4, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[4])
+        let v5: T5 = decode_field_from<A, T5, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[5])
+        let v6: T6 = decode_field_from<A, T6, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[6])
+        let v7: T7 = decode_field_from<A, T7, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[7])
+        let v8: T8 = decode_field_from<A, T8, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[8])
+        let v9: T9 = decode_field_from<A, T9, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[9])
+        let v10: T10 = decode_field_from<A, T10, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[10])
+        let v11: T11 = decode_field_from<A, T11, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[11])
         (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11)
     }
 
@@ -3642,30 +3839,18 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Decode<A>
     fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self
         where A::Decoder<I>: AbiDecoder<A>
     {
-        let mut head_pos = pos
-        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T0>()
-        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T1>()
-        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T2>()
-        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T3>()
-        let v4: T4 = decode_field_from_prechecked_head<A, T4, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T4>()
-        let v5: T5 = decode_field_from_prechecked_head<A, T5, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T5>()
-        let v6: T6 = decode_field_from_prechecked_head<A, T6, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T6>()
-        let v7: T7 = decode_field_from_prechecked_head<A, T7, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T7>()
-        let v8: T8 = decode_field_from_prechecked_head<A, T8, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T8>()
-        let v9: T9 = decode_field_from_prechecked_head<A, T9, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T9>()
-        let v10: T10 = decode_field_from_prechecked_head<A, T10, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
-        head_pos += abi_field_head_size<T10>()
-        let v11: T11 = decode_field_from_prechecked_head<A, T11, I>(input, base: pos, head_pos: head_pos, input_len: input_len)
+        let v0: T0 = decode_field_from_prechecked_head<A, T0, I>(input, base: pos, head_pos: pos, input_len: input_len)
+        let v1: T1 = decode_field_from_prechecked_head<A, T1, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[1], input_len: input_len)
+        let v2: T2 = decode_field_from_prechecked_head<A, T2, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[2], input_len: input_len)
+        let v3: T3 = decode_field_from_prechecked_head<A, T3, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[3], input_len: input_len)
+        let v4: T4 = decode_field_from_prechecked_head<A, T4, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[4], input_len: input_len)
+        let v5: T5 = decode_field_from_prechecked_head<A, T5, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[5], input_len: input_len)
+        let v6: T6 = decode_field_from_prechecked_head<A, T6, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[6], input_len: input_len)
+        let v7: T7 = decode_field_from_prechecked_head<A, T7, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[7], input_len: input_len)
+        let v8: T8 = decode_field_from_prechecked_head<A, T8, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[8], input_len: input_len)
+        let v9: T9 = decode_field_from_prechecked_head<A, T9, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[9], input_len: input_len)
+        let v10: T10 = decode_field_from_prechecked_head<A, T10, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[10], input_len: input_len)
+        let v11: T11 = decode_field_from_prechecked_head<A, T11, I>(input, base: pos, head_pos: pos + <Self as AbiRecord<12>>::LAYOUT.offsets[11], input_len: input_len)
         (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11)
     }
 
@@ -3698,29 +3883,18 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Encode<A>
     fn encode(own self, _ ptr: *u8) {
         let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11) = self
         let mut tail = Self::HEAD_SIZE
-        let head1 = abi_field_head_size<T0>()
-        let head2 = head1 + abi_field_head_size<T1>()
-        let head3 = head2 + abi_field_head_size<T2>()
-        let head4 = head3 + abi_field_head_size<T3>()
-        let head5 = head4 + abi_field_head_size<T4>()
-        let head6 = head5 + abi_field_head_size<T5>()
-        let head7 = head6 + abi_field_head_size<T6>()
-        let head8 = head7 + abi_field_head_size<T7>()
-        let head9 = head8 + abi_field_head_size<T8>()
-        let head10 = head9 + abi_field_head_size<T9>()
-        let head11 = head10 + abi_field_head_size<T10>()
         tail = encode_field_at<A, T0>(v0, ptr, head_pos: 0, tail)
-        tail = encode_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
-        tail = encode_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
-        tail = encode_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
-        tail = encode_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
-        tail = encode_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
-        tail = encode_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
-        tail = encode_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
-        tail = encode_field_at<A, T8>(v8, ptr, head_pos: head8, tail)
-        tail = encode_field_at<A, T9>(v9, ptr, head_pos: head9, tail)
-        tail = encode_field_at<A, T10>(v10, ptr, head_pos: head10, tail)
-        encode_field_at<A, T11>(v11, ptr, head_pos: head11, tail)
+        tail = encode_field_at<A, T1>(v1, ptr, head_pos: <Self as AbiRecord<12>>::LAYOUT.offsets[1], tail)
+        tail = encode_field_at<A, T2>(v2, ptr, head_pos: <Self as AbiRecord<12>>::LAYOUT.offsets[2], tail)
+        tail = encode_field_at<A, T3>(v3, ptr, head_pos: <Self as AbiRecord<12>>::LAYOUT.offsets[3], tail)
+        tail = encode_field_at<A, T4>(v4, ptr, head_pos: <Self as AbiRecord<12>>::LAYOUT.offsets[4], tail)
+        tail = encode_field_at<A, T5>(v5, ptr, head_pos: <Self as AbiRecord<12>>::LAYOUT.offsets[5], tail)
+        tail = encode_field_at<A, T6>(v6, ptr, head_pos: <Self as AbiRecord<12>>::LAYOUT.offsets[6], tail)
+        tail = encode_field_at<A, T7>(v7, ptr, head_pos: <Self as AbiRecord<12>>::LAYOUT.offsets[7], tail)
+        tail = encode_field_at<A, T8>(v8, ptr, head_pos: <Self as AbiRecord<12>>::LAYOUT.offsets[8], tail)
+        tail = encode_field_at<A, T9>(v9, ptr, head_pos: <Self as AbiRecord<12>>::LAYOUT.offsets[9], tail)
+        tail = encode_field_at<A, T10>(v10, ptr, head_pos: <Self as AbiRecord<12>>::LAYOUT.offsets[10], tail)
+        encode_field_at<A, T11>(v11, ptr, head_pos: <Self as AbiRecord<12>>::LAYOUT.offsets[11], tail)
     }
 }
 
@@ -3745,31 +3919,19 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> Encode<A>
     fn encode(own self, _ ptr: *u8) {
         let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12) = self
         let mut tail = Self::HEAD_SIZE
-        let head1 = abi_field_head_size<T0>()
-        let head2 = head1 + abi_field_head_size<T1>()
-        let head3 = head2 + abi_field_head_size<T2>()
-        let head4 = head3 + abi_field_head_size<T3>()
-        let head5 = head4 + abi_field_head_size<T4>()
-        let head6 = head5 + abi_field_head_size<T5>()
-        let head7 = head6 + abi_field_head_size<T6>()
-        let head8 = head7 + abi_field_head_size<T7>()
-        let head9 = head8 + abi_field_head_size<T8>()
-        let head10 = head9 + abi_field_head_size<T9>()
-        let head11 = head10 + abi_field_head_size<T10>()
-        let head12 = head11 + abi_field_head_size<T11>()
         tail = encode_field_at<A, T0>(v0, ptr, head_pos: 0, tail)
-        tail = encode_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
-        tail = encode_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
-        tail = encode_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
-        tail = encode_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
-        tail = encode_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
-        tail = encode_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
-        tail = encode_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
-        tail = encode_field_at<A, T8>(v8, ptr, head_pos: head8, tail)
-        tail = encode_field_at<A, T9>(v9, ptr, head_pos: head9, tail)
-        tail = encode_field_at<A, T10>(v10, ptr, head_pos: head10, tail)
-        tail = encode_field_at<A, T11>(v11, ptr, head_pos: head11, tail)
-        encode_field_at<A, T12>(v12, ptr, head_pos: head12, tail)
+        tail = encode_field_at<A, T1>(v1, ptr, head_pos: <Self as AbiRecord<13>>::LAYOUT.offsets[1], tail)
+        tail = encode_field_at<A, T2>(v2, ptr, head_pos: <Self as AbiRecord<13>>::LAYOUT.offsets[2], tail)
+        tail = encode_field_at<A, T3>(v3, ptr, head_pos: <Self as AbiRecord<13>>::LAYOUT.offsets[3], tail)
+        tail = encode_field_at<A, T4>(v4, ptr, head_pos: <Self as AbiRecord<13>>::LAYOUT.offsets[4], tail)
+        tail = encode_field_at<A, T5>(v5, ptr, head_pos: <Self as AbiRecord<13>>::LAYOUT.offsets[5], tail)
+        tail = encode_field_at<A, T6>(v6, ptr, head_pos: <Self as AbiRecord<13>>::LAYOUT.offsets[6], tail)
+        tail = encode_field_at<A, T7>(v7, ptr, head_pos: <Self as AbiRecord<13>>::LAYOUT.offsets[7], tail)
+        tail = encode_field_at<A, T8>(v8, ptr, head_pos: <Self as AbiRecord<13>>::LAYOUT.offsets[8], tail)
+        tail = encode_field_at<A, T9>(v9, ptr, head_pos: <Self as AbiRecord<13>>::LAYOUT.offsets[9], tail)
+        tail = encode_field_at<A, T10>(v10, ptr, head_pos: <Self as AbiRecord<13>>::LAYOUT.offsets[10], tail)
+        tail = encode_field_at<A, T11>(v11, ptr, head_pos: <Self as AbiRecord<13>>::LAYOUT.offsets[11], tail)
+        encode_field_at<A, T12>(v12, ptr, head_pos: <Self as AbiRecord<13>>::LAYOUT.offsets[12], tail)
     }
 }
 
@@ -3795,33 +3957,20 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13> Encode<
     fn encode(own self, _ ptr: *u8) {
         let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13) = self
         let mut tail = Self::HEAD_SIZE
-        let head1 = abi_field_head_size<T0>()
-        let head2 = head1 + abi_field_head_size<T1>()
-        let head3 = head2 + abi_field_head_size<T2>()
-        let head4 = head3 + abi_field_head_size<T3>()
-        let head5 = head4 + abi_field_head_size<T4>()
-        let head6 = head5 + abi_field_head_size<T5>()
-        let head7 = head6 + abi_field_head_size<T6>()
-        let head8 = head7 + abi_field_head_size<T7>()
-        let head9 = head8 + abi_field_head_size<T8>()
-        let head10 = head9 + abi_field_head_size<T9>()
-        let head11 = head10 + abi_field_head_size<T10>()
-        let head12 = head11 + abi_field_head_size<T11>()
-        let head13 = head12 + abi_field_head_size<T12>()
         tail = encode_field_at<A, T0>(v0, ptr, head_pos: 0, tail)
-        tail = encode_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
-        tail = encode_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
-        tail = encode_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
-        tail = encode_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
-        tail = encode_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
-        tail = encode_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
-        tail = encode_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
-        tail = encode_field_at<A, T8>(v8, ptr, head_pos: head8, tail)
-        tail = encode_field_at<A, T9>(v9, ptr, head_pos: head9, tail)
-        tail = encode_field_at<A, T10>(v10, ptr, head_pos: head10, tail)
-        tail = encode_field_at<A, T11>(v11, ptr, head_pos: head11, tail)
-        tail = encode_field_at<A, T12>(v12, ptr, head_pos: head12, tail)
-        encode_field_at<A, T13>(v13, ptr, head_pos: head13, tail)
+        tail = encode_field_at<A, T1>(v1, ptr, head_pos: <Self as AbiRecord<14>>::LAYOUT.offsets[1], tail)
+        tail = encode_field_at<A, T2>(v2, ptr, head_pos: <Self as AbiRecord<14>>::LAYOUT.offsets[2], tail)
+        tail = encode_field_at<A, T3>(v3, ptr, head_pos: <Self as AbiRecord<14>>::LAYOUT.offsets[3], tail)
+        tail = encode_field_at<A, T4>(v4, ptr, head_pos: <Self as AbiRecord<14>>::LAYOUT.offsets[4], tail)
+        tail = encode_field_at<A, T5>(v5, ptr, head_pos: <Self as AbiRecord<14>>::LAYOUT.offsets[5], tail)
+        tail = encode_field_at<A, T6>(v6, ptr, head_pos: <Self as AbiRecord<14>>::LAYOUT.offsets[6], tail)
+        tail = encode_field_at<A, T7>(v7, ptr, head_pos: <Self as AbiRecord<14>>::LAYOUT.offsets[7], tail)
+        tail = encode_field_at<A, T8>(v8, ptr, head_pos: <Self as AbiRecord<14>>::LAYOUT.offsets[8], tail)
+        tail = encode_field_at<A, T9>(v9, ptr, head_pos: <Self as AbiRecord<14>>::LAYOUT.offsets[9], tail)
+        tail = encode_field_at<A, T10>(v10, ptr, head_pos: <Self as AbiRecord<14>>::LAYOUT.offsets[10], tail)
+        tail = encode_field_at<A, T11>(v11, ptr, head_pos: <Self as AbiRecord<14>>::LAYOUT.offsets[11], tail)
+        tail = encode_field_at<A, T12>(v12, ptr, head_pos: <Self as AbiRecord<14>>::LAYOUT.offsets[12], tail)
+        encode_field_at<A, T13>(v13, ptr, head_pos: <Self as AbiRecord<14>>::LAYOUT.offsets[13], tail)
     }
 }
 
@@ -3848,35 +3997,21 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14> En
     fn encode(own self, _ ptr: *u8) {
         let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14) = self
         let mut tail = Self::HEAD_SIZE
-        let head1 = abi_field_head_size<T0>()
-        let head2 = head1 + abi_field_head_size<T1>()
-        let head3 = head2 + abi_field_head_size<T2>()
-        let head4 = head3 + abi_field_head_size<T3>()
-        let head5 = head4 + abi_field_head_size<T4>()
-        let head6 = head5 + abi_field_head_size<T5>()
-        let head7 = head6 + abi_field_head_size<T6>()
-        let head8 = head7 + abi_field_head_size<T7>()
-        let head9 = head8 + abi_field_head_size<T8>()
-        let head10 = head9 + abi_field_head_size<T9>()
-        let head11 = head10 + abi_field_head_size<T10>()
-        let head12 = head11 + abi_field_head_size<T11>()
-        let head13 = head12 + abi_field_head_size<T12>()
-        let head14 = head13 + abi_field_head_size<T13>()
         tail = encode_field_at<A, T0>(v0, ptr, head_pos: 0, tail)
-        tail = encode_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
-        tail = encode_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
-        tail = encode_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
-        tail = encode_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
-        tail = encode_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
-        tail = encode_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
-        tail = encode_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
-        tail = encode_field_at<A, T8>(v8, ptr, head_pos: head8, tail)
-        tail = encode_field_at<A, T9>(v9, ptr, head_pos: head9, tail)
-        tail = encode_field_at<A, T10>(v10, ptr, head_pos: head10, tail)
-        tail = encode_field_at<A, T11>(v11, ptr, head_pos: head11, tail)
-        tail = encode_field_at<A, T12>(v12, ptr, head_pos: head12, tail)
-        tail = encode_field_at<A, T13>(v13, ptr, head_pos: head13, tail)
-        encode_field_at<A, T14>(v14, ptr, head_pos: head14, tail)
+        tail = encode_field_at<A, T1>(v1, ptr, head_pos: <Self as AbiRecord<15>>::LAYOUT.offsets[1], tail)
+        tail = encode_field_at<A, T2>(v2, ptr, head_pos: <Self as AbiRecord<15>>::LAYOUT.offsets[2], tail)
+        tail = encode_field_at<A, T3>(v3, ptr, head_pos: <Self as AbiRecord<15>>::LAYOUT.offsets[3], tail)
+        tail = encode_field_at<A, T4>(v4, ptr, head_pos: <Self as AbiRecord<15>>::LAYOUT.offsets[4], tail)
+        tail = encode_field_at<A, T5>(v5, ptr, head_pos: <Self as AbiRecord<15>>::LAYOUT.offsets[5], tail)
+        tail = encode_field_at<A, T6>(v6, ptr, head_pos: <Self as AbiRecord<15>>::LAYOUT.offsets[6], tail)
+        tail = encode_field_at<A, T7>(v7, ptr, head_pos: <Self as AbiRecord<15>>::LAYOUT.offsets[7], tail)
+        tail = encode_field_at<A, T8>(v8, ptr, head_pos: <Self as AbiRecord<15>>::LAYOUT.offsets[8], tail)
+        tail = encode_field_at<A, T9>(v9, ptr, head_pos: <Self as AbiRecord<15>>::LAYOUT.offsets[9], tail)
+        tail = encode_field_at<A, T10>(v10, ptr, head_pos: <Self as AbiRecord<15>>::LAYOUT.offsets[10], tail)
+        tail = encode_field_at<A, T11>(v11, ptr, head_pos: <Self as AbiRecord<15>>::LAYOUT.offsets[11], tail)
+        tail = encode_field_at<A, T12>(v12, ptr, head_pos: <Self as AbiRecord<15>>::LAYOUT.offsets[12], tail)
+        tail = encode_field_at<A, T13>(v13, ptr, head_pos: <Self as AbiRecord<15>>::LAYOUT.offsets[13], tail)
+        encode_field_at<A, T14>(v14, ptr, head_pos: <Self as AbiRecord<15>>::LAYOUT.offsets[14], tail)
     }
 }
 
@@ -3904,37 +4039,22 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T1
     fn encode(own self, _ ptr: *u8) {
         let (v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15) = self
         let mut tail = Self::HEAD_SIZE
-        let head1 = abi_field_head_size<T0>()
-        let head2 = head1 + abi_field_head_size<T1>()
-        let head3 = head2 + abi_field_head_size<T2>()
-        let head4 = head3 + abi_field_head_size<T3>()
-        let head5 = head4 + abi_field_head_size<T4>()
-        let head6 = head5 + abi_field_head_size<T5>()
-        let head7 = head6 + abi_field_head_size<T6>()
-        let head8 = head7 + abi_field_head_size<T7>()
-        let head9 = head8 + abi_field_head_size<T8>()
-        let head10 = head9 + abi_field_head_size<T9>()
-        let head11 = head10 + abi_field_head_size<T10>()
-        let head12 = head11 + abi_field_head_size<T11>()
-        let head13 = head12 + abi_field_head_size<T12>()
-        let head14 = head13 + abi_field_head_size<T13>()
-        let head15 = head14 + abi_field_head_size<T14>()
         tail = encode_field_at<A, T0>(v0, ptr, head_pos: 0, tail)
-        tail = encode_field_at<A, T1>(v1, ptr, head_pos: head1, tail)
-        tail = encode_field_at<A, T2>(v2, ptr, head_pos: head2, tail)
-        tail = encode_field_at<A, T3>(v3, ptr, head_pos: head3, tail)
-        tail = encode_field_at<A, T4>(v4, ptr, head_pos: head4, tail)
-        tail = encode_field_at<A, T5>(v5, ptr, head_pos: head5, tail)
-        tail = encode_field_at<A, T6>(v6, ptr, head_pos: head6, tail)
-        tail = encode_field_at<A, T7>(v7, ptr, head_pos: head7, tail)
-        tail = encode_field_at<A, T8>(v8, ptr, head_pos: head8, tail)
-        tail = encode_field_at<A, T9>(v9, ptr, head_pos: head9, tail)
-        tail = encode_field_at<A, T10>(v10, ptr, head_pos: head10, tail)
-        tail = encode_field_at<A, T11>(v11, ptr, head_pos: head11, tail)
-        tail = encode_field_at<A, T12>(v12, ptr, head_pos: head12, tail)
-        tail = encode_field_at<A, T13>(v13, ptr, head_pos: head13, tail)
-        tail = encode_field_at<A, T14>(v14, ptr, head_pos: head14, tail)
-        encode_field_at<A, T15>(v15, ptr, head_pos: head15, tail)
+        tail = encode_field_at<A, T1>(v1, ptr, head_pos: <Self as AbiRecord<16>>::LAYOUT.offsets[1], tail)
+        tail = encode_field_at<A, T2>(v2, ptr, head_pos: <Self as AbiRecord<16>>::LAYOUT.offsets[2], tail)
+        tail = encode_field_at<A, T3>(v3, ptr, head_pos: <Self as AbiRecord<16>>::LAYOUT.offsets[3], tail)
+        tail = encode_field_at<A, T4>(v4, ptr, head_pos: <Self as AbiRecord<16>>::LAYOUT.offsets[4], tail)
+        tail = encode_field_at<A, T5>(v5, ptr, head_pos: <Self as AbiRecord<16>>::LAYOUT.offsets[5], tail)
+        tail = encode_field_at<A, T6>(v6, ptr, head_pos: <Self as AbiRecord<16>>::LAYOUT.offsets[6], tail)
+        tail = encode_field_at<A, T7>(v7, ptr, head_pos: <Self as AbiRecord<16>>::LAYOUT.offsets[7], tail)
+        tail = encode_field_at<A, T8>(v8, ptr, head_pos: <Self as AbiRecord<16>>::LAYOUT.offsets[8], tail)
+        tail = encode_field_at<A, T9>(v9, ptr, head_pos: <Self as AbiRecord<16>>::LAYOUT.offsets[9], tail)
+        tail = encode_field_at<A, T10>(v10, ptr, head_pos: <Self as AbiRecord<16>>::LAYOUT.offsets[10], tail)
+        tail = encode_field_at<A, T11>(v11, ptr, head_pos: <Self as AbiRecord<16>>::LAYOUT.offsets[11], tail)
+        tail = encode_field_at<A, T12>(v12, ptr, head_pos: <Self as AbiRecord<16>>::LAYOUT.offsets[12], tail)
+        tail = encode_field_at<A, T13>(v13, ptr, head_pos: <Self as AbiRecord<16>>::LAYOUT.offsets[13], tail)
+        tail = encode_field_at<A, T14>(v14, ptr, head_pos: <Self as AbiRecord<16>>::LAYOUT.offsets[14], tail)
+        encode_field_at<A, T15>(v15, ptr, head_pos: <Self as AbiRecord<16>>::LAYOUT.offsets[15], tail)
     }
 }
 

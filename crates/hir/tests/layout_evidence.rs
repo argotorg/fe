@@ -67,6 +67,44 @@ fn assert_trusted_layoutizes(name: &str, src: &str) {
     assert_layoutizes_in(name, src, true);
 }
 
+/// Reads a fixture from `test_files/layout_evidence`, returning its real path
+/// and its text.
+fn layout_evidence_fixture(name: &str) -> (Utf8PathBuf, String) {
+    let path = Utf8PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test_files/layout_evidence"
+    ))
+    .join(name);
+    let text = std::fs::read_to_string(&path).expect("fixture should be readable");
+    (path, text)
+}
+
+#[test]
+fn finite_nested_options_through_named_fields_have_finite_layouts() {
+    let (path, text) = layout_evidence_fixture("finite_nested_options.fe");
+    assert_layoutizes(path.as_str(), &text);
+}
+
+#[test]
+fn expanding_structural_type_arguments_do_not_expand_layouts_forever() {
+    let (path, text) = layout_evidence_fixture("expanding_structural_arguments.fe");
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(path, &text);
+    let (top_mod, _) = db.top_mod(file);
+    let inspect = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "inspect"))),
+    );
+    let signature = inspect.key(&db).layout_bundle_signature(&db);
+    assert!(
+        signature.inputs[0]
+            .interface
+            .schema
+            .non_regular_view_cycle
+            .is_some()
+    );
+}
+
 fn assert_layoutizes_in(name: &str, src: &str, std_module: bool) {
     let mut db = HirAnalysisTestDb::default();
     let path = Utf8PathBuf::from(name);
