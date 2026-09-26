@@ -524,3 +524,13 @@ impl TopicValue for bool {
 impl<const N: usize> TopicValue for FixedBytes<N> {
     fn as_topic(self) -> u256 { self.word() }
 }
+
+impl<const N: usize> ingot::evm::SolPacked for FixedBytes<N> {
+    const BITS: u256 = N as u256 * 8
+    fn to_packed(own self) -> u256 {
+        self.val
+    }
+    fn from_packed(_ bits: u256) -> Self {
+        FixedBytes { val: bits }
+    }
+}
