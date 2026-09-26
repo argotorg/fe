@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/higher_kind_helpers_cannot_hide_record_requirements/constrained_constructor.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ constrained_constructor.fe:7:36
+  │
+4 │ struct Bounded<T: Flag> where T::ALLOWED { value: u256 }
+  │                               ---------- required by this predicate
+  ·
+7 │ const fn answer() -> u256 { hidden<Bounded>() }
+  │                                    ^^^^^^^ partially applied records with const requirements are not supported; supply all arguments

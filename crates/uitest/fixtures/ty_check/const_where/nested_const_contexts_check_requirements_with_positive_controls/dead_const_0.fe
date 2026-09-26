@@ -1,0 +1,2 @@
+const fn length<const N: usize>() -> usize where N > 0 { 0 }
+const VALUE: usize = if false { length<0>() } else { 0 }

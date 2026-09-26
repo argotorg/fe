@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/generic_record_uses_require_explicit_premises/record.fe
+---
+

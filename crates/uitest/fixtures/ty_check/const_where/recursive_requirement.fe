@@ -1,0 +1,17 @@
+// A requirement cannot establish itself, directly or through another
+// function's requirement.
+const fn cyclic<const N: usize>() -> bool where cyclic<N>() {
+    true
+}
+
+const fn first<const N: usize>() -> bool where second<N>() {
+    true
+}
+
+const fn second<const M: usize>() -> bool where first<M>() {
+    true
+}
+
+fn use_cyclic() -> bool {
+    cyclic<1>()
+}

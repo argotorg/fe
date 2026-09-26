@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/ground_predicate_calls_discharge_unused_helper_requirements/without_impl.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ without_impl.fe:4:19
+  │
+3 │ const fn allowed<T>() -> bool where T: Required { true }
+  │                                        -------- required by this bound on `allowed`
+4 │ fn unused() where allowed<u256>() {}
+  │                   ^^^^^^^^^^^^^ `u256` doesn't implement `Required`

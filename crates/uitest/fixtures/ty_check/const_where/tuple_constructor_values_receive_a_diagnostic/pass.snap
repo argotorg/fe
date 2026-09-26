@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/tuple_constructor_values_receive_a_diagnostic/pass.fe
+---
+error[8-0095]: tuple-variant constructors cannot be used as values
+  ┌─ pass.fe:3:22
+  │
+3 │ fn unused() { ignore(Choice<1>::Value) }
+  │                      ^^^^^^^^^^^^^^^^ call the constructor directly

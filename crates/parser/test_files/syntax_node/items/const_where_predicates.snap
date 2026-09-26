@@ -1,0 +1,385 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/const_where_predicates.fe
+---
+Root@0..335
+  ItemList@0..334
+    Item@0..32
+      Func@0..32
+        FnKw@0..2 "fn"
+        WhiteSpace@2..3 " "
+        FuncSignature@3..29
+          Ident@3..4 "f"
+          GenericParamList@4..7
+            Lt@4..5 "<"
+            TypeGenericParam@5..6
+              Ident@5..6 "T"
+            Gt@6..7 ">"
+          FuncParamList@7..9
+            LParen@7..8 "("
+            RParen@8..9 ")"
+          WhiteSpace@9..10 " "
+          WhereClause@10..29
+            WhereKw@10..15 "where"
+            WhiteSpace@15..16 " "
+            WherePredicate@16..23
+              PathType@16..17
+                Path@16..17
+                  PathSegment@16..17
+                    Ident@16..17 "T"
+              TypeBoundList@17..23
+                Colon@17..18 ":"
+                WhiteSpace@18..19 " "
+                TypeBound@19..23
+                  TraitRef@19..23
+                    Path@19..23
+                      PathSegment@19..23
+                        Ident@19..23 "Copy"
+            Comma@23..24 ","
+            WhiteSpace@24..25 " "
+            WhereConstPredicate@25..29
+              LitExpr@25..29
+                Lit@25..29
+                  TrueKw@25..29 "true"
+        WhiteSpace@29..30 " "
+        BlockExpr@30..32
+          LBrace@30..31 "{"
+          RBrace@31..32 "}"
+    Newline@32..34 "\n\n"
+    Item@34..68
+      Func@34..68
+        FnKw@34..36 "fn"
+        WhiteSpace@36..37 " "
+        FuncSignature@37..64
+          Ident@37..38 "f"
+          GenericParamList@38..41
+            Lt@38..39 "<"
+            TypeGenericParam@39..40
+              Ident@39..40 "T"
+            Gt@40..41 ">"
+          FuncParamList@41..43
+            LParen@41..42 "("
+            RParen@42..43 ")"
+          WhiteSpace@43..44 " "
+          WhereClause@44..64
+            WhereKw@44..49 "where"
+            WhiteSpace@49..50 " "
+            WherePredicate@50..57
+              PathType@50..51
+                Path@50..51
+                  PathSegment@50..51
+                    Ident@50..51 "T"
+              TypeBoundList@51..57
+                Colon@51..52 ":"
+                WhiteSpace@52..53 " "
+                TypeBound@53..57
+                  TraitRef@53..57
+                    Path@53..57
+                      PathSegment@53..57
+                        Ident@53..57 "Copy"
+            Comma@57..58 ","
+            WhiteSpace@58..59 " "
+            WhereConstPredicate@59..63
+              LitExpr@59..63
+                Lit@59..63
+                  TrueKw@59..63 "true"
+            Comma@63..64 ","
+        Newline@64..65 "\n"
+        WhiteSpace@65..66 " "
+        BlockExpr@66..68
+          LBrace@66..67 "{"
+          RBrace@67..68 "}"
+    Newline@68..70 "\n\n"
+    Item@70..116
+      Struct@70..116
+        StructKw@70..76 "struct"
+        WhiteSpace@76..77 " "
+        Ident@77..78 "S"
+        GenericParamList@78..81
+          Lt@78..79 "<"
+          TypeGenericParam@79..80
+            Ident@79..80 "T"
+          Gt@80..81 ">"
+        WhiteSpace@81..82 " "
+        WhereClause@82..102
+          WhereKw@82..87 "where"
+          WhiteSpace@87..88 " "
+          WherePredicate@88..95
+            PathType@88..89
+              Path@88..89
+                PathSegment@88..89
+                  Ident@88..89 "T"
+            TypeBoundList@89..95
+              Colon@89..90 ":"
+              WhiteSpace@90..91 " "
+              TypeBound@91..95
+                TraitRef@91..95
+                  Path@91..95
+                    PathSegment@91..95
+                      Ident@91..95 "Copy"
+          Comma@95..96 ","
+          WhiteSpace@96..97 " "
+          WhereConstPredicate@97..101
+            LitExpr@97..101
+              Lit@97..101
+                TrueKw@97..101 "true"
+          Comma@101..102 ","
+        Newline@102..103 "\n"
+        WhiteSpace@103..104 " "
+        RecordFieldDefList@104..116
+          LBrace@104..105 "{"
+          WhiteSpace@105..106 " "
+          RecordFieldDef@106..114
+            Ident@106..111 "value"
+            Colon@111..112 ":"
+            WhiteSpace@112..113 " "
+            PathType@113..114
+              Path@113..114
+                PathSegment@113..114
+                  Ident@113..114 "T"
+          WhiteSpace@114..115 " "
+          RBrace@115..116 "}"
+    Newline@116..118 "\n\n"
+    Item@118..150
+      Func@118..150
+        FnKw@118..120 "fn"
+        WhiteSpace@120..121 " "
+        FuncSignature@121..147
+          Ident@121..122 "f"
+          GenericParamList@122..125
+            Lt@122..123 "<"
+            TypeGenericParam@123..124
+              Ident@123..124 "T"
+            Gt@124..125 ">"
+          FuncParamList@125..127
+            LParen@125..126 "("
+            RParen@126..127 ")"
+          WhiteSpace@127..128 " "
+          WhereClause@128..147
+            WhereKw@128..133 "where"
+            WhiteSpace@133..134 " "
+            WhereConstPredicate@134..138
+              LitExpr@134..138
+                Lit@134..138
+                  TrueKw@134..138 "true"
+            Comma@138..139 ","
+            WhiteSpace@139..140 " "
+            WherePredicate@140..147
+              PathType@140..141
+                Path@140..141
+                  PathSegment@140..141
+                    Ident@140..141 "T"
+              TypeBoundList@141..147
+                Colon@141..142 ":"
+                WhiteSpace@142..143 " "
+                TypeBound@143..147
+                  TraitRef@143..147
+                    Path@143..147
+                      PathSegment@143..147
+                        Ident@143..147 "Copy"
+        WhiteSpace@147..148 " "
+        BlockExpr@148..150
+          LBrace@148..149 "{"
+          RBrace@149..150 "}"
+    Newline@150..152 "\n\n"
+    Item@152..185
+      Func@152..185
+        FnKw@152..154 "fn"
+        WhiteSpace@154..155 " "
+        FuncSignature@155..182
+          Ident@155..156 "f"
+          FuncParamList@156..158
+            LParen@156..157 "("
+            RParen@157..158 ")"
+          WhiteSpace@158..159 " "
+          WhereClause@159..182
+            WhereKw@159..164 "where"
+            WhiteSpace@164..165 " "
+            WhereConstPredicate@165..173
+              CallExpr@165..173
+                PathExpr@165..170
+                  Path@165..170
+                    PathSegment@165..170
+                      Ident@165..170 "check"
+                CallArgList@170..173
+                  LParen@170..171 "("
+                  CallArg@171..172
+                    LitExpr@171..172
+                      Lit@171..172
+                        Int@171..172 "3"
+                  RParen@172..173 ")"
+            Comma@173..174 ","
+            WhiteSpace@174..175 " "
+            WhereConstPredicate@175..182
+              ParenExpr@175..182
+                LParen@175..176 "("
+                BinExpr@176..181
+                  LitExpr@176..177
+                    Lit@176..177
+                      Int@176..177 "2"
+                  WhiteSpace@177..178 " "
+                  Lt@178..179 "<"
+                  WhiteSpace@179..180 " "
+                  LitExpr@180..181
+                    Lit@180..181
+                      Int@180..181 "3"
+                RParen@181..182 ")"
+        WhiteSpace@182..183 " "
+        BlockExpr@183..185
+          LBrace@183..184 "{"
+          RBrace@184..185 "}"
+    Newline@185..187 "\n\n"
+    Item@187..222
+      Struct@187..222
+        StructKw@187..193 "struct"
+        WhiteSpace@193..194 " "
+        Ident@194..195 "S"
+        WhiteSpace@195..196 " "
+        WhereClause@196..206
+          WhereKw@196..201 "where"
+          WhiteSpace@201..202 " "
+          WhereConstPredicate@202..206
+            PathExpr@202..206
+              Path@202..206
+                PathSegment@202..206
+                  Ident@202..206 "FLAG"
+        WhiteSpace@206..207 " "
+        RecordFieldDefList@207..222
+          LBrace@207..208 "{"
+          WhiteSpace@208..209 " "
+          RecordFieldDef@209..220
+            Ident@209..214 "value"
+            Colon@214..215 ":"
+            WhiteSpace@215..216 " "
+            PathType@216..220
+              Path@216..220
+                PathSegment@216..220
+                  Ident@216..220 "u256"
+          WhiteSpace@220..221 " "
+          RBrace@221..222 "}"
+    Newline@222..224 "\n\n"
+    Item@224..250
+      Enum@224..250
+        EnumKw@224..228 "enum"
+        WhiteSpace@228..229 " "
+        Ident@229..230 "E"
+        WhiteSpace@230..231 " "
+        WhereClause@231..241
+          WhereKw@231..236 "where"
+          WhiteSpace@236..237 " "
+          WhereConstPredicate@237..241
+            PathExpr@237..241
+              Path@237..241
+                PathSegment@237..241
+                  Ident@237..241 "FLAG"
+        WhiteSpace@241..242 " "
+        VariantDefList@242..250
+          LBrace@242..243 "{"
+          WhiteSpace@243..244 " "
+          VariantDef@244..245
+            Ident@244..245 "A"
+          Comma@245..246 ","
+          WhiteSpace@246..247 " "
+          VariantDef@247..248
+            Ident@247..248 "B"
+          WhiteSpace@248..249 " "
+          RBrace@249..250 "}"
+    Newline@250..252 "\n\n"
+    Item@252..288
+      Trait@252..288
+        TraitKw@252..257 "trait"
+        WhiteSpace@257..258 " "
+        Ident@258..259 "T"
+        WhiteSpace@259..260 " "
+        TraitItemList@260..288
+          LBrace@260..261 "{"
+          WhiteSpace@261..262 " "
+          Func@262..279
+            FnKw@262..264 "fn"
+            WhiteSpace@264..265 " "
+            FuncSignature@265..279
+              Ident@265..266 "f"
+              FuncParamList@266..268
+                LParen@266..267 "("
+                RParen@267..268 ")"
+              WhiteSpace@268..269 " "
+              WhereClause@269..279
+                WhereKw@269..274 "where"
+                WhiteSpace@274..275 " "
+                WhereConstPredicate@275..279
+                  LitExpr@275..279
+                    Lit@275..279
+                      TrueKw@275..279 "true"
+          Newline@279..280 "\n"
+          Func@280..286
+            FnKw@280..282 "fn"
+            WhiteSpace@282..283 " "
+            FuncSignature@283..286
+              Ident@283..284 "g"
+              FuncParamList@284..286
+                LParen@284..285 "("
+                RParen@285..286 ")"
+          WhiteSpace@286..287 " "
+          RBrace@287..288 "}"
+    Newline@288..290 "\n\n"
+    Item@290..334
+      Func@290..334
+        FnKw@290..292 "fn"
+        WhiteSpace@292..293 " "
+        FuncSignature@293..331
+          Ident@293..294 "f"
+          FuncParamList@294..296
+            LParen@294..295 "("
+            RParen@295..296 ")"
+          WhiteSpace@296..297 " "
+          WhereClause@297..331
+            WhereKw@297..302 "where"
+            WhiteSpace@302..303 " "
+            WhereConstPredicate@303..331
+              ParenExpr@303..331
+                LParen@303..304 "("
+                BlockExpr@304..330
+                  LBrace@304..305 "{"
+                  WhiteSpace@305..306 " "
+                  LetStmt@306..321
+                    LetKw@306..309 "let"
+                    WhiteSpace@309..310 " "
+                    PathPat@310..311
+                      Path@310..311
+                        PathSegment@310..311
+                          Ident@310..311 "n"
+                    Colon@311..312 ":"
+                    WhiteSpace@312..313 " "
+                    PathType@313..317
+                      Path@313..317
+                        PathSegment@313..317
+                          Ident@313..317 "u256"
+                    WhiteSpace@317..318 " "
+                    Eq@318..319 "="
+                    WhiteSpace@319..320 " "
+                    LitExpr@320..321
+                      Lit@320..321
+                        Int@320..321 "3"
+                  Newline@321..322 "\n"
+                  WhiteSpace@322..323 " "
+                  ExprStmt@323..328
+                    BinExpr@323..328
+                      PathExpr@323..324
+                        Path@323..324
+                          PathSegment@323..324
+                            Ident@323..324 "n"
+                      WhiteSpace@324..325 " "
+                      Gt@325..326 ">"
+                      WhiteSpace@326..327 " "
+                      LitExpr@327..328
+                        Lit@327..328
+                          Int@327..328 "0"
+                  WhiteSpace@328..329 " "
+                  RBrace@329..330 "}"
+                RParen@330..331 ")"
+        WhiteSpace@331..332 " "
+        BlockExpr@332..334
+          LBrace@332..333 "{"
+          RBrace@333..334 "}"
+  Newline@334..335 "\n"

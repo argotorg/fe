@@ -1,0 +1,4 @@
+const fn length<const N: usize>() -> usize where N > 0 { 0 }
+const fn accepts<const SIZE: usize>() -> bool { true }
+fn forward<const N: usize>() where N > 0, ({ let values: [u8; { length<N>() }] = []
+ true }) {}

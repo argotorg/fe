@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/enum_requirements_do_not_supply_formation_evidence/not_bool.fe
+---
+error[8-0000]: type mismatch
+  ┌─ not_bool.fe:1:35
+  │
+1 │ enum Choice<const N: usize> where N + 1 { Empty }
+  │                                   ^^^^^ expected `bool`, but `usize` is given

@@ -1,0 +1,3 @@
+const fn yes<T>() -> bool { true }
+struct Bounded<const N: usize> where yes<Bounded<N>>() { value: u256 }
+fn use_it(_ value: Bounded<1>) {}

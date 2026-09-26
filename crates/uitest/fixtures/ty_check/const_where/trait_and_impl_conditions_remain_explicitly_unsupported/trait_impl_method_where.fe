@@ -1,0 +1,3 @@
+trait Read<const N: usize> { fn read(self) }
+struct S {}
+impl<const N: usize> Read<N> for S { fn read(self) where N > 0 {} }

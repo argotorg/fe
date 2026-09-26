@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/forwarding_distinguishes_declarations_and_parameter_positions/different_declaration.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ different_declaration.fe:4:81
+  │
+3 │ const fn bounded<const N: usize>() -> u256 where allowed(N) { 42 }
+  │                                                  ---------- required by this predicate
+4 │ const fn forward<const A: usize, const B: usize>() -> u256 where different(B) { bounded<B>() }
+  │                                                                                 ^^^^^^^^^^^^ no matching const requirement in the caller after substitution

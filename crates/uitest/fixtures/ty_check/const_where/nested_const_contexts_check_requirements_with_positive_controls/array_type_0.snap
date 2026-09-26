@@ -1,0 +1,21 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/nested_const_contexts_check_requirements_with_positive_controls/array_type_0.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ array_type_0.fe:2:34
+  │
+1 │ const fn length<const N: usize>() -> usize where N > 0 { 0 }
+  │                                                  ----- required by this predicate
+2 │ fn answer() { let values: [u8; { length<0>() }] = [] }
+  │                                  ^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0031]: type annotation is needed
+  ┌─ array_type_0.fe:2:19
+  │
+2 │ fn answer() { let values: [u8; { length<0>() }] = [] }
+  │                   ^^^^^^
+  │                   │
+  │                   type annotation is needed
+  │                   consider giving `: [_; 0]` here

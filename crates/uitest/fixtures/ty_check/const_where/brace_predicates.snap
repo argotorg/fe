@@ -1,0 +1,29 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/brace_predicates.fe
+---
+error[8-0091]: const where predicate failed
+   ┌─ brace_predicates.fe:9:21
+   │
+ 9 │   fn rejected() where {
+   │ ╭─────────────────────^
+10 │ │     let size: u256 = 9
+11 │ │     size < LIMIT
+12 │ │ } {}
+   │ ╰─^ condition evaluated to `false`
+
+error[8-0091]: const where predicate failed
+   ┌─ brace_predicates.fe:14:24
+   │
+14 │   fn mixed() where true, {
+   │ ╭────────────────────────^
+15 │ │     LIMIT > 100
+16 │ │ } {}
+   │ ╰─^ condition evaluated to `false`
+
+error[8-0091]: const where predicate failed
+   ┌─ brace_predicates.fe:18:21
+   │
+18 │ struct Record where { LIMIT == 7 } {
+   │                     ^^^^^^^^^^^^^^ condition evaluated to `false`

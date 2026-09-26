@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/concrete_calls_discharge_unused_requirements/dead_constant.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ dead_constant.fe:2:32
+  │
+1 │ const fn bounded<const N: usize>() -> u256 where N > 0 { 42 }
+  │                                                  ----- required by this predicate
+2 │ const VALUE: u256 = if false { bounded<0>() } else { 42 }
+  │                                ^^^^^^^^^^^^ condition evaluated to `false`

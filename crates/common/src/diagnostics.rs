@@ -211,7 +211,7 @@ impl DiagnosticPass {
             Self::Parse => 1,
             Self::MsgLower => 9,
             Self::EventLower => 10,
-            Self::ErrorLower => 16,
+            Self::ErrorLower => 13,
             Self::AttrMisuse => 12,
             Self::NameResolution => 2,
             Self::TypeDefinition => 3,

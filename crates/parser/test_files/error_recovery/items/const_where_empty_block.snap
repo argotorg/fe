@@ -1,0 +1,24 @@
+---
+source: crates/parser/tests/error_recovery.rs
+expression: node
+input_file: test_files/error_recovery/items/const_where_empty_block.fe
+---
+Root@0..16
+  ItemList@0..15
+    Item@0..15
+      Func@0..15
+        FnKw@0..2 "fn"
+        WhiteSpace@2..3 " "
+        FuncSignature@3..12
+          Ident@3..4 "f"
+          FuncParamList@4..6
+            LParen@4..5 "("
+            RParen@5..6 ")"
+          WhiteSpace@6..7 " "
+          WhereClause@7..12
+            WhereKw@7..12 "where"
+        WhiteSpace@12..13 " "
+        BlockExpr@13..15
+          LBrace@13..14 "{"
+          RBrace@14..15 "}"
+  Newline@15..16 "\n"

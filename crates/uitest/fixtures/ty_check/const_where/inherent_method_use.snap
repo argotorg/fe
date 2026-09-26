@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/inherent_method_use.fe
+---
+error[8-0093]: const requirement is not satisfied
+   ┌─ inherent_method_use.fe:17:5
+   │
+ 7 │     fn read(self) -> u256 where N > 0 {
+   │                                 ----- required by this predicate
+   ·
+17 │     Window<0> { value: 1 }.read()
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ inherent_method_use.fe:21:5
+   │
+11 │     fn take<const M: usize>(self) -> u256 where M > N {
+   │                                                 ----- required by this predicate
+   ·
+21 │     Window<1> { value: 1 }.take<1>()
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`

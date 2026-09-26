@@ -1,0 +1,22 @@
+// Call-site requirements are checked after inference, including an argument
+// inferred from a value, and a generic caller needs a matching premise.
+const fn bounded<const N: usize>() -> u256 where N > 0 {
+    42
+}
+
+const fn sized<const N: usize>(_ values: [u8; N]) -> u256 where N > 0 {
+    42
+}
+
+fn explicit() -> u256 {
+    bounded<0>()
+}
+
+fn inferred() -> u256 {
+    let values: [u8; 0] = []
+    sized(values)
+}
+
+fn missing_premise<const M: usize>() -> u256 {
+    bounded<M>()
+}

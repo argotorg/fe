@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/anonymous_constants_forward_enclosing_function_requirements/local.fe
+---
+

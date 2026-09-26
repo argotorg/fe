@@ -1,0 +1,2 @@
+const fn length<const N: usize>() -> usize where N > 0 { 0 }
+const fn forward<const M: usize>() -> [u8; { length<M>() }]  { [] }

@@ -47,9 +47,16 @@ module.exports = grammar({
   ],
 
   conflicts: $ => [
+    [$.where_clause],
+    [$.qualified_path_type, $.qualified_path_expression],
+    [$.tuple_type, $.tuple_expression],
+    [$.where_const_predicate, $.path_segment],
+    [$.where_const_predicate, $._expression],
+    [$.where_const_predicate, $._expression, $._path],
+    [$.where_const_predicate, $._expression, $._path, $.path_segment],
     // Self type vs self path segment vs expression
     [$.self_type, $.path_segment],
-    // [$.self_type, $._expression, $.path_segment], -- resolved by precedence
+    [$.self_type, $._expression, $.path_segment],
     // recv arm pattern
     [$.recv_arm_pattern],
     // _condition variants use the same terminals as expressions.
@@ -551,16 +558,37 @@ module.exports = grammar({
       field('type', $._type),
     )),
 
-    where_clause: $ => prec.right(seq(
+    where_clause: $ => seq(
       'where',
-      sep1($.where_predicate, ','),
+      sep1(choice($.where_predicate, $.where_const_predicate), ','),
       optional(','),
-    )),
+    ),
 
     where_predicate: $ => seq(
       $._type,
       ':',
       $.type_bound_list,
+    ),
+
+    where_const_predicate: $ => choice(
+      $.binary_expression,
+      $.unary_expression,
+      $.cast_expression,
+      $.call_expression,
+      $.macro_call_expression,
+      $.method_call_expression,
+      $.instantiation_expression,
+      $.field_expression,
+      $.index_expression,
+      prec.left($.identifier),
+      $.scoped_path,
+      $.qualified_path_expression,
+      $.paren_expression,
+      $.literal,
+      $.if_expression,
+      $.match_expression,
+      // A braced predicate, as in `where { N > 0 } { body }`.
+      $.block,
     ),
 
     // ==================== TYPES ====================

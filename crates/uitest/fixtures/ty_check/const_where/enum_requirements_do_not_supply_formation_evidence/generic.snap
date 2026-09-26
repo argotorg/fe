@@ -1,0 +1,21 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/enum_requirements_do_not_supply_formation_evidence/generic.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ generic.fe:2:60
+  │
+1 │ const fn length<const M: usize>() -> usize where M > 0 { 0 }
+  │                                                  ----- required by this predicate
+2 │ enum Choice<const N: usize> where N > 0, ({ let xs: [u8; { length<N>() }] = []
+  │                                                            ^^^^^^^^^^^ no matching const requirement in the caller after substitution
+
+error[8-0031]: type annotation is needed
+  ┌─ generic.fe:2:49
+  │
+2 │ enum Choice<const N: usize> where N > 0, ({ let xs: [u8; { length<N>() }] = []
+  │                                                 ^^
+  │                                                 │
+  │                                                 type annotation is needed
+  │                                                 consider giving `: [_; 0]` here

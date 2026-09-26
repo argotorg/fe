@@ -1,0 +1,3 @@
+const fn first<const N: usize>() -> bool where second<N>() { true }
+const fn second<const M: usize>() -> bool where first<M>() { true }
+const fn answer() -> bool { first<1>() }

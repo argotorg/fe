@@ -1,0 +1,3 @@
+const fn length<const N: usize>() -> usize where N > 0 { 0 }
+const fn forward<const M: usize>(_ values: [u8; { length<M>() }]) -> usize where M > 0 { 42 }
+const fn answer() -> usize { forward<1>([]) }

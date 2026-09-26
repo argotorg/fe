@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/record_requirements_cover_declaration_and_inferred_positions/trait_argument.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ trait_argument.fe:3:21
+  │
+1 │ struct Bounded<const N: usize> where N > 0 { value: u256 }
+  │                                      ----- required by this predicate
+2 │ trait Marker<T> {}
+3 │ fn use_it<T: Marker<Bounded<0>>>() {}
+  │                     ^^^^^^^^^^ condition evaluated to `false`

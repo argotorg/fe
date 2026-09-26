@@ -1,0 +1,5 @@
+struct Window<const N: usize> { value: u256 }
+impl<const N: usize> Window<N> { const fn make() -> Self where N > 0 { Self { value: 42 } }
+const fn read(self) -> u256 where N > 0 { self.value }
+const fn take<const M: usize>(self) -> u256 where N > 0, M > N { self.value } }
+const fn answer() -> u256 { Window<1>::read(Window { value: 42 }) }

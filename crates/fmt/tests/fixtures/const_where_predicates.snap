@@ -1,0 +1,51 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/const_where_predicates.fe
+---
+fn f() where false {}
+
+struct S where FLAG { value: u256 }
+
+enum E where true {
+    A,
+}
+
+impl S where true {
+    fn f() where false {}
+}
+
+fn f<T>() where true, T: Copy, false {}
+
+fn f<T>()
+where
+    T: Copy,
+    // keep this condition
+    false,
+    true
+{}
+
+trait T {
+    fn f() where true
+    fn g() where false
+}
+
+fn f()
+where
+    ({
+        let n: u256 = 3
+        n > 0
+    })
+{}
+
+fn braced()
+where
+    {
+        let n: u256 = 3
+        n > 0
+    }
+{}
+
+fn braced_after_bound<T>() where T: Copy, { true } {}
+
+struct Braced where { true } { value: u256 }

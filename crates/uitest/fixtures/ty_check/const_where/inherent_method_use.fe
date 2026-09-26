@@ -1,0 +1,22 @@
+// Inherent methods check the impl's parameters and their own parameters.
+struct Window<const N: usize> {
+    value: u256,
+}
+
+impl<const N: usize> Window<N> {
+    fn read(self) -> u256 where N > 0 {
+        self.value
+    }
+
+    fn take<const M: usize>(self) -> u256 where M > N {
+        self.value
+    }
+}
+
+fn receiver() -> u256 {
+    Window<0> { value: 1 }.read()
+}
+
+fn method_argument() -> u256 {
+    Window<1> { value: 1 }.take<1>()
+}

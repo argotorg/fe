@@ -1,0 +1,3 @@
+const fn length<const M: usize>() -> usize where M > 0 { 0 }
+struct Bounded<const N: usize> where N > 0, ({ let xs: [u8; { length<N>() }] = []
+ true }) { value: u256 }

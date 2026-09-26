@@ -289,6 +289,10 @@ ast_node! {
     IntoIterator<Item=WherePredicate>,
 }
 impl WhereClause {
+    pub fn const_predicates(&self) -> impl Iterator<Item = WhereConstPredicate> {
+        support::children(self.syntax())
+    }
+
     pub fn where_kw(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::WhereKw)
     }
@@ -307,6 +311,17 @@ impl WherePredicate {
 
     /// Returns `Trait` in `T: Trait`.
     pub fn bounds(&self) -> Option<TypeBoundList> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// A boolean const expression in a where clause.
+    pub struct WhereConstPredicate,
+    SK::WhereConstPredicate,
+}
+impl WhereConstPredicate {
+    pub fn expr(&self) -> Option<super::Expr> {
         support::child(self.syntax())
     }
 }

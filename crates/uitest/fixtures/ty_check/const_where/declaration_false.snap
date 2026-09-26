@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/declaration_false.fe
+---
+error[8-0091]: const where predicate failed
+  ┌─ declaration_false.fe:4:19
+  │
+4 │ fn unused() where LIMIT < 4 {}
+  │                   ^^^^^^^^^ condition evaluated to `false`
+
+error[8-0091]: const where predicate failed
+  ┌─ declaration_false.fe:6:27
+  │
+6 │ struct Record where true, LIMIT == 0 {
+  │                           ^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0091]: const where predicate failed
+   ┌─ declaration_false.fe:10:19
+   │
+10 │ enum Choice where false {
+   │                   ^^^^^ condition evaluated to `false`

@@ -162,6 +162,29 @@ fn format_type_mismatch_message<'db>(
     format!("expected `{expected_plain}`, but `{given_plain}` is given")
 }
 
+fn const_requirement_diag(
+    severity: Severity,
+    primary: &crate::span::DynLazySpan<'_>,
+    predicate: &crate::span::DynLazySpan<'_>,
+    reason: &str,
+    error_code: GlobalErrorCode,
+    db: &dyn SpannedHirAnalysisDb,
+) -> CompleteDiagnostic {
+    let mut diag = primary_diag(
+        severity,
+        "const requirement is not satisfied",
+        reason,
+        primary.resolve(db),
+        error_code,
+    );
+    diag.sub_diagnostics.push(SubDiagnostic::new(
+        LabelStyle::Secondary,
+        "required by this predicate".to_string(),
+        predicate.resolve(db),
+    ));
+    diag
+}
+
 fn primary_diag(
     severity: Severity,
     message: &str,
@@ -2370,6 +2393,14 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
+            Self::ConstRequirementNotSatisfied {
+                primary,
+                predicate,
+                reason,
+            } => {
+                const_requirement_diag(Severity::Error, primary, predicate, reason, error_code, db)
+            }
+
             Self::InvalidConstTyExpr(span) => primary_diag(
                 Severity::Error,
                 "the expression is not supported in a const type context",
@@ -3406,6 +3437,64 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary.resolve(db),
                 error_code,
             ),
+
+            Self::WhereConstPredicateFailed(span) => primary_diag(
+                severity,
+                "const where predicate failed",
+                "condition evaluated to `false`",
+                span.resolve(db),
+                error_code,
+            ),
+            Self::ConstRequirementNotSatisfied {
+                primary,
+                predicate,
+                reason,
+            } => const_requirement_diag(severity, primary, predicate, reason, error_code, db),
+            Self::RecursiveConstRequirement(span) => primary_diag(
+                severity,
+                "recursive const requirement",
+                "a requirement cannot establish itself",
+                span.resolve(db),
+                error_code,
+            ),
+            Self::VariantConstructorValueUnsupported(span) => primary_diag(
+                severity,
+                "tuple-variant constructors cannot be used as values",
+                "call the constructor directly",
+                span.resolve(db),
+                error_code,
+            ),
+            Self::GenericConstPredicateUnsupported(span) => {
+                let mut diag = primary_diag(
+                    severity,
+                    "const where predicates are not supported here yet",
+                    "not yet supported in traits, trait impls with generic parameters, \
+                     generic `impl` blocks, or items nested in generic items",
+                    span.resolve(db),
+                    error_code,
+                );
+                diag.notes.push(
+                    "const where predicates are supported on functions, structs, enums, and \
+                     inherent methods, including methods of generic `impl` blocks"
+                        .to_string(),
+                );
+                diag
+            }
+            Self::WhereTypeBoundMissing(span) => {
+                let mut diag = primary_diag(
+                    severity,
+                    "missing type bound for `where` predicate",
+                    "expected `:` and a trait bound after this type",
+                    span.resolve(db),
+                    error_code,
+                );
+                diag.notes.push(
+                    "a `where` predicate without `:` is a const condition and must be \
+                     a `bool` value"
+                        .to_string(),
+                );
+                diag
+            }
 
             Self::ConstValueMustBeKnown(span) => primary_diag(
                 severity,

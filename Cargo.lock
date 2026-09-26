@@ -2387,9 +2387,11 @@ version = "26.3.0"
 dependencies = [
  "camino",
  "codespan-reporting",
+ "dir-test",
  "fe-common",
  "fe-hir",
  "fe-resolver",
+ "fe-test-utils",
  "glob",
  "petgraph",
  "salsa",

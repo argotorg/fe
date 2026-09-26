@@ -1,0 +1,2 @@
+enum Choice<const N: usize> where N > 0 { Empty, Tuple(u256), Record { value: u256 } }
+struct Outer<const M: usize>  { item: Choice<M> }

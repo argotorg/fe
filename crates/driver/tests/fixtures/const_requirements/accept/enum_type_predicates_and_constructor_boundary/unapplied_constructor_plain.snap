@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/enum_type_predicates_and_constructor_boundary/unapplied_constructor_plain.fe
+---
+

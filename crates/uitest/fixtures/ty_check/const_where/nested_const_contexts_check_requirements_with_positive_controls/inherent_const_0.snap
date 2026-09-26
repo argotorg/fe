@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/nested_const_contexts_check_requirements_with_positive_controls/inherent_const_0.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ inherent_const_0.fe:3:31
+  │
+1 │ const fn length<const N: usize>() -> usize where N > 0 { 0 }
+  │                                                  ----- required by this predicate
+2 │ struct S {}
+3 │ impl S { const VALUE: usize = length<0>() }
+  │                               ^^^^^^^^^^^ condition evaluated to `false`

@@ -1,0 +1,2 @@
+enum Choice<const N: usize> where N > 0 { Empty, Tuple(u256), Record { value: u256 } }
+const fn make<const M: usize>() -> Choice<M> where M > 0 { Choice::Empty }

@@ -1,0 +1,8 @@
+
+const LIMIT: u256 = 8
+const fn allowed(_ n: u256) -> bool { n < LIMIT }
+const fn answer() -> u256 where allowed(3), !false, (1 < 2) { 42 }
+struct Record where LIMIT == 8 { value: u256 }
+enum Choice where true { Yes, No }
+impl Record where true { fn get(self) -> u256 { self.value } }
+const fn consume() -> u256 { answer() }

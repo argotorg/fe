@@ -1,0 +1,4 @@
+struct Node<const N: usize> where check<N>() { value: u256 }
+const fn check<const N: usize>() -> bool where holds<Node<N>>() { true }
+const fn holds<T>() -> bool { true }
+fn use_it(_ node: Node<1>) {}

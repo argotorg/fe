@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/enum_requirements_do_not_supply_formation_evidence/ground_false.fe
+---
+error[8-0091]: const where predicate failed
+  ┌─ ground_false.fe:1:35
+  │
+1 │ enum Choice<const N: usize> where false { Empty }
+  │                                   ^^^^^ condition evaluated to `false`

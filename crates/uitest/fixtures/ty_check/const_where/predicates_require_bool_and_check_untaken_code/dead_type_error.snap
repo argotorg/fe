@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/predicates_require_bool_and_check_untaken_code/dead_type_error.fe
+---
+error[8-0000]: type mismatch
+  ┌─ dead_type_error.fe:1:44
+  │
+1 │ fn unused() where (if true { true } else { 42 }) {}
+  │                                            ^^ expected `bool`, but `{integer}` is given

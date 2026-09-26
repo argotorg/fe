@@ -1,0 +1,21 @@
+fn f<T>() where T: Copy, true {}
+
+fn f<T>() where T: Copy, true,
+ {}
+
+struct S<T> where T: Copy, true,
+ { value: T }
+
+fn f<T>() where true, T: Copy {}
+
+fn f() where check(3), (2 < 3) {}
+
+struct S where FLAG { value: u256 }
+
+enum E where FLAG { A, B }
+
+trait T { fn f() where true
+fn g() }
+
+fn f() where ({ let n: u256 = 3
+ n > 0 }) {}

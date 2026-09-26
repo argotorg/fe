@@ -1,0 +1,32 @@
+---
+source: crates/parser/tests/error_recovery.rs
+expression: node
+input_file: test_files/error_recovery/items/const_where_missing_comma.fe
+---
+Root@0..27
+  ItemList@0..26
+    Item@0..26
+      Func@0..26
+        FnKw@0..2 "fn"
+        WhiteSpace@2..3 " "
+        FuncSignature@3..23
+          Ident@3..4 "f"
+          FuncParamList@4..6
+            LParen@4..5 "("
+            RParen@5..6 ")"
+          WhiteSpace@6..7 " "
+          WhereClause@7..23
+            WhereKw@7..12 "where"
+            WhiteSpace@12..13 " "
+            WhereConstPredicate@13..17
+              LitExpr@13..17
+                Lit@13..17
+                  TrueKw@13..17 "true"
+            WhiteSpace@17..18 " "
+            Error@18..23
+              FalseKw@18..23 "false"
+        WhiteSpace@23..24 " "
+        BlockExpr@24..26
+          LBrace@24..25 "{"
+          RBrace@25..26 "}"
+  Newline@26..27 "\n"

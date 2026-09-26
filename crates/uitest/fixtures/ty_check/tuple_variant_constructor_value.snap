@@ -1,0 +1,31 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/tuple_variant_constructor_value.fe
+---
+error[8-0031]: type annotation is needed
+   ┌─ tuple_variant_constructor_value.fe:12:9
+   │
+12 │     let pair = (Choice::Value, 0)
+   │         ^^^^
+   │         │
+   │         type annotation is needed
+   │         consider giving `: (fn Value, {integer})` here
+
+error[8-0095]: tuple-variant constructors cannot be used as values
+  ┌─ tuple_variant_constructor_value.fe:8:23
+  │
+8 │     let constructor = Choice::Value
+  │                       ^^^^^^^^^^^^^ call the constructor directly
+
+error[8-0095]: tuple-variant constructors cannot be used as values
+   ┌─ tuple_variant_constructor_value.fe:12:17
+   │
+12 │     let pair = (Choice::Value, 0)
+   │                 ^^^^^^^^^^^^^ call the constructor directly
+
+error[8-0095]: tuple-variant constructors cannot be used as values
+   ┌─ tuple_variant_constructor_value.fe:16:12
+   │
+16 │     ignore(Choice::Value)
+   │            ^^^^^^^^^^^^^ call the constructor directly

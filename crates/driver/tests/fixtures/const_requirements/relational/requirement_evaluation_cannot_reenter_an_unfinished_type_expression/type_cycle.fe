@@ -1,0 +1,4 @@
+const fn flag<const N: usize>() -> bool where count(N) == 0 { true }
+const fn count(_ n: usize) -> usize { let values: [u8; { if flag<1>() { 0 } else { 0 } }] = []
+ 0 }
+const fn answer() -> bool { flag<1>() }

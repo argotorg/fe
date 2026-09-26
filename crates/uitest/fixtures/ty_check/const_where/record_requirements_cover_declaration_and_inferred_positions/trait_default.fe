@@ -1,0 +1,2 @@
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+trait Has { type Item = Bounded<0> }

@@ -1,0 +1,7 @@
+mod first {
+ pub const fn allowed(_ n: usize) -> bool { n > 0 }
+ pub const fn bounded<const N: usize>() -> u256 where allowed(N) { 42 }
+}
+const fn allowed(_ n: usize) -> bool { n > 0 }
+const fn forward<const M: usize>() -> u256 where allowed(M) { first::bounded<M>() }
+const fn answer() -> u256 { forward<1>() }

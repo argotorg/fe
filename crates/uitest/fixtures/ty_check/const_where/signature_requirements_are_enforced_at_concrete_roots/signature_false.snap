@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/signature_requirements_are_enforced_at_concrete_roots/signature_false.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ signature_false.fe:3:30
+  │
+2 │ const fn forward<const M: usize>(_ values: [u8; { length<M>() }]) -> usize where M > 0 { 42 }
+  │                                                                                  ----- required by this predicate
+3 │ const fn answer() -> usize { forward<0>([]) }
+  │                              ^^^^^^^^^^^^^^ condition evaluated to `false`

@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/requirement_failures_do_not_become_evidence/nonconst.fe
+---
+error[8-0062]: non-const call in `const fn`
+  ┌─ nonconst.fe:2:50
+  │
+1 │ fn flag(_ n: usize) -> bool { n > 0 }
+  │    ---- callee defined here
+2 │ const fn bounded<const N: usize>() -> u256 where flag(N) { 42 }
+  │                                                  ^^^^^^^ `flag` is not a `const fn`
+
+error[8-0093]: const requirement is not satisfied
+  ┌─ nonconst.fe:3:23
+  │
+2 │ const fn bounded<const N: usize>() -> u256 where flag(N) { 42 }
+  │                                                  ------- required by this predicate
+3 │ fn answer() -> u256 { bounded<0>() }
+  │                       ^^^^^^^^^^^^ condition could not be established; the predicate must be a well-formed, evaluable bool

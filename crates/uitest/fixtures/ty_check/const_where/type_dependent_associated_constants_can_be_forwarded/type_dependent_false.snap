@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/type_dependent_associated_constants_can_be_forwarded/type_dependent_false.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ type_dependent_false.fe:8:23
+  │
+7 │ const fn forward<U: Flag>() -> u256 where U::ALLOWED { bounded<U>() }
+  │                                           ---------- required by this predicate
+8 │ fn answer() -> u256 { forward<No>() }
+  │                       ^^^^^^^^^^^^^ condition evaluated to `false`

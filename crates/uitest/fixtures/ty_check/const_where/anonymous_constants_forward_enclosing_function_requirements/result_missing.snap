@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/anonymous_constants_forward_enclosing_function_requirements/result_missing.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ result_missing.fe:2:46
+  │
+1 │ const fn length<const N: usize>() -> usize where N > 0 { 0 }
+  │                                                  ----- required by this predicate
+2 │ const fn forward<const M: usize>() -> [u8; { length<M>() }]  { [] }
+  │                                              ^^^^^^^^^^^ no matching const requirement in the caller after substitution

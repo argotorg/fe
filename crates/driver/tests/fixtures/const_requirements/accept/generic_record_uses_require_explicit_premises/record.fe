@@ -1,0 +1,2 @@
+struct Bounded<const N: usize> where N > 0 { value: u256 }
+struct Outer<const M: usize> where M > 0 { item: Bounded<M> }

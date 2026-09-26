@@ -1,0 +1,2 @@
+const A: bool = A
+fn unused() where A {}

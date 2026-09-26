@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/forwarding_uses_substituted_semantic_identity/missing.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ missing.fe:2:53
+  │
+1 │ const fn bounded<const N: usize>() -> u256 where N > 0 { 42 }
+  │                                                  ----- required by this predicate
+2 │ const fn forward<const RENAMED: usize>() -> u256  { bounded<RENAMED>() }
+  │                                                     ^^^^^^^^^^^^^^^^^^ no matching const requirement in the caller after substitution

@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/predicates_require_bool_and_check_untaken_code/nonconst.fe
+---
+error[8-0062]: non-const call in `const fn`
+  ┌─ nonconst.fe:2:19
+  │
+1 │ fn flag() -> bool { true }
+  │    ---- callee defined here
+2 │ fn unused() where flag() {}
+  │                   ^^^^^^ `flag` is not a `const fn`

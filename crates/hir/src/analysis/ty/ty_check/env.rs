@@ -18,7 +18,7 @@ use super::effect_env as keyed_effect_env;
 use super::owner::BodyOwner;
 use super::{
     Callable, ConstIntrinsicKind, ConstRef, SemanticExprLowering, TyChecker, TypedBody,
-    ValuePathRef, stmt::ForLoopSeq,
+    TypedBodyTables, ValuePathRef, stmt::ForLoopSeq,
 };
 use crate::analysis::ty::pattern_ir::{
     PatternAnalysisStatus, PatternStore, ValidatedPat, ValidatedPatId,
@@ -105,6 +105,9 @@ impl<'db> TyCheckEnv<'db> {
                     db,
                     vec![crate::semantic::trait_self_predicate(db, trait_)],
                 ),
+                Some(item @ (ItemKind::Struct(_) | ItemKind::Enum(_))) => {
+                    crate::semantic::constraints_for(db, item)
+                }
                 Some(ItemKind::ImplTrait(impl_trait)) => {
                     collect_constraints(db, impl_trait.into()).instantiate_identity()
                 }
@@ -925,9 +928,8 @@ impl<'db> TyCheckEnv<'db> {
             |prop| prop.ty,
         );
 
-        TypedBody {
+        TypedBodyTables {
             body: Some(self.body),
-            has_diagnostics: false,
             result_ty,
             assumptions,
             pat_ty: self.pat_ty,
@@ -949,6 +951,7 @@ impl<'db> TyCheckEnv<'db> {
             expr_place,
             expr_places,
         }
+        .into()
     }
 
     pub(super) fn expr_data(&self, expr: ExprId) -> &'db Partial<Expr<'db>> {

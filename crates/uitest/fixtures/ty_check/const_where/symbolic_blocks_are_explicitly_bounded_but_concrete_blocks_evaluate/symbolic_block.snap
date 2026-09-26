@@ -1,0 +1,15 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/symbolic_blocks_are_explicitly_bounded_but_concrete_blocks_evaluate/symbolic_block.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ symbolic_block.fe:4:17
+  │
+1 │   const fn bounded<const N: usize>() -> u256 where ({ let value = N
+  │ ╭──────────────────────────────────────────────────'
+2 │ │  value > 0 }) { 42 }
+  │ ╰─────────────' required by this predicate
+3 │   fn forward<const M: usize>() -> u256 where ({ let value = M
+4 │    value > 0 }) { bounded<M>() }
+  │                   ^^^^^^^^^^^^ symbolic forwarding of this expression is not supported; concrete evaluation is required

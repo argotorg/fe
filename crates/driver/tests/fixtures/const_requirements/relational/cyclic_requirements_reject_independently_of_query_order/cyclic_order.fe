@@ -1,0 +1,2 @@
+const fn cyclic<const N: usize>() -> bool where cyclic<N>() { true }
+const fn answer() -> bool { cyclic<1>() }

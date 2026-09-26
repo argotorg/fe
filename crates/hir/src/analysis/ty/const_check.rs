@@ -17,19 +17,28 @@ pub(crate) fn check_const_fn_body<'db>(
         return Vec::new();
     };
 
+    let mut diags = check_const_body_expressions(db, body, typed_body);
+    if func.has_effects(db) {
+        diags.insert(
+            0,
+            BodyDiag::ConstFnEffectsNotAllowed(func.span().effects().into()).into(),
+        );
+    }
+    diags
+}
+
+/// Shared const-language checks for function bodies and declaration predicates.
+pub(crate) fn check_const_body_expressions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    typed_body: &TypedBody<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
     let mut checker = ConstFnChecker {
         db,
         body,
         typed_body,
         diags: Vec::new(),
     };
-
-    if func.has_effects(db) {
-        checker
-            .diags
-            .push(BodyDiag::ConstFnEffectsNotAllowed(func.span().effects().into()).into());
-    }
-
     checker.check_expr(body.expr(db));
     checker.diags
 }

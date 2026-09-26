@@ -6,7 +6,8 @@ use super::{
     define_lazy_span_node,
     expr::LazyExprSpan,
     params::{
-        LazyFuncParamListSpan, LazyGenericParamListSpan, LazyUsesClauseSpan, LazyWhereClauseSpan,
+        LazyFuncParamListSpan, LazyGenericParamListSpan, LazyTypeBoundListSpan, LazyUsesClauseSpan,
+        LazyWhereClauseSpan,
     },
     pat::LazyPatSpan,
     path::LazyPathSpan,
@@ -418,6 +419,7 @@ define_lazy_span_node!(
     }
     @node {
         (ty, ty, LazyTySpan),
+        (bounds, bounds, LazyTypeBoundListSpan),
         (attributes, attr_list, LazyAttrListSpan),
     }
 );

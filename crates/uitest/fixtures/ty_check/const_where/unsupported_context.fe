@@ -1,0 +1,30 @@
+// Const where predicates are rejected where use sites are not checked yet.
+trait Marker where true {}
+
+trait Read {
+    fn read(self) where true
+}
+
+trait ReadN<const N: usize> {
+    fn read(self)
+}
+
+struct S<const N: usize> {}
+
+impl<const N: usize> S<N> where N > 0 {
+    fn get(self) {}
+}
+
+impl<const N: usize> ReadN<N> for S<N> where N > 0 {
+    fn read(self) {}
+}
+
+struct T {}
+
+impl<const N: usize> ReadN<N> for T {
+    fn read(self) where N > 0 {}
+}
+
+fn outer<const N: usize>() {
+    struct Inner where true {}
+}

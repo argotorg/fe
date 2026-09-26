@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/record_requirements_cover_declaration_and_inferred_positions/associated_bound_good.fe
+---
+

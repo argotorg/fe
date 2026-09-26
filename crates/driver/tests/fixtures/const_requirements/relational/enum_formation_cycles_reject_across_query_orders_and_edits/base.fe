@@ -1,0 +1,3 @@
+const fn yes<T>() -> bool { true }
+enum Choice<const N: usize> where yes<Choice<N>>() { Empty }
+fn use_it(_ item: Choice<1>) {}

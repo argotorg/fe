@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/nested_predicate_constants_cannot_borrow_enclosing_premises/nested_formation_2.fe
+---
+error[8-0064]: const value must be resolvable during type checking
+  ┌─ nested_formation_2.fe:3:36
+  │
+3 │ fn forward<const N: usize>() where accepts<{ length<N>() }>(), N > 0 {}
+  │                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^ requires fully-resolved const value

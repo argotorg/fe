@@ -1,0 +1,3 @@
+const fn length<const M: usize>() -> usize where M > 0 { 0 }
+enum Choice<const N: usize> where N > 0, ({ let xs: [u8; { length<N>() }] = []
+ true }) { Empty }

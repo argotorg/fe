@@ -1,0 +1,2 @@
+const fn bounded<const N: usize>() -> bool where bounded<N>() { true }
+fn answer() -> bool { bounded<0>() }

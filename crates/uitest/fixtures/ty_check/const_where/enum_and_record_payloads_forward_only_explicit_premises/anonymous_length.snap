@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/enum_and_record_payloads_forward_only_explicit_premises/anonymous_length.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ anonymous_length.fe:3:44
+  │
+2 │ const fn length<const K: usize>() -> usize where K > 0 { 0 }
+  │                                                  ----- required by this predicate
+3 │ enum Outer<const M: usize>  { Value([u8; { length<M>() }]) }
+  │                                            ^^^^^^^^^^^ no matching const requirement in the caller after substitution

@@ -1,0 +1,23 @@
+fn bounded<const N: usize>() where {
+    let limit: usize = 8
+    N < limit
+} {}
+
+fn mixed<T, const N: usize>() where T: Copy, {
+    N > 0
+}, N < 8 {}
+
+fn trailing<T>() where T: Copy, { let value: u8 = 1 }
+
+struct Sized<const N: usize> where { N > 0 } { value: u256 }
+
+enum Choice<const N: usize> where { N > 0 } { A, B }
+
+trait Checked {
+    fn declared() where { true }
+    fn defaulted() where { true } {}
+}
+
+extern {
+    fn external() where { true }
+}

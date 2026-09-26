@@ -1,0 +1,21 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/enum_requirements_check_every_variant_and_match/empty_zero.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ empty_zero.fe:3:34
+  │
+1 │ enum Choice<const N: usize> where N > 0 { Empty, Tuple(u256), Record { value: u256 } }
+  │                                   ----- required by this predicate
+2 │ const fn read<const M: usize>(_ item: Choice<M>) -> u256 where M > 0 { match item { Choice::Empty => 7, Choice::Tuple(value) => value, Choice::Record { value } => value + 1 } }
+3 │ const fn answer() -> u256 { read(Choice<0>::Empty) }
+  │                                  ^^^^^^^^^^^^^^^^ condition evaluated to `false`
+
+error[8-0093]: const requirement is not satisfied
+  ┌─ empty_zero.fe:3:29
+  │
+2 │ const fn read<const M: usize>(_ item: Choice<M>) -> u256 where M > 0 { match item { Choice::Empty => 7, Choice::Tuple(value) => value, Choice::Record { value } => value + 1 } }
+  │                                                                ----- required by this predicate
+3 │ const fn answer() -> u256 { read(Choice<0>::Empty) }
+  │                             ^^^^^^^^^^^^^^^^^^^^^^ condition evaluated to `false`

@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/record_predicate_formation_cannot_assume_its_clause/literal.fe
+---
+

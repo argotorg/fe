@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/nested_predicate_constants_cannot_borrow_enclosing_premises/nested_formation_3.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ nested_formation_3.fe:3:65
+  │
+1 │ const fn length<const N: usize>() -> usize where N > 0 { 0 }
+  │                                                  ----- required by this predicate
+2 │ const fn accepts<const SIZE: usize>() -> bool { true }
+3 │ fn forward<const N: usize>() where N > 0, ({ let values: [u8; { length<N>() }] = []
+  │                                                                 ^^^^^^^^^^^ no matching const requirement in the caller after substitution
+
+error[8-0031]: type annotation is needed
+  ┌─ nested_formation_3.fe:3:50
+  │
+3 │ fn forward<const N: usize>() where N > 0, ({ let values: [u8; { length<N>() }] = []
+  │                                                  ^^^^^^
+  │                                                  │
+  │                                                  type annotation is needed
+  │                                                  consider giving `: [_; 0]` here

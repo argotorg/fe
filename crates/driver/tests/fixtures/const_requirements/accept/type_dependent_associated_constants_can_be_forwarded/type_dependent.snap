@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/type_dependent_associated_constants_can_be_forwarded/type_dependent.fe
+---
+answer() = 42

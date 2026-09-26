@@ -1,0 +1,3 @@
+const fn length<const N: usize>() -> usize where N > 0 { 0 }
+struct S {}
+impl S { const VALUE: usize = length<1>() }

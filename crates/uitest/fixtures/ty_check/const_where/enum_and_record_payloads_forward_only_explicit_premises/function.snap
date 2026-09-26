@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/enum_and_record_payloads_forward_only_explicit_premises/function.fe
+---
+error[3-0057]: const requirement is not satisfied
+  ┌─ function.fe:2:36
+  │
+1 │ enum Choice<const N: usize> where N > 0 { Empty, Tuple(u256), Record { value: u256 } }
+  │                                   ----- required by this predicate
+2 │ const fn make<const M: usize>() -> Choice<M>  { Choice::Empty }
+  │                                    ^^^^^^^^^ no matching const requirement in the caller after substitution
+
+error[3-0057]: const requirement is not satisfied
+  ┌─ function.fe:2:49
+  │
+1 │ enum Choice<const N: usize> where N > 0 { Empty, Tuple(u256), Record { value: u256 } }
+  │                                   ----- required by this predicate
+2 │ const fn make<const M: usize>() -> Choice<M>  { Choice::Empty }
+  │                                                 ^^^^^^^^^^^^^ no matching const requirement in the caller after substitution

@@ -1,0 +1,18 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/requirement_failures_do_not_become_evidence/malformed.fe
+---
+error[8-0000]: type mismatch
+  ┌─ malformed.fe:1:50
+  │
+1 │ const fn bounded<const N: usize>() -> u256 where N { 42 }
+  │                                                  ^ expected `bool`, but `usize` is given
+
+error[8-0093]: const requirement is not satisfied
+  ┌─ malformed.fe:2:23
+  │
+1 │ const fn bounded<const N: usize>() -> u256 where N { 42 }
+  │                                                  - required by this predicate
+2 │ fn answer() -> u256 { bounded<0>() }
+  │                       ^^^^^^^^^^^^ condition could not be established; the predicate must be a well-formed, evaluable bool

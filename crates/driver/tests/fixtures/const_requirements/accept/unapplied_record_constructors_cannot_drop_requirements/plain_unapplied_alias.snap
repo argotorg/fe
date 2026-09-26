@@ -1,0 +1,6 @@
+---
+source: crates/driver/tests/const_requirements.rs
+expression: values
+input_file: tests/fixtures/const_requirements/accept/unapplied_record_constructors_cannot_drop_requirements/plain_unapplied_alias.fe
+---
+

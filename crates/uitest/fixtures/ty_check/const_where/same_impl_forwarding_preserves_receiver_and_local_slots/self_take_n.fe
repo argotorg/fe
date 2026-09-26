@@ -1,0 +1,4 @@
+struct Window<const N: usize> {}
+impl<const N: usize> Window<N> { const fn take<const M: usize>(self) -> usize where N > 0, M > N { M }
+const fn forward<const K: usize>(self) -> usize where N > 0, K > N { self.take<N>() } }
+const fn answer() -> usize { Window<1> {}.forward<3>() }

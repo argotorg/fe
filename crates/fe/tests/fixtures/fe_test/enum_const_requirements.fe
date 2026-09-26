@@ -1,0 +1,24 @@
+struct Payload<const N: usize> where N > 0 {
+    value: u256,
+}
+
+enum Checked<const N: usize> where N > 0 {
+    Empty,
+    Tuple(Payload<N>),
+    Record { value: u256 },
+}
+
+fn read<const M: usize>(_ item: Checked<M>) -> u256 where M > 0 {
+    match item {
+        Checked::Empty => 7,
+        Checked::Tuple(payload) => payload.value,
+        Checked::Record { value } => value + 1,
+    }
+}
+
+#[test]
+fn constrained_enum_variants() {
+    assert!(read(Checked<1>::Empty) == 7)
+    assert!(read(Checked<2>::Tuple(Payload { value: 41 })) == 41)
+    assert!(read(Checked<3>::Record { value: 41 }) == 42)
+}

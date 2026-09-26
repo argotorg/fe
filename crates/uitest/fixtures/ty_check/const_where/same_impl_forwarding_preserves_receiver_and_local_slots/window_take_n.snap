@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/same_impl_forwarding_preserves_receiver_and_local_slots/window_take_n.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ window_take_n.fe:3:70
+  │
+2 │ impl<const N: usize> Window<N> { const fn take<const M: usize>(self) -> usize where N > 0, M > N { M }
+  │                                                                                     ----- required by this predicate
+3 │ const fn forward<const K: usize>(self) -> usize where N > 0, K > N { Window<K> {}.take<N>() } }
+  │                                                                      ^^^^^^^^^^^^^^^^^^^^^^ no matching const requirement in the caller after substitution
+
+error[8-0093]: const requirement is not satisfied
+  ┌─ window_take_n.fe:3:70
+  │
+2 │ impl<const N: usize> Window<N> { const fn take<const M: usize>(self) -> usize where N > 0, M > N { M }
+  │                                                                                            ----- required by this predicate
+3 │ const fn forward<const K: usize>(self) -> usize where N > 0, K > N { Window<K> {}.take<N>() } }
+  │                                                                      ^^^^^^^^^^^^^^^^^^^^^^ no matching const requirement in the caller after substitution

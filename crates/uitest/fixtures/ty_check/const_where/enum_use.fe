@@ -1,0 +1,13 @@
+// Enum requirements apply to variants with and without payloads.
+enum Choice<const N: usize> where N > 0 {
+    Empty,
+    Tuple(u256),
+}
+
+fn empty() {
+    let _item = Choice<0>::Empty
+}
+
+fn tuple() {
+    let _item = Choice<0>::Tuple(1)
+}

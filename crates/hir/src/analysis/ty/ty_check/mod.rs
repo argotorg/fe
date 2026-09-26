@@ -1,4 +1,6 @@
 mod callable;
+mod const_requirements;
+pub(crate) use const_requirements::check_declared_type_requirements;
 mod contract;
 mod effect_env;
 pub(crate) mod env;
@@ -53,6 +55,7 @@ pub(super) use expr::TraitOps;
 use num_traits::ToPrimitive;
 pub use owner::BodyOwner;
 pub use owner::EffectParamOwner;
+use std::sync::Arc;
 pub use stmt::ForLoopSeq;
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -297,6 +300,149 @@ fn diag_depends_on_param_instantiation<'db>(
     }
 }
 
+/// Ground predicates are declaration obligations. Ordinary generic functions
+/// and ADTs retain parameter-dependent predicates for substitution at uses.
+/// A failed or unsupported evaluation must never count as a satisfied condition.
+pub(crate) fn check_where_const_predicates<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: WhereClauseOwner<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let predicates = owner.where_clause(db).const_predicates(db);
+    if predicates.is_empty() {
+        return Vec::new();
+    }
+    // `where T` parses as a const predicate. When the lone path names a type,
+    // the author most likely left out the trait bound, so say that instead of
+    // reporting a type used as a value.
+    let (missing_bounds, predicates): (Vec<Body<'db>>, Vec<Body<'db>>) = predicates
+        .iter()
+        .partition(|body| predicate_names_a_type(db, **body));
+    let mut diags: Vec<FuncBodyDiag<'db>> = missing_bounds
+        .iter()
+        .map(|body| BodyDiag::WhereTypeBoundMissing(body.span().into()).into())
+        .collect();
+    if predicates.is_empty() {
+        return diags;
+    }
+    let generic_declaration = match owner {
+        WhereClauseOwner::Func(func)
+            if const_requirements::function_requirements_supported(db, func) =>
+        {
+            Some(GenericParamOwner::Func(func))
+        }
+        WhereClauseOwner::Struct(record) => Some(GenericParamOwner::Struct(record)),
+        WhereClauseOwner::Enum(enum_) => Some(GenericParamOwner::Enum(enum_)),
+        _ => None,
+    };
+    // Inherent method parameter lists include their impl's generic parameters.
+    // Requirement substitution reconciles their owners. Other generic contexts remain
+    // unsupported, including trait methods and nested generic declarations.
+    let inherited_impl = match owner {
+        WhereClauseOwner::Func(func) => func
+            .scope()
+            .parent_item(db)
+            .filter(|item| matches!(item, crate::hir_def::ItemKind::Impl(_))),
+        _ => None,
+    };
+    let mut item = Some(crate::hir_def::ItemKind::from(owner));
+    while let Some(current) = item {
+        if let Some(params) = GenericParamOwner::from_item_opt(current)
+            && !collect_generic_params(db, params).params(db).is_empty()
+            && generic_declaration
+                .is_none_or(|declaration| current != crate::hir_def::ItemKind::from(declaration))
+            && Some(current) != inherited_impl
+        {
+            diags.extend(
+                predicates.iter().map(|body| {
+                    BodyDiag::GenericConstPredicateUnsupported(body.span().into()).into()
+                }),
+            );
+            return diags;
+        }
+        item = current.scope().parent_item(db);
+    }
+
+    for &body in &predicates {
+        let expected = TyId::bool(db);
+        let body_owner = BodyOwner::AnonConstBody { body, expected };
+        let (body_diags, _) = const_requirements::check_predicate_formation(db, body);
+        if !body_diags.is_empty() && !static_assert_ignorable_type_diags(db, body_diags) {
+            diags.extend(body_diags.iter().cloned());
+            continue;
+        }
+        if let Some(declaration) = generic_declaration
+            && !collect_generic_params(db, declaration)
+                .params(db)
+                .is_empty()
+            && const_requirements::predicate_may_depend_on_params(db, body)
+        {
+            continue;
+        }
+        let outcome = eval_body_owner_const(db, body_owner, Vec::new());
+        diags.extend(const_predicate_outcome_diags(db, body, body_owner, outcome));
+    }
+    diags
+}
+
+/// Reports the CTFE outcome of a const predicate. The predicate holds only when
+/// it evaluates to `true`; a blocked or failed evaluation is an error.
+fn const_predicate_outcome_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    predicate: Body<'db>,
+    owner: BodyOwner<'db>,
+    outcome: EvalOutcome<'db, SemConstId<'db>>,
+) -> Vec<FuncBodyDiag<'db>> {
+    match outcome {
+        EvalOutcome::Ready(value) => match static_assert_bool_value(db, value) {
+            Some(true) => Vec::new(),
+            Some(false) => {
+                vec![BodyDiag::WhereConstPredicateFailed(predicate.span().into()).into()]
+            }
+            None => vec![BodyDiag::ConstValueMustBeKnown(predicate.span().into()).into()],
+        },
+        EvalOutcome::Blocked(info) => {
+            let (primary, dependency) = blocked_const_detail(db, predicate, &info);
+            vec![
+                BodyDiag::ConstDependencyMustBeKnown {
+                    primary,
+                    dependency,
+                }
+                .into(),
+            ]
+        }
+        EvalOutcome::Failed(failure) => {
+            let ty = TyId::invalid(db, invalid_cause_from_eval_failure(db, owner, failure));
+            vec![
+                ty.emit_diag(db, predicate.span().into())
+                    .map(FuncBodyDiag::from)
+                    .unwrap_or_else(|| {
+                        BodyDiag::ConstValueMustBeKnown(predicate.span().into()).into()
+                    }),
+            ]
+        }
+    }
+}
+
+/// Whether a const predicate is a lone path that names a type, as in `where T`.
+/// A const generic parameter also resolves to a type, but it is a value here,
+/// matching how the type checker reads a path expression.
+fn predicate_names_a_type<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> bool {
+    let Partial::Present(Expr::Path(Partial::Present(path))) = body.expr(db).data(db, body) else {
+        return false;
+    };
+    let resolved = crate::analysis::name_resolution::resolve_path(
+        db,
+        *path,
+        body.scope(),
+        PredicateListId::empty_list(db),
+        true,
+    );
+    matches!(
+        resolved,
+        Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) if ty.const_ty_ty(db).is_none()
+    )
+}
+
 #[salsa::tracked(return_ref)]
 pub fn check_static_assert<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -451,6 +597,40 @@ pub(super) fn check_body<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    let (mut diags, mut typed_body) = infer_body(db, owner).clone();
+    if diags.is_empty() || static_assert_ignorable_type_diags(db, &diags) {
+        diags.extend(const_requirements::check_body_requirements(
+            db,
+            owner,
+            &typed_body,
+        ));
+    }
+    typed_body.has_diagnostics = !diags.is_empty();
+    (diags, typed_body)
+}
+
+/// Inference and const-language checking, without requirement discharge.
+/// CTFE consumes this completed template. It must not re-enter the enclosing
+/// discharge query by requesting a checked body while evaluating a predicate.
+/// Compiler diagnostics still use the checked body entry points above.
+pub(crate) fn infer_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> &'db (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    infer_body_query(db, BodyInferenceKey::new(db, owner))
+}
+
+#[salsa::interned]
+struct BodyInferenceKey<'db> {
+    owner: BodyOwner<'db>,
+}
+
+#[salsa::tracked(return_ref, cycle_initial=infer_body_cycle_initial, cycle_fn=infer_body_cycle_recover)]
+fn infer_body_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: BodyInferenceKey<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    let owner = key.owner(db);
     let Ok(mut checker) = TyChecker::new(db, owner) else {
         return (
             Vec::new(),
@@ -479,6 +659,55 @@ pub(super) fn check_body<'db>(
     typed_body.has_diagnostics = !diags.is_empty();
 
     (diags, typed_body)
+}
+
+// A requirement evaluated from a type expression can depend on the body
+// currently being inferred. Start that cycle with a failed template, never a
+// provisional successful value; existing query handlers may still iterate.
+fn infer_body_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: BodyInferenceKey<'db>,
+) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    let mut typed = TypedBody::empty(db);
+    typed.has_diagnostics = true;
+    typed.result_ty = TyId::invalid(db, InvalidCause::TypeLoweringCycle);
+    let span = key
+        .owner(db)
+        .body(db)
+        .map(|body| body.span().into())
+        .unwrap_or_else(DynLazySpan::invalid);
+    (
+        vec![FuncBodyDiag::Ty(
+            TyLowerDiag::TypeLoweringCycle(span).into(),
+        )],
+        typed,
+    )
+}
+
+fn infer_body_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &(Vec<FuncBodyDiag<'db>>, TypedBody<'db>),
+    _count: u32,
+    _key: BodyInferenceKey<'db>,
+) -> salsa::CycleRecoveryAction<(Vec<FuncBodyDiag<'db>>, TypedBody<'db>)> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+/// A failed requirement in a type expression must not supply a CTFE value
+/// that could make the same requirement succeed on a later cycle iteration.
+pub(crate) fn inference_has_failed_const_requirements(diags: &[FuncBodyDiag<'_>]) -> bool {
+    diags.iter().any(|diag| {
+        matches!(
+            diag,
+            FuncBodyDiag::Body(
+                BodyDiag::ConstRequirementNotSatisfied { .. }
+                    | BodyDiag::RecursiveConstRequirement(_)
+            ) | FuncBodyDiag::Ty(TyDiagCollection::Ty(
+                TyLowerDiag::ConstRequirementNotSatisfied { .. }
+                    | TyLowerDiag::TypeLoweringCycle(_)
+            ))
+        )
+    })
 }
 
 /// Forces evaluation of a const item's value and reports failures
@@ -766,9 +995,8 @@ fn typed_body_for_bodyless_func<'db>(
             }
         })
         .collect();
-    TypedBody {
+    TypedBodyTables {
         body: None,
-        has_diagnostics: false,
         result_ty,
         assumptions,
         pat_ty: SecondaryMap::new(),
@@ -790,6 +1018,7 @@ fn typed_body_for_bodyless_func<'db>(
         expr_place: SecondaryMap::new(),
         expr_places: PrimaryMap::new(),
     }
+    .into()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2981,35 +3210,53 @@ pub(crate) enum SmirLoweringReadiness {
     IncompletePlan,
 }
 
+/// The result of type checking one body.
+///
+/// Cloning is cheap: the inferred tables are shared. The checked-body queries
+/// (`check_func_body` and friends) return a clone of the `infer_body`
+/// template, so each body's tables are stored once rather than twice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedBody<'db> {
-    body: Option<Body<'db>>,
     has_diagnostics: bool,
-    result_ty: TyId<'db>,
-    assumptions: PredicateListId<'db>,
-    pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
-    expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
-    implicit_moves: FxHashSet<ExprId>,
-    const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
-    value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
-    semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
-    record_init_lowering: SecondaryMap<ExprId, Option<RecordInitLowering<'db>>>,
-    resolved_field_index: SecondaryMap<ExprId, Option<u16>>,
-    call_effect_args: SecondaryMap<ExprId, Option<Vec<ResolvedEffectArg<'db>>>>,
-    return_borrow_provider: Option<ProviderAddressSpace>,
-    /// Bindings for function parameters (indexed by param position)
-    param_bindings: Vec<LocalBinding<'db>>,
-    /// Bindings for local variables (keyed by the pattern that introduces them)
-    pat_bindings: SecondaryMap<PatId, Option<LocalBinding<'db>>>,
-    /// Binding capture mode for local variables (keyed by the pattern that introduces them)
-    pat_binding_modes: SecondaryMap<PatId, Option<PatBindingMode>>,
-    pattern_store: PatternStore<'db>,
-    pattern_status: SecondaryMap<PatId, PatternAnalysisStatus>,
-    /// Resolved Seq trait methods for for-loops
-    for_loop_seq: SecondaryMap<StmtId, Option<ForLoopSeq<'db>>>,
-    expr_place: SecondaryMap<ExprId, PackedOption<ExprPlaceId>>,
-    expr_places: PrimaryMap<ExprPlaceId, Place<'db>>,
+    tables: Arc<TypedBodyTables<'db>>,
 }
+
+// A private module keeps the shared tables type out of the crate's public
+// API while `TypedBody` can still deref to it.
+mod typed_body_tables {
+    use super::*;
+
+    /// Shared storage behind [`TypedBody`]; its fields are private to type checking.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct TypedBodyTables<'db> {
+        pub(super) body: Option<Body<'db>>,
+        pub(super) result_ty: TyId<'db>,
+        pub(super) assumptions: PredicateListId<'db>,
+        pub(super) pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
+        pub(super) expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
+        pub(super) implicit_moves: FxHashSet<ExprId>,
+        pub(super) const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
+        pub(super) value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
+        pub(super) semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
+        pub(super) record_init_lowering: SecondaryMap<ExprId, Option<RecordInitLowering<'db>>>,
+        pub(super) resolved_field_index: SecondaryMap<ExprId, Option<u16>>,
+        pub(super) call_effect_args: SecondaryMap<ExprId, Option<Vec<ResolvedEffectArg<'db>>>>,
+        pub(super) return_borrow_provider: Option<ProviderAddressSpace>,
+        /// Bindings for function parameters (indexed by param position)
+        pub(super) param_bindings: Vec<LocalBinding<'db>>,
+        /// Bindings for local variables (keyed by the pattern that introduces them)
+        pub(super) pat_bindings: SecondaryMap<PatId, Option<LocalBinding<'db>>>,
+        /// Binding capture mode for local variables (keyed by the pattern that introduces them)
+        pub(super) pat_binding_modes: SecondaryMap<PatId, Option<PatBindingMode>>,
+        pub(super) pattern_store: PatternStore<'db>,
+        pub(super) pattern_status: SecondaryMap<PatId, PatternAnalysisStatus>,
+        /// Resolved Seq trait methods for for-loops
+        pub(super) for_loop_seq: SecondaryMap<StmtId, Option<ForLoopSeq<'db>>>,
+        pub(super) expr_place: SecondaryMap<ExprId, PackedOption<ExprPlaceId>>,
+        pub(super) expr_places: PrimaryMap<ExprPlaceId, Place<'db>>,
+    }
+}
+use typed_body_tables::TypedBodyTables;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BindingSource {
@@ -3046,7 +3293,7 @@ pub enum ReturnProvenance {
     cycle_initial=func_return_provenance_cycle_initial
 )]
 fn func_return_provenance<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> ReturnProvenance {
-    let (diags, typed_body) = check_func_body(db, func);
+    let (diags, typed_body) = infer_body(db, BodyOwner::Func(func));
     if !diags.is_empty() {
         return ReturnProvenance::Unknown;
     }
@@ -3391,7 +3638,7 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .values_mut()
             .flatten()
             .for_each(|binding| *binding = binding.fold_with(db, folder));
-        this.pattern_store = this.pattern_store.fold_with(db, folder);
+        this.pattern_store = std::mem::take(&mut this.pattern_store).fold_with(db, folder);
         this.for_loop_seq
             .values_mut()
             .flatten()
@@ -3400,6 +3647,30 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .values_mut()
             .for_each(|place| *place = place.clone().fold_with(db, folder));
         this
+    }
+}
+
+impl<'db> std::ops::Deref for TypedBody<'db> {
+    type Target = TypedBodyTables<'db>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.tables
+    }
+}
+
+// Mutation copies the tables only while they are still shared.
+impl<'db> std::ops::DerefMut for TypedBody<'db> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.tables)
+    }
+}
+
+impl<'db> From<TypedBodyTables<'db>> for TypedBody<'db> {
+    fn from(tables: TypedBodyTables<'db>) -> Self {
+        Self {
+            has_diagnostics: false,
+            tables: Arc::new(tables),
+        }
     }
 }
 
@@ -3903,7 +4174,7 @@ impl<'db> TypedBody<'db> {
             return None;
         }
 
-        let (diags, typed_body) = check_func_body(db, func);
+        let (diags, typed_body) = infer_body(db, BodyOwner::Func(func));
         if !diags.is_empty() {
             seen.remove(&func);
             return None;
@@ -4956,9 +5227,8 @@ impl<'db> TypedBody<'db> {
     }
 
     fn empty(db: &'db dyn HirAnalysisDb) -> Self {
-        Self {
+        TypedBodyTables {
             body: None,
-            has_diagnostics: false,
             result_ty: TyId::unit(db),
             assumptions: PredicateListId::empty_list(db),
             pat_ty: SecondaryMap::new(),
@@ -4980,6 +5250,7 @@ impl<'db> TypedBody<'db> {
             expr_place: SecondaryMap::new(),
             expr_places: PrimaryMap::new(),
         }
+        .into()
     }
 }
 
@@ -5275,6 +5546,19 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
             let is_direct_call_callee =
                 matches!(expr_data, Expr::Path(..)) && self.direct_call_callees.contains(&expr);
             if prop.binding.is_none() && !is_direct_call_callee {
+                if matches!(expr_data, Expr::Path(..))
+                    && matches!(
+                        prop.ty.base_ty(self.db).data(self.db),
+                        TyData::TyBase(TyBase::Func(CallableDef::VariantCtor(_)))
+                    )
+                {
+                    self.diags.push(
+                        BodyDiag::VariantConstructorValueUnsupported(span.clone().into()).into(),
+                    );
+                    // Constructors have direct-call lowering, but no value
+                    // representation. Mark this path unready for semantic MIR.
+                    self.body.expr_ty[expr] = Some(ExprProp::invalid(self.db));
+                }
                 self.check_wf(prop.ty, span.into());
             }
         }

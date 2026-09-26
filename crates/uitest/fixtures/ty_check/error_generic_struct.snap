@@ -3,7 +3,7 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/error_generic_struct.fe
 ---
-error[16-0003]: `#[error]` structs must be non-generic
+error[13-0003]: `#[error]` structs must be non-generic
   ┌─ error_generic_struct.fe:2:15
   │
 2 │ struct Generic<T> {
