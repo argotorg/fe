@@ -229,7 +229,15 @@ pub fn decode_output_at<T, I>(_ input: own I, _ base: u256) -> T
     where T: Decode<Sol> + AbiSize, I: ByteInput
 {
     let input_len = input.len()
-    checked_frame_end<Sol>(base, abi_single_root_head_size<T>(), input_len)
+    let head_size = abi_single_root_head_size<T>()
+    checked_frame_end<Sol>(base, head_size, input_len)
+    // Root-frame canonicality: a fixed-width return must occupy exactly its
+    // head size. Trailing returndata bytes are rejected rather than ignored —
+    // e.g. a 64-byte buffer whose first word is canonical `true` must not
+    // decode as a bare `bool` true.
+    if !T::IS_DYNAMIC && input_len != base + head_size {
+        Sol::decode_error()
+    }
     decode_field_from_prechecked_head<Sol, T, I>(input, base: base, head_pos: base, input_len: input_len)
 }
 
@@ -330,6 +338,14 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
 
     fn set_pos(mut self, _ new_pos: u256) {
         self.cur.pos = new_pos
+    }
+
+    fn remaining(self) -> u256 {
+        let total: u256 = self.cur.input.len()
+        if self.cur.pos >= total {
+            return 0
+        }
+        total - self.cur.pos
     }
 
     fn read_u8(mut self) -> u8 {
