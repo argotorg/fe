@@ -2,11 +2,10 @@ use std::hash::Hash;
 
 use crate::core::hir_def::IdentId;
 use crate::hir_def::scope_graph::ScopeId;
-use crate::hir_def::{ItemKind, Trait};
 use common::indexmap::{IndexMap, IndexSet};
 
 use super::{
-    trait_def::{ImplementorId, TraitInstId},
+    trait_def::{ImplementorId, TraitInstId, TraitRefId},
     trait_resolution::{PredicateListId, TraitGoalSolution, TraitSolverQuery},
     ty_check::{EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
     ty_def::{TyData, TyId},
@@ -20,7 +19,7 @@ use crate::analysis::{
         sem_const_from_ty,
     },
     ty::const_expr::{ConstExpr, ConstExprId, ConstInvocation},
-    ty::const_ty::{ConstTyData, ConstTyId, const_ty_from_sem_const},
+    ty::const_ty::{ConstCaptureEnv, ConstTyData, ConstTyId, const_ty_from_sem_const},
 };
 
 pub trait TyFoldable<'db>
@@ -46,13 +45,24 @@ pub trait TyFolder<'db> {
         scope
     }
 
+    fn fold_const_capture(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        capture: &ConstCaptureEnv<'db>,
+    ) -> ConstCaptureEnv<'db>
+    where
+        Self: Sized,
+    {
+        capture.fold_ranges(db, self)
+    }
+
     fn fold_ty_app(
         &mut self,
         db: &'db dyn HirAnalysisDb,
         abs: TyId<'db>,
         arg: TyId<'db>,
     ) -> TyId<'db> {
-        TyId::app(db, abs, arg)
+        TyId::app_structural(db, abs, arg)
     }
 }
 
@@ -112,24 +122,20 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                     UnEvaluated {
                         body,
                         ty,
+                        template_ty,
                         const_def,
-                        generic_args,
-                        preserve_unevaluated,
-                        defer_validation,
+                        capture,
+                        policy,
                     } => {
                         let ty = ty.map(|t| folder.fold_ty(db, t));
-                        let generic_args = generic_args
-                            .iter()
-                            .copied()
-                            .map(|arg| folder.fold_ty(db, arg))
-                            .collect();
+                        let capture = folder.fold_const_capture(db, capture);
                         UnEvaluated {
                             body: *body,
                             ty,
+                            template_ty: *template_ty,
                             const_def: *const_def,
-                            generic_args,
-                            preserve_unevaluated: *preserve_unevaluated,
-                            defer_validation: *defer_validation,
+                            capture,
+                            policy: *policy,
                         }
                     }
                 };
@@ -246,9 +252,9 @@ impl<'db> TyFoldable<'db> for SemanticInstanceKey<'db> {
             GenericSubst::new(
                 db,
                 self.subst(db)
-                    .generic_args(db)
-                    .clone()
-                    .fold_with(db, folder),
+                    .mapping(db)
+                    .as_ref()
+                    .map(|mapping| mapping.map_values(|value| value.fold_with(db, folder))),
             ),
             EffectProviderSubst::new(
                 db,
@@ -370,6 +376,22 @@ where
         self.into_iter()
             .map(|ty| ty.fold_with(db, folder))
             .collect()
+    }
+}
+
+impl<'db> TyFoldable<'db> for TraitRefId<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        TraitRefId::new(
+            db,
+            self.def(db),
+            self.args(db)
+                .iter()
+                .map(|ty| ty.fold_with(db, folder))
+                .collect::<Vec<_>>(),
+        )
     }
 }
 
@@ -578,113 +600,6 @@ impl<'db> TyFoldable<'db> for ResolvedEffectArg<'db> {
             instantiated_key_ty: self.instantiated_key_ty.map(|ty| ty.fold_with(db, folder)),
             provider_target_ty: self.provider_target_ty.map(|ty| ty.fold_with(db, folder)),
             provider: self.provider,
-        }
-    }
-}
-
-/// Returns true if `needle` occurs anywhere within `haystack`.
-fn ty_contains<'db>(db: &'db dyn HirAnalysisDb, haystack: TyId<'db>, needle: TyId<'db>) -> bool {
-    use super::visitor::{TyVisitor, walk_ty};
-
-    struct ContainsVisitor<'db> {
-        db: &'db dyn HirAnalysisDb,
-        needle: TyId<'db>,
-        found: bool,
-    }
-
-    impl<'db> TyVisitor<'db> for ContainsVisitor<'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-
-        fn visit_ty(&mut self, ty: TyId<'db>) {
-            if self.found {
-                return;
-            }
-            if ty == self.needle {
-                self.found = true;
-                return;
-            }
-            walk_ty(self, ty);
-        }
-    }
-
-    let mut visitor = ContainsVisitor {
-        db,
-        needle,
-        found: false,
-    };
-    haystack.visit_with(&mut visitor);
-    visitor.found
-}
-
-/// A type folder that substitutes associated types based on a trait instance's bindings
-pub struct AssocTySubst<'db> {
-    trait_inst: TraitInstId<'db>,
-}
-
-impl<'db> AssocTySubst<'db> {
-    pub fn new(trait_inst: TraitInstId<'db>) -> Self {
-        Self { trait_inst }
-    }
-}
-
-impl<'db> TyFolder<'db> for AssocTySubst<'db> {
-    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        match ty.data(db) {
-            TyData::TyParam(param) => {
-                // If this is a trait self parameter, substitute with the trait instance's self type
-                if param.is_trait_self() {
-                    let owner_trait = param.owner.resolve_to::<Trait>(db).or_else(|| {
-                        match param.owner.parent_item(db)? {
-                            ItemKind::Trait(trait_) => Some(trait_),
-                            _ => None,
-                        }
-                    });
-                    if owner_trait.is_some_and(|trait_def| trait_def == self.trait_inst.def(db)) {
-                        let self_ty = self.trait_inst.self_ty(db);
-                        // Avoid infinite recursion when the instance `Self` is the same param.
-                        if self_ty == ty {
-                            return ty;
-                        }
-                        // Occurs check: when the replacement itself contains this `Self`
-                        // param (e.g. the instance's self type is a projection rooted at
-                        // `Self`, as in a `Self::Item: Trait` assumption), re-folding it
-                        // would substitute forever. The replacement is already expressed
-                        // in the outer context, so return it as-is.
-                        if ty_contains(db, self_ty, ty) {
-                            return self_ty;
-                        }
-                        return self_ty.fold_with(db, self);
-                    }
-                }
-                ty.super_fold_with(db, self)
-            }
-            TyData::AssocTy(assoc_ty) => {
-                // First fold the trait instance to handle any Self substitutions
-                let folded_trait = assoc_ty.trait_.fold_with(db, self);
-
-                // Check if this associated type belongs to our trait instance
-                if folded_trait.def(db) == self.trait_inst.def(db)
-                    && folded_trait.args(db) == self.trait_inst.args(db)
-                {
-                    // Check if we have a binding for this associated type
-                    if let Some(&bound_ty) =
-                        self.trait_inst.assoc_type_bindings(db).get(&assoc_ty.name)
-                    {
-                        return bound_ty.fold_with(db, self);
-                    }
-                }
-
-                // If the trait instance changed due to Self substitution, create a new associated type
-                if folded_trait != assoc_ty.trait_ {
-                    return TyId::assoc_ty(db, folded_trait, assoc_ty.name);
-                }
-
-                // Continue with default folding
-                ty.super_fold_with(db, self)
-            }
-            _ => ty.super_fold_with(db, self),
         }
     }
 }

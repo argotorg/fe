@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_impl/impl_method_effect_mismatch.fe
+---
+error[6-0024]: method `f` has incompatible effects
+   ┌─ impl_method_effect_mismatch.fe:11:8
+   │
+ 4 │     fn f(self) uses (a: A)
+   │        - trait requires these effects
+   ·
+11 │     fn f(self) {}
+   │        ^ expected 1 effects, found 0
+
+error[6-0024]: method `f` has incompatible effects
+   ┌─ impl_method_effect_mismatch.fe:15:8
+   │
+ 4 │     fn f(self) uses (a: A)
+   │        - trait requires these effects
+   ·
+15 │     fn f(self) uses (a: mut A) {}
+   │        ^ effect keys or mutability differ from the trait method

@@ -17,13 +17,13 @@ use super::{
     fold::{TyFoldable, TyFolder},
     layout_holes::LayoutRootUse,
     trait_def::{
-        ImplementorOrigin, TraitInstId, impls_for_trait_and_ty_with_possible_constraints,
-        resolve_trait_impl_instance,
+        ImplementorOrigin, TraitInstId, TraitRefId,
+        impls_for_trait_and_ty_with_possible_constraints, resolve_trait_impl_instance,
     },
     trait_lower::complete_impl_assoc_ty,
     trait_resolution::{PredicateListId, Selection, TraitSolveCx},
-    ty_def::{AssocTy, TyData, TyId, TyParam},
-    visitor::{TyVisitable, TyVisitor},
+    ty_def::{AssocTy, TyData, TyId, TyParam, collect_variables},
+    unify::UnificationTable,
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -47,6 +47,37 @@ pub fn normalize_ty<'db>(
     ty.fold_with(db, &mut normalizer)
 }
 
+/// Apply declared associated equalities without implementation selection.
+/// Structural slot planning uses declaration coordinates before the slots it
+/// is discovering exist, so implementation lookup would create a query cycle.
+pub fn normalize_from_assumptions<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> T
+where
+    T: TyFoldable<'db>,
+{
+    let mut normalizer = TypeNormalizer::new(db, scope, assumptions);
+    normalizer.resolve_impls = false;
+    value.fold_with(db, &mut normalizer)
+}
+
+/// Apply the associated equalities carried by a single trait predicate, as
+/// [`normalize_from_assumptions`] does.
+pub fn normalize_with_trait_evidence<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    scope: ScopeId<'db>,
+    evidence: TraitInstId<'db>,
+) -> T
+where
+    T: TyFoldable<'db>,
+{
+    normalize_from_assumptions(db, value, scope, PredicateListId::new(db, vec![evidence]))
+}
+
 pub(crate) fn normalize_layout_root_uses<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
@@ -67,19 +98,18 @@ pub(crate) fn normalize_layout_root_uses<'db>(
         if let TyData::AssocTy(assoc) = ty.data(db) {
             let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
             if let Selection::Unique(resolved) =
-                resolve_trait_impl_instance(db, solve_cx, assoc.trait_)
-                && !matches!(
-                    resolved.selected().origin(db),
-                    ImplementorOrigin::Assumption
-                )
+                resolve_trait_impl_instance(db, solve_cx, assoc.trait_.as_predicate(db))
+                && let ImplementorOrigin::Hir(impl_trait) = resolved.selected().origin(db)
             {
                 for root_use in resolved.assoc_ty_layout_root_uses(db, assoc.name) {
                     let root_use = LayoutRootUse {
-                        value: Binder::bind(root_use.value).instantiate(db, resolved.impl_args(db)),
+                        value: Binder::bind(impl_trait.into(), root_use.value)
+                            .instantiate(db, resolved.impl_args(db)),
                         owner: root_use.owner.map(|owner| {
                             normalize_ty(
                                 db,
-                                Binder::bind(owner).instantiate(db, resolved.impl_args(db)),
+                                Binder::bind(impl_trait.into(), owner)
+                                    .instantiate(db, resolved.impl_args(db)),
                                 scope,
                                 assumptions,
                             )
@@ -123,45 +153,9 @@ pub struct TypeNormalizer<'db> {
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    resolve_impls: bool,
     // Projection cache: None = in progress (cycle guard), Some(ty) = normalized result
     cache: FxHashMap<AssocTy<'db>, Option<TyId<'db>>>,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct AssumptionUnifyInput<T> {
-    pub(crate) lhs_self: T,
-    pub(crate) rhs_self: T,
-    pub(crate) bound: T,
-}
-
-impl<'db, T> TyFoldable<'db> for AssumptionUnifyInput<T>
-where
-    T: TyFoldable<'db> + Copy,
-{
-    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
-    where
-        F: TyFolder<'db>,
-    {
-        Self {
-            lhs_self: self.lhs_self.fold_with(db, folder),
-            rhs_self: self.rhs_self.fold_with(db, folder),
-            bound: self.bound.fold_with(db, folder),
-        }
-    }
-}
-
-impl<'db, T> TyVisitable<'db> for AssumptionUnifyInput<T>
-where
-    T: TyVisitable<'db> + Copy,
-{
-    fn visit_with<V>(&self, visitor: &mut V)
-    where
-        V: TyVisitor<'db> + ?Sized,
-    {
-        self.lhs_self.visit_with(visitor);
-        self.rhs_self.visit_with(visitor);
-        self.bound.visit_with(visitor);
-    }
 }
 
 impl<'db> TypeNormalizer<'db> {
@@ -174,12 +168,26 @@ impl<'db> TypeNormalizer<'db> {
             db,
             scope,
             assumptions,
+            resolve_impls: true,
             cache: FxHashMap::default(),
         }
     }
 }
 
 impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
+    fn fold_ty_app(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        abs: TyId<'db>,
+        arg: TyId<'db>,
+    ) -> TyId<'db> {
+        if self.resolve_impls {
+            TyId::app(db, abs, arg)
+        } else {
+            TyId::app_structural(db, abs, arg)
+        }
+    }
+
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         match ty.data(self.db) {
             TyData::TyParam(p @ TyParam { owner, .. }) if p.is_trait_self() => {
@@ -219,48 +227,27 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
 
 impl<'db> TypeNormalizer<'db> {
     fn try_resolve_assoc_ty(&mut self, ty: TyId<'db>, assoc: &AssocTy<'db>) -> Option<TyId<'db>> {
-        // 1) Check if the trait instance itself carries an explicit binding
-        if let Some(&bound_ty) = assoc.trait_.assoc_type_bindings(self.db).get(&assoc.name) {
-            return Some(bound_ty);
-        }
-
-        // 2) Check assumptions for an equivalent trait instance that carries
-        //    an explicit associated type binding (e.g., from where-clauses).
+        // Equality evidence is separate from the projection's identity. Match
+        // its entire trait reference before using an assumption's binding.
+        let target = assoc.trait_.fold_with(self.db, self);
+        let mut matching_bounds: IndexMap<TyId<'db>, ()> = IndexMap::new();
         for &pred in self.assumptions.list(self.db) {
-            if pred.def(self.db) != assoc.trait_.def(self.db) {
-                continue;
-            }
-
-            let lhs_self = self.fold_ty(self.db, assoc.trait_.self_ty(self.db));
-            let rhs_self = self.fold_ty(self.db, pred.self_ty(self.db));
-            let Some(&bound) = pred.assoc_type_bindings(self.db).get(&assoc.name) else {
+            let Some(bound) = pred.bound_assoc_ty(self.db, assoc.name) else {
                 continue;
             };
-
-            // Unify in a canonicalized local table, then map the resolved
-            // associated type back to the original inference environment.
-            let canonical_input = Canonicalized::new(
-                self.db,
-                AssumptionUnifyInput {
-                    lhs_self,
-                    rhs_self,
-                    bound,
-                },
-            );
-
-            if let Some(resolved) = canonical_input.with_materialized(self.db, |cx| {
-                let input = cx.query();
-                if cx
-                    .unify::<TyId<'db>>(input.lhs_self, input.rhs_self)
-                    .is_ok()
-                {
-                    let resolved = cx.resolve::<TyId<'db>>(input.bound);
-                    return cx.try_extract::<TyId<'db>>(resolved);
-                }
-                None
-            }) {
-                return Some(resolved);
+            if self.trait_refs_match(target, pred.trait_ref(self.db)) {
+                matching_bounds.insert(self.fold_ty(self.db, bound), ());
             }
+        }
+        if matching_bounds.len() > 1 {
+            return None;
+        }
+        if let Some((&bound, _)) = matching_bounds.first() {
+            return (bound != ty).then_some(bound);
+        }
+
+        if !self.resolve_impls {
+            return None;
         }
 
         // 3) Fall back to the general associated type search used by path resolution,
@@ -290,8 +277,7 @@ impl<'db> TypeNormalizer<'db> {
             Err(FindAssociatedTypeError::InfiniteBoundRecursion) => return None,
         };
 
-        // Keep only candidates from the same trait as `assoc`.
-        raw_cands.retain(|(inst, _)| inst.def(self.db) == assoc.trait_.def(self.db));
+        raw_cands.retain(|(inst, _)| self.trait_refs_match(target, inst.trait_ref(self.db)));
 
         // Deduplicate by normalized result type (to handle cases where multiple
         // impls yield the same associated type, e.g., Output = Self for all impls).
@@ -313,8 +299,28 @@ impl<'db> TypeNormalizer<'db> {
         }
     }
 
+    /// A pure normalization query may observe established equality, but may
+    /// not choose a binding by assigning an unresolved caller inference var.
+    fn trait_refs_match(&mut self, target: TraitRefId<'db>, candidate: TraitRefId<'db>) -> bool {
+        if target.def(self.db) != candidate.def(self.db) {
+            return false;
+        }
+        let candidate = candidate.fold_with(self.db, self);
+        if target == candidate {
+            return true;
+        }
+        if !collect_variables(self.db, &target).is_empty()
+            || !collect_variables(self.db, &candidate).is_empty()
+        {
+            return false;
+        }
+        UnificationTable::new(self.db)
+            .unify::<TraitRefId<'db>>(target, candidate)
+            .is_ok()
+    }
+
     fn try_resolve_assoc_ty_from_impls(&mut self, assoc: &AssocTy<'db>) -> Option<TyId<'db>> {
-        let trait_inst = assoc.trait_.fold_with(self.db, self);
+        let trait_inst = assoc.trait_.fold_with(self.db, self).as_predicate(self.db);
         let trait_def = trait_inst.def(self.db);
         let canonical_self_ty = Canonical::new(self.db, trait_inst.self_ty(self.db));
 
@@ -329,6 +335,7 @@ impl<'db> TypeNormalizer<'db> {
         let canonical_target = Canonicalized::new(self.db, trait_inst);
         canonical_target.with_materialized(self.db, |cx| {
             let target_inst = cx.query();
+            let original_target = cx.try_extract::<TraitInstId<'db>>(target_inst);
             for ingot in search_ingots.into_iter().flatten() {
                 for implementor in impls_for_trait_and_ty_with_possible_constraints(
                     self.db,
@@ -338,8 +345,7 @@ impl<'db> TypeNormalizer<'db> {
                     self.assumptions,
                 ) {
                     let Some(implementor) =
-                        complete_impl_assoc_ty(self.db, *implementor.skip_binder(), assoc.name)
-                            .map(Binder::bind)
+                        complete_impl_assoc_ty(self.db, implementor, assoc.name)
                     else {
                         continue;
                     };
@@ -349,6 +355,9 @@ impl<'db> TypeNormalizer<'db> {
                         assoc.name,
                         |cx, inst, assoc_ty| {
                             cx.unify::<TraitInstId<'db>>(inst, target_inst).ok()?;
+                            if cx.try_extract::<TraitInstId<'db>>(target_inst) != original_target {
+                                return None;
+                            }
                             let assoc_ty = cx.resolve::<TyId<'db>>(assoc_ty);
                             cx.try_extract::<TyId<'db>>(assoc_ty)
                         },

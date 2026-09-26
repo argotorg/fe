@@ -2,6 +2,7 @@ mod const_ref;
 mod semantic;
 mod template;
 
+pub use const_ref::generated_callee_key;
 pub(crate) use const_ref::{
     provisional_semantic_callee_key, resolve_semantic_const_ref,
     semantic_callee_key_with_effect_providers,
@@ -21,5 +22,5 @@ pub(crate) use semantic::{
 };
 pub use template::{
     EffectProviderSubst, GenericSubst, ImplEnv, TypedBodyTemplate, instantiate_typed_body,
-    instantiate_with_generic_args, typed_body_template,
+    typed_body_template,
 };

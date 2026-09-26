@@ -1,0 +1,81 @@
+use std::evm::{Call, Evm}
+
+msg ExtentMsg {
+    #[selector = 0x761c0e58]
+    Read { index: usize } -> u8,
+}
+
+struct S<const N: usize> {
+    x: [u8; { 10 / N }],
+}
+
+pub contract SpecializedExtent {
+    mut data: S<2>
+    mut empty: [S<2>; 0]
+
+    init() uses (mut data) {
+        data.x[0] = 11
+        data.x[4] = 29
+    }
+
+    recv ExtentMsg {
+        Read { index } -> u8 uses (data) {
+            data.x[index]
+        }
+    }
+}
+
+#[test]
+fn test_specialized_adt_array_extent() uses (evm: mut Evm) {
+    let addr = evm.create2<SpecializedExtent>(value: 0, args: (), salt: 0)
+    assert!(addr.inner != 0)
+
+    let first: u8 = evm.call(
+        addr: addr,
+        gas: 100000,
+        value: 0,
+        message: ExtentMsg::Read { index: 0 },
+    )
+    assert!(first == 11)
+
+    let last: u8 = evm.call(
+        addr: addr,
+        gas: 100000,
+        value: 0,
+        message: ExtentMsg::Read { index: 4 },
+    )
+    assert!(last == 29)
+}
+
+type Arr<const N: usize> = [u8; { 10 / N }]
+
+msg AliasMsg {
+    #[selector = 0x01]
+    Pick { value: Arr<2>, index: usize } -> u8,
+}
+
+pub contract AliasExtent {
+    mut first: u8
+
+    init(value: Arr<2>) uses (mut first) {
+        first = value[4]
+    }
+
+    recv AliasMsg {
+        Pick { value, index } -> u8 uses (first) {
+            value[index] + first
+        }
+    }
+}
+
+#[test]
+fn test_alias_array_extent_in_init_and_message() uses (evm: mut Evm) {
+    let addr = evm.create2<AliasExtent>(value: 0, args: ([1, 2, 3, 4, 5],), salt: 0)
+    let picked: u8 = evm.call(
+        addr: addr,
+        gas: 100000,
+        value: 0,
+        message: AliasMsg::Pick { value: [10, 20, 30, 40, 50], index: 3 },
+    )
+    assert!(picked == 45)
+}

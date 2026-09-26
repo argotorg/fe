@@ -5,6 +5,7 @@ use crate::{
         Const, Enum, EnumVariant, GenericParamOwner, HirIngot, IdentId, Impl, ImplTrait, ItemKind,
         PathId, PathKind, Trait, TypeBound, TypeKind, VariantKind, scope_graph::ScopeId,
     },
+    core::semantic::trait_self_predicate,
     span::{DynLazySpan, path::LazyPathSpan},
 };
 use common::indexmap::{IndexMap, IndexSet};
@@ -28,16 +29,17 @@ use crate::analysis::{
     ty::{
         adt_def::AdtRef,
         binder::Binder,
-        canonical::{Canonical, Canonicalized},
-        const_ty::{ConstBodyLowering, HoleAnchor, HoleMinter, LayoutHoleArgSite},
+        canonical::Canonicalized,
+        const_ty::{ConstBodyLowering, HoleAnchor, LayoutHoleArgSite, LoweringContext},
         fold::TyFoldable as _,
-        method_table::probe_method,
+        generic_defaults::DefaultApplication,
+        method_table::{MethodProbe, probe_method},
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_satisfied_constraints},
         trait_lower::{
             TraitArgError, TraitRefLowerError, complete_candidate_impl_assoc_ty,
             complete_impl_assoc_ty, lower_candidate_impl_assoc_ty, lower_checked_impl_assoc_ty,
-            lower_trait_ref, lower_trait_ref_deferred, lower_trait_ref_impl_with_minter,
+            lower_trait_ref, lower_trait_ref_impl_with_minter, lower_trait_ref_with_minter,
         },
         trait_resolution::{
             GoalSatisfiability, PredicateListId, TraitSolveCx, constraint::collect_constraints,
@@ -45,7 +47,7 @@ use crate::analysis::{
         },
         ty_def::{InvalidCause, Kind, TyBase, TyData, TyId},
         ty_lower::{
-            ConstDefaultCompletion, TyAlias, collect_generic_params, lower_generic_arg_list,
+            TyAlias, collect_generic_params, collect_source_generic_params, lower_generic_arg_list,
             lower_hir_ty_with_minter, lower_type_alias, lower_type_alias_deferred,
         },
         unify::UnificationTable,
@@ -725,7 +727,7 @@ impl<'db> ResolvedVariant<'db> {
     pub fn iter_field_types(
         &self,
         db: &'db dyn HirAnalysisDb,
-    ) -> impl Iterator<Item = Binder<TyId<'db>>> {
+    ) -> impl Iterator<Item = Binder<'db, TyId<'db>>> {
         self.ty
             .adt_def(db)
             .unwrap()
@@ -762,7 +764,7 @@ pub fn resolve_path<'db>(
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
-    let minter = HoleMinter::new(HoleAnchor::TemplatePath {
+    let minter = LoweringContext::new(HoleAnchor::TemplatePath {
         path,
         scope,
         assumptions,
@@ -780,7 +782,7 @@ pub(crate) fn resolve_path_with_minter<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
-    minter: &HoleMinter<'db>,
+    minter: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
     let directive = QueryDirective::for_scope(db, scope);
     resolve_path_impl(
@@ -796,33 +798,6 @@ pub(crate) fn resolve_path_with_minter<'db>(
     )
 }
 
-pub fn resolve_path_with_observer<'db, F>(
-    db: &'db dyn HirAnalysisDb,
-    path: PathId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    resolve_tail_as_value: bool,
-    observer: &mut F,
-) -> PathResolutionResult<'db, PathRes<'db>>
-where
-    F: FnMut(PathId<'db>, &PathRes<'db>),
-{
-    let minter = HoleMinter::new(HoleAnchor::TemplatePath {
-        path,
-        scope,
-        assumptions,
-    });
-    resolve_path_with_observer_and_minter(
-        db,
-        path,
-        scope,
-        assumptions,
-        resolve_tail_as_value,
-        observer,
-        &minter,
-    )
-}
-
 pub(crate) fn resolve_path_with_observer_and_minter<'db, F>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
@@ -830,7 +805,7 @@ pub(crate) fn resolve_path_with_observer_and_minter<'db, F>(
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
     observer: &mut F,
-    minter: &HoleMinter<'db>,
+    minter: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>>
 where
     F: FnMut(PathId<'db>, &PathRes<'db>),
@@ -859,7 +834,7 @@ fn resolve_path_impl<'db, F>(
     base_directive: QueryDirective,
     is_tail: bool,
     observer: &mut F,
-    minter: &HoleMinter<'db>,
+    minter: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>>
 where
     F: FnMut(PathId<'db>, &PathRes<'db>),
@@ -901,7 +876,9 @@ where
                     ));
                 }
                 InvalidCause::PathResolutionFailed { path: ty_path } => {
-                    if let Err(inner) = resolve_path(db, ty_path, scope, assumptions, false) {
+                    if let Err(inner) =
+                        resolve_path_with_minter(db, ty_path, scope, assumptions, false, minter)
+                    {
                         return Err(PathResError {
                             kind: PathResErrorKind::QualifiedTypeType(Box::new(Err(inner))),
                             failed_at: path,
@@ -914,7 +891,7 @@ where
         let trait_inst_result = match minter.const_bodies() {
             ConstBodyLowering::Eager => lower_trait_ref(db, ty, trait_, scope, assumptions, None),
             ConstBodyLowering::Deferred => {
-                lower_trait_ref_deferred(db, ty, trait_, scope, assumptions, None)
+                lower_trait_ref_with_minter(db, ty, trait_, scope, assumptions, None, minter)
             }
         };
         let trait_inst = match trait_inst_result {
@@ -968,7 +945,7 @@ where
             // evaluation/CTFE.
             if let TyData::QualifiedTy(trait_inst) = ty.data(db) {
                 // Associated type projection
-                if let Some(assoc_ty) = trait_inst.assoc_ty(db, ident) {
+                if let Some(assoc_ty) = trait_inst.project_assoc_ty(db, ident) {
                     let r = PathRes::Ty(assoc_ty);
                     observer(path, &r);
                     return Ok(r);
@@ -1054,7 +1031,11 @@ where
                 }
             }
 
-            if is_tail && resolve_tail_as_value {
+            // Deferred signature lowering resolves type/const shapes, not callable
+            // values. Method discovery checks signatures and their hidden parameters,
+            // so entering it here would make shape discovery depend on validation.
+            if is_tail && resolve_tail_as_value && minter.const_bodies() == ConstBodyLowering::Eager
+            {
                 let receiver_ty = Canonicalized::new(db, ty);
                 match select_method_candidate(
                     db,
@@ -1097,7 +1078,7 @@ where
                         }
                     };
                     if matches!(
-                        minter.anchor(),
+                        minter.holes().anchor(),
                         HoleAnchor::ImplAssocType {
                             impl_trait: owner,
                             ..
@@ -1111,9 +1092,9 @@ where
                                 lower_candidate_impl_assoc_ty(db, impl_trait, ident)
                             }
                         }
-                        .or_else(|| trait_inst.assoc_ty(db, ident))
+                        .or_else(|| trait_inst.project_assoc_ty(db, ident))
                     } else {
-                        trait_inst.assoc_ty(db, ident)
+                        trait_inst.project_assoc_ty(db, ident)
                     }
                 })
             } else {
@@ -1187,7 +1168,8 @@ where
                 LayoutHoleArgSite::Path(path),
                 minter,
             );
-            let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>)> = IndexMap::new();
+            let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>, TyId<'db>)> =
+                IndexMap::new();
             for (inst, ty_candidate) in assoc_tys.iter().copied() {
                 let applied = if seg_args.is_empty() {
                     ty_candidate
@@ -1206,14 +1188,23 @@ where
                     ));
                 }
 
-                let norm = normalize_ty(db, applied, scope, assumptions);
-                dedup.entry(norm).or_insert((inst, applied));
+                // Interpret each candidate's own equality when comparing it
+                // with other candidates. Normalizing the binding-free
+                // projection under all assumptions can leave conflicting
+                // equalities unresolved and incorrectly merge them.
+                let candidate_ty = inst
+                    .assoc_type_bindings(db)
+                    .get(&ident)
+                    .copied()
+                    .map_or(applied, |bound| TyId::foldl(db, bound, &seg_args));
+                let norm = normalize_ty(db, candidate_ty, scope, assumptions);
+                dedup.entry(norm).or_insert((inst, applied, norm));
             }
 
             match dedup.len() {
                 0 => unreachable!(),
                 1 => {
-                    let (_, (_, original_ty)) = dedup.first().unwrap();
+                    let (_, (_, original_ty, _)) = dedup.first().unwrap();
                     let r = PathRes::Ty(*original_ty);
                     observer(path, &r);
                     return Ok(r);
@@ -1222,7 +1213,7 @@ where
                     // Build candidate list from deduped set for diagnostics
                     let candidates = dedup
                         .into_iter()
-                        .map(|(_norm, (inst, original_ty))| (inst, original_ty))
+                        .map(|(_norm, (inst, _, candidate_ty))| (inst, candidate_ty))
                         .collect();
                     return Err(PathResError::new(
                         PathResErrorKind::AmbiguousAssociatedType {
@@ -1408,8 +1399,8 @@ fn select_inherent_const_candidate<'db>(
             // Instantiate the impl's params once so the target type and the
             // impl's `where` constraints share the same inference vars.
             let impl_params = collect_generic_params(db, impl_.into()).params(db);
-            let fresh_args = table.instantiate_with_fresh_vars(Binder::bind(impl_params.to_vec()));
-            let impl_ty = Binder::bind(impl_ty).instantiate(db, &fresh_args);
+            let fresh_args = table.instantiate_with_fresh_vars(impl_params.to_vec());
+            let impl_ty = Binder::bind(impl_.into(), impl_ty).instantiate(db, &fresh_args);
             let impl_ty = table.instantiate_to_term(impl_ty);
             if table.unify(impl_ty, receiver).is_err() {
                 continue;
@@ -1496,7 +1487,16 @@ pub(crate) fn shadowed_inherent_fn_for_const<'db>(
 ) -> Option<DynLazySpan<'db>> {
     let self_ty = impl_.admissible_inherent_impl_ty(db)?;
     let ingot = impl_.top_mod(db).ingot(db);
-    for &cand in probe_method(db, ingot, Canonical::new(db, self_ty), name) {
+    for cand in probe_method(
+        db,
+        ingot,
+        MethodProbe {
+            receiver: self_ty,
+            assumptions: collect_constraints(db, impl_.into()).instantiate_identity(),
+        },
+        impl_.scope(),
+        name,
+    ) {
         let CallableDef::Func(func) = cand.def else {
             continue;
         };
@@ -1526,10 +1526,10 @@ fn inherent_impl_self_types_unify<'db>(
     };
     let mut table = UnificationTable::new(db);
     let instantiate = |table: &mut UnificationTable<'db>, impl_: Impl<'db>, ty: TyId<'db>| {
-        let args = table.instantiate_with_fresh_vars(Binder::bind(
+        let args = table.instantiate_with_fresh_vars(
             collect_generic_params(db, impl_.into()).params(db).to_vec(),
-        ));
-        let self_ty = Binder::bind(ty).instantiate(db, &args);
+        );
+        let self_ty = Binder::bind(impl_.into(), ty).instantiate(db, &args);
         table.instantiate_to_term(self_ty)
     };
     let a_self = instantiate(&mut table, a, a_ty);
@@ -1646,7 +1646,7 @@ fn select_assoc_const_candidate<'db>(
                 receiver.canonical(),
                 assumptions,
             ) {
-                let declared = candidate.skip_binder().trait_(db);
+                let declared = candidate.trait_(db);
                 if declared.def(db).const_(db, name).is_none() {
                     continue;
                 }
@@ -1654,7 +1654,7 @@ fn select_assoc_const_candidate<'db>(
                 // binder. Recover its arguments from this receiver before the
                 // selected trait instance leaves the inference context.
                 let snapshot = cx.snapshot();
-                let inst = cx.instantiate_with_fresh_vars(Binder::bind(declared));
+                let inst = cx.instantiate_with_fresh_vars(declared);
                 if cx.unify::<TyId<'db>>(receiver_ty, inst.self_ty(db)).is_ok() {
                     if let Some(inst) = cx.try_extract::<TraitInstId<'db>>(inst) {
                         matches.insert(inst);
@@ -1706,10 +1706,11 @@ fn find_associated_type_in_mode<'db>(
     // Qualified type: `<A as T>::B`. Always construct the associated type projection
     // against the qualified trait instance; bindings (if any) will be handled downstream.
     if let TyData::QualifiedTy(trait_inst) = original_ty.data(db) {
-        return Ok(smallvec![(
-            *trait_inst,
-            TyId::assoc_ty(db, *trait_inst, name)
-        )]);
+        return Ok(trait_inst
+            .project_assoc_ty(db, name)
+            .map_or_else(SmallVec::new, |projection| {
+                smallvec![(*trait_inst, projection)]
+            }));
     }
 
     let scope_ingot = scope.ingot(db);
@@ -1720,13 +1721,13 @@ fn find_associated_type_in_mode<'db>(
             if let Some(trait_) = param.owner.resolve_to::<Trait>(db) {
                 if trait_.assoc_ty(db, name).is_some() {
                     let trait_inst =
-                        TraitInstId::new(db, trait_, vec![original_ty], IndexMap::new());
-                    let assoc_ty = TyId::assoc_ty(db, trait_inst, name);
+                        TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
+                    let assoc_ty = TyId::assoc_ty(db, trait_inst.trait_ref(db), name);
                     return Ok(smallvec![(trait_inst, assoc_ty)]);
                 }
             } else if let Some(impl_trait) = param.owner.resolve_to::<ImplTrait>(db)
                 && let Some(trait_inst) = impl_trait.trait_inst(db)
-                && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
+                && let Some(assoc_ty) = trait_inst.project_assoc_ty(db, name)
             {
                 return Ok(smallvec![(trait_inst, assoc_ty)]);
             }
@@ -1748,12 +1749,11 @@ fn find_associated_type_in_mode<'db>(
         if let TyData::TyParam(_) = original_ty.data(db) {
             for &trait_inst in assumptions.list(db) {
                 let snapshot = cx.snapshot();
-                let pred_self_ty =
-                    cx.instantiate_with_fresh_vars(Binder::bind(trait_inst.self_ty(db)));
+                let pred_self_ty = cx.instantiate_with_fresh_vars(trait_inst.self_ty(db));
 
                 if cx.unify::<TyId<'db>>(lhs_ty, pred_self_ty).is_ok() {
                     let trait_inst = cx.materialize(trait_inst);
-                    if let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
+                    if let Some(assoc_ty) = trait_inst.project_assoc_ty(db, name)
                         && let (Some(inst), Some(assoc_ty)) = (
                             cx.try_extract::<TraitInstId<'db>>(trait_inst),
                             cx.try_extract::<TyId<'db>>(assoc_ty),
@@ -1775,18 +1775,13 @@ fn find_associated_type_in_mode<'db>(
                 {
                     let impl_ = match const_bodies {
                         ConstBodyLowering::Eager => {
-                            let Some(impl_) =
-                                complete_impl_assoc_ty(db, *impl_.skip_binder(), name)
-                                    .map(Binder::bind)
-                            else {
+                            let Some(impl_) = complete_impl_assoc_ty(db, impl_, name) else {
                                 continue;
                             };
                             impl_
                         }
                         ConstBodyLowering::Deferred => {
-                            let Some(impl_) =
-                                complete_candidate_impl_assoc_ty(db, *impl_.skip_binder(), name)
-                                    .map(Binder::bind)
+                            let Some(impl_) = complete_candidate_impl_assoc_ty(db, impl_, name)
                             else {
                                 continue;
                             };
@@ -1817,7 +1812,7 @@ fn find_associated_type_in_mode<'db>(
                 if cx
                     .unify::<TyId<'db>>(lhs_ty, trait_inst.self_ty(db))
                     .is_ok()
-                    && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
+                    && let Some(assoc_ty) = trait_inst.project_assoc_ty(db, name)
                     && let (Some(inst), Some(assoc_ty)) = (
                         cx.try_extract::<TraitInstId<'db>>(trait_inst),
                         cx.try_extract::<TyId<'db>>(assoc_ty),
@@ -1861,7 +1856,7 @@ fn find_associated_type_in_mode<'db>(
                     if inst.def(db).assoc_ty(db, name).is_some()
                         && let Some(inst) = cx.try_extract::<TraitInstId<'db>>(inst)
                     {
-                        candidates.push((inst, TyId::assoc_ty(db, inst, name)));
+                        candidates.push((inst, TyId::assoc_ty(db, inst.trait_ref(db), name)));
                     }
                 }
             }
@@ -1881,7 +1876,7 @@ pub fn resolve_name_res<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
-    let minter = HoleMinter::new(HoleAnchor::TemplatePath {
+    let minter = LoweringContext::new(HoleAnchor::TemplatePath {
         path,
         scope,
         assumptions,
@@ -1896,7 +1891,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
     path: PathId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    minter: &HoleMinter<'db>,
+    minter: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
     let args = lower_generic_arg_list(
         db,
@@ -1915,14 +1910,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
             ScopeId::Item(item) => match item {
                 ItemKind::Struct(_) | ItemKind::Enum(_) => {
                     let adt_ref = AdtRef::try_from_item(item).unwrap();
-                    PathRes::Ty(ty_from_adtref(
-                        db,
-                        path,
-                        adt_ref,
-                        &args,
-                        assumptions,
-                        minter,
-                    )?)
+                    PathRes::Ty(ty_from_adtref(db, path, adt_ref, &args, minter)?)
                 }
                 ItemKind::Contract(contract) => {
                     // Contracts have no generic parameters
@@ -1981,10 +1969,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                             path,
                         ));
                     }
-                    PathRes::TyAlias(
-                        alias.clone(),
-                        alias.instantiate_from_path(db, path, &args, assumptions, minter),
-                    )
+                    PathRes::TyAlias(alias.clone(), alias.instantiate(db, &args, minter))
                 }
 
                 ItemKind::Impl(impl_) => {
@@ -2087,7 +2072,11 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
             },
             ScopeId::GenericParam(parent, idx) => {
                 let owner = GenericParamOwner::from_item_opt(parent).unwrap();
-                let param_set = collect_generic_params(db, owner);
+                let param_set = if minter.source_params() == Some(owner) {
+                    collect_source_generic_params(db, owner)
+                } else {
+                    collect_generic_params(db, owner)
+                };
                 let ty = param_set
                     .param_by_original_idx(db, idx as usize)
                     .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
@@ -2095,34 +2084,28 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                 PathRes::Ty(ty)
             }
 
+            // A bare associated name inside its trait means `<Self as Trait<..>>`
+            // with the trait's own parameters; the name itself takes no arguments.
+            ScopeId::TraitType(..) | ScopeId::TraitConst(..) if !args.is_empty() => {
+                return Err(PathResError::new(
+                    PathResErrorKind::ArgNumMismatch {
+                        expected: 0,
+                        given: args.len(),
+                    },
+                    path,
+                ));
+            }
+
             ScopeId::TraitType(t, idx) => {
-                let trait_def = t;
-                let trait_type = t.assoc_ty_by_index(db, idx as usize);
-
-                let params = collect_generic_params(db, t.into());
-                let self_ty = params.trait_self(db).unwrap();
-
-                let mut trait_args = vec![self_ty];
-                trait_args.extend_from_slice(&args);
-                let trait_inst = TraitInstId::new(db, trait_def, &trait_args, IndexMap::new());
-
-                // Create an associated type reference
-                let assoc_ty_name = trait_type.name.unwrap();
-                let assoc_ty = TyId::assoc_ty(db, trait_inst, assoc_ty_name);
-
-                PathRes::Ty(assoc_ty)
+                let trait_inst = trait_self_predicate(db, t);
+                let assoc_ty_name = t.assoc_ty_by_index(db, idx as usize).name.unwrap();
+                PathRes::Ty(TyId::assoc_ty(db, trait_inst.trait_ref(db), assoc_ty_name))
             }
 
             ScopeId::TraitConst(t, idx) => {
-                let params = collect_generic_params(db, t.into());
-                let self_ty = params.trait_self(db).unwrap();
-
-                let mut trait_args = vec![self_ty];
-                trait_args.extend_from_slice(&args);
-                let trait_inst = TraitInstId::new(db, t, trait_args, IndexMap::new());
-
+                let trait_inst = trait_self_predicate(db, t);
                 let const_name = t.const_by_index(idx as usize).name(db).unwrap();
-                PathRes::TraitConst(self_ty, trait_inst, const_name)
+                PathRes::TraitConst(trait_inst.self_ty(db), trait_inst, const_name)
             }
 
             ScopeId::ImplConst(impl_, idx) => {
@@ -2139,7 +2122,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                 } else {
                     // The variant was imported via `use`.
                     debug_assert!(path.parent(db).is_none());
-                    ty_from_adtref(db, path, var.enum_.into(), &[], assumptions, minter)?
+                    ty_from_adtref(db, path, var.enum_.into(), &[], minter)?
                 };
                 // TODO report error if args isn't empty
                 PathRes::EnumVariant(ResolvedVariant {
@@ -2172,20 +2155,20 @@ fn ty_from_adtref<'db>(
     path: PathId<'db>,
     adt_ref: AdtRef<'db>,
     args: &[TyId<'db>],
-    assumptions: PredicateListId<'db>,
-    minter: &HoleMinter<'db>,
+    minter: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, TyId<'db>> {
     let adt = adt_ref.as_adt(db);
     let ty = TyId::adt(db, adt);
-    let completed_args = adt.param_set(db).complete_explicit_args(
+    let completed_args = adt.param_set(db).complete_args(
         db,
-        None,
+        &[],
         args,
-        assumptions,
-        ConstDefaultCompletion::metadata(Some(path)),
-        Some(minter),
+        DefaultApplication::StructuralMetadata(minter),
     );
-    let applied = TyId::foldl(db, ty, &completed_args);
+    let applied = match completed_args {
+        Ok(args) => TyId::foldl(db, ty, &args),
+        Err(error) => TyId::invalid(db, error.cause),
+    };
     if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) = applied.data(db)
     {
         Err(PathResError::new(

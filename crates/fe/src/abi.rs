@@ -8,17 +8,17 @@ use hir::{
         ty::{
             abi_ty::{self, AbiComponent, AbiTypeDesc, ParsedFunctionSignature},
             adt_def::AdtRef,
+            binder::Binder,
             corelib::{RuntimeBuiltinFuncKind, runtime_builtin_func_kind},
-            fold::{AssocTySubst, TyFoldable},
-            trait_def::{
-                TraitInstId, complete_resolved_trait_method_args, resolve_trait_method_instance,
-            },
-            trait_resolution::{PredicateListId, TraitSolveCx},
+            normalize::normalize_from_assumptions,
+            trait_def::{TraitInstId, resolve_trait_method_instance},
+            trait_resolution::{PredicateListId, Selection, TraitSolveCx},
             ty_def::{TyBase, TyData, TyId},
         },
     },
     hir_def::{
-        FieldDefListId, Func, IdentId, PathId, Struct, TopLevelMod, Trait, scope_graph::ScopeId,
+        FieldDefListId, Func, GenericParamOwner, IdentId, PathId, Struct, TopLevelMod, Trait,
+        scope_graph::ScopeId,
     },
 };
 use serde::Serialize;
@@ -386,21 +386,22 @@ fn collect_typed_body_event_structs<'db>(
             let mut target = VisitedFuncBody::from_callable(func, callable);
             if let Some(inst) = callable.trait_inst()
                 && let Some(name) = func.name(db).to_opt()
-                && let Some((impl_func, impl_args)) = resolve_trait_method_instance(
+                && let Selection::Unique(method) = resolve_trait_method_instance(
                     db,
                     TraitSolveCx::new(db, body.scope()).with_assumptions(typed_body.assumptions()),
                     inst,
                     name,
                 )
+                && let Some(impl_func) = method.body()
+                && let Ok(body_args) = method.complete_body_args(
+                    db,
+                    callable.generic_args(),
+                    callable.checked_input_tys(),
+                    None,
+                )
             {
                 target.func = impl_func;
-                target.generic_args = complete_resolved_trait_method_args(
-                    db,
-                    impl_func,
-                    impl_args,
-                    callable.generic_args(),
-                    inst.args(db).len(),
-                );
+                target.generic_args = body_args.into_values();
             }
             if target.func.body(db).is_none() || !visited_funcs.insert(target.clone()) {
                 continue;
@@ -448,14 +449,15 @@ fn instantiate_callable_typed_body<'db>(
     typed_body: hir::analysis::ty::ty_check::TypedBody<'db>,
     target: &VisitedFuncBody<'db>,
 ) -> hir::analysis::ty::ty_check::TypedBody<'db> {
-    let mut typed_body = hir::analysis::semantic::instantiate_with_generic_args(
-        db,
-        typed_body,
-        &target.generic_args,
-    );
+    let mut typed_body = Binder::bind(GenericParamOwner::Func(target.func), typed_body)
+        .instantiate(db, &target.generic_args);
     if let Some(trait_inst) = target.trait_inst {
-        let mut subst = AssocTySubst::new(trait_inst);
-        typed_body = typed_body.fold_with(db, &mut subst);
+        typed_body = normalize_from_assumptions(
+            db,
+            typed_body,
+            target.func.scope(),
+            PredicateListId::new(db, vec![trait_inst]),
+        );
     }
     typed_body
 }

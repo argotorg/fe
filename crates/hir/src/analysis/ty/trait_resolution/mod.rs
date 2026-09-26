@@ -1,8 +1,10 @@
 use super::{
+    binder::Binder,
     canonical::{Canonical, Canonicalized, Solution},
     const_expr::ConstExpr,
     const_ty::ConstTyData,
-    fold::{AssocTySubst, TyFoldable},
+    fold::TyFoldable,
+    normalize::normalize_from_assumptions,
     trait_def::{ImplementorId, TraitInstId},
     ty_def::{TyData, TyFlags, TyId},
     visitor::{TyVisitable, TyVisitor},
@@ -109,7 +111,7 @@ impl<'db> CanonicalGoalQuery<'db> {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum Selection<T> {
+pub enum Selection<T> {
     Unique(T),
     Ambiguous(IndexSet<T>),
     NotFound,
@@ -437,7 +439,7 @@ pub(crate) fn check_ty_wf<'db>(
     }
     match base.data(db) {
         TyData::AssocTy(assoc) => {
-            let wf = check_projected_trait_use_wf(db, solve_cx, assoc.trait_);
+            let wf = check_projected_trait_use_wf(db, solve_cx, assoc.trait_.as_predicate(db));
             if !wf.is_wf() {
                 return wf;
             }
@@ -832,9 +834,9 @@ impl<'db> PredicateListId<'db> {
     }
 
     pub(super) fn merge(self, db: &'db dyn HirAnalysisDb, other: Self) -> Self {
-        let mut predicates = self.list(db).clone();
-        predicates.extend(other.list(db));
-        PredicateListId::new(db, predicates)
+        let mut predicates: IndexSet<_> = self.list(db).iter().copied().collect();
+        predicates.extend(other.list(db).iter().copied());
+        PredicateListId::new(db, predicates.into_iter().collect::<Vec<_>>())
     }
 
     pub fn empty_list(db: &'db dyn HirAnalysisDb) -> Self {
@@ -855,15 +857,16 @@ impl<'db> PredicateListId<'db> {
         let mut worklist: Vec<TraitInstId<'db>> = self.list(db).to_vec();
 
         while let Some(pred) = worklist.pop() {
+            let hir_trait = pred.def(db);
+            let evidence = PredicateListId::new(db, vec![pred]);
             // 1. Collect super traits
-            for super_trait in pred.def(db).super_traits(db) {
-                // Instantiate with current predicate's args
-                let inst = super_trait.instantiate(db, pred.args(db));
-
-                // Also substitute `Self` and associated types using current predicate's
-                // assoc-type bindings so derived bounds are as concrete as possible.
-                let mut subst = AssocTySubst::new(pred);
-                let inst = inst.fold_with(db, &mut subst);
+            for super_trait in hir_trait.super_traits(db) {
+                let inst = normalize_from_assumptions(
+                    db,
+                    super_trait.instantiate(db, pred.args(db)),
+                    hir_trait.scope(),
+                    evidence,
+                );
                 if predicate_has_recursive_assoc_projection(db, inst) {
                     continue;
                 }
@@ -875,23 +878,25 @@ impl<'db> PredicateListId<'db> {
             }
 
             // 2. Collect associated type bounds
-            let hir_trait = pred.def(db);
+            let formal_trait =
+                TraitInstId::new_simple(db, hir_trait, hir_trait.params(db).to_vec());
             for trait_type in hir_trait.assoc_types(db) {
                 // Get the associated type name
                 let Some(assoc_ty_name) = trait_type.name(db) else {
                     continue;
                 };
 
-                // Create the associated type: Self::AssocType
-                let assoc_ty = TyId::assoc_ty(db, pred, assoc_ty_name);
+                // Keep the entire bound in declaration coordinates until every
+                // formal, including non-Self trait parameters, is instantiated.
+                let assoc_ty = TyId::assoc_ty(db, formal_trait.trait_ref(db), assoc_ty_name);
 
-                let _assumptions =
-                    PredicateListId::new(db, all_predicates.iter().copied().collect::<Vec<_>>());
-
-                for mut trait_inst in assoc_ty.assoc_type_bounds(db, trait_type) {
-                    // Substitute `Self` and associated types using the original predicate instance
-                    let mut subst = AssocTySubst::new(pred);
-                    trait_inst = trait_inst.fold_with(db, &mut subst);
+                for bound in assoc_ty.assoc_type_bounds(db, trait_type) {
+                    let trait_inst = normalize_from_assumptions(
+                        db,
+                        Binder::bind(hir_trait.into(), bound).instantiate(db, pred.args(db)),
+                        hir_trait.scope(),
+                        evidence,
+                    );
                     if predicate_has_recursive_assoc_projection(db, trait_inst) {
                         continue;
                     }
@@ -1039,6 +1044,30 @@ mod tests {
             inner = TyId::app(db, constructor, inner);
         }
         inner
+    }
+
+    #[test]
+    fn predicate_merge_is_stable_and_idempotent() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("predicate_merge.fe".into(), "trait A {}\ntrait B {}");
+        let (top_mod, _) = db.top_mod(file);
+        let a = TraitInstId::new(
+            &db,
+            named_trait(&db, top_mod, "A"),
+            vec![TyId::bool(&db)],
+            IndexMap::new(),
+        );
+        let b = TraitInstId::new(
+            &db,
+            named_trait(&db, top_mod, "B"),
+            vec![TyId::bool(&db)],
+            IndexMap::new(),
+        );
+        let left = PredicateListId::new(&db, vec![a, b, a]);
+        let right = PredicateListId::new(&db, vec![b, a]);
+        let merged = left.merge(&db, right);
+        assert_eq!(merged.list(&db), &[a, b]);
+        assert_eq!(merged.merge(&db, left), merged);
     }
 
     #[test]

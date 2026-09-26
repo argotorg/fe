@@ -1,0 +1,94 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/generic_type_default_validation.fe
+---
+error[2-0002]: `Missing` is not found
+  ┌─ generic_type_default_validation.fe:3:16
+  │
+3 │ fn missing<T = Missing>() {}
+  │                ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+  ┌─ generic_type_default_validation.fe:4:22
+  │
+4 │ fn nested<T = (u256, Missing)>() {}
+  │                      ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Unknown` is not found
+  ┌─ generic_type_default_validation.fe:7:15
+  │
+7 │ fn unused<T = Unknown>() {}
+  │               ^^^^^^^ `Unknown` is not found
+
+error[2-0002]: `Absent` is not found
+  ┌─ generic_type_default_validation.fe:8:19
+  │
+8 │ fn overridden<T = Absent>() {}
+  │                   ^^^^^^ `Absent` is not found
+
+error[2-0002]: `Missing` is not found
+   ┌─ generic_type_default_validation.fe:18:22
+   │
+18 │ enum InvalidEnum<T = Missing> { Empty }
+   │                      ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+   ┌─ generic_type_default_validation.fe:20:23
+   │
+20 │ type InvalidAlias<T = Missing> = T
+   │                       ^^^^^^^ `Missing` is not found
+
+error[2-0013]: const generic argument expected for `Cap`
+   ┌─ generic_type_default_validation.fe:24:6
+   │
+24 │ impl Cap<ConstSlot<u256>> for bool {}
+   │      ^^^ expected const argument of type `u256`
+
+error[3-0001]: invalid type argument kind
+  ┌─ generic_type_default_validation.fe:5:19
+  │
+5 │ fn wrong_kind<T = Wrap>() {}
+  │                   ^^^^ expected `*` kind, but `Wrap` has `(* -> *)` kind
+
+error[3-0001]: invalid type argument kind
+  ┌─ generic_type_default_validation.fe:6:34
+  │
+6 │ fn wrong_higher_kind<T: * -> * = u256>() {}
+  │                                  ^^^^ expected `(* -> *)` kind, but `u256` has `*` kind
+
+error[3-0001]: invalid type argument kind
+   ┌─ generic_type_default_validation.fe:17:26
+   │
+17 │ struct InvalidStruct<T = Wrap> {}
+   │                          ^^^^ expected `*` kind, but `Wrap` has `(* -> *)` kind
+
+error[3-0001]: invalid type argument kind
+   ┌─ generic_type_default_validation.fe:19:24
+   │
+19 │ trait InvalidTrait<T = Wrap> {}
+   │                        ^^^^ expected `*` kind, but `Wrap` has `(* -> *)` kind
+
+error[3-0013]: expected a normal type
+  ┌─ generic_type_default_validation.fe:9:38
+  │
+9 │ fn const_as_type<const N: usize, T = N>() {}
+  │                                      ^ expected a normal type here, but `const N: usize` is given
+
+error[8-0012]: undefined variable
+   ┌─ generic_type_default_validation.fe:13:25
+   │
+13 │ fn body_unused<T = [u8; undefined()]>() {}
+   │                         ^^^^^^^^^ undefined variable `undefined`
+
+error[8-0012]: undefined variable
+   ┌─ generic_type_default_validation.fe:14:28
+   │
+14 │ fn body_defaulted<T = [u8; undefined()]>() {}
+   │                            ^^^^^^^^^ undefined variable `undefined`
+
+error[8-0012]: undefined variable
+   ┌─ generic_type_default_validation.fe:15:29
+   │
+15 │ fn body_overridden<T = [u8; undefined()]>() {}
+   │                             ^^^^^^^^^ undefined variable `undefined`

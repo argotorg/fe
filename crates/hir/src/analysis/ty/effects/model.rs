@@ -476,10 +476,10 @@ fn value_is_well_formed_with<'db>(
             }
             if let Some(cause) = ty.invalid_cause(self.db) {
                 // Generic const-fn calls can be non-evaluable until effect-key
-                // substitution gives them concrete const args.
-                if matches!(cause, InvalidCause::ConstTyExpected { .. })
-                    || (self.allow_untyped_const_exprs
-                        && matches!(cause, InvalidCause::ConstEvalNonConstCall { .. }))
+                // substitution gives them concrete const args. A type in a
+                // const-argument position is invalid regardless of evaluation.
+                if self.allow_untyped_const_exprs
+                    && matches!(cause, InvalidCause::ConstEvalNonConstCall { .. })
                 {
                     return;
                 }
@@ -493,11 +493,9 @@ fn value_is_well_formed_with<'db>(
             match const_ty.data(self.db) {
                 ConstTyData::Hole(..) if !self.allow_layout_holes => self.invalid = true,
                 ConstTyData::UnEvaluated {
-                    ty: None,
-                    generic_args,
-                    ..
+                    ty: None, capture, ..
                 } if self.allow_untyped_const_exprs => {
-                    generic_args.visit_with(self);
+                    capture.visit_with(self);
                 }
                 _ => walk_const_ty(self, const_ty),
             }

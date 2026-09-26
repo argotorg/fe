@@ -1,0 +1,16 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/nested_const_type_argument_div_zero.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/nested_const_type_argument_div_zero.fe
+
+error[3-0025]: division by zero in const context
+  ┌─ nested_const_type_argument_div_zero.fe:2:24
+  │
+2 │     core::size_of<[u8; { 1 / 0 }]>()
+  │                        ^^^^^^^^^ cannot divide by zero
+
+
+=== EXIT CODE: 1 ===

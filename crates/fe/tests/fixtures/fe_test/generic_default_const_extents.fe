@@ -1,0 +1,69 @@
+fn inner<const N: usize, T = [u8; { 10 / N }]>() -> u256 {
+    core::size_of<T>()
+}
+
+// An unused dependent default never requires its const to evaluate.
+fn unused<const N: usize, T = [u8; { 10 / N }]>() -> u256 {
+    7
+}
+
+// A symbolic caller forwards the default without evaluating it.
+fn forwarded<const M: usize>() -> u256 {
+    inner<M>()
+}
+
+type A<const N: usize> = [u8; { 10 / N }]
+type B<const N: usize> = A<N>
+
+fn direct<const N: usize, T = A<N>>() -> u256 {
+    core::size_of<T>()
+}
+
+fn nested<const N: usize, T = B<N>>() -> u256 {
+    core::size_of<T>()
+}
+
+fn unused_alias<const N: usize, T = A<N>>() -> u256 {
+    9
+}
+
+struct Succ<const N: usize> {
+    x: [u8; { N + 1 }],
+}
+
+struct Quot<const N: usize> {
+    x: [u8; { 10 / N }],
+}
+
+trait Length {
+    const LEN: usize
+}
+
+impl Length for bool {
+    const LEN: usize = 2
+}
+
+// Only the field's source const can evaluate a nested associated const.
+struct AssocLen<T: Length> {
+    x: [u8; { T::LEN + 1 }],
+}
+
+#[test]
+fn dependent_defaults_evaluate_at_concrete_use() {
+    assert!(inner<2>() == 5)
+    assert!(inner<0, [u8; 1]>() == 1)
+    assert!(unused<0>() == 7)
+    assert!(forwarded<2>() == 5)
+    assert!(direct<2>() == 5)
+    assert!(direct<0, [u8; 1]>() == 1)
+    assert!(nested<2>() == 5)
+    assert!(unused_alias<0>() == 9)
+}
+
+#[test]
+fn specialized_adt_field_sizes() {
+    assert!(core::size_of<Succ<2>>() == 3)
+    assert!(core::size_of<Quot<2>>() == 5)
+    assert!(core::size_of<AssocLen<bool>>() == 3)
+    assert!(core::size_of<[AssocLen<bool>; 2]>() == 6)
+}

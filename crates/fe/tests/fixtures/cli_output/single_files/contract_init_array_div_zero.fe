@@ -1,0 +1,13 @@
+type Arr<const N: usize> = [u8; { 10 / N }]
+
+struct S<const N: usize> {
+    x: [u8; { 10 / N }],
+}
+
+pub contract AliasArg {
+    init(value: Arr<0>) {}
+}
+
+pub contract StructArg {
+    init(value: S<0>) {}
+}

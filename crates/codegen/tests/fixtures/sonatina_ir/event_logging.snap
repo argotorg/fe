@@ -44,15 +44,7 @@ func private %as_topic(v0.@layout_0) -> i256 {
         return v3;
 }
 
-func private %core__lib__ptr__cast__g5f1e_d784(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
-}
-
-func private %core__lib__ptr__cast__g5f1e_f94f(v0.i256) -> i256 {
+func private %cast(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -177,7 +169,7 @@ func private %encode__gf13e(v0.i256, v1.i256) {
         jump block1;
 
     block1:
-        call %core__lib__abi__store_word_0f18 v1 v0;
+        call %store_word v1 v0;
         return;
 }
 
@@ -191,7 +183,7 @@ func inline(always) private %encode_field_at(v0.i256, v1.i256, v2.i256, v3.i256)
     block2:
         v7.i256 = call %trait_AbiSize__payload_size__ge513 v0;
         v10.i256 = call %ptr_offset v1 v2;
-        call %core__lib__abi__store_word_9397 v10 v3;
+        call %store_word v10 v3;
         v12.i256 = call %ptr_offset v1 v3;
         call %encode__gf13e v0 v12;
         v14.i256 = add v3 v7;
@@ -334,22 +326,12 @@ func private %span(v0.objref<@layout_1>) -> @layout_3 {
         return v8;
 }
 
-func private %core__lib__abi__store_word_0f18(v0.i256, v1.i256) {
+func private %store_word(v0.i256, v1.i256) {
     block0:
         jump block1;
 
     block1:
-        v3.i256 = call %core__lib__ptr__cast__g5f1e_f94f v0;
-        mstore v3 v1 i256;
-        return;
-}
-
-func private %core__lib__abi__store_word_9397(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i256 = call %core__lib__ptr__cast__g5f1e_d784 v0;
+        v3.i256 = call %cast v0;
         mstore v3 v1 i256;
         return;
 }

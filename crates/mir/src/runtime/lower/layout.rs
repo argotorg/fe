@@ -11,7 +11,9 @@ use crate::{
     },
 };
 
-use super::type_info::{RuntimeTypeEnv, runtime_repr_ty_in_env, stored_class_for_ty_in_env};
+use super::type_info::{
+    RuntimeTypeEnv, runtime_array_len, runtime_repr_ty_in_env, stored_class_for_ty_in_env,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AggregateCtorElem<'db> {
@@ -35,7 +37,9 @@ pub(crate) fn layout_for_ty_in_env<'db>(
             db,
             LayoutKey::Array(ArrayLayout {
                 elem: stored_class_for_ty_in_env(db, env, elem),
-                len: ty.array_len(db).expect("array length") as u64,
+                len: runtime_array_len(db, ty)
+                    .expect("valid runtime array length")
+                    .expect("concrete runtime array length") as u64,
             }),
         );
     }
@@ -64,7 +68,9 @@ pub(crate) fn layout_for_aggregate_instance_in_env<'db>(
     if ty.is_array(db) {
         let (_, args) = ty.decompose_ty_app(db);
         let elem_ty = args.first().copied().expect("array element type");
-        let len = ty.array_len(db).expect("array length");
+        let len = runtime_array_len(db, ty)
+            .expect("valid runtime array length")
+            .expect("concrete runtime array length");
         assert_eq!(
             len,
             field_classes.len(),

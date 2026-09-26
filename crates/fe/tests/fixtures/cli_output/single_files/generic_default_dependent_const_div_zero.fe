@@ -1,0 +1,8 @@
+// A dependent default fails only when its concrete size is demanded.
+fn inner<const N: usize, T = [u8; { 10 / N }]>() -> u256 {
+    core::size_of<T>()
+}
+
+fn concrete() -> u256 {
+    inner<0>()
+}

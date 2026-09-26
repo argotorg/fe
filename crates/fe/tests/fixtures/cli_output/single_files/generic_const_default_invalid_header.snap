@@ -1,0 +1,22 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/generic_const_default_invalid_header.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/generic_const_default_invalid_header.fe
+
+error[2-0002]: `Missing` is not found
+  ┌─ generic_const_default_invalid_header.fe:1:20
+  │
+1 │ fn unused<const N: Missing = 1>() {}
+  │                    ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+  ┌─ generic_const_default_invalid_header.fe:3:15
+  │
+3 │ fn f<const N: Missing = 1>() {}
+  │               ^^^^^^^ `Missing` is not found
+
+
+=== EXIT CODE: 1 ===

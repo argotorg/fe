@@ -1,0 +1,26 @@
+trait Output { type Item }
+impl Output for bool { type Item = u256 }
+
+fn shorthand<U = T::Item, T: Output = bool>() {}
+fn qualified<U = <T as Output>::Item, T: Output = bool>() {}
+fn self_shorthand<T: Output = T::Item>() {}
+fn self_qualified<T: Output = <T as Output>::Item>() {}
+fn nested<U = (T::Item, [T::Item; 1]), T: Output = bool>() {}
+
+struct Forward<U = T::Item, T: Output = bool> {}
+enum ForwardEnum<U = T::Item, T: Output = bool> { Empty }
+trait ForwardTrait<U = T::Item, T: Output = bool> {}
+type ForwardAlias<U = T::Item, T = bool> = U
+
+fn nested_const<T = [u8; N], const N: usize = 1>() {}
+fn nested_type<T = ForwardAlias<u256, U>, U = bool>() {}
+
+fn earlier<T: Output, U = T::Item>() {}
+
+// A projection's trait arguments are construction dependencies too.
+trait Indexed<X> { type Item }
+fn hidden_trait_arg<T: Indexed<V>, U = T::Item, V = u8>() {}
+struct Receiver<T: Output> {}
+impl<T: Output> Receiver<T> {
+    fn inherited<U = T::Item, V = U>() {}
+}

@@ -4,7 +4,7 @@ use hir::{
         HirAnalysisDb,
         semantic::{EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance},
         ty::{
-            trait_def::TraitInstId,
+            trait_def::{TraitInstId, TraitRefId},
             ty_check::{
                 BodyOwner, EffectParamSite, EffectProviderProvenance, EffectProviderSpecialization,
                 LocalBinding,
@@ -382,14 +382,21 @@ fn trait_inst_mentions_effect_provider_param<'db>(
     db: &'db dyn HirAnalysisDb,
     trait_inst: TraitInstId<'db>,
 ) -> bool {
-    trait_inst
-        .args(db)
-        .iter()
-        .any(|ty| ty_mentions_effect_provider_param(db, *ty))
+    trait_ref_mentions_effect_provider_param(db, trait_inst.trait_ref(db))
         || trait_inst
             .assoc_type_bindings(db)
             .iter()
             .any(|(_, ty)| ty_mentions_effect_provider_param(db, *ty))
+}
+
+fn trait_ref_mentions_effect_provider_param<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_ref: TraitRefId<'db>,
+) -> bool {
+    trait_ref
+        .args(db)
+        .iter()
+        .any(|ty| ty_mentions_effect_provider_param(db, *ty))
 }
 
 fn ty_mentions_effect_provider_param<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
@@ -403,7 +410,7 @@ fn ty_mentions_effect_provider_param<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'
 
     match ty.data(db) {
         TyData::TyParam(param) => param.is_effect_provider(),
-        TyData::AssocTy(assoc) => trait_inst_mentions_effect_provider_param(db, assoc.trait_),
+        TyData::AssocTy(assoc) => trait_ref_mentions_effect_provider_param(db, assoc.trait_),
         TyData::QualifiedTy(trait_inst) => {
             trait_inst_mentions_effect_provider_param(db, *trait_inst)
         }
@@ -484,7 +491,7 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
         }
         TyData::AssocTy(assoc) => format!(
             "assoc${}${}",
-            trait_identity(db, assoc.trait_),
+            trait_ref_identity(db, assoc.trait_),
             assoc.name.data(db)
         ),
         TyData::QualifiedTy(trait_inst) => format!("qualified${}", trait_identity(db, *trait_inst)),
@@ -507,21 +514,26 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
 }
 
 fn trait_identity<'db>(db: &'db dyn HirAnalysisDb, trait_inst: TraitInstId<'db>) -> String {
-    let args = trait_inst
-        .args(db)
-        .iter()
-        .map(|arg| type_identity(db, *arg))
-        .collect::<Vec<_>>()
-        .join("$");
+    let trait_ref = trait_ref_identity(db, trait_inst.trait_ref(db));
     let assoc_types = trait_inst
         .assoc_type_bindings(db)
         .iter()
         .map(|(name, ty)| format!("{}${}", name.data(db), type_identity(db, *ty)))
         .collect::<Vec<_>>()
         .join("$");
+    format!("{trait_ref}$assoc${assoc_types}")
+}
+
+fn trait_ref_identity<'db>(db: &'db dyn HirAnalysisDb, trait_ref: TraitRefId<'db>) -> String {
+    let args = trait_ref
+        .args(db)
+        .iter()
+        .map(|arg| type_identity(db, *arg))
+        .collect::<Vec<_>>()
+        .join("$");
     format!(
-        "{}$args${args}$assoc${assoc_types}",
-        item_identity(db, trait_inst.def(db).into())
+        "{}$args${args}",
+        item_identity(db, trait_ref.def(db).into())
     )
 }
 

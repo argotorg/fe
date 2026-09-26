@@ -1,0 +1,16 @@
+pub struct A {}
+
+pub trait T {
+    fn f(self) uses (a: A)
+}
+
+pub struct Missing {}
+pub struct Mutable {}
+
+impl T for Missing {
+    fn f(self) {}
+}
+
+impl T for Mutable {
+    fn f(self) uses (a: mut A) {}
+}

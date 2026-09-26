@@ -1,0 +1,58 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/contract_adt_field_const_div_zero.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/contract_adt_field_const_div_zero.fe
+
+error[3-0025]: division by zero in const context
+  ┌─ contract_adt_field_const_div_zero.fe:3:15
+  │
+3 │     x: [u8; { 10 / N }],
+  │               ^^^^^^ cannot divide by zero
+
+error[3-0025]: division by zero in const context
+  ┌─ contract_adt_field_const_div_zero.fe:7:15
+  │
+7 │     x: [u8; { 10 / N }],
+  │               ^^^^^^ cannot divide by zero
+
+error[3-0025]: division by zero in const context
+   ┌─ contract_adt_field_const_div_zero.fe:11:15
+   │
+11 │     x: [u8; { 10 / N }],
+   │               ^^^^^^ cannot divide by zero
+
+error[3-0025]: division by zero in const context
+   ┌─ contract_adt_field_const_div_zero.fe:23:20
+   │
+23 │     inner: Plain<{ 10 / N }>,
+   │                    ^^^^^^ cannot divide by zero
+
+error[3-0025]: division by zero in const context
+   ┌─ contract_adt_field_const_div_zero.fe:27:16
+   │
+27 │     x: ([u8; { 10 / N }],),
+   │                ^^^^^^ cannot divide by zero
+
+error[3-0025]: division by zero in const context
+   ┌─ contract_adt_field_const_div_zero.fe:31:16
+   │
+31 │     x: [[u8; { 10 / N }]; 2],
+   │                ^^^^^^ cannot divide by zero
+
+error[3-0025]: division by zero in const context
+   ┌─ contract_adt_field_const_div_zero.fe:35:14
+   │
+35 │     V([u8; { 10 / N }]),
+   │              ^^^^^^ cannot divide by zero
+
+error[3-0025]: division by zero in const context
+   ┌─ contract_adt_field_const_div_zero.fe:40:15
+   │
+40 │     b: [u8; { 10 / N }],
+   │               ^^^^^^ cannot divide by zero
+
+
+=== EXIT CODE: 1 ===

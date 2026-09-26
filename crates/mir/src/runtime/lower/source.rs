@@ -26,6 +26,7 @@ use super::{
         runtime_class_for_effect_binding_provider_in_env,
     },
     semantic_body::{RuntimeOperand, RuntimeSemanticBody},
+    type_info::runtime_array_len,
 };
 
 /// Index bounds in projection order, stopping at the first empty array.
@@ -68,8 +69,8 @@ pub(super) fn data_path_index_bounds<'db>(
                 )
             }),
             NDataProjection::Index(index) => {
-                let len = ty
-                    .array_len(db)
+                let len = runtime_array_len(db, ty)
+                    .expect("valid runtime array length")
                     .expect("normalized index projection must retain a concrete array length");
                 bounds.push((*index, len));
                 if len == 0 {

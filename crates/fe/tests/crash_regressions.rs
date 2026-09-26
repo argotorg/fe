@@ -110,6 +110,21 @@ fn run_fe_check(path: &Path) -> FeCheckRun {
 }
 
 #[test]
+fn valid_generic_type_default_fixtures_pass_check() {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../uitest/fixtures/ty_check");
+    // The uitest snapshots cover HIR diagnostics; these valid fixtures must
+    // also pass the full `fe check` pipeline.
+    for fixture in [
+        "generic_type_default_environments.fe",
+        "inherent_method_projection_target.fe",
+    ] {
+        let run = run_fe_check(&fixtures.join(fixture));
+        assert!(!run.timed_out, "{fixture} timed out: {}", run.combined);
+        assert_eq!(run.code, 0, "{fixture}: {}", run.combined);
+    }
+}
+
+#[test]
 fn crash_regressions_do_not_panic() {
     let dir = fixtures_dir();
     let mut fixtures: Vec<PathBuf> = fs::read_dir(&dir)

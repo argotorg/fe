@@ -3,8 +3,8 @@ use common::indexmap::IndexSet;
 use super::{
     adt_def::AdtDef,
     const_expr::ConstExpr,
-    const_ty::{ConstTyData, ConstTyId},
-    trait_def::{ImplementorId, TraitInstId},
+    const_ty::{ConstCaptureEnv, ConstTyData, ConstTyId},
+    trait_def::{ImplementorId, TraitInstId, TraitRefId},
     trait_resolution::{PredicateListId, TraitGoalSolution, TraitSolverQuery},
     ty_check::{EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
     ty_def::{AssocTy, InvalidCause, PrimTy, TyBase, TyData, TyFlags, TyId, TyParam, TyVar},
@@ -158,7 +158,18 @@ where
                 use_.visit_with(visitor);
             }
         },
-        ConstTyData::UnEvaluated { .. } => {}
+        ConstTyData::UnEvaluated { capture, .. } => capture.visit_with(visitor),
+    }
+}
+
+impl<'db> TyVisitable<'db> for ConstCaptureEnv<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        if let Self::Bound(subst) = self {
+            subst.values().visit_with(visitor);
+        }
     }
 }
 
@@ -251,6 +262,15 @@ impl<'db> TyVisitable<'db> for SemanticInstanceKey<'db> {
         let env = self.impl_env(db);
         env.assumptions(db).visit_with(visitor);
         env.witnesses(db).visit_with(visitor);
+    }
+}
+
+impl<'db> TyVisitable<'db> for TraitRefId<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.args(visitor.db()).visit_with(visitor);
     }
 }
 

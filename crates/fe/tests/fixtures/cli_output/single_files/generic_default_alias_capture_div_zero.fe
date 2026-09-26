@@ -1,0 +1,19 @@
+// Alias defaults compose their const captures through nested aliases.
+type A<const N: usize> = [u8; { 10 / N }]
+type B<const N: usize> = A<N>
+
+fn direct<const N: usize, T = A<N>>() -> u256 {
+    core::size_of<T>()
+}
+
+fn nested<const N: usize, T = B<N>>() -> u256 {
+    core::size_of<T>()
+}
+
+fn concrete_direct() -> u256 {
+    direct<0>()
+}
+
+fn concrete_nested() -> u256 {
+    nested<0>()
+}

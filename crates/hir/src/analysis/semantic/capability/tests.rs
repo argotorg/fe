@@ -1304,6 +1304,98 @@ fn admitted_generic_array_parameters_have_capability_shapes() {
     assert!(shape.contains_capability(&db));
 }
 
+#[test]
+fn deferred_array_lengths_share_shapes_and_specialization_keys() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "deferred_array_shapes.fe".into(),
+        r#"
+type DefaultArray<const N: usize, T = [mut u256; { N + 1 }]> = T
+type EmptyArray<T = [mut u256; { 0 }]> = T
+fn inspect<const N: usize, const M: usize>(
+    _ eager: own [mut u256; { N + 1 }],
+    _ deferred: own DefaultArray<N>,
+    _ other_param: own DefaultArray<M>,
+    _ other_offset: own [mut u256; { N + 2 }],
+    _ borrowed: mut DefaultArray<N>,
+    _ fixed: own DefaultArray<1>,
+    _ empty: own EmptyArray,
+) {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let func = find_func(&db, top_mod, "inspect");
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(func)),
+    );
+    let artifacts = normalize_semantic_body(&db, instance).expect("deferred array admission");
+    let shapes: Vec<_> = artifacts
+        .body
+        .values
+        .iter()
+        .filter(|value| matches!(value.definition, NValueDefinition::EntryParam { .. }))
+        .map(|value| {
+            capability_shape(&db, func.scope(), instance.assumptions(&db), value.ty).unwrap()
+        })
+        .collect();
+    let [
+        eager,
+        deferred,
+        other_param,
+        other_offset,
+        borrowed,
+        fixed,
+        empty,
+    ]: [ShapeId<'_>; 7] = shapes.try_into().unwrap();
+    assert_eq!(eager, deferred);
+    assert_ne!(eager, other_param);
+    assert_ne!(eager, other_offset);
+    let ShapeChildren::Array { len, element } = *eager.children(&db) else {
+        panic!("symbolic array")
+    };
+    assert!(matches!(len, ArrayLength::Symbolic(_)));
+    assert_eq!(fixed, array_shape(&db, element, 2));
+    assert_eq!(empty, array_shape(&db, element, 0));
+    assert!(!empty.contains_capability(&db));
+    let identity = IndexSubst::new(&scope(), &scope(), []).unwrap();
+    assert_eq!(borrowed.substitute(&db, &identity), borrowed);
+
+    let mut values = ValueInterner::new(&db, ValueLimits::default());
+    let value = values.from_shape(eager, &scope(), |_, path, scope| {
+        vec![Guarded {
+            guard: Guard::always(scope),
+            payload: Payload {
+                tag: 1,
+                indices: path.indices().collect(),
+            },
+        }]
+    });
+    let repacked = values.repack(&value, deferred);
+    assert_eq!(repacked, value);
+    for length in [0, 2] {
+        let subst = IndexSubst::new(&scope(), &scope(), [(len.index(), length.into())]).unwrap();
+        let specialized_shape = deferred.substitute(&db, &subst);
+        assert_eq!(specialized_shape, array_shape(&db, element, length));
+        let specialized = values.substitute(&value, &subst);
+        assert_eq!(specialized.shape(), specialized_shape);
+        assert_eq!(specialized.is_empty(), length == 0);
+        assert_eq!(
+            values.repack(&specialized, specialized_shape),
+            values.substitute(&repacked, &subst),
+        );
+
+        // The same canonical key must specialize deferred extents retained in
+        // direct capability target/representation types, not just array nodes.
+        let semantics = borrowed.substitute(&db, &subst).direct(&db).unwrap();
+        assert_eq!(semantics.target_ty.array_len(&db), Some(length));
+        assert_eq!(
+            semantics.representation_ty.as_borrow(&db).unwrap().1,
+            semantics.target_ty,
+        );
+    }
+}
+
 fn generic_array_shapes(db: &mut HirAnalysisTestDb) -> (&HirAnalysisTestDb, Vec<ShapeId<'_>>) {
     let file = db.new_stand_alone(
         "generic_array_algebra.fe".into(),

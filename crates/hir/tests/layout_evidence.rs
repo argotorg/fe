@@ -234,7 +234,7 @@ fn first<const FIRST: u256, const SECOND: u256>(
     let key = SemanticInstanceKey::new(
         &db,
         BodyOwner::Func(func),
-        GenericSubst::new(&db, vec![params[1], params[1]]),
+        GenericSubst::for_owner(&db, func.into(), vec![params[1], params[1]]),
         EffectProviderSubst::empty(&db),
         ImplEnv::empty(&db, func.scope()),
     );
@@ -281,7 +281,7 @@ fn forward<const ROOT: u256>(value: Rooted<ROOT>) -> Rooted<ROOT> {
         SemanticInstanceKey::new(
             &db,
             BodyOwner::Func(convert),
-            GenericSubst::new(&db, vec![params[1], params[1]]),
+            GenericSubst::for_owner(&db, convert.into(), vec![params[1], params[1]]),
             EffectProviderSubst::empty(&db),
             ImplEnv::empty(&db, convert.scope()),
         ),
@@ -342,7 +342,7 @@ fn discard<const FIRST: u256, const SECOND: u256>(
         SemanticInstanceKey::new(
             &db,
             BodyOwner::Func(discard),
-            GenericSubst::new(&db, vec![params[1], params[1]]),
+            GenericSubst::for_owner(&db, discard.into(), vec![params[1], params[1]]),
             EffectProviderSubst::empty(&db),
             ImplEnv::empty(&db, discard.scope()),
         ),

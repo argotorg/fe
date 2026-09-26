@@ -1055,8 +1055,7 @@ pub(super) fn normalized_local_place_class_in_env<'db>(
     local: SLocalId,
     carriers: &[RuntimeCarrier<'db>],
 ) -> Option<RuntimeClass<'db>> {
-    let typed_body = body.owner().key(db).typed_body(db);
-    let facts = BodyStaticFacts::new_in_context(db, body, typed_body, env);
+    let facts = BodyStaticFacts::new_in_context(db, body, env);
     let place = super::source::declared_root_place_for_local(body, local)
         .or_else(|| super::source::alias_source_place_for_local(db, body, local))?;
     BodyEnv::from_parts(db, body, env, &facts).normalized_place_class(carriers, &place)

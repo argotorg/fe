@@ -21,7 +21,7 @@ pub(crate) use path_resolver::resolve_type_path_definition;
 pub(crate) use path_resolver::{FindAssociatedTypeError, find_associated_type};
 pub use path_resolver::{
     PathRes, PathResError, PathResErrorKind, ResolvedVariant, resolve_ident_to_bucket,
-    resolve_name_res, resolve_path, resolve_path_with_observer,
+    resolve_name_res, resolve_path,
 };
 pub(crate) use path_resolver::{
     earliest_conflicting_inherent_const_impl, shadowed_inherent_fn_for_const,

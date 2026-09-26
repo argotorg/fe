@@ -1,0 +1,33 @@
+struct Wrap<T> { value: T }
+
+fn missing<T = Missing>() {}
+fn nested<T = (u256, Missing)>() {}
+fn wrong_kind<T = Wrap>() {}
+fn wrong_higher_kind<T: * -> * = u256>() {}
+fn unused<T = Unknown>() {}
+fn overridden<T = Absent>() {}
+fn const_as_type<const N: usize, T = N>() {}
+
+// Nested const bodies are validated at the declaration, whether or not the
+// default is used or overridden.
+fn body_unused<T = [u8; undefined()]>() {}
+fn body_defaulted<T = [u8; undefined()]>() {}
+fn body_overridden<T = [u8; undefined()]>() {}
+
+struct InvalidStruct<T = Wrap> {}
+enum InvalidEnum<T = Missing> { Empty }
+trait InvalidTrait<T = Wrap> {}
+type InvalidAlias<T = Missing> = T
+
+struct ConstSlot<const ROOT: u256 = _> {}
+trait Cap<T> {}
+impl Cap<ConstSlot<u256>> for bool {}
+
+fn exercise() {
+    missing()
+    nested()
+    wrong_kind()
+    overridden<u256>()
+    body_defaulted()
+    body_overridden<u8>()
+}

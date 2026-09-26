@@ -6,12 +6,12 @@ use std::marker::PhantomData;
 use either::Either;
 use ena::unify::{InPlace, UnifyKey, UnifyValue};
 use num_bigint::BigInt;
+use rustc_hash::FxHashMap;
 
 use super::{
-    binder::Binder,
     const_expr::{ConstExpr, ConstExprId},
     fold::{TyFoldable, TyFolder},
-    trait_def::{ImplementorId, TraitInstId},
+    trait_def::{ImplementorId, TraitInstId, TraitRefId},
     ty_def::{ApplicableTyProp, Kind, TyData, TyId, TyVar, TyVarSort, inference_keys},
 };
 use crate::analysis::{
@@ -376,11 +376,20 @@ where
         }
     }
 
-    pub fn instantiate_with_fresh_vars<T>(&mut self, value: Binder<T>) -> T
+    /// Replaces every non-effect generic parameter in `value` with a fresh
+    /// inference variable, reusing one variable per distinct parameter.
+    pub fn instantiate_with_fresh_vars<T>(&mut self, value: T) -> T
     where
         T: TyFoldable<'db>,
     {
-        value.instantiate_with(self.db, |ty| self.new_var_from_param(ty))
+        let db = self.db;
+        value.fold_with(
+            db,
+            &mut FreshVarFolder {
+                table: self,
+                params: FxHashMap::default(),
+            },
+        )
     }
 
     pub fn instantiate_to_term(&mut self, mut ty: TyId<'db>) -> TyId<'db> {
@@ -607,6 +616,23 @@ impl<'db> Unifiable<'db> for TyId<'db> {
     }
 }
 
+impl<'db> Unifiable<'db> for TraitRefId<'db> {
+    fn unify<U: UnificationStore<'db>>(
+        self,
+        table: &mut UnificationTableBase<'db, U>,
+        other: Self,
+    ) -> UnificationResult {
+        let db = table.db;
+        if self.def(db) != other.def(db) || self.args(db).len() != other.args(db).len() {
+            return Err(UnificationError::TypeMismatch);
+        }
+        for (&left, &right) in self.args(db).iter().zip(other.args(db)) {
+            table.unify_ty(left, right)?;
+        }
+        Ok(())
+    }
+}
+
 impl<'db> Unifiable<'db> for TraitInstId<'db> {
     fn unify<U: UnificationStore<'db>>(
         self,
@@ -614,7 +640,7 @@ impl<'db> Unifiable<'db> for TraitInstId<'db> {
         other: Self,
     ) -> UnificationResult {
         let db = table.db;
-        if self.def(db) != other.def(db) {
+        if self.def(db) != other.def(db) || self.args(db).len() != other.args(db).len() {
             return Err(UnificationError::TypeMismatch);
         }
 
@@ -737,5 +763,36 @@ where
         let resolved = shallow_resolved.fold_with(self.table.db, self);
         self.var_stack.pop();
         resolved
+    }
+}
+
+struct FreshVarFolder<'a, 'db, U>
+where
+    U: UnificationStore<'db>,
+{
+    table: &'a mut UnificationTableBase<'db, U>,
+    // Keyed by full parameter identity: different owners can reuse an index.
+    params: FxHashMap<TyId<'db>, TyId<'db>>,
+}
+
+impl<'db, U> TyFolder<'db> for FreshVarFolder<'_, 'db, U>
+where
+    U: UnificationStore<'db>,
+{
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        let is_param = match ty.data(db) {
+            TyData::TyParam(param) => !param.is_effect(),
+            TyData::ConstTy(const_ty) => matches!(const_ty.data(db), ConstTyData::TyParam(..)),
+            _ => false,
+        };
+        if !is_param {
+            return ty.super_fold_with(db, self);
+        }
+        if let Some(&var) = self.params.get(&ty) {
+            return var;
+        }
+        let var = self.table.new_var_from_param(ty);
+        self.params.insert(ty, var);
+        var
     }
 }

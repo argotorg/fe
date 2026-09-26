@@ -615,15 +615,6 @@ impl<'a, 'db> TyFolder<'db> for EffectKeyIdentityInstantiator<'a, 'db> {
 
         ty.super_fold_with(db, self)
     }
-
-    fn fold_ty_app(
-        &mut self,
-        db: &'db dyn HirAnalysisDb,
-        abs: TyId<'db>,
-        arg: TyId<'db>,
-    ) -> TyId<'db> {
-        TyId::new(db, TyData::TyApp(abs, arg))
-    }
 }
 
 fn explicit_param_count_for_effect_identity_base<'db>(

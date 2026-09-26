@@ -1,0 +1,16 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/generic_default_nested_const_div_zero.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/generic_default_nested_const_div_zero.fe
+
+error[3-0025]: division by zero in const context
+  ┌─ generic_default_nested_const_div_zero.fe:2:35
+  │
+2 │ fn bad<const N: usize, T = [u8; { 1 / 0 }]>() -> u256 {
+  │                                   ^^^^^ cannot divide by zero
+
+
+=== EXIT CODE: 1 ===

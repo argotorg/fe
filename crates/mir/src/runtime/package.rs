@@ -3,17 +3,16 @@ use hir::semantic::{RecvArmAbiInfo, RecvArmView};
 use hir::{
     analysis::{
         semantic::{
-            GenericSubst, ImplEnv, LayoutEvidenceBase, ManualContractSection,
-            RootSemanticInstanceError, SemanticInstance, SemanticInstanceKey,
-            get_or_build_semantic_instance, owner_effect_bindings, root_semantic_instance_key,
-            same_owner_effect_binding,
+            LayoutEvidenceBase, ManualContractSection, RootSemanticInstanceError, SemanticInstance,
+            generated_callee_key, get_or_build_semantic_instance, owner_effect_bindings,
+            root_semantic_instance_key, same_owner_effect_binding,
         },
         ty::{
             CallableLayoutParamPort, LayoutEvidencePathStep,
             const_ty::{CallableInputLayoutHoleOrigin, ConstTyData},
             corelib::{resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path},
-            trait_def::{TraitInstId, resolve_trait_method_instance},
-            trait_resolution::TraitSolveCx,
+            trait_def::{MethodArgMapError, TraitInstId},
+            trait_resolution::PredicateListId,
             ty_check::{BodyOwner, EffectParamSite, LocalBinding},
             ty_def::{TyData, TyId},
         },
@@ -37,6 +36,7 @@ use crate::{
     runtime::lower::interface::runtime_visible_binding_plans,
     runtime::lower::type_info::{
         RuntimeTypeEnv, provider_class_for_target_in_env, top_level_class_for_ty_in_env,
+        validate_runtime_array_extents_in_env,
     },
     runtime::root_effects::{
         EntryEffectContext, entry_semantic_args_plan, target_root_provider_materialization,
@@ -837,6 +837,12 @@ fn contract_init_abi_plan<'db>(
         });
     };
 
+    validate_runtime_array_extents_in_env(
+        db,
+        RuntimeTypeEnv::new(Some(contract.scope()), PredicateListId::empty_list(db)),
+        contract.init_args_ty(db),
+    )?;
+
     let semantic = semantic_instance_for_root_owner(db, BodyOwner::ContractInit { contract })?;
     let user_init = Some(runtime_instance_for_semantic(db, semantic));
     let entry_args = entry_semantic_args_plan(
@@ -875,6 +881,11 @@ fn contract_recv_wrapper<'db>(
 ) -> Result<(RecvArmAbiInfo<'db>, RuntimeInstance<'db>), LowerError> {
     let contract = arm.contract(db);
     let abi_info = arm.abi_info(db, abi_ty);
+    let type_env = RuntimeTypeEnv::new(Some(contract.scope()), PredicateListId::empty_list(db));
+    validate_runtime_array_extents_in_env(db, type_env, abi_info.args_ty)?;
+    if let Some(ret_ty) = abi_info.ret_ty {
+        validate_runtime_array_extents_in_env(db, type_env, ret_ty)?;
+    }
     let recv = arm.recv(db);
     let owner = BodyOwner::ContractRecvArm {
         contract,
@@ -1355,12 +1366,7 @@ fn semantic_instance_for_root_owner<'db>(
             format!("root semantic instance for {owner:?} is missing a root provider binding"),
         ),
         RootSemanticInstanceError::UnclosedEffectEnv(err) => LowerError::Unsupported(format!(
-            "root semantic instance for {:?} is not closed under synthesized root substitution: owner_scope={:?} param_idx={} args_len={} offending_ty={}",
-            err.owner,
-            err.owner_scope,
-            err.param_idx,
-            err.args_len,
-            err.offending_ty.pretty_print(db),
+            "root semantic instance is not closed under synthesized root substitution: {err:?}"
         )),
     })?;
     Ok(get_or_build_semantic_instance(db, key))
@@ -1466,10 +1472,8 @@ fn format_root_semantic_instance_rejection<'db>(
         RootSemanticInstanceError::MissingRootProvider { .. } => format!(
             "function `{func_name}` cannot be used as a standalone runtime root because an effect provider could not be synthesized"
         ),
-        RootSemanticInstanceError::UnclosedEffectEnv(err) => format!(
-            "function `{func_name}` cannot be used as a standalone runtime root because its effect environment is not fully concrete: parameter {} is missing while instantiating {}",
-            err.param_idx,
-            err.offending_ty.pretty_print(db),
+        RootSemanticInstanceError::UnclosedEffectEnv(_) => format!(
+            "function `{func_name}` cannot be used as a standalone runtime root because its effect environment is not fully concrete"
         ),
     }
 }
@@ -1601,14 +1605,15 @@ fn resolve_decode_runtime_args_instance<'db>(
                 "missing required core::contracts::decode_runtime_args".to_string(),
             )
         })?;
-    let assumptions = hir::analysis::ty::trait_resolution::PredicateListId::empty_list(db);
-    let key = SemanticInstanceKey::new(
+    let key = generated_callee_key(
         db,
-        BodyOwner::Func(func),
-        GenericSubst::new(db, vec![host_ty, sol_abi_ty(db, scope)?, msg_ty]),
-        hir::analysis::semantic::EffectProviderSubst::empty(db),
-        ImplEnv::new(db, scope, assumptions, vec![]),
-    );
+        scope,
+        PredicateListId::empty_list(db),
+        func,
+        None,
+        &[host_ty, sol_abi_ty(db, scope)?, msg_ty],
+    )
+    .map_err(|error| generated_call_error(db, func, error))?;
     let semantic = get_or_build_semantic_instance(db, key);
     Ok(runtime_instance_for_semantic_with_visible_param_overrides(
         db,
@@ -1623,38 +1628,50 @@ fn resolve_decode_runtime_args_instance<'db>(
     ))
 }
 
-fn resolve_trait_runtime_instance<'db>(
+pub(crate) fn resolve_trait_runtime_instance<'db>(
     db: &'db dyn MirDb,
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
     inst: TraitInstId<'db>,
     method: &str,
-    extra_generic_args: Vec<TyId<'db>>,
+    own_args: Vec<TyId<'db>>,
 ) -> Result<RuntimeInstance<'db>, LowerError> {
-    let assumptions = hir::analysis::ty::trait_resolution::PredicateListId::empty_list(db);
-    let method = IdentId::new(db, method.to_string());
-    let (func, mut impl_args) = resolve_trait_method_instance(
+    let name = IdentId::new(db, method.to_string());
+    let func = inst
+        .def(db)
+        .method_defs(db)
+        .get(&name)
+        .copied()
+        .ok_or_else(|| {
+            LowerError::Unsupported(format!(
+                "missing trait method `{method}` for runtime package"
+            ))
+        })?;
+    let key = generated_callee_key(
         db,
-        TraitSolveCx::new(db, scope).with_assumptions(assumptions),
-        inst,
-        method,
+        scope,
+        PredicateListId::empty_list(db),
+        func,
+        Some(inst),
+        &own_args,
     )
-    .ok_or_else(|| {
-        LowerError::Unsupported(format!(
-            "failed to resolve trait method `{}` for runtime package planning",
-            method.data(db)
-        ))
-    })?;
-    impl_args.extend(extra_generic_args);
-    let key = SemanticInstanceKey::new(
-        db,
-        BodyOwner::Func(func),
-        GenericSubst::new(db, impl_args),
-        hir::analysis::semantic::EffectProviderSubst::empty(db),
-        ImplEnv::new(db, scope, assumptions, vec![inst]),
-    );
+    .map_err(|error| generated_call_error(db, func, error))?;
     Ok(runtime_instance_for_semantic(
         db,
         get_or_build_semantic_instance(db, key),
+    ))
+}
+
+pub(crate) fn generated_call_error<'db>(
+    db: &'db dyn MirDb,
+    func: Func<'db>,
+    error: MethodArgMapError<'db>,
+) -> LowerError {
+    let name = func
+        .name(db)
+        .to_opt()
+        .map_or("<unnamed>", |name| name.data(db));
+    LowerError::Unsupported(format!(
+        "failed to finalize generated call to `{name}`: {error:?}"
     ))
 }
 
@@ -2656,6 +2673,27 @@ pub fn main() -> i32 {
         let package =
             build_test_runtime_package(&db, top_mod, filter).expect("test package should build");
         f(&db, package)
+    }
+
+    #[test]
+    fn invalid_specialized_init_array_extent_returns_lowering_error() {
+        for source in [
+            "type Arr<const N: usize> = [u8; { 10 / N }]\npub contract C { init(value: Arr<0>) {} }\n",
+            "struct S<const N: usize> { x: [u8; { 10 / N }] }\npub contract C { init(value: S<0>) {} }\n",
+        ] {
+            let mut db = DriverDataBase::default();
+            let file_url = Url::parse("file:///invalid_specialized_init_array_extent.fe").unwrap();
+            let file = db
+                .workspace()
+                .touch(&mut db, file_url, Some(source.to_string()));
+            let top_mod = db.top_mod(file);
+            let error = build_runtime_package(&db, top_mod)
+                .expect_err("invalid specialized init array must not enter runtime layout");
+            assert!(
+                error.to_string().contains("array length"),
+                "unexpected runtime error for {source}: {error}"
+            );
+        }
     }
 
     #[test]

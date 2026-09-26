@@ -1,8 +1,8 @@
 use crate::{
     analysis::place::Place,
     hir_def::{
-        BinOp, Body, Contract, Expr, ExprId, Func, IdentId, ItemKind, Partial, Pat, PatId, Stmt,
-        StmtId, UnOp, scope_graph::ScopeId,
+        BinOp, Body, Contract, Expr, ExprId, Func, IdentId, Partial, Pat, PatId, Stmt, StmtId,
+        UnOp, scope_graph::ScopeId,
     },
     span::DynLazySpan,
 };
@@ -26,7 +26,7 @@ use crate::analysis::ty::pattern_ir::{
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        const_ty::CallableInputLayoutHoleOrigin,
+        const_ty::{CallableInputLayoutHoleOrigin, const_body_assumptions},
         corelib::resolve_lib_type_path,
         effects::{
             EffectKeyKind,
@@ -36,10 +36,7 @@ use crate::analysis::{
         fold::{TyFoldable, TyFolder},
         provider::ProviderAddressSpace,
         trait_def::TraitInstId,
-        trait_resolution::{
-            PredicateListId,
-            constraint::{collect_constraints, collect_func_effect_provider_constraints},
-        },
+        trait_resolution::{PredicateListId, constraint::collect_func_effect_provider_constraints},
         ty_contains_const_hole,
         ty_def::{InvalidCause, StringFallback, TyData, TyId, TyVarSort},
         ty_lower::lower_hir_ty,
@@ -96,25 +93,6 @@ pub(crate) struct TyCheckEnv<'db> {
 
 impl<'db> TyCheckEnv<'db> {
     pub(super) fn new(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> Result<Self, ()> {
-        fn const_owner_preds<'db>(
-            db: &'db dyn HirAnalysisDb,
-            scope: ScopeId<'db>,
-        ) -> PredicateListId<'db> {
-            match scope.parent_item(db) {
-                Some(ItemKind::Trait(trait_)) => PredicateListId::new(
-                    db,
-                    vec![crate::semantic::trait_self_predicate(db, trait_)],
-                ),
-                Some(ItemKind::ImplTrait(impl_trait)) => {
-                    collect_constraints(db, impl_trait.into()).instantiate_identity()
-                }
-                Some(ItemKind::Impl(impl_)) => {
-                    collect_constraints(db, impl_.into()).instantiate_identity()
-                }
-                _ => PredicateListId::empty_list(db),
-            }
-        }
-
         let Some(body) = owner.body(db) else {
             return Err(());
         };
@@ -130,32 +108,8 @@ impl<'db> TyCheckEnv<'db> {
                 let assumptions = preds.extend_all_bounds(db);
                 (preds, assumptions)
             }
-            BodyOwner::AnonConstBody { .. } => {
-                let containing_func = match owner_scope.parent_item(db) {
-                    Some(ItemKind::Func(func)) => Some(func),
-                    Some(ItemKind::Body(parent)) => parent.containing_func(db),
-                    _ => None,
-                };
-                if let Some(func) = containing_func {
-                    let preds = crate::semantic::func_body_assumptions(db, func);
-                    let assumptions = preds.extend_all_bounds(db);
-                    (preds, assumptions)
-                } else {
-                    // Walk up through nested body scopes to find an enclosing item (trait/impl).
-                    let mut enclosing = owner_scope;
-                    let mut parent_item = enclosing.parent_item(db);
-                    while let Some(ItemKind::Body(parent)) = parent_item {
-                        enclosing = parent.scope();
-                        parent_item = enclosing.parent_item(db);
-                    }
-
-                    let preds = const_owner_preds(db, enclosing);
-                    let assumptions = preds.extend_all_bounds(db);
-                    (preds, assumptions)
-                }
-            }
-            BodyOwner::Const(const_) => {
-                let preds = const_owner_preds(db, const_.scope());
+            BodyOwner::AnonConstBody { .. } | BodyOwner::Const(_) => {
+                let preds = const_body_assumptions(db, owner_scope);
                 let assumptions = preds.extend_all_bounds(db);
                 (preds, assumptions)
             }

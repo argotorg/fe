@@ -6,10 +6,18 @@ use salsa::Update;
 
 use crate::analysis::{
     HirAnalysisDb,
-    semantic::{SemanticInstance, instantiate_with_generic_args},
+    semantic::SemanticInstance,
     ty::{
-        const_ty::{ConstTyData, ConstTyId, const_ty_from_sem_const, evaluate_type_level_const_ty},
-        ty_def::{PrimTy, TyBase, TyData, TyId, TyVarSort, prim_int_bits},
+        adt_def::{AdtDef, ConcreteTypeView, instantiate_adt_field_for_concrete_demand},
+        const_ty::{
+            ConcreteArrayLengthError, ConstTyData, ConstTyId, const_ty_from_sem_const,
+            demand_concrete_array_length, evaluate_type_level_const_ty,
+            normalize_const_tys_for_comparison, ty_is_fully_ground,
+        },
+        fold::{TyFoldable, TyFolder},
+        subst::substitute_complete,
+        ty_def::{InvalidCause, PrimTy, TyBase, TyData, TyId, TyVarSort, prim_int_bits},
+        ty_error::first_invalid_ty_cause,
     },
 };
 
@@ -183,6 +191,20 @@ pub(crate) fn fixed_string_capacity_bytes<'db>(
     const_ty.integer_value(db)?.to_usize()
 }
 
+/// Compares types by their const identities, so a deferred extent and the
+/// value it evaluates to name the same type.
+fn const_identity_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+    struct ConstIdentity;
+
+    impl<'db> TyFolder<'db> for ConstIdentity {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            normalize_const_tys_for_comparison(db, ty.super_fold_with(db, self))
+        }
+    }
+
+    ty.fold_with(db, &mut ConstIdentity)
+}
+
 fn verify_sem_const_children<'db>(
     db: &'db dyn HirAnalysisDb,
     children: &[SemConstId<'db>],
@@ -202,6 +224,7 @@ fn verify_sem_const_children<'db>(
             && !expected_ty.has_projection(db)
             && !expected_ty.has_hole(db)
             && actual_ty != expected_ty
+            && const_identity_ty(db, actual_ty) != const_identity_ty(db, expected_ty)
         {
             return Err("constant child type differs from its aggregate field type");
         }
@@ -279,6 +302,10 @@ fn verify_sem_const_shape_impl<'db>(
         }
         SemConstValue::Struct { ty, fields } => {
             let ty = ty.as_view(db).unwrap_or(ty);
+            // A function item value is a fieldless record of its item type.
+            if ty.is_func(db) && fields.is_empty() {
+                return Ok(());
+            }
             if !ty.is_struct(db) {
                 return Err("constant record payload has a non-record type");
             }
@@ -518,14 +545,14 @@ pub(crate) fn instantiate_const_template<'db>(
     instance: SemanticInstance<'db>,
     template: ConstTyId<'db>,
 ) -> ConstTyId<'db> {
-    let key = instance.key(db);
-    let args = key.subst(db).generic_args(db);
-    if args.is_empty() {
+    let subst = instance.key(db).subst(db);
+    let Some(mapping) = subst.mapping(db).as_ref() else {
         return template;
-    }
+    };
     // Declaration templates include inherited parameters from enclosing impls
-    // and traits. Their indices refer to this declaration's full argument list.
-    let instantiated = instantiate_with_generic_args(db, TyId::const_ty(db, template), args);
+    // and traits. The instance substitution ranges over the full schema.
+    let instantiated = substitute_complete(db, TyId::const_ty(db, template), mapping)
+        .expect("semantic const uses its instance substitution domain");
     let TyData::ConstTy(const_ty) = instantiated.data(db) else {
         unreachable!("instantiating a const template must retain its constant representation")
     };
@@ -672,6 +699,9 @@ fn reify_runtime_const_impl<'db>(
         }
         SemConstValue::Struct { ty: _, fields } => {
             let ty = expected_ty.as_view(db).unwrap_or(expected_ty);
+            if ty.is_func(db) && fields.is_empty() {
+                return Some(struct_const(db, ty, Box::new([])));
+            }
             if !ty.is_struct(db) {
                 return None;
             }
@@ -907,61 +937,107 @@ pub fn int_ty_shape<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<(u
     })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RuntimeSizeError {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuntimeSizeError<'db> {
     Overflow,
+    InvalidType(InvalidCause<'db>),
+    UnavailableConcrete,
 }
 
 pub fn runtime_size_bytes<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
-) -> Result<Option<u64>, RuntimeSizeError> {
+) -> Result<Option<u64>, RuntimeSizeError<'db>> {
+    runtime_size_bytes_with_source(db, ConcreteTypeView::identity(ty))
+}
+
+/// The fields of one variant of `ty`, an application of `adt`, each paired
+/// with its view through `source`, which must name the same application.
+fn adt_variant_field_views<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt: AdtDef<'db>,
+    variant_idx: usize,
+    ty: TyId<'db>,
+    source: TyId<'db>,
+) -> Result<Vec<ConcreteTypeView<'db>>, RuntimeSizeError<'db>> {
+    let args = ty.generic_args(db);
+    let source_args = source.generic_args(db);
+    if source.adt_def(db) != Some(adt) || source_args.len() != args.len() {
+        return Err(RuntimeSizeError::UnavailableConcrete);
+    }
+    Ok((0..adt.fields(db)[variant_idx].num_types())
+        .map(|field_idx| {
+            instantiate_adt_field_for_concrete_demand(
+                db,
+                adt,
+                variant_idx,
+                field_idx,
+                args,
+                source_args,
+            )
+        })
+        .collect())
+}
+
+pub(crate) fn runtime_size_bytes_with_source<'db>(
+    db: &'db dyn HirAnalysisDb,
+    view: ConcreteTypeView<'db>,
+) -> Result<Option<u64>, RuntimeSizeError<'db>> {
     const WORD_SIZE_BYTES: u64 = 32;
 
     fn array_len<'db>(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
-    ) -> Result<Option<u64>, RuntimeSizeError> {
+        source: TyId<'db>,
+    ) -> Result<Option<u64>, RuntimeSizeError<'db>> {
         let (_, args) = ty.decompose_ty_app(db);
-        let Some(arg) = args.get(1) else {
+        let (_, source_args) = source.decompose_ty_app(db);
+        let (Some(&canonical), Some(&source)) = (args.get(1), source_args.get(1)) else {
             return Ok(None);
         };
-        let TyData::ConstTy(const_ty) = arg.data(db) else {
-            return Ok(None);
-        };
-        const_ty.integer_value(db).map_or(Ok(None), |value| {
-            value.to_u64().map(Some).ok_or(RuntimeSizeError::Overflow)
-        })
+        demand_concrete_array_length(db, canonical, source)
+            .map_err(|error| match error {
+                ConcreteArrayLengthError::Invalid(cause) => RuntimeSizeError::InvalidType(cause),
+                ConcreteArrayLengthError::Mismatch => RuntimeSizeError::UnavailableConcrete,
+            })?
+            .map(|len| len.to_u64().ok_or(RuntimeSizeError::Overflow))
+            .transpose()
     }
 
     fn sum_fields<'db>(
         db: &'db dyn HirAnalysisDb,
-        fields: impl IntoIterator<Item = TyId<'db>>,
+        fields: impl IntoIterator<Item = ConcreteTypeView<'db>>,
         visiting: &mut FxHashSet<TyId<'db>>,
-    ) -> Result<Option<u64>, RuntimeSizeError> {
+    ) -> Result<Option<u64>, RuntimeSizeError<'db>> {
         fields.into_iter().try_fold(Some(0u64), |size, field| {
-            let Some(size) = size else {
-                return Ok(None);
-            };
-            let Some(field_size) = inner(db, field, visiting)? else {
-                return Ok(None);
-            };
-            size.checked_add(field_size)
-                .map(Some)
-                .ok_or(RuntimeSizeError::Overflow)
+            let field_size = inner(db, field.canonical, field.source, visiting)?;
+            match (size, field_size) {
+                (Some(size), Some(field_size)) => size
+                    .checked_add(field_size)
+                    .map(Some)
+                    .ok_or(RuntimeSizeError::Overflow),
+                _ => Ok(None),
+            }
         })
     }
 
     fn inner<'db>(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
+        source: TyId<'db>,
         visiting: &mut FxHashSet<TyId<'db>>,
-    ) -> Result<Option<u64>, RuntimeSizeError> {
+    ) -> Result<Option<u64>, RuntimeSizeError<'db>> {
         if !visiting.insert(ty) {
             return Ok(None);
         }
 
-        let result = if ty.has_invalid(db) || ty.has_var(db) {
+        let result = if let Some(cause) = ty.invalid_cause(db) {
+            return Err(RuntimeSizeError::InvalidType(cause));
+        } else if ty.has_invalid(db) {
+            return Err(RuntimeSizeError::InvalidType(
+                first_invalid_ty_cause(db, ty).unwrap_or(InvalidCause::Other),
+            ));
+        } else if ty.has_var(db) {
             None
         } else if let TyData::TyParam(param) = ty.data(db)
             && (param.is_effect() || param.is_effect_provider() || param.is_trait_self())
@@ -970,18 +1046,36 @@ pub fn runtime_size_bytes<'db>(
         } else if ty.has_param(db) {
             None
         } else if ty.is_tuple(db) {
-            sum_fields(db, ty.field_types(db), visiting)?
+            let canonical_fields = ty.field_types(db);
+            let source_fields = source.field_types(db);
+            if canonical_fields.len() != source_fields.len() {
+                return Err(RuntimeSizeError::UnavailableConcrete);
+            }
+            sum_fields(
+                db,
+                canonical_fields
+                    .into_iter()
+                    .zip(source_fields)
+                    .map(|(canonical, source)| ConcreteTypeView::new(canonical, source)),
+                visiting,
+            )?
         } else if matches!(
             ty.base_ty(db).data(db),
             TyData::TyBase(TyBase::Func(_) | TyBase::Contract(_))
         ) {
             Some(0)
         } else if ty.is_array(db) {
+            if !source.is_array(db) {
+                return Err(RuntimeSizeError::UnavailableConcrete);
+            }
             let (_, args) = ty.decompose_ty_app(db);
-            match (args.first().copied(), array_len(db, ty)?) {
+            let (_, source_args) = source.decompose_ty_app(db);
+            match (args.first().copied(), array_len(db, ty, source)?) {
                 (Some(elem), Some(len)) => {
-                    let stride = inner(db, elem, visiting)?.unwrap_or(WORD_SIZE_BYTES);
-                    Some(len.checked_mul(stride).ok_or(RuntimeSizeError::Overflow)?)
+                    let source_elem = source_args.first().copied().unwrap_or(elem);
+                    inner(db, elem, source_elem, visiting)?
+                        .map(|stride| len.checked_mul(stride).ok_or(RuntimeSizeError::Overflow))
+                        .transpose()?
                 }
                 _ => None,
             }
@@ -997,25 +1091,26 @@ pub fn runtime_size_bytes<'db>(
                 _ => prim_int_bits(*prim).map(|bits| bits as u64 / 8),
             }
         } else if ty.is_struct(db) {
-            sum_fields(db, ty.field_types(db), visiting)?
+            let adt = ty.adt_def(db).expect("struct has an ADT definition");
+            sum_fields(
+                db,
+                adt_variant_field_views(db, adt, 0, ty, source)?,
+                visiting,
+            )?
         } else if let Some(enum_) = ty.as_enum(db) {
-            let args = ty.generic_args(db);
+            let adt = enum_.as_adt(db);
             let tag_size = u64::from(enum_tag_bits(enum_.len_variants(db)).div_ceil(8));
-            let max_payload = enum_
-                .variants(db)
-                .try_fold(Some(0u64), |max_payload, variant| {
-                    let Some(max_payload) = max_payload else {
-                        return Ok(None);
-                    };
-                    Ok(sum_fields(
+            let max_payload =
+                (0..adt.fields(db).len()).try_fold(Some(0u64), |max_payload, variant_idx| {
+                    let payload = sum_fields(
                         db,
-                        variant
-                            .field_tys(db)
-                            .into_iter()
-                            .map(|field| field.instantiate(db, args)),
+                        adt_variant_field_views(db, adt, variant_idx, ty, source)?,
                         visiting,
-                    )?
-                    .map(|payload| max_payload.max(payload)))
+                    )?;
+                    Ok(match (max_payload, payload) {
+                        (Some(max_payload), Some(payload)) => Some(max_payload.max(payload)),
+                        _ => None,
+                    })
                 })?;
             match max_payload {
                 Some(max_payload) => Some(
@@ -1033,5 +1128,9 @@ pub fn runtime_size_bytes<'db>(
         Ok(result)
     }
 
-    inner(db, ty, &mut FxHashSet::default())
+    let size = inner(db, view.canonical, view.source, &mut FxHashSet::default())?;
+    if size.is_none() && ty_is_fully_ground(db, view.canonical) {
+        return Err(RuntimeSizeError::UnavailableConcrete);
+    }
+    Ok(size)
 }

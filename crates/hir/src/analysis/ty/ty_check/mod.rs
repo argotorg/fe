@@ -26,8 +26,8 @@ use crate::analysis::ty::trait_lower::lower_impl_trait;
 use crate::analysis::ty::trait_resolution::constraint::{
     PredicateSource, collect_func_decl_constraint_pairs,
 };
-use crate::analysis::ty::visitor::TyVisitable;
-use crate::hir_def::{CallableDef, ImplTrait, Trait};
+use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_const_ty};
+use crate::hir_def::{CallableDef, ConstGenericArgValue, ImplTrait, Trait};
 use crate::{
     hir_def::{
         BinOp, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func,
@@ -40,7 +40,7 @@ use crate::{
     },
     visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat},
 };
-use callable::{CallGenericArgUnifyError, unify_explicit_call_generic_args};
+use callable::{CallGenericArgPhase, CallGenericArgUnifyError, unify_explicit_call_generic_args};
 pub use callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization};
 use common::indexmap::IndexMap;
 use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption};
@@ -62,17 +62,19 @@ use crate::analysis::place::{Place, PlaceBase, PlaceProjection};
 
 use super::{
     LayoutBundlePath, LayoutBundlePathStep,
+    adt_def::ConcreteTypeView,
     assoc_const::{AssocConstUse, InherentConstUse},
-    canonical::{Canonical, Canonicalized},
+    canonical::Canonical,
     diagnostics::{
         BodyDiag, CallConstraintDiagInfo, FuncBodyDiag, StaticAssertComparisonValues,
         TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
     },
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key},
+    generic_defaults::{GenericDefault, generic_default},
     layout_holes::merge_equated_layout_holes,
     trait_def::{TraitInstId, resolve_trait_method_instance},
     trait_resolution::{
-        CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
+        CanonicalGoalQuery, GoalSatisfiability, PredicateListId, Selection, TraitSolveCx,
         goal_query_has_no_distinct_solution, is_goal_query_satisfiable, is_goal_satisfiable,
     },
     ty_contains_const_hole,
@@ -83,31 +85,33 @@ use super::{
     ty_lower::{
         CallableInputLayoutBackingSource, callable_input_layout_backing_index_lengths,
         callable_input_layout_backing_sources, collect_generic_params,
-        layout_param_projection_paths_in_ty, lower_hir_ty, resolve_callable_input_effect_key,
+        layout_param_projection_paths_in_ty, lower_hir_ty, lower_hir_ty_deferred,
+        resolve_callable_input_effect_key,
     },
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
 };
 use crate::analysis::semantic::SemanticCodeRegionRef;
 use crate::analysis::semantic::{
-    BlockedInfo, ConstDependency, ConstUsePolicy, EffectProviderSubst, EvalOutcome, GenericSubst,
-    ImplEnv, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticInstanceKey,
+    BlockedInfo, ConstDependency, ConstUsePolicy, CtfeConfig, EffectProviderSubst, EvalOutcome,
+    GenericSubst, ImplEnv, RuntimeSizeError, SemConstId, SemConstScalar, SemConstValue, SemOrigin,
+    SemanticInstanceKey, const_computation_for_instance, describe_const_computation,
     eval_body_owner_const, get_or_build_semantic_instance, reify_runtime_const_for_ty,
+    runtime_size_bytes_with_source,
 };
 use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
     const_ty::{
-        BodyHoleSite, CallableInputLayoutHoleOrigin, ConstTyData, HoleAnchor, HoleMinter,
-        invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag,
+        BodyHoleSite, CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleAnchor,
+        LoweringContext, invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag,
     },
-    fold::AssocTySubst,
-    normalize::normalize_ty,
+    normalize::{normalize_ty, normalize_with_trait_evidence},
     pattern_ir::{
         ConstructorKind, PatternAnalysisStatus, PatternStore, ValidatedPatId, ValidatedPatKind,
     },
     pattern_types::{
         PatternDestructureMode, apply_pattern_borrow_mode, destructure_pattern_source,
     },
-    ty_error::collect_ty_lower_errors,
+    ty_error::{collect_ty_lower_errors, diag_from_invalid_cause},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -169,7 +173,6 @@ pub fn check_impl_trait_const_bodies<'db>(
     let Some(implementor) = lower_impl_trait(db, impl_trait) else {
         return Vec::new();
     };
-    let implementor = implementor.instantiate_identity();
     let trait_hir = implementor.trait_def(db);
     let trait_args = implementor.trait_(db).args(db);
     let policy = if generated_origin.is_some() {
@@ -282,6 +285,118 @@ pub fn check_trait_const_default_bodies<'db>(
     diags
 }
 
+/// Checks const bodies in generic defaults at their declarations, including
+/// bodies nested in type defaults. A use may omit or override a default, so
+/// applications cannot own these diagnostics.
+#[salsa::tracked(return_ref)]
+pub fn check_generic_default_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let mut diags = Vec::new();
+    for view in owner.params(db) {
+        for checked in check_generic_default_body_types(db, owner, view.idx) {
+            diags.extend(checked.diagnostics.iter().cloned());
+            if checked.ctfe_ready {
+                diags.extend(const_body_ctfe_diags(
+                    db,
+                    checked.body,
+                    checked.expected,
+                    ConstUsePolicy::AllowDependent,
+                ));
+            }
+        }
+    }
+    diags
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub(crate) struct DefaultConstBodyCheck<'db> {
+    pub(crate) body: Body<'db>,
+    pub(crate) expected: TyId<'db>,
+    pub(crate) diagnostics: Vec<FuncBodyDiag<'db>>,
+    pub(crate) ctfe_ready: bool,
+}
+
+/// Name/type checking stays separate from const execution so structural
+/// default discovery can remain cycle-free and checked symbolic defaults can
+/// retain their concrete-evaluation obligations.
+#[salsa::tracked(return_ref)]
+pub(crate) fn check_generic_default_body_types<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+    param_idx: usize,
+) -> Vec<DefaultConstBodyCheck<'db>> {
+    struct NestedConstBodies<'db> {
+        db: &'db dyn HirAnalysisDb,
+        seen: FxHashSet<(Body<'db>, TyId<'db>)>,
+        bodies: Vec<(Body<'db>, TyId<'db>)>,
+    }
+
+    impl<'db> TyVisitor<'db> for NestedConstBodies<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {
+            if let ConstTyData::UnEvaluated {
+                body,
+                template_ty,
+                ty,
+                ..
+            } = const_ty.data(self.db)
+                && let Some(expected) = template_ty.or(*ty)
+                && self.seen.insert((*body, expected))
+            {
+                self.bodies.push((*body, expected));
+            }
+            walk_const_ty(self, const_ty);
+        }
+    }
+
+    let Ok(Some(default)) = generic_default(db, owner, param_idx) else {
+        return Vec::new();
+    };
+    let bodies = match default {
+        GenericDefault::Const {
+            value: ConstGenericArgValue::Expr(Partial::Present(body)),
+            expected,
+        } => vec![(*body, expected.instantiate_identity())],
+        GenericDefault::Type(template) => {
+            let mut nested = NestedConstBodies {
+                db,
+                seen: FxHashSet::default(),
+                bodies: Vec::new(),
+            };
+            template.instantiate_identity().visit_with(&mut nested);
+            nested.bodies
+        }
+        GenericDefault::Const { .. } => Vec::new(),
+    };
+    bodies
+        .into_iter()
+        .filter(|(_, expected)| !expected.has_invalid(db))
+        .map(|(body, expected)| {
+            let body_diags = &check_anon_const_body(db, body, expected).0;
+            let diagnostics = if expected.has_param(db) {
+                body_diags
+                    .iter()
+                    .filter(|diag| !diag_depends_on_param_instantiation(db, diag))
+                    .cloned()
+                    .collect()
+            } else {
+                body_diags.clone()
+            };
+            DefaultConstBodyCheck {
+                body,
+                expected,
+                diagnostics,
+                ctfe_ready: body_diags.is_empty(),
+            }
+        })
+        .collect()
+}
+
 /// Whether a default-body diagnostic could be an artifact of checking
 /// against a rigid generic param instead of a per-instantiation type.
 fn diag_depends_on_param_instantiation<'db>(
@@ -314,7 +429,7 @@ pub fn check_static_assert<'db>(
         return body_diags.clone();
     }
 
-    match eval_body_owner_const(db, owner, Vec::new()) {
+    match eval_body_owner_const(db, owner, GenericSubst::none(db)) {
         EvalOutcome::Ready(value) => match static_assert_bool_value(db, value) {
             Some(true) => {}
             Some(false) => {
@@ -444,7 +559,7 @@ fn eval_static_assert_comparison_operand<'db>(
     if !body_diags.is_empty() && !static_assert_ignorable_type_diags(db, body_diags) {
         return None;
     }
-    eval_body_owner_const(db, owner, Vec::new()).into_ready()
+    eval_body_owner_const(db, owner, GenericSubst::none(db)).into_ready()
 }
 
 pub(super) fn check_body<'db>(
@@ -551,7 +666,25 @@ fn const_body_ctfe_diags_with_context<'db>(
             unreachable!("optional folding does not produce declaration diagnostics")
         }
     };
-    match eval_body_owner_const(db, owner, Vec::new()) {
+    let outcome = if require_value {
+        eval_body_owner_const(db, owner, GenericSubst::none(db))
+    } else {
+        // A dependent declaration may describe opaque computations, such as
+        // extern const calls, that only a value demand has to execute.
+        let key = SemanticInstanceKey::new(
+            db,
+            owner,
+            GenericSubst::none(db),
+            EffectProviderSubst::empty(db),
+            ImplEnv::empty(db, owner.scope()),
+        );
+        let request = const_computation_for_instance(db, key, Vec::new());
+        match describe_const_computation(db, request, CtfeConfig::default()) {
+            EvalOutcome::Failed(failure) => EvalOutcome::Failed(failure),
+            EvalOutcome::Ready(_) | EvalOutcome::Blocked(_) => return diags,
+        }
+    };
+    match outcome {
         EvalOutcome::Ready(value) => {
             if matches!(value.value(db), SemConstValue::Description(..)) {
                 let cause = InvalidCause::ConstEvalInvariant {
@@ -578,7 +711,7 @@ fn const_body_ctfe_diags_with_context<'db>(
                 let key = SemanticInstanceKey::new(
                     db,
                     owner,
-                    GenericSubst::empty(db),
+                    GenericSubst::none(db),
                     EffectProviderSubst::empty(db),
                     ImplEnv::empty(db, owner.scope()),
                 );
@@ -902,15 +1035,35 @@ impl<'db> TyChecker<'db> {
                         continue;
                     };
                     let ty = lower_hir_ty(self.db, hir_ty, scope, assumptions);
+                    let span = contract.span().init_block().params().param(idx).ty().into();
 
                     if ty_contains_const_hole(self.db, ty) {
                         self.push_diag(TyDiagCollection::from(
-                            TyLowerDiag::ConstHoleInValuePosition {
-                                span: contract.span().init_block().params().param(idx).ty().into(),
-                                ty,
-                            },
+                            TyLowerDiag::ConstHoleInValuePosition { span, ty },
                         ));
                         continue;
+                    }
+
+                    let source = lower_hir_ty_deferred(self.db, hir_ty, scope, assumptions);
+                    match runtime_size_bytes_with_source(self.db, ConcreteTypeView::new(ty, source))
+                    {
+                        Err(RuntimeSizeError::InvalidType(cause)) => {
+                            if let Some(diag) = diag_from_invalid_cause(span.clone(), &cause) {
+                                self.push_diag(diag);
+                            } else {
+                                self.push_diag(BodyDiag::TypeMustBeKnown(span));
+                            }
+                            continue;
+                        }
+                        Err(RuntimeSizeError::Overflow) => {
+                            self.push_diag(BodyDiag::TypeSizeOverflow { primary: span, ty });
+                            continue;
+                        }
+                        Err(RuntimeSizeError::UnavailableConcrete) | Ok(None) => {
+                            self.push_diag(BodyDiag::TypeMustBeKnown(span));
+                            continue;
+                        }
+                        Ok(Some(_)) => {}
                     }
 
                     if param.mode != crate::hir_def::params::FuncParamMode::Own {
@@ -1680,11 +1833,13 @@ impl<'db> TyChecker<'db> {
                             body,
                             site: BodyHoleSite::Expr(pending.expr),
                         },
+                        CallGenericArgPhase::Probe,
                         |this, _, given, current| this.table.unify(given, *current).is_ok(),
                     ) {
                         Ok(()) => {}
                         Err(CallGenericArgUnifyError::ArityMismatch { .. })
-                        | Err(CallGenericArgUnifyError::UnificationFailed) => {
+                        | Err(CallGenericArgUnifyError::UnificationFailed)
+                        | Err(CallGenericArgUnifyError::InvalidArgument(_)) => {
                             return Viability::Incompatible;
                         }
                     }
@@ -1707,8 +1862,7 @@ impl<'db> TyChecker<'db> {
                     {
                         let mut expected = expected.instantiate(db, callable.generic_args());
                         if let Some(inst) = callable.trait_inst() {
-                            let mut subst = AssocTySubst::new(inst);
-                            expected = expected.fold_with(db, &mut subst);
+                            expected = normalize_with_trait_evidence(db, expected, scope, inst);
                         }
                         let expected = normalize_ty(
                             db,
@@ -2728,7 +2882,7 @@ impl<'db> TyChecker<'db> {
         path: PathId<'db>,
         resolve_tail_as_value: bool,
         span: LazyPathSpan<'db>,
-        minter: &HoleMinter<'db>,
+        minter: &LoweringContext<'db>,
     ) -> Result<PathRes<'db>, PathResError<'db>> {
         let scope = self.env.scope();
         let mut invisible = None;
@@ -2801,14 +2955,23 @@ impl<'db> TyChecker<'db> {
     /// lives in the method-table probe; nothing is re-derived here.
     fn extract_inherent_method_to_term(
         &mut self,
-        canonical_receiver: &Canonicalized<'db, TyId<'db>>,
         cand: ProbedMethod<'db>,
         receiver_ty: TyId<'db>,
     ) -> TyId<'db> {
-        let bound = canonical_receiver.extract_solution(&mut self.table, cand.bound);
+        let bound = cand.extract(&mut self.table);
         self.register_effect_provider_args(cand.def, bound.func_ty);
         let snapshot = self.table.snapshot();
-        if self.table.unify(bound.key_ty, receiver_ty).is_err() {
+        let matched = self.table.unify(bound.key_ty, receiver_ty).is_ok()
+            && cand
+                .query
+                .assumptions
+                .list(self.db)
+                .iter()
+                .zip(bound.assumptions.list(self.db))
+                .all(|(&original, &solved)| self.table.unify(original, solved).is_ok());
+        if matched {
+            self.table.commit(snapshot);
+        } else {
             self.table.rollback_to(snapshot);
         }
         bound.func_ty
@@ -3086,38 +3249,6 @@ fn call_like_expr_args(expr: &Expr<'_>) -> Option<Vec<ExprId>> {
     }
 }
 
-fn resolved_callable_instance<'db>(
-    db: &'db dyn HirAnalysisDb,
-    typed: &TypedBody<'db>,
-    body: Body<'db>,
-    callable: &Callable<'db>,
-) -> Option<(Func<'db>, Vec<TyId<'db>>)> {
-    let CallableDef::Func(mut func) = callable.callable_def() else {
-        return None;
-    };
-    let mut generic_args = callable.generic_args().to_vec();
-    if let Some(inst) = callable.trait_inst()
-        && let Some(name) = func.name(db).to_opt()
-        && let Some((impl_func, impl_args)) = resolve_trait_method_instance(
-            db,
-            TraitSolveCx::new(db, body.scope()).with_assumptions(typed.assumptions()),
-            inst,
-            name,
-        )
-    {
-        let trait_arg_len = inst.args(db).len();
-        let mut resolved_args = impl_args;
-        resolved_args.extend_from_slice(
-            generic_args
-                .get(trait_arg_len..)
-                .unwrap_or(generic_args.as_slice()),
-        );
-        func = impl_func;
-        generic_args = resolved_args;
-    }
-    Some((func, generic_args))
-}
-
 type LayoutBackingEquivalenceKey = (
     usize,
     Option<(CallableInputLayoutHoleOrigin, Vec<LayoutBundlePathStep>)>,
@@ -3178,6 +3309,7 @@ fn degenerate_return_projection(
 pub enum ValuePathRef<'db> {
     UnitVariant(ResolvedVariant<'db>),
     TypeConst(TyId<'db>),
+    FunctionItem,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -3221,6 +3353,7 @@ impl<'db> TyVisitable<'db> for ValuePathRef<'db> {
         match self {
             Self::UnitVariant(variant) => variant.ty.visit_with(visitor),
             Self::TypeConst(ty) => ty.visit_with(visitor),
+            Self::FunctionItem => {}
         }
     }
 }
@@ -3243,6 +3376,7 @@ impl<'db> TyFoldable<'db> for ValuePathRef<'db> {
             // Folding it here would retain only the actual value and erase
             // which formal const parameter the expression referenced.
             Self::TypeConst(ty) => Self::TypeConst(ty),
+            Self::FunctionItem => Self::FunctionItem,
         }
     }
 }
@@ -3336,6 +3470,13 @@ impl<'db> TyVisitable<'db> for TypedBody<'db> {
         }
         for lowering in self.record_init_lowering.values().flatten() {
             lowering.visit_with(visitor);
+        }
+        for args in self.call_effect_args.values().flatten() {
+            args.visit_with(visitor);
+        }
+        self.param_bindings.visit_with(visitor);
+        for binding in self.pat_bindings.values().flatten() {
+            binding.visit_with(visitor);
         }
         for place in self.expr_places.values() {
             place.visit_with(visitor);
@@ -4224,7 +4365,21 @@ impl<'db> TypedBody<'db> {
         visited_locals: &mut FxHashSet<PatId>,
     ) -> Option<Vec<ReturnSource>> {
         let callable = self.callable_expr(expr)?;
-        let (func, _) = resolved_callable_instance(db, self, body, callable)?;
+        let CallableDef::Func(mut func) = callable.callable_def() else {
+            return None;
+        };
+        if let Some(inst) = callable.trait_inst()
+            && let Some(name) = func.name(db).to_opt()
+            && let Selection::Unique(method) = resolve_trait_method_instance(
+                db,
+                TraitSolveCx::new(db, body.scope()).with_assumptions(self.assumptions()),
+                inst,
+                name,
+            )
+            && let Some(body_func) = method.body()
+        {
+            func = body_func;
+        }
         let callee_sources = self.forwarded_return_param_sources_from_callable(db, func)?;
         let mut merged = FxHashSet::default();
         for callee_source in callee_sources {
@@ -5204,10 +5359,7 @@ fn try_instantiate_trait_method<'db>(
     let inst_self = table.instantiate_to_term(inst.self_ty(db));
     table.unify(inst_self, receiver_ty)?;
 
-    // Apply associated type substitutions from the trait instance
-    use crate::analysis::ty::fold::{AssocTySubst, TyFoldable};
-    let mut subst = AssocTySubst::new(inst);
-    Ok(ty.fold_with(db, &mut subst))
+    Ok(normalize_with_trait_evidence(db, ty, method.scope(), inst))
 }
 
 fn instantiate_trait_method<'db>(
@@ -5231,10 +5383,7 @@ fn instantiate_trait_assoc_fn<'db>(
     // `try_instantiate_trait_method`.
     let ty = TyId::foldl(db, TyId::func(db, method), inst.args(db));
 
-    // Apply associated type substitutions from the trait instance
-    use crate::analysis::ty::fold::{AssocTySubst, TyFoldable};
-    let mut subst = AssocTySubst::new(inst);
-    ty.fold_with(db, &mut subst)
+    normalize_with_trait_evidence(db, ty, method.scope(), inst)
 }
 
 struct TyCheckerFinalizer<'db> {

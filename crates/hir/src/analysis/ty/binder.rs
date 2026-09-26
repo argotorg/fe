@@ -1,443 +1,88 @@
-use std::collections::hash_map::Entry;
-
-use rustc_hash::FxHashMap;
-
 use super::{
-    const_ty::{ConstTyData, ConstTyId},
-    fold::{TyFoldable, TyFolder},
-    trait_def::TraitInstId,
-    ty_def::{AssocTy, TyData, TyId},
-    visitor::{TyVisitable, TyVisitor, walk_ty},
+    fold::TyFoldable,
+    subst::substitute_complete,
+    ty_def::TyId,
+    ty_lower::{CompleteSubst, ParamSchemaId, SubstError},
 };
-use crate::analysis::HirAnalysisDb;
-use crate::hir_def::{GenericParamOwner, ItemKind, scope_graph::ScopeId};
+use crate::{analysis::HirAnalysisDb, hir_def::GenericParamOwner};
 
-/// A `Binder` is a type constructor that binds a type variable within its
-/// scope.
-///
-/// # Type Parameters
-/// - `T`: The type being bound within the `Binder`.
+/// A declaration template whose parameters are interpreted by the full
+/// parameter schema of `owner`. Instantiation always uses that schema, so a
+/// substitution built for another declaration is rejected rather than leaving
+/// the template's parameters untouched. A closed template (no owner) binds no
+/// parameters, e.g. contract field types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Binder<T> {
+pub struct Binder<'db, T> {
+    owner: Option<GenericParamOwner<'db>>,
     value: T,
 }
-unsafe impl<T> salsa::Update for Binder<T>
+unsafe impl<T> salsa::Update for Binder<'_, T>
 where
     T: salsa::Update,
 {
     unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {
         unsafe {
             let old_value = &mut *old_pointer;
-            T::maybe_update(&mut old_value.value, new_value.value)
+            let owner_changed = old_value.owner != new_value.owner;
+            old_value.owner = new_value.owner;
+            T::maybe_update(&mut old_value.value, new_value.value) | owner_changed
         }
     }
 }
 
-impl<T> Binder<T> {
-    pub const fn bind(value: T) -> Self {
-        Binder { value }
+impl<'db, T> Binder<'db, T> {
+    pub const fn bind(owner: GenericParamOwner<'db>, value: T) -> Self {
+        Binder {
+            owner: Some(owner),
+            value,
+        }
     }
-}
 
-impl<'db, T> Binder<T>
-where
-    T: TyFoldable<'db>,
-{
-    /// Instantiates the binder with an identity function.
-    ///
-    /// This method essentially returns the value within the binder without any
-    /// modifications.
-    ///
-    /// # Returns
-    /// The value contained within the `Binder`.
-    ///
-    /// # Note
-    /// This function is useful when you want to retrieve the value inside the
-    /// binder without applying any transformations.
+    pub const fn closed(value: T) -> Self {
+        Binder { owner: None, value }
+    }
+
+    /// Returns the template in declaration coordinates. This is not an
+    /// instantiation; use it only where the declaration's own parameters are
+    /// the intended interpretation.
     pub fn instantiate_identity(self) -> T {
         self.value
     }
 
-    /// Retrieves a reference to the value within the binder.
-    ///
-    /// This function is useful when you want to access some data that you know
-    /// doesn't depend on bounded variables in the binder.
+    /// Borrows the template in declaration coordinates, for data known not to
+    /// depend on the bound parameters.
     pub fn skip_binder(&self) -> &T {
         &self.value
     }
+}
 
-    /// Instantiates the binder with the provided arguments.
-    ///
-    /// This method takes a reference to a `HirAnalysisDb` and a slice of `TyId`
-    /// arguments, and returns a new instance of the type contained within
-    /// the binder with the arguments applied.
-    ///
-    /// # Parameters
-    /// - `db`: A reference to the `HirAnalysisDb`.
-    /// - `args`: A slice of `TyId` that will be used to instantiate the type.
-    ///
-    /// # Returns
-    /// A new instance of the type contained within the binder with the
-    /// arguments applied.
+impl<'db, T> Binder<'db, T>
+where
+    T: TyFoldable<'db>,
+{
+    /// Instantiates the template with `args`, one per full-schema slot.
     pub fn instantiate(self, db: &'db dyn HirAnalysisDb, args: &[TyId<'db>]) -> T {
-        let mut folder = InstantiateFolder {
-            owner: bound_value_owner(db, &self.value),
-            args,
+        let Some(owner) = self.owner else {
+            assert!(args.is_empty(), "closed binder instantiated with arguments");
+            return self.value;
         };
-        self.value.fold_with(db, &mut folder)
+        let subst = CompleteSubst::for_owner(db, owner, args.to_vec())
+            .unwrap_or_else(|error| panic!("invalid binder arguments for {owner:?}: {error:?}"));
+        self.instantiate_subst(db, &subst)
+            .unwrap_or_else(|error| panic!("failed to instantiate binder of {owner:?}: {error:?}"))
     }
 
-    /// Instantiates the binder with the provided arguments, substituting only
-    /// params owned by `owner`.
-    pub fn instantiate_scoped(
+    /// Instantiates the template with a substitution over this declaration's
+    /// schema or a restricted domain of it.
+    pub fn instantiate_subst(
         self,
         db: &'db dyn HirAnalysisDb,
-        owner: ScopeId<'db>,
-        args: &[TyId<'db>],
-    ) -> T {
-        let mut folder = InstantiateScopedFolder {
-            owner,
-            args,
-            new_owner: None,
-        };
-        self.value.fold_with(db, &mut folder)
-    }
-
-    /// Instantiates params owned by `owner` and transfers retained context to
-    /// `new_owner`. Other contexts keep their original ownership.
-    pub fn instantiate_scoped_into(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        owner: ScopeId<'db>,
-        new_owner: ScopeId<'db>,
-        args: &[TyId<'db>],
-    ) -> T {
-        let mut folder = InstantiateScopedFolder {
-            owner,
-            args,
-            new_owner: Some(new_owner),
-        };
-        self.value.fold_with(db, &mut folder)
-    }
-
-    /// Instantiates the binder with a custom function.
-    ///
-    /// This method takes a reference to a `HirAnalysisDb` and a closure that
-    /// maps a bound variable to `TyId`, and returns a new instance of the
-    /// type contained within the binder with the custom function applied.
-    ///
-    /// # Parameters
-    /// - `db`: A reference to the `HirAnalysisDb`.
-    /// - `f`: A function that map a bouded variable to a type.
-    ///
-    /// # Returns
-    /// A new instance of the type contained within the binder with the custom
-    /// function applied.
-    pub fn instantiate_with<F>(self, db: &'db dyn HirAnalysisDb, f: F) -> T
-    where
-        F: FnMut(TyId<'db>) -> TyId<'db>,
-    {
-        let mut folder = InstantiateWithFolder {
-            f,
-            params: FxHashMap::default(),
-        };
-        self.value.fold_with(db, &mut folder)
-    }
-}
-
-struct InstantiateFolder<'db, 'a> {
-    owner: Option<ScopeId<'db>>,
-    args: &'a [TyId<'db>],
-}
-
-impl<'db> TyFolder<'db> for InstantiateFolder<'db, '_> {
-    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        match ty.data(db) {
-            TyData::TyParam(param) if !param.is_effect() => {
-                return self.args[param.idx];
-            }
-            TyData::ConstTy(const_ty) => {
-                if let ConstTyData::TyParam(param, _) = const_ty.data(db) {
-                    return self.args[param.idx];
-                }
-
-                let folded = ty.super_fold_with(db, self);
-                if let TyData::ConstTy(const_ty) = folded.data(db)
-                    && let Some(const_ty) = backfill_unevaluated_const_generic_args(
-                        db, *const_ty, self.args, self.owner,
-                    )
-                {
-                    return TyId::const_ty(db, const_ty);
-                }
-                return folded;
-            }
-
-            TyData::AssocTy(assoc_ty) => {
-                // When substituting type parameters in associated types,
-                // we need to fold the trait instance to substitute its generic parameters
-                let trait_inst = assoc_ty.trait_;
-
-                // Fold the self type and generic arguments of the trait instance
-                let mut folded_generic_args = vec![];
-                for &arg in trait_inst.args(db) {
-                    folded_generic_args.push(self.fold_ty(db, arg));
-                }
-
-                // If any types changed, create a new trait instance with substituted types
-                if folded_generic_args != *trait_inst.args(db) {
-                    // If we couldn't resolve to a concrete type, create a new trait instance
-                    let new_trait_inst = TraitInstId::new(
-                        db,
-                        trait_inst.def(db),
-                        folded_generic_args,
-                        trait_inst.assoc_type_bindings(db).clone(),
-                    );
-
-                    // Return a new associated type with the updated trait instance
-                    return TyId::new(
-                        db,
-                        TyData::AssocTy(AssocTy {
-                            trait_: new_trait_inst,
-                            name: assoc_ty.name,
-                        }),
-                    );
-                }
-            }
-
-            _ => {}
+        subst: &CompleteSubst<'db>,
+    ) -> Result<T, SubstError<'db>> {
+        if self.owner.map(|owner| ParamSchemaId::full(db, owner)) != Some(subst.domain().schema(db))
+        {
+            return Err(SubstError::InvalidDomain(subst.domain()));
         }
-
-        ty.super_fold_with(db, self)
-    }
-}
-
-struct InstantiateScopedFolder<'db, 'a> {
-    owner: ScopeId<'db>,
-    args: &'a [TyId<'db>],
-    new_owner: Option<ScopeId<'db>>,
-}
-
-impl<'db> TyFolder<'db> for InstantiateScopedFolder<'db, '_> {
-    fn fold_scope(&mut self, scope: ScopeId<'db>) -> ScopeId<'db> {
-        if scope == self.owner {
-            self.new_owner.unwrap_or(scope)
-        } else {
-            scope
-        }
-    }
-
-    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        match ty.data(db) {
-            TyData::TyParam(param) if param.owner == self.owner && !param.is_effect() => {
-                return self.args[param.idx];
-            }
-            TyData::ConstTy(const_ty) => {
-                if let ConstTyData::TyParam(param, _) = const_ty.data(db)
-                    && param.owner == self.owner
-                {
-                    return self.args[param.idx];
-                }
-
-                let folded = ty.super_fold_with(db, self);
-                if let TyData::ConstTy(const_ty) = folded.data(db)
-                    && let Some(const_ty) = backfill_unevaluated_const_generic_args(
-                        db,
-                        *const_ty,
-                        self.args,
-                        Some(self.owner),
-                    )
-                {
-                    return TyId::const_ty(db, const_ty);
-                }
-                return folded;
-            }
-
-            TyData::AssocTy(assoc_ty) => {
-                let trait_inst = assoc_ty.trait_;
-
-                let mut folded_generic_args = vec![];
-                for &arg in trait_inst.args(db) {
-                    folded_generic_args.push(self.fold_ty(db, arg));
-                }
-
-                if folded_generic_args != *trait_inst.args(db) {
-                    let new_trait_inst = TraitInstId::new(
-                        db,
-                        trait_inst.def(db),
-                        folded_generic_args,
-                        trait_inst.assoc_type_bindings(db).clone(),
-                    );
-
-                    return TyId::new(
-                        db,
-                        TyData::AssocTy(AssocTy {
-                            trait_: new_trait_inst,
-                            name: assoc_ty.name,
-                        }),
-                    );
-                }
-            }
-
-            _ => {}
-        }
-
-        ty.super_fold_with(db, self)
-    }
-}
-
-pub(crate) fn backfill_unevaluated_const_generic_args<'db>(
-    db: &'db dyn HirAnalysisDb,
-    const_ty: ConstTyId<'db>,
-    args: &[TyId<'db>],
-    owner: Option<ScopeId<'db>>,
-) -> Option<ConstTyId<'db>> {
-    let ConstTyData::UnEvaluated {
-        body,
-        ty,
-        const_def,
-        generic_args,
-        preserve_unevaluated,
-        defer_validation,
-    } = const_ty.data(db)
-    else {
-        return None;
-    };
-    let owner = owner?;
-    if !generic_args.is_empty()
-        || args.is_empty()
-        || unevaluated_const_owner_scope(db, *body) != Some(owner)
-    {
-        return None;
-    }
-
-    Some(ConstTyId::new(
-        db,
-        ConstTyData::UnEvaluated {
-            body: *body,
-            ty: *ty,
-            const_def: *const_def,
-            generic_args: args.to_vec(),
-            preserve_unevaluated: *preserve_unevaluated,
-            defer_validation: *defer_validation,
-        },
-    ))
-}
-
-pub(crate) fn bound_value_owner<'db, T>(
-    db: &'db dyn HirAnalysisDb,
-    value: &T,
-) -> Option<ScopeId<'db>>
-where
-    T: TyVisitable<'db>,
-{
-    struct OwnerCollector<'db> {
-        db: &'db dyn HirAnalysisDb,
-        owner: Option<ScopeId<'db>>,
-        ambiguous: bool,
-    }
-
-    impl<'db> OwnerCollector<'db> {
-        fn record_owner(&mut self, owner: ScopeId<'db>) {
-            match self.owner {
-                Some(current) if current != owner => self.ambiguous = true,
-                Some(_) => {}
-                None => self.owner = Some(owner),
-            }
-        }
-    }
-
-    impl<'db> TyVisitor<'db> for OwnerCollector<'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-
-        fn visit_ty(&mut self, ty: TyId<'db>) {
-            if self.ambiguous {
-                return;
-            }
-
-            match ty.data(self.db) {
-                TyData::TyParam(param) if !param.is_effect() => self.record_owner(param.owner),
-                TyData::ConstTy(const_ty) => match const_ty.data(self.db) {
-                    ConstTyData::TyParam(param, _) => self.record_owner(param.owner),
-                    ConstTyData::UnEvaluated { body, .. } => {
-                        if let Some(owner) = unevaluated_const_owner_scope(self.db, *body) {
-                            self.record_owner(owner);
-                        }
-                    }
-                    _ => walk_ty(self, ty),
-                },
-                _ => walk_ty(self, ty),
-            }
-        }
-    }
-
-    let mut collector = OwnerCollector {
-        db,
-        owner: None,
-        ambiguous: false,
-    };
-    value.visit_with(&mut collector);
-    (!collector.ambiguous).then_some(collector.owner).flatten()
-}
-
-fn unevaluated_const_owner_scope<'db>(
-    db: &'db dyn HirAnalysisDb,
-    body: crate::hir_def::Body<'db>,
-) -> Option<ScopeId<'db>> {
-    let mut owner = body.scope().parent_item(db)?;
-    while let ItemKind::Body(parent) = owner {
-        owner = parent.scope().parent_item(db)?;
-    }
-    GenericParamOwner::from_item_opt(owner).map(GenericParamOwner::scope)
-}
-
-struct InstantiateWithFolder<'db, F>
-where
-    F: FnMut(TyId<'db>) -> TyId<'db>,
-{
-    f: F,
-    // Cache by full param identity (TyId), not by param.idx.
-    //
-    // Different generic-param owners can legally reuse the same idx; caching by idx
-    // conflates distinct params and makes instantiate_with unsound for values that
-    // contain params from multiple owners.
-    params: FxHashMap<TyId<'db>, TyId<'db>>,
-}
-
-impl<'db, F> TyFolder<'db> for InstantiateWithFolder<'db, F>
-where
-    F: FnMut(TyId<'db>) -> TyId<'db>,
-{
-    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        match ty.data(db) {
-            TyData::TyParam(param) if !param.is_effect() => {
-                match self.params.entry(ty) {
-                    Entry::Occupied(entry) => return *entry.get(),
-                    Entry::Vacant(entry) => {
-                        let ty = (self.f)(ty);
-                        entry.insert(ty);
-                        return ty;
-                    }
-                };
-            }
-            TyData::ConstTy(const_ty) => {
-                if let ConstTyData::TyParam(param, _) = const_ty.data(db) {
-                    let _ = param;
-                    match self.params.entry(ty) {
-                        Entry::Occupied(entry) => return *entry.get(),
-                        Entry::Vacant(entry) => {
-                            let ty = (self.f)(ty);
-                            entry.insert(ty);
-                            return ty;
-                        }
-                    };
-                }
-            }
-
-            _ => {}
-        }
-
-        ty.super_fold_with(db, self)
+        substitute_complete(db, self.value, subst)
     }
 }

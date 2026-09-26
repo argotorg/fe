@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assoc_equality_matches_trait_args.fe
+---
+error[8-0000]: type mismatch
+   ┌─ assoc_equality_matches_trait_args.fe:12:5
+   │
+12 │     x
+   │     ^ expected `u256`, but `T::Item` is given

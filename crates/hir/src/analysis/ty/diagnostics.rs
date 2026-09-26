@@ -278,6 +278,7 @@ pub enum ContractFieldLayoutIssue {
     ConflictingRootSpaces,
     ExtentOverflow,
     IncompleteProjection,
+    InconsistentArrayLength,
     AmbiguousBindingSelector,
     InconsistentRootType,
     RootNeedsLanding,
@@ -1165,6 +1166,11 @@ pub enum ImplDiag<'db> {
         impl_ty: TyId<'db>,
     },
 
+    MethodEffectMismatch {
+        trait_m: CallableDef<'db>,
+        impl_m: CallableDef<'db>,
+    },
+
     MethodStricterBound {
         span: DynLazySpan<'db>,
         stricter_bounds: ThinVec<TraitInstId<'db>>,
@@ -1268,6 +1274,7 @@ impl ImplDiag<'_> {
             Self::MethodArgTyMismatch { .. } => 7,
             Self::MethodRetTyMismatch { .. } => 8,
             Self::MethodStricterBound { .. } => 9,
+            Self::MethodEffectMismatch { .. } => 24,
             Self::InvalidSelfType { .. } => 10,
             Self::InherentImplIsNotAllowed { .. } => 11,
             Self::MissingAssociatedType { .. } => 12,

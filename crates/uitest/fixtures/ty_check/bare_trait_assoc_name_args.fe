@@ -1,0 +1,5 @@
+trait Has<T> {
+    type Item
+    const LEN: usize
+    fn f(_ x: Item<u8>) -> usize { LEN<u8> }
+}

@@ -1,0 +1,20 @@
+trait Bound<X> {}
+
+trait Foo<T, U> {
+    type Item: Bound<T>
+}
+
+fn needs_bound<X, B: Bound<X>>() {}
+
+// `F::Item: Bound<T>` is instantiated with the bound's own trait arguments.
+fn first_arg<F: Foo<u256, u8>>() {
+    needs_bound<u256, F::Item>()
+}
+
+fn swapped<A, B, F: Foo<B, A>>() {
+    needs_bound<B, F::Item>()
+}
+
+fn second_arg<F: Foo<u256, u8>>() {
+    needs_bound<u8, F::Item>()
+}

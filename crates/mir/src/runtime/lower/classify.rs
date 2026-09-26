@@ -1,13 +1,11 @@
 #[cfg(test)]
 use hir::analysis::semantic::normalized::ReadMode;
 
-use common::indexmap::IndexSet;
 use cranelift_entity::{EntityRef, PrimaryMap, entity_impl};
 use hir::analysis::{
     semantic::{
-        FieldIndex, GenericSubst, ImplEnv, Mutability, SConst, SLocal, SLocalId, SemanticCalleeRef,
-        SemanticInstance, SemanticInstanceKey, SemanticLocalKind, SemanticLocalRole,
-        ValueProvenance, VariantIndex, get_or_build_semantic_instance,
+        FieldIndex, Mutability, SConst, SLocal, SLocalId, SemanticInstance, SemanticLocalKind,
+        SemanticLocalRole, ValueProvenance, VariantIndex, get_or_build_semantic_instance,
         normalized::{
             NDataProjection, NEffectArg, NExpr, NIndex, NOperand, NPlace, NPlaceBase, NRootKind,
             NStatementKind, NValueDefinition, NValueId,
@@ -16,12 +14,8 @@ use hir::analysis::{
     ty::{
         ProviderKind,
         corelib::{ContractMetadataKind, contract_metadata_kind, runtime_builtin_func_kind},
-        normalize::normalize_ty,
         provider::registered_root_providers,
-        trait_def::{
-            TraitInstId, complete_resolved_trait_method_args, resolve_trait_method_instance,
-        },
-        trait_resolution::{PredicateListId, TraitSolveCx},
+        trait_resolution::PredicateListId,
         ty_check::{BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite},
         ty_def::{CapabilityKind, TyData, TyId},
     },
@@ -70,7 +64,7 @@ use super::{
     semantic_body::{RuntimeOperand, RuntimeSemanticBody},
     type_info::{
         RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env,
-        provider_address_space_to_runtime, provider_class_for_target_in_env,
+        provider_address_space_to_runtime, provider_class_for_target_in_env, runtime_array_len,
         runtime_interface_ty_in_env, runtime_repr_ty_in_env, runtime_zero_sized_transport_ty,
         runtime_zero_sized_ty, scalar_class_for_ty_in_env, stored_class_for_ty_in_env,
         top_level_class_for_ty_in_env,
@@ -259,24 +253,17 @@ struct CallStaticFacts<'db> {
 
 impl<'db> BodyStaticFacts<'db> {
     pub(crate) fn new(db: &'db dyn MirDb, body: &RuntimeSemanticBody<'db>) -> Self {
-        let typed_body = body.owner().key(db).typed_body(db);
         let type_env = RuntimeTypeEnv::for_semantic(db, body.owner());
-        Self::new_in_context(db, body, typed_body, type_env)
+        Self::new_in_context(db, body, type_env)
     }
 
     pub(super) fn new_in_context(
         db: &'db dyn MirDb,
         body: &RuntimeSemanticBody<'db>,
-        typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
         type_env: RuntimeTypeEnv<'db>,
     ) -> Self {
         let mut boundary_sites = BoundarySiteAllocator::default();
-        let expr_facts_builder = ExprStaticFactsBuilder {
-            db,
-            body,
-            typed_body,
-            type_env,
-        };
+        let expr_facts_builder = ExprStaticFactsBuilder { db, body, type_env };
         let local_facts: Vec<_> = body
             .locals
             .iter()
@@ -651,12 +638,14 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                         self.body.owner().key(self.db),
                     );
                 };
-                let len = ty.array_len(self.db).unwrap_or_else(|| {
+                let len = runtime_array_len(self.db, *ty)
+                    .expect("valid runtime array length")
+                    .unwrap_or_else(|| {
                     panic!(
                         "array repeat with non-concrete length reached runtime class inference: \
                          {expr:?}"
                     )
-                });
+                    });
                 aggregate_make_class_from_facts(
                     self,
                     facts,
@@ -1205,7 +1194,6 @@ fn local_disallows_const_ref_storage(body: &RuntimeSemanticBody<'_>, local: SLoc
 struct ExprStaticFactsBuilder<'a, 'db> {
     db: &'db dyn MirDb,
     body: &'a RuntimeSemanticBody<'db>,
-    typed_body: &'a hir::analysis::ty::ty_check::TypedBody<'db>,
     type_env: RuntimeTypeEnv<'db>,
 }
 
@@ -1219,7 +1207,6 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
     ) -> Option<ExprStaticFacts<'db>> {
         let db = self.db;
         let body = self.body;
-        let typed_body = self.typed_body;
         let type_env = self.type_env;
         Some(match expr {
             NExpr::Forward { .. }
@@ -1260,12 +1247,14 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                 scalar_class_for_ty_in_env(db, type_env, result_ty).map(RuntimeClass::Scalar),
             ),
             NExpr::ArrayRepeat { ty, .. } => {
-                let len = ty.array_len(db).unwrap_or_else(|| {
+                let len = runtime_array_len(db, *ty)
+                    .expect("valid runtime array length")
+                    .unwrap_or_else(|| {
                     panic!(
                         "array repeat with non-concrete length reached runtime class inference: \
                          {expr:?}"
                     )
-                });
+                    });
                 let elem_ty = ty
                     .decompose_ty_app(db)
                     .1
@@ -1433,21 +1422,10 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
             }
             NExpr::Call {
                 callee,
-                args,
                 effect_args,
                 ..
             } => {
-                let caller_key = body.owner().key(db);
-                let callee_key = resolve_runtime_call_key(
-                    db, caller_key, typed_body, body, *callee, args,
-                )
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "runtime call resolution failed during return-class inference for {:?}: {err}",
-                        caller_key,
-                    )
-                });
-                let semantic = get_or_build_semantic_instance(db, callee_key);
+                let semantic = get_or_build_semantic_instance(db, callee.key);
                 let builtin_return_class = extern_builtin_return_class(db, semantic, result_ty);
                 let return_decision = static_runtime_return_decision(db, semantic);
                 let needs_input_plan = builtin_return_class.is_none()
@@ -2416,189 +2394,12 @@ fn desired_read_only_view_param_plan<'db>(
     }
 }
 
-pub(crate) fn resolve_runtime_call_key<'db>(
-    db: &'db dyn MirDb,
-    caller_key: SemanticInstanceKey<'db>,
-    caller_typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
-    body: &RuntimeSemanticBody<'db>,
-    callee: SemanticCalleeRef<'db>,
-    args: &[NOperand],
-) -> Result<SemanticInstanceKey<'db>, crate::runtime::LowerError> {
-    let callee_key = callee.key;
-    let callee_semantic = get_or_build_semantic_instance(db, callee_key);
-    if contract_metadata_builtin(db, callee_semantic).is_some() {
-        return Ok(callee_key);
-    }
-    let BodyOwner::Func(func) = callee_key.owner(db) else {
-        return Ok(callee_key);
-    };
-    let Some(trait_) = func.containing_trait(db) else {
-        return Ok(callee_key);
-    };
-    if func.body(db).is_some() {
-        return Ok(callee_key);
-    }
-    let Some(method_name) = func.name(db).to_opt() else {
-        return Err(crate::runtime::LowerError::Unsupported(format!(
-            "runtime trait-call resolution reached an unnamed declaration-only method: caller={caller_key:?} callee={callee_key:?}"
-        )));
-    };
-    let impl_env = callee_key.impl_env(db);
-    let original_inst: Option<TraitInstId<'db>> = impl_env
-        .witnesses(db)
-        .iter()
-        .find(|inst| inst.def(db) == trait_)
-        .copied();
-    let concrete_inst = if func
-        .params(db)
-        .next()
-        .is_some_and(|param| param.is_self_param(db))
-    {
-        let Some(arg) = args.first() else {
-            return Err(crate::runtime::LowerError::Unsupported(format!(
-                "runtime trait-call resolution is missing a self argument: caller={caller_key:?} callee={callee_key:?}"
-            )));
-        };
-        let Some(self_ty) = concrete_runtime_self_ty_for_call_arg(
-            db,
-            RuntimeTypeEnv::for_semantic(db, body.owner()),
-            body,
-            body.operand_local(*arg).ok_or_else(|| {
-                crate::runtime::LowerError::Unsupported(format!(
-                    "runtime trait-call self argument has no representation: caller={caller_key:?} callee={callee_key:?} value={:?}",
-                    arg.value,
-                ))
-            })?,
-        ) else {
-            return Err(crate::runtime::LowerError::Unsupported(format!(
-                "runtime trait-call resolution could not infer the concrete self type: caller={caller_key:?} callee={callee_key:?} local={:?}",
-                arg.value,
-            )));
-        };
-        let mut inst_args = original_inst
-            .map(|inst| inst.args(db).to_vec())
-            .unwrap_or_else(|| vec![self_ty]);
-        let Some(first) = inst_args.first_mut() else {
-            return Err(crate::runtime::LowerError::Unsupported(format!(
-                "runtime trait-call resolution produced an empty trait-inst arg list: caller={caller_key:?} callee={callee_key:?}"
-            )));
-        };
-        *first = self_ty;
-        TraitInstId::new(
-            db,
-            trait_,
-            inst_args,
-            original_inst
-                .map(|inst| inst.assoc_type_bindings(db).clone())
-                .unwrap_or_default(),
-        )
-    } else {
-        let Some(original_inst) = original_inst else {
-            return Err(crate::runtime::LowerError::Unsupported(format!(
-                "runtime trait-call resolution is missing a trait witness for a declaration-only method: caller={caller_key:?} callee={callee_key:?}"
-            )));
-        };
-        original_inst
-    };
-    let assumptions = runtime_callee_assumptions(db, caller_key, caller_typed_body);
-    let Some((impl_func, impl_args)) = resolve_trait_method_instance(
-        db,
-        TraitSolveCx::new(db, caller_key.impl_env(db).normalization_scope(db))
-            .with_assumptions(assumptions),
-        concrete_inst,
-        method_name,
-    ) else {
-        return Err(crate::runtime::LowerError::Unsupported(format!(
-            "runtime trait-call resolution failed to resolve a concrete impl body: caller={caller_key:?} decl={callee_key:?} method={} concrete_inst={} original_inst={}",
-            method_name.data(db),
-            concrete_inst.pretty_print(db, false),
-            original_inst
-                .map(|inst| inst.pretty_print(db, false))
-                .unwrap_or_else(|| "<none>".to_string()),
-        )));
-    };
-    let impl_args = complete_resolved_trait_method_args(
-        db,
-        impl_func,
-        impl_args,
-        callee_key.subst(db).generic_args(db),
-        concrete_inst.args(db).len(),
-    );
-    let owner = BodyOwner::Func(impl_func);
-    Ok(SemanticInstanceKey::new(
-        db,
-        owner,
-        GenericSubst::new(db, impl_args),
-        hir::analysis::semantic::EffectProviderSubst::empty(db),
-        ImplEnv::for_resolved_trait_method(db, owner, concrete_inst),
-    ))
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum GenericNumericIntrinsicKind {
     Bitcast,
     Saturating(SaturatingBinOp),
     CheckedBinary(ArithBinOp),
     CheckedNeg,
-}
-
-fn runtime_callee_assumptions<'db>(
-    db: &'db dyn MirDb,
-    caller_key: SemanticInstanceKey<'db>,
-    caller_typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
-) -> PredicateListId<'db> {
-    let impl_env = caller_key.impl_env(db);
-    let mut predicates: IndexSet<_> = caller_typed_body
-        .assumptions()
-        .list(db)
-        .iter()
-        .copied()
-        .collect();
-    predicates.extend(impl_env.assumptions(db).list(db).iter().copied());
-    predicates.extend(impl_env.witnesses(db).iter().copied());
-    PredicateListId::new(db, predicates.into_iter().collect::<Vec<_>>())
-}
-
-fn concrete_runtime_self_ty_for_call_arg<'db>(
-    db: &'db dyn MirDb,
-    env: RuntimeTypeEnv<'db>,
-    body: &RuntimeSemanticBody<'db>,
-    local: SLocalId,
-) -> Option<TyId<'db>> {
-    let scope = env.scope;
-    let assumptions = env.assumptions;
-    let normalized = |ty| normalize_runtime_self_ty(db, ty, scope, assumptions);
-    let local_data = body.local(local)?;
-    let provider = local_data.role.root_provider(&body.locals);
-    match &local_data.role {
-        SemanticLocalRole::Erased => None,
-        SemanticLocalRole::DirectValue { .. } | SemanticLocalRole::DirectCarrier { .. }
-            if provider.is_some() =>
-        {
-            Some(normalized(provider?.provider_ty))
-        }
-        SemanticLocalRole::PlaceBoundValue { value_ty, .. } => Some(normalized(
-            provider
-                .and_then(|provider| provider.semantics.target_ty)
-                .unwrap_or(*value_ty),
-        )),
-        SemanticLocalRole::DirectValue { .. } => Some(normalized(local_data.ty)),
-        SemanticLocalRole::PlaceCarrier { value_ty, .. } => Some(normalized(*value_ty)),
-        SemanticLocalRole::DirectCarrier { target_ty, .. } => Some(normalized(*target_ty)),
-    }
-}
-
-fn normalize_runtime_self_ty<'db>(
-    db: &'db dyn MirDb,
-    ty: TyId<'db>,
-    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> TyId<'db> {
-    let ty = runtime_repr_ty_in_env(db, RuntimeTypeEnv::new(scope, assumptions), ty);
-    if let Some((_, inner)) = ty.as_borrow(db) {
-        return scope.map_or(inner, |scope| normalize_ty(db, inner, scope, assumptions));
-    }
-    scope.map_or(ty, |scope| normalize_ty(db, ty, scope, assumptions))
 }
 
 pub(super) fn carrier_value_class<'db>(
@@ -3165,18 +2966,24 @@ mod tests {
     use driver::DriverDataBase;
     use hir::{
         analysis::semantic::{
-            NEffectArg, NPlace, NPlaceBase, NRootKind, NStatementKind, NTerminatorKind,
-            SemanticInstance, SemanticNormalizationFailure, get_or_build_semantic_instance,
+            EffectProviderSubst, GenericSubst, ImplEnv, NEffectArg, NPlace, NPlaceBase, NRootKind,
+            NStatementKind, NTerminatorKind, SemanticCalleeRef, SemanticInstance,
+            SemanticInstanceKey, SemanticNormalizationFailure, get_or_build_semantic_instance,
             owner_effect_bindings, resolved_provider_binding_for_instance_effect,
             root_semantic_instance_key,
         },
-        analysis::ty::ty_check::{BodyOwner, LocalBinding},
+        analysis::ty::{
+            trait_def::TraitInstId,
+            trait_resolution::PredicateListId,
+            ty_check::{BodyOwner, LocalBinding},
+        },
     };
     use url::Url;
 
     use super::super::{
         abi::runtime_declaration_abi_plan,
         arg_selector::RuntimeArgSelector,
+        body::check_runtime_body_supported,
         boundary::BoundarySiteAllocator,
         call_input::{
             CompiledCallInputPlan, CompiledEffectArgPlan, compile_call_input_plan_for_semantic,
@@ -3259,6 +3066,75 @@ mod tests {
             panic!("failed to build root semantic key for `{name}`: {err:?}")
         });
         get_or_build_semantic_instance(db, key)
+    }
+
+    #[test]
+    fn runtime_rejects_bodyless_trait_call_before_layout_planning() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///runtime_trait_body_layout_slot.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Slot<const ROOT: u256 = _> {}
+trait Has { type Item; fn take(_ x: Self::Item) }
+impl Has for bool {
+    type Item = Slot
+    fn take(_ x: Slot) {}
+}
+fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("missing source file");
+        let top_mod = db.top_mod(file);
+        let trait_ = top_mod.all_traits(&db)[0];
+        let declaration = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| func.containing_trait(&db) == Some(trait_))
+            .expect("missing trait method declaration");
+        let caller = semantic_instance_for_named_func(&db, top_mod, "caller");
+        let mut body = RuntimeSemanticBody::admitted(&db, caller).expect("missing caller body");
+        let trait_inst = TraitInstId::new_simple(&db, trait_, vec![TyId::bool(&db)]);
+        let callee_key = SemanticInstanceKey::new(
+            &db,
+            BodyOwner::Func(declaration),
+            GenericSubst::for_owner(&db, declaration.into(), trait_inst.args(&db).to_vec()),
+            EffectProviderSubst::empty(&db),
+            ImplEnv::new(
+                &db,
+                declaration.scope(),
+                PredicateListId::empty_list(&db),
+                vec![trait_inst],
+            ),
+        );
+        let mut replaced = false;
+        for block in &mut body.normalized.blocks {
+            for statement in &mut block.statements {
+                if let NStatementKind::Define {
+                    expr: NExpr::Call { callee, .. },
+                    ..
+                } = &mut statement.kind
+                {
+                    *callee = SemanticCalleeRef { key: callee_key };
+                    replaced = true;
+                }
+            }
+        }
+        assert!(replaced, "source call was not normalized");
+        let error = check_runtime_body_supported(&db, caller.key(&db), &body)
+            .expect_err("declaration-only target must fail before layout planning");
+        assert!(
+            matches!(&error, crate::runtime::LowerError::Unsupported(message) if message.contains("requires a selected implementation")),
+            "unexpected admission error: {error:?}"
+        );
     }
 
     fn contract_by_name<'db>(

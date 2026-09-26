@@ -25,12 +25,12 @@ use super::{
     ty_may_be_code_region_token,
 };
 use crate::analysis::place::{Place, PlaceBase, PlaceProjection};
-use crate::analysis::semantic::runtime_size_bytes;
+use crate::analysis::semantic::{RuntimeSizeError, runtime_size_bytes};
 use crate::analysis::ty::{
     adt_def::AdtRef,
     assoc_const::{AssocConstUse, InherentConstUse},
     canonical::{Canonicalized, Solution},
-    const_ty::{BodyHoleSite, HoleAnchor, HoleMinter, instantiate_inherent_const_decl_ty},
+    const_ty::{BodyHoleSite, HoleAnchor, LoweringContext, instantiate_inherent_const_decl_ty},
     corelib::{
         resolve_core_range_types, resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
     },
@@ -54,7 +54,8 @@ use crate::analysis::ty::{
         place_effect_provider_param_index_map, stored_value_contains_implicit_layout_params,
         stored_value_contains_out_of_scope_params,
     },
-    fold::{AssocTySubst, TyFoldable as _, TyFolder},
+    fold::{TyFoldable as _, TyFolder},
+    normalize::normalize_with_trait_evidence,
     provider::{
         ProviderLayoutEvidence, ProviderTransport, provider_semantics,
         provider_semantics_for_specialized_call,
@@ -321,7 +322,10 @@ impl<'db> TyChecker<'db> {
         };
         if let Some(ty) = ty {
             let ty = self.normalize_ty(ty);
-            if runtime_size_bytes(self.db, ty).is_err() {
+            if matches!(
+                runtime_size_bytes(self.db, ty),
+                Err(RuntimeSizeError::Overflow)
+            ) {
                 self.push_diag(BodyDiag::TypeSizeOverflow {
                     primary: expr.span(self.body()).into(),
                     ty,
@@ -2711,7 +2715,7 @@ impl<'db> TyChecker<'db> {
         let resolution = (|| {
             self.commit_trait_goal_solution(effect_handle_inst, handle_solution);
 
-            let target_assoc = effect_handle_inst.assoc_ty(self.db, target_ident)?;
+            let target_assoc = effect_handle_inst.project_assoc_ty(self.db, target_ident)?;
             let mut target_ty = normalize_ty(self.db, target_assoc, scope, assumptions)
                 .fold_with(self.db, &mut self.table);
             let mut provided_ty = self.table.fold_ty(self.db, provided_ty);
@@ -3364,7 +3368,7 @@ impl<'db> TyChecker<'db> {
 
         let (func_ty, trait_inst) = match candidate {
             MethodCandidate::InherentMethod(cand) => (
-                self.extract_inherent_method_to_term(&canonical_r_ty, cand, selected_receiver_ty),
+                self.extract_inherent_method_to_term(cand, selected_receiver_ty),
                 None,
             ),
 
@@ -3504,7 +3508,7 @@ impl<'db> TyChecker<'db> {
             body: self.body(),
             site: BodyHoleSite::Expr(expr),
         };
-        let minter = HoleMinter::new(anchor);
+        let minter = LoweringContext::new(anchor);
         let unify_generic_args = |tc: &mut Self, callable: &mut Callable<'db>| {
             callable.unify_generic_args(tc, generic_args, anchor, generic_args_span.clone())
         };
@@ -3592,6 +3596,7 @@ impl<'db> TyChecker<'db> {
                     }
                 }
                 PathRes::Func(ty) => {
+                    let ty = self.instantiate_to_term(ty);
                     let mut callable =
                         Callable::new(self.db, ty, expr.span(self.body()).into(), None)
                             .expect("function item path should resolve to callable");
@@ -3599,7 +3604,9 @@ impl<'db> TyChecker<'db> {
                         return ExprProp::invalid(self.db);
                     }
 
-                    ExprProp::new(self.instantiate_to_term(callable.ty(self.db)), true)
+                    self.env
+                        .register_value_path_ref(expr, ValuePathRef::FunctionItem);
+                    ExprProp::new(callable.ty(self.db), true)
                 }
                 PathRes::Trait(trait_) => {
                     let diag = BodyDiag::NotValue {
@@ -3617,6 +3624,8 @@ impl<'db> TyChecker<'db> {
                             variant.ty
                         }
                         VariantKind::Tuple(_) => {
+                            self.env
+                                .register_value_path_ref(expr, ValuePathRef::FunctionItem);
                             let ty = variant.constructor_func_ty(self.db).unwrap();
                             self.instantiate_to_term(ty)
                         }
@@ -3644,11 +3653,7 @@ impl<'db> TyChecker<'db> {
                     let canonical_r_ty = Canonicalized::new(self.db, receiver_ty);
                     let (method_ty, trait_inst) = match candidate {
                         MethodCandidate::InherentMethod(cand) => (
-                            self.extract_inherent_method_to_term(
-                                &canonical_r_ty,
-                                cand,
-                                receiver_ty,
-                            ),
+                            self.extract_inherent_method_to_term(cand, receiver_ty),
                             None,
                         ),
                         MethodCandidate::TraitMethod(cand)
@@ -3709,6 +3714,8 @@ impl<'db> TyChecker<'db> {
 
                     let method_ty = callable.ty(self.db);
                     self.env.register_callable(expr, callable);
+                    self.env
+                        .register_value_path_ref(expr, ValuePathRef::FunctionItem);
                     ExprProp::new(method_ty, true)
                 }
                 PathRes::TraitMethod(trait_inst, method) => {
@@ -3789,6 +3796,8 @@ impl<'db> TyChecker<'db> {
 
                     let func_ty = callable.ty(self.db);
                     self.env.register_callable(expr, callable);
+                    self.env
+                        .register_value_path_ref(expr, ValuePathRef::FunctionItem);
                     ExprProp::new(func_ty, true)
                 }
                 PathRes::TraitConst(recv_ty, inst, name) => {
@@ -3901,7 +3910,7 @@ impl<'db> TyChecker<'db> {
         };
 
         let path_span = span.clone().path();
-        let minter = HoleMinter::new(HoleAnchor::BodySyntax {
+        let minter = LoweringContext::new(HoleAnchor::BodySyntax {
             body: self.body(),
             site: BodyHoleSite::Expr(expr),
         });
@@ -5367,8 +5376,20 @@ impl<'db> TyChecker<'db> {
             }
         };
 
-        let callable = Callable::new(self.db, method, expr.span(self.body()).into(), Some(inst))
-            .expect("failed to create Callable for core::ops trait method");
+        let mut callable =
+            Callable::new(self.db, method, expr.span(self.body()).into(), Some(inst))
+                .expect("failed to create Callable for core::ops trait method");
+
+        let mut checked_inputs = vec![self.normalize_ty(lhs_ty)];
+        if let Some(rhs_expr) = rhs_expr {
+            let rhs_ty = self
+                .env
+                .typed_expr(rhs_expr)
+                .expect("checked operator RHS has a type")
+                .ty;
+            checked_inputs.push(self.normalize_ty(rhs_ty));
+        }
+        callable.set_checked_input_tys(checked_inputs);
 
         let ret_ty = self.normalize_ty(callable.ret_ty(self.db));
         self.env.register_semantic_call(expr, callable);
@@ -5384,12 +5405,16 @@ impl<'db> TyChecker<'db> {
         let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) else {
             return None;
         };
-        let mut expected_rhs = func_def
+        let expected_rhs = func_def
             .arg_tys(self.db)
             .get(1)?
             .instantiate(self.db, gen_args);
-        let mut subst = AssocTySubst::new(inst);
-        expected_rhs = self.normalize_ty(expected_rhs.fold_with(self.db, &mut subst));
+        let expected_rhs = self.normalize_ty(normalize_with_trait_evidence(
+            self.db,
+            expected_rhs,
+            self.env.scope(),
+            inst,
+        ));
         Some(expected_rhs)
     }
 
@@ -5583,7 +5608,7 @@ fn resolve_ident_expr<'db>(
     env: &TyCheckEnv<'db>,
     path: PathId<'db>,
     ident_span: DynLazySpan<'db>,
-    minter: &HoleMinter<'db>,
+    minter: &LoweringContext<'db>,
 ) -> ResolvedPathInBody<'db> {
     let ident = path.ident(db).unwrap();
 

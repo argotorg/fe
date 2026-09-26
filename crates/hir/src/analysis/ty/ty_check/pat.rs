@@ -20,7 +20,7 @@ use crate::analysis::{
         LayoutBundlePathStep,
         assoc_const::{AssocConstUse, InherentConstUse},
         binder::Binder,
-        const_ty::{BodyHoleSite, HoleAnchor, HoleMinter, instantiate_inherent_const_decl_ty},
+        const_ty::{BodyHoleSite, HoleAnchor, LoweringContext, instantiate_inherent_const_decl_ty},
         diagnostics::{BodyDiag, TraitConstraintDiag, TyDiagCollection},
         fold::TyFoldable,
         pattern_ir::{
@@ -416,7 +416,7 @@ impl<'db> TyChecker<'db> {
         }
 
         let span = pat.span(self.body()).into_path_pat();
-        let minter = HoleMinter::new(HoleAnchor::BodySyntax {
+        let minter = LoweringContext::new(HoleAnchor::BodySyntax {
             body: self.body(),
             site: BodyHoleSite::Pat(pat),
         });
@@ -773,7 +773,7 @@ impl<'db> TyChecker<'db> {
         path: PathId<'db>,
     ) -> TupleVariantResolution<'db> {
         let span = pat.span(self.body()).into_path_tuple_pat();
-        let minter = HoleMinter::new(HoleAnchor::BodySyntax {
+        let minter = LoweringContext::new(HoleAnchor::BodySyntax {
             body: self.body(),
             site: BodyHoleSite::Pat(pat),
         });
@@ -851,8 +851,8 @@ impl<'db> TyChecker<'db> {
                         variant.enum_(self.db).scope(),
                         self.env.assumptions(),
                     );
-                    let instantiated =
-                        Binder::bind(ty).instantiate(self.db, variant_ty.generic_args(self.db));
+                    let instantiated = Binder::bind(variant.enum_(self.db).into(), ty)
+                        .instantiate(self.db, variant_ty.generic_args(self.db));
                     self.normalize_ty(instantiated)
                 }
                 None => TyId::invalid(self.db, InvalidCause::ParseError),
@@ -949,7 +949,7 @@ impl<'db> TyChecker<'db> {
             );
         }
 
-        let minter = HoleMinter::new(HoleAnchor::BodySyntax {
+        let minter = LoweringContext::new(HoleAnchor::BodySyntax {
             body: self.body(),
             site: BodyHoleSite::Pat(pat),
         });

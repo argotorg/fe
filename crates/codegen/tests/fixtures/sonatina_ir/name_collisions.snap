@@ -14,7 +14,7 @@ global private const @layout_0 $const_region_2 = {10};
 global private const @layout_1 $const_region_3 = {20};
 global private const @layout_0 $const_region_4 = {100};
 
-func private %standalone_name_collisions__name_collisions____u32_as_u256_56b3(v0.i32) -> i256 {
+func private %__u32_as_u256(v0.i32) -> i256 {
     block0:
         jump block1;
 
@@ -22,15 +22,7 @@ func private %standalone_name_collisions__name_collisions____u32_as_u256_56b3(v0
         return 999.i256;
 }
 
-func private %standalone_name_collisions__name_collisions____u32_as_u256_56b3_0(v0.i32) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return 999.i256;
-}
-
-func private %standalone_name_collisions__name_collisions__add_9cf2() -> i32 {
+func private %add() -> i32 {
     block0:
         jump block1;
 
@@ -38,23 +30,7 @@ func private %standalone_name_collisions__name_collisions__add_9cf2() -> i32 {
         return 123.i32;
 }
 
-func private %standalone_name_collisions__name_collisions__add_9cf2_0() -> i32 {
-    block0:
-        jump block1;
-
-    block1:
-        return 123.i32;
-}
-
-func private %standalone_name_collisions__name_collisions__add_9cf2_1() -> i32 {
-    block0:
-        jump block1;
-
-    block1:
-        return 123.i32;
-}
-
-func private %standalone_name_collisions__name_collisions__a__b__flattened_fn_97f0() -> i32 {
+func private %name_collisions__a__b__flattened_fn() -> i32 {
     block0:
         jump block1;
 
@@ -62,23 +38,7 @@ func private %standalone_name_collisions__name_collisions__a__b__flattened_fn_97
         return 1.i32;
 }
 
-func private %standalone_name_collisions__name_collisions__a__b__flattened_fn_aebd() -> i32 {
-    block0:
-        jump block1;
-
-    block1:
-        return 1.i32;
-}
-
-func private %standalone_name_collisions__name_collisions__a__b__flattened_fn_aebd_0() -> i32 {
-    block0:
-        jump block1;
-
-    block1:
-        return 1.i32;
-}
-
-func private %standalone_name_collisions__name_collisions__a_b__flattened_fn_e3ab() -> i32 {
+func private %name_collisions__a_b__flattened_fn() -> i32 {
     block0:
         jump block1;
 
@@ -86,23 +46,7 @@ func private %standalone_name_collisions__name_collisions__a_b__flattened_fn_e3a
         return 2.i32;
 }
 
-func private %standalone_name_collisions__name_collisions__a_b__flattened_fn_e3ab_0() -> i32 {
-    block0:
-        jump block1;
-
-    block1:
-        return 2.i32;
-}
-
-func private %standalone_name_collisions__name_collisions__a_b__flattened_fn_ec84() -> i32 {
-    block0:
-        jump block1;
-
-    block1:
-        return 2.i32;
-}
-
-func private %standalone_name_collisions__name_collisions__generic_fn__gb148_7f67(v0.@layout_0) -> @layout_0 {
+func private %generic_fn__gb148(v0.@layout_0) -> @layout_0 {
     block0:
         jump block1;
 
@@ -110,23 +54,7 @@ func private %standalone_name_collisions__name_collisions__generic_fn__gb148_7f6
         return v0;
 }
 
-func private %standalone_name_collisions__name_collisions__generic_fn__gb148_7f67_0(v0.@layout_0) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
-}
-
-func private %standalone_name_collisions__name_collisions__generic_fn__gf088_e9d1(v0.@layout_1) -> @layout_1 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
-}
-
-func private %standalone_name_collisions__name_collisions__generic_fn__gf088_e9d1_0(v0.@layout_1) -> @layout_1 {
+func private %generic_fn__gf088(v0.@layout_1) -> @layout_1 {
     block0:
         jump block1;
 
@@ -139,14 +67,14 @@ func private %main() -> i32 {
         jump block1;
 
     block1:
-        v0.i32 = call %standalone_name_collisions__name_collisions__test_module_qualifier_flatten_collision_0454_0;
-        v1.i32 = call %standalone_name_collisions__name_collisions__test_generic_type_collision_baa3_0;
-        v2.i32 = call %standalone_name_collisions__name_collisions__test_impl_method_collision_666c_0;
-        v3.i32 = call %standalone_name_collisions__name_collisions__test_trait_method_collision_540b_0;
-        v4.i32 = call %standalone_name_collisions__name_collisions__test_param_local_collision_c9bd_0;
-        v5.i256 = call %standalone_name_collisions__name_collisions__test_user_defined_conversion_pattern_name_d546_0;
-        v6.i32 = call %standalone_name_collisions__name_collisions__test_ret_param_collision_dc54_0;
-        v7.i32 = call %standalone_name_collisions__name_collisions__test_backend_reserved_fn_collision_d33d_0;
+        v0.i32 = call %test_module_qualifier_flatten_collision;
+        v1.i32 = call %test_generic_type_collision;
+        v2.i32 = call %test_impl_method_collision;
+        v3.i32 = call %test_trait_method_collision;
+        v4.i32 = call %test_param_local_collision;
+        v5.i256 = call %test_user_defined_conversion_pattern_name;
+        v6.i32 = call %test_ret_param_collision;
+        v7.i32 = call %test_backend_reserved_fn_collision;
         return 0.i32;
 }
 
@@ -159,7 +87,7 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %standalone_name_collisions__name_collisions__param_local_collision_a1c4(v0.i32) -> i32 {
+func private %param_local_collision(v0.i32) -> i32 {
     block0:
         jump block1;
 
@@ -180,28 +108,7 @@ func private %standalone_name_collisions__name_collisions__param_local_collision
         return v11;
 }
 
-func private %standalone_name_collisions__name_collisions__param_local_collision_a1c4_0(v0.i32) -> i32 {
-    block0:
-        jump block1;
-
-    block1:
-        (v3.i32, v4.i1) = uaddo v0 1.i32;
-        br v4 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        (v11.i32, v12.i1) = uaddo v3 2.i32;
-        br v12 block2 block4;
-
-    block4:
-        return v11;
-}
-
-func private %standalone_name_collisions__name_collisions__impl_b__impl_Widget_b0f7__process_1462(v0.constref<@layout_1>) -> i64 {
+func private %name_collisions__impl_b__impl_Widget__process(v0.constref<@layout_1>) -> i64 {
     block0:
         jump block1;
 
@@ -220,26 +127,7 @@ func private %standalone_name_collisions__name_collisions__impl_b__impl_Widget_b
         return v6;
 }
 
-func private %standalone_name_collisions__name_collisions__impl_b__impl_Widget_b0f7__process_1462_0(v0.constref<@layout_1>) -> i64 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.constref<i64> = const.proj v0 0.i256;
-        v4.i64 = const.load v3;
-        (v6.i64, v7.i1) = umulo v4 3.i64;
-        br v7 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        return v6;
-}
-
-func private %standalone_name_collisions__name_collisions__impl_a__impl_Widget_8971__process_9a37(v0.constref<@layout_0>) -> i32 {
+func private %name_collisions__impl_a__impl_Widget__process(v0.constref<@layout_0>) -> i32 {
     block0:
         jump block1;
 
@@ -258,43 +146,7 @@ func private %standalone_name_collisions__name_collisions__impl_a__impl_Widget_8
         return v6;
 }
 
-func private %standalone_name_collisions__name_collisions__impl_a__impl_Widget_8971__process_9a37_0(v0.constref<@layout_0>) -> i32 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.constref<i32> = const.proj v0 0.i256;
-        v4.i32 = const.load v3;
-        (v6.i32, v7.i1) = umulo v4 2.i32;
-        br v7 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        return v6;
-}
-
-func private %standalone_name_collisions__name_collisions__ret_param_collision_c303(v0.i32) -> i32 {
-    block0:
-        jump block1;
-
-    block1:
-        (v3.i32, v4.i1) = uaddo v0 1.i32;
-        br v4 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        return v3;
-}
-
-func private %standalone_name_collisions__name_collisions__ret_param_collision_c303_0(v0.i32) -> i32 {
+func private %ret_param_collision(v0.i32) -> i32 {
     block0:
         jump block1;
 
@@ -349,25 +201,16 @@ func private %impl_trait_MultiTraitImpl_b140__same_method(v0.constref<@layout_0>
         return v6;
 }
 
-func private %standalone_name_collisions__name_collisions__test_backend_reserved_fn_collision_d33d() -> i32 {
+func private %test_backend_reserved_fn_collision() -> i32 {
     block0:
         jump block1;
 
     block1:
-        v0.i32 = call %standalone_name_collisions__name_collisions__add_9cf2;
+        v0.i32 = call %add;
         return v0;
 }
 
-func private %standalone_name_collisions__name_collisions__test_backend_reserved_fn_collision_d33d_0() -> i32 {
-    block0:
-        jump block1;
-
-    block1:
-        v0.i32 = call %standalone_name_collisions__name_collisions__add_9cf2_0;
-        return v0;
-}
-
-func private %standalone_name_collisions__name_collisions__test_generic_type_collision_baa3() -> i32 {
+func private %test_generic_type_collision() -> i32 {
     block0:
         jump block1;
 
@@ -379,35 +222,15 @@ func private %standalone_name_collisions__name_collisions__test_generic_type_col
         v6.objref<@layout_0> = obj.alloc @layout_0;
         obj.init.const v6 v2;
         v7.@layout_0 = obj.load v6;
-        v8.@layout_0 = call %standalone_name_collisions__name_collisions__generic_fn__gb148_7f67 v7;
+        v8.@layout_0 = call %generic_fn__gb148 v7;
         v9.objref<@layout_1> = obj.alloc @layout_1;
         obj.init.const v9 v5;
         v10.@layout_1 = obj.load v9;
-        v11.@layout_1 = call %standalone_name_collisions__name_collisions__generic_fn__gf088_e9d1 v10;
+        v11.@layout_1 = call %generic_fn__gf088 v10;
         return 42.i32;
 }
 
-func private %standalone_name_collisions__name_collisions__test_generic_type_collision_baa3_0() -> i32 {
-    block0:
-        jump block1;
-
-    block1:
-        v1.constref<@layout_0> = const.ref $const_region_0;
-        v2.constref<@layout_0> = const.ref $const_region_0;
-        v4.constref<@layout_1> = const.ref $const_region_1;
-        v5.constref<@layout_1> = const.ref $const_region_1;
-        v6.objref<@layout_0> = obj.alloc @layout_0;
-        obj.init.const v6 v2;
-        v7.@layout_0 = obj.load v6;
-        v8.@layout_0 = call %standalone_name_collisions__name_collisions__generic_fn__gb148_7f67_0 v7;
-        v9.objref<@layout_1> = obj.alloc @layout_1;
-        obj.init.const v9 v5;
-        v10.@layout_1 = obj.load v9;
-        v11.@layout_1 = call %standalone_name_collisions__name_collisions__generic_fn__gf088_e9d1_0 v10;
-        return 42.i32;
-}
-
-func private %standalone_name_collisions__name_collisions__test_impl_method_collision_666c() -> i32 {
+func private %test_impl_method_collision() -> i32 {
     block0:
         jump block1;
 
@@ -416,32 +239,18 @@ func private %standalone_name_collisions__name_collisions__test_impl_method_coll
         v2.constref<@layout_0> = const.ref $const_region_2;
         v4.constref<@layout_1> = const.ref $const_region_3;
         v5.constref<@layout_1> = const.ref $const_region_3;
-        v6.i32 = call %standalone_name_collisions__name_collisions__impl_a__impl_Widget_8971__process_9a37 v2;
-        v7.i64 = call %standalone_name_collisions__name_collisions__impl_b__impl_Widget_b0f7__process_1462 v5;
+        v6.i32 = call %name_collisions__impl_a__impl_Widget__process v2;
+        v7.i64 = call %name_collisions__impl_b__impl_Widget__process v5;
         return v6;
 }
 
-func private %standalone_name_collisions__name_collisions__test_impl_method_collision_666c_0() -> i32 {
+func private %test_module_qualifier_flatten_collision() -> i32 {
     block0:
         jump block1;
 
     block1:
-        v1.constref<@layout_0> = const.ref $const_region_2;
-        v2.constref<@layout_0> = const.ref $const_region_2;
-        v4.constref<@layout_1> = const.ref $const_region_3;
-        v5.constref<@layout_1> = const.ref $const_region_3;
-        v6.i32 = call %standalone_name_collisions__name_collisions__impl_a__impl_Widget_8971__process_9a37_0 v2;
-        v7.i64 = call %standalone_name_collisions__name_collisions__impl_b__impl_Widget_b0f7__process_1462_0 v5;
-        return v6;
-}
-
-func private %standalone_name_collisions__name_collisions__test_module_qualifier_flatten_collision_0454() -> i32 {
-    block0:
-        jump block1;
-
-    block1:
-        v0.i32 = call %standalone_name_collisions__name_collisions__a__b__flattened_fn_aebd;
-        v1.i32 = call %standalone_name_collisions__name_collisions__a_b__flattened_fn_e3ab;
+        v0.i32 = call %name_collisions__a__b__flattened_fn;
+        v1.i32 = call %name_collisions__a_b__flattened_fn;
         (v2.i32, v3.i1) = uaddo v0 v1;
         br v3 block2 block3;
 
@@ -454,62 +263,25 @@ func private %standalone_name_collisions__name_collisions__test_module_qualifier
         return v2;
 }
 
-func private %standalone_name_collisions__name_collisions__test_module_qualifier_flatten_collision_0454_0() -> i32 {
+func private %test_param_local_collision() -> i32 {
     block0:
         jump block1;
 
     block1:
-        v0.i32 = call %standalone_name_collisions__name_collisions__a__b__flattened_fn_aebd_0;
-        v1.i32 = call %standalone_name_collisions__name_collisions__a_b__flattened_fn_e3ab_0;
-        (v2.i32, v3.i1) = uaddo v0 v1;
-        br v3 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        return v2;
-}
-
-func private %standalone_name_collisions__name_collisions__test_param_local_collision_c9bd() -> i32 {
-    block0:
-        jump block1;
-
-    block1:
-        v1.i32 = call %standalone_name_collisions__name_collisions__param_local_collision_a1c4 10.i32;
+        v1.i32 = call %param_local_collision 10.i32;
         return v1;
 }
 
-func private %standalone_name_collisions__name_collisions__test_param_local_collision_c9bd_0() -> i32 {
+func private %test_ret_param_collision() -> i32 {
     block0:
         jump block1;
 
     block1:
-        v1.i32 = call %standalone_name_collisions__name_collisions__param_local_collision_a1c4_0 10.i32;
+        v1.i32 = call %ret_param_collision 10.i32;
         return v1;
 }
 
-func private %standalone_name_collisions__name_collisions__test_ret_param_collision_dc54() -> i32 {
-    block0:
-        jump block1;
-
-    block1:
-        v1.i32 = call %standalone_name_collisions__name_collisions__ret_param_collision_c303 10.i32;
-        return v1;
-}
-
-func private %standalone_name_collisions__name_collisions__test_ret_param_collision_dc54_0() -> i32 {
-    block0:
-        jump block1;
-
-    block1:
-        v1.i32 = call %standalone_name_collisions__name_collisions__ret_param_collision_c303_0 10.i32;
-        return v1;
-}
-
-func private %standalone_name_collisions__name_collisions__test_trait_method_collision_540b() -> i32 {
+func private %test_trait_method_collision() -> i32 {
     block0:
         jump block1;
 
@@ -532,44 +304,12 @@ func private %standalone_name_collisions__name_collisions__test_trait_method_col
         return v7;
 }
 
-func private %standalone_name_collisions__name_collisions__test_trait_method_collision_540b_0() -> i32 {
+func private %test_user_defined_conversion_pattern_name() -> i256 {
     block0:
         jump block1;
 
     block1:
-        v1.constref<@layout_0> = const.ref $const_region_4;
-        v2.constref<@layout_0> = const.ref $const_region_4;
-        v3.i32 = call %impl_trait_MultiTraitImpl_5bd8__same_method v2;
-        v4.constref<@layout_0> = const.ref $const_region_4;
-        v5.constref<@layout_0> = const.ref $const_region_4;
-        v6.i32 = call %impl_trait_MultiTraitImpl_b140__same_method v5;
-        (v7.i32, v8.i1) = uaddo v3 v6;
-        br v8 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        return v7;
-}
-
-func private %standalone_name_collisions__name_collisions__test_user_defined_conversion_pattern_name_d546() -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v1.i256 = call %standalone_name_collisions__name_collisions____u32_as_u256_56b3 42.i32;
-        return v1;
-}
-
-func private %standalone_name_collisions__name_collisions__test_user_defined_conversion_pattern_name_d546_0() -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v1.i256 = call %standalone_name_collisions__name_collisions____u32_as_u256_56b3_0 42.i32;
+        v1.i256 = call %__u32_as_u256 42.i32;
         return v1;
 }
 

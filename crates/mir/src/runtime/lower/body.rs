@@ -3,13 +3,13 @@ use std::{collections::HashSet, mem::size_of};
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        EffectProviderSubst, EvalOutcome, FieldIndex, GenericSubst, ImplEnv, LayoutEvidenceBase,
-        LayoutEvidenceBody, LayoutEvidenceComponentValue, LayoutEvidenceConstBinding,
-        LayoutEvidenceConstant, LayoutEvidenceExpr, LayoutEvidenceIndex, LayoutEvidenceOperand,
-        SBlockId, SConst, SLocalId, SStmtId, SemConstId, SemConstScalar, SemConstValue, SemOrigin,
+        EvalOutcome, FieldIndex, LayoutEvidenceBase, LayoutEvidenceBody,
+        LayoutEvidenceComponentValue, LayoutEvidenceConstBinding, LayoutEvidenceConstant,
+        LayoutEvidenceExpr, LayoutEvidenceIndex, LayoutEvidenceOperand, RuntimeSizeError, SBlockId,
+        SConst, SLocalId, SStmtId, SemConstId, SemConstScalar, SemConstValue, SemOrigin,
         SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticConstRef,
         SemanticInstance, SemanticInstanceKey, SemanticLocalRole, VariantIndex, eval_const_ref,
-        get_or_build_semantic_instance, layout_evidence_body,
+        generated_callee_key, get_or_build_semantic_instance, layout_evidence_body,
         normalized::{
             NBlockId, NDataPath, NDataProjection, NEffectArg, NExpr, NIndex, NOperand, NPlace,
             NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind, NSuccessor,
@@ -54,7 +54,7 @@ use crate::{
         RuntimeLayoutMap, RuntimeLocalRoot, RuntimePlace, RuntimeProviderBinding,
         RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, VariantId,
         code_region::runtime_code_region_for_semantic_ref,
-        package::{LowerError, runtime_instance_for_semantic},
+        package::{LowerError, generated_call_error, runtime_instance_for_semantic},
     },
 };
 
@@ -66,7 +66,7 @@ use super::{
     classify::{
         BodyEnv, BodyStaticFacts, ContractMetadataBuiltin, GenericNumericIntrinsicKind,
         InferClassCache, RuntimeBodyCx, contract_metadata_builtin, generic_numeric_intrinsic_kind,
-        resolve_runtime_call_key, semantic_return_ty,
+        semantic_return_ty,
     },
     consts::{
         aggregate_const_ref_class, aggregate_const_ref_region, collect_const_ref_regions,
@@ -99,8 +99,9 @@ use super::{
     tuple::RuntimeTupleFieldEmitter,
     type_info::{
         RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env,
-        provider_class_for_target_in_env, runtime_effect_handle_info, stored_class_for_ty_in_env,
-        top_level_class_for_ty_in_env,
+        provider_class_for_target_in_env, runtime_array_len, runtime_effect_handle_info,
+        stored_class_for_ty_in_env, top_level_class_for_ty_in_env,
+        validate_runtime_array_extents_in_env,
     },
 };
 
@@ -118,6 +119,17 @@ pub fn lower_to_rmir<'db>(
             semantic.key(db)
         ))
     })?;
+    let type_env = RuntimeTypeEnv::for_semantic(db, semantic);
+    for ty in normalized_body
+        .normalized
+        .values
+        .iter()
+        .map(|value| value.ty)
+        .chain(normalized_body.normalized.roots.iter().map(|root| root.ty))
+        .chain(normalized_body.locals.iter().map(|local| local.ty))
+    {
+        validate_runtime_array_extents_in_env(db, type_env, ty)?;
+    }
     check_runtime_body_supported(db, semantic.key(db), &normalized_body)?;
     let facts = BodyStaticFacts::new(db, &normalized_body);
     let abi = runtime_body_abi_plan(db, key, &normalized_body);
@@ -158,7 +170,7 @@ pub fn lower_to_rmir<'db>(
     Ok(emitter.finish())
 }
 
-fn check_runtime_body_supported<'db>(
+pub(super) fn check_runtime_body_supported<'db>(
     db: &'db dyn MirDb,
     key: SemanticInstanceKey<'db>,
     body: &RuntimeSemanticBody<'db>,
@@ -170,6 +182,21 @@ fn check_runtime_body_supported<'db>(
     })?;
     for block in &body.normalized.blocks {
         for stmt in &block.statements {
+            if let NStatementKind::Define {
+                expr: NExpr::Call { callee, .. },
+                ..
+            } = &stmt.kind
+                && let BodyOwner::Func(func) = callee.key.owner(db)
+                && func.containing_trait(db).is_some()
+                && func.body(db).is_none()
+                && contract_metadata_builtin(db, get_or_build_semantic_instance(db, callee.key))
+                    .is_none()
+            {
+                return Err(LowerError::Unsupported(format!(
+                    "runtime call requires a selected implementation before layout planning: caller={key:?} callee={:?}",
+                    callee.key,
+                )));
+            }
             if let NStatementKind::Define {
                 result: dst,
                 expr: NExpr::Const(constant),
@@ -300,7 +327,7 @@ fn oversized_size_of_ty<'db>(
         return None;
     }
     let ty = *invocation.key.subst(db).generic_args(db).first()?;
-    runtime_size_bytes(db, ty).is_err().then_some(ty)
+    matches!(runtime_size_bytes(db, ty), Err(RuntimeSizeError::Overflow)).then_some(ty)
 }
 
 fn semantic_const_ref_name<'db>(
@@ -2527,12 +2554,14 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn lower_array_repeat(&mut self, bb: RBlockId, dst: RLocalId, ty: TyId<'db>, value: NOperand) {
-        let len = ty.array_len(self.db).unwrap_or_else(|| {
-            panic!(
-                "array repeat with non-concrete length reached runtime lowering: {}",
-                ty.pretty_print(self.db)
-            )
-        });
+        let len = runtime_array_len(self.db, ty)
+            .expect("valid runtime array length")
+            .unwrap_or_else(|| {
+                panic!(
+                    "array repeat with non-concrete length reached runtime lowering: {}",
+                    ty.pretty_print(self.db)
+                )
+            });
         self.lower_aggregate_make(bb, dst, ty, &vec![value; len]);
     }
 
@@ -3610,25 +3639,7 @@ impl<'db> RmirEmitter<'db> {
                 self.lower_layout_evidence_assignment(bb, assignment);
             }
         }
-        let caller_key = self.current_semantic_key();
-        let caller_typed_body = caller_key.instantiate_typed_body(self.db);
-        let callee_key = resolve_runtime_call_key(
-            self.db,
-            caller_key,
-            &caller_typed_body,
-            &self.semantic_body,
-            callee,
-            args,
-        )
-        .unwrap_or_else(|err| {
-            panic!(
-                "runtime call resolution failed while lowering {:?}: {err}",
-                self.key
-                    .semantic(self.db)
-                    .map(|semantic| semantic.key(self.db)),
-            )
-        });
-        let semantic = get_or_build_semantic_instance(self.db, callee_key);
+        let semantic = get_or_build_semantic_instance(self.db, callee.key);
         if layout_call.is_none() {
             if let Some(ret) = self.lower_core_primitive_wrapper_call(bb, semantic, args) {
                 return ret;
@@ -4016,13 +4027,9 @@ impl<'db> RmirEmitter<'db> {
         };
         let func = resolve_lib_func_path(self.db, scope, func_path)
             .unwrap_or_else(|| panic!("missing {func_path}"));
-        let semantic_key = SemanticInstanceKey::new(
-            self.db,
-            BodyOwner::Func(func),
-            GenericSubst::new(self.db, vec![value_ty]),
-            EffectProviderSubst::empty(self.db),
-            ImplEnv::new(self.db, scope, assumptions, Vec::new()),
-        );
+        let semantic_key =
+            generated_callee_key(self.db, scope, assumptions, func, None, &[value_ty])
+                .unwrap_or_else(|error| panic!("{}", generated_call_error(self.db, func, error)));
         runtime_instance_for_semantic(
             self.db,
             get_or_build_semantic_instance(self.db, semantic_key),
@@ -5401,21 +5408,21 @@ impl<'db> RmirEmitter<'db> {
                 })
                 .impl_instance;
         let trait_inst = impl_instance.trait_inst();
-        let (func, impl_args) = impl_instance
-            .method_instance(self.db, IdentId::new(self.db, "raw".to_string()))
-            .unwrap_or_else(|| {
-                panic!(
-                    "failed to resolve EffectHandle::raw for {}",
-                    handle_ty.pretty_print(self.db),
-                )
-            });
-        let key = SemanticInstanceKey::new(
+        let func = trait_inst
+            .def(self.db)
+            .method_defs(self.db)
+            .get(&IdentId::new(self.db, "raw".to_string()))
+            .copied()
+            .expect("EffectHandle declares raw");
+        let key = generated_callee_key(
             self.db,
-            BodyOwner::Func(func),
-            GenericSubst::new(self.db, impl_args),
-            EffectProviderSubst::empty(self.db),
-            ImplEnv::new(self.db, scope, self.env.assumptions, vec![trait_inst]),
-        );
+            scope,
+            self.env.assumptions,
+            func,
+            Some(trait_inst),
+            &[],
+        )
+        .unwrap_or_else(|error| panic!("{}", generated_call_error(self.db, func, error)));
         get_or_build_semantic_instance(self.db, key)
     }
 
@@ -5525,12 +5532,7 @@ impl<'db> RmirEmitter<'db> {
             let NExpr::Call { callee, args, effect_args, .. } = expr else {
                 return true;
             };
-            let caller = self.current_semantic_key();
-            let typed = caller.instantiate_typed_body(self.db);
-            let callee = resolve_runtime_call_key(
-                self.db, caller, &typed, &self.semantic_body, *callee, args,
-            ).expect("admitted call must resolve during runtime value demand");
-            let semantic = get_or_build_semantic_instance(self.db, callee);
+            let semantic = get_or_build_semantic_instance(self.db, callee.key);
             let mut sites = BoundarySiteAllocator::default();
             let plan = compile_call_input_plan_for_semantic(
                 self.db, &self.semantic_body, semantic, self.env, effect_args, &mut sites,

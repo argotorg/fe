@@ -4,7 +4,7 @@ use fe_hir::analysis::semantic::{
     root_semantic_instance_key, typed_body_template,
 };
 use fe_hir::analysis::ty::trait_def::resolve_trait_method_instance;
-use fe_hir::analysis::ty::trait_resolution::TraitSolveCx;
+use fe_hir::analysis::ty::trait_resolution::{Selection, TraitSolveCx};
 use fe_hir::analysis::ty::ty_check::{BodyOwner, check_func_body};
 use fe_hir::hir_def::{Expr, ItemKind, Partial};
 use fe_hir::test_db::HirAnalysisTestDb;
@@ -58,13 +58,15 @@ fn run(evm: mut Evm) -> u256 {
         .map(|(name, method)| (*name, *method))
         .expect("missing trait method");
 
-    let (resolved_method, impl_args) = resolve_trait_method_instance(
+    let Selection::Unique(resolved) = resolve_trait_method_instance(
         &db,
         TraitSolveCx::new(&db, impl_trait.scope()),
         inst,
         method_name,
-    )
-    .expect("missing resolved method");
+    ) else {
+        panic!("missing resolved method");
+    };
+    let resolved_method = resolved.body().expect("missing resolved method body");
 
     assert_eq!(resolved_method, trait_method);
     assert!(resolved_method.body(&db).is_some());
@@ -72,7 +74,7 @@ fn run(evm: mut Evm) -> u256 {
     let instantiated = instantiate_typed_body(
         &db,
         typed_body_template(&db, BodyOwner::Func(resolved_method)),
-        GenericSubst::new(&db, impl_args),
+        GenericSubst::for_owner(&db, resolved_method.into(), resolved.body_args().to_vec()),
     );
     let self_binding = instantiated.param_binding(0).expect("missing self binding");
     let self_ty = instantiated.binding_ty(&db, self_binding);

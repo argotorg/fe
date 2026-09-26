@@ -269,9 +269,8 @@ impl<'db> TyChecker<'db> {
             ];
 
             for ingot in search_ingots.into_iter().flatten() {
-                for impl_ in impls_for_ty(self.db, ingot, canonical_ty) {
+                for &impl_id in impls_for_ty(self.db, ingot, canonical_ty) {
                     let snapshot = self.snapshot_state();
-                    let impl_id = impl_.skip_binder();
                     if impl_id.trait_def(self.db) != seq_trait {
                         self.commit_state(snapshot);
                         continue;
@@ -280,9 +279,7 @@ impl<'db> TyChecker<'db> {
                     // Instantiate the impl's trait instance (with associated type
                     // bindings) using fresh type variables, then unify to get concrete types
                     let raw_trait_inst = impl_id.trait_inst(self.db);
-                    let trait_inst = self.table.instantiate_with_fresh_vars(
-                        crate::analysis::ty::binder::Binder::bind(raw_trait_inst),
-                    );
+                    let trait_inst = self.table.instantiate_with_fresh_vars(raw_trait_inst);
 
                     // Unify the trait's Self type with the iterable type
                     let self_ty = trait_inst.self_ty(self.db);
@@ -349,6 +346,12 @@ impl<'db> TyChecker<'db> {
                         continue;
                     };
                     let mut len_callable = len_callable;
+
+                    len_callable.set_checked_input_tys(vec![iterable_ty]);
+                    let get_index_ty = get_callable
+                        .arg_ty(self.db, 1)
+                        .expect("Seq::get index type");
+                    get_callable.set_checked_input_tys(vec![iterable_ty, get_index_ty]);
 
                     let call_span: crate::span::DynLazySpan<'db> = expr.span(self.body()).into();
                     let len_effect_args =

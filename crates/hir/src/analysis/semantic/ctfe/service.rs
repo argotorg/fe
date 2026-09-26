@@ -5,8 +5,8 @@ use num_traits::ToPrimitive;
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        EffectProviderSubst, GenericSubst, ImplEnv, SConst, SExpr, SLocalId, SStmtKind,
-        STerminatorKind, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticInstance,
+        EffectProviderSubst, ImplEnv, SConst, SExpr, SLocalId, SStmtKind, STerminatorKind,
+        SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticInstance,
         SemanticInstanceKey, SemanticLocalRole, array_const,
         consts::{instantiate_const_template, retype_verified_sem_const},
         enum_const, execute_scalar_cast, execute_source_int_binary, execute_source_int_unary,
@@ -14,7 +14,6 @@ use crate::analysis::{
         sem_const_from_ty, sem_const_ty, struct_const, tuple_const,
     },
     ty::{
-        binder::Binder,
         const_expr::{ConstExpr, ConstExprId, ConstInvocation},
         const_ty::{
             ConstTyData, ConstTyId, const_ty_from_assoc_const_use,
@@ -23,6 +22,7 @@ use crate::analysis::{
         corelib::{
             PrimitiveWrapperCallKind, core_primitive_wrapper_call_kind, ctfe_extern_intrinsic_kind,
         },
+        subst::instantiate_scoped_into,
         ty_check::BodyOwner,
         ty_def::{TyData, TyId},
     },
@@ -69,7 +69,7 @@ pub fn specialize_const_computation<'db>(
 ) -> Result<ConstComputationId<'db>, EvalFailure<'db>> {
     let from_owner = computation.parameter_owner(db);
     let origin = computation.origin(db);
-    let fold_ty = |ty| Binder::bind(ty).instantiate_scoped_into(db, from_owner, new_owner, args);
+    let fold_ty = |ty| instantiate_scoped_into(db, ty, from_owner, new_owner, args);
     let inputs = computation
         .inputs(db)
         .iter()
@@ -77,12 +77,11 @@ pub fn specialize_const_computation<'db>(
         .collect::<Result<Vec<_>, _>>()?;
 
     let entry = match computation.entry(db) {
-        ConstEntry::Resolved(key) => ConstEntry::Resolved(
-            Binder::bind(key).instantiate_scoped_into(db, from_owner, new_owner, args),
-        ),
+        ConstEntry::Resolved(key) => ConstEntry::Resolved(instantiate_scoped_into(
+            db, key, from_owner, new_owner, args,
+        )),
         ConstEntry::Associated(use_) => {
-            let folded =
-                Binder::bind(use_).instantiate_scoped_into(db, from_owner, new_owner, args);
+            let folded = instantiate_scoped_into(db, use_, from_owner, new_owner, args);
             let scope = if use_.origin_scope() == from_owner {
                 new_owner
             } else {
@@ -91,8 +90,7 @@ pub fn specialize_const_computation<'db>(
             ConstEntry::Associated(folded.with_env(scope, folded.assumptions()))
         }
         ConstEntry::Inherent(use_) => {
-            let folded =
-                Binder::bind(use_).instantiate_scoped_into(db, from_owner, new_owner, args);
+            let folded = instantiate_scoped_into(db, use_, from_owner, new_owner, args);
             let scope = if use_.origin_scope() == from_owner {
                 new_owner
             } else {
@@ -124,7 +122,7 @@ pub fn specialize_const_description<'db>(
     if description.parameter_owner() != from_owner {
         return Ok(description.clone());
     }
-    let fold_ty = |ty| Binder::bind(ty).instantiate_scoped_into(db, from_owner, new_owner, args);
+    let fold_ty = |ty| instantiate_scoped_into(db, ty, from_owner, new_owner, args);
     let ty = fold_ty(description.ty());
     match description.repr() {
         ConstRepr::Value(value) => {
@@ -193,8 +191,13 @@ fn specialize_term_provenance<'db>(
     new_owner: ScopeId<'db>,
     args: &[TyId<'db>],
 ) -> Result<TermProvenance<'db>, EvalFailure<'db>> {
-    let folded = Binder::bind(TyId::const_ty(db, provenance.term))
-        .instantiate_scoped_into(db, from_owner, new_owner, args);
+    let folded = instantiate_scoped_into(
+        db,
+        TyId::const_ty(db, provenance.term),
+        from_owner,
+        new_owner,
+        args,
+    );
     let TyData::ConstTy(term) = folded.data(db) else {
         return Err(EvalFailure::Invariant {
             origin: provenance.origin,
@@ -214,8 +217,7 @@ fn specialize_term_provenance<'db>(
             .iter()
             .map(|frame| TermCallFrame {
                 origin: frame.origin,
-                callee: Binder::bind(frame.callee)
-                    .instantiate_scoped_into(db, from_owner, new_owner, args),
+                callee: instantiate_scoped_into(db, frame.callee, from_owner, new_owner, args),
             })
             .collect(),
         operation_order: provenance.operation_order,
@@ -900,17 +902,18 @@ fn force_const_term_operand_impl<'db>(
         ConstTyData::UnEvaluated {
             body,
             ty: Some(expected),
-            generic_args,
+            template_ty,
+            capture,
             ..
         } => {
             let owner = BodyOwner::AnonConstBody {
                 body: *body,
-                expected: *expected,
+                expected: template_ty.unwrap_or(*expected),
             };
             let key = SemanticInstanceKey::new(
                 db,
                 owner,
-                GenericSubst::new(db, generic_args.clone()),
+                capture.generic_subst(db),
                 EffectProviderSubst::empty(db),
                 ImplEnv::empty(db, owner.scope()),
             );
@@ -1503,17 +1506,18 @@ fn force_selected_const_ty<'db>(
         ConstTyData::UnEvaluated {
             body,
             ty,
-            generic_args,
+            template_ty,
+            capture,
             ..
         } => {
             let owner = BodyOwner::AnonConstBody {
                 body: *body,
-                expected: ty.unwrap_or(expected),
+                expected: template_ty.or(*ty).unwrap_or(expected),
             };
             let key = SemanticInstanceKey::new(
                 db,
                 owner,
-                GenericSubst::new(db, generic_args.clone()),
+                capture.generic_subst(db),
                 EffectProviderSubst::empty(db),
                 impl_env,
             );

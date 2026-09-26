@@ -886,6 +886,21 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     )
                 }
             }
+            Some(ValuePathRef::FunctionItem) => {
+                let ty = self.expr_ty(expr);
+                debug_assert!(
+                    ty.is_func(self.db),
+                    "function-item path has non-function type"
+                );
+                self.emit_expr_with_origin(
+                    SemOrigin::Expr(expr),
+                    ty,
+                    SExpr::AggregateMake {
+                        ty,
+                        fields: Box::new([]),
+                    },
+                )
+            }
             None => panic!(
                 "typed path expression is missing semantic value-path classification: owner={:?} expr={expr:?} data={:?} ty={} ty_data={:?} binding={:?} const_ref={:?} code_region_ref={:?}",
                 self.template_owner,
@@ -1191,14 +1206,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             ),
         };
         let result_ty = self.expr_ty(expr);
+        // Admission reports failed concrete demands; raw lowering preserves
+        // the symbolic form for provisional and not-yet-admitted bodies.
         let size = match runtime_size_bytes(self.db, ty) {
             Ok(size @ Some(_)) => size,
-            Ok(None) if ty.has_param(self.db) || ty.has_var(self.db) => None,
-            Err(_) => None,
-            Ok(None) => panic!(
-                "core::size_of should resolve for {}",
-                ty.pretty_print(self.db)
-            ),
+            Ok(None) | Err(_) => None,
         };
         let Some(size) = size else {
             let caller = self.instance.key(self.db);
@@ -1207,13 +1219,21 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     self.db,
                     caller,
                     callable,
+                    &[],
                     callable.effect_providers(),
                 ),
-                BindingRoleMode::Provisional => {
-                    provisional_semantic_callee_key(self.db, caller, callable, self.assumptions)
-                }
+                BindingRoleMode::Provisional => provisional_semantic_callee_key(
+                    self.db,
+                    caller,
+                    callable,
+                    &[],
+                    self.assumptions,
+                ),
             }
-            .expect("const intrinsic should resolve to a function");
+            .ok()
+            .flatten()
+            .expect("const intrinsic should resolve to a function")
+            .key;
             let const_expr = match kind {
                 ConstIntrinsicKind::SizeOf => ConstExpr::Invocation(ConstInvocation {
                     key,

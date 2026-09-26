@@ -1,0 +1,5 @@
+const fn length<T>() -> usize { 2 }
+
+// Arithmetic defaults require a block. Parser recovery must not allow CTFE
+// to lower the malformed expression without a valid call classification.
+fn malformed<const N: usize = length<T>() + length<T>(), T = u256>() {}

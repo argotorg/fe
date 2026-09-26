@@ -76,7 +76,7 @@ func private %codecopy(v0.objref<@layout_0>, v1.i256, v2.i256, v3.i256) {
         evm_revert 0.i256 36.i256;
 
     block9:
-        v23.i256 = call %impl_MemBuffer__len v0;
+        v23.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__len_b81b v0;
         obj.store v4 v23;
         v24.i1 = gt v16 v23;
         br v24 block5 block6;
@@ -155,6 +155,16 @@ func private %init() {
         unreachable;
 }
 
+func private %core__lib__ptr__impl_MemBuffer_2cdf__len_735d(v0.objref<@layout_0>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.objref<i256> = obj.proj v0 1.i256;
+        v4.i256 = obj.load v3;
+        return v4;
+}
+
 func private %len__g79ff(v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
@@ -165,7 +175,7 @@ func private %len__g79ff(v0.objref<@layout_1>) -> i256 {
         return v4;
 }
 
-func private %impl_MemBuffer__len(v0.objref<@layout_0>) -> i256 {
+func private %core__lib__ptr__impl_MemBuffer_2cdf__len_b81b(v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -224,9 +234,9 @@ func private %prepare_copy_destination(v0.objref<@layout_0>, v1.i256, v2.i256) -
 
     block6:
         v27.i256 = call %impl_MemBuffer__ptr v0;
-        v28.i256 = call %impl_MemBuffer__len v0;
+        v28.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__len_735d v0;
         v29.i256 = add v27 v28;
-        v31.i256 = call %impl_MemBuffer__len v0;
+        v31.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__len_735d v0;
         (v32.i256, v33.i1) = usubo v1 v31;
         br v33 block10 block12;
 
@@ -239,7 +249,7 @@ func private %prepare_copy_destination(v0.objref<@layout_0>, v1.i256, v2.i256) -
         return v39;
 
     block9:
-        v42.i256 = call %impl_MemBuffer__len v0;
+        v42.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__len_735d v0;
         obj.store v5 v42;
         v43.i1 = gt v1 v42;
         br v43 block6 block7;
@@ -259,7 +269,7 @@ func private %prepare_copy_destination(v0.objref<@layout_0>, v1.i256, v2.i256) -
         jump block8;
 }
 
-func private %ptr__g79ff(v0.objref<@layout_1>) -> i256 {
+func private %impl_MemBuffer__ptr(v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
@@ -269,7 +279,7 @@ func private %ptr__g79ff(v0.objref<@layout_1>) -> i256 {
         return v4;
 }
 
-func private %impl_MemBuffer__ptr(v0.objref<@layout_0>) -> i256 {
+func private %ptr__g79ff(v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 

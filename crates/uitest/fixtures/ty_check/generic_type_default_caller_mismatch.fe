@@ -1,0 +1,15 @@
+trait Output { type Item }
+impl Output for bool { type Item = u256 }
+trait Other { type Item }
+impl Other for bool { type Item = bool }
+
+fn selected<T: Output, U = T::Item>(_ item: U) {}
+fn qualified<T: Output, U = <T as Output>::Item>(_ item: U) {}
+
+fn unrelated<X: Other<Item = bool>>(_ item: bool) {
+    selected<bool>(item)
+    selected<bool, u256>(item)
+    qualified<bool>(item)
+}
+
+fn exercise() { unrelated<bool>(true) }

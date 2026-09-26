@@ -33,7 +33,7 @@ use fe_hir::{
         LayoutViewKind, PlaceStep, RootRole, StoragePlace, validate_allocated_contract_layout,
     },
     hir_def::{CallableDef, Contract, Expr, IdentId, ItemKind, Partial},
-    test_db::{HirAnalysisTestDb, find_contract, format_diagnostics},
+    test_db::{HirAnalysisTestDb, find_contract, find_func, format_diagnostics},
 };
 use layout_test_support::{parse_module, parse_ok};
 
@@ -1740,6 +1740,35 @@ contract C { mut values: Slots }
 }
 
 #[test]
+fn specialized_adt_field_array_extent_preserves_indexed_root_layout() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+struct Slot<const ROOT: u256 = _> {}
+struct Slots<const N: usize> { values: [Slot; { 10 / N }] }
+
+contract C {
+    mut first: Slots<2>,
+    mut second: Slots<5>,
+}
+"#,
+    );
+    let contract = find_contract(&db, top_mod, "C");
+    let layout = contract.storage_layout(&db);
+    let first = field(&db, contract, "first");
+    let second = field(&db, contract, "second");
+    assert_eq!(first.families.len(), 1);
+    assert_eq!(second.families.len(), 1);
+    assert_eq!(first.families[0].extent, 5);
+    assert_eq!(second.families[0].extent, 2);
+    assert_eq!(first.families[0].dimensions[0].len, 5);
+    assert_eq!(second.families[0].dimensions[0].len, 2);
+    assert_ne!(first.families[0].lane, second.families[0].lane);
+    validate_allocated_contract_layout(&db, layout.allocated.as_ref().unwrap()).unwrap();
+}
+
+#[test]
 fn one_source_can_bind_scalar_and_multiple_indexed_landings() {
     parse_ok!(
         db,
@@ -2704,7 +2733,7 @@ fn concrete_array(maps: [StorageMap<u256, u256, 7>; 2]) {}
     let key = SemanticInstanceKey::new(
         &db,
         BodyOwner::Func(func),
-        GenericSubst::new(&db, vec![root]),
+        GenericSubst::for_owner(&db, func.into(), vec![root]),
         EffectProviderSubst::empty(&db),
         ImplEnv::empty(&db, func.scope()),
     );
@@ -3028,7 +3057,7 @@ fn consume_outer<const WRAPPER: u256, const TARGET: u256>(
     let value_schema = SemanticInstanceKey::new(
         &db,
         BodyOwner::Func(consume_independent),
-        GenericSubst::new(&db, vec![params[1], params[1]]),
+        GenericSubst::for_owner(&db, consume_independent.into(), vec![params[1], params[1]]),
         EffectProviderSubst::empty(&db),
         ImplEnv::empty(&db, consume_independent.scope()),
     )
@@ -3067,7 +3096,7 @@ fn consume_outer<const WRAPPER: u256, const TARGET: u256>(
     let outer_schema = SemanticInstanceKey::new(
         &db,
         BodyOwner::Func(consume_outer),
-        GenericSubst::new(&db, vec![params[1], params[1]]),
+        GenericSubst::for_owner(&db, consume_outer.into(), vec![params[1], params[1]]),
         EffectProviderSubst::empty(&db),
         ImplEnv::empty(&db, consume_outer.scope()),
     )
@@ -3131,6 +3160,83 @@ fn read(maps: [StorageMap<u256, u256>; 2], lane: usize, key: u256) -> u256 {
         schema.components[0].port.value_path,
         [LayoutEvidencePathStep::Index]
     );
+}
+
+#[test]
+fn callable_array_slots_are_structural_while_evidence_follows_extents() {
+    for (extent, materialized) in [
+        ("2", true),
+        ("{ 1 + 1 }", true),
+        ("0", false),
+        ("{ 1 - 1 }", false),
+        ("N", false),
+    ] {
+        for validate_first in [false, true] {
+            let mut db = HirAnalysisTestDb::default();
+            let source = format!(
+                r#"
+struct Slot<const ROOT: u256 = _> {{}}
+fn probe<const N: usize>(_ value: ([Slot; {extent}], Slot, [[Slot; 2]; {extent}], [Slot; 2])) {{}}
+"#
+            );
+            let file = db.new_stand_alone("structural_array_slots.fe".into(), &source);
+            let (top_mod, _) = db.top_mod(file);
+            let func = find_func(&db, top_mod, "probe");
+            if validate_first {
+                db.assert_no_diags(top_mod);
+            }
+            let params = CallableDef::Func(func).params(&db);
+            // Four source roots and four indexed landings precede N,
+            // independently of whether either array has physical elements.
+            assert_eq!(params.len(), 9, "{extent}, validate_first {validate_first}");
+            let schema = callable_input_layout_bundle_schema(
+                &db,
+                func,
+                CallableInputLayoutHoleOrigin::ValueParam(0),
+            )
+            .expect("missing tuple input schema");
+            assert_eq!(
+                schema.components.len(),
+                if materialized { 4 } else { 2 },
+                "{schema:#?}"
+            );
+            for (field, indices, dimensions) in [(1, vec![1], vec![]), (3, vec![3, 7], vec![2])] {
+                let component = schema
+                    .components
+                    .iter()
+                    .find(|component| {
+                        component.port.value_path.first()
+                            == Some(&LayoutEvidencePathStep::Field(field))
+                    })
+                    .expect("missing sibling component");
+                assert_eq!(
+                    component.supplied_const_params,
+                    indices
+                        .into_iter()
+                        .map(|idx| params[idx])
+                        .collect::<Vec<_>>(),
+                    "{extent}"
+                );
+                assert_eq!(component.dimensions, dimensions);
+            }
+            if materialized {
+                for (field, dimensions, slots) in [(0, vec![2], 2), (2, vec![2, 2], 3)] {
+                    let component = schema
+                        .components
+                        .iter()
+                        .find(|component| {
+                            component.port.value_path.first()
+                                == Some(&LayoutEvidencePathStep::Field(field))
+                        })
+                        .expect("missing indexed component");
+                    assert_eq!(component.dimensions, dimensions);
+                    assert_eq!(component.supplied_const_params.len(), slots);
+                }
+            }
+            assert!(schema.validate().is_ok());
+            db.assert_no_diags(top_mod);
+        }
+    }
 }
 
 #[test]

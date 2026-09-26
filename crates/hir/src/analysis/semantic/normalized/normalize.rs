@@ -14,7 +14,7 @@ use crate::{
             capability::{
                 handle::OpaqueHandleContract,
                 semantics::{CapabilityClass, CapabilitySemantics, capability_semantics},
-                shape::{ShapeId, capability_shape},
+                shape::{ArrayLength, ShapeId, capability_shape},
             },
             eval_const_ref, get_or_build_semantic_instance,
             lower::layout_backing_source_path_is_prefix,
@@ -2520,14 +2520,13 @@ impl<'db> StructuralRepackCollector<'db> {
         } else if source.is_array(db) && target.is_array(db) {
             let source_elem = source.decompose_ty_app(db).1.first().copied();
             let target_elem = target.decompose_ty_app(db).1.first().copied();
-            let lengths_match = match (source.array_len(db), target.array_len(db)) {
-                (Some(source), Some(target)) => source == target,
-                (None, None) => source.generic_args(db)[1] == target.generic_args(db)[1],
-                _ => false,
-            };
-            if !lengths_match {
+            // Verifier-approved repacks must use the same length identity as
+            // capability shapes and their subsequent value transfers.
+            let [source_len, target_len] =
+                [source, target].map(|ty| ArrayLength::from_ty(db, ty.generic_args(db)[1]));
+            if source_len.is_none() || source_len != target_len {
                 false
-            } else if source.array_len(db) == Some(0) {
+            } else if source_len == Some(ArrayLength::Known(0)) {
                 true
             } else {
                 source_elem
@@ -3032,8 +3031,9 @@ mod tests {
                 unit_const,
             },
             ty::{
+                const_ty::{ConstTyData, normalize_const_tys_for_comparison},
                 ty_check::{BodyOwner, EffectPassMode},
-                ty_def::{BorrowKind, CapabilityKind, TyId},
+                ty_def::{BorrowKind, CapabilityKind, TyData, TyId},
             },
         },
         hir_def::{ArithBinOp, BinOp, ItemKind, LogicalBinOp, UnOp},
@@ -3642,6 +3642,26 @@ fn widen(_ value: own u8) -> u256 {
     }
 
     #[test]
+    fn symbolic_array_defaults_normalize_and_verify() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "symbolic_array_defaults.fe".into(),
+            include_str!(
+                "../../../../../uitest/fixtures/ty_check/generic_type_default_environments.fe"
+            ),
+        );
+        let (top_mod, _) = db.top_mod(file);
+        for name in ["forward_nested", "recursive_nested"] {
+            let artifacts = normalized_func(&db, top_mod, name);
+            verify_normalized_body(&db, &artifacts.body)
+                .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+            let raw = artifacts.body.owner.admitted_body(&db).unwrap();
+            verify_normalized_layout_plan(&db, &artifacts.body, raw, &artifacts.layout_plan)
+                .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        }
+    }
+
+    #[test]
     fn handle_repacks_require_compatible_referents() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_trusted_effect_handle_module(
@@ -3676,6 +3696,20 @@ fn symbolic<const N: usize, const M: usize>(
     _ left: own Ptr<[u256; N]>,
     _ right: own Ptr<[u256; M]>,
 ) {}
+type DefaultArray<const N: usize, T = [u256; { N + 1 }]> = T
+type EmptyArray<T = [u256; { 0 }]> = T
+fn symbolic_defaults<const N: usize, const M: usize>(
+    _ eager: own Ptr<[u256; { N + 1 }]>,
+    _ deferred: own Ptr<DefaultArray<N>>,
+    _ other_param: own Ptr<DefaultArray<M>>,
+    _ other_offset: own Ptr<[u256; { N + 2 }]>,
+) {}
+fn concrete_defaults(
+    _ eager: own Ptr<[u256; 1]>,
+    _ deferred: own Ptr<DefaultArray<0>>,
+    _ empty_eager: own Ptr<[u8; 0]>,
+    _ empty_deferred: own Ptr<EmptyArray>,
+) {}
 "#,
         );
         let (top_mod, _) = db.top_mod(file);
@@ -3707,6 +3741,68 @@ fn symbolic<const N: usize, const M: usize>(
         assert!(
             super::structural_repack_mapping(&db, body.owner, left, right).is_none(),
             "distinct symbolic array lengths are not interchangeable"
+        );
+        let body = normalized_func(&db, top_mod, "symbolic_defaults").body;
+        let types: Vec<_> = body
+            .values
+            .iter()
+            .filter_map(|value| {
+                matches!(value.definition, NValueDefinition::EntryParam { .. }).then_some(value.ty)
+            })
+            .collect();
+        let [eager, deferred, other_param, other_offset]: [TyId<'_>; 4] = types.try_into().unwrap();
+        let eager_len = eager.generic_args(&db)[0].generic_args(&db)[1];
+        let deferred_len = deferred.generic_args(&db)[0].generic_args(&db)[1];
+        assert_ne!(eager_len, deferred_len);
+        assert!(matches!(
+            deferred_len.data(&db),
+            TyData::ConstTy(const_ty) if matches!(const_ty.data(&db), ConstTyData::UnEvaluated { .. })
+        ));
+        assert_eq!(
+            normalize_const_tys_for_comparison(&db, eager_len),
+            normalize_const_tys_for_comparison(&db, deferred_len),
+        );
+        for (source, target) in [(eager, deferred), (deferred, eager)] {
+            assert!(
+                super::structural_repack_mapping(&db, body.owner, source, target).is_some(),
+                "equivalent eager and deferred symbolic lengths must be compatible"
+            );
+            assert!(super::structural_types_are_boundary_compatible(
+                &db, body.owner, source, target,
+            ));
+        }
+        for target in [other_param, other_offset] {
+            assert!(
+                super::structural_repack_mapping(&db, body.owner, deferred, target).is_none(),
+                "canonicalization must not equate different symbolic lengths"
+            );
+            assert!(!super::structural_types_are_boundary_compatible(
+                &db, body.owner, deferred, target,
+            ));
+        }
+        let body = normalized_func(&db, top_mod, "concrete_defaults").body;
+        let types: Vec<_> = body
+            .values
+            .iter()
+            .filter_map(|value| {
+                matches!(value.definition, NValueDefinition::EntryParam { .. }).then_some(value.ty)
+            })
+            .collect();
+        let [eager, deferred, empty_eager, empty_deferred]: [TyId<'_>; 4] =
+            types.try_into().unwrap();
+        for (source, target) in [
+            (eager, deferred),
+            (deferred, eager),
+            (empty_eager, empty_deferred),
+            (empty_deferred, empty_eager),
+        ] {
+            assert!(super::structural_repack_mapping(&db, body.owner, source, target).is_some());
+            assert!(super::structural_types_are_boundary_compatible(
+                &db, body.owner, source, target,
+            ));
+        }
+        assert!(
+            super::structural_repack_mapping(&db, body.owner, deferred, empty_deferred).is_none()
         );
         let body = normalized_func(&db, top_mod, "spaces").body;
         let types: Vec<_> = body

@@ -1,0 +1,26 @@
+// Bare associated names inside a generic trait refer to `<Self as Has<T>>`.
+trait Has<T> {
+    type Item
+    const LEN: usize
+
+    fn id(_ x: own Item) -> Item { x }
+    fn len() -> usize { LEN }
+}
+
+impl Has<u256> for bool {
+    type Item = u256
+    const LEN: usize = 3
+}
+
+impl Has<bool> for bool {
+    type Item = u8
+    const LEN: usize = 5
+}
+
+#[test]
+fn bare_associated_names_keep_trait_arguments() {
+    assert!(<bool as Has<u256>>::id(7) == 7)
+    assert!(<bool as Has<u256>>::len() == 3)
+    assert!(<bool as Has<bool>>::id(9) == 9)
+    assert!(<bool as Has<bool>>::len() == 5)
+}

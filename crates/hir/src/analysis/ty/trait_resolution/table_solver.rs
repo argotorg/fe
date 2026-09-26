@@ -23,7 +23,6 @@ use super::{
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        binder::Binder,
         canonical::{Canonical, Solution},
         fold::TyFoldable,
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
@@ -110,7 +109,7 @@ pub(crate) enum TargetSolutionMatch {
 
 #[derive(Clone, Copy)]
 enum Clause<'db> {
-    Implementor(Binder<ImplementorId<'db>>),
+    Implementor(ImplementorId<'db>),
     Assumption(usize),
 }
 
@@ -361,9 +360,8 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         } = self.prepare_query(*key);
 
         let selected_impl = match clause {
-            Clause::Implementor(candidate) => {
-                let selected_impl = candidate.instantiate_identity();
-                let candidate = table.instantiate_with_fresh_vars(candidate);
+            Clause::Implementor(selected_impl) => {
+                let candidate = table.instantiate_with_fresh_vars(selected_impl);
                 let scope = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
                     self.db,
                     self.origin_ingot,

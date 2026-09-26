@@ -60,9 +60,8 @@ pub fn build_effect_query_for_call<'db>(
     // ordinary unresolved inference, projections, or invalid state after construction.
     let key = match &req.key {
         EffectRequirementKey::Type(schema) => {
-            let carrier =
-                instantiate_type_effect_key(tc.db, schema.carrier, callable.generic_args())
-                    .fold_with(tc.db, &mut tc.table);
+            let carrier = instantiate_type_effect_key(tc.db, schema.carrier, callable)
+                .fold_with(tc.db, &mut tc.table);
             let carrier = normalize_effect_identity_ty(
                 tc.db,
                 carrier,
@@ -76,9 +75,7 @@ pub fn build_effect_query_for_call<'db>(
             let key = instantiate_trait_effect_key(
                 tc.db,
                 schema.clone().into_trait_inst(tc.db),
-                callable.generic_args(),
-                true,
-                None,
+                callable,
             )
             .fold_with(tc.db, &mut tc.table);
             let key = normalize_effect_identity_trait(
@@ -220,7 +217,7 @@ fn generic_param_owner_for_effect_family_base<'db>(
     base: TyId<'db>,
 ) -> Option<GenericParamOwner<'db>> {
     match base.data(db) {
-        TyData::TyBase(TyBase::Adt(adt)) => adt.as_generic_param_owner(db),
+        TyData::TyBase(TyBase::Adt(adt)) => Some(adt.as_generic_param_owner(db)),
         TyData::TyBase(TyBase::Func(func)) => match func {
             CallableDef::Func(def) => Some((*def).into()),
             CallableDef::VariantCtor(_) => None,
@@ -493,9 +490,7 @@ where
                 return ty;
             };
 
-            let Some(owner) = adt.as_generic_param_owner(self.db) else {
-                return ty;
-            };
+            let owner = adt.as_generic_param_owner(self.db);
             let param_set = collect_generic_params(self.db, owner);
             let explicit_param_count = param_set.explicit_param_count(self.db);
             if args.len() >= explicit_param_count {

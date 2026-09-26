@@ -1,0 +1,64 @@
+trait Output { type Item }
+impl Output for bool { type Item = u256 }
+trait Other { type Item }
+impl Other for bool { type Item = bool }
+
+fn selected<T: Output, U = T::Item>(_ item: U) {}
+fn qualified<T: Output, U = <T as Output>::Item>(_ item: U) {}
+fn where_bound<T, U = T::Item>(_ item: U) where T: Output {}
+
+fn unrelated<X: Other<Item = bool>>() {
+    selected<bool>(1)
+    selected<bool, u256>(1)
+}
+
+fn forward<T: Output>(_ item: T::Item) {
+    selected<T>(item)
+}
+
+struct Holder<T: Output, U = T::Item> {}
+enum Choice<T: Output, U = T::Item> { Empty }
+trait DefaultTrait<T: Output, U = T::Item> {}
+impl DefaultTrait<bool> for bool {}
+fn needs_trait<T: DefaultTrait<bool, u256>>() {}
+
+impl<T: Output> Holder<T> {
+    fn inherited<U = T::Item>(self, _ item: U) {}
+}
+
+struct Wrap<T> { value: T }
+fn higher<F: * -> * = Wrap>() {}
+type Alias<T, U = T> = Wrap<U>
+fn takes_alias(_ value: Alias<u256, u256>) {}
+
+trait Bound {}
+impl Bound for bool {}
+fn deferred_bound<T, U: Bound = T>() {}
+
+fn nested_const<const A: usize, const B: usize, T = [u8; { B + 1 }]>(_ value: T) {}
+
+fn forward_nested<const X: usize, const Y: usize>(_ value: [u8; { X + 1 }]) {
+    nested_const<Y, X>(value)
+}
+
+fn recursive_nested<const A: usize, const B: usize, T = [u8; { B + 1 }]>(
+    _ left: [u8; { A + 1 }], _ right: [u8; { B + 1 }],
+) {
+    recursive_nested<B, A>(right, left)
+}
+
+fn exercise(holder: Holder<bool>) {
+    selected<bool>(1)
+    qualified<bool>(1)
+    where_bound<bool>(1)
+    unrelated<bool>()
+    holder.inherited(1)
+    let _holder: Holder<bool, u256> = Holder<bool> {}
+    let _choice: Choice<bool, u256> = Choice<bool>::Empty
+    needs_trait<bool>()
+    higher()
+    let alias: Alias<u256> = Wrap { value: 1 }
+    takes_alias(alias)
+    deferred_bound<bool>()
+    deferred_bound<u256, bool>()
+}

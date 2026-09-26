@@ -77,7 +77,7 @@ use crate::hir_def::*;
 // rather than exposing raw syntax.
 use crate::analysis::ty::adt_def::{AdtCycleMember, AdtDef, AdtField, AdtRef};
 use crate::analysis::ty::const_ty::{
-    CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleAnchor, HoleMinter,
+    CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleAnchor, LoweringContext,
 };
 use crate::analysis::ty::effects::{
     EffectKeyKind, place_effect_provider_param_index_map, resolve_effect_key,
@@ -95,8 +95,8 @@ use crate::analysis::ty::trait_lower::{
     TraitRefLowerError, lower_trait_ref, lower_trait_ref_deferred,
 };
 use crate::analysis::ty::trait_resolution::constraint::{
-    collect_adt_constraints, collect_candidate_constraints, collect_constraints,
-    collect_func_decl_constraints, collect_func_def_constraints,
+    collect_candidate_constraints, collect_constraints, collect_func_decl_constraints,
+    collect_func_def_constraints,
 };
 use crate::analysis::ty::ty_def::{TyBase, TyData, TyParam};
 use crate::analysis::ty::ty_lower::{GenericParamTypeSet, collect_generic_params};
@@ -111,7 +111,7 @@ use crate::analysis::ty::{
     ty_check::EffectParamSite,
     ty_contains_const_hole,
     ty_def::{InvalidCause, PrimTy, TyId},
-    ty_error::collect_ty_lower_errors,
+    ty_error::{collect_ty_lower_errors, demanded_ground_const_cause, diag_from_invalid_cause},
     ty_lower::{
         TyAlias, lower_callable_input_param_ty, lower_hir_ty, lower_hir_ty_deferred,
         lower_hir_ty_with_minter, lower_layout_root_uses_in_hir_ty, lower_opt_hir_ty,
@@ -172,8 +172,8 @@ pub fn constraints_for<'db>(
     item: ItemKind<'db>,
 ) -> PredicateListId<'db> {
     match item {
-        ItemKind::Struct(s) => collect_adt_constraints(db, s.as_adt(db)).instantiate_identity(),
-        ItemKind::Enum(e) => collect_adt_constraints(db, e.as_adt(db)).instantiate_identity(),
+        ItemKind::Struct(s) => collect_constraints(db, s.into()).instantiate_identity(),
+        ItemKind::Enum(e) => collect_constraints(db, e.into()).instantiate_identity(),
         // Contracts have no generic parameters, so no constraints
         ItemKind::Contract(_) => PredicateListId::empty_list(db),
         ItemKind::Func(f) => {
@@ -773,7 +773,7 @@ impl<'db> Func<'db> {
     }
 
     /// Semantic argument types bound to identity parameters.
-    pub fn arg_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<TyId<'db>>> {
+    pub fn arg_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<'db, TyId<'db>>> {
         let assumptions = self.assumptions(db);
         let layout_args = callable_input_layout_args(db, self);
         match self.params_list(db).to_opt() {
@@ -795,7 +795,7 @@ impl<'db> Func<'db> {
                         !ty_contains_const_hole(db, ty) || ty.has_invalid(db),
                         "unelaborated layout hole remained in Func::arg_tys"
                     );
-                    Binder::bind(ty)
+                    Binder::bind(self.into(), ty)
                 })
                 .collect(),
             None => Vec::new(),
@@ -803,7 +803,7 @@ impl<'db> Func<'db> {
     }
 
     /// Semantic receiver type if this is a method (first argument), else None.
-    pub fn receiver_ty(self, db: &'db dyn HirAnalysisDb) -> Option<Binder<TyId<'db>>> {
+    pub fn receiver_ty(self, db: &'db dyn HirAnalysisDb) -> Option<Binder<'db, TyId<'db>>> {
         self.is_method(db)
             .then(|| self.arg_tys(db).into_iter().next())
             .flatten()
@@ -963,6 +963,15 @@ impl<'db> Body<'db> {
 }
 
 impl<'db> CallableDef<'db> {
+    /// The declaration whose parameter schema interprets this callable's
+    /// signature: the function itself, or a variant constructor's enum.
+    pub fn generic_owner(self) -> GenericParamOwner<'db> {
+        match self {
+            Self::Func(func) => func.into(),
+            Self::VariantCtor(variant) => variant.enum_.into(),
+        }
+    }
+
     pub fn name_span(self) -> crate::span::DynLazySpan<'db> {
         match self {
             Self::Func(func) => func.span().name().into(),
@@ -1070,7 +1079,7 @@ impl<'db> CallableDef<'db> {
         }
     }
 
-    pub fn arg_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<TyId<'db>>> {
+    pub fn arg_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<'db, TyId<'db>>> {
         match self {
             Self::Func(func) => func.arg_tys(db),
             Self::VariantCtor(var) => {
@@ -1081,21 +1090,21 @@ impl<'db> CallableDef<'db> {
         }
     }
 
-    pub fn ret_ty(self, db: &'db dyn HirAnalysisDb) -> Binder<TyId<'db>> {
+    pub fn ret_ty(self, db: &'db dyn HirAnalysisDb) -> Binder<'db, TyId<'db>> {
         match self {
-            Self::Func(func) => Binder::bind(func.return_ty(db)),
+            Self::Func(func) => Binder::bind(func.into(), func.return_ty(db)),
             Self::VariantCtor(var) => {
                 let adt = var.enum_.as_adt(db);
                 let mut ty = TyId::adt(db, adt);
                 for &param in adt.params(db) {
                     ty = TyId::app(db, ty, param);
                 }
-                Binder::bind(ty)
+                Binder::bind(var.enum_.into(), ty)
             }
         }
     }
 
-    pub fn receiver_ty(self, db: &'db dyn HirAnalysisDb) -> Option<Binder<TyId<'db>>> {
+    pub fn receiver_ty(self, db: &'db dyn HirAnalysisDb) -> Option<Binder<'db, TyId<'db>>> {
         match self {
             Self::Func(func) if func.is_method(db) => func.arg_tys(db).into_iter().next(),
             _ => None,
@@ -1183,7 +1192,7 @@ impl<'db> FuncParamView<'db> {
     }
 
     /// Semantic type of this parameter, bound to identity parameters.
-    pub fn ty_binder(self, db: &'db dyn HirAnalysisDb) -> Binder<TyId<'db>> {
+    pub fn ty_binder(self, db: &'db dyn HirAnalysisDb) -> Binder<'db, TyId<'db>> {
         // Delegate to the function-level lowering to keep behavior consistent.
         // Indexing is safe as long as `idx` was derived from the function's own
         // parameter list.
@@ -1554,7 +1563,7 @@ impl<'db> RecvArmView<'db> {
                 vec![variant_ty, abi],
                 IndexMap::new(),
             );
-            let return_proj = TyId::assoc_ty(db, inst, return_ident);
+            let return_proj = TyId::assoc_ty(db, inst.trait_ref(db), return_ident);
             normalize_ty(db, return_proj, contract.scope(), assumptions)
         } else {
             TyId::invalid(db, InvalidCause::Other)
@@ -2601,7 +2610,7 @@ pub(crate) fn get_variant_selector_info<'db>(
     scope: ScopeId<'db>,
 ) -> VariantSelectorInfo {
     use crate::analysis::semantic::{
-        EvalOutcome, SemConstScalar, SemConstValue, eval_body_owner_const,
+        EvalOutcome, GenericSubst, SemConstScalar, SemConstValue, eval_body_owner_const,
     };
     use crate::analysis::ty::{
         canonical::Canonical,
@@ -2624,10 +2633,10 @@ pub(crate) fn get_variant_selector_info<'db>(
         variant_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
     ];
 
-    let Some(implementor) = search_ingots.into_iter().flatten().find_map(|ingot| {
+    let Some(impl_) = search_ingots.into_iter().flatten().find_map(|ingot| {
         impls_for_ty(db, ingot, canonical_ty)
             .iter()
-            .find(|impl_| impl_.skip_binder().trait_def(db).eq(&msg_variant_trait))
+            .find(|impl_| impl_.trait_def(db).eq(&msg_variant_trait))
             .copied()
     }) else {
         return VariantSelectorInfo {
@@ -2635,7 +2644,6 @@ pub(crate) fn get_variant_selector_info<'db>(
             signature: None,
         };
     };
-    let impl_ = implementor.skip_binder();
 
     let selector_name = IdentId::new(db, "SELECTOR".to_string());
     let hir_impl = impl_.hir_impl_trait(db);
@@ -2673,7 +2681,7 @@ pub(crate) fn get_variant_selector_info<'db>(
             body,
             expected: expected_ty,
         },
-        Vec::new(),
+        GenericSubst::none(db),
     ) {
         EvalOutcome::Ready(value) => match value.value(db) {
             SemConstValue::Scalar {
@@ -3024,7 +3032,7 @@ impl<'db> Enum<'db> {
 
 impl<'db> Struct<'db> {
     /// Returns semantic types of all fields, bound to identity parameters.
-    pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<TyId<'db>>> {
+    pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<'db, TyId<'db>>> {
         use crate::analysis::ty::ty_def::{InvalidCause, TyId};
         use crate::analysis::ty::ty_lower::lower_hir_ty;
 
@@ -3041,7 +3049,7 @@ impl<'db> Struct<'db> {
                     Some(hir_ty) => lower_hir_ty(db, hir_ty, scope, assumptions),
                     None => TyId::invalid(db, InvalidCause::ParseError),
                 };
-                Binder::bind(ty)
+                Binder::bind(self.into(), ty)
             })
             .collect()
     }
@@ -3309,6 +3317,10 @@ impl<'db> TypeAlias<'db> {
         let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
         if ty.has_invalid(db) {
             collect_ty_lower_errors(db, self.scope(), hir_ty, self.span().ty(), assumptions)
+        } else if let Some(cause) = demanded_ground_const_cause(db, ty) {
+            diag_from_invalid_cause(self.span().ty().into(), &cause)
+                .into_iter()
+                .collect()
         } else {
             Vec::new()
         }
@@ -3458,8 +3470,10 @@ impl<'db> Trait<'db> {
     pub(crate) fn super_traits(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> IndexSet<Binder<TraitInstId<'db>>> {
-        self.super_trait_bounds(db).map(Binder::bind).collect()
+    ) -> IndexSet<Binder<'db, TraitInstId<'db>>> {
+        self.super_trait_bounds(db)
+            .map(|bound| Binder::bind(self.into(), bound))
+            .collect()
     }
 
     /// Returns all `impl Trait for Type` blocks that implement this trait
@@ -3760,6 +3774,9 @@ impl<'db> Impl<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> InherentImplAdmissibility<'db> {
         let ty = self.ty(db);
+        if ty.has_invalid(db) {
+            return InherentImplAdmissibility::InvalidTy { ty };
+        }
         let ingot = self.top_mod(db).ingot(db);
         if !ty.is_inherent_impl_allowed(db, ingot) {
             let base = ty.base_ty(db);
@@ -3768,10 +3785,6 @@ impl<'db> Impl<'db> {
                 is_nominal: !base.is_param(db),
             };
         }
-        if ty.has_invalid(db) {
-            return InherentImplAdmissibility::InvalidTy { ty };
-        }
-
         match check_ty_wf(
             db,
             TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),
@@ -3884,7 +3897,7 @@ impl<'db> ImplTrait<'db> {
     pub(crate) fn lowered_implementor(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> Result<Binder<ImplementorId<'db>>, ImplTraitLowerError<'db>> {
+    ) -> Result<ImplementorId<'db>, ImplTraitLowerError<'db>> {
         // Early return if the implementor type is syntactically missing or invalid.
         if matches!(
             self.ty(db).data(db),
@@ -3906,18 +3919,13 @@ impl<'db> ImplTrait<'db> {
         // Build implementor view
         let params = self.impl_params(db);
         let types = self.assoc_type_bindings_for_trait_inst(db, trait_inst);
-        let implementor = Binder::bind(ImplementorId::new(
-            db,
-            trait_inst,
-            params,
-            types,
-            ImplementorOrigin::Hir(self),
-        ));
+        let implementor =
+            ImplementorId::new(db, trait_inst, params, types, ImplementorOrigin::Hir(self));
 
         // Conflict check
-        let trait_ = implementor.skip_binder().trait_(db);
+        let trait_ = implementor.trait_(db);
         for &cand_view in impls_for_trait_def(db, self.top_mod(db).ingot(db), trait_.def(db)) {
-            let cand_impl_trait = cand_view.skip_binder().hir_impl_trait(db);
+            let cand_impl_trait = cand_view.hir_impl_trait(db);
             if cand_impl_trait == self {
                 continue;
             }
@@ -3932,17 +3940,13 @@ impl<'db> ImplTrait<'db> {
         }
 
         // Kind check
-        let expected_kind = implementor
-            .instantiate_identity()
-            .trait_def(db)
-            .self_param(db)
-            .kind(db);
+        let expected_kind = implementor.trait_def(db).self_param(db).kind(db);
 
         let self_ty = self.ty(db);
         if self_ty.kind(db) != expected_kind {
             return Err(ImplTraitLowerError::KindMismatch {
                 expected: expected_kind.clone(),
-                actual: implementor.instantiate_identity().self_ty(db),
+                actual: implementor.self_ty(db),
             });
         }
 
@@ -4253,9 +4257,10 @@ impl<'db> ImplTrait<'db> {
                 continue;
             };
 
-            types
-                .entry(name)
-                .or_insert_with(|| Binder::bind(default).instantiate(db, trait_inst.args(db)));
+            types.entry(name).or_insert_with(|| {
+                Binder::bind(trait_inst.def(db).into(), default)
+                    .instantiate(db, trait_inst.args(db))
+            });
         }
 
         types
@@ -4309,10 +4314,7 @@ impl<'db> ImplTrait<'db> {
     pub(crate) fn implementor_with_errors(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> (
-        Option<Binder<ImplementorId<'db>>>,
-        Vec<TyDiagCollection<'db>>,
-    ) {
+    ) -> (Option<ImplementorId<'db>>, Vec<TyDiagCollection<'db>>) {
         use crate::analysis::name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
         use crate::analysis::ty::diagnostics::TraitLowerDiag;
 
@@ -4469,7 +4471,7 @@ impl<'db> ImplAssocTypeView<'db> {
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
         let hir = self.owner.types(db)[self.idx].type_ref.to_opt()?;
         let assumptions = constraints_for(db, self.owner.into());
-        let minter = HoleMinter::new(self.hole_anchor());
+        let minter = LoweringContext::new(self.hole_anchor());
         Some(lower_hir_ty_with_minter(
             db,
             hir,
@@ -4483,7 +4485,7 @@ impl<'db> ImplAssocTypeView<'db> {
         let hir = self.owner.types(db)[self.idx].type_ref.to_opt()?;
         let assumptions =
             collect_candidate_constraints(db, self.owner.into()).instantiate_identity();
-        let minter = HoleMinter::deferred(self.hole_anchor());
+        let minter = LoweringContext::deferred(self.hole_anchor());
         Some(lower_hir_ty_with_minter(
             db,
             hir,
@@ -4498,7 +4500,7 @@ impl<'db> ImplAssocTypeView<'db> {
             return Vec::new();
         };
         let scope = self.owner.scope();
-        let minter = HoleMinter::new(self.hole_anchor());
+        let minter = LoweringContext::new(self.hole_anchor());
         lower_layout_root_uses_in_hir_ty(
             db,
             hir,
@@ -4678,7 +4680,7 @@ impl<'db> TraitAssocTypeView<'db> {
         };
         let scope = self.owner.scope();
         let assumptions = constraints_for(db, self.owner.into());
-        let minter = HoleMinter::new(HoleAnchor::TemplateTy {
+        let minter = LoweringContext::new(HoleAnchor::TemplateTy {
             ty: hir,
             scope,
             assumptions,
@@ -4892,8 +4894,8 @@ impl<'db> TraitAssocConstView<'db> {
 
     /// Semantic type of this associated const as a Binder, suitable for
     /// instantiation with trait args.
-    pub fn ty_binder(self, db: &'db dyn HirAnalysisDb) -> Option<Binder<TyId<'db>>> {
-        self.ty(db).map(Binder::bind)
+    pub fn ty_binder(self, db: &'db dyn HirAnalysisDb) -> Option<Binder<'db, TyId<'db>>> {
+        self.ty(db).map(|ty| Binder::bind(self.owner.into(), ty))
     }
 }
 
@@ -5010,7 +5012,7 @@ impl<'db> VariantView<'db> {
     }
 
     /// Returns semantic types of this variant's fields (empty for unit variants).
-    pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<TyId<'db>>> {
+    pub fn field_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<'db, TyId<'db>>> {
         use crate::analysis::ty::ty_def::{InvalidCause, TyId};
         use crate::analysis::ty::ty_lower::lower_hir_ty;
 
@@ -5033,7 +5035,7 @@ impl<'db> VariantView<'db> {
                             Some(hir_ty) => lower_hir_ty(db, hir_ty, scope, assumptions),
                             None => TyId::invalid(db, InvalidCause::ParseError),
                         };
-                        Binder::bind(ty)
+                        Binder::bind(enum_.into(), ty)
                     })
                     .collect()
             }
@@ -5045,7 +5047,7 @@ impl<'db> VariantView<'db> {
                         Some(hir_ty) => lower_hir_ty(db, hir_ty, scope, assumptions),
                         None => TyId::invalid(db, InvalidCause::ParseError),
                     };
-                    Binder::bind(ty)
+                    Binder::bind(enum_.into(), ty)
                 })
                 .collect(),
         }
@@ -5152,7 +5154,7 @@ impl<'db> FieldView<'db> {
     pub fn ty_diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use crate::analysis::name_resolution::{PathRes, resolve_path};
         use crate::analysis::ty::ty_def::TyData;
-        use crate::analysis::ty::ty_error::collect_hir_ty_diags;
+        use crate::analysis::ty::ty_error::{collect_hir_ty_diags, diag_from_invalid_cause};
 
         let mut out = Vec::new();
 
@@ -5214,6 +5216,22 @@ impl<'db> FieldView<'db> {
                 .field_errors_for_id(field)
                 .and_then(|errors| errors.first())
         {
+            if let ContractLayoutError::InvalidConcreteArrayLength { invalid } = error {
+                if let Some(diag) = invalid
+                    .invalid_cause(db)
+                    .and_then(|cause| diag_from_invalid_cause(span.clone(), &cause))
+                {
+                    return vec![diag];
+                }
+                return vec![
+                    TyLowerDiag::ContractFieldLayoutInvariant {
+                        span,
+                        ty,
+                        issue: crate::analysis::ty::diagnostics::ContractFieldLayoutIssue::IncompleteProjection,
+                    }
+                    .into(),
+                ];
+            }
             let diag = match error {
                 ContractLayoutError::ExplicitContractLayoutHole { .. } => {
                     TyLowerDiag::ContractFieldExplicitConstHole { span, ty }
@@ -5254,6 +5272,7 @@ impl<'db> FieldView<'db> {
                 error @ (ContractLayoutError::ConflictingLayoutRootSpaces { .. }
                 | ContractLayoutError::LayoutExtentOverflow
                 | ContractLayoutError::IncompleteAdtLayoutProjection { .. }
+                | ContractLayoutError::InconsistentConcreteArrayLength { .. }
                 | ContractLayoutError::AmbiguousLayoutBindingSelector { .. }
                 | ContractLayoutError::InconsistentLayoutRootType { .. }
                 | ContractLayoutError::LayoutRootNeedsLanding { .. }
@@ -5268,6 +5287,9 @@ impl<'db> FieldView<'db> {
                         }
                         ContractLayoutError::IncompleteAdtLayoutProjection { .. } => {
                             crate::analysis::ty::diagnostics::ContractFieldLayoutIssue::IncompleteProjection
+                        }
+                        ContractLayoutError::InconsistentConcreteArrayLength { .. } => {
+                            crate::analysis::ty::diagnostics::ContractFieldLayoutIssue::InconsistentArrayLength
                         }
                         ContractLayoutError::AmbiguousLayoutBindingSelector { .. } => {
                             crate::analysis::ty::diagnostics::ContractFieldLayoutIssue::AmbiguousBindingSelector
@@ -5285,6 +5307,7 @@ impl<'db> FieldView<'db> {
                             crate::analysis::ty::diagnostics::ContractFieldLayoutIssue::InternalGraph
                         }
                         ContractLayoutError::InvalidFieldType
+                        | ContractLayoutError::InvalidConcreteArrayLength { .. }
                         | ContractLayoutError::ExplicitContractLayoutHole { .. }
                         | ContractLayoutError::NonSlotContractLayoutHole { .. }
                         | ContractLayoutError::UnresolvedConcreteLayoutRoot { .. }
@@ -5301,6 +5324,7 @@ impl<'db> FieldView<'db> {
                     };
                     TyLowerDiag::ContractFieldLayoutInvariant { span, ty, issue }
                 }
+                ContractLayoutError::InvalidConcreteArrayLength { .. } => unreachable!(),
             };
             out.push(diag.into());
             return out;

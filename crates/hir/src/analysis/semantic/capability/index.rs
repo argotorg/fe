@@ -9,7 +9,7 @@ use crate::analysis::{
         normalized::{NBlockId, NIndex, NValueId},
     },
     ty::{
-        const_ty::{ConstTyId, const_ty_from_sem_const},
+        const_ty::{ConstTyId, const_ty_from_sem_const, normalize_const_tys_for_comparison},
         fold::{TyFoldable, TyFolder},
         ty_def::{TyData, TyId},
     },
@@ -36,6 +36,7 @@ pub enum IndexExpr<'db> {
     Runtime(NValueId),
     Iteration(NBlockId),
     FormalValue(u32),
+    /// A complete const-expression atom in comparison-normalized form.
     TypeConst(ConstTyId<'db>),
     Bound(BoundIndex),
 }
@@ -339,8 +340,16 @@ impl<'db> From<usize> for IndexExpr<'db> {
 // supplies a substitution for each complete expression, including derived bounds.
 impl<'db> TyFolder<'db> for IndexSubst<'db> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        if let TyData::ConstTy(value) = ty.data(db) {
-            return match self.apply(IndexExpr::TypeConst(*value)) {
+        // Capability types can retain deferred extents even though shape lengths
+        // already carry canonical atoms. Look up the same specialization key.
+        let normalized = normalize_const_tys_for_comparison(db, ty);
+        if let TyData::ConstTy(value) = normalized.data(db) {
+            let key = IndexExpr::TypeConst(*value);
+            let replacement = self.apply(key);
+            if replacement == key {
+                return ty;
+            }
+            return match replacement {
                 IndexExpr::Const(integer) => TyId::const_ty(
                     db,
                     const_ty_from_sem_const(db, int_const(db, value.ty(db), BigInt::from(integer))),

@@ -2700,7 +2700,10 @@ fn layout_normalization_error<'db>(
 ) -> LayoutEvidenceError<'db> {
     match failure {
         SemanticNormalizationFailure::Blocked(blocked) => LayoutEvidenceError::Blocked(blocked),
-        SemanticNormalizationFailure::InternalFailure(diag) => LayoutEvidenceError::Normalize(diag),
+        SemanticNormalizationFailure::Rejected(diag)
+        | SemanticNormalizationFailure::InternalFailure(diag) => {
+            LayoutEvidenceError::Normalize(diag)
+        }
     }
 }
 

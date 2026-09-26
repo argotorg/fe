@@ -2,20 +2,17 @@ use cranelift_entity::EntityRef;
 use hir::analysis::semantic::SemOrigin;
 use hir::{
     analysis::{
-        semantic::{
-            GenericSubst, ImplEnv, LayoutEvidenceBase, LayoutEvidenceConstant, SemanticInstanceKey,
-            get_or_build_semantic_instance, prepare_static_layout_root_value,
-        },
+        semantic::{LayoutEvidenceBase, LayoutEvidenceConstant, prepare_static_layout_root_value},
         ty::{
             corelib::{resolve_core_trait, resolve_lib_type_path},
-            trait_def::{TraitInstId, resolve_trait_method_instance},
-            trait_resolution::{PredicateListId, TraitSolveCx},
-            ty_check::{BodyOwner, LocalBinding},
+            trait_def::TraitInstId,
+            trait_resolution::PredicateListId,
+            ty_check::LocalBinding,
             ty_def::{InvalidCause, TyData, TyId},
         },
     },
     hir_def::{
-        Contract, IdentId,
+        Contract,
         expr::{ArithBinOp, BinOp, CompBinOp},
     },
 };
@@ -51,7 +48,7 @@ use crate::{
             },
             type_info::{RuntimeTypeEnv, top_level_class_for_ty_in_env},
         },
-        package::runtime_instance_for_semantic,
+        package::resolve_trait_runtime_instance,
     },
 };
 
@@ -1723,35 +1720,6 @@ fn resolve_sol_decoder_new<'db>(
     resolve_trait_runtime_instance(db, scope, inst, "decoder_new", vec![input_ty]).ok()
 }
 
-fn resolve_trait_runtime_instance<'db>(
-    db: &'db dyn MirDb,
-    scope: hir::hir_def::scope_graph::ScopeId<'db>,
-    inst: TraitInstId<'db>,
-    method: &str,
-    extra_generic_args: Vec<TyId<'db>>,
-) -> Result<RuntimeInstance<'db>, ()> {
-    let assumptions = PredicateListId::empty_list(db);
-    let (func, mut impl_args) = resolve_trait_method_instance(
-        db,
-        TraitSolveCx::new(db, scope).with_assumptions(assumptions),
-        inst,
-        IdentId::new(db, method.to_string()),
-    )
-    .ok_or(())?;
-    impl_args.extend(extra_generic_args);
-    let key = SemanticInstanceKey::new(
-        db,
-        BodyOwner::Func(func),
-        GenericSubst::new(db, impl_args),
-        hir::analysis::semantic::EffectProviderSubst::empty(db),
-        ImplEnv::new(db, scope, assumptions, vec![inst]),
-    );
-    Ok(runtime_instance_for_semantic(
-        db,
-        get_or_build_semantic_instance(db, key),
-    ))
-}
-
 fn sol_abi_ty<'db>(
     db: &'db dyn MirDb,
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
@@ -1771,6 +1739,7 @@ mod tests {
     use super::*;
     use common::InputDb;
     use driver::DriverDataBase;
+    use hir::analysis::ty::ty_check::BodyOwner;
     use url::Url;
 
     use crate::{

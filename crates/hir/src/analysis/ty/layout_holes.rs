@@ -1,16 +1,16 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{
-    binder::{backfill_unevaluated_const_generic_args, bound_value_owner},
     const_ty::{
-        BoundHoleId, CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleAnchor, HoleId,
-        LayoutBoundaryIdentity, LayoutInstantiationContext, LayoutInstantiationId,
-        LayoutOccurrencePath, LayoutOccurrenceStep, LayoutRootId, LayoutShapeHoleKind,
-        StructuralHoleId,
+        BoundHoleId, CallableInputLayoutHoleOrigin, ConstCaptureEnv, ConstTyData, ConstTyId,
+        HoleAnchor, HoleId, LayoutBoundaryIdentity, LayoutInstantiationContext,
+        LayoutInstantiationId, LayoutOccurrencePath, LayoutOccurrenceStep, LayoutRootId,
+        LayoutShapeHoleKind, StructuralHoleId,
     },
     fold::{TyFoldable, TyFolder},
+    subst::is_owned_by_schema,
     ty_def::{TyData, TyId, TyParam},
-    ty_lower::func_implicit_param_plan,
+    ty_lower::{CompleteSubst, ParamBasis, ParamDomainId, func_implicit_param_plan},
     visitor::{TyVisitable, TyVisitor, walk_ty},
 };
 use crate::analysis::HirAnalysisDb;
@@ -478,25 +478,43 @@ fn collect_root_uses<'db>(
     }
 }
 
+/// The coordinate basis of a layout template and its checked argument map.
+pub(crate) struct LayoutTemplateSubst<'db> {
+    basis: ParamBasis,
+    mapping: CompleteSubst<'db>,
+}
+
+impl<'db> LayoutTemplateSubst<'db> {
+    pub(crate) fn new(basis: ParamBasis, mapping: CompleteSubst<'db>) -> Self {
+        Self { basis, mapping }
+    }
+}
+
 /// Instantiates a root-bearing type template at one explicit semantic
 /// boundary. Type parameters clone every distinct root in their argument once
 /// per parameter occurrence; const parameters forward their exact value. Body
 /// roots land once per template application. Diagnostic traces are extended,
-/// but only the resulting `LayoutRootId` controls sharing.
+/// but only the resulting `LayoutRootId` controls sharing. `None` means the
+/// input is already instantiated and only its roots need a new landing.
 pub(crate) fn instantiate_layout_template<'db>(
     db: &'db dyn HirAnalysisDb,
     template: TyId<'db>,
-    params: &[TyId<'db>],
-    args: &[TyId<'db>],
+    subst: Option<LayoutTemplateSubst<'db>>,
     context: LayoutInstantiationContext<'db>,
     boundary: LayoutBoundaryIdentity<'db>,
     occurrence: LayoutOccurrencePath,
 ) -> LayoutInstantiation<'db> {
     let instance = LayoutInstantiationId::new(db, context, boundary, occurrence);
+    if let Some(subst) = &subst {
+        assert_eq!(
+            subst.mapping.domain(),
+            ParamDomainId::full(db, subst.mapping.domain().schema(db)),
+            "layout template instantiation requires a full parameter mapping"
+        );
+    }
     let mut instantiator = LayoutTemplateInstantiator {
         db,
-        params,
-        args,
+        subst,
         boundary,
         instance,
         path: Vec::new(),
@@ -527,10 +545,9 @@ pub(crate) fn instantiate_layout_template<'db>(
     }
 }
 
-struct LayoutTemplateInstantiator<'a, 'db> {
+struct LayoutTemplateInstantiator<'db> {
     db: &'db dyn HirAnalysisDb,
-    params: &'a [TyId<'db>],
-    args: &'a [TyId<'db>],
+    subst: Option<LayoutTemplateSubst<'db>>,
     boundary: LayoutBoundaryIdentity<'db>,
     instance: LayoutInstantiationId<'db>,
     path: LayoutOccurrencePath,
@@ -538,9 +555,18 @@ struct LayoutTemplateInstantiator<'a, 'db> {
     root_uses: Vec<LayoutRootUse<'db>>,
 }
 
-impl<'a, 'db> LayoutTemplateInstantiator<'a, 'db> {
-    fn param_index(&self, ty: TyId<'db>) -> Option<usize> {
-        self.params.iter().position(|param| *param == ty)
+impl<'db> LayoutTemplateInstantiator<'db> {
+    /// The mapping position and argument for a declared parameter occurrence.
+    fn param_argument(&self, ty: TyId<'db>) -> Option<(usize, TyId<'db>)> {
+        let subst = self.subst.as_ref()?;
+        let domain = subst.mapping.domain();
+        let key = domain
+            .schema(self.db)
+            .original_key_in_basis(self.db, ty, subst.basis)?;
+        let idx = domain
+            .position_for(self.db, key)
+            .expect("layout template mapping covers every declared parameter");
+        Some((idx, subst.mapping.values()[idx]))
     }
 
     fn with_path<T>(&mut self, step: LayoutOccurrenceStep, f: impl FnOnce(&mut Self) -> T) -> T {
@@ -613,24 +639,28 @@ impl<'a, 'db> LayoutTemplateInstantiator<'a, 'db> {
             .enumerate()
             .map(|(idx, arg)| self.with_path(step(idx), |this| arg.fold_with(db, this)))
             .collect::<Vec<_>>();
-        TyId::foldl(db, base, &args)
+        args.into_iter()
+            .fold(base, |ty, arg| TyId::app_structural(db, ty, arg))
     }
 }
 
-impl<'a, 'db> TyFolder<'db> for LayoutTemplateInstantiator<'a, 'db> {
+impl<'db> TyFolder<'db> for LayoutTemplateInstantiator<'db> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        if let Some(idx) = self.param_index(ty)
-            && let Some(&arg) = self.args.get(idx)
-        {
-            return match ty.data(db) {
-                TyData::TyParam(_) => self.type_argument(idx, arg),
-                TyData::ConstTy(const_ty)
-                    if matches!(const_ty.data(db), ConstTyData::TyParam(..)) =>
-                {
-                    self.const_argument(idx, arg)
-                }
-                _ => ty,
+        if let Some((idx, arg)) = self.param_argument(ty) {
+            return if matches!(ty.data(db), TyData::TyParam(_)) {
+                self.type_argument(idx, arg)
+            } else {
+                self.const_argument(idx, arg)
             };
+        }
+
+        if let Some(subst) = &self.subst {
+            let schema = subst.mapping.domain().schema(db);
+            assert!(
+                !is_owned_by_schema(db, ty, schema),
+                "layout template parameter {ty:?} is outside {schema:?} in basis {:?}",
+                subst.basis
+            );
         }
 
         if let Some(hole) = structural_hole_id(db, ty) {
@@ -666,27 +696,22 @@ impl<'a, 'db> TyFolder<'db> for LayoutTemplateInstantiator<'a, 'db> {
             });
         }
 
-        let folded = ty.super_fold_with(db, self);
-        if let TyData::ConstTy(const_ty) = folded.data(db)
-            && let Some(const_ty) = backfill_unevaluated_const_generic_args(
-                db,
-                *const_ty,
-                self.args,
-                bound_value_owner(db, &self.params),
-            )
-        {
-            return TyId::const_ty(db, const_ty);
-        }
-        folded
+        ty.super_fold_with(db, self)
     }
 
-    fn fold_ty_app(
+    fn fold_const_capture(
         &mut self,
         db: &'db dyn HirAnalysisDb,
-        abs: TyId<'db>,
-        arg: TyId<'db>,
-    ) -> TyId<'db> {
-        TyId::new(db, TyData::TyApp(abs, arg))
+        capture: &ConstCaptureEnv<'db>,
+    ) -> ConstCaptureEnv<'db> {
+        if let Some(subst) = &self.subst
+            && let Some(bound) = capture.bind_identity_with(db, &subst.mapping)
+        {
+            return bound.unwrap_or_else(|error| {
+                panic!("layout template capture does not match its declared schema: {error:?}")
+            });
+        }
+        capture.fold_ranges(db, self)
     }
 }
 
@@ -838,15 +863,6 @@ where
 
             ty.super_fold_with(db, self)
         }
-
-        fn fold_ty_app(
-            &mut self,
-            db: &'db dyn HirAnalysisDb,
-            abs: TyId<'db>,
-            arg: TyId<'db>,
-        ) -> TyId<'db> {
-            TyId::new(db, TyData::TyApp(abs, arg))
-        }
     }
 
     let mut folder = LayoutPlaceholderSubst {
@@ -975,15 +991,6 @@ where
 
             ty.super_fold_with(db, self)
         }
-
-        fn fold_ty_app(
-            &mut self,
-            db: &'db dyn HirAnalysisDb,
-            abs: TyId<'db>,
-            arg: TyId<'db>,
-        ) -> TyId<'db> {
-            TyId::new(db, TyData::TyApp(abs, arg))
-        }
     }
 
     value.fold_with(
@@ -1105,24 +1112,26 @@ mod tests {
     use rustc_hash::FxHashMap;
 
     use super::{
-        LayoutPlaceholderPolicy, collect_unique_app_bound_structural_holes_in_order,
-        collect_unique_layout_placeholders_in_order, landed_hole, layout_shape_key,
-        layout_view_states_are_permutations, merge_equated_layout_holes, reanchor_template_holes,
-        structural_hole_id, substitute_layout_placeholders_by_placeholder,
+        LayoutPlaceholderPolicy, collect_layout_placeholders_in_order_with_policy,
+        collect_unique_app_bound_structural_holes_in_order,
+        collect_unique_layout_placeholders_in_order, instantiate_layout_template, landed_hole,
+        layout_shape_key, layout_view_states_are_permutations, merge_equated_layout_holes,
+        reanchor_template_holes, structural_hole_id, substitute_layout_placeholders_by_placeholder,
     };
     use crate::analysis::ty::{
         const_ty::{
             ConstTyData, ConstTyId, HoleAnchor, HoleId, LayoutBoundaryIdentity, LayoutHoleArgSite,
             LayoutInstantiationContext, LayoutInstantiationId, LayoutIntroSite,
-            LayoutOccurrenceStep, LayoutRootId, StructuralHoleOrigin,
+            LayoutOccurrenceStep, LayoutRootId, StructuralHoleOrigin, UnevaluatedConstPolicy,
         },
+        generic_defaults::{GenericDefault, generic_default},
         trait_resolution::PredicateListId,
         ty_def::{Kind, PrimTy, TyBase, TyData, TyId, TyParam},
         ty_lower::lower_hir_ty,
     };
     use crate::core::semantic::trait_self_predicate;
     use crate::hir_def::{GenericArgListId, IdentId, ItemKind, PathId, scope_graph::ScopeId};
-    use crate::test_db::HirAnalysisTestDb;
+    use crate::test_db::{HirAnalysisTestDb, find_func};
 
     fn usize_ty<'db>(db: &'db HirAnalysisTestDb) -> TyId<'db> {
         TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)))
@@ -1207,6 +1216,66 @@ mod tests {
         TyId::app(db, TyId::array(db, TyId::u256(db)), len)
     }
 
+    #[test]
+    fn layout_template_instantiation_preserves_deferred_const() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("layout_const_application.fe"),
+            "fn f<T = [u8; { 1 / 0 }]>() {}",
+        );
+        let (module, _) = db.top_mod(file);
+        let func = find_func(&db, module, "f");
+        let GenericDefault::Type(default) = generic_default(&db, func.into(), 0)
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+        else {
+            panic!("expected type default")
+        };
+        let TyData::ConstTy(length) = default.instantiate_identity().generic_args(&db)[1].data(&db)
+        else {
+            panic!("expected const length")
+        };
+        let ConstTyData::UnEvaluated {
+            body,
+            ty,
+            template_ty,
+            const_def,
+            capture,
+            ..
+        } = length.data(&db)
+        else {
+            panic!("expected deferred const length")
+        };
+        let eager = ConstTyId::new(
+            &db,
+            ConstTyData::UnEvaluated {
+                body: *body,
+                ty: *ty,
+                template_ty: *template_ty,
+                const_def: *const_def,
+                capture: capture.clone(),
+                policy: UnevaluatedConstPolicy::Evaluate,
+            },
+        );
+        let template = TyId::app_structural(
+            &db,
+            TyId::array(&db, TyId::u8(&db)),
+            TyId::const_ty(&db, eager),
+        );
+        let instantiated = instantiate_layout_template(
+            &db,
+            template,
+            None,
+            LayoutInstantiationContext::Lowering(template_anchor(&db, func.scope())),
+            LayoutBoundaryIdentity::ArrayElement,
+            Vec::new(),
+        );
+        let actual = instantiated.ty.generic_args(&db)[1];
+        assert_eq!(actual, TyId::const_ty(&db, eager), "{:?}", actual.data(&db));
+    }
+
     fn array_len_hole<'db>(
         db: &'db HirAnalysisTestDb,
         array_ty: TyId<'db>,
@@ -1253,6 +1322,47 @@ mod tests {
         let second = fields[1].decompose_ty_app(&db).1[1];
         assert_eq!(first, expected_first);
         assert_eq!(second, actual_second);
+    }
+
+    #[test]
+    fn dependent_const_default_visits_captured_layout_hole() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("dependent_const_default_visits_captured_layout_hole.fe"),
+            r#"
+const fn plus_one(_ value: usize) -> usize {
+    value + 1
+}
+
+struct Dependent<const N: usize, const M: usize = plus_one(N)> {}
+
+fn consume(_ value: Dependent<_>) {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let consume = find_func(&db, top_mod, "consume");
+        let hir_ty = consume
+            .params(&db)
+            .next()
+            .and_then(|param| param.hir_ty(&db))
+            .expect("missing `value` parameter type");
+        let ty = lower_hir_ty(
+            &db,
+            hir_ty,
+            consume.scope(),
+            PredicateListId::empty_list(&db),
+        );
+        let placeholders = collect_layout_placeholders_in_order_with_policy(
+            &db,
+            ty,
+            LayoutPlaceholderPolicy::HolesOnly,
+        );
+        assert_eq!(placeholders.len(), 2);
+        let direct = structural_hole_id(&db, placeholders[0])
+            .expect("explicit wildcard should remain structural");
+        let captured = structural_hole_id(&db, placeholders[1])
+            .expect("captured wildcard should remain structural");
+        assert_eq!(direct.root(&db), captured.root(&db));
     }
 
     #[test]

@@ -118,7 +118,11 @@ fn assert_specialization_law<'db>(
         specialize_const_description(db, &description, owner.scope(), owner.scope(), args, origin)
             .expect("description specialization must preserve its binder");
     let replayed = force_const_description(db, &specialized, CtfeConfig::default(), origin);
-    let direct = eval_body_owner_const(db, owner, args.to_vec());
+    let direct = eval_body_owner_const(
+        db,
+        owner,
+        GenericSubst::for_body_owner(db, owner, args.to_vec()),
+    );
     match (&replayed, &direct) {
         (EvalOutcome::Ready(left), EvalOutcome::Ready(right)) => {
             assert_same_value_tree(db, left.value(), *right);
@@ -229,7 +233,7 @@ fn invocation<'db>(
         key: SemanticInstanceKey::new(
             db,
             owner,
-            GenericSubst::new(db, generic_args),
+            GenericSubst::for_body_owner(db, owner, generic_args),
             EffectProviderSubst::empty(db),
             ImplEnv::empty(db, owner.scope()),
         ),
@@ -256,7 +260,8 @@ type Alias<const N: usize> = [u8; nested<N>()]
     db.assert_no_diags(module);
     for function_name in ["probe", "nested"] {
         let owner = BodyOwner::Func(function(&db, module, function_name));
-        let outcome = eval_body_owner_const(&db, owner, vec![]);
+        let outcome =
+            eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
         assert!(
             matches!(outcome, EvalOutcome::Blocked(_)),
             "{name}: {function_name} must block on its unresolved index: {outcome:?}"
@@ -274,7 +279,11 @@ type Alias<const N: usize> = [u8; nested<N>()]
     let value = ready(eval_body_owner_const(
         &db,
         BodyOwner::Func(function(&db, module, "concrete")),
-        vec![],
+        GenericSubst::for_body_owner(
+            &db,
+            BodyOwner::Func(function(&db, module, "concrete")),
+            vec![],
+        ),
     ));
     let SemConstValue::Scalar {
         value: SemConstScalar::Int { value },
@@ -290,7 +299,11 @@ type Alias<const N: usize> = [u8; nested<N>()]
     let alias_value = ready(eval_body_owner_const(
         &db,
         BodyOwner::Func(function(&db, module, "concrete_alias")),
-        vec![],
+        GenericSubst::for_body_owner(
+            &db,
+            BodyOwner::Func(function(&db, module, "concrete_alias")),
+            vec![],
+        ),
     ));
     assert!(matches!(
         alias_value.value(&db),
@@ -412,7 +425,11 @@ const fn caller_arg<const N: u8>() -> u8 { plus1(value: N / 0) }
         CtfeConfig::default(),
         SemOrigin::Body(owner),
     );
-    let direct = eval_body_owner_const(&db, owner, vec![max]);
+    let direct = eval_body_owner_const(
+        &db,
+        owner,
+        GenericSubst::for_body_owner(&db, owner, vec![max]),
+    );
     match (replayed, direct) {
         (
             EvalOutcome::Failed(EvalFailure::Ctfe(replayed)),
@@ -436,9 +453,11 @@ const fn caller_arg<const N: u8>() -> u8 { plus1(value: N / 0) }
             };
             assert_eq!(left_origin, right_origin);
             assert_eq!(left_source, right_source);
+            // Direct lowering sheds caller context from ground callees, so
+            // compare the callee body and substitution rather than its env.
             assert_eq!(
-                left.key(&db),
-                right.key(&db),
+                (left.key(&db).owner(&db), left.key(&db).subst(&db)),
+                (right.key(&db).owner(&db), right.key(&db).subst(&db)),
                 "inlined term must retain its callee key"
             );
         }
@@ -468,7 +487,11 @@ const fn caller_arg<const N: u8>() -> u8 { plus1(value: N / 0) }
         CtfeConfig::default(),
         SemOrigin::Body(owner),
     );
-    let direct = eval_body_owner_const(&db, owner, vec![one]);
+    let direct = eval_body_owner_const(
+        &db,
+        owner,
+        GenericSubst::for_body_owner(&db, owner, vec![one]),
+    );
     match (replayed, direct) {
         (
             EvalOutcome::Failed(EvalFailure::Ctfe(replayed)),
@@ -531,7 +554,11 @@ const fn relay<const N: usize>() -> u8 { selected<N>() }
         CtfeConfig::default(),
         SemOrigin::Body(owner),
     );
-    let direct = eval_body_owner_const(&db, owner, vec![zero]);
+    let direct = eval_body_owner_const(
+        &db,
+        owner,
+        GenericSubst::for_body_owner(&db, owner, vec![zero]),
+    );
     match (replayed, direct) {
         (
             EvalOutcome::Failed(EvalFailure::Ctfe(CtfeError::CalleeError {
@@ -547,7 +574,12 @@ const fn relay<const N: usize>() -> u8 { selected<N>() }
         ) => {
             assert_eq!(left_origin, right_origin);
             assert_eq!(left_source, right_source);
-            assert_eq!(left.key(&db), right.key(&db));
+            // Direct lowering sheds caller context from ground callees, so
+            // compare the callee body and substitution rather than its env.
+            assert_eq!(
+                (left.key(&db).owner(&db), left.key(&db).subst(&db)),
+                (right.key(&db).owner(&db), right.key(&db).subst(&db)),
+            );
         }
         (replayed, direct) => panic!("expected callee failures: {replayed:?} versus {direct:?}"),
     }
@@ -645,7 +677,11 @@ const fn choose<const N: u8>() -> u8 { N }
     let forced = force_const_computation(&db, specialized, CtfeConfig::default())
         .into_ready()
         .unwrap();
-    let direct = ready(eval_body_owner_const(&db, count, vec![large]));
+    let direct = ready(eval_body_owner_const(
+        &db,
+        count,
+        GenericSubst::for_body_owner(&db, count, vec![large]),
+    ));
     assert_same_value_tree(&db, forced.value(), direct);
     let SemConstValue::Scalar {
         value: SemConstScalar::Int { value },
@@ -703,8 +739,10 @@ const RIGHT: u8 = LEFT
             panic!("{name} is not a constant");
         };
         let owner = BodyOwner::Const(constant);
-        let first = eval_body_owner_const(&db, owner, vec![]);
-        let second = eval_body_owner_const(&db, owner, vec![]);
+        let first =
+            eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+        let second =
+            eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
         assert_eq!(
             first, second,
             "recursive result must be stable across queries"
@@ -1074,7 +1112,7 @@ const fn unary_comparison<const N: usize>() -> bool {
     ));
     for length in [zero, one] {
         assert!(matches!(
-            eval_body_owner_const(&db, owner, vec![length]),
+            eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![length])),
             EvalOutcome::Failed(EvalFailure::Ctfe(ref error))
                 if matches!(root_error(error), CtfeError::DivisionByZero { .. })
         ));
@@ -1195,7 +1233,11 @@ const fn early_fault<const N: usize>() -> u8 {
     let request =
         const_computation_for_instance(&db, identity_semantic_instance_key(&db, owner), Vec::new());
     let described = describe_const_computation(&db, request, CtfeConfig::default());
-    let direct = eval_body_owner_const(&db, owner, vec![one]);
+    let direct = eval_body_owner_const(
+        &db,
+        owner,
+        GenericSubst::for_body_owner(&db, owner, vec![one]),
+    );
     match (described, direct) {
         (
             EvalOutcome::Failed(EvalFailure::Ctfe(described)),
@@ -1248,7 +1290,7 @@ const fn early_fault<const N: usize>() -> u8 {
             if matches!(root_error(error), CtfeError::DivisionByZero { .. })
     ));
     assert!(matches!(
-        eval_body_owner_const(&db, early, vec![one]),
+        eval_body_owner_const(&db, early, GenericSubst::for_body_owner(&db, early, vec![one])),
         EvalOutcome::Failed(EvalFailure::Ctfe(ref error))
             if matches!(root_error(error), CtfeError::DivisionByZero { .. })
     ));
@@ -1273,7 +1315,11 @@ const fn zero() -> u8 { discarded<0>() }
     let generic = eval_body_owner_const(
         &db,
         BodyOwner::Func(function(&db, module, "discarded")),
-        vec![],
+        GenericSubst::for_body_owner(
+            &db,
+            BodyOwner::Func(function(&db, module, "discarded")),
+            vec![],
+        ),
     );
     assert!(
         matches!(generic, EvalOutcome::Blocked(_)),
@@ -1283,7 +1329,7 @@ const fn zero() -> u8 { discarded<0>() }
     let one = ready(eval_body_owner_const(
         &db,
         BodyOwner::Func(function(&db, module, "one")),
-        vec![],
+        GenericSubst::for_body_owner(&db, BodyOwner::Func(function(&db, module, "one")), vec![]),
     ));
     let SemConstValue::Scalar {
         value: SemConstScalar::Int { value },
@@ -1294,7 +1340,11 @@ const fn zero() -> u8 { discarded<0>() }
     };
     assert_eq!(value.to_u8(), Some(9));
 
-    let zero = eval_body_owner_const(&db, BodyOwner::Func(function(&db, module, "zero")), vec![]);
+    let zero = eval_body_owner_const(
+        &db,
+        BodyOwner::Func(function(&db, module, "zero")),
+        GenericSubst::for_body_owner(&db, BodyOwner::Func(function(&db, module, "zero")), vec![]),
+    );
     assert!(
         matches!(zero, EvalOutcome::Failed(EvalFailure::Ctfe(ref error)) if matches!(root_error(error), CtfeError::OutOfBounds { .. })),
         "{zero:?}"
@@ -1327,7 +1377,7 @@ const fn through_type() -> usize { Marker<1>::VALUE }
         let value = ready(eval_body_owner_const(
             &db,
             BodyOwner::Func(function(&db, module, name)),
-            vec![],
+            GenericSubst::for_body_owner(&db, BodyOwner::Func(function(&db, module, name)), vec![]),
         ));
         let SemConstValue::Scalar {
             value: SemConstScalar::Int { value },
@@ -1391,8 +1441,11 @@ impl<const N: usize> Selected<N> for TraitMarker<N> {}
     );
     let (module, _) = db.top_mod(file);
     for name in ["direct_bad", "through_type_bad", "through_trait_bad"] {
-        let outcome =
-            eval_body_owner_const(&db, BodyOwner::Func(function(&db, module, name)), vec![]);
+        let outcome = eval_body_owner_const(
+            &db,
+            BodyOwner::Func(function(&db, module, name)),
+            GenericSubst::for_body_owner(&db, BodyOwner::Func(function(&db, module, name)), vec![]),
+        );
         assert!(
             matches!(
                 outcome,
@@ -1437,7 +1490,11 @@ fn user_extern_names_do_not_gain_core_intrinsic_semantics() {
         let outcome = eval_body_owner_const(
             &db,
             BodyOwner::Func(function(&db, module, "invoke")),
-            vec![],
+            GenericSubst::for_body_owner(
+                &db,
+                BodyOwner::Func(function(&db, module, "invoke")),
+                vec![],
+            ),
         );
         assert!(
             matches!(outcome, EvalOutcome::Failed(EvalFailure::Ctfe(ref error)) if matches!(root_error(error), CtfeError::NotConstEvaluable { .. })),
@@ -1490,7 +1547,11 @@ fn user_extern_names_do_not_gain_core_intrinsic_semantics() {
     let outcome = eval_body_owner_const(
         &db,
         BodyOwner::Func(function(&db, module, "invoke")),
-        vec![],
+        GenericSubst::for_body_owner(
+            &db,
+            BodyOwner::Func(function(&db, module, "invoke")),
+            vec![],
+        ),
     );
     assert!(
         matches!(outcome, EvalOutcome::Failed(EvalFailure::Ctfe(ref error)) if matches!(root_error(error), CtfeError::NotConstEvaluable { .. })),
@@ -1516,7 +1577,11 @@ const fn checked() -> u8 { check<255>() }
     let wrapped = ready(eval_body_owner_const(
         &db,
         BodyOwner::Func(function(&db, module, "wrapped")),
-        vec![],
+        GenericSubst::for_body_owner(
+            &db,
+            BodyOwner::Func(function(&db, module, "wrapped")),
+            vec![],
+        ),
     ));
     let SemConstValue::Scalar {
         value: SemConstScalar::Int { value },
@@ -1529,7 +1594,11 @@ const fn checked() -> u8 { check<255>() }
     let checked = eval_body_owner_const(
         &db,
         BodyOwner::Func(function(&db, module, "checked")),
-        vec![],
+        GenericSubst::for_body_owner(
+            &db,
+            BodyOwner::Func(function(&db, module, "checked")),
+            vec![],
+        ),
     );
     assert!(
         matches!(checked, EvalOutcome::Failed(EvalFailure::Ctfe(ref error)) if matches!(root_error(error), CtfeError::ArithmeticOverflow { .. })),
@@ -1735,7 +1804,11 @@ const fn selected<const X: usize, const Y: usize>() -> usize { Selected<{ X + 0 
         let owner = BodyOwner::Func(function(&db, module, name));
         assert!(
             matches!(
-                eval_body_owner_const(&db, owner, Vec::new()),
+                eval_body_owner_const(
+                    &db,
+                    owner,
+                    GenericSubst::for_body_owner(&db, owner, Vec::new())
+                ),
                 EvalOutcome::Blocked(_)
             ),
             "{name} requires a caller-owned value"
@@ -1765,7 +1838,11 @@ const fn selected<const X: usize, const Y: usize>() -> usize { Selected<{ X + 0 
         SemanticInstanceKey::new(
             &db,
             owner,
-            GenericSubst::new(&db, vec![caller_y, integer_const_arg(&db, usize_ty, 1)]),
+            GenericSubst::for_body_owner(
+                &db,
+                owner,
+                vec![caller_y, integer_const_arg(&db, usize_ty, 1)],
+            ),
             identity.effect_providers(&db),
             identity.impl_env(&db),
         ),
@@ -1997,7 +2074,11 @@ fn ctfe_typed_read_preserves_provider_borrow_rejection() {
     let outcome = eval_body_owner_const(
         &db,
         BodyOwner::Func(function(&db, module, "caller")),
-        vec![],
+        GenericSubst::for_body_owner(
+            &db,
+            BodyOwner::Func(function(&db, module, "caller")),
+            vec![],
+        ),
     );
     assert!(matches!(
         outcome,
@@ -2281,7 +2362,7 @@ const fn pair() -> (u8, u8) { (1, 2) }
     let u8_ty = TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::U8)));
     let u16_ty = TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::U16)));
     let usize_ty = TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
-    let [value, len] = key.subst(&db).generic_args(&db).as_slice() else {
+    let [value, len] = key.subst(&db).generic_args(&db) else {
         panic!("repeat has two parameters")
     };
     let wrap = |term| TyId::new(&db, TyData::ConstTy(term));
@@ -2339,7 +2420,7 @@ const fn pair() -> (u8, u8) { (1, 2) }
         SemanticInstanceKey::new(
             &db,
             owner,
-            GenericSubst::new(&db, args.to_vec()),
+            GenericSubst::for_body_owner(&db, owner, args.to_vec()),
             key.effect_providers(&db),
             key.impl_env(&db),
         ),
@@ -2810,7 +2891,11 @@ const fn projected() -> [u8; 3] { One { value: [5 as u8; 3] }.as_bytes() }
     db.assert_no_diags(module);
     for (name, expected) in [("bare", 0), ("projected", 5)] {
         let owner = BodyOwner::Func(function(&db, module, name));
-        let value = ready(eval_body_owner_const(&db, owner, Vec::new()));
+        let value = ready(eval_body_owner_const(
+            &db,
+            owner,
+            GenericSubst::for_body_owner(&db, owner, Vec::new()),
+        ));
         let SemConstValue::Array { elems, .. } = value.value(&db) else {
             panic!("expected array")
         };

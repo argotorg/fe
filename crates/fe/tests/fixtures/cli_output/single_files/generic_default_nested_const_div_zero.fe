@@ -1,0 +1,8 @@
+// The declaration owns the error: it is reported once even when the default is used.
+fn bad<const N: usize, T = [u8; { 1 / 0 }]>() -> u256 {
+    core::size_of<T>()
+}
+
+fn concrete() -> u256 {
+    bad<1>()
+}

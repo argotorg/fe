@@ -1,0 +1,14 @@
+type Arr<const N: usize> = [u8; { 10 / N }]
+
+msg M {
+    #[selector = 1]
+    Read { value: Arr<0> } -> u8,
+}
+
+pub contract C {
+    recv M {
+        Read { value } -> u8 {
+            value[0]
+        }
+    }
+}

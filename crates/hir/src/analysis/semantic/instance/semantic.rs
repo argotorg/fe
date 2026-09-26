@@ -5,12 +5,16 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            CallSiteId, PlaceProvenance, SBlockId, SExpr, SStmtKind, STerminatorKind, SemanticBody,
-            SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex,
-            diagnostics::SemanticNormalizationFailure,
+            CallSiteId, PlaceProvenance, RuntimeSizeError, SBlockId, SExpr, SStmtKind,
+            STerminatorKind, SemOrigin, SemanticBody, SemanticCalleeRef, SemanticLocalRole,
+            ValueProvenance, VariantIndex,
+            diagnostics::{
+                SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind,
+                SemanticDiagnosticLabel, SemanticDiagnosticSpan, SemanticNormalizationFailure,
+            },
             effect_param_site,
             lower::{BindingRoleMode, lower_to_smir, lower_to_smir_with_call_sites},
-            owner_effect_bindings, verify_semantic_body,
+            owner_effect_bindings, runtime_size_bytes, verify_semantic_body,
         },
         ty::{
             CallableLayoutBundleInput, CallableLayoutBundleSignature, CallableLayoutOwner,
@@ -24,17 +28,19 @@ use crate::{
                 ProviderAddressSpace, ProviderKind, ProviderLayoutEvidence, ProviderTransport,
                 provider_semantics, provider_semantics_for_specialized_call,
             },
+            subst::substitute_complete,
+            trait_def::MethodArgMapError,
             trait_resolution::{
                 GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
             },
             ty_check::{
-                BodyOwner, EffectParamSite, EffectProviderProvenance, EffectProviderSpecialization,
-                LocalBinding, ParamSite, ResolvedEffectArg, SemanticExprLowering,
-                SmirLoweringIssue, TypedBody,
+                BodyOwner, ConstIntrinsicKind, EffectParamSite, EffectProviderProvenance,
+                EffectProviderSpecialization, LocalBinding, ParamSite, ResolvedEffectArg,
+                SemanticExprLowering, SmirLoweringIssue, TypedBody,
             },
-            ty_def::{BorrowKind, CapabilityKind, TyId},
+            ty_def::{BorrowKind, CapabilityKind, InvalidCause, TyId},
             ty_lower::{
-                callable_layout_bundle_input_interface,
+                ParamSchemaId, SubstError, callable_layout_bundle_input_interface,
                 specialized_callable_layout_bundle_signature_with_normalizer,
             },
         },
@@ -143,12 +149,18 @@ pub struct SemanticInstance<'db> {
 }
 
 #[derive(Debug, Clone)]
-pub struct SemanticEffectEnvInstantiationError<'db> {
-    pub owner: BodyOwner<'db>,
-    pub owner_scope: ScopeId<'db>,
-    pub offending_ty: TyId<'db>,
-    pub param_idx: usize,
-    pub args_len: usize,
+pub enum SemanticEffectEnvInstantiationError<'db> {
+    Generic {
+        owner: BodyOwner<'db>,
+        error: SubstError<'db>,
+    },
+    MissingDomain {
+        owner: BodyOwner<'db>,
+    },
+    WrongOwner {
+        owner: BodyOwner<'db>,
+        schema: ParamSchemaId<'db>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,6 +168,7 @@ pub(crate) enum SemanticBodyAdmissionError<'db> {
     BlockedByUpstreamDiagnostics(Box<[crate::analysis::ty::ty_check::SmirLoweringIssue]>),
     IncompleteLoweringPlan(Box<[crate::analysis::ty::ty_check::SmirLoweringIssue]>),
     CallSiteFinalization(crate::analysis::semantic::SemanticDiagnosticId<'db>),
+    InvalidConcreteType(crate::analysis::semantic::SemanticDiagnosticId<'db>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
@@ -170,6 +183,8 @@ pub struct CallSiteLowering<'db> {
     pub callee: Option<SemanticCalleeRef<'db>>,
     pub receiver: Option<ReceiverLoweringPlan<'db>>,
     pub effect_args: Box<[ResolvedEffectArg<'db>]>,
+    pub effect_pairs: Box<[(usize, usize)]>,
+    pub provider_pairs: Box<[(u32, u32)]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
@@ -191,6 +206,12 @@ struct CallSiteFinalizationData<'db> {
     call_sites: Vec<Option<CallSiteLowering<'db>>>,
     for_loop_call_sites: Vec<Option<ForLoopCallSites<'db>>>,
     diagnostic: Option<crate::analysis::semantic::SemanticDiagnosticId<'db>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Update)]
+struct ProvisionalCallSiteData<'db, T: Update + PartialEq + Eq + Clone> {
+    sites: Vec<Option<T>>,
+    diagnostic: Option<SemanticDiagnosticId<'db>>,
 }
 
 #[derive(Debug, Clone)]
@@ -237,16 +258,8 @@ pub fn instantiated_effect_env<'db>(
     instance: SemanticInstance<'db>,
 ) -> Option<InstantiatedEffectEnv<'db>> {
     let (site, requirements, providers, resolutions, forwarded_witnesses, assumptions) =
-        instantiate_effect_env_data_for_key(db, instance.key(db)).unwrap_or_else(|err| {
-            panic!(
-                "failed to instantiate effect env for {:?}: owner_scope={:?} param_idx={} args_len={} offending_ty={}",
-                err.owner,
-                err.owner_scope,
-                err.param_idx,
-                err.args_len,
-                err.offending_ty.pretty_print(db),
-            )
-        })?;
+        instantiate_effect_env_data_for_key(db, instance.key(db))
+            .unwrap_or_else(|err| panic!("failed to instantiate effect env: {err:?}"))?;
     Some(InstantiatedEffectEnv::new(
         db,
         site,
@@ -324,14 +337,18 @@ fn call_like_receiver_expr<'db>(expr_data: &Expr<'db>) -> Option<ExprId> {
 fn provisional_call_sites<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> Vec<Option<CallSiteLowering<'db>>> {
+) -> ProvisionalCallSiteData<'db, CallSiteLowering<'db>> {
     let typed_body = instance.key(db).typed_body(db);
     let Some(body) = typed_body.body() else {
-        return Vec::new();
+        return ProvisionalCallSiteData {
+            sites: Vec::new(),
+            diagnostic: None,
+        };
     };
     let assumptions = semantic_instance_base_assumptions_for_key(db, instance.key(db));
     let scope = body.scope();
     let mut sites = vec![None; body.exprs(db).len()];
+    let mut diagnostic = None;
 
     for (expr, expr_data) in body.exprs(db).iter() {
         let Partial::Present(expr_data) = expr_data else {
@@ -341,69 +358,125 @@ fn provisional_call_sites<'db>(
         else {
             continue;
         };
-        sites[expr.index()] = Some(CallSiteLowering {
-            callee: provisional_semantic_callee_key(db, instance.key(db), callable, assumptions)
-                .map(|key| SemanticCalleeRef { key }),
-            receiver: receiver_lowering_plan(
-                db,
-                expr_data,
-                callable,
-                typed_body,
-                scope,
-                assumptions,
-            ),
-            effect_args: typed_body
-                .call_effect_args(expr)
-                .unwrap_or(&[])
-                .to_vec()
-                .into_boxed_slice(),
-        });
+        let mut site = provisional_call_site(
+            db,
+            instance,
+            callable,
+            typed_body.call_effect_args(expr).unwrap_or(&[]),
+            assumptions,
+            SemOrigin::Expr(expr),
+            &mut diagnostic,
+        );
+        site.receiver =
+            receiver_lowering_plan(db, expr_data, callable, typed_body, scope, assumptions);
+        sites[expr.index()] = Some(site);
     }
 
-    sites
+    ProvisionalCallSiteData { sites, diagnostic }
 }
 
 #[salsa::tracked(return_ref)]
 fn provisional_for_loop_call_sites<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> Vec<Option<ForLoopCallSites<'db>>> {
+) -> ProvisionalCallSiteData<'db, ForLoopCallSites<'db>> {
     let typed_body = instance.key(db).typed_body(db);
     let Some(body) = typed_body.body() else {
-        return Vec::new();
+        return ProvisionalCallSiteData {
+            sites: Vec::new(),
+            diagnostic: None,
+        };
     };
     let assumptions = semantic_instance_base_assumptions_for_key(db, instance.key(db));
     let mut sites = vec![None; body.stmts(db).len()];
+    let mut diagnostic = None;
     for (stmt, _) in body.stmts(db).iter() {
         let Some(seq) = typed_body.for_loop_seq(stmt) else {
             continue;
         };
+        let origin = SemOrigin::Stmt(stmt);
         sites[stmt.index()] = Some(ForLoopCallSites {
-            len: CallSiteLowering {
-                callee: provisional_semantic_callee_key(
-                    db,
-                    instance.key(db),
-                    &seq.len_callable,
-                    assumptions,
-                )
-                .map(|key| SemanticCalleeRef { key }),
-                receiver: None,
-                effect_args: seq.len_effect_args.clone().into_boxed_slice(),
-            },
-            get: CallSiteLowering {
-                callee: provisional_semantic_callee_key(
-                    db,
-                    instance.key(db),
-                    &seq.get_callable,
-                    assumptions,
-                )
-                .map(|key| SemanticCalleeRef { key }),
-                receiver: None,
-                effect_args: seq.get_effect_args.clone().into_boxed_slice(),
-            },
+            len: provisional_call_site(
+                db,
+                instance,
+                &seq.len_callable,
+                &seq.len_effect_args,
+                assumptions,
+                origin,
+                &mut diagnostic,
+            ),
+            get: provisional_call_site(
+                db,
+                instance,
+                &seq.get_callable,
+                &seq.get_effect_args,
+                assumptions,
+                origin,
+                &mut diagnostic,
+            ),
         });
     }
-    sites
+    ProvisionalCallSiteData { sites, diagnostic }
+}
+
+/// Plans a call before provider refinement. The first argument-mapping
+/// failure is recorded in `diagnostic`; the site then keeps its nominal
+/// effect order.
+fn provisional_call_site<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    callable: &crate::analysis::ty::ty_check::Callable<'db>,
+    nominal_effect_args: &[ResolvedEffectArg<'db>],
+    assumptions: PredicateListId<'db>,
+    origin: SemOrigin<'db>,
+    diagnostic: &mut Option<SemanticDiagnosticId<'db>>,
+) -> CallSiteLowering<'db> {
+    let mut report = |error| {
+        diagnostic.get_or_insert_with(|| method_arg_map_diagnostic(db, instance, error, origin));
+    };
+    let callee = provisional_semantic_callee_key(
+        db,
+        instance.key(db),
+        callable,
+        nominal_effect_args,
+        assumptions,
+    )
+    .unwrap_or_else(|error| {
+        report(error);
+        None
+    });
+    let effect_pairs = callee
+        .as_ref()
+        .map_or(&[][..], |plan| plan.effect_pairs.as_slice());
+    let effect_args =
+        rebase_effect_args(nominal_effect_args, effect_pairs).unwrap_or_else(|error| {
+            report(error);
+            nominal_effect_args.into()
+        });
+    let (callee, effect_pairs, provider_pairs) = match callee {
+        Some(plan) => (
+            Some(SemanticCalleeRef { key: plan.key }),
+            plan.effect_pairs,
+            plan.provider_pairs,
+        ),
+        None => (None, Vec::new(), Vec::new()),
+    };
+    CallSiteLowering {
+        callee,
+        receiver: None,
+        effect_args,
+        effect_pairs: effect_pairs.into(),
+        provider_pairs: provider_pairs.into(),
+    }
+}
+
+fn provisional_call_site_diagnostic<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Option<SemanticDiagnosticId<'db>> {
+    provisional_call_sites(db, instance)
+        .diagnostic
+        .or(provisional_for_loop_call_sites(db, instance).diagnostic)
 }
 
 #[salsa::tracked(
@@ -415,8 +488,15 @@ fn final_call_site_data<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> CallSiteFinalizationData<'db> {
-    let mut call_sites = provisional_call_sites(db, instance).clone();
-    let mut for_loop_call_sites = provisional_for_loop_call_sites(db, instance).clone();
+    let mut call_sites = provisional_call_sites(db, instance).sites.clone();
+    let mut for_loop_call_sites = provisional_for_loop_call_sites(db, instance).sites.clone();
+    if let Some(diagnostic) = provisional_call_site_diagnostic(db, instance) {
+        return CallSiteFinalizationData {
+            call_sites,
+            for_loop_call_sites,
+            diagnostic: Some(diagnostic),
+        };
+    }
     let typed_body = instance.key(db).typed_body(db);
     let Some(body) = typed_body.body() else {
         return CallSiteFinalizationData {
@@ -437,7 +517,10 @@ fn final_call_site_data<'db>(
                     diagnostic: None,
                 };
             }
-            Err(SemanticNormalizationFailure::InternalFailure(diag)) => {
+            Err(
+                SemanticNormalizationFailure::Rejected(diag)
+                | SemanticNormalizationFailure::InternalFailure(diag),
+            ) => {
                 return CallSiteFinalizationData {
                     call_sites,
                     for_loop_call_sites,
@@ -458,8 +541,38 @@ fn final_call_site_data<'db>(
             .push(refinement);
     }
 
-    for (expr, _) in body.exprs(db).iter() {
+    let diagnostic = finalize_call_sites(
+        db,
+        instance,
+        typed_body,
+        body,
+        &mut call_sites,
+        &mut for_loop_call_sites,
+        &by_site,
+    )
+    .err();
+    CallSiteFinalizationData {
+        call_sites,
+        for_loop_call_sites,
+        diagnostic,
+    }
+}
+
+fn finalize_call_sites<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    typed_body: &TypedBody<'db>,
+    body: crate::hir_def::Body<'db>,
+    call_sites: &mut [Option<CallSiteLowering<'db>>],
+    for_loop_call_sites: &mut [Option<ForLoopCallSites<'db>>],
+    by_site: &FxHashMap<CallSiteId, Vec<CallSiteProviderRefinement>>,
+) -> Result<(), SemanticDiagnosticId<'db>> {
+    let refinements = |site| by_site.get(&site).map(Vec::as_slice);
+    for (expr, expr_data) in body.exprs(db).iter() {
         let Some(site) = call_sites.get_mut(expr.index()).and_then(Option::as_mut) else {
+            continue;
+        };
+        let Partial::Present(expr_data) = expr_data else {
             continue;
         };
         let Some(SemanticExprLowering::Call { callable }) = typed_body.semantic_expr_lowering(expr)
@@ -471,7 +584,17 @@ fn final_call_site_data<'db>(
             instance,
             callable,
             site,
-            by_site.get(&CallSiteId::Expr(expr)).map(Vec::as_slice),
+            typed_body.call_effect_args(expr).unwrap_or(&[]),
+            refinements(CallSiteId::Expr(expr)),
+            SemOrigin::Expr(expr),
+        )?;
+        site.receiver = receiver_lowering_plan(
+            db,
+            expr_data,
+            callable,
+            typed_body,
+            body.scope(),
+            instance.assumptions(db),
         );
     }
 
@@ -490,26 +613,21 @@ fn final_call_site_data<'db>(
             instance,
             &seq.len_callable,
             &mut sites.len,
-            by_site
-                .get(&CallSiteId::ForLoopLen(stmt))
-                .map(Vec::as_slice),
-        );
+            &seq.len_effect_args,
+            refinements(CallSiteId::ForLoopLen(stmt)),
+            SemOrigin::Stmt(stmt),
+        )?;
         finalize_call_site(
             db,
             instance,
             &seq.get_callable,
             &mut sites.get,
-            by_site
-                .get(&CallSiteId::ForLoopGet(stmt))
-                .map(Vec::as_slice),
-        );
+            &seq.get_effect_args,
+            refinements(CallSiteId::ForLoopGet(stmt)),
+            SemOrigin::Stmt(stmt),
+        )?;
     }
-
-    CallSiteFinalizationData {
-        call_sites,
-        for_loop_call_sites,
-        diagnostic: None,
-    }
+    Ok(())
 }
 
 fn final_call_site_data_cycle_initial<'db>(
@@ -517,9 +635,9 @@ fn final_call_site_data_cycle_initial<'db>(
     instance: SemanticInstance<'db>,
 ) -> CallSiteFinalizationData<'db> {
     CallSiteFinalizationData {
-        call_sites: provisional_call_sites(db, instance).clone(),
-        for_loop_call_sites: provisional_for_loop_call_sites(db, instance).clone(),
-        diagnostic: None,
+        call_sites: provisional_call_sites(db, instance).sites.clone(),
+        for_loop_call_sites: provisional_for_loop_call_sites(db, instance).sites.clone(),
+        diagnostic: provisional_call_site_diagnostic(db, instance),
     }
 }
 
@@ -536,7 +654,7 @@ fn call_sites_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Vec<Option<CallSiteLowering<'db>>> {
-    provisional_call_sites(db, instance).clone()
+    provisional_call_sites(db, instance).sites.clone()
 }
 
 fn call_sites_cycle_recover<'db>(
@@ -552,7 +670,7 @@ fn for_loop_call_sites_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Vec<Option<ForLoopCallSites<'db>>> {
-    provisional_for_loop_call_sites(db, instance).clone()
+    provisional_for_loop_call_sites(db, instance).sites.clone()
 }
 
 fn for_loop_call_sites_cycle_recover<'db>(
@@ -578,25 +696,121 @@ fn call_sites_have_effect_args<'db>(
             .any(|sites| !sites.len.effect_args.is_empty() || !sites.get.effect_args.is_empty())
 }
 
+fn rebase_effect_args<'db>(
+    args: &[ResolvedEffectArg<'db>],
+    effect_pairs: &[(usize, usize)],
+) -> Result<Box<[ResolvedEffectArg<'db>]>, MethodArgMapError<'db>> {
+    if effect_pairs.is_empty() {
+        return Ok(args.to_vec().into_boxed_slice());
+    }
+    let mut rebased = Vec::with_capacity(args.len());
+    for arg in args {
+        let nominal = arg.binding_idx as usize;
+        let Some((_, body_idx)) = effect_pairs.iter().find(|(index, _)| *index == nominal) else {
+            return Err(MethodArgMapError::MissingEffectRole(nominal));
+        };
+        let Ok(binding_idx) = u32::try_from(*body_idx) else {
+            return Err(MethodArgMapError::MissingEffectRole(nominal));
+        };
+        let mut arg = arg.clone();
+        arg.binding_idx = binding_idx;
+        arg.param_idx = *body_idx;
+        rebased.push(arg);
+    }
+    rebased.sort_by_key(|arg| arg.param_idx);
+    Ok(rebased.into_boxed_slice())
+}
+
+fn method_arg_map_diagnostic<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    error: MethodArgMapError<'db>,
+    origin: SemOrigin<'db>,
+) -> SemanticDiagnosticId<'db> {
+    let message = match error {
+        MethodArgMapError::SignatureMismatch {
+            nominal,
+            body,
+            nominal_args,
+            body_args,
+            evidence,
+            nominal_signature,
+            body_signature,
+        } => {
+            let nominal_args = nominal_args
+                .iter()
+                .map(|arg| arg.pretty_print(db).to_string())
+                .collect::<Vec<_>>();
+            let body_args = body_args
+                .iter()
+                .map(|arg| arg.pretty_print(db).to_string())
+                .collect::<Vec<_>>();
+            format!(
+                "checked call signature mismatch: nominal={nominal:?} target={body:?}, nominal_args={nominal_args:?}, body_args={body_args:?}, evidence={}, nominal_signature=({nominal_signature}), body_signature=({body_signature})",
+                evidence.pretty_print(db),
+            )
+        }
+        error => format!("checked call body argument mapping failed: {error:?}"),
+    };
+    SemanticDiagnosticId::new(
+        db,
+        SemanticDiagnostic {
+            kind: SemanticDiagnosticKind::Internal,
+            instance,
+            primary: SemanticDiagnosticLabel {
+                message,
+                span: SemanticDiagnosticSpan::Origin {
+                    owner: instance.key(db).owner(db),
+                    origin,
+                },
+            },
+            secondaries: Vec::new(),
+        },
+    )
+}
+
 fn finalize_call_site<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     callable: &crate::analysis::ty::ty_check::Callable<'db>,
     site: &mut CallSiteLowering<'db>,
+    nominal_effect_args: &[ResolvedEffectArg<'db>],
     refinements: Option<&[CallSiteProviderRefinement]>,
-) {
+    origin: SemOrigin<'db>,
+) -> Result<(), SemanticDiagnosticId<'db>> {
     let mut effect_providers = callable.effect_providers().to_vec();
+    let mapping_diag = |error| method_arg_map_diagnostic(db, instance, error, origin);
+    let mut refined_nominal_effect_args = nominal_effect_args.to_vec();
     if let Some(refinements) = refinements {
         for refinement in refinements {
-            for arg in &mut site.effect_args {
-                if arg.binding_idx == refinement.binding_idx {
+            let nominal_binding_idx = if site.effect_pairs.is_empty() {
+                refinement.binding_idx
+            } else {
+                let Some((nominal, _)) = site
+                    .effect_pairs
+                    .iter()
+                    .find(|(_, body)| *body == refinement.binding_idx as usize)
+                else {
+                    return Err(mapping_diag(MethodArgMapError::MissingEffectRole(
+                        refinement.binding_idx as usize,
+                    )));
+                };
+                u32::try_from(*nominal)
+                    .map_err(|_| mapping_diag(MethodArgMapError::MissingEffectRole(*nominal)))?
+            };
+            for arg in &mut refined_nominal_effect_args {
+                if arg.binding_idx == nominal_binding_idx {
                     arg.provider = Some(refinement.address_space);
                 }
             }
             if let Some(provider_idx) = refinement.provider_idx
-                && let Some(specialization) = effect_providers
-                    .iter_mut()
-                    .find(|provider| provider.provider.provider_idx == provider_idx)
+                && let Some(specialization) = effect_providers.iter_mut().find(|provider| {
+                    site.provider_pairs
+                        .iter()
+                        .find(|(nominal, _)| *nominal == provider.provider.provider_idx)
+                        .map_or(provider.provider.provider_idx, |(_, body)| *body)
+                        == provider_idx
+                })
             {
                 specialize_provider_address_space(
                     db,
@@ -607,13 +821,87 @@ fn finalize_call_site<'db>(
             }
         }
     }
-    site.callee = semantic_callee_key_with_effect_providers(
+    let callee = semantic_callee_key_with_effect_providers(
         db,
         instance.key(db),
         callable,
+        &refined_nominal_effect_args,
         &effect_providers,
     )
-    .map(|key| SemanticCalleeRef { key });
+    .map_err(mapping_diag)?;
+    if let Some(callee) = callee {
+        site.effect_args = rebase_effect_args(&refined_nominal_effect_args, &callee.effect_pairs)
+            .map_err(mapping_diag)?;
+        site.effect_pairs = callee.effect_pairs.into_boxed_slice();
+        site.provider_pairs = callee.provider_pairs.into_boxed_slice();
+        site.callee = Some(SemanticCalleeRef { key: callee.key });
+    } else {
+        site.callee = None;
+    }
+    Ok(())
+}
+
+fn invalid_size_diagnostic<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    origin: SemOrigin<'db>,
+    ty: TyId<'db>,
+    error: RuntimeSizeError<'db>,
+) -> SemanticDiagnosticId<'db> {
+    let mut diagnostic = SemanticDiagnostic::new(
+        instance,
+        SemanticDiagnosticKind::InvalidConcreteType,
+        "this operation requires a valid concrete type size".into(),
+        SemanticDiagnosticSpan::Origin {
+            owner: instance.key(db).owner(db),
+            origin,
+        },
+    );
+    let message = match error {
+        RuntimeSizeError::Overflow => format!(
+            "`{}` exceeds the supported 64-bit raw-memory layout size",
+            ty.pretty_print(db)
+        ),
+        RuntimeSizeError::UnavailableConcrete => {
+            "concrete type size could not be determined".to_string()
+        }
+        RuntimeSizeError::InvalidType(cause) => {
+            let source = match &cause {
+                InvalidCause::ConstEvalDivisionByZero { body, expr }
+                | InvalidCause::ConstEvalArithmeticOverflow { body, expr }
+                | InvalidCause::ConstEvalNegativeExponent { body, expr }
+                | InvalidCause::ConstEvalUnsupported { body, expr }
+                | InvalidCause::ConstEvalNonConstCall { body, expr }
+                | InvalidCause::ConstEvalStepLimitExceeded { body, expr }
+                | InvalidCause::ConstEvalRecursionLimitExceeded { body, expr }
+                | InvalidCause::ConstEvalRecursiveConst { body, expr }
+                | InvalidCause::ConstEvalAssertionFailed { body, expr, .. } => {
+                    Some(SemanticDiagnosticSpan::HirExpr {
+                        body: *body,
+                        expr: *expr,
+                    })
+                }
+                _ => None,
+            };
+            let message = match cause {
+                InvalidCause::ConstEvalDivisionByZero { .. } => {
+                    "division by zero in const context".to_string()
+                }
+                InvalidCause::ConstEvalArithmeticOverflow { .. } => {
+                    "arithmetic overflow in const context".to_string()
+                }
+                _ => format!("invalid const value: {}", cause.pretty_print(db)),
+            };
+            if let Some(source) = source {
+                diagnostic.push_secondary(message.clone(), source);
+            }
+            message
+        }
+    };
+    if diagnostic.secondaries.is_empty() {
+        diagnostic.primary.message = message;
+    }
+    SemanticDiagnosticId::new(db, diagnostic)
 }
 
 fn specialize_provider_address_space<'db>(
@@ -677,8 +965,8 @@ impl<'db> SemanticInstance<'db> {
     pub(crate) fn provisional_body(self, db: &'db dyn HirAnalysisDb) -> SemanticBody<'db> {
         let key = self.key(db);
         let typed_body = key.typed_body(db);
-        let call_sites = provisional_call_sites(db, self);
-        let for_loop_call_sites = provisional_for_loop_call_sites(db, self);
+        let call_sites = &provisional_call_sites(db, self).sites;
+        let for_loop_call_sites = &provisional_for_loop_call_sites(db, self).sites;
         let body = lower_to_smir_with_call_sites(
             db,
             self,
@@ -746,9 +1034,7 @@ impl<'db> SemanticInstance<'db> {
                     }
                     None => None,
                 }
-                .unwrap_or_else(|| {
-                    TyId::invalid(db, crate::analysis::ty::ty_def::InvalidCause::Other)
-                })
+                .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
             }
             LocalBinding::Local { .. } | LocalBinding::Param { .. } => {
                 self.key(db).typed_body(db).binding_ty(db, binding)
@@ -941,8 +1227,8 @@ impl<'db> SemanticInstance<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<SemanticCalleeRef<'db>> {
         collect_callees(
-            provisional_call_sites(db, self),
-            provisional_for_loop_call_sites(db, self),
+            &provisional_call_sites(db, self).sites,
+            &provisional_for_loop_call_sites(db, self).sites,
         )
     }
 
@@ -953,14 +1239,35 @@ impl<'db> SemanticInstance<'db> {
         let typed_body = self.key(db).typed_body(db);
         let causes = typed_body.smir_lowering_issues(db).into_boxed_slice();
         if causes.iter().copied().any(SmirLoweringIssue::is_incomplete) {
-            Err(SemanticBodyAdmissionError::IncompleteLoweringPlan(causes))
-        } else if causes.is_empty() {
-            Ok(())
-        } else {
-            Err(SemanticBodyAdmissionError::BlockedByUpstreamDiagnostics(
-                causes,
-            ))
+            return Err(SemanticBodyAdmissionError::IncompleteLoweringPlan(causes));
         }
+        if !causes.is_empty() {
+            return Err(SemanticBodyAdmissionError::BlockedByUpstreamDiagnostics(
+                causes,
+            ));
+        }
+
+        if let Some(body) = typed_body.body() {
+            for (expr, _) in body.exprs(db).iter() {
+                let Some(SemanticExprLowering::ConstIntrinsic {
+                    callable,
+                    kind: ConstIntrinsicKind::SizeOf,
+                }) = typed_body.semantic_expr_lowering(expr)
+                else {
+                    continue;
+                };
+                let Some(arg) = callable.generic_args().first().copied() else {
+                    continue;
+                };
+                let arg = normalize_ty(db, arg, body.scope(), self.assumptions(db));
+                if let Err(error) = runtime_size_bytes(db, arg) {
+                    return Err(SemanticBodyAdmissionError::InvalidConcreteType(
+                        invalid_size_diagnostic(db, self, SemOrigin::Expr(expr), arg, error),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn admitted_body(
@@ -979,6 +1286,9 @@ impl<'db> SemanticInstance<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> Result<&'db SemanticBody<'db>, SemanticBodyAdmissionError<'db>> {
         self.ensure_body_admitted(db)?;
+        if let Some(diagnostic) = provisional_call_site_diagnostic(db, self) {
+            return Err(SemanticBodyAdmissionError::CallSiteFinalization(diagnostic));
+        }
         Ok(self.provisional_body(db))
     }
 
@@ -1294,7 +1604,7 @@ fn effect_binding_ty_from_env<'db>(
     provider_idx: Option<u32>,
 ) -> TyId<'db> {
     let Some(env) = env else {
-        return TyId::invalid(db, crate::analysis::ty::ty_def::InvalidCause::Other);
+        return TyId::invalid(db, InvalidCause::Other);
     };
     let requirement = env
         .requirements(db)
@@ -1321,7 +1631,7 @@ fn effect_binding_ty_from_env<'db>(
             .or_else(|| provider.map(|binding| binding.provider_ty)),
         None => None,
     }
-    .unwrap_or_else(|| TyId::invalid(db, crate::analysis::ty::ty_def::InvalidCause::Other))
+    .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
 }
 
 fn instantiated_resolved_binding<'db>(
@@ -1394,7 +1704,13 @@ pub fn root_semantic_instance_key<'db>(
     let key = SemanticInstanceKey::new(
         db,
         owner,
-        GenericSubst::new(db, generic_args),
+        match owner {
+            BodyOwner::Func(func) => GenericSubst::for_owner(db, func.into(), generic_args),
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::ContractInit { .. }
+            | BodyOwner::ContractRecvArm { .. } => GenericSubst::none(db),
+        },
         EffectProviderSubst::new(db, effect_providers),
         ImplEnv::empty(db, owner.scope()),
     );
@@ -1410,7 +1726,7 @@ pub fn identity_semantic_instance_key<'db>(
     SemanticInstanceKey::new(
         db,
         owner,
-        GenericSubst::new(db, owner_identity_generic_args(db, owner)),
+        GenericSubst::for_body_owner(db, owner, Vec::new()),
         EffectProviderSubst::empty(db),
         ImplEnv::empty(db, owner.scope()),
     )
@@ -1655,19 +1971,6 @@ fn root_owner_generic_args<'db>(
         | BodyOwner::AnonConstBody { .. }
         | BodyOwner::ContractInit { .. }
         | BodyOwner::ContractRecvArm { .. } => Ok(Vec::new()),
-    }
-}
-
-fn owner_identity_generic_args<'db>(
-    db: &'db dyn HirAnalysisDb,
-    owner: BodyOwner<'db>,
-) -> Vec<TyId<'db>> {
-    match owner {
-        BodyOwner::Func(func) => CallableDef::Func(func).params(db).to_vec(),
-        BodyOwner::Const(_)
-        | BodyOwner::AnonConstBody { .. }
-        | BodyOwner::ContractInit { .. }
-        | BodyOwner::ContractRecvArm { .. } => Vec::new(),
     }
 }
 
@@ -1985,7 +2288,7 @@ fn instantiate_normalized_ty<'db>(
 ) -> Result<TyId<'db>, SemanticEffectEnvInstantiationError<'db>> {
     let scope = key.owner(db).scope();
     let assumptions = semantic_instance_base_assumptions_for_key(db, key);
-    let ty = instantiate_checked(db, key.owner(db), scope, ty, key.subst(db).generic_args(db))?;
+    let ty = instantiate_checked(db, key.owner(db), ty, key.subst(db))?;
     Ok(normalize_ty(db, ty, scope, assumptions))
 }
 
@@ -1999,13 +2302,7 @@ fn instantiate_normalized_trait_inst<'db>(
 > {
     let scope = key.owner(db).scope();
     let assumptions = semantic_instance_base_assumptions_for_key(db, key);
-    let trait_inst = instantiate_checked(
-        db,
-        key.owner(db),
-        scope,
-        trait_inst,
-        key.subst(db).generic_args(db),
-    )?;
+    let trait_inst = instantiate_checked(db, key.owner(db), trait_inst, key.subst(db))?;
     let args = trait_inst
         .args(db)
         .iter()
@@ -2027,72 +2324,29 @@ fn instantiate_normalized_trait_inst<'db>(
 fn instantiate_checked<'db, T>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
-    owner_scope: ScopeId<'db>,
     value: T,
-    args: &[TyId<'db>],
+    subst: GenericSubst<'db>,
 ) -> Result<T, SemanticEffectEnvInstantiationError<'db>>
 where
-    T: crate::analysis::ty::fold::TyFoldable<'db>,
+    T: TyFoldable<'db>,
 {
-    let mut folder = CheckedInstantiateFolder {
-        owner,
-        owner_scope,
-        args,
-        error: None,
+    let Some(mapping) = subst.mapping(db).as_ref() else {
+        return if matches!(owner, BodyOwner::Func(_)) {
+            Err(SemanticEffectEnvInstantiationError::MissingDomain { owner })
+        } else {
+            Ok(value)
+        };
     };
-    let value = value.fold_with(db, &mut folder);
-    folder.error.map_or(Ok(value), Err)
-}
-
-struct CheckedInstantiateFolder<'db, 'a> {
-    owner: BodyOwner<'db>,
-    owner_scope: ScopeId<'db>,
-    args: &'a [TyId<'db>],
-    error: Option<SemanticEffectEnvInstantiationError<'db>>,
-}
-
-impl<'db> crate::analysis::ty::fold::TyFolder<'db> for CheckedInstantiateFolder<'db, '_> {
-    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        match ty.data(db) {
-            crate::analysis::ty::ty_def::TyData::TyParam(param)
-                if param.owner == self.owner_scope && !param.is_effect() =>
-            {
-                if let Some(arg) = self.args.get(param.idx).copied() {
-                    return arg;
-                }
-                self.error
-                    .get_or_insert(SemanticEffectEnvInstantiationError {
-                        owner: self.owner,
-                        owner_scope: self.owner_scope,
-                        offending_ty: ty,
-                        param_idx: param.idx,
-                        args_len: self.args.len(),
-                    });
-                ty
-            }
-            crate::analysis::ty::ty_def::TyData::ConstTy(const_ty) => {
-                if let crate::analysis::ty::const_ty::ConstTyData::TyParam(param, _) =
-                    const_ty.data(db)
-                    && param.owner == self.owner_scope
-                {
-                    if let Some(arg) = self.args.get(param.idx).copied() {
-                        return arg;
-                    }
-                    self.error
-                        .get_or_insert(SemanticEffectEnvInstantiationError {
-                            owner: self.owner,
-                            owner_scope: self.owner_scope,
-                            offending_ty: ty,
-                            param_idx: param.idx,
-                            args_len: self.args.len(),
-                        });
-                    return ty;
-                }
-                ty.super_fold_with(db, self)
-            }
-            _ => ty.super_fold_with(db, self),
-        }
+    if let BodyOwner::Func(func) = owner
+        && mapping.domain().schema(db).owner(db) != func.into()
+    {
+        return Err(SemanticEffectEnvInstantiationError::WrongOwner {
+            owner,
+            schema: mapping.domain().schema(db),
+        });
     }
+    substitute_complete(db, value, mapping)
+        .map_err(|error| SemanticEffectEnvInstantiationError::Generic { owner, error })
 }
 
 fn known_never_returns_cycle_initial<'db>(

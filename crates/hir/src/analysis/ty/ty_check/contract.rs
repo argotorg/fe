@@ -14,8 +14,8 @@ use crate::{
         HirAnalysisDb,
         name_resolution::{ExpectedPathKind, PathRes, resolve_path},
         semantic::{
-            EvalOutcome, SemConstScalar, SemConstValue, contract_init_assigned_fields,
-            eval_body_owner_const,
+            EvalOutcome, GenericSubst, SemConstScalar, SemConstValue,
+            contract_init_assigned_fields, eval_body_owner_const,
         },
         ty::{
             adt_def::AdtRef,
@@ -67,7 +67,7 @@ fn implements_msg_variant<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>)
 
     impls_for_ty(db, ingot, canonical_ty)
         .iter()
-        .any(|impl_| impl_.skip_binder().trait_def(db).eq(&msg_variant_trait))
+        .any(|impl_| impl_.trait_def(db).eq(&msg_variant_trait))
 }
 
 fn resolve_sol_abi_ty<'db>(
@@ -717,13 +717,12 @@ pub(crate) fn eval_msg_variant_selector<'db>(
         Some(scope_ingot),
         variant_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
     ];
-    let implementor = search_ingots.into_iter().flatten().find_map(|ingot| {
+    let impl_ = search_ingots.into_iter().flatten().find_map(|ingot| {
         impls_for_ty(db, ingot, canonical_ty)
             .iter()
-            .find(|impl_| impl_.skip_binder().trait_def(db) == msg_variant_trait)
+            .find(|impl_| impl_.trait_def(db) == msg_variant_trait)
             .copied()
     })?;
-    let impl_ = implementor.skip_binder();
 
     let selector_name = IdentId::new(db, "SELECTOR".to_string());
     let selector_const = impl_
@@ -753,7 +752,7 @@ pub(crate) fn eval_msg_variant_selector<'db>(
             body,
             expected: expected_ty,
         },
-        Vec::new(),
+        GenericSubst::none(db),
     ) {
         EvalOutcome::Ready(value) => match value.value(db) {
             SemConstValue::Scalar {
@@ -985,11 +984,11 @@ pub(super) fn get_msg_variant_return_type<'db>(
     let msg_variant_impl = search_ingots.into_iter().flatten().find_map(|ingot| {
         impls_for_ty(db, ingot, canonical_ty)
             .iter()
-            .find(|impl_| impl_.skip_binder().trait_def(db).eq(&msg_variant_trait))
+            .find(|impl_| impl_.trait_def(db).eq(&msg_variant_trait))
             .copied()
     })?;
 
     // Get the Return associated type from the impl
     let return_name = IdentId::new(db, "Return".to_string());
-    msg_variant_impl.skip_binder().assoc_ty(db, return_name)
+    msg_variant_impl.assoc_ty(db, return_name)
 }

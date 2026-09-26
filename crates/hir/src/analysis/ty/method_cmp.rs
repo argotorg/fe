@@ -14,12 +14,12 @@ use super::{
         CanonicalEffectIdentity, EffectKeyCanonMode, EffectKeyKind,
         canonical_effect_identity_for_binding, place_effect_provider_param_index_map,
     },
-    fold::{AssocTySubst, TyFoldable, TyFolder},
+    fold::{TyFoldable, TyFolder},
     layout_holes::{
         callable_input_layout_bindings_by_origin, layout_shape_key, layout_shape_ty,
         layout_shape_value,
     },
-    normalize::normalize_ty,
+    normalize::{normalize_from_assumptions, normalize_ty},
     trait_def::TraitInstId,
     trait_resolution::{
         GoalSatisfiability, PredicateListId, TraitSolveCx,
@@ -27,14 +27,13 @@ use super::{
     },
     ty_check::{ConstRef, check_anon_const_body},
     ty_def::{InvalidCause, TyData, TyId},
+    ty_lower::{CompleteSubst, ParamDomainId, ParamSchemaId, PartialSubst},
     unify::UnificationTable,
 };
-use crate::analysis::{HirAnalysisDb, semantic::instantiate_with_generic_args};
+use crate::analysis::HirAnalysisDb;
 use crate::hir_def::{CallableDef, Expr, Partial, PathKind, scope_graph::ScopeId};
 use common::indexmap::IndexMap;
 use rustc_hash::FxHashMap;
-
-type ParamSubstMap<'db> = FxHashMap<(ScopeId<'db>, usize), TyId<'db>>;
 
 /// Compares the implementation method with the trait method to ensure they
 /// match.
@@ -83,7 +82,14 @@ pub(super) fn compare_impl_method<'db>(
     // method with the trait method.
     let mut err = !compare_arg_label(db, impl_m, trait_m, sink);
 
-    let param_subst = trait_to_impl_param_subst(db, impl_m, trait_m, trait_inst);
+    let (param_subst, effect_pairs) = trait_to_impl_param_subst(db, impl_m, trait_m, trait_inst);
+    if let (CallableDef::Func(_), CallableDef::Func(trait_func)) = (impl_m, trait_m)
+        && effect_pairs.len() != trait_func.effect_requirements(db).len()
+    {
+        sink.push(ImplDiag::MethodEffectMismatch { trait_m, impl_m }.into());
+        err = true;
+    }
+    let param_subst = param_subst.residualize(db);
     err |= !compare_ty(db, impl_m, trait_m, &param_subst, trait_inst, sink);
     if err {
         return;
@@ -208,7 +214,7 @@ fn compare_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_m: CallableDef<'db>,
     trait_m: CallableDef<'db>,
-    param_subst: &ParamSubstMap<'db>,
+    param_subst: &CompleteSubst<'db>,
     trait_inst: TraitInstId<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
@@ -216,9 +222,9 @@ fn compare_ty<'db>(
     let impl_m_arg_tys = impl_m.arg_tys(db);
     let trait_m_arg_tys = trait_m.arg_tys(db);
 
-    let mut substituter = AssocTySubst::new(trait_inst);
+    let evidence = PredicateListId::new(db, vec![trait_inst]);
     let impl_assumptions = collect_func_def_constraints(db, impl_m, true).instantiate_identity();
-    let trait_assumptions = instantiate_with_partial_map(
+    let trait_assumptions = instantiate_trait_method_template(
         db,
         collect_func_def_constraints(db, trait_m, true),
         param_subst,
@@ -234,14 +240,15 @@ fn compare_ty<'db>(
         .enumerate()
     {
         // 1) Instantiate trait method's type params into the impl's generics
-        let trait_m_ty = instantiate_with_partial_map(db, *trait_m_ty, param_subst);
+        let trait_m_ty = instantiate_trait_method_template(db, *trait_m_ty, param_subst);
         if trait_m_ty.has_invalid(db) {
             continue;
         }
         let impl_m_ty = impl_m_ty.instantiate_identity();
 
         // 2) Substitute associated types using the provided trait instance.
-        let trait_m_ty_substituted = trait_m_ty.fold_with(db, &mut substituter);
+        let trait_m_ty_substituted =
+            normalize_from_assumptions(db, trait_m_ty, trait_scope, evidence);
 
         // 3) Normalize both types to resolve any further nested associated types.
         let trait_m_ty_normalized =
@@ -283,10 +290,11 @@ fn compare_ty<'db>(
     }
 
     let impl_m_ret_ty = impl_m.ret_ty(db).instantiate_identity();
-    let trait_m_ret_ty = instantiate_with_partial_map(db, trait_m.ret_ty(db), param_subst);
+    let trait_m_ret_ty = instantiate_trait_method_template(db, trait_m.ret_ty(db), param_subst);
 
     // Substitute and normalize the return type as well.
-    let trait_m_ret_ty_substituted = trait_m_ret_ty.fold_with(db, &mut substituter);
+    let trait_m_ret_ty_substituted =
+        normalize_from_assumptions(db, trait_m_ret_ty, trait_scope, evidence);
     let trait_m_ret_ty_normalized = normalize_ty(
         db,
         trait_m_ret_ty_substituted,
@@ -332,30 +340,17 @@ fn compare_ty<'db>(
     !err
 }
 
-fn param_owner_and_idx<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-) -> Option<(ScopeId<'db>, usize)> {
-    match ty.data(db) {
-        TyData::TyParam(param) => Some((param.owner, param.idx)),
-        TyData::ConstTy(const_ty) => match const_ty.data(db) {
-            ConstTyData::TyParam(param, _) => Some((param.owner, param.idx)),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 fn insert_param_mapping<'db>(
     db: &'db dyn HirAnalysisDb,
-    out: &mut ParamSubstMap<'db>,
+    out: &mut PartialSubst<'db>,
     from: TyId<'db>,
     to: TyId<'db>,
 ) {
-    let Some(key) = param_owner_and_idx(db, from) else {
+    let Some(key) = out.domain().schema(db).original_key(db, from) else {
         return;
     };
-    out.insert(key, to);
+    out.bind(db, key, to)
+        .expect("method parameter correspondence must agree");
 }
 
 fn trait_to_impl_param_subst<'db>(
@@ -363,8 +358,9 @@ fn trait_to_impl_param_subst<'db>(
     impl_m: CallableDef<'db>,
     trait_m: CallableDef<'db>,
     trait_inst: TraitInstId<'db>,
-) -> ParamSubstMap<'db> {
-    let mut out: ParamSubstMap<'db> = FxHashMap::default();
+) -> (PartialSubst<'db>, Vec<(usize, usize)>) {
+    let schema = ParamSchemaId::callable(db, trait_m);
+    let mut out = PartialSubst::new(db, ParamDomainId::full(db, schema));
 
     // Map inherited trait params (trait Self + trait generics) using the trait method's
     // lowered param prefix. These are the TyIds that actually occur inside the method's
@@ -428,7 +424,7 @@ fn trait_to_impl_param_subst<'db>(
         }
     }
 
-    map_effect_provider_params_by_identity(
+    let effect_pairs = map_effect_provider_params_by_identity(
         db,
         &mut out,
         impl_m,
@@ -438,25 +434,59 @@ fn trait_to_impl_param_subst<'db>(
         &impl_layout,
     );
 
-    out
+    (out, effect_pairs)
+}
+
+pub(crate) struct MethodParamCorrespondence {
+    pub body_to_trait_slots: Vec<Option<usize>>,
+    pub trait_effect_to_body: Vec<(usize, usize)>,
+}
+
+/// The same declaration correspondence used by method conformance, expressed
+/// as body slots so call elaboration cannot reinterpret it by position.
+pub(crate) fn method_param_correspondence<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_m: CallableDef<'db>,
+    trait_m: CallableDef<'db>,
+    trait_inst: TraitInstId<'db>,
+) -> MethodParamCorrespondence {
+    let (mapping, trait_effect_to_body) =
+        trait_to_impl_param_subst(db, impl_m, trait_m, trait_inst);
+    let impl_params = impl_m.params(db);
+    let mut body_to_trait = vec![None; impl_params.len()];
+    for (trait_slot, &trait_param) in trait_m.params(db).iter().enumerate() {
+        let Some(key) = mapping.domain().schema(db).original_key(db, trait_param) else {
+            continue;
+        };
+        let Some(body_param) = mapping.get(db, key) else {
+            continue;
+        };
+        if let Some(body_slot) = impl_params.iter().position(|param| *param == body_param) {
+            body_to_trait[body_slot] = Some(trait_slot);
+        }
+    }
+    MethodParamCorrespondence {
+        body_to_trait_slots: body_to_trait,
+        trait_effect_to_body,
+    }
 }
 
 #[derive(Clone, Copy)]
 struct EffectProviderEntry<'db> {
     effect_idx: usize,
-    provider_param: TyId<'db>,
+    provider_param: Option<TyId<'db>>,
     identity: CanonicalEffectIdentity<'db>,
 }
 
 fn map_effect_provider_params_by_identity<'db>(
     db: &'db dyn HirAnalysisDb,
-    out: &mut ParamSubstMap<'db>,
+    out: &mut PartialSubst<'db>,
     impl_m: CallableDef<'db>,
     trait_m: CallableDef<'db>,
     trait_inst: TraitInstId<'db>,
     trait_layout: &FxHashMap<CallableInputLayoutHoleOrigin, Vec<TyId<'db>>>,
     impl_layout: &FxHashMap<CallableInputLayoutHoleOrigin, Vec<TyId<'db>>>,
-) {
+) -> Vec<(usize, usize)> {
     let assumptions = collect_func_def_constraints(db, impl_m, true).instantiate_identity();
     let trait_entries = collect_effect_provider_entries(
         db,
@@ -469,6 +499,7 @@ fn map_effect_provider_params_by_identity<'db>(
     let impl_entries =
         collect_effect_provider_entries(db, impl_m, None, trait_inst, impl_m.scope(), assumptions);
     let mut used_impl_entries = vec![false; impl_entries.len()];
+    let mut effect_pairs = Vec::new();
 
     for trait_entry in trait_entries {
         let Some((impl_idx, impl_entry)) =
@@ -480,13 +511,12 @@ fn map_effect_provider_params_by_identity<'db>(
             continue;
         };
         used_impl_entries[impl_idx] = true;
-
-        insert_param_mapping(
-            db,
-            out,
-            trait_entry.provider_param,
-            impl_entry.provider_param,
-        );
+        effect_pairs.push((trait_entry.effect_idx, impl_entry.effect_idx));
+        if let (Some(trait_param), Some(impl_param)) =
+            (trait_entry.provider_param, impl_entry.provider_param)
+        {
+            insert_param_mapping(db, out, trait_param, impl_param);
+        }
 
         let trait_origin = CallableInputLayoutHoleOrigin::Effect(trait_entry.effect_idx);
         let impl_origin = CallableInputLayoutHoleOrigin::Effect(impl_entry.effect_idx);
@@ -502,12 +532,13 @@ fn map_effect_provider_params_by_identity<'db>(
             }
         }
     }
+    effect_pairs
 }
 
 fn collect_effect_provider_entries<'db>(
     db: &'db dyn HirAnalysisDb,
     method: CallableDef<'db>,
-    param_subst: Option<&ParamSubstMap<'db>>,
+    param_subst: Option<&PartialSubst<'db>>,
     trait_inst: TraitInstId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
@@ -515,30 +546,39 @@ fn collect_effect_provider_entries<'db>(
     let CallableDef::Func(func) = method else {
         return Vec::new();
     };
+    let param_subst = param_subst.map(|subst| subst.residualize(db));
 
     let provider_param_map = place_effect_provider_param_index_map(db, func);
     let params = method.params(db);
 
     func.effect_requirements(db)
         .iter()
-        .filter_map(|binding| {
+        .map(|binding| {
             let effect_idx = binding.binding_idx as usize;
-            let provider_param_idx = provider_param_map
+            let provider_param = provider_param_map
                 .get(binding.binding_idx as usize)
                 .copied()
-                .flatten()?;
-            let provider_param = *params.get(provider_param_idx)?;
+                .flatten()
+                .and_then(|provider_param_idx| params.get(provider_param_idx).copied());
             let mut binding = binding.clone();
-            if let Some(subst) = param_subst {
+            if let Some(subst) = &param_subst {
                 binding.key = match binding.key {
                     crate::core::semantic::EffectRequirementKey::Type(key_ty) => {
                         crate::core::semantic::EffectRequirementKey::Type(
-                            instantiate_with_partial_map(db, Binder::bind(key_ty), subst),
+                            instantiate_trait_method_template(
+                                db,
+                                Binder::bind(method.generic_owner(), key_ty),
+                                subst,
+                            ),
                         )
                     }
                     crate::core::semantic::EffectRequirementKey::Trait(key_trait) => {
                         crate::core::semantic::EffectRequirementKey::Trait(
-                            instantiate_with_partial_map(db, Binder::bind(key_trait), subst),
+                            instantiate_trait_method_template(
+                                db,
+                                Binder::bind(method.generic_owner(), key_trait),
+                                subst,
+                            ),
                         )
                     }
                     crate::core::semantic::EffectRequirementKey::Other => {
@@ -576,11 +616,11 @@ fn collect_effect_provider_entries<'db>(
                 )
             });
 
-            Some(EffectProviderEntry {
+            EffectProviderEntry {
                 effect_idx,
                 provider_param,
                 identity,
-            })
+            }
         })
         .collect()
 }
@@ -666,23 +706,20 @@ fn effect_identity_tys_match<'db>(
         .is_ok()
 }
 
-fn instantiate_with_partial_map<'db, T>(
+fn instantiate_trait_method_template<'db, T>(
     db: &'db dyn HirAnalysisDb,
-    binder: Binder<T>,
-    param_subst: &ParamSubstMap<'db>,
+    binder: Binder<'db, T>,
+    param_subst: &CompleteSubst<'db>,
 ) -> T
 where
     T: TyFoldable<'db>,
 {
-    binder.instantiate_with(db, |param_ty| {
-        let Some(key) = param_owner_and_idx(db, param_ty) else {
-            return param_ty;
-        };
-        param_subst.get(&key).copied().unwrap_or(param_ty)
-    })
+    binder
+        .instantiate_subst(db, param_subst)
+        .expect("trait method comparison uses the declared parameter domain")
 }
 
-fn normalize_predicate_for_comparison<'db>(
+pub(crate) fn normalize_predicate_for_comparison<'db>(
     db: &'db dyn HirAnalysisDb,
     pred: TraitInstId<'db>,
     scope: ScopeId<'db>,
@@ -761,7 +798,7 @@ fn normalize_predicates_for_comparison<'db>(
     )
 }
 
-fn normalize_compare_assoc_consts<'db>(
+pub(crate) fn normalize_compare_assoc_consts<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
     scope: crate::hir_def::scope_graph::ScopeId<'db>,
@@ -824,18 +861,14 @@ fn normalize_compare_assoc_consts<'db>(
             db: &'db dyn HirAnalysisDb,
             body: crate::hir_def::Body<'db>,
             expected_ty: TyId<'db>,
-            generic_args: &[TyId<'db>],
+            capture: &super::const_ty::ConstCaptureEnv<'db>,
         ) -> Option<TyId<'db>> {
             let (diags, typed_body) = check_anon_const_body(db, body, expected_ty);
             if !diags.is_empty() {
                 return None;
             }
 
-            let typed_body = if generic_args.is_empty() {
-                typed_body.clone()
-            } else {
-                instantiate_with_generic_args(db, typed_body.clone(), generic_args)
-            };
+            let typed_body = capture.specialize(db, typed_body.clone());
             let ConstRef::TraitConst(assoc) = typed_body.expr_const_ref(body.expr(db))? else {
                 return None;
             };
@@ -893,7 +926,7 @@ fn normalize_compare_assoc_consts<'db>(
                     body,
                     ty: expected_ty,
                     const_def,
-                    generic_args,
+                    capture,
                     ..
                 } => {
                     if const_def.is_some() {
@@ -927,7 +960,7 @@ fn normalize_compare_assoc_consts<'db>(
                             .unwrap_or(ty);
                     }
 
-                    self.normalize_unevaluated_assoc_const(db, *body, expected_ty, generic_args)
+                    self.normalize_unevaluated_assoc_const(db, *body, expected_ty, capture)
                         .unwrap_or(ty)
                 }
                 _ => ty,
@@ -982,11 +1015,11 @@ fn compare_constraints<'db>(
     impl_m: CallableDef<'db>,
     trait_m: CallableDef<'db>,
     trait_inst: TraitInstId<'db>,
-    param_subst: &ParamSubstMap<'db>,
+    param_subst: &CompleteSubst<'db>,
     sink: &mut Vec<TyDiagCollection<'db>>,
 ) -> bool {
     let impl_m_constraints = collect_func_def_constraints(db, impl_m, false).instantiate_identity();
-    let trait_m_constraints = instantiate_with_partial_map(
+    let trait_m_constraints = instantiate_trait_method_template(
         db,
         collect_func_def_constraints(db, trait_m, false),
         param_subst,

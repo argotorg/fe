@@ -40,18 +40,6 @@ error[3-0000]: expected `*` kind in this context
    │        ^^^^^^^^ expected `*` kind here
 
 error[3-0000]: expected `*` kind in this context
-   ┌─ not_star_kind.fe:22:12
-   │
-22 │     fn foo(self) {}
-   │            ^^^^ expected `*` kind here
-
-error[3-0000]: expected `*` kind in this context
-   ┌─ not_star_kind.fe:24:18
-   │
-24 │     fn bar(self: Self) {}
-   │                  ^^^^ expected `*` kind here
-
-error[3-0000]: expected `*` kind in this context
    ┌─ not_star_kind.fe:28:13
    │
 28 │ fn foo(gen: Gen) {}

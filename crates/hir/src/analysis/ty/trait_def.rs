@@ -2,14 +2,17 @@
 
 use crate::{
     analysis::ty::{
-        method_cmp::compare_impl_method,
+        method_cmp::{compare_impl_method, method_param_correspondence},
         trait_lower::{
             ImplSelfKey, collect_trait_impls, complete_impl_trait, complete_selected_impl,
             lower_impl_trait_header,
         },
         trait_resolution::{GoalSatisfiability, PredicateListId, Selection},
     },
-    hir_def::{Body, Contract, Func, HirIngot, IdentId, ImplTrait, Trait},
+    hir_def::{
+        Body, Contract, Func, GenericParamOwner, HirIngot, IdentId, ImplTrait, Trait,
+        scope_graph::ScopeId,
+    },
 };
 use common::{
     indexmap::{IndexMap, IndexSet},
@@ -21,17 +24,23 @@ use salsa::Update;
 use super::{
     binder::Binder,
     canonical::Canonical,
+    const_ty::CallableInputLayoutHoleOrigin,
     diagnostics::{ImplDiag, TyDiagCollection},
     fold::{TyFoldable, TyFolder},
     layout_holes::LayoutRootUse,
+    normalize::normalize_ty,
+    subst::substitute_complete,
     trait_lower::collect_implementor_methods,
     trait_resolution::{
         TraitSolveCx, constraint::collect_candidate_constraints, is_goal_satisfiable,
         normalize_trait_inst_preserving_validity,
     },
     ty_def::{TyBase, TyData, TyId},
-    ty_lower::collect_generic_params,
-    ty_lower::layout_param_root_uses,
+    ty_lower::{
+        CompleteSubst, ParamBasis, ParamDomainId, ParamKey, ParamSchemaId, PartialSubst,
+        callable_input_layout_origin_ty, collect_layout_arg_bindings, layout_param_root_uses,
+        param_schema, same_layout_argument,
+    },
     unify::UnificationTable,
     visitor::{TyVisitable, TyVisitor},
 };
@@ -55,7 +64,7 @@ pub(crate) fn impls_for_trait_def<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
     trait_def: Trait<'db>,
-) -> Vec<Binder<ImplementorId<'db>>> {
+) -> Vec<ImplementorId<'db>> {
     let env = ingot_trait_env(db, ingot);
     let mut out = env.impls_for_trait(db, trait_def);
 
@@ -81,7 +90,7 @@ pub(crate) fn impls_for_trait_and_ty<'db>(
     ingot: Ingot<'db>,
     trait_def: Trait<'db>,
     ty: Canonical<TyId<'db>>,
-) -> Vec<Binder<ImplementorId<'db>>> {
+) -> Vec<ImplementorId<'db>> {
     let mut table = UnificationTable::new(db);
     let ty = ty.extract_identity(&mut table);
 
@@ -124,10 +133,10 @@ pub(crate) fn impls_for_trait_in_ingots<'db>(
     primary: Ingot<'db>,
     secondary: Option<Ingot<'db>>,
     trait_: Canonical<TraitInstId<'db>>,
-) -> Vec<Binder<ImplementorId<'db>>> {
+) -> Vec<ImplementorId<'db>> {
     let mut table = UnificationTable::new(db);
     let trait_def = trait_.extract_identity(&mut table).def(db);
-    let mut dedup: IndexSet<Binder<ImplementorId<'db>>> = IndexSet::default();
+    let mut dedup: IndexSet<ImplementorId<'db>> = IndexSet::default();
     dedup.extend(impls_for_trait_def(db, primary, trait_def).iter().copied());
     if let Some(secondary) = secondary {
         dedup.extend(
@@ -156,7 +165,7 @@ fn is_std_evm_contract_trait_def<'db>(db: &'db dyn HirAnalysisDb, trait_def: Tra
 fn contract_virtual_impls<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
-) -> Vec<Binder<ImplementorId<'db>>> {
+) -> Vec<ImplementorId<'db>> {
     let Some(contract_trait) = std_evm_contract_trait_def(db, ingot) else {
         return Vec::new();
     };
@@ -180,7 +189,7 @@ fn contract_virtual_impls<'db>(
                 types,
                 ImplementorOrigin::VirtualContract(contract),
             );
-            out.push(Binder::bind(implementor));
+            out.push(implementor);
         }
     }
 
@@ -272,7 +281,7 @@ impl<'db> ResolvedImplInstance<'db> {
     ///
     /// The returned generic arguments match the selected implementation for an
     /// explicit method and the resolved trait instance for a default method.
-    pub fn method_instance(
+    fn method_instance(
         self,
         db: &'db dyn HirAnalysisDb,
         name: IdentId<'db>,
@@ -311,7 +320,8 @@ impl<'db> ResolvedImplInstance<'db> {
                 {
                     assoc.layout_root_uses(db)
                 } else {
-                    let trait_args = self.selected.trait_(db).args(db);
+                    let trait_inst = self.selected.trait_(db);
+                    let trait_args = trait_inst.args(db);
                     self.selected
                         .trait_def(db)
                         .assoc_types(db)
@@ -321,9 +331,11 @@ impl<'db> ResolvedImplInstance<'db> {
                                 .layout_root_uses(db)
                                 .into_iter()
                                 .map(|root_use| LayoutRootUse {
-                                    value: Binder::bind(root_use.value).instantiate(db, trait_args),
+                                    value: Binder::bind(trait_inst.def(db).into(), root_use.value)
+                                        .instantiate(db, trait_args),
                                     owner: root_use.owner.map(|owner| {
-                                        Binder::bind(owner).instantiate(db, trait_args)
+                                        Binder::bind(trait_inst.def(db).into(), owner)
+                                            .instantiate(db, trait_args)
                                     }),
                                     selector: root_use.selector,
                                     index_dimensions: root_use.index_dimensions,
@@ -337,10 +349,14 @@ impl<'db> ResolvedImplInstance<'db> {
         let Some(template) = self.assoc_ty_template(db, name) else {
             return uses;
         };
+        let ImplementorOrigin::Hir(impl_trait) = self.selected.origin(db) else {
+            return uses;
+        };
         let root_params = self.forwarded_layout_root_params(db);
         for root_use in layout_param_root_uses(
             db,
             template,
+            ParamSchemaId::full(db, impl_trait.into()),
             self.impl_params(db),
             self.impl_params(db),
             &root_params,
@@ -441,7 +457,7 @@ fn instantiate_selected_impl<'db>(
     }
 
     let mut table = UnificationTable::new(db);
-    let instantiated = table.instantiate_with_fresh_vars(Binder::bind(selected));
+    let instantiated = table.instantiate_with_fresh_vars(selected);
     table.unify(instantiated.trait_inst(db), inst).ok()?;
     Some(ResolvedImplInstance {
         selected,
@@ -471,37 +487,274 @@ pub(crate) fn resolve_trait_impl_instance<'db>(
     }
 }
 
-/// Resolves the concrete HIR function that implements `method` for the given
-/// trait instance, returning both the function and the impl's instantiated
-/// generic arguments.
+/// A selected method retains the proof origin and the nominal trait reference.
+/// A trait default body selected through an assumption remains generic-bound
+/// dispatch until a concrete implementation is chosen.
+#[derive(Debug, Clone)]
+pub struct ResolvedMethodInstance<'db> {
+    resolved: ResolvedImplInstance<'db>,
+    declaration: Func<'db>,
+    body: Option<Func<'db>>,
+    body_args: Vec<TyId<'db>>,
+    body_to_nominal: Vec<Option<usize>>,
+    effect_pairs: Vec<(usize, usize)>,
+    normalization_scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+}
+
+#[derive(Debug, Clone)]
+pub enum MethodArgMapError<'db> {
+    MissingBody,
+    NominalArity {
+        expected: usize,
+        given: usize,
+    },
+    SelectedPrefixArity {
+        expected: usize,
+        given: usize,
+    },
+    MissingNominalRole(ParamKey<'db>),
+    MissingEffectRole(usize),
+    MissingProviderRole(u32),
+    InconsistentProviderRole {
+        nominal: u32,
+        first: u32,
+        second: u32,
+    },
+    CheckedInputArity {
+        expected: usize,
+        given: usize,
+    },
+    ConflictingLayoutRole(ParamKey<'db>),
+    SignatureArity {
+        func: Func<'db>,
+        expected_generics: usize,
+        given_generics: usize,
+        declared_inputs: usize,
+        parameter_inputs: usize,
+    },
+    SignatureMismatch {
+        nominal: Func<'db>,
+        body: Func<'db>,
+        nominal_args: Vec<TyId<'db>>,
+        body_args: Vec<TyId<'db>>,
+        evidence: PredicateListId<'db>,
+        nominal_signature: String,
+        body_signature: String,
+    },
+}
+
+impl<'db> ResolvedMethodInstance<'db> {
+    pub fn resolved(&self) -> ResolvedImplInstance<'db> {
+        self.resolved
+    }
+
+    pub fn body(&self) -> Option<Func<'db>> {
+        self.body
+    }
+
+    pub fn body_args(&self) -> &[TyId<'db>] {
+        &self.body_args
+    }
+
+    pub fn effect_pairs(&self) -> &[(usize, usize)] {
+        &self.effect_pairs
+    }
+
+    pub fn origin(&self, db: &'db dyn HirAnalysisDb) -> ImplementorOrigin<'db> {
+        self.resolved.selected().origin(db)
+    }
+
+    /// Rebase an already-completed nominal method instance into the selected
+    /// body schema. Inherited values come from implementation selection; the
+    /// method's own and hidden slots are matched by structural role.
+    pub fn complete_body_args(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        nominal_args: &[TyId<'db>],
+        checked_inputs: Option<&[TyId<'db>]>,
+        checked_effect_inputs: Option<&[(usize, TyId<'db>)]>,
+    ) -> Result<CompleteSubst<'db>, MethodArgMapError<'db>> {
+        let body = self.body.ok_or(MethodArgMapError::MissingBody)?;
+        let nominal_schema = param_schema(db, self.declaration.into(), ParamBasis::Full);
+        if nominal_args.len() != nominal_schema.keys(db).len() {
+            return Err(MethodArgMapError::NominalArity {
+                expected: nominal_schema.keys(db).len(),
+                given: nominal_args.len(),
+            });
+        }
+        let body_schema = param_schema(db, body.into(), ParamBasis::Full);
+        let inherited_len = GenericParamOwner::Func(body)
+            .parent(db)
+            .map_or(0, |parent| {
+                param_schema(db, parent, ParamBasis::Full).keys(db).len()
+            });
+        if self.body_args.len() != inherited_len {
+            return Err(MethodArgMapError::SelectedPrefixArity {
+                expected: inherited_len,
+                given: self.body_args.len(),
+            });
+        }
+
+        let domain = ParamDomainId::full(db, body_schema);
+        let mut args = PartialSubst::new(db, domain);
+        for (slot, &arg) in self.body_args.iter().enumerate() {
+            args.bind(db, body_schema.keys(db)[slot], arg)
+                .expect("selected inherited parameter key");
+        }
+        for (body_slot, &key) in body_schema.keys(db).iter().enumerate().skip(inherited_len) {
+            if let Some(nominal_slot) = self.body_to_nominal.get(body_slot).copied().flatten() {
+                args.bind(db, key, nominal_args[nominal_slot])
+                    .expect("selected nominal parameter key");
+            } else if !matches!(key, ParamKey::CallableLayout { .. }) {
+                return Err(MethodArgMapError::MissingNominalRole(key));
+            }
+        }
+        if let Some(checked_inputs) = checked_inputs
+            && checked_inputs.len() != body.arg_tys(db).len()
+        {
+            return Err(MethodArgMapError::CheckedInputArity {
+                expected: body.arg_tys(db).len(),
+                given: checked_inputs.len(),
+            });
+        }
+        if checked_inputs.is_some() || checked_effect_inputs.is_some() {
+            let mut predicates: IndexSet<_> = self.assumptions.list(db).iter().copied().collect();
+            predicates.insert(self.resolved.trait_inst());
+            let assumptions = PredicateListId::new(db, predicates.into_iter().collect::<Vec<_>>());
+            let value_inputs =
+                checked_inputs
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                    .map(|(idx, &ty)| {
+                        let origin = if body.is_method(db) && idx == 0 {
+                            CallableInputLayoutHoleOrigin::Receiver
+                        } else {
+                            CallableInputLayoutHoleOrigin::ValueParam(idx)
+                        };
+                        (origin, ty)
+                    });
+            let effect_inputs = checked_effect_inputs
+                .into_iter()
+                .flatten()
+                .map(|&(nominal, ty)| {
+                    self.effect_pairs
+                        .iter()
+                        .find(|(index, _)| *index == nominal)
+                        .map(|&(_, body_idx)| (CallableInputLayoutHoleOrigin::Effect(body_idx), ty))
+                        .ok_or(MethodArgMapError::MissingEffectRole(nominal))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            for (origin, actual_ty) in value_inputs.chain(effect_inputs) {
+                let Some(formal_ty) = callable_input_layout_origin_ty(db, body, origin) else {
+                    continue;
+                };
+                let formal_ty = normalize_ty(
+                    db,
+                    substitute_complete(db, formal_ty, &args.residualize(db))
+                        .expect("selected input template must match body schema"),
+                    self.normalization_scope,
+                    assumptions,
+                );
+                let actual_ty = normalize_ty(db, actual_ty, self.normalization_scope, assumptions);
+                let mut bindings = Vec::new();
+                if !collect_layout_arg_bindings(db, formal_ty, actual_ty, &mut bindings) {
+                    continue;
+                }
+                for (formal, actual) in bindings {
+                    let Some(key @ ParamKey::CallableLayout { .. }) =
+                        body_schema.original_key(db, formal)
+                    else {
+                        continue;
+                    };
+                    if let Some(existing) = args.get(db, key) {
+                        if !same_layout_argument(db, existing, actual) {
+                            return Err(MethodArgMapError::ConflictingLayoutRole(key));
+                        }
+                    } else {
+                        args.bind(db, key, actual)
+                            .expect("selected layout parameter key");
+                    }
+                }
+            }
+        }
+        // Every non-layout slot is bound by now. A receiver can carry layout
+        // components through its runtime bundle even when its nominal type
+        // exposes no const argument, so unbound layout slots keep their body
+        // formals; call layout evidence binds them.
+        Ok(args.residualize(db))
+    }
+}
+
+/// Selects a trait method while retaining implementation versus generic-bound
+/// origin. `body` is absent when only a declaration is available.
 pub fn resolve_trait_method_instance<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
     method: IdentId<'db>,
-) -> Option<(Func<'db>, Vec<TyId<'db>>)> {
+) -> Selection<ResolvedMethodInstance<'db>> {
     let resolved = match resolve_trait_impl_instance(db, solve_cx, inst) {
         Selection::Unique(resolved) => resolved,
-        Selection::Ambiguous(_ambiguous) => return None,
-        Selection::NotFound => return None,
+        Selection::Ambiguous(_) => return Selection::Ambiguous(IndexSet::new()),
+        Selection::NotFound => return Selection::NotFound,
     };
-    resolved.method_instance(db, method)
-}
-
-pub fn complete_resolved_trait_method_args<'db>(
-    db: &'db dyn HirAnalysisDb,
-    impl_func: Func<'db>,
-    mut impl_args: Vec<TyId<'db>>,
-    caller_args: &[TyId<'db>],
-    trait_arg_len: usize,
-) -> Vec<TyId<'db>> {
-    let expected_len = collect_generic_params(db, impl_func.into())
-        .params(db)
-        .len();
-    let missing_len = expected_len.saturating_sub(impl_args.len());
-    let tail = caller_args.get(trait_arg_len..).unwrap_or(caller_args);
-    impl_args.extend(tail.iter().copied().take(missing_len));
-    impl_args
+    let Some(declaration) = resolved
+        .selected()
+        .trait_def(db)
+        .method_defs(db)
+        .get(&method)
+        .copied()
+    else {
+        return Selection::NotFound;
+    };
+    let (body, body_args) = resolved.method_instance(db, method).map_or_else(
+        || (None, resolved.trait_inst().args(db).to_vec()),
+        |(func, args)| (Some(func), args),
+    );
+    let (body_to_nominal, effect_pairs) = body.map_or_else(
+        || (Vec::new(), Vec::new()),
+        |body| {
+            if body == declaration {
+                (
+                    (0..param_schema(db, body.into(), ParamBasis::Full)
+                        .keys(db)
+                        .len())
+                        .map(Some)
+                        .collect(),
+                    (0..body.effect_requirements(db).len())
+                        .map(|idx| (idx, idx))
+                        .collect(),
+                )
+            } else {
+                let correspondence = method_param_correspondence(
+                    db,
+                    body.as_callable(db).expect("selected method is callable"),
+                    declaration
+                        .as_callable(db)
+                        .expect("trait method is callable"),
+                    resolved.selected().trait_inst(db),
+                );
+                (
+                    correspondence.body_to_trait_slots,
+                    correspondence.trait_effect_to_body,
+                )
+            }
+        },
+    );
+    let normalization_scope =
+        solve_cx.normalization_scope_for_trait_inst(db, resolved.trait_inst());
+    Selection::Unique(ResolvedMethodInstance {
+        resolved,
+        declaration,
+        body,
+        body_args,
+        body_to_nominal,
+        effect_pairs,
+        normalization_scope,
+        assumptions: solve_cx.assumptions(),
+    })
 }
 
 /// Returns all implementors for the given `ty` whose constraints are fully proven.
@@ -510,7 +763,7 @@ pub(crate) fn impls_for_ty_with_satisfied_constraints<'db>(
     ingot: Ingot<'db>,
     ty: Canonical<TyId<'db>>,
     assumptions: PredicateListId<'db>,
-) -> Vec<Binder<ImplementorId<'db>>> {
+) -> Vec<ImplementorId<'db>> {
     impls_for_ty_with_constraint_mode(db, ingot, None, ty, assumptions, false)
 }
 
@@ -522,7 +775,7 @@ pub(crate) fn impls_for_trait_and_ty_with_possible_constraints<'db>(
     trait_def: Trait<'db>,
     ty: Canonical<TyId<'db>>,
     assumptions: PredicateListId<'db>,
-) -> Vec<Binder<ImplementorId<'db>>> {
+) -> Vec<ImplementorId<'db>> {
     impls_for_ty_with_constraint_mode(db, ingot, Some(trait_def), ty, assumptions, true)
 }
 
@@ -533,7 +786,7 @@ fn impls_for_ty_with_constraint_mode<'db>(
     ty: Canonical<TyId<'db>>,
     assumptions: PredicateListId<'db>,
     allow_needs_confirmation: bool,
-) -> Vec<Binder<ImplementorId<'db>>> {
+) -> Vec<ImplementorId<'db>> {
     let mut table = UnificationTable::new(db);
     let ty = ty.extract_identity(&mut table);
 
@@ -599,7 +852,7 @@ pub(crate) fn impls_for_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
     ty: Canonical<TyId<'db>>,
-) -> Vec<Binder<ImplementorId<'db>>> {
+) -> Vec<ImplementorId<'db>> {
     let mut table = UnificationTable::new(db);
     let ty = ty.extract_identity(&mut table);
 
@@ -643,15 +896,15 @@ pub fn assoc_const_body_for_trait_inst<'db>(
         .map(|(body, _, _)| body)
 }
 
-/// Returns the selected body, its declared template type, and the arguments
-/// owned by that body. Explicit impl bodies use impl arguments; inherited
-/// defaults use trait arguments.
+/// Returns the selected body, its declared template type, and the checked
+/// substitution over the body's owner. Explicit impl bodies use impl
+/// arguments; inherited defaults use trait arguments.
 pub fn assoc_const_body_template_for_trait_inst<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
     const_name: IdentId<'db>,
-) -> Option<(Body<'db>, TyId<'db>, Vec<TyId<'db>>)> {
+) -> Option<(Body<'db>, TyId<'db>, CompleteSubst<'db>)> {
     let resolved = match resolve_trait_impl_instance(db, solve_cx, inst) {
         Selection::Unique(resolved) => resolved,
         Selection::Ambiguous(_ambiguous) => return None,
@@ -664,7 +917,7 @@ pub(crate) fn selected_assoc_const_body_template<'db>(
     db: &'db dyn HirAnalysisDb,
     resolved: ResolvedImplInstance<'db>,
     const_name: IdentId<'db>,
-) -> Option<(Body<'db>, TyId<'db>, Vec<TyId<'db>>)> {
+) -> Option<(Body<'db>, TyId<'db>, CompleteSubst<'db>)> {
     let explicit = match resolved.selected().origin(db) {
         ImplementorOrigin::Hir(impl_trait) => impl_trait
             .assoc_consts(db)
@@ -674,7 +927,12 @@ pub(crate) fn selected_assoc_const_body_template<'db>(
                 Some((
                     constant.value_body(db)?,
                     constant.ty(db)?,
-                    resolved.impl_args(db).to_vec(),
+                    CompleteSubst::for_owner(
+                        db,
+                        impl_trait.into(),
+                        resolved.impl_args(db).to_vec(),
+                    )
+                    .ok()?,
                 ))
             }),
         ImplementorOrigin::VirtualContract(_) => None,
@@ -682,11 +940,12 @@ pub(crate) fn selected_assoc_const_body_template<'db>(
     };
     explicit.or_else(|| {
         let inst = resolved.trait_inst();
-        let constant = inst.def(db).const_(db, const_name)?;
+        let trait_ = inst.def(db);
+        let constant = trait_.const_(db, const_name)?;
         Some((
             constant.default_body(db)?,
             constant.ty(db)?,
-            inst.args(db).to_vec(),
+            CompleteSubst::for_owner(db, trait_.into(), inst.args(db).to_vec()).ok()?,
         ))
     })
 }
@@ -772,7 +1031,7 @@ impl<'db> TraitEnv<'db> {
         &self,
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
-    ) -> Vec<Binder<ImplementorId<'db>>> {
+    ) -> Vec<ImplementorId<'db>> {
         let key = match ty.data(db) {
             TyData::TyBase(TyBase::Prim(prim)) => Some(ImplSelfKey::Prim(*prim)),
             TyData::TyBase(TyBase::Adt(adt)) => Some(ImplSelfKey::Item(adt.scope(db))),
@@ -791,7 +1050,7 @@ impl<'db> TraitEnv<'db> {
         &self,
         db: &'db dyn HirAnalysisDb,
         trait_def: Trait<'db>,
-    ) -> Vec<Binder<ImplementorId<'db>>> {
+    ) -> Vec<ImplementorId<'db>> {
         self.impls
             .get(&trait_def)
             .into_iter()
@@ -968,8 +1227,8 @@ impl<'db> ImplementorId<'db> {
 /// - then check that the merged constraints are satisfiable.
 pub(crate) fn does_impl_trait_conflict<'db>(
     db: &'db dyn HirAnalysisDb,
-    a: Binder<ImplementorId<'db>>,
-    b: Binder<ImplementorId<'db>>,
+    a: ImplementorId<'db>,
+    b: ImplementorId<'db>,
 ) -> bool {
     let mut table = UnificationTable::new(db);
     let a = table.instantiate_with_fresh_vars(a);
@@ -1008,8 +1267,41 @@ pub(crate) fn does_impl_trait_conflict<'db>(
     true
 }
 
-/// Represents an instantiated trait, which can be thought of as a trait
-/// reference from a HIR perspective.
+/// The positional identity of a trait application. Associated equalities live
+/// in predicates and resolution evidence, not in a projection's identity.
+#[salsa::interned]
+#[derive(Debug)]
+pub struct TraitRefId<'db> {
+    pub key: Trait<'db>,
+    #[return_ref]
+    pub args: Vec<TyId<'db>>,
+}
+
+impl<'db> TraitRefId<'db> {
+    pub fn def(self, db: &'db dyn HirAnalysisDb) -> Trait<'db> {
+        self.key(db)
+    }
+
+    pub fn self_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        self.args(db)[0]
+    }
+
+    pub fn as_predicate(self, db: &'db dyn HirAnalysisDb) -> TraitInstId<'db> {
+        TraitInstId::new_simple(db, self.def(db), self.args(db).to_vec())
+    }
+
+    pub fn project_assoc_ty(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        name: IdentId<'db>,
+    ) -> Option<TyId<'db>> {
+        self.def(db)
+            .assoc_ty(db, name)
+            .map(|_| TyId::assoc_ty(db, self, name))
+    }
+}
+
+/// A trait predicate, including associated equality evidence when present.
 #[salsa::interned]
 #[derive(Debug)]
 pub struct TraitInstId<'db> {
@@ -1032,6 +1324,12 @@ impl<'db> TraitInstId<'db> {
         Self::new(db, def, args, IndexMap::new())
     }
 
+    /// Extract positional identity only. The caller remains responsible for
+    /// preserving this predicate's associated equalities as evidence.
+    pub fn trait_ref(self, db: &'db dyn HirAnalysisDb) -> TraitRefId<'db> {
+        TraitRefId::new(db, self.def(db), self.args(db).to_vec())
+    }
+
     pub fn with_fresh_vars(
         db: &'db dyn HirAnalysisDb,
         def: Trait<'db>,
@@ -1052,14 +1350,20 @@ impl<'db> TraitInstId<'db> {
             .collect()
     }
 
-    pub fn assoc_ty(self, db: &'db dyn HirAnalysisDb, name: IdentId<'db>) -> Option<TyId<'db>> {
-        if let Some(ty) = self.assoc_type_bindings(db).get(&name) {
-            return Some(*ty);
-        }
-        if self.def(db).assoc_ty(db, name).is_some() {
-            return Some(TyId::assoc_ty(db, self, name));
-        }
-        None
+    pub fn bound_assoc_ty(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        name: IdentId<'db>,
+    ) -> Option<TyId<'db>> {
+        self.assoc_type_bindings(db).get(&name).copied()
+    }
+
+    pub fn project_assoc_ty(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        name: IdentId<'db>,
+    ) -> Option<TyId<'db>> {
+        self.trait_ref(db).project_assoc_ty(db, name)
     }
 
     /// Normalize arguments of this trait instance.

@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/implied_assoc_bound_trait_args.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ implied_assoc_bound_trait_args.fe:19:5
+   │
+ 7 │ fn needs_bound<X, B: Bound<X>>() {}
+   │                      -------- required by this bound on `needs_bound`
+   ·
+19 │     needs_bound<u8, F::Item>()
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^ `F::Item` doesn't implement `Bound<u8>`

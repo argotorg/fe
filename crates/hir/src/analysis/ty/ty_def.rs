@@ -24,10 +24,12 @@ use smallvec::SmallVec;
 
 use super::{
     adt_def::{AdtDef, instantiate_adt_field_shape},
-    const_ty::{ConstTyData, ConstTyId, TypePrintMode, const_ty_from_sem_const},
+    const_ty::{
+        ConstTyData, ConstTyId, TypePrintMode, UnevaluatedConstPolicy, const_ty_from_sem_const,
+    },
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     effects::place_effect_provider_param_index_map,
-    trait_def::TraitInstId,
+    trait_def::{TraitInstId, TraitRefId},
     trait_resolution::{PredicateListId, WellFormedness},
     ty_lower::collect_generic_params,
     unify::{InferenceKey, UnificationTable},
@@ -376,9 +378,13 @@ impl<'db> TyId<'db> {
 
     pub fn assoc_ty(
         db: &'db dyn HirAnalysisDb,
-        trait_: TraitInstId<'db>,
+        trait_: TraitRefId<'db>,
         name: IdentId<'db>,
     ) -> Self {
+        assert!(
+            trait_.def(db).assoc_ty(db, name).is_some(),
+            "associated member must belong to its projection trait"
+        );
         let assoc_ty = AssocTy { trait_, name };
         Self::new(db, TyData::AssocTy(assoc_ty))
     }
@@ -540,6 +546,18 @@ impl<'db> TyId<'db> {
         matches!(self.base_ty(db).data(db), TyData::TyParam(_))
     }
 
+    /// The declared parameter this type or const parameter occurrence names.
+    pub(crate) fn as_generic_param(self, db: &'db dyn HirAnalysisDb) -> Option<&'db TyParam<'db>> {
+        match self.data(db) {
+            TyData::TyParam(param) => Some(param),
+            TyData::ConstTy(const_ty) => match const_ty.data(db) {
+                ConstTyData::TyParam(param, _) => Some(param),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Returns `true` if the base type is a user defined `struct` type.
     pub fn is_struct(self, db: &dyn HirAnalysisDb) -> bool {
         let base_ty = self.base_ty(db);
@@ -681,6 +699,10 @@ impl<'db> TyId<'db> {
     }
 
     /// Perform type level application.
+    pub(crate) fn app_structural(db: &'db dyn HirAnalysisDb, lhs: Self, rhs: Self) -> TyId<'db> {
+        Self::new(db, TyData::TyApp(lhs, rhs))
+    }
+
     pub fn app(db: &'db dyn HirAnalysisDb, lhs: Self, rhs: Self) -> TyId<'db> {
         let Some(applicable_ty) = lhs.applicable_ty(db) else {
             return Self::invalid(
@@ -692,17 +714,7 @@ impl<'db> TyId<'db> {
             );
         };
 
-        let rhs = if matches!(
-            rhs.data(db),
-            TyData::ConstTy(const_ty)
-                if matches!(
-                    const_ty.data(db),
-                    ConstTyData::UnEvaluated {
-                        preserve_unevaluated: true,
-                        ..
-                    }
-                )
-        ) {
+        let rhs = if rhs.preserves_const_arg_metadata(db) {
             rhs.check_const_ty_without_eval(db, applicable_ty.const_ty)
         } else {
             rhs.evaluate_const_ty(db, applicable_ty.const_ty)
@@ -736,6 +748,12 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::TyApp(lhs, rhs))
     }
 
+    /// Whether application must retain this const argument as deferred metadata.
+    pub(crate) fn preserves_const_arg_metadata(self, db: &'db dyn HirAnalysisDb) -> bool {
+        matches!(self.data(db), TyData::ConstTy(ct)
+        if matches!(ct.data(db), ConstTyData::UnEvaluated { policy, .. } if policy.preserves_metadata()))
+    }
+
     pub(crate) fn check_const_ty_without_eval(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -754,7 +772,7 @@ impl<'db> TyId<'db> {
                 if matches!(
                     const_ty.data(db),
                     ConstTyData::UnEvaluated {
-                        defer_validation: true,
+                        policy: UnevaluatedConstPolicy::DeferValidation,
                         ..
                     }
                 ) {
@@ -1406,7 +1424,7 @@ impl TyVar<'_> {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct AssocTy<'db> {
-    pub trait_: TraitInstId<'db>,
+    pub trait_: TraitRefId<'db>,
     pub name: IdentId<'db>,
 }
 

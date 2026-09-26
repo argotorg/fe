@@ -123,6 +123,13 @@ impl<'db> GenericParam<'db> {
             Self::Const(c) => c.name,
         }
     }
+
+    pub fn has_default(&self) -> bool {
+        match self {
+            Self::Type(ty) => ty.default_ty.is_some(),
+            Self::Const(c) => c.default.is_some(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From)]
@@ -172,7 +179,7 @@ pub struct ConstGenericArg<'db> {
     pub value: ConstGenericArgValue<'db>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum ConstGenericArgValue<'db> {
     Expr(Partial<Body<'db>>),
     Hole,

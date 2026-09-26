@@ -8,7 +8,7 @@ use crate::{
         semantic::{FieldIndex, SemConstValue, VariantIndex},
         ty::{
             adt_def::{AdtRef, instantiate_adt_field_shape},
-            const_ty::{ConstTyData, ConstTyId},
+            const_ty::{ConstTyData, ConstTyId, normalize_const_tys_for_comparison},
             fold::TyFoldable,
             normalize::normalize_ty,
             trait_resolution::PredicateListId,
@@ -28,7 +28,13 @@ pub enum ArrayLength<'db> {
 }
 
 impl<'db> ArrayLength<'db> {
-    fn from_const(db: &'db dyn HirAnalysisDb, value: ConstTyId<'db>) -> Option<Self> {
+    pub(crate) fn from_ty(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<Self> {
+        // Deferred defaults and eagerly lowered extents must name the same
+        // length in shapes, repacks, and specialization keys.
+        let TyData::ConstTy(value) = normalize_const_tys_for_comparison(db, ty).data(db) else {
+            return None;
+        };
+        let value = *value;
         if let Some(integer) = value.integer_value(db) {
             return integer.to_usize().map(Self::Known);
         }
@@ -67,7 +73,7 @@ impl<'db> ArrayLength<'db> {
     fn substitute(self, db: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
         match subst.apply(self.index()) {
             IndexExpr::Const(len) => Self::Known(len),
-            IndexExpr::TypeConst(value) => Self::from_const(db, value)
+            IndexExpr::TypeConst(value) => Self::from_ty(db, TyId::const_ty(db, value))
                 .expect("array length specialization must remain a valid const"),
             _ => unreachable!("const substitution cannot introduce runtime or bound variables"),
         }
@@ -250,10 +256,7 @@ impl<'db> ShapeCx<'db> {
         let children = if let Some(inner) = ty.as_view(self.db) {
             self.build(inner)?.data(self.db).children.clone()
         } else if ty.is_array(self.db) {
-            let TyData::ConstTy(constant) = ty.generic_args(self.db)[1].data(self.db) else {
-                return Err(ShapeError::UnknownArrayLength(ty));
-            };
-            let len = ArrayLength::from_const(self.db, *constant)
+            let len = ArrayLength::from_ty(self.db, ty.generic_args(self.db)[1])
                 .ok_or(ShapeError::UnknownArrayLength(ty))?;
             if len == ArrayLength::Known(0) {
                 ShapeChildren::EmptyArray

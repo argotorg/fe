@@ -1,0 +1,7 @@
+fn unused<const N: Missing = 1>() {}
+
+fn f<const N: Missing = 1>() {}
+
+fn use_default() {
+    f()
+}

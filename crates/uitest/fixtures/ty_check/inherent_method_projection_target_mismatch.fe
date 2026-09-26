@@ -1,0 +1,23 @@
+trait Output { type Item }
+impl Output for bool { type Item = u256 }
+
+struct Pair<A, B> {}
+impl<T: Output> Pair<T::Item, T> {
+    fn selected(self, _ item: T::Item) {}
+}
+
+fn wrong_target(pair: Pair<bool, bool>) {
+    pair.selected(true)
+}
+
+fn wrong_argument(pair: Pair<u256, bool>) {
+    pair.selected(true)
+}
+
+fn wrong_generic<T: Output<Item = u256>>(pair: Pair<bool, T>) {
+    pair.selected(true)
+}
+
+fn missing_bound<T>(pair: Pair<u256, T>) {
+    pair.selected(1)
+}

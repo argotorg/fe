@@ -16,9 +16,9 @@ use crate::{
         },
         semantic::{
             BlockedInfo, ConstDemandKind, ConstDependency, EvalFailure, EvalOutcome, FieldIndex,
-            PrimitiveFault, SConst, SExpr, SLocalId, SOperand, SPlace, SStmt, SStmtKind,
-            STerminatorKind, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody,
-            SemanticConstRef, VariantIndex, array_const, bool_const, bytes_const,
+            PrimitiveFault, RuntimeSizeError, SConst, SExpr, SLocalId, SOperand, SPlace, SStmt,
+            SStmtKind, STerminatorKind, SemConstId, SemConstScalar, SemConstValue, SemOrigin,
+            SemanticBody, SemanticConstRef, VariantIndex, array_const, bool_const, bytes_const,
             consts::instantiate_const_template, enum_const, execute_scalar_cast,
             execute_source_int_binary, execute_source_int_unary, int_const, int_in_range,
             int_ty_shape, normalize_int_to_shape, runtime_size_bytes, sem_const_eq,
@@ -32,7 +32,7 @@ use crate::{
             },
             normalize::normalize_ty,
             ty_check::{BodyOwner, LocalBinding, ParamSite},
-            ty_def::{PrimTy, TyBase, TyData, TyId},
+            ty_def::{InvalidCause, PrimTy, TyBase, TyData, TyId},
         },
     },
     core::hir_def::expr::LogicalBinOp,
@@ -219,12 +219,12 @@ fn eval_const_ref_cycle_recover<'db>(
 pub fn eval_body_owner_const<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
-    generic_args: Vec<crate::analysis::ty::ty_def::TyId<'db>>,
+    subst: GenericSubst<'db>,
 ) -> EvalOutcome<'db, SemConstId<'db>> {
     let key = SemanticInstanceKey::new(
         db,
         owner,
-        GenericSubst::new(db, generic_args),
+        subst,
         crate::analysis::semantic::EffectProviderSubst::empty(db),
         ImplEnv::empty(db, owner.scope()),
     );
@@ -234,7 +234,7 @@ pub fn eval_body_owner_const<'db>(
 fn eval_body_owner_const_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
-    _generic_args: Vec<crate::analysis::ty::ty_def::TyId<'db>>,
+    _subst: GenericSubst<'db>,
 ) -> EvalOutcome<'db, SemConstId<'db>> {
     EvalOutcome::Failed(EvalFailure::Ctfe(CtfeError::RecursiveConst {
         origin: SemOrigin::Body(owner),
@@ -246,7 +246,7 @@ fn eval_body_owner_const_cycle_recover<'db>(
     _value: &EvalOutcome<'db, SemConstId<'db>>,
     _count: u32,
     _owner: BodyOwner<'db>,
-    _generic_args: Vec<crate::analysis::ty::ty_def::TyId<'db>>,
+    _subst: GenericSubst<'db>,
 ) -> salsa::CycleRecoveryAction<EvalOutcome<'db, SemConstId<'db>>> {
     salsa::CycleRecoveryAction::Iterate
 }
@@ -255,13 +255,13 @@ fn eval_body_owner_const_cycle_recover<'db>(
 pub fn eval_body_owner_const_with_args<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
-    generic_args: Vec<crate::analysis::ty::ty_def::TyId<'db>>,
+    subst: GenericSubst<'db>,
     args: Vec<SemConstId<'db>>,
 ) -> EvalOutcome<'db, SemConstId<'db>> {
     let key = SemanticInstanceKey::new(
         db,
         owner,
-        GenericSubst::new(db, generic_args),
+        subst,
         crate::analysis::semantic::EffectProviderSubst::empty(db),
         ImplEnv::empty(db, owner.scope()),
     );
@@ -305,7 +305,7 @@ pub(super) fn execute_resolved_const_computation_with_steps<'db>(
 fn eval_body_owner_const_with_args_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
-    _generic_args: Vec<crate::analysis::ty::ty_def::TyId<'db>>,
+    _subst: GenericSubst<'db>,
     _args: Vec<SemConstId<'db>>,
 ) -> EvalOutcome<'db, SemConstId<'db>> {
     EvalOutcome::Failed(EvalFailure::Ctfe(CtfeError::RecursiveConst {
@@ -318,7 +318,7 @@ fn eval_body_owner_const_with_args_cycle_recover<'db>(
     _value: &EvalOutcome<'db, SemConstId<'db>>,
     _count: u32,
     _owner: BodyOwner<'db>,
-    _generic_args: Vec<crate::analysis::ty::ty_def::TyId<'db>>,
+    _subst: GenericSubst<'db>,
     _args: Vec<SemConstId<'db>>,
 ) -> salsa::CycleRecoveryAction<EvalOutcome<'db, SemConstId<'db>>> {
     salsa::CycleRecoveryAction::Iterate
@@ -2042,7 +2042,26 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 .assumptions(),
         );
         let size = runtime_size_bytes(self.db, ty)
-            .map_err(|_| CtfeError::ArithmeticOverflow { origin })?
+            .map_err(|error| match error {
+                RuntimeSizeError::Overflow => CtfeError::ArithmeticOverflow { origin },
+                RuntimeSizeError::UnavailableConcrete => CtfeError::InvalidOperation {
+                    origin,
+                    message: "concrete type size could not be determined".to_string(),
+                },
+                RuntimeSizeError::InvalidType(InvalidCause::ConstEvalDivisionByZero { .. }) => {
+                    CtfeError::DivisionByZero { origin }
+                }
+                RuntimeSizeError::InvalidType(InvalidCause::ConstEvalArithmeticOverflow {
+                    ..
+                }) => CtfeError::ArithmeticOverflow { origin },
+                RuntimeSizeError::InvalidType(InvalidCause::ConstEvalNegativeExponent {
+                    ..
+                }) => CtfeError::NegativeExponent { origin },
+                RuntimeSizeError::InvalidType(cause) => CtfeError::InvalidOperation {
+                    origin,
+                    message: cause.pretty_print(self.db),
+                },
+            })?
             .ok_or(CtfeError::NotConstEvaluable { origin })?;
         Ok(CtfeConstValue::int(self.db, result_ty, BigInt::from(size)))
     }

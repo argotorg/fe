@@ -45,7 +45,7 @@ fn pretty_print_ty_for_mismatch<'db>(db: &'db dyn SpannedHirAnalysisDb, ty: TyId
             format!(
                 "<{} as {}>::{}",
                 self_ty,
-                assoc_ty.trait_.pretty_print(db, false),
+                assoc_ty.trait_.as_predicate(db).pretty_print(db, false),
                 assoc_ty.name.data(db)
             )
         }
@@ -2217,6 +2217,11 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                         "contract-field layout is incomplete",
                         "this field contains an ADT or array application that cannot be projected completely",
                         "every layout-bearing application must have its full declared generic arity and every root-bearing array must have a known length",
+                    ),
+                    ContractFieldLayoutIssue::InconsistentArrayLength => (
+                        "contract-field array length is inconsistent",
+                        "this field's source expression and canonical type disagree on an array length",
+                        "a concrete array length must agree across source evaluation and canonical layout",
                     ),
                     ContractFieldLayoutIssue::AmbiguousBindingSelector => (
                         "layout-root selector is ambiguous",
@@ -5308,6 +5313,43 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                         SubDiagnostic {
                             style: LabelStyle::Secondary,
                             message: "trait requires this return type".to_string(),
+                            span: trait_m.name_span().resolve(db),
+                        },
+                    ],
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
+            Self::MethodEffectMismatch { trait_m, impl_m } => {
+                let trait_count = match trait_m {
+                    CallableDef::Func(func) => func.effect_requirements(db).len(),
+                    CallableDef::VariantCtor(_) => 0,
+                };
+                let impl_count = match impl_m {
+                    CallableDef::Func(func) => func.effect_requirements(db).len(),
+                    CallableDef::VariantCtor(_) => 0,
+                };
+                let detail = if trait_count == impl_count {
+                    "effect keys or mutability differ from the trait method".to_string()
+                } else {
+                    format!("expected {trait_count} effects, found {impl_count}")
+                };
+                CompleteDiagnostic {
+                    severity,
+                    message: format!(
+                        "method `{}` has incompatible effects",
+                        impl_m.name(db).expect("methods have names").data(db),
+                    ),
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: detail,
+                            span: impl_m.name_span().resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: "trait requires these effects".to_string(),
                             span: trait_m.name_span().resolve(db),
                         },
                     ],

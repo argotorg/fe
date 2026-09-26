@@ -370,13 +370,17 @@ fn runtime_abi_head_guard_matches_modern_solidity_signed_size_check(fixture: Fix
 
     assert!(
         output.lines().any(|line| {
-            line.contains("call %validate_runtime_head") && line.contains("4.i256 32.i256")
+            line.contains("call %")
+                && line.contains("validate_runtime_head")
+                && line.contains("4.i256 32.i256")
         }),
         "runtime decoder should validate its one-word head after the selector:\n{output}"
     );
     assert!(
         output.lines().any(|line| {
-            line.contains("call %validate_runtime_head") && line.contains("4.i256 0.i256")
+            line.contains("call %")
+                && line.contains("validate_runtime_head")
+                && line.contains("4.i256 0.i256")
         }),
         "zero-argument runtime decoder should retain its empty-head path:\n{output}"
     );

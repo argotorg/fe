@@ -9,8 +9,9 @@ use common::ingot::IngotKind;
 
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::{
-    adt_def::AdtRef,
-    ty_def::{PrimTy, TyBase, TyData, TyId},
+    adt_def::{AdtRef, ConcreteTypeView, instantiate_adt_field_for_concrete_demand},
+    const_ty::{ConcreteArrayLengthError, demand_concrete_array_length},
+    ty_def::{InvalidCause, PrimTy, TyBase, TyData, TyId},
 };
 
 /// The Solidity ABI type of a semantic Fe type.
@@ -35,23 +36,30 @@ pub struct AbiComponent {
 
 /// Why a semantic Fe type cannot be represented as a Solidity ABI type.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AbiTypeError {
+pub enum AbiTypeError<'db> {
     /// The type contains an invalid nominal recursion cycle.
     Recursive(String),
     /// The type has no supported Solidity ABI representation.
     Unsupported(String),
+    /// A concrete const in the ABI shape failed evaluation at its source.
+    InvalidConst {
+        cause: InvalidCause<'db>,
+        message: String,
+    },
 }
 
-impl AbiTypeError {
+impl AbiTypeError<'_> {
     fn unsupported(message: impl Into<String>) -> Self {
         Self::Unsupported(message.into())
     }
 }
 
-impl fmt::Display for AbiTypeError {
+impl fmt::Display for AbiTypeError<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Recursive(message) | Self::Unsupported(message) => message.fmt(f),
+            Self::Recursive(message)
+            | Self::Unsupported(message)
+            | Self::InvalidConst { message, .. } => message.fmt(f),
         }
     }
 }
@@ -98,9 +106,26 @@ fn canonical_tuple_type(component_descs: &[AbiTypeDesc]) -> String {
 pub fn semantic_ty_to_abi_desc<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
-) -> Result<AbiTypeDesc, AbiTypeError> {
+) -> Result<AbiTypeDesc, AbiTypeError<'db>> {
+    semantic_ty_to_abi_desc_with_source(db, ConcreteTypeView::identity(ty))
+}
+
+pub(crate) fn semantic_ty_to_abi_desc_with_source<'db>(
+    db: &'db dyn HirAnalysisDb,
+    view: ConcreteTypeView<'db>,
+) -> Result<AbiTypeDesc, AbiTypeError<'db>> {
+    let ConcreteTypeView {
+        canonical: ty,
+        source,
+    } = view;
     if let Some((_, inner)) = ty.as_capability(db) {
-        return semantic_ty_to_abi_desc(db, inner);
+        let source_inner = source
+            .as_capability(db)
+            .map(|(_, inner)| inner)
+            .ok_or_else(|| {
+                AbiTypeError::unsupported("ABI source and canonical capabilities differ")
+            })?;
+        return semantic_ty_to_abi_desc_with_source(db, ConcreteTypeView::new(inner, source_inner));
     }
 
     if ty == TyId::unit(db) {
@@ -111,9 +136,18 @@ pub fn semantic_ty_to_abi_desc<'db>(
 
     if ty.is_tuple(db) {
         let components = ty.field_types(db);
+        let source_components = source.field_types(db);
+        if !source.is_tuple(db) || components.len() != source_components.len() {
+            return Err(AbiTypeError::unsupported(
+                "ABI source and canonical tuple shapes differ",
+            ));
+        }
         let component_descs: Vec<_> = components
             .into_iter()
-            .map(|field_ty| semantic_ty_to_abi_desc(db, field_ty))
+            .zip(source_components)
+            .map(|(field_ty, source_ty)| {
+                semantic_ty_to_abi_desc_with_source(db, ConcreteTypeView::new(field_ty, source_ty))
+            })
             .collect::<Result<_, _>>()?;
         return Ok(AbiTypeDesc::tuple(
             component_descs
@@ -130,6 +164,12 @@ pub fn semantic_ty_to_abi_desc<'db>(
 
     if ty.is_array(db) {
         let (_, args) = ty.decompose_ty_app(db);
+        let (_, source_args) = source.decompose_ty_app(db);
+        if !source.is_array(db) || args.len() != source_args.len() {
+            return Err(AbiTypeError::unsupported(
+                "ABI source and canonical array shapes differ",
+            ));
+        }
         let elem_ty = args
             .first()
             .copied()
@@ -138,13 +178,20 @@ pub fn semantic_ty_to_abi_desc<'db>(
             .get(1)
             .copied()
             .ok_or_else(|| AbiTypeError::unsupported("array type is missing its length"))?;
-        let elem_desc = semantic_ty_to_abi_desc(db, elem_ty)?;
-        let len = array_len_to_string(db, len_ty)?;
+        let len = array_len_to_string(db, len_ty, source_args[1])?;
+        let elem_desc = semantic_ty_to_abi_desc_with_source(
+            db,
+            ConcreteTypeView::new(elem_ty, source_args[0]),
+        )?;
         return Ok(elem_desc.array(&len));
     }
 
     if let Some(elem_ty) = core_dyn_array_elem_ty(db, ty) {
-        let elem_desc = semantic_ty_to_abi_desc(db, elem_ty)?;
+        let source_elem = core_dyn_array_elem_ty(db, source).ok_or_else(|| {
+            AbiTypeError::unsupported("ABI source and canonical dynamic arrays differ")
+        })?;
+        let elem_desc =
+            semantic_ty_to_abi_desc_with_source(db, ConcreteTypeView::new(elem_ty, source_elem))?;
         return Ok(elem_desc.array(""));
     }
 
@@ -188,7 +235,7 @@ pub fn semantic_ty_to_abi_desc<'db>(
             if is_std_address_ty(db, ty, adt_ref) {
                 return Ok(AbiTypeDesc::simple("address"));
             }
-            if let Some(sol_type) = std_sol_compat_abi_type(db, ty, adt_ref) {
+            if let Some(sol_type) = std_sol_compat_abi_type(db, ty, source, adt_ref)? {
                 return Ok(AbiTypeDesc::simple(&sol_type));
             }
             match adt_ref {
@@ -199,27 +246,42 @@ pub fn semantic_ty_to_abi_desc<'db>(
                             ty.pretty_print(db)
                         )));
                     }
-                    let field_tys = ty.field_types(db);
+                    if source.adt_def(db) != Some(adt_ref.as_adt(db))
+                        || source.generic_args(db).len() != ty.generic_args(db).len()
+                    {
+                        return Err(AbiTypeError::unsupported(
+                            "ABI source and canonical struct shapes differ",
+                        ));
+                    }
+                    let field_count = adt_ref.as_adt(db).fields(db)[0].num_types();
                     let hir_fields = struct_.hir_fields(db).data(db);
-                    if hir_fields.len() != field_tys.len() {
+                    if hir_fields.len() != field_count {
                         return Err(AbiTypeError::unsupported(format!(
                             "field count mismatch: {} HIR fields vs {} semantic fields",
                             hir_fields.len(),
-                            field_tys.len()
+                            field_count
                         )));
                     }
                     let component_descs: Vec<(String, AbiTypeDesc)> = hir_fields
                         .iter()
-                        .zip(field_tys)
-                        .map(|(field, field_ty)| {
+                        .enumerate()
+                        .map(|(idx, field)| {
+                            let field_ty = instantiate_adt_field_for_concrete_demand(
+                                db,
+                                adt_ref.as_adt(db),
+                                0,
+                                idx,
+                                ty.generic_args(db),
+                                source.generic_args(db),
+                            );
                             let name = field
                                 .name
                                 .to_opt()
                                 .map(|ident| ident.data(db).to_string())
                                 .unwrap_or_default();
-                            Ok((name, semantic_ty_to_abi_desc(db, field_ty)?))
+                            Ok((name, semantic_ty_to_abi_desc_with_source(db, field_ty)?))
                         })
-                        .collect::<Result<_, AbiTypeError>>()?;
+                        .collect::<Result<_, AbiTypeError<'db>>>()?;
                     let canonical = canonical_tuple_type(
                         &component_descs
                             .iter()
@@ -255,19 +317,23 @@ pub fn semantic_ty_to_abi_desc<'db>(
     }
 }
 
-fn array_len_to_string(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Result<String, AbiTypeError> {
-    match ty.data(db) {
-        TyData::ConstTy(const_ty) => match const_ty.integer_value(db) {
-            Some(value) => Ok(value.to_string()),
-            None => Err(AbiTypeError::unsupported(format!(
+fn array_len_to_string<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    source: TyId<'db>,
+) -> Result<String, AbiTypeError<'db>> {
+    match demand_concrete_array_length(db, ty, source) {
+        Ok(Some(value)) => Ok(value.to_string()),
+        Err(ConcreteArrayLengthError::Invalid(cause)) => Err(AbiTypeError::InvalidConst {
+            message: cause.pretty_print(db).to_string(),
+            cause,
+        }),
+        Ok(None) | Err(ConcreteArrayLengthError::Mismatch) => {
+            Err(AbiTypeError::unsupported(format!(
                 "array length `{}` is not a concrete integer",
                 ty.pretty_print(db)
-            ))),
-        },
-        _ => Err(AbiTypeError::unsupported(format!(
-            "array length `{}` is not represented as a const type",
-            ty.pretty_print(db)
-        ))),
+            )))
+        }
     }
 }
 
@@ -352,61 +418,76 @@ pub(crate) fn is_dynamic_event_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool 
 
 /// Recognise `std::abi::sol` SolCompat wrapper types like `Uint160` / `Int24`
 /// and return their Solidity ABI type string (e.g. `"uint160"`, `"int24"`).
-fn std_sol_compat_abi_type(
-    db: &dyn HirAnalysisDb,
-    ty: TyId<'_>,
-    adt_ref: AdtRef<'_>,
-) -> Option<String> {
+fn std_sol_compat_abi_type<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    source: TyId<'db>,
+    adt_ref: AdtRef<'db>,
+) -> Result<Option<String>, AbiTypeError<'db>> {
     if !ty
         .ingot(db)
         .is_some_and(|ingot| ingot.kind(db) == IngotKind::Std)
     {
-        return None;
+        return Ok(None);
     }
-    let name = adt_ref.name(db)?.data(db).to_string();
+    let Some(name) = adt_ref.name(db) else {
+        return Ok(None);
+    };
+    let name = name.data(db).to_string();
 
     if name == "FixedBytes" {
         let (_, args) = ty.decompose_ty_app(db);
-        let len_ty = args.first().copied().or_else(|| args.get(1).copied())?;
-        let len = fixed_bytes_len_to_string(db, len_ty)?;
-        return Some(format!("bytes{len}"));
+        let source_args = source.generic_args(db);
+        let (Some(&len_ty), Some(&source_len)) = (
+            args.first().or_else(|| args.get(1)),
+            source_args.first().or_else(|| source_args.get(1)),
+        ) else {
+            return Ok(None);
+        };
+        let len = fixed_bytes_len_to_string(db, len_ty, source_len)?;
+        return Ok(len.map(|len| format!("bytes{len}")));
     }
 
     if let Some(rest) = name.strip_prefix("Bytes") {
-        let len: u16 = rest.parse().ok()?;
+        let Ok(len) = rest.parse::<u16>() else {
+            return Ok(None);
+        };
         if (1..=32).contains(&len) {
-            return Some(format!("bytes{len}"));
+            return Ok(Some(format!("bytes{len}")));
         }
-        return None;
+        return Ok(None);
     }
 
     // Match Uint{N} or Int{N} where N is a valid Solidity bit width (8..=256, multiple of 8)
     let (prefix, digits) = if let Some(rest) = name.strip_prefix("Uint") {
         ("uint", rest)
     } else {
-        let rest = name.strip_prefix("Int")?;
+        let Some(rest) = name.strip_prefix("Int") else {
+            return Ok(None);
+        };
         ("int", rest)
     };
 
-    let bits: u16 = digits.parse().ok()?;
+    let Ok(bits) = digits.parse::<u16>() else {
+        return Ok(None);
+    };
     if (8..=256).contains(&bits) && bits.is_multiple_of(8) {
-        Some(format!("{prefix}{bits}"))
+        Ok(Some(format!("{prefix}{bits}")))
     } else {
-        None
+        Ok(None)
     }
 }
 
-fn fixed_bytes_len_to_string(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<String> {
-    match ty.data(db) {
-        TyData::ConstTy(const_ty) => match const_ty.integer_value(db) {
-            Some(value) => {
-                let len = value.to_string().parse::<u16>().ok()?;
-                (1..=32).contains(&len).then(|| len.to_string())
-            }
-            _ => None,
-        },
-        _ => None,
-    }
+fn fixed_bytes_len_to_string<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    source: TyId<'db>,
+) -> Result<Option<String>, AbiTypeError<'db>> {
+    let len = array_len_to_string(db, ty, source)?;
+    let Ok(len) = len.parse::<u16>() else {
+        return Ok(None);
+    };
+    Ok((1..=32).contains(&len).then(|| len.to_string()))
 }
 
 /// A selector signature literal such as `transfer(address,uint256)`, split

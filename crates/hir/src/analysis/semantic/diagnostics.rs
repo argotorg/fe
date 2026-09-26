@@ -19,7 +19,7 @@ use crate::{
         },
         ty::ty_check::{BodyOwner, SmirLoweringIssue},
     },
-    hir_def::{Body, Partial},
+    hir_def::{Body, ExprId, Partial},
     span::LazySpan,
 };
 
@@ -214,6 +214,7 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
             SemanticDiagnosticKind::TransportViolation => 7,
             SemanticDiagnosticKind::StorageViolation => 8,
             SemanticDiagnosticKind::UnresolvedCall => 9,
+            SemanticDiagnosticKind::InvalidConcreteType => 10,
         };
         CompleteDiagnostic::new(
             Severity::Error,
@@ -275,6 +276,10 @@ impl SemanticDiagnosticKind {
                 "pending borrow validation in `fn {}`",
                 checker_name(db, instance)
             ),
+            Self::InvalidConcreteType => format!(
+                "invalid concrete type in `fn {}`",
+                checker_name(db, instance)
+            ),
         }
     }
 }
@@ -295,6 +300,7 @@ impl<'db> SemanticDiagnosticSpan<'db> {
             Self::LocalSourceOrBody { instance, local } => {
                 resolve_local_source_span(db, instance, local)
             }
+            Self::HirExpr { body, expr } => expr.span(body).resolve(db),
         }
     }
 }
@@ -396,6 +402,10 @@ pub enum SemanticDiagnosticSpan<'db> {
         instance: SemanticInstance<'db>,
         local: SLocalId,
     },
+    HirExpr {
+        body: Body<'db>,
+        expr: ExprId,
+    },
 }
 
 #[salsa::interned]
@@ -413,6 +423,7 @@ pub struct BlockedSemanticBody<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SemanticNormalizationFailure<'db> {
     Blocked(BlockedSemanticBody<'db>),
+    Rejected(SemanticDiagnostic<'db>),
     InternalFailure(SemanticDiagnostic<'db>),
 }
 
@@ -420,7 +431,7 @@ impl<'db> SemanticNormalizationFailure<'db> {
     pub fn diagnostic(&self) -> Option<&SemanticDiagnostic<'db>> {
         match self {
             Self::Blocked(_) => None,
-            Self::InternalFailure(diag) => Some(diag),
+            Self::Rejected(diag) | Self::InternalFailure(diag) => Some(diag),
         }
     }
 }
@@ -442,4 +453,5 @@ pub enum SemanticDiagnosticKind {
     StorageViolation,
     ProviderProvenanceConflict,
     UnresolvedCall,
+    InvalidConcreteType,
 }

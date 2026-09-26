@@ -1,0 +1,3 @@
+fn use_bad() -> u256 {
+    core::size_of<[u8; { 1 / 0 }]>()
+}

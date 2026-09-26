@@ -1,0 +1,39 @@
+fn dependent<const A: usize, const B: usize, const C: usize = B>(
+    _ value: [u8; C],
+) {}
+
+fn chained<const A: usize, const B: usize, const C: usize = B, const D: usize = C>(
+    _ value: [u8; D],
+) {}
+
+fn mixed<T, const N: usize, U = T, const M: usize = N>(_ value: [U; M]) {}
+
+struct Pair<const A: usize, const B: usize, const C: usize = B> {}
+
+type Alias<const A: usize, const B: usize, const C: usize = B> = Pair<A, B, C>
+
+fn take_pair<const A: usize, const B: usize>(_ value: Pair<A, B, B>) {}
+
+fn forward<const X: usize, const Y: usize, T>(
+    _ value: [u8; X],
+    _ mixed_value: [T; X],
+    _ pair: Pair<Y, X>,
+    _ alias: Alias<Y, X>,
+) {
+    dependent<Y, X>(value)
+    dependent<Y, X, X>(value)
+    chained<Y, X>(value)
+    mixed<T, X>(mixed_value)
+    take_pair<Y, X>(pair)
+    take_pair<Y, X>(alias)
+}
+
+struct Receiver<T, const N: usize> {}
+
+impl<T, const N: usize> Receiver<T, N> {
+    fn take<U = T, const M: usize = N>(self, _ value: [U; M]) {}
+}
+
+fn inherited<const N: usize, T>(receiver: Receiver<T, N>, _ value: [T; N]) {
+    receiver.take(value)
+}

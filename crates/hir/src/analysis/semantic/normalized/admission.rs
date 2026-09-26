@@ -34,6 +34,7 @@ pub struct AdmittedSemanticBodyId<'db> {
 pub enum SemanticBodyAdmission<'db> {
     Ready(AdmittedSemanticBodyId<'db>),
     Blocked(BlockedSemanticBody<'db>),
+    Rejected(SemanticDiagnosticId<'db>),
     InternalFailure(SemanticDiagnosticId<'db>),
 }
 
@@ -70,6 +71,9 @@ fn artifacts_from_admission<'db>(
         SemanticBodyAdmission::Blocked(blocked) => {
             Err(SemanticNormalizationFailure::Blocked(blocked))
         }
+        SemanticBodyAdmission::Rejected(diag) => Err(SemanticNormalizationFailure::Rejected(
+            diag.diag(db).clone(),
+        )),
         SemanticBodyAdmission::InternalFailure(diag) => Err(
             SemanticNormalizationFailure::InternalFailure(diag.diag(db).clone()),
         ),
@@ -153,6 +157,9 @@ fn admission_failure<'db>(
         }
         SemanticBodyAdmissionError::CallSiteFinalization(diag) => {
             SemanticBodyAdmission::InternalFailure(diag)
+        }
+        SemanticBodyAdmissionError::InvalidConcreteType(diag) => {
+            SemanticBodyAdmission::Rejected(diag)
         }
     }
 }

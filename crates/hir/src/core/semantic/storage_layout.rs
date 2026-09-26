@@ -7,20 +7,24 @@ use salsa::Update;
 use crate::{
     analysis::{
         HirAnalysisDb,
-        semantic::int_const,
+        semantic::{RuntimeSizeError, int_const, runtime_size_bytes_with_source},
         ty::{
             ProviderAddressSpace,
-            adt_def::{AdtDef, AdtRef, instantiate_adt_field_layout, instantiate_adt_field_shape},
+            adt_def::{
+                AdtDef, AdtRef, ConcreteTypeView, instantiate_adt_field_layout,
+                instantiate_adt_field_shape, instantiate_adt_field_source_for_concrete_demand,
+            },
             binder::Binder,
             const_ty::{
-                ConstCanonEnv, ConstCanonMode, ConstTyData, ConstTyId, HoleAnchor, HoleMinter,
-                LayoutBoundaryIdentity, LayoutInstantiationContext, LayoutInstantiationId,
-                LayoutOccurrenceStep, LayoutRootId, StructuralHoleOrigin, canonicalize_ty_for_mode,
-                const_ty_from_sem_const,
+                ConcreteArrayLengthError, ConstCanonEnv, ConstCanonMode, ConstTyData, ConstTyId,
+                HoleAnchor, LayoutBoundaryIdentity, LayoutInstantiationContext,
+                LayoutInstantiationId, LayoutOccurrenceStep, LayoutRootId, LoweringContext,
+                StructuralHoleOrigin, canonicalize_ty_for_mode, const_ty_from_sem_const,
+                demand_concrete_array_length,
             },
             layout_holes::{
-                LayoutIndexDimension, LayoutInstantiation, LayoutViewRecurrence,
-                classify_layout_view_recurrence, instantiate_layout_template,
+                LayoutIndexDimension, LayoutInstantiation, LayoutTemplateSubst,
+                LayoutViewRecurrence, classify_layout_view_recurrence, instantiate_layout_template,
                 layout_hole_fallback_ty, layout_root_descends_from, layout_root_id,
                 layout_root_lineage, layout_shape_key, rewrite_structural_holes,
                 structural_hole_id,
@@ -30,10 +34,13 @@ use crate::{
                 ProviderLayoutFailure, ProviderLayoutResolution, StaticSlotLayoutResolution,
                 resolve_effect_handle_layout, resolve_static_slot_layout,
             },
-            trait_def::{ImplementorId, ResolvedImplInstance},
+            trait_def::{ImplementorId, ImplementorOrigin, ResolvedImplInstance},
             trait_resolution::PredicateListId,
             ty_def::{PrimTy, TyBase, TyData, TyId},
-            ty_lower::{lower_layout_root_uses_in_hir_ty, lower_opt_hir_ty},
+            ty_lower::{
+                CompleteSubst, ParamBasis, ParamDomainId, ParamSchemaId,
+                lower_layout_root_uses_in_hir_ty, lower_opt_hir_ty,
+            },
         },
     },
     hir_def::{Contract, EnumVariant, FieldParent, IdentId, IntegerId, VariantKind},
@@ -568,6 +575,8 @@ pub enum AssignedRootValue<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum ContractLayoutError<'db> {
     InvalidFieldType,
+    InvalidConcreteArrayLength { invalid: TyId<'db> },
+    InconsistentConcreteArrayLength { array: TyId<'db> },
     ExplicitContractLayoutHole { placeholder: TyId<'db> },
     NonSlotContractLayoutHole { placeholder: TyId<'db> },
     UnresolvedConcreteLayoutRoot { value: TyId<'db> },
@@ -593,6 +602,10 @@ impl ContractLayoutError<'_> {
     pub fn summary(&self) -> &'static str {
         match self {
             Self::InvalidFieldType => "field type is invalid",
+            Self::InvalidConcreteArrayLength { .. } => "array length const evaluation failed",
+            Self::InconsistentConcreteArrayLength { .. } => {
+                "canonical and source array lengths disagree"
+            }
             Self::ExplicitContractLayoutHole { .. } => {
                 "explicit `_` const arguments are not layout roots"
             }
@@ -1279,10 +1292,10 @@ fn slot_const_ty<'db>(db: &'db dyn HirAnalysisDb, value: usize, ty: TyId<'db>) -
 }
 
 fn const_ty_to_usize<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<usize> {
-    let TyData::ConstTy(const_ty) = ty.data(db) else {
-        return None;
-    };
-    const_ty.integer_value(db)?.to_usize()
+    demand_concrete_array_length(db, ty, ty)
+        .ok()
+        .flatten()
+        .and_then(|int| int.to_usize())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1398,11 +1411,27 @@ fn instantiate_provider_target_layout<'db>(
     target_template: TyId<'db>,
 ) -> Result<LayoutInstantiation<'db>, ContractLayoutError<'db>> {
     let boundary = LayoutBoundaryIdentity::ProviderTarget(impl_instance.selected());
+    let schema = match impl_instance.selected().origin(db) {
+        ImplementorOrigin::Hir(impl_trait) => Some(ParamSchemaId::full(db, impl_trait.into())),
+        ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => None,
+    };
+    if schema.is_none() && !impl_instance.impl_args(db).is_empty() {
+        return Err(ContractLayoutError::InternalLayoutGraph);
+    }
+    let subst = schema
+        .map(|schema| {
+            CompleteSubst::new(
+                ParamDomainId::full(db, schema),
+                db,
+                impl_instance.impl_args(db).to_vec(),
+            )
+        })
+        .transpose()
+        .map_err(|_| ContractLayoutError::InternalLayoutGraph)?;
     let target = instantiate_layout_template(
         db,
         target_template,
-        impl_instance.impl_params(db),
-        impl_instance.impl_args(db),
+        subst.map(|mapping| LayoutTemplateSubst::new(ParamBasis::Full, mapping)),
         LayoutInstantiationContext::Nested(parent_instance),
         boundary,
         vec![LayoutOccurrenceStep::Instantiation(0)],
@@ -1415,15 +1444,16 @@ fn instantiate_provider_target_layout<'db>(
     let mut target = instantiate_layout_template(
         db,
         normalized,
-        &[],
-        &[],
+        None,
         LayoutInstantiationContext::Nested(target.instance),
         boundary,
         vec![LayoutOccurrenceStep::Normalization],
     );
     let target_ident = IdentId::new(db, "Target".to_string());
     for root_use in impl_instance.assoc_ty_layout_root_uses(db, target_ident) {
-        let value = Binder::bind(root_use.value).instantiate(db, impl_instance.impl_args(db));
+        let Some(schema) = schema else { continue };
+        let value = Binder::bind(schema.owner(db), root_use.value)
+            .instantiate(db, impl_instance.impl_args(db));
         if layout_root_id(db, value).is_some() {
             continue;
         }
@@ -1432,7 +1462,8 @@ fn instantiate_provider_target_layout<'db>(
             owner: root_use.owner.map(|owner| {
                 normalize_ty(
                     db,
-                    Binder::bind(owner).instantiate(db, impl_instance.impl_args(db)),
+                    Binder::bind(schema.owner(db), owner)
+                        .instantiate(db, impl_instance.impl_args(db)),
                     scope,
                     assumptions,
                 )
@@ -1506,11 +1537,22 @@ impl<'db> FieldCollector<'db> {
         if self.errors.contains(&error) {
             return;
         }
-        if matches!(error, ContractLayoutError::NonRegularProviderCycle) {
-            self.errors.insert(0, error);
-        } else {
-            self.errors.push(error);
-        }
+        let position = match &error {
+            ContractLayoutError::NonRegularProviderCycle => 0,
+            ContractLayoutError::InvalidConcreteArrayLength { .. } => self
+                .errors
+                .iter()
+                .position(|prior| {
+                    !matches!(
+                        prior,
+                        ContractLayoutError::NonRegularProviderCycle
+                            | ContractLayoutError::InvalidConcreteArrayLength { .. }
+                    )
+                })
+                .unwrap_or(self.errors.len()),
+            _ => self.errors.len(),
+        };
+        self.errors.insert(position, error);
     }
 
     fn concrete_owner(&self, root: LayoutRootId<'db>) -> Option<TyId<'db>> {
@@ -1724,13 +1766,14 @@ impl<'db> FieldCollector<'db> {
     fn walk_instantiation(
         &mut self,
         instantiation: &LayoutInstantiation<'db>,
+        source: TyId<'db>,
         place: StoragePlace<'db>,
         dimensions: &[LayoutIndexDimension<'db>],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
         let reached_start = self.reached_concrete_sites.len();
         let output = self.walk_ty(
-            instantiation.ty,
+            ConcreteTypeView::new(instantiation.ty, source),
             instantiation.instance,
             place,
             dimensions,
@@ -1757,7 +1800,7 @@ impl<'db> FieldCollector<'db> {
         });
         let output = if self.visiting.insert((instantiation.ty, place.clone())) {
             let output = self.walk_ty_representation(
-                instantiation.ty,
+                ConcreteTypeView::new(instantiation.ty, instantiation.ty),
                 instantiation.instance,
                 place.clone(),
                 dimensions,
@@ -1790,12 +1833,13 @@ impl<'db> FieldCollector<'db> {
 
     fn walk_ty(
         &mut self,
-        ty: TyId<'db>,
+        views: ConcreteTypeView<'db>,
         parent_instance: LayoutInstantiationId<'db>,
         place: StoragePlace<'db>,
         dimensions: &[LayoutIndexDimension<'db>],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
+        let ty = views.canonical;
         if let Some(event) =
             self.emit_root(ty, place.clone(), place.steps.clone(), dimensions, mode)
         {
@@ -1825,7 +1869,7 @@ impl<'db> FieldCollector<'db> {
                 target_template,
                 space,
             }) => self.walk_embedded_provider(
-                ty,
+                views,
                 parent_instance,
                 place.clone(),
                 dimensions,
@@ -1841,7 +1885,7 @@ impl<'db> FieldCollector<'db> {
                 WalkOutput::empty()
             }
             Some(ProviderLayoutResolution::NotHandle) | None => {
-                self.walk_ty_representation(ty, parent_instance, place.clone(), dimensions, mode)
+                self.walk_ty_representation(views, parent_instance, place.clone(), dimensions, mode)
             }
         };
         self.visiting.remove(&(ty, place));
@@ -1850,50 +1894,76 @@ impl<'db> FieldCollector<'db> {
 
     fn walk_ty_representation(
         &mut self,
-        ty: TyId<'db>,
+        views: ConcreteTypeView<'db>,
         parent_instance: LayoutInstantiationId<'db>,
         place: StoragePlace<'db>,
         dimensions: &[LayoutIndexDimension<'db>],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
-        if let Some((_, inner)) = ty.as_capability(self.db) {
+        let ConcreteTypeView {
+            canonical: ty,
+            source,
+        } = views;
+        if let Some((kind, inner)) = ty.as_capability(self.db) {
+            let Some((source_kind, source_inner)) = source.as_capability(self.db) else {
+                self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
+                return WalkOutput::empty();
+            };
+            if kind != source_kind {
+                self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
+                return WalkOutput::empty();
+            }
             self.walk_ty(
-                inner,
+                ConcreteTypeView::new(inner, source_inner),
                 parent_instance,
                 place.with_step(PlaceStep::TransparentInner),
                 dimensions,
                 mode,
             )
         } else if let TyData::ConstTy(const_ty) = ty.data(self.db) {
+            let TyData::ConstTy(source_const_ty) = source.data(self.db) else {
+                self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
+                return WalkOutput::empty();
+            };
             self.walk_ty(
-                const_ty.ty(self.db),
+                ConcreteTypeView::new(const_ty.ty(self.db), source_const_ty.ty(self.db)),
                 parent_instance,
                 place.clone(),
                 dimensions,
                 mode,
             )
         } else if ty.is_tuple(self.db) {
+            if !source.is_tuple(self.db) {
+                self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
+                return WalkOutput::empty();
+            }
+            let source_fields = source.field_types(self.db);
+            let fields = ty.field_types(self.db);
+            if fields.len() != source_fields.len() {
+                self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
+                return WalkOutput::empty();
+            }
             self.walk_sequence(
-                ty.field_types(self.db)
-                    .into_iter()
-                    .enumerate()
-                    .map(|(idx, elem)| {
+                fields.into_iter().zip(source_fields).enumerate().map(
+                    |(idx, (elem, source_elem))| {
                         (
                             LayoutInstantiation {
                                 ty: elem,
                                 root_uses: Vec::new(),
                                 instance: parent_instance,
                             },
+                            source_elem,
                             place.with_step(PlaceStep::TupleElem(idx as u32)),
                         )
-                    }),
+                    },
+                ),
                 dimensions,
                 mode,
             )
         } else if ty.is_array(self.db) {
-            self.walk_array(ty, parent_instance, place.clone(), dimensions, mode)
+            self.walk_array(views, parent_instance, place.clone(), dimensions, mode)
         } else if let Some(adt) = ty.adt_def(self.db) {
-            self.walk_adt(ty, adt, parent_instance, place.clone(), dimensions, mode)
+            self.walk_adt(views, adt, parent_instance, place.clone(), dimensions, mode)
         } else {
             let inline_span = if ty.is_never(self.db)
                 || ty.is_zero_sized(self.db)
@@ -1915,13 +1985,14 @@ impl<'db> FieldCollector<'db> {
 
     fn walk_embedded_provider(
         &mut self,
-        ty: TyId<'db>,
+        views: ConcreteTypeView<'db>,
         parent_instance: LayoutInstantiationId<'db>,
         place: StoragePlace<'db>,
         dimensions: &[LayoutIndexDimension<'db>],
         mode: WalkMode,
         target_edge: ProviderTargetEdge<'db>,
     ) -> WalkOutput<'db> {
+        let ty = views.canonical;
         match classify_layout_view_recurrence(
             self.db,
             ty,
@@ -1933,11 +2004,23 @@ impl<'db> FieldCollector<'db> {
                 .map(|(idx, frame)| (idx, frame.ty, frame.implementation)),
         ) {
             LayoutViewRecurrence::BackEdge { .. } => {
-                return self.walk_ty_representation(ty, parent_instance, place, dimensions, mode);
+                return self.walk_ty_representation(
+                    views,
+                    parent_instance,
+                    place,
+                    dimensions,
+                    mode,
+                );
             }
             LayoutViewRecurrence::NonRegular { .. } => {
                 self.push_error(ContractLayoutError::NonRegularProviderCycle);
-                return self.walk_ty_representation(ty, parent_instance, place, dimensions, mode);
+                return self.walk_ty_representation(
+                    views,
+                    parent_instance,
+                    place,
+                    dimensions,
+                    mode,
+                );
             }
             LayoutViewRecurrence::Expand => {}
         }
@@ -1948,7 +2031,7 @@ impl<'db> FieldCollector<'db> {
 
         let declared_start = self.occurrences.len();
         let mut output =
-            self.walk_ty_representation(ty, parent_instance, place.clone(), dimensions, mode);
+            self.walk_ty_representation(views, parent_instance, place.clone(), dimensions, mode);
         let target = match instantiate_provider_target_layout(
             self.db,
             self.scope,
@@ -1969,6 +2052,7 @@ impl<'db> FieldCollector<'db> {
         self.active_space = target_edge.space;
         let target_output = self.walk_instantiation(
             &target,
+            target.ty,
             place.with_step(PlaceStep::ProviderTarget),
             dimensions,
             mode,
@@ -2001,15 +2085,16 @@ impl<'db> FieldCollector<'db> {
 
     fn walk_sequence(
         &mut self,
-        items: impl IntoIterator<Item = (LayoutInstantiation<'db>, StoragePlace<'db>)>,
+        items: impl IntoIterator<Item = (LayoutInstantiation<'db>, TyId<'db>, StoragePlace<'db>)>,
         dimensions: &[LayoutIndexDimension<'db>],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
         let mut inline_span = 0usize;
         let mut inline_leaves = Vec::new();
         let mut events = Vec::new();
-        for (instantiation, place) in items {
-            let mut output = self.walk_instantiation(&instantiation, place, dimensions, mode);
+        for (instantiation, source, place) in items {
+            let mut output =
+                self.walk_instantiation(&instantiation, source, place, dimensions, mode);
             let Some(next) = inline_span.checked_add(output.inline_span) else {
                 self.push_error(ContractLayoutError::LayoutExtentOverflow);
                 continue;
@@ -2034,22 +2119,50 @@ impl<'db> FieldCollector<'db> {
 
     fn walk_array(
         &mut self,
-        ty: TyId<'db>,
+        views: ConcreteTypeView<'db>,
         parent_instance: LayoutInstantiationId<'db>,
         place: StoragePlace<'db>,
         dimensions: &[LayoutIndexDimension<'db>],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
+        let ConcreteTypeView {
+            canonical: ty,
+            source,
+        } = views;
         let (_, args) = ty.decompose_ty_app(self.db);
-        let Some(&element) = args.first() else {
+        let (_, source_args) = source.decompose_ty_app(self.db);
+        if !source.is_array(self.db) || args.len() != 2 || source_args.len() != 2 {
             self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
             return WalkOutput::empty();
+        }
+        let element = args[0];
+        let source_element = source_args[0];
+        let len = match demand_concrete_array_length(self.db, args[1], source_args[1]) {
+            Ok(Some(len)) => len.to_usize(),
+            Ok(None) => None,
+            Err(ConcreteArrayLengthError::Invalid(cause)) => {
+                self.push_error(ContractLayoutError::InvalidConcreteArrayLength {
+                    invalid: TyId::invalid(self.db, cause),
+                });
+                return WalkOutput::empty();
+            }
+            Err(ConcreteArrayLengthError::Mismatch) => {
+                self.push_error(ContractLayoutError::InconsistentConcreteArrayLength { array: ty });
+                return WalkOutput::empty();
+            }
         };
-        let Some(len) = args
-            .get(1)
-            .copied()
-            .and_then(|len| const_ty_to_usize(self.db, len))
-        else {
+        if (len.is_none() || len == Some(0))
+            && let Err(RuntimeSizeError::InvalidType(cause)) = runtime_size_bytes_with_source(
+                self.db,
+                ConcreteTypeView::new(element, source_element),
+            )
+        {
+            self.push_error(ContractLayoutError::InvalidConcreteArrayLength {
+                invalid: TyId::invalid(self.db, cause),
+            });
+            return WalkOutput::empty();
+        }
+        let Some(len) = len else {
             if contains_layout_roots(self.db, element) {
                 self.push_error(ContractLayoutError::UnknownArrayLengthWithLayoutRoots {
                     array: ty,
@@ -2065,8 +2178,7 @@ impl<'db> FieldCollector<'db> {
         let element = instantiate_layout_template(
             self.db,
             element,
-            &[],
-            &[],
+            None,
             LayoutInstantiationContext::Nested(parent_instance),
             LayoutBoundaryIdentity::ArrayElement,
             vec![LayoutOccurrenceStep::ArrayDimension(dimensions.len() as u32)],
@@ -2077,7 +2189,7 @@ impl<'db> FieldCollector<'db> {
             len,
         });
         let mut output = self.walk_ty(
-            element.ty,
+            ConcreteTypeView::new(element.ty, source_element),
             element.instance,
             place.with_step(PlaceStep::ArrayElem(0)),
             &element_dimensions,
@@ -2103,19 +2215,27 @@ impl<'db> FieldCollector<'db> {
 
     fn walk_adt(
         &mut self,
-        ty: TyId<'db>,
+        views: ConcreteTypeView<'db>,
         adt: AdtDef<'db>,
         parent_instance: LayoutInstantiationId<'db>,
         place: StoragePlace<'db>,
         dimensions: &[LayoutIndexDimension<'db>],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
+        let ConcreteTypeView {
+            canonical: ty,
+            source,
+        } = views;
         if adt.recursive_cycle(self.db).is_some() {
             self.push_error(ContractLayoutError::InvalidFieldType);
             return WalkOutput::empty();
         }
         let args = ty.generic_args(self.db);
-        if args.len() != adt.params(self.db).len() {
+        let source_args = source.generic_args(self.db);
+        if source.adt_def(self.db) != Some(adt)
+            || args.len() != adt.params(self.db).len()
+            || source_args.len() != args.len()
+        {
             self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
             return WalkOutput::empty();
         }
@@ -2179,8 +2299,15 @@ impl<'db> FieldCollector<'db> {
                         parent_instance,
                         vec![LayoutOccurrenceStep::StructField(field_idx as u32)],
                     );
+                    let source_field = instantiate_adt_field_source_for_concrete_demand(
+                        self.db,
+                        adt,
+                        0,
+                        field_idx,
+                        source_args,
+                    );
                     let field_place = place.with_step(PlaceStep::StructField(field_idx as u32));
-                    items.push((inst, field_place));
+                    items.push((inst, source_field, field_place));
                 }
                 let mut output = self.walk_sequence(items, dimensions, mode);
                 direct_events.append(&mut output.events);
@@ -2214,9 +2341,16 @@ impl<'db> FieldCollector<'db> {
                                 LayoutOccurrenceStep::EnumPayloadField(field_idx as u32),
                             ],
                         );
+                        let source_field = instantiate_adt_field_source_for_concrete_demand(
+                            self.db,
+                            adt,
+                            variant_idx,
+                            field_idx,
+                            source_args,
+                        );
                         let field_place =
                             variant_place.with_step(PlaceStep::EnumPayloadField(field_idx as u32));
-                        items.push((inst, field_place));
+                        items.push((inst, source_field, field_place));
                     }
                     let mut output = self.walk_sequence(items, dimensions, mode);
                     max_payload = max_payload.max(output.inline_span);
@@ -3075,8 +3209,7 @@ fn collect_field_plan<'db>(
     let mut declared = instantiate_layout_template(
         db,
         lowered,
-        &[],
-        &[],
+        None,
         LayoutInstantiationContext::Lowering(HoleAnchor::TemplateTy {
             ty: hir_ty,
             scope,
@@ -3088,7 +3221,7 @@ fn collect_field_plan<'db>(
         },
         vec![LayoutOccurrenceStep::Instantiation(0)],
     );
-    let minter = HoleMinter::new(HoleAnchor::TemplateTy {
+    let minter = LoweringContext::new(HoleAnchor::TemplateTy {
         ty: hir_ty,
         scope,
         assumptions,
@@ -3139,8 +3272,13 @@ fn collect_field_plan<'db>(
     } else {
         root_place.clone()
     };
-    let counted =
-        collector.walk_instantiation(&target, basis_place.clone(), &[], WalkMode::Counted);
+    let counted = collector.walk_instantiation(
+        &target,
+        target.ty,
+        basis_place.clone(),
+        &[],
+        WalkMode::Counted,
+    );
     let materialize = if is_provider {
         collector.walk_provider_wrapper_instantiation(
             &declared,

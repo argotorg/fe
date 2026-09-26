@@ -3,6 +3,7 @@ use hir::{
         semantic::SemanticInstance,
         ty::{
             ProviderAddressSpace, ProviderKind,
+            const_ty::{ConcreteArrayLengthError, demand_concrete_array_length},
             normalize::normalize_ty,
             provider::{ProviderLayoutEvidence, provider_semantics},
             trait_def::ResolvedImplInstance,
@@ -14,12 +15,15 @@ use hir::{
     },
     hir_def::scope_graph::ScopeId,
 };
+use num_traits::ToPrimitive;
+use rustc_hash::FxHashSet;
 use salsa::Update;
 
 use crate::{
     db::MirDb,
     runtime::{
-        AddressSpaceKind, RefKind, RefView, RuntimeClass, ScalarClass, ScalarRepr, ScalarRole,
+        AddressSpaceKind, LowerError, RefKind, RefView, RuntimeClass, ScalarClass, ScalarRepr,
+        ScalarRole,
     },
 };
 
@@ -207,6 +211,91 @@ pub(crate) fn runtime_repr_ty_in_env<'db>(
     runtime_storage_ty_in_env(db, env, ty)
 }
 
+/// Concrete runtime layout demand. Symbolic type checking uses the literal-only
+/// `TyId::array_len` accessor; runtime lowering must also reduce specialized
+/// abstract const expressions before interpreting an array's representation.
+pub(crate) fn runtime_array_len<'db>(
+    db: &'db dyn MirDb,
+    ty: TyId<'db>,
+) -> Result<Option<usize>, LowerError> {
+    if !ty.is_array(db) {
+        return Ok(None);
+    }
+    let (_, args) = ty.decompose_ty_app(db);
+    let Some(&len) = args.get(1) else {
+        return Ok(None);
+    };
+    demand_concrete_array_length(db, len, len)
+        .map_err(|error| {
+            let reason = match error {
+                ConcreteArrayLengthError::Invalid(cause) => cause.pretty_print(db).to_string(),
+                ConcreteArrayLengthError::Mismatch => {
+                    "canonical and source array lengths disagree".to_string()
+                }
+            };
+            LowerError::Unsupported(format!(
+                "invalid runtime array length in `{}`: {reason}",
+                ty.pretty_print(db)
+            ))
+        })?
+        .map(|length| {
+            length.to_usize().ok_or_else(|| {
+                LowerError::Unsupported(format!(
+                    "array length in `{}` exceeds the supported runtime layout range",
+                    ty.pretty_print(db)
+                ))
+            })
+        })
+        .transpose()
+}
+
+pub(crate) fn validate_runtime_array_extents_in_env<'db>(
+    db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
+    ty: TyId<'db>,
+) -> Result<(), LowerError> {
+    fn visit<'db>(
+        db: &'db dyn MirDb,
+        env: RuntimeTypeEnv<'db>,
+        ty: TyId<'db>,
+        seen: &mut FxHashSet<TyId<'db>>,
+    ) -> Result<(), LowerError> {
+        let ty = runtime_repr_ty_in_env(db, env, ty);
+        if !seen.insert(ty) {
+            return Ok(());
+        }
+        if ty.is_array(db) {
+            runtime_array_len(db, ty)?.ok_or_else(|| {
+                LowerError::Unsupported(format!(
+                    "array length in `{}` is not concrete for runtime layout",
+                    ty.pretty_print(db)
+                ))
+            })?;
+            if let Some(elem) = ty.generic_args(db).first().copied() {
+                visit(db, env, elem, seen)?;
+            }
+        } else if let Some((_, inner)) = ty.as_borrow(db) {
+            visit(db, env, inner, seen)?;
+        } else if let Some((_, inner)) = ty.as_capability(db) {
+            visit(db, env, inner, seen)?;
+        } else if ty.is_tuple(db) || ty.is_struct(db) {
+            for field in ty.field_types(db) {
+                visit(db, env, field, seen)?;
+            }
+        } else if let Some(enum_) = ty.as_enum(db) {
+            let args = ty.generic_args(db);
+            for variant in enum_.variants(db) {
+                for field in variant.field_tys(db) {
+                    visit(db, env, field.instantiate(db, args), seen)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    visit(db, env, ty, &mut FxHashSet::default())
+}
+
 #[salsa::tracked]
 fn runtime_interface_ty<'db>(
     db: &'db dyn MirDb,
@@ -271,13 +360,16 @@ pub(super) fn runtime_zero_sized_ty<'db>(
     }
     if repr_ty.is_array(db) {
         let (_, args) = repr_ty.decompose_ty_app(db);
-        return repr_ty.array_len(db).is_some_and(|len| {
-            len == 0
-                || args
-                    .first()
-                    .copied()
-                    .is_some_and(|elem| runtime_zero_sized_ty(db, elem, scope, assumptions))
-        });
+        return runtime_array_len(db, repr_ty)
+            .ok()
+            .flatten()
+            .is_some_and(|len| {
+                len == 0
+                    || args
+                        .first()
+                        .copied()
+                        .is_some_and(|elem| runtime_zero_sized_ty(db, elem, scope, assumptions))
+            });
     }
     if repr_ty.is_tuple(db) || repr_ty.is_struct(db) {
         return repr_ty

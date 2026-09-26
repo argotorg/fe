@@ -83,6 +83,9 @@ pub fn contract_init_assigned_fields<'db>(
         AssignedTargetsResult::Blocked(blocked) => {
             Err(SemanticNormalizationFailure::Blocked(blocked.clone()))
         }
+        AssignedTargetsResult::Rejected(diag) => Err(SemanticNormalizationFailure::Rejected(
+            diag.diag(db).clone(),
+        )),
         AssignedTargetsResult::InternalFailure(diag) => Err(
             SemanticNormalizationFailure::InternalFailure(diag.diag(db).clone()),
         ),
@@ -96,12 +99,14 @@ pub fn contract_init_assigned_fields<'db>(
 enum AssignedTargetsResult<'db> {
     Ready(Option<Vec<AssignedTarget<'db>>>),
     Blocked(BlockedSemanticBody<'db>),
+    Rejected(SemanticDiagnosticId<'db>),
     InternalFailure(SemanticDiagnosticId<'db>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum AssignedTargetsFailure<'db> {
     Blocked(BlockedSemanticBody<'db>),
+    Rejected(SemanticDiagnosticId<'db>),
     InternalFailure(SemanticDiagnosticId<'db>),
 }
 
@@ -117,6 +122,7 @@ fn instance_assigned_targets<'db>(
     let body = match semantic_body_admission(db, instance) {
         SemanticBodyAdmission::Ready(body) => body.body(db).clone(),
         SemanticBodyAdmission::Blocked(blocked) => return AssignedTargetsResult::Blocked(blocked),
+        SemanticBodyAdmission::Rejected(diag) => return AssignedTargetsResult::Rejected(diag),
         SemanticBodyAdmission::InternalFailure(diag) => {
             return AssignedTargetsResult::InternalFailure(diag);
         }
@@ -130,6 +136,9 @@ fn instance_assigned_targets<'db>(
         Ok(states) => states,
         Err(AssignedTargetsFailure::Blocked(blocked)) => {
             return AssignedTargetsResult::Blocked(blocked);
+        }
+        Err(AssignedTargetsFailure::Rejected(diag)) => {
+            return AssignedTargetsResult::Rejected(diag);
         }
         Err(AssignedTargetsFailure::InternalFailure(diag)) => {
             return AssignedTargetsResult::InternalFailure(diag);
@@ -146,6 +155,9 @@ fn instance_assigned_targets<'db>(
                 Ok(state) => exit_states.push(state),
                 Err(AssignedTargetsFailure::Blocked(blocked)) => {
                     return AssignedTargetsResult::Blocked(blocked);
+                }
+                Err(AssignedTargetsFailure::Rejected(diag)) => {
+                    return AssignedTargetsResult::Rejected(diag);
                 }
                 Err(AssignedTargetsFailure::InternalFailure(diag)) => {
                     return AssignedTargetsResult::InternalFailure(diag);
@@ -359,6 +371,9 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
             AssignedTargetsResult::Ready(None) => return Ok(()),
             AssignedTargetsResult::Blocked(blocked) => {
                 return Err(AssignedTargetsFailure::Blocked(blocked.clone()));
+            }
+            AssignedTargetsResult::Rejected(diag) => {
+                return Err(AssignedTargetsFailure::Rejected(*diag));
             }
             AssignedTargetsResult::InternalFailure(diag) => {
                 return Err(AssignedTargetsFailure::InternalFailure(*diag));

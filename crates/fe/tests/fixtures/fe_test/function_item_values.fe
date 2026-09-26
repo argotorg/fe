@@ -1,0 +1,79 @@
+trait Read {
+    type Output
+    fn read(number: Self) -> Self::Output
+    fn default_read(number: Self) -> Self::Output { Self::read(number) }
+}
+
+trait Convert<T> {
+    fn convert(number: Self) -> T
+}
+
+struct Number { value: u256 }
+
+impl Read for Number {
+    type Output = u256
+    fn read(number: Number) -> u256 { number.value }
+}
+
+impl Convert<u256> for Number {
+    fn convert(number: Number) -> u256 { number.value }
+}
+
+fn invoke<T: Read<Output = u256>>(number: T) -> u256 {
+    let function = Read::read
+    function(number)
+}
+
+fn stored_values() -> u256 {
+    let read = <Number as Read>::read
+    let default_read = <Number as Read>::default_read
+    let convert = <Number as Convert<u256>>::convert
+    let pair = (read, convert)
+    pair.0(number: Number { value: 10 })
+        + pair.1(number: Number { value: 11 })
+        + default_read(number: Number { value: 12 })
+        + invoke(number: Number { value: 13 })
+}
+
+fn answer(value: u256) -> u256 { value }
+
+fn identity<T = u256>(value: own T) -> T { value }
+
+impl Number {
+    fn inherent_read(number: Number) -> u256 { number.value }
+    fn identity<T = Self>(value: own T) -> T { value }
+}
+
+enum Maybe { Some(u256), None }
+
+fn every_item_kind() -> u256 {
+    let answer_value = answer
+    let identity_value = identity
+    let inherent_value = Number::inherent_read
+    let defaulted_value = Number::identity
+    let trait_value = Read::read
+    let ufcs_value = <Number as Read>::read
+    let constructor_value = Maybe::Some
+    let constructed = match constructor_value(6) {
+        Maybe::Some(value) => value
+        Maybe::None => 0
+    }
+    let number = defaulted_value(value: Number { value: 7 })
+    answer_value(value: 1)
+        + identity_value(value: 2)
+        + inherent_value(number: Number { value: 3 })
+        + trait_value(number: Number { value: 4 })
+        + ufcs_value(number: Number { value: 5 })
+        + constructed
+        + number.value
+}
+
+#[test]
+fn stored_trait_function_items_dispatch() {
+    assert!(stored_values() == 46)
+}
+
+#[test]
+fn every_function_item_kind_is_a_value() {
+    assert!(every_item_kind() == 28)
+}

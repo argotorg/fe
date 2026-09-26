@@ -42,7 +42,10 @@ fn semantic_borrow_summary_query<'db>(
         Err(SemanticNormalizationFailure::Blocked(blocked)) => {
             return blocked_signature_borrow_summary_result(db, instance, blocked);
         }
-        Err(SemanticNormalizationFailure::InternalFailure(diag)) => {
+        Err(
+            SemanticNormalizationFailure::Rejected(diag)
+            | SemanticNormalizationFailure::InternalFailure(diag),
+        ) => {
             return SemanticBorrowSummaryResult::Err(SemanticDiagnosticId::new(db, diag));
         }
     };
@@ -62,7 +65,10 @@ fn provisional_borrow_summary_query<'db>(
         Err(SemanticNormalizationFailure::Blocked(blocked)) => {
             return blocked_signature_borrow_summary_result(db, instance, blocked);
         }
-        Err(SemanticNormalizationFailure::InternalFailure(diag)) => {
+        Err(
+            SemanticNormalizationFailure::Rejected(diag)
+            | SemanticNormalizationFailure::InternalFailure(diag),
+        ) => {
             return SemanticBorrowSummaryResult::Err(SemanticDiagnosticId::new(db, diag));
         }
     };
@@ -263,7 +269,10 @@ fn semantic_borrow_check_query<'db>(
         Err(SemanticNormalizationFailure::Blocked(blocked)) => {
             return SemanticBorrowCheckResult::Blocked(blocked);
         }
-        Err(SemanticNormalizationFailure::InternalFailure(diag)) => {
+        Err(
+            SemanticNormalizationFailure::Rejected(diag)
+            | SemanticNormalizationFailure::InternalFailure(diag),
+        ) => {
             return SemanticBorrowCheckResult::Err(SemanticDiagnosticId::new(db, diag));
         }
     };

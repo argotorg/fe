@@ -1,0 +1,16 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/msg_field_alias_array_div_zero.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/msg_field_alias_array_div_zero.fe
+
+error[3-0025]: division by zero in const context
+  ┌─ msg_field_alias_array_div_zero.fe:1:35
+  │
+1 │ type Arr<const N: usize> = [u8; { 10 / N }]
+  │                                   ^^^^^^ cannot divide by zero
+
+
+=== EXIT CODE: 1 ===

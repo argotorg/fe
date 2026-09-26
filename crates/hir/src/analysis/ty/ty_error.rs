@@ -7,17 +7,18 @@ use crate::{
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
-        ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path,
-        resolve_path_with_observer,
+        ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path_with_minter,
+        resolve_path_with_observer_and_minter,
     },
-    ty::visitor::TyVisitor,
+    ty::visitor::{TyVisitor, walk_ty},
 };
 
 use super::{
+    const_ty::{ConstBodyLowering, ConstTyData, HoleAnchor, LoweringContext, ty_is_fully_ground},
     diagnostics::{TyDiagCollection, TyLowerDiag},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, TyData, TyId},
-    ty_lower::lower_hir_ty,
+    ty_lower::lower_hir_ty_in_mode,
 };
 use crate::visitor::prelude::LazyTraitRefSpan;
 
@@ -33,14 +34,52 @@ pub fn collect_hir_ty_diags<'db>(
     span: LazyTySpan<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
+    collect_hir_ty_diags_in_mode(
+        db,
+        scope,
+        hir_ty,
+        span,
+        assumptions,
+        ConstBodyLowering::Eager,
+    )
+}
+
+/// Collect structural diagnostics for a declaration template. Anonymous const
+/// bodies are checked by the declaration's body-validation owner.
+pub(crate) fn collect_hir_ty_diags_deferred<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    hir_ty: TypeId<'db>,
+    span: LazyTySpan<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    collect_hir_ty_diags_in_mode(
+        db,
+        scope,
+        hir_ty,
+        span,
+        assumptions,
+        ConstBodyLowering::Deferred,
+    )
+}
+
+fn collect_hir_ty_diags_in_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    hir_ty: TypeId<'db>,
+    span: LazyTySpan<'db>,
+    assumptions: PredicateListId<'db>,
+    const_bodies: ConstBodyLowering,
+) -> Vec<TyDiagCollection<'db>> {
     // Try precise HIR-based errors first
-    let diags = collect_ty_lower_errors(db, scope, hir_ty, span.clone(), assumptions);
+    let diags =
+        collect_ty_lower_errors_in_mode(db, scope, hir_ty, span.clone(), assumptions, const_bodies);
     if !diags.is_empty() {
         return diags;
     }
 
     // Fall back to semantic errors
-    let ty = lower_hir_ty(db, hir_ty, scope, assumptions);
+    let ty = lower_hir_ty_in_mode(db, hir_ty, scope, assumptions, const_bodies);
     emit_invalid_ty_error(db, ty, span.into())
         .into_iter()
         .collect()
@@ -53,10 +92,29 @@ pub fn collect_ty_lower_errors<'db>(
     span: LazyTySpan<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
+    collect_ty_lower_errors_in_mode(
+        db,
+        scope,
+        hir_ty,
+        span,
+        assumptions,
+        ConstBodyLowering::Eager,
+    )
+}
+
+fn collect_ty_lower_errors_in_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    hir_ty: TypeId<'db>,
+    span: LazyTySpan<'db>,
+    assumptions: PredicateListId<'db>,
+    const_bodies: ConstBodyLowering,
+) -> Vec<TyDiagCollection<'db>> {
     let mut vis = HirTyErrVisitor {
         db,
         assumptions,
         diags: Vec::new(),
+        const_bodies,
     };
     let mut ctxt = VisitorCtxt::new(db, scope, span);
     vis.visit_ty(&mut ctxt, hir_ty);
@@ -67,9 +125,21 @@ struct HirTyErrVisitor<'db> {
     db: &'db dyn HirAnalysisDb,
     diags: Vec<TyDiagCollection<'db>>,
     assumptions: PredicateListId<'db>,
+    const_bodies: ConstBodyLowering,
 }
 
 impl<'db> HirTyErrVisitor<'db> {
+    fn path_context(&self, path: PathId<'db>, scope: ScopeId<'db>) -> LoweringContext<'db> {
+        LoweringContext::for_const_bodies(
+            HoleAnchor::TemplatePath {
+                path,
+                scope,
+                assumptions: self.assumptions,
+            },
+            self.const_bodies,
+        )
+    }
+
     fn push_opt_diag(&mut self, diag: Option<TyDiagCollection<'db>>) {
         if let Some(diag) = diag {
             self.diags.push(diag)
@@ -90,7 +160,14 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             && let Some(hir_ty) = type_arg.ty.to_opt()
             && let TypeKind::Path(path_partial) = hir_ty.data(self.db)
             && let Some(path) = path_partial.to_opt()
-            && let Ok(resolved) = resolve_path(self.db, path, ctxt.scope(), self.assumptions, true)
+            && let Ok(resolved) = resolve_path_with_minter(
+                self.db,
+                path,
+                ctxt.scope(),
+                self.assumptions,
+                true,
+                &self.path_context(path, ctxt.scope()),
+            )
         {
             let is_const_like = match resolved {
                 PathRes::Const(..) | PathRes::TraitConst(..) | PathRes::InherentConst(..) => true,
@@ -119,14 +196,16 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                         }
                     };
 
-                    match resolve_path_with_observer(
+                    let resolved = resolve_path_with_observer_and_minter(
                         self.db,
                         path,
                         scope,
                         self.assumptions,
                         true,
                         &mut check_visibility,
-                    ) {
+                        &self.path_context(path, scope),
+                    );
+                    match resolved {
                         Ok(_) => {
                             if let Some((path, deriv_span)) = invisible
                                 && let Some(ident) = path.ident(self.db).to_opt()
@@ -175,7 +254,13 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
     }
 
     fn visit_ty(&mut self, ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>, hir_ty: TypeId<'db>) {
-        let ty = lower_hir_ty(self.db, hir_ty, ctxt.scope(), self.assumptions);
+        let ty = lower_hir_ty_in_mode(
+            self.db,
+            hir_ty,
+            ctxt.scope(),
+            self.assumptions,
+            self.const_bodies,
+        );
 
         // This will report errors with nested types that are fundamental to the nested type,
         // but will not catch cases where the nested type is fine on its own, but incompatible
@@ -231,14 +316,16 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             }
         };
 
-        let res = match resolve_path_with_observer(
+        let resolved = resolve_path_with_observer_and_minter(
             self.db,
             path,
             scope,
             self.assumptions,
             false,
             &mut check_visibility,
-        ) {
+            &self.path_context(path, scope),
+        );
+        let res = match resolved {
             Ok(res) => res,
 
             Err(err) => {
@@ -293,14 +380,16 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         // TODO(diags): In the future, refine this to walk only generic args
         // under the trait ref and surface kind/arg mismatches with precise
         // spans when available from semantic lowering.
-        match crate::analysis::name_resolution::resolve_path_with_observer(
+        let resolved = resolve_path_with_observer_and_minter(
             self.db,
             path,
             scope,
             self.assumptions,
             false,
             &mut check_visibility,
-        ) {
+            &self.path_context(path, scope),
+        );
+        match resolved {
             Ok(res) => {
                 if !matches!(res, crate::analysis::name_resolution::PathRes::Trait(_)) {
                     // Expected a trait in this context
@@ -346,23 +435,29 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
     }
 }
 
-pub fn emit_invalid_ty_error<'db>(
+pub(crate) fn first_invalid_ty_cause<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
-    span: DynLazySpan<'db>,
-) -> Option<TyDiagCollection<'db>> {
-    struct EmitDiagVisitor<'db> {
+) -> Option<InvalidCause<'db>> {
+    struct InvalidCauseVisitor<'db> {
         db: &'db dyn HirAnalysisDb,
-        diag: Option<TyDiagCollection<'db>>,
-        span: DynLazySpan<'db>,
+        first: Option<InvalidCause<'db>>,
+        reportable: Option<InvalidCause<'db>>,
     }
-    impl<'db> TyVisitor<'db> for EmitDiagVisitor<'db> {
+    impl<'db> TyVisitor<'db> for InvalidCauseVisitor<'db> {
         fn db(&self) -> &'db dyn HirAnalysisDb {
             self.db
         }
         fn visit_invalid(&mut self, cause: &InvalidCause<'db>) {
-            if let Some(diag) = diag_from_invalid_cause(self.span.clone(), cause) {
-                self.diag.get_or_insert(diag);
+            self.first.get_or_insert_with(|| cause.clone());
+            if !matches!(
+                cause,
+                InvalidCause::NotAType(_)
+                    | InvalidCause::PathResolutionFailed { .. }
+                    | InvalidCause::ParseError
+                    | InvalidCause::Other
+            ) {
+                self.reportable.get_or_insert_with(|| cause.clone());
             }
         }
     }
@@ -371,17 +466,63 @@ pub fn emit_invalid_ty_error<'db>(
         return None;
     }
 
-    let mut visitor = EmitDiagVisitor {
+    let mut visitor = InvalidCauseVisitor {
         db,
-        diag: None,
-        span,
+        first: None,
+        reportable: None,
     };
-
     visitor.visit_ty(ty);
-    visitor.diag
+    visitor.reportable.or(visitor.first)
 }
 
-fn diag_from_invalid_cause<'db>(
+/// The first failure among deferred const terms whose captures are fully
+/// ground. A concrete target demands them so a failing specialization is
+/// reported where it is written rather than at a later layout demand.
+pub(crate) fn demanded_ground_const_cause<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Option<InvalidCause<'db>> {
+    struct GroundConstDemand<'db> {
+        db: &'db dyn HirAnalysisDb,
+        cause: Option<InvalidCause<'db>>,
+    }
+    impl<'db> TyVisitor<'db> for GroundConstDemand<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if self.cause.is_some() {
+                return;
+            }
+            if let TyData::ConstTy(const_ty) = ty.data(self.db)
+                && matches!(
+                    const_ty.data(self.db),
+                    ConstTyData::UnEvaluated { .. } | ConstTyData::Computation { .. }
+                )
+                && ty_is_fully_ground(self.db, ty)
+            {
+                self.cause =
+                    first_invalid_ty_cause(self.db, const_ty.evaluate(self.db, None).ty(self.db));
+                return;
+            }
+            walk_ty(self, ty);
+        }
+    }
+
+    let mut visitor = GroundConstDemand { db, cause: None };
+    visitor.visit_ty(ty);
+    visitor.cause
+}
+
+pub fn emit_invalid_ty_error<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    span: DynLazySpan<'db>,
+) -> Option<TyDiagCollection<'db>> {
+    first_invalid_ty_cause(db, ty).and_then(|cause| diag_from_invalid_cause(span, &cause))
+}
+
+pub(crate) fn diag_from_invalid_cause<'db>(
     span: DynLazySpan<'db>,
     cause: &InvalidCause<'db>,
 ) -> Option<TyDiagCollection<'db>> {

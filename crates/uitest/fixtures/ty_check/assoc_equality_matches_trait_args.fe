@@ -1,0 +1,13 @@
+trait Out<A> {
+    type Item
+}
+
+// The equality is evidence for `Out<u8>` only; the `Out<bool>` projection
+// stays abstract.
+fn matched<T: Out<u8, Item = u256>>(_ x: <T as Out<u8>>::Item) -> u256 {
+    x
+}
+
+fn mismatched<T: Out<u8, Item = u256> + Out<bool>>(_ x: <T as Out<bool>>::Item) -> u256 {
+    x
+}

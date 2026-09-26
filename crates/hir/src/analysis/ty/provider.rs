@@ -258,7 +258,7 @@ fn resolved_effect_handle_assoc_ty<'db>(
 ) -> Option<(TyId<'db>, TyId<'db>)> {
     let ident = IdentId::new(db, name.to_string());
     let trait_ty = trait_bound
-        .then(|| resolved.trait_inst().assoc_ty(db, ident))
+        .then(|| resolved.trait_inst().project_assoc_ty(db, ident))
         .flatten();
     Some((
         resolved.assoc_ty_template(db, ident).or(trait_ty)?,
@@ -697,7 +697,7 @@ mod tests {
     };
     use crate::{
         analysis::ty::{
-            binder::Binder, trait_def::ImplementorOrigin, trait_resolution::PredicateListId,
+            trait_def::ImplementorOrigin, trait_resolution::PredicateListId,
             unify::UnificationTable,
         },
         hir_def::{ItemKind, TopLevelMod, scope_graph::ScopeId},
@@ -738,7 +738,7 @@ fn handle<T>(value: own *T) {}
         db.assert_no_diags(top_mod);
         let (scope, provider_ty) = provider_param_ty(&db, top_mod);
         let mut table = UnificationTable::new(&db);
-        let provider_ty = table.instantiate_with_fresh_vars(Binder::bind(provider_ty));
+        let provider_ty = table.instantiate_with_fresh_vars(provider_ty);
         assert!(provider_ty.has_var(&db));
         assert!(matches!(
             resolve_effect_handle(&db, scope, PredicateListId::empty_list(&db), provider_ty),
@@ -746,7 +746,7 @@ fn handle<T>(value: own *T) {}
         ));
         let func = find_func(&db, top_mod, "handle");
         let ty = func.params(&db).next().expect("handle parameter").ty(&db);
-        let handle_ty = table.instantiate_with_fresh_vars(Binder::bind(ty));
+        let handle_ty = table.instantiate_with_fresh_vars(ty);
         assert!(handle_ty.has_var(&db));
         assert!(matches!(
             resolve_effect_handle(

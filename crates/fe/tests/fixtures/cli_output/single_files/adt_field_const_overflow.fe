@@ -1,0 +1,9 @@
+// Canonical extent arithmetic wraps; concrete demand must use checked
+// evaluation of the field's source const.
+struct S<const N: usize> {
+    x: [u8; { N + 1 }],
+}
+
+fn size() -> u256 {
+    core::size_of<S<0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff>>()
+}

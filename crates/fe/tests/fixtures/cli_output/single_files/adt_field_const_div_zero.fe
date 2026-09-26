@@ -1,0 +1,48 @@
+// Each concrete size demand reports the field's source const error once.
+struct S<const N: usize> {
+    x: [u8; { 10 / N }],
+}
+
+struct Inner<const N: usize> {
+    x: [u8; { 10 / N }],
+}
+
+struct Outer<const N: usize> {
+    inner: Inner<N>,
+}
+
+struct Plain<const N: usize> {
+    x: [u8; N],
+}
+
+struct ArgOuter<const N: usize> {
+    inner: Plain<{ 10 / N }>,
+}
+
+struct Element<const N: usize> {
+    x: [u8; { 10 / N }],
+}
+
+enum E<const N: usize> {
+    V([u8; { 10 / N }]),
+}
+
+fn size_struct() -> u256 {
+    core::size_of<S<0>>()
+}
+
+fn size_nested() -> u256 {
+    core::size_of<Outer<0>>()
+}
+
+fn size_nested_argument() -> u256 {
+    core::size_of<ArgOuter<0>>()
+}
+
+fn size_enum() -> u256 {
+    core::size_of<E<0>>()
+}
+
+fn size_array_element() -> u256 {
+    core::size_of<[Element<0>; 1]>()
+}

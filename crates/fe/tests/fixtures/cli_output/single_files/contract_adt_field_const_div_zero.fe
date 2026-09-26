@@ -1,0 +1,73 @@
+// Contract storage layout reports each field's source const error once.
+struct S<const N: usize> {
+    x: [u8; { 10 / N }],
+}
+
+struct Element<const N: usize> {
+    x: [u8; { 10 / N }],
+}
+
+struct Inner<const N: usize> {
+    x: [u8; { 10 / N }],
+}
+
+struct Outer<const N: usize> {
+    inner: Inner<N>,
+}
+
+struct Plain<const N: usize> {
+    x: [u8; N],
+}
+
+struct ArgOuter<const N: usize> {
+    inner: Plain<{ 10 / N }>,
+}
+
+struct TupleField<const N: usize> {
+    x: ([u8; { 10 / N }],),
+}
+
+struct NestedArray<const N: usize> {
+    x: [[u8; { 10 / N }]; 2],
+}
+
+enum E<const N: usize> {
+    V([u8; { 10 / N }]),
+}
+
+struct WithHole<const N: usize, const M: usize = _> {
+    a: [u8; M],
+    b: [u8; { 10 / N }],
+}
+
+pub contract Direct {
+    mut value: S<0>,
+}
+
+pub contract EmptyArray {
+    mut value: [Element<0>; 0],
+}
+
+pub contract Nested {
+    mut value: Outer<0>,
+}
+
+pub contract NestedArgument {
+    mut value: ArgOuter<0>,
+}
+
+pub contract Tuple {
+    mut value: TupleField<0>,
+}
+
+pub contract ArrayOfArrays {
+    mut value: NestedArray<0>,
+}
+
+pub contract Enum {
+    mut value: E<0>,
+}
+
+pub contract Hole {
+    mut value: WithHole<0>,
+}

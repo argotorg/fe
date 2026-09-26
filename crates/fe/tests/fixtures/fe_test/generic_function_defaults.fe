@@ -1,0 +1,237 @@
+fn selected<const A: usize, const B: usize, const C: usize = B>() -> usize { C }
+
+fn forwarded<const X: usize, const Y: usize>() -> usize { selected<Y, X>() }
+
+// A recursive call captures the caller's own parameters in swapped order.
+fn recursive<const A: usize, const B: usize, const C: usize = B>(_ depth: u256) -> usize {
+    if depth == 0 {
+        C
+    } else {
+        recursive<B, A>(depth - 1)
+    }
+}
+
+trait Length {
+    const LEN: usize
+    fn value<const N: usize = Self::LEN>() -> usize { N }
+}
+
+impl Length for bool {
+    const LEN: usize = 2
+}
+
+fn trait_value<T: Length, const N: usize = T::LEN>() -> usize { N }
+
+struct Size<const N: usize> {}
+
+impl<const N: usize> Size<N> {
+    const LEN: usize = N
+}
+
+fn inherent_value<const N: usize, const M: usize = Size<N>::LEN>() -> usize { M }
+
+fn identity<T = u256>(_ value: own T) -> T { value }
+
+fn sized_default<const N: usize, T = [u8; { N + 1 }]>() -> u256 { core::size_of<T>() }
+fn sized_forwarded<const N: usize>() -> u256 { sized_default<N>() }
+
+trait Output { type Item }
+impl Output for bool { type Item = u256 }
+
+fn projected<T: Output, U = T::Item>(_ value: own U) -> U { value }
+
+struct Holder<T: Output, U = T::Item> { value: U }
+impl<T: Output> Holder<T> {
+    fn value(own self) -> T::Item { self.value }
+    fn select<U = T::Item>(_ value: own U) -> U { value }
+}
+
+trait Root { const ROOT: u256 }
+impl Root for bool { const ROOT: u256 = 7 }
+struct Slot<const ROOT: u256, const SALT: u256 = _> { value: u256 }
+
+fn effect_default<T: Root = bool>() -> u256 uses (slot: Slot<T::ROOT>) {
+    slot.value
+}
+
+fn array_tail<const N: usize>(_ value: ([Slot<7>; N], Slot<7>)) -> u256 {
+    value.1.value
+}
+
+struct AssocSlot<const ROOT: u256 = _> { value: u256 }
+trait HasAssocSlot {
+    type Item
+    fn take(_ value: Self::Item) -> u256
+}
+impl HasAssocSlot for bool {
+    type Item = AssocSlot
+    fn take(_ value: AssocSlot) -> u256 { value.value }
+}
+fn generic_selected_slot<T: HasAssocSlot>(_ value: T::Item) -> u256 {
+    T::take(value)
+}
+
+trait HasEffectSlot {
+    type Item
+    fn take_effect() -> u256 uses (slot: Self::Item)
+}
+impl HasEffectSlot for bool {
+    type Item = AssocSlot
+    fn take_effect() -> u256 uses (slot: AssocSlot) { slot.value }
+}
+
+struct EffA { value: u256 }
+struct EffB { value: u256 }
+struct EffS {}
+trait ReorderedEffects {
+    fn sum(self) -> u256 uses (a: EffA, b: EffB)
+}
+impl ReorderedEffects for EffS {
+    fn sum(self) -> u256 uses (b: EffB, a: EffA) {
+        a.value * 10 + b.value
+    }
+}
+
+trait Choice {
+    fn choose(_ x: u256) -> u256 { 1 }
+}
+impl Choice for bool {
+    fn choose(_ x: u256) -> u256 { 2 }
+}
+impl Choice for u256 {}
+
+fn direct_choice<T: Choice>(_ x: u256) -> u256 { T::choose(x) }
+fn stored_choice<T: Choice>(_ x: u256) -> u256 {
+    let choose = T::choose
+    choose(x)
+}
+
+const fn plus1(_ value: usize) -> usize { value + 1 }
+const fn id<const X: usize>() -> usize { X }
+
+// Swapped same-owner arguments must be substituted into each default once.
+fn plus_default<const N: usize, const M: usize, const K: usize = plus1(N)>() -> usize { K }
+fn call_default<const N: usize, const M: usize, const K: usize = id<N>()>() -> usize { K }
+fn swapped_plus<const X: usize, const Y: usize>() -> usize { plus_default<Y, X>() }
+fn swapped_call<const X: usize, const Y: usize>() -> usize { call_default<Y, X>() }
+
+#[test]
+fn const_defaults() {
+    assert!(forwarded<2, 3>() == 2)
+    assert!(recursive<2, 3>(0) == 3)
+    assert!(recursive<2, 3>(1) == 2)
+    assert!(trait_value<bool>() == 2)
+    assert!(inherent_value<3>() == 3)
+    let trait_item = <bool as Length>::value
+    assert!(trait_item() == 2)
+    assert!(sized_default<3>() == 4)
+    assert!(sized_forwarded<3>() == 4)
+    assert!(sized_default<3, [u8; 4]>() == 4)
+    assert!(swapped_plus<2, 5>() == 6)
+    assert!(swapped_call<2, 5>() == 5)
+}
+
+#[test]
+fn type_and_projection_defaults() {
+    let defaulted = identity
+    let overridden = identity<bool>
+    assert!(defaulted(7) == 7)
+    assert!(overridden(true))
+    assert!(projected<bool>(11) == 11)
+    let projected_item = projected<bool>
+    assert!(projected_item(12) == 12)
+    let holder = Holder<bool> { value: 13 }
+    assert!(holder.value() == 13)
+    assert!(Holder<bool>::select(14) == 14)
+}
+
+#[test]
+fn layout_and_effect_defaults() {
+    let slot = Slot<7, 9> { value: 15 }
+    with (Slot<7, 9> = slot) {
+        assert!(effect_default() == 15)
+        assert!(effect_default<bool>() == 15)
+    }
+    assert!(array_tail<0>(([], Slot<7, 9> { value: 16 })) == 16)
+    assert!(array_tail<2>(([Slot<7, 9> { value: 17 }, Slot<7, 9> { value: 17 }], Slot<7, 10> { value: 18 })) == 18)
+    assert!(generic_selected_slot<bool>(AssocSlot<7> { value: 21 }) == 21)
+    assert!(<bool as HasAssocSlot>::take(AssocSlot<7> { value: 22 }) == 22)
+    with (AssocSlot<7> = AssocSlot<7> { value: 23 }) {
+        assert!(<bool as HasEffectSlot>::take_effect() == 23)
+    }
+    let a = EffA { value: 3 }
+    let b = EffB { value: 5 }
+    with (EffA = a, EffB = b) {
+        assert!(EffS {}.sum() == 35)
+    }
+}
+
+#[test]
+fn trait_default_and_override_dispatch() {
+    assert!(direct_choice<bool>(0) == 2)
+    assert!(stored_choice<bool>(0) == 2)
+    assert!(direct_choice<u256>(0) == 1)
+    assert!(stored_choice<u256>(0) == 1)
+}
+
+trait Echo {
+    type Item
+    fn echo(_ x: own Self::Item) -> Self::Item { x }
+}
+
+impl Echo for bool {
+    type Item = u256
+}
+
+impl Echo for u256 {
+    type Item = u256
+    fn echo(_ x: own u256) -> u256 { x + 1 }
+}
+
+fn direct_echo<T: Echo<Item = u256>>(_ x: u256) -> u256 {
+    T::echo(x)
+}
+
+fn stored_echo<T: Echo<Item = u256>>(_ x: u256) -> u256 {
+    let f = T::echo
+    f(x)
+}
+
+fn qualified_stored_echo<T: Echo<Item = u256>>(_ x: u256) -> u256 {
+    let f = <T as Echo>::echo
+    f(x)
+}
+
+fn tuple_stored_echo<T: Echo<Item = u256>>(_ x: u256) -> u256 {
+    let pair = (T::echo, x)
+    let f = pair.0
+    f(pair.1)
+}
+
+#[test]
+fn trait_function_items_keep_evidence_and_dispatch() {
+    assert!(direct_echo<bool>(7) == 7)
+    assert!(stored_echo<bool>(7) == 7)
+    assert!(qualified_stored_echo<bool>(7) == 7)
+    assert!(tuple_stored_echo<bool>(7) == 7)
+    assert!(direct_echo<u256>(7) == 8)
+    assert!(stored_echo<u256>(7) == 8)
+    assert!(qualified_stored_echo<u256>(7) == 8)
+    assert!(tuple_stored_echo<u256>(7) == 8)
+}
+
+trait Out { type Item }
+impl Out for bool { type Item = u256 }
+
+fn equality_default<T: Out<Item = U>, U = T::Item>(_ t: T, _ x: U) -> U { x }
+
+struct EqualityDefault<T: Out<Item = U>, U = T::Item> { t: T, x: U }
+
+#[test]
+fn equality_bound_default_constructs_projection() {
+    assert!(equality_default(true, 1) == 1)
+    assert!(equality_default<bool>(true, 2) == 2)
+    let s = EqualityDefault<bool> { t: true, x: 3 }
+    let explicit: EqualityDefault<bool, u256> = s
+    assert!(explicit.x == 3)
+}

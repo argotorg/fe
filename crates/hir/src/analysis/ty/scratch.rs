@@ -4,11 +4,9 @@ use rustc_hash::FxHashMap;
 use salsa::Update;
 
 use super::{
-    binder::Binder,
     canonical::{Canonicalized, Solution},
     const_ty::{ConstTyData, ConstTyId},
     fold::{TyFoldable, TyFolder},
-    normalize::AssumptionUnifyInput,
     trait_def::{ImplementorId, TraitInstId},
     trait_lower::{TraitRefLowerError, lower_trait_ref},
     trait_resolution::PredicateListId,
@@ -68,12 +66,12 @@ impl<'q, 'db> ScratchTraitInst<'q, 'db> {
         ScratchTy::new(self.raw.self_ty(db))
     }
 
-    pub(crate) fn assoc_ty(
+    pub(crate) fn project_assoc_ty(
         self,
         db: &'db dyn HirAnalysisDb,
         name: IdentId<'db>,
     ) -> Option<ScratchTy<'q, 'db>> {
-        self.raw.assoc_ty(db, name).map(ScratchTy::new)
+        self.raw.project_assoc_ty(db, name).map(ScratchTy::new)
     }
 
     const fn new(raw: TraitInstId<'db>) -> Self {
@@ -140,11 +138,11 @@ where
         U::brand(U::unbrand(value).fold_with(self.db, &mut self.table))
     }
 
-    pub(crate) fn instantiate_with_fresh_vars<U>(&mut self, binder: Binder<U>) -> U::Branded<'q>
+    pub(crate) fn instantiate_with_fresh_vars<U>(&mut self, value: U) -> U::Branded<'q>
     where
         U: TyFoldable<'db> + ScratchRepr<'db> + private::ScratchOps<'db>,
     {
-        U::brand(self.table.instantiate_with_fresh_vars(binder))
+        U::brand(self.table.instantiate_with_fresh_vars(value))
     }
 
     pub(crate) fn materialize_to_term(&mut self, ty: TyId<'db>) -> ScratchTy<'q, 'db> {
@@ -208,7 +206,7 @@ where
 
     pub(crate) fn with_impl_assoc_ty<R>(
         &mut self,
-        implementor: Binder<ImplementorId<'db>>,
+        implementor: ImplementorId<'db>,
         receiver: ScratchTy<'q, 'db>,
         name: IdentId<'db>,
         f: impl FnOnce(&mut Self, ScratchTraitInst<'q, 'db>, ScratchTy<'q, 'db>) -> R,
@@ -298,28 +296,6 @@ impl<'db> private::ScratchOps<'db> for TraitInstId<'db> {
 
     fn unbrand<'q>(value: Self::Branded<'q>) -> Self {
         value.raw
-    }
-}
-
-impl<'db> ScratchRepr<'db> for AssumptionUnifyInput<TyId<'db>> {
-    type Branded<'q> = AssumptionUnifyInput<ScratchTy<'q, 'db>>;
-}
-
-impl<'db> private::ScratchOps<'db> for AssumptionUnifyInput<TyId<'db>> {
-    fn brand<'q>(raw: Self) -> Self::Branded<'q> {
-        AssumptionUnifyInput {
-            lhs_self: ScratchTy::new(raw.lhs_self),
-            rhs_self: ScratchTy::new(raw.rhs_self),
-            bound: ScratchTy::new(raw.bound),
-        }
-    }
-
-    fn unbrand<'q>(value: Self::Branded<'q>) -> Self {
-        AssumptionUnifyInput {
-            lhs_self: value.lhs_self.raw,
-            rhs_self: value.rhs_self.raw,
-            bound: value.bound.raw,
-        }
     }
 }
 

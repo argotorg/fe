@@ -1,0 +1,13 @@
+fn free_self<T = Self>() {}
+
+type First<T = Second> = T
+type Second<T = First> = T
+
+struct Recursive<T = Recursive> {}
+fn unused_cycle<T = Recursive>() {}
+
+fn exercise() {
+    free_self()
+    let _value: First = true
+    let _recursive: Recursive = Recursive {}
+}

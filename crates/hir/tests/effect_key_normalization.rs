@@ -10,11 +10,12 @@ use fe_hir::analysis::semantic::{
 };
 use fe_hir::analysis::ty::effects::{EffectKeyKind, place_effect_provider_param_index_map};
 use fe_hir::analysis::ty::trait_def::resolve_trait_method_instance;
-use fe_hir::analysis::ty::trait_resolution::TraitSolveCx;
+use fe_hir::analysis::ty::trait_resolution::{Selection, TraitSolveCx};
 use fe_hir::analysis::ty::ty_check::{
     BodyOwner, EffectArg, EffectArgLayoutView, EffectPassMode, TypedBody,
     check_contract_recv_arm_body, check_func_body,
 };
+use fe_hir::analysis::ty::ty_def::TyData;
 use fe_hir::hir_def::{CallableDef, Contract, Expr, ExprId, Func, ItemKind, Partial, TopLevelMod};
 use fe_hir::test_db::{HirAnalysisTestDb, initialize_test_analysis_pass};
 
@@ -432,6 +433,180 @@ where
 }
 
 #[test]
+fn effect_provider_slots_are_independent_of_key_validation() {
+    for (key, layout_params, valid) in [
+        ("Slot<T::ROOT>", 0, true),
+        ("LayoutSlot<T::ROOT>", 1, true),
+        ("LayoutSlot<{ <T as HasRoot>::ROOT }>", 1, true),
+        ("LayoutSlot<T::ROOT, _>", 1, true),
+        ("LayoutSlot<{ T::ROOT + 1 }>", 1, true),
+        ("Cap<LayoutSlot<T::ROOT>>", 1, true),
+        ("NestedLayout<T::ROOT>", 1, true),
+        ("ArrayLayout<T::ROOT>", 2, true),
+        ("AliasLayout<T::ROOT>", 1, true),
+        ("*LayoutSlot<T::ROOT>", 1, true),
+        ("(LayoutSlot<T::ROOT>, LayoutSlot<T::ROOT>)", 2, true),
+        // Direct effect-key holes are already callable-bound when projections
+        // traverse the array, unlike the field-local holes in ArrayLayout.
+        ("[LayoutSlot<T::ROOT>; 2]", 1, true),
+        ("[LayoutSlot<T::ROOT>; { 1 + 1 }]", 1, true),
+        ("[LayoutSlot<T::ROOT>; 0]", 1, true),
+        ("LayoutSlot<true>", 1, false),
+        ("Slot<u256>", 0, false),
+        ("*Slot<u256>", 0, false),
+        ("Missing", 0, false),
+        ("Cap<u256, u256>", 0, false),
+    ] {
+        for validate_first in [false, true] {
+            let mut db = HirAnalysisTestDb::default();
+            let source = format!(
+                r#"
+trait HasRoot {{ const ROOT: u256 }}
+trait Cap<T> {{}}
+struct Slot<const ROOT: u256> {{}}
+struct LayoutSlot<const ROOT: u256, const SALT: u256 = _> {{}}
+struct NestedLayout<const ROOT: u256> {{ slot: LayoutSlot<ROOT> }}
+struct ArrayLayout<const ROOT: u256> {{ slots: [LayoutSlot<ROOT>; 2] }}
+type AliasLayout<const ROOT: u256> = LayoutSlot<ROOT>
+
+fn needs<T: HasRoot, U = T>()
+    uses (first: Cap<T>, middle: {key}, last: Slot<T::ROOT>)
+{{}}
+"#
+            );
+            let file = db.new_stand_alone("stable_effect_provider_slots.fe".into(), &source);
+            let (top_mod, _) = db.top_mod(file);
+            let needs = find_func(&db, top_mod, "needs");
+            if validate_first {
+                let diags = diagnostics_for(&db, top_mod);
+                assert_eq!(
+                    diags.is_empty(),
+                    valid,
+                    "key {key}, validate_first {validate_first}: {diags:#?}"
+                );
+            }
+
+            assert_eq!(
+                place_effect_provider_param_index_map(&db, needs),
+                &[
+                    Some(layout_params),
+                    Some(layout_params + 1),
+                    Some(layout_params + 2)
+                ],
+                "key {key}, validate_first {validate_first}"
+            );
+            let params = CallableDef::Func(needs).params(&db);
+            assert_eq!(params.len(), layout_params + 5);
+            for (idx, param) in params.iter().enumerate().skip(layout_params) {
+                let TyData::TyParam(param) = param.data(&db) else {
+                    panic!("expected type parameter at {idx}");
+                };
+                assert_eq!(param.idx, idx);
+            }
+            let diags = diagnostics_for(&db, top_mod);
+            assert_eq!(
+                diags.is_empty(),
+                valid,
+                "key {key}, validate_first {validate_first}: {diags:#?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn callable_layout_discovery_uses_declared_bounds_before_hidden_slots() {
+    for (declaration, provider_idx, param_count) in [
+        (
+            "fn needs<T, const ROOT: u256, U = T>(_ value: LayoutSlot<ROOT>) uses (slot: LayoutSlot<T::ROOT>) where T: HasRoot {}",
+            2,
+            6,
+        ),
+        (
+            "impl<T: HasRoot> Holder<T> { fn needs<U>() uses (slot: LayoutSlot<U::ROOT>) where U: HasRoot {} }",
+            2,
+            4,
+        ),
+        (
+            "trait Example: HasRoot { fn needs<T>() uses (slot: LayoutSlot<Self::ROOT>) {} }",
+            2,
+            4,
+        ),
+    ] {
+        for validate_first in [false, true] {
+            let mut db = HirAnalysisTestDb::default();
+            let source = format!(
+                r#"
+trait HasRoot {{ const ROOT: u256 }}
+struct LayoutSlot<const ROOT: u256, const SALT: u256 = _> {{}}
+struct Holder<T> {{ value: T }}
+{declaration}
+"#
+            );
+            let file = db.new_stand_alone("callable_layout_discovery.fe".into(), &source);
+            let (top_mod, _) = db.top_mod(file);
+            let needs = top_mod
+                .all_funcs(&db)
+                .iter()
+                .copied()
+                .find(|func| {
+                    func.name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "needs")
+                })
+                .expect("missing function");
+            if validate_first {
+                db.assert_no_diags(top_mod);
+            }
+            assert_eq!(
+                place_effect_provider_param_index_map(&db, needs),
+                &[Some(provider_idx)],
+                "{declaration}"
+            );
+            assert_eq!(CallableDef::Func(needs).params(&db).len(), param_count);
+            db.assert_no_diags(top_mod);
+        }
+    }
+}
+
+#[test]
+fn effect_provider_slots_follow_inherited_and_layout_parameters() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "effect_provider_slots_follow_inherited_and_layout_parameters.fe".into(),
+        r#"
+trait HasRoot { const ROOT: u256 }
+trait Cap<T> {}
+struct Slot<const ROOT: u256 = _> {}
+struct Holder<T> { value: T }
+
+impl<T: HasRoot> Holder<T> {
+    fn needs<U = T>() uses (any: Slot, exact: Slot<T::ROOT>, cap: Cap<U>) {}
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let needs = top_mod
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "needs")
+        })
+        .expect("missing associated function");
+    assert_eq!(
+        place_effect_provider_param_index_map(&db, needs),
+        &[Some(2), Some(3), Some(4)]
+    );
+    let params = CallableDef::Func(needs).params(&db);
+    assert_eq!(params.len(), 6);
+    assert!(matches!(params[1].data(&db), TyData::ConstTy(_)));
+    assert!(matches!(params[5].data(&db), TyData::TyParam(param) if param.idx == 5));
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
 fn ordinary_calls_use_keyed_trait_effect_witnesses_after_trait_const_normalization() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -455,7 +630,7 @@ impl HasRoot for Impl {
 
 impl Cap<Slot<7>> for Provider {}
 
-fn needs<T>() uses (cap: Cap<Slot<T::ROOT>>)
+fn needs<T = Impl>() uses (cap: Cap<Slot<T::ROOT>>)
 where
     T: HasRoot
 {}
@@ -463,6 +638,7 @@ where
 fn caller(p: own Provider) {
     with (Cap<Slot<7>> = p) {
         let out: () = needs<Impl>()
+        let defaulted: () = needs()
     }
 }
 "#,
@@ -1270,7 +1446,7 @@ impl HasRoot for Impl {
     const ROOT: u256 = 7
 }
 
-fn needs<T>() uses (slot: Slot<T::ROOT>)
+fn needs<T = Impl>() uses (slot: Slot<T::ROOT>)
 where
     T: HasRoot
 {}
@@ -1279,6 +1455,7 @@ fn caller() {
     let slot = Slot<7> {}
     with (Slot<7> = slot) {
         let out: () = needs<Impl>()
+        let defaulted: () = needs()
     }
 }
 "#,
@@ -2744,9 +2921,9 @@ fn concrete_layout_hole_type_keyed_bindings_shadow_outer_exact_providers() {
 struct Slot<const ROOT: u256 = _> {}
 struct Other<const ROOT: u256 = _> {}
 
-fn needs_exact() uses (slot: Slot<u256>) {}
+fn needs_exact() uses (slot: Slot<1>) {}
 
-fn caller(bad: Other<1>) uses (slot: Slot<u256>) {
+fn caller(bad: Other<1>) uses (slot: Slot<1>) {
     with (Slot = bad) {
         needs_exact()
     }
@@ -2780,9 +2957,9 @@ fn concrete_layout_hole_type_keyed_bindings_prefer_inner_identity_matches() {
         r#"
 struct Slot<const ROOT: u256 = _> {}
 
-fn needs_exact() uses (slot: Slot<u256>) {}
+fn needs_exact() uses (slot: Slot<1>) {}
 
-fn caller(inner: Slot<1>) uses (slot: Slot<u256>) {
+fn caller(inner: Slot<1>) uses (slot: Slot<1>) {
     with (Slot = inner) {
         needs_exact()
     }
@@ -2818,7 +2995,7 @@ trait Cap<T> {
 struct Slot<const ROOT: u256 = _> {}
 struct Provider {}
 
-impl Cap<Slot<u256>> for Provider {
+impl Cap<Slot<1>> for Provider {
     fn cap(self) {}
 }
 
@@ -2858,13 +3035,13 @@ struct Slot<const ROOT: u256 = _> {}
 struct Good {}
 struct Bad {}
 
-impl Cap<Slot<u256>> for Good {
+impl Cap<Slot<1>> for Good {
     fn cap(self) {}
 }
 
-fn needs_exact() uses (cap: Cap<Slot<u256>>) {}
+fn needs_exact() uses (cap: Cap<Slot<1>>) {}
 
-fn caller() uses (cap: Cap<Slot<u256>>) {
+fn caller() uses (cap: Cap<Slot<1>>) {
     with (Cap<Slot> = Bad {}) {
         needs_exact()
     }
@@ -2904,7 +3081,7 @@ struct Slot<const ROOT: u256 = _> {}
 struct Good {}
 struct Bad {}
 
-impl Cap<Slot<u256>> for Good {
+impl Cap<Slot<1>> for Good {
     fn cap(self) {}
 }
 
@@ -2953,13 +3130,13 @@ trait Cap<T> {
 struct Slot<const ROOT: u256 = _> {}
 struct Inner {}
 
-impl Cap<Slot<u256>> for Inner {
+impl Cap<Slot<1>> for Inner {
     fn cap(self) {}
 }
 
-fn needs_exact() uses (cap: Cap<Slot<u256>>) {}
+fn needs_exact() uses (cap: Cap<Slot<1>>) {}
 
-fn caller(inner: own Inner) uses (cap: Cap<Slot<u256>>) {
+fn caller(inner: own Inner) uses (cap: Cap<Slot<1>>) {
     with (Cap<Slot> = inner) {
         needs_exact()
     }
@@ -2993,11 +3170,11 @@ struct Slot<const ROOT: u256 = _> {}
 struct Keyed {}
 struct Unkeyed {}
 
-impl Cap<Slot<u256>> for Keyed {
+impl Cap<Slot<1>> for Keyed {
     fn cap(self) {}
 }
 
-impl Cap<Slot<u256>> for Unkeyed {
+impl Cap<Slot<1>> for Unkeyed {
     fn cap(self) {}
 }
 
@@ -4679,19 +4856,20 @@ fn impl_trait_method_typed_body_instantiation_substitutes_self() {
     let inst = impl_trait
         .trait_inst(&db)
         .expect("missing impl trait instance");
-    let (resolved_method, impl_args) = resolve_trait_method_instance(
+    let Selection::Unique(resolved) = resolve_trait_method_instance(
         &db,
         TraitSolveCx::new(&db, impl_trait.scope()),
         inst,
         method.name(&db).to_opt().expect("missing method name"),
-    )
-    .expect("missing resolved impl method");
-    assert_eq!(resolved_method, method);
+    ) else {
+        panic!("missing resolved impl method");
+    };
+    assert_eq!(resolved.body(), Some(method));
 
     let instantiated = instantiate_typed_body(
         &db,
         typed_body_template(&db, BodyOwner::Func(method)),
-        GenericSubst::new(&db, impl_args),
+        GenericSubst::for_owner(&db, method.into(), resolved.body_args().to_vec()),
     );
     let self_binding = instantiated.param_binding(0).expect("missing self binding");
     let self_ty = instantiated.binding_ty(&db, self_binding);
@@ -4720,18 +4898,19 @@ fn impl_trait_method_self_paths_preserve_binding_ty_after_instantiation() {
     let inst = impl_trait
         .trait_inst(&db)
         .expect("missing impl trait instance");
-    let (_, impl_args) = resolve_trait_method_instance(
+    let Selection::Unique(resolved) = resolve_trait_method_instance(
         &db,
         TraitSolveCx::new(&db, impl_trait.scope()),
         inst,
         method.name(&db).to_opt().expect("missing method name"),
-    )
-    .expect("missing resolved impl method");
+    ) else {
+        panic!("missing resolved impl method");
+    };
 
     let instantiated = instantiate_typed_body(
         &db,
         typed_body_template(&db, BodyOwner::Func(method)),
-        GenericSubst::new(&db, impl_args),
+        GenericSubst::for_owner(&db, method.into(), resolved.body_args().to_vec()),
     );
     let body = instantiated.body().expect("missing typed body");
     let self_binding = instantiated.param_binding(0).expect("missing self binding");
@@ -4924,19 +5103,20 @@ fn impl_sum_semantic_body_uses_self_binding_directly() {
     let inst = impl_trait
         .trait_inst(&db)
         .expect("missing impl trait instance");
-    let (_, impl_args) = resolve_trait_method_instance(
+    let Selection::Unique(resolved) = resolve_trait_method_instance(
         &db,
         TraitSolveCx::new(&db, impl_trait.scope()),
         inst,
         method.name(&db).to_opt().expect("missing method name"),
-    )
-    .expect("missing resolved impl method");
+    ) else {
+        panic!("missing resolved impl method");
+    };
     let instance = get_or_build_semantic_instance(
         &db,
         fe_hir::analysis::semantic::SemanticInstanceKey::new(
             &db,
             BodyOwner::Func(method),
-            GenericSubst::new(&db, impl_args),
+            GenericSubst::for_owner(&db, method.into(), resolved.body_args().to_vec()),
             fe_hir::analysis::semantic::EffectProviderSubst::empty(&db),
             fe_hir::analysis::semantic::ImplEnv::empty(&db, impl_trait.scope()),
         ),

@@ -1,0 +1,5 @@
+fn wrong_type<const N: usize = true>() {}
+
+fn test() {
+    wrong_type()
+}
