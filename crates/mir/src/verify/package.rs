@@ -5,9 +5,10 @@ use crate::{
     db::MirDb,
     instance::RuntimeInstance,
     runtime::{
-        ConstScalar, DispatchDefault, RBlock, RExpr, RStmt, RTerminator, ResolvedCodeRegion,
-        RuntimeBuiltin, RuntimeCodeRegion, RuntimeFunctionOwner, RuntimeLinkage, RuntimeObject,
-        RuntimePackage, RuntimeProgramView, RuntimeReturnPlan, RuntimeSyntheticSpec,
+        ConstScalar, DispatchDefault, RBlock, RExpr, RLocalId, RStmt, RTerminator,
+        ResolvedCodeRegion, RuntimeBuiltin, RuntimeCodeRegion, RuntimeFunctionOwner,
+        RuntimeLinkage, RuntimeObject, RuntimePackage, RuntimeProgramView, RuntimeReturnPlan,
+        RuntimeSyntheticSpec,
         code_region::{code_region_runtime_entry, code_region_section_name, code_region_symbol},
     },
     verify::{VerifyError, storage_layout::verify_contract_storage_seam, verify_runtime_body},
@@ -208,12 +209,20 @@ fn verify_synthetic_function<'db>(
                 // entry block reverts when `callvalue != 0` and otherwise jumps
                 // to the block that calls the handler once and exits through the
                 // planned ABI return; a payable wrapper does all of this in its
-                // entry block. Operands are fixed by construction, so this checks
-                // the control flow, payment policy and callees the plan
-                // prescribes. Call preparation may specialize runtime carriers,
-                // so callees are compared by semantic instance, which retains
-                // generic arguments such as the returned type.
+                // entry block. Unit arms return no data. Other operands are fixed
+                // by construction, so this checks the control flow, payment
+                // policy, return and callees the plan prescribes. Call
+                // preparation may specialize runtime carriers, so callees are
+                // compared by semantic instance, which retains generic arguments
+                // such as the returned type.
                 let semantic = |callee: RuntimeInstance<'db>| callee.key(db).semantic(db);
+                let is_zero = |def: Option<(usize, &RExpr<'db>)>| {
+                    matches!(
+                        def,
+                        Some((_, RExpr::ConstScalar(ConstScalar::Int { words, .. })))
+                            if words.iter().all(|byte| *byte == 0)
+                    )
+                };
                 let handler_calls = |block: &RBlock<'db>| {
                     block
                         .stmts
@@ -238,18 +247,7 @@ fn verify_synthetic_function<'db>(
                     else {
                         return Err(VerifyError::InvalidRecvAbiWrapper);
                     };
-                    // The latest assignment to `local` before statement `end`.
-                    let def = |local, end: usize| {
-                        entry.stmts[..end]
-                            .iter()
-                            .enumerate()
-                            .rev()
-                            .find_map(|(idx, stmt)| match stmt {
-                                RStmt::Assign { dst, expr } if *dst == local => Some((idx, expr)),
-                                _ => None,
-                            })
-                    };
-                    let guarded = match def(cond, entry.stmts.len()) {
+                    let guarded = match last_assignment(&entry.stmts, cond) {
                         Some((
                             idx,
                             RExpr::Binary {
@@ -259,13 +257,9 @@ fn verify_synthetic_function<'db>(
                             },
                         )) => {
                             matches!(
-                                def(*lhs, idx),
+                                last_assignment(&entry.stmts[..idx], *lhs),
                                 Some((_, RExpr::Builtin(RuntimeBuiltin::CallValue)))
-                            ) && matches!(
-                                def(*rhs, idx),
-                                Some((_, RExpr::ConstScalar(ConstScalar::Int { words, .. })))
-                                    if words.iter().all(|byte| *byte == 0)
-                            )
+                            ) && is_zero(last_assignment(&entry.stmts[..idx], *rhs))
                         }
                         _ => false,
                     };
@@ -279,7 +273,12 @@ fn verify_synthetic_function<'db>(
                         .ok_or(VerifyError::MissingRuntimeBlock(else_bb))?
                 };
                 let returns = match (&plan.ret, &exit.terminator) {
-                    (RuntimeReturnPlan::Unit, RTerminator::ReturnData { .. }) => true,
+                    // The exit block runs after the entry block (they are the
+                    // same block when payable), so its assignments are later.
+                    (RuntimeReturnPlan::Unit, RTerminator::ReturnData { len, .. }) => is_zero(
+                        last_assignment(&exit.stmts, *len)
+                            .or_else(|| last_assignment(&entry.stmts, *len)),
+                    ),
                     (
                         RuntimeReturnPlan::Value { return_value, .. },
                         RTerminator::TerminalCall { callee, .. },
@@ -298,6 +297,21 @@ fn verify_synthetic_function<'db>(
             | RuntimeSyntheticSpec::ContractInitAbi { .. } => Ok(()),
         },
     }
+}
+
+/// The latest assignment to `local` in `stmts`, with its statement index.
+fn last_assignment<'a, 'db>(
+    stmts: &'a [RStmt<'db>],
+    local: RLocalId,
+) -> Option<(usize, &'a RExpr<'db>)> {
+    stmts
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(idx, stmt)| match stmt {
+            RStmt::Assign { dst, expr } if *dst == local => Some((idx, expr)),
+            _ => None,
+        })
 }
 
 fn verify_has_terminator<'db>(
@@ -422,8 +436,7 @@ fn resolve_package_object<'db>(
 mod tests {
     use super::*;
     use crate::runtime::{
-        ContractRecvAbiPlan, RBlockId, RLocalId, RuntimeBody,
-        synthetic::lower_synthetic_runtime_body,
+        ContractRecvAbiPlan, RBlockId, RuntimeBody, synthetic::lower_synthetic_runtime_body,
     };
     use common::InputDb;
     use cranelift_entity::EntityRef;
@@ -551,12 +564,34 @@ pub contract C {
                 RTerminator::Goto(RBlockId::from_u32(exit as u32)),
             ];
             match (&plan.ret, &original.blocks[exit].terminator) {
-                (RuntimeReturnPlan::Unit, RTerminator::ReturnData { .. }) => {
+                (RuntimeReturnPlan::Unit, RTerminator::ReturnData { offset, len }) => {
                     units = true;
                     wrong.extend(helpers.iter().map(|&callee| RTerminator::TerminalCall {
                         callee,
                         args: Box::default(),
                     }));
+                    // A structurally valid non-empty return reveals memory
+                    // instead of the unit arm's empty return data.
+                    let mut body = original.clone();
+                    let size = RLocalId::from_u32(body.locals.len() as u32);
+                    body.locals.push(body.locals[len.index()].clone());
+                    body.blocks[exit].stmts.push(RStmt::Assign {
+                        dst: size,
+                        expr: RExpr::ConstScalar(ConstScalar::Int {
+                            bits: 256,
+                            signed: false,
+                            words: vec![32],
+                        }),
+                    });
+                    body.blocks[exit].terminator = RTerminator::ReturnData {
+                        offset: *offset,
+                        len: size,
+                    };
+                    assert_eq!(verify_runtime_body(&db, &view, &body), Ok(()));
+                    assert_eq!(
+                        verify_synthetic_function(&db, owner.clone(), &body),
+                        Err(VerifyError::InvalidRecvAbiWrapper)
+                    );
                 }
                 (RuntimeReturnPlan::Value { .. }, RTerminator::TerminalCall { callee, args }) => {
                     values = true;
