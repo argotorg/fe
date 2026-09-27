@@ -28,6 +28,7 @@ pub enum VerifyError<'db> {
     InvalidEnumTag(LayoutId<'db>),
     MissingEnumVariantProof(RLocalId),
     InvalidReturnClass,
+    InvalidRecvAbiWrapper,
     InvalidExprClass(RLocalId),
     InvalidIndexClass(crate::runtime::RValueId),
     InvalidStoreClass,
@@ -111,6 +112,7 @@ impl<'db> VerifyError<'db> {
             | VerifyError::InvalidCopyClass
             | VerifyError::InvalidTerminalCall(_)
             | VerifyError::InvalidReturnClass
+            | VerifyError::InvalidRecvAbiWrapper
             | VerifyError::CallArgCountMismatch(_)
             | VerifyError::CallArgClassMismatch(_, _)
             | VerifyError::InvalidCodeRegion(_)
