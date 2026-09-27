@@ -124,24 +124,75 @@ fn check_variant_field_abi_requirements<'db>(
     diags: &mut Vec<Box<dyn DiagnosticVoucher + 'db>>,
     ty_diags: &mut Vec<FuncBodyDiag<'db>>,
 ) {
+    for (idx, issue) in variant_field_abi_issues(db, struct_) {
+        let kind = match issue {
+            FieldAbiIssue::Msg(kind) => kind,
+            FieldAbiIssue::Ty(diag) => {
+                ty_diags.push(diag);
+                continue;
+            }
+        };
+        let primary_range = msg_variant_field(db, top_mod, struct_, idx).map_or_else(
+            || msg_variant_focus_range(db, top_mod, struct_, MsgDesugaredFocus::Selector),
+            |field| {
+                field
+                    .ty()
+                    .map_or(field.syntax().text_range(), |ty| ty.syntax().text_range())
+            },
+        );
+        diags.push(Box::new(MsgDiagnostic {
+            kind,
+            file: top_mod.file(db),
+            primary_range,
+            secondary_range: None,
+            variant_name: variant_name.to_string(),
+        }));
+    }
+}
+
+/// Invalid field types and recursive ones are diagnosed by the analyses that
+/// own them, so message field analysis reports nothing more for them.
+pub(crate) fn field_abi_reported_elsewhere<'db>(
+    db: &'db dyn HirAnalysisDb,
+    field_ty: TyId<'db>,
+) -> bool {
+    field_ty.has_invalid(db)
+        || matches!(
+            semantic_ty_to_abi_desc(db, field_ty),
+            Err(AbiTypeError::Recursive(_))
+        )
+}
+
+/// An ABI problem with one `msg` variant field, reported by msg field analysis.
+pub(crate) enum FieldAbiIssue<'db> {
+    Msg(MsgDiagnosticKind),
+    /// An invalid constant in the field type, reported as a type diagnostic.
+    Ty(FuncBodyDiag<'db>),
+}
+
+pub(crate) fn variant_field_abi_issues<'db>(
+    db: &'db dyn HirAnalysisDb,
+    struct_: Struct<'db>,
+) -> Vec<(usize, FieldAbiIssue<'db>)> {
     let (Some(sol_ty), Some(abi_size_trait), Some(encode_trait), Some(decode_trait)) = (
         resolve_lib_type_path(db, struct_.scope(), "std::abi::Sol"),
         resolve_core_trait(db, struct_.scope(), &["abi", "AbiSize"]),
         resolve_core_trait(db, struct_.scope(), &["abi", "Encode"]),
         resolve_core_trait(db, struct_.scope(), &["abi", "Decode"]),
     ) else {
-        return;
+        return Vec::new();
     };
 
     let solve_cx = TraitSolveCx::new(db, struct_.scope());
     let adt = AdtRef::from(struct_).as_adt(db);
+    let mut issues = Vec::new();
     for (idx, field_ty) in struct_
         .field_tys(db)
         .into_iter()
         .map(|ty| ty.instantiate_identity())
         .enumerate()
     {
-        if field_ty.has_invalid(db) {
+        if field_abi_reported_elsewhere(db, field_ty) {
             continue;
         }
 
@@ -154,7 +205,7 @@ fn check_variant_field_abi_requirements<'db>(
             Err(AbiTypeError::InvalidConst { cause, message }) => {
                 let span = struct_.span().fields().field(idx).ty().into();
                 if let Some(diag) = diag_from_invalid_cause(span, &cause) {
-                    ty_diags.push(diag.into());
+                    issues.push((idx, FieldAbiIssue::Ty(diag.into())));
                     continue;
                 }
                 MsgDiagnosticKind::UnsupportedAbiField {
@@ -191,22 +242,9 @@ fn check_variant_field_abi_requirements<'db>(
             }
         };
 
-        let primary_range = msg_variant_field(db, top_mod, struct_, idx).map_or_else(
-            || msg_variant_focus_range(db, top_mod, struct_, MsgDesugaredFocus::Selector),
-            |field| {
-                field
-                    .ty()
-                    .map_or(field.syntax().text_range(), |ty| ty.syntax().text_range())
-            },
-        );
-        diags.push(Box::new(MsgDiagnostic {
-            kind,
-            file: top_mod.file(db),
-            primary_range,
-            secondary_range: None,
-            variant_name: variant_name.to_string(),
-        }));
+        issues.push((idx, FieldAbiIssue::Msg(kind)));
     }
+    issues
 }
 
 /// Checks the argument types declared in a variant's `sol("...")` selector

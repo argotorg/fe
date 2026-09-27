@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/abi_record_layout_wrong_field_type.fe
+---
+error[8-0000]: type mismatch
+  ┌─ abi_record_layout_wrong_field_type.fe:5:16
+  │
+5 │     head_size: false,
+  │                ^^^^^ expected `u256`, but `bool` is given

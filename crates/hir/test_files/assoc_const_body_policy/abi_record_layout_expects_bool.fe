@@ -1,0 +1,19 @@
+// A local `core::abi` changes the expected type of the generated LAYOUT
+// constant, while the error producer still emits an `AbiRecordLayout` body.
+mod core {
+    pub mod abi {
+        pub struct AbiRecordLayout<const N: usize> {
+            pub offsets: [u256; N],
+            pub head_size: u256,
+        }
+        pub trait AbiRecord<const N: usize> { const LAYOUT: bool }
+        pub const fn abi_record_layout<const N: usize>(
+            _ sizes: [u256; N],
+        ) -> AbiRecordLayout<N> {
+            AbiRecordLayout { offsets: [0; N], head_size: 0 }
+        }
+    }
+}
+
+#[error]
+pub struct Empty {}

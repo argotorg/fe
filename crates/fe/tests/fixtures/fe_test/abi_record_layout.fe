@@ -1,0 +1,82 @@
+use std::evm::{Address, Call, Evm, RawMem}
+
+msg Records {
+    #[selector = 0x70110001]
+    Check { flag: bool, small: u8, pair: [u256; 2], label: String<5>, bytes: Bytes } -> bool,
+}
+
+pub contract RecordReceiver {
+    recv Records {
+        Check { flag, small, pair, label, bytes } -> bool {
+            flag
+                && small == 7
+                && pair[0] == 11
+                && pair[1] == 13
+                && label.len() == 5
+                && bytes.len() == 32
+        }
+    }
+}
+
+msg Relay {
+    #[selector = 0x70110002]
+    Check { target: Address } -> bool,
+}
+
+pub contract RecordSender uses (call: mut Call, mem: mut RawMem) {
+    recv Relay {
+        Check { target } -> bool uses (mut call, mut mem) {
+            let data = core::ptr::alloc_bytes(64)
+            mem.mstore(addr: data, value: 32)
+            let bytes = Bytes::from_abi_tail(data: data, len: 32, size: 64)
+            call.call(
+                addr: target,
+                gas: 1000000,
+                value: 0,
+                message: Records::Check {
+                    flag: true,
+                    small: 7,
+                    pair: [11, 13],
+                    label: "hello",
+                    bytes,
+                },
+            )
+        }
+    }
+}
+
+#[test]
+fn generated_record_layout_roundtrip() uses (evm: mut Evm) {
+    let receiver = evm.create2<RecordReceiver>(value: 0, args: (), salt: 1)
+    let sender = evm.create2<RecordSender>(value: 0, args: (), salt: 2)
+    let valid: bool = evm
+        .call(
+            addr: sender,
+            gas: 2000000,
+            value: 0,
+            message: Relay::Check { target: receiver },
+        )
+    assert!(valid)
+}
+
+#[error]
+pub struct RecordError { pub flag: bool, pub value: u256, pub label: String<5> }
+
+#[test(should_revert)]
+fn generated_error_layout_encodes_dynamic_tail() uses (evm: mut Evm) {
+    revert_error(RecordError { flag: true, value: 11, label: "hello" })
+}
+
+#[test]
+fn generated_error_layout_has_canonical_bytes() uses (evm: Evm) {
+    let data = std::evm::encode_abi_payload(RecordError { flag: true, value: 11, label: "hello" })
+    assert!(data.len() == 160)
+    assert!(evm.mload(data.ptr()) == 1)
+    assert!(evm.mload(core::ptr::offset_bytes(data.ptr(), 32)) == 11)
+    assert!(evm.mload(core::ptr::offset_bytes(data.ptr(), 64)) == 96)
+    assert!(evm.mload(core::ptr::offset_bytes(data.ptr(), 96)) == 5)
+    assert!(
+        evm.mload(core::ptr::offset_bytes(data.ptr(), 128))
+            == 0x68656c6c6f000000000000000000000000000000000000000000000000000000,
+    )
+}

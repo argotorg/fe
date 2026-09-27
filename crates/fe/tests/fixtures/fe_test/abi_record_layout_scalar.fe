@@ -1,0 +1,31 @@
+// Generated msg and #[error] layouts agree with their AbiSize metadata.
+msg Records {
+    #[selector = 1]
+    Scalars { first: u256, second: bool, third: u256 } -> bool,
+    #[selector = 2]
+    Empty -> bool,
+}
+
+#[error]
+pub struct Failure { pub code: u256, pub flag: bool }
+
+static_assert(<Records::Scalars as core::abi::AbiRecord<3>>::LAYOUT.offsets[0] == 0)
+static_assert(<Records::Scalars as core::abi::AbiRecord<3>>::LAYOUT.offsets[1] == 32)
+static_assert(<Records::Scalars as core::abi::AbiRecord<3>>::LAYOUT.offsets[2] == 64)
+static_assert(<Records::Scalars as core::abi::AbiRecord<3>>::LAYOUT.head_size == 96)
+static_assert(<Records::Scalars as core::abi::AbiSize>::HEAD_SIZE == 96)
+static_assert(!<Records::Scalars as core::abi::AbiSize>::IS_DYNAMIC)
+static_assert(<Records::Empty as core::abi::AbiRecord<0>>::LAYOUT.head_size == 0)
+static_assert(!<Records::Empty as core::abi::AbiSize>::IS_DYNAMIC)
+static_assert(<Failure as core::abi::AbiRecord<2>>::LAYOUT.offsets[1] == 32)
+static_assert(<Failure as core::abi::AbiRecord<2>>::LAYOUT.head_size == 64)
+static_assert(<Failure as core::abi::AbiSize>::HEAD_SIZE == 64)
+static_assert(!<Failure as core::abi::AbiSize>::IS_DYNAMIC)
+
+#[test]
+fn scalar_and_empty_layouts() {
+    assert!(<Records::Scalars as core::abi::AbiRecord<3>>::LAYOUT.offsets[2] == 64)
+    assert!(<Records::Scalars as core::abi::AbiSize>::HEAD_SIZE == 96)
+    assert!(<Records::Empty as core::abi::AbiRecord<0>>::LAYOUT.head_size == 0)
+    assert!(<Failure as core::abi::AbiSize>::HEAD_SIZE == 64)
+}

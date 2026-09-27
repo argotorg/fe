@@ -1,0 +1,11 @@
+use core::abi::{AbiRecordLayout, abi_record_layout}
+
+const LAYOUT: AbiRecordLayout<2> = abi_record_layout([
+    115792089237316195423570985008687907853269984665640564039457584007913129639935,
+    1,
+])
+const TOTAL: u256 = LAYOUT.head_size
+
+struct Require<const N: u256> {}
+
+fn force(_ value: Require<TOTAL>) {}

@@ -1,0 +1,6 @@
+use core::abi::AbiRecordLayout
+
+const BAD: AbiRecordLayout<1> = AbiRecordLayout {
+    offsets: [0],
+    head_size: false,
+}
