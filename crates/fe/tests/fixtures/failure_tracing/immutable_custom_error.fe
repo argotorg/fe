@@ -1,0 +1,37 @@
+use std::evm::{Call, Create, Evm, revert_error}
+
+#[error]
+pub struct Unsettled {
+    pub remaining: u256,
+}
+
+msg ManagerMsg {
+    #[selector = 1]
+    Settle,
+}
+
+pub contract Manager {
+    remaining: u256,
+
+    init(seed: u256) uses (mut remaining) {
+        assert!(seed != 0, "constructor refused")
+        remaining = seed
+    }
+
+    recv ManagerMsg {
+        Settle {} uses (remaining, evm: mut Evm) {
+            revert_error(Unsettled { remaining })
+        }
+    }
+}
+
+#[test]
+fn nested_failure() uses (evm: mut Evm) {
+    let manager = evm.create2<Manager>(value: 0, args: (7,), salt: 1)
+    evm.call(addr: manager, gas: 1000000, value: 0, message: ManagerMsg::Settle {})
+}
+
+#[test]
+fn constructor_failure() uses (evm: mut Evm) {
+    let manager = evm.create2<Manager>(value: 0, args: (0,), salt: 2)
+}
