@@ -3,6 +3,9 @@
 //! Discovers functions marked with `#[test]` attribute, compiles them, and
 //! executes them using revm or the native host.
 
+mod failure;
+mod failure_decode;
+
 #[cfg(feature = "cranelift")]
 mod native;
 
@@ -540,6 +543,7 @@ impl OutcomeCollectorState {
 
 #[derive(Debug, Clone, Default)]
 pub struct TestDebugOptions {
+    pub explain_failure: bool,
     pub trace_evm: bool,
     pub trace_evm_keep: usize,
     pub trace_evm_stack_n: usize,
@@ -730,7 +734,8 @@ pub fn run_tests(
     call_trace: bool,
     use_recovery: bool,
 ) -> Result<bool, String> {
-    if backend.is_native() && (show_logs || debug.trace_evm || call_trace) {
+    if backend.is_native() && (show_logs || debug.trace_evm || debug.explain_failure || call_trace)
+    {
         return Err("native tests do not support EVM logs or tracing options".to_string());
     }
     if !backend.is_native() && (native_timeout_secs.is_some() || native_output_limit_kib.is_some())
@@ -1423,6 +1428,7 @@ fn prepare_suite_job(plan: &SuitePlan, cfg: &SuiteWorkerConfig) -> (PreparedSuit
     }
     let sonatina_options = SonatinaTestOptions {
         emit_observability: report_ctx.is_some(),
+        explain_failure: suite_debug.explain_failure,
     };
 
     let build_started = Instant::now();
@@ -2140,7 +2146,8 @@ fn discover_tests(
         report,
         output,
     );
-    let module_output = emit_result?;
+    let mut module_output = emit_result?;
+    failure::attach_error_metadata(db, &mut module_output);
 
     if module_output.tests.is_empty() {
         return Ok(DiscoverResult { tests: Vec::new() });
@@ -2169,7 +2176,8 @@ fn discover_ingot_tests(
         report,
         output,
     );
-    let module_output = emit_result?;
+    let mut module_output = emit_result?;
+    failure::attach_error_metadata(db, &mut module_output);
 
     if module_output.tests.is_empty() {
         return Ok(DiscoverResult { tests: Vec::new() });
@@ -2686,7 +2694,11 @@ pub(super) fn compile_and_run_test(
     }
 
     let bytecode = hex::encode(&case.bytecode);
-    let (result, logs, trace) = execute_test(
+    let mut diagnostics = case
+        .debug_info
+        .as_deref()
+        .map(|info| failure::FailureDiagnostics::new(info, &case.display_name, evm_trace));
+    let (mut result, logs, trace) = execute_test(
         &case.display_name,
         &bytecode,
         show_logs,
@@ -2694,7 +2706,31 @@ pub(super) fn compile_and_run_test(
         evm_trace,
         call_trace,
         initial_balance,
+        diagnostics.as_mut(),
     );
+    if let Some(diagnostics) = &diagnostics {
+        if !result.passed {
+            let message = result.error_message.get_or_insert_with(String::new);
+            message.push('\n');
+            message.push_str(&diagnostics.render());
+        }
+        if let Some(options) = evm_trace {
+            let steps = diagnostics.render_steps();
+            if options.write_stderr {
+                eprint!("{steps}");
+            }
+            if let Some(path) = &options.out_path
+                && let Err(error) = std::fs::write(path, steps)
+            {
+                eprintln!("Failed to write execution steps: {error}");
+            }
+        }
+        if let Some(report) = report
+            && let Err(error) = diagnostics.write_report(&report.root_dir, &case.display_name)
+        {
+            eprintln!("Failed to write execution diagnostics: {error}");
+        }
+    }
     TestOutcome {
         result,
         logs,
@@ -2820,9 +2856,20 @@ fn execute_test(
     evm_trace: Option<&EvmTraceOptions>,
     call_trace: bool,
     initial_balance: Option<U256>,
+    mut diagnostics: Option<&mut failure::FailureDiagnostics<'_>>,
 ) -> (TestResult, Vec<String>, Option<contract_harness::CallTrace>) {
     // Deploy the test contract
-    let (mut instance, _) = match RuntimeInstance::deploy_tracked(bytecode_hex) {
+    let deployment = if let Some(diagnostics) = diagnostics.as_deref_mut() {
+        let (result, trace) =
+            RuntimeInstance::deploy_observed(bytecode_hex, &[], Some(diagnostics.limits.clone()));
+        if let Some(trace) = trace {
+            diagnostics.record(trace);
+        }
+        result
+    } else {
+        RuntimeInstance::deploy_tracked(bytecode_hex)
+    };
+    let (mut instance, _) = match deployment {
         Ok(deployed) => deployed,
         Err(err) => {
             return (
@@ -2841,25 +2888,32 @@ fn execute_test(
         instance.fund_contract(balance);
     }
 
-    instance.set_trace_options(evm_trace.cloned());
+    if diagnostics.is_none() {
+        instance.set_trace_options(evm_trace.cloned());
+    }
 
     // Execute the test (empty calldata since test functions take no args)
     let options = ExecutionOptions::default();
 
-    // Capture call trace BEFORE the real execution so the cloned context
-    // has the right pre-call state (contract deployed but not yet called).
-    let trace = if call_trace {
-        Some(instance.call_raw_traced(&[], options))
+    let (call_result, trace) = if let Some(diagnostics) = diagnostics {
+        let (result, structured, legacy) =
+            instance.call_raw_observed(&[], options, diagnostics.limits.clone(), call_trace);
+        diagnostics.record(structured);
+        (
+            result.map(|outcome| if show_logs { outcome.logs } else { Vec::new() }),
+            legacy,
+        )
     } else {
-        None
-    };
-
-    let call_result = if show_logs {
-        instance
-            .call_raw_with_logs(&[], options)
-            .map(|outcome| outcome.logs)
-    } else {
-        instance.call_raw(&[], options).map(|_| Vec::new())
+        // Preserve the historical path unless structured diagnostics were requested.
+        let trace = call_trace.then(|| instance.call_raw_traced(&[], options));
+        let result = if show_logs {
+            instance
+                .call_raw_with_logs(&[], options)
+                .map(|outcome| outcome.logs)
+        } else {
+            instance.call_raw(&[], options).map(|_| Vec::new())
+        };
+        (result, trace)
     };
 
     match (call_result, expected_revert) {

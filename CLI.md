@@ -477,7 +477,7 @@ Runs Fe tests via the test harness (revm-based execution).
 ### Synopsis
 
 ```
-fe test [--filter <pattern>] [--jobs <n>] [--grouped] [--show-logs] [--optimize <level>] [--trace-evm] [--trace-evm-keep <n>] [--trace-evm-stack-n <n>] [--debug-dir <dir>] [--report [--report-out <out>]] [--report-dir <dir> [--report-failed-only]] [--call-trace] [path]...
+fe test [--filter <pattern>] [--jobs <n>] [--grouped] [--show-logs] [--optimize <level>] [--explain-failure] [--trace-evm] [--trace-evm-keep <n>] [--trace-evm-stack-n <n>] [--debug-dir <dir>] [--report [--report-out <out>]] [--report-dir <dir> [--report-failed-only]] [--call-trace] [path]...
 ```
 
 ### Inputs
@@ -498,6 +498,26 @@ fe test [--filter <pattern>] [--jobs <n>] [--grouped] [--show-logs] [--optimize 
 - `--grouped` keeps suite-by-suite execution (each worker runs whole suites).
 
 ### Debugging
+
+`fe test --explain-failure` records the actual EVM test deployment and execution,
+then explains failed tests with a call tree, raw revert data, decoded standard and custom
+errors when verified metadata is available, and verified Fe source locations where available. It is opt-in and does
+not change expected-revert assertions. Successful expected-revert tests do not
+print a failure explanation. Native execution does not support this option.
+
+Source attribution uses the exact test build and its source snapshots. Unknown
+code, generated instructions, and ambiguous optimized locations remain explicit.
+A nested revert is an observation, not proof that it caused the test failure;
+an enclosing call may handle it successfully. DELEGATECALL displays the executed
+code address separately from its storage context.
+
+Combine the flag with `--trace-evm` for a bounded opcode history or with `--report`
+to retain structured execution data, compiler facts, an artifact manifest, and
+source snapshots. Combined tracing flags observe one execution. Frame and payload
+capture limits are independent of the opcode ring; truncation is reported.
+See [test failure tracing](docs/test-failure-tracing.md) for identity rules, report
+contents, capture limits, and measured overhead.
+
 
 - `--trace-evm`, `--trace-evm-keep`, `--trace-evm-stack-n` enable EVM opcode tracing.
 - `--debug-dir <dir>` writes debug outputs (traces) into a directory.

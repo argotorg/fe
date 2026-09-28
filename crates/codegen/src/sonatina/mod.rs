@@ -115,6 +115,7 @@ pub struct SonatinaContractBytecode {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SonatinaTestOptions {
     pub emit_observability: bool,
+    pub explain_failure: bool,
 }
 
 #[cfg(feature = "cranelift")]
@@ -1818,15 +1819,145 @@ pub fn emit_test_module_sonatina(
     if package.root_objects(db).is_empty() {
         return Ok(TestModuleOutput { tests: Vec::new() });
     }
+    let owner = format!("test:{}", package.root_objects(db)[0].name(db));
     let mut compiler = IsolatedObjectCompiler {
         db,
         package: &package,
         opt_level,
-        emit_observability: options.emit_observability,
+        emit_observability: options.emit_observability || options.explain_failure,
         compiled: HashMap::new(),
         in_progress: FxHashSet::default(),
-        trace_owner: None,
+        trace_owner: options.explain_failure.then(|| owner.clone()),
         trace_facts: BTreeMap::new(),
+    };
+    let debug_info = if options.explain_failure {
+        use common::InputDb;
+        // Describe every object with facts from the same isolated compilation
+        // that produced the executed bytes; dependencies are embedded as data.
+        let mut facts = mir::trace::emit_mir_facts(db, package);
+        let mut bytecodes = BTreeMap::new();
+        for object in package.objects(db) {
+            let name = object.name(db);
+            compiler.compile(&name)?;
+            let artifact = &compiler.compiled[name.as_str()];
+            let bytecode = BTreeMap::from([(
+                name.clone(),
+                root_contract_bytecode(
+                    db,
+                    object,
+                    &HashMap::from([(name.clone(), object)]),
+                    &HashMap::from([(name.as_str(), artifact)]),
+                    true,
+                    ExternalEmbeds::Data,
+                )?,
+            )]);
+            let (sonatina_owner, sonatina_facts) = compiler
+                .trace_facts
+                .remove(&name)
+                .expect("compiled object has trace facts");
+            facts.extend(crate::trace::emit_observed_bytecode_trace_facts(
+                &owner,
+                "tests",
+                "function:test",
+                &sonatina_owner,
+                &bytecode,
+                &sonatina_facts,
+            )?);
+            facts.extend(sonatina_facts);
+            bytecodes.extend(bytecode);
+        }
+        let sources = facts
+            .iter()
+            .filter_map(|fact| {
+                let trace_facts::TraceFact::SourceFile(source) = fact else {
+                    return None;
+                };
+                let url = url::Url::parse(&source.uri).ok()?;
+                let file = db.workspace().get(db, &url)?;
+                Some((source.content_hash.clone(), file.text(db).to_string()))
+            })
+            .collect();
+        let codes = bytecodes
+            .into_iter()
+            .map(|(name, bytecode)| {
+                let runtime_owner =
+                    crate::trace::bytecode_runtime_owner_key(&owner, "tests", &name);
+                let creation_owner =
+                    crate::trace::bytecode_creation_owner_key(&owner, "tests", &name);
+                let immutable_tail_bytes = package
+                    .objects(db)
+                    .iter()
+                    .find(|object| object.name(db) == name)
+                    .and_then(|object| {
+                        object.sections(db).iter().find_map(|section| {
+                            match section.entry.owner(db) {
+                                mir::RuntimeFunctionOwner::Synthetic(
+                                    mir::RuntimeSyntheticSpec::ContractInitRoot {
+                                        contract, ..
+                                    },
+                                ) => Some(contract.code_address_space_slot_count(db) * 32),
+                                _ => None,
+                            }
+                        })
+                    })
+                    .unwrap_or(0);
+                let debug_owner = package
+                    .objects(db)
+                    .iter()
+                    .find(|object| object.name(db) == name)
+                    .and_then(|object| {
+                        object.sections(db).iter().find_map(|section| {
+                            use hir::analysis::ty::ty_check::BodyOwner;
+                            use hir::span::LazySpan;
+                            let (scope, kind, name) = match section.entry.owner(db) {
+                                mir::RuntimeFunctionOwner::Synthetic(
+                                    mir::RuntimeSyntheticSpec::ContractInitRoot {
+                                        contract, ..
+                                    },
+                                ) => (contract.scope(), "contract", contract.name(db).to_opt()?),
+                                mir::RuntimeFunctionOwner::Synthetic(
+                                    mir::RuntimeSyntheticSpec::TestRoot { callee, .. },
+                                ) => {
+                                    let semantic = callee.key(db).semantic(db)?;
+                                    let BodyOwner::Func(func) = semantic.key(db).owner(db) else {
+                                        return None;
+                                    };
+                                    (func.scope(), "function", func.name(db).to_opt()?)
+                                }
+                                _ => return None,
+                            };
+                            let file = scope.top_mod(db).span().resolve(db)?.file;
+                            Some(crate::test_output::TestDebugOwner {
+                                source_uri: file.url(db)?.to_string(),
+                                kind: kind.into(),
+                                name: name.data(db).to_string(),
+                            })
+                        })
+                    });
+                crate::test_output::TestDebugCode {
+                    owner: debug_owner,
+                    custom_errors: vec![],
+                    immutable_tail_bytes,
+                    name,
+                    deploy: bytecode.deploy,
+                    runtime: bytecode.runtime,
+                    create_key: crate::trace::bytecode_creation_code_object_key(&creation_owner),
+                    runtime_key: crate::trace::bytecode_code_object_key(&runtime_owner),
+                }
+            })
+            .collect();
+        Some(std::sync::Arc::new(crate::test_output::TestDebugInfo {
+            optimization: format!("{opt_level:?}"),
+            compiler_flags: vec![
+                format!("profile={}", db.compilation_settings().profile(db)),
+                format!("recovery_mode={}", db.compiler_options().recovery_mode(db)),
+            ],
+            facts,
+            codes,
+            sources,
+        }))
+    } else {
+        None
     };
     let mut tests = Vec::new();
     for object in package.root_objects(db) {
@@ -1860,6 +1991,7 @@ pub fn emit_test_module_sonatina(
             object_name: object.name(db).clone(),
             bytecode: wrap_as_init_code(&runtime.bytes),
             sonatina_observability_json: artifact.observability_json(),
+            debug_info: debug_info.clone(),
             value_param_count: 0,
             effect_param_count: 0,
             init_bytecode: Vec::new(),
@@ -2484,6 +2616,80 @@ pub contract C uses (evm: mut Evm) {
         }
         compile_runtime_objects(module, OptLevel::O0, false)
             .expect("test runtime package should compile");
+    }
+
+    #[test]
+    fn test_debug_facts_describe_identical_executables_at_every_optimization() {
+        let mut db = DriverDataBase::default();
+
+        let file_url = temp_fixture_url("test_failure_debug_facts.fe");
+        let source = r#"
+use std::evm::{Call, Create, Evm}
+use std::abi::sol
+msg ProbeMsg {
+    #[selector = sol("read()")]
+    Read -> u256,
+}
+pub contract Probe {
+    recv ProbeMsg {
+        Read {} -> u256 { 7 }
+    }
+}
+#[test]
+fn deploy_and_call() uses (evm: mut Evm) {
+    let addr = evm.create2<Probe>(value: 0, args: (), salt: 0)
+    let value = evm.call(addr: addr, gas: 100000, value: 0, message: ProbeMsg::Read {})
+    assert!(value == 7)
+}
+"#;
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(source.to_string()));
+        let file = db.workspace().get(&db, &file_url).unwrap();
+        let top_mod = db.top_mod(file);
+        let diagnostics = db.run_on_top_mod(top_mod);
+        assert!(diagnostics.is_empty(), "invalid tracing fixture");
+        for opt in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::Os] {
+            let normal =
+                emit_test_module_sonatina(&db, top_mod, opt, SonatinaTestOptions::default(), None)
+                    .unwrap();
+            let observed = emit_test_module_sonatina(
+                &db,
+                top_mod,
+                opt,
+                SonatinaTestOptions {
+                    emit_observability: true,
+                    explain_failure: true,
+                },
+                None,
+            )
+            .unwrap();
+            assert_eq!(normal.tests.len(), observed.tests.len());
+            for (normal, observed) in normal.tests.iter().zip(&observed.tests) {
+                assert_eq!(
+                    normal.bytecode, observed.bytecode,
+                    "debug emission changed bytecode at {opt:?}"
+                );
+                let info = observed.debug_info.as_ref().unwrap();
+                assert!(info.codes.len() >= 2, "missing deployed contract");
+                assert!(
+                    info.codes
+                        .iter()
+                        .any(|code| code.deploy == observed.bytecode)
+                );
+                assert!(info.sources.values().any(|text| text == source));
+                let bundle = trace_facts::TraceBundle::new(
+                    trace_facts::TraceMetadata::compiler_emitted(
+                        "test",
+                        "evm",
+                        vec!["test".into()],
+                        file_url.as_str(),
+                        vec![],
+                    ),
+                    info.facts.clone(),
+                );
+                trace_facts::TraceSnapshot::new(bundle).expect("test compiler facts must validate");
+            }
+        }
     }
 
     #[test]
