@@ -265,6 +265,14 @@ func private %main_root() {
         evm_stop;
 }
 
+func private %trait_AbiSize__payload_size__ge513(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return 32.i256;
+}
+
 func inline(always) private %impl_trait_____payload_size__ge513(v0.@layout_0) -> i256 {
     block0:
         jump block1;
@@ -274,14 +282,6 @@ func inline(always) private %impl_trait_____payload_size__ge513(v0.@layout_0) ->
         v5.i256 = call %dynamic_payload_size v4;
         v6.i256 = add 32.i256 v5;
         return v6;
-}
-
-func private %trait_AbiSize__payload_size__ge513(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return 32.i256;
 }
 
 func private %impl_MemBuffer__ptr(v0.objref<@layout_1>) -> i256 {

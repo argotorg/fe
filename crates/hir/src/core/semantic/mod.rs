@@ -104,8 +104,8 @@ use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_ty};
 use crate::analysis::ty::{
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     provider::{
-        ProviderLayoutEvidence, ProviderSemantics, RootProviderRegistration, provider_semantics,
-        registered_root_providers,
+        ProviderLayoutEvidence, ProviderSemantics, RootProviderRegistration, RootProviderScope,
+        provider_semantics, registered_root_providers,
     },
     trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf},
     ty_check::EffectParamSite,
@@ -518,7 +518,7 @@ fn func_provider_bindings_canonical<'db>(
                     provider_ty,
                     is_mut: true,
                     source: ProviderSource::RootProvider {
-                        site: EffectParamSite::Func(func),
+                        scope: RootProviderScope::Func(func),
                         registration,
                     },
                     semantics: provider_semantics(db, scope, assumptions, provider_ty),
@@ -1744,7 +1744,7 @@ pub enum ProviderSource<'db> {
         field: ContractFieldId<'db>,
     },
     RootProvider {
-        site: EffectParamSite<'db>,
+        scope: RootProviderScope<'db>,
         registration: RootProviderRegistration<'db>,
     },
 }
@@ -2384,7 +2384,10 @@ fn contract_provider_bindings_canonical<'db>(
                     provider_idx: (base_provider_idx + idx) as u32,
                     provider_ty,
                     is_mut: true,
-                    source: ProviderSource::RootProvider { site, registration },
+                    source: ProviderSource::RootProvider {
+                        scope: RootProviderScope::of_site(site),
+                        registration,
+                    },
                     semantics: provider_semantics(db, scope, assumptions, provider_ty),
                     layout_env: None,
                 }

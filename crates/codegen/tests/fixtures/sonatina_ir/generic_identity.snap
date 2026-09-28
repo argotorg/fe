@@ -23,7 +23,7 @@ func private %call_identity_u32() -> i32 {
         return v1;
 }
 
-func private %identity__g6338(v0.i32) -> i32 {
+func private %identity__gda9b(v0.i1) -> i1 {
     block0:
         jump block1;
 
@@ -31,7 +31,7 @@ func private %identity__g6338(v0.i32) -> i32 {
         return v0;
 }
 
-func private %identity__gda9b(v0.i1) -> i1 {
+func private %identity__g6338(v0.i32) -> i32 {
     block0:
         jump block1;
 

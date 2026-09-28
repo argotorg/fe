@@ -2057,6 +2057,74 @@ pub contract ReturnContract {
     }
 
     #[test]
+    fn recv_arms_share_helper_instances() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("recv_arms_share_helper_instances.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::evm::Evm
+
+struct Store {
+    a: u256,
+}
+
+fn bump(_ x: u256) -> u256 uses (evm: mut Evm, store: mut Store) {
+    store.a = store.a + x
+    store.a
+}
+
+msg M {
+    #[selector = 1]
+    A { x: u256 } -> u256,
+    #[selector = 2]
+    B { x: u256 } -> u256,
+}
+
+pub contract C uses (evm: mut Evm) {
+    mut store: Store,
+
+    recv M {
+        A { x } -> u256 uses (mut evm, mut store) {
+            bump(x)
+        }
+        B { x } -> u256 uses (mut evm, mut store) {
+            bump(x + 1)
+        }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("fixture should be loaded");
+        let top_mod = db.top_mod(file);
+        let output = emit_module_sonatina_ir(&db, top_mod).expect("contract should compile");
+
+        // The arms' root providers, module scopes, and effect provenance
+        // differ, but none of them changes a helper's body.
+        for helper in [&["bump"][..], &["store_word"], &["MemBuffer", "__alloc"]] {
+            let definitions = output
+                .lines()
+                .filter(|line| {
+                    line.starts_with("func ") && helper.iter().all(|part| line.contains(part))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                definitions.len(),
+                1,
+                "`{helper:?}` should have one runtime instance:\n{}",
+                definitions.join("\n")
+            );
+        }
+    }
+
+    #[test]
     fn result_map_chain_test_runtime_package_retains_value_enum_asserts() {
         let mut db = DriverDataBase::default();
         let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

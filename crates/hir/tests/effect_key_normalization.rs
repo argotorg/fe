@@ -4,8 +4,8 @@ use cranelift_entity::EntityRef;
 use fe_hir::analysis::diagnostics::DiagnosticVoucher;
 use fe_hir::analysis::place::PlaceBase;
 use fe_hir::analysis::semantic::{
-    GenericSubst, get_or_build_semantic_instance, instantiate_typed_body, instantiated_effect_env,
-    layout_evidence_body, resolved_provider_binding_for_instance_effect,
+    GenericSubst, SemanticInstanceKey, get_or_build_semantic_instance, instantiate_typed_body,
+    instantiated_effect_env, layout_evidence_body, resolved_provider_binding_for_instance_effect,
     root_semantic_instance_key, typed_body_template, validate_instantiated_effect_env_key,
 };
 use fe_hir::analysis::ty::effects::{EffectKeyKind, place_effect_provider_param_index_map};
@@ -5610,11 +5610,39 @@ fn root_effect_handle_bindings_specialize_provider_targets_to_underlying_values(
     );
 }
 
+fn needs_callee_keys<'db>(
+    db: &'db HirAnalysisTestDb,
+    top_mod: TopLevelMod<'db>,
+) -> Vec<SemanticInstanceKey<'db>> {
+    let caller = find_func(db, top_mod, "caller");
+    let instance = get_or_build_semantic_instance(
+        db,
+        root_semantic_instance_key(db, BodyOwner::Func(caller))
+            .expect("caller root instance should exist"),
+    );
+    instance
+        .body(db)
+        .callees()
+        .into_iter()
+        .filter(|callee| {
+            matches!(
+                callee.key.owner(db),
+                BodyOwner::Func(func)
+                    if func
+                        .name(db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(db) == "needs")
+            )
+        })
+        .map(|callee| callee.key)
+        .collect()
+}
+
 #[test]
-fn free_function_effect_calls_monomorphize_distinct_provider_bindings() {
+fn free_function_effect_calls_share_instances_for_equal_provider_bindings() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
-        Utf8PathBuf::from("free_function_effect_calls_monomorphize_distinct_provider_bindings.fe"),
+        Utf8PathBuf::from("free_function_effect_calls_share_equal_provider_bindings.fe"),
         r#"
 use std::evm::{RawStorage, StorageMap}
 
@@ -5641,33 +5669,51 @@ fn caller()
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 
-    let caller = find_func(&db, top_mod, "caller");
-    let instance = get_or_build_semantic_instance(
-        &db,
-        root_semantic_instance_key(&db, BodyOwner::Func(caller))
-            .expect("caller root instance should exist"),
-    );
-    let callees = instance
-        .body(&db)
-        .callees()
-        .into_iter()
-        .filter(|callee| {
-            matches!(
-                callee.key.owner(&db),
-                BodyOwner::Func(func)
-                    if func
-                        .name(&db)
-                        .to_opt()
-                        .is_some_and(|name| name.data(&db) == "needs")
-            )
-        })
-        .collect::<Vec<_>>();
+    let callees = needs_callee_keys(&db, top_mod);
+    assert_eq!(callees.len(), 2);
     assert_eq!(
-        callees.len(),
-        2,
+        callees[0], callees[1],
+        "call sites whose providers bind identically should share one callee instance",
+    );
+}
+
+#[test]
+fn free_function_effect_calls_monomorphize_distinct_provider_bindings() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("free_function_effect_calls_monomorphize_distinct_provider_bindings.fe"),
+        r#"
+use std::evm::{RawStorage, StorageMap}
+
+fn needs(_ addr: u256) -> u256
+    uses (balances: StorageMap<u256, u256>)
+{
+    balances.get(key: addr)
+}
+
+fn caller()
+    uses (storage: mut RawStorage)
+{
+    let mut left = StorageMap<u256, u256, 0>::new()
+    let mut right = StorageMap<u256, u256, 1>::new()
+    with (left) {
+        let _ = needs(1)
+    }
+    with (right) {
+        let _ = needs(2)
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let callees = needs_callee_keys(&db, top_mod);
+    assert_eq!(callees.len(), 2);
+    assert_ne!(
+        callees[0], callees[1],
         "different free-function effect providers should produce distinct callee instances",
     );
-    assert_ne!(callees[0].key, callees[1].key);
 }
 
 #[test]

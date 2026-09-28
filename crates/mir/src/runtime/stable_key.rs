@@ -4,15 +4,13 @@ use hir::{
         HirAnalysisDb,
         semantic::{EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance},
         ty::{
+            RootProviderScope,
             trait_def::{TraitInstId, TraitRefId},
-            ty_check::{
-                BodyOwner, EffectParamSite, EffectProviderProvenance, EffectProviderSpecialization,
-                LocalBinding,
-            },
+            ty_check::{BodyOwner, EffectParamSite},
             ty_def::{TyBase, TyData, TyId},
         },
     },
-    hir_def::{CallableDef, ExprId, ItemKind, PatId, TopLevelMod, scope_graph::ScopeId},
+    hir_def::{CallableDef, ItemKind, TopLevelMod, scope_graph::ScopeId},
     semantic::{ProviderBinding, ProviderSource},
 };
 
@@ -182,24 +180,9 @@ fn effect_provider_subst_identity<'db>(
     subst
         .providers(db)
         .iter()
-        .map(|provider| effect_provider_specialization_identity(db, provider, mode))
+        .map(|provider| provider_binding_identity(db, provider, mode))
         .collect::<Vec<_>>()
         .join("$")
-}
-
-fn effect_provider_specialization_identity<'db>(
-    db: &'db dyn HirAnalysisDb,
-    specialization: &EffectProviderSpecialization<'db>,
-    mode: IdentityMode,
-) -> String {
-    match mode {
-        IdentityMode::Sort => format!(
-            "provider${}$provenance${}",
-            provider_binding_identity(db, &specialization.provider, mode),
-            effect_provider_provenance_identity(db, specialization.provenance)
-        ),
-        IdentityMode::Symbol => provider_binding_identity(db, &specialization.provider, mode),
-    }
 }
 
 fn provider_binding_identity<'db>(
@@ -238,7 +221,10 @@ fn provider_source_identity<'db>(
             item_identity(db, field.contract.into()),
             field.index
         ),
-        ProviderSource::RootProvider { site, registration } => {
+        ProviderSource::RootProvider {
+            scope,
+            registration,
+        } => {
             let ty = match mode {
                 IdentityMode::Sort => {
                     format!("$ty${}", type_identity(db, registration.provider_ty))
@@ -247,7 +233,7 @@ fn provider_source_identity<'db>(
             };
             format!(
                 "root_provider${}$idx${}$kind${:?}{ty}",
-                effect_param_site_identity(db, *site),
+                root_provider_scope_identity(db, *scope),
                 registration.idx,
                 registration.site_kind
             )
@@ -274,53 +260,6 @@ fn provider_semantics_identity<'db>(
     )
 }
 
-fn effect_provider_provenance_identity<'db>(
-    db: &'db dyn HirAnalysisDb,
-    provenance: EffectProviderProvenance<'db>,
-) -> String {
-    match provenance {
-        EffectProviderProvenance::Binding { owner, binding } => format!(
-            "binding${}${}",
-            body_owner_identity(db, owner),
-            local_binding_identity(db, binding)
-        ),
-        EffectProviderProvenance::Expr { owner, expr } => {
-            format!("expr${}${}", body_owner_identity(db, owner), expr_id(expr))
-        }
-    }
-}
-
-fn local_binding_identity<'db>(db: &'db dyn HirAnalysisDb, binding: LocalBinding<'db>) -> String {
-    match binding {
-        LocalBinding::Local { pat, is_mut } => {
-            format!("local${}${is_mut}", pat_id(pat))
-        }
-        LocalBinding::Param {
-            site,
-            idx,
-            mode,
-            ty,
-            is_mut,
-        } => format!(
-            "param${:?}${idx}${mode:?}${}${is_mut}",
-            site,
-            type_identity(db, ty)
-        ),
-        LocalBinding::EffectParam {
-            site,
-            idx,
-            binding_name,
-            provider_idx,
-            is_mut,
-            ..
-        } => format!(
-            "effect_param${}${idx}${}${provider_idx}${is_mut}",
-            effect_param_site_identity(db, site),
-            binding_name.data(db)
-        ),
-    }
-}
-
 fn impl_env_identity<'db>(
     db: &'db dyn HirAnalysisDb,
     env: ImplEnv<'db>,
@@ -328,9 +267,13 @@ fn impl_env_identity<'db>(
 ) -> String {
     let assumptions = trait_list_identity(db, env.assumptions(db).list(db).iter().copied(), mode);
     let witnesses = trait_list_identity(db, env.witnesses(db).iter().copied(), mode);
+    // Callees normalize at an ingot root, and every ingot's root module has
+    // the same name, so the scope must name its ingot.
+    let scope = env.normalization_scope(db);
     format!(
-        "scope${}$assumptions${assumptions}$witnesses${witnesses}",
-        module_path_components_for_scope(db, env.normalization_scope(db)).join("$")
+        "scope${}${}$assumptions${assumptions}$witnesses${witnesses}",
+        ingot_identity_for_top_mod(db, scope.top_mod(db)),
+        module_path_components_for_scope(db, scope).join("$")
     )
 }
 
@@ -423,6 +366,18 @@ fn ty_mentions_effect_provider_param<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'
     }
 }
 
+fn root_provider_scope_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: RootProviderScope<'db>,
+) -> String {
+    match scope {
+        RootProviderScope::Func(func) => format!("func${}", item_identity(db, func.into())),
+        RootProviderScope::Contract(contract) => {
+            format!("contract${}", item_identity(db, contract.into()))
+        }
+    }
+}
+
 fn effect_param_site_identity<'db>(
     db: &'db dyn HirAnalysisDb,
     site: EffectParamSite<'db>,
@@ -444,14 +399,6 @@ fn effect_param_site_identity<'db>(
             item_identity(db, contract.into())
         ),
     }
-}
-
-fn expr_id(expr: ExprId) -> u32 {
-    expr.as_u32()
-}
-
-fn pat_id(pat: PatId) -> u32 {
-    pat.as_u32()
 }
 
 pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {

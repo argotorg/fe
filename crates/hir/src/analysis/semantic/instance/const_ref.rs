@@ -41,7 +41,8 @@ use crate::{
     },
     core::semantic::{EffectEnvView, EffectRequirementKey, ProviderBinding},
     hir_def::{
-        CallableDef, Const, Func, GenericParamOwner, params::FuncParamMode, scope_graph::ScopeId,
+        CallableDef, Const, Func, GenericParamOwner, HirIngot, params::FuncParamMode,
+        scope_graph::ScopeId,
     },
 };
 use common::indexmap::IndexSet;
@@ -597,16 +598,24 @@ fn semantic_callee_key_with_assumptions<'db>(
             !nominal_redundant,
         )
     } else if selected_trait_method.is_none()
-        && !nominal_func.is_associated_func(db)
+        && (nominal_func.containing_impl(db).is_some() || !nominal_func.is_associated_func(db))
         && callable.trait_inst().is_none()
-        && effect_args.is_empty()
-        && effect_providers.is_empty()
-        && nominal_func.effect_requirements(db).is_empty()
         && !has_callable_layout_slots(db, nominal_func)
-        && is_ground(collect_flags(db, subst_args.as_slice()))
+        && is_ground(
+            collect_flags(db, subst_args.as_slice())
+                | collect_flags(db, effect_providers.as_slice())
+                | collect_flags(db, effect_args),
+        )
     {
+        // A concrete free or inherent function sheds caller context when its
+        // bounds hold and its signature and effect keys normalize the same
+        // without the caller's assumptions.
         let empty = PredicateListId::empty_list(db);
         let scope = nominal_func.scope();
+        let caller_scope = impl_env.normalization_scope(db);
+        let same_without_caller = |ty| {
+            normalize_ty(db, ty, caller_scope, assumptions) == normalize_ty(db, ty, scope, empty)
+        };
         let bounds = collect_func_decl_constraints(db, CallableDef::Func(nominal_func), true)
             .instantiate(db, &subst_args);
         let independent = bounds.list(db).iter().copied().all(|bound| {
@@ -615,17 +624,15 @@ fn semantic_callee_key_with_assumptions<'db>(
                 GoalSatisfiability::Satisfied(_)
             )
         }) && (0..nominal_func.arg_tys(db).len()).all(|idx| {
-            let arg = callable
-                .arg_ty(db, idx)
-                .expect("nominal input arity changed");
-            normalize_ty(db, arg, impl_env.normalization_scope(db), assumptions)
-                == normalize_ty(db, arg, scope, empty)
-        }) && normalize_ty(
-            db,
-            callable.ret_ty(db),
-            impl_env.normalization_scope(db),
-            assumptions,
-        ) == normalize_ty(db, callable.ret_ty(db), scope, empty);
+            same_without_caller(
+                callable
+                    .arg_ty(db, idx)
+                    .expect("nominal input arity changed"),
+            )
+        }) && same_without_caller(callable.ret_ty(db))
+            && checked_effect_inputs
+                .iter()
+                .all(|&(_, ty)| same_without_caller(ty));
         (independent, true)
     } else {
         (false, true)
@@ -641,7 +648,16 @@ fn semantic_callee_key_with_assumptions<'db>(
     if let Some((resolved, _)) = selected_trait_method {
         witnesses.insert(resolved.trait_inst());
     }
-    let normalization_scope = if context_independent || selected_impl {
+    let normalization_scope = if context_independent {
+        // Library paths and impl selection resolve per ingot, and a body can
+        // reach impls only its caller's ingot sees, such as `Encode<Sol>` for a
+        // panic payload. Keep that ingot, not the module.
+        impl_env
+            .normalization_scope(db)
+            .ingot(db)
+            .root_mod(db)
+            .scope()
+    } else if selected_impl {
         owner.scope()
     } else {
         impl_env.normalization_scope(db)
@@ -716,7 +732,13 @@ fn semantic_callee_key_with_assumptions<'db>(
             db,
             owner,
             GenericSubst::for_owner(db, body_func.into(), subst_args),
-            EffectProviderSubst::new(db, effect_providers),
+            EffectProviderSubst::new(
+                db,
+                effect_providers
+                    .into_iter()
+                    .map(|specialization| specialization.provider)
+                    .collect::<Vec<_>>(),
+            ),
             impl_env,
         ),
         effect_pairs,

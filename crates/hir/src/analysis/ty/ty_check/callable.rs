@@ -71,35 +71,44 @@ pub struct EffectProviderSpecialization<'db> {
     pub provenance: EffectProviderProvenance<'db>,
 }
 
-impl<'db> TyVisitable<'db> for EffectProviderSpecialization<'db> {
+impl<'db> TyVisitable<'db> for ProviderBinding<'db> {
     fn visit_with<V>(&self, visitor: &mut V)
     where
         V: TyVisitor<'db> + ?Sized,
     {
-        self.provider.provider_ty.visit_with(visitor);
-        self.provider.semantics.provider_ty.visit_with(visitor);
-        if let Some(target_ty) = self.provider.semantics.target_ty {
+        self.provider_ty.visit_with(visitor);
+        self.semantics.provider_ty.visit_with(visitor);
+        if let Some(target_ty) = self.semantics.target_ty {
             target_ty.visit_with(visitor);
         }
-        match &self.provider.source {
+        match &self.source {
             ProviderSource::UsesParam { .. } | ProviderSource::ContractField { .. } => {}
             ProviderSource::RootProvider { registration, .. } => {
                 registration.provider_ty.visit_with(visitor);
             }
         }
+    }
+}
+
+impl<'db> TyVisitable<'db> for EffectProviderSpecialization<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.provider.visit_with(visitor);
         if let EffectProviderProvenance::Binding { binding, .. } = self.provenance {
             binding.visit_with(visitor);
         }
     }
 }
 
-impl<'db> TyFoldable<'db> for EffectProviderSpecialization<'db> {
+impl<'db> TyFoldable<'db> for ProviderBinding<'db> {
     fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
     where
         F: TyFolder<'db>,
     {
-        let provider_ty = self.provider.provider_ty.fold_with(db, folder);
-        let evidence = match self.provider.semantics.evidence {
+        let provider_ty = self.provider_ty.fold_with(db, folder);
+        let evidence = match self.semantics.evidence {
             crate::analysis::ty::provider::ProviderLayoutEvidence::ResolvedHandle(instance) => {
                 crate::analysis::ty::provider::ProviderLayoutEvidence::ResolvedHandle(
                     instance.fold_with(db, folder),
@@ -113,16 +122,12 @@ impl<'db> TyFoldable<'db> for EffectProviderSpecialization<'db> {
             evidence => evidence,
         };
         let semantics = crate::analysis::ty::provider::ProviderSemantics {
-            provider_ty: self.provider.semantics.provider_ty.fold_with(db, folder),
-            target_ty: self
-                .provider
-                .semantics
-                .target_ty
-                .map(|ty| ty.fold_with(db, folder)),
+            provider_ty: self.semantics.provider_ty.fold_with(db, folder),
+            target_ty: self.semantics.target_ty.map(|ty| ty.fold_with(db, folder)),
             evidence,
-            ..self.provider.semantics
+            ..self.semantics
         };
-        let source = match self.provider.source {
+        let source = match self.source {
             ProviderSource::UsesParam {
                 site,
                 requirement_idx,
@@ -131,14 +136,31 @@ impl<'db> TyFoldable<'db> for EffectProviderSpecialization<'db> {
                 requirement_idx,
             },
             ProviderSource::ContractField { field } => ProviderSource::ContractField { field },
-            ProviderSource::RootProvider { site, registration } => ProviderSource::RootProvider {
-                site,
+            ProviderSource::RootProvider {
+                scope,
+                registration,
+            } => ProviderSource::RootProvider {
+                scope,
                 registration: crate::analysis::ty::provider::RootProviderRegistration {
                     provider_ty: registration.provider_ty.fold_with(db, folder),
                     ..registration
                 },
             },
         };
+        Self {
+            provider_ty,
+            semantics,
+            source,
+            ..self
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for EffectProviderSpecialization<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
         let provenance = match self.provenance {
             EffectProviderProvenance::Binding { owner, binding } => {
                 EffectProviderProvenance::Binding {
@@ -151,12 +173,7 @@ impl<'db> TyFoldable<'db> for EffectProviderSpecialization<'db> {
             }
         };
         Self {
-            provider: ProviderBinding {
-                provider_ty,
-                semantics,
-                source,
-                ..self.provider
-            },
+            provider: self.provider.fold_with(db, folder),
             provenance,
         }
     }

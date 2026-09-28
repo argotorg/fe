@@ -1,6 +1,6 @@
 use fe_hir::analysis::semantic::owner_effect_bindings;
 use fe_hir::analysis::ty::ty_check::{BodyOwner, EffectParamSite, LocalBinding};
-use fe_hir::analysis::ty::{ProviderAddressSpace, ProviderKind};
+use fe_hir::analysis::ty::{ProviderAddressSpace, ProviderKind, RootProviderScope};
 use fe_hir::semantic::{EffectEnvView, ProviderSource};
 use fe_hir::test_db::HirAnalysisTestDb;
 
@@ -123,7 +123,7 @@ pub contract C uses (ctx: Ctx) {
 
     assert!(matches!(
         resolved.provider.source,
-        ProviderSource::RootProvider { site: provider_site, .. } if provider_site == site
+        ProviderSource::RootProvider { scope, .. } if scope == RootProviderScope::Contract(*contract)
     ));
     assert_eq!(resolved.provider.semantics.kind, ProviderKind::RootObject);
 }

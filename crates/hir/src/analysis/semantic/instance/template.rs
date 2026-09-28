@@ -7,15 +7,15 @@ use crate::{
             trait_def::TraitInstId,
             trait_resolution::PredicateListId,
             ty_check::{
-                BodyOwner, EffectProviderSpecialization, TypedBody, check_anon_const_body,
-                check_const_body, check_contract_init_body, check_contract_recv_arm_body,
-                check_func_body,
+                BodyOwner, TypedBody, check_anon_const_body, check_const_body,
+                check_contract_init_body, check_contract_recv_arm_body, check_func_body,
             },
             ty_def::TyId,
             ty_lower::CompleteSubst,
         },
     },
     hir_def::{CallableDef, GenericParamOwner, scope_graph::ScopeId},
+    semantic::ProviderBinding,
 };
 
 #[derive(Clone, Debug)]
@@ -141,7 +141,7 @@ impl<'db> ImplEnv<'db> {
 #[derive(Debug)]
 pub struct EffectProviderSubst<'db> {
     #[return_ref]
-    pub providers: Vec<EffectProviderSpecialization<'db>>,
+    pub providers: Vec<ProviderBinding<'db>>,
 }
 
 impl<'db> EffectProviderSubst<'db> {

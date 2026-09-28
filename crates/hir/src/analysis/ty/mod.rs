@@ -81,7 +81,8 @@ pub use layout_holes::{
 pub use msg_selector::MsgAnalysisPass;
 pub use provider::{
     ProviderAddressSpace, ProviderKind, ProviderSemantics, ProviderTransport,
-    RootProviderRegistration, RootProviderSiteKind, provider_semantics, registered_root_providers,
+    RootProviderRegistration, RootProviderScope, RootProviderSiteKind, provider_semantics,
+    registered_root_providers,
 };
 
 const DEFAULT_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];

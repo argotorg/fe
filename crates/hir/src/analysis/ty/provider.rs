@@ -381,6 +381,29 @@ pub enum RootProviderSiteKind {
     ContractRecvArm,
 }
 
+/// The item whose root-provider registrations a root provider comes from.
+///
+/// Every init or recv-arm site of a contract shares the contract's
+/// registrations, so a root provider's identity names the contract rather than
+/// the arm that materialized it. Callees specialized to it do not depend on the
+/// arm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum RootProviderScope<'db> {
+    Func(Func<'db>),
+    Contract(Contract<'db>),
+}
+
+impl<'db> RootProviderScope<'db> {
+    pub fn of_site(site: EffectParamSite<'db>) -> Self {
+        match site {
+            EffectParamSite::Func(func) => Self::Func(func),
+            EffectParamSite::Contract(contract)
+            | EffectParamSite::ContractInit { contract }
+            | EffectParamSite::ContractRecvArm { contract, .. } => Self::Contract(contract),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct RootProviderRegistration<'db> {
     pub idx: u32,

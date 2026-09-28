@@ -26,7 +26,7 @@ use crate::{
             normalize::normalize_ty,
             provider::{
                 ProviderAddressSpace, ProviderKind, ProviderLayoutEvidence, ProviderTransport,
-                provider_semantics, provider_semantics_for_specialized_call,
+                RootProviderScope, provider_semantics, provider_semantics_for_specialized_call,
             },
             subst::substitute_complete,
             trait_def::MethodArgMapError,
@@ -34,9 +34,9 @@ use crate::{
                 GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
             },
             ty_check::{
-                BodyOwner, ConstIntrinsicKind, EffectParamSite, EffectProviderProvenance,
-                EffectProviderSpecialization, LocalBinding, ParamSite, ResolvedEffectArg,
-                SemanticExprLowering, SmirLoweringIssue, TypedBody,
+                BodyOwner, ConstIntrinsicKind, EffectParamSite, EffectProviderSpecialization,
+                LocalBinding, ParamSite, ResolvedEffectArg, SemanticExprLowering,
+                SmirLoweringIssue, TypedBody,
             },
             ty_def::{BorrowKind, CapabilityKind, InvalidCause, TyId},
             ty_lower::{
@@ -1424,8 +1424,8 @@ pub(crate) fn provisional_provider_binding_for_instance_effect<'db>(
         key.effect_providers(db)
             .providers(db)
             .iter()
-            .find(|provider| provider.provider.provider_idx == provider_idx)
-            .map(|provider| provider.provider.clone())
+            .find(|provider| provider.provider_idx == provider_idx)
+            .cloned()
     };
     match binding {
         LocalBinding::EffectParam {
@@ -1886,10 +1886,10 @@ fn instantiate_provider_bindings_for_key<'db>(
     resolutions: &[ResolvedEffectBinding],
 ) -> Result<Vec<ProviderBinding<'db>>, SemanticEffectEnvInstantiationError<'db>> {
     let mut specializations = FxHashMap::default();
-    for specialization in key.effect_providers(db).providers(db) {
+    for provider in key.effect_providers(db).providers(db) {
         specializations.insert(
-            specialization.provider.provider_idx,
-            instantiate_provider_binding(db, key, specialization.provider.clone())?,
+            provider.provider_idx,
+            instantiate_provider_binding(db, key, provider.clone())?,
         );
     }
     if matches!(
@@ -1977,7 +1977,7 @@ fn root_owner_generic_args<'db>(
 fn root_owner_effect_providers<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
-) -> Vec<EffectProviderSpecialization<'db>> {
+) -> Vec<ProviderBinding<'db>> {
     let BodyOwner::Func(func) = owner else {
         return Vec::new();
     };
@@ -1995,9 +1995,9 @@ fn root_owner_effect_providers<'db>(
         matches!(
             provider.source,
             ProviderSource::RootProvider {
-                site: provider_site,
+                scope: RootProviderScope::Func(provider_func),
                 ..
-            } if provider_site == site
+            } if provider_func == func
         )
     });
     let provider_slots = providers
@@ -2047,7 +2047,7 @@ fn root_owner_effect_providers<'db>(
                 };
                 (provider_ty, slot.source.clone(), Some(target_ty))
             };
-            let provider = ProviderBinding {
+            Some(ProviderBinding {
                 provider_idx: slot.provider_idx,
                 provider_ty,
                 is_mut: slot.is_mut,
@@ -2062,19 +2062,6 @@ fn root_owner_effect_providers<'db>(
                     ProviderTransport::ByValue,
                 ),
                 layout_env: None,
-            };
-            Some(EffectProviderSpecialization {
-                provider,
-                provenance: EffectProviderProvenance::Binding {
-                    owner,
-                    binding: LocalBinding::EffectParam {
-                        site,
-                        idx: requirement.binding_idx as usize,
-                        binding_name: requirement.binding_name,
-                        provider_idx: slot.provider_idx,
-                        is_mut: requirement.is_mut,
-                    },
-                },
             })
         })
         .collect()
@@ -2137,12 +2124,7 @@ fn root_func_generic_args<'db>(
     let site = effect_param_site(owner).expect("function owners should always have an effect site");
     let provider_ty_by_idx = root_owner_effect_providers(db, owner)
         .into_iter()
-        .map(|provider| {
-            (
-                provider.provider.provider_idx,
-                provider.provider.provider_ty,
-            )
-        })
+        .map(|provider| (provider.provider_idx, provider.provider_ty))
         .collect::<FxHashMap<_, _>>();
     let resolved_provider_by_effect = EffectEnvView::new(site)
         .resolutions(db)
@@ -2226,8 +2208,11 @@ fn instantiate_provider_binding<'db>(
     let assumptions = semantic_instance_base_assumptions_for_key(db, key);
     let provider_ty = instantiate_normalized_ty(db, key, provider.provider_ty)?;
     let source = match provider.source.clone() {
-        ProviderSource::RootProvider { site, registration } => ProviderSource::RootProvider {
-            site,
+        ProviderSource::RootProvider {
+            scope,
+            registration,
+        } => ProviderSource::RootProvider {
+            scope,
             registration: crate::analysis::ty::provider::RootProviderRegistration {
                 provider_ty: instantiate_normalized_ty(db, key, registration.provider_ty)?,
                 ..registration

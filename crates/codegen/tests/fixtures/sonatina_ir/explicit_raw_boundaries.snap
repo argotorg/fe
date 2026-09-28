@@ -63,7 +63,7 @@ func private %cast__gc266(v0.i256) -> i256 {
         return v0;
 }
 
-func private %cast__g5f1e(v0.i256) -> i256 {
+func private %cast__gf772(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -71,7 +71,7 @@ func private %cast__g5f1e(v0.i256) -> i256 {
         return v0;
 }
 
-func private %cast__gf772(v0.i256) -> i256 {
+func private %cast__g5f1e(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -109,7 +109,7 @@ func private %mstore(v0.i256, v1.i256) {
         return;
 }
 
-func private %raw_store__g64c6(v0.i256) {
+func private %raw_store__g6e74(v0.i256) {
     block0:
         jump block1;
 
@@ -119,7 +119,7 @@ func private %raw_store__g64c6(v0.i256) {
         return;
 }
 
-func private %raw_store__g6e74(v0.i256) {
+func private %raw_store__g64c6(v0.i256) {
     block0:
         jump block1;
 

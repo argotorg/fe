@@ -131,16 +131,6 @@ func private %emit_transfer(v0.constref<@layout_0>, v1.constref<@layout_0>, v2.i
         return;
 }
 
-func inline(always) private %encode__gac80(v0.@layout_0, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = extract_value v0 0.i256;
-        v7.i256 = call %encode_field_at v4 v1 0.i256 32.i256;
-        return;
-}
-
 func inline(always) private %encode_abi_payload(v0.@layout_0) -> @layout_1 {
     block0:
         jump block1;
@@ -179,6 +169,16 @@ func private %encode__gf13e(v0.i256, v1.i256) {
 
     block1:
         call %store_word v1 v0;
+        return;
+}
+
+func inline(always) private %encode__gac80(v0.@layout_0, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = extract_value v0 0.i256;
+        v7.i256 = call %encode_field_at v4 v1 0.i256 32.i256;
         return;
 }
 
@@ -293,7 +293,7 @@ func private %trait_AbiSize__payload_size__ge513(v0.i256) -> i256 {
         return 32.i256;
 }
 
-func private %impl_MemBuffer__ptr(v0.objref<@layout_1>) -> i256 {
+func private %ptr__g79ff(v0.objref<@layout_3>) -> i256 {
     block0:
         jump block1;
 
@@ -303,7 +303,7 @@ func private %impl_MemBuffer__ptr(v0.objref<@layout_1>) -> i256 {
         return v4;
 }
 
-func private %ptr__g79ff(v0.objref<@layout_3>) -> i256 {
+func private %impl_MemBuffer__ptr(v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
