@@ -1462,6 +1462,8 @@ pub struct TyParam<'db> {
     // ```
     // The `foo`'s type parameter list is lowered to [`T`, `U`, `V`], so the index of `V` is 2.
     pub idx: usize,
+    /// Source declaration index, independent of the source/full lowering basis.
+    pub(super) declared_index: Option<usize>,
     pub kind: Kind,
     variant: Variant,
     pub owner: ScopeId<'db>,
@@ -1541,10 +1543,12 @@ impl<'db> TyParam<'db> {
         idx: usize,
         kind: Kind,
         scope: ScopeId<'db>,
+        declared_index: Option<usize>,
     ) -> Self {
         Self {
             name,
             idx,
+            declared_index,
             kind,
             variant: Variant::Normal,
             owner: scope,
@@ -1555,6 +1559,7 @@ impl<'db> TyParam<'db> {
         Self {
             name: IdentId::make_self_ty(db),
             idx: 0,
+            declared_index: None,
             kind,
             variant: Variant::TraitSelf,
             owner: scope,
@@ -1566,6 +1571,7 @@ impl<'db> TyParam<'db> {
         Self {
             name,
             idx,
+            declared_index: None,
             kind: Kind::Star,
             variant: Variant::Effect,
             owner: scope,
@@ -1577,6 +1583,7 @@ impl<'db> TyParam<'db> {
         Self {
             name,
             idx,
+            declared_index: None,
             kind: Kind::Star,
             variant: Variant::EffectProvider,
             owner: scope,
@@ -1587,6 +1594,7 @@ impl<'db> TyParam<'db> {
         Self {
             name,
             idx,
+            declared_index: None,
             kind,
             variant: Variant::Implicit,
             owner: scope,
@@ -1594,6 +1602,9 @@ impl<'db> TyParam<'db> {
     }
 
     pub fn original_idx(&self, db: &'db dyn HirAnalysisDb) -> usize {
+        if let Some(index) = self.declared_index {
+            return index;
+        }
         match self.variant {
             Variant::Normal | Variant::TraitSelf => {
                 let owner = GenericParamOwner::from_item_opt(self.owner.item()).unwrap();

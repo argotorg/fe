@@ -743,6 +743,47 @@ mod tests {
     }
 
     #[test]
+    fn source_and_full_parameters_keep_their_declared_scope() {
+        use crate::analysis::ty::ty_def::TyData;
+        use crate::analysis::ty::ty_lower::{
+            collect_generic_params, collect_source_generic_params,
+        };
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("generic_scope_with_effect.fe"),
+            r#"
+trait Value { type Output }
+trait Marker {}
+trait Effect { fn act(self) }
+fn inspect<A, B>(a: A, b: B) uses (effect: Effect)
+where A: Value, A::Output: Marker, B: Value, B::Output: Marker
+{}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let func = find_func(&db, top_mod, "inspect");
+        let owner = GenericParamOwner::Func(func);
+        let source = collect_source_generic_params(&db, owner);
+        let full = collect_generic_params(&db, owner);
+        assert!(
+            full.offset_to_explicit_params_position(&db)
+                > source.offset_to_explicit_params_position(&db)
+        );
+        for set in [source, full] {
+            for (index, ty) in set.explicit_params(&db).iter().enumerate() {
+                let TyData::TyParam(param) = ty.data(&db) else {
+                    panic!("expected type parameter")
+                };
+                assert_eq!(param.original_idx(&db), index);
+                assert_eq!(
+                    param.scope(&db),
+                    ScopeId::GenericParam(func.into(), index as u16)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn method_where_clause_resolves_with_parent_constraints() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(

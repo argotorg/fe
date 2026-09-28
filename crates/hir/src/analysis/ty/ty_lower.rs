@@ -2712,7 +2712,7 @@ pub(crate) fn func_implicit_param_plan<'db>(
                 layout_hole_fallback_ty(db, *hole_ty),
             );
             let lowered_idx = prefix_len + implicit_precursors.len();
-            let implicit_arg = precursor.evaluate(db, func.scope(), lowered_idx);
+            let implicit_arg = precursor.evaluate(db, func.scope(), lowered_idx, 0);
             implicit_precursors.push(precursor);
             bindings.push((placeholder, implicit_arg));
         }
@@ -3385,7 +3385,7 @@ pub(crate) fn evaluate_params_precursor<'db>(
     set.params_precursor(db)
         .iter()
         .enumerate()
-        .map(|(i, p)| p.evaluate(db, set.scope(db), i))
+        .map(|(i, p)| p.evaluate(db, set.scope(db), i, set.offset_to_explicit(db)))
         .collect()
 }
 
@@ -4272,7 +4272,7 @@ impl<'db> GenericParamTypeSet<'db> {
         let cand = params.first()?;
 
         if cand.is_trait_self() {
-            Some(cand.evaluate(db, self.scope(db), 0))
+            Some(cand.evaluate(db, self.scope(db), 0, self.offset_to_explicit(db)))
         } else {
             None
         }
@@ -4290,7 +4290,7 @@ impl<'db> GenericParamTypeSet<'db> {
         let idx = self.offset_to_explicit(db) + original_idx;
         self.params_precursor(db)
             .get(idx)
-            .map(|p| p.evaluate(db, self.scope(db), idx))
+            .map(|p| p.evaluate(db, self.scope(db), idx, self.offset_to_explicit(db)))
     }
 }
 
@@ -4443,6 +4443,7 @@ impl<'db> TyParamPrecursor<'db> {
         db: &'db dyn HirAnalysisDb,
         scope: ScopeId<'db>,
         lowered_idx: usize,
+        explicit_offset: usize,
     ) -> TyId<'db> {
         let Partial::Present(name) = self.name else {
             return TyId::invalid(db, InvalidCause::Other);
@@ -4456,7 +4457,13 @@ impl<'db> TyParamPrecursor<'db> {
                 TyId::new(db, TyData::TyParam(param))
             }
             Variant::Normal => {
-                let param = TyParam::normal_param(name, lowered_idx, kind, scope);
+                let param = TyParam::normal_param(
+                    name,
+                    lowered_idx,
+                    kind,
+                    scope,
+                    lowered_idx.checked_sub(explicit_offset),
+                );
                 TyId::new(db, TyData::TyParam(param))
             }
             Variant::EffectProvider => {
@@ -4464,7 +4471,13 @@ impl<'db> TyParamPrecursor<'db> {
                 TyId::new(db, TyData::TyParam(param))
             }
             Variant::Const(Some(_)) => {
-                let param = TyParam::normal_param(name, lowered_idx, kind, scope);
+                let param = TyParam::normal_param(
+                    name,
+                    lowered_idx,
+                    kind,
+                    scope,
+                    lowered_idx.checked_sub(explicit_offset),
+                );
                 let ty = self
                     .declared_const_ty(db, scope)
                     .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
