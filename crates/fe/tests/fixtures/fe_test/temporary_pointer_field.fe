@@ -1,0 +1,73 @@
+use core::ptr::MemArray
+
+struct Item {
+    a: u256,
+    b: u256,
+}
+
+struct Order {
+    items: MemArray<Item>,
+    n: u256,
+}
+
+struct Link {
+    next: *Item,
+}
+
+fn first(_ orders: MemArray<Order>) -> *Order {
+    orders.ptr_at(0)
+}
+
+fn orders_with_one_item() -> MemArray<Order> {
+    let mut orders = MemArray<Order>::new_uninit(1)
+    let mut items = MemArray<Item>::new_uninit(1)
+    items[0] = Item { a: 1, b: 2 }
+    orders[0] = Order { items, n: 5 }
+    orders
+}
+
+#[test]
+fn read_field_of_temporary_pointer() {
+    let orders = orders_with_one_item()
+    assert(orders.ptr_at(0).n == 5)
+    assert(first(orders).n == 5)
+    assert(orders.ptr_at(0).items.ptr_at(0).a == 1)
+    let o = orders.ptr_at(0)
+    assert(o.items.ptr_at(0).b == 2)
+}
+
+#[test]
+fn write_field_of_temporary_pointer() {
+    let orders = orders_with_one_item()
+    orders.ptr_at(0).n = 9
+    first(orders).items.ptr_at(0).b = 7
+    orders.ptr_at(0).items.ptr_at(0).a += 5
+    let o = orders.ptr_at(0)
+    assert(o.n == 9)
+    assert(o.items.ptr_at(0).a == 6)
+    assert(o.items.ptr_at(0).b == 7)
+}
+
+#[test]
+fn field_through_pointer_field_of_temporary_pointer() {
+    let mut items = MemArray<Item>::new_uninit(1)
+    items[0] = Item { a: 3, b: 4 }
+    let mut links = MemArray<Link>::new_uninit(1)
+    links[0] = Link { next: items.ptr_at(0) }
+    assert(links.ptr_at(0).next.a == 3)
+    links.ptr_at(0).next.b = 8
+    assert(items.ptr_at(0).b == 8)
+}
+
+#[test]
+fn explicitly_borrow_field_of_temporary_pointer() {
+    let orders = orders_with_one_item()
+    let value: mut u256 = mut orders.ptr_at(0).n
+    value += 7
+    assert(orders.ptr_at(0).n == 12)
+    let shared: ref u256 = ref first(orders).n
+    assert(shared == 12)
+    let nested: mut u256 = mut orders.ptr_at(0).items.ptr_at(0).a
+    nested += 8
+    assert(orders.ptr_at(0).items.ptr_at(0).a == 9)
+}

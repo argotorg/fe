@@ -1,0 +1,29 @@
+use core::ops::Index
+
+struct WordView { base: u256 }
+
+impl Copy for WordView {}
+
+impl Index<u256> for WordView {
+    type Output = u256
+
+    fn index(self, _ offset: u256) -> u256 {
+        self.base + offset
+    }
+}
+
+struct Holder {
+    view: WordView,
+    words: [u256; 2],
+}
+
+fn make_ptr() -> *Holder {
+    core::ptr::alloc<Holder>()
+}
+
+fn borrow_custom_index_through_pointer() {
+    // A built-in array element below a temporary pointer is a place.
+    let _element: ref u256 = ref make_ptr().words[0]
+    // A custom `Index` call returns a value, even below a temporary pointer.
+    let _value: ref u256 = ref make_ptr().view[0]
+}

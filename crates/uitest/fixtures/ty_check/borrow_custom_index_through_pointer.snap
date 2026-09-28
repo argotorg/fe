@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/borrow_custom_index_through_pointer.fe
+---
+error[8-0065]: cannot borrow from this expression
+   ┌─ borrow_custom_index_through_pointer.fe:28:28
+   │
+28 │     let _value: ref u256 = ref make_ptr().view[0]
+   │                            ^^^^^^^^^^^^^^^^^^^^^^ expected a place expression
