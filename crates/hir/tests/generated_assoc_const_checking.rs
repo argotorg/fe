@@ -3,7 +3,7 @@ use fe_hir::{
         diagnostics::{BodyDiag, FuncBodyDiag},
         ty_check::check_impl_trait_const_bodies,
     },
-    hir_def::{AssocConstBodyCheckPolicy, ImplTrait, TopLevelMod},
+    hir_def::{AbiRecordKind, AssocConstBodyCheckPolicy, ImplTrait, TopLevelMod},
     span::{DesugaredOrigin, HirOrigin, impl_trait_ast},
     test_db::HirAnalysisTestDb,
 };
@@ -133,7 +133,7 @@ fn standard_fieldless_event_remains_clean_with_body_checking() {
 }
 
 #[test]
-fn generated_abi_record_and_metadata_consts_use_body_analysis() {
+fn generated_abi_record_metadata_consts_defer_field_failures_to_field_analysis() {
     let mut db = HirAnalysisTestDb::default();
     let (path, text) = fixture("error_with_field.fe");
     let file = db.new_stand_alone(path, &text);
@@ -153,8 +153,8 @@ fn generated_abi_record_and_metadata_consts_use_body_analysis() {
             .expect("selected impl contains the constant");
         assert_eq!(
             constant.body_check_policy,
-            AssocConstBodyCheckPolicy::BodyAnalysis,
-            "generated `{const_name}` must retain ordinary body checking"
+            AssocConstBodyCheckPolicy::AbiRecordFields(AbiRecordKind::Error),
+            "generated `{const_name}` must declare record field analysis as the owner of field failures"
         );
     }
 
@@ -173,7 +173,7 @@ fn generated_abi_record_layout_checks_the_trait_expected_type() {
     assert_eq!(generated.hir_consts(&db).len(), 1);
     assert_eq!(
         generated.hir_consts(&db)[0].body_check_policy,
-        AssocConstBodyCheckPolicy::BodyAnalysis
+        AssocConstBodyCheckPolicy::AbiRecordFields(AbiRecordKind::Error)
     );
 
     let diagnostics = check_impl_trait_const_bodies(&db, generated);
@@ -242,7 +242,9 @@ fn message_selector_body_diagnostic_has_one_owner() {
     assert_eq!(
         policies
             .iter()
-            .filter(|&&policy| policy == AssocConstBodyCheckPolicy::BodyAnalysis)
+            .filter(|&&policy| {
+                policy == AssocConstBodyCheckPolicy::AbiRecordFields(AbiRecordKind::MsgVariant)
+            })
             .count(),
         3
     );

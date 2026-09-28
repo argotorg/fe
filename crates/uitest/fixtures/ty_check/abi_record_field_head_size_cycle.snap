@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/abi_record_field_head_size_cycle.fe
+---
+error[6-0017]: associated const `HEAD_SIZE` has a recursive definition
+   ┌─ abi_record_field_head_size_cycle.fe:12:11
+   │
+12 │     const HEAD_SIZE: u256 = <CycleMsg::Probe as core::abi::AbiSize>::HEAD_SIZE
+   │           ^^^^^^^^^ `HEAD_SIZE` cannot be evaluated to a concrete value

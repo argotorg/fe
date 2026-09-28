@@ -10,8 +10,8 @@ use super::{
 };
 use crate::{
     hir_def::{
-        AttrListId, FieldDef, FieldDefListId, GenericParamListId, IdentId, Partial, PathId, Struct,
-        TrackedItemVariant, TraitRefId, TypeId, TypeKind,
+        AbiRecordKind, AttrListId, FieldDef, FieldDefListId, GenericParamListId, IdentId, Partial,
+        PathId, Struct, TrackedItemVariant, TraitRefId, TypeId, TypeKind,
     },
     span::ErrorDesugared,
 };
@@ -178,7 +178,7 @@ pub(super) fn lower_error_struct<'db>(
     );
 
     // Generate impl AbiRecord and impl AbiSize
-    lower_abi_size_impl(&mut builder, self_ty, &field_specs);
+    lower_abi_size_impl(&mut builder, self_ty, &field_specs, AbiRecordKind::Error);
 
     // Generate impl Encode<Sol>
     lower_sol_encode_impl(&mut builder, self_ty, &field_specs);

@@ -9,11 +9,11 @@ use super::{
 use crate::{
     HirDb, MsgDiagnostic, MsgDiagnosticKind,
     hir_def::{
-        ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, ExprId, FieldDef,
-        FieldDefListId, FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName,
-        GenericArgListId, IdentId, ImplTrait, LitKind, LogicalBinOp, Mod, Partial, PathId,
-        PathKind, Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind,
-        Visibility,
+        AbiRecordKind, ArithBinOp, AssocConstBodyCheckPolicy, AssocConstDef, AttrListId, BinOp,
+        Body, BodyKind, Expr, ExprId, FieldDef, FieldDefListId, FieldIndex, FuncModifiers,
+        FuncParam, FuncParamMode, FuncParamName, GenericArgListId, IdentId, ImplTrait, LitKind,
+        LogicalBinOp, Mod, Partial, PathId, PathKind, Struct, TrackedItemVariant, TraitRefId,
+        TupleTypeId, TypeId, TypeKind, Visibility,
     },
     lower::FileLowerCtxt,
     span::{MsgDesugared, MsgDesugaredFocus},
@@ -136,7 +136,7 @@ fn lower_msg_variant_abi_size_impl<'db>(
 ) -> ImplTrait<'db> {
     let field_specs = lower_msg_variant_field_specs(builder.ctxt(), variant);
     let self_ty = variant_struct_ty(builder.db(), struct_);
-    lower_abi_size_impl(builder, self_ty, &field_specs)
+    lower_abi_size_impl(builder, self_ty, &field_specs, AbiRecordKind::MsgVariant)
 }
 
 /// Generate `impl core::abi::AbiRecord<N> for SelfTy` and
@@ -147,8 +147,9 @@ pub(super) fn lower_abi_size_impl<'db, O: Clone + Into<crate::span::DesugaredOri
     builder: &mut HirBuilder<'_, 'db, O>,
     self_ty: TypeId<'db>,
     field_specs: &[(IdentId<'db>, TypeId<'db>)],
+    kind: AbiRecordKind,
 ) -> ImplTrait<'db> {
-    lower_abi_record_impl(builder, self_ty, field_specs);
+    lower_abi_record_impl(builder, self_ty, field_specs, kind);
     let db = builder.db();
     let roots = builder.roots();
     let trait_path = PathId::from_ident(db, roots.core)
@@ -161,8 +162,8 @@ pub(super) fn lower_abi_size_impl<'db, O: Clone + Into<crate::span::DesugaredOri
         TrackedItemVariant::ImplTrait(impl_trait_idx),
         |builder, id| {
             let consts = vec![
-                create_head_size_assoc_const(builder, field_specs.len()),
-                create_is_dynamic_assoc_const(builder, field_specs),
+                create_head_size_assoc_const(builder, field_specs.len(), kind),
+                create_is_dynamic_assoc_const(builder, field_specs, kind),
             ];
             let impl_trait =
                 builder.new_impl_trait(id, trait_ref, ty, vec![], consts, builder.origin());
@@ -290,6 +291,7 @@ fn abi_size_assoc_expr<'db>(
 fn create_is_dynamic_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
     builder: &mut HirBuilder<'_, 'db, O>,
     fields: &[(IdentId<'db>, TypeId<'db>)],
+    kind: AbiRecordKind,
 ) -> AssocConstDef<'db> {
     let db = builder.db();
     let name = builder.ident(generated_abi_const::IS_DYNAMIC);
@@ -312,13 +314,13 @@ fn create_is_dynamic_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrig
         );
     }
 
-    let body = body_ctxt.build(None, expr, BodyKind::Anonymous);
+    let body = body_ctxt.build_with_origin(origin, expr, BodyKind::Anonymous);
     AssocConstDef {
         attributes: AttrListId::new(db, vec![]),
         name: Partial::Present(name),
         ty: Partial::Present(ty),
         value: Partial::Present(body),
-        body_check_policy: crate::hir_def::AssocConstBodyCheckPolicy::BodyAnalysis,
+        body_check_policy: AssocConstBodyCheckPolicy::AbiRecordFields(kind),
         vis: crate::hir_def::Visibility::Public,
     }
 }
@@ -327,6 +329,7 @@ fn create_is_dynamic_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrig
 fn create_head_size_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrigin>>(
     builder: &mut HirBuilder<'_, 'db, O>,
     field_count: usize,
+    kind: AbiRecordKind,
 ) -> AssocConstDef<'db> {
     let db = builder.db();
     let name = builder.ident(generated_abi_const::HEAD_SIZE);
@@ -354,16 +357,16 @@ fn create_head_size_assoc_const<'db, O: Clone + Into<crate::span::DesugaredOrigi
             layout,
             Partial::Present(FieldIndex::Ident(IdentId::new(db, "head_size".to_owned()))),
         ),
-        origin,
+        origin.clone(),
     );
 
-    let body = body_ctxt.build(None, expr, BodyKind::Anonymous);
+    let body = body_ctxt.build_with_origin(origin, expr, BodyKind::Anonymous);
     AssocConstDef {
         attributes: AttrListId::new(db, vec![]),
         name: Partial::Present(name),
         ty: Partial::Present(ty),
         value: Partial::Present(body),
-        body_check_policy: crate::hir_def::AssocConstBodyCheckPolicy::BodyAnalysis,
+        body_check_policy: AssocConstBodyCheckPolicy::AbiRecordFields(kind),
         vis: crate::hir_def::Visibility::Public,
     }
 }
@@ -372,6 +375,7 @@ pub(super) fn lower_abi_record_impl<'db, O: Clone + Into<crate::span::DesugaredO
     builder: &mut HirBuilder<'_, 'db, O>,
     self_ty: TypeId<'db>,
     fields: &[(IdentId<'db>, TypeId<'db>)],
+    kind: AbiRecordKind,
 ) -> ImplTrait<'db> {
     let db = builder.db();
     let core = builder.roots().core;
@@ -425,15 +429,15 @@ pub(super) fn lower_abi_record_impl<'db, O: Clone + Into<crate::span::DesugaredO
                         expr: fields_array,
                     }],
                 ),
-                origin,
+                origin.clone(),
             );
-            let body = body.build(None, layout, BodyKind::Anonymous);
+            let body = body.build_with_origin(origin, layout, BodyKind::Anonymous);
             let layout_const = AssocConstDef {
                 attributes: AttrListId::new(db, vec![]),
                 name: Partial::Present(IdentId::new(db, generated_abi_const::LAYOUT.to_owned())),
                 ty: Partial::Present(layout_ty),
                 value: Partial::Present(body),
-                body_check_policy: crate::hir_def::AssocConstBodyCheckPolicy::BodyAnalysis,
+                body_check_policy: AssocConstBodyCheckPolicy::AbiRecordFields(kind),
                 vis: crate::hir_def::Visibility::Public,
             };
             builder.new_impl_trait(

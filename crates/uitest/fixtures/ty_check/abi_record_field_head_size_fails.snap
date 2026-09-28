@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/abi_record_field_head_size_fails.fe
+---
+error[3-0025]: division by zero in const context
+   ┌─ abi_record_field_head_size_fails.fe:16:29
+   │
+16 │     const HEAD_SIZE: u256 = 32 / ZERO
+   │                             ^^^^^^^^^ cannot divide by zero
+
+error[3-0025]: division by zero in const context
+   ┌─ abi_record_field_head_size_fails.fe:33:29
+   │
+33 │     const HEAD_SIZE: u256 = 32 / ZERO
+   │                             ^^^^^^^^^ cannot divide by zero
+
+error[3-0025]: division by zero in const context
+   ┌─ abi_record_field_head_size_fails.fe:50:29
+   │
+50 │     const HEAD_SIZE: u256 = 32 / ZERO
+   │                             ^^^^^^^^^ cannot divide by zero

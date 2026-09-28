@@ -27,7 +27,9 @@ use crate::analysis::ty::trait_resolution::constraint::{
     PredicateSource, collect_func_decl_constraint_pairs,
 };
 use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_const_ty};
-use crate::hir_def::{CallableDef, ConstGenericArgValue, ImplTrait, Trait};
+use crate::hir_def::{
+    AssocConstBodyCheckPolicy, CallableDef, ConstGenericArgValue, ImplTrait, Trait,
+};
 use crate::{
     hir_def::{
         BinOp, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func,
@@ -179,7 +181,7 @@ pub fn check_impl_trait_const_bodies<'db>(
     // Producers explicitly record any other diagnostic owner or compatibility
     // exception. A generated origin alone never exempts a new constant body.
     if !impl_trait.hir_consts(db).iter().any(|constant| {
-        constant.body_check_policy != crate::hir_def::AssocConstBodyCheckPolicy::MsgSelectorAnalysis
+        constant.body_check_policy != AssocConstBodyCheckPolicy::MsgSelectorAnalysis
     }) {
         return Vec::new();
     }
@@ -209,12 +211,31 @@ pub fn check_impl_trait_const_bodies<'db>(
         ConstUsePolicy::AllowDependent
     };
 
+    // The record whose generated ABI metadata these constants are, if any.
+    let record = match implementor.self_ty(db).adt_ref(db) {
+        Some(crate::analysis::ty::adt_def::AdtRef::Struct(record)) => Some(record),
+        _ => None,
+    };
+
     let mut diags = Vec::new();
     for impl_const in impl_trait.assoc_consts(db) {
-        if impl_const.body_check_policy(db)
-            == crate::hir_def::AssocConstBodyCheckPolicy::MsgSelectorAnalysis
-        {
-            continue;
+        let body_check_policy = impl_const.body_check_policy(db);
+        match body_check_policy {
+            AssocConstBodyCheckPolicy::MsgSelectorAnalysis => continue,
+            // Record field analysis reports a field type without ABI support;
+            // this body's failures would only repeat it.
+            AssocConstBodyCheckPolicy::AbiRecordFields(kind)
+                if record.is_some_and(|record| {
+                    !crate::analysis::ty::abi_record_fields::abi_record_fields_pass(
+                        db, record, kind,
+                    )
+                }) =>
+            {
+                continue;
+            }
+            AssocConstBodyCheckPolicy::BodyAnalysis
+            | AssocConstBodyCheckPolicy::AbiRecordFields(_)
+            | AssocConstBodyCheckPolicy::ExpansionSourceCompatibility => {}
         }
         let Some(body) = impl_const.value_body(db) else {
             continue;
@@ -232,19 +253,24 @@ pub fn check_impl_trait_const_bodies<'db>(
             continue;
         }
         let body_diags = &check_anon_const_body(db, body, expected_ty).0;
-        if impl_const.body_check_policy(db)
-            == crate::hir_def::AssocConstBodyCheckPolicy::BodyAnalysis
-        {
+        if body_check_policy != AssocConstBodyCheckPolicy::ExpansionSourceCompatibility {
             diags.extend(body_diags.iter().cloned());
         }
         if body_diags.is_empty() {
-            let context = generated_origin.map(|origin| ConstDiagContext {
-                const_name: impl_const.name(db).map_or_else(
-                    || "<associated const>".to_string(),
-                    |name| name.data(db).clone(),
-                ),
-                origin: origin.to_string(),
-            });
+            // Generated record metadata reports an evaluation failure where it
+            // occurs, as ordinary constants do, so a failing field constant is
+            // reported once, at its own body. Other generated constants name
+            // the generated implementation in their report.
+            let context = match body_check_policy {
+                AssocConstBodyCheckPolicy::AbiRecordFields(_) => None,
+                _ => generated_origin.map(|origin| ConstDiagContext {
+                    const_name: impl_const.name(db).map_or_else(
+                        || "<associated const>".to_string(),
+                        |name| name.data(db).clone(),
+                    ),
+                    origin: origin.to_string(),
+                }),
+            };
             diags.extend(
                 const_body_ctfe_diags_with_context(db, body, expected_ty, policy, context)
                     .into_iter()

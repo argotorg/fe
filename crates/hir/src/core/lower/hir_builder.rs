@@ -206,9 +206,9 @@ where
         let db = body.f_ctxt.db();
         let value = body.push_expr(
             Expr::Lit(LitKind::Int(IntegerId::from_usize(db, field_count))),
-            origin,
+            origin.clone(),
         );
-        let body = body.build(None, value, BodyKind::Anonymous);
+        let body = body.build_with_origin(origin, value, BodyKind::Anonymous);
         GenericArgListId::given(
             db,
             vec![GenericArg::Const(ConstGenericArg {

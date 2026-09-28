@@ -12,10 +12,10 @@ use super::{
 };
 use crate::{
     hir_def::{
-        AssocConstDef, AttrListId, Body, BodyKind, Expr, FieldDef, FieldDefListId, FieldIndex,
-        FuncModifiers, FuncParam, FuncParamMode, FuncParamName, GenericParamListId, IdentId,
-        LitKind, Partial, PathId, PathKind, Struct, TrackedItemVariant, TraitRefId, TypeId,
-        TypeKind, TypeMode, Visibility,
+        AbiRecordKind, AssocConstDef, AttrListId, BodyKind, Expr, FieldDef, FieldDefListId,
+        FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName, GenericParamListId,
+        IdentId, LitKind, Partial, PathId, PathKind, Struct, TrackedItemVariant, TraitRefId,
+        TypeId, TypeKind, TypeMode, Visibility,
     },
     span::{DesugaredOrigin, EventDesugared, HirOrigin},
 };
@@ -172,7 +172,12 @@ pub(super) fn lower_event_struct<'db>(
     // The data fields form the log's ABI record; `emit` encodes them with the
     // layout this impl provides.
     if !parsed_fields.data_fields.is_empty() {
-        lower_abi_record_impl(&mut builder, record_ty, &parsed_fields.data_fields);
+        lower_abi_record_impl(
+            &mut builder,
+            record_ty,
+            &parsed_fields.data_fields,
+            AbiRecordKind::Event,
+        );
     }
 
     struct_
@@ -414,20 +419,7 @@ pub(super) fn create_sol_signature_const<'db, O: Clone + Into<DesugaredOrigin>>(
     );
     let call_id = body_ctxt.push_expr(call, origin.clone());
 
-    let body = Body::new(
-        db,
-        id,
-        call_id,
-        BodyKind::Anonymous,
-        body_ctxt.stmts,
-        body_ctxt.exprs,
-        body_ctxt.conds,
-        body_ctxt.pats,
-        body_ctxt.f_ctxt.top_mod(),
-        body_ctxt.source_map,
-        origin,
-    );
-    body_ctxt.f_ctxt.leave_item_scope(body);
+    let body = body_ctxt.build_with_origin(origin, call_id, BodyKind::Anonymous);
 
     AssocConstDef {
         attributes: AttrListId::new(db, vec![]),
