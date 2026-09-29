@@ -1,0 +1,151 @@
+//! secp256k1 ECDSA signature parsing and recovery, ERC-1271 contract
+//! signature checks, and a combined check with OpenZeppelin
+//! `SignatureChecker` semantics.
+//!
+//! Signatures are passed as a `MemSpan` over their raw bytes, so both ABI
+//! `bytes` values (`sig.payload_span()`) and hand-sliced memory regions work.
+//!
+//! Accepting both the 65-byte and the 64-byte EIP-2098 encoding means one
+//! signature has two valid byte strings. Never use signature bytes as a
+//! uniqueness key (replay protection belongs in the signed digest, e.g. a
+//! nonce).
+use core::option::Option
+use core::ptr::{self, MemBuffer, MemSpan}
+use core::result::Result
+use super::crypto::{self, PrecompileError}
+use super::effects::{Address, Call}
+use super::ops
+
+/// `isValidSignature(bytes32,bytes)` selector, left-aligned in a word.
+const ERC1271_MAGIC_WORD: u256 = 0x1626ba7e00000000000000000000000000000000000000000000000000000000
+const LOW_255_BITS: u256 = 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+fn offset(_ base: *u8, _ bytes: u256) -> *u8 {
+    ptr::offset_bytes(base, bytes)
+}
+
+/// A decoded ECDSA signature. `v` is the recovery byte as encoded (27 or 28
+/// for well-formed signatures, but not validated by `parse`).
+pub struct EcdsaSig {
+    pub v: u256,
+    pub r: u256,
+    pub s: u256,
+}
+
+impl Copy for EcdsaSig {}
+
+impl EcdsaSig {
+    /// Signer of `digest`, rejecting non-canonical signatures: `v` must be 27
+    /// or 28, `0 < r < n` and `0 < s <= n / 2` (OpenZeppelin `ECDSA`
+    /// semantics, EIP-2 low `s`). `None` if the signature is rejected or
+    /// recovery fails (including an ECRecover precompile call failure).
+    pub fn recover(self, digest: u256) -> Option<Address> {
+        to_address(crypto::ecrecover(hash: digest, v: self.v, r: self.r, s: self.s))
+    }
+
+    /// Signer of `digest` with the ECRecover precompile's own acceptance
+    /// rules (Solidity `ecrecover`, Solady `ECDSA`): high `s` values are
+    /// accepted, so `(r, s, v)` and `(r, n - s, 55 - v)` (27 and 28 swapped)
+    /// recover the same signer. `None` if recovery fails.
+    pub fn recover_raw(self, digest: u256) -> Option<Address> {
+        to_address(crypto::ecrecover_raw(hash: digest, v: self.v, r: self.r, s: self.s))
+    }
+}
+
+fn to_address(_ result: Result<PrecompileError, Option<u256>>) -> Option<Address> {
+    match result {
+        Result::Ok(Option::Some(word)) => Option::Some(Address { inner: word }),
+        _ => Option::None,
+    }
+}
+
+/// Decode a 65-byte `r ++ s ++ v` signature or a 64-byte EIP-2098
+/// `r ++ vs` compact signature, where the top bit of `vs` selects
+/// `v = 27 + bit` and the low 255 bits are `s`.
+///
+/// `None` only for any other length; `v`, `r` and `s` are not range checked.
+pub fn parse(_ signature: MemSpan) -> Option<EcdsaSig> {
+    let len = signature.len()
+    if len != 64 && len != 65 {
+        return Option::None
+    }
+    let r = ops::mload(signature.ptr())
+    let s = ops::mload(offset(signature.ptr(), 32))
+    if len == 65 {
+        let v = signature.byte_at(64) as u256
+        return Option::Some(EcdsaSig { v, r, s })
+    }
+    Option::Some(EcdsaSig { v: (s >> 255) + 27, r, s: s & LOW_255_BITS })
+}
+
+/// `parse` then `EcdsaSig::recover`: the canonical (low `s`) signer of
+/// `digest`, or `None`.
+pub fn recover(digest: u256, _ signature: MemSpan) -> Option<Address> {
+    match parse(signature) {
+        Option::Some(sig) => sig.recover(digest),
+        Option::None => Option::None,
+    }
+}
+
+/// `parse` then `EcdsaSig::recover_raw`: the signer of `digest` under the
+/// precompile's rules (high `s` accepted), or `None`.
+pub fn recover_raw(digest: u256, _ signature: MemSpan) -> Option<Address> {
+    match parse(signature) {
+        Option::Some(sig) => sig.recover_raw(digest),
+        Option::None => Option::None,
+    }
+}
+
+/// ERC-1271 check with OpenZeppelin `isValidERC1271SignatureNow` semantics:
+/// `STATICCALL`s `signer.isValidSignature(digest, signature)` with all
+/// remaining gas and returns true only if the call succeeds and returns at
+/// least 32 bytes whose first word is exactly `0x1626ba7e` followed by 28
+/// zero bytes and `signer` has code. Reverts, short returndata and accounts
+/// without code yield false; the code check also rejects precompiles such as
+/// identity (`0x04`), which would echo the magic selector back. At most one
+/// word of returndata is copied.
+pub fn is_valid_erc1271_signature_now(_ signer: Address, digest: u256, signature: MemSpan) -> bool
+uses (call: Call)
+{
+    let len = signature.len()
+    let padded = (len + 31) / 32 * 32
+    let args = MemBuffer::alloc(0x64 + padded)
+    ops::mstore(addr: args.ptr(), value: ERC1271_MAGIC_WORD)
+    ops::mstore(addr: offset(args.ptr(), 0x04), value: digest)
+    ops::mstore(addr: offset(args.ptr(), 0x24), value: 0x40)
+    ops::mstore(addr: offset(args.ptr(), 0x44), value: len)
+    if padded != 0 {
+        ops::mstore(addr: offset(args.ptr(), 0x44 + padded), value: 0)
+    }
+    ptr::copy(offset(args.ptr(), 0x64), signature)
+
+    let mut ret = MemBuffer::with_capacity(32)
+    let outcome = call.raw_staticcall(addr: signer, gas: ops::gas(), args: args.span(), ret: mut ret)
+    outcome.success()
+        && outcome.returndata_len() >= 32
+        && ops::mload(ret.ptr()) == ERC1271_MAGIC_WORD
+        && ops::extcodesize(signer.inner) != 0
+}
+
+/// Whether `signature` is valid for `signer` over `digest`: true if it
+/// canonically recovers (`recover`) to `signer`, otherwise the result of
+/// `is_valid_erc1271_signature_now`.
+///
+/// This is OpenZeppelin 4.x `SignatureChecker.isValidSignatureNow` (also
+/// Solady's order): ECDSA is tried first regardless of the signer's code, so
+/// an EIP-7702 delegated EOA is accepted by its key. OpenZeppelin 5.x instead
+/// skips ECDSA for signers with code. An ECDSA mismatch always costs one
+/// `STATICCALL`, which to an account without code returns false.
+pub fn is_valid_signature_now(_ signer: Address, digest: u256, signature: MemSpan) -> bool
+uses (call: Call)
+{
+    match recover(digest, signature) {
+        Option::Some(recovered) => {
+            if recovered == signer {
+                return true
+            }
+        }
+        Option::None => {}
+    }
+    is_valid_erc1271_signature_now(signer, digest, signature)
+}

@@ -1,0 +1,273 @@
+// std::evm::signature: ECDSA parsing/recovery, ERC-1271 and the combined check.
+//
+// Vectors were produced with
+// `cast wallet sign --no-hash --private-key <anvil key 0> <digest>`.
+use core::option::Option
+use core::ptr::{self, MemBuffer, MemSpan}
+use std::abi::{Bytes, Bytes32, sol}
+use std::evm::{Address, Call, Evm, RawOps, assert, signature}
+
+// Anvil account 0 and account 1.
+const OWNER: u256 = 0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266
+const OTHER: u256 = 0x70997970c51812dc3a010c7d01b50e0d17dc79c8
+
+// keccak256("fe signature"), signed by OWNER with v = 28.
+const DIGEST_1: u256 = 0x23e19352f952434ff0acdda34903b944b66660ffd9c4b4b653994015b61a6fb7
+const R_1: u256 = 0x63b1adcdccd061ed9526b8a78ef8c357572c81fa148ce48370a7f8712aa500b1
+const S_1: u256 = 0x0a34d7f42300ad311b2b2606645a490075d495c8c9c01aced60a6334ef5a5dad
+// EIP-2098 `vs` for signature 1: s with the top bit set (v = 28).
+const VS_1: u256 = 0x8a34d7f42300ad311b2b2606645a490075d495c8c9c01aced60a6334ef5a5dad
+// n - S_1: the malleable high-s twin of signature 1 (valid with v = 27).
+const HIGH_S_1: u256 = 0xf5cb280bdcff52cee4d4d9f99ba5b6fe44da471de588856ce9c7fb57e0dbe394
+
+// keccak256("fe signature 2"), signed by OWNER with v = 27.
+const DIGEST_2: u256 = 0x9b89a170e51c75b9168c889a3909deb0fa37724508e5c5b1d3463d72ef0ddbfe
+const R_2: u256 = 0x6f0bd15eee9ac69090643da5ea81512da94225d84aee3389bc7e714377abb6cc
+const S_2: u256 = 0x10ebcdce2a4a287eed783ddcf0ac4cdb5f21e7bc868ca4a4aa4f6171a18245da
+
+// DIGEST_1 signed by OTHER with v = 28.
+const OTHER_R_1: u256 = 0xfb6ec3d9fab2fda6ce13415034c85feb21f230361f53e7fb3e6e5cb30dd621c5
+const OTHER_S_1: u256 = 0x4a01cbfc92cf164b16bd2e43e681302a702dd97015dfa529299d4fd8da27139d
+
+const MAGIC_WORD: u256 = 0x1626ba7e << 224
+
+msg Erc1271Msg {
+    #[selector = sol("isValidSignature(bytes32,bytes)")]
+    IsValidSignature { hash: Bytes32, signature: Bytes } -> u256,
+}
+
+/// Smart wallet owned by OWNER: accepts exactly what OWNER signed, which also
+/// checks that the digest and signature bytes arrive intact.
+pub contract Wallet {
+    recv Erc1271Msg {
+        IsValidSignature { hash, signature } -> u256 {
+            match signature::recover(digest: hash.val, signature.payload_span()) {
+                Option::Some(signer) => {
+                    if signer.inner == OWNER {
+                        return MAGIC_WORD
+                    }
+                }
+                Option::None => {}
+            }
+            let ret: u256 = 0
+            ret
+        }
+    }
+}
+
+/// Returns the magic selector with a nonzero trailing byte.
+pub contract DirtyMagic {
+    recv Erc1271Msg {
+        IsValidSignature { hash, signature } -> u256 { MAGIC_WORD | 1 }
+    }
+}
+
+/// Returns a different selector.
+pub contract WrongMagic {
+    recv Erc1271Msg {
+        IsValidSignature { hash, signature } -> u256 { 0xffffffff << 224 }
+    }
+}
+
+/// Returns only the 4 magic bytes.
+pub contract ShortMagic {
+    recv Erc1271Msg {
+        IsValidSignature { hash, signature } -> u256 uses (raw: mut RawOps) {
+            let mut data = MemBuffer::alloc(32)
+            raw.mstore(addr: data.ptr(), value: MAGIC_WORD)
+            data.set_len(4)
+            raw.return_data(data: data.span())
+        }
+    }
+}
+
+/// Reverts with the magic word as revert data.
+pub contract RevertMagic {
+    recv Erc1271Msg {
+        IsValidSignature { hash, signature } -> u256 uses (raw: mut RawOps) {
+            let data = MemBuffer::alloc(32)
+            raw.mstore(addr: data.ptr(), value: MAGIC_WORD)
+            raw.revert(data: data.span())
+        }
+    }
+}
+
+/// Returns the magic word followed by an extra word, for any input.
+pub contract LongMagic {
+    recv Erc1271Msg {
+        IsValidSignature { hash, signature } -> u256 uses (raw: mut RawOps) {
+            let data = MemBuffer::alloc(64)
+            raw.mstore(addr: data.ptr(), value: MAGIC_WORD)
+            raw.mstore(addr: ptr::offset_bytes(data.ptr(), 32), value: 0xdead)
+            raw.return_data(data: data.span())
+        }
+    }
+}
+
+// Exactly 65 bytes are allocated, so `parse` must not read past the span.
+fn sig65(r: u256, s: u256, v: u256) -> MemSpan uses (evm: mut Evm) {
+    let data = MemBuffer::alloc(65)
+    evm.mstore(addr: data.ptr(), value: r)
+    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 32), value: s)
+    evm.mstore8(addr: ptr::offset_bytes(data.ptr(), 64), value: v.downcast_truncate())
+    data.span()
+}
+
+fn sig64(r: u256, vs: u256) -> MemSpan uses (evm: mut Evm) {
+    let data = MemBuffer::alloc(64)
+    evm.mstore(addr: data.ptr(), value: r)
+    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 32), value: vs)
+    MemSpan::from_raw_parts(ptr: data.ptr(), len: 64)
+}
+
+fn blob(len: u256) -> MemSpan uses (evm: mut Evm) {
+    let data = MemBuffer::alloc(96)
+    evm.mstore(addr: data.ptr(), value: R_1)
+    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 32), value: S_1)
+    evm.mstore(addr: ptr::offset_bytes(data.ptr(), 64), value: 0x1c1c << 240)
+    MemSpan::from_raw_parts(ptr: data.ptr(), len)
+}
+
+fn is_addr(_ value: Option<Address>, _ expected: u256) -> bool {
+    match value {
+        Option::Some(addr) => addr.inner == expected,
+        Option::None => false,
+    }
+}
+
+fn is_none(_ value: Option<Address>) -> bool {
+    match value {
+        Option::Some(_) => false,
+        Option::None => true,
+    }
+}
+
+#[test]
+fn parse_decodes_both_encodings() uses (evm: mut Evm) {
+    let full = signature::parse(sig65(r: R_1, s: S_1, v: 28)).unwrap()
+    assert(full.v == 28 && full.r == R_1 && full.s == S_1)
+
+    let compact = signature::parse(sig64(r: R_1, vs: VS_1)).unwrap()
+    assert(compact.v == 28 && compact.r == R_1 && compact.s == S_1)
+
+    let compact_27 = signature::parse(sig64(r: R_2, vs: S_2)).unwrap()
+    assert(compact_27.v == 27 && compact_27.r == R_2 && compact_27.s == S_2)
+
+    // `parse` decodes without validating v.
+    let odd_v = signature::parse(sig65(r: R_1, s: S_1, v: 0x42)).unwrap()
+    assert(odd_v.v == 0x42)
+}
+
+#[test]
+fn parse_rejects_other_lengths() uses (evm: mut Evm) {
+    assert(signature::parse(blob(len: 0)).is_none())
+    assert(signature::parse(blob(len: 63)).is_none())
+    assert(signature::parse(blob(len: 66)).is_none())
+    assert(is_none(signature::recover(digest: DIGEST_1, blob(len: 63))))
+    assert(is_none(signature::recover_raw(digest: DIGEST_1, blob(len: 66))))
+    // 65 bytes of the same blob is the valid signature.
+    assert(is_addr(signature::recover(digest: DIGEST_1, blob(len: 65)), OWNER))
+}
+
+#[test]
+fn recover_real_vectors() uses (evm: mut Evm) {
+    assert(is_addr(signature::recover(digest: DIGEST_1, sig65(r: R_1, s: S_1, v: 28)), OWNER))
+    assert(is_addr(signature::recover(digest: DIGEST_1, sig64(r: R_1, vs: VS_1)), OWNER))
+    assert(is_addr(signature::recover(digest: DIGEST_2, sig65(r: R_2, s: S_2, v: 27)), OWNER))
+    assert(is_addr(signature::recover(digest: DIGEST_2, sig64(r: R_2, vs: S_2)), OWNER))
+    assert(is_addr(signature::recover_raw(digest: DIGEST_1, sig64(r: R_1, vs: VS_1)), OWNER))
+    assert(is_addr(signature::recover(digest: DIGEST_1, sig65(r: OTHER_R_1, s: OTHER_S_1, v: 28)), OTHER))
+
+    // Methods on a decoded signature.
+    let sig = signature::parse(sig65(r: R_1, s: S_1, v: 28)).unwrap()
+    assert(is_addr(sig.recover(digest: DIGEST_1), OWNER))
+    assert(is_addr(sig.recover_raw(digest: DIGEST_1), OWNER))
+
+    // A different digest recovers some other key.
+    let wrong_digest = signature::recover(digest: DIGEST_2, sig65(r: R_1, s: S_1, v: 28))
+    assert(!is_addr(wrong_digest, OWNER))
+}
+
+#[test]
+fn recover_rejects_wrong_v() uses (evm: mut Evm) {
+    // The other recovery id yields a different key, not the signer.
+    assert(!is_addr(signature::recover(digest: DIGEST_1, sig65(r: R_1, s: S_1, v: 27)), OWNER))
+    // Out-of-range v values never recover.
+    assert(is_none(signature::recover(digest: DIGEST_1, sig65(r: R_1, s: S_1, v: 0))))
+    assert(is_none(signature::recover(digest: DIGEST_1, sig65(r: R_1, s: S_1, v: 1))))
+    assert(is_none(signature::recover(digest: DIGEST_1, sig65(r: R_1, s: S_1, v: 29))))
+    assert(is_none(signature::recover_raw(digest: DIGEST_1, sig65(r: R_1, s: S_1, v: 29))))
+}
+
+#[test]
+fn high_s_only_recovers_raw() uses (evm: mut Evm) {
+    let twin = sig65(r: R_1, s: HIGH_S_1, v: 27)
+    assert(is_none(signature::recover(digest: DIGEST_1, twin)))
+    assert(is_addr(signature::recover_raw(digest: DIGEST_1, twin), OWNER))
+    // Zero r/s are rejected by both.
+    assert(is_none(signature::recover(digest: DIGEST_1, sig65(r: 0, s: S_1, v: 28))))
+    assert(is_none(signature::recover_raw(digest: DIGEST_1, sig65(r: R_1, s: 0, v: 28))))
+}
+
+#[test]
+fn erc1271_checks_magic_exactly() uses (evm: mut Evm) {
+    let wallet = evm.create2<Wallet>(value: 0, args: (), salt: 0)
+    let dirty = evm.create2<DirtyMagic>(value: 0, args: (), salt: 1)
+    let wrong = evm.create2<WrongMagic>(value: 0, args: (), salt: 2)
+    let short = evm.create2<ShortMagic>(value: 0, args: (), salt: 3)
+    let reverting = evm.create2<RevertMagic>(value: 0, args: (), salt: 4)
+    let long = evm.create2<LongMagic>(value: 0, args: (), salt: 5)
+    let good = sig65(r: R_1, s: S_1, v: 28)
+    let compact = sig64(r: R_1, vs: VS_1)
+    let foreign = sig65(r: OTHER_R_1, s: OTHER_S_1, v: 28)
+    with (Call = evm) {
+        assert(signature::is_valid_erc1271_signature_now(wallet, digest: DIGEST_1, signature: good))
+        assert(signature::is_valid_erc1271_signature_now(wallet, digest: DIGEST_1, signature: compact))
+        assert(!signature::is_valid_erc1271_signature_now(wallet, digest: DIGEST_2, signature: good))
+        assert(!signature::is_valid_erc1271_signature_now(wallet, digest: DIGEST_1, signature: foreign))
+
+        assert(!signature::is_valid_erc1271_signature_now(dirty, digest: DIGEST_1, signature: good))
+        assert(!signature::is_valid_erc1271_signature_now(wrong, digest: DIGEST_1, signature: good))
+        assert(!signature::is_valid_erc1271_signature_now(short, digest: DIGEST_1, signature: good))
+        assert(!signature::is_valid_erc1271_signature_now(reverting, digest: DIGEST_1, signature: good))
+        assert(signature::is_valid_erc1271_signature_now(long, digest: DIGEST_1, signature: good))
+        assert(signature::is_valid_erc1271_signature_now(long, digest: DIGEST_1, signature: blob(len: 0)))
+
+        // Accounts without code never validate, not even for their own key.
+        assert(!signature::is_valid_erc1271_signature_now(Address { inner: OWNER }, digest: DIGEST_1, signature: good))
+        // The identity precompile echoes the calldata, whose first word is the
+        // magic word when the digest's high 224 bits are zero; it has no code.
+        let identity = Address { inner: 0x04 }
+        assert(!signature::is_valid_erc1271_signature_now(identity, digest: 0x1234, signature: good))
+        assert(!signature::is_valid_signature_now(identity, digest: 0x1234, signature: good))
+    }
+}
+
+#[test]
+fn is_valid_signature_now_ecdsa_then_erc1271() uses (evm: mut Evm) {
+    let wallet = evm.create2<Wallet>(value: 0, args: (), salt: 0)
+    let long = evm.create2<LongMagic>(value: 0, args: (), salt: 1)
+    let owner = Address { inner: OWNER }
+    let other = Address { inner: OTHER }
+    let good = sig65(r: R_1, s: S_1, v: 28)
+    let compact = sig64(r: R_1, vs: VS_1)
+    let twin = sig65(r: R_1, s: HIGH_S_1, v: 27)
+    let foreign = sig65(r: OTHER_R_1, s: OTHER_S_1, v: 28)
+    with (Call = evm) {
+        // EOA path.
+        assert(signature::is_valid_signature_now(owner, digest: DIGEST_1, signature: good))
+        assert(signature::is_valid_signature_now(owner, digest: DIGEST_1, signature: compact))
+        assert(signature::is_valid_signature_now(other, digest: DIGEST_1, signature: foreign))
+        assert(!signature::is_valid_signature_now(other, digest: DIGEST_1, signature: good))
+        assert(!signature::is_valid_signature_now(owner, digest: DIGEST_2, signature: good))
+        assert(!signature::is_valid_signature_now(owner, digest: DIGEST_1, signature: twin))
+        assert(!signature::is_valid_signature_now(owner, digest: DIGEST_1, signature: blob(len: 66)))
+        assert(!signature::is_valid_signature_now(Address::zero(), digest: DIGEST_1, signature: good))
+
+        // Contract path.
+        assert(signature::is_valid_signature_now(wallet, digest: DIGEST_1, signature: good))
+        assert(!signature::is_valid_signature_now(wallet, digest: DIGEST_1, signature: foreign))
+        // Non-ECDSA lengths go straight to ERC-1271.
+        assert(signature::is_valid_signature_now(long, digest: DIGEST_1, signature: blob(len: 3)))
+    }
+}
