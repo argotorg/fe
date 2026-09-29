@@ -52,7 +52,7 @@ use super::{
     access::ResolvedOperation,
     boundary::resolve_boundary_requirements,
     events::ConflictAnalysis,
-    inventory::Inventory,
+    inventory::{Inventory, unbounded_referents_diag},
     ir::{BoundaryRequirement, PendingSemanticValidation},
     loop_certificate::{FrontierCandidate, PrefixCertificate},
     scalar::{CONDITION_BUDGET, ScalarDemand},
@@ -140,18 +140,22 @@ impl<'db> Borrowck<'db> {
         summary_mode: BorrowSummaryMode,
     ) -> Result<Self, SemanticDiagnostic<'db>> {
         let inventory = Inventory::new(db, &body).map_err(|error| {
+            let message = match error {
+                ShapeError::UnboundedReferents(head) => {
+                    return unbounded_referents_diag(db, instance, body.template_owner, head);
+                }
+                ShapeError::UnresolvedCapability(ty) => format!(
+                    "unresolved capability inventory for `{}`: {ty:?}",
+                    ty.pretty_print(db)
+                ),
+                error => format!("invalid capability inventory: {error:?}"),
+            };
             normalized_body_internal_diag(
                 db,
                 instance,
                 &body,
                 SemOrigin::Body(body.template_owner),
-                match error {
-                    ShapeError::UnresolvedCapability(ty) => format!(
-                        "unresolved capability inventory for `{}`: {ty:?}",
-                        ty.pretty_print(db)
-                    ),
-                    error => format!("invalid capability inventory: {error:?}"),
-                },
+                message,
             )
         })?;
         let mut checker = Self {
@@ -918,9 +922,7 @@ impl<'db> Borrowck<'db> {
             let changed = self
                 .inventory
                 .add_external_sources(self.db, self.instance, sources.iter().cloned())
-                .map_err(|error| {
-                    self.internal_diag(origin, format!("invalid raw memory storage: {error:?}"))
-                })?;
+                .map_err(|error| self.storage_error(origin, error, "invalid raw memory storage"))?;
             if !changed {
                 let (source, scope) = &sources[0];
                 let root = RegionRoot::External(source.clone());
@@ -1411,5 +1413,21 @@ impl<'db> Borrowck<'db> {
         message: String,
     ) -> SemanticDiagnostic<'db> {
         self.diag(SemanticDiagnosticKind::Internal, origin, message)
+    }
+
+    /// A storage discovery failure. Reaching too many referent types is the
+    /// program's error; any other failure is internal.
+    pub(super) fn storage_error(
+        &self,
+        origin: SemOrigin<'db>,
+        error: ShapeError<'db>,
+        context: &str,
+    ) -> SemanticDiagnostic<'db> {
+        match error {
+            ShapeError::UnboundedReferents(head) => {
+                unbounded_referents_diag(self.db, self.instance, self.body.template_owner, head)
+            }
+            error => self.internal_diag(origin, format!("{context}: {error:?}")),
+        }
     }
 }

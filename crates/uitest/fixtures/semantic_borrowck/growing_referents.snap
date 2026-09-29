@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/growing_referents.fe
+---
+error[16-0011]: unbounded referent types in `fn value`
+   ┌─ growing_referents.fe:19:36
+   │
+19 │   fn value(grow: Grow<u256>) -> u256 {
+   │ ╭────────────────────────────────────^
+20 │ │     grow.value
+21 │ │ }
+   │ ╰─^ more than 64 instantiations of `Grow` are reachable from here; a trait may be growing a recursive type

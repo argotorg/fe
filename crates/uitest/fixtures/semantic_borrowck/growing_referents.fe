@@ -1,0 +1,21 @@
+// An impl can make a recursive type grow where its fields do not.
+pub trait Next {
+    type Out
+}
+
+impl Next for u256 {
+    type Out = Grow<[u256; 1]>
+}
+
+impl<T> Next for [T; 1] {
+    type Out = Grow<[[T; 1]; 1]>
+}
+
+pub struct Grow<T: Next> {
+    value: T,
+    next: *T::Out,
+}
+
+fn value(grow: Grow<u256>) -> u256 {
+    grow.value
+}

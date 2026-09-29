@@ -1,7 +1,7 @@
 //! Immutable structural input and borrow-occurrence inventory.
 use std::collections::{BTreeMap, BTreeSet};
 
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{
     control::LoopRegions,
@@ -30,6 +30,7 @@ use crate::{
                 state::{BorrowState, CapabilityValue, CapabilityValues},
                 value::{Guarded, ValueLimits},
             },
+            diagnostics::{SemanticDiagnostic, SemanticDiagnosticKind, SemanticDiagnosticSpan},
             instantiated_effect_env,
             normalized::{
                 HandleOrigin, NBlock, NBlockId, NExpr, NRootId, NRootKind, NStatementKind,
@@ -46,6 +47,36 @@ use crate::{
     },
     hir_def::FuncParamMode,
 };
+
+/// Checking enumerates the types reachable from a function's inputs, and a
+/// trait can make that set infinite: a projection or an effect handle's target
+/// may keep wrapping the argument of a recursive type. Definitions with
+/// growth written in their fields are rejected before checking, so reaching
+/// more instantiations of one type constructor than this is treated as such
+/// growth. It bounds the depth and width of any growing family.
+pub(super) const MAX_REFERENT_INSTANTIATIONS: usize = 64;
+
+/// The error for inputs that reach too many instantiations of `head`.
+pub(super) fn unbounded_referents_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    template_owner: BodyOwner<'db>,
+    head: TyId<'db>,
+) -> SemanticDiagnostic<'db> {
+    SemanticDiagnostic::new(
+        instance,
+        SemanticDiagnosticKind::UnboundedReferents,
+        format!(
+            "more than {MAX_REFERENT_INSTANTIATIONS} instantiations of `{}` are reachable from here; a trait may be growing a recursive type",
+            head.pretty_print(db)
+        ),
+        SemanticDiagnosticSpan::OriginWithTemplateFallback {
+            owner: instance.key(db).owner(db),
+            template_owner,
+            origin: SemOrigin::Body(template_owner),
+        },
+    )
+}
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct InputTarget<'db> {
@@ -76,6 +107,8 @@ pub(super) struct Inventory<'db> {
     /// the physical cells belonging to its allocation occurrences.
     pub allocation_cells: BTreeMap<AddressOccurrence<'db>, Vec<RegionRoot<'db>>>,
     external_loans: BTreeMap<(ExternalSource<'db>, bool), LoanId>,
+    /// The distinct target types registered for each type constructor.
+    instantiations: FxHashMap<TyId<'db>, FxHashSet<TyId<'db>>>,
 }
 
 #[derive(Clone)]
@@ -119,6 +152,7 @@ struct InputBuilder<'db> {
     targets: BTreeMap<ExternalSource<'db>, InputTarget<'db>>,
     storage: BTreeMap<RegionRoot<'db>, CapabilityValue<'db>>,
     pending: Vec<(InputTarget<'db>, InputOrigin<'db>, Vec<TyId<'db>>)>,
+    instantiations: FxHashMap<TyId<'db>, FxHashSet<TyId<'db>>>,
 }
 
 impl<'db> Inventory<'db> {
@@ -138,6 +172,7 @@ impl<'db> Inventory<'db> {
             targets: BTreeMap::new(),
             storage: BTreeMap::new(),
             pending: Vec::new(),
+            instantiations: FxHashMap::default(),
         };
         let shapes = body
             .values
@@ -321,6 +356,7 @@ impl<'db> Inventory<'db> {
             external_loans: inputs.input_loans,
             entry,
             allocation_cells: BTreeMap::new(),
+            instantiations: inputs.instantiations,
         };
         for (id, value) in entry_values {
             result.entry.set_value(id, value);
@@ -357,6 +393,7 @@ impl<'db> Inventory<'db> {
                 .map(|(root, value)| (root.clone(), value.clone()))
                 .collect(),
             pending: Vec::new(),
+            instantiations: std::mem::take(&mut self.instantiations),
         };
         let previous_targets = builder.targets.clone();
         let previous_storage_count = builder.storage.len();
@@ -468,6 +505,7 @@ impl<'db> Inventory<'db> {
             .filter_map(|((source, _), loan)| source.is_incoming().then_some(*loan))
             .collect();
         self.external_loans = builder.input_loans;
+        self.instantiations = builder.instantiations;
         self.allocation_cells.clear();
         for (root, value) in self.entry.storage() {
             if value.shape().contains_capability(db)
@@ -510,7 +548,13 @@ impl<'db> InputBuilder<'db> {
                 target.classes.sort();
             }
         } else {
-            let shape = self.shape(source.contract.ty)?;
+            let ty = source.contract.ty;
+            let head = ty.base_ty(self.db);
+            let instantiations = self.instantiations.entry(head).or_default();
+            if instantiations.insert(ty) && instantiations.len() > MAX_REFERENT_INSTANTIATIONS {
+                return Err(ShapeError::UnboundedReferents(head));
+            }
+            let shape = self.shape(ty)?;
             let target = InputTarget {
                 ty: source.contract.ty,
                 source: source.clone(),

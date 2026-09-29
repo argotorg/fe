@@ -59,3 +59,13 @@ pub struct S14<T> {
     t: T,
     next: *S13<S14<[T; 1]>>,
 }
+
+// An empty array exposes no element.
+pub struct S15<T> {
+    values: [T; 0],
+}
+
+pub struct S16<T> {
+    t: T,
+    next: *S15<S16<[T; 1]>>,
+}

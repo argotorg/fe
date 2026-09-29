@@ -238,7 +238,7 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
             if let Some(cycle) = adt.recursive_cycle(db) {
                 diags.push(Box::new(TyLowerDiag::RecursiveType(cycle.clone())) as _);
                 cycle_participants.extend(cycle.iter().map(|m| m.adt));
-            } else if let Some(cycle) = growing.adts.get(&adt) {
+            } else if let Some(cycle) = growing.get(&adt) {
                 diags.push(Box::new(TyLowerDiag::GrowingRecursiveType(cycle.clone())) as _);
             }
         }
@@ -936,7 +936,6 @@ impl ModuleAnalysisPass for ImplTraitAnalysisPass {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         let reported_at_source = generated_abi_reported_at_source(db, top_mod);
-        let growing = ingot_growing_cycles(db, top_mod.ingot(db));
         top_mod
             .all_impl_traits(db)
             .iter()
@@ -948,15 +947,8 @@ impl ModuleAnalysisPass for ImplTraitAnalysisPass {
                 }
                 _ => true,
             })
-            .flat_map(|impl_trait| {
-                impl_trait
-                    .diags(db)
-                    .into_iter()
-                    .map(|diag| diag.to_voucher())
-                    .chain(growing.impls.get(impl_trait).map(|cycle| {
-                        Box::new(TyLowerDiag::GrowingRecursiveType(cycle.clone())) as _
-                    }))
-            })
+            .flat_map(|impl_trait| impl_trait.diags(db))
+            .map(|diag| diag.to_voucher())
             .collect()
     }
 }
