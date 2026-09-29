@@ -15,8 +15,17 @@
 //! `safe_approve` has no "must set the allowance to zero first" restriction;
 //! callers dealing with tokens that require it (e.g. USDT) should approve 0
 //! first themselves.
+//!
+//! `try_transfer`, `try_transfer_from` and `try_approve` perform the same
+//! calls without reverting and return a `TokenCall` outcome instead, so the
+//! caller can raise its own error. Their success rule (Solady `SafeTransferLib`,
+//! OpenZeppelin 5 `SafeERC20`, Seaport) is slightly different from the
+//! `safe_*` helpers: the first returned word must be exactly 1, and any
+//! returndata beyond the first word is ignored and never copied.
 
-use super::effects::{Address, Call, Ctx, revert}
+use core::ptr::MemBuffer
+use super::effects::{Address, Call, Ctx, RawCallOutcome, revert}
+use super::token::TokenCall
 use ingot::abi::sol::sol
 use ingot::evm::ops
 
@@ -91,4 +100,91 @@ fn empty_return_without_code(_ token: Address) -> bool
 uses (ctx: Ctx)
 {
     ops::returndatasize() == 0 && ctx.extcodesize(token) == 0
+}
+
+/// Call `transfer(receiver, amount)` on `token` without reverting; see
+/// `try_transfer_from` for the classification.
+pub fn try_transfer(token: Address, receiver: Address, amount: u256) -> TokenCall
+uses (ctx: Ctx, call: mut Call)
+{
+    let mut ret = MemBuffer::with_capacity(32)
+    let outcome = call.try_call_into(
+        addr: token,
+        gas: ops::gas(),
+        value: 0,
+        message: Erc20Msg::Transfer { receiver, amount },
+        ret: mut ret,
+    )
+    classify_bool_return(token, outcome, ret)
+}
+
+/// Call `transferFrom(owner, receiver, amount)` on `token` without reverting.
+///
+/// Forwards all available gas and copies at most 32 bytes of returndata, so
+/// an oversized return costs the caller no copy or memory expansion. The
+/// outcome is:
+///
+/// - `Reverted` if the call failed; the revert payload is left in the
+///   returndata buffer
+/// - `Ok` if the call returned at least 32 bytes whose first word is exactly
+///   1 (not merely nonzero), ignoring any further bytes
+/// - `Ok` if the call returned no data and `token` has code (tokens such as
+///   USDT that return nothing)
+/// - `NoCode` if the call returned no data and `token` has no code. The code
+///   size is checked only on this path, after the call, so compliant tokens
+///   pay nothing extra.
+/// - `BadReturn` otherwise: `false`, any other word such as 2, or 1 to 31
+///   bytes of returndata
+pub fn try_transfer_from(
+    token: Address,
+    owner: Address,
+    receiver: Address,
+    amount: u256,
+) -> TokenCall
+uses (ctx: Ctx, call: mut Call)
+{
+    let mut ret = MemBuffer::with_capacity(32)
+    let outcome = call.try_call_into(
+        addr: token,
+        gas: ops::gas(),
+        value: 0,
+        message: Erc20Msg::TransferFrom { owner, receiver, amount },
+        ret: mut ret,
+    )
+    classify_bool_return(token, outcome, ret)
+}
+
+/// Call `approve(spender, amount)` on `token` without reverting; see
+/// `try_transfer_from` for the classification.
+pub fn try_approve(token: Address, spender: Address, amount: u256) -> TokenCall
+uses (ctx: Ctx, call: mut Call)
+{
+    let mut ret = MemBuffer::with_capacity(32)
+    let outcome = call.try_call_into(
+        addr: token,
+        gas: ops::gas(),
+        value: 0,
+        message: Erc20Msg::Approve { spender, amount },
+        ret: mut ret,
+    )
+    classify_bool_return(token, outcome, ret)
+}
+
+fn classify_bool_return(_ token: Address, _ outcome: RawCallOutcome, _ ret: MemBuffer) -> TokenCall
+uses (ctx: Ctx)
+{
+    if !outcome.success() {
+        return TokenCall::Reverted
+    }
+    let len = outcome.returndata_len()
+    if len == 0 {
+        if ctx.extcodesize(token) == 0 {
+            return TokenCall::NoCode
+        }
+        return TokenCall::Ok
+    }
+    if len >= 32 && ret.span().word_at(0) == 1 {
+        return TokenCall::Ok
+    }
+    TokenCall::BadReturn
 }

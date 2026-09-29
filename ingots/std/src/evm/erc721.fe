@@ -1,0 +1,107 @@
+//! Non-reverting ERC721 helpers: `transferFrom` and the `onERC721Received`
+//! receiver check, classified into outcomes instead of reverting.
+//!
+//! See `std::evm::token` for the outcome types and for how to bubble the
+//! callee's revert payload after a `Reverted` outcome.
+
+use core::ptr::MemBuffer
+use ingot::abi::{Bytes, Bytes4, sol::sol}
+use super::effects::{Address, Call, Ctx}
+use super::token::{ReceiverCheck, TokenCall}
+use ingot::evm::ops
+
+/// `IERC721Receiver.onERC721Received.selector`.
+pub const ON_ERC721_RECEIVED: u32 = 0x150b7a02
+
+msg Erc721Msg {
+    #[selector = sol("transferFrom(address,address,uint256)")]
+    TransferFrom { owner: Address, receiver: Address, tokenId: u256 },
+}
+
+msg Erc721ReceiverMsg {
+    #[selector = sol("onERC721Received(address,address,uint256,bytes)")]
+    OnErc721Received { operator: Address, from: Address, tokenId: u256, data: Bytes } -> Bytes4,
+}
+
+/// Call `transferFrom(owner, receiver, token_id)` on `token` without
+/// reverting.
+///
+/// Returns `NoCode` without calling if `token` has no code (checked before
+/// the call, like a Solidity interface call and Seaport). Otherwise forwards
+/// all available gas, copies no returndata, and returns `Ok` if the call
+/// succeeded (any returndata is ignored, since ERC721 `transferFrom` returns
+/// nothing) or `Reverted` if it failed. Never returns `BadReturn`.
+///
+/// Like ERC721 `transferFrom`, this does not call `onERC721Received`; use
+/// `check_on_received` for that.
+pub fn try_transfer_from(
+    token: Address,
+    owner: Address,
+    receiver: Address,
+    token_id: u256,
+) -> TokenCall
+uses (ctx: Ctx, call: mut Call)
+{
+    if ctx.extcodesize(token) == 0 {
+        return TokenCall::NoCode
+    }
+    let mut ret = MemBuffer::empty()
+    let outcome = call.try_call_into(
+        addr: token,
+        gas: ops::gas(),
+        value: 0,
+        message: Erc721Msg::TransferFrom { owner, receiver, tokenId: token_id },
+        ret: mut ret,
+    )
+    if outcome.success() {
+        TokenCall::Ok
+    } else {
+        TokenCall::Reverted
+    }
+}
+
+/// Call `onERC721Received(operator, from, token_id, data)` on `receiver`
+/// without reverting, as done after an ERC721 safe transfer
+/// (OpenZeppelin `ERC721Utils.checkOnERC721Received`).
+///
+/// Returns `NoCode` without calling if `receiver` has no code; ERC721 treats
+/// such receivers as accepting. Otherwise forwards all available gas, copies
+/// at most 32 bytes of returndata, and returns `Accepted`, `WrongMagic`,
+/// `BadReturn` or `Reverted` as documented on `ReceiverCheck`. Returndata
+/// beyond the first word is ignored.
+pub fn check_on_received(
+    receiver: Address,
+    operator: Address,
+    from: Address,
+    token_id: u256,
+    data: Bytes,
+) -> ReceiverCheck
+uses (ctx: Ctx, call: mut Call)
+{
+    if ctx.extcodesize(receiver) == 0 {
+        return ReceiverCheck::NoCode
+    }
+    let mut ret = MemBuffer::with_capacity(32)
+    let outcome = call.try_call_into(
+        addr: receiver,
+        gas: ops::gas(),
+        value: 0,
+        message: Erc721ReceiverMsg::OnErc721Received { operator, from, tokenId: token_id, data },
+        ret: mut ret,
+    )
+    if !outcome.success() {
+        return ReceiverCheck::Reverted
+    }
+    if outcome.returndata_len() < 32 {
+        return ReceiverCheck::BadReturn
+    }
+    let word = ret.span().word_at(0)
+    if word << 32 != 0 {
+        return ReceiverCheck::BadReturn
+    }
+    if word >> 224 == ON_ERC721_RECEIVED as u256 {
+        ReceiverCheck::Accepted
+    } else {
+        ReceiverCheck::WrongMagic
+    }
+}

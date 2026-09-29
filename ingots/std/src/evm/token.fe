@@ -1,0 +1,61 @@
+//! Outcomes of non-reverting token calls, shared by `std::evm::erc20`,
+//! `std::evm::erc721` and `std::evm::erc1155`.
+//!
+//! The `try_*` helpers in those modules never revert on their own: they
+//! classify what the token (or receiver) did and leave the reaction to the
+//! caller, so a contract can raise its own error for each case.
+//!
+//! After a `Reverted` outcome the EVM returndata buffer still holds the
+//! callee's complete revert payload (the helpers make no further call), so
+//! the caller can forward it with `std::evm::bubble_last_revert()` or inspect
+//! it with `std::evm::copy_returndata()` before making any other call.
+
+/// Outcome of a token transfer or approval call.
+#[must_use]
+pub enum TokenCall {
+    /// The call succeeded and its return value (if any is expected) signals
+    /// success.
+    Ok,
+    /// The call failed (revert, out of gas, invalid opcode, ...).
+    Reverted,
+    /// The call succeeded but returned data that does not signal success.
+    /// Only ERC20 calls inspect returndata, so only they produce this.
+    BadReturn,
+    /// There is no code at the token address. See each helper for whether
+    /// this is checked before or after the call.
+    NoCode,
+}
+
+impl Copy for TokenCall {}
+
+impl TokenCall {
+    /// Whether the outcome is `TokenCall::Ok`.
+    pub fn is_ok(self) -> bool {
+        match self {
+            TokenCall::Ok => true,
+            _ => false,
+        }
+    }
+}
+
+/// Outcome of a safe-transfer receiver hook such as
+/// `onERC721Received`.
+#[must_use]
+pub enum ReceiverCheck {
+    /// The hook succeeded and returned the expected magic value.
+    Accepted,
+    /// The hook succeeded and returned a well-formed `bytes4` other than
+    /// the expected magic value.
+    WrongMagic,
+    /// The hook succeeded but returned fewer than 32 bytes, or a first word
+    /// that is not a valid ABI-encoded `bytes4` (nonzero low 28 bytes).
+    /// Solidity's decoder would revert without data on such returndata.
+    BadReturn,
+    /// The hook call failed.
+    Reverted,
+    /// The receiver has no code, so the hook was not called. Token standards
+    /// treat such receivers (EOAs) as accepting.
+    NoCode,
+}
+
+impl Copy for ReceiverCheck {}

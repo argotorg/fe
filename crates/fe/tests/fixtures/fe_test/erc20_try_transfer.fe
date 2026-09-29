@@ -1,0 +1,164 @@
+/// Tests for the non-reverting `std::evm::erc20::try_*` helpers: every
+/// returndata shape a token can produce is classified into a `TokenCall`
+/// outcome instead of reverting.
+
+use core::ptr
+use std::evm::{RawOps, TokenCall, bubble_last_revert, erc20}
+
+msg TokenMsg {
+    #[selector = sol("transfer(address,uint256)")]
+    Transfer { receiver: Address, amount: u256 } -> bool,
+    #[selector = sol("transferFrom(address,address,uint256)")]
+    TransferFrom { owner: Address, receiver: Address, amount: u256 } -> bool,
+    #[selector = sol("approve(address,uint256)")]
+    Approve { spender: Address, amount: u256 } -> bool,
+}
+
+struct Reply {
+    word: u256,
+    len: u256,
+}
+
+/// Returns `len` bytes of returndata: `word` followed by arbitrary bytes (or the
+/// first `len` bytes of `word` when `len < 32`). Reverts with the
+/// `0xdeadbeef...` marker when `len` is `REVERT`.
+pub contract RawReplyToken {
+    mut reply: Reply
+
+    init(word: u256, len: u256) uses (mut reply) {
+        reply.word = word
+        reply.len = len
+    }
+
+    recv TokenMsg {
+        Transfer { receiver, amount } -> bool uses (reply, raw: mut RawOps) {
+            answer(word: reply.word, len: reply.len)
+        }
+        TransferFrom { owner, receiver, amount } -> bool uses (reply, raw: mut RawOps) {
+            answer(word: reply.word, len: reply.len)
+        }
+        Approve { spender, amount } -> bool uses (reply, raw: mut RawOps) {
+            answer(word: reply.word, len: reply.len)
+        }
+    }
+}
+
+const REVERT: u256 = 0xffffffff
+
+fn answer(word: u256, len: u256) -> ! uses (raw: mut RawOps) {
+    let alloc = if len < 32 { 32 } else { len }
+    let mut data = ptr::MemBuffer::alloc(alloc)
+    if len == REVERT {
+        raw.mstore(addr: data.ptr(), value: 0xdeadbeefcafebabe << 192)
+        data.set_len(32)
+        raw.revert(data: data.span())
+    }
+    raw.mstore(addr: data.ptr(), value: word)
+    data.set_len(len)
+    raw.return_data(data: data.span())
+}
+
+fn alice() -> Address {
+    Address { inner: 2 }
+}
+
+fn bob() -> Address {
+    Address { inner: 3 }
+}
+
+fn code(_ outcome: TokenCall) -> u256 {
+    match outcome {
+        TokenCall::Ok => 0,
+        TokenCall::Reverted => 1,
+        TokenCall::BadReturn => 2,
+        TokenCall::NoCode => 3,
+    }
+}
+
+/// Deploy a token replying with (`word`, `len`) and classify all three calls,
+/// asserting they agree.
+fn classify(word: u256, len: u256, salt: u256) -> u256 uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let token = evm.create2<RawReplyToken>(value: 0, args: (word, len), salt)
+    let a = code(erc20::try_transfer(token, receiver: alice(), amount: 1))
+    let b = code(erc20::try_transfer_from(token, owner: alice(), receiver: bob(), amount: 1))
+    let c = code(erc20::try_approve(token, spender: alice(), amount: 1))
+    assert!(a == b && b == c)
+    a
+}
+
+#[test]
+fn test_true_is_ok() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    assert!(classify(word: 1, len: 32, salt: 0) == 0)
+    let token = evm.create2<RawReplyToken>(value: 0, args: (1, 32), salt: 1)
+    assert!(erc20::try_transfer(token, receiver: alice(), amount: 1).is_ok())
+}
+
+#[test]
+fn test_empty_return_from_contract_is_ok() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    assert!(classify(word: 0, len: 0, salt: 0) == 0)
+}
+
+#[test]
+fn test_false_is_bad_return() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    assert!(classify(word: 0, len: 32, salt: 0) == 2)
+}
+
+#[test]
+fn test_two_is_bad_return() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    // Only exactly 1 counts as true, as in Solady and OpenZeppelin 5.
+    assert!(classify(word: 2, len: 32, salt: 0) == 2)
+    assert!(classify(word: 1 << 255, len: 32, salt: 1) == 2)
+}
+
+#[test]
+fn test_short_return_is_bad_return() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    // 31 bytes of an all-ones word, and a lone 4-byte return.
+    assert!(classify(word: 1, len: 31, salt: 0) == 2)
+    assert!(classify(word: 1 << 224, len: 4, salt: 1) == 2)
+}
+
+#[test]
+fn test_trailing_bytes_after_true_are_ignored() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    assert!(classify(word: 1, len: 33, salt: 0) == 0)
+    assert!(classify(word: 1, len: 64, salt: 1) == 0)
+}
+
+#[test]
+fn test_return_bomb_is_not_copied() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    // 256 KiB of returndata: the token pays ~160k gas to expand its memory.
+    // Copying it into the caller would cost about as much again, so the
+    // bound below only holds because at most 32 bytes are copied.
+    let len: u256 = 0x40000
+    let token = evm.create2<RawReplyToken>(value: 0, args: (1, len), salt: 0)
+    let before = ctx.gas()
+    let outcome = erc20::try_transfer(token, receiver: alice(), amount: 1)
+    let used = before - ctx.gas()
+    assert!(code(outcome) == 0)
+    assert!(used < 250000)
+
+    let bad = evm.create2<RawReplyToken>(value: 0, args: (0, len), salt: 1)
+    assert!(code(erc20::try_transfer(token: bad, receiver: alice(), amount: 1)) == 2)
+}
+
+#[test]
+fn test_revert_is_reverted() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    assert!(classify(word: 0, len: REVERT, salt: 0) == 1)
+}
+
+/// The revert payload survives in the returndata buffer for bubbling.
+#[test(should_revert, selector = 0xdeadbeef)]
+fn test_reverted_payload_can_be_bubbled() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let token = evm.create2<RawReplyToken>(value: 0, args: (0, REVERT), salt: 0)
+    match erc20::try_transfer(token, receiver: alice(), amount: 1) {
+        TokenCall::Reverted => bubble_last_revert(),
+        _ => {}
+    }
+}
+
+#[test]
+fn test_codeless_token_is_no_code() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let eoa = Address { inner: 0xe0a }
+    assert!(code(erc20::try_transfer(token: eoa, receiver: alice(), amount: 1)) == 3)
+    assert!(code(erc20::try_transfer_from(token: eoa, owner: alice(), receiver: bob(), amount: 1)) == 3)
+    assert!(code(erc20::try_approve(token: eoa, spender: alice(), amount: 1)) == 3)
+}

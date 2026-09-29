@@ -1,0 +1,93 @@
+//! Non-reverting ERC1155 transfer helpers, classified into `TokenCall`
+//! outcomes instead of reverting.
+//!
+//! See `std::evm::token` for the outcome type and for how to bubble the
+//! token's revert payload after a `Reverted` outcome.
+
+use core::ptr::MemBuffer
+use ingot::abi::{Bytes, DynArray, sol::sol}
+use super::effects::{Address, Call, Ctx}
+use super::token::TokenCall
+use ingot::evm::ops
+
+msg Erc1155Msg {
+    #[selector = sol("safeTransferFrom(address,address,uint256,uint256,bytes)")]
+    SafeTransferFrom { owner: Address, receiver: Address, id: u256, amount: u256, data: Bytes },
+    #[selector = sol("safeBatchTransferFrom(address,address,uint256[],uint256[],bytes)")]
+    SafeBatchTransferFrom {
+        owner: Address,
+        receiver: Address,
+        ids: DynArray<u256>,
+        amounts: DynArray<u256>,
+        data: Bytes,
+    },
+}
+
+/// Call `safeTransferFrom(owner, receiver, id, amount, data)` on `token`
+/// without reverting.
+///
+/// Returns `NoCode` without calling if `token` has no code (checked before
+/// the call, like a Solidity interface call and Seaport). Otherwise forwards
+/// all available gas, copies no returndata, and returns `Ok` if the call
+/// succeeded (any returndata is ignored) or `Reverted` if it failed. Never
+/// returns `BadReturn`. The receiver's `onERC1155Received` hook is the
+/// token's responsibility.
+pub fn try_safe_transfer_from(
+    token: Address,
+    owner: Address,
+    receiver: Address,
+    id: u256,
+    amount: u256,
+    data: Bytes,
+) -> TokenCall
+uses (ctx: Ctx, call: mut Call)
+{
+    if ctx.extcodesize(token) == 0 {
+        return TokenCall::NoCode
+    }
+    let mut ret = MemBuffer::empty()
+    let outcome = call.try_call_into(
+        addr: token,
+        gas: ops::gas(),
+        value: 0,
+        message: Erc1155Msg::SafeTransferFrom { owner, receiver, id, amount, data },
+        ret: mut ret,
+    )
+    if outcome.success() {
+        TokenCall::Ok
+    } else {
+        TokenCall::Reverted
+    }
+}
+
+/// Call `safeBatchTransferFrom(owner, receiver, ids, amounts, data)` on
+/// `token` without reverting, with the same classification as
+/// `try_safe_transfer_from`. Mismatched `ids` and `amounts` lengths are
+/// passed through unchecked; a compliant token reverts on them.
+pub fn try_safe_batch_transfer_from(
+    token: Address,
+    owner: Address,
+    receiver: Address,
+    ids: DynArray<u256>,
+    amounts: DynArray<u256>,
+    data: Bytes,
+) -> TokenCall
+uses (ctx: Ctx, call: mut Call)
+{
+    if ctx.extcodesize(token) == 0 {
+        return TokenCall::NoCode
+    }
+    let mut ret = MemBuffer::empty()
+    let outcome = call.try_call_into(
+        addr: token,
+        gas: ops::gas(),
+        value: 0,
+        message: Erc1155Msg::SafeBatchTransferFrom { owner, receiver, ids, amounts, data },
+        ret: mut ret,
+    )
+    if outcome.success() {
+        TokenCall::Ok
+    } else {
+        TokenCall::Reverted
+    }
+}

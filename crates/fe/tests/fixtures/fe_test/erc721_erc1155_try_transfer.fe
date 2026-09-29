@@ -1,0 +1,399 @@
+/// Tests for the non-reverting `std::evm::erc721` and `std::evm::erc1155`
+/// transfer helpers and the `onERC721Received` receiver check.
+
+use core::ptr
+use std::abi::Bytes4
+use std::evm::{RawOps, ReceiverCheck, TokenCall, bubble_last_revert, erc721, erc1155}
+
+msg Erc721Msg {
+    #[selector = sol("transferFrom(address,address,uint256)")]
+    TransferFrom { from: Address, to: Address, tokenId: u256 },
+}
+
+msg Erc1155Msg {
+    #[selector = sol("safeTransferFrom(address,address,uint256,uint256,bytes)")]
+    SafeTransferFrom { from: Address, to: Address, id: u256, value: u256, data: Bytes },
+    #[selector = sol("safeBatchTransferFrom(address,address,uint256[],uint256[],bytes)")]
+    SafeBatchTransferFrom { from: Address, to: Address, ids: Vec<u256>, values: Vec<u256>, data: Bytes },
+}
+
+msg ReceiverMsg {
+    #[selector = sol("onERC721Received(address,address,uint256,bytes)")]
+    OnErc721Received { operator: Address, from: Address, tokenId: u256, data: Bytes } -> Bytes4,
+}
+
+msg LastMsg {
+    #[selector = 0x01]
+    Last -> u256,
+}
+
+struct Last {
+    value: u256,
+}
+
+/// Records a digest of the last transfer's arguments; returns nothing.
+pub contract Nft {
+    mut last: Last
+
+    recv Erc721Msg {
+        TransferFrom { from, to, tokenId } uses (mut last) {
+            last.value = from.inner * 0x10000 + to.inner * 0x100 + tokenId
+        }
+    }
+
+    recv LastMsg {
+        Last -> u256 uses (last) {
+            last.value
+        }
+    }
+}
+
+/// Returns an unrelated word (`false`): ERC721 returndata is ignored.
+pub contract FalseNft {
+    recv Erc721Msg {
+        TransferFrom { from, to, tokenId } uses (raw: mut RawOps) {
+            let data = ptr::MemBuffer::alloc(32)
+            raw.mstore(addr: data.ptr(), value: 0)
+            raw.return_data(data: data.span())
+        }
+    }
+}
+
+pub contract RevertingNft {
+    recv Erc721Msg {
+        TransferFrom { from, to, tokenId } {
+            let marker: u256 = 0xdeadbeefcafebabe << 192
+            revert(marker)
+        }
+    }
+}
+
+/// Records a digest of the last transfer's arguments; returns nothing.
+pub contract MultiToken {
+    mut last: Last
+
+    recv Erc1155Msg {
+        SafeTransferFrom { from, to, id, value, data } uses (mut last) {
+            last.value = from.inner * 0x10000 + to.inner * 0x100 + id * value + data.len()
+        }
+        SafeBatchTransferFrom { from, to, ids, values, data } uses (mut last) {
+            let mut sum: u256 = 0
+            let mut i: u256 = 0
+            while i < ids.len() {
+                sum += ids.get(i) * values.get(i)
+                i += 1
+            }
+            last.value = from.inner * 0x10000 + to.inner * 0x100 + sum + ids.len() * 0x1000000 + values.len() * 0x100000000 + data.len()
+        }
+    }
+
+    recv LastMsg {
+        Last -> u256 uses (last) {
+            last.value
+        }
+    }
+}
+
+pub contract RevertingMultiToken {
+    recv Erc1155Msg {
+        SafeTransferFrom { from, to, id, value, data } {
+            let marker: u256 = 0xdeadbeefcafebabe << 192
+            revert(marker)
+        }
+        SafeBatchTransferFrom { from, to, ids, values, data } {
+            let marker: u256 = 0xdeadbeefcafebabe << 192
+            revert(marker)
+        }
+    }
+}
+
+struct Reply {
+    word: u256,
+    len: u256,
+}
+
+const REVERT: u256 = 0xffffffff
+
+/// `onERC721Received` receiver that replies with `len` bytes starting with
+/// `word` (reverting when `len` is `REVERT`), but only when called with the
+/// expected arguments; otherwise it returns the zero selector.
+pub contract Receiver {
+    mut reply: Reply
+
+    init(word: u256, len: u256) uses (mut reply) {
+        reply.word = word
+        reply.len = len
+    }
+
+    recv ReceiverMsg {
+        OnErc721Received { operator, from, tokenId, data } -> Bytes4 uses (reply, raw: mut RawOps) {
+            let expected = operator.inner == 7 && from.inner == 2 && tokenId == 42 && data.len() == 0
+            let alloc = if reply.len < 32 { 32 } else { reply.len }
+            let mut out = ptr::MemBuffer::alloc(alloc)
+            if reply.len == REVERT {
+                raw.mstore(addr: out.ptr(), value: 0xdeadbeefcafebabe << 192)
+                out.set_len(32)
+                raw.revert(data: out.span())
+            }
+            raw.mstore(addr: out.ptr(), value: if expected { reply.word } else { 0 })
+            out.set_len(reply.len)
+            raw.return_data(data: out.span())
+        }
+    }
+}
+
+fn alice() -> Address {
+    Address { inner: 2 }
+}
+
+fn bob() -> Address {
+    Address { inner: 3 }
+}
+
+fn eoa() -> Address {
+    Address { inner: 0xe0a }
+}
+
+fn last(_ token: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(addr: token, gas: 100000, value: 0, message: LastMsg::Last {})
+}
+
+fn code(_ outcome: TokenCall) -> u256 {
+    match outcome {
+        TokenCall::Ok => 0,
+        TokenCall::Reverted => 1,
+        TokenCall::BadReturn => 2,
+        TokenCall::NoCode => 3,
+    }
+}
+
+fn receiver_code(_ outcome: ReceiverCheck) -> u256 {
+    match outcome {
+        ReceiverCheck::Accepted => 0,
+        ReceiverCheck::WrongMagic => 1,
+        ReceiverCheck::BadReturn => 2,
+        ReceiverCheck::Reverted => 3,
+        ReceiverCheck::NoCode => 4,
+    }
+}
+
+fn u256_vec(_ a: u256, _ b: u256, _ c: u256) -> Vec<u256> {
+    let mut v = MemVec<u256>::zeroed(3)
+    v.set(index: 0, value: a)
+    v.set(index: 1, value: b)
+    v.set(index: 2, value: c)
+    v.to_dyn_array()
+}
+
+// ---------------------------------------------------------------------------
+// erc721::try_transfer_from
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_erc721_transfer_ok() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let nft = evm.create2<Nft>(value: 0, args: (), salt: 0)
+    assert!(erc721::try_transfer_from(token: nft, owner: alice(), receiver: bob(), token_id: 9).is_ok())
+    assert!(last(nft) == 0x20309)
+}
+
+#[test]
+fn test_erc721_returndata_is_ignored() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let nft = evm.create2<FalseNft>(value: 0, args: (), salt: 0)
+    assert!(code(erc721::try_transfer_from(token: nft, owner: alice(), receiver: bob(), token_id: 9)) == 0)
+}
+
+#[test]
+fn test_erc721_revert_is_reverted() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let nft = evm.create2<RevertingNft>(value: 0, args: (), salt: 0)
+    assert!(code(erc721::try_transfer_from(token: nft, owner: alice(), receiver: bob(), token_id: 9)) == 1)
+}
+
+#[test(should_revert, selector = 0xdeadbeef)]
+fn test_erc721_reverted_payload_can_be_bubbled() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let nft = evm.create2<RevertingNft>(value: 0, args: (), salt: 0)
+    match erc721::try_transfer_from(token: nft, owner: alice(), receiver: bob(), token_id: 9) {
+        TokenCall::Reverted => bubble_last_revert(),
+        _ => {}
+    }
+}
+
+#[test]
+fn test_erc721_codeless_is_no_code() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    assert!(code(erc721::try_transfer_from(token: eoa(), owner: alice(), receiver: bob(), token_id: 9)) == 3)
+}
+
+// ---------------------------------------------------------------------------
+// erc1155::try_safe_transfer_from / try_safe_batch_transfer_from
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_erc1155_transfer_ok() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let token = evm.create2<MultiToken>(value: 0, args: (), salt: 0)
+    let outcome = erc1155::try_safe_transfer_from(
+        token,
+        owner: alice(),
+        receiver: bob(),
+        id: 5,
+        amount: 7,
+        data: Bytes::empty(),
+    )
+    assert!(outcome.is_ok())
+    assert!(last(token) == 0x20300 + 35)
+}
+
+#[test]
+fn test_erc1155_batch_transfer_ok() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let token = evm.create2<MultiToken>(value: 0, args: (), salt: 0)
+    let outcome = erc1155::try_safe_batch_transfer_from(
+        token,
+        owner: alice(),
+        receiver: bob(),
+        ids: u256_vec(1, 2, 3),
+        amounts: u256_vec(10, 20, 30),
+        data: Bytes::empty(),
+    )
+    assert!(outcome.is_ok())
+    assert!(last(token) == 0x20300 + 140 + 3 * 0x1000000 + 3 * 0x100000000)
+}
+
+#[test]
+fn test_erc1155_revert_is_reverted() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let token = evm.create2<RevertingMultiToken>(value: 0, args: (), salt: 0)
+    let single = erc1155::try_safe_transfer_from(
+        token,
+        owner: alice(),
+        receiver: bob(),
+        id: 5,
+        amount: 7,
+        data: Bytes::empty(),
+    )
+    assert!(code(single) == 1)
+    let batch = erc1155::try_safe_batch_transfer_from(
+        token,
+        owner: alice(),
+        receiver: bob(),
+        ids: u256_vec(1, 2, 3),
+        amounts: u256_vec(10, 20, 30),
+        data: Bytes::empty(),
+    )
+    assert!(code(batch) == 1)
+}
+
+#[test(should_revert, selector = 0xdeadbeef)]
+fn test_erc1155_reverted_payload_can_be_bubbled() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let token = evm.create2<RevertingMultiToken>(value: 0, args: (), salt: 0)
+    let outcome = erc1155::try_safe_batch_transfer_from(
+        token,
+        owner: alice(),
+        receiver: bob(),
+        ids: u256_vec(1, 2, 3),
+        amounts: u256_vec(10, 20, 30),
+        data: Bytes::empty(),
+    )
+    match outcome {
+        TokenCall::Reverted => bubble_last_revert(),
+        _ => {}
+    }
+}
+
+#[test]
+fn test_erc1155_codeless_is_no_code() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let single = erc1155::try_safe_transfer_from(
+        token: eoa(),
+        owner: alice(),
+        receiver: bob(),
+        id: 5,
+        amount: 7,
+        data: Bytes::empty(),
+    )
+    assert!(code(single) == 3)
+    let batch = erc1155::try_safe_batch_transfer_from(
+        token: eoa(),
+        owner: alice(),
+        receiver: bob(),
+        ids: u256_vec(1, 2, 3),
+        amounts: u256_vec(10, 20, 30),
+        data: Bytes::empty(),
+    )
+    assert!(code(batch) == 3)
+}
+
+// ---------------------------------------------------------------------------
+// erc721::check_on_received
+// ---------------------------------------------------------------------------
+
+fn check(word: u256, len: u256, salt: u256) -> u256 uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let receiver = evm.create2<Receiver>(value: 0, args: (word, len), salt)
+    receiver_code(
+        erc721::check_on_received(
+            receiver,
+            operator: Address { inner: 7 },
+            from: alice(),
+            token_id: 42,
+            data: Bytes::empty(),
+        ),
+    )
+}
+
+#[test]
+fn test_receiver_correct_magic_is_accepted() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    assert!(check(word: 0x150b7a02 << 224, len: 32, salt: 0) == 0)
+    // Returndata beyond the first word is ignored.
+    assert!(check(word: 0x150b7a02 << 224, len: 0x10000, salt: 1) == 0)
+}
+
+#[test]
+fn test_receiver_wrong_magic() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    assert!(check(word: 0xdeadbeef << 224, len: 32, salt: 0) == 1)
+    // Arguments are forwarded: the mock answers 0 unless they match.
+    let receiver = evm.create2<Receiver>(value: 0, args: (0x150b7a02 << 224, 32), salt: 1)
+    let outcome = erc721::check_on_received(
+        receiver,
+        operator: Address { inner: 8 },
+        from: alice(),
+        token_id: 42,
+        data: Bytes::empty(),
+    )
+    assert!(receiver_code(outcome) == 1)
+}
+
+#[test]
+fn test_receiver_short_or_dirty_return_is_bad_return() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    assert!(check(word: 0x150b7a02 << 224, len: 4, salt: 0) == 2)
+    assert!(check(word: 0x150b7a02 << 224, len: 0, salt: 1) == 2)
+    // A valid magic with a nonzero low byte is not an ABI `bytes4`.
+    assert!(check(word: (0x150b7a02 << 224) + 1, len: 32, salt: 2) == 2)
+}
+
+#[test]
+fn test_receiver_revert_is_reverted() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    assert!(check(word: 0, len: REVERT, salt: 0) == 3)
+}
+
+#[test(should_revert, selector = 0xdeadbeef)]
+fn test_receiver_revert_payload_can_be_bubbled() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let receiver = evm.create2<Receiver>(value: 0, args: (0, REVERT), salt: 0)
+    let outcome = erc721::check_on_received(
+        receiver,
+        operator: Address { inner: 7 },
+        from: alice(),
+        token_id: 42,
+        data: Bytes::empty(),
+    )
+    match outcome {
+        ReceiverCheck::Reverted => bubble_last_revert(),
+        _ => {}
+    }
+}
+
+#[test]
+fn test_codeless_receiver_is_no_code() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
+    let outcome = erc721::check_on_received(
+        receiver: eoa(),
+        operator: Address { inner: 7 },
+        from: alice(),
+        token_id: 42,
+        data: Bytes::empty(),
+    )
+    assert!(receiver_code(outcome) == 4)
+}
