@@ -3574,15 +3574,66 @@ impl<'db> AdtDef<'db> {
 
         impl_check(db, self, self, &[])
     }
+}
 
-    /// Detects a recursive cycle that passes a generic parameter of this ADT
-    /// back to its own position inside a larger argument, as `Grow<T>` does
-    /// through a field of type `*Grow<[T; 1]>`. Indirection keeps such a type
-    /// finitely sized, but each instantiation reaches infinitely many distinct
-    /// types. Returns the cycle members if the ADT is part of such a cycle.
-    pub fn growing_cycle(self, db: &'db dyn HirAnalysisDb) -> Option<Vec<GrowingCycleMember<'db>>> {
-        growing_cycle(db, self.ingot(db), self.scope(db), GrowthOwner::Adt(self))
+/// The growing recursive cycles of an ingot's definitions: generic ADTs and
+/// impl associated types that pass a generic argument back to its own
+/// position inside a larger one, as `Grow<T>` does through a field of type
+/// `*Grow<[T; 1]>`. Indirection keeps such a type finitely sized, but each
+/// instantiation reaches infinitely many distinct types.
+#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+pub struct IngotGrowingCycles<'db> {
+    pub adts: IndexMap<AdtDef<'db>, Vec<GrowingCycleMember<'db>>>,
+    pub impls: IndexMap<ImplTrait<'db>, Vec<GrowingCycleMember<'db>>>,
+}
+
+/// Finds the growing cycles of all definitions of `ingot` in one search, so a
+/// long chain of definitions is explored once rather than once per member.
+/// Each cycle is reported once, at its first definition in item order, so an
+/// ADT of the ingot reports a cycle before any impl on it does.
+#[salsa::tracked(return_ref)]
+pub fn ingot_growing_cycles<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+) -> IngotGrowingCycles<'db> {
+    let mut cycles = IngotGrowingCycles {
+        adts: IndexMap::default(),
+        impls: IndexMap::default(),
+    };
+    let adts = ingot
+        .all_items(db)
+        .iter()
+        .filter_map(|item| AdtRef::try_from_item(*item))
+        .map(|adt| GrowthOwner::Adt(lower_adt(db, adt)));
+    let assoc_tys = ingot.all_impl_traits(db).iter().filter_map(|&impl_trait| {
+        impls_for_trait_def(db, ingot, impl_trait.trait_def(db)?)
+            .iter()
+            .find(|implementor| implementor.origin(db) == ImplementorOrigin::Hir(impl_trait))
+    });
+    let starts: Vec<_> = adts
+        .chain(assoc_tys.flat_map(|&implementor| {
+            implementor
+                .types(db)
+                .keys()
+                .map(move |&name| GrowthOwner::AssocTy(implementor, name))
+        }))
+        .collect();
+    if starts.is_empty() {
+        return cycles;
     }
+    for (owner, cycle) in growing_cycles(db, ingot, ingot.root_mod(db).scope(), &starts) {
+        match owner {
+            GrowthOwner::Adt(adt) => {
+                cycles.adts.insert(adt, cycle);
+            }
+            GrowthOwner::AssocTy(implementor, _) => {
+                if let ImplementorOrigin::Hir(impl_trait) = implementor.origin(db) {
+                    cycles.impls.entry(impl_trait).or_insert(cycle);
+                }
+            }
+        }
+    }
+    cycles
 }
 
 /// A generic definition that builds the types reachable from a value: an ADT
@@ -3612,8 +3663,9 @@ impl<'db> GrowthOwner<'db> {
     }
 }
 
-/// Finds a cycle that passes an input of `start` back to itself inside a
-/// larger argument, using the impls visible from `ingot`.
+/// Finds cycles that pass an input back to itself inside a larger argument,
+/// using the impls visible from `ingot`, each reported at the first of
+/// `starts` that lies on it.
 ///
 /// An input flows into each ADT argument built from it, and into each input
 /// of an impl that may resolve a projection built from it. A written type may
@@ -3622,12 +3674,12 @@ impl<'db> GrowthOwner<'db> {
 /// grows only if its flows gain size in total. A state also keeps the head
 /// constructor of the input's value when known, so a projection only reaches
 /// the impls that value can select.
-fn growing_cycle<'db>(
+fn growing_cycles<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
     scope: ScopeId<'db>,
-    start: GrowthOwner<'db>,
-) -> Option<Vec<GrowingCycleMember<'db>>> {
+    starts: &[GrowthOwner<'db>],
+) -> Vec<(GrowthOwner<'db>, Vec<GrowingCycleMember<'db>>)> {
     type State<'db> = (GrowthOwner<'db>, usize, Option<TyId<'db>>);
     struct Flow<'db> {
         to: State<'db>,
@@ -3697,15 +3749,13 @@ fn growing_cycle<'db>(
         })
     }
 
-    let inputs = start.inputs(db);
-    if start.params(db).is_empty() {
-        return None;
-    }
     let handle = resolve_core_trait(db, scope, &["EffectHandle"]);
     let target = IdentId::new(db, "Target".to_string());
     let mut flows: IndexMap<State<'db>, Vec<Flow<'db>>> = IndexMap::default();
-    let mut pending: Vec<_> = (0..inputs.len())
-        .map(|input| (start, input, None))
+    let mut pending: Vec<_> = starts
+        .iter()
+        .filter(|start| !start.params(db).is_empty())
+        .flat_map(|&start| (0..start.inputs(db).len()).map(move |input| (start, input, None)))
         .collect();
     while let Some(state @ (owner, input, value_head)) = pending.pop() {
         if flows.contains_key(&state) {
@@ -3836,8 +3886,9 @@ fn growing_cycle<'db>(
     }
 
     // A state grows without bound if a cycle through it can gain size. Within
-    // a strongly connected set of states, a closed walk through one state can
-    // repeat any cycle of the set, so any positive cycle of the set suffices.
+    // a strongly connected component, a closed walk through one state can
+    // repeat any cycle of the component, so each component is checked once
+    // for a positive cycle.
     struct Edge<'db> {
         from: usize,
         to: usize,
@@ -3865,23 +3916,123 @@ fn growing_cycle<'db>(
         outgoing[edge.from].push(idx);
         incoming[edge.to].push(idx);
     }
-    let reach = |from: usize, adjacent: &[Vec<usize>], next: fn(&Edge<'db>) -> usize| {
-        let mut reached = vec![false; flows.len()];
-        reached[from] = true;
-        let mut pending = vec![from];
-        while let Some(state) = pending.pop() {
-            for &edge in &adjacent[state] {
-                let next = next(&edges[edge]);
-                if !reached[next] {
-                    reached[next] = true;
-                    pending.push(next);
+
+    // Kosaraju: finish order on the flows, then components on the reverse.
+    let mut finished = Vec::with_capacity(flows.len());
+    let mut visited = vec![false; flows.len()];
+    for root in 0..flows.len() {
+        if visited[root] {
+            continue;
+        }
+        visited[root] = true;
+        let mut stack = vec![(root, 0)];
+        while let Some(&(state, next)) = stack.last() {
+            if let Some(&edge) = outgoing[state].get(next) {
+                stack.last_mut().expect("the stack is not empty").1 += 1;
+                let to = edges[edge].to;
+                if !visited[to] {
+                    visited[to] = true;
+                    stack.push((to, 0));
+                }
+            } else {
+                finished.push(state);
+                stack.pop();
+            }
+        }
+    }
+    let mut component = vec![None; flows.len()];
+    let mut members: Vec<Vec<usize>> = Vec::new();
+    for &root in finished.iter().rev() {
+        if component[root].is_some() {
+            continue;
+        }
+        let id = members.len();
+        component[root] = Some(id);
+        let mut stack = vec![root];
+        let mut states = Vec::new();
+        while let Some(state) = stack.pop() {
+            states.push(state);
+            for &edge in &incoming[state] {
+                let from = edges[edge].from;
+                if component[from].is_none() {
+                    component[from] = Some(id);
+                    stack.push(from);
                 }
             }
         }
-        reached
-    };
-    // The shortest walk of edges between two states of a component.
-    let walk = |from: usize, to: usize, component: &[bool]| {
+        members.push(states);
+    }
+    let component: Vec<_> = component
+        .into_iter()
+        .map(|id| id.expect("every state is in a component"))
+        .collect();
+    let mut inner = vec![Vec::new(); members.len()];
+    for (idx, edge) in edges.iter().enumerate() {
+        if component[edge.from] == component[edge.to] {
+            inner[component[edge.from]].push(idx);
+        }
+    }
+
+    // A positive cycle of each component: an unbounded edge, or a gain that
+    // longest-path Bellman-Ford still finds after one round per state.
+    let mut gain = vec![None; flows.len()];
+    let mut entered = vec![None; flows.len()];
+    let positive: Vec<Option<Vec<usize>>> = inner
+        .iter()
+        .zip(&members)
+        .map(|(inner, states)| {
+            if let Some(&edge) = inner.iter().find(|edge| edges[**edge].growth.is_none()) {
+                return Some(vec![edge]);
+            }
+            let root = *inner.first().map(|edge| &edges[*edge].from)?;
+            gain[root] = Some(0);
+            let mut improved = None;
+            for _ in 0..states.len() {
+                improved = None;
+                for &edge in inner {
+                    let Edge {
+                        from, to, growth, ..
+                    } = edges[edge];
+                    if let (Some(base), Some(growth)) = (gain[from], growth)
+                        && gain[to].is_none_or(|gain| base + growth > gain)
+                    {
+                        gain[to] = Some(base + growth);
+                        entered[to] = Some(edge);
+                        improved = Some(to);
+                    }
+                }
+                if improved.is_none() {
+                    break;
+                }
+            }
+            let cycle = improved.map(|mut on_cycle| {
+                for _ in 0..states.len() {
+                    on_cycle =
+                        edges[entered[on_cycle].expect("an improved state was entered")].from;
+                }
+                let mut cycle = Vec::new();
+                let mut at = on_cycle;
+                loop {
+                    let edge = entered[at].expect("a positive cycle is entered");
+                    cycle.push(edge);
+                    at = edges[edge].from;
+                    if at == on_cycle {
+                        break;
+                    }
+                }
+                cycle.reverse();
+                cycle
+            });
+            for &state in states {
+                gain[state] = None;
+                entered[state] = None;
+            }
+            cycle
+        })
+        .collect();
+
+    // The shortest walk of edges between two states of one component.
+    let walk = |from: usize, to: usize| {
         let mut entered = FxHashMap::from_iter([(from, None)]);
         let mut pending = VecDeque::from([from]);
         while let Some(state) = pending.pop_front()
@@ -3889,7 +4040,7 @@ fn growing_cycle<'db>(
         {
             for &edge in &outgoing[state] {
                 let next = edges[edge].to;
-                if component[next] && !entered.contains_key(&next) {
+                if component[next] == component[from] && !entered.contains_key(&next) {
                     entered.insert(next, Some(edge));
                     pending.push_back(next);
                 }
@@ -3900,82 +4051,45 @@ fn growing_cycle<'db>(
         path.reverse();
         path
     };
-    flows
-        .keys()
-        .enumerate()
-        .filter(|(_, (owner, ..))| *owner == start)
-        .filter_map(|(state, _)| {
-            let forward = reach(state, &outgoing, |edge| edge.to);
-            let backward = reach(state, &incoming, |edge| edge.from);
-            let component: Vec<_> = forward
-                .iter()
-                .zip(&backward)
-                .map(|(f, b)| *f && *b)
-                .collect();
-            let inner: Vec<_> = (0..edges.len())
-                .filter(|edge| component[edges[*edge].from] && component[edges[*edge].to])
-                .collect();
-            let cycle =
-                if let Some(&edge) = inner.iter().find(|edge| edges[**edge].growth.is_none()) {
-                    vec![edge]
-                } else {
-                    // Longest-path Bellman-Ford: a state still gaining after one
-                    // round per state lies behind a positive cycle.
-                    let size = component.iter().filter(|member| **member).count();
-                    let mut gain = vec![None; flows.len()];
-                    let mut entered = vec![None; flows.len()];
-                    gain[state] = Some(0);
-                    let mut improved = None;
-                    for _ in 0..size {
-                        improved = None;
-                        for &edge in &inner {
-                            let Edge {
-                                from, to, growth, ..
-                            } = edges[edge];
-                            if let (Some(base), Some(growth)) = (gain[from], growth)
-                                && gain[to].is_none_or(|gain| base + growth > gain)
-                            {
-                                gain[to] = Some(base + growth);
-                                entered[to] = Some(edge);
-                                improved = Some(to);
-                            }
-                        }
-                        if improved.is_none() {
-                            break;
-                        }
-                    }
-                    let mut on_cycle = improved?;
-                    for _ in 0..size {
-                        on_cycle =
-                            edges[entered[on_cycle].expect("an improved state was entered")].from;
-                    }
-                    let mut cycle = Vec::new();
-                    let mut at = on_cycle;
-                    loop {
-                        let edge = entered[at].expect("a positive cycle is entered");
-                        cycle.push(edge);
-                        at = edges[edge].from;
-                        if at == on_cycle {
-                            break;
-                        }
-                    }
-                    cycle.reverse();
-                    cycle
-                };
-            let first = edges[cycle[0]].from;
-            let last = edges[*cycle.last().expect("a cycle has an edge")].to;
-            let mut seen = FxHashSet::default();
-            Some(
-                walk(state, first, &component)
-                    .into_iter()
-                    .chain(cycle)
-                    .chain(walk(last, state, &component))
-                    .map(|edge| edges[edge].member)
-                    .filter(|member| seen.insert(*member))
-                    .collect::<Vec<_>>(),
-            )
-        })
-        .min_by_key(Vec::len)
+    // Report each growing component once, at its first start, through the
+    // shortest closed walk from one of the start's states around the
+    // component's positive cycle.
+    let mut states_of: IndexMap<GrowthOwner<'db>, Vec<usize>> = IndexMap::default();
+    for (state, (owner, ..)) in flows.keys().enumerate() {
+        states_of.entry(*owner).or_default().push(state);
+    }
+    let mut reported = vec![false; members.len()];
+    let mut cycles = Vec::new();
+    for start in starts {
+        let Some((found, cycle)) = states_of
+            .get(start)
+            .into_iter()
+            .flatten()
+            .filter(|state| !reported[component[**state]])
+            .filter_map(|&state| {
+                let cycle = positive[component[state]].as_ref()?;
+                let first = edges[cycle[0]].from;
+                let last = edges[*cycle.last().expect("a cycle has an edge")].to;
+                let mut seen = FxHashSet::default();
+                Some((
+                    component[state],
+                    walk(state, first)
+                        .into_iter()
+                        .chain(cycle.iter().copied())
+                        .chain(walk(last, state))
+                        .map(|edge| edges[edge].member)
+                        .filter(|member| seen.insert(*member))
+                        .collect::<Vec<_>>(),
+                ))
+            })
+            .min_by_key(|(_, members)| members.len())
+        else {
+            continue;
+        };
+        reported[found] = true;
+        cycles.push((*start, cycle));
+    }
+    cycles
 }
 
 /// Which parameters of `adt` can have part of their value become a reachable
@@ -4777,29 +4891,6 @@ impl<'db> ImplTrait<'db> {
     /// if the implementor type resolves to a concrete ADT.
     pub fn implementing_adt(self, db: &'db dyn HirAnalysisDb) -> Option<AdtRef<'db>> {
         self.ty(db).adt_ref(db)
-    }
-
-    /// Detects a growing recursive cycle through an associated type of this
-    /// impl; see [`AdtDef::growing_cycle`]. A cycle through an ADT of this
-    /// ingot is left to that ADT, whose check also sees this impl.
-    pub fn growing_cycle(self, db: &'db dyn HirAnalysisDb) -> Option<Vec<GrowingCycleMember<'db>>> {
-        let ingot = self.top_mod(db).ingot(db);
-        let implementor = *impls_for_trait_def(db, ingot, self.trait_def(db)?)
-            .iter()
-            .find(|implementor| implementor.origin(db) == ImplementorOrigin::Hir(self))?;
-        implementor.types(db).keys().find_map(|&name| {
-            growing_cycle(
-                db,
-                ingot,
-                self.scope(),
-                GrowthOwner::AssocTy(implementor, name),
-            )
-            .filter(|cycle| {
-                cycle.iter().all(|member| {
-                    !matches!(member, GrowingCycleMember::Field(field) if field.adt.ingot(db) == ingot)
-                })
-            })
-        })
     }
 
     /// Iterate associated type definitions in this impl-trait block as views.

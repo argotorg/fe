@@ -9,12 +9,12 @@ use crate::core::hir_def::{
     GenericParamOwner, IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias,
     scope_graph::{ScopeGraph, ScopeId},
 };
-use adt_def::{AdtDef, AdtRef, GrowingCycleMember};
+use adt_def::{AdtDef, AdtRef};
 use common::indexmap::IndexMap;
 use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
-use trait_def::{ImplementorOrigin, impls_for_trait_def};
+use trait_def::impls_for_trait_def;
 use trait_resolution::constraint::super_trait_cycle;
 use ty_def::{BorrowKind, InvalidCause, TyData, TyId};
 use ty_lower::{collect_generic_params, lower_hir_ty, lower_type_alias};
@@ -25,6 +25,7 @@ use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
 };
 use crate::semantic::diagnostics::Diagnosable;
+use crate::semantic::ingot_growing_cycles;
 use crate::span::{DesugaredOrigin, EventDesugared, HirOrigin};
 
 pub mod abi_ty;
@@ -226,6 +227,7 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
 
         let mut diags = vec![];
         let mut cycle_participants = FxHashSet::<AdtDef<'db>>::default();
+        let growing = ingot_growing_cycles(db, top_mod.ingot(db));
 
         for adt_ref in adts {
             diags.extend(adt_ref.diags(db).into_iter().map(|d| d.to_voucher()));
@@ -236,12 +238,8 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
             if let Some(cycle) = adt.recursive_cycle(db) {
                 diags.push(Box::new(TyLowerDiag::RecursiveType(cycle.clone())) as _);
                 cycle_participants.extend(cycle.iter().map(|m| m.adt));
-            } else if let Some(cycle) = adt.growing_cycle(db) {
-                cycle_participants.extend(cycle.iter().filter_map(|member| match member {
-                    GrowingCycleMember::Field(field) => Some(field.adt),
-                    GrowingCycleMember::AssocTy(..) => None,
-                }));
-                diags.push(Box::new(TyLowerDiag::GrowingRecursiveType(cycle)) as _);
+            } else if let Some(cycle) = growing.adts.get(&adt) {
+                diags.push(Box::new(TyLowerDiag::GrowingRecursiveType(cycle.clone())) as _);
             }
         }
         diags
@@ -938,7 +936,8 @@ impl ModuleAnalysisPass for ImplTraitAnalysisPass {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         let reported_at_source = generated_abi_reported_at_source(db, top_mod);
-        let mut diags: Vec<_> = top_mod
+        let growing = ingot_growing_cycles(db, top_mod.ingot(db));
+        top_mod
             .all_impl_traits(db)
             .iter()
             // Generated ABI impl failures are diagnosed once at their source declarations.
@@ -949,23 +948,16 @@ impl ModuleAnalysisPass for ImplTraitAnalysisPass {
                 }
                 _ => true,
             })
-            .flat_map(|impl_trait| impl_trait.diags(db))
-            .map(|diag| diag.to_voucher())
-            .collect();
-        let mut cycle_participants = FxHashSet::default();
-        for &impl_trait in top_mod.all_impl_traits(db) {
-            if cycle_participants.contains(&ImplementorOrigin::Hir(impl_trait)) {
-                continue;
-            }
-            if let Some(cycle) = impl_trait.growing_cycle(db) {
-                cycle_participants.extend(cycle.iter().filter_map(|member| match member {
-                    GrowingCycleMember::AssocTy(implementor, _) => Some(implementor.origin(db)),
-                    GrowingCycleMember::Field(_) => None,
-                }));
-                diags.push(Box::new(TyLowerDiag::GrowingRecursiveType(cycle)) as _);
-            }
-        }
-        diags
+            .flat_map(|impl_trait| {
+                impl_trait
+                    .diags(db)
+                    .into_iter()
+                    .map(|diag| diag.to_voucher())
+                    .chain(growing.impls.get(impl_trait).map(|cycle| {
+                        Box::new(TyLowerDiag::GrowingRecursiveType(cycle.clone())) as _
+                    }))
+            })
+            .collect()
     }
 }
 
