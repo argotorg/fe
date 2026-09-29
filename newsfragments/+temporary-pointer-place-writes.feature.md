@@ -1,0 +1,1 @@
+Fields and array elements reached through a temporary pointer, such as `f().value` or `(*f()).items[i]`, can now be assigned, compound-assigned and borrowed with `ref` or `mut`, just like those reached through a pointer variable.
