@@ -1,7 +1,7 @@
 //! Immutable structural input and borrow-occurrence inventory.
 use std::collections::{BTreeMap, BTreeSet};
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 
 use super::{
     control::LoopRegions,
@@ -52,10 +52,18 @@ use crate::{
 /// trait or const expression can make that set infinite: a projection, an
 /// effect handle's target or a const argument may keep growing the argument
 /// of a recursive type. Definitions whose field types grow by constructors
-/// are rejected before checking, so reaching more instantiations of one type
-/// constructor than this is treated as such growth. It bounds the depth and
-/// width of any growing family.
+/// are rejected before checking, so one chain of referents reaching more
+/// instantiations of one type constructor than this is treated as such
+/// growth. Storage discovered later stays within the types of the inputs,
+/// the body and the callees, whose own inventories are bounded the same way.
 pub(super) const MAX_REFERENT_INSTANTIATIONS: usize = 64;
+
+/// A referent type on an expansion path with its type constructor.
+type Referent<'db> = (TyId<'db>, TyId<'db>);
+
+fn referent<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Referent<'db> {
+    (ty, ty.base_ty(db))
+}
 
 /// The error for inputs that reach too many instantiations of `head`.
 pub(super) fn unbounded_referents_diag<'db>(
@@ -108,8 +116,6 @@ pub(super) struct Inventory<'db> {
     /// the physical cells belonging to its allocation occurrences.
     pub allocation_cells: BTreeMap<AddressOccurrence<'db>, Vec<RegionRoot<'db>>>,
     external_loans: BTreeMap<(ExternalSource<'db>, bool), LoanId>,
-    /// The distinct target types registered for each type constructor.
-    instantiations: FxHashMap<TyId<'db>, FxHashSet<TyId<'db>>>,
 }
 
 #[derive(Clone)]
@@ -152,8 +158,7 @@ struct InputBuilder<'db> {
     input_loans: BTreeMap<(ExternalSource<'db>, bool), LoanId>,
     targets: BTreeMap<ExternalSource<'db>, InputTarget<'db>>,
     storage: BTreeMap<RegionRoot<'db>, CapabilityValue<'db>>,
-    pending: Vec<(InputTarget<'db>, InputOrigin<'db>, Vec<TyId<'db>>)>,
-    instantiations: FxHashMap<TyId<'db>, FxHashSet<TyId<'db>>>,
+    pending: Vec<(InputTarget<'db>, InputOrigin<'db>, Vec<Referent<'db>>)>,
 }
 
 impl<'db> Inventory<'db> {
@@ -173,7 +178,6 @@ impl<'db> Inventory<'db> {
             targets: BTreeMap::new(),
             storage: BTreeMap::new(),
             pending: Vec::new(),
-            instantiations: FxHashMap::default(),
         };
         let shapes = body
             .values
@@ -216,7 +220,12 @@ impl<'db> Inventory<'db> {
                 },
             };
             let contents = if let NRootKind::ParamPlace { param } = root.kind {
-                inputs.value(shape, &scope, InputOrigin::Parameter(param), &[root.ty])?
+                inputs.value(
+                    shape,
+                    &scope,
+                    InputOrigin::Parameter(param),
+                    &[referent(db, root.ty)],
+                )?
             } else if let RegionRoot::External(source) = &region {
                 assert_eq!(
                     shape,
@@ -231,13 +240,13 @@ impl<'db> Inventory<'db> {
                     scope.clone(),
                     CapabilityClass::Handle,
                     true,
-                    &[root.ty],
+                    &[referent(db, root.ty)],
                 )?;
                 inputs.value(
                     shape,
                     &scope,
                     InputOrigin::Referent(source.clone()),
-                    &[root.ty],
+                    &[referent(db, root.ty)],
                 )?
             } else {
                 inputs.values.empty(shape, &scope)
@@ -252,7 +261,7 @@ impl<'db> Inventory<'db> {
                     shapes[index],
                     &scope,
                     InputOrigin::Parameter(param),
-                    &[value.ty],
+                    &[referent(db, value.ty)],
                 )?;
                 entry_values.push((NValueId::new(index), value));
             }
@@ -357,7 +366,6 @@ impl<'db> Inventory<'db> {
             external_loans: inputs.input_loans,
             entry,
             allocation_cells: BTreeMap::new(),
-            instantiations: inputs.instantiations,
         };
         for (id, value) in entry_values {
             result.entry.set_value(id, value);
@@ -394,7 +402,6 @@ impl<'db> Inventory<'db> {
                 .map(|(root, value)| (root.clone(), value.clone()))
                 .collect(),
             pending: Vec::new(),
-            instantiations: std::mem::take(&mut self.instantiations),
         };
         let previous_targets = builder.targets.clone();
         let previous_storage_count = builder.storage.len();
@@ -506,7 +513,6 @@ impl<'db> Inventory<'db> {
             .filter_map(|((source, _), loan)| source.is_incoming().then_some(*loan))
             .collect();
         self.external_loans = builder.input_loans;
-        self.instantiations = builder.instantiations;
         self.allocation_cells.clear();
         for (root, value) in self.entry.storage() {
             if value.shape().contains_capability(db)
@@ -539,7 +545,7 @@ impl<'db> InputBuilder<'db> {
         scope: BinderScope,
         class: CapabilityClass,
         writable: bool,
-        ancestry: &[TyId<'db>],
+        ancestry: &[Referent<'db>],
     ) -> Result<(), ShapeError<'db>> {
         let (source, scope, _) = canonical_source(self.db, &source, &scope);
         if let Some(target) = self.targets.get_mut(&source) {
@@ -549,10 +555,14 @@ impl<'db> InputBuilder<'db> {
                 target.classes.sort();
             }
         } else {
-            let ty = source.contract.ty;
-            let head = ty.base_ty(self.db);
-            let instantiations = self.instantiations.entry(head).or_default();
-            if instantiations.insert(ty) && instantiations.len() > MAX_REFERENT_INSTANTIATIONS {
+            let (ty, head) = referent(self.db, source.contract.ty);
+            let instantiations: FxHashSet<_> = ancestry
+                .iter()
+                .filter(|(_, ancestor)| *ancestor == head)
+                .map(|(ancestor, _)| *ancestor)
+                .chain([ty])
+                .collect();
+            if instantiations.len() > MAX_REFERENT_INSTANTIATIONS {
                 return Err(ShapeError::UnboundedReferents(head));
             }
             let shape = self.shape(ty)?;
@@ -577,7 +587,7 @@ impl<'db> InputBuilder<'db> {
             if self.storage.contains_key(&root) {
                 continue;
             }
-            ancestry.push(target.ty);
+            ancestry.push(referent(self.db, target.ty));
             // Reserve the cell before traversing recursively followed handles.
             self.storage
                 .insert(root.clone(), self.values.empty(target.shape, &target.scope));
@@ -607,7 +617,7 @@ impl<'db> InputBuilder<'db> {
         shape: ShapeId<'db>,
         scope: &BinderScope,
         origin: InputOrigin<'db>,
-        ancestry: &[TyId<'db>],
+        ancestry: &[Referent<'db>],
     ) -> Result<CapabilityValue<'db>, ShapeError<'db>> {
         let mut requests = Vec::new();
         let mut views: Vec<(StructuralPath<IndexExpr<'db>>, ExternalSource<'db>)> = Vec::new();
@@ -694,7 +704,7 @@ impl<'db> InputBuilder<'db> {
                         }
                     }
                 };
-                if ancestry.contains(&semantics.target_ty) {
+                if ancestry.iter().any(|(ty, _)| *ty == semantics.target_ty) {
                     source = source.widen();
                 }
                 if semantics.class == CapabilityClass::View {
