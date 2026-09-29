@@ -1,0 +1,19 @@
+// A field type whose ABI support fails inside a wrapper is reported once per
+// field, by the record's field analysis, and not again by the generated
+// `LAYOUT`, `HEAD_SIZE` or `IS_DYNAMIC` of the record.
+use std::evm::{Address, StorageMap}
+
+msg BadMsg {
+    #[selector = 1]
+    Bad { value: Option<StorageMap<Address, u256, 0>> },
+}
+
+#[error]
+struct BadError {
+    value: Option<StorageMap<Address, u256, 0>>,
+}
+
+#[event]
+struct BadEvent {
+    value: Option<StorageMap<Address, u256, 0>>,
+}

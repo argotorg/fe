@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/abi_record_nested_unsupported_field.fe
+---
+error[9-0008]: unsupported ABI field type in msg variant `Bad`
+  ┌─ abi_record_nested_unsupported_field.fe:8:18
+  │
+8 │     Bad { value: Option<StorageMap<Address, u256, 0>> },
+  │                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Option<StorageMap<Address, u256, 0>>` cannot be represented in the Solidity ABI
+  │
+  = unsupported ABI enum type `Option<StorageMap<Address, u256, 0>>`
+
+error[10-0007]: unsupported ABI field type
+   ┌─ abi_record_nested_unsupported_field.fe:18:12
+   │
+18 │     value: Option<StorageMap<Address, u256, 0>>,
+   │            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Option<StorageMap<Address, u256, 0>>` does not satisfy `AbiSize`, `Encode<Sol>`
+   │
+   = event data fields must implement `AbiSize` and `Encode<Sol>`
+
+error[16-0004]: unsupported ABI field type
+   ┌─ abi_record_nested_unsupported_field.fe:13:12
+   │
+13 │     value: Option<StorageMap<Address, u256, 0>>,
+   │            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Option<StorageMap<Address, u256, 0>>` does not satisfy `AbiSize`, `Encode<Sol>`
+   │
+   = custom error fields must implement `AbiSize` and `Encode<Sol>`

@@ -726,6 +726,44 @@ impl DiagnosticVoucher for crate::AbiFieldDiagnostic {
     }
 }
 
+impl DiagnosticVoucher for crate::analysis::ty::abi_record_fields::AbiRecordFieldDiag<'_> {
+    fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        use crate::AbiFieldContext;
+
+        // The codes of `AbiFieldDiagnostic`, which reports the other field
+        // types these records do not support.
+        let (diagnostic_pass, code, required) = match self.context {
+            AbiFieldContext::Error => (
+                DiagnosticPass::ErrorLower,
+                4,
+                "custom error fields must implement `AbiSize` and `Encode<Sol>`",
+            ),
+            AbiFieldContext::Event => (
+                DiagnosticPass::EventLower,
+                7,
+                "event data fields must implement `AbiSize` and `Encode<Sol>`",
+            ),
+        };
+        let label = format!(
+            "`{}` does not satisfy `{}`",
+            self.ty.pretty_print(db),
+            self.traits.iter().format("`, `")
+        );
+
+        CompleteDiagnostic::new(
+            Severity::Error,
+            "unsupported ABI field type".to_string(),
+            vec![SubDiagnostic::new(
+                LabelStyle::Primary,
+                label,
+                Some(Span::new(self.file, self.primary_range, SpanKind::Original)),
+            )],
+            vec![required.to_string()],
+            GlobalErrorCode::new(diagnostic_pass, code),
+        )
+    }
+}
+
 impl DiagnosticVoucher for crate::ErrorDiagnostic {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         use crate::ErrorDiagnosticKind;

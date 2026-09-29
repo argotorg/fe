@@ -6,7 +6,7 @@ use crate::analysis::ty::trait_resolution::{
 use crate::analysis::ty::ty_check::EffectParamOwner;
 use crate::core::adt_lower::lower_adt;
 use crate::core::hir_def::{
-    GenericParamOwner, IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias,
+    Func, GenericParamOwner, IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use adt_def::{AdtDef, AdtRef};
@@ -359,6 +359,17 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
         // Check function and const bodies; contract-specific analysis is handled separately.
         let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = Vec::new();
         let indexed_dynamic_events = events_with_indexed_dynamic_fields(db, top_mod);
+        // Record field analysis owns an `#[error]` or `#[event]` field type
+        // that cannot be used in the record's ABI; the record's generated
+        // bodies would only repeat it.
+        let (record_field_diags, failing_records) =
+            abi_record_fields::encoded_record_field_diags(db, top_mod);
+        diags.extend(record_field_diags);
+        let record_fails = |func: &Func<'db>| {
+            func.containing_impl_trait(db)
+                .and_then(|impl_trait| abi_record_fields::generated_abi_record(db, impl_trait))
+                .is_some_and(|(record, _)| failing_records.contains(&record))
+        };
         for func in top_mod
             .all_funcs(db)
             .iter()
@@ -366,8 +377,9 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
             .filter(|func| match func.origin(db) {
                 HirOrigin::Desugared(DesugaredOrigin::Msg(_)) => false,
                 HirOrigin::Desugared(DesugaredOrigin::Event(event)) => {
-                    !indexed_dynamic_events.contains(event)
+                    !indexed_dynamic_events.contains(event) && !record_fails(func)
                 }
+                HirOrigin::Desugared(DesugaredOrigin::Error(_)) => !record_fails(func),
                 _ => true,
             })
         {
