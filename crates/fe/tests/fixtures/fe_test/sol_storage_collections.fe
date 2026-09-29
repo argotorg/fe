@@ -1,0 +1,339 @@
+// `SolArray`, `SolEnumerableSet` and `SolWord` against the storage layout of
+// Solidity 0.8 and OpenZeppelin's `EnumerableSet`. The expected slot
+// contents were produced by running the equivalent Solidity contract
+// (see `solidity_layout_parity`) and reading its storage with `vm.load`.
+use std::abi::Bytes32
+use std::abi::sol::{Uint24, Uint120}
+use std::evm::{Address, Evm, RawStorage, SolArray, SolEnumerableSet, SolSlot}
+
+// keccak256(abi.encode(n)) for n = 0..3: the data slots of arrays at 0..3.
+const DATA_0: u256 = 0x290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563
+const DATA_1: u256 = 0xb10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6
+const DATA_2: u256 = 0x405787fa12a823e0f2b7631cc41b3ba8828b3321ca811111fa75cd3aa3bb5ace
+const DATA_3: u256 = 0xc2575a0e9e593c00f959f8c92f12db2869c3395a3b0502d05e2516446f71f85b
+
+fn load(_ slot: u256) -> u256 uses (storage: RawStorage) {
+    storage.sload(slot)
+}
+
+fn addr(_ inner: u256) -> Address {
+    Address { inner }
+}
+
+// contract L {
+//     uint256[] a;              // slot 0
+//     uint24[] b;               // slot 1
+//     int16[] c;                // slot 2
+//     EnumerableSet.AddressSet s; // slots 3, 4
+//     struct Status { bool validated; bool cancelled; uint120 num; uint120 den; }
+//     Status st;                // slot 5
+//     function run() external {
+//         a.push(11); a.push(22); a.push(33); a.pop(); a[0] = 44;
+//         for (uint24 i = 1; i <= 12; i++) b.push(i);
+//         b.pop(); b.pop(); b[3] = 0xabcdef;
+//         c.push(-1); c.push(-300); c.push(7); c.pop();
+//         s.add(address(0xA)); s.add(address(0xB)); s.add(address(0xC)); s.add(address(0xD));
+//         s.remove(address(0xB)); s.add(address(0xB)); s.remove(address(0xA));
+//         st = Status(true, false, 3, 7);
+//         st.cancelled = true; st.validated = false;
+//     }
+// }
+#[test]
+fn solidity_layout_parity() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let a = SolArray<u256>::at(0)
+        a.push(11)
+        a.push(22)
+        a.push(33)
+        a.pop()
+        a.set(index: 0, value: 44)
+
+        let b = SolArray<Uint24>::at(1)
+        let mut i: u32 = 1
+        while i <= 12 {
+            b.push(Uint24 { val: i })
+            i += 1
+        }
+        b.pop()
+        b.pop()
+        b.set(index: 3, value: Uint24 { val: 0xabcdef })
+
+        let c = SolArray<i16>::at(2)
+        c.push(-1)
+        c.push(-300)
+        c.push(7)
+        c.pop()
+
+        let s = SolEnumerableSet<Address>::at(3)
+        assert(s.add(addr(0xa)))
+        assert(s.add(addr(0xb)))
+        assert(s.add(addr(0xc)))
+        assert(s.add(addr(0xd)))
+        assert(s.remove(addr(0xb)))
+        assert(s.add(addr(0xb)))
+        assert(s.remove(addr(0xa)))
+
+        let mut st = SolSlot::at(5).load()
+        st.set(offset: 0, value: true)
+        st.set(offset: 1, value: false)
+        st.set(offset: 2, value: Uint120 { val: 3 })
+        st.set(offset: 17, value: Uint120 { val: 7 })
+        st.store()
+        let mut st = SolSlot::at(5).load()
+        st.set(offset: 1, value: true)
+        st.set(offset: 0, value: false)
+        st.store()
+
+        // Lengths.
+        assert(load(0) == 2)
+        assert(load(1) == 10)
+        assert(load(2) == 2)
+        assert(load(3) == 3)
+        assert(load(4) == 0)
+        assert(
+            load(5) == 0x0000000000000000000000000000070000000000000000000000000000030100,
+        )
+
+        // uint256[]: popped element zeroed.
+        assert(a.element_slot(0) == DATA_0)
+        assert(load(DATA_0) == 44)
+        assert(load(DATA_0 + 1) == 22)
+        assert(load(DATA_0 + 2) == 0)
+
+        // uint24[]: ten per slot; popped elements zeroed.
+        assert(b.element_slot(10) == DATA_1 + 1)
+        assert(b.element_offset(3) == 9)
+        assert(
+            load(DATA_1) == 0x000000000a000009000008000007000006000005abcdef000003000002000001,
+        )
+        assert(load(DATA_1 + 1) == 0)
+
+        // int16[]: two's complement fields.
+        assert(
+            load(DATA_2) == 0x00000000000000000000000000000000000000000000000000000000fed4ffff,
+        )
+        assert(c.get(0) == -1)
+        assert(c.get(1) == -300)
+
+        // AddressSet: values [b, d, c], positions index + 1, removed ones 0.
+        assert(load(DATA_3) == 0xb)
+        assert(load(DATA_3 + 1) == 0xd)
+        assert(load(DATA_3 + 2) == 0xc)
+        assert(load(DATA_3 + 3) == 0)
+        assert(
+            load(
+                    0x5c6b02db8b672415ffad906d7ccee10bd53dbad7d0b29e2bc0e50c93d5f31093,
+                ) == 0,
+        )
+        assert(
+            load(
+                    0x0c1469ad586d86b6976c45826d7ae56d76ee516e37a2bccffbe904b74dbae7ea,
+                ) == 1,
+        )
+        assert(
+            load(
+                    0xa5022b2bfd144bf9103d80168549b5df7c72ab60bd51bf71a02a08d844853b4a,
+                ) == 2,
+        )
+        assert(
+            load(
+                    0x140aabff1a85df08546c9a350c79ae18341bde4a2cef5d2fd460885c0128ce26,
+                ) == 3,
+        )
+    }
+}
+
+#[test]
+fn array_reads_and_writes() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let owners = SolArray<Address>::at(9)
+        assert(owners.len() == 0)
+        owners.push(addr(0x11))
+        owners.push(addr(0x22))
+        assert(owners.len() == 2)
+        assert(owners.get(1).inner == 0x22)
+        owners.set(index: 0, value: addr(0x33))
+        assert(owners.get(0).inner == 0x33)
+        owners.pop()
+        owners.pop()
+        assert(owners.len() == 0)
+        // Pushing after popping reuses the zeroed slot.
+        owners.push(addr(0x44))
+        assert(owners.get(0).inner == 0x44)
+
+        // bool[]: 32 per slot; setting one keeps its neighbours.
+        let flags = SolArray<bool>::at(10)
+        let mut i: u256 = 0
+        while i < 33 {
+            flags.push(i % 2 == 0)
+            i += 1
+        }
+        flags.set(index: 2, value: false)
+        assert(flags.get(0))
+        assert(!flags.get(1))
+        assert(!flags.get(2))
+        assert(flags.get(4))
+        assert(flags.get(32))
+        assert(flags.element_slot(32) == flags.element_slot(0) + 1)
+        assert(flags.element_offset(32) == 0)
+
+        let tags = SolArray<Bytes32>::at(11)
+        tags.push(Bytes32 { val: u256::max() })
+        assert(tags.get(0).val == u256::max())
+    }
+}
+
+#[test(should_revert, panic = 0x31)]
+fn pop_empty_panics() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        SolArray<u256>::at(0).pop()
+    }
+}
+
+#[test(should_revert, panic = 0x32)]
+fn get_out_of_bounds_panics() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let a = SolArray<u8>::at(0)
+        a.push(1)
+        let _ = a.get(1)
+    }
+}
+
+#[test(should_revert, panic = 0x32)]
+fn set_out_of_bounds_panics() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        SolArray<Address>::at(0).set(index: 0, value: addr(1))
+    }
+}
+
+#[test(should_revert, panic = 0x41)]
+fn push_past_max_length_panics() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        SolSlot::at(0).write(offset: 0, value: 0xffffffffffffffff as u256)
+        SolArray<u256>::at(0).push(1)
+    }
+}
+
+#[test]
+fn set_edge_cases() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let s = SolEnumerableSet<u256>::at(20)
+        assert(s.len() == 0)
+        assert(!s.contains(7))
+        assert(!s.remove(7))
+        assert(s.add(7))
+        assert(!s.add(7))
+        assert(s.contains(7))
+        assert(s.len() == 1)
+        // Removing the only (and so last) element needs no swap.
+        assert(s.remove(7))
+        assert(!s.contains(7))
+        assert(s.len() == 0)
+        assert(load(DATA_OF_20) == 0)
+
+        assert(s.add(1))
+        assert(s.add(2))
+        assert(s.add(3))
+        // Removing the last element keeps the order of the others.
+        assert(s.remove(3))
+        assert(s.get(0) == 1)
+        assert(s.get(1) == 2)
+        // Removing the first moves the last into its place.
+        assert(s.remove(1))
+        assert(s.get(0) == 2)
+        assert(s.len() == 1)
+        assert(s.add(1))
+        assert(s.get(1) == 1)
+        assert(s.contains(2) && s.contains(1) && !s.contains(3))
+
+        let b = SolEnumerableSet<Bytes32>::at(30)
+        assert(b.add(Bytes32 { val: 0xff << 248 }))
+        assert(b.contains(Bytes32 { val: 0xff << 248 }))
+        assert(b.get(0).val == 0xff << 248)
+    }
+}
+
+// keccak256(abi.encode(20))
+const DATA_OF_20: u256 = 0xce6d7b5282bd9a3661ae061feed1dbda4e52ab073b1f9285be6e155d9c38d4ec
+
+#[test(should_revert, panic = 0x32)]
+fn set_get_out_of_bounds_panics() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let s = SolEnumerableSet<Address>::at(0)
+        s.add(addr(1))
+        let _ = s.get(1)
+    }
+}
+
+// Storage slot arithmetic wraps modulo 2**256 like Solidity's: a set at the
+// last slot keeps its positions mapping at slot 0.
+#[test]
+fn set_at_last_slot_wraps() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let s = SolEnumerableSet<u256>::at(u256::max())
+        assert(s.add(5))
+        assert(s.add(6))
+        assert(s.contains(5))
+        assert(load(u256::max()) == 2)
+        assert(load(std::evm::SolMapping::at(0).slot_of(5 as u256)) == 1)
+        assert(load(std::evm::SolMapping::at(0).slot_of(6 as u256)) == 2)
+        assert(s.remove(5))
+        assert(!s.contains(5))
+        assert(s.get(0) == 6)
+    }
+}
+
+#[test]
+fn array_element_slot_wraps() {
+    assert(SolArray<u256>::at(0).element_slot(u256::max()) == DATA_0 - 1)
+}
+
+#[test]
+fn word_reads_and_writes_many_fields() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        // address operator; bool paused;
+        SolSlot::at(0).write(offset: 0, value: addr(0xabc))
+        SolSlot::at(0).write(offset: 20, value: true)
+        SolSlot::at(0).write(offset: 21, value: 0x77 as u8)
+
+        let word = SolSlot::at(0).load()
+        let operator: Address = word.get(offset: 0)
+        let paused: bool = word.get(offset: 20)
+        assert(operator.inner == 0xabc)
+        assert(paused)
+
+        let mut word = SolSlot::at(0).load()
+        word.set(offset: 0, value: addr(0xdef))
+        word.set(offset: 20, value: false)
+        // Nothing is written until `store`.
+        let still: Address = SolSlot::at(0).read(offset: 0)
+        assert(still.inner == 0xabc)
+        word.store()
+        let operator: Address = SolSlot::at(0).read(offset: 0)
+        let paused: bool = SolSlot::at(0).read(offset: 20)
+        let untouched: u8 = SolSlot::at(0).read(offset: 21)
+        assert(operator.inner == 0xdef)
+        assert(!paused)
+        assert(untouched == 0x77)
+        assert(word.word == load(0))
+    }
+}
+
+#[test(should_revert)]
+fn word_field_past_end_reverts() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let mut word = SolSlot::at(0).load()
+        word.set(offset: 17, value: addr(1))
+    }
+}
+
+#[test]
+fn push_to_max_length_succeeds() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let array = SolArray<u256>::at(0)
+        SolSlot::at(0).write(offset: 0, value: 0xfffffffffffffffe as u256)
+        array.push(42)
+        assert(array.len() == 0xffffffffffffffff)
+        assert(array.get(0xfffffffffffffffe) == 42)
+    }
+}

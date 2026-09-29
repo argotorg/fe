@@ -1,0 +1,100 @@
+//! Solidity dynamic storage arrays (`T[]`) at a runtime slot.
+//!
+//! A `T[]` state variable at slot `s` stores its length in `s` and its
+//! elements from `keccak256(abi.encode(s))` on. Elements of 16 bytes or
+//! fewer are packed like Solidity: `32 / size` of them share a slot, element
+//! `i` sitting `(i % (32 / size)) * size` bytes above the low end of slot
+//! `keccak256(abi.encode(s)) + i / (32 / size)`. Wider elements take one
+//! slot each.
+//!
+//! ```fe
+//! // `address[] owners;` at slot 2
+//! let owners = SolArray<Address>::at(2)
+//! owners.push(owner)
+//! let first = owners.get(0)
+//! ```
+use core::ops::WrappingAdd
+use super::effects::{RawStorage, revert_error}
+use super::panic::{PANIC_INDEX_OUT_OF_BOUNDS, PANIC_OUT_OF_MEMORY, PANIC_POP_EMPTY, Panic}
+use super::sol_slot::{SolPacked, SolSlot, data_slot}
+
+// Solidity refuses to `push` onto a storage array of 2**64 - 1 elements.
+const MAX_LEN: u256 = 0xffffffffffffffff
+
+pub struct SolArray<T> { pub slot: u256 }
+
+impl<T> Copy for SolArray<T> {}
+
+impl<T: SolPacked> SolArray<T> {
+    /// The array whose length is stored at `slot`.
+    pub fn at(_ slot: u256) -> Self {
+        SolArray { slot }
+    }
+
+    /// Number of elements.
+    pub fn len(self) -> u256 uses (storage: RawStorage) {
+        storage.sload(self.slot)
+    }
+
+    /// The slot holding element `index`, without a bounds check. Wraps
+    /// modulo `2**256`, like Solidity's storage slot arithmetic.
+    pub fn element_slot(self, _ index: u256) -> u256 {
+        data_slot(self.slot).wrapping_add(index / self.per_slot())
+    }
+
+    /// The byte offset of element `index` within `element_slot(index)`:
+    /// always 0 for elements wider than 16 bytes.
+    pub fn element_offset(self, _ index: u256) -> u256 {
+        (index % self.per_slot()) * (T::BITS / 8)
+    }
+
+    /// Element `index`. Reverts with `Panic(0x32)` if `index >= len()`.
+    pub fn get(self, _ index: u256) -> T uses (storage: RawStorage) {
+        self.check_index(index)
+        SolSlot::at(self.element_slot(index)).read(offset: self.element_offset(index))
+    }
+
+    /// Replaces element `index`, keeping elements packed into the same slot.
+    /// Reverts with `Panic(0x32)` if `index >= len()`.
+    pub fn set(self, index: u256, value: own T) uses (storage: mut RawStorage) {
+        self.check_index(index)
+        SolSlot::at(self.element_slot(index)).write(offset: self.element_offset(index), value)
+    }
+
+    /// Appends `value`. Reverts with `Panic(0x41)` if the array already has
+    /// 2**64 - 1 elements, like Solidity.
+    pub fn push(self, _ value: own T) uses (storage: mut RawStorage) {
+        let len = self.len()
+        if len >= MAX_LEN {
+            revert_error(Panic::from(PANIC_OUT_OF_MEMORY))
+        }
+        SolSlot::at(self.element_slot(len)).write(offset: self.element_offset(len), value)
+        storage.sstore(slot: self.slot, value: len + 1)
+    }
+
+    /// Removes the last element and zeroes its storage, like Solidity's
+    /// `pop()`. Reverts with `Panic(0x31)` if the array is empty.
+    pub fn pop(self) uses (storage: mut RawStorage) {
+        let len = self.len()
+        if len == 0 {
+            revert_error(Panic::from(PANIC_POP_EMPTY))
+        }
+        let last = len - 1
+        SolSlot::at(self.element_slot(last))
+            .write(
+                offset: self.element_offset(last),
+                value: T::from_packed(0),
+            )
+        storage.sstore(slot: self.slot, value: last)
+    }
+
+    fn per_slot(self) -> u256 {
+        32 / (T::BITS / 8)
+    }
+
+    fn check_index(self, _ index: u256) uses (storage: RawStorage) {
+        if index >= self.len() {
+            revert_error(Panic::from(PANIC_INDEX_OUT_OF_BOUNDS))
+        }
+    }
+}
