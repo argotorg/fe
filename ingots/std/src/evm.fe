@@ -3,6 +3,7 @@ pub use clones::{self}
 pub use calldata::{self, *}
 pub use crypto::{self, *}
 pub use effects::{self, *}
+pub use eip712::{self}
 pub use erc20::{self}
 pub use erc165::{self}
 pub use event::{self, *}

@@ -12,9 +12,8 @@
 use core::option::Option
 use core::ptr::{self, FixedMemBuffer, MemBuffer, MemSpan}
 use core::result::Result
-use super::effects::{Address, RawMem}
+use super::effects::Address
 use super::ops
-use super::packed
 
 fn offset(_ base: *u8, _ bytes: u256) -> *u8 {
     ptr::offset_bytes(base, bytes)
@@ -230,11 +229,11 @@ pub fn sha256(_ data: MemSpan) -> Result<PrecompileError, u256> {
 
 /// EIP-712 typed-data digest:
 /// `keccak256(0x19 ++ 0x01 ++ domain_separator ++ struct_hash)`.
+///
+/// Same as `std::evm::eip712::digest`, which new code should prefer.
 #[inline(always)]
-pub fn eip712_digest(domain_separator: u256, struct_hash: u256) -> u256
-uses (mem: mut RawMem)
-{
-    packed::keccak_packed((0x19 as u8, 0x01 as u8, domain_separator, struct_hash))
+pub fn eip712_digest(domain_separator: u256, struct_hash: u256) -> u256 {
+    super::eip712::digest(domain_separator, struct_hash)
 }
 
 /// RIPEMD160 hash of a memory region (precompile 0x03).

@@ -902,6 +902,14 @@ impl RuntimeInstance {
         self.trace_options = trace_options;
     }
 
+    /// Sets the `CHAINID` seen by subsequent calls, as after a chain fork.
+    pub fn set_chain_id(&mut self, chain_id: u64) {
+        self.evm.ctx.cfg.chain_id = chain_id;
+        // Transactions keep their default chain id; skip the check that would
+        // reject them on the new chain.
+        self.evm.ctx.cfg.tx_chain_id_check = false;
+    }
+
     /// Executes a strongly-typed function call using ABI encoding.
     pub fn call_function(
         &mut self,

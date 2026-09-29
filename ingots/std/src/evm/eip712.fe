@@ -1,0 +1,143 @@
+//! EIP-712 domain separators and typed-data digests.
+//!
+//! Covers the standard four-field domain used by OpenZeppelin's `EIP712`:
+//! `EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)`.
+//! Name and version enter the domain as keccak256 hashes, so they are usually
+//! compile-time constants built with `core::keccak`:
+//!
+//! ```fe
+//! use core::keccak
+//!
+//! const NAME_HASH: u256 = keccak("MyToken")
+//! const VERSION_HASH: u256 = keccak("1")
+//! ```
+//!
+//! [`Domain`] caches the separator for the deploying chain and contract
+//! address, and rederives it when either differs at the time of use (after a
+//! chain fork or when running through `DELEGATECALL`), like OpenZeppelin's
+//! `_domainSeparatorV4`.
+//!
+//! Fe reads immutable contract fields with `CODECOPY` rather than inlining
+//! them, so the cache saves less than in Solidity. When both hashes are
+//! constants, deriving the separator on every use with
+//! `domain_separator(NAME_HASH, VERSION_HASH, ctx.chainid(), ctx.address())`
+//! is slightly cheaper than a cached lookup and needs no contract field.
+use core::ptr::{self, FixedMemBuffer}
+use super::effects::{Address, Ctx}
+use super::ops
+
+/// `keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")`.
+pub const DOMAIN_TYPEHASH: u256 = core::keccak(
+    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)",
+)
+
+/// `keccak256(abi.encode(DOMAIN_TYPEHASH, name_hash, version_hash, chain_id, verifying_contract))`.
+///
+/// `verifying_contract` is hashed as its full word, like ABI encoding; a
+/// canonical address has its upper 96 bits clear.
+pub fn domain_separator(
+    name_hash: u256,
+    version_hash: u256,
+    chain_id: u256,
+    verifying_contract: Address,
+) -> u256 {
+    let buf = FixedMemBuffer<160>::alloc()
+    let p = buf.ptr()
+    ops::mstore(addr: p, value: DOMAIN_TYPEHASH)
+    ops::mstore(addr: ptr::offset_bytes(p, 32), value: name_hash)
+    ops::mstore(addr: ptr::offset_bytes(p, 64), value: version_hash)
+    ops::mstore(addr: ptr::offset_bytes(p, 96), value: chain_id)
+    ops::mstore(
+        addr: ptr::offset_bytes(p, 128),
+        value: verifying_contract.inner,
+    )
+    ops::keccak256(offset: p, len: 160)
+}
+
+/// EIP-712 typed-data digest,
+/// `keccak256(0x19 ++ 0x01 ++ domain_separator ++ struct_hash)`, like
+/// OpenZeppelin's `MessageHashUtils.toTypedDataHash`.
+///
+/// Writes the 66-byte preimage into a fresh allocation with three word stores,
+/// without the `RawMem` effect or the packed-encoding builder.
+pub fn digest(domain_separator: u256, struct_hash: u256) -> u256 {
+    let buf = FixedMemBuffer<66>::alloc()
+    let p = buf.ptr()
+    ops::mstore(addr: p, value: 0x1901 << 240)
+    ops::mstore(addr: ptr::offset_bytes(p, 2), value: domain_separator)
+    ops::mstore(addr: ptr::offset_bytes(p, 34), value: struct_hash)
+    ops::keccak256(offset: p, len: 66)
+}
+
+/// An EIP-712 domain with the separator cached for the chain and contract
+/// that created it.
+///
+/// Meant to be created once in a contract's `init` and kept in an immutable
+/// contract field, the counterpart of OpenZeppelin's immutables:
+///
+/// ```fe
+/// pub contract Token {
+///     domain: Domain,
+///
+///     init() uses (mut domain, ctx: Ctx) {
+///         domain = Domain::new(name_hash: keccak("Token"), version_hash: keccak("1"))
+///     }
+/// }
+/// ```
+pub struct Domain {
+    name_hash: u256,
+    version_hash: u256,
+    cached_chain_id: u256,
+    cached_address: Address,
+    cached_separator: u256,
+}
+
+impl Copy for Domain {}
+
+impl Domain {
+    /// The domain for `name_hash` and `version_hash` on the current chain,
+    /// with `ctx.address()` as verifying contract.
+    pub fn new(name_hash: u256, version_hash: u256) -> Self uses (ctx: Ctx) {
+        let chain_id = ctx.chainid()
+        let address = ctx.address()
+        Domain {
+            name_hash,
+            version_hash,
+            cached_chain_id: chain_id,
+            cached_address: address,
+            cached_separator: domain_separator(
+                name_hash,
+                version_hash,
+                chain_id,
+                verifying_contract: address,
+            ),
+        }
+    }
+
+    /// The separator for the current chain id and `ctx.address()`.
+    ///
+    /// Returns the cached separator when both equal the values at creation.
+    /// Otherwise derives it anew for the current values without updating the
+    /// cache, so every call on a forked chain or through `DELEGATECALL` pays
+    /// for the hash.
+    pub fn separator(self) -> u256 uses (ctx: Ctx) {
+        let chain_id = ctx.chainid()
+        let address = ctx.address()
+        if chain_id == self.cached_chain_id && address == self.cached_address {
+            self.cached_separator
+        } else {
+            domain_separator(
+                name_hash: self.name_hash,
+                version_hash: self.version_hash,
+                chain_id,
+                verifying_contract: address,
+            )
+        }
+    }
+
+    /// The EIP-712 digest of `struct_hash` in this domain, like
+    /// OpenZeppelin's `_hashTypedDataV4`.
+    pub fn digest(self, struct_hash: u256) -> u256 uses (ctx: Ctx) {
+        self::digest(domain_separator: self.separator(), struct_hash)
+    }
+}
