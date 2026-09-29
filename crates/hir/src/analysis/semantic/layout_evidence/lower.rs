@@ -12,7 +12,8 @@ use crate::analysis::{
         normalized::{
             NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NIndex, NLayoutLocals,
             NLayoutPlan, NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId,
-            NStatementKind, NTerminatorKind, NValueId, NormalizedBody, normalize_semantic_body,
+            NStatementKind, NTerminatorKind, NValueId, NormalizedBody,
+            normalize_runtime_semantic_body,
         },
     },
     ty::{
@@ -2498,7 +2499,8 @@ fn layout_evidence_body_query<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: SemanticInstance<'db>,
 ) -> Result<LayoutEvidenceBody<'db>, LayoutEvidenceError<'db>> {
-    let artifacts = normalize_semantic_body(db, owner).map_err(layout_normalization_error)?;
+    let artifacts =
+        normalize_runtime_semantic_body(db, owner).map_err(layout_normalization_error)?;
     let normalized = artifacts.body;
     let layout_plan = artifacts.layout_plan;
     let source = owner.body(db);
@@ -2509,7 +2511,7 @@ fn layout_evidence_body_query<'db>(
     let template_source = (owner.key(db) != identity_key)
         .then(|| {
             let template = get_or_build_semantic_instance(db, identity_key);
-            normalize_semantic_body(db, template)
+            normalize_runtime_semantic_body(db, template)
                 .map_err(layout_normalization_error)
                 .map(|_| template.body(db))
         })

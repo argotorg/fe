@@ -25,7 +25,7 @@ use fe_hir::{
             check_semantic_borrows, check_semantic_boundaries,
             collect_semantic_borrow_diagnostic_vouchers, contract_init_assigned_fields,
             get_or_build_semantic_instance, identity_semantic_instance_key, layout_evidence_body,
-            normalize_semantic_body,
+            normalize_runtime_semantic_body, normalize_semantic_body,
             normalized::{
                 HandleOrigin, NLayoutBackingSource, NormalizedBodyVerifyError, normalize_raw_body,
                 verify_normalized_body,
@@ -2986,6 +2986,53 @@ fn normalized_func_body<'db>(
         })
         .unwrap_or_else(|| panic!("missing function `{func_name}`"));
     normalize_semantic_body(db, instance).expect("normalized body")
+}
+
+#[test]
+fn constant_moves_stay_visible_to_analysis_and_fold_for_runtime() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "semantic_borrowck.fe".into(),
+        r#"
+struct Boxed { v: u256 }
+
+fn wrap() -> (Boxed,) {
+    let b = Boxed { v: 3 }
+    (b,)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "wrap"))),
+    );
+    let aggregates = |artifacts: NormalizedArtifacts<'_>| {
+        artifacts
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| match &statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::AggregateMake { fields, .. },
+                    ..
+                } => Some(fields.iter().map(|field| field.mode).collect::<Vec<_>>()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let analysis = aggregates(normalize_semantic_body(&db, instance).expect("analysis body"));
+    assert!(
+        analysis.contains(&vec![ReadMode::Move]),
+        "the analysis body must keep the move of `b`: {analysis:?}"
+    );
+    let runtime = aggregates(normalize_runtime_semantic_body(&db, instance).expect("runtime body"));
+    assert!(
+        runtime.is_empty(),
+        "the runtime body must fold both constant aggregates: {runtime:?}"
+    );
 }
 
 #[test]

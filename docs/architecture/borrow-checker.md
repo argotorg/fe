@@ -12,8 +12,10 @@ For source examples and compatibility changes, see
 ```mermaid
 flowchart TD
     Typed[Typed HIR and lowering plans] --> Raw[Instantiated semantic body]
-    Raw --> Admission[Admission and conservative constant canonicalization]
-    Admission --> Normalized[Verified normalized body and layout plan]
+    Raw --> Admission[Admission and const-reference resolution]
+    Admission --> Normalized[Verified operation-preserving normalized body]
+    Raw --> Folding[Runtime constant folding]
+    Folding --> RuntimeBody[Verified runtime body and layout plan]
     Normalized --> Structural[Structural values, storage, and loans]
     Structural --> Resolution[Resolved operation and boundary facts]
     Resolution --> Structural
@@ -26,8 +28,17 @@ flowchart TD
     Summary --> Validation[Concrete borrow and boundary validation]
     Conflicts --> Validation
     Validation --> Runtime[Layout evidence and runtime lowering]
-    Normalized --> Runtime
+    RuntimeBody --> Runtime
 ```
+
+Analyses consume the operation-preserving body. Admission resolves const
+references but folds no operation, so moves, borrows, reads, and calls stay
+visible even when every operand is constant; acceptance never depends on
+constant evaluation. Layout evidence and runtime lowering share a separately
+verified body whose constant-evaluable operations are folded. Folding a move of
+a constant is sound only after the operation-preserving body passes ownership
+checking, which the runtime lowering gate below requires. When folding changes
+nothing, both views are the same admitted body.
 
 Admission distinguishes an upstream-blocked body from an internal normalization
 failure. The shared types and diagnostic constructors live in
@@ -49,10 +60,10 @@ consumes the summary's boundary result. The
 requires both checks to succeed for each concrete semantic body before lowering
 it. A pending, blocked, or failed result cannot pass that gate.
 
-Admission-time CTFE runs before these summaries exist. Its conservative raw-body
-invalidation remains independent. Contract-field definite assignment similarly
-has a distinct initialization contract; it does not replace general ownership
-availability for pointer referents.
+Runtime constant folding runs before these summaries exist. Its conservative
+raw-body invalidation remains independent. Contract-field definite assignment
+similarly has a distinct initialization contract; it does not replace general
+ownership availability for pointer referents.
 
 ## One operation contract
 
