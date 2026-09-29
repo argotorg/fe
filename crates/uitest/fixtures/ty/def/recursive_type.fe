@@ -42,10 +42,6 @@ pub struct S10<T> {
     next: *S10<[T; 1]>,
 }
 
-pub struct S11<const N: u256> {
-    next: *S11<{ N + 1 }>,
-}
-
 pub struct S12<T, const N: u256> {
     t: T,
     same: *S12<T, N>,

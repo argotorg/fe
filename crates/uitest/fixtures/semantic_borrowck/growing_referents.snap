@@ -4,10 +4,19 @@ expression: diags
 input_file: fixtures/semantic_borrowck/growing_referents.fe
 ---
 error[16-0011]: unbounded referent types in `fn value`
-   ┌─ growing_referents.fe:19:36
+   ┌─ growing_referents.fe:20:36
    │
-19 │   fn value(grow: Grow<u256>) -> u256 {
+20 │   fn value(grow: Grow<u256>) -> u256 {
    │ ╭────────────────────────────────────^
-20 │ │     grow.value
-21 │ │ }
-   │ ╰─^ more than 64 instantiations of `Grow` are reachable from here; a trait may be growing a recursive type
+21 │ │     grow.value
+22 │ │ }
+   │ ╰─^ more than 64 instantiations of `Grow` are reachable from here; a trait or const expression may be growing a recursive type
+
+error[16-0011]: unbounded referent types in `fn count`
+   ┌─ growing_referents.fe:29:37
+   │
+29 │   fn count(counter: Count<0>) -> u256 {
+   │ ╭─────────────────────────────────────^
+30 │ │     counter.value
+31 │ │ }
+   │ ╰─^ more than 64 instantiations of `Count` are reachable from here; a trait or const expression may be growing a recursive type

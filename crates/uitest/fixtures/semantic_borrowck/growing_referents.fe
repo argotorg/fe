@@ -1,4 +1,5 @@
-// An impl can make a recursive type grow where its fields do not.
+// An impl or a const expression can make a recursive type grow where its
+// field types do not.
 pub trait Next {
     type Out
 }
@@ -18,4 +19,13 @@ pub struct Grow<T: Next> {
 
 fn value(grow: Grow<u256>) -> u256 {
     grow.value
+}
+
+pub struct Count<const N: u256> {
+    value: u256,
+    next: *Count<{ N + 1 }>,
+}
+
+fn count(counter: Count<0>) -> u256 {
+    counter.value
 }

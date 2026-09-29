@@ -49,11 +49,12 @@ use crate::{
 };
 
 /// Checking enumerates the types reachable from a function's inputs, and a
-/// trait can make that set infinite: a projection or an effect handle's target
-/// may keep wrapping the argument of a recursive type. Definitions with
-/// growth written in their fields are rejected before checking, so reaching
-/// more instantiations of one type constructor than this is treated as such
-/// growth. It bounds the depth and width of any growing family.
+/// trait or const expression can make that set infinite: a projection, an
+/// effect handle's target or a const argument may keep growing the argument
+/// of a recursive type. Definitions whose field types grow by constructors
+/// are rejected before checking, so reaching more instantiations of one type
+/// constructor than this is treated as such growth. It bounds the depth and
+/// width of any growing family.
 pub(super) const MAX_REFERENT_INSTANTIATIONS: usize = 64;
 
 /// The error for inputs that reach too many instantiations of `head`.
@@ -67,7 +68,7 @@ pub(super) fn unbounded_referents_diag<'db>(
         instance,
         SemanticDiagnosticKind::UnboundedReferents,
         format!(
-            "more than {MAX_REFERENT_INSTANTIATIONS} instantiations of `{}` are reachable from here; a trait may be growing a recursive type",
+            "more than {MAX_REFERENT_INSTANTIATIONS} instantiations of `{}` are reachable from here; a trait or const expression may be growing a recursive type",
             head.pretty_print(db)
         ),
         SemanticDiagnosticSpan::OriginWithTemplateFallback {

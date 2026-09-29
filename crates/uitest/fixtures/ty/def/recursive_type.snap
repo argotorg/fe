@@ -62,13 +62,3 @@ error[3-0057]: recursive type grows without bound
    │           ------------ recursion occurs here
    │
    = each pass through this recursion can grow a type argument, so the type can refer to infinitely many distinct types
-
-error[3-0057]: recursive type grows without bound
-   ┌─ recursive_type.fe:45:12
-   │
-45 │ pub struct S11<const N: u256> {
-   │            ^^^ recursive type definition here
-46 │     next: *S11<{ N + 1 }>,
-   │           --------------- recursion occurs here
-   │
-   = each pass through this recursion can grow a type argument, so the type can refer to infinitely many distinct types

@@ -3585,9 +3585,10 @@ impl<'db> AdtDef<'db> {
 ///
 /// One search covers the ingot, so a long chain of definitions is explored
 /// once rather than once per member, and each cycle is reported once, at its
-/// first ADT in item order. Only growth written in field types is found: an
-/// argument computed by a trait, through a projection or an effect handle's
-/// target, is left to the borrow checker's referent limit.
+/// first ADT in item order. Only growth by type constructors written in field
+/// types is found: an argument computed by a trait projection or a const
+/// expression, and an effect handle's target, are left to the borrow
+/// checker's referent limit.
 #[salsa::tracked(return_ref)]
 pub fn ingot_growing_cycles<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -3602,49 +3603,145 @@ pub fn ingot_growing_cycles<'db>(
         member: AdtCycleMember<'db>,
     }
 
+    /// Whether an instance of `ty` is computed by a projection or a const
+    /// expression over parameters, rather than built by type constructors.
+    fn computed<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+        match ty.data(db) {
+            TyData::AssocTy(_) | TyData::QualifiedTy(_) => true,
+            TyData::ConstTy(value) => {
+                !matches!(value.data(db), ConstTyData::TyParam(..)) && ty.has_param(db)
+            }
+            _ => ty.generic_args(db).iter().any(|arg| computed(db, *arg)),
+        }
+    }
+
+    let empty_array = |ty: TyId<'db>| {
+        ty.is_array(db)
+            && ArrayLength::from_ty(db, ty.generic_args(db)[1]) == Some(ArrayLength::Known(0))
+    };
     let adts: Vec<_> = ingot
         .all_items(db)
         .iter()
         .filter_map(|item| AdtRef::try_from_item(*item))
         .map(|adt| lower_adt(db, adt))
         .collect();
-    let mut states: IndexSet<(AdtDef<'db>, usize)> = IndexSet::default();
-    let mut edges = Vec::new();
-    let mut explored = FxHashSet::default();
+
+    // Every ADT whose fields the ingot's ADTs can reach, with its field types.
+    let mut fields: IndexMap<AdtDef<'db>, Vec<(AdtCycleMember<'db>, TyId<'db>)>> =
+        IndexMap::default();
     let mut pending = adts.clone();
     while let Some(adt) = pending.pop() {
-        if !explored.insert(adt) {
+        if fields.contains_key(&adt) {
             continue;
         }
-        let params = adt.params(db);
-        for (field_idx, field) in adt.fields(db).iter().enumerate() {
-            for (ty_idx, ty) in field.iter_types(db).enumerate() {
-                let member = AdtCycleMember {
-                    adt,
-                    field_idx,
-                    ty_idx,
-                };
-                let mut reachable = vec![ty.instantiate_identity()];
-                while let Some(ty) = reachable.pop() {
-                    reachable.extend(reachable_parts(db, ty));
-                    let (base, args) = ty.decompose_ty_app(db);
-                    let TyData::TyBase(TyBase::Adt(applied)) = base.data(db) else {
-                        continue;
+        let adt_fields: Vec<_> = adt
+            .fields(db)
+            .iter()
+            .enumerate()
+            .flat_map(|(field_idx, field)| {
+                field.iter_types(db).enumerate().map(move |(ty_idx, ty)| {
+                    let member = AdtCycleMember {
+                        adt,
+                        field_idx,
+                        ty_idx,
                     };
-                    pending.push(*applied);
-                    for (to, arg) in args.iter().enumerate() {
-                        if arg.has_projection(db) {
-                            continue;
-                        }
-                        for (from, param) in params.iter().enumerate() {
-                            if value_contains_generic_param(db, arg, from) {
-                                edges.push(Edge {
-                                    from: states.insert_full((adt, from)).0,
-                                    to: states.insert_full((*applied, to)).0,
-                                    grows: arg != param,
-                                    member,
-                                });
-                            }
+                    (member, ty.instantiate_identity())
+                })
+            })
+            .collect();
+        let mut subterms: Vec<_> = adt_fields.iter().map(|(_, ty)| *ty).collect();
+        while let Some(ty) = subterms.pop() {
+            let (base, args) = ty.decompose_ty_app(db);
+            if let TyData::TyBase(TyBase::Adt(applied)) = base.data(db) {
+                pending.push(*applied);
+            }
+            subterms.extend(args);
+        }
+        fields.insert(adt, adt_fields);
+    }
+
+    // A parameter is exposed, so part of its value can become a reachable
+    // type, if it occurs in a field below builtin constructors and exposed
+    // ADT arguments only; any other argument only distinguishes the type.
+    // Each occurrence is a Horn clause whose premises are the ADT arguments
+    // above it, and premise counters find the least model.
+    let mut conclusions = Vec::new();
+    let mut unmet = Vec::new();
+    let mut waiting: FxHashMap<(AdtDef<'db>, usize), Vec<usize>> = FxHashMap::default();
+    let mut facts = Vec::new();
+    for (&adt, adt_fields) in &fields {
+        let params = adt.params(db);
+        let mut occurrences: Vec<_> = adt_fields.iter().map(|(_, ty)| (*ty, Vec::new())).collect();
+        while let Some((ty, premises)) = occurrences.pop() {
+            if let Some(param) = params.iter().position(|param| *param == ty) {
+                let premises: FxHashSet<_> = premises.into_iter().collect();
+                if premises.is_empty() {
+                    facts.push((adt, param));
+                }
+                for &premise in &premises {
+                    waiting.entry(premise).or_default().push(conclusions.len());
+                }
+                conclusions.push((adt, param));
+                unmet.push(premises.len());
+                continue;
+            }
+            if empty_array(ty) {
+                continue;
+            }
+            let (base, args) = ty.decompose_ty_app(db);
+            let applied = match base.data(db) {
+                TyData::TyBase(TyBase::Adt(applied)) => Some(*applied),
+                _ => None,
+            };
+            occurrences.extend(args.iter().enumerate().map(|(position, arg)| {
+                let mut premises = premises.clone();
+                premises.extend(applied.map(|applied| (applied, position)));
+                (*arg, premises)
+            }));
+        }
+    }
+    let mut exposed = FxHashSet::default();
+    while let Some(fact) = facts.pop() {
+        if exposed.insert(fact) {
+            for &clause in waiting.get(&fact).into_iter().flatten() {
+                unmet[clause] -= 1;
+                if unmet[clause] == 0 {
+                    facts.push(conclusions[clause]);
+                }
+            }
+        }
+    }
+
+    let mut states: IndexSet<(AdtDef<'db>, usize)> = IndexSet::default();
+    let mut edges = Vec::new();
+    for (&adt, adt_fields) in &fields {
+        let params = adt.params(db);
+        for &(member, ty) in adt_fields {
+            let mut reachable = vec![ty];
+            while let Some(ty) = reachable.pop() {
+                if empty_array(ty) {
+                    continue;
+                }
+                let (base, args) = ty.decompose_ty_app(db);
+                let TyData::TyBase(TyBase::Adt(applied)) = base.data(db) else {
+                    reachable.extend(args);
+                    continue;
+                };
+                for (to, arg) in args.iter().enumerate() {
+                    if exposed.contains(&(*applied, to)) {
+                        reachable.push(*arg);
+                    }
+                    if computed(db, *arg) {
+                        continue;
+                    }
+                    for (from, param) in params.iter().enumerate() {
+                        if value_contains_generic_param(db, arg, from) {
+                            edges.push(Edge {
+                                from: states.insert_full((adt, from)).0,
+                                to: states.insert_full((*applied, to)).0,
+                                grows: arg != param,
+                                member,
+                            });
                         }
                     }
                 }
@@ -3759,65 +3856,6 @@ pub fn ingot_growing_cycles<'db>(
         cycles.insert(adt, cycle);
     }
     cycles
-}
-
-/// Which parameters of `adt` can have part of their value become a reachable
-/// type through its fields, rather than only distinguishing the type.
-#[salsa::tracked(
-    return_ref,
-    cycle_fn=exposed_params_cycle_recover,
-    cycle_initial=exposed_params_cycle_initial
-)]
-fn exposed_params<'db>(db: &'db dyn HirAnalysisDb, adt: AdtDef<'db>) -> Vec<bool> {
-    let params = adt.params(db);
-    let mut exposed = vec![false; params.len()];
-    let mut reachable: Vec<_> = adt
-        .fields(db)
-        .iter()
-        .flat_map(|field| field.iter_types(db).map(|ty| ty.instantiate_identity()))
-        .collect();
-    while let Some(ty) = reachable.pop() {
-        if let Some(param) = params.iter().position(|param| *param == ty) {
-            exposed[param] = true;
-        }
-        reachable.extend(reachable_parts(db, ty));
-    }
-    exposed
-}
-
-fn exposed_params_cycle_initial<'db>(db: &'db dyn HirAnalysisDb, adt: AdtDef<'db>) -> Vec<bool> {
-    // Iteration only adds parameters reached through a recursive field.
-    vec![false; adt.params(db).len()]
-}
-
-fn exposed_params_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &[bool],
-    _count: u32,
-    _adt: AdtDef<'db>,
-) -> salsa::CycleRecoveryAction<Vec<bool>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
-/// The parts of `ty` that are reachable types whenever an instance of `ty`
-/// is: the arguments of a builtin constructor, except the element of an
-/// empty array, and the exposed arguments of an ADT.
-fn reachable_parts<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<TyId<'db>> {
-    let (base, args) = ty.decompose_ty_app(db);
-    match base.data(db) {
-        TyData::TyBase(TyBase::Adt(adt)) => args
-            .iter()
-            .zip(exposed_params(db, *adt))
-            .filter(|(_, exposed)| **exposed)
-            .map(|(arg, _)| *arg)
-            .collect(),
-        _ if ty.is_array(db)
-            && ArrayLength::from_ty(db, args[1]) == Some(ArrayLength::Known(0)) =>
-        {
-            Vec::new()
-        }
-        _ => args.to_vec(),
-    }
 }
 
 /// Collect all ADTs directly appearing inside the given type without
