@@ -51,3 +51,24 @@ error[3-0002]: recursive type definition
    │            ^^ recursive type definition here
 31 │     s: S8<[T; 1]>,
    │        ---------- recursion occurs here
+
+error[3-0057]: recursive type grows without bound
+   ┌─ recursive_type.fe:40:12
+   │
+40 │ pub struct S10<T> {
+   │            ^^^ recursive type definition here
+41 │     t: T,
+42 │     next: *S10<[T; 1]>,
+   │           ------------ recursion occurs here
+   │
+   = every pass through this recursion wraps a type argument in a larger type, so the type refers to infinitely many distinct types
+
+error[3-0057]: recursive type grows without bound
+   ┌─ recursive_type.fe:45:12
+   │
+45 │ pub struct S11<const N: u256> {
+   │            ^^^ recursive type definition here
+46 │     next: *S11<{ N + 1 }>,
+   │           --------------- recursion occurs here
+   │
+   = every pass through this recursion wraps a type argument in a larger type, so the type refers to infinitely many distinct types

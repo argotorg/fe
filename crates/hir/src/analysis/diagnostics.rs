@@ -1727,31 +1727,46 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
             ),
 
             // TODO: add hint about indirection (eg *T)
-            Self::RecursiveType(cycle) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "recursive type definition".to_string(),
-                sub_diagnostics: {
-                    let head = cycle.first().unwrap();
-                    let mut subs = vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: "recursive type definition here".to_string(),
-                        span: head.adt.adt_ref(db).name_span(db).resolve(db),
-                    }];
-                    subs.extend(cycle.iter().map(|m| {
-                        SubDiagnostic {
-                            style: LabelStyle::Secondary,
-                            message: "recursion occurs here".to_string(),
-                            span: m
-                                .adt
-                                .variant_ty_span(db, m.field_idx as usize, m.ty_idx as usize)
-                                .resolve(db),
-                        }
-                    }));
-                    subs
-                },
-                notes: vec![],
-                error_code,
-            },
+            Self::RecursiveType(cycle) | Self::GrowingRecursiveType(cycle) => {
+                let growing = matches!(self, Self::GrowingRecursiveType(_));
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: if growing {
+                        "recursive type grows without bound"
+                    } else {
+                        "recursive type definition"
+                    }
+                    .to_string(),
+                    sub_diagnostics: {
+                        let head = cycle.first().unwrap();
+                        let mut subs = vec![SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: "recursive type definition here".to_string(),
+                            span: head.adt.adt_ref(db).name_span(db).resolve(db),
+                        }];
+                        subs.extend(cycle.iter().map(|m| {
+                            SubDiagnostic {
+                                style: LabelStyle::Secondary,
+                                message: "recursion occurs here".to_string(),
+                                span: m
+                                    .adt
+                                    .variant_ty_span(db, m.field_idx as usize, m.ty_idx as usize)
+                                    .resolve(db),
+                            }
+                        }));
+                        subs
+                    },
+                    notes: if growing {
+                        vec![
+                            "every pass through this recursion wraps a type argument in a larger type, so the type refers to infinitely many distinct types"
+                                .to_string(),
+                        ]
+                    } else {
+                        vec![]
+                    },
+                    error_code,
+                }
+            }
             Self::UnboundTypeAliasParam {
                 span,
                 alias,

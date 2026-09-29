@@ -82,7 +82,7 @@ impl<'db> AdtDef<'db> {
                 }
             }
 
-            AdtRef::Struct(s) => s.span().fields().field(field_idx).ty().into(),
+            AdtRef::Struct(s) => s.span().fields().field(ty_idx).ty().into(),
         }
     }
 

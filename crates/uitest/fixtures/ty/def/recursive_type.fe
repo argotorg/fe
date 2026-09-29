@@ -35,3 +35,19 @@ pub struct S8<T> {
 pub struct S9 {
     s: S1,
 }
+
+// Indirection permits recursion only if its type arguments do not grow.
+pub struct S10<T> {
+    t: T,
+    next: *S10<[T; 1]>,
+}
+
+pub struct S11<const N: u256> {
+    next: *S11<{ N + 1 }>,
+}
+
+pub struct S12<T, const N: u256> {
+    t: T,
+    same: *S12<T, N>,
+    other: *S12<u8, 0>,
+}

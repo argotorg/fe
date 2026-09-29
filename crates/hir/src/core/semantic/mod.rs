@@ -38,6 +38,8 @@ pub use reference::{
     FieldAccessView, HasReferences, MethodCallView, PathView, ReferenceView, Target, UsePathView,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::VecDeque;
+use std::iter;
 pub use storage_layout::{
     AllocatedContractStorageLayout, AssignedLayoutTy, AssignedRootValue, ConcreteRootOccurrence,
     ConcreteRootOccurrenceId, ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind,
@@ -116,7 +118,7 @@ use crate::analysis::ty::{
         TyAlias, lower_callable_input_param_ty, lower_hir_ty, lower_hir_ty_deferred,
         lower_hir_ty_with_minter, lower_layout_root_uses_in_hir_ty, lower_opt_hir_ty,
         lower_type_alias, lower_type_alias_from_hir, lower_type_alias_from_hir_deferred,
-        resolve_callable_input_effect_key,
+        resolve_callable_input_effect_key, value_contains_generic_param,
     },
 };
 use crate::core::adt_lower::{lower_adt, lower_contract_fields};
@@ -3570,6 +3572,96 @@ impl<'db> AdtDef<'db> {
         }
 
         impl_check(db, self, self, &[])
+    }
+
+    /// Detects a recursive cycle that passes a generic parameter of this ADT
+    /// back to its own position inside a larger argument, as `Grow<T>` does
+    /// through a field of type `*Grow<[T; 1]>`. Indirection keeps such a type
+    /// finitely sized, but each instantiation reaches infinitely many distinct
+    /// types. Returns the cycle members if the ADT is part of such a cycle.
+    pub fn growing_cycle(self, db: &'db dyn HirAnalysisDb) -> Option<Vec<AdtCycleMember<'db>>> {
+        // A field type passes parameter `from` of its ADT into argument `to` of
+        // an applied ADT. The argument grows unless it is the parameter itself.
+        struct Flow<'db> {
+            from: usize,
+            to: (AdtDef<'db>, usize),
+            grows: bool,
+            member: AdtCycleMember<'db>,
+        }
+
+        if self.params(db).is_empty() {
+            return None;
+        }
+        let mut flows: FxHashMap<AdtDef<'db>, Vec<Flow<'db>>> = FxHashMap::default();
+        let mut adts = vec![self];
+        while let Some(adt) = adts.pop() {
+            if flows.contains_key(&adt) {
+                continue;
+            }
+            let params = adt.params(db);
+            let mut adt_flows = Vec::new();
+            for (field_idx, field) in adt.fields(db).iter().enumerate() {
+                for (ty_idx, ty) in field.iter_types(db).enumerate() {
+                    let member = AdtCycleMember {
+                        adt,
+                        field_idx: field_idx as u16,
+                        ty_idx: ty_idx as u16,
+                    };
+                    let mut applications = vec![ty.instantiate_identity()];
+                    while let Some(ty) = applications.pop() {
+                        let (base, args) = ty.decompose_ty_app(db);
+                        applications.extend(args);
+                        let TyData::TyBase(TyBase::Adt(applied)) = base.data(db) else {
+                            continue;
+                        };
+                        adts.push(*applied);
+                        for (to, arg) in args.iter().enumerate() {
+                            adt_flows.extend(
+                                params
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(from, _)| {
+                                        value_contains_generic_param(db, arg, *from)
+                                    })
+                                    .map(|(from, param)| Flow {
+                                        from,
+                                        to: (*applied, to),
+                                        grows: arg != param,
+                                        member,
+                                    }),
+                            );
+                        }
+                    }
+                }
+            }
+            flows.insert(adt, adt_flows);
+        }
+
+        // Search for a path from a parameter back to itself through a growing flow.
+        for start in 0..self.params(db).len() {
+            let start = (self, start);
+            let mut reached = FxHashMap::from_iter([((start, false), None)]);
+            let mut pending = VecDeque::from([(start, false)]);
+            while let Some(state @ ((adt, param), grown)) = pending.pop_front() {
+                for flow in flows[&adt].iter().filter(|flow| flow.from == param) {
+                    let next = (flow.to, grown || flow.grows);
+                    if reached.contains_key(&next) {
+                        continue;
+                    }
+                    reached.insert(next, Some((state, flow.member)));
+                    if next == (start, true) {
+                        let mut cycle: Vec<_> =
+                            iter::successors(reached[&next], |(previous, _)| reached[previous])
+                                .map(|(_, member)| member)
+                                .collect();
+                        cycle.reverse();
+                        return Some(cycle);
+                    }
+                    pending.push_back(next);
+                }
+            }
+        }
+        None
     }
 }
 

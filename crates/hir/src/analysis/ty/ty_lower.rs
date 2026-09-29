@@ -3060,7 +3060,7 @@ pub fn callable_input_layout_backing_index_lengths<'db>(
         .cloned()
 }
 
-fn value_contains_generic_param<'db, T>(
+pub(crate) fn value_contains_generic_param<'db, T>(
     db: &'db dyn HirAnalysisDb,
     value: &T,
     param_idx: usize,

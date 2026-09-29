@@ -230,10 +230,14 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
         for adt_ref in adts {
             diags.extend(adt_ref.diags(db).into_iter().map(|d| d.to_voucher()));
             let adt = lower_adt(db, adt_ref);
-            if !cycle_participants.contains(&adt)
-                && let Some(cycle) = adt.recursive_cycle(db)
-            {
+            if cycle_participants.contains(&adt) {
+                continue;
+            }
+            if let Some(cycle) = adt.recursive_cycle(db) {
                 diags.push(Box::new(TyLowerDiag::RecursiveType(cycle.clone())) as _);
+                cycle_participants.extend(cycle.iter().map(|m| m.adt));
+            } else if let Some(cycle) = adt.growing_cycle(db) {
+                diags.push(Box::new(TyLowerDiag::GrowingRecursiveType(cycle.clone())) as _);
                 cycle_participants.extend(cycle.iter().map(|m| m.adt));
             }
         }
