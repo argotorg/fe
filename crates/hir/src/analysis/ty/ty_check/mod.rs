@@ -2542,7 +2542,7 @@ impl<'db> TyChecker<'db> {
                     return;
                 }
 
-                self.env.record_implicit_move(expr);
+                self.env.record_implicit_move(expr, expected_ty);
             }
         }
     }

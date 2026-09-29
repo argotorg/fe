@@ -10,7 +10,7 @@ use crate::{
 use crate::hir_def::CallableDef;
 use crate::hir_def::params::FuncParamMode;
 use cranelift_entity::{PrimaryMap, SecondaryMap};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use salsa::Update;
 use thin_vec::ThinVec;
 
@@ -34,11 +34,13 @@ use crate::analysis::{
             model::EffectRequirementDecl,
         },
         fold::{TyFoldable, TyFolder},
+        normalize::normalize_ty,
         provider::ProviderAddressSpace,
         trait_def::TraitInstId,
         trait_resolution::{PredicateListId, constraint::collect_func_effect_provider_constraints},
         ty_contains_const_hole,
         ty_def::{InvalidCause, StringFallback, TyData, TyId, TyVarSort},
+        ty_is_copy,
         ty_lower::lower_hir_ty,
         unify::UnificationTable,
     },
@@ -55,7 +57,9 @@ pub(crate) struct TyCheckEnv<'db> {
 
     pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
     expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
-    implicit_moves: FxHashSet<ExprId>,
+    /// Owned-context moves and the type each value is moved as. Whether that
+    /// type is `Copy` is decided in `finish`, once inference has resolved it.
+    implicit_moves: FxHashMap<ExprId, TyId<'db>>,
     const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
     value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
     callables: SecondaryMap<ExprId, Option<Callable<'db>>>,
@@ -126,7 +130,7 @@ impl<'db> TyCheckEnv<'db> {
             body,
             pat_ty: SecondaryMap::new(),
             expr_ty: SecondaryMap::new(),
-            implicit_moves: FxHashSet::default(),
+            implicit_moves: FxHashMap::default(),
             const_refs: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),
             callables: SecondaryMap::new(),
@@ -800,8 +804,8 @@ impl<'db> TyCheckEnv<'db> {
         self.deferred.push(DeferredTask::PrimitiveOp(pending))
     }
 
-    pub(super) fn record_implicit_move(&mut self, expr: ExprId) {
-        self.implicit_moves.insert(expr);
+    pub(super) fn record_implicit_move(&mut self, expr: ExprId, ty: TyId<'db>) {
+        self.implicit_moves.insert(expr, ty);
     }
 
     /// Completes the type checking environment by finalizing pending trait
@@ -856,6 +860,20 @@ impl<'db> TyCheckEnv<'db> {
             });
         let assumptions = self.assumptions.fold_with(self.db, &mut prober);
         let pattern_store = self.pattern_store.fold_with(self.db, &mut prober);
+        let scope = prober.scope;
+        let implicit_moves = self
+            .implicit_moves
+            .iter()
+            .filter_map(|(expr, ty)| {
+                let ty = normalize_ty(
+                    self.db,
+                    ty.fold_with(self.db, &mut prober),
+                    scope,
+                    assumptions,
+                );
+                (!ty_is_copy(self.db, scope, ty, assumptions)).then_some(*expr)
+            })
+            .collect();
 
         self.semantic_expr_lowering
             .values_mut()
@@ -901,7 +919,7 @@ impl<'db> TyCheckEnv<'db> {
             assumptions,
             pat_ty: self.pat_ty,
             expr_ty: self.expr_ty,
-            implicit_moves: self.implicit_moves,
+            implicit_moves,
             const_refs: self.const_refs,
             value_path_refs: self.value_path_refs,
             semantic_expr_lowering: self.semantic_expr_lowering,
