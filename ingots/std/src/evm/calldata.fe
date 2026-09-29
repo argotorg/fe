@@ -1,7 +1,7 @@
 use core::abi::{AbiSize, ByteInput, Decode}
 use core::Copy
 use core::num::IntDowncast
-use ingot::abi::Sol
+use ingot::abi::{ArrayView, Sol, decode_array_view_at}
 use ingot::abi::sol::{decode_input}
 use ingot::evm::ops::{calldataload, calldatacopy, calldatasize, revert_empty}
 
@@ -29,6 +29,17 @@ impl CallData {
     /// Decode Solidity ABI data from this calldata view.
     pub fn decode<T>(self) -> T where T: Decode<Sol> + AbiSize {
         decode_input(self)
+    }
+
+    /// Lazy view of the ABI `T[]` whose head word is at `head_pos` (relative
+    /// to `base`); offsets are resolved relative to `base`.
+    ///
+    /// With `CallData::with_base(4)`, `head_pos: k * 32` is the `k`-th
+    /// argument of an external call, which is how a `recv` arm with a raw
+    /// selector reads a `T[] calldata` argument without decoding all of it.
+    /// See `decode_array_view_at` for the validation performed.
+    pub fn array_view<T>(self, _ head_pos: u256) -> ArrayView<CallData, T> where T: AbiSize {
+        decode_array_view_at(self, base: 0, head_pos: head_pos)
     }
 }
 

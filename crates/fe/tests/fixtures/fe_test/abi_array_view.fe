@@ -1,0 +1,476 @@
+use core::abi::ByteInput
+use core::ptr::{self, MemBuffer, MemSpan}
+use std::abi::{
+    ArrayView,
+    Bytes,
+    DynArray,
+    DynString,
+    MemVec,
+    decode_array_view,
+    decode_array_view_at,
+}
+use std::evm::{Address, Call, CallData, Evm, RawMem}
+
+/// Solidity `(uint8,address,uint256)`: a static tuple element.
+type Transfer = (u8, Address, u256)
+
+// Raw-selector variants: each arm reads its `T[] calldata` argument lazily.
+msg ViewMsg {
+    /// sum(uint256[])
+    #[selector = 0x01]
+    Sum -> u256,
+    /// get(uint256[],uint256)
+    #[selector = 0x02]
+    GetU256 -> u256,
+    /// get(address[],uint256)
+    #[selector = 0x03]
+    GetAddress -> Address,
+    /// get((uint8,address,uint256)[],uint256), returns amount + kind
+    #[selector = 0x04]
+    GetTransfer -> u256,
+    /// get(bytes[],uint256), returns len * 256 + first byte via a view
+    #[selector = 0x05]
+    BytesAt -> u256,
+    /// get(bytes[],uint256), returns len * 256 + first byte via `get`
+    #[selector = 0x06]
+    BytesGet -> u256,
+    /// get(uint256[][],uint256,uint256)
+    #[selector = 0x07]
+    Matrix -> u256,
+    /// get(uint256,uint256[]), returns the length of the second argument
+    #[selector = 0x08]
+    SecondLen -> u256,
+    /// get(string[],uint256), returns the string length
+    #[selector = 0x09]
+    StringLen -> u256,
+}
+
+// Typed counterpart used to let the compiler encode valid calldata.
+msg TypedMsg {
+    #[selector = 0x01]
+    Sum { values: DynArray<u256> } -> u256,
+}
+
+pub contract Viewer {
+    recv ViewMsg {
+        Sum {} -> u256 {
+            let values = CallData::with_base(4).array_view<u256>(0)
+            let mut total: u256 = 0
+            let mut i: u256 = 0
+            while i < values.len() {
+                total += values.get(i)
+                i += 1
+            }
+            total
+        }
+
+        GetU256 {} -> u256 {
+            let cd = CallData::with_base(4)
+            cd.array_view<u256>(0).get(cd.word_at(32))
+        }
+
+        GetAddress {} -> Address {
+            let cd = CallData::with_base(4)
+            cd.array_view<Address>(0).get(cd.word_at(32))
+        }
+
+        GetTransfer {} -> u256 {
+            let cd = CallData::with_base(4)
+            let transfer = cd.array_view<Transfer>(0).get(cd.word_at(32))
+            transfer.2 + transfer.0 as u256
+        }
+
+        BytesAt {} -> u256 {
+            let cd = CallData::with_base(4)
+            let item = cd.array_view<Bytes>(0).bytes_at(cd.word_at(32))
+            if item.is_empty() {
+                return 0
+            }
+            item.len() * 256 + item.byte_at(0) as u256
+        }
+
+        BytesGet {} -> u256 {
+            let cd = CallData::with_base(4)
+            let item = cd.array_view<Bytes>(0).get(cd.word_at(32))
+            if item.len() == 0 {
+                return 0
+            }
+            item.len() * 256 + item.byte_at(0) as u256
+        }
+
+        Matrix {} -> u256 {
+            let cd = CallData::with_base(4)
+            let rows = cd.array_view<DynArray<u256>>(0)
+            rows.array_at(cd.word_at(32)).get(cd.word_at(64))
+        }
+
+        SecondLen {} -> u256 {
+            CallData::with_base(4).array_view<u256>(32).len()
+        }
+
+        StringLen {} -> u256 {
+            let cd = CallData::with_base(4)
+            cd.array_view<DynString>(0).string_at(cd.word_at(32)).len()
+        }
+    }
+}
+
+const PANIC_SELECTOR: u256 = 0x4e487b71
+
+struct Outcome { success: bool, ret_len: u256, word0: u256, word4: u256 }
+
+fn call_words<const N: usize>(_ addr: Address, selector: u256, words: [u256; N]) -> Outcome
+uses (evm: mut Evm)
+{
+    let len = 4 + (N as u256) * 32
+    let data = MemBuffer::alloc(len + 32)
+    evm.mstore(addr: data.ptr(), value: selector << 224)
+    let mut i: usize = 0
+    while i < N {
+        evm.mstore(
+            addr: ptr::offset_bytes(data.ptr(), 4 + (i as u256) * 32),
+            value: words[i],
+        )
+        i += 1
+    }
+    let mut ret = MemBuffer::alloc(64)
+    let outcome = evm
+        .raw_call(
+            addr: addr,
+            gas: 1000000,
+            value: 0,
+            args: MemSpan::from_raw_parts(ptr: data.ptr(), len: len),
+            ret: mut ret,
+        )
+    let rlen = outcome.returndata_len()
+    Outcome {
+        success: outcome.success(),
+        ret_len: rlen,
+        word0: if rlen >= 32 {
+            ret.span().word_at(0)
+        } else {
+            0
+        },
+        word4: if rlen >= 36 {
+            ret.span().word_at(4)
+        } else {
+            0
+        },
+    }
+}
+
+fn returns<const N: usize>(_ addr: Address, selector: u256, words: [u256; N], expected: u256)
+uses (evm: mut Evm)
+{
+    let out = call_words(addr, selector: selector, words: words)
+    assert!(out.success)
+    assert!(out.ret_len == 32)
+    assert!(out.word0 == expected)
+}
+
+fn reverts_empty<const N: usize>(_ addr: Address, selector: u256, words: [u256; N])
+uses (evm: mut Evm)
+{
+    let out = call_words(addr, selector: selector, words: words)
+    assert!(!out.success)
+    assert!(out.ret_len == 0)
+}
+
+fn reverts_index_panic<const N: usize>(_ addr: Address, selector: u256, words: [u256; N])
+uses (evm: mut Evm)
+{
+    let out = call_words(addr, selector: selector, words: words)
+    assert!(!out.success)
+    assert!(out.ret_len == 36)
+    assert!(out.word0 >> 224 == PANIC_SELECTOR)
+    assert!(out.word4 == 0x32)
+}
+
+fn deploy() -> Address uses (evm: mut Evm) {
+    evm.create2<Viewer>(value: 0, args: (), salt: 0)
+}
+
+const MAX: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+const TWO_64: u256 = 0x10000000000000000
+
+#[test]
+fn test_u256_array() uses (evm: mut Evm) {
+    let v = deploy()
+    returns(v, selector: 1, words: [0x20, 3, 1, 2, 3], expected: 6)
+    returns(v, selector: 1, words: [0x20, 0], expected: 0)
+    // Offsets are relative to the argument start and need not be canonical.
+    returns(v, selector: 1, words: [0x40, 0xdead, 1, 5], expected: 5)
+    // Trailing bytes after the array are ignored.
+    returns(v, selector: 1, words: [0x20, 1, 5, 99], expected: 5)
+    returns(v, selector: 2, words: [0x40, 1, 2, 7, 8], expected: 8)
+    returns(v, selector: 8, words: [7, 0x40, 2, 9, 9], expected: 2)
+}
+
+#[test]
+fn test_typed_caller_encoding() uses (evm: mut Evm) {
+    let v = deploy()
+    let mut values = MemVec<u256>::zeroed(4)
+    values.set(index: 0, value: 10)
+    values.set(index: 1, value: 20)
+    values.set(index: 2, value: 30)
+    values.set(index: 3, value: 40)
+    let sum: u256 = evm
+        .call(
+            addr: v,
+            gas: 1000000,
+            value: 0,
+            message: TypedMsg::Sum { values: values.to_dyn_array() },
+        )
+    assert!(sum == 100)
+}
+
+#[test]
+fn test_index_out_of_bounds_panics() uses (evm: mut Evm) {
+    let v = deploy()
+    reverts_index_panic(v, selector: 2, words: [0x40, 2, 2, 7, 8])
+    reverts_index_panic(v, selector: 2, words: [0x40, MAX, 2, 7, 8])
+    reverts_index_panic(v, selector: 2, words: [0x40, 0, 0])
+}
+
+#[test]
+fn test_malformed_offsets_revert_empty() uses (evm: mut Evm) {
+    let v = deploy()
+    // Head word missing entirely.
+    reverts_empty(v, selector: 8, words: [7])
+    // Length word beyond calldata.
+    reverts_empty(v, selector: 1, words: [0x20])
+    reverts_empty(v, selector: 1, words: [0x40, 0])
+    // Offsets of 2**64 and more, and offsets that wrap around.
+    reverts_empty(v, selector: 1, words: [TWO_64, 0])
+    reverts_empty(v, selector: 1, words: [MAX, 0])
+    reverts_empty(v, selector: 1, words: [MAX - 31, 0])
+}
+
+#[test]
+fn test_malformed_lengths_revert_empty() uses (evm: mut Evm) {
+    let v = deploy()
+    reverts_empty(v, selector: 1, words: [0x20, 4, 1, 2, 3])
+    reverts_empty(v, selector: 1, words: [0x20, TWO_64, 1, 2, 3])
+    reverts_empty(v, selector: 1, words: [0x20, (1 as u256) << 251, 1])
+    reverts_empty(v, selector: 1, words: [0x20, MAX / 32, 1])
+    reverts_empty(v, selector: 1, words: [0x20, MAX, 1])
+    // Validation happens on creation, even if no element is read.
+    reverts_empty(v, selector: 8, words: [0, 0x40, 3, 1, 2])
+}
+
+#[test]
+fn test_address_elements_validated_on_access() uses (evm: mut Evm) {
+    let v = deploy()
+    let dirty: u256 = ((1 as u256) << 160) | 5
+    returns(v, selector: 3, words: [0x40, 1, 2, dirty, 7], expected: 7)
+    reverts_empty(v, selector: 3, words: [0x40, 0, 2, dirty, 7])
+    reverts_empty(v, selector: 3, words: [0x40, 0, 1, MAX])
+}
+
+#[test]
+fn test_static_struct_elements() uses (evm: mut Evm) {
+    let v = deploy()
+    returns(
+        v,
+        selector: 4,
+        words: [0x40, 0, 2, 1, 0xaa, 100, 2, 0xbb, 200],
+        expected: 101,
+    )
+    returns(
+        v,
+        selector: 4,
+        words: [0x40, 1, 2, 1, 0xaa, 100, 2, 0xbb, 200],
+        expected: 202,
+    )
+    reverts_index_panic(
+        v,
+        selector: 4,
+        words: [0x40, 2, 2, 1, 0xaa, 100, 2, 0xbb, 200],
+    )
+    // Element stride is the struct head size (96 bytes), not one word.
+    reverts_empty(v, selector: 4, words: [0x40, 0, 2, 1, 0xaa, 100, 2, 0xbb])
+    // Dirty bits in a narrow integer field and an address field.
+    reverts_empty(v, selector: 4, words: [0x40, 0, 1, 0x100, 0xaa, 100])
+    reverts_empty(
+        v,
+        selector: 4,
+        words: [0x40, 0, 1, 1, (1 as u256) << 160, 100],
+    )
+}
+
+#[test]
+fn test_bytes_elements() uses (evm: mut Evm) {
+    let v = deploy()
+    // bytes[] = [0xaabbcc, 0xdd]; element heads at 0x60, tails at 0xa0/0xe0.
+    let aabbcc: u256 = 0xaabbcc << 232
+    let dd: u256 = 0xdd << 248
+    returns(
+        v,
+        selector: 5,
+        words: [0x40, 0, 2, 0x40, 0x80, 3, aabbcc, 1, dd],
+        expected: 3 * 256 + 0xaa,
+    )
+    returns(
+        v,
+        selector: 5,
+        words: [0x40, 1, 2, 0x40, 0x80, 3, aabbcc, 1, dd],
+        expected: 256 + 0xdd,
+    )
+    returns(
+        v,
+        selector: 6,
+        words: [0x40, 0, 2, 0x40, 0x80, 3, aabbcc, 1, dd],
+        expected: 3 * 256 + 0xaa,
+    )
+    returns(
+        v,
+        selector: 6,
+        words: [0x40, 1, 2, 0x40, 0x80, 3, aabbcc, 1, dd],
+        expected: 256 + 0xdd,
+    )
+    // Empty bytes element.
+    returns(v, selector: 5, words: [0x40, 0, 1, 0x20, 0], expected: 0)
+    returns(v, selector: 6, words: [0x40, 0, 1, 0x20, 0], expected: 0)
+    reverts_index_panic(
+        v,
+        selector: 5,
+        words: [0x40, 2, 2, 0x40, 0x80, 3, aabbcc, 1, dd],
+    )
+    reverts_index_panic(
+        v,
+        selector: 6,
+        words: [0x40, 2, 2, 0x40, 0x80, 3, aabbcc, 1, dd],
+    )
+
+    // A malformed second element only fails when it is accessed.
+    returns(
+        v,
+        selector: 5,
+        words: [0x40, 0, 2, 0x40, MAX, 3, aabbcc],
+        expected: 3 * 256 + 0xaa,
+    )
+    reverts_empty(v, selector: 5, words: [0x40, 1, 2, 0x40, MAX, 3, aabbcc])
+    reverts_empty(v, selector: 6, words: [0x40, 1, 2, 0x40, MAX, 3, aabbcc])
+    reverts_empty(
+        v,
+        selector: 5,
+        words: [0x40, 1, 2, 0x40, TWO_64, 3, aabbcc],
+    )
+    // Element length word beyond calldata.
+    reverts_empty(v, selector: 5, words: [0x40, 1, 2, 0x40, 0x80, 3, aabbcc])
+    reverts_empty(v, selector: 6, words: [0x40, 1, 2, 0x40, 0x80, 3, aabbcc])
+    // Element payload beyond calldata.
+    reverts_empty(v, selector: 5, words: [0x40, 0, 1, 0x20, 33, aabbcc])
+    reverts_empty(v, selector: 6, words: [0x40, 0, 1, 0x20, 33, aabbcc])
+    reverts_empty(v, selector: 5, words: [0x40, 0, 1, 0x20, MAX, aabbcc])
+    reverts_empty(v, selector: 6, words: [0x40, 0, 1, 0x20, MAX, aabbcc])
+    // Element heads beyond calldata.
+    reverts_empty(v, selector: 5, words: [0x40, 0, 3, 0x40, 0x80])
+}
+
+#[test]
+fn test_string_elements() uses (evm: mut Evm) {
+    let v = deploy()
+    returns(
+        v,
+        selector: 9,
+        words: [0x40, 0, 1, 0x20, 5, 0x68656c6c6f << 216],
+        expected: 5,
+    )
+    reverts_empty(v, selector: 9, words: [0x40, 0, 1, 0x20, 64, 0])
+}
+
+#[test]
+fn test_nested_arrays() uses (evm: mut Evm) {
+    let v = deploy()
+    // uint256[][] = [[10, 11], [20]]; element heads at 0x80.
+    returns(
+        v,
+        selector: 7,
+        words: [0x60, 0, 1, 2, 0x40, 0xa0, 2, 10, 11, 1, 20],
+        expected: 11,
+    )
+    returns(
+        v,
+        selector: 7,
+        words: [0x60, 1, 0, 2, 0x40, 0xa0, 2, 10, 11, 1, 20],
+        expected: 20,
+    )
+    reverts_index_panic(
+        v,
+        selector: 7,
+        words: [0x60, 1, 1, 2, 0x40, 0xa0, 2, 10, 11, 1, 20],
+    )
+    reverts_index_panic(
+        v,
+        selector: 7,
+        words: [0x60, 2, 0, 2, 0x40, 0xa0, 2, 10, 11, 1, 20],
+    )
+    // Inner array length exceeding calldata.
+    reverts_empty(
+        v,
+        selector: 7,
+        words: [0x60, 1, 0, 2, 0x40, 0xa0, 2, 10, 11, 2, 20],
+    )
+    // Inner offset out of bounds or wrapping.
+    reverts_empty(
+        v,
+        selector: 7,
+        words: [0x60, 1, 0, 2, 0x40, 0x1000, 2, 10, 11, 1, 20],
+    )
+    reverts_empty(
+        v,
+        selector: 7,
+        words: [0x60, 1, 0, 2, 0x40, MAX, 2, 10, 11, 1, 20],
+    )
+    // A broken second row does not affect reads of the first row.
+    returns(
+        v,
+        selector: 7,
+        words: [0x60, 0, 0, 2, 0x40, MAX, 2, 10, 11],
+        expected: 10,
+    )
+}
+
+fn mem_input<const N: usize>(_ words: [u256; N]) -> MemSpan
+uses (evm: mut Evm)
+{
+    let data = ptr::alloc_bytes((N as u256) * 32)
+    let mut i: usize = 0
+    while i < N {
+        evm.mstore(
+            addr: ptr::offset_bytes(data, (i as u256) * 32),
+            value: words[i],
+        )
+        i += 1
+    }
+    MemSpan::from_raw_parts(ptr: data, len: (N as u256) * 32)
+}
+
+#[test]
+fn test_memory_input_and_element_pos() uses (evm: mut Evm) {
+    // (uint256, (uint8,address,uint256)[]) at base 0x20 of a memory input.
+    let input = mem_input([0xffff, 7, 0x40, 2, 1, 0xaa, 100, 2, 0xbb, 200])
+    let view: ArrayView<MemSpan, Transfer> = decode_array_view_at(input, base: 0x20, head_pos: 0x20)
+    assert!(view.len() == 2)
+    assert!(!view.is_empty())
+    assert!(view.element_pos(0) == 0x80)
+    assert!(view.element_pos(1) == 0xe0)
+    let second = view.get(1)
+    assert!(second.0 == 2)
+    assert!(second.1.inner == 0xbb)
+    // Individual fields of a static struct element via its position.
+    let amount: u256 = view.input().word_at(view.element_pos(1) + 0x40)
+    assert!(amount == 200)
+
+    // bytes[] element positions resolve to the element tails.
+    let bytes_input = mem_input([0x20, 2, 0x40, 0x60, 0, 1, 0xee << 248])
+    let bytes: ArrayView<MemSpan, Bytes> = decode_array_view_at(bytes_input, base: 0, head_pos: 0)
+    assert!(bytes.element_pos(0) == 0x80)
+    assert!(bytes.element_pos(1) == 0xa0)
+    assert!(bytes.bytes_at(0).is_empty())
+    assert!(bytes.bytes_at(1).byte_at(0) == 0xee)
+
+    let empty: ArrayView<MemSpan, u256> = decode_array_view(mem_input([0x20, 0]))
+    assert!(empty.is_empty())
+}
