@@ -20,10 +20,10 @@ use crate::{
     },
     span::HirOrigin,
 };
-pub use abi_field::{AbiFieldContext, AbiFieldDiagnostic};
+pub use abi_field::{
+    AbiFieldContext, AbiFieldDiagnostic, AbiRecordDiagnostic, AbiRecordDiagnosticKind,
+};
 pub use attr::{AttrMisuseError, AttrMisuseErrorKind};
-pub use error::{ErrorDiagnostic, ErrorDiagnosticKind};
-pub use event::{EventError, EventErrorKind};
 pub use item::{FieldModifierError, FieldModifierErrorKind, MsgDiagnostic, MsgDiagnosticKind};
 pub use parse::parse_file_impl;
 

@@ -2,7 +2,11 @@ use parser::ast::{self, prelude::*};
 use salsa::Accumulator as _;
 
 use super::{
-    AbiFieldContext, AbiFieldDiagnostic, FileLowerCtxt,
+    AbiFieldContext, FileLowerCtxt,
+    abi_field::{
+        AbiRecordDiagnostic, AbiRecordDiagnosticKind, LoweredAbiRecord, check_abi_record_field_ty,
+        lower_abi_record_struct,
+    },
     attr::{
         AttrForm, AttrRule, AttrTarget, has_named_attr, lower_attrs_without_named,
         named_attr_specs, validate_attr_rules,
@@ -12,32 +16,12 @@ use super::{
 };
 use crate::{
     hir_def::{
-        AbiRecordKind, AssocConstDef, AttrListId, BodyKind, Expr, FieldDef, FieldDefListId,
-        FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName, GenericParamListId,
-        IdentId, LitKind, Partial, PathId, PathKind, Struct, TrackedItemVariant, TraitRefId,
-        TypeId, TypeKind, TypeMode, Visibility,
+        AbiRecordKind, AssocConstDef, AttrListId, BodyKind, Expr, FieldDef, FieldIndex,
+        FuncModifiers, FuncParam, FuncParamMode, FuncParamName, IdentId, LitKind, Partial, PathId,
+        PathKind, Struct, TrackedItemVariant, TraitRefId, TypeId, TypeKind, TypeMode, Visibility,
     },
     span::{DesugaredOrigin, EventDesugared, HirOrigin},
 };
-
-/// Event-related errors accumulated during `#[event]` lowering / validation.
-#[salsa::accumulator]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct EventError {
-    pub kind: EventErrorKind,
-    pub file: common::file::File,
-    /// Range of the primary span (attribute, type, or item name).
-    pub primary_range: parser::TextRange,
-    pub struct_name: Option<String>,
-    pub field_name: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum EventErrorKind {
-    GenericEventStruct,
-    TooManyIndexedFields { indexed_count: usize },
-    IndexedDynamicField { ty: String },
-}
 
 pub(super) fn is_event_struct(ast: &ast::Struct) -> bool {
     has_named_attr(ast.attr_list(), "event")
@@ -48,72 +32,23 @@ pub(super) fn lower_event_struct<'db>(
     ast: ast::Struct,
 ) -> Struct<'db> {
     let db = ctxt.db();
-    let file = ctxt.top_mod().file(db);
 
     let event_desugared = EventDesugared {
         event_struct: parser::ast::AstPtr::new(&ast),
     };
     let mut builder = HirBuilder::new(ctxt, event_desugared.clone());
 
-    let struct_name_token = ast.name();
-    let struct_name = struct_name_token.as_ref().map(|n| n.text().to_string());
-
-    let attributes = lower_attrs_without_named(builder.ctxt(), ast.attr_list(), "event");
-
-    let vis = super::lower_visibility(&ast);
-    let generic_params = GenericParamListId::lower_ast_opt(builder.ctxt(), ast.generic_params());
-    if !generic_params.data(db).is_empty() {
-        let range = ast
-            .generic_params()
-            .map_or_else(|| ast.syntax().text_range(), |g| g.syntax().text_range());
-        EventError {
-            kind: EventErrorKind::GenericEventStruct,
-            file,
-            primary_range: range,
-            struct_name: struct_name.clone(),
-            field_name: None,
-        }
-        .accumulate(db);
-    }
-
-    let where_clause =
-        crate::hir_def::WhereClauseId::lower_ast_opt(builder.ctxt(), ast.where_clause());
-
-    let parsed_fields = parse_event_fields(builder.ctxt(), &ast, struct_name.as_deref());
-
-    let fields_hir = FieldDefListId::new(db, parsed_fields.hir_fields);
-
-    let name_ident = IdentId::lower_token_partial(builder.ctxt(), struct_name_token);
-
-    let struct_ = builder.struct_item(
-        name_ident,
-        attributes,
-        vis,
-        generic_params,
-        where_clause,
-        fields_hir,
-    );
-
+    let LoweredAbiRecord {
+        struct_,
+        fields: parsed_fields,
+        generated,
+    } = lower_abi_record_struct(&mut builder, &ast, AbiFieldContext::Event, |ctxt| {
+        parse_event_fields(ctxt, &ast)
+    });
     // Generate `impl Event` only when the struct is well-formed enough to do so.
-    if !parsed_fields.is_valid {
-        return struct_;
-    }
-    if !generic_params.data(db).is_empty() {
-        return struct_;
-    }
-
-    let Some(struct_name_str) = struct_name.clone() else {
-        // Parser error: missing name token. Avoid panics/cascades.
+    let Some((self_ty, struct_name_str)) = generated else {
         return struct_;
     };
-
-    let Some(struct_name_ident) = name_ident.to_opt() else {
-        return struct_;
-    };
-    let self_ty = TypeId::new(
-        db,
-        TypeKind::Path(Partial::Present(PathId::from_ident(db, struct_name_ident))),
-    );
     let trait_ref = TraitRefId::new(
         db,
         Partial::Present(
@@ -184,20 +119,19 @@ pub(super) fn lower_event_struct<'db>(
 }
 
 struct ParsedEventFields<'db> {
-    hir_fields: Vec<FieldDef<'db>>,
     /// Each field's source type, used to generate Solidity signature fragments.
     ordered_field_types: Vec<TypeId<'db>>,
     /// Indexed fields with their TypeId (for topic encoding).
     indexed_fields: Vec<(IdentId<'db>, TypeId<'db>)>,
     data_fields: Vec<(IdentId<'db>, TypeId<'db>)>,
-    is_valid: bool,
 }
 
+/// Lowers the fields of an `#[event]` struct, returning the HIR fields,
+/// whether they are valid, and the valid fields its impls use.
 fn parse_event_fields<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     ast: &ast::Struct,
-    struct_name: Option<&str>,
-) -> ParsedEventFields<'db> {
+) -> (Vec<FieldDef<'db>>, bool, ParsedEventFields<'db>) {
     let db = ctxt.db();
     let file = ctxt.top_mod().file(db);
 
@@ -211,13 +145,15 @@ fn parse_event_fields<'db>(
     let mut is_valid = true;
 
     let Some(fields) = ast.fields() else {
-        return ParsedEventFields {
+        return (
             hir_fields,
-            ordered_field_types,
-            indexed_fields,
-            data_fields,
             is_valid,
-        };
+            ParsedEventFields {
+                ordered_field_types,
+                indexed_fields,
+                data_fields,
+            },
+        );
     };
 
     for field in fields {
@@ -249,8 +185,7 @@ fn parse_event_fields<'db>(
             is_valid = false;
         }
 
-        let name_tok = field.name();
-        let name_ident = IdentId::lower_token_partial(ctxt, name_tok.clone());
+        let name_ident = IdentId::lower_token_partial(ctxt, field.name());
 
         let ty_ref = TypeId::lower_ast_partial(ctxt, field.ty());
 
@@ -265,24 +200,10 @@ fn parse_event_fields<'db>(
             continue;
         };
 
-        // Extract the type path. We need it to generate `FieldType::SOL_TYPE`
-        // in the TOPIC0 computation. Non-path types (tuples, etc.) are not
-        // supported as event fields.
-        let TypeKind::Path(Partial::Present(_)) = ty.data(db) else {
-            AbiFieldDiagnostic {
-                context: AbiFieldContext::Event,
-                ty: ty.pretty_print(db),
-                file,
-                primary_range: field
-                    .ty()
-                    .map_or_else(|| field.syntax().text_range(), |t| t.syntax().text_range()),
-                struct_name: struct_name.map(|s| s.to_string()),
-                field_name: name_tok.map(|n| n.text().to_string()),
-            }
-            .accumulate(db);
+        if !check_abi_record_field_ty(ctxt, &field, ty, AbiFieldContext::Event) {
             is_valid = false;
             continue;
-        };
+        }
 
         ordered_field_types.push(ty);
 
@@ -298,24 +219,24 @@ fn parse_event_fields<'db>(
             .get(3)
             .copied()
             .unwrap_or_else(|| ast.syntax().text_range());
-        EventError {
-            kind: EventErrorKind::TooManyIndexedFields { indexed_count },
+        AbiRecordDiagnostic {
+            kind: AbiRecordDiagnosticKind::TooManyIndexedFields { indexed_count },
             file,
             primary_range,
-            struct_name: struct_name.map(|s| s.to_string()),
-            field_name: None,
         }
         .accumulate(db);
         is_valid = false;
     }
 
-    ParsedEventFields {
+    (
         hir_fields,
-        ordered_field_types,
-        indexed_fields,
-        data_fields,
         is_valid,
-    }
+        ParsedEventFields {
+            ordered_field_types,
+            indexed_fields,
+            data_fields,
+        },
+    )
 }
 
 /// Build a Solidity signature const (`TOPIC0` for events, `SELECTOR` for
