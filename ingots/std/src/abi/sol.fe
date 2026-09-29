@@ -216,8 +216,10 @@ pub fn decode_input_at<T, I>(_ input: own I, _ base: u256) -> T
 
 /// Decode a Solidity ABI return/output payload from an arbitrary byte input at byte 0.
 ///
-/// Unlike `decode_input`, this applies the top-level wrapper required for
-/// single dynamic composite outputs such as `(string,uint64)` or `string[2]`.
+/// Unlike `decode_input`, this applies the top-level offset word required for
+/// a single dynamic output such as `string` or `string[2]`. Tuples decode as a
+/// parameter list without that wrapper, matching Solidity multi-value returns
+/// such as `returns (string, uint64)`.
 pub fn decode_output<T, I>(_ input: own I) -> T
     where T: Decode<Sol> + AbiSize, I: ByteInput
 {
@@ -229,6 +231,9 @@ pub fn decode_output_at<T, I>(_ input: own I, _ base: u256) -> T
     where T: Decode<Sol> + AbiSize, I: ByteInput
 {
     let input_len = input.len()
+    if T::IS_PARAM_LIST {
+        return decode_frame_from<Sol, T, I>(input, base, input_len)
+    }
     checked_frame_end<Sol>(base, abi_single_root_head_size<T>(), input_len)
     decode_field_from_prechecked_head<Sol, T, I>(input, base: base, head_pos: base, input_len: input_len)
 }

@@ -2385,6 +2385,17 @@ pub contract CustomWidthBoundary uses (log: mut Log) {
         ])
     }
 
+    fn nested_tuple_output_types() -> Vec<ParamType> {
+        vec![ParamType::String, ParamType::Uint(64)]
+    }
+
+    fn nested_tuple_output_tokens(text: &str, count: u64) -> Vec<Token> {
+        let Token::Tuple(tokens) = nested_tuple_token(text, count) else {
+            unreachable!("nested_tuple_token returns a tuple")
+        };
+        tokens
+    }
+
     fn long_string_value(tag: &str) -> String {
         format!("{tag}-abcdefghijklmnopqrstuvwxyz-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789")
     }
@@ -3450,9 +3461,11 @@ pub contract FixedDynamicArrayBoundary {{
             .call_raw(&call, ExecutionOptions::default())
             .expect("echo((string,uint64)) should succeed");
 
-        let decoded = decode(&[nested_tuple_param_type()], &result.return_data)
+        // A tuple return is a parameter list, like Solidity's
+        // `returns (string, uint64)`: no outer offset word.
+        let decoded = decode(&nested_tuple_output_types(), &result.return_data)
             .expect("echo((string,uint64)) should return ABI-encoded outputs");
-        assert_eq!(decoded, vec![nested_tuple_token(&text, 7)]);
+        assert_eq!(decoded, nested_tuple_output_tokens(&text, 7));
     }
 
     #[test]
@@ -3483,9 +3496,9 @@ pub contract FixedDynamicArrayBoundary {{
             .call_raw(&call, ExecutionOptions::default())
             .expect("callEcho(address,(string,uint64)) should succeed");
 
-        let decoded = decode(&[nested_tuple_param_type()], &result.return_data)
+        let decoded = decode(&nested_tuple_output_types(), &result.return_data)
             .expect("callEcho(address,(string,uint64)) should return ABI-encoded outputs");
-        assert_eq!(decoded, vec![nested_tuple_token(&text, 9)]);
+        assert_eq!(decoded, nested_tuple_output_tokens(&text, 9));
     }
 
     #[test]

@@ -224,20 +224,24 @@ fn recv_arm_to_abi_entry(
     };
 
     let input_descs = struct_ty_to_abi_param_descs(db, variant_struct, variant_ty, |_| None)?;
-    let outputs = match abi_info.ret_ty {
-        Some(ret_ty) => {
-            let desc = semantic_ty_to_abi_desc(db, ret_ty)?;
-            vec![
-                NamedAbiParamDesc {
-                    name: String::new(),
-                    indexed: None,
-                    desc,
-                }
-                .into_param(),
-            ]
-        }
+    // A tuple return is a parameter list (Solidity multi-value `returns`), so
+    // each element becomes its own output, matching its runtime encoding.
+    let output_tys = match abi_info.ret_ty {
+        Some(ret_ty) if ret_ty.is_tuple(db) => ret_ty.field_types(db),
+        Some(ret_ty) => vec![ret_ty],
         None => Vec::new(),
     };
+    let outputs = output_tys
+        .into_iter()
+        .map(|ty| {
+            Ok(NamedAbiParamDesc {
+                name: String::new(),
+                indexed: None,
+                desc: semantic_ty_to_abi_desc(db, ty)?,
+            }
+            .into_param())
+        })
+        .collect::<Result<Vec<_>, String>>()?;
 
     let selector_value = abi_info.selector_value.ok_or_else(|| {
         format!(
@@ -1512,9 +1516,80 @@ pub contract TupleContract {
         assert_eq!(function["inputs"][0]["components"][0]["type"], "uint64");
         assert_eq!(function["inputs"][0]["components"][1]["type"], "bool");
         assert_eq!(function["inputs"][1]["type"], "uint256[2]");
-        assert_eq!(function["outputs"][0]["type"], "tuple");
-        assert_eq!(function["outputs"][0]["components"][0]["type"], "uint64");
-        assert_eq!(function["outputs"][0]["components"][1]["type"], "bool");
+        assert_eq!(function["outputs"].as_array().unwrap().len(), 2);
+        assert_eq!(function["outputs"][0]["type"], "uint64");
+        assert_eq!(function["outputs"][1]["type"], "bool");
+    }
+
+    #[test]
+    fn tuple_return_emits_one_output_per_element() {
+        let code = r#"
+use std::abi::{Bytes32, DynString}
+
+msg InfoMsg {
+    #[selector = sol("information()")]
+    Information {} -> (DynString, Bytes32, Address),
+    #[selector = sol("nested()")]
+    Nested {} -> (u256, (DynString, bool)),
+    #[selector = sol("name()")]
+    Name {} -> DynString,
+}
+
+pub contract Info {
+    recv InfoMsg {
+        Information {} -> (DynString, Bytes32, Address) {
+            (DynString::empty(), Bytes32 { val: 0 }, Address { inner: 0 })
+        }
+        Nested {} -> (u256, (DynString, bool)) {
+            (0, (DynString::empty(), false))
+        }
+        Name {} -> DynString {
+            DynString::empty()
+        }
+    }
+}
+"#;
+
+        let entries = abi_entries(code, "Info");
+        let function = |name: &str| {
+            entries
+                .iter()
+                .find(|entry| entry["type"] == "function" && entry["name"] == name)
+                .unwrap_or_else(|| panic!("missing function `{name}`"))
+                .clone()
+        };
+
+        let information = function("information");
+        assert_eq!(
+            information["outputs"],
+            serde_json::json!([
+                { "name": "", "type": "string" },
+                { "name": "", "type": "bytes32" },
+                { "name": "", "type": "address" },
+            ])
+        );
+
+        let nested = function("nested");
+        assert_eq!(
+            nested["outputs"],
+            serde_json::json!([
+                { "name": "", "type": "uint256" },
+                {
+                    "name": "",
+                    "type": "tuple",
+                    "components": [
+                        { "name": "", "type": "string" },
+                        { "name": "", "type": "bool" },
+                    ],
+                },
+            ])
+        );
+
+        let name = function("name");
+        assert_eq!(
+            name["outputs"],
+            serde_json::json!([{ "name": "", "type": "string" }])
+        );
     }
 
     #[test]

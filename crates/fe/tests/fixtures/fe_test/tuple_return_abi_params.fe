@@ -1,0 +1,113 @@
+// A recv arm returning a tuple is encoded like Solidity's multi-value
+// `returns (string, bytes32, address)`: a parameter list without a leading
+// offset word. A single dynamic return keeps its offset word, matching
+// Solidity's `returns (string)`.
+
+use std::abi::{Bytes32, DynString}
+use core::abi::ByteInput
+use std::evm::decode_returndata
+
+msg InfoMsg {
+    #[selector = sol("information()")]
+    Information {} -> (DynString, Bytes32, Address),
+    #[selector = sol("name()")]
+    Name {} -> DynString,
+    #[selector = sol("nested()")]
+    Nested {} -> (u256, (DynString, bool)),
+}
+
+fn version() -> DynString {
+    // "1.6"
+    DynString::from_word_prefix(word: 0x312e36 << 232, len: 3)
+}
+
+pub contract Info {
+    recv InfoMsg {
+        Information {} -> (DynString, Bytes32, Address) {
+            (version(), Bytes32 { val: 0xabcd }, Address { inner: 0x1234 })
+        }
+
+        Name {} -> DynString {
+            version()
+        }
+
+        Nested {} -> (u256, (DynString, bool)) {
+            (7, (version(), true))
+        }
+    }
+}
+
+#[test]
+fn test_tuple_return_is_encoded_as_param_list()
+uses (evm: mut Evm, call: mut Call)
+{
+    let info = evm.create2<Info>(value: 0, args: (), salt: 0)
+    let outcome = info.try_call(InfoMsg::Information {})
+    assert!(outcome.success())
+
+    // Same bytes as `cast abi-encode "f(string,bytes32,address)" "1.6" <0xabcd> <0x1234>`.
+    assert!(outcome.returndata_len() == 160)
+    let ret = outcome.returndata()
+    assert!(ret.word_at(0) == 0x60)
+    assert!(ret.word_at(32) == 0xabcd)
+    assert!(ret.word_at(64) == 0x1234)
+    assert!(ret.word_at(96) == 3)
+    assert!(ret.word_at(128) == 0x312e36 << 232)
+
+    let decoded: (DynString, Bytes32, Address) = decode_returndata(ret)
+    assert!(decoded.0 == version())
+    assert!(decoded.1.val == 0xabcd)
+    assert!(decoded.2.inner == 0x1234)
+}
+
+#[test]
+fn test_tuple_return_typed_call_round_trips()
+uses (evm: mut Evm, call: mut Call)
+{
+    let info = evm.create2<Info>(value: 0, args: (), salt: 0)
+    let (name, tag, owner) = info.call(InfoMsg::Information {})
+    assert!(name == version())
+    assert!(tag.val == 0xabcd)
+    assert!(owner.inner == 0x1234)
+
+    let (n, (s, flag)) = info.call(InfoMsg::Nested {})
+    assert!(n == 7)
+    assert!(s == version())
+    assert!(flag)
+}
+
+#[test]
+fn test_nested_tuple_return_layout() uses (evm: mut Evm, call: mut Call) {
+    let info = evm.create2<Info>(value: 0, args: (), salt: 0)
+    let outcome = info.try_call(InfoMsg::Nested {})
+    assert!(outcome.success())
+
+    // Same bytes as `cast abi-encode "f(uint256,(string,bool))" 7 '("1.6",true)'`.
+    assert!(outcome.returndata_len() == 192)
+    let ret = outcome.returndata()
+    assert!(ret.word_at(0) == 7)
+    assert!(ret.word_at(32) == 0x40)
+    assert!(ret.word_at(64) == 0x40)
+    assert!(ret.word_at(96) == 1)
+    assert!(ret.word_at(128) == 3)
+    assert!(ret.word_at(160) == 0x312e36 << 232)
+}
+
+#[test]
+fn test_single_dynamic_return_keeps_offset_word()
+uses (evm: mut Evm, call: mut Call)
+{
+    let info = evm.create2<Info>(value: 0, args: (), salt: 0)
+    let outcome = info.try_call(InfoMsg::Name {})
+    assert!(outcome.success())
+
+    // Same bytes as `cast abi-encode "f(string)" "1.6"`.
+    assert!(outcome.returndata_len() == 96)
+    let ret = outcome.returndata()
+    assert!(ret.word_at(0) == 0x20)
+    assert!(ret.word_at(32) == 3)
+    assert!(ret.word_at(64) == 0x312e36 << 232)
+
+    let name: DynString = info.call(InfoMsg::Name {})
+    assert!(name == version())
+}

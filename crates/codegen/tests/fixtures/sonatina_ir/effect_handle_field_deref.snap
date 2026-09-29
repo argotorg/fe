@@ -97,6 +97,15 @@ func private %abi_field_size(v0.i256) -> i256 {
         return v6;
 }
 
+func private %abi_payload_size(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %payload_size v0;
+        return v2;
+}
+
 func private %abi_single_root_size(v0.i256) -> i256 {
     block0:
         jump block1;
@@ -681,6 +690,29 @@ func private %encode(v0.i256, v1.i256) {
         return;
 }
 
+func inline(always) private %encode_alloc(v0.i256) -> @layout_1 {
+    block0:
+        v1.objref<@layout_1> = obj.alloc @layout_1;
+        jump block1;
+
+    block1:
+        v3.i256 = call %abi_payload_size v0;
+        v4.@layout_1 = call %impl_MemBuffer__alloc v3;
+        v6.objref<i256> = obj.proj v1 0.i256;
+        v7.i256 = extract_value v4 0.i256;
+        obj.store v6 v7;
+        v9.objref<i256> = obj.proj v1 1.i256;
+        v10.i256 = extract_value v4 1.i256;
+        obj.store v9 v10;
+        v12.objref<i256> = obj.proj v1 2.i256;
+        v13.i256 = extract_value v4 2.i256;
+        obj.store v12 v13;
+        v14.i256 = call %impl_MemBuffer__ptr v1;
+        call %encode v0 v14;
+        v16.@layout_1 = obj.load v1;
+        return v16;
+}
+
 func inline(always) private %encode_field_at(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
         jump block1;
@@ -704,6 +736,25 @@ func inline(always) private %encode_field_at(v0.i256, v1.i256, v2.i256, v3.i256)
         v17.i256 = call %ptr_offset v1 v2;
         call %encode v0 v17;
         return v3;
+}
+
+func inline(always) private %encode_return_alloc(v0.i256) -> @layout_1 {
+    block0:
+        jump block1;
+
+    block1:
+        br 0.i1 block2 block3;
+
+    block2:
+        v3.@layout_1 = call %encode_alloc v0;
+        return v3;
+
+    block3:
+        jump block4;
+
+    block4:
+        v5.@layout_1 = call %encode_single_root_alloc v0;
+        return v5;
 }
 
 func inline(always) private %encode_single_root_alloc(v0.i256) -> @layout_1 {
@@ -955,7 +1006,7 @@ func private %return_value(v0.i256) {
         br 1.i1 block4 block5;
 
     block3:
-        v13.@layout_1 = call %encode_single_root_alloc v0;
+        v13.@layout_1 = call %encode_return_alloc v0;
         v15.objref<i256> = obj.proj v4 0.i256;
         v16.i256 = extract_value v13 0.i256;
         obj.store v15 v16;

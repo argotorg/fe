@@ -1,4 +1,4 @@
-use super::abi::{Abi, AbiDecoder, AbiSize, ByteInput, Decode, Encode, encode_single_root_alloc}
+use super::abi::{Abi, AbiDecoder, AbiSize, ByteInput, Decode, Encode, encode_return_alloc}
 use super::ptr::MemSpan
 
 /// Host interface required by compiler-generated contract entrypoints.
@@ -38,7 +38,7 @@ pub trait ContractHost {
     fn return_value<A: Abi, T>(mut self, _ value: own T) -> !
         where T: Encode<A> + AbiSize
     {
-        let out = encode_single_root_alloc<A, T>(value)
+        let out = encode_return_alloc<A, T>(value)
         self.return_bytes(data: out.span())
     }
 }

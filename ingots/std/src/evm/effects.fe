@@ -9,6 +9,7 @@ use core::abi::{
     Decode,
     Encode,
     encode_alloc,
+    encode_return_alloc,
     encode_single_root_alloc,
     store_word,
 }
@@ -1322,7 +1323,7 @@ impl ContractHost for Evm {
                 self.return_data(data: out.span())
             }
         } else {
-            let out = encode_single_root_alloc<A, T>(value)
+            let out = encode_return_alloc<A, T>(value)
             self.return_bytes(data: out.span())
         }
     }

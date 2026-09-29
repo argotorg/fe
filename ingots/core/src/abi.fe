@@ -162,6 +162,13 @@ pub trait AbiDecoder<A: Abi> {
 pub trait AbiSize {
     const HEAD_SIZE: u256
     const IS_DYNAMIC: bool
+    /// Whether a top-level return value of this type is encoded as a
+    /// parameter list: the value's own head/tail layout without a leading
+    /// offset word, like Solidity's multi-value `returns (A, B, ...)`.
+    ///
+    /// Tuples set this. Other dynamic types keep the single-root layout,
+    /// which matches a Solidity single `returns (T)`.
+    const IS_PARAM_LIST: bool = false
 
     fn payload_size(self) -> u256 {
         Self::HEAD_SIZE
@@ -429,6 +436,20 @@ pub fn encode_single_root_alloc<A: Abi, T>(_ value: own T) -> ptr::MemBuffer
         tail: abi_single_root_head_size<T>(),
     )
     buffer
+}
+
+/// Encode a top-level return/output value.
+///
+/// Parameter-list types (tuples) are encoded without an outer offset word;
+/// everything else uses the single-root layout.
+#[inline(always)]
+pub fn encode_return_alloc<A: Abi, T>(_ value: own T) -> ptr::MemBuffer
+    where T: Encode<A> + AbiSize
+{
+    if T::IS_PARAM_LIST {
+        return encode_alloc<A, T>(value)
+    }
+    encode_single_root_alloc<A, T>(value)
 }
 
 fn max_u256(a: u256, b: u256) -> u256 {
@@ -1209,6 +1230,7 @@ impl<T0> AbiSize for (T0,)
 {
     const HEAD_SIZE: u256 = abi_field_head_size<T0>()
     const IS_DYNAMIC: bool = T0::IS_DYNAMIC
+    const IS_PARAM_LIST: bool = true
 
     #[arithmetic(unchecked)]
     #[inline(always)]
@@ -1222,6 +1244,7 @@ impl<T0, T1> AbiSize for (T0, T1)
 {
     const HEAD_SIZE: u256 = abi_field_head_size<T0>() + abi_field_head_size<T1>()
     const IS_DYNAMIC: bool = T0::IS_DYNAMIC || T1::IS_DYNAMIC
+    const IS_PARAM_LIST: bool = true
 
     #[arithmetic(unchecked)]
     #[inline(always)]
@@ -1235,6 +1258,7 @@ impl<T0, T1, T2> AbiSize for (T0, T1, T2)
 {
     const HEAD_SIZE: u256 = abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>()
     const IS_DYNAMIC: bool = T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC
+    const IS_PARAM_LIST: bool = true
 
     #[arithmetic(unchecked)]
     #[inline(always)]
@@ -1252,6 +1276,7 @@ impl<T0, T1, T2, T3> AbiSize for (T0, T1, T2, T3)
     const HEAD_SIZE: u256 =
         abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>()
     const IS_DYNAMIC: bool = T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC
+    const IS_PARAM_LIST: bool = true
 
     #[arithmetic(unchecked)]
     #[inline(always)]
@@ -1275,6 +1300,7 @@ impl<T0, T1, T2, T3, T4> AbiSize for (T0, T1, T2, T3, T4)
         abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>()
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC
+    const IS_PARAM_LIST: bool = true
 
     #[arithmetic(unchecked)]
     #[inline(always)]
@@ -1300,6 +1326,7 @@ impl<T0, T1, T2, T3, T4, T5> AbiSize for (T0, T1, T2, T3, T4, T5)
         abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>()
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC
+    const IS_PARAM_LIST: bool = true
 
     #[arithmetic(unchecked)]
     #[inline(always)]
@@ -1327,6 +1354,7 @@ impl<T0, T1, T2, T3, T4, T5, T6> AbiSize for (T0, T1, T2, T3, T4, T5, T6)
         abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>()
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC
+    const IS_PARAM_LIST: bool = true
 
     #[arithmetic(unchecked)]
     #[inline(always)]
@@ -1356,6 +1384,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7> AbiSize for (T0, T1, T2, T3, T4, T5, T6, T7
         abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>()
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC
+    const IS_PARAM_LIST: bool = true
 
     #[arithmetic(unchecked)]
     #[inline(always)]
@@ -1387,6 +1416,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8> AbiSize for (T0, T1, T2, T3, T4, T5, T6
         abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>()
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC
+    const IS_PARAM_LIST: bool = true
 
     #[arithmetic(unchecked)]
     #[inline(always)]
@@ -1420,6 +1450,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> AbiSize for (T0, T1, T2, T3, T4, T5
         abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>()
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC
+    const IS_PARAM_LIST: bool = true
 
     #[arithmetic(unchecked)]
     #[inline(always)]
@@ -1455,6 +1486,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> AbiSize for (T0, T1, T2, T3, T
         abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>() + abi_field_head_size<T10>()
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC
+    const IS_PARAM_LIST: bool = true
 
     #[arithmetic(unchecked)]
     #[inline(always)]
@@ -1492,6 +1524,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> AbiSize for (T0, T1, T2, 
         abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>() + abi_field_head_size<T10>() + abi_field_head_size<T11>()
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC || T11::IS_DYNAMIC
+    const IS_PARAM_LIST: bool = true
 
     #[arithmetic(unchecked)]
     #[inline(always)]
@@ -1531,6 +1564,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> AbiSize for (T0, T1,
         abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>() + abi_field_head_size<T10>() + abi_field_head_size<T11>() + abi_field_head_size<T12>()
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC || T11::IS_DYNAMIC || T12::IS_DYNAMIC
+    const IS_PARAM_LIST: bool = true
 
     #[arithmetic(unchecked)]
     #[inline(always)]
@@ -1572,6 +1606,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13> AbiSize for (T0
         abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>() + abi_field_head_size<T10>() + abi_field_head_size<T11>() + abi_field_head_size<T12>() + abi_field_head_size<T13>()
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC || T11::IS_DYNAMIC || T12::IS_DYNAMIC || T13::IS_DYNAMIC
+    const IS_PARAM_LIST: bool = true
 
     #[arithmetic(unchecked)]
     #[inline(always)]
@@ -1615,6 +1650,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14> AbiSize fo
         abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>() + abi_field_head_size<T10>() + abi_field_head_size<T11>() + abi_field_head_size<T12>() + abi_field_head_size<T13>() + abi_field_head_size<T14>()
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC || T11::IS_DYNAMIC || T12::IS_DYNAMIC || T13::IS_DYNAMIC || T14::IS_DYNAMIC
+    const IS_PARAM_LIST: bool = true
 
     #[arithmetic(unchecked)]
     #[inline(always)]
@@ -1660,6 +1696,7 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15> AbiSi
         abi_field_head_size<T0>() + abi_field_head_size<T1>() + abi_field_head_size<T2>() + abi_field_head_size<T3>() + abi_field_head_size<T4>() + abi_field_head_size<T5>() + abi_field_head_size<T6>() + abi_field_head_size<T7>() + abi_field_head_size<T8>() + abi_field_head_size<T9>() + abi_field_head_size<T10>() + abi_field_head_size<T11>() + abi_field_head_size<T12>() + abi_field_head_size<T13>() + abi_field_head_size<T14>() + abi_field_head_size<T15>()
     const IS_DYNAMIC: bool =
         T0::IS_DYNAMIC || T1::IS_DYNAMIC || T2::IS_DYNAMIC || T3::IS_DYNAMIC || T4::IS_DYNAMIC || T5::IS_DYNAMIC || T6::IS_DYNAMIC || T7::IS_DYNAMIC || T8::IS_DYNAMIC || T9::IS_DYNAMIC || T10::IS_DYNAMIC || T11::IS_DYNAMIC || T12::IS_DYNAMIC || T13::IS_DYNAMIC || T14::IS_DYNAMIC || T15::IS_DYNAMIC
+    const IS_PARAM_LIST: bool = true
 
     #[arithmetic(unchecked)]
     #[inline(always)]
