@@ -1,5 +1,5 @@
 use super::{
-    adt_def::AdtCycleMember,
+    adt_def::{AdtCycleMember, GrowingCycleMember},
     provider::{ProviderAddressSpace, ProviderLayoutFailure},
     trait_def::TraitInstId,
     ty_check::{RecordLike, TraitOps},
@@ -81,7 +81,7 @@ pub enum TyLowerDiag<'db> {
     },
 
     RecursiveType(Vec<AdtCycleMember<'db>>),
-    GrowingRecursiveType(Vec<AdtCycleMember<'db>>),
+    GrowingRecursiveType(Vec<GrowingCycleMember<'db>>),
 
     UnboundTypeAliasParam {
         span: DynLazySpan<'db>,

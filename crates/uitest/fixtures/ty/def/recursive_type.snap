@@ -61,7 +61,7 @@ error[3-0057]: recursive type grows without bound
 42 │     next: *S10<[T; 1]>,
    │           ------------ recursion occurs here
    │
-   = every pass through this recursion wraps a type argument in a larger type, so the type refers to infinitely many distinct types
+   = each pass through this recursion can grow a type argument, so the type can refer to infinitely many distinct types
 
 error[3-0057]: recursive type grows without bound
    ┌─ recursive_type.fe:45:12
@@ -71,4 +71,4 @@ error[3-0057]: recursive type grows without bound
 46 │     next: *S11<{ N + 1 }>,
    │           --------------- recursion occurs here
    │
-   = every pass through this recursion wraps a type argument in a larger type, so the type refers to infinitely many distinct types
+   = each pass through this recursion can grow a type argument, so the type can refer to infinitely many distinct types

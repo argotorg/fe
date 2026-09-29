@@ -1,0 +1,63 @@
+use core::{AddressSpace, EffectHandle, ptr}
+
+pub trait Next {
+    type Out
+}
+
+// Recursion through a projection grows if an impl wraps its input.
+impl Next for u256 {
+    type Out = Hidden<[u256; 1]>
+}
+
+impl<T> Next for [T; 1] {
+    type Out = Hidden<[[T; 1]; 1]>
+}
+
+pub struct Hidden<T: Next> {
+    value: T,
+    next: *T::Out,
+}
+
+// Recursion through a projection may rebuild the impl's input.
+pub struct Wrap<T> {
+    value: T,
+}
+
+impl<T> Next for Wrap<T> {
+    type Out = Same<Wrap<T>>
+}
+
+pub struct Same<T: Next> {
+    next: *T::Out,
+}
+
+// A handle's target is a referent.
+pub struct Link<T> {}
+
+impl<T> EffectHandle for Link<T> {
+    type Target = Node<[T; 1]>
+    type Raw = *Node<[T; 1]>
+    const SPACE: AddressSpace = AddressSpace::Memory
+
+    fn raw(self) -> *Node<[T; 1]> {
+        ptr::alloc<Node<[T; 1]>>()
+    }
+}
+
+pub struct Node<T> {
+    value: T,
+    next: Link<T>,
+}
+
+// An impl can close a growing cycle through types it does not define.
+pub struct Chain<T> {}
+
+impl<T> EffectHandle for Chain<T> {
+    type Target = Option<Chain<[T; 1]>>
+    type Raw = *Option<Chain<[T; 1]>>
+    const SPACE: AddressSpace = AddressSpace::Memory
+
+    fn raw(self) -> *Option<Chain<[T; 1]>> {
+        ptr::alloc<Option<Chain<[T; 1]>>>()
+    }
+}

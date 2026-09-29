@@ -77,7 +77,7 @@ use crate::analysis::ty::binder::Binder;
 use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
-use crate::analysis::ty::adt_def::{AdtCycleMember, AdtDef, AdtField, AdtRef};
+use crate::analysis::ty::adt_def::{AdtCycleMember, AdtDef, AdtField, AdtRef, GrowingCycleMember};
 use crate::analysis::ty::const_ty::{
     CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleAnchor, LoweringContext,
 };
@@ -123,6 +123,7 @@ use crate::analysis::ty::{
 };
 use crate::core::adt_lower::{lower_adt, lower_contract_fields};
 use common::indexmap::IndexMap;
+use common::ingot::Ingot;
 use indexmap::IndexSet;
 use salsa::Update;
 // Re-export from crate root for backwards compatibility
@@ -3579,90 +3580,289 @@ impl<'db> AdtDef<'db> {
     /// through a field of type `*Grow<[T; 1]>`. Indirection keeps such a type
     /// finitely sized, but each instantiation reaches infinitely many distinct
     /// types. Returns the cycle members if the ADT is part of such a cycle.
-    pub fn growing_cycle(self, db: &'db dyn HirAnalysisDb) -> Option<Vec<AdtCycleMember<'db>>> {
-        // A field type passes parameter `from` of its ADT into argument `to` of
-        // an applied ADT. The argument grows unless it is the parameter itself.
-        struct Flow<'db> {
-            from: usize,
-            to: (AdtDef<'db>, usize),
-            grows: bool,
-            member: AdtCycleMember<'db>,
-        }
+    pub fn growing_cycle(self, db: &'db dyn HirAnalysisDb) -> Option<Vec<GrowingCycleMember<'db>>> {
+        growing_cycle(db, self.ingot(db), self.scope(db), GrowthOwner::Adt(self))
+    }
+}
 
-        if self.params(db).is_empty() {
+/// A generic definition that builds the types reachable from a value: an ADT
+/// through its fields, or an impl through an associated type that resolves a
+/// projection.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum GrowthOwner<'db> {
+    Adt(AdtDef<'db>),
+    AssocTy(ImplementorId<'db>, IdentId<'db>),
+}
+
+impl<'db> GrowthOwner<'db> {
+    fn params(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
+        match self {
+            Self::Adt(adt) => adt.params(db),
+            Self::AssocTy(implementor, _) => implementor.params(db),
+        }
+    }
+
+    /// The patterns of the values this definition is instantiated from: the
+    /// parameters of an ADT, or the trait arguments an impl matches.
+    fn inputs(self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
+        match self {
+            Self::Adt(adt) => adt.params(db),
+            Self::AssocTy(implementor, _) => implementor.trait_(db).args(db),
+        }
+    }
+}
+
+/// Finds a cycle that passes an input of `start` back to itself inside a
+/// larger argument, using the impls visible from `ingot`.
+///
+/// An input flows into each ADT argument built from it, and into each input
+/// of an impl that may resolve a projection built from it. A written type may
+/// also be an effect handle, whose `Target` is a referent. An argument grows
+/// unless no instance of it is larger than the input's value. A state also
+/// keeps the head constructor of the input's value when known, so a
+/// projection only reaches the impls that value can select.
+fn growing_cycle<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+    scope: ScopeId<'db>,
+    start: GrowthOwner<'db>,
+) -> Option<Vec<GrowingCycleMember<'db>>> {
+    type State<'db> = (GrowthOwner<'db>, usize, Option<TyId<'db>>);
+    struct Flow<'db> {
+        to: State<'db>,
+        grows: bool,
+        /// Whether the receiver certainly applies, rather than possibly
+        /// matching a value whose head is unknown.
+        definite: bool,
+        member: GrowingCycleMember<'db>,
+    }
+
+    /// The head constructor of `ty`, unless it is a parameter, projection or
+    /// const, whose values may have any head.
+    fn head<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<TyId<'db>> {
+        let base = ty.base_ty(db);
+        matches!(base.data(db), TyData::TyBase(_)).then_some(base)
+    }
+
+    /// Whether some instance of `ty` may match an impl `pattern` over
+    /// `params`, and whether every instance does. `known` gives the head of
+    /// one parameter's value.
+    fn match_pattern<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        pattern: TyId<'db>,
+        params: &[TyId<'db>],
+        known: (TyId<'db>, Option<TyId<'db>>),
+    ) -> Option<bool> {
+        if params.contains(&pattern) {
+            return Some(true);
+        }
+        let (base, args) = ty.decompose_ty_app(db);
+        let (pattern_base, pattern_args) = pattern.decompose_ty_app(db);
+        if base == pattern_base && args.len() == pattern_args.len() {
+            return args
+                .iter()
+                .zip(pattern_args)
+                .try_fold(true, |definite, (arg, pattern)| {
+                    Some(definite & match_pattern(db, *arg, *pattern, params, known)?)
+                });
+        }
+        let head = if ty == known.0 { known.1 } else { head(db, ty) };
+        (head.is_none() || head == Some(pattern_base)).then_some(false)
+    }
+
+    /// The number of constructors in `ty` outside `params`, counting each
+    /// parameter's occurrences, or `None` if a projection or const
+    /// expression over the parameters may take a value of any size.
+    fn measure<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        params: &[TyId<'db>],
+        occurrences: &mut [usize],
+    ) -> Option<usize> {
+        if let Some(param) = params.iter().position(|param| *param == ty) {
+            occurrences[param] += 1;
+            return Some(0);
+        }
+        if matches!(ty.data(db), TyData::AssocTy(_) | TyData::ConstTy(_))
+            && (0..params.len()).any(|param| value_contains_generic_param(db, &ty, param))
+        {
             return None;
         }
-        let mut flows: FxHashMap<AdtDef<'db>, Vec<Flow<'db>>> = FxHashMap::default();
-        let mut adts = vec![self];
-        while let Some(adt) = adts.pop() {
-            if flows.contains_key(&adt) {
-                continue;
-            }
-            let params = adt.params(db);
-            let mut adt_flows = Vec::new();
-            for (field_idx, field) in adt.fields(db).iter().enumerate() {
-                for (ty_idx, ty) in field.iter_types(db).enumerate() {
-                    let member = AdtCycleMember {
-                        adt,
-                        field_idx: field_idx as u16,
-                        ty_idx: ty_idx as u16,
-                    };
-                    let mut applications = vec![ty.instantiate_identity()];
-                    while let Some(ty) = applications.pop() {
-                        let (base, args) = ty.decompose_ty_app(db);
-                        applications.extend(args);
-                        let TyData::TyBase(TyBase::Adt(applied)) = base.data(db) else {
+        ty.generic_args(db).iter().try_fold(1, |size, arg| {
+            Some(size + measure(db, *arg, params, occurrences)?)
+        })
+    }
+
+    let inputs = start.inputs(db);
+    if start.params(db).is_empty() {
+        return None;
+    }
+    let handle = resolve_core_trait(db, scope, &["EffectHandle"]);
+    let target = IdentId::new(db, "Target".to_string());
+    let mut flows: IndexMap<State<'db>, Vec<Flow<'db>>> = IndexMap::default();
+    let mut pending: Vec<_> = (0..inputs.len())
+        .map(|input| (start, input, None))
+        .collect();
+    while let Some(state @ (owner, input, value_head)) = pending.pop() {
+        if flows.contains_key(&state) {
+            continue;
+        }
+        let definitions: Vec<_> = match owner {
+            GrowthOwner::Adt(adt) => adt
+                .fields(db)
+                .iter()
+                .enumerate()
+                .flat_map(|(field_idx, field)| {
+                    field.iter_types(db).enumerate().map(move |(ty_idx, ty)| {
+                        let member = AdtCycleMember {
+                            adt,
+                            field_idx: field_idx as u16,
+                            ty_idx: ty_idx as u16,
+                        };
+                        (GrowingCycleMember::Field(member), ty.instantiate_identity())
+                    })
+                })
+                .collect(),
+            GrowthOwner::AssocTy(implementor, name) => implementor
+                .types(db)
+                .get(&name)
+                .map(|ty| (GrowingCycleMember::AssocTy(implementor, name), *ty))
+                .into_iter()
+                .collect(),
+        };
+        let params = owner.params(db);
+        let pattern = owner.inputs(db)[input];
+        // A parameter matched by the whole pattern takes the value's head.
+        let known = (pattern, head(db, pattern).or(value_head));
+        let known_head = |ty| if ty == known.0 { known.1 } else { head(db, ty) };
+        let mut state_flows = Vec::new();
+        for (member, ty) in definitions {
+            let mut subterms = vec![ty];
+            while let Some(ty) = subterms.pop() {
+                let (base, args) = ty.decompose_ty_app(db);
+                subterms.extend(args);
+                let mut receivers = Vec::new();
+                if let TyData::TyBase(TyBase::Adt(applied)) = base.data(db) {
+                    receivers.extend(
+                        args.iter()
+                            .enumerate()
+                            .map(|(to, arg)| ((GrowthOwner::Adt(*applied), to), *arg, true)),
+                    );
+                }
+                // A parameter or projection that is a handle takes a value
+                // written elsewhere, whose own flows reach the handle impl.
+                let projections = handle
+                    .filter(|_| head(db, ty).is_some())
+                    .map(|handle| (handle, vec![ty], target))
+                    .into_iter()
+                    .chain(match ty.data(db) {
+                        TyData::AssocTy(assoc) => Some((
+                            assoc.trait_.def(db),
+                            assoc.trait_.args(db).clone(),
+                            assoc.name,
+                        )),
+                        _ => None,
+                    });
+                for (trait_def, projected, name) in projections {
+                    for &implementor in impls_for_trait_def(db, ingot, trait_def) {
+                        let patterns = implementor.trait_(db).args(db);
+                        let Some(definite) = projected
+                            .iter()
+                            .zip(patterns)
+                            .try_fold(true, |definite, (ty, pattern)| {
+                                let matches = match_pattern(
+                                    db,
+                                    *ty,
+                                    *pattern,
+                                    implementor.params(db),
+                                    known,
+                                )?;
+                                Some(definite & matches)
+                            })
+                            .filter(|_| implementor.types(db).contains_key(&name))
+                        else {
                             continue;
                         };
-                        adts.push(*applied);
-                        for (to, arg) in args.iter().enumerate() {
-                            adt_flows.extend(
-                                params
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(from, _)| {
-                                        value_contains_generic_param(db, arg, *from)
-                                    })
-                                    .map(|(from, param)| Flow {
-                                        from,
-                                        to: (*applied, to),
-                                        grows: arg != param,
-                                        member,
-                                    }),
-                            );
-                        }
+                        let receiver = GrowthOwner::AssocTy(implementor, name);
+                        receivers.extend(
+                            projected
+                                .iter()
+                                .enumerate()
+                                .map(|(to, arg)| ((receiver, to), *arg, definite)),
+                        );
                     }
                 }
+                for ((receiver, to), arg, definite) in receivers {
+                    let flows_from_input = (0..params.len()).any(|param| {
+                        value_contains_generic_param(db, &arg, param)
+                            && value_contains_generic_param(db, &pattern, param)
+                    });
+                    if !flows_from_input {
+                        continue;
+                    }
+                    let mut arg_occurrences = vec![0; params.len()];
+                    let mut pattern_occurrences = vec![0; params.len()];
+                    let grows = match (
+                        measure(db, arg, params, &mut arg_occurrences),
+                        measure(db, pattern, params, &mut pattern_occurrences),
+                    ) {
+                        (Some(arg_size), Some(pattern_size)) => {
+                            arg_size > pattern_size
+                                || arg_occurrences
+                                    .iter()
+                                    .zip(&pattern_occurrences)
+                                    .any(|(arg, pattern)| arg > pattern)
+                        }
+                        _ => true,
+                    };
+                    let to = (receiver, to, known_head(arg));
+                    pending.push(to);
+                    state_flows.push(Flow {
+                        to,
+                        grows,
+                        definite,
+                        member,
+                    });
+                }
             }
-            flows.insert(adt, adt_flows);
         }
+        // Report a certain cycle over an equally short possible one.
+        state_flows.sort_by_key(|flow| !flow.definite);
+        flows.insert(state, state_flows);
+    }
 
-        // Search for a path from a parameter back to itself through a growing flow.
-        for start in 0..self.params(db).len() {
-            let start = (self, start);
-            let mut reached = FxHashMap::from_iter([((start, false), None)]);
-            let mut pending = VecDeque::from([(start, false)]);
-            while let Some(state @ ((adt, param), grown)) = pending.pop_front() {
-                for flow in flows[&adt].iter().filter(|flow| flow.from == param) {
+    // Report the shortest path from a state of `start` back to itself
+    // through a growing flow.
+    flows
+        .keys()
+        .filter(|(owner, ..)| *owner == start)
+        .filter_map(|&state| {
+            let mut reached = FxHashMap::from_iter([((state, false), None)]);
+            let mut pending = VecDeque::from([(state, false)]);
+            while let Some(current @ (at, grown)) = pending.pop_front() {
+                for flow in &flows[&at] {
                     let next = (flow.to, grown || flow.grows);
                     if reached.contains_key(&next) {
                         continue;
                     }
-                    reached.insert(next, Some((state, flow.member)));
-                    if next == (start, true) {
+                    reached.insert(next, Some((current, flow.member)));
+                    if next == (state, true) {
                         let mut cycle: Vec<_> =
                             iter::successors(reached[&next], |(previous, _)| reached[previous])
                                 .map(|(_, member)| member)
                                 .collect();
                         cycle.reverse();
+                        let mut seen = FxHashSet::default();
+                        cycle.retain(|member| seen.insert(*member));
                         return Some(cycle);
                     }
                     pending.push_back(next);
                 }
             }
-        }
-        None
-    }
+            None
+        })
+        .min_by_key(Vec::len)
 }
 
 /// Collect all ADTs directly appearing inside the given type without
@@ -4397,6 +4597,29 @@ impl<'db> ImplTrait<'db> {
     /// if the implementor type resolves to a concrete ADT.
     pub fn implementing_adt(self, db: &'db dyn HirAnalysisDb) -> Option<AdtRef<'db>> {
         self.ty(db).adt_ref(db)
+    }
+
+    /// Detects a growing recursive cycle through an associated type of this
+    /// impl; see [`AdtDef::growing_cycle`]. A cycle through an ADT of this
+    /// ingot is left to that ADT, whose check also sees this impl.
+    pub fn growing_cycle(self, db: &'db dyn HirAnalysisDb) -> Option<Vec<GrowingCycleMember<'db>>> {
+        let ingot = self.top_mod(db).ingot(db);
+        let implementor = *impls_for_trait_def(db, ingot, self.trait_def(db)?)
+            .iter()
+            .find(|implementor| implementor.origin(db) == ImplementorOrigin::Hir(self))?;
+        implementor.types(db).keys().find_map(|&name| {
+            growing_cycle(
+                db,
+                ingot,
+                self.scope(),
+                GrowthOwner::AssocTy(implementor, name),
+            )
+            .filter(|cycle| {
+                cycle.iter().all(|member| {
+                    !matches!(member, GrowingCycleMember::Field(field) if field.adt.ingot(db) == ingot)
+                })
+            })
+        })
     }
 
     /// Iterate associated type definitions in this impl-trait block as views.

@@ -11,6 +11,7 @@ use crate::analysis::{
     },
     ty::{
         ProviderAddressSpace,
+        adt_def::GrowingCycleMember,
         diagnostics::{
             BodyDiag, CallConstraintDiagInfo, ContractFieldLayoutIssue, DefConflictError,
             FuncBodyDiag, ImplDiag, MustUseSubject, TraitConstraintDiag, TraitLowerDiag,
@@ -1727,43 +1728,55 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
             ),
 
             // TODO: add hint about indirection (eg *T)
-            Self::RecursiveType(cycle) | Self::GrowingRecursiveType(cycle) => {
-                let growing = matches!(self, Self::GrowingRecursiveType(_));
-                CompleteDiagnostic {
-                    severity: Severity::Error,
-                    message: if growing {
-                        "recursive type grows without bound"
-                    } else {
-                        "recursive type definition"
+            Self::RecursiveType(cycle) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "recursive type definition".to_string(),
+                sub_diagnostics: {
+                    let head = cycle.first().unwrap();
+                    let mut subs = vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: "recursive type definition here".to_string(),
+                        span: head.adt.adt_ref(db).name_span(db).resolve(db),
+                    }];
+                    subs.extend(cycle.iter().map(|m| {
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: "recursion occurs here".to_string(),
+                            span: m
+                                .adt
+                                .variant_ty_span(db, m.field_idx as usize, m.ty_idx as usize)
+                                .resolve(db),
+                        }
+                    }));
+                    subs
+                },
+                notes: vec![],
+                error_code,
+            },
+            Self::GrowingRecursiveType(cycle) => {
+                let head = cycle[0];
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: match head {
+                        GrowingCycleMember::Field(_) => "recursive type definition here",
+                        GrowingCycleMember::AssocTy(..) => "associated type definition here",
                     }
                     .to_string(),
-                    sub_diagnostics: {
-                        let head = cycle.first().unwrap();
-                        let mut subs = vec![SubDiagnostic {
-                            style: LabelStyle::Primary,
-                            message: "recursive type definition here".to_string(),
-                            span: head.adt.adt_ref(db).name_span(db).resolve(db),
-                        }];
-                        subs.extend(cycle.iter().map(|m| {
-                            SubDiagnostic {
-                                style: LabelStyle::Secondary,
-                                message: "recursion occurs here".to_string(),
-                                span: m
-                                    .adt
-                                    .variant_ty_span(db, m.field_idx as usize, m.ty_idx as usize)
-                                    .resolve(db),
-                            }
-                        }));
-                        subs
-                    },
-                    notes: if growing {
-                        vec![
-                            "every pass through this recursion wraps a type argument in a larger type, so the type refers to infinitely many distinct types"
-                                .to_string(),
-                        ]
-                    } else {
-                        vec![]
-                    },
+                    span: head.spans(db).0.resolve(db),
+                }];
+                sub_diagnostics.extend(cycle.iter().map(|member| SubDiagnostic {
+                    style: LabelStyle::Secondary,
+                    message: "recursion occurs here".to_string(),
+                    span: member.spans(db).1.resolve(db),
+                }));
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "recursive type grows without bound".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "each pass through this recursion can grow a type argument, so the type can refer to infinitely many distinct types"
+                            .to_string(),
+                    ],
                     error_code,
                 }
             }

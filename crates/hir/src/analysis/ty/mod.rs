@@ -9,12 +9,12 @@ use crate::core::hir_def::{
     GenericParamOwner, IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias,
     scope_graph::{ScopeGraph, ScopeId},
 };
-use adt_def::{AdtDef, AdtRef};
+use adt_def::{AdtDef, AdtRef, GrowingCycleMember};
 use common::indexmap::IndexMap;
 use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
-use trait_def::impls_for_trait_def;
+use trait_def::{ImplementorOrigin, impls_for_trait_def};
 use trait_resolution::constraint::super_trait_cycle;
 use ty_def::{BorrowKind, InvalidCause, TyData, TyId};
 use ty_lower::{collect_generic_params, lower_hir_ty, lower_type_alias};
@@ -237,8 +237,11 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
                 diags.push(Box::new(TyLowerDiag::RecursiveType(cycle.clone())) as _);
                 cycle_participants.extend(cycle.iter().map(|m| m.adt));
             } else if let Some(cycle) = adt.growing_cycle(db) {
-                diags.push(Box::new(TyLowerDiag::GrowingRecursiveType(cycle.clone())) as _);
-                cycle_participants.extend(cycle.iter().map(|m| m.adt));
+                cycle_participants.extend(cycle.iter().filter_map(|member| match member {
+                    GrowingCycleMember::Field(field) => Some(field.adt),
+                    GrowingCycleMember::AssocTy(..) => None,
+                }));
+                diags.push(Box::new(TyLowerDiag::GrowingRecursiveType(cycle)) as _);
             }
         }
         diags
@@ -935,7 +938,7 @@ impl ModuleAnalysisPass for ImplTraitAnalysisPass {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         let reported_at_source = generated_abi_reported_at_source(db, top_mod);
-        top_mod
+        let mut diags: Vec<_> = top_mod
             .all_impl_traits(db)
             .iter()
             // Generated ABI impl failures are diagnosed once at their source declarations.
@@ -948,7 +951,21 @@ impl ModuleAnalysisPass for ImplTraitAnalysisPass {
             })
             .flat_map(|impl_trait| impl_trait.diags(db))
             .map(|diag| diag.to_voucher())
-            .collect()
+            .collect();
+        let mut cycle_participants = FxHashSet::default();
+        for &impl_trait in top_mod.all_impl_traits(db) {
+            if cycle_participants.contains(&ImplementorOrigin::Hir(impl_trait)) {
+                continue;
+            }
+            if let Some(cycle) = impl_trait.growing_cycle(db) {
+                cycle_participants.extend(cycle.iter().filter_map(|member| match member {
+                    GrowingCycleMember::AssocTy(implementor, _) => Some(implementor.origin(db)),
+                    GrowingCycleMember::Field(_) => None,
+                }));
+                diags.push(Box::new(TyLowerDiag::GrowingRecursiveType(cycle)) as _);
+            }
+        }
+        diags
     }
 }
 

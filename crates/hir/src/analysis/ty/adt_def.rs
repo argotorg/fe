@@ -15,6 +15,7 @@ use super::{
     layout_holes::{
         LayoutInstantiation, LayoutRootUse, LayoutTemplateSubst, instantiate_layout_template,
     },
+    trait_def::{ImplementorId, ImplementorOrigin},
     trait_resolution::{PredicateListId, constraint::collect_constraints},
     ty_def::{InvalidCause, TyId},
     ty_lower::{
@@ -253,6 +254,49 @@ pub struct AdtCycleMember<'db> {
     pub adt: AdtDef<'db>,
     pub field_idx: u16,
     pub ty_idx: u16,
+}
+
+/// A definition on a cycle whose generic arguments grow: an ADT field, or an
+/// impl's associated type that resolves a projection on the cycle.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, salsa::Update)]
+pub enum GrowingCycleMember<'db> {
+    Field(AdtCycleMember<'db>),
+    AssocTy(ImplementorId<'db>, IdentId<'db>),
+}
+
+impl<'db> GrowingCycleMember<'db> {
+    /// The spans of the defining item's name and of this member's type.
+    pub(crate) fn spans(self, db: &'db dyn HirAnalysisDb) -> (DynLazySpan<'db>, DynLazySpan<'db>) {
+        match self {
+            Self::Field(member) => (
+                member.adt.name_span(db),
+                member
+                    .adt
+                    .variant_ty_span(db, member.field_idx as usize, member.ty_idx as usize),
+            ),
+            Self::AssocTy(implementor, name) => {
+                // An impl without its own definition takes the trait's default.
+                let span = match implementor.origin(db) {
+                    ImplementorOrigin::Hir(impl_trait) => impl_trait
+                        .assoc_types(db)
+                        .find(|assoc| assoc.name(db) == Some(name))
+                        .map(|assoc| assoc.span()),
+                    ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => None,
+                }
+                .or_else(|| {
+                    implementor
+                        .trait_(db)
+                        .def(db)
+                        .assoc_types(db)
+                        .find(|assoc| assoc.name(db) == Some(name))
+                        .map(|assoc| assoc.span())
+                });
+                span.map_or((DynLazySpan::invalid(), DynLazySpan::invalid()), |span| {
+                    (span.clone().name().into(), span.ty().into())
+                })
+            }
+        }
+    }
 }
 
 /// Instantiates an ADT field as a source-level type shape. This deliberately
