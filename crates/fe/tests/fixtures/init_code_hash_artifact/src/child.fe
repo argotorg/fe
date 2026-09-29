@@ -1,0 +1,32 @@
+use ingot::shared::mix
+
+msg ChildMsg {
+    #[selector = 0x11111111]
+    Get { x: u256, y: u256 } -> u256,
+}
+
+pub contract Child {
+    recv ChildMsg {
+        Get { x, y } -> u256 {
+            mix(x, y)
+        }
+    }
+}
+
+struct Stored {
+    value: u256,
+}
+
+pub contract ArgChild {
+    mut stored: Stored
+
+    init(x: u256, owner: Address) uses (mut stored) {
+        stored.value = mix(x, 2) + owner.inner
+    }
+
+    recv ChildMsg {
+        Get { x, y } -> u256 uses (stored) {
+            stored.value + mix(x, y)
+        }
+    }
+}

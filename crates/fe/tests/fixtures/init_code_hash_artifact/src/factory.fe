@@ -1,0 +1,33 @@
+use std::evm::{Create, init_code_hash}
+use ingot::child::{ArgChild, Child}
+use ingot::shared::mix
+
+msg FactoryMsg {
+    #[selector = 0x22222222]
+    ChildHash -> u256,
+    #[selector = 0x33333333]
+    ArgChildHash { x: u256, owner: Address } -> u256,
+    #[selector = 0x44444444]
+    MakeChild { salt: u256, n: u256 } -> Address,
+    #[selector = 0x55555555]
+    MakeArgChild { x: u256, owner: Address, salt: u256 } -> Address,
+}
+
+// Lives in a different module than the children, so `Child.bin` and the
+// `Child` code embedded here come from separate runtime packages.
+pub contract Factory {
+    recv FactoryMsg {
+        ChildHash -> u256 {
+            init_code_hash<Child>(())
+        }
+        ArgChildHash { x, owner } -> u256 {
+            init_code_hash<ArgChild>((x, owner))
+        }
+        MakeChild { salt, n } -> Address uses (create: mut Create) {
+            create.create2<Child>(value: 0, args: (), salt: mix(salt, n))
+        }
+        MakeArgChild { x, owner, salt } -> Address uses (create: mut Create) {
+            create.create2<ArgChild>(value: 0, args: (x, owner), salt)
+        }
+    }
+}

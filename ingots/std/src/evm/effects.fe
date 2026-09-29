@@ -411,24 +411,8 @@ pub trait Create: EvmCapabilitySeal {
 
     /// Deploy a high-level contract using `CREATE`, bubbling revert data on failure.
     fn create<C: Contract>(mut self, value: u256, args: own C::InitArgs) -> Address {
-        let init_len = C::init_code_len()
-        let init_off = C::init_code_offset()
-        let mut addr: Address
-
-        if !C::InitArgs::IS_DYNAMIC && C::InitArgs::HEAD_SIZE == 0 {
-            let init_code = MemBuffer::alloc(init_len)
-            ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_code.len())
-            addr = self.create_raw(value: value, init_code: init_code.span())
-        } else {
-            let encoded = encode_abi_payload<C::InitArgs>(args)
-            let init_code = MemBuffer::alloc(init_len + encoded.len())
-            ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_len)
-            ptr::copy(
-                dest: ptr::offset_bytes(init_code.ptr(), init_len),
-                source: encoded.span(),
-            )
-            addr = self.create_raw(value: value, init_code: init_code.span())
-        }
+        let init_code = contract_init_code<C>(args)
+        let addr = self.create_raw(value: value, init_code: init_code.span())
 
         // Solidity-style behavior: bubble revert data if creation fails.
         if addr.inner == 0 {
@@ -440,24 +424,8 @@ pub trait Create: EvmCapabilitySeal {
 
     /// Deploy a high-level contract using `CREATE2`, bubbling revert data on failure.
     fn create2<C: Contract>(mut self, value: u256, args: own C::InitArgs, salt: u256) -> Address {
-        let init_len = C::init_code_len()
-        let init_off = C::init_code_offset()
-        let mut addr: Address
-
-        if !C::InitArgs::IS_DYNAMIC && C::InitArgs::HEAD_SIZE == 0 {
-            let init_code = MemBuffer::alloc(init_len)
-            ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_code.len())
-            addr = self.create2_raw(value: value, init_code: init_code.span(), salt)
-        } else {
-            let encoded = encode_abi_payload<C::InitArgs>(args)
-            let init_code = MemBuffer::alloc(init_len + encoded.len())
-            ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_len)
-            ptr::copy(
-                dest: ptr::offset_bytes(init_code.ptr(), init_len),
-                source: encoded.span(),
-            )
-            addr = self.create2_raw(value: value, init_code: init_code.span(), salt)
-        }
+        let init_code = contract_init_code<C>(args)
+        let addr = self.create2_raw(value: value, init_code: init_code.span(), salt)
 
         // Solidity-style behavior: bubble revert data if creation fails.
         if addr.inner == 0 {
@@ -473,6 +441,53 @@ pub fn encode_abi_payload<T>(_ value: own T) -> MemBuffer
     where T: Encode<Sol> + AbiSize
 {
     encode_alloc<Sol, T>(value)
+}
+
+/// Init code that `create<C>` and `create2<C>` deploy: `C`'s creation code
+/// embedded in the current contract, followed by the ABI-encoded `args`
+/// (nothing is appended when `C::InitArgs` encodes to zero bytes, e.g. `()`).
+#[inline(always)]
+fn contract_init_code<C: Contract>(_ args: own C::InitArgs) -> MemBuffer {
+    let init_len = C::init_code_len()
+    let init_off = C::init_code_offset()
+    if !C::InitArgs::IS_DYNAMIC && C::InitArgs::HEAD_SIZE == 0 {
+        let init_code = MemBuffer::alloc(init_len)
+        ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_len)
+        init_code
+    } else {
+        let encoded = encode_abi_payload<C::InitArgs>(args)
+        let init_code = MemBuffer::alloc(init_len + encoded.len())
+        ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_len)
+        ptr::copy(
+            dest: ptr::offset_bytes(init_code.ptr(), init_len),
+            source: encoded.span(),
+        )
+        init_code
+    }
+}
+
+/// Keccak256 of the init code `create2<C>(value, args, salt)` deploys: `C`'s
+/// creation code as embedded in the current contract, followed by the
+/// ABI-encoded constructor `args` (pass `()` for a contract whose `init`
+/// takes no arguments).
+///
+/// This is the `init_code_hash` input of `create2_address`. The creation code
+/// is copied to fresh memory with `CODECOPY` and hashed there, so the cost
+/// grows with its size (about 9 gas per 32-byte word plus memory expansion,
+/// on top of encoding `args`). Contracts that derive many addresses usually
+/// compute the hash once, e.g. in `init`, and store it.
+pub fn init_code_hash<C: Contract>(_ args: own C::InitArgs) -> u256 {
+    let init_code = contract_init_code<C>(args)
+    ops::keccak256(offset: init_code.ptr(), len: init_code.len())
+}
+
+/// Address at which `create2<C>(value, args, salt)` executed by `deployer`
+/// creates the contract: `create2_address(deployer, salt, init_code_hash<C>(args))`.
+///
+/// The deployment itself may still fail (e.g. the address already holds code,
+/// or `C`'s `init` reverts); this only derives the address.
+pub fn predict_create2<C: Contract>(deployer: Address, args: own C::InitArgs, salt: u256) -> Address {
+    super::crypto::create2_address(deployer, salt, init_code_hash: init_code_hash<C>(args))
 }
 
 /// Metadata returned by a low-level EVM call.

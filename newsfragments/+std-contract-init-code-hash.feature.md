@@ -1,0 +1,1 @@
+Added `std::evm::init_code_hash<C>(args)` and `std::evm::predict_create2<C>(deployer, args, salt)`, which hash the exact init code `create2<C>` deploys (the embedded creation code of `C` followed by its ABI-encoded constructor arguments) and derive the resulting `CREATE2` address.

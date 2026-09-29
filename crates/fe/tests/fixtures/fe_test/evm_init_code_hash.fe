@@ -1,0 +1,156 @@
+// `init_code_hash<C>` / `predict_create2<C>` agree with what `create2<C>` deploys.
+use std::evm::{
+    Address,
+    Contract,
+    Create,
+    Ctx,
+    RawMem,
+    RawOps,
+    create2_address,
+    init_code_hash,
+    keccak256,
+    predict_create2,
+}
+use core::ptr::MemBuffer
+
+// Called by both `Factory` and `Plain`, so the embedded `Plain` code shares a
+// function with its parent.
+fn mix(_ a: u256, _ b: u256) -> u256 {
+    let mut acc: u256 = a
+    let mut i: u256 = 0
+    while i < b {
+        acc = (acc * 31 + i) ^ (acc >> 3)
+        i += 1
+    }
+    acc
+}
+
+msg ChildMsg {
+    #[selector = 0x11111111]
+    Get { x: u256, n: u256 } -> u256,
+}
+
+pub contract Plain {
+    recv ChildMsg {
+        Get { x, n } -> u256 {
+            mix(x, n)
+        }
+    }
+}
+
+struct Stored {
+    value: u256,
+}
+
+pub contract WithArgs {
+    mut stored: Stored
+
+    init(x: u256, owner: Address) uses (mut stored) {
+        stored.value = x + owner.inner
+    }
+
+    recv ChildMsg {
+        Get { x, n } -> u256 uses (stored) {
+            stored.value + x + n
+        }
+    }
+}
+
+pub contract WithName {
+    mut stored: Stored
+
+    init(name: String<16>, x: u256) uses (mut stored) {
+        stored.value = x
+    }
+
+    recv ChildMsg {
+        Get { x, n } -> u256 uses (stored) {
+            stored.value + x + n
+        }
+    }
+}
+
+msg FactoryMsg {
+    #[selector = 0x22222222]
+    Predict { salt: u256, n: u256 } -> Address,
+    #[selector = 0x33333333]
+    Make { salt: u256, n: u256 } -> Address,
+}
+
+pub contract Factory {
+    recv FactoryMsg {
+        Predict { salt, n } -> Address uses (ctx: Ctx) {
+            predict_create2<Plain>(deployer: ctx.address(), args: (), salt: mix(salt, n))
+        }
+        Make { salt, n } -> Address uses (create: mut Create) {
+            create.create2<Plain>(value: 0, args: (), salt: mix(salt, n))
+        }
+    }
+}
+
+#[test]
+fn no_arg_contract_address_matches_create2() uses (evm: mut Evm) {
+    let predicted = predict_create2<Plain>(deployer: evm.address(), args: (), salt: 7)
+    assert(predicted == create2_address(deployer: evm.address(), salt: 7, init_code_hash: init_code_hash<Plain>(())))
+    assert(predicted != predict_create2<Plain>(deployer: evm.address(), args: (), salt: 8))
+
+    let deployed = evm.create2<Plain>(value: 0, args: (), salt: 7)
+    assert(deployed == predicted)
+    let got: u256 = evm.call(addr: deployed, gas: 100000, value: 0, message: ChildMsg::Get { x: 5, n: 3 })
+    assert(got == mix(5, 3))
+}
+
+#[test]
+fn no_arg_init_code_hash_is_hash_of_embedded_code() uses (evm: mut Evm) {
+    let len = <Plain as Contract>::init_code_len()
+    let mut code = MemBuffer::alloc(len)
+    evm.codecopy(dest: mut code, dest_offset: 0, src_offset: <Plain as Contract>::init_code_offset(), len)
+    assert(init_code_hash<Plain>(()) == keccak256(code.span()))
+}
+
+#[test]
+fn static_args_are_abi_encoded_after_the_code() uses (evm: mut Evm) {
+    let owner = Address { inner: 0xabc }
+    let len = <WithArgs as Contract>::init_code_len()
+    let mut code = MemBuffer::alloc(len + 64)
+    evm.codecopy(dest: mut code, dest_offset: 0, src_offset: <WithArgs as Contract>::init_code_offset(), len)
+    evm.mstore(addr: core::ptr::offset_bytes(code.ptr(), len), value: 42)
+    evm.mstore(addr: core::ptr::offset_bytes(code.ptr(), len + 32), value: 0xabc)
+    assert(init_code_hash<WithArgs>((42, owner)) == keccak256(code.span()))
+    assert(init_code_hash<WithArgs>((43, owner)) != init_code_hash<WithArgs>((42, owner)))
+}
+
+#[test]
+fn static_args_contract_address_matches_create2() uses (evm: mut Evm) {
+    let owner = Address { inner: 0xabc }
+    let predicted = predict_create2<WithArgs>(deployer: evm.address(), args: (42, owner), salt: 1)
+    assert(predicted != predict_create2<WithArgs>(deployer: evm.address(), args: (43, owner), salt: 1))
+
+    let deployed = evm.create2<WithArgs>(value: 0, args: (42, owner), salt: 1)
+    assert(deployed == predicted)
+    let got: u256 = evm.call(addr: deployed, gas: 100000, value: 0, message: ChildMsg::Get { x: 1, n: 2 })
+    assert(got == 42 + 0xabc + 1 + 2)
+}
+
+#[test]
+fn dynamic_args_contract_address_matches_create2() uses (evm: mut Evm) {
+    let predicted = predict_create2<WithName>(deployer: evm.address(), args: ("conduit", 9), salt: 3)
+    assert(predicted != predict_create2<WithName>(deployer: evm.address(), args: ("conduits", 9), salt: 3))
+
+    let deployed = evm.create2<WithName>(value: 0, args: ("conduit", 9), salt: 3)
+    assert(deployed == predicted)
+    let got: u256 = evm.call(addr: deployed, gas: 100000, value: 0, message: ChildMsg::Get { x: 0, n: 0 })
+    assert(got == 9)
+}
+
+#[test]
+fn factory_predicts_its_own_deployments() uses (evm: mut Evm) {
+    let factory = evm.create2<Factory>(value: 0, args: (), salt: 0)
+    let predicted: Address = evm.call(addr: factory, gas: 1000000, value: 0, message: FactoryMsg::Predict { salt: 0x5eed, n: 4 })
+    assert(predicted == predict_create2<Plain>(deployer: factory, args: (), salt: mix(0x5eed, 4)))
+
+    let deployed: Address = evm.call(addr: factory, gas: 1000000, value: 0, message: FactoryMsg::Make { salt: 0x5eed, n: 4 })
+    assert(deployed == predicted)
+    let got: u256 = evm.call(addr: deployed, gas: 100000, value: 0, message: ChildMsg::Get { x: 5, n: 3 })
+    assert(got == mix(5, 3))
+}
