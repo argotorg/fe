@@ -744,7 +744,7 @@ impl<'db> Callable<'db> {
             // Requiring explicit `ref`/`mut` on *place* arguments makes aliasing visible at the
             // call site, and ensures MIR borrow checking sees the right loan operations.
             if let Some(params) = func_params.as_ref() {
-                let arg_is_place = tc.env.expr_place(given.expr).is_some();
+                let arg_is_place = tc.env.is_place_expr(given.expr);
 
                 let given_capability = tc
                     .normalize_ty(given.expr_prop.ty)

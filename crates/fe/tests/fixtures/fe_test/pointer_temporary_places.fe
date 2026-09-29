@@ -20,8 +20,23 @@ fn id(_ cell: *Cell) -> *Cell {
     cell
 }
 
+fn bump(_ counter: mut Counter) {
+    counter.n += 1
+}
+
 fn incr() uses (counter: mut Counter) {
     counter.n += 1
+}
+
+#[test]
+fn test_writes_and_borrows_through_temporary_pointers() {
+    let cell = new_cell()
+    id(cell).counter.n = 1
+    (*id(cell)).counter.n += 1
+    id(cell).counters[1].n = 5
+    bump(mut id(cell).counter)
+    assert(cell.counter.n == 3)
+    assert(cell.counters[1].n == 5)
 }
 
 #[test]

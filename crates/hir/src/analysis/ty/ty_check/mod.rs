@@ -58,7 +58,7 @@ pub use stmt::ForLoopSeq;
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
 
-use crate::analysis::place::{Place, PlaceBase, PlaceProjection};
+use crate::analysis::place::{Place, PlaceBase, PlaceProjection, is_pointer_place_expr};
 
 use super::{
     LayoutBundlePath, LayoutBundlePathStep,
@@ -3738,10 +3738,10 @@ impl<'db> TypedBody<'db> {
 
     /// Pointer rvalues are evaluated once before lowering their target place.
     fn has_lowerable_place(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> bool {
-        self.expr_place(expr).is_some() || self.body.is_some_and(|body| {
-            matches!(expr.data(db, body), Partial::Present(Expr::Un(inner, crate::hir_def::UnOp::Deref))
-                if { let ty = self.expr_ty(db, *inner); ty.as_capability(db).map_or(ty, |(_, target)| target).as_ptr(db).is_some() })
-        })
+        self.expr_place(expr).is_some()
+            || self.body.is_some_and(|body| {
+                is_pointer_place_expr(db, body, expr, &mut |expr| self.expr_ty(db, expr))
+            })
     }
 
     fn missing_place_issue(

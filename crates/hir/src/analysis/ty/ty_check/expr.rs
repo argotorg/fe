@@ -580,7 +580,7 @@ impl<'db> TyChecker<'db> {
         }
 
         if matches!(op, UnOp::Mut | UnOp::Ref) {
-            if self.env.expr_place(*lhs).is_none() && !self.is_pointer_deref_expr(*lhs) {
+            if !self.env.is_place_expr(*lhs) {
                 self.push_diag(BodyDiag::BorrowFromNonPlace {
                     primary: expr.span(self.body()).into(),
                 });
@@ -596,11 +596,12 @@ impl<'db> TyChecker<'db> {
                 .env
                 .expr_place(*lhs)
                 .and_then(|place| self.concrete_borrow_provider_for_place(&place));
-            let borrow_provider = if borrow_provider.is_none() && self.is_pointer_deref_expr(*lhs) {
-                Some(super::ProviderAddressSpace::Memory)
-            } else {
-                borrow_provider
-            };
+            let borrow_provider =
+                if borrow_provider.is_none() && self.env.is_pointer_place_expr(*lhs) {
+                    Some(super::ProviderAddressSpace::Memory)
+                } else {
+                    borrow_provider
+                };
 
             return match op {
                 UnOp::Ref => ExprProp {
@@ -5428,9 +5429,7 @@ impl<'db> TyChecker<'db> {
     }
 
     fn check_assign_lhs(&mut self, lhs: ExprId, typed_lhs: &ExprProp<'db>) -> AssignLhsStatus {
-        if (!self.is_assignable_expr(lhs) || self.env.expr_place(lhs).is_none())
-            && !self.is_pointer_deref_expr(lhs)
-        {
+        if !self.is_assignable_expr(lhs) || !self.env.is_place_expr(lhs) {
             if !typed_lhs.ty.has_invalid(self.db) {
                 let diag = BodyDiag::NonAssignableExpr(lhs.span(self.body()).into());
                 self.push_diag(diag);

@@ -1,5 +1,5 @@
 use crate::{
-    analysis::place::Place,
+    analysis::place::{Place, is_pointer_place_expr},
     hir_def::{
         BinOp, Body, Contract, Expr, ExprId, Func, IdentId, Partial, Pat, PatId, Stmt, StmtId,
         UnOp, scope_graph::ScopeId,
@@ -397,12 +397,26 @@ impl<'db> TyCheckEnv<'db> {
             self.body,
             expr,
             |expr| self.typed_expr(expr).and_then(|p| p.binding),
-            |expr| {
-                self.typed_expr(expr).map_or_else(
-                    || TyId::invalid(self.db, InvalidCause::Other),
-                    |prop| prop.ty,
-                )
-            },
+            |expr| self.typed_expr_ty(expr),
+        )
+    }
+
+    /// Returns `true` if `expr` is an assignable, borrowable location: a
+    /// binding-rooted place, or memory addressed by a pointer.
+    pub(super) fn is_place_expr(&self, expr: ExprId) -> bool {
+        self.expr_place(expr).is_some() || self.is_pointer_place_expr(expr)
+    }
+
+    pub(super) fn is_pointer_place_expr(&self, expr: ExprId) -> bool {
+        is_pointer_place_expr(self.db, self.body, expr, &mut |expr| {
+            self.typed_expr_ty(expr)
+        })
+    }
+
+    fn typed_expr_ty(&self, expr: ExprId) -> TyId<'db> {
+        self.typed_expr(expr).map_or_else(
+            || TyId::invalid(self.db, InvalidCause::Other),
+            |prop| prop.ty,
         )
     }
 

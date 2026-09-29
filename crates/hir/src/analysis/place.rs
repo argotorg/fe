@@ -157,6 +157,42 @@ impl<'db> Place<'db> {
     }
 }
 
+/// Returns `true` if `expr` names memory addressed by a pointer: `*ptr`, or a
+/// field or array element selected through a pointer or from such memory.
+/// Unlike a [`Place`], the pointer need not be a binding, as in `f().field`.
+pub fn is_pointer_place_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expr: ExprId,
+    expr_ty: &mut dyn FnMut(ExprId) -> TyId<'db>,
+) -> bool {
+    let Partial::Present(expr_data) = expr.data(db, body) else {
+        return false;
+    };
+    match expr_data {
+        Expr::Un(base, UnOp::Deref) => {
+            let base_ty = expr_ty(*base);
+            base_ty
+                .as_capability(db)
+                .map_or(base_ty, |(_, inner)| inner)
+                .as_ptr(db)
+                .is_some()
+        }
+        Expr::Field(base, field) => {
+            field
+                .to_opt()
+                .and_then(|field| resolve_place_field(db, expr_ty(*base), field))
+                .is_some_and(|resolved| resolved.implicit_deref_ty.is_some())
+                || is_pointer_place_expr(db, body, *base, expr_ty)
+        }
+        Expr::Bin(base, _, BinOp::Index) => {
+            projectable_place_ty(db, expr_ty(*base)).is_array(db)
+                && is_pointer_place_expr(db, body, *base, expr_ty)
+        }
+        _ => false,
+    }
+}
+
 pub fn projectable_place_ty<'db>(db: &'db dyn HirAnalysisDb, mut ty: TyId<'db>) -> TyId<'db> {
     while let Some((_, inner)) = ty.as_capability(db) {
         ty = inner;
