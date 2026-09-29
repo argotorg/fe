@@ -69,8 +69,8 @@ pub fn decode_array_view<T, I>(_ input: own I) -> ArrayView<I, T>
 ///   `T::HEAD_SIZE` for static `T` and 32 for dynamic `T`.
 ///
 /// Solidity additionally rejects offset and length words of `2**64` or more.
-/// No input can be that long, so the bounds checks above (which are
-/// overflow-safe for any word) reject exactly the same values.
+/// Lengths are checked explicitly, including zero-sized element types.
+/// Offsets are also bounded by the input frame.
 ///
 /// Element tails of dynamic `T` are not inspected here; they are validated
 /// when accessed, exactly like Solidity. Solidity also rejects calldata
@@ -89,7 +89,7 @@ pub fn decode_array_view_at<T, I>(_ input: own I, base: u256, head_pos: u256) ->
     let stride = abi_field_head_size<T>()
     // `elems <= input_len` holds after the frame check, and the division
     // bounds `len * stride` without overflow.
-    if stride != 0 && len > (input_len - elems) / stride {
+    if len >= 0x10000000000000000 || (stride != 0 && len > (input_len - elems) / stride) {
         Sol::decode_error()
     }
     ArrayView { input, elems, len }
@@ -110,6 +110,62 @@ impl<I, T> ArrayView<I, T>
     /// The underlying input.
     pub fn input(self) -> I {
         self.input
+    }
+
+    /// Byte position in `input` of the element heads area, that is of the
+    /// head of element 0 (just after the length word).
+    ///
+    /// Tail offsets of dynamic elements are relative to this position. For
+    /// static `T` it equals `element_pos(0)` when the array is non-empty.
+    /// Positions are relative to `input`; add `CallData::base` to get an
+    /// absolute calldata position for `calldataload`.
+    pub fn heads_pos(self) -> u256 {
+        self.elems
+    }
+
+    /// The raw first word of element `index`'s head, at
+    /// `heads_pos() + index * stride`.
+    ///
+    /// For dynamic `T` this is the element's tail offset relative to
+    /// `heads_pos()`, exactly as encoded and without any validation. For
+    /// static `T` it is the first word of the element's inline encoding,
+    /// also unvalidated (e.g. an `Address` with dirty upper bits is returned
+    /// as is). The word itself always lies within the input, as the
+    /// construction checks cover all element heads. A zero-sized static `T`
+    /// (such as `()`) has no head, so the result is 0 and nothing is read.
+    ///
+    /// Reverts with `Panic(0x32)` if `index >= len()`.
+    #[arithmetic(unchecked)]
+    pub fn head_word(self, _ index: u256) -> u256 {
+        self.check_index(index)
+        let stride = abi_field_head_size<T>()
+        if stride == 0 {
+            return 0
+        }
+        self.input.word_at(self.elems + index * stride)
+    }
+
+    /// Like `element_pos`, but without validating the tail of a dynamic
+    /// element: for dynamic `T` it returns `heads_pos() + head_word(index)`
+    /// computed modulo `2**256`, like the `add` of a hand-written decoder
+    /// (`heads + calldataload(heads + index * 32)`). For static `T` it is
+    /// identical to `element_pos`.
+    ///
+    /// The returned position may lie beyond the end of the input or wrap
+    /// around. Only use it when the caller validates the element's encoding
+    /// itself, or when reads past the end are harmless for the input at
+    /// hand, as with `CallData`, where out-of-range reads yield zeros. Prefer
+    /// `element_pos`, `get` or the lazy element accessors otherwise.
+    ///
+    /// Reverts with `Panic(0x32)` if `index >= len()`.
+    #[arithmetic(unchecked)]
+    pub fn unchecked_element_pos(self, _ index: u256) -> u256 {
+        self.check_index(index)
+        let head_at = self.elems + index * abi_field_head_size<T>()
+        if !T::IS_DYNAMIC {
+            return head_at
+        }
+        self.elems + self.input.word_at(head_at)
     }
 
     /// Byte position in `input` where the encoding of element `index` starts.
