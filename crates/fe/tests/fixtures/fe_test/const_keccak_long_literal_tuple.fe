@@ -1,0 +1,103 @@
+use std::abi::sol
+
+// String literals inside tuple arguments to `core::keccak` are hashed as their
+// raw bytes, concatenated in order (like `abi.encodePacked` of the parts), so
+// literals longer than the 31-byte inline `String` capacity can be composed.
+
+const OFFER_ITEM: [u8; 106] = "OfferItem(uint8 itemType,address token,uint256 identifierOrCriteria,uint256 startAmount,uint256 endAmount)"
+
+const CONSIDERATION_ITEM: [u8; 132] = "ConsiderationItem(uint8 itemType,address token,uint256 identifierOrCriteria,uint256 startAmount,uint256 endAmount,address recipient)"
+
+// cast keccak "OrderComponents(address offerer,address zone)x"
+const LONG_SHORT: u256 = core::keccak(("OrderComponents(address offerer,address zone)", "x"))
+
+const ORDER_COMPONENTS: [u8; 212] = "OrderComponents(address offerer,address zone,OfferItem[] offer,ConsiderationItem[] consideration,uint8 orderType,uint256 startTime,uint256 endTime,bytes32 zoneHash,uint256 salt,bytes32 conduitKey,uint256 counter)"
+
+// Seaport ORDER_TYPEHASH: keccak(OrderComponents ++ ConsiderationItem ++ OfferItem)
+const ORDER_TYPEHASH: u256 = core::keccak(
+    (
+        "OrderComponents(address offerer,address zone,OfferItem[] offer,ConsiderationItem[] consideration,uint8 orderType,uint256 startTime,uint256 endTime,bytes32 zoneHash,uint256 salt,bytes32 conduitKey,uint256 counter)",
+        CONSIDERATION_ITEM,
+        OFFER_ITEM,
+    ),
+)
+
+// Seaport bulk order typehashes, built from repeated fragments.
+const BULK_ORDER_HEIGHT_1: u256 = core::keccak(
+    (
+        "BulkOrder(OrderComponents",
+        "[2]",
+        " tree)",
+        CONSIDERATION_ITEM,
+        OFFER_ITEM,
+        ORDER_COMPONENTS,
+    ),
+)
+const BULK_ORDER_HEIGHT_2: u256 = core::keccak(
+    (
+        "BulkOrder(OrderComponents",
+        "[2]",
+        "[2]",
+        " tree)",
+        CONSIDERATION_ITEM,
+        OFFER_ITEM,
+        ORDER_COMPONENTS,
+    ),
+)
+
+#[test]
+fn long_literal_with_short_literal() {
+    let expected: u256 = 0xffbe8a079693de9816fc9492fa34fe44dfbddad48c573f69f7581860768fbec9
+    assert!(LONG_SHORT == expected)
+}
+
+#[test]
+fn single_long_literal() {
+    // cast keccak "OrderComponents(address offerer,address zone)"
+    let expected: u256 = 0xb4a07eb4bf69402c7e72809186f3c476a08bcba3b83e965afc99ad5babe0e3cd
+    let bare = core::keccak("OrderComponents(address offerer,address zone)")
+    let one_tuple = core::keccak(("OrderComponents(address offerer,address zone)",))
+    assert!(bare == expected)
+    assert!(one_tuple == expected)
+}
+
+#[test]
+fn mixed_long_and_short_parts() {
+    let two = core::keccak(("OrderComponents(", "address offerer,address zone)x"))
+    let three = core::keccak(("Order", "Components(address offerer,address zone)", "x"))
+    assert!(two == LONG_SHORT)
+    assert!(three == LONG_SHORT)
+}
+
+#[test]
+fn nested_tuples() {
+    let left = core::keccak(
+        (("OrderComponents(address offerer,", "address zone)"), "x"),
+    )
+    let right = core::keccak(
+        ("OrderComponents(address offerer,", ("address zone)", ("x",))),
+    )
+    assert!(left == LONG_SHORT)
+    assert!(right == LONG_SHORT)
+}
+
+#[test]
+fn composed_from_byte_array_constants() {
+    let expected: u256 = 0xfa445660b7e21515a59617fcd68910b487aa5808b8abda3d78bc85df364b2c2f
+    assert!(ORDER_TYPEHASH == expected)
+    let order = core::keccak((ORDER_COMPONENTS, CONSIDERATION_ITEM, OFFER_ITEM))
+    assert!(order == expected)
+}
+
+#[test]
+fn bulk_order_typehashes() {
+    let height_1: u256 = 0x3ca2711d29384747a8f61d60aad3c450405f7aaff5613541dee28df2d6986d32
+    let height_2: u256 = 0xbf8e29b89f29ed9b529c154a63038ffca562f8d7cd1e2545dda53a1b582dde30
+    assert!(BULK_ORDER_HEIGHT_1 == height_1)
+    assert!(BULK_ORDER_HEIGHT_2 == height_2)
+}
+
+#[test]
+fn selector_from_tuple_parts() {
+    assert!(sol(("transfer(", "address,uint256)")) == 0xa9059cbb)
+}

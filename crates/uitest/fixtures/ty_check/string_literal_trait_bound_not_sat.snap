@@ -19,7 +19,7 @@ error[6-0003]: trait bound is not satisfied
     ┌─ string_literal_trait_bound_not_sat.fe:17:5
     │
  17 │     core::keccak(("a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r"))
-    │     ^^^^^^^^^^^^ `(String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>, String<1>)` doesn't implement `AsBytes`
+    │     ^^^^^^^^^^^^ `([u8; 1], [u8; 1], [u8; 1], [u8; 1], [u8; 1], [u8; 1], [u8; 1], [u8; 1], [u8; 1], [u8; 1], [u8; 1], [u8; 1], [u8; 1], [u8; 1], [u8; 1], [u8; 1], [u8; 1], [u8; 1])` doesn't implement `AsBytes`
     │
     ┌─ src/bytes.fe:443:24
     │

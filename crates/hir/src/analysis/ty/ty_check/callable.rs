@@ -829,13 +829,20 @@ impl<'db> Callable<'db> {
 
     fn compile_time_string_literal_arg_expected(
         &self,
-        tc: &TyChecker<'db>,
+        tc: &mut TyChecker<'db>,
         expr: ExprId,
         arg_idx: usize,
     ) -> Option<TyId<'db>> {
-        let Partial::Present(Expr::Lit(LitKind::String(string_id))) = expr.data(tc.db, tc.body())
-        else {
-            return None;
+        let string_id = match expr.data(tc.db, tc.body()) {
+            Partial::Present(Expr::Lit(LitKind::String(string_id))) => *string_id,
+            Partial::Present(Expr::Tuple(_))
+                if self
+                    .callable_def
+                    .accepts_compile_time_string_literal_bytes(tc.db, tc.env.scope()) =>
+            {
+                return string_literal_tuple_bytes_hint(tc, expr);
+            }
+            _ => return None,
         };
 
         let mut expected = self
@@ -855,6 +862,35 @@ impl<'db> Callable<'db> {
 
         None
     }
+}
+
+/// Types the string literals of a (possibly nested) tuple argument as byte
+/// arrays, like a string literal passed directly to a compile-time byte
+/// consumer such as `core::keccak`. This keeps literals longer than the inline
+/// `String` capacity usable as tuple parts. Other elements get fresh variables.
+fn string_literal_tuple_bytes_hint<'db>(
+    tc: &mut TyChecker<'db>,
+    expr: ExprId,
+) -> Option<TyId<'db>> {
+    let elems = match expr.data(tc.db, tc.body()) {
+        Partial::Present(Expr::Lit(LitKind::String(string_id))) => {
+            return Some(tc.string_literal_byte_array_ty(string_id.len_bytes(tc.db)));
+        }
+        Partial::Present(Expr::Tuple(elems)) => elems.clone(),
+        _ => return None,
+    };
+    let hints: Vec<_> = elems
+        .iter()
+        .map(|elem| string_literal_tuple_bytes_hint(tc, *elem))
+        .collect();
+    if hints.iter().all(Option::is_none) {
+        return None;
+    }
+    let elem_tys: Vec<_> = hints
+        .into_iter()
+        .map(|hint| hint.unwrap_or_else(|| tc.fresh_ty()))
+        .collect();
+    Some(TyId::tuple_with_elems(tc.db, &elem_tys))
 }
 
 fn bind_callable_params_from_actual<'db>(

@@ -5437,6 +5437,20 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
             let prop = self.body.expr_prop(self.db, expr);
             let span = ctxt.span().unwrap();
             self.check_unknown(prop.ty, span.clone().into());
+            // A string literal only gets an oversized `String<N>` type through
+            // inference fallback; report it here instead of leaving an invalid
+            // literal type for constant evaluation to trip over.
+            if let Expr::Lit(LitKind::String(_)) = expr_data
+                && let TyData::Invalid(InvalidCause::StringTooLarge { max, given }) =
+                    prop.ty.data(self.db)
+            {
+                let diag = TyLowerDiag::StringTooLarge {
+                    span: span.clone().into(),
+                    max: *max,
+                    given: *given,
+                };
+                self.diags.push(TyDiagCollection::from(diag).into());
+            }
             let is_direct_call_callee =
                 matches!(expr_data, Expr::Path(..)) && self.direct_call_callees.contains(&expr);
             if prop.binding.is_none() && !is_direct_call_callee {
