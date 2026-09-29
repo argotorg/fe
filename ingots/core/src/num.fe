@@ -991,6 +991,25 @@ pub const fn trailing_zeros(_ x: u256) -> u256 {
     255 - leading_zeros(x & (0 - x))
 }
 
+/// Returns the greatest common divisor of `a` and `b`.
+///
+/// `gcd(a, 0) == gcd(0, a) == a`, so `gcd(0, 0) == 0`. Never fails.
+///
+/// Uses Euclid's algorithm with `%`, so gas depends on the inputs: one loop
+/// iteration per remainder step, at most 368 for `u256` operands (reached
+/// by consecutive Fibonacci numbers) and far fewer for typical values.
+#[arithmetic(unchecked)]
+pub const fn gcd(_ a: u256, _ b: u256) -> u256 {
+    let mut x = a
+    let mut y = b
+    while y != 0 {
+        let r = x % y
+        x = y
+        y = r
+    }
+    x
+}
+
 extern {
     /// Returns `(a + b) % m` with a 257-bit intermediate sum, or 0 if `m == 0`.
     pub const fn addmod(_ a: u256, _ b: u256, _ m: u256) -> u256
