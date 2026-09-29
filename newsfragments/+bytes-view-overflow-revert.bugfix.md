@@ -1,0 +1,1 @@
+`decode_bytes_view_at` (and `decode_bytes_view`) now revert with empty returndata, like Solidity's ABI decoder, instead of panicking with `Panic(0x11)` when an offset or length is so large that its sum with the payload position overflows.

@@ -1,0 +1,69 @@
+use core::ptr::{self, MemBuffer, MemSpan}
+use std::abi::decode_bytes_view_at
+use std::evm::{Address, CallData, Evm, RawMem}
+
+msg ViewMsg {
+    /// f(bytes): returns the length of the argument, read through a view.
+    #[selector = 0x01]
+    Len -> u256,
+}
+
+pub contract Viewer {
+    recv ViewMsg {
+        Len {} -> u256 {
+            decode_bytes_view_at(CallData::with_base(4), base: 0, head_pos: 0).len()
+        }
+    }
+}
+
+struct Outcome { success: bool, ret_len: u256, word0: u256 }
+
+fn call_words<const N: usize>(_ addr: Address, words: [u256; N]) -> Outcome uses (evm: mut Evm) {
+    let len = 4 + (N as u256) * 32
+    let data = MemBuffer::alloc(len + 32)
+    evm.mstore(addr: data.ptr(), value: 1 << 224)
+    let mut i: usize = 0
+    while i < N {
+        evm.mstore(addr: ptr::offset_bytes(data.ptr(), 4 + (i as u256) * 32), value: words[i])
+        i += 1
+    }
+    let mut ret = MemBuffer::alloc(64)
+    let outcome = evm.raw_call(
+        addr: addr,
+        gas: 1000000,
+        value: 0,
+        args: MemSpan::from_raw_parts(ptr: data.ptr(), len: len),
+        ret: mut ret,
+    )
+    let rlen = outcome.returndata_len()
+    Outcome {
+        success: outcome.success(),
+        ret_len: rlen,
+        word0: if rlen >= 32 {
+            ret.span().word_at(0)
+        } else {
+            0
+        },
+    }
+}
+
+fn reverts_empty<const N: usize>(_ addr: Address, words: [u256; N]) uses (evm: mut Evm) {
+    let out = call_words(addr, words: words)
+    assert!(!out.success)
+    assert!(out.ret_len == 0)
+}
+
+const MAX: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+#[test]
+fn test_overflowing_bytes_offsets_and_lengths_revert_empty() uses (evm: mut Evm) {
+    let v = evm.create2<Viewer>(value: 0, args: (), salt: 0)
+    let ok = call_words(v, words: [0x20, 2, 0xabcd << 240])
+    assert!(ok.success && ok.word0 == 2)
+    // Offsets whose sum with the base wraps around.
+    reverts_empty(v, words: [MAX, 0])
+    reverts_empty(v, words: [MAX - 31, 0])
+    // Lengths whose sum with the data position wraps around.
+    reverts_empty(v, words: [0x20, MAX])
+    reverts_empty(v, words: [0x20, MAX - 31])
+}

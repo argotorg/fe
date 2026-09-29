@@ -247,6 +247,11 @@ pub fn decode_bytes_view<I>(_ input: own I) -> BytesView<I>
 ///
 /// `base` selects the start of the ABI payload and `head_pos` selects the byte
 /// offset of the dynamic head within that payload.
+///
+/// Malformed offsets and lengths, including ones whose sums would overflow,
+/// revert with empty returndata.
+// The explicit wrap checks below replace checked-arithmetic panics.
+#[arithmetic(unchecked)]
 pub fn decode_bytes_view_at<I>(_ input: own I, base: u256, head_pos: u256) -> BytesView<I>
     where I: ByteInput
 {
