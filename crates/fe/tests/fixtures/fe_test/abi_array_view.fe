@@ -43,6 +43,18 @@ msg ViewMsg {
     /// get(string[],uint256), returns the string length
     #[selector = 0x09]
     StringLen -> u256,
+    /// get(bytes[],uint256), returns the raw head word
+    #[selector = 0x0a]
+    HeadWord -> u256,
+    /// get(bytes[],uint256), returns the unchecked element position
+    #[selector = 0x0b]
+    UncheckedPos -> u256,
+    /// get(bytes[],uint256), returns the validated element position
+    #[selector = 0x0c]
+    ElementPos -> u256,
+    /// get(uint256,uint256[]), returns the heads position of the second argument
+    #[selector = 0x0d]
+    HeadsPos -> u256,
 }
 
 // Typed counterpart used to let the compiler encode valid calldata.
@@ -111,6 +123,25 @@ pub contract Viewer {
         StringLen {} -> u256 {
             let cd = CallData::with_base(4)
             cd.array_view<DynString>(0).string_at(cd.word_at(32)).len()
+        }
+
+        HeadWord {} -> u256 {
+            let cd = CallData::with_base(4)
+            cd.array_view<Bytes>(0).head_word(cd.word_at(32))
+        }
+
+        UncheckedPos {} -> u256 {
+            let cd = CallData::with_base(4)
+            cd.array_view<Bytes>(0).unchecked_element_pos(cd.word_at(32))
+        }
+
+        ElementPos {} -> u256 {
+            let cd = CallData::with_base(4)
+            cd.array_view<Bytes>(0).element_pos(cd.word_at(32))
+        }
+
+        HeadsPos {} -> u256 {
+            CallData::with_base(4).array_view<u256>(32).heads_pos()
         }
     }
 }
@@ -473,4 +504,114 @@ fn test_memory_input_and_element_pos() uses (evm: mut Evm) {
 
     let empty: ArrayView<MemSpan, u256> = decode_array_view(mem_input([0x20, 0]))
     assert!(empty.is_empty())
+}
+
+#[test]
+fn test_raw_head_access() uses (evm: mut Evm) {
+    let v = deploy()
+    // bytes[] with heads at 0x60 (relative to the arguments); the second
+    // element's offset points past the end of calldata.
+    let words = [0x40, 0, 2, 0x40, 0x1000, 1, 0xee << 248]
+    returns(v, selector: 0x0a, words: words, expected: 0x40)
+    returns(
+        v,
+        selector: 0x0a,
+        words: [0x40, 1, 2, 0x40, 0x1000, 1, 0xee << 248],
+        expected: 0x1000,
+    )
+    // In range: the unchecked position equals the validated one.
+    returns(v, selector: 0x0b, words: words, expected: 0xa0)
+    returns(v, selector: 0x0c, words: words, expected: 0xa0)
+    // Out of range: no validation, and offsets wrap modulo 2**256.
+    returns(
+        v,
+        selector: 0x0b,
+        words: [0x40, 1, 2, 0x40, 0x1000, 1, 0xee << 248],
+        expected: 0x1060,
+    )
+    reverts_empty(
+        v,
+        selector: 0x0c,
+        words: [0x40, 1, 2, 0x40, 0x1000, 1, 0xee << 248],
+    )
+    returns(
+        v,
+        selector: 0x0b,
+        words: [0x40, 1, 2, 0x40, MAX, 1, 0xee << 248],
+        expected: 0x5f,
+    )
+    reverts_empty(
+        v,
+        selector: 0x0c,
+        words: [0x40, 1, 2, 0x40, MAX, 1, 0xee << 248],
+    )
+    // Index out of range.
+    reverts_index_panic(v, selector: 0x0a, words: [0x40, 2, 2, 0x40, 0x1000])
+    reverts_index_panic(v, selector: 0x0b, words: [0x40, 2, 2, 0x40, 0x1000])
+    reverts_index_panic(v, selector: 0x0a, words: [0x40, MAX, 0])
+    reverts_index_panic(v, selector: 0x0b, words: [0x40, 0, 0])
+    // Heads position of the second argument, after its length word.
+    returns(
+        v,
+        selector: 0x0d,
+        words: [7, 0x40, 2, 9, 9],
+        expected: 0x60,
+    )
+    returns(
+        v,
+        selector: 0x0d,
+        words: [7, 0x60, 0, 1, 5],
+        expected: 0x80,
+    )
+}
+
+#[test]
+fn test_raw_head_access_static_elements() uses (evm: mut Evm) {
+    // (uint256, (uint8,address,uint256)[]) at base 0x20 of a memory input.
+    let input = mem_input([0xffff, 7, 0x40, 2, 1, 0xaa, 100, 2, 0xbb, 200])
+    let view: ArrayView<MemSpan, Transfer> = decode_array_view_at(input, base: 0x20, head_pos: 0x20)
+    assert!(view.heads_pos() == 0x80)
+    assert!(view.head_word(0) == 1)
+    assert!(view.head_word(1) == 2)
+    assert!(view.unchecked_element_pos(0) == 0x80)
+    assert!(view.unchecked_element_pos(1) == 0xe0)
+
+    // Dynamic elements: head words are tail offsets from `heads_pos`.
+    let bytes_input = mem_input([0x20, 2, 0x40, 0x60, 0, 1, 0xee << 248])
+    let bytes: ArrayView<MemSpan, Bytes> = decode_array_view_at(bytes_input, base: 0, head_pos: 0)
+    assert!(bytes.heads_pos() == 0x40)
+    assert!(bytes.head_word(0) == 0x40)
+    assert!(bytes.head_word(1) == 0x60)
+    assert!(bytes.unchecked_element_pos(1) == bytes.element_pos(1))
+
+    // An empty array still has a heads position.
+    let empty: ArrayView<MemSpan, u256> = decode_array_view(mem_input([0x20, 0]))
+    assert!(empty.heads_pos() == 0x40)
+}
+
+#[test]
+fn test_raw_head_access_zero_sized_elements() uses (evm: mut Evm) {
+    // `()[]` of length 3: the elements occupy no bytes, so there are no head
+    // words. The input ends at the heads position, followed by a nonzero
+    // word that must not be read.
+    let input = mem_input([0x20, 3, 0xdead]).slice(offset: 0, len: 0x40)
+    let view: ArrayView<MemSpan, ()> = decode_array_view(input)
+    assert!(view.len() == 3)
+    assert!(view.heads_pos() == 0x40)
+    assert!(view.head_word(2) == 0)
+    assert!(view.element_pos(2) == 0x40)
+    assert!(view.unchecked_element_pos(2) == 0x40)
+    view.get(2)
+}
+
+#[test(should_revert)]
+fn test_zero_stride_length_limit() uses (evm: mut Evm) {
+    let view: ArrayView<MemSpan, ()> = decode_array_view(mem_input([0x20, TWO_64]))
+    assert!(view.len() == TWO_64)
+}
+
+#[test(should_revert)]
+fn test_zero_stride_max_length_rejected() uses (evm: mut Evm) {
+    let view: ArrayView<MemSpan, ()> = decode_array_view(mem_input([0x20, MAX]))
+    assert!(view.len() == MAX)
 }
