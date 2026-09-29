@@ -9,6 +9,7 @@ pub type Text = DynString
 pub type Vec<T> = DynArray<T>
 pub use sol::{self, *}
 pub use dyn_array::{DynArrayAccess, DynVec, MemVec, canonical_dyn_array, dyn_array_from}
+pub use array_view::{ArrayView, decode_array_view, decode_array_view_at}
 
 use core::ptr
 use super::evm::effects::RawMem
