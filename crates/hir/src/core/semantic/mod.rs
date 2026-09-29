@@ -119,7 +119,7 @@ use crate::analysis::ty::{
         TyAlias, lower_callable_input_param_ty, lower_hir_ty, lower_hir_ty_deferred,
         lower_hir_ty_with_minter, lower_layout_root_uses_in_hir_ty, lower_opt_hir_ty,
         lower_type_alias, lower_type_alias_from_hir, lower_type_alias_from_hir_deferred,
-        resolve_callable_input_effect_key, value_contains_generic_param,
+        resolve_callable_input_effect_key,
     },
 };
 use crate::core::adt_lower::{lower_adt, lower_contract_fields};
@@ -3603,6 +3603,31 @@ pub fn ingot_growing_cycles<'db>(
         member: AdtCycleMember<'db>,
     }
 
+    /// The indices of the parameters that occur in `ty`.
+    fn params_in<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> FxHashSet<usize> {
+        struct Collector<'db> {
+            db: &'db dyn HirAnalysisDb,
+            params: FxHashSet<usize>,
+        }
+        impl<'db> TyVisitor<'db> for Collector<'db> {
+            fn db(&self) -> &'db dyn HirAnalysisDb {
+                self.db
+            }
+            fn visit_param(&mut self, param: &TyParam<'db>) {
+                self.params.insert(param.idx);
+            }
+            fn visit_const_param(&mut self, param: &TyParam<'db>, _: TyId<'db>) {
+                self.params.insert(param.idx);
+            }
+        }
+        let mut collector = Collector {
+            db,
+            params: FxHashSet::default(),
+        };
+        ty.visit_with(&mut collector);
+        collector.params
+    }
+
     /// Whether an instance of `ty` is computed by a projection or a const
     /// expression over parameters, rather than built by type constructors.
     fn computed<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
@@ -3734,15 +3759,13 @@ pub fn ingot_growing_cycles<'db>(
                     if computed(db, *arg) {
                         continue;
                     }
-                    for (from, param) in params.iter().enumerate() {
-                        if value_contains_generic_param(db, arg, from) {
-                            edges.push(Edge {
-                                from: states.insert_full((adt, from)).0,
-                                to: states.insert_full((*applied, to)).0,
-                                grows: arg != param,
-                                member,
-                            });
-                        }
+                    for from in params_in(db, *arg) {
+                        edges.push(Edge {
+                            from: states.insert_full((adt, from)).0,
+                            to: states.insert_full((*applied, to)).0,
+                            grows: *arg != params[from],
+                            member,
+                        });
                     }
                 }
             }
@@ -3826,33 +3849,30 @@ pub fn ingot_growing_cycles<'db>(
         path.reverse();
         path
     };
-    // Report each growing component once, at its first ADT, through the
-    // shortest closed walk from one of its parameters across a growing flow.
+    // Report each growing component once, at its first ADT, through a closed
+    // walk from one of its parameters across a growing flow.
     let mut reported = vec![false; components];
     let mut cycles = IndexMap::default();
     for adt in adts {
-        let Some((found, cycle)) = (0..adt.params(db).len())
+        let Some((state, edge)) = (0..adt.params(db).len())
             .filter_map(|param| states.get_index_of(&(adt, param)))
-            .filter(|state| !reported[component[*state]])
-            .filter_map(|state| {
-                let edge = growing[component[state]]?;
-                let mut seen = FxHashSet::default();
-                Some((
-                    component[state],
-                    walk(state, edges[edge].from)
-                        .into_iter()
-                        .chain([edge])
-                        .chain(walk(edges[edge].to, state))
-                        .map(|edge| edges[edge].member)
-                        .filter(|member| seen.insert(*member))
-                        .collect::<Vec<_>>(),
-                ))
+            .find_map(|state| {
+                growing[component[state]]
+                    .filter(|_| !reported[component[state]])
+                    .map(|edge| (state, edge))
             })
-            .min_by_key(|(_, cycle)| cycle.len())
         else {
             continue;
         };
-        reported[found] = true;
+        reported[component[state]] = true;
+        let mut seen = FxHashSet::default();
+        let cycle = walk(state, edges[edge].from)
+            .into_iter()
+            .chain([edge])
+            .chain(walk(edges[edge].to, state))
+            .map(|edge| edges[edge].member)
+            .filter(|member| seen.insert(*member))
+            .collect();
         cycles.insert(adt, cycle);
     }
     cycles
