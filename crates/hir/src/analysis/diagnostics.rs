@@ -1744,7 +1744,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                             message: "recursion occurs here".to_string(),
                             span: m
                                 .adt
-                                .variant_ty_span(db, m.field_idx as usize, m.ty_idx as usize)
+                                .variant_ty_span(db, m.field_idx, m.ty_idx)
                                 .resolve(db),
                         }
                     }));

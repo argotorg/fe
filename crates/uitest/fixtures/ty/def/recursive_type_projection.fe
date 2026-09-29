@@ -100,3 +100,56 @@ where
     value: T,
     next: *<(T, Carried<[T; 1]>) as Second>::Out,
 }
+
+// A handle exposes only the parameters its target uses.
+pub struct Gate<T, U> {}
+
+impl<T, U> EffectHandle for Gate<T, U> {
+    type Target = T
+    type Raw = *T
+    const SPACE: AddressSpace = AddressSpace::Memory
+
+    fn raw(self) -> *T {
+        ptr::alloc<T>()
+    }
+}
+
+pub struct Gated<T> {
+    value: T,
+    next: *Gate<u8, Gated<[T; 1]>>,
+}
+
+// A projection is bounded by the impls that may resolve it.
+pub trait Id {
+    type Out
+}
+
+impl<T> Id for T {
+    type Out = T
+}
+
+pub struct Same2<T: Id> {
+    value: T,
+    next: *Same2<T::Out>,
+}
+
+// An impl whose repeated parameter cannot match does not resolve a projection.
+pub trait Pair {
+    type Out
+}
+
+impl<U> Pair for (U, U) {
+    type Out = Unmatched<[U; 1]>
+}
+
+impl<A> Pair for (A, [A; 1]) {
+    type Out = u8
+}
+
+pub struct Unmatched<T>
+where
+    (T, [T; 1]): Pair,
+{
+    value: T,
+    next: *<(T, [T; 1]) as Pair>::Out,
+}

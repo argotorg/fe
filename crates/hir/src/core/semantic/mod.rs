@@ -3556,8 +3556,8 @@ impl<'db> AdtDef<'db> {
                     for field_adt_ref in collect_direct_adts(db, ty.instantiate_identity()) {
                         chain.push(AdtCycleMember {
                             adt,
-                            field_idx: field_idx as u16,
-                            ty_idx: ty_idx as u16,
+                            field_idx,
+                            ty_idx,
                         });
 
                         if let Some(cycle) =
@@ -3699,18 +3699,56 @@ fn growing_cycles<'db>(
         matches!(base.data(db), TyData::TyBase(_)).then_some(base)
     }
 
+    /// Whether some instance of `a` can equal some instance of `b`. A
+    /// parameter, projection or const may take any value, but a type
+    /// parameter cannot contain itself.
+    fn could_equal<'db>(db: &'db dyn HirAnalysisDb, a: TyId<'db>, b: TyId<'db>) -> bool {
+        fn occurs<'db>(db: &'db dyn HirAnalysisDb, param: TyId<'db>, ty: TyId<'db>) -> bool {
+            ty.generic_args(db)
+                .iter()
+                .any(|arg| *arg == param || occurs(db, param, *arg))
+        }
+        let opaque = |ty: TyId<'db>| {
+            matches!(
+                ty.data(db),
+                TyData::TyParam(_) | TyData::AssocTy(_) | TyData::ConstTy(_)
+            )
+        };
+        if a == b {
+            return true;
+        }
+        if let Some((param, other)) = [(a, b), (b, a)].into_iter().find(|(ty, _)| opaque(*ty)) {
+            return !matches!(param.data(db), TyData::TyParam(_)) || !occurs(db, param, other);
+        }
+        let ((a_base, a_args), (b_base, b_args)) = (a.decompose_ty_app(db), b.decompose_ty_app(db));
+        a_base == b_base
+            && a_args.len() == b_args.len()
+            && a_args
+                .iter()
+                .zip(b_args)
+                .all(|(a, b)| could_equal(db, *a, *b))
+    }
+
     /// Whether some instance of `ty` may match an impl `pattern` over
     /// `params`, and whether every instance does. `known` gives the head of
-    /// one parameter's value.
+    /// one parameter's value. A repeated parameter must match values that can
+    /// be equal; `bindings` holds each parameter's first match.
     fn match_pattern<'db>(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
         pattern: TyId<'db>,
         params: &[TyId<'db>],
         known: (TyId<'db>, Option<TyId<'db>>),
+        bindings: &mut [Option<TyId<'db>>],
     ) -> Option<bool> {
-        if params.contains(&pattern) {
-            return Some(true);
+        if let Some(param) = params.iter().position(|param| *param == pattern) {
+            return match bindings[param] {
+                Some(bound) => could_equal(db, bound, ty).then_some(true),
+                None => {
+                    bindings[param] = Some(ty);
+                    Some(true)
+                }
+            };
         }
         let (base, args) = ty.decompose_ty_app(db);
         let (pattern_base, pattern_args) = pattern.decompose_ty_app(db);
@@ -3719,25 +3757,33 @@ fn growing_cycles<'db>(
                 .iter()
                 .zip(pattern_args)
                 .try_fold(true, |definite, (arg, pattern)| {
-                    Some(definite & match_pattern(db, *arg, *pattern, params, known)?)
+                    Some(definite & match_pattern(db, *arg, *pattern, params, known, bindings)?)
                 });
         }
         let head = if ty == known.0 { known.1 } else { head(db, ty) };
         (head.is_none() || head == Some(pattern_base)).then_some(false)
     }
 
-    /// The number of constructors in `ty` outside `params`, counting each
-    /// parameter's occurrences, or `None` if a projection or const
-    /// expression over the parameters may take a value of any size.
+    /// An upper bound on the number of constructors in an instance of `ty`
+    /// outside `params`, counting each parameter's occurrences, or `None` if
+    /// it is unbounded. A projection with a single input is at most as large
+    /// as that input plus what `resolve` says the impls resolving it add; a
+    /// const expression over the parameters may take any value.
     fn measure<'db>(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
         params: &[TyId<'db>],
         occurrences: &mut [usize],
-    ) -> Option<usize> {
+        resolve: &dyn Fn(TyId<'db>) -> Option<i64>,
+    ) -> Option<i64> {
         if let Some(param) = params.iter().position(|param| *param == ty) {
             occurrences[param] += 1;
             return Some(0);
+        }
+        if let TyData::AssocTy(assoc) = ty.data(db)
+            && let [input] = assoc.trait_.args(db).as_slice()
+        {
+            return Some(measure(db, *input, params, occurrences, resolve)? + resolve(ty)?);
         }
         if matches!(ty.data(db), TyData::AssocTy(_) | TyData::ConstTy(_))
             && (0..params.len()).any(|param| value_contains_generic_param(db, &ty, param))
@@ -3745,8 +3791,30 @@ fn growing_cycles<'db>(
             return None;
         }
         ty.generic_args(db).iter().try_fold(1, |size, arg| {
-            Some(size + measure(db, *arg, params, occurrences)?)
+            Some(size + measure(db, *arg, params, occurrences, resolve)?)
         })
+    }
+
+    /// An upper bound on how much larger an instance of `arg` is than the
+    /// instance of `pattern` it is built from, or `None` if it is unbounded.
+    /// Each parameter occurrence `arg` drops held at least one constructor.
+    fn growth<'db>(
+        db: &'db dyn HirAnalysisDb,
+        arg: TyId<'db>,
+        pattern: TyId<'db>,
+        params: &[TyId<'db>],
+        resolve: &dyn Fn(TyId<'db>) -> Option<i64>,
+    ) -> Option<i64> {
+        let mut arg_occurrences = vec![0; params.len()];
+        let mut pattern_occurrences = vec![0; params.len()];
+        let size = measure(db, arg, params, &mut arg_occurrences, resolve)?
+            - measure(db, pattern, params, &mut pattern_occurrences, resolve)?;
+        arg_occurrences
+            .iter()
+            .zip(&pattern_occurrences)
+            .try_fold(size, |growth, (arg, pattern)| {
+                (arg <= pattern).then(|| growth - (pattern - arg) as i64)
+            })
     }
 
     let handle = resolve_core_trait(db, scope, &["EffectHandle"]);
@@ -3770,8 +3838,8 @@ fn growing_cycles<'db>(
                     field.iter_types(db).enumerate().map(move |(ty_idx, ty)| {
                         let member = AdtCycleMember {
                             adt,
-                            field_idx: field_idx as u16,
-                            ty_idx: ty_idx as u16,
+                            field_idx,
+                            ty_idx,
                         };
                         (GrowingCycleMember::Field(member), ty.instantiate_identity())
                     })
@@ -3789,8 +3857,38 @@ fn growing_cycles<'db>(
         // A parameter matched by the whole pattern takes the value's head.
         let known = (pattern, head(db, pattern).or(value_head));
         let known_head = |ty| if ty == known.0 { known.1 } else { head(db, ty) };
-        let mut pattern_occurrences = vec![0; params.len()];
-        let pattern_size = measure(db, pattern, params, &mut pattern_occurrences);
+        // The most a projection's impls add to its input, if all are bounded.
+        let resolve = |projection: TyId<'db>| {
+            let TyData::AssocTy(assoc) = projection.data(db) else {
+                return None;
+            };
+            let [input] = assoc.trait_.args(db).as_slice() else {
+                return None;
+            };
+            impls_for_trait_def(db, ingot, assoc.trait_.def(db))
+                .iter()
+                .filter(|implementor| {
+                    let params = implementor.params(db);
+                    let pattern = implementor.trait_(db).args(db)[0];
+                    match_pattern(
+                        db,
+                        *input,
+                        pattern,
+                        params,
+                        known,
+                        &mut vec![None; params.len()],
+                    )
+                    .is_some()
+                })
+                .map(|implementor| {
+                    let resolved = *implementor.types(db).get(&assoc.name)?;
+                    let pattern = implementor.trait_(db).args(db)[0];
+                    growth(db, resolved, pattern, implementor.params(db), &|_| None)
+                })
+                .collect::<Option<Vec<_>>>()?
+                .into_iter()
+                .max()
+        };
         let mut state_flows = Vec::new();
         for (member, ty) in definitions {
             let mut subterms = vec![ty];
@@ -3822,6 +3920,7 @@ fn growing_cycles<'db>(
                 for (trait_def, projected, name) in projections {
                     for &implementor in impls_for_trait_def(db, ingot, trait_def) {
                         let patterns = implementor.trait_(db).args(db);
+                        let mut bindings = vec![None; implementor.params(db).len()];
                         let Some(definite) = projected
                             .iter()
                             .zip(patterns)
@@ -3832,6 +3931,7 @@ fn growing_cycles<'db>(
                                     *pattern,
                                     implementor.params(db),
                                     known,
+                                    &mut bindings,
                                 )?;
                                 Some(definite & matches)
                             })
@@ -3856,19 +3956,7 @@ fn growing_cycles<'db>(
                     if !flows_from_input {
                         continue;
                     }
-                    // Each parameter occurrence the argument drops held at
-                    // least one constructor of the input's value.
-                    let mut arg_occurrences = vec![0; params.len()];
-                    let growth = measure(db, arg, params, &mut arg_occurrences)
-                        .zip(pattern_size)
-                        .and_then(|(arg_size, pattern_size)| {
-                            arg_occurrences.iter().zip(&pattern_occurrences).try_fold(
-                                arg_size as i64 - pattern_size as i64,
-                                |growth, (arg, pattern)| {
-                                    (arg <= pattern).then(|| growth - (pattern - arg) as i64)
-                                },
-                            )
-                        });
+                    let growth = growth(db, arg, pattern, params, &resolve);
                     let to = (receiver, to, known_head(arg));
                     pending.push(to);
                     state_flows.push(Flow {
@@ -4094,34 +4182,72 @@ fn growing_cycles<'db>(
 
 /// Which parameters of `adt` can have part of their value become a reachable
 /// type, as a field, a referent or an effect handle's target, rather than only
-/// distinguishing the type. A handle may expose any parameter in its target.
+/// distinguishing the type.
 #[salsa::tracked(
     return_ref,
     cycle_fn=exposed_params_cycle_recover,
     cycle_initial=exposed_params_cycle_initial
 )]
 fn exposed_params<'db>(db: &'db dyn HirAnalysisDb, adt: AdtDef<'db>) -> Vec<bool> {
+    /// Which of `params` occur at reachable positions of `roots`.
+    fn reached<'db>(
+        db: &'db dyn HirAnalysisDb,
+        mut reachable: Vec<TyId<'db>>,
+        params: &[TyId<'db>],
+    ) -> Vec<bool> {
+        let mut reached = vec![false; params.len()];
+        while let Some(ty) = reachable.pop() {
+            if let Some(param) = params.iter().position(|param| *param == ty) {
+                reached[param] = true;
+            }
+            reachable.extend(reachable_parts(db, ty));
+        }
+        reached
+    }
+
     let params = adt.params(db);
-    let handle = resolve_core_trait(db, adt.scope(db), &["EffectHandle"]).is_some_and(|handle| {
-        impls_for_trait_def(db, adt.ingot(db), handle)
-            .iter()
-            .any(|implementor| {
-                let self_ty = implementor.trait_(db).self_ty(db);
-                implementor.params(db).contains(&self_ty)
-                    || matches!(self_ty.base_ty(db).data(db), TyData::TyBase(TyBase::Adt(base)) if *base == adt)
-            })
-    });
-    let mut exposed = vec![handle; params.len()];
-    let mut reachable: Vec<_> = adt
+    let fields = adt
         .fields(db)
         .iter()
         .flat_map(|field| field.iter_types(db).map(|ty| ty.instantiate_identity()))
         .collect();
-    while let Some(ty) = reachable.pop() {
-        if let Some(param) = params.iter().position(|param| *param == ty) {
-            exposed[param] = true;
+    let mut exposed = reached(db, fields, params);
+    let Some(handle) = resolve_core_trait(db, adt.scope(db), &["EffectHandle"]) else {
+        return exposed;
+    };
+    let target = IdentId::new(db, "Target".to_string());
+    for implementor in impls_for_trait_def(db, adt.ingot(db), handle) {
+        let impl_params = implementor.params(db);
+        let pattern = implementor.trait_(db).self_ty(db);
+        let (base, args) = pattern.decompose_ty_app(db);
+        let blanket = impl_params.contains(&pattern);
+        if !blanket && !matches!(base.data(db), TyData::TyBase(TyBase::Adt(base)) if *base == adt) {
+            continue;
         }
-        reachable.extend(reachable_parts(db, ty));
+        // A handle exposes the parts of itself its target does.
+        let targeted = reached(
+            db,
+            implementor
+                .types(db)
+                .get(&target)
+                .copied()
+                .into_iter()
+                .collect(),
+            impl_params,
+        );
+        let exposes = |ty: &TyId<'db>| {
+            (0..impl_params.len())
+                .any(|param| targeted[param] && value_contains_generic_param(db, ty, param))
+        };
+        if blanket {
+            if exposes(&pattern) {
+                exposed.fill(true);
+            }
+        } else {
+            for (exposed, arg) in exposed.iter_mut().zip(args) {
+                *exposed |= exposes(arg);
+            }
+        }
     }
     exposed
 }

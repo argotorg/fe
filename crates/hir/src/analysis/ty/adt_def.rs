@@ -252,8 +252,8 @@ impl<'db> AdtRef<'db> {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AdtCycleMember<'db> {
     pub adt: AdtDef<'db>,
-    pub field_idx: u16,
-    pub ty_idx: u16,
+    pub field_idx: usize,
+    pub ty_idx: usize,
 }
 
 /// A definition on a cycle whose generic arguments grow: an ADT field, or an
@@ -272,7 +272,7 @@ impl<'db> GrowingCycleMember<'db> {
                 member.adt.name_span(db),
                 member
                     .adt
-                    .variant_ty_span(db, member.field_idx as usize, member.ty_idx as usize),
+                    .variant_ty_span(db, member.field_idx, member.ty_idx),
             ),
             Self::AssocTy(implementor, name) => {
                 // An impl without its own definition takes the trait's default.
