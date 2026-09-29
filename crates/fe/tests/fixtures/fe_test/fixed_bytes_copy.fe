@@ -1,0 +1,29 @@
+use std::abi::{Bytes4, Bytes32}
+
+struct Params {
+    key: Bytes32,
+}
+
+fn sum_twice(_ key: Bytes32) -> u256 {
+    let a = key
+    let b = key
+    a.val + b.val
+}
+
+fn forward(_ params: Params) -> (Bytes32, Bytes32) {
+    (params.key, params.key)
+}
+
+#[test]
+fn fixed_bytes_values_are_copy() {
+    let key = Bytes32 { val: 7 }
+    assert!(sum_twice(key) == 14)
+    assert!(key.val == 7)
+
+    let (first, second) = forward(Params { key })
+    assert!(first.val == 7 && second.val == 7)
+
+    let selector = Bytes4 { val: 0x01ffc9a7 }
+    let copy = selector
+    assert!(selector.word() == copy.word())
+}

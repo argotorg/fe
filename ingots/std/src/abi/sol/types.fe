@@ -244,6 +244,9 @@ pub struct FixedBytes<const N: usize> {
     /// Right-aligned byte value before ABI padding.
     pub val: u256,
 }
+
+impl<const N: usize> Copy for FixedBytes<N> {}
+
 impl<const N: usize> StaticAbiElementSeal for FixedBytes<N> {}
 
 impl<const N: usize> StaticAbiElement for FixedBytes<N> {}
