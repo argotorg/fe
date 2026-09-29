@@ -297,7 +297,7 @@ fn test(e: E) -> u8 {
             assert!(
                 body_has_diag(&diags, |diag| matches!(
                     diag,
-                    BodyDiag::UndefinedVariable(_, ident) if ident.data(db) == "x"
+                    BodyDiag::UndefinedVariable(_, ident, _) if ident.data(db) == "x"
                 )),
                 "expected undefined-variable diagnostic, got {diags:?}",
             );

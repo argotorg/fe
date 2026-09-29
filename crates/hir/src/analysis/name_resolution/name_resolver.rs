@@ -52,6 +52,13 @@ pub struct QueryDirective {
     /// If `allow_glob` is `true`, then the resolver uses the glob import to
     /// resolve the name.
     allow_glob: bool,
+
+    /// If `allow_assoc_fn` is `false`, functions defined in an `impl`,
+    /// `impl trait` or `trait` scope are not visible. This is the case for
+    /// queries propagated to a lexical parent: like in Rust, associated
+    /// functions are not in scope as bare names inside their own impl or
+    /// trait and must be referred to via `Self::f` or `self.f()`.
+    allow_assoc_fn: bool,
 }
 
 impl QueryDirective {
@@ -69,6 +76,7 @@ impl QueryDirective {
             allow_lex: true,
             allow_external: true,
             allow_glob: true,
+            allow_assoc_fn: true,
         }
     }
 
@@ -85,6 +93,11 @@ impl QueryDirective {
 
     pub(super) fn disallow_glob(mut self) -> Self {
         self.allow_glob = false;
+        self
+    }
+
+    fn disallow_assoc_fn(mut self) -> Self {
+        self.allow_assoc_fn = false;
         self
     }
 }
@@ -542,7 +555,15 @@ impl<'db, 'a> NameResolver<'db, 'a> {
                 PropagationResult::UnPropagated => {}
             };
 
+            let hide_assoc_fns = !query.directive(self.db).allow_assoc_fn
+                && matches!(
+                    scope,
+                    ScopeId::Item(ItemKind::Impl(_) | ItemKind::ImplTrait(_) | ItemKind::Trait(_))
+                );
             for edge in s_graph.edges(scope) {
+                if hide_assoc_fns && matches!(edge.dest, ScopeId::Item(ItemKind::Func(_))) {
+                    continue;
+                }
                 process_edge(edge);
             }
         }
@@ -567,7 +588,10 @@ impl<'db, 'a> NameResolver<'db, 'a> {
 
         // 4. Look for the name in the lexical scope if it exists.
         if let Some(parent) = parent {
-            let directive = query.directive(self.db).disallow_external();
+            let directive = query
+                .directive(self.db)
+                .disallow_external()
+                .disallow_assoc_fn();
             let query_for_parent =
                 EarlyNameQueryId::new(self.db, query.name(self.db), parent, directive);
 

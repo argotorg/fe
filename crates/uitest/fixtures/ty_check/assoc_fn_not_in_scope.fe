@@ -1,0 +1,37 @@
+// Functions of an impl or trait are not in scope as bare names inside it.
+
+pub struct S {
+    x: u256,
+}
+
+impl S {
+    fn helper(x: u256) -> u256 {
+        x + 1
+    }
+
+    fn get(self) -> u256 {
+        self.x
+    }
+
+    pub fn bare_assoc(self) -> u256 {
+        helper(self.x)
+    }
+
+    pub fn bare_method(self) -> u256 {
+        get(self)
+    }
+}
+
+pub trait T {
+    fn value(self) -> u256
+
+    fn doubled(self) -> u256 {
+        value(self) * 2
+    }
+}
+
+impl T for S {
+    fn value(self) -> u256 {
+        get(self)
+    }
+}

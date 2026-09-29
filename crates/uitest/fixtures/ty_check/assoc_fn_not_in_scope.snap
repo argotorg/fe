@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assoc_fn_not_in_scope.fe
+---
+error[8-0012]: undefined variable
+   ┌─ assoc_fn_not_in_scope.fe:17:9
+   │
+17 │         helper(self.x)
+   │         ^^^^^^ undefined variable `helper`
+   │
+   = `helper` is a function of the enclosing `impl`, which is not in scope as a bare name; call it as `Self::helper(..)`
+
+error[8-0012]: undefined variable
+   ┌─ assoc_fn_not_in_scope.fe:21:9
+   │
+21 │         get(self)
+   │         ^^^ undefined variable `get`
+   │
+   = `get` is a function of the enclosing `impl`, which is not in scope as a bare name; call it as `self.get(..)`
+
+error[8-0012]: undefined variable
+   ┌─ assoc_fn_not_in_scope.fe:29:9
+   │
+29 │         value(self) * 2
+   │         ^^^^^ undefined variable `value`
+   │
+   = `value` is a function of the enclosing `trait`, which is not in scope as a bare name; call it as `self.value(..)`
+
+error[8-0012]: undefined variable
+   ┌─ assoc_fn_not_in_scope.fe:35:9
+   │
+35 │         get(self)
+   │         ^^^ undefined variable `get`

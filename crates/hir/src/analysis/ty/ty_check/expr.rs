@@ -3559,7 +3559,8 @@ impl<'db> TyChecker<'db> {
                 }
             }
             ResolvedPathInBody::NewBinding(ident) => {
-                let diag = BodyDiag::UndefinedVariable(path_expr_span.into(), ident);
+                let assoc_fn = enclosing_assoc_fn(self.db, self.body(), ident);
+                let diag = BodyDiag::UndefinedVariable(path_expr_span.into(), ident, assoc_fn);
                 self.push_diag(diag);
 
                 ExprProp::invalid(self.db)
@@ -5695,6 +5696,35 @@ fn resolve_ident_expr<'db>(
         ResolvedPathInBody::Invalid => ResolvedPathInBody::NewBinding(ident),
         r => r,
     }
+}
+
+/// If `ident` names a function of the `impl`, `impl trait` or `trait` that
+/// encloses `body`, returns the container kind (`"impl"` or `"trait"`) and
+/// whether that function takes `self`. Such functions are not in scope as bare
+/// names.
+fn enclosing_assoc_fn<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: crate::hir_def::Body<'db>,
+    ident: IdentId<'db>,
+) -> Option<(&'static str, bool)> {
+    let mut scope = body.scope();
+    let (container, kind) = loop {
+        let item = scope.parent_item(db)?;
+        match item {
+            ItemKind::Impl(_) | ItemKind::ImplTrait(_) => break (item, "impl"),
+            ItemKind::Trait(_) => break (item, "trait"),
+            ItemKind::Mod(_) | ItemKind::TopMod(_) => return None,
+            _ => scope = ScopeId::from_item(item),
+        }
+    };
+    ScopeId::from_item(container)
+        .child_items(db)
+        .find_map(|child| match child {
+            ItemKind::Func(func) if func.name(db).to_opt() == Some(ident) => {
+                Some((kind, func.is_method(db)))
+            }
+            _ => None,
+        })
 }
 
 /// This traits are intended to be implemented by the operators that can work as

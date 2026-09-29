@@ -438,7 +438,10 @@ pub enum BodyDiag<'db> {
         hint: Option<String>,
     },
 
-    UndefinedVariable(DynLazySpan<'db>, IdentId<'db>),
+    /// The third field is set when the enclosing `impl` or `trait` defines a
+    /// function of the same name: the container kind (`"impl"` or `"trait"`)
+    /// and whether that function takes `self`.
+    UndefinedVariable(DynLazySpan<'db>, IdentId<'db>, Option<(&'static str, bool)>),
 
     InvalidEffectKey {
         owner: EffectParamOwner<'db>,

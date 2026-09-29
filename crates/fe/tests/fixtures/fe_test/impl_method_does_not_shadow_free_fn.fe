@@ -1,0 +1,81 @@
+use std::evm::Ctx
+
+// Associated functions are not in scope as bare names inside their impl or
+// trait: a bare call refers to the module-level function of the same name.
+// The associated function is reached via `Self::name`, `Type::name` or a
+// method call.
+
+pub fn digest(domain_separator: u256, struct_hash: u256) -> u256 {
+    domain_separator * 1000 + struct_hash
+}
+
+pub fn scaled(_ value: u256) -> u256 {
+    value * 10
+}
+
+pub struct Domain {
+    sep: u256,
+}
+
+impl Copy for Domain {}
+
+impl Domain {
+    pub fn digest(self, struct_hash: u256) -> u256 {
+        digest(domain_separator: self.sep, struct_hash)
+    }
+
+    pub fn separator(self) -> u256 uses (ctx: Ctx) {
+        self.sep + ctx.chainid()
+    }
+
+    pub fn digest_on_chain(self, struct_hash: u256) -> u256 uses (ctx: Ctx) {
+        digest(domain_separator: self.separator(), struct_hash)
+    }
+
+    fn scaled(self) -> u256 {
+        scaled(self.sep) + 1
+    }
+
+    pub fn scaled_twice(self) -> u256 {
+        Self::scaled(self) + self.scaled()
+    }
+}
+
+pub trait Scale {
+    fn scaled(self) -> u256
+
+    fn scaled_default(self) -> u256 {
+        scaled(self.scaled())
+    }
+}
+
+impl Scale for Domain {
+    fn scaled(self) -> u256 {
+        scaled(self.sep) + 2
+    }
+}
+
+#[test]
+fn bare_call_in_impl_resolves_to_free_fn() {
+    let d = Domain { sep: 7 }
+    assert!(d.digest(struct_hash: 5) == 7005)
+}
+
+#[test]
+fn bare_call_in_effectful_method_resolves_to_free_fn() uses (ctx: Ctx) {
+    let d = Domain { sep: 7 }
+    let expected = (7 + ctx.chainid()) * 1000 + 5
+    assert!(d.digest_on_chain(struct_hash: 5) == expected)
+}
+
+#[test]
+fn associated_fn_still_reachable_via_self_path_and_method_call() {
+    let d = Domain { sep: 3 }
+    assert!(d.scaled_twice() == 62)
+}
+
+#[test]
+fn bare_call_in_trait_default_method_resolves_to_free_fn() {
+    let d = Domain { sep: 3 }
+    assert!(d.scaled_default() == 320)
+}

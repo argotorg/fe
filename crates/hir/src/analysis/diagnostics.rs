@@ -2914,17 +2914,32 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            Self::UndefinedVariable(primary, ident) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "undefined variable".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!("undefined variable `{}`", ident.data(db)),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
-                error_code,
-            },
+            Self::UndefinedVariable(primary, ident, assoc_fn) => {
+                let ident = ident.data(db);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "undefined variable".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("undefined variable `{ident}`"),
+                        span: primary.resolve(db),
+                    }],
+                    notes: assoc_fn
+                        .map(|(container, is_method)| {
+                            let call = if is_method {
+                                format!("self.{ident}(..)")
+                            } else {
+                                format!("Self::{ident}(..)")
+                            };
+                            format!(
+                                "`{ident}` is a function of the enclosing `{container}`, which is not in scope as a bare name; call it as `{call}`"
+                            )
+                        })
+                        .into_iter()
+                        .collect(),
+                    error_code,
+                }
+            }
 
             Self::InvalidEffectKey { owner, key, idx } => {
                 let idx = *idx;
