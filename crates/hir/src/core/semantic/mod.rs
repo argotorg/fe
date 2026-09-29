@@ -3617,10 +3617,11 @@ impl<'db> GrowthOwner<'db> {
 ///
 /// An input flows into each ADT argument built from it, and into each input
 /// of an impl that may resolve a projection built from it. A written type may
-/// also be an effect handle, whose `Target` is a referent. An argument grows
-/// unless no instance of it is larger than the input's value. A state also
-/// keeps the head constructor of the input's value when known, so a
-/// projection only reaches the impls that value can select.
+/// also be an effect handle, whose `Target` is a referent. Each flow bounds
+/// how much larger its argument can be than the input's value, so a cycle
+/// grows only if its flows gain size in total. A state also keeps the head
+/// constructor of the input's value when known, so a projection only reaches
+/// the impls that value can select.
 fn growing_cycle<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
@@ -3630,7 +3631,9 @@ fn growing_cycle<'db>(
     type State<'db> = (GrowthOwner<'db>, usize, Option<TyId<'db>>);
     struct Flow<'db> {
         to: State<'db>,
-        grows: bool,
+        /// An upper bound on how much larger the argument is than the input's
+        /// value, or `None` if it may be unboundedly larger.
+        growth: Option<i64>,
         /// Whether the receiver certainly applies, rather than possibly
         /// matching a value whose head is unknown.
         definite: bool,
@@ -3736,12 +3739,14 @@ fn growing_cycle<'db>(
         // A parameter matched by the whole pattern takes the value's head.
         let known = (pattern, head(db, pattern).or(value_head));
         let known_head = |ty| if ty == known.0 { known.1 } else { head(db, ty) };
+        let mut pattern_occurrences = vec![0; params.len()];
+        let pattern_size = measure(db, pattern, params, &mut pattern_occurrences);
         let mut state_flows = Vec::new();
         for (member, ty) in definitions {
             let mut subterms = vec![ty];
             while let Some(ty) = subterms.pop() {
+                subterms.extend(reachable_parts(db, ty));
                 let (base, args) = ty.decompose_ty_app(db);
-                subterms.extend(args);
                 let mut receivers = Vec::new();
                 if let TyData::TyBase(TyBase::Adt(applied)) = base.data(db) {
                     receivers.extend(
@@ -3801,26 +3806,24 @@ fn growing_cycle<'db>(
                     if !flows_from_input {
                         continue;
                     }
+                    // Each parameter occurrence the argument drops held at
+                    // least one constructor of the input's value.
                     let mut arg_occurrences = vec![0; params.len()];
-                    let mut pattern_occurrences = vec![0; params.len()];
-                    let grows = match (
-                        measure(db, arg, params, &mut arg_occurrences),
-                        measure(db, pattern, params, &mut pattern_occurrences),
-                    ) {
-                        (Some(arg_size), Some(pattern_size)) => {
-                            arg_size > pattern_size
-                                || arg_occurrences
-                                    .iter()
-                                    .zip(&pattern_occurrences)
-                                    .any(|(arg, pattern)| arg > pattern)
-                        }
-                        _ => true,
-                    };
+                    let growth = measure(db, arg, params, &mut arg_occurrences)
+                        .zip(pattern_size)
+                        .and_then(|(arg_size, pattern_size)| {
+                            arg_occurrences.iter().zip(&pattern_occurrences).try_fold(
+                                arg_size as i64 - pattern_size as i64,
+                                |growth, (arg, pattern)| {
+                                    (arg <= pattern).then(|| growth - (pattern - arg) as i64)
+                                },
+                            )
+                        });
                     let to = (receiver, to, known_head(arg));
                     pending.push(to);
                     state_flows.push(Flow {
                         to,
-                        grows,
+                        growth,
                         definite,
                         member,
                     });
@@ -3832,37 +3835,214 @@ fn growing_cycle<'db>(
         flows.insert(state, state_flows);
     }
 
-    // Report the shortest path from a state of `start` back to itself
-    // through a growing flow.
-    flows
-        .keys()
-        .filter(|(owner, ..)| *owner == start)
-        .filter_map(|&state| {
-            let mut reached = FxHashMap::from_iter([((state, false), None)]);
-            let mut pending = VecDeque::from([(state, false)]);
-            while let Some(current @ (at, grown)) = pending.pop_front() {
-                for flow in &flows[&at] {
-                    let next = (flow.to, grown || flow.grows);
-                    if reached.contains_key(&next) {
-                        continue;
-                    }
-                    reached.insert(next, Some((current, flow.member)));
-                    if next == (state, true) {
-                        let mut cycle: Vec<_> =
-                            iter::successors(reached[&next], |(previous, _)| reached[previous])
-                                .map(|(_, member)| member)
-                                .collect();
-                        cycle.reverse();
-                        let mut seen = FxHashSet::default();
-                        cycle.retain(|member| seen.insert(*member));
-                        return Some(cycle);
-                    }
+    // A state grows without bound if a cycle through it can gain size. Within
+    // a strongly connected set of states, a closed walk through one state can
+    // repeat any cycle of the set, so any positive cycle of the set suffices.
+    struct Edge<'db> {
+        from: usize,
+        to: usize,
+        growth: Option<i64>,
+        member: GrowingCycleMember<'db>,
+    }
+    let flows = &flows;
+    let edges: Vec<_> = flows
+        .values()
+        .enumerate()
+        .flat_map(|(from, state_flows)| {
+            state_flows.iter().map(move |flow| Edge {
+                from,
+                to: flows
+                    .get_index_of(&flow.to)
+                    .expect("every flow target is explored"),
+                growth: flow.growth,
+                member: flow.member,
+            })
+        })
+        .collect();
+    let mut outgoing = vec![Vec::new(); flows.len()];
+    let mut incoming = vec![Vec::new(); flows.len()];
+    for (idx, edge) in edges.iter().enumerate() {
+        outgoing[edge.from].push(idx);
+        incoming[edge.to].push(idx);
+    }
+    let reach = |from: usize, adjacent: &[Vec<usize>], next: fn(&Edge<'db>) -> usize| {
+        let mut reached = vec![false; flows.len()];
+        reached[from] = true;
+        let mut pending = vec![from];
+        while let Some(state) = pending.pop() {
+            for &edge in &adjacent[state] {
+                let next = next(&edges[edge]);
+                if !reached[next] {
+                    reached[next] = true;
+                    pending.push(next);
+                }
+            }
+        }
+        reached
+    };
+    // The shortest walk of edges between two states of a component.
+    let walk = |from: usize, to: usize, component: &[bool]| {
+        let mut entered = FxHashMap::from_iter([(from, None)]);
+        let mut pending = VecDeque::from([from]);
+        while let Some(state) = pending.pop_front()
+            && state != to
+        {
+            for &edge in &outgoing[state] {
+                let next = edges[edge].to;
+                if component[next] && !entered.contains_key(&next) {
+                    entered.insert(next, Some(edge));
                     pending.push_back(next);
                 }
             }
-            None
+        }
+        let mut path: Vec<_> =
+            iter::successors(entered[&to], |edge| entered[&edges[*edge].from]).collect();
+        path.reverse();
+        path
+    };
+    flows
+        .keys()
+        .enumerate()
+        .filter(|(_, (owner, ..))| *owner == start)
+        .filter_map(|(state, _)| {
+            let forward = reach(state, &outgoing, |edge| edge.to);
+            let backward = reach(state, &incoming, |edge| edge.from);
+            let component: Vec<_> = forward
+                .iter()
+                .zip(&backward)
+                .map(|(f, b)| *f && *b)
+                .collect();
+            let inner: Vec<_> = (0..edges.len())
+                .filter(|edge| component[edges[*edge].from] && component[edges[*edge].to])
+                .collect();
+            let cycle =
+                if let Some(&edge) = inner.iter().find(|edge| edges[**edge].growth.is_none()) {
+                    vec![edge]
+                } else {
+                    // Longest-path Bellman-Ford: a state still gaining after one
+                    // round per state lies behind a positive cycle.
+                    let size = component.iter().filter(|member| **member).count();
+                    let mut gain = vec![None; flows.len()];
+                    let mut entered = vec![None; flows.len()];
+                    gain[state] = Some(0);
+                    let mut improved = None;
+                    for _ in 0..size {
+                        improved = None;
+                        for &edge in &inner {
+                            let Edge {
+                                from, to, growth, ..
+                            } = edges[edge];
+                            if let (Some(base), Some(growth)) = (gain[from], growth)
+                                && gain[to].is_none_or(|gain| base + growth > gain)
+                            {
+                                gain[to] = Some(base + growth);
+                                entered[to] = Some(edge);
+                                improved = Some(to);
+                            }
+                        }
+                        if improved.is_none() {
+                            break;
+                        }
+                    }
+                    let mut on_cycle = improved?;
+                    for _ in 0..size {
+                        on_cycle =
+                            edges[entered[on_cycle].expect("an improved state was entered")].from;
+                    }
+                    let mut cycle = Vec::new();
+                    let mut at = on_cycle;
+                    loop {
+                        let edge = entered[at].expect("a positive cycle is entered");
+                        cycle.push(edge);
+                        at = edges[edge].from;
+                        if at == on_cycle {
+                            break;
+                        }
+                    }
+                    cycle.reverse();
+                    cycle
+                };
+            let first = edges[cycle[0]].from;
+            let last = edges[*cycle.last().expect("a cycle has an edge")].to;
+            let mut seen = FxHashSet::default();
+            Some(
+                walk(state, first, &component)
+                    .into_iter()
+                    .chain(cycle)
+                    .chain(walk(last, state, &component))
+                    .map(|edge| edges[edge].member)
+                    .filter(|member| seen.insert(*member))
+                    .collect::<Vec<_>>(),
+            )
         })
         .min_by_key(Vec::len)
+}
+
+/// Which parameters of `adt` can have part of their value become a reachable
+/// type, as a field, a referent or an effect handle's target, rather than only
+/// distinguishing the type. A handle may expose any parameter in its target.
+#[salsa::tracked(
+    return_ref,
+    cycle_fn=exposed_params_cycle_recover,
+    cycle_initial=exposed_params_cycle_initial
+)]
+fn exposed_params<'db>(db: &'db dyn HirAnalysisDb, adt: AdtDef<'db>) -> Vec<bool> {
+    let params = adt.params(db);
+    let handle = resolve_core_trait(db, adt.scope(db), &["EffectHandle"]).is_some_and(|handle| {
+        impls_for_trait_def(db, adt.ingot(db), handle)
+            .iter()
+            .any(|implementor| {
+                let self_ty = implementor.trait_(db).self_ty(db);
+                implementor.params(db).contains(&self_ty)
+                    || matches!(self_ty.base_ty(db).data(db), TyData::TyBase(TyBase::Adt(base)) if *base == adt)
+            })
+    });
+    let mut exposed = vec![handle; params.len()];
+    let mut reachable: Vec<_> = adt
+        .fields(db)
+        .iter()
+        .flat_map(|field| field.iter_types(db).map(|ty| ty.instantiate_identity()))
+        .collect();
+    while let Some(ty) = reachable.pop() {
+        if let Some(param) = params.iter().position(|param| *param == ty) {
+            exposed[param] = true;
+        }
+        reachable.extend(reachable_parts(db, ty));
+    }
+    exposed
+}
+
+fn exposed_params_cycle_initial<'db>(db: &'db dyn HirAnalysisDb, adt: AdtDef<'db>) -> Vec<bool> {
+    // Iteration only adds parameters reached through a recursive field.
+    vec![false; adt.params(db).len()]
+}
+
+fn exposed_params_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &[bool],
+    _count: u32,
+    _adt: AdtDef<'db>,
+) -> salsa::CycleRecoveryAction<Vec<bool>> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
+/// The parts of `ty` that are reachable types whenever an instance of `ty`
+/// is: the arguments of a builtin constructor, the exposed arguments of an
+/// ADT, and every input of a projection, which an impl may return.
+fn reachable_parts<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<TyId<'db>> {
+    if let TyData::AssocTy(assoc) = ty.data(db) {
+        return assoc.trait_.args(db).clone();
+    }
+    let (base, args) = ty.decompose_ty_app(db);
+    match base.data(db) {
+        TyData::TyBase(TyBase::Adt(adt)) => args
+            .iter()
+            .zip(exposed_params(db, *adt))
+            .filter(|(_, exposed)| **exposed)
+            .map(|(arg, _)| *arg)
+            .collect(),
+        _ => args.to_vec(),
+    }
 }
 
 /// Collect all ADTs directly appearing inside the given type without

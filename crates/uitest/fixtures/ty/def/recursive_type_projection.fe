@@ -61,3 +61,42 @@ impl<T> EffectHandle for Chain<T> {
         ptr::alloc<Option<Chain<[T; 1]>>>()
     }
 }
+
+// An impl may undo the growth of the cycle that reaches it.
+pub trait Unwrap {
+    type Out
+}
+
+impl<T> Unwrap for [T; 1] {
+    type Out = Wrapped<T>
+}
+
+pub struct Unwrapping<U: Unwrap> {
+    next: *U::Out,
+}
+
+pub struct Wrapped<T> {
+    value: T,
+    next: *Unwrapping<[T; 1]>,
+}
+
+// A projection may resolve to part of its input.
+pub trait Second {
+    type Out
+}
+
+impl<T> Second for (u8, T) {
+    type Out = T
+}
+
+impl<S, T> Second for ([S; 1], T) {
+    type Out = T
+}
+
+pub struct Carried<T>
+where
+    (T, Carried<[T; 1]>): Second,
+{
+    value: T,
+    next: *<(T, Carried<[T; 1]>) as Second>::Out,
+}

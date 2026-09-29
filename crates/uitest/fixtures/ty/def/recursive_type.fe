@@ -51,3 +51,11 @@ pub struct S12<T, const N: u256> {
     same: *S12<T, N>,
     other: *S12<u8, 0>,
 }
+
+// An argument that no field exposes only distinguishes the type.
+pub struct S13<T> {}
+
+pub struct S14<T> {
+    t: T,
+    next: *S13<S14<[T; 1]>>,
+}
