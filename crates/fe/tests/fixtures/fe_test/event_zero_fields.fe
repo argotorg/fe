@@ -1,0 +1,57 @@
+// Regression test for `#[event]` and `#[error]` structs with zero fields.
+//
+// The `#[event]` desugar used to push a `self` expression into the generated
+// `emit` body unconditionally. With no fields nothing referenced it, so the
+// orphaned expression was never typed and MIR lowering rejected the body as
+// invalid, even though `fe check` passed. A zero-field event emits LOG1 with
+// topic0 = keccak256("Paused()") and empty data, like Solidity's
+// `event Paused();`. `event_dynamic.rs` asserts the emitted log.
+
+use std::evm::{Evm, Log, revert_error}
+
+#[event]
+pub struct Paused {}
+
+#[error]
+pub struct Unauthorized {}
+
+msg ProbeMsg {
+    #[selector = sol("pause()")]
+    Pause -> u256,
+    #[selector = sol("fail()")]
+    Fail,
+}
+
+pub contract Probe uses (log: mut Log) {
+    recv ProbeMsg {
+        Pause -> u256 uses (mut log) {
+            log.emit(Paused {})
+            let ret: u256 = 1
+            ret
+        }
+
+        Fail {} {
+            revert_error(Unauthorized {})
+        }
+    }
+}
+
+#[test]
+fn topic0_paused() {
+    // cast keccak "Paused()"
+    assert!(Paused::TOPIC0 == 0x9e87fac88ff661f02d44f95383c817fece4bce600a3dab7a54406878b965e752)
+}
+
+#[test]
+fn emit_zero_field_event() uses (evm: mut Evm) {
+    let c = evm.create2<Probe>(value: 0, args: (), salt: 0)
+    let r: u256 = evm.call(addr: c, gas: 5000000, value: 0, message: ProbeMsg::Pause {})
+    assert!(r == 1)
+}
+
+// cast sig "Unauthorized()"
+#[test(should_revert, selector = 0x82b42900)]
+fn revert_zero_field_error() uses (evm: mut Evm) {
+    let c = evm.create2<Probe>(value: 0, args: (), salt: 0)
+    evm.call(addr: c, gas: 5000000, value: 0, message: ProbeMsg::Fail {})
+}

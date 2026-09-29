@@ -511,7 +511,10 @@ fn lower_emit_method<'db>(
         None,
         modifiers,
         move |body| {
-            let self_expr = body.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
+            // Only materialize `self` when a field reads it: an unreferenced expr
+            // in the body arena is never typed and blocks MIR lowering.
+            let self_expr = (!data_fields.is_empty() || !indexed_fields.is_empty())
+                .then(|| body.path_expr(PathId::from_ident(db, IdentId::make_self(db))));
 
             let data_buffer = if data_fields.is_empty() {
                 let empty_buffer = PathId::from_ident(db, roots.core)
@@ -523,7 +526,7 @@ fn lower_emit_method<'db>(
             } else {
                 let mut elems = Vec::with_capacity(data_fields.len());
                 for (name, _) in data_fields.iter().copied() {
-                    elems.push(self_field_expr(body, self_expr, name));
+                    elems.push(self_field_expr(body, self_expr.unwrap(), name));
                 }
                 let payload_expr = body.push_expr(Expr::Tuple(elems));
                 let encode_path = PathId::from_ident(db, roots.std)
@@ -549,7 +552,7 @@ fn lower_emit_method<'db>(
             });
 
             for (name, _ty) in indexed_fields.iter().copied() {
-                let value = self_field_expr(body, self_expr, name);
+                let value = self_field_expr(body, self_expr.unwrap(), name);
                 let topic = body.method_call_expr(value, as_topic_ident, vec![]);
                 args.push(crate::hir_def::expr::CallArg {
                     label: Some(IdentId::new(db, format!("topic{}", args.len() - 1))),
