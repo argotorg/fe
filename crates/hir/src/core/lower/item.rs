@@ -57,6 +57,9 @@ pub enum MsgDiagnosticKind {
         signature_arity: usize,
         field_count: usize,
     },
+    /// The `sol("...")` selector signature is not a well-formed Solidity
+    /// function signature.
+    MalformedSignature { signature: String, reason: String },
     /// A field type has no supported Solidity ABI representation.
     UnsupportedAbiField { ty: String, reason: String },
     /// A field type does not satisfy the traits required by generated ABI helpers.

@@ -589,6 +589,19 @@ impl DiagnosticVoucher for crate::MsgDiagnostic {
                 vec![],
                 None,
             ),
+            MsgDiagnosticKind::MalformedSignature { signature, reason } => (
+                9,
+                format!(
+                    "malformed selector signature `{signature}` for msg variant `{}`",
+                    self.variant_name
+                ),
+                reason.clone(),
+                vec![
+                    "expected a canonical Solidity signature such as `transfer(address,uint256)`"
+                        .to_string(),
+                ],
+                None,
+            ),
             MsgDiagnosticKind::UnsupportedAbiField { ty, reason } => (
                 8,
                 format!(

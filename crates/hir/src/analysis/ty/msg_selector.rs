@@ -213,7 +213,8 @@ fn check_variant_field_abi_requirements<'db>(
 /// Checks the argument types declared in a variant's `sol("...")` selector
 /// signature against the semantic ABI types of the variant's fields. Variants
 /// whose selector is not a recoverable signature string (e.g. a plain integer
-/// literal) are skipped; malformed signatures are reported at ABI emission.
+/// literal) are skipped; malformed signatures are reported here so they are
+/// caught before the (wrong) keccak-derived selector is used.
 fn check_variant_signature_types<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
@@ -228,8 +229,19 @@ fn check_variant_signature_types<'db>(
     else {
         return;
     };
-    let Ok(parsed) = parse_function_signature(&signature) else {
-        return;
+    let parsed = match parse_function_signature(&signature) {
+        Ok(parsed) => parsed,
+        Err(reason) => {
+            let range = msg_variant_focus_range(db, top_mod, struct_, MsgDesugaredFocus::Selector);
+            diags.push(Box::new(MsgDiagnostic {
+                kind: MsgDiagnosticKind::MalformedSignature { signature, reason },
+                file,
+                primary_range: range,
+                secondary_range: None,
+                variant_name: variant_name.to_string(),
+            }) as _);
+            return;
+        }
     };
 
     let field_tys: Vec<_> = struct_

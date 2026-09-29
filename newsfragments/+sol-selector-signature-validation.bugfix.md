@@ -1,0 +1,1 @@
+Report malformed `sol("...")` selector signatures on msg variants (unbalanced parentheses, invalid or empty function names, empty argument types, whitespace) as `fe check` errors instead of silently using the keccak of the malformed string as the selector and failing only later during JSON ABI emission.

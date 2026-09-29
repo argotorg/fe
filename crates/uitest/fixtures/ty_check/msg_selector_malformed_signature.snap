@@ -1,0 +1,45 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/msg_selector_malformed_signature.fe
+---
+error[9-0009]: malformed selector signature `foo((address[],((uint256,bool)[],uint256)[])` for msg variant `Foo`
+  ┌─ msg_selector_malformed_signature.fe:7:5
+  │
+7 │     #[selector = sol("foo((address[],((uint256,bool)[],uint256)[])")]
+  │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unbalanced selector argument list
+  │
+  = expected a canonical Solidity signature such as `transfer(address,uint256)`
+
+error[9-0009]: malformed selector signature `(uint256)` for msg variant `NoName`
+   ┌─ msg_selector_malformed_signature.fe:11:5
+   │
+11 │     #[selector = sol("(uint256)")]
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ selector function name must be a single identifier
+   │
+   = expected a canonical Solidity signature such as `transfer(address,uint256)`
+
+error[9-0009]: malformed selector signature `bar(uint256,)` for msg variant `Trailing`
+   ┌─ msg_selector_malformed_signature.fe:15:5
+   │
+15 │     #[selector = sol("bar(uint256,)")]
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ empty selector argument type
+   │
+   = expected a canonical Solidity signature such as `transfer(address,uint256)`
+
+error[9-0009]: malformed selector signature `baz(uint256, bool)` for msg variant `Spaced`
+   ┌─ msg_selector_malformed_signature.fe:19:5
+   │
+19 │     #[selector = sol("baz(uint256, bool)")]
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ selector signature must not contain whitespace
+   │
+   = expected a canonical Solidity signature such as `transfer(address,uint256)`
+
+error[9-0009]: malformed selector signature `qux(uint256` for msg variant `Unclosed`
+   ┌─ msg_selector_malformed_signature.fe:23:5
+   │
+23 │     #[selector = sol("qux(uint256")]
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ selector signature must end with `)`
+   │
+   = expected a canonical Solidity signature such as `transfer(address,uint256)`

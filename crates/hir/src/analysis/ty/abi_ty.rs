@@ -506,8 +506,16 @@ pub fn parse_function_signature(signature: &str) -> Result<ParsedFunctionSignatu
     let args = args
         .strip_suffix(')')
         .ok_or_else(|| "selector signature must end with `)`".to_string())?;
-    if name.is_empty() || name.trim() != name || name.chars().any(char::is_whitespace) {
+    let mut name_chars = name.chars();
+    let valid_name = name_chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && name_chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+    if !valid_name {
         return Err("selector function name must be a single identifier".to_string());
+    }
+    if args.chars().any(char::is_whitespace) {
+        return Err("selector signature must not contain whitespace".to_string());
     }
 
     Ok(ParsedFunctionSignature {

@@ -1,0 +1,29 @@
+// A `sol("...")` selector signature must be a well-formed Solidity function
+// signature; otherwise the selector would silently be the keccak of the
+// malformed string.
+
+msg SigMsg {
+    // Error: one `(` too many, the argument list is unbalanced
+    #[selector = sol("foo((address[],((uint256,bool)[],uint256)[])")]
+    Foo { a: u256 } -> u256,
+
+    // Error: empty function name
+    #[selector = sol("(uint256)")]
+    NoName { a: u256 },
+
+    // Error: trailing comma leaves an empty argument type
+    #[selector = sol("bar(uint256,)")]
+    Trailing { a: u256 },
+
+    // Error: whitespace changes the keccak-derived selector
+    #[selector = sol("baz(uint256, bool)")]
+    Spaced { a: u256, b: bool },
+
+    // Error: missing closing parenthesis
+    #[selector = sol("qux(uint256")]
+    Unclosed { a: u256 },
+
+    // OK
+    #[selector = sol("transfer(address,uint256)")]
+    Transfer { to: Address, amount: u256 } -> bool,
+}
