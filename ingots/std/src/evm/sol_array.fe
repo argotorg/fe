@@ -13,10 +13,13 @@
 //! owners.push(owner)
 //! let first = owners.get(0)
 //! ```
+use core::abi::{AbiSize, DynArray, Encode, store_word}
 use core::ops::WrappingAdd
+use core::ptr
+use ingot::abi::{Sol, StaticAbiElement}
 use super::effects::{RawStorage, revert_error}
 use super::panic::{PANIC_INDEX_OUT_OF_BOUNDS, PANIC_OUT_OF_MEMORY, PANIC_POP_EMPTY, Panic}
-use super::sol_slot::{SolPacked, SolSlot, data_slot}
+use super::sol_slot::{SolPacked, SolSlot, data_slot, field_mask}
 
 // Solidity refuses to `push` onto a storage array of 2**64 - 1 elements.
 const MAX_LEN: u256 = 0xffffffffffffffff
@@ -88,6 +91,23 @@ impl<T: SolPacked> SolArray<T> {
         storage.sstore(slot: self.slot, value: last)
     }
 
+    /// All elements in index order, as an ABI `T[]` in memory, like
+    /// Solidity's `return arr;` for a storage array.
+    ///
+    /// Costs one `sload` per storage slot (packed elements share one) and
+    /// allocates `32 * (len() + 1)` bytes, so the gas grows with the length
+    /// without bound. Meant for view calls; a state-changing function calling
+    /// it can be made to run out of gas by growing the array.
+    pub fn to_dyn_array(self) -> DynArray<T>
+    uses (storage: RawStorage) where T: StaticAbiElement + Encode<Sol> + AbiSize
+    {
+        read_dyn_array(
+            first_slot: data_slot(self.slot),
+            len: self.len(),
+            per_slot: self.per_slot(),
+        )
+    }
+
     fn per_slot(self) -> u256 {
         32 / (T::BITS / 8)
     }
@@ -97,4 +117,31 @@ impl<T: SolPacked> SolArray<T> {
             revert_error(Panic::from(PANIC_INDEX_OUT_OF_BOUNDS))
         }
     }
+}
+
+/// Reads `len` elements laid out from `first_slot` on with `per_slot` of them
+/// packed into each slot (element `i` at byte `(i % per_slot) * size` of
+/// slot `first_slot + i / per_slot`) into an ABI `T[]`, loading each slot
+/// once.
+pub(ingot) fn read_dyn_array<T>(first_slot: u256, len: u256, per_slot: u256) -> DynArray<T>
+uses (storage: RawStorage)
+where T: SolPacked + StaticAbiElement + Encode<Sol> + AbiSize
+{
+    let size = 32 + len * 32
+    let data = ptr::alloc_bytes(size)
+    store_word(ptr: data, value: len)
+    let bits = T::BITS
+    let mask = field_mask(bits)
+    let mut word: u256 = 0
+    let mut i: u256 = 0
+    while i < len {
+        let lane = i % per_slot
+        if lane == 0 {
+            word = storage.sload(first_slot.wrapping_add(i / per_slot))
+        }
+        let value = T::from_packed((word >> (lane * bits)) & mask)
+        value.encode(ptr::offset_bytes(data, 32 + i * 32))
+        i += 1
+    }
+    DynArray::from_abi_tail(data, len, size)
 }

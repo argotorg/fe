@@ -12,14 +12,18 @@
 //!
 //! `read`/`write` cost one `sload` (and one `sstore`) per field. To read or
 //! update several fields of one slot with a single `sload`/`sstore`, `load`
-//! the slot into a `SolWord`:
+//! the slot into a `SolWord` and `store` it back:
 //!
 //! ```fe
-//! let mut word = SolSlot::at(0).load()
+//! let slot = SolSlot::at(0)
+//! let mut word = slot.load()
 //! let owner: Address = word.get(offset: 0)
 //! word.set(offset: 20, value: false)
-//! word.store()
+//! slot.store(word)
 //! ```
+//!
+//! A `SolWord` is only a value, so it also packs or unpacks a word obtained
+//! some other way: `SolWord { word: raw }.get(offset: 2)`.
 //!
 //! `read_bytes`/`write_bytes` (and the `string` variants) use Solidity's
 //! layout for a `bytes` or `string` state variable in the slot.
@@ -78,19 +82,25 @@ impl SolSlot {
     /// Loads the whole slot with one `sload`, for reading or updating
     /// several packed fields; see `SolWord`.
     pub fn load(self) -> SolWord uses (storage: RawStorage) {
-        SolWord { slot: self.slot, word: storage.sload(self.slot) }
+        SolWord { word: storage.sload(self.slot) }
+    }
+
+    /// Writes `word` to the slot with one `sstore`, replacing all of it,
+    /// including changes made to the slot since `word` was loaded.
+    pub fn store(self, _ word: SolWord) uses (storage: mut RawStorage) {
+        storage.sstore(slot: self.slot, value: word.word)
     }
 }
 
-/// The value of a storage slot, loaded once by `SolSlot::load`.
+/// A 32-byte word of Solidity-packed fields, such as the value of a storage
+/// slot loaded by `SolSlot::load`.
 ///
-/// `get` and `set` address a Solidity-packed field by its byte offset from
-/// the low end of the word, with the same encoding and bounds checks as
-/// `SolSlot::read`/`write`, but touch only this in-memory copy. `store`
-/// writes the word back to `slot` with one `sstore`. Changes to the slot
-/// made after `load` are overwritten by `store`.
+/// `get` and `set` address a field by its byte offset from the low end of the
+/// word, with the same encoding and bounds checks as `SolSlot::read`/`write`,
+/// but only compute on the value: storage changes only when the word is
+/// written with `SolSlot::store`. `SolWord { word }` packs or unpacks a word
+/// obtained any other way, e.g. read through `RawOps` or returned by a call.
 pub struct SolWord {
-    pub slot: u256,
     pub word: u256,
 }
 
@@ -106,16 +116,11 @@ impl SolWord {
 
     /// Replaces the `T` stored `offset` bytes above the low end of the word,
     /// keeping the other bytes. Reverts if the field does not fit in the
-    /// word. Storage is unchanged until `store`.
+    /// word.
     pub fn set<T: SolPacked>(mut self, offset: u256, value: own T) {
         let shift = field_shift(offset, bits: T::BITS)
         let mask = field_mask(T::BITS) << shift
         self.word = (self.word & !mask) | ((value.to_packed() << shift) & mask)
-    }
-
-    /// Writes the word back to its slot.
-    pub fn store(self) uses (storage: mut RawStorage) {
-        storage.sstore(slot: self.slot, value: self.word)
     }
 }
 

@@ -14,11 +14,13 @@
 //! if operators.add(operator) { /* newly added */ }
 //! let n = operators.len()
 //! ```
+use core::abi::{AbiSize, DynArray, Encode}
 use core::ops::WrappingAdd
+use ingot::abi::{Sol, StaticAbiElement}
 use super::effects::RawStorage
 use super::mapping::SolMapping
-use super::sol_array::SolArray
-use super::sol_slot::{SolPacked, field_mask}
+use super::sol_array::{SolArray, read_dyn_array}
+use super::sol_slot::{SolPacked, data_slot, field_mask}
 
 pub struct SolEnumerableSet<T> { pub slot: u256 }
 
@@ -34,7 +36,7 @@ impl<T: SolPacked> SolEnumerableSet<T> {
 
     /// Number of elements.
     pub fn len(self) -> u256 uses (storage: RawStorage) {
-        self.values().len()
+        self.array().len()
     }
 
     /// Whether `value` is in the set.
@@ -46,7 +48,24 @@ impl<T: SolPacked> SolEnumerableSet<T> {
     /// The order changes when elements are removed. Reverts with
     /// `Panic(0x32)` if `index >= len()`.
     pub fn get(self, _ index: u256) -> T uses (storage: RawStorage) {
-        T::from_packed(self.values().get(index) & field_mask(T::BITS))
+        T::from_packed(self.array().get(index) & field_mask(T::BITS))
+    }
+
+    /// All elements in the set's internal order (the order of `get`), like
+    /// OZ's `values`.
+    ///
+    /// Costs one `sload` per element and allocates `32 * (len() + 1)`
+    /// bytes, so the gas grows with the size of the set without bound. Meant
+    /// for view calls, as OZ warns; a state-changing function calling it can
+    /// be made to run out of gas by growing the set.
+    pub fn values(self) -> DynArray<T>
+    uses (storage: RawStorage) where T: StaticAbiElement + Encode<Sol> + AbiSize
+    {
+        read_dyn_array(
+            first_slot: data_slot(self.slot),
+            len: self.len(),
+            per_slot: 1,
+        )
     }
 
     /// Adds `value`; returns false if it was already present.
@@ -56,7 +75,7 @@ impl<T: SolPacked> SolEnumerableSet<T> {
         if storage.sload(position_slot) != 0 {
             return false
         }
-        let values = self.values()
+        let values = self.array()
         values.push(word)
         storage.sstore(slot: position_slot, value: values.len())
         true
@@ -71,7 +90,7 @@ impl<T: SolPacked> SolEnumerableSet<T> {
         if position == 0 {
             return false
         }
-        let values = self.values()
+        let values = self.array()
         let index = position - 1
         let last = values.len() - 1
         if index != last {
@@ -84,7 +103,7 @@ impl<T: SolPacked> SolEnumerableSet<T> {
         true
     }
 
-    fn values(self) -> SolArray<u256> {
+    fn array(self) -> SolArray<u256> {
         SolArray::at(self.slot)
     }
 

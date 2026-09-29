@@ -4,7 +4,8 @@
 // (see `solidity_layout_parity`) and reading its storage with `vm.load`.
 use std::abi::Bytes32
 use std::abi::sol::{Uint24, Uint120}
-use std::evm::{Address, Evm, RawStorage, SolArray, SolEnumerableSet, SolSlot}
+use std::abi::DynArray
+use std::evm::{Address, Evm, RawStorage, SolArray, SolEnumerableSet, SolSlot, SolWord}
 
 // keccak256(abi.encode(n)) for n = 0..3: the data slots of arrays at 0..3.
 const DATA_0: u256 = 0x290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563
@@ -78,11 +79,11 @@ fn solidity_layout_parity() uses (evm: mut Evm) {
         st.set(offset: 1, value: false)
         st.set(offset: 2, value: Uint120 { val: 3 })
         st.set(offset: 17, value: Uint120 { val: 7 })
-        st.store()
+        SolSlot::at(5).store(st)
         let mut st = SolSlot::at(5).load()
         st.set(offset: 1, value: true)
         st.set(offset: 0, value: false)
-        st.store()
+        SolSlot::at(5).store(st)
 
         // Lengths.
         assert(load(0) == 2)
@@ -280,6 +281,7 @@ fn set_at_last_slot_wraps() uses (evm: mut Evm) {
         assert(s.remove(5))
         assert(!s.contains(5))
         assert(s.get(0) == 6)
+        assert(s.values().len() == 1)
     }
 }
 
@@ -308,7 +310,7 @@ fn word_reads_and_writes_many_fields() uses (evm: mut Evm) {
         // Nothing is written until `store`.
         let still: Address = SolSlot::at(0).read(offset: 0)
         assert(still.inner == 0xabc)
-        word.store()
+        SolSlot::at(0).store(word)
         let operator: Address = SolSlot::at(0).read(offset: 0)
         let paused: bool = SolSlot::at(0).read(offset: 20)
         let untouched: u8 = SolSlot::at(0).read(offset: 21)
@@ -325,6 +327,126 @@ fn word_field_past_end_reverts() uses (evm: mut Evm) {
         let mut word = SolSlot::at(0).load()
         word.set(offset: 17, value: addr(1))
     }
+}
+
+// Word `index` of the ABI encoding of `array` (word 0 is the length).
+fn abi_word<T>(_ array: DynArray<T>, _ index: u256) -> u256 {
+    array.encoded_span().word_at(index * 32)
+}
+
+#[test]
+fn array_to_dyn_array() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let empty = SolArray<u256>::at(40).to_dyn_array()
+        assert(empty.len() == 0)
+        assert(empty.encoded_size() == 32)
+        assert(abi_word(empty, 0) == 0)
+
+        // uint24[]: ten per slot, so the eleventh element starts a new slot.
+        let small = SolArray<Uint24>::at(41)
+        let mut i: u32 = 1
+        while i <= 11 {
+            small.push(Uint24 { val: i * 0x10101 })
+            i += 1
+        }
+        let values = small.to_dyn_array()
+        assert(values.len() == 11)
+        assert(values.encoded_size() == 32 * 12)
+        assert(abi_word(values, 0) == 11)
+        let mut i: u256 = 0
+        while i < 11 {
+            assert(abi_word(values, i + 1) == (i + 1) * 0x10101)
+            assert(values.get(i).val as u256 == (i + 1) * 0x10101)
+            i += 1
+        }
+
+        // int16[]: negative elements are sign-extended to a full ABI word.
+        let signed = SolArray<i16>::at(42)
+        signed.push(-1)
+        signed.push(-300)
+        signed.push(7)
+        let values = signed.to_dyn_array()
+        assert(abi_word(values, 1) == u256::max())
+        assert(abi_word(values, 2) == u256::max() - 299)
+        assert(abi_word(values, 3) == 7)
+        assert(values.get(1) == -300)
+
+        // bool[] and address[].
+        let flags = SolArray<bool>::at(43)
+        let mut i: u256 = 0
+        while i < 33 {
+            flags.push(i % 3 == 0)
+            i += 1
+        }
+        let values = flags.to_dyn_array()
+        assert(values.len() == 33)
+        let mut i: u256 = 0
+        while i < 33 {
+            assert(abi_word(values, i + 1) == if i % 3 == 0 { 1 } else { 0 })
+            i += 1
+        }
+        let owners = SolArray<Address>::at(44)
+        owners.push(addr(0xaa))
+        owners.push(addr(0xbb))
+        let values = owners.to_dyn_array()
+        assert(abi_word(values, 1) == 0xaa && abi_word(values, 2) == 0xbb)
+    }
+}
+
+#[test]
+fn set_values() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let s = SolEnumerableSet<Address>::at(50)
+        assert(s.values().len() == 0)
+
+        // The order of `get`, as in `solidity_layout_parity`: [b, d, c].
+        assert(s.add(addr(0xa)))
+        assert(s.add(addr(0xb)))
+        assert(s.add(addr(0xc)))
+        assert(s.add(addr(0xd)))
+        assert(s.remove(addr(0xb)))
+        assert(s.add(addr(0xb)))
+        assert(s.remove(addr(0xa)))
+        let values = s.values()
+        assert(values.len() == 3)
+        assert(values.encoded_size() == 32 * 4)
+        assert(abi_word(values, 0) == 3)
+        assert(abi_word(values, 1) == 0xb)
+        assert(abi_word(values, 2) == 0xd)
+        assert(abi_word(values, 3) == 0xc)
+        let mut i: u256 = 0
+        while i < 3 {
+            assert(values.get(i).inner == s.get(i).inner)
+            i += 1
+        }
+
+        let tags = SolEnumerableSet<Bytes32>::at(52)
+        assert(tags.add(Bytes32 { val: 0xff << 248 }))
+        assert(tags.add(Bytes32 { val: 1 }))
+        let values = tags.values()
+        assert(abi_word(values, 1) == 0xff << 248)
+        assert(abi_word(values, 2) == 1)
+    }
+}
+
+#[test]
+fn word_without_slot() {
+    // Seaport's `OrderStatus`: bool flags at bytes 0 and 1, uint120 numerator
+    // at byte 2 and denominator at byte 17.
+    let raw: u256 = 0x0000000000000000000000000000070000000000000000000000000000030100
+    let word = SolWord { word: raw }
+    let validated: bool = word.get(offset: 0)
+    let cancelled: bool = word.get(offset: 1)
+    let numerator: Uint120 = word.get(offset: 2)
+    let denominator: Uint120 = word.get(offset: 17)
+    assert(!validated && cancelled)
+    assert(numerator.val == 3 && denominator.val == 7)
+
+    let mut packed = SolWord { word: 0 }
+    packed.set(offset: 1, value: true)
+    packed.set(offset: 2, value: Uint120 { val: 3 })
+    packed.set(offset: 17, value: Uint120 { val: 7 })
+    assert(packed.word == raw)
 }
 
 #[test]
