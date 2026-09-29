@@ -1,0 +1,159 @@
+/// Keccak-256 Merkle proof verification.
+///
+/// `hash_pair_sorted`, `process_proof` and `verify` match OpenZeppelin's
+/// `MerkleProof` (sorted-pair / commutative trees, as produced by
+/// `@openzeppelin/merkle-tree` and used by Seaport criteria resolvers).
+/// `process_indexed_proof` and `verify_indexed` handle positional trees,
+/// where the leaf index selects the side at each level (as in Seaport bulk
+/// order signatures).
+///
+/// Leaves are taken as-is: this module never hashes the leaf. Callers
+/// normally pass `keccak256` of the leaf data (OpenZeppelin's standard tree
+/// hashes it twice). Leaves must not be 64-byte values that could be read
+/// as a pair of internal nodes, or an internal node can be proven as a leaf.
+///
+/// Every function allocates one 64-byte hashing buffer per call and reuses
+/// it for every level, so memory cost does not grow with the proof length.
+///
+/// Proofs are read in place from any `ProofNodes` source: `MemSlice<u256>`,
+/// or an ABI `bytes32[]` / `uint256[]` (`DynArray<Bytes32>` /
+/// `DynArray<u256>`, e.g. a decoded message field). Nothing is copied.
+///
+/// ```ignore
+/// use std::evm::merkle
+///
+/// Claim { proof, amount } -> bool {
+///     let leaf = keccak_packed((ctx.caller(), amount))
+///     merkle::verify(proof, root: store.root, leaf)
+/// }
+/// ```
+use core::abi::DynArray
+use core::ptr::{self, MemSlice}
+use ingot::abi::Bytes32
+use super::ops
+
+/// A sequence of 32-byte Merkle proof nodes, ordered from the leaf's
+/// sibling up to the child of the root.
+pub trait ProofNodes {
+    /// The nodes as a word slice over the source's own memory.
+    fn nodes(self) -> MemSlice<u256>
+}
+
+impl ProofNodes for MemSlice<u256> {
+    fn nodes(self) -> MemSlice<u256> {
+        self
+    }
+}
+
+impl ProofNodes for DynArray<u256> {
+    fn nodes(self) -> MemSlice<u256> {
+        dyn_array_words(self.encoded_span().ptr(), len: self.len())
+    }
+}
+
+/// `Bytes32` elements are used as raw 32-byte words, exactly as Solidity's
+/// `bytes32[]`; no per-element decoding happens.
+impl ProofNodes for DynArray<Bytes32> {
+    fn nodes(self) -> MemSlice<u256> {
+        dyn_array_words(self.encoded_span().ptr(), len: self.len())
+    }
+}
+
+// Static-element DynArray tails are the length word followed by `len`
+// element words, validated when the array is constructed or decoded.
+#[inline(always)]
+fn dyn_array_words(_ data: *u8, len: u256) -> MemSlice<u256> {
+    MemSlice::from_raw_parts(ptr: ptr::cast<u8, u256>(ptr::offset_bytes(data, 32)), len)
+}
+
+/// `keccak256(abi.encode(min(a, b), max(a, b)))`: OpenZeppelin's
+/// `Hashes.commutativeKeccak256` (`MerkleProof._hashPair`).
+///
+/// The result does not depend on argument order.
+pub fn hash_pair_sorted(_ a: u256, _ b: u256) -> u256 {
+    sorted_into(ptr::alloc_bytes(64), a, b)
+}
+
+/// The root implied by `leaf` and a sorted-pair `proof`:
+/// `node = hash_pair_sorted(node, proof[i])` for each node in order,
+/// starting from `leaf`. An empty proof yields `leaf` itself.
+///
+/// Same as OpenZeppelin `MerkleProof.processProof`.
+#[arithmetic(unchecked)]
+pub fn process_proof<P: ProofNodes>(proof: P, leaf: u256) -> u256 {
+    let nodes = proof.nodes()
+    let len = nodes.len()
+    let base = ptr::cast<u256, u8>(nodes.ptr())
+    let scratch = ptr::alloc_bytes(64)
+    let mut node = leaf
+    let mut i: u256 = 0
+    while i < len {
+        node = sorted_into(scratch, node, ops::mload(ptr::offset_bytes(base, i * 32)))
+        i += 1
+    }
+    node
+}
+
+/// Whether `leaf` is proven part of the sorted-pair tree with `root`:
+/// `process_proof(proof, leaf) == root`.
+///
+/// Same as OpenZeppelin `MerkleProof.verify`. With an empty proof this holds
+/// exactly when `leaf == root` (a one-leaf tree).
+pub fn verify<P: ProofNodes>(proof: P, root: u256, leaf: u256) -> bool {
+    process_proof(proof, leaf) == root
+}
+
+/// The root implied by `leaf` at position `index` of a positional tree.
+///
+/// At level `i` (0 = the leaf), bit `i` of `index` gives the side of the
+/// current node: `1` means it is the right child, so the parent is
+/// `keccak256(abi.encode(proof[i], node))`; `0` means it is the left child
+/// and the parent is `keccak256(abi.encode(node, proof[i]))`. For a complete
+/// tree of height `proof.len()` this makes `index` the leaf's position
+/// counted from the left. Bits at or above `proof.len()` are ignored, and
+/// an empty proof yields `leaf` itself.
+///
+/// This is the Seaport bulk order proof walk (`_computeBulkOrderProof`,
+/// with the 3-byte key as `index`), before its final typehash step.
+#[arithmetic(unchecked)]
+pub fn process_indexed_proof<P: ProofNodes>(proof: P, leaf: u256, index: u256) -> u256 {
+    let nodes = proof.nodes()
+    let len = nodes.len()
+    let base = ptr::cast<u256, u8>(nodes.ptr())
+    let scratch = ptr::alloc_bytes(64)
+    let right_at = ptr::offset_bytes(scratch, 32)
+    let mut node = leaf
+    let mut i: u256 = 0
+    while i < len {
+        let sibling = ops::mload(ptr::offset_bytes(base, i * 32))
+        if (index >> i) & 1 == 1 {
+            ops::mstore(addr: scratch, value: sibling)
+            ops::mstore(addr: right_at, value: node)
+        } else {
+            ops::mstore(addr: scratch, value: node)
+            ops::mstore(addr: right_at, value: sibling)
+        }
+        node = ops::keccak256(offset: scratch, len: 64)
+        i += 1
+    }
+    node
+}
+
+/// Whether `leaf` sits at position `index` of the positional tree with
+/// `root`: `process_indexed_proof(proof, leaf, index) == root`.
+pub fn verify_indexed<P: ProofNodes>(proof: P, root: u256, leaf: u256, index: u256) -> bool {
+    process_indexed_proof(proof, leaf, index) == root
+}
+
+#[inline(always)]
+fn sorted_into(_ scratch: *u8, _ a: u256, _ b: u256) -> u256 {
+    let right_at = ptr::offset_bytes(scratch, 32)
+    if a < b {
+        ops::mstore(addr: scratch, value: a)
+        ops::mstore(addr: right_at, value: b)
+    } else {
+        ops::mstore(addr: scratch, value: b)
+        ops::mstore(addr: right_at, value: a)
+    }
+    ops::keccak256(offset: scratch, len: 64)
+}

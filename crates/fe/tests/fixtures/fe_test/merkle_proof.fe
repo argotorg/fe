@@ -1,0 +1,308 @@
+// `std::evm::merkle`: OpenZeppelin `MerkleProof` parity for sorted-pair
+// trees and Seaport bulk-order parity for positional (indexed) trees.
+//
+// Every expected value was precomputed outside Fe with Foundry's
+// `cast keccak` as the hash oracle (leaf i = keccak256(abi.encode(uint256(i)))):
+// sorted trees pair adjacent nodes with OpenZeppelin's commutative
+// `_hashPair` and promote an odd last node unchanged (merkletreejs
+// `sortPairs`), positional trees are complete and were cross-checked
+// against a re-implementation of Seaport's `_computeBulkOrderProof` walk.
+// The fixture is not its own oracle.
+
+use core::ptr::{self, MemSlice}
+use std::abi::{Bytes32, DynArray, FixedBytes, MemVec}
+use std::evm::{Evm, merkle}
+
+fn words<const N: usize>(_ values: [u256; N]) -> MemSlice<u256> {
+    let mut array = ptr::alloc_array<u256>(N as u256)
+    let mut i: usize = 0
+    for value in values {
+        array[i] = value
+        i += 1
+    }
+    array.as_slice()
+}
+
+fn empty() -> MemSlice<u256> {
+    MemSlice<u256>::empty()
+}
+
+// keccak256(abi.encode(uint256(1))), keccak256(abi.encode(uint256(2)))
+const PAIR_A: u256 = 0xb10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6
+const PAIR_B: u256 = 0x405787fa12a823e0f2b7631cc41b3ba8828b3321ca811111fa75cd3aa3bb5ace
+// keccak256(abi.encode(min(a, b), max(a, b)))
+const PAIR_AB: u256 = 0x2a171b5bcd1449348c3e09a5424946b5e6d6f5471221941d585131d673952ee4
+// keccak256(abi.encode(a, a))
+const PAIR_AA: u256 = 0xb6fd98eeb7e08fc521f11511289afe4d8e873fd7a3fb76ab757fa47c23f596e9
+
+#[test]
+fn test_hash_pair_sorted() {
+    assert!(merkle::hash_pair_sorted(PAIR_A, PAIR_B) == PAIR_AB)
+    assert!(merkle::hash_pair_sorted(PAIR_B, PAIR_A) == PAIR_AB)
+    assert!(merkle::hash_pair_sorted(PAIR_A, PAIR_A) == PAIR_AA)
+}
+
+// A one-leaf tree: the root is the leaf and the proof is empty.
+#[test]
+fn test_empty_proof() {
+    assert!(merkle::process_proof(proof: empty(), leaf: PAIR_A) == PAIR_A)
+    assert!(merkle::verify(proof: empty(), root: PAIR_A, leaf: PAIR_A))
+    assert!(!merkle::verify(proof: empty(), root: PAIR_A, leaf: PAIR_B))
+    assert!(merkle::process_indexed_proof(proof: empty(), leaf: PAIR_A, index: 7) == PAIR_A)
+    assert!(merkle::verify_indexed(proof: empty(), root: PAIR_A, leaf: PAIR_A, index: 7))
+    assert!(!merkle::verify_indexed(proof: empty(), root: PAIR_A, leaf: PAIR_B, index: 0))
+}
+
+const ROOT_2: u256 = 0x891370df4fadf33f50e41f7c8a791e680c0655695ea3404385a909c8f5e13fb4
+const LEAF_2_0: u256 = 0x290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563
+const LEAF_2_1: u256 = 0xb10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6
+
+const ROOT_3: u256 = 0x038a2f0e22b3057e8442080dd34c298001ff0796b494235f125d681d5507068c
+const LEAF_3_0: u256 = 0x290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563
+const LEAF_3_1: u256 = 0xb10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6
+const LEAF_3_2: u256 = 0x405787fa12a823e0f2b7631cc41b3ba8828b3321ca811111fa75cd3aa3bb5ace
+
+const ROOT_8: u256 = 0x8e612b28dcb28b22120543ab6da08e0d31eec6eb2722d5d43a2afd6b0ebdba48
+const LEAF_8_0: u256 = 0x290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563
+const LEAF_8_1: u256 = 0xb10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6
+const LEAF_8_2: u256 = 0x405787fa12a823e0f2b7631cc41b3ba8828b3321ca811111fa75cd3aa3bb5ace
+const LEAF_8_3: u256 = 0xc2575a0e9e593c00f959f8c92f12db2869c3395a3b0502d05e2516446f71f85b
+const LEAF_8_4: u256 = 0x8a35acfbc15ff81a39ae7d344fd709f28e8600b4aa8c65c6b64bfe7fe36bd19b
+const LEAF_8_5: u256 = 0x036b6384b5eca791c62761152d0c79bb0604c104a5fb6f4eb0703f3154bb3db0
+const LEAF_8_6: u256 = 0xf652222313e28459528d920b65115c16c04f3efc82aaedc97be59f3f377c0d3f
+const LEAF_8_7: u256 = 0xa66cc928b5edb82af9bd49922954155ab7b0942694bea4ce44661d9a8736c688
+
+#[test]
+fn test_sorted_tree_2_leaves() {
+    let proof_0 = words([0xb10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6])
+    assert!(merkle::process_proof(proof: proof_0, leaf: LEAF_2_0) == ROOT_2)
+    assert!(merkle::verify(proof: proof_0, root: ROOT_2, leaf: LEAF_2_0))
+    let proof_1 = words([0x290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563])
+    assert!(merkle::process_proof(proof: proof_1, leaf: LEAF_2_1) == ROOT_2)
+    assert!(merkle::verify(proof: proof_1, root: ROOT_2, leaf: LEAF_2_1))
+}
+
+#[test]
+fn test_sorted_tree_3_leaves() {
+    let proof_0 = words([0xb10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6, 0x405787fa12a823e0f2b7631cc41b3ba8828b3321ca811111fa75cd3aa3bb5ace])
+    assert!(merkle::process_proof(proof: proof_0, leaf: LEAF_3_0) == ROOT_3)
+    assert!(merkle::verify(proof: proof_0, root: ROOT_3, leaf: LEAF_3_0))
+    let proof_1 = words([0x290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563, 0x405787fa12a823e0f2b7631cc41b3ba8828b3321ca811111fa75cd3aa3bb5ace])
+    assert!(merkle::process_proof(proof: proof_1, leaf: LEAF_3_1) == ROOT_3)
+    assert!(merkle::verify(proof: proof_1, root: ROOT_3, leaf: LEAF_3_1))
+    let proof_2 = words([0x891370df4fadf33f50e41f7c8a791e680c0655695ea3404385a909c8f5e13fb4])
+    assert!(merkle::process_proof(proof: proof_2, leaf: LEAF_3_2) == ROOT_3)
+    assert!(merkle::verify(proof: proof_2, root: ROOT_3, leaf: LEAF_3_2))
+}
+
+#[test]
+fn test_sorted_tree_8_leaves() {
+    let proof_0 = words([0xb10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6, 0xc5fd106a8e5214837c622e5fdef112b1d83ad6de66beafb53451c77843c9d04e, 0x9687420ece112ec1bb7441fb691952a25e39a583bafbccedcbe2820ea484a425])
+    assert!(merkle::process_proof(proof: proof_0, leaf: LEAF_8_0) == ROOT_8)
+    assert!(merkle::verify(proof: proof_0, root: ROOT_8, leaf: LEAF_8_0))
+    let proof_1 = words([0x290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563, 0xc5fd106a8e5214837c622e5fdef112b1d83ad6de66beafb53451c77843c9d04e, 0x9687420ece112ec1bb7441fb691952a25e39a583bafbccedcbe2820ea484a425])
+    assert!(merkle::process_proof(proof: proof_1, leaf: LEAF_8_1) == ROOT_8)
+    assert!(merkle::verify(proof: proof_1, root: ROOT_8, leaf: LEAF_8_1))
+    let proof_2 = words([0xc2575a0e9e593c00f959f8c92f12db2869c3395a3b0502d05e2516446f71f85b, 0x891370df4fadf33f50e41f7c8a791e680c0655695ea3404385a909c8f5e13fb4, 0x9687420ece112ec1bb7441fb691952a25e39a583bafbccedcbe2820ea484a425])
+    assert!(merkle::process_proof(proof: proof_2, leaf: LEAF_8_2) == ROOT_8)
+    assert!(merkle::verify(proof: proof_2, root: ROOT_8, leaf: LEAF_8_2))
+    let proof_3 = words([0x405787fa12a823e0f2b7631cc41b3ba8828b3321ca811111fa75cd3aa3bb5ace, 0x891370df4fadf33f50e41f7c8a791e680c0655695ea3404385a909c8f5e13fb4, 0x9687420ece112ec1bb7441fb691952a25e39a583bafbccedcbe2820ea484a425])
+    assert!(merkle::process_proof(proof: proof_3, leaf: LEAF_8_3) == ROOT_8)
+    assert!(merkle::verify(proof: proof_3, root: ROOT_8, leaf: LEAF_8_3))
+    let proof_4 = words([0x036b6384b5eca791c62761152d0c79bb0604c104a5fb6f4eb0703f3154bb3db0, 0xe9d4f81a8a01e0c30919ba1e1107cafb025987296eeef184f2212136fab88a57, 0x2c24f92f65cdd0fde0264c1f41fadf17cb35cdffeaca769e5673e72b072be707])
+    assert!(merkle::process_proof(proof: proof_4, leaf: LEAF_8_4) == ROOT_8)
+    assert!(merkle::verify(proof: proof_4, root: ROOT_8, leaf: LEAF_8_4))
+    let proof_5 = words([0x8a35acfbc15ff81a39ae7d344fd709f28e8600b4aa8c65c6b64bfe7fe36bd19b, 0xe9d4f81a8a01e0c30919ba1e1107cafb025987296eeef184f2212136fab88a57, 0x2c24f92f65cdd0fde0264c1f41fadf17cb35cdffeaca769e5673e72b072be707])
+    assert!(merkle::process_proof(proof: proof_5, leaf: LEAF_8_5) == ROOT_8)
+    assert!(merkle::verify(proof: proof_5, root: ROOT_8, leaf: LEAF_8_5))
+    let proof_6 = words([0xa66cc928b5edb82af9bd49922954155ab7b0942694bea4ce44661d9a8736c688, 0x1da3391a6cc34ffe839fa9b9e6b1d79b1f55c4be20cfd009e48a894bde80ac5d, 0x2c24f92f65cdd0fde0264c1f41fadf17cb35cdffeaca769e5673e72b072be707])
+    assert!(merkle::process_proof(proof: proof_6, leaf: LEAF_8_6) == ROOT_8)
+    assert!(merkle::verify(proof: proof_6, root: ROOT_8, leaf: LEAF_8_6))
+    let proof_7 = words([0xf652222313e28459528d920b65115c16c04f3efc82aaedc97be59f3f377c0d3f, 0x1da3391a6cc34ffe839fa9b9e6b1d79b1f55c4be20cfd009e48a894bde80ac5d, 0x2c24f92f65cdd0fde0264c1f41fadf17cb35cdffeaca769e5673e72b072be707])
+    assert!(merkle::process_proof(proof: proof_7, leaf: LEAF_8_7) == ROOT_8)
+    assert!(merkle::verify(proof: proof_7, root: ROOT_8, leaf: LEAF_8_7))
+}
+
+const BULK_ROOT_1: u256 = 0xcc808ba39ea0848ee3890306c14bb3a65a91a56db0a9c8e628e3abdc990324b5
+const BULK_LEAF_1_0: u256 = 0x26700e13983fefbd9cf16da2ed70fa5c6798ac55062a4803121a869731e308d2
+const BULK_LEAF_1_1: u256 = 0x8ff97419363ffd7000167f130ef7168fbea05faf9251824ca5043f113cc6a7c7
+
+const BULK_ROOT_2: u256 = 0x08eba60ab654750ae005f338acc9826fa2b71a820586d10e7fefcd01854531d8
+const BULK_LEAF_2_0: u256 = 0x26700e13983fefbd9cf16da2ed70fa5c6798ac55062a4803121a869731e308d2
+const BULK_LEAF_2_1: u256 = 0x8ff97419363ffd7000167f130ef7168fbea05faf9251824ca5043f113cc6a7c7
+const BULK_LEAF_2_2: u256 = 0x46501879b8ca8525e8c2fd519e2fbfcfa2ebea26501294aa02cbfcfb12e94354
+const BULK_LEAF_2_3: u256 = 0x9787eeb91fe3101235e4a76063c7023ecb40f923f97916639c598592fa30d6ae
+
+const BULK_ROOT_3: u256 = 0xfa571d0a8df711df2a89291076ad67f3cc5139cf80edc578080b2c66b9d2dc04
+const BULK_LEAF_3_0: u256 = 0x26700e13983fefbd9cf16da2ed70fa5c6798ac55062a4803121a869731e308d2
+const BULK_LEAF_3_1: u256 = 0x8ff97419363ffd7000167f130ef7168fbea05faf9251824ca5043f113cc6a7c7
+const BULK_LEAF_3_2: u256 = 0x46501879b8ca8525e8c2fd519e2fbfcfa2ebea26501294aa02cbfcfb12e94354
+const BULK_LEAF_3_3: u256 = 0x9787eeb91fe3101235e4a76063c7023ecb40f923f97916639c598592fa30d6ae
+const BULK_LEAF_3_4: u256 = 0xa2153420d844928b4421650203c77babc8b33d7f2e7b450e2966db0c22097753
+const BULK_LEAF_3_5: u256 = 0x7fb4302e8e91f9110a6554c2c0a24601252c2a42c2220ca988efcfe399914308
+const BULK_LEAF_3_6: u256 = 0x116fea137db6e131133e7f2bab296045d8f41cc5607279db17b218cab0929a51
+const BULK_LEAF_3_7: u256 = 0xbd43cb8ece8cd1863bcd6082d65c5b0d25665b1ce17980f0da43c0ed545f98b4
+
+#[test]
+fn test_indexed_tree_height_1() {
+    let proof_0 = words([0x8ff97419363ffd7000167f130ef7168fbea05faf9251824ca5043f113cc6a7c7])
+    assert!(merkle::process_indexed_proof(proof: proof_0, leaf: BULK_LEAF_1_0, index: 0) == BULK_ROOT_1)
+    assert!(merkle::verify_indexed(proof: proof_0, root: BULK_ROOT_1, leaf: BULK_LEAF_1_0, index: 0))
+    let proof_1 = words([0x26700e13983fefbd9cf16da2ed70fa5c6798ac55062a4803121a869731e308d2])
+    assert!(merkle::process_indexed_proof(proof: proof_1, leaf: BULK_LEAF_1_1, index: 1) == BULK_ROOT_1)
+    assert!(merkle::verify_indexed(proof: proof_1, root: BULK_ROOT_1, leaf: BULK_LEAF_1_1, index: 1))
+}
+
+#[test]
+fn test_indexed_tree_height_2() {
+    let proof_0 = words([0x8ff97419363ffd7000167f130ef7168fbea05faf9251824ca5043f113cc6a7c7, 0x12e74e04227fb9f9464b22a134d64adc08a26d1dc7a4544a537142e23fc3d579])
+    assert!(merkle::process_indexed_proof(proof: proof_0, leaf: BULK_LEAF_2_0, index: 0) == BULK_ROOT_2)
+    assert!(merkle::verify_indexed(proof: proof_0, root: BULK_ROOT_2, leaf: BULK_LEAF_2_0, index: 0))
+    let proof_1 = words([0x26700e13983fefbd9cf16da2ed70fa5c6798ac55062a4803121a869731e308d2, 0x12e74e04227fb9f9464b22a134d64adc08a26d1dc7a4544a537142e23fc3d579])
+    assert!(merkle::process_indexed_proof(proof: proof_1, leaf: BULK_LEAF_2_1, index: 1) == BULK_ROOT_2)
+    assert!(merkle::verify_indexed(proof: proof_1, root: BULK_ROOT_2, leaf: BULK_LEAF_2_1, index: 1))
+    let proof_2 = words([0x9787eeb91fe3101235e4a76063c7023ecb40f923f97916639c598592fa30d6ae, 0xcc808ba39ea0848ee3890306c14bb3a65a91a56db0a9c8e628e3abdc990324b5])
+    assert!(merkle::process_indexed_proof(proof: proof_2, leaf: BULK_LEAF_2_2, index: 2) == BULK_ROOT_2)
+    assert!(merkle::verify_indexed(proof: proof_2, root: BULK_ROOT_2, leaf: BULK_LEAF_2_2, index: 2))
+    let proof_3 = words([0x46501879b8ca8525e8c2fd519e2fbfcfa2ebea26501294aa02cbfcfb12e94354, 0xcc808ba39ea0848ee3890306c14bb3a65a91a56db0a9c8e628e3abdc990324b5])
+    assert!(merkle::process_indexed_proof(proof: proof_3, leaf: BULK_LEAF_2_3, index: 3) == BULK_ROOT_2)
+    assert!(merkle::verify_indexed(proof: proof_3, root: BULK_ROOT_2, leaf: BULK_LEAF_2_3, index: 3))
+}
+
+#[test]
+fn test_indexed_tree_height_3() {
+    let proof_0 = words([0x8ff97419363ffd7000167f130ef7168fbea05faf9251824ca5043f113cc6a7c7, 0x12e74e04227fb9f9464b22a134d64adc08a26d1dc7a4544a537142e23fc3d579, 0x93bb52ae34408c88aed8c56ebe5e3e2646d804385726533963607465c4015c8f])
+    assert!(merkle::process_indexed_proof(proof: proof_0, leaf: BULK_LEAF_3_0, index: 0) == BULK_ROOT_3)
+    assert!(merkle::verify_indexed(proof: proof_0, root: BULK_ROOT_3, leaf: BULK_LEAF_3_0, index: 0))
+    let proof_1 = words([0x26700e13983fefbd9cf16da2ed70fa5c6798ac55062a4803121a869731e308d2, 0x12e74e04227fb9f9464b22a134d64adc08a26d1dc7a4544a537142e23fc3d579, 0x93bb52ae34408c88aed8c56ebe5e3e2646d804385726533963607465c4015c8f])
+    assert!(merkle::process_indexed_proof(proof: proof_1, leaf: BULK_LEAF_3_1, index: 1) == BULK_ROOT_3)
+    assert!(merkle::verify_indexed(proof: proof_1, root: BULK_ROOT_3, leaf: BULK_LEAF_3_1, index: 1))
+    let proof_2 = words([0x9787eeb91fe3101235e4a76063c7023ecb40f923f97916639c598592fa30d6ae, 0xcc808ba39ea0848ee3890306c14bb3a65a91a56db0a9c8e628e3abdc990324b5, 0x93bb52ae34408c88aed8c56ebe5e3e2646d804385726533963607465c4015c8f])
+    assert!(merkle::process_indexed_proof(proof: proof_2, leaf: BULK_LEAF_3_2, index: 2) == BULK_ROOT_3)
+    assert!(merkle::verify_indexed(proof: proof_2, root: BULK_ROOT_3, leaf: BULK_LEAF_3_2, index: 2))
+    let proof_3 = words([0x46501879b8ca8525e8c2fd519e2fbfcfa2ebea26501294aa02cbfcfb12e94354, 0xcc808ba39ea0848ee3890306c14bb3a65a91a56db0a9c8e628e3abdc990324b5, 0x93bb52ae34408c88aed8c56ebe5e3e2646d804385726533963607465c4015c8f])
+    assert!(merkle::process_indexed_proof(proof: proof_3, leaf: BULK_LEAF_3_3, index: 3) == BULK_ROOT_3)
+    assert!(merkle::verify_indexed(proof: proof_3, root: BULK_ROOT_3, leaf: BULK_LEAF_3_3, index: 3))
+    let proof_4 = words([0x7fb4302e8e91f9110a6554c2c0a24601252c2a42c2220ca988efcfe399914308, 0x62c8724f6ab1eddb6472103d86be4b7e9c324a1c43bf8746d46ca75851d4d3e6, 0x08eba60ab654750ae005f338acc9826fa2b71a820586d10e7fefcd01854531d8])
+    assert!(merkle::process_indexed_proof(proof: proof_4, leaf: BULK_LEAF_3_4, index: 4) == BULK_ROOT_3)
+    assert!(merkle::verify_indexed(proof: proof_4, root: BULK_ROOT_3, leaf: BULK_LEAF_3_4, index: 4))
+    let proof_5 = words([0xa2153420d844928b4421650203c77babc8b33d7f2e7b450e2966db0c22097753, 0x62c8724f6ab1eddb6472103d86be4b7e9c324a1c43bf8746d46ca75851d4d3e6, 0x08eba60ab654750ae005f338acc9826fa2b71a820586d10e7fefcd01854531d8])
+    assert!(merkle::process_indexed_proof(proof: proof_5, leaf: BULK_LEAF_3_5, index: 5) == BULK_ROOT_3)
+    assert!(merkle::verify_indexed(proof: proof_5, root: BULK_ROOT_3, leaf: BULK_LEAF_3_5, index: 5))
+    let proof_6 = words([0xbd43cb8ece8cd1863bcd6082d65c5b0d25665b1ce17980f0da43c0ed545f98b4, 0xdd565b9266147e83ccb5e60ab1436abde980b9fffdbbaba062b78743479d7b31, 0x08eba60ab654750ae005f338acc9826fa2b71a820586d10e7fefcd01854531d8])
+    assert!(merkle::process_indexed_proof(proof: proof_6, leaf: BULK_LEAF_3_6, index: 6) == BULK_ROOT_3)
+    assert!(merkle::verify_indexed(proof: proof_6, root: BULK_ROOT_3, leaf: BULK_LEAF_3_6, index: 6))
+    let proof_7 = words([0x116fea137db6e131133e7f2bab296045d8f41cc5607279db17b218cab0929a51, 0xdd565b9266147e83ccb5e60ab1436abde980b9fffdbbaba062b78743479d7b31, 0x08eba60ab654750ae005f338acc9826fa2b71a820586d10e7fefcd01854531d8])
+    assert!(merkle::process_indexed_proof(proof: proof_7, leaf: BULK_LEAF_3_7, index: 7) == BULK_ROOT_3)
+    assert!(merkle::verify_indexed(proof: proof_7, root: BULK_ROOT_3, leaf: BULK_LEAF_3_7, index: 7))
+}
+
+#[test]
+fn test_sorted_invalid_proofs() {
+    let proof = words([0xb10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6, 0xc5fd106a8e5214837c622e5fdef112b1d83ad6de66beafb53451c77843c9d04e, 0x9687420ece112ec1bb7441fb691952a25e39a583bafbccedcbe2820ea484a425])
+    assert!(merkle::verify(proof, root: ROOT_8, leaf: LEAF_8_0))
+    // Another leaf with this proof.
+    assert!(!merkle::verify(proof, root: ROOT_8, leaf: LEAF_8_2))
+    // Wrong root.
+    assert!(!merkle::verify(proof, root: ROOT_3, leaf: LEAF_8_0))
+    // Truncated proof: yields the level-2 node, not the root.
+    assert!(!merkle::verify(proof: proof.truncate(len: 2), root: ROOT_8, leaf: LEAF_8_0))
+    // One node too many.
+    let long = words([0xb10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6, 0xc5fd106a8e5214837c622e5fdef112b1d83ad6de66beafb53451c77843c9d04e, 0x9687420ece112ec1bb7441fb691952a25e39a583bafbccedcbe2820ea484a425, 0xb10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6])
+    assert!(!merkle::verify(proof: long, root: ROOT_8, leaf: LEAF_8_0))
+    // A single flipped bit in a proof node.
+    let mut tampered = ptr::alloc_array<u256>(3)
+    tampered[0] = proof[0]
+    tampered[1] = proof[1] ^ 1
+    tampered[2] = proof[2]
+    assert!(!merkle::verify(proof: tampered.as_slice(), root: ROOT_8, leaf: LEAF_8_0))
+    // Leaves are not hashed here, so an internal node verifies with the
+    // rest of the proof. Callers must keep leaves distinct from nodes.
+    let node = merkle::hash_pair_sorted(LEAF_8_0, proof[0])
+    assert!(merkle::verify(proof: proof.slice(offset: 1, len: 2), root: ROOT_8, leaf: node))
+}
+
+// Bits of `index` at or above the proof length are ignored (Seaport reads a
+// 24-bit key whatever the tree height), wrong indices fail.
+#[test]
+fn test_indexed_index_bits() {
+    let proof = words([0xa2153420d844928b4421650203c77babc8b33d7f2e7b450e2966db0c22097753, 0x62c8724f6ab1eddb6472103d86be4b7e9c324a1c43bf8746d46ca75851d4d3e6, 0x08eba60ab654750ae005f338acc9826fa2b71a820586d10e7fefcd01854531d8])
+    assert!(merkle::verify_indexed(proof, root: BULK_ROOT_3, leaf: BULK_LEAF_3_5, index: 5))
+    assert!(merkle::verify_indexed(proof, root: BULK_ROOT_3, leaf: BULK_LEAF_3_5, index: 5 + 8))
+    assert!(merkle::verify_indexed(proof, root: BULK_ROOT_3, leaf: BULK_LEAF_3_5, index: 5 | (1 << 255)))
+    assert!(!merkle::verify_indexed(proof, root: BULK_ROOT_3, leaf: BULK_LEAF_3_5, index: 4))
+    assert!(!merkle::verify_indexed(proof, root: BULK_ROOT_3, leaf: BULK_LEAF_3_5, index: 7))
+    assert!(!merkle::verify_indexed(proof, root: BULK_ROOT_3, leaf: BULK_LEAF_3_4, index: 5))
+    // Positional trees are not sorted-pair trees.
+    assert!(!merkle::verify(proof, root: BULK_ROOT_3, leaf: BULK_LEAF_3_5))
+}
+
+// Proofs arriving as ABI `bytes32[]` / `uint256[]` message fields are read
+// in place from the decoded `DynArray`.
+msg MerkleMsg {
+    #[selector = 0x01]
+    Verify { proof: DynArray<Bytes32>, root: u256, leaf: u256 } -> bool,
+    #[selector = 0x02]
+    VerifyWords { proof: DynArray<u256>, root: u256, leaf: u256 } -> bool,
+    #[selector = 0x03]
+    VerifyIndexed { proof: DynArray<Bytes32>, root: u256, leaf: u256, index: u256 } -> bool,
+}
+
+pub contract MerkleVerifier {
+    init() {}
+
+    recv MerkleMsg {
+        Verify { proof, root, leaf } -> bool {
+            merkle::verify(proof, root, leaf)
+        }
+
+        VerifyWords { proof, root, leaf } -> bool {
+            merkle::verify(proof, root, leaf)
+        }
+
+        VerifyIndexed { proof, root, leaf, index } -> bool {
+            merkle::verify_indexed(proof, root, leaf, index)
+        }
+    }
+}
+
+fn bytes32_array(_ words: MemSlice<u256>) -> DynArray<Bytes32> {
+    let mut v: MemVec<Bytes32> = MemVec::zeroed(words.len())
+    let mut i: u256 = 0
+    while i < words.len() {
+        v.set(index: i, value: FixedBytes<32> { val: words[i as usize] })
+        i += 1
+    }
+    v.to_dyn_array()
+}
+
+fn u256_array(_ words: MemSlice<u256>) -> DynArray<u256> {
+    let mut v: MemVec<u256> = MemVec::zeroed(words.len())
+    let mut i: u256 = 0
+    while i < words.len() {
+        v.set(index: i, value: words[i as usize])
+        i += 1
+    }
+    v.to_dyn_array()
+}
+
+#[test]
+fn test_abi_array_proofs() uses (evm: mut Evm) {
+    let verifier = evm.create2<MerkleVerifier>(value: 0, args: (), salt: 0)
+    assert!(verifier.inner != 0)
+    let proof = words([0xb10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6, 0xc5fd106a8e5214837c622e5fdef112b1d83ad6de66beafb53451c77843c9d04e, 0x9687420ece112ec1bb7441fb691952a25e39a583bafbccedcbe2820ea484a425])
+    let ok: bool = evm.call(addr: verifier, gas: 1000000, value: 0, message: MerkleMsg::Verify { proof: bytes32_array(proof), root: ROOT_8, leaf: LEAF_8_0 })
+    assert!(ok)
+    let bad: bool = evm.call(addr: verifier, gas: 1000000, value: 0, message: MerkleMsg::Verify { proof: bytes32_array(proof), root: ROOT_8, leaf: LEAF_8_1 })
+    assert!(!bad)
+    let ok_words: bool = evm.call(addr: verifier, gas: 1000000, value: 0, message: MerkleMsg::VerifyWords { proof: u256_array(proof), root: ROOT_8, leaf: LEAF_8_0 })
+    assert!(ok_words)
+    let empty_ok: bool = evm.call(addr: verifier, gas: 1000000, value: 0, message: MerkleMsg::Verify { proof: bytes32_array(empty()), root: LEAF_8_3, leaf: LEAF_8_3 })
+    assert!(empty_ok)
+
+    let bulk = words([0xa2153420d844928b4421650203c77babc8b33d7f2e7b450e2966db0c22097753, 0x62c8724f6ab1eddb6472103d86be4b7e9c324a1c43bf8746d46ca75851d4d3e6, 0x08eba60ab654750ae005f338acc9826fa2b71a820586d10e7fefcd01854531d8])
+    let indexed_ok: bool = evm.call(addr: verifier, gas: 1000000, value: 0, message: MerkleMsg::VerifyIndexed { proof: bytes32_array(bulk), root: BULK_ROOT_3, leaf: BULK_LEAF_3_5, index: 5 })
+    assert!(indexed_ok)
+    let indexed_bad: bool = evm.call(addr: verifier, gas: 1000000, value: 0, message: MerkleMsg::VerifyIndexed { proof: bytes32_array(bulk), root: BULK_ROOT_3, leaf: BULK_LEAF_3_5, index: 6 })
+    assert!(!indexed_bad)
+}
