@@ -1,0 +1,19 @@
+use std::evm::{Ctx}
+use ingot::shared::mix
+
+msg ChildMsg {
+    #[selector = 0x11111111]
+    Get { x: u256, y: u256 } -> u256,
+}
+
+pub contract Child {
+    owner: Address,
+
+    init() uses (mut owner, ctx: Ctx) { owner = ctx.caller() }
+
+    recv ChildMsg {
+        Get { x, y } -> u256 uses (owner) {
+            mix(x, y) + owner.inner
+        }
+    }
+}

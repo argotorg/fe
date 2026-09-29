@@ -16,8 +16,8 @@ use trace_facts::{
     PcRange, SourceFileFact, SourceSpanFact, StaticGasFact, TraceFact,
 };
 
+use crate::OptLevel;
 use crate::debug::BytecodeSourceMapEntry;
-use crate::{OptLevel, compile_runtime_package_sonatina};
 
 pub const SONATINA_PREOPT_FUNCTION_KIND: &str = "sonatina.preopt.function";
 pub const SONATINA_PREOPT_BLOCK_KIND: &str = "sonatina.preopt.block";
@@ -136,32 +136,31 @@ fn emit_observable_package_trace_facts(
         Some(0),
     );
     let module_key = top_mod.name(db).data(db).to_string();
-    let sonatina_module = compile_runtime_package_sonatina(db, &package)?;
     let sonatina_owner = sonatina_module_owner_key(input_owner_key, &module_key);
-    facts.extend(emit_sonatina_trace_view_facts(
+    let traced = crate::sonatina::emit_runtime_package_sonatina_bytecode_with_trace(
+        db,
+        &package,
+        opt_level,
         &sonatina_owner,
-        &sonatina_module,
-        CompilerPhase::SonatinaPreOpt,
-    )?);
-    let (bytecode, postopt_sonatina_facts) =
-        crate::sonatina::emit_runtime_module_sonatina_bytecode_with_observability_and_trace(
-            db,
-            &package,
-            sonatina_module,
-            opt_level,
-            &sonatina_owner,
-        )?;
-    let observed_bytecode_facts = emit_observed_bytecode_trace_facts(
-        input_owner_key,
-        &module_key,
-        "function:runtime",
-        &sonatina_owner,
-        &bytecode,
-        &postopt_sonatina_facts,
     )?;
-    facts.extend(postopt_sonatina_facts);
-    facts.extend(observed_bytecode_facts);
-    for contract_name in bytecode.keys() {
+    for (contract_name, traced) in traced {
+        let crate::sonatina::TracedContractBytecode {
+            bytecode,
+            owner,
+            facts: sonatina_facts,
+        } = traced;
+        let bytecode = BTreeMap::from([(contract_name.clone(), bytecode)]);
+        let observed = emit_observed_bytecode_trace_facts(
+            input_owner_key,
+            &module_key,
+            "function:runtime",
+            &owner,
+            &bytecode,
+            &sonatina_facts,
+        )?;
+        facts.extend(sonatina_facts);
+        facts.extend(observed);
+        let contract_name = contract_name.as_str();
         let owner_key = bytecode_runtime_owner_key(input_owner_key, &module_key, contract_name);
         let code_object = bytecode_code_object_key(&owner_key);
         if let Some(span) = whole_file_source_span(code_object, source_file.clone(), source_text) {

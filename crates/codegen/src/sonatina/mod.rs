@@ -253,6 +253,7 @@ fn format_cranelift_errors(errors: &[sonatina_codegen::isa::cranelift::Cranelift
         .join("; ")
 }
 
+#[cfg(test)]
 fn compile_runtime_objects(
     module: Module,
     opt_level: OptLevel,
@@ -311,6 +312,7 @@ fn merged_section_observability<'db>(
     section_artifact: &SectionArtifact,
     section: &mir::RuntimeSection<'db>,
     root_key: (String, mir::RuntimeSectionName),
+    external_embeds: ExternalEmbeds,
 ) -> Result<Option<SectionObservability>, LowerError> {
     fn merge_embeds<'db>(
         db: &'db dyn mir::MirDb,
@@ -319,6 +321,7 @@ fn merged_section_observability<'db>(
         section_artifact: &SectionArtifact,
         section: &mir::RuntimeSection<'db>,
         path: &mut FxHashSet<(String, mir::RuntimeSectionName)>,
+        external_embeds: ExternalEmbeds,
     ) -> Result<Option<SectionObservability>, LowerError> {
         let Some(mut merged) = section_artifact.observability.clone() else {
             return Ok(None);
@@ -349,6 +352,12 @@ fn merged_section_observability<'db>(
         }
 
         for embed in &section.embeds {
+            if external_embeds == ExternalEmbeds::Data
+                && matches!(embed.source, mir::RuntimeSectionRef::External { .. })
+            {
+                // Precompiled external code is ordinary section data here.
+                continue;
+            }
             let embed_key = section_ref_key(embed.source.clone());
             enter_observability_embed(path, embed_key.clone())?;
             let symbol_id = SymbolId::Embed(EmbedSymbol::from(embed.as_symbol.clone()));
@@ -366,6 +375,7 @@ fn merged_section_observability<'db>(
                     embedded_artifact,
                     &embedded_section,
                     path,
+                    external_embeds,
                 )?,
                 &embed_key,
             )?;
@@ -412,7 +422,20 @@ fn merged_section_observability<'db>(
         section_artifact,
         section,
         &mut path,
+        external_embeds,
     )
+}
+
+/// How sections of other objects are embedded in a compiled Sonatina module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExternalEmbeds {
+    /// The embedded object was compiled in the same module and linked as a
+    /// Sonatina embed.
+    #[cfg(test)]
+    Linked,
+    /// The embedded object was compiled separately and its bytes were placed
+    /// in the embedding section as constant data.
+    Data,
 }
 
 fn enter_observability_embed(
@@ -1117,6 +1140,63 @@ fn filter_runtime_package_to_root_objects<'db>(
     )
 }
 
+/// Restrict `package` to `object` alone: its own sections and the functions,
+/// const regions and code regions they reach. Sections of other objects that
+/// `object` embeds are left out; their code regions stay so that references to
+/// them still resolve.
+fn isolate_runtime_package_object<'db>(
+    db: &'db dyn mir::MirDb,
+    package: RuntimePackage<'db>,
+    object: mir::RuntimeObject<'db>,
+) -> RuntimePackage<'db> {
+    let objects = vec![object];
+    let functions = {
+        let function_set = reachable_functions(db, &objects);
+        package
+            .functions(db)
+            .into_iter()
+            .filter(|function| function_set.contains(&function.instance(db)))
+            .collect::<Vec<_>>()
+    };
+    let const_region_set = reachable_const_regions(db, &objects, &functions);
+    let const_regions = package
+        .const_regions(db)
+        .into_iter()
+        .filter(|region| const_region_set.contains(region))
+        .collect::<Vec<_>>();
+    let embedded_sections = object
+        .sections(db)
+        .into_iter()
+        .flat_map(|section| {
+            let own = runtime_section_key(db, object, &section.name);
+            std::iter::once(own).chain(
+                section
+                    .embeds
+                    .into_iter()
+                    .map(|embed| section_ref_key(embed.source)),
+            )
+        })
+        .collect::<FxHashSet<_>>();
+    let code_regions = package
+        .code_regions(db)
+        .into_iter()
+        .filter(|region| embedded_sections.contains(&section_ref_key(region.source(db))))
+        .collect::<Vec<_>>();
+    RuntimePackage::new(
+        db,
+        package.top_mod(db),
+        functions,
+        RuntimePackagePlan::new(
+            db,
+            objects,
+            const_regions,
+            code_regions,
+            vec![object],
+            Some(object),
+        ),
+    )
+}
+
 fn reachable_sections<'db>(
     db: &'db dyn mir::MirDb,
     objects: &[mir::RuntimeObject<'db>],
@@ -1232,59 +1312,212 @@ pub fn emit_runtime_package_sonatina_ir_optimized(
     Ok(writer.dump_string())
 }
 
+/// Compile every root object of `package` into contract bytecode.
+///
+/// Each object is compiled in its own Sonatina module, and an object embedded
+/// by another one (`create<B>`, `Contract::init_code_*`) is embedded as the
+/// exact bytes of its own compilation. This keeps an object's code independent
+/// of whatever else shares its runtime package: module-wide optimizations
+/// (inlining budgets and call counts, dead argument elimination, function
+/// ordering by symbol) never see functions of another object. As a result the
+/// init code a contract deploys for `B` is exactly `B`'s standalone artifact.
 fn emit_runtime_package_sonatina_bytecode_with_options(
     db: &DriverDataBase,
     package: &RuntimePackage<'_>,
     opt_level: OptLevel,
     emit_observability: bool,
-    postopt_trace_owner: Option<&str>,
-) -> Result<
-    (
-        BTreeMap<String, SonatinaContractBytecode>,
-        Vec<trace_facts::TraceFact>,
-    ),
-    LowerError,
-> {
+) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
     ensure_runtime_package_has_roots(db, package, "Sonatina bytecode")?;
-    let module = compile_runtime_package_sonatina(db, package)?;
-    emit_runtime_module_sonatina_bytecode_with_options(
+    let mut compiler = IsolatedObjectCompiler {
         db,
         package,
-        module,
         opt_level,
         emit_observability,
-        postopt_trace_owner,
-    )
+        compiled: HashMap::new(),
+        in_progress: FxHashSet::default(),
+        trace_owner: None,
+        trace_facts: BTreeMap::new(),
+    };
+    let mut out = BTreeMap::new();
+    for object in package.root_objects(db) {
+        let object_name = object.name(db);
+        compiler.compile(&object_name)?;
+        let artifact = &compiler.compiled[object_name.as_str()];
+        let objects_by_name = HashMap::from([(object_name.clone(), object)]);
+        let artifacts_by_name = HashMap::from([(object_name.as_str(), artifact)]);
+        out.insert(
+            object_name.clone(),
+            root_contract_bytecode(
+                db,
+                object,
+                &objects_by_name,
+                &artifacts_by_name,
+                emit_observability,
+                ExternalEmbeds::Data,
+            )?,
+        );
+    }
+    Ok(out)
 }
 
-/// Compile bytecode from an already-lowered module. Trace emission uses this
-/// so the preopt trace view and the compiled bytecode come from the SAME
-/// lowering; a second lowering would silently rely on both producing
-/// bit-identical FuncRefs/InstIds for the preopt/postopt joins to line up.
-pub fn emit_runtime_module_sonatina_bytecode_with_observability_and_trace(
+struct IsolatedObjectCompiler<'db, 'a> {
+    db: &'db DriverDataBase,
+    package: &'a RuntimePackage<'db>,
+    opt_level: OptLevel,
+    emit_observability: bool,
+    compiled: HashMap<String, ObjectArtifact>,
+    in_progress: FxHashSet<String>,
+    trace_owner: Option<String>,
+    trace_facts: BTreeMap<String, (String, Vec<trace_facts::TraceFact>)>,
+}
+
+impl<'db> IsolatedObjectCompiler<'db, '_> {
+    /// Compile `object_name` in isolation, after compiling the objects its
+    /// sections embed.
+    fn compile(&mut self, object_name: &str) -> Result<(), LowerError> {
+        if self.compiled.contains_key(object_name) {
+            return Ok(());
+        }
+        if !self.in_progress.insert(object_name.to_string()) {
+            return Err(LowerError::Internal(format!(
+                "runtime object `{object_name}` embeds itself"
+            )));
+        }
+        let object = self
+            .package
+            .objects(self.db)
+            .into_iter()
+            .find(|object| object.name(self.db) == object_name)
+            .ok_or_else(|| {
+                LowerError::Internal(format!("runtime object `{object_name}` not found"))
+            })?;
+
+        let mut external_code: Vec<((String, mir::RuntimeSectionName), Vec<u8>)> = Vec::new();
+        for section in object.sections(self.db) {
+            for embed in section.embeds {
+                let mir::RuntimeSectionRef::External { object, section } = embed.source else {
+                    continue;
+                };
+                let key = (object, section);
+                if external_code.iter().any(|(existing, _)| *existing == key) {
+                    continue;
+                }
+                self.compile(&key.0)?;
+                let bytes = self.compiled[key.0.as_str()]
+                    .sections
+                    .get(&section_name_for_runtime(&key.1))
+                    .ok_or_else(|| {
+                        LowerError::Internal(format!(
+                            "compiled object `{}` is missing section `{:?}`",
+                            key.0, key.1
+                        ))
+                    })?
+                    .bytes
+                    .clone();
+                external_code.push((key, bytes));
+            }
+        }
+
+        let isolated = isolate_runtime_package_object(self.db, *self.package, object);
+        let module = lower_runtime::compile_runtime_package_sonatina_with_external_code(
+            self.db,
+            &isolated,
+            &external_code,
+        )?;
+        ensure_module_sonatina_ir_valid(&module)?;
+        // Each isolated module has its own IDs. Keep pre/post-opt facts and
+        // instruction provenance under a distinct owner for that exact module.
+        let owner = self
+            .trace_owner
+            .as_ref()
+            .map(|base| format!("{base}::object:{object_name}"));
+        let mut facts = if let Some(owner) = &owner {
+            crate::trace::emit_sonatina_trace_view_facts(
+                owner,
+                &module,
+                trace_facts::CompilerPhase::SonatinaPreOpt,
+            )?
+        } else {
+            Vec::new()
+        };
+        let (artifacts, postopt) = compile_runtime_objects_with_postopt_trace(
+            module,
+            self.opt_level,
+            self.emit_observability,
+            owner.as_deref(),
+        )?;
+        if let Some(owner) = owner {
+            facts.extend(postopt);
+            self.trace_facts
+                .insert(object_name.to_string(), (owner, facts));
+        }
+        let artifact = artifacts
+            .into_iter()
+            .find(|artifact| artifact.object.0.as_str() == object_name)
+            .ok_or_else(|| {
+                LowerError::Internal(format!("compiled object `{object_name}` not found"))
+            })?;
+        self.in_progress.remove(object_name);
+        self.compiled.insert(object_name.to_string(), artifact);
+        Ok(())
+    }
+}
+
+pub(crate) struct TracedContractBytecode {
+    pub bytecode: SonatinaContractBytecode,
+    pub owner: String,
+    pub facts: Vec<trace_facts::TraceFact>,
+}
+
+/// Emit each root's bytecode and trace facts from the same isolated lowering.
+/// Dependencies use the identical compilation path and are embedded as data.
+pub(crate) fn emit_runtime_package_sonatina_bytecode_with_trace(
     db: &DriverDataBase,
     package: &RuntimePackage<'_>,
-    module: Module,
     opt_level: OptLevel,
-    postopt_trace_owner: &str,
-) -> Result<
-    (
-        BTreeMap<String, SonatinaContractBytecode>,
-        Vec<trace_facts::TraceFact>,
-    ),
-    LowerError,
-> {
+    trace_owner: &str,
+) -> Result<BTreeMap<String, TracedContractBytecode>, LowerError> {
     ensure_runtime_package_has_roots(db, package, "Sonatina bytecode")?;
-    emit_runtime_module_sonatina_bytecode_with_options(
+    let mut compiler = IsolatedObjectCompiler {
         db,
         package,
-        module,
         opt_level,
-        true,
-        Some(postopt_trace_owner),
-    )
+        emit_observability: true,
+        compiled: HashMap::new(),
+        in_progress: FxHashSet::default(),
+        trace_owner: Some(trace_owner.to_string()),
+        trace_facts: BTreeMap::new(),
+    };
+    let mut out = BTreeMap::new();
+    for object in package.root_objects(db) {
+        let name = object.name(db);
+        compiler.compile(&name)?;
+        let artifact = &compiler.compiled[name.as_str()];
+        let bytecode = root_contract_bytecode(
+            db,
+            object,
+            &HashMap::from([(name.clone(), object)]),
+            &HashMap::from([(name.as_str(), artifact)]),
+            true,
+            ExternalEmbeds::Data,
+        )?;
+        let (owner, facts) = compiler
+            .trace_facts
+            .remove(&name)
+            .expect("compiled root has trace facts");
+        out.insert(
+            name,
+            TracedContractBytecode {
+                bytecode,
+                owner,
+                facts,
+            },
+        );
+    }
+    Ok(out)
 }
 
+#[cfg(test)]
 fn emit_runtime_module_sonatina_bytecode_with_options(
     db: &DriverDataBase,
     package: &RuntimePackage<'_>,
@@ -1319,104 +1552,126 @@ fn emit_runtime_module_sonatina_bytecode_with_options(
     let mut out = BTreeMap::new();
     for object in package.root_objects(db) {
         let object_name = object.name(db);
-        let artifact = artifacts_by_name
-            .get(object_name.as_str())
-            .copied()
-            .ok_or_else(|| {
-                LowerError::Internal(format!("compiled object `{object_name}` not found"))
-            })?;
-        let init = artifact
-            .sections
-            .get(&section_name_for_runtime(&mir::RuntimeSectionName::Init));
-        let runtime = artifact
-            .sections
-            .get(&section_name_for_runtime(&mir::RuntimeSectionName::Runtime));
-        let runtime_section_name = mir::RuntimeSectionName::Runtime;
-        let init_section_name = mir::RuntimeSectionName::Init;
-        let (deploy, runtime, deploy_observability, runtime_observability) = match (init, runtime) {
-            (Some(init), Some(runtime)) => {
-                let sections = object.sections(db);
-                let init_section = sections
-                    .iter()
-                    .find(|section| section.name == init_section_name)
-                    .ok_or_else(|| {
-                        LowerError::Internal(format!(
-                            "root object `{object_name}` has init artifact but no init section"
-                        ))
-                    })?;
-                let runtime_section = sections
-                    .iter()
-                    .find(|section| section.name == runtime_section_name)
-                    .ok_or_else(|| {
-                        LowerError::Internal(format!(
-                            "root object `{object_name}` has runtime artifact but no runtime section"
-                        ))
-                    })?;
-                (
-                    init.bytes.clone(),
-                    runtime.bytes.clone(),
-                    merged_section_observability(
-                        db,
-                        &objects_by_name,
-                        &artifacts_by_name,
-                        init,
-                        init_section,
-                        (object_name.clone(), init_section.name.clone()),
-                    )?,
-                    merged_section_observability(
-                        db,
-                        &objects_by_name,
-                        &artifacts_by_name,
-                        runtime,
-                        runtime_section,
-                        (object_name.clone(), runtime_section.name.clone()),
-                    )?,
-                )
-            }
-            _ => {
-                let sections = object.sections(db);
-                let section = sections.first().ok_or_else(|| {
-                    LowerError::Internal(format!("root object `{object_name}` has no sections"))
-                })?;
-                ensure_observable_contract_section(&section.name, emit_observability)?;
-                let runtime_section = artifact
-                    .sections
-                    .get(&section_name_for_runtime(&section.name))
-                    .ok_or_else(|| {
-                        LowerError::Internal(format!(
-                            "compiled object `{object_name}` is missing section `{:?}`",
-                            section.name
-                        ))
-                    })?;
-                let runtime = runtime_section.bytes.clone();
-                let runtime_observability = merged_section_observability(
-                    db,
-                    &objects_by_name,
-                    &artifacts_by_name,
-                    runtime_section,
-                    section,
-                    (object_name.clone(), section.name.clone()),
-                )?;
-                let deploy = wrap_as_init_code(&runtime);
-                let deploy_code_bytes = deploy.len().saturating_sub(runtime.len());
-                let deploy_observability = emit_observability
-                    .then(|| wrapped_init_observability(deploy.len(), deploy_code_bytes))
-                    .flatten();
-                (deploy, runtime, deploy_observability, runtime_observability)
-            }
-        };
         out.insert(
             object_name.clone(),
-            SonatinaContractBytecode {
-                deploy,
-                runtime,
-                deploy_observability,
-                runtime_observability,
-            }
-            .checked(&object_name, emit_observability)?,
+            root_contract_bytecode(
+                db,
+                object,
+                &objects_by_name,
+                &artifacts_by_name,
+                emit_observability,
+                ExternalEmbeds::Linked,
+            )?,
         );
     }
     Ok((out, postopt_trace_facts))
+}
+
+fn root_contract_bytecode<'db>(
+    db: &'db DriverDataBase,
+    object: mir::RuntimeObject<'db>,
+    objects_by_name: &HashMap<String, mir::RuntimeObject<'db>>,
+    artifacts_by_name: &HashMap<&str, &ObjectArtifact>,
+    emit_observability: bool,
+    external_embeds: ExternalEmbeds,
+) -> Result<SonatinaContractBytecode, LowerError> {
+    let object_name = object.name(db);
+    let artifact = artifacts_by_name
+        .get(object_name.as_str())
+        .copied()
+        .ok_or_else(|| {
+            LowerError::Internal(format!("compiled object `{object_name}` not found"))
+        })?;
+    let init = artifact
+        .sections
+        .get(&section_name_for_runtime(&mir::RuntimeSectionName::Init));
+    let runtime = artifact
+        .sections
+        .get(&section_name_for_runtime(&mir::RuntimeSectionName::Runtime));
+    let runtime_section_name = mir::RuntimeSectionName::Runtime;
+    let init_section_name = mir::RuntimeSectionName::Init;
+    let (deploy, runtime, deploy_observability, runtime_observability) = match (init, runtime) {
+        (Some(init), Some(runtime)) => {
+            let sections = object.sections(db);
+            let init_section = sections
+                .iter()
+                .find(|section| section.name == init_section_name)
+                .ok_or_else(|| {
+                    LowerError::Internal(format!(
+                        "root object `{object_name}` has init artifact but no init section"
+                    ))
+                })?;
+            let runtime_section = sections
+                .iter()
+                .find(|section| section.name == runtime_section_name)
+                .ok_or_else(|| {
+                    LowerError::Internal(format!(
+                        "root object `{object_name}` has runtime artifact but no runtime section"
+                    ))
+                })?;
+            (
+                init.bytes.clone(),
+                runtime.bytes.clone(),
+                merged_section_observability(
+                    db,
+                    objects_by_name,
+                    artifacts_by_name,
+                    init,
+                    init_section,
+                    (object_name.clone(), init_section.name.clone()),
+                    external_embeds,
+                )?,
+                merged_section_observability(
+                    db,
+                    objects_by_name,
+                    artifacts_by_name,
+                    runtime,
+                    runtime_section,
+                    (object_name.clone(), runtime_section.name.clone()),
+                    external_embeds,
+                )?,
+            )
+        }
+        _ => {
+            let sections = object.sections(db);
+            let section = sections.first().ok_or_else(|| {
+                LowerError::Internal(format!("root object `{object_name}` has no sections"))
+            })?;
+            ensure_observable_contract_section(&section.name, emit_observability)?;
+            let runtime_section = artifact
+                .sections
+                .get(&section_name_for_runtime(&section.name))
+                .ok_or_else(|| {
+                    LowerError::Internal(format!(
+                        "compiled object `{object_name}` is missing section `{:?}`",
+                        section.name
+                    ))
+                })?;
+            let runtime = runtime_section.bytes.clone();
+            let runtime_observability = merged_section_observability(
+                db,
+                objects_by_name,
+                artifacts_by_name,
+                runtime_section,
+                section,
+                (object_name.clone(), section.name.clone()),
+                external_embeds,
+            )?;
+            let deploy = wrap_as_init_code(&runtime);
+            let deploy_code_bytes = deploy.len().saturating_sub(runtime.len());
+            let deploy_observability = emit_observability
+                .then(|| wrapped_init_observability(deploy.len(), deploy_code_bytes))
+                .flatten();
+            (deploy, runtime, deploy_observability, runtime_observability)
+        }
+    };
+    SonatinaContractBytecode {
+        deploy,
+        runtime,
+        deploy_observability,
+        runtime_observability,
+    }
+    .checked(&object_name, emit_observability)
 }
 
 pub fn emit_runtime_package_sonatina_bytecode(
@@ -1424,8 +1679,7 @@ pub fn emit_runtime_package_sonatina_bytecode(
     package: &RuntimePackage<'_>,
     opt_level: OptLevel,
 ) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
-    emit_runtime_package_sonatina_bytecode_with_options(db, package, opt_level, false, None)
-        .map(|(bytecode, _)| bytecode)
+    emit_runtime_package_sonatina_bytecode_with_options(db, package, opt_level, false)
 }
 
 pub fn emit_runtime_package_sonatina_bytecode_with_observability(
@@ -1433,8 +1687,7 @@ pub fn emit_runtime_package_sonatina_bytecode_with_observability(
     package: &RuntimePackage<'_>,
     opt_level: OptLevel,
 ) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
-    emit_runtime_package_sonatina_bytecode_with_options(db, package, opt_level, true, None)
-        .map(|(bytecode, _)| bytecode)
+    emit_runtime_package_sonatina_bytecode_with_options(db, package, opt_level, true)
 }
 
 pub fn emit_module_sonatina_ir(
@@ -1564,14 +1817,16 @@ pub fn emit_test_module_sonatina(
     if package.root_objects(db).is_empty() {
         return Ok(TestModuleOutput { tests: Vec::new() });
     }
-    let module = compile_runtime_package_sonatina(db, &package)?;
-    ensure_module_sonatina_ir_valid(&module)?;
-    let artifacts = compile_runtime_objects(module, opt_level, options.emit_observability)?;
-    let artifacts_by_name = artifacts
-        .iter()
-        .map(|artifact| (artifact.object.0.as_str(), artifact))
-        .collect::<std::collections::HashMap<_, _>>();
-
+    let mut compiler = IsolatedObjectCompiler {
+        db,
+        package: &package,
+        opt_level,
+        emit_observability: options.emit_observability,
+        compiled: HashMap::new(),
+        in_progress: FxHashSet::default(),
+        trace_owner: None,
+        trace_facts: BTreeMap::new(),
+    };
     let mut tests = Vec::new();
     for object in package.root_objects(db) {
         let sections = object.sections(db);
@@ -1581,12 +1836,8 @@ pub fn emit_test_module_sonatina(
         let mir::RuntimeSectionName::Test(_) = &section.name else {
             continue;
         };
-        let artifact = artifacts_by_name
-            .get(object.name(db).as_str())
-            .copied()
-            .ok_or_else(|| {
-                LowerError::Internal(format!("compiled object `{}` not found", object.name(db)))
-            })?;
+        compiler.compile(&object.name(db))?;
+        let artifact = &compiler.compiled[object.name(db).as_str()];
         let runtime = artifact
             .sections
             .get(&section_name_for_runtime(&section.name))

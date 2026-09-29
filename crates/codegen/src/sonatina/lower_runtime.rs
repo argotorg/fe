@@ -161,6 +161,31 @@ pub(super) fn compile_runtime_package_sonatina(
         .map(|(module, _)| module)
 }
 
+/// Lowers a package holding a single object whose external embeds are
+/// replaced by already compiled code.
+///
+/// Each `external_code` entry maps an embedded `(object, section)` to its
+/// final bytes. The bytes are placed in the embedding section as constant data,
+/// and code region offset/length builtins that name the embedded section
+/// resolve to that data. The embedded object's functions are not part of this
+/// module, so module-wide optimizations over the embedding object cannot change
+/// the code that gets embedded.
+pub(super) fn compile_runtime_package_sonatina_with_external_code(
+    db: &DriverDataBase,
+    package: &RuntimePackage<'_>,
+    external_code: &[((String, mir::RuntimeSectionName), Vec<u8>)],
+) -> Result<Module, LowerError> {
+    let isa = super::create_evm_isa();
+    let builder = ModuleBuilder::new(ModuleCtx::new(&isa));
+    let mut lowerer = ModuleLowerer::new(db, builder, isa.inst_set(), package, None);
+    lowerer.declare_functions()?;
+    lowerer.lower_const_regions()?;
+    lowerer.declare_external_code(external_code);
+    lowerer.lower_bodies()?;
+    lowerer.declare_objects()?;
+    Ok(lowerer.finish().0)
+}
+
 pub(super) fn compile_runtime_package_sonatina_for_isa<'db, I>(
     db: &'db DriverDataBase,
     package: &RuntimePackage<'db>,
@@ -197,6 +222,7 @@ struct ModuleLowerer<'db, 'a, I: 'static> {
     const_globals: FxHashMap<ConstRegionId<'db>, GlobalVariableRef>,
     const_names: FxHashMap<ConstRegionId<'db>, String>,
     explicit_code_region_sections: FxHashSet<(String, mir::RuntimeSectionName)>,
+    external_code: FxHashMap<(String, mir::RuntimeSectionName), GlobalVariableRef>,
 }
 
 impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
@@ -230,6 +256,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             const_globals: FxHashMap::default(),
             const_names: FxHashMap::default(),
             explicit_code_region_sections: FxHashSet::default(),
+            external_code: FxHashMap::default(),
         }
     }
 
@@ -468,6 +495,44 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
         })
     }
 
+    fn declare_external_code(
+        &mut self,
+        external_code: &[((String, mir::RuntimeSectionName), Vec<u8>)],
+    ) {
+        for (idx, (key, bytes)) in external_code.iter().enumerate() {
+            let ty = self.builder.declare_array_type(Type::I8, bytes.len());
+            let init = sonatina_ir::global_variable::GvInitializer::make_array(
+                bytes
+                    .iter()
+                    .map(|byte| {
+                        sonatina_ir::global_variable::GvInitializer::make_imm(Immediate::I8(
+                            *byte as i8,
+                        ))
+                    })
+                    .collect(),
+            );
+            let gv = self.builder.declare_gv(GlobalVariableData::constant(
+                format!("external_code_{idx}"),
+                ty,
+                Linkage::Private,
+                init,
+            ));
+            self.external_code.insert(key.clone(), gv);
+        }
+    }
+
+    fn external_code_symbol(&self, region: mir::RuntimeCodeRegion<'db>) -> Option<SymbolRef> {
+        let resolved = self
+            .package
+            .code_regions(self.db)
+            .into_iter()
+            .find(|resolved| resolved.region(self.db) == region)?;
+        let source = resolved.source(self.db);
+        self.external_code
+            .get(&(source.object().to_string(), source.section().clone()))
+            .map(|gv| SymbolRef::Global(*gv))
+    }
+
     fn lower_bodies(&mut self) -> Result<(), LowerError> {
         for function in self.package.functions(self.db) {
             if function.linkage(self.db) == RuntimeLinkage::External {
@@ -502,6 +567,10 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                                 EmbedSymbol::from(embed.as_symbol.clone()),
                             );
                         }
+                        mir::RuntimeSectionRef::External { object, section }
+                            if self
+                                .external_code
+                                .contains_key(&(object.clone(), section.clone())) => {}
                         mir::RuntimeSectionRef::External { object, section } => {
                             section_builder.embed_external(
                                 object.clone(),
@@ -2941,6 +3010,9 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     }
 
     fn code_region_symbol_ref(&mut self, region: mir::RuntimeCodeRegion<'db>) -> SymbolRef {
+        if let Some(symbol) = self.module.external_code_symbol(region) {
+            return symbol;
+        }
         self.module.mark_explicit_code_region(region);
         if !self.current_sections.is_empty()
             && self

@@ -1,0 +1,18 @@
+use std::evm::{Create}
+use ingot::child::Child
+use ingot::shared::mix
+
+msg FactoryMsg {
+    #[selector = 0x22222222]
+    Make { salt: u256, n: u256 } -> Address,
+}
+
+// Lives in a different module than `Child`, so `Child.bin` and the `Child`
+// code embedded here come from separate runtime packages.
+pub contract Factory {
+    recv FactoryMsg {
+        Make { salt, n } -> Address uses (create: mut Create) {
+            create.create2<Child>(value: 0, args: (), salt: mix(salt, n))
+        }
+    }
+}
