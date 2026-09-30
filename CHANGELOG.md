@@ -1,6 +1,14 @@
 # Changelog
 
 [//]: # (towncrier release notes start)
+## 26.4.1 (2026-09-30)
+
+### Bugfixes
+
+- The borrow checker no longer misses moves and borrows of compile-time constant values. Moving a constant non-`Copy` value twice, matching the same value by value twice, or reading a local while a `mut` borrow of it is live is now rejected, as it already was for runtime values. Passing an unannotated string literal to a generic `own` parameter more than once is no longer reported as a move conflict. ([#1649](https://github.com/argotorg/fe/issues/1649))
+- A `mut self` method that uses a `StorageMap` or `StorageBytes` field is no longer rejected with a borrow conflict when called on a contract field whose struct has other fields, for example from a `recv` handler. ([#1659](https://github.com/argotorg/fe/issues/1659))
+
+
 ## 26.4.0 (2026-09-30)
 
 ### Features
