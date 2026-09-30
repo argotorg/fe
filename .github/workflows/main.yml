@@ -264,7 +264,13 @@ jobs:
       - name: Build
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --locked --release --target ${{ matrix.target }} ${{ matrix.EXTRA_FEATURES }}
+        # `fe/cranelift` enables the native backend (`fe build --backend native`).
+        run: cargo build --locked --release --target ${{ matrix.target }} --features fe/cranelift ${{ matrix.EXTRA_FEATURES }}
+      - name: Check native backend is available
+        # Cross-compiled binaries can't run on the build host.
+        if: matrix.target != 'aarch64-unknown-linux-gnu' && matrix.target != 'x86_64-apple-darwin'
+        shell: bash
+        run: target/${{ matrix.target }}/release/fe${{ matrix.EXT }} build --help | grep -q native
       - name: Strip binary (Unix)
         if: runner.os != 'Windows'
         run: ${{ matrix.STRIP }} target/${{ matrix.target }}/release/fe
