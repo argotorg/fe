@@ -1,0 +1,71 @@
+// Enum variants and modules take no generic arguments. Arguments written on
+// them must be rejected, not silently dropped.
+
+enum Choice {
+    Empty,
+    Full(u8),
+    Named { x: u8 },
+}
+
+use Choice::Empty
+
+mod m {
+    pub struct In {}
+    pub mod inner {
+        pub struct Deep {}
+    }
+}
+
+fn unit_variant() -> Choice {
+    Choice::Empty<{ nope }>
+}
+
+fn unit_variant_type_arg() -> Choice {
+    Choice::Empty<u8>
+}
+
+fn tuple_variant() -> Choice {
+    Choice::Full<u8>(1)
+}
+
+fn record_variant() -> Choice {
+    Choice::Named<u8> { x: 1 }
+}
+
+fn imported_variant() -> Choice {
+    Empty<u8>
+}
+
+fn variant_pattern(c: Choice) -> u8 {
+    match c {
+        Choice::Full<u8>(x) => x
+        _ => 0
+    }
+}
+
+fn module_in_expr() -> m::In {
+    m<{ nope }>::In {}
+}
+
+fn module_in_type(_ x: m<u8>::In) {}
+
+fn nested_module() -> m::inner::Deep {
+    m::inner<u8>::Deep {}
+}
+
+// Generic arguments on the enum itself, and paths without arguments, are fine.
+enum Wrap<T> {
+    Some(T),
+    None,
+}
+
+fn ok() -> u8 {
+    let _w: Wrap<u8> = Wrap<u8>::None
+    let _v = Wrap<u8>::Some(1)
+    let _i: m::In = m::In {}
+    let _d: m::inner::Deep = m::inner::Deep {}
+    match Choice::Empty {
+        Choice::Full(x) => x
+        _ => 0
+    }
+}

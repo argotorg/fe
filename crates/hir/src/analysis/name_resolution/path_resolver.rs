@@ -963,7 +963,7 @@ where
 
                 // Associated const on a specific trait instance
                 if resolve_tail_as_value && trait_inst.def(db).const_(db, ident).is_some() {
-                    reject_assoc_const_generic_args(db, path)?;
+                    reject_generic_args(db, path)?;
                     let r = PathRes::TraitConst(trait_inst.self_ty(db), *trait_inst, ident);
                     observer(path, &r);
                     return Ok(r);
@@ -985,6 +985,8 @@ where
                 if let Ok(res) = bucket.pick(NameDomain::VALUE)
                     && let Some(var) = res.enum_variant()
                 {
+                    // Generic arguments belong on the enum (`E<T>::V`).
+                    reject_generic_args(db, path)?;
                     let reso = PathRes::EnumVariant(ResolvedVariant {
                         ty,
                         variant: var,
@@ -1003,7 +1005,7 @@ where
                 if let Some(impl_) =
                     select_inherent_const_candidate(db, ty, ident, scope, assumptions)
                 {
-                    reject_assoc_const_generic_args(db, path)?;
+                    reject_generic_args(db, path)?;
                     let r = PathRes::InherentConst(ty, impl_, ident);
                     observer(path, &r);
                     return Ok(r);
@@ -1013,7 +1015,7 @@ where
                 // `OtherIngotType::CONST` and `ExternalType::LOCAL_TRAIT_CONST` both resolve.
                 match select_assoc_const_candidate(db, ty, ident, scope, assumptions) {
                     AssocConstSelection::Found(inst) => {
-                        reject_assoc_const_generic_args(db, path)?;
+                        reject_generic_args(db, path)?;
                         let r = PathRes::TraitConst(ty, inst, ident);
                         observer(path, &r);
                         return Ok(r);
@@ -1314,7 +1316,7 @@ pub(crate) fn ingot_impl_const_map<'db>(
     map
 }
 
-fn reject_assoc_const_generic_args<'db>(
+fn reject_generic_args<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
 ) -> Result<(), PathResError<'db>> {
@@ -1997,7 +1999,10 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                     PathRes::Ty(TyId::contract(db, contract))
                 }
 
-                ItemKind::Mod(_) | ItemKind::TopMod(_) => PathRes::Mod(scope_id),
+                ItemKind::Mod(_) | ItemKind::TopMod(_) => {
+                    reject_generic_args(db, path)?;
+                    PathRes::Mod(scope_id)
+                }
 
                 ItemKind::Func(func) => {
                     let func_def = func.as_callable(db).unwrap();
@@ -2188,6 +2193,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
             }
 
             ScopeId::Variant(var) => {
+                reject_generic_args(db, path)?;
                 let enum_ty = if let Some(ty) = parent_ty {
                     ty
                 } else {
@@ -2195,7 +2201,6 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                     debug_assert!(path.parent(db).is_none());
                     ty_from_adtref(db, path, var.enum_.into(), &[], minter)?
                 };
-                // TODO report error if args isn't empty
                 PathRes::EnumVariant(ResolvedVariant {
                     ty: enum_ty,
                     variant: var,
