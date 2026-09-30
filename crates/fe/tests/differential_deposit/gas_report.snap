@@ -5,13 +5,13 @@ expression: report
 bytecode size
 path         fe-O2        sol     sol-IR   fe vs sol-IR
 -----------------------------------------------------------
-init          2446       4819       3082  -636 (-20.6%)
+init          2443       4819       3082  -639 (-20.7%)
 runtime       2364       4445       2844  -480 (-16.9%)
 
 deployment gas
 path        fe-O2        sol     sol-IR     fe vs sol-IR
 ------------------------------------------------------------
-deploy    1265161    1738847    1379411  -114250 (-8.3%)
+deploy    1264989    1738847    1379411  -114422 (-8.3%)
 
 call gas
 path                            fe-O2        sol     sol-IR    fe vs sol-IR
