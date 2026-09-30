@@ -401,20 +401,32 @@ fn assigned_provider_components<'db>(
         };
         let mut projections = base_projections.clone();
         projections.extend(layout_projections(component_path)?);
+        // A value path can identify a unique assigned root even when a
+        // provider's physical representation differs from its semantic type.
+        // If it is ambiguous, use the const parameter port to distinguish
+        // roots sharing that path (e.g. StorageBytes length and data salts).
+        let unique_value = || {
+            field
+                .unique_root_value_for_evidence_projections(view, component.ty, &projections)
+                .or_else(|| {
+                    let param = u16::try_from(component.port.root.param).ok()?;
+                    let mut root_projections = projections.clone();
+                    root_projections.push(LayoutProjection::ConstParam(param));
+                    field.unique_root_value_for_evidence_projections(
+                        view,
+                        component.ty,
+                        &root_projections,
+                    )
+                })
+        };
         let value = match &component.representative {
             Some(LayoutBundleComponentKey::Root(root)) => field
                 .root_value_for_evidence_projections(view, *root, component.ty, &projections)
                 .ok()
-                .or_else(|| {
-                    field.unique_root_value_for_evidence_projections(
-                        view,
-                        component.ty,
-                        &projections,
-                    )
-                }),
+                .or_else(unique_value),
             None
             | Some(LayoutBundleComponentKey::Param(_) | LayoutBundleComponentKey::Static(_)) => {
-                field.unique_root_value_for_evidence_projections(view, component.ty, &projections)
+                unique_value()
             }
         }
         .ok_or(LayoutEvidenceError::ProviderPlace)?;

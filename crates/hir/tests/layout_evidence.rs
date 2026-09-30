@@ -3257,3 +3257,11 @@ fn specialized_array_enum_leaf_methods_bind_runtime_layout_consts() {
         "fixture must reach a specialized Slot::root instance"
     );
 }
+
+#[test]
+fn nested_storage_bytes_infer_distinct_const_roots() {
+    assert_layoutizes(
+        "nested_storage_bytes_layout.fe",
+        include_str!("../../fe/tests/fixtures/fe_test/nested_storage_bytes_layout.fe"),
+    );
+}

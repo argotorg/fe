@@ -1,0 +1,110 @@
+use core::ptr::{MemBuffer, offset}
+use core::abi::store_word
+use std::evm::{Evm, StorageBytes, StorageMap, keccak256}
+
+struct Store {
+    before: StorageMap<u256, u256>,
+    first: StorageBytes<u256>,
+    second: StorageBytes<u256>,
+    after: StorageMap<u256, u256>,
+}
+
+msg BlobMsg {
+    #[selector = 1]
+    Set { key: u256, first: Bytes, second: Bytes },
+    #[selector = 2]
+    Get { key: u256 } -> (u256, u256, u256, u256, u256, u256),
+    #[selector = 3]
+    ClearFirst { key: u256 },
+}
+
+pub contract NestedBlobs {
+    mut store: Store,
+
+    recv BlobMsg {
+        Set { key, first, second } uses (mut store) {
+            store.before.set(key, value: 111)
+            store.first.store_view(key, view: first.view())
+            store.second.store_view(key, view: second.view())
+            store.after.set(key, value: 222)
+        }
+        Get { key } -> (u256, u256, u256, u256, u256, u256)
+        uses store
+        {
+            (
+                store.first.len(key),
+                store.second.len(key),
+                keccak256(store.first.to_memory(key).span()),
+                keccak256(store.second.to_memory(key).span()),
+                store.before.get(key),
+                store.after.get(key),
+            )
+        }
+        ClearFirst { key } uses (mut store) {
+            store.first.clear(key)
+        }
+    }
+}
+
+fn words(_ first: u256, _ second: u256) -> Bytes {
+    let buffer = MemBuffer::alloc(64)
+    store_word(ptr: buffer.ptr(), value: first)
+    store_word(ptr: offset(buffer.ptr(), 32), value: second)
+    Bytes::from_payload(source: buffer.span())
+}
+
+#[test]
+fn test_nested_storage_bytes_inferred_salts_are_independent()
+uses (evm: mut Evm)
+{
+    let addr = evm.create2<NestedBlobs>(value: 0, args: (), salt: 0)
+    evm.call(
+        addr,
+        gas: 1000000,
+        value: 0,
+        message: BlobMsg::Set { key: 0, first: words(10, 20), second: words(30, 40) },
+    )
+    evm.call(
+        addr,
+        gas: 1000000,
+        value: 0,
+        message: BlobMsg::Set { key: 1, first: words(50, 60), second: words(70, 80) },
+    )
+    let (len1, len2, hash1, hash2, before, after) = evm
+        .call(
+            addr,
+            gas: 1000000,
+            value: 0,
+            message: BlobMsg::Get { key: 0 },
+        )
+    assert!(len1 == 64 && len2 == 64)
+    assert!(hash1 == keccak256(words(10, 20).payload_span()))
+    assert!(hash2 == keccak256(words(30, 40).payload_span()))
+    assert!(before == 111 && after == 222)
+    evm.call(
+        addr,
+        gas: 1000000,
+        value: 0,
+        message: BlobMsg::ClearFirst { key: 0 },
+    )
+    let (cleared, kept, _, kept_hash, kept_before, kept_after) = evm
+        .call(
+            addr,
+            gas: 1000000,
+            value: 0,
+            message: BlobMsg::Get { key: 0 },
+        )
+    assert!(cleared == 0 && kept == 64)
+    assert!(
+        kept_hash == hash2 && kept_before == 111 && kept_after == 222,
+    )
+    let (_, _, other_hash1, other_hash2, _, _) = evm
+        .call(
+            addr,
+            gas: 1000000,
+            value: 0,
+            message: BlobMsg::Get { key: 1 },
+        )
+    assert!(other_hash1 == keccak256(words(50, 60).payload_span()))
+    assert!(other_hash2 == keccak256(words(70, 80).payload_span()))
+}
