@@ -272,6 +272,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "archery"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33ca55ee147b1926dbea904f50fe4902494e97bc742205abbbf10c709e43815f"
+dependencies = [
+ "triomphe",
+]
+
+[[package]]
 name = "ark-bls12-381"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5950,6 +5959,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rpds"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e025feb26210bc196b908e72deb063b1b4000754304341cbc168a1e72c857ebc"
+dependencies = [
+ "archery",
+ "smallvec 1.15.1",
+]
+
+[[package]]
 name = "rug"
 version = "1.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6746,7 +6765,7 @@ dependencies = [
 [[package]]
 name = "sonatina-codegen"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=c60eed743c62c3ae18b34036700c6f115bba0f9c#c60eed743c62c3ae18b34036700c6f115bba0f9c"
+source = "git+https://github.com/fe-lang/sonatina?rev=b9009db7dcb5658f1080d8e1722cf1d171caaa34#b9009db7dcb5658f1080d8e1722cf1d171caaa34"
 dependencies = [
  "bit-set",
  "cranelift-codegen",
@@ -6758,6 +6777,7 @@ dependencies = [
  "dashmap",
  "indexmap 2.13.0",
  "rayon",
+ "rpds",
  "rustc-hash 2.1.1",
  "smallvec 1.15.1",
  "sonatina-ir",
@@ -6771,7 +6791,7 @@ dependencies = [
 [[package]]
 name = "sonatina-ir"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=c60eed743c62c3ae18b34036700c6f115bba0f9c#c60eed743c62c3ae18b34036700c6f115bba0f9c"
+source = "git+https://github.com/fe-lang/sonatina?rev=b9009db7dcb5658f1080d8e1722cf1d171caaa34#b9009db7dcb5658f1080d8e1722cf1d171caaa34"
 dependencies = [
  "bit-set",
  "bitflags 2.11.0",
@@ -6795,7 +6815,7 @@ dependencies = [
 [[package]]
 name = "sonatina-macros"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=c60eed743c62c3ae18b34036700c6f115bba0f9c#c60eed743c62c3ae18b34036700c6f115bba0f9c"
+source = "git+https://github.com/fe-lang/sonatina?rev=b9009db7dcb5658f1080d8e1722cf1d171caaa34#b9009db7dcb5658f1080d8e1722cf1d171caaa34"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6805,7 +6825,7 @@ dependencies = [
 [[package]]
 name = "sonatina-parser"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=c60eed743c62c3ae18b34036700c6f115bba0f9c#c60eed743c62c3ae18b34036700c6f115bba0f9c"
+source = "git+https://github.com/fe-lang/sonatina?rev=b9009db7dcb5658f1080d8e1722cf1d171caaa34#b9009db7dcb5658f1080d8e1722cf1d171caaa34"
 dependencies = [
  "annotate-snippets",
  "bimap",
@@ -6826,7 +6846,7 @@ dependencies = [
 [[package]]
 name = "sonatina-triple"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=c60eed743c62c3ae18b34036700c6f115bba0f9c#c60eed743c62c3ae18b34036700c6f115bba0f9c"
+source = "git+https://github.com/fe-lang/sonatina?rev=b9009db7dcb5658f1080d8e1722cf1d171caaa34#b9009db7dcb5658f1080d8e1722cf1d171caaa34"
 dependencies = [
  "thiserror 2.0.18",
 ]
@@ -6834,10 +6854,11 @@ dependencies = [
 [[package]]
 name = "sonatina-verifier"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?rev=c60eed743c62c3ae18b34036700c6f115bba0f9c#c60eed743c62c3ae18b34036700c6f115bba0f9c"
+source = "git+https://github.com/fe-lang/sonatina?rev=b9009db7dcb5658f1080d8e1722cf1d171caaa34#b9009db7dcb5658f1080d8e1722cf1d171caaa34"
 dependencies = [
  "cranelift-entity 0.126.2",
  "rayon",
+ "rpds",
  "rustc-hash 2.1.1",
  "smallvec 1.15.1",
  "sonatina-ir",
@@ -7476,6 +7497,12 @@ name = "tree-sitter-language"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "009994f150cc0cd50ff54917d5bc8bffe8cad10ca10d81c34da2ec421ae61782"
+
+[[package]]
+name = "triomphe"
+version = "0.1.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b40688ea6389c8171614b25491f71d4a27946e0c7ce2da1c6de27e25abf1a0ae"
 
 [[package]]
 name = "try-lock"
