@@ -22,11 +22,17 @@ use std::{
 #[cfg(test)]
 thread_local! {
     pub(crate) static INTERN_ATTEMPTS: Cell<usize> = const { Cell::new(0) };
+    static APPLY_VISITS: Cell<usize> = const { Cell::new(0) };
 }
 
 #[cfg(test)]
 pub(super) fn intern_attempts() -> usize {
     INTERN_ATTEMPTS.get()
+}
+
+#[cfg(test)]
+pub(super) fn apply_visits() -> usize {
+    APPLY_VISITS.get()
 }
 
 /// What identifies a completed graph for accounting: its canonical hash, node
@@ -167,6 +173,15 @@ enum Node<V, T> {
         low: Child,
         high: Child,
     },
+}
+
+impl<V, T> Node<V, T> {
+    fn leaf_value(&self) -> Option<&T> {
+        match self {
+            Self::Leaf(value) => Some(value),
+            Self::Branch { .. } => None,
+        }
+    }
 }
 
 /// A child position indexes its own graph's node list. Reduced graphs stay far
@@ -547,13 +562,17 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
         lhs: usize,
         right: &OrderedView<'_, V, T, impl Fn(&V) -> V>,
         rhs: usize,
-        join: &impl Fn(&T, &T) -> T,
+        join: &impl Fn(Option<&T>, Option<&T>) -> Option<T>,
         memo: &mut FxHashMap<(Child, Child), usize>,
     ) -> usize {
         let root = (child(lhs), child(rhs));
         // Expand low edges first, then join memoized children without native recursion.
         let mut pending = vec![(root, None)];
         while let Some((key, branch)) = pending.pop() {
+            #[cfg(test)]
+            if branch.is_none() {
+                APPLY_VISITS.set(APPLY_VISITS.get() + 1);
+            }
             if memo.contains_key(&key) {
                 continue;
             }
@@ -566,32 +585,32 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Builder<V, T> {
                 self.branch(variable, memo[&low], memo[&high])
             } else {
                 let (lhs, rhs) = (key.0 as usize, key.1 as usize);
-                match (&left.decision.nodes[lhs], &right.decision.nodes[rhs]) {
-                    (Node::Leaf(left), Node::Leaf(right)) => {
-                        self.intern(Node::Leaf(join(left, right)))
-                    }
-                    _ => {
-                        let variable = match (left.variable(lhs), right.variable(rhs)) {
-                            (Some(left), Some(right)) => left.min(right),
-                            (Some(variable), None) | (None, Some(variable)) => variable,
-                            (None, None) => unreachable!("two leaves are joined directly"),
-                        };
-                        let (left_low, left_high) = left.cofactors(lhs, &variable);
-                        let (right_low, right_high) = right.cofactors(rhs, &variable);
-                        let low = (child(left_low), child(right_low));
-                        let high = (child(left_high), child(right_high));
-                        pending.push((
-                            key,
-                            Some(ApplyBranch {
-                                variable,
-                                low,
-                                high,
-                            }),
-                        ));
-                        pending.push((high, None));
-                        pending.push((low, None));
-                        continue;
-                    }
+                if let Some(value) = join(
+                    left.decision.nodes[lhs].leaf_value(),
+                    right.decision.nodes[rhs].leaf_value(),
+                ) {
+                    self.intern(Node::Leaf(value))
+                } else {
+                    let variable = match (left.variable(lhs), right.variable(rhs)) {
+                        (Some(left), Some(right)) => left.min(right),
+                        (Some(variable), None) | (None, Some(variable)) => variable,
+                        (None, None) => unreachable!("two leaves are joined directly"),
+                    };
+                    let (left_low, left_high) = left.cofactors(lhs, &variable);
+                    let (right_low, right_high) = right.cofactors(rhs, &variable);
+                    let low = (child(left_low), child(right_low));
+                    let high = (child(left_high), child(right_high));
+                    pending.push((
+                        key,
+                        Some(ApplyBranch {
+                            variable,
+                            low,
+                            high,
+                        }),
+                    ));
+                    pending.push((high, None));
+                    pending.push((low, None));
+                    continue;
                 }
             };
             memo.insert(key, result);
@@ -763,10 +782,7 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
 
     /// The whole graph's value, when it decides nothing.
     pub(super) fn leaf_value(&self) -> Option<&T> {
-        match &self.nodes[self.root()] {
-            Node::Leaf(value) => Some(value),
-            Node::Branch { .. } => None,
-        }
+        self.nodes[self.root()].leaf_value()
     }
 
     pub(super) fn leaves(&self) -> impl Iterator<Item = &T> {
@@ -895,7 +911,11 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         result
     }
 
-    pub(super) fn apply(&self, other: &Self, leaf: impl Fn(&T, &T) -> T) -> Self {
+    pub(super) fn apply(
+        &self,
+        other: &Self,
+        leaf: impl Fn(Option<&T>, Option<&T>) -> Option<T>,
+    ) -> Self {
         self.ordered_view(Clone::clone)
             .apply(other.ordered_view(Clone::clone), leaf)
     }
@@ -1058,14 +1078,17 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash, F: Fn(&V) -> V> OrderedView<'_
         }
     }
 
+    /// Resolve constant results before splitting. `None` denotes a nonterminal
+    /// operand; a returned value must hold for every valuation of that operand.
+    /// Two terminal operands must always produce a value.
     pub(super) fn apply(
         self,
         other: OrderedView<'_, V, T, impl Fn(&V) -> V>,
-        leaf: impl Fn(&T, &T) -> T,
+        leaf: impl Fn(Option<&T>, Option<&T>) -> Option<T>,
     ) -> Decision<V, T> {
         let (left, right) = (self.decision, other.decision);
-        if let (Some(left), Some(right)) = (left.leaf_value(), right.leaf_value()) {
-            return Decision::leaf(leaf(left, right));
+        if let Some(value) = leaf(left.leaf_value(), right.leaf_value()) {
+            return Decision::leaf(value);
         }
         #[cfg(feature = "borrowck-profile")]
         let operation = Operation::new(1, left.nodes.len() + right.nodes.len());
@@ -1187,7 +1210,9 @@ mod tests {
                         false,
                     );
                     let right = Decision::chain([(8192, expected)], true, false);
-                    let joined = left.apply(&right, |left, right| *left && *right);
+                    let joined = left.apply(&right, |left, right| {
+                        left.zip(right).map(|(left, right)| *left && *right)
+                    });
                     assert_eq!(
                         joined,
                         Decision::chain(
@@ -1205,7 +1230,9 @@ mod tests {
                     false,
                 );
                 assert_eq!(
-                    equal.apply(&Decision::leaf(true), |left, right| *left && *right),
+                    equal.apply(&Decision::leaf(true), |left, right| left
+                        .zip(right)
+                        .map(|(left, right)| *left && *right)),
                     equal
                 );
             })
@@ -1374,6 +1401,135 @@ mod tests {
     }
 
     #[test]
+    fn absorbing_terminals_skip_variable_translation_in_excluded_subgraphs() {
+        for absorbing in [false, true] {
+            let mask = Decision::chain([(0, true)], !absorbing, absorbing);
+            let join = |left: Option<&bool>, right: Option<&bool>| {
+                if left == Some(&absorbing) || right == Some(&absorbing) {
+                    Some(absorbing)
+                } else {
+                    left.zip(right).map(|_| !absorbing)
+                }
+            };
+            for size in [16, 256] {
+                let excluded = Decision::chain(
+                    [(0, false)]
+                        .into_iter()
+                        .chain((1..=size).map(|variable| (variable, true))),
+                    !absorbing,
+                    absorbing,
+                );
+                let constant = Decision::leaf(absorbing);
+                for (left, right) in [
+                    (&mask, &excluded),
+                    (&excluded, &mask),
+                    (&constant, &excluded),
+                    (&excluded, &constant),
+                ] {
+                    let visits = Cell::new(0);
+                    let translate = |variable: &i32| {
+                        visits.set(visits.get() + 1);
+                        variable + 1
+                    };
+                    let before = intern_attempts();
+                    let joined = left
+                        .ordered_view(translate)
+                        .apply(right.ordered_view(translate), join);
+                    assert!(joined.is_leaf(&absorbing));
+                    assert!(intern_attempts() - before <= 4);
+                    assert!(
+                        visits.get() <= 4,
+                        "{} translations visited an excluded {size}-node subgraph",
+                        visits.get()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn partial_terminal_apply_matches_exhaustive_boolean_truth_tables() {
+        let from_table = |table: u8| {
+            let mut builder = Builder::new();
+            let leaves: [_; 4] =
+                array::from_fn(|bit| builder.intern(Node::Leaf(table & (1 << bit) != 0)));
+            let low = builder.branch(1u8, leaves[0], leaves[1]);
+            let high = builder.branch(1, leaves[2], leaves[3]);
+            let root = builder.branch(0, low, high);
+            builder.finish(root)
+        };
+        let evaluate = |decision: &Decision<u8, bool>, assignment: u8| {
+            let mut node = decision.root();
+            loop {
+                match decision.nodes[node] {
+                    Node::Leaf(value) => break value,
+                    Node::Branch {
+                        variable,
+                        low,
+                        high,
+                    } => {
+                        node = if assignment & (1 << variable) == 0 {
+                            low
+                        } else {
+                            high
+                        } as usize;
+                    }
+                }
+            }
+        };
+        for left_table in 0..16u8 {
+            for right_table in 0..16u8 {
+                let (left, right) = (from_table(left_table), from_table(right_table));
+                for (left_slots, right_slots) in
+                    [([0, 2], [1, 2]), ([1, 3], [0, 3]), ([0, 1], [0, 1])]
+                {
+                    // Every binary Boolean operator, including noncommutative ones.
+                    for operation in 0..16u8 {
+                        let output = |left: bool, right: bool| {
+                            operation & (1 << (usize::from(left) * 2 + usize::from(right))) != 0
+                        };
+                        let joined = left
+                            .ordered_view(|key| left_slots[usize::from(*key)])
+                            .apply(
+                                right.ordered_view(|key| right_slots[usize::from(*key)]),
+                                |left, right| {
+                                    let mut possibilities = [
+                                        (false, false),
+                                        (false, true),
+                                        (true, false),
+                                        (true, true),
+                                    ]
+                                    .into_iter()
+                                    .filter(|(a, b)| {
+                                        left.is_none_or(|left| left == a)
+                                            && right.is_none_or(|right| right == b)
+                                    })
+                                    .map(|(a, b)| output(a, b));
+                                    let first = possibilities.next().unwrap();
+                                    possibilities.all(|value| value == first).then_some(first)
+                                },
+                            );
+                        for assignment in 0..16u8 {
+                            let lookup = |table, slots: [u8; 2]| {
+                                let row = ((assignment >> slots[0]) & 1) * 2
+                                    + ((assignment >> slots[1]) & 1);
+                                table & (1 << row) != 0
+                            };
+                            assert_eq!(
+                                evaluate(&joined, assignment),
+                                output(
+                                    lookup(left_table, left_slots),
+                                    lookup(right_table, right_slots)
+                                )
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn borrowed_operations_match_materialized_ordered_maps() {
         let from_table = |table: [u8; 4]| {
             let mut builder = Builder::new();
@@ -1406,7 +1562,9 @@ mod tests {
                         left.relabel_ordered(left_map, |leaf| 255 - leaf),
                         eager_left.map(|key| Variable::Symbol(*key), |leaf| 255 - leaf)
                     );
-                    let join = |left: &u8, right: &u8| left * 7 + right;
+                    let join = |left: Option<&u8>, right: Option<&u8>| {
+                        left.zip(right).map(|(left, right)| left * 7 + right)
+                    };
                     assert_eq!(
                         left.ordered_view(left_map)
                             .apply(right.ordered_view(right_map), join),
@@ -1430,12 +1588,16 @@ mod tests {
     fn ordered_renaming_preserves_correlated_boolean_decisions() {
         let choice = |variable| Decision::chain([(variable, true)], true, false);
         let source = choice(0).apply(
-            &choice(1).apply(&choice(2), |left, right| *left || *right),
-            |left, right| *left && *right,
+            &choice(1).apply(&choice(2), |left, right| {
+                left.zip(right).map(|(left, right)| *left || *right)
+            }),
+            |left, right| left.zip(right).map(|(left, right)| *left && *right),
         );
         let expected = choice(10).apply(
-            &choice(11).apply(&choice(12), |left, right| *left || *right),
-            |left, right| *left && *right,
+            &choice(11).apply(&choice(12), |left, right| {
+                left.zip(right).map(|(left, right)| *left || *right)
+            }),
+            |left, right| left.zip(right).map(|(left, right)| *left && *right),
         );
         assert_eq!(
             source.map(|key| Variable::Symbol(*key + 10), |value| *value),
@@ -1452,7 +1614,9 @@ mod tests {
                 },
                 |value| *value
             ),
-            choice(10).apply(&choice(12), |left, right| *left && *right)
+            choice(10).apply(&choice(12), |left, right| left
+                .zip(right)
+                .map(|(left, right)| *left && *right))
         );
     }
 
@@ -1464,10 +1628,18 @@ mod tests {
             |variable| super::Variable::Symbol(*variable),
             |value| !value,
         );
-        let left = x.apply(&y, |left, right| *left && *right);
-        let right = not_x.apply(&z, |left, right| *left && *right);
-        let relation = left.apply(&right, |left, right| *left || *right);
-        let union = y.apply(&z, |left, right| *left || *right);
+        let left = x.apply(&y, |left, right| {
+            left.zip(right).map(|(left, right)| *left && *right)
+        });
+        let right = not_x.apply(&z, |left, right| {
+            left.zip(right).map(|(left, right)| *left && *right)
+        });
+        let relation = left.apply(&right, |left, right| {
+            left.zip(right).map(|(left, right)| *left || *right)
+        });
+        let union = y.apply(&z, |left, right| {
+            left.zip(right).map(|(left, right)| *left || *right)
+        });
 
         assert_eq!(
             relation.exists(|variable| *variable == 0, |left, right| *left || *right),
@@ -1557,7 +1729,9 @@ mod tests {
     fn quantification_visits_shared_variables_once_in_order() {
         let first = Decision::chain([(0u8, true)], true, false);
         let second = Decision::chain([(1u8, true)], true, false);
-        let parity = first.apply(&second, |left, right| left ^ right);
+        let parity = first.apply(&second, |left, right| {
+            left.zip(right).map(|(left, right)| left ^ right)
+        });
         assert_eq!(parity.variables().count(), 3);
         let mut observed = Vec::new();
         let quantified = parity.exists(

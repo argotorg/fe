@@ -273,8 +273,16 @@ impl BitOperation {
             return result;
         }
         let result = match &operation {
-            Self::And(lhs, rhs) => Some(lhs.apply(rhs, |left, right| *left && *right)),
-            Self::Or(lhs, rhs) => Some(lhs.apply(rhs, |left, right| *left || *right)),
+            Self::And(lhs, rhs) => Some(lhs.apply(rhs, |left, right| match (left, right) {
+                (Some(false), _) | (_, Some(false)) => Some(false),
+                (Some(left), Some(right)) => Some(*left && *right),
+                _ => None,
+            })),
+            Self::Or(lhs, rhs) => Some(lhs.apply(rhs, |left, right| match (left, right) {
+                (Some(true), _) | (_, Some(true)) => Some(true),
+                (Some(left), Some(right)) => Some(*left || *right),
+                _ => None,
+            })),
             Self::Not(decision) => Some(decision.map(|bit| Variable::Symbol(*bit), |value| !value)),
             Self::Restrict(decision, care) => {
                 decision.restrict(care, &false, |value, care| care.then_some(*value))
@@ -1096,7 +1104,7 @@ impl<'db> Condition<'db> {
         (decision, false)
     }
 
-    /// Join two aligned decisions, joining leaves only as the traversal reaches them.
+    /// Join two aligned decisions, resolving constant results as traversal reaches them.
     /// A reduced graph holds each leaf once and the traversal memoizes node pairs,
     /// so each reachable pair is joined once. Tabulating every pair of the merged
     /// table instead also joined pairs no valuation reaches, including pairs from
@@ -1104,15 +1112,21 @@ impl<'db> Condition<'db> {
     fn joined(
         &self,
         other: &Self,
-        join: impl Fn(&IndexCondition<'db>, &IndexCondition<'db>) -> IndexCondition<'db>,
+        join: impl Fn(
+            Option<&IndexCondition<'db>>,
+            Option<&IndexCondition<'db>>,
+        ) -> Option<IndexCondition<'db>>,
     ) -> Self {
         let (choices, left, right) = self.aligned_choices(other);
         let results = RefCell::new(Vec::new());
         let decision = self.decision.ordered_view(|bit| left.variable(bit)).apply(
             other.decision.ordered_view(|bit| right.variable(bit)),
             |left, right| {
-                let joined = join(&self.leaves[*left as usize], &other.leaves[*right as usize]);
-                intern_leaf(&mut results.borrow_mut(), joined)
+                let joined = join(
+                    left.map(|slot| self.leaves[*slot as usize].as_ref()),
+                    right.map(|slot| other.leaves[*slot as usize].as_ref()),
+                )?;
+                Some(intern_leaf(&mut results.borrow_mut(), joined))
             },
         );
         Self::compact(choices, results.into_inner(), decision)
@@ -1204,16 +1218,40 @@ impl<'db> Condition<'db> {
     }
 
     fn and(&self, other: &Self) -> Self {
-        self.joined(other, IndexCondition::and)
+        self.joined(other, |left, right| {
+            if left.is_some_and(IndexCondition::is_never)
+                || right.is_some_and(IndexCondition::is_never)
+            {
+                Some(IndexCondition::never())
+            } else {
+                left.zip(right).map(|(left, right)| left.and(right))
+            }
+        })
     }
 
     fn or(&self, other: &Self) -> Self {
-        self.joined(other, IndexCondition::or)
+        self.joined(other, |left, right| {
+            if left.is_some_and(IndexCondition::is_always)
+                || right.is_some_and(IndexCondition::is_always)
+            {
+                Some(IndexCondition::always())
+            } else {
+                left.zip(right).map(|(left, right)| left.or(right))
+            }
+        })
     }
 
     /// Everything this decision accepts that `other` rejects.
     fn without(&self, other: &Self) -> Self {
-        self.joined(other, |left, right| left.and(&right.not()))
+        self.joined(other, |left, right| {
+            if left.is_some_and(IndexCondition::is_never)
+                || right.is_some_and(IndexCondition::is_always)
+            {
+                Some(IndexCondition::never())
+            } else {
+                left.zip(right).map(|(left, right)| left.and(&right.not()))
+            }
+        })
     }
 
     /// Rebuild the choice keys this decision reads.
@@ -1855,7 +1893,10 @@ impl<'db> Guard<'db> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{decision::intern_attempts, index::IndexNamespace};
+    use super::super::{
+        decision::{apply_visits, intern_attempts},
+        index::IndexNamespace,
+    };
     use super::*;
 
     fn selected<'db>(scope: &BinderScope, occurrence: u16) -> Guard<'db> {
@@ -2132,6 +2173,75 @@ mod tests {
     }
 
     #[test]
+    fn absorbing_choice_leaves_skip_excluded_subgraphs() {
+        let keys: Vec<_> = (0..2)
+            .map(|occurrence| {
+                Arc::new(ChoiceKey::new(
+                    ValueOccurrence::Argument(occurrence),
+                    StructuralPath::default(),
+                ))
+            })
+            .collect();
+        let mask = Condition::choice_bits(&keys[0], 1, |_| true);
+        for bits in [16, 256] {
+            let tail = Condition::choice_bits(&keys[1], bits, |_| true);
+            let excluded = Condition::constant(true).without(&mask).and(&tail);
+            let included = mask.and(&tail);
+            let covering = mask.or(&tail);
+            for (left, right, operation, expected) in [
+                (
+                    &mask,
+                    &excluded,
+                    Condition::and as fn(&_, &_) -> _,
+                    Condition::constant(false),
+                ),
+                (&excluded, &mask, Condition::and, Condition::constant(false)),
+                (&mask, &included, Condition::or, mask.clone()),
+                (&included, &mask, Condition::or, mask.clone()),
+                (
+                    &mask,
+                    &covering,
+                    Condition::without,
+                    Condition::constant(false),
+                ),
+                (
+                    &included,
+                    &mask,
+                    Condition::without,
+                    Condition::constant(false),
+                ),
+                (
+                    &Condition::constant(false),
+                    &tail,
+                    Condition::and,
+                    Condition::constant(false),
+                ),
+                (
+                    &tail,
+                    &Condition::constant(true),
+                    Condition::or,
+                    Condition::constant(true),
+                ),
+            ] {
+                let before = intern_attempts();
+                let visits = apply_visits();
+                let actual = operation(left, right);
+                let attempts = intern_attempts() - before;
+                assert_eq!(actual, expected);
+                assert!(
+                    apply_visits() - visits <= 3,
+                    "{} apply visits for an excluded {bits}-bit subgraph",
+                    apply_visits() - visits
+                );
+                assert!(
+                    attempts <= 4,
+                    "{attempts} interning attempts visited an excluded {bits}-bit subgraph"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn borrowed_choice_operations_keep_operand_leaf_tables_separate() {
         let key = |occurrence| {
             Arc::new(ChoiceKey::new(
@@ -2184,6 +2294,45 @@ mod tests {
                 expected
             );
         }
+        let permute = |condition: &Condition<'static>| {
+            Condition::new(
+                condition.choices.clone(),
+                condition.leaves.iter().rev().cloned().collect(),
+                condition.decision.relabel_ordered(Clone::clone, |slot| {
+                    u32::try_from(condition.leaves.len() - 1).unwrap() - slot
+                }),
+            )
+        };
+        for source in [
+            source.clone(),
+            source.map_leaves(|leaf| Arc::new(leaf.not())),
+        ] {
+            for left in [&source, &permute(&source)] {
+                for right in [
+                    &care,
+                    &permute(&care),
+                    &Condition::constant(true),
+                    &Condition::constant(false),
+                ] {
+                    for (operation, join) in [
+                        (
+                            Condition::and as fn(&_, &_) -> _,
+                            IndexCondition::and as fn(&_, &_) -> _,
+                        ),
+                        (Condition::or, IndexCondition::or),
+                        (Condition::without, |left, right| left.and(&right.not())),
+                    ] {
+                        let result = operation(left, right);
+                        for values in [[false, false], [false, true], [true, false], [true, true]] {
+                            assert_eq!(
+                                *evaluate(&result, values),
+                                join(&evaluate(left, values), &evaluate(right, values))
+                            );
+                        }
+                    }
+                }
+            }
+        }
         // No `never` slot in this care table: its slot zero is feasible.
         assert_eq!(source.restricted(&Condition::constant(true)), Some(source));
     }
@@ -2194,8 +2343,10 @@ mod tests {
         let (left, right) = (alternatives(&scope, 0), alternatives(&scope, 1));
         let joins = Cell::new(0);
         let joined = left.condition.joined(&right.condition, |left, right| {
-            joins.set(joins.get() + 1);
-            left.and(right)
+            left.zip(right).map(|(left, right)| {
+                joins.set(joins.get() + 1);
+                left.and(right)
+            })
         });
         assert_eq!(joined, left.condition.and(&right.condition));
         assert_eq!(joins.get(), 33, "a join evaluated unreachable leaf pairs");
