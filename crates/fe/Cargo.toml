@@ -55,6 +55,9 @@ language-server = { workspace = true, optional = true }
 tokio = { version = "1.43.0", default-features = false, features = ["rt-multi-thread", "net", "macros"], optional = true }
 axum = { version = "0.8", optional = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+mimalloc = { version = "0.1", default-features = false }
+
 [dev-dependencies]
 num-bigint.workspace = true
 dir-test.workspace = true

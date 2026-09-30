@@ -38,7 +38,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Setter;
 use std::{
     fmt::Write as _,
+    io,
     sync::Arc,
+    thread,
     time::{Duration, Instant},
 };
 use url::Url;
@@ -259,6 +261,7 @@ struct RequestedSuiteArtifacts<'a> {
 #[derive(Clone, Debug)]
 struct SuiteWorkerConfig {
     shared: Arc<WorkerSharedConfig>,
+    database_cleanup: Sender<DriverDataBase>,
     filter: Option<String>,
     allow_single_steal: bool,
     prefer_single_when_idle: bool,
@@ -816,6 +819,8 @@ pub fn run_tests(
             max_in_flight_suites(grouped, suite_worker_count, single_worker_count);
         let suite_worker_cfg = SuiteWorkerConfig {
             shared: Arc::clone(&shared),
+            database_cleanup: background_dropper(suite_worker_count)
+                .map_err(|err| format!("could not start database cleanup worker: {err}"))?,
             filter: filter.clone(),
             allow_single_steal: !grouped,
             prefer_single_when_idle: single_worker_count == 0,
@@ -1134,7 +1139,7 @@ fn emit_parallel_suite_outcome(
             message: plan.path.to_string(),
         });
     }
-    let (prepared, output) = prepare_suite_job(&plan, cfg.filter.as_deref(), cfg.shared.as_ref());
+    let (prepared, output) = prepare_suite_job(&plan, cfg);
     if !output.is_empty() {
         let _ = outcome_tx.send(JobOutcome::Text {
             suite_key: plan.suite_key,
@@ -1157,7 +1162,7 @@ fn emit_grouped_suite_outcome(
             message: plan.path.to_string(),
         });
     }
-    let (prepared, output) = prepare_suite_job(&plan, cfg.filter.as_deref(), cfg.shared.as_ref());
+    let (prepared, output) = prepare_suite_job(&plan, cfg);
     if !output.is_empty() {
         let _ = outcome_tx.send(JobOutcome::Text {
             suite_key: plan.suite_key.clone(),
@@ -1333,11 +1338,24 @@ fn suite_worker_loop_parallel(channels: SuiteWorkerChannels, cfg: SuiteWorkerCon
     }
 }
 
-fn prepare_suite_job(
-    plan: &SuitePlan,
-    filter: Option<&str>,
-    shared: &WorkerSharedConfig,
-) -> (PreparedSuite, String) {
+// One detached worker overlaps destruction with test execution. Its bounded
+// queue applies backpressure once one database per suite worker is waiting.
+// It drains when the senders close; process exit may reclaim the final databases.
+fn background_dropper<T: Send + 'static>(capacity: usize) -> io::Result<Sender<T>> {
+    let (sender, receiver) = crossbeam_channel::bounded(capacity);
+    thread::Builder::new()
+        .name("fe-db-cleanup".into())
+        .spawn(move || {
+            for value in receiver {
+                drop(value);
+            }
+        })?;
+    Ok(sender)
+}
+
+fn prepare_suite_job(plan: &SuitePlan, cfg: &SuiteWorkerConfig) -> (PreparedSuite, String) {
+    let shared = cfg.shared.as_ref();
+    let filter = cfg.filter.as_deref();
     let mut output = String::new();
 
     let suite_report_staging = if plan.suite_report_out.is_some() || shared.aggregate_report {
@@ -1456,6 +1474,11 @@ fn prepare_suite_job(
             single_jobs: Vec::new(),
         }
     };
+    // The prepared artifacts own their data, so database destruction can run
+    // concurrently with test execution without retaining borrowed compiler data.
+    cfg.database_cleanup
+        .send(db)
+        .expect("database cleanup worker exited");
 
     (
         PreparedSuite {
@@ -2980,5 +3003,70 @@ fn print_summary(results: &[TestResult]) {
         for result in results.iter().filter(|r| !r.passed) {
             println!("    {}", result.name);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossbeam_channel::TrySendError;
+
+    #[derive(Debug)]
+    struct DropProbe {
+        id: usize,
+        dropped: Sender<(usize, thread::ThreadId)>,
+        block: Option<(Sender<()>, Receiver<()>)>,
+    }
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            if let Some((started, release)) = &self.block {
+                started.send(()).unwrap();
+                release.recv().unwrap();
+            }
+            self.dropped
+                .send((self.id, thread::current().id()))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn database_cleanup_is_bounded_and_drains_on_one_worker() {
+        let cleanup = background_dropper(1).unwrap();
+        let (started_tx, started_rx) = crossbeam_channel::bounded(1);
+        let (release_tx, release_rx) = crossbeam_channel::bounded(1);
+        let (dropped_tx, dropped_rx) = crossbeam_channel::unbounded();
+        cleanup
+            .send(DropProbe {
+                id: 0,
+                dropped: dropped_tx.clone(),
+                block: Some((started_tx, release_rx)),
+            })
+            .unwrap();
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        cleanup
+            .send(DropProbe {
+                id: 1,
+                dropped: dropped_tx.clone(),
+                block: None,
+            })
+            .unwrap();
+        let Err(TrySendError::Full(last)) = cleanup.try_send(DropProbe {
+            id: 2,
+            dropped: dropped_tx,
+            block: None,
+        }) else {
+            panic!("cleanup must apply backpressure while the worker is busy");
+        };
+        release_tx.send(()).unwrap();
+        cleanup.send(last).unwrap();
+        drop(cleanup);
+        let first = dropped_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let second = dropped_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let third = dropped_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!([first.0, second.0, third.0], [0, 1, 2]);
+        assert_eq!(first.1, second.1);
+        assert_eq!(second.1, third.1);
+        assert_ne!(first.1, thread::current().id());
     }
 }

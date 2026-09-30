@@ -32,6 +32,12 @@ use walkdir::WalkDir;
 
 use crate::test::TestDebugOptions;
 
+// mimalloc serves the compiler's many small allocations faster than the system
+// allocator.
+#[cfg(not(target_arch = "wasm32"))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ColorChoice {
     Auto,
