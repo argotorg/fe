@@ -11,7 +11,7 @@ use std::{
 
 #[cfg(test)]
 thread_local! {
-    static INTERN_ATTEMPTS: Cell<usize> = const { Cell::new(0) };
+    pub(crate) static INTERN_ATTEMPTS: Cell<usize> = const { Cell::new(0) };
 }
 
 /// What identifies a completed graph for accounting: its canonical hash, node

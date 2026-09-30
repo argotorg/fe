@@ -11,7 +11,7 @@ use super::{
     access::ResolvedAccess,
     ir::{AvailabilityRequirement, AvailabilitySummary},
     solver::Borrowck,
-    summary::CallInputs,
+    summary::{CallInputs, SourceInstantiations},
 };
 use crate::analysis::{
     semantic::{
@@ -201,6 +201,8 @@ impl<'db> Borrowck<'db> {
             unavailable: RegionSet::empty(&scope),
             consumed: Vec::new(),
         };
+        let cache = self.inventory.values.guard_cache();
+        let mut instantiations = SourceInstantiations::new(state, result, inputs);
         // Every source is substituted against the same pre-call snapshot. A
         // guaranteed callee destination can still be ambiguous in its caller.
         for (region, kind, definite, extent) in call
@@ -231,10 +233,10 @@ impl<'db> Borrowck<'db> {
                 ),
             ])
         {
-            let mut target_region = RegionSet::empty(&scope);
+            let mut target_clauses = Vec::new();
             let mut invalidated = NativeValidity::default();
             for clause in region.clauses() {
-                let Some(guard) = self.instantiate_guard(&clause.guard, result, inputs)? else {
+                let Some(guard) = instantiations.guard(self, &clause.guard)? else {
                     continue;
                 };
                 let source =
@@ -248,8 +250,7 @@ impl<'db> Borrowck<'db> {
                 {
                     continue;
                 }
-                let mut target =
-                    self.instantiate_source(state, &source, result, guard.scope(), inputs)?;
+                let mut target = instantiations.resolve(self, &source, guard.scope())?;
                 // A by-value effect provider can expose its representation as
                 // an input place. Its logical holder was already validated and
                 // transferred by the caller's operand access. Only addressable
@@ -287,7 +288,10 @@ impl<'db> Borrowck<'db> {
                             self.value_validity(&contents, ValueOccurrence::Value(result));
                     }
                 }
-                let target = target.region.with_guard(&guard).close_existentials(&scope);
+                let target = target
+                    .region
+                    .restricted(&guard, |left, right| cache.borrow_mut().and(left, right))
+                    .close_existentials(&scope);
                 if kind.is_none() && !definite {
                     let ty = source.referent_ty(self.db, call.instance).ok_or_else(|| {
                         self.internal_diag(
@@ -301,9 +305,10 @@ impl<'db> Borrowck<'db> {
                     }
                 }
                 if !definite || target.definite_write().is_some() {
-                    target_region = target_region.union(&target);
+                    target_clauses.extend(target.clauses().iter().cloned());
                 }
             }
+            let target_region = RegionSet::new(&scope, target_clauses);
             if let Some(kind) = kind {
                 resolved.incoming.push((
                     AvailabilityRequirement {

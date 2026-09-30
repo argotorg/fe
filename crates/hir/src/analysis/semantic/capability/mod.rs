@@ -24,6 +24,9 @@ pub mod value;
 mod tests;
 
 #[cfg(test)]
+pub(crate) use decision::INTERN_ATTEMPTS as DECISION_INTERN_ATTEMPTS;
+
+#[cfg(test)]
 pub(crate) mod test_roots {
     use super::{
         external::{ExternalSource, ReferentContract},

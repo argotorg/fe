@@ -9,6 +9,7 @@ use std::cell::Cell;
 #[cfg(test)]
 thread_local! {
     static GUARD_INSTANTIATIONS: Cell<usize> = const { Cell::new(0) };
+    static SOURCE_INSTANTIATIONS: Cell<usize> = const { Cell::new(0) };
 }
 
 use cranelift_entity::EntityRef;
@@ -269,6 +270,7 @@ impl<'a, 'db> SourceInstantiations<'a, 'db> {
         #[cfg(test)]
         {
             self.evaluations += 1;
+            SOURCE_INSTANTIATIONS.set(SOURCE_INSTANTIATIONS.get() + 1);
         }
         let resolved = checker.instantiate_source_uncached(source, scope, self)?;
         if checker.source_generation == generation {
@@ -3285,8 +3287,9 @@ mod tests {
             semantic::{
                 VariantIndex,
                 capability::{
-                    external::ProviderStorage, guard::ChoiceKey, handle::HandleAddressSpace,
-                    region::CANONICALIZED_REGION_CLAUSES, source::InputSource, test_roots,
+                    DECISION_INTERN_ATTEMPTS, external::ProviderStorage, guard::ChoiceKey,
+                    handle::HandleAddressSpace, region::CANONICALIZED_REGION_CLAUSES,
+                    source::InputSource, test_roots,
                 },
                 identity_semantic_instance_key,
                 normalized::{NRootId, ReadMode},
@@ -3621,18 +3624,32 @@ pub contract C {
     }
 
     #[test]
-    fn call_memory_regions_preserve_guards_authority_and_linear_work() {
+    fn call_memory_and_availability_regions_preserve_guards_authority_and_linear_work() {
         let mut db = HirAnalysisTestDb::default();
+        let flags = (0..32)
+            .map(|index| format!("_ flag{index}: bool"))
+            .collect::<Vec<_>>()
+            .join(", ");
         let file = db.new_stand_alone(
             "call_memory_unions.fe".into(),
-            "fn native(_ value: mut u256, _ index: u256) {}\nfn raw(_ value: *u256, _ index: u256) {}",
+            &format!(
+                "fn native(_ value: mut u256, _ index: u256, {flags}) {{}}\nfn raw(_ value: *u256, _ index: u256, {flags}) {{}}"
+            ),
         );
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);
         let scope = BinderScope::default();
         let ty = TyId::u256(&db);
-        let count = 256;
-        for (name, invalidated) in [("native", false), ("native", true), ("raw", false)] {
+        for (count, name, invalidated, conditional) in [64, 128, 256]
+            .into_iter()
+            .flat_map(|count| {
+                [("native", false), ("native", true), ("raw", false)]
+                    .map(|(name, invalidated)| (count, name, invalidated))
+            })
+            .flat_map(|(count, name, invalidated)| {
+                [false, true].map(move |conditional| (count, name, invalidated, conditional))
+            })
+        {
             let instance = get_or_build_semantic_instance(
                 &db,
                 identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, name))),
@@ -3657,11 +3674,15 @@ pub contract C {
                     }
                 })
                 .collect();
-            let args = [params[&0], params[&1]].map(|value| NOperand {
-                value,
-                origin: None,
-                mode: ReadMode::Read,
-            });
+            let args: Vec<_> = params
+                .values()
+                .copied()
+                .map(|value| NOperand {
+                    value,
+                    origin: None,
+                    mode: ReadMode::Read,
+                })
+                .collect();
             let result = args[0].value;
             let mut state = checker.inventory.entry.clone();
             if invalidated {
@@ -3685,6 +3706,27 @@ pub contract C {
                 let mixed = checker.inventory.values.join(&original, &damaged);
                 state.set_value(result, mixed);
             }
+            let caller_guard = if conditional {
+                params
+                    .range(2..)
+                    .try_fold(Guard::always(&scope), |guard, (_, value)| {
+                        guard.with_boolean(
+                            ChoiceKey::new(
+                                ValueOccurrence::Value(*value),
+                                StructuralPath::default(),
+                            ),
+                            true,
+                        )
+                    })
+                    .unwrap()
+            } else {
+                Guard::always(&scope)
+            };
+            let guarded = checker
+                .inventory
+                .values
+                .with_guard(state.value(result), &caller_guard);
+            state.set_value(result, guarded);
             let origin = SemOrigin::Body(checker.body.template_owner);
             let inputs = CallInputs {
                 args: &args,
@@ -3763,8 +3805,24 @@ pub contract C {
                 kind: MemoryAccessKind::Write,
                 extent: AccessExtent::Bytes(IndexExpr::FormalValue(1)),
                 region: region.clone(),
-                authorizers: region,
+                authorizers: region.clone(),
             }];
+            summary.availability = AvailabilitySummary {
+                incoming: vec![
+                    AvailabilityRequirement {
+                        kind: MemoryAccessKind::Write,
+                        extent: AccessExtent::Bytes(IndexExpr::FormalValue(1)),
+                        region: region.clone(),
+                    },
+                    AvailabilityRequirement {
+                        kind: MemoryAccessKind::Read,
+                        extent: AccessExtent::Typed,
+                        region: region.clone(),
+                    },
+                ],
+                reinitialized: region.clone(),
+                unavailable: region,
+            };
             checker.calls.insert(
                 result,
                 CallSummary {
@@ -3778,10 +3836,12 @@ pub contract C {
             );
             let before = CANONICALIZED_REGION_CLAUSES.get();
             let guards_before = GUARD_INSTANTIATIONS.get();
+            let decisions_before = DECISION_INTERN_ATTEMPTS.get();
             let resolved = checker
                 .call_memory_accesses(&state, result, inputs)
                 .unwrap();
             let visits = CANONICALIZED_REGION_CLAUSES.get() - before;
+            let memory_decisions = DECISION_INTERN_ATTEMPTS.get() - decisions_before;
             assert_eq!(resolved.len(), 1);
             let resolved = &resolved[0];
             assert_eq!(resolved.access.region, expected_region);
@@ -3806,6 +3866,342 @@ pub contract C {
                 2,
                 "each distinct call guard should be instantiated once"
             );
+
+            let before = CANONICALIZED_REGION_CLAUSES.get();
+            let guards_before = GUARD_INSTANTIATIONS.get();
+            let sources_before = SOURCE_INSTANTIATIONS.get();
+            let decisions_before = DECISION_INTERN_ATTEMPTS.get();
+            let availability = checker
+                .call_availability(&state, result, inputs)
+                .unwrap()
+                .unwrap();
+            let visits = CANONICALIZED_REGION_CLAUSES.get() - before;
+            let guards = GUARD_INSTANTIATIONS.get() - guards_before;
+            let sources = SOURCE_INSTANTIATIONS.get() - sources_before;
+            let availability_decisions = DECISION_INTERN_ATTEMPTS.get() - decisions_before;
+            assert_eq!(availability.incoming.len(), 2);
+            for (requirement, validity) in &availability.incoming {
+                assert_eq!(requirement.region, expected_region);
+                assert_eq!(validity.invalid, invalidated);
+                assert_eq!(validity.requirements, base.invalidated.requirements);
+            }
+            assert_eq!(availability.incoming[0].0.kind, MemoryAccessKind::Write);
+            assert_eq!(
+                availability.incoming[0].0.extent,
+                AccessExtent::Bytes(checker.index(args[1].value))
+            );
+            assert_eq!(availability.incoming[1].0.kind, MemoryAccessKind::Read);
+            assert_eq!(availability.incoming[1].0.extent, AccessExtent::Typed);
+            assert_eq!(availability.reinitialized, expected_region);
+            assert_eq!(availability.unavailable, expected_region);
+            assert!(
+                availability.consumed.is_empty(),
+                "scalar memory has no capabilities to retire"
+            );
+            assert!(
+                visits <= count * 64,
+                "{name}, invalidated={invalidated}: availability processed {visits} clauses, {guards} guards, {sources} sources for {count} alternatives"
+            );
+            assert_eq!(guards, 2, "reuse each call guard across availability roles");
+            assert_eq!(
+                sources, count,
+                "reuse the shared source prefix and repeated targets"
+            );
+            let budget = count * 32 + caller_guard.node_count() * 32;
+            assert!(
+                memory_decisions <= budget,
+                "{name}, invalidated={invalidated}, conditional={conditional}: memory effects interned {memory_decisions} decision nodes for {count} alternatives (budget {budget})"
+            );
+            assert!(
+                availability_decisions <= budget,
+                "{name}, invalidated={invalidated}, conditional={conditional}: availability interned {availability_decisions} decision nodes for {count} alternatives (budget {budget})"
+            );
+        }
+    }
+
+    #[test]
+    fn call_availability_preserves_targets_validity_consumption_and_call_isolation() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "call_availability.fe".into(),
+            "struct Holder { value: mut u256 }\nfn inspect(_ left: mut Holder, _ right: mut Holder, _ selector: u256) -> u256 { 0 }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "inspect"))),
+        );
+        let summary = Borrowck::new(&db, instance)
+            .unwrap()
+            .borrow_summary()
+            .unwrap()
+            .summary
+            .unwrap();
+        let scope = BinderScope::default();
+        let field = StructuralPath::new([Projection::Field(FieldIndex(0))]);
+        for (damaged, ambiguous) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mut checker = Borrowck::new(&db, instance).unwrap();
+            let params: BTreeMap<_, _> = checker
+                .body
+                .values
+                .iter()
+                .enumerate()
+                .filter_map(|(index, value)| {
+                    if let NValueDefinition::EntryParam { param } = value.definition {
+                        Some((param, NValueId::new(index)))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let result = params[&0];
+            let zero = checker
+                .body
+                .values
+                .iter()
+                .enumerate()
+                .find_map(|(index, _)| {
+                    let value = NValueId::new(index);
+                    (checker.index(value) == IndexExpr::Const(0)).then_some(value)
+                })
+                .unwrap();
+            let entry = checker.inventory.entry.clone();
+            let holder_ty = entry.value(result).shape().direct(&db).unwrap().target_ty;
+            let holder_shape = checker.shape(holder_ty).unwrap();
+            let mut storage: Vec<_> = entry
+                .storage()
+                .map(|(root, value)| (root.clone(), value.clone()))
+                .collect();
+            for (_, value) in &mut storage {
+                if damaged && value.shape() == holder_shape {
+                    let held = checker
+                        .inventory
+                        .values
+                        .project(value, &field, ValueOccurrence::Value(result))
+                        .unwrap();
+                    let region = checker.resolve_capability(&held).region;
+                    assert!(!region.is_empty());
+                    *value = checker.inventory.values.from_shape(
+                        holder_shape,
+                        value.scope(),
+                        |semantics, _, scope| {
+                            vec![Guarded {
+                                guard: Guard::always(scope),
+                                payload: CapabilityRef::Invalidated {
+                                    class: semantics.class,
+                                    region: region.clone(),
+                                },
+                            }]
+                        },
+                    );
+                }
+            }
+            let mut state = BorrowState::new(
+                &mut checker.inventory.values,
+                entry.holders().map(|(id, value)| (id, value.shape())),
+                storage,
+            );
+            for (id, value) in entry.holders() {
+                state.set_value(id, value.clone());
+            }
+            if ambiguous {
+                let alternatives = checker
+                    .inventory
+                    .values
+                    .join(state.value(result), state.value(params[&1]));
+                state.set_value(result, alternatives);
+            }
+            let origin = SemOrigin::Body(checker.body.template_owner);
+            let source = SourceExpr {
+                invalidated: false,
+                source: ExternalSource::input(
+                    InputSource::slot(0, StructuralPath::default()),
+                    ReferentContract::memory(&db, holder_ty),
+                    false,
+                ),
+                path: RegionPath::new([Projection::Field(FieldIndex(0))]),
+                views: Default::default(),
+            };
+            let region = source_region(&source, &Guard::always(&scope));
+            let mut summary = summary.clone();
+            summary.availability = AvailabilitySummary {
+                incoming: vec![
+                    AvailabilityRequirement {
+                        kind: MemoryAccessKind::Write,
+                        extent: AccessExtent::Typed,
+                        region: region.clone(),
+                    },
+                    AvailabilityRequirement {
+                        kind: MemoryAccessKind::Read,
+                        extent: AccessExtent::Typed,
+                        region: region.clone(),
+                    },
+                ],
+                reinitialized: region.clone(),
+                unavailable: region,
+            };
+            checker.calls.insert(
+                result,
+                CallSummary {
+                    instance,
+                    summary,
+                    pending: false,
+                    updates: Vec::new(),
+                    births: Vec::new(),
+                    single_result_port: false,
+                },
+            );
+            let shape = checker
+                .shape(source.referent_ty(&db, instance).unwrap())
+                .unwrap();
+            assert!(shape.contains_capability(&db));
+            // A second call mapping and a moved snapshot must not reuse the first call's facts.
+            for actuals in [
+                [params[&0], params[&1], params[&2]],
+                [params[&1], params[&0], params[&2]],
+            ] {
+                let args = actuals.map(|value| NOperand {
+                    value,
+                    origin: None,
+                    mode: ReadMode::Read,
+                });
+                let inputs = CallInputs {
+                    args: &args,
+                    effects: &[],
+                    origin,
+                };
+                let target = checker
+                    .instantiate_source(&state, &source, result, &scope, inputs)
+                    .unwrap();
+                let expected = target.region.close_existentials(&scope);
+                assert_eq!(
+                    expected.clauses().len(),
+                    if ambiguous && actuals[0] == params[&0] {
+                        2
+                    } else {
+                        1
+                    }
+                );
+                assert!(
+                    !target.invalidated.invalid,
+                    "the outer references are valid"
+                );
+                let contents = checker
+                    .read_region(
+                        &state,
+                        &target.region,
+                        shape,
+                        ValueOccurrence::Value(result),
+                        origin,
+                    )
+                    .unwrap();
+                let validity = checker.value_validity(&contents, ValueOccurrence::Value(result));
+                assert_eq!(validity.invalid, damaged);
+                let resolved = checker
+                    .call_availability(&state, result, inputs)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(resolved.incoming.len(), 2);
+                assert_eq!(resolved.incoming[0].0.region, expected);
+                assert!(
+                    !resolved.incoming[0].1.invalid,
+                    "writing does not require valid contents"
+                );
+                assert!(resolved.incoming[0].1.requirements.is_empty());
+                assert_eq!(resolved.incoming[1].0.region, expected);
+                assert_eq!(resolved.incoming[1].1.invalid, validity.invalid);
+                assert_eq!(resolved.incoming[1].1.requirements, validity.requirements);
+                assert_eq!(
+                    resolved.reinitialized,
+                    if expected.definite_write().is_some() {
+                        expected.clone()
+                    } else {
+                        RegionSet::empty(&scope)
+                    }
+                );
+                assert_eq!(resolved.unavailable, expected);
+                assert_eq!(resolved.consumed, [(expected, shape)]);
+            }
+            let args = [params[&0], params[&1], zero].map(|value| NOperand {
+                value,
+                origin: None,
+                mode: ReadMode::Read,
+            });
+            let inputs = CallInputs {
+                args: &args,
+                effects: &[],
+                origin,
+            };
+            let mut moved = state.clone();
+            let empty = checker
+                .inventory
+                .values
+                .empty(state.value(result).shape(), &scope);
+            moved.set_value(result, empty);
+            let resolved = checker
+                .call_availability(&moved, result, inputs)
+                .unwrap()
+                .unwrap();
+            assert!(resolved.incoming.iter().all(|(requirement, validity)| {
+                requirement.region.is_empty()
+                    && !validity.invalid
+                    && validity.requirements.is_empty()
+            }));
+            assert!(resolved.reinitialized.is_empty());
+            assert!(resolved.unavailable.is_empty());
+            assert!(resolved.consumed.is_empty());
+
+            let impossible = Guard::always(&scope)
+                .with_equality(IndexExpr::FormalValue(2), IndexExpr::Const(1))
+                .unwrap();
+            let region = source_region(&source, &impossible);
+            let availability = &mut checker.calls.get_mut(&result).unwrap().summary.availability;
+            for requirement in &mut availability.incoming {
+                requirement.region = region.clone();
+            }
+            availability.reinitialized = region.clone();
+            availability.unavailable = region;
+            let guards_before = GUARD_INSTANTIATIONS.get();
+            let sources_before = SOURCE_INSTANTIATIONS.get();
+            let resolved = checker
+                .call_availability(&state, result, inputs)
+                .unwrap()
+                .unwrap();
+            assert!(
+                resolved
+                    .incoming
+                    .iter()
+                    .all(|(requirement, _)| requirement.region.is_empty())
+            );
+            assert!(resolved.reinitialized.is_empty());
+            assert!(resolved.unavailable.is_empty());
+            assert!(resolved.consumed.is_empty());
+            assert_eq!(GUARD_INSTANTIATIONS.get() - guards_before, 1);
+            assert_eq!(SOURCE_INSTANTIATIONS.get() - sources_before, 0);
+
+            let local = Guard::always(&scope)
+                .with_boolean(
+                    ChoiceKey::new(ValueOccurrence::Value(result), StructuralPath::default()),
+                    true,
+                )
+                .unwrap();
+            checker
+                .calls
+                .get_mut(&result)
+                .unwrap()
+                .summary
+                .availability
+                .incoming[0]
+                .region = source_region(&source, &local);
+            let guards_before = GUARD_INSTANTIATIONS.get();
+            for _ in 0..2 {
+                assert!(
+                    checker.call_availability(&state, result, inputs).is_err(),
+                    "invalid local summary choices must be rejected"
+                );
+            }
+            assert_eq!(GUARD_INSTANTIATIONS.get() - guards_before, 2);
         }
     }
 

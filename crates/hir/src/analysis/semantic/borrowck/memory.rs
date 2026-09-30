@@ -61,6 +61,7 @@ impl<'db> Borrowck<'db> {
             return Ok(Vec::new());
         };
         let mut resolved = Vec::new();
+        let cache = self.inventory.values.guard_cache();
         let mut instantiations = SourceInstantiations::new(state, result, inputs);
         for access in &call.summary.accesses {
             let mut invalidated = NativeValidity::default();
@@ -100,9 +101,10 @@ impl<'db> Borrowck<'db> {
                                     return None;
                                 }
                                 Some(Guarded {
-                                    guard: parent
-                                        .guard
-                                        .and(&guard.in_scope(parent.guard.scope()))?,
+                                    guard: cache.borrow_mut().and(
+                                        &parent.guard,
+                                        &guard.in_scope(parent.guard.scope()),
+                                    )?,
                                     payload: parent.payload,
                                 })
                             }),
@@ -110,7 +112,7 @@ impl<'db> Borrowck<'db> {
                     alternatives.push(
                         target
                             .region
-                            .with_guard(&guard)
+                            .restricted(&guard, |left, right| cache.borrow_mut().and(left, right))
                             .close_existentials(source_region.scope()),
                     );
                 }
