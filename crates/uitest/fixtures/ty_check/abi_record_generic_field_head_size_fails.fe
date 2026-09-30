@@ -1,0 +1,67 @@
+// A generic field type whose `HEAD_SIZE` fails only for the argument a record
+// uses is reported where it fails, with a location, and once per failing
+// field type.
+use core::abi::{AbiDecoder, AbiSize, Decode, Encode}
+use std::abi::{Sol, SolCompat}
+
+pub struct MsgField<const N: u256> { v: u256 }
+impl<const N: u256> Copy for MsgField<N> {}
+impl<const N: u256> SolCompat for MsgField<N> {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint256"
+}
+impl<const N: u256> AbiSize for MsgField<N> {
+    const HEAD_SIZE: u256 = 32 / N
+    const IS_DYNAMIC: bool = false
+}
+impl<const N: u256> Encode<Sol> for MsgField<N> {
+    fn encode(own self, _ ptr: *u8) { self.v.encode(ptr) }
+}
+impl<const N: u256> Decode<Sol> for MsgField<N> {
+    fn decode_payload<D: AbiDecoder<Sol>>(_ d: mut D) -> Self { MsgField<N> { v: 0 } }
+}
+
+pub struct ErrorField<const N: u256> { v: u256 }
+impl<const N: u256> Copy for ErrorField<N> {}
+impl<const N: u256> SolCompat for ErrorField<N> {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint256"
+}
+impl<const N: u256> AbiSize for ErrorField<N> {
+    const HEAD_SIZE: u256 = 32 / N
+    const IS_DYNAMIC: bool = false
+}
+impl<const N: u256> Encode<Sol> for ErrorField<N> {
+    fn encode(own self, _ ptr: *u8) { self.v.encode(ptr) }
+}
+impl<const N: u256> Decode<Sol> for ErrorField<N> {
+    fn decode_payload<D: AbiDecoder<Sol>>(_ d: mut D) -> Self { ErrorField<N> { v: 0 } }
+}
+
+pub struct EventField<const N: u256> { v: u256 }
+impl<const N: u256> Copy for EventField<N> {}
+impl<const N: u256> SolCompat for EventField<N> {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint256"
+}
+impl<const N: u256> AbiSize for EventField<N> {
+    const HEAD_SIZE: u256 = 32 / N
+    const IS_DYNAMIC: bool = false
+}
+impl<const N: u256> Encode<Sol> for EventField<N> {
+    fn encode(own self, _ ptr: *u8) { self.v.encode(ptr) }
+}
+impl<const N: u256> Decode<Sol> for EventField<N> {
+    fn decode_payload<D: AbiDecoder<Sol>>(_ d: mut D) -> Self { EventField<N> { v: 0 } }
+}
+
+msg M {
+    #[selector = 1]
+    V { a: MsgField<0>, b: u256 },
+}
+
+#[error]
+struct E { a: ErrorField<0>, b: u256 }
+
+#[event]
+struct Ev { a: EventField<0>, b: u256 }

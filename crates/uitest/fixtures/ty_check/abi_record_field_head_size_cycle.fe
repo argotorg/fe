@@ -1,0 +1,24 @@
+// A field type whose `HEAD_SIZE` depends on the record that holds it is
+// reported once, as a recursive definition. The generated `LAYOUT` and
+// `HEAD_SIZE` of the record add nothing.
+struct RecursiveHead {}
+
+msg CycleMsg {
+    #[selector = 1]
+    Probe { value: RecursiveHead, x: u256 } -> bool,
+}
+
+impl core::abi::AbiSize for RecursiveHead {
+    const HEAD_SIZE: u256 = <CycleMsg::Probe as core::abi::AbiSize>::HEAD_SIZE
+    const IS_DYNAMIC: bool = false
+}
+
+impl core::abi::Encode<std::abi::Sol> for RecursiveHead {
+    fn encode(own self, _ ptr: *u8) {}
+}
+
+impl core::abi::Decode<std::abi::Sol> for RecursiveHead {
+    fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ decoder: mut D) -> Self {
+        RecursiveHead {}
+    }
+}

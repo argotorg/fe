@@ -653,52 +653,6 @@ impl DiagnosticVoucher for crate::MsgDiagnostic {
     }
 }
 
-impl DiagnosticVoucher for crate::EventError {
-    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
-        use crate::EventErrorKind;
-
-        let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
-
-        let (code, message, label, notes) = match &self.kind {
-            EventErrorKind::GenericEventStruct => (
-                3,
-                "`#[event]` structs must be non-generic".to_string(),
-                "generics are not supported on `#[event]` structs".to_string(),
-                vec!["remove generic parameters from the event struct".to_string()],
-            ),
-            EventErrorKind::TooManyIndexedFields { indexed_count } => (
-                6,
-                "too many indexed fields in event".to_string(),
-                format!("EVM supports at most 3 indexed fields (found {indexed_count})"),
-                vec!["remove `#[indexed]` from fields until there are at most 3".to_string()],
-            ),
-            EventErrorKind::IndexedDynamicField { ty } => (
-                8,
-                "indexed dynamic event fields are not supported".to_string(),
-                format!("`{ty}` requires Solidity's special indexed-value hashing"),
-                vec![
-                    "remove `#[indexed]` from this field; dynamic event data is supported"
-                        .to_string(),
-                ],
-            ),
-        };
-
-        let error_code = GlobalErrorCode::new(DiagnosticPass::EventLower, code);
-
-        CompleteDiagnostic::new(
-            Severity::Error,
-            message,
-            vec![SubDiagnostic::new(
-                LabelStyle::Primary,
-                label,
-                Some(primary_span),
-            )],
-            notes,
-            error_code,
-        )
-    }
-}
-
 impl DiagnosticVoucher for crate::AbiFieldDiagnostic {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         use crate::AbiFieldContext;
@@ -726,28 +680,90 @@ impl DiagnosticVoucher for crate::AbiFieldDiagnostic {
     }
 }
 
-impl DiagnosticVoucher for crate::ErrorDiagnostic {
+impl DiagnosticVoucher for crate::analysis::ty::abi_record_fields::AbiRecordFieldDiag<'_> {
+    fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        use crate::AbiFieldContext;
+
+        // The codes of `AbiFieldDiagnostic`, which reports the other field
+        // types these records do not support.
+        let (diagnostic_pass, code, required) = match self.context {
+            AbiFieldContext::Error => (
+                DiagnosticPass::ErrorLower,
+                4,
+                "custom error fields must implement `AbiSize` and `Encode<Sol>`",
+            ),
+            AbiFieldContext::Event => (
+                DiagnosticPass::EventLower,
+                7,
+                "event data fields must implement `AbiSize` and `Encode<Sol>`",
+            ),
+        };
+        let label = format!(
+            "`{}` does not satisfy `{}`",
+            self.ty.pretty_print(db),
+            self.traits.iter().format("`, `")
+        );
+
+        CompleteDiagnostic::new(
+            Severity::Error,
+            "unsupported ABI field type".to_string(),
+            vec![SubDiagnostic::new(
+                LabelStyle::Primary,
+                label,
+                Some(Span::new(self.file, self.primary_range, SpanKind::Original)),
+            )],
+            vec![required.to_string()],
+            GlobalErrorCode::new(diagnostic_pass, code),
+        )
+    }
+}
+
+impl DiagnosticVoucher for crate::AbiRecordDiagnostic {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
-        use crate::ErrorDiagnosticKind;
+        use crate::{AbiFieldContext, AbiRecordDiagnosticKind};
 
         let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
 
         let (code, message, label, notes) = match &self.kind {
-            ErrorDiagnosticKind::GenericErrorStruct => (
-                3,
-                "`#[error]` structs must be non-generic".to_string(),
-                "generics are not supported on `#[error]` structs".to_string(),
-                vec!["remove generic parameters from the error struct".to_string()],
-            ),
-            ErrorDiagnosticKind::EventErrorAttrConflict => (
+            AbiRecordDiagnosticKind::GenericStruct(context) => {
+                let attr = match context {
+                    AbiFieldContext::Event => "event",
+                    AbiFieldContext::Error => "error",
+                };
+                (
+                    3,
+                    format!("`#[{attr}]` structs must be non-generic"),
+                    format!("generics are not supported on `#[{attr}]` structs"),
+                    vec![format!("remove generic parameters from the {attr} struct")],
+                )
+            }
+            AbiRecordDiagnosticKind::EventErrorAttrConflict => (
                 5,
                 "`#[error]` cannot be combined with `#[event]`".to_string(),
                 "`#[error]` conflicts with `#[event]` on the same struct".to_string(),
                 vec!["split this into separate structs or remove one attribute".to_string()],
             ),
+            AbiRecordDiagnosticKind::TooManyIndexedFields { indexed_count } => (
+                6,
+                "too many indexed fields in event".to_string(),
+                format!("EVM supports at most 3 indexed fields (found {indexed_count})"),
+                vec!["remove `#[indexed]` from fields until there are at most 3".to_string()],
+            ),
+            AbiRecordDiagnosticKind::IndexedDynamicField { ty } => (
+                8,
+                "indexed dynamic event fields are not supported".to_string(),
+                format!("`{ty}` requires Solidity's special indexed-value hashing"),
+                vec![
+                    "remove `#[indexed]` from this field; dynamic event data is supported"
+                        .to_string(),
+                ],
+            ),
         };
 
-        let error_code = GlobalErrorCode::new(DiagnosticPass::ErrorLower, code);
+        let pass = match self.kind.context() {
+            AbiFieldContext::Event => DiagnosticPass::EventLower,
+            AbiFieldContext::Error => DiagnosticPass::ErrorLower,
+        };
 
         CompleteDiagnostic::new(
             Severity::Error,
@@ -758,7 +774,7 @@ impl DiagnosticVoucher for crate::ErrorDiagnostic {
                 Some(primary_span),
             )],
             notes,
-            error_code,
+            GlobalErrorCode::new(pass, code),
         )
     }
 }

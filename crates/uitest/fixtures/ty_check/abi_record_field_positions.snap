@@ -1,0 +1,87 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/abi_record_field_positions.fe
+---
+error[9-0008]: message field does not satisfy ABI requirements in msg variant `Alias`
+   ┌─ abi_record_field_positions.fe:15:20
+   │
+15 │     Alias { value: Map },
+   │                    ^^^ `StorageMap<Address, u256, 0>` does not satisfy `AbiSize`, `Encode<Sol>`, `Decode<Sol>`
+   │
+   = message fields must implement `AbiSize`, `Encode<Sol>`, and `Decode<Sol>`
+
+error[9-0008]: message field does not satisfy ABI requirements in msg variant `Array`
+   ┌─ abi_record_field_positions.fe:17:20
+   │
+17 │     Array { value: [Map; 2] },
+   │                    ^^^^^^^^ `[StorageMap<Address, u256, 0>; 2]` does not satisfy `AbiSize`, `Encode<Sol>`, `Decode<Sol>`
+   │
+   = message fields must implement `AbiSize`, `Encode<Sol>`, and `Decode<Sol>`
+
+error[9-0008]: message field does not satisfy ABI requirements in msg variant `Tuple`
+   ┌─ abi_record_field_positions.fe:19:20
+   │
+19 │     Tuple { value: (Map, u256) },
+   │                    ^^^^^^^^^^^ `(StorageMap<Address, u256, 0>, u256)` does not satisfy `AbiSize`, `Encode<Sol>`, `Decode<Sol>`
+   │
+   = message fields must implement `AbiSize`, `Encode<Sol>`, and `Decode<Sol>`
+
+error[10-0007]: unsupported ABI field type
+   ┌─ abi_record_field_positions.fe:35:12
+   │
+35 │     value: Map,
+   │            ^^^ `StorageMap<Address, u256, 0>` does not satisfy `AbiSize`, `Encode<Sol>`
+   │
+   = event data fields must implement `AbiSize` and `Encode<Sol>`
+
+error[10-0007]: unsupported ABI field type
+   ┌─ abi_record_field_positions.fe:41:12
+   │
+41 │     value: [Map; 2],
+   │            ^^^^^^^^ `[Map; 2]` is not supported as an event field
+   │
+   = tuples are not supported in event or custom error fields; use a struct type for grouped data
+
+error[16-0004]: unsupported ABI field type
+   ┌─ abi_record_field_positions.fe:23:28
+   │
+23 │ struct ErrorAlias { value: Map, fine: u256 }
+   │                            ^^^ `StorageMap<Address, u256, 0>` does not satisfy `AbiSize`, `Encode<Sol>`
+   │
+   = custom error fields must implement `AbiSize` and `Encode<Sol>`
+
+error[16-0004]: unsupported ABI field type
+   ┌─ abi_record_field_positions.fe:26:28
+   │
+26 │ struct ErrorArray { value: [Map; 2] }
+   │                            ^^^^^^^^ `[Map; 2]` is not supported as a custom error field
+   │
+   = tuples are not supported in event or custom error fields; use a struct type for grouped data
+
+error[16-0004]: unsupported ABI field type
+   ┌─ abi_record_field_positions.fe:29:28
+   │
+29 │ struct ErrorTuple { value: Pair }
+   │                            ^^^^ `(StorageMap<Address, u256, 0>, u256)` is not supported as a custom error field
+   │
+   = tuples are not supported in event or custom error fields; use a struct type for grouped data
+
+error[16-0004]: unsupported ABI field type
+   ┌─ abi_record_field_positions.fe:55:34
+   │
+55 │     pub struct InModule { value: StorageMap<Address, u256, 0> }
+   │                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `StorageMap<Address, u256, 0>` does not satisfy `AbiSize`, `Encode<Sol>`
+   │
+   = custom error fields must implement `AbiSize` and `Encode<Sol>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ abi_record_field_positions.fe:44:1
+   │
+44 │ ╭ #[event]
+45 │ │ struct EventIndexed {
+46 │ │     #[indexed]
+47 │ │     key: Map,
+48 │ │     value: u256,
+49 │ │ }
+   │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `TopicValue`

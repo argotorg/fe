@@ -1293,12 +1293,51 @@ pub struct AssocTyDef<'db> {
     pub(crate) type_ref: Partial<TypeId<'db>>,
 }
 
+/// Controls body checking and diagnostic ownership for an impl associated constant.
+/// This policy is independent of source origin and does not affect checking
+/// the constant's declared type against the trait declaration.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, salsa::Update)]
+pub enum AssocConstBodyCheckPolicy {
+    /// The ordinary body-analysis pass checks the value against its expected type.
+    #[default]
+    BodyAnalysis,
+    /// Message selector analysis checks and evaluates this value, reporting its
+    /// body diagnostics before checking selector uniqueness.
+    MsgSelectorAnalysis,
+    /// Generated ABI metadata over the fields of a record of this kind
+    /// (`LAYOUT`, `HEAD_SIZE`, `IS_DYNAMIC`). Record field analysis reports
+    /// each field type that lacks the ABI traits the record's generated impls
+    /// use. Body analysis checks this value only when every field passes that
+    /// analysis, and then reports its failures as for any constant: once,
+    /// where they occur.
+    AbiRecordFields(AbiRecordKind),
+    /// Check existing event/error ABI bodies while suppressing duplicate source
+    /// diagnostics. Successfully typed bodies still receive contextual CTFE
+    /// diagnostics. New producers should use `BodyAnalysis`.
+    ExpansionSourceCompatibility,
+}
+
+/// A record whose ABI impls lowering generates. The kind fixes which fields
+/// the impls cover and which traits they require of each field type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum AbiRecordKind {
+    /// A `msg` variant: every field implements `AbiSize`, `Encode<Sol>` and
+    /// `Decode<Sol>`, and has a Solidity ABI type.
+    MsgVariant,
+    /// An `#[error]` struct: every field implements `AbiSize` and `Encode<Sol>`.
+    Error,
+    /// An `#[event]` struct: every data field, that is every field not marked
+    /// `#[indexed]`, implements `AbiSize` and `Encode<Sol>`.
+    Event,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocConstDef<'db> {
     pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
     pub ty: Partial<TypeId<'db>>,
     pub value: Partial<Body<'db>>,
+    pub body_check_policy: AssocConstBodyCheckPolicy,
     /// Only meaningful for consts in inherent `impl` blocks; consts in trait
     /// impls inherit their visibility from the trait.
     pub vis: Visibility,

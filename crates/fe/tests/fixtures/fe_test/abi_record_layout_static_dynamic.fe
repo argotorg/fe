@@ -1,0 +1,25 @@
+// Static arrays take their full head size; dynamic fields take one word.
+use core::abi::Bytes
+
+msg Records {
+    #[selector = 1]
+    Static { flag: bool, words: [u256; 2], last: bool } -> bool,
+    #[selector = 2]
+    Dynamic { first: u256, data: Bytes, last: bool } -> bool,
+}
+
+static_assert(<Records::Static as core::abi::AbiRecord<3>>::LAYOUT.offsets[1] == 32)
+static_assert(<Records::Static as core::abi::AbiRecord<3>>::LAYOUT.offsets[2] == 96)
+static_assert(<Records::Static as core::abi::AbiRecord<3>>::LAYOUT.head_size == 128)
+static_assert(<Records::Dynamic as core::abi::AbiRecord<3>>::LAYOUT.offsets[1] == 32)
+static_assert(<Records::Dynamic as core::abi::AbiRecord<3>>::LAYOUT.offsets[2] == 64)
+static_assert(<Records::Dynamic as core::abi::AbiRecord<3>>::LAYOUT.head_size == 96)
+static_assert(<Records::Dynamic as core::abi::AbiSize>::HEAD_SIZE == 96)
+static_assert(<Records::Dynamic as core::abi::AbiSize>::IS_DYNAMIC)
+
+#[test]
+fn static_and_dynamic_layouts() {
+    assert!(<Records::Static as core::abi::AbiRecord<3>>::LAYOUT.head_size == 128)
+    assert!(<Records::Dynamic as core::abi::AbiRecord<3>>::LAYOUT.head_size == 96)
+    assert!(<Records::Dynamic as core::abi::AbiSize>::IS_DYNAMIC)
+}

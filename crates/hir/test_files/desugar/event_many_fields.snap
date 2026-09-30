@@ -27,7 +27,39 @@ impl std::evm::Event for ManyFields {
     const TOPIC0: u256 = core::keccak((("ManyFields", "(", <Address as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ","), (<u256 as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ")")))
 
     #[inline(always)]
+    #[arithmetic(unchecked)]
     fn emit<L: std::evm::Log>(own self, _ log: mut L) {
-        log.log2(data: std::evm::encode_abi_payload((self.f0, self.f1, self.f2, self.f3, self.f4, self.f5, self.f6, self.f7, self.f8, self.f9, self.f10, self.f11)).span(), topic0: Self::TOPIC0, topic1: self.who.as_topic())
+        let __field_0 = self.f0
+        let __field_1 = self.f1
+        let __field_2 = self.f2
+        let __field_3 = self.f3
+        let __field_4 = self.f4
+        let __field_5 = self.f5
+        let __field_6 = self.f6
+        let __field_7 = self.f7
+        let __field_8 = self.f8
+        let __field_9 = self.f9
+        let __field_10 = self.f10
+        let __field_11 = self.f11
+        let __data = core::ptr::MemBuffer::alloc(<Self as core::abi::AbiRecord<12> >::LAYOUT.head_size + core::abi::dynamic_payload_size(__field_0) + core::abi::dynamic_payload_size(__field_1) + core::abi::dynamic_payload_size(__field_2) + core::abi::dynamic_payload_size(__field_3) + core::abi::dynamic_payload_size(__field_4) + core::abi::dynamic_payload_size(__field_5) + core::abi::dynamic_payload_size(__field_6) + core::abi::dynamic_payload_size(__field_7) + core::abi::dynamic_payload_size(__field_8) + core::abi::dynamic_payload_size(__field_9) + core::abi::dynamic_payload_size(__field_10) + core::abi::dynamic_payload_size(__field_11))
+        let __ptr = __data.ptr()
+        let mut __tail = <Self as core::abi::AbiRecord<12> >::LAYOUT.head_size
+        __tail = core::abi::encode_field_at<std::abi::Sol, u256>(__field_0, __ptr, head_pos: <Self as core::abi::AbiRecord<12> >::LAYOUT.offsets[0], tail: __tail)
+        __tail = core::abi::encode_field_at<std::abi::Sol, u256>(__field_1, __ptr, head_pos: <Self as core::abi::AbiRecord<12> >::LAYOUT.offsets[1], tail: __tail)
+        __tail = core::abi::encode_field_at<std::abi::Sol, u256>(__field_2, __ptr, head_pos: <Self as core::abi::AbiRecord<12> >::LAYOUT.offsets[2], tail: __tail)
+        __tail = core::abi::encode_field_at<std::abi::Sol, u256>(__field_3, __ptr, head_pos: <Self as core::abi::AbiRecord<12> >::LAYOUT.offsets[3], tail: __tail)
+        __tail = core::abi::encode_field_at<std::abi::Sol, u256>(__field_4, __ptr, head_pos: <Self as core::abi::AbiRecord<12> >::LAYOUT.offsets[4], tail: __tail)
+        __tail = core::abi::encode_field_at<std::abi::Sol, u256>(__field_5, __ptr, head_pos: <Self as core::abi::AbiRecord<12> >::LAYOUT.offsets[5], tail: __tail)
+        __tail = core::abi::encode_field_at<std::abi::Sol, u256>(__field_6, __ptr, head_pos: <Self as core::abi::AbiRecord<12> >::LAYOUT.offsets[6], tail: __tail)
+        __tail = core::abi::encode_field_at<std::abi::Sol, u256>(__field_7, __ptr, head_pos: <Self as core::abi::AbiRecord<12> >::LAYOUT.offsets[7], tail: __tail)
+        __tail = core::abi::encode_field_at<std::abi::Sol, u256>(__field_8, __ptr, head_pos: <Self as core::abi::AbiRecord<12> >::LAYOUT.offsets[8], tail: __tail)
+        __tail = core::abi::encode_field_at<std::abi::Sol, u256>(__field_9, __ptr, head_pos: <Self as core::abi::AbiRecord<12> >::LAYOUT.offsets[9], tail: __tail)
+        __tail = core::abi::encode_field_at<std::abi::Sol, u256>(__field_10, __ptr, head_pos: <Self as core::abi::AbiRecord<12> >::LAYOUT.offsets[10], tail: __tail)
+        core::abi::encode_field_at<std::abi::Sol, u256>(__field_11, __ptr, head_pos: <Self as core::abi::AbiRecord<12> >::LAYOUT.offsets[11], tail: __tail)
+        log.log2(data: __data.span(), topic0: Self::TOPIC0, topic1: self.who.as_topic())
     }
+}
+
+impl core::abi::AbiRecord<12> for ManyFields {
+    const LAYOUT: core::abi::AbiRecordLayout<12> = core::abi::abi_record_layout<12>([core::abi::abi_field_head_size<u256>(), core::abi::abi_field_head_size<u256>(), core::abi::abi_field_head_size<u256>(), core::abi::abi_field_head_size<u256>(), core::abi::abi_field_head_size<u256>(), core::abi::abi_field_head_size<u256>(), core::abi::abi_field_head_size<u256>(), core::abi::abi_field_head_size<u256>(), core::abi::abi_field_head_size<u256>(), core::abi::abi_field_head_size<u256>(), core::abi::abi_field_head_size<u256>(), core::abi::abi_field_head_size<u256>()])
 }

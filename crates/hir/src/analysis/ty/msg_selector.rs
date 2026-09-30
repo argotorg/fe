@@ -5,26 +5,18 @@ use parser::{
     ast::{self, AttrListOwner as _, prelude::*},
 };
 
+use crate::analysis::ty::abi_record_fields::{FieldAbiIssue, abi_record_field_issues};
 use crate::analysis::ty::abi_ty::{
-    AbiTypeError, parse_function_signature, semantic_ty_to_abi_desc,
-    semantic_ty_to_abi_desc_with_source, suggested_fe_type_for_sol_type,
+    parse_function_signature, semantic_ty_to_abi_desc, suggested_fe_type_for_sol_type,
 };
-use crate::analysis::ty::adt_def::{
-    AdtRef, ConcreteTypeView, instantiate_adt_field_source_for_concrete_demand,
-};
-use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_type_path};
+use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::diagnostics::FuncBodyDiag;
-use crate::analysis::ty::trait_def::TraitInstId;
-use crate::analysis::ty::trait_resolution::{
-    GoalSatisfiability, TraitSolveCx, is_goal_satisfiable,
-};
 use crate::analysis::ty::ty_check::eval_msg_variant_selector;
 use crate::analysis::ty::ty_def::TyId;
-use crate::analysis::ty::ty_error::diag_from_invalid_cause;
 use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
 };
-use crate::hir_def::{ItemKind, Mod, Struct, TopLevelMod};
+use crate::hir_def::{AbiRecordKind, ItemKind, Mod, Struct, TopLevelMod};
 use crate::lower::parse_file_impl;
 use crate::semantic::get_variant_selector_info;
 use crate::span::{DesugaredOrigin, HirOrigin, MsgDesugaredFocus};
@@ -124,73 +116,21 @@ fn check_variant_field_abi_requirements<'db>(
     diags: &mut Vec<Box<dyn DiagnosticVoucher + 'db>>,
     ty_diags: &mut Vec<FuncBodyDiag<'db>>,
 ) {
-    let (Some(sol_ty), Some(abi_size_trait), Some(encode_trait), Some(decode_trait)) = (
-        resolve_lib_type_path(db, struct_.scope(), "std::abi::Sol"),
-        resolve_core_trait(db, struct_.scope(), &["abi", "AbiSize"]),
-        resolve_core_trait(db, struct_.scope(), &["abi", "Encode"]),
-        resolve_core_trait(db, struct_.scope(), &["abi", "Decode"]),
-    ) else {
-        return;
-    };
-
-    let solve_cx = TraitSolveCx::new(db, struct_.scope());
-    let adt = AdtRef::from(struct_).as_adt(db);
-    for (idx, field_ty) in struct_
-        .field_tys(db)
-        .into_iter()
-        .map(|ty| ty.instantiate_identity())
-        .enumerate()
-    {
-        if field_ty.has_invalid(db) {
-            continue;
-        }
-
-        let source = instantiate_adt_field_source_for_concrete_demand(db, adt, 0, idx, &[]);
-        let kind = match semantic_ty_to_abi_desc_with_source(
-            db,
-            ConcreteTypeView::new(field_ty, source),
-        ) {
-            Err(AbiTypeError::Recursive(_)) => continue,
-            Err(AbiTypeError::InvalidConst { cause, message }) => {
-                let span = struct_.span().fields().field(idx).ty().into();
-                if let Some(diag) = diag_from_invalid_cause(span, &cause) {
-                    ty_diags.push(diag.into());
-                    continue;
-                }
-                MsgDiagnosticKind::UnsupportedAbiField {
-                    ty: field_ty.pretty_print(db).to_string(),
-                    reason: message,
-                }
-            }
-            Err(AbiTypeError::Unsupported(reason)) => MsgDiagnosticKind::UnsupportedAbiField {
-                ty: field_ty.pretty_print(db).to_string(),
+    for (idx, issue) in abi_record_field_issues(db, struct_, AbiRecordKind::MsgVariant) {
+        let kind = match issue {
+            FieldAbiIssue::Unsupported { ty, reason } => MsgDiagnosticKind::UnsupportedAbiField {
+                ty: ty.pretty_print(db).to_string(),
                 reason,
             },
-            Ok(_) => {
-                let mut traits = Vec::new();
-                for (name, trait_, args) in [
-                    ("AbiSize", abi_size_trait, vec![field_ty]),
-                    ("Encode<Sol>", encode_trait, vec![field_ty, sol_ty]),
-                    ("Decode<Sol>", decode_trait, vec![field_ty, sol_ty]),
-                ] {
-                    let goal = TraitInstId::new_simple(db, trait_, args);
-                    if matches!(
-                        is_goal_satisfiable(db, solve_cx, goal),
-                        GoalSatisfiability::UnSat(_) | GoalSatisfiability::NeedsConfirmation { .. }
-                    ) {
-                        traits.push(name);
-                    }
-                }
-                if traits.is_empty() {
-                    continue;
-                }
-                MsgDiagnosticKind::MissingAbiTraits {
-                    ty: field_ty.pretty_print(db).to_string(),
-                    traits,
-                }
+            FieldAbiIssue::MissingTraits { ty, traits } => MsgDiagnosticKind::MissingAbiTraits {
+                ty: ty.pretty_print(db).to_string(),
+                traits,
+            },
+            FieldAbiIssue::Ty(diag) => {
+                ty_diags.push(diag);
+                continue;
             }
         };
-
         let primary_range = msg_variant_field(db, top_mod, struct_, idx).map_or_else(
             || msg_variant_focus_range(db, top_mod, struct_, MsgDesugaredFocus::Selector),
             |field| {

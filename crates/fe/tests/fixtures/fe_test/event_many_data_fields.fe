@@ -1,0 +1,87 @@
+// An event with more than 16 data fields, mixing static and dynamic types.
+//
+// The data fields are ABI-encoded as one record, like a tuple of those fields
+// in declaration order. `crates/fe/tests/event_dynamic.rs` checks the emitted
+// log bytes of `Probe`.
+
+use std::abi::{Bytes, DynArray, bytes_from_words_prefix}
+use std::evm::{Evm, Log, RawMem}
+
+#[event]
+struct Wide {
+    #[indexed]
+    who: Address,
+    d0: u256,
+    d1: Bytes,
+    d2: bool,
+    d3: u256,
+    d4: u8,
+    d5: u256,
+    d6: u256,
+    d7: u256,
+    d8: Address,
+    d9: DynArray<u256>,
+    d10: u256,
+    d11: u256,
+    d12: u256,
+    d13: u256,
+    d14: u256,
+    d15: u256,
+    d16: u256,
+}
+
+fn wide() -> Wide uses (raw: mut RawMem) {
+    let values = core::ptr::alloc_bytes(64)
+    raw.mstore(addr: values, value: 1)
+    raw.mstore(addr: core::ptr::offset_bytes(values, 32), value: 7)
+    Wide {
+        who: Address::zero(),
+        d0: 1,
+        d1: bytes_from_words_prefix<1, 1>(
+            [0xaa00000000000000000000000000000000000000000000000000000000000000],
+        ),
+        d2: true,
+        d3: 3,
+        d4: 4,
+        d5: 5,
+        d6: 6,
+        d7: 7,
+        d8: Address::zero(),
+        d9: DynArray::from_abi_tail(data: values, len: 1, size: 64),
+        d10: 10,
+        d11: 11,
+        d12: 12,
+        d13: 13,
+        d14: 14,
+        d15: 15,
+        d16: 16,
+    }
+}
+
+msg ProbeMsg {
+    #[selector = sol("emitWide()")]
+    EmitWide -> u256,
+}
+
+pub contract Probe uses (log: mut Log, raw: mut RawMem) {
+    recv ProbeMsg {
+        EmitWide -> u256 uses (mut log, mut raw) {
+            log.emit(wide())
+            let ret: u256 = 1
+            ret
+        }
+    }
+}
+
+#[test]
+fn topic0_wide() {
+    // `cast keccak "Wide(address,uint256,bytes,bool,uint256,uint8,uint256,uint256,uint256,address,uint256[],uint256,uint256,uint256,uint256,uint256,uint256,uint256)"`
+    assert!(Wide::TOPIC0 == 0x5bda61535a4933a59253710ef065b796e69285f8ee0cd6b7a96c1f1c09d18875)
+}
+
+#[test]
+fn emit_wide_event() uses (evm: mut Evm) {
+    let c = evm.create2<Probe>(value: 0, args: (), salt: 0)
+    let r: u256 = evm.call(addr: c, gas: 5000000, value: 0, message: ProbeMsg::EmitWide {})
+    assert!(r == 1)
+}

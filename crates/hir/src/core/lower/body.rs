@@ -120,6 +120,18 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
         body_kind: BodyKind,
     ) -> Body<'db> {
         let origin = ast.map_or(HirOrigin::None, HirOrigin::raw);
+        self.build_with_origin(origin, body_expr, body_kind)
+    }
+
+    /// Builds a body with the given origin. A body that lowering generated
+    /// passes the declaration it was generated from, so a diagnostic on the
+    /// body as a whole is reported there.
+    pub(super) fn build_with_origin(
+        self,
+        origin: HirOrigin<ast::Expr>,
+        body_expr: ExprId,
+        body_kind: BodyKind,
+    ) -> Body<'db> {
         let body = Body::new(
             self.f_ctxt.db(),
             self.id,

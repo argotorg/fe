@@ -1,0 +1,56 @@
+// Unsupported field types in each position a record can hold them: through a
+// type alias, inside an array or a tuple, in a nested module, and beside
+// supported fields. Each field is reported once, at its type. Event and error
+// lowering rejects a field type that is not a path, such as an array, and a
+// tuple behind an alias. An indexed event field is not part of the event's
+// data record; the generated `emit` reports it.
+use std::evm::{Address, StorageMap}
+
+type Map = StorageMap<Address, u256, 0>
+
+type Pair = (Map, u256)
+
+msg Positions {
+    #[selector = 1]
+    Alias { value: Map },
+    #[selector = 2]
+    Array { value: [Map; 2] },
+    #[selector = 3]
+    Tuple { value: (Map, u256) },
+}
+
+#[error]
+struct ErrorAlias { value: Map, fine: u256 }
+
+#[error]
+struct ErrorArray { value: [Map; 2] }
+
+#[error]
+struct ErrorTuple { value: Pair }
+
+#[event]
+struct EventData {
+    #[indexed]
+    key: u256,
+    value: Map,
+    fine: u256,
+}
+
+#[event]
+struct EventArray {
+    value: [Map; 2],
+}
+
+#[event]
+struct EventIndexed {
+    #[indexed]
+    key: Map,
+    value: u256,
+}
+
+mod inner {
+    use std::evm::{Address, StorageMap}
+
+    #[error]
+    pub struct InModule { value: StorageMap<Address, u256, 0> }
+}

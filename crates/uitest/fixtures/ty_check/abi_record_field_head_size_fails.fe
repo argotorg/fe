@@ -1,0 +1,69 @@
+// A field type whose own `HEAD_SIZE` fails to evaluate is reported once, at
+// that constant. The generated `LAYOUT` and `HEAD_SIZE` of each record that
+// holds it add nothing.
+use core::abi::{AbiDecoder, AbiSize, Decode, Encode}
+use std::abi::{Sol, SolCompat}
+
+const ZERO: u256 = 0
+
+pub struct MsgField { v: u256 }
+impl Copy for MsgField {}
+impl SolCompat for MsgField {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint256"
+}
+impl AbiSize for MsgField {
+    const HEAD_SIZE: u256 = 32 / ZERO
+    const IS_DYNAMIC: bool = false
+}
+impl Encode<Sol> for MsgField {
+    fn encode(own self, _ ptr: *u8) { self.v.encode(ptr) }
+}
+impl Decode<Sol> for MsgField {
+    fn decode_payload<D: AbiDecoder<Sol>>(_ d: mut D) -> Self { MsgField { v: 0 } }
+}
+
+pub struct ErrorField { v: u256 }
+impl Copy for ErrorField {}
+impl SolCompat for ErrorField {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint256"
+}
+impl AbiSize for ErrorField {
+    const HEAD_SIZE: u256 = 32 / ZERO
+    const IS_DYNAMIC: bool = false
+}
+impl Encode<Sol> for ErrorField {
+    fn encode(own self, _ ptr: *u8) { self.v.encode(ptr) }
+}
+impl Decode<Sol> for ErrorField {
+    fn decode_payload<D: AbiDecoder<Sol>>(_ d: mut D) -> Self { ErrorField { v: 0 } }
+}
+
+pub struct EventField { v: u256 }
+impl Copy for EventField {}
+impl SolCompat for EventField {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint256"
+}
+impl AbiSize for EventField {
+    const HEAD_SIZE: u256 = 32 / ZERO
+    const IS_DYNAMIC: bool = false
+}
+impl Encode<Sol> for EventField {
+    fn encode(own self, _ ptr: *u8) { self.v.encode(ptr) }
+}
+impl Decode<Sol> for EventField {
+    fn decode_payload<D: AbiDecoder<Sol>>(_ d: mut D) -> Self { EventField { v: 0 } }
+}
+
+msg M {
+    #[selector = 1]
+    V { a: MsgField, b: u256 },
+}
+
+#[error]
+struct E { a: ErrorField, b: u256 }
+
+#[event]
+struct Ev { a: EventField, b: u256 }
