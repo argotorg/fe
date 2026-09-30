@@ -3203,7 +3203,7 @@ impl<'db> TyChecker<'db> {
     }
 
     fn specialize_same_trait_method_inst(
-        &self,
+        &mut self,
         method_name: IdentId<'db>,
         inst: TraitInstId<'db>,
     ) -> TraitInstId<'db> {
@@ -3234,6 +3234,20 @@ impl<'db> TyChecker<'db> {
         let enclosing_args = enclosing_inst.args(self.db);
         let inst_args = inst.args(self.db);
         if inst_args.len() != enclosing_args.len() || inst_args.is_empty() {
+            return inst;
+        }
+
+        // The enclosing impl's arguments fill in what method selection left
+        // open, as when forwarding to a field. They must not replace
+        // arguments it already found, as for `self.inner.eq(other.inner)`
+        // inside `impl<T> Eq for Wrap<T>`.
+        let snapshot = self.snapshot_state();
+        let compatible = inst_args[1..]
+            .iter()
+            .zip(&enclosing_args[1..])
+            .all(|(&arg, &enclosing)| self.table.unify(arg, enclosing).is_ok());
+        self.rollback_state(snapshot);
+        if !compatible {
             return inst;
         }
 

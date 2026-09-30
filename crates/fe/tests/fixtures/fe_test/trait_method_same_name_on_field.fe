@@ -1,0 +1,114 @@
+// Inside a trait impl, calling the same trait method on another value, such
+// as a field, uses that value's own impl.
+
+use core::ops::Eq
+
+struct Wrap<T> {
+    inner: T,
+}
+
+impl<T> Eq for Wrap<T> where T: Eq {
+    fn eq(self, _ other: Self) -> bool {
+        self.inner.eq(other.inner)
+    }
+
+    fn ne(self, _ other: Self) -> bool {
+        self.inner.ne(other.inner)
+    }
+}
+
+trait MyEq<Rhs> {
+    fn my_eq(self, _ other: Rhs) -> bool
+}
+
+impl MyEq<u16> for u16 {
+    fn my_eq(self, _ other: u16) -> bool {
+        self == other
+    }
+}
+
+impl<U> MyEq<u8> for Wrap<U> where U: MyEq<u16> {
+    fn my_eq(self, _ other: u8) -> bool {
+        self.inner.my_eq(other as u16)
+    }
+}
+
+// A call on the impl's own self type still resolves to the enclosing impl.
+struct Countdown {
+    n: u8,
+}
+
+impl MyEq<u8> for Countdown {
+    fn my_eq(self, _ other: u8) -> bool {
+        if self.n == 0 {
+            other == 0
+        } else {
+            let next = Countdown { n: self.n - 1 }
+            next.my_eq(other)
+        }
+    }
+}
+
+// Forwarding to a field whose impl is generic over the trait argument: the
+// argument is taken from the enclosing impl.
+struct Plain {}
+struct Tagged {}
+
+trait Emit<M> {
+    fn emit(self) -> u256
+}
+
+struct Leaf {
+    v: u256,
+}
+
+impl<M> Emit<M> for Leaf {
+    fn emit(self) -> u256 {
+        self.v
+    }
+}
+
+struct Node {
+    leaf: Leaf,
+}
+
+impl<M> Emit<M> for Node {
+    fn emit(self) -> u256 {
+        self.leaf.emit() + 1
+    }
+}
+
+#[test]
+fn same_trait_method_on_field() {
+    let a = Wrap { inner: 5 as u8 }
+    let b = Wrap { inner: 5 as u8 }
+    let c = Wrap { inner: 6 as u8 }
+    assert!(a.eq(b))
+    assert!(!a.eq(c))
+    assert!(a.ne(c))
+    assert!(!a.ne(b))
+    assert!(a == b)
+    assert!(a != c)
+}
+
+#[test]
+fn same_trait_method_with_other_trait_args() {
+    let w = Wrap { inner: 7 as u16 }
+    assert!(w.my_eq(7))
+    assert!(!w.my_eq(8))
+}
+
+#[test]
+fn same_trait_method_on_self_type() {
+    let c = Countdown { n: 3 }
+    assert!(c.my_eq(0))
+    assert!(!c.my_eq(1))
+}
+
+#[test]
+fn same_trait_method_forwarded_to_field() {
+    let n = Node { leaf: Leaf { v: 41 } }
+    assert!(<Node as Emit<Plain>>::emit(n) == 42)
+    let t = Node { leaf: Leaf { v: 1 } }
+    assert!(<Node as Emit<Tagged>>::emit(t) == 2)
+}
