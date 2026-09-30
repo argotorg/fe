@@ -13,7 +13,7 @@ pub enum PrimTy {
 
 impl PrimTy {
     pub fn name(self, db: &dyn HirDb) -> IdentId<'_> {
-        IdentId::new(db, self.as_str().to_string())
+        IdentId::new(db, self.as_str())
     }
 
     /// The builtin type named `name`, matched without interning every

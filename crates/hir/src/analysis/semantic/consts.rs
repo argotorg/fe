@@ -249,6 +249,8 @@ pub(crate) fn verify_sem_const_description_shape<'db>(
     verify_sem_const_shape_impl(db, value, true)
 }
 
+// Evaluation loads the same constants repeatedly, and each value is immutable.
+#[salsa::tracked]
 fn verify_sem_const_shape_impl<'db>(
     db: &'db dyn HirAnalysisDb,
     value: SemConstId<'db>,

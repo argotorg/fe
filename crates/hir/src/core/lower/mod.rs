@@ -349,7 +349,7 @@ impl<'db> FileLowerCtxt<'db> {
 
 impl<'db> IdentId<'db> {
     fn lower_token(ctxt: &mut FileLowerCtxt<'db>, token: SyntaxToken) -> Self {
-        Self::new(ctxt.db(), token.text().to_string())
+        Self::new(ctxt.db(), token.text())
     }
 
     fn lower_token_partial(

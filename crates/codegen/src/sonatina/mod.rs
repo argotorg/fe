@@ -856,7 +856,7 @@ fn prepare_native_main(
     let argv_ty = TyId::ptr_to(db, TyId::ptr_to(db, TyId::u8(db)));
     let args = func
         .arg_tys(db)
-        .into_iter()
+        .iter()
         .map(|arg| {
             let ty = arg.instantiate_identity();
             ty.as_view(db).unwrap_or(ty)

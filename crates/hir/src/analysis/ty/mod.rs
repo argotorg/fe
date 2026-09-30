@@ -134,10 +134,11 @@ fn ty_is_copy_query<'db>(
     };
     let inst = trait_def::TraitInstId::new_simple(db, copy_trait, vec![ty]);
     let inst = inst.normalize(db, scope, assumptions);
+    // Normalization keeps a predicate's trait, so only Copy predicates can match.
     if assumptions
         .list(db)
         .iter()
-        .any(|&pred| pred.normalize(db, scope, assumptions) == inst)
+        .any(|&pred| pred.def(db) == copy_trait && pred.normalize(db, scope, assumptions) == inst)
     {
         return true;
     }

@@ -178,7 +178,17 @@ impl<'db> TyId<'db> {
     }
 
     pub fn flags(self, db: &dyn HirAnalysisDb) -> TyFlags {
-        ty_flags(db, self)
+        // Leaf types have fixed flags; only composite types need the cached walk.
+        match self.data(db) {
+            TyData::TyBase(_) | TyData::Never => TyFlags::empty(),
+            TyData::TyVar(_) => TyFlags::HAS_VAR,
+            TyData::TyParam(_) => TyFlags::HAS_PARAM,
+            TyData::Invalid(_) => TyFlags::HAS_INVALID,
+            TyData::TyApp(..)
+            | TyData::AssocTy(_)
+            | TyData::QualifiedTy(_)
+            | TyData::ConstTy(_) => ty_flags(db, self),
+        }
     }
 
     pub fn has_invalid(self, db: &dyn HirAnalysisDb) -> bool {
@@ -255,6 +265,11 @@ impl<'db> TyId<'db> {
     /// doesn't perform deconstruction recursively. e.g.,
     /// `App(App(T, U), App(V, W))` -> `(T, [U, App(V, W)])`
     pub fn decompose_ty_app(self, db: &'db dyn HirAnalysisDb) -> (TyId<'db>, &'db [TyId<'db>]) {
+        // Most types are not applications; they decompose to themselves without
+        // the cost of a query.
+        if !matches!(self.data(db), TyData::TyApp(..)) {
+            return (self, &[]);
+        }
         let (base, args) = decompose_ty_app(db, self);
         (*base, args)
     }
@@ -473,6 +488,8 @@ impl<'db> TyId<'db> {
     /// This is a structural check (not based on byte-size calculation):
     /// - `()` and empty structs are zero-sized
     /// - tuples/structs/arrays are zero-sized iff all elements/fields are zero-sized
+    // Borrow checking asks about the same types repeatedly.
+    #[salsa::tracked]
     pub fn is_zero_sized(self, db: &'db dyn HirAnalysisDb) -> bool {
         fn inner<'db>(
             db: &'db dyn HirAnalysisDb,

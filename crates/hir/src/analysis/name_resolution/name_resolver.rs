@@ -534,26 +534,29 @@ impl<'db, 'a> NameResolver<'db, 'a> {
         let s_graph = top_mod.scope_graph(self.db);
 
         {
-            let mut process_edge = |edge: &ScopeEdge<'db>| match edge.kind.propagate(self.db, query)
-            {
-                PropagationResult::Terminated => {
-                    if found_scopes.insert(edge.dest) {
-                        let res = NameRes::new_from_scope(
-                            edge.dest,
-                            NameDomain::from_scope(self.db, edge.dest),
-                            NameDerivation::Def,
-                        );
-                        bucket.push(&res);
+            // Edges only need the query's name and whether lexical scopes apply.
+            let name = query.name(self.db);
+            let allow_lex = query.directive(self.db).allow_lex;
+            let mut process_edge =
+                |edge: &ScopeEdge<'db>| match edge.kind.propagate(self.db, name, allow_lex) {
+                    PropagationResult::Terminated => {
+                        if found_scopes.insert(edge.dest) {
+                            let res = NameRes::new_from_scope(
+                                edge.dest,
+                                NameDomain::from_scope(self.db, edge.dest),
+                                NameDerivation::Def,
+                            );
+                            bucket.push(&res);
+                        }
                     }
-                }
 
-                PropagationResult::Continuation => {
-                    debug_assert!(parent.is_none());
-                    parent = Some(edge.dest);
-                }
+                    PropagationResult::Continuation => {
+                        debug_assert!(parent.is_none());
+                        parent = Some(edge.dest);
+                    }
 
-                PropagationResult::UnPropagated => {}
-            };
+                    PropagationResult::UnPropagated => {}
+                };
 
             let hide_assoc_fns = !query.directive(self.db).allow_assoc_fn
                 && matches!(
@@ -862,7 +865,8 @@ trait QueryPropagator<'db> {
     fn propagate(
         self,
         db: &'db dyn HirAnalysisDb,
-        query: EarlyNameQueryId<'db>,
+        name: IdentId<'db>,
+        allow_lex: bool,
     ) -> PropagationResult;
     fn propagate_glob(self) -> PropagationResult;
 }
@@ -881,10 +885,11 @@ enum PropagationResult {
 impl<'db> QueryPropagator<'db> for LexEdge {
     fn propagate(
         self,
-        db: &'db dyn HirAnalysisDb,
-        query: EarlyNameQueryId<'db>,
+        _db: &'db dyn HirAnalysisDb,
+        _name: IdentId<'db>,
+        allow_lex: bool,
     ) -> PropagationResult {
-        if query.directive(db).allow_lex {
+        if allow_lex {
             PropagationResult::Continuation
         } else {
             PropagationResult::UnPropagated
@@ -899,10 +904,11 @@ impl<'db> QueryPropagator<'db> for LexEdge {
 impl<'db> QueryPropagator<'db> for ModEdge<'db> {
     fn propagate(
         self,
-        db: &'db dyn HirAnalysisDb,
-        query: EarlyNameQueryId<'db>,
+        _db: &'db dyn HirAnalysisDb,
+        name: IdentId<'db>,
+        _allow_lex: bool,
     ) -> PropagationResult {
-        if self.0 == query.name(db) {
+        if self.0 == name {
             PropagationResult::Terminated
         } else {
             PropagationResult::UnPropagated
@@ -917,10 +923,11 @@ impl<'db> QueryPropagator<'db> for ModEdge<'db> {
 impl<'db> QueryPropagator<'db> for TypeEdge<'db> {
     fn propagate(
         self,
-        db: &'db dyn HirAnalysisDb,
-        query: EarlyNameQueryId<'db>,
+        _db: &'db dyn HirAnalysisDb,
+        name: IdentId<'db>,
+        _allow_lex: bool,
     ) -> PropagationResult {
-        if self.0 == query.name(db) {
+        if self.0 == name {
             PropagationResult::Terminated
         } else {
             PropagationResult::UnPropagated
@@ -935,10 +942,11 @@ impl<'db> QueryPropagator<'db> for TypeEdge<'db> {
 impl<'db> QueryPropagator<'db> for TraitEdge<'db> {
     fn propagate(
         self,
-        db: &'db dyn HirAnalysisDb,
-        query: EarlyNameQueryId<'db>,
+        _db: &'db dyn HirAnalysisDb,
+        name: IdentId<'db>,
+        _allow_lex: bool,
     ) -> PropagationResult {
-        if self.0 == query.name(db) {
+        if self.0 == name {
             PropagationResult::Terminated
         } else {
             PropagationResult::UnPropagated
@@ -953,10 +961,11 @@ impl<'db> QueryPropagator<'db> for TraitEdge<'db> {
 impl<'db> QueryPropagator<'db> for TraitTypeEdge<'db> {
     fn propagate(
         self,
-        db: &'db dyn HirAnalysisDb,
-        query: EarlyNameQueryId<'db>,
+        _db: &'db dyn HirAnalysisDb,
+        name: IdentId<'db>,
+        _allow_lex: bool,
     ) -> PropagationResult {
-        if self.0 == query.name(db) {
+        if self.0 == name {
             PropagationResult::Terminated
         } else {
             PropagationResult::UnPropagated
@@ -971,10 +980,11 @@ impl<'db> QueryPropagator<'db> for TraitTypeEdge<'db> {
 impl<'db> QueryPropagator<'db> for ValueEdge<'db> {
     fn propagate(
         self,
-        db: &'db dyn HirAnalysisDb,
-        query: EarlyNameQueryId<'db>,
+        _db: &'db dyn HirAnalysisDb,
+        name: IdentId<'db>,
+        _allow_lex: bool,
     ) -> PropagationResult {
-        if self.0 == query.name(db) {
+        if self.0 == name {
             PropagationResult::Terminated
         } else {
             PropagationResult::UnPropagated
@@ -989,10 +999,11 @@ impl<'db> QueryPropagator<'db> for ValueEdge<'db> {
 impl<'db> QueryPropagator<'db> for GenericParamEdge<'db> {
     fn propagate(
         self,
-        db: &'db dyn HirAnalysisDb,
-        query: EarlyNameQueryId<'db>,
+        _db: &'db dyn HirAnalysisDb,
+        name: IdentId<'db>,
+        _allow_lex: bool,
     ) -> PropagationResult {
-        if self.0 == query.name(db) {
+        if self.0 == name {
             PropagationResult::Terminated
         } else {
             PropagationResult::UnPropagated
@@ -1007,10 +1018,11 @@ impl<'db> QueryPropagator<'db> for GenericParamEdge<'db> {
 impl<'db> QueryPropagator<'db> for FieldEdge<'db> {
     fn propagate(
         self,
-        db: &'db dyn HirAnalysisDb,
-        query: EarlyNameQueryId<'db>,
+        _db: &'db dyn HirAnalysisDb,
+        name: IdentId<'db>,
+        _allow_lex: bool,
     ) -> PropagationResult {
-        if self.0 == query.name(db) {
+        if self.0 == name {
             PropagationResult::Terminated
         } else {
             PropagationResult::UnPropagated
@@ -1025,10 +1037,11 @@ impl<'db> QueryPropagator<'db> for FieldEdge<'db> {
 impl<'db> QueryPropagator<'db> for VariantEdge<'db> {
     fn propagate(
         self,
-        db: &'db dyn HirAnalysisDb,
-        query: EarlyNameQueryId<'db>,
+        _db: &'db dyn HirAnalysisDb,
+        name: IdentId<'db>,
+        _allow_lex: bool,
     ) -> PropagationResult {
-        if self.0 == query.name(db) {
+        if self.0 == name {
             PropagationResult::Terminated
         } else {
             PropagationResult::UnPropagated
@@ -1044,9 +1057,10 @@ impl<'db> QueryPropagator<'db> for SuperEdge {
     fn propagate(
         self,
         db: &'db dyn HirAnalysisDb,
-        query: EarlyNameQueryId<'db>,
+        name: IdentId<'db>,
+        _allow_lex: bool,
     ) -> PropagationResult {
-        if query.name(db).is_super(db) {
+        if name.is_super(db) {
             PropagationResult::Terminated
         } else {
             PropagationResult::UnPropagated
@@ -1062,9 +1076,10 @@ impl<'db> QueryPropagator<'db> for IngotEdge {
     fn propagate(
         self,
         db: &'db dyn HirAnalysisDb,
-        query: EarlyNameQueryId<'db>,
+        name: IdentId<'db>,
+        _allow_lex: bool,
     ) -> PropagationResult {
-        if query.name(db).is_ingot(db) {
+        if name.is_ingot(db) {
             PropagationResult::Terminated
         } else {
             PropagationResult::UnPropagated
@@ -1080,9 +1095,10 @@ impl<'db> QueryPropagator<'db> for SelfTyEdge {
     fn propagate(
         self,
         db: &'db dyn HirAnalysisDb,
-        query: EarlyNameQueryId<'db>,
+        name: IdentId<'db>,
+        _allow_lex: bool,
     ) -> PropagationResult {
-        if query.name(db).is_self_ty(db) {
+        if name.is_self_ty(db) {
             PropagationResult::Terminated
         } else {
             PropagationResult::UnPropagated
@@ -1098,9 +1114,10 @@ impl<'db> QueryPropagator<'db> for SelfEdge {
     fn propagate(
         self,
         db: &'db dyn HirAnalysisDb,
-        query: EarlyNameQueryId<'db>,
+        name: IdentId<'db>,
+        _allow_lex: bool,
     ) -> PropagationResult {
-        if query.name(db).is_self(db) {
+        if name.is_self(db) {
             PropagationResult::Terminated
         } else {
             PropagationResult::UnPropagated
@@ -1116,7 +1133,8 @@ impl<'db> QueryPropagator<'db> for AnonEdge {
     fn propagate(
         self,
         _db: &'db dyn HirAnalysisDb,
-        _query: EarlyNameQueryId<'db>,
+        _name: IdentId<'db>,
+        _allow_lex: bool,
     ) -> PropagationResult {
         PropagationResult::UnPropagated
     }
@@ -1130,23 +1148,24 @@ impl<'db> QueryPropagator<'db> for EdgeKind<'db> {
     fn propagate(
         self,
         db: &'db dyn HirAnalysisDb,
-        query: EarlyNameQueryId<'db>,
+        name: IdentId<'db>,
+        allow_lex: bool,
     ) -> PropagationResult {
         match self {
-            EdgeKind::Lex(edge) => edge.propagate(db, query),
-            EdgeKind::Mod(edge) => edge.propagate(db, query),
-            EdgeKind::Type(edge) => edge.propagate(db, query),
-            EdgeKind::Trait(edge) => edge.propagate(db, query),
-            EdgeKind::TraitType(edge) => edge.propagate(db, query),
-            EdgeKind::GenericParam(edge) => edge.propagate(db, query),
-            EdgeKind::Value(edge) => edge.propagate(db, query),
-            EdgeKind::Field(edge) => edge.propagate(db, query),
-            EdgeKind::Variant(edge) => edge.propagate(db, query),
-            EdgeKind::Super(edge) => edge.propagate(db, query),
-            EdgeKind::Ingot(edge) => edge.propagate(db, query),
-            EdgeKind::Self_(edge) => edge.propagate(db, query),
-            EdgeKind::SelfTy(edge) => edge.propagate(db, query),
-            EdgeKind::Anon(edge) => edge.propagate(db, query),
+            EdgeKind::Lex(edge) => edge.propagate(db, name, allow_lex),
+            EdgeKind::Mod(edge) => edge.propagate(db, name, allow_lex),
+            EdgeKind::Type(edge) => edge.propagate(db, name, allow_lex),
+            EdgeKind::Trait(edge) => edge.propagate(db, name, allow_lex),
+            EdgeKind::TraitType(edge) => edge.propagate(db, name, allow_lex),
+            EdgeKind::GenericParam(edge) => edge.propagate(db, name, allow_lex),
+            EdgeKind::Value(edge) => edge.propagate(db, name, allow_lex),
+            EdgeKind::Field(edge) => edge.propagate(db, name, allow_lex),
+            EdgeKind::Variant(edge) => edge.propagate(db, name, allow_lex),
+            EdgeKind::Super(edge) => edge.propagate(db, name, allow_lex),
+            EdgeKind::Ingot(edge) => edge.propagate(db, name, allow_lex),
+            EdgeKind::Self_(edge) => edge.propagate(db, name, allow_lex),
+            EdgeKind::SelfTy(edge) => edge.propagate(db, name, allow_lex),
+            EdgeKind::Anon(edge) => edge.propagate(db, name, allow_lex),
         }
     }
 

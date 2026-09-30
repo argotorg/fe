@@ -471,19 +471,41 @@ pub(crate) fn resolve_trait_impl_instance<'db>(
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
 ) -> Selection<ResolvedImplInstance<'db>> {
+    match resolve_trait_impl_instance_query(db, solve_cx, inst) {
+        ImplSelection::Unique(resolved) => Selection::Unique(resolved),
+        ImplSelection::Ambiguous => Selection::Ambiguous(IndexSet::new()),
+        ImplSelection::NotFound => Selection::NotFound,
+    }
+}
+
+/// An implementation selection, without candidates for an ambiguous one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+enum ImplSelection<'db> {
+    Unique(ResolvedImplInstance<'db>),
+    Ambiguous,
+    NotFound,
+}
+
+/// Call sites and method checks select the same implementations repeatedly.
+#[salsa::tracked]
+fn resolve_trait_impl_instance_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    inst: TraitInstId<'db>,
+) -> ImplSelection<'db> {
     let assumptions = solve_cx.assumptions();
     let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
     let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
     match solve_cx.select_impl(db, inst) {
         Selection::Unique(selected) => complete_selected_impl(db, selected)
             .and_then(|selected| instantiate_selected_impl(db, selected, inst))
-            .map_or(Selection::NotFound, Selection::Unique),
+            .map_or(ImplSelection::NotFound, ImplSelection::Unique),
         // There is deliberately no resolved instance for a non-unique
         // selection. Re-unifying each candidate would both fabricate evidence
         // the caller must not consume and attempt to fold inference variables
         // owned by the caller through a fresh local table.
-        Selection::Ambiguous(_) => Selection::Ambiguous(IndexSet::new()),
-        Selection::NotFound => Selection::NotFound,
+        Selection::Ambiguous(_) => ImplSelection::Ambiguous,
+        Selection::NotFound => ImplSelection::NotFound,
     }
 }
 

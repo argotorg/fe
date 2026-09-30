@@ -50,7 +50,7 @@ impl<'db> ScopeGraphBuilder<'db> {
             declared_blocks: vec![],
         };
 
-        let id = TrackedItemId::new(db, TrackedItemVariant::TopLevelMod(top_mod.name(db)));
+        let id = TrackedItemId::new(db, None, TrackedItemVariant::TopLevelMod(top_mod.name(db)));
         builder.enter_item_scope(id, true);
         builder
     }

@@ -5,7 +5,6 @@
 
 use std::hash::Hash;
 
-use common::indexmap::IndexMap;
 use cranelift_entity::{EntityRef, PrimaryMap, SecondaryMap};
 use parser::ast::{self, prelude::*};
 use rustc_hash::FxHashMap;
@@ -196,15 +195,13 @@ pub struct BodySourceMap {
     pub pat_map: SourceNodeMap<ast::Pat, PatId>,
 }
 
-#[allow(clippy::derived_hash_with_manual_eq)]
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SourceNodeMap<Ast, Node>
 where
     Ast: SourceAst,
     Node: EntityRef,
 {
     pub node_to_source: SecondaryMap<Node, HirOrigin<Ast>>,
-    pub source_to_node: IndexMap<HirOrigin<Ast>, Node>,
 }
 
 impl<Ast, Node> SourceNodeMap<Ast, Node>
@@ -213,30 +210,12 @@ where
     Node: EntityRef,
 {
     pub(crate) fn insert(&mut self, node: Node, ast: HirOrigin<Ast>) {
-        self.node_to_source[node] = ast.clone();
-        self.source_to_node.insert(ast, node);
+        self.node_to_source[node] = ast;
     }
 
     pub(crate) fn node_to_source(&self, node: Node) -> &HirOrigin<Ast> {
         &self.node_to_source[node]
     }
-}
-
-impl<Ast, Node> PartialEq for SourceNodeMap<Ast, Node>
-where
-    Ast: SourceAst,
-    Node: EntityRef,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.node_to_source == other.node_to_source
-    }
-}
-
-impl<Ast, Node> Eq for SourceNodeMap<Ast, Node>
-where
-    Ast: SourceAst,
-    Node: EntityRef,
-{
 }
 
 impl<Ast, Node> Default for SourceNodeMap<Ast, Node>
@@ -246,7 +225,6 @@ where
 {
     fn default() -> Self {
         Self {
-            source_to_node: IndexMap::default(),
             node_to_source: SecondaryMap::new(),
         }
     }

@@ -437,6 +437,7 @@ fn trait_to_impl_param_subst<'db>(
     (out, effect_pairs)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
 pub(crate) struct MethodParamCorrespondence {
     pub body_to_trait_slots: Vec<Option<usize>>,
     pub trait_effect_to_body: Vec<(usize, usize)>,
@@ -444,6 +445,8 @@ pub(crate) struct MethodParamCorrespondence {
 
 /// The same declaration correspondence used by method conformance, expressed
 /// as body slots so call elaboration cannot reinterpret it by position.
+/// Resolving the same trait method at many call sites asks for it repeatedly.
+#[salsa::tracked]
 pub(crate) fn method_param_correspondence<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_m: CallableDef<'db>,

@@ -1692,14 +1692,13 @@ impl Visibility {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct TrackedItemId<'db> {
+    parent: Option<TrackedItemId<'db>>,
     variant: TrackedItemVariant<'db>,
 }
 
 impl<'db> TrackedItemId<'db> {
     pub(crate) fn join(self, db: &'db dyn HirDb, variant: TrackedItemVariant<'db>) -> Self {
-        let old = self.variant(db);
-        let joined = old.join(variant);
-        Self::new(db, joined)
+        Self::new(db, Some(self), variant)
     }
 }
 
@@ -1726,10 +1725,52 @@ pub enum TrackedItemVariant<'db> {
     WhereConstPredicate(u32),
     StaticAssertComparisonLhs,
     StaticAssertComparisonRhs,
-    Joined(Box<Self>, Box<Self>),
 }
-impl TrackedItemVariant<'_> {
-    pub(crate) fn join(self, rhs: Self) -> Self {
-        Self::Joined(self.into(), rhs.into())
+
+#[cfg(test)]
+mod tests {
+    use crate::test_db::HirAnalysisTestDb;
+    use salsa::{Setter, plumbing::AsId};
+
+    #[test]
+    fn nested_item_identity_survives_reordering_and_distinguishes_parents() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("nested_identity.fe".into(), "");
+        let mut original = None;
+        for source in [
+            "mod left { fn same(_ x: u256) {}\nmod inner { fn same(_ x: bool) {} } }\nmod right { fn same(_ x: bool) {} }",
+            "mod right { fn same(_ x: u256) {} }\nmod left { mod inner { fn same(_ x: u256) {} }\nfn same(_ x: bool) {} }",
+            "mod left { fn same(_ x: u256) {}\nmod inner { fn same(_ x: bool) {} } }\nmod right { fn same(_ x: bool) {} }",
+        ] {
+            file.set_text(&mut db).to(source.into());
+            let (module, _) = db.top_mod(file);
+            db.assert_no_diags(module);
+            let mut functions = module
+                .all_funcs(&db)
+                .iter()
+                .copied()
+                .map(|func| {
+                    (
+                        format!("{:?}", func.scope().pretty_path(&db)),
+                        func.id(&db).as_id(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            functions.sort_by(|(left, _), (right, _)| left.cmp(right));
+            assert_eq!(functions.len(), 3);
+            for (idx, (_, func)) in functions.iter().enumerate() {
+                assert!(
+                    functions
+                        .iter()
+                        .skip(idx + 1)
+                        .all(|(_, other)| func != other)
+                );
+            }
+            if let Some(original) = &original {
+                assert_eq!(&functions, original);
+            } else {
+                original = Some(functions);
+            }
+        }
     }
 }

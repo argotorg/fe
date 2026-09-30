@@ -1709,6 +1709,7 @@ where
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Update)]
 pub(crate) struct FuncImplicitParamPlan<'db> {
     pub(crate) implicit_precursors: Vec<TyParamPrecursor<'db>>,
     pub(crate) bindings_by_origin:
@@ -1718,6 +1719,7 @@ pub(crate) struct FuncImplicitParamPlan<'db> {
 
 /// Checked layout metadata is downstream of slot discovery, never an input to
 /// generic parameter allocation.
+#[derive(Debug, Clone, PartialEq, Eq, Update)]
 struct CallableInputLayoutPlan<'db> {
     params: FuncImplicitParamPlan<'db>,
     layout_bundle_interfaces_by_origin:
@@ -2823,6 +2825,7 @@ pub(crate) fn func_implicit_param_plan<'db>(
     }
 }
 
+#[salsa::tracked(return_ref)]
 fn callable_input_layout_plan<'db>(
     db: &'db dyn HirAnalysisDb,
     func: crate::hir_def::Func<'db>,
@@ -2920,7 +2923,7 @@ pub fn callable_input_layout_backing_sources<'db>(
     let plan = callable_input_layout_plan(db, func);
     let mut sources = Vec::new();
     let mut origins = Vec::new();
-    for (idx, ty) in func.arg_tys(db).into_iter().enumerate() {
+    for (idx, ty) in func.arg_tys(db).iter().enumerate() {
         let origin = if func.is_method(db) && idx == 0 {
             CallableInputLayoutHoleOrigin::Receiver
         } else {
@@ -4497,7 +4500,7 @@ impl<'db> GenericParamCollector<'db> {
 }
 
 #[doc(hidden)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct TyParamPrecursor<'db> {
     name: Partial<IdentId<'db>>,
     kind: Option<Kind>,
@@ -4506,7 +4509,7 @@ pub struct TyParamPrecursor<'db> {
     default_hir_const: Option<ConstGenericArgValue<'db>>, // Only used for const params
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 enum Variant<'db> {
     TraitSelf,
     Normal,
