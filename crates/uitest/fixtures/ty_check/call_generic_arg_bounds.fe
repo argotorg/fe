@@ -1,0 +1,86 @@
+// A generic argument written on a call must satisfy its own bounds, in every
+// call form, just as it must in a type annotation.
+
+trait Marker {}
+
+struct Marked {}
+impl Marker for Marked {}
+
+struct NotMarked {}
+
+struct Foo<T> where T: Marker {
+    x: u8,
+}
+
+struct W<T> {
+    t: T,
+}
+
+impl<T> W<T> {
+    fn new() -> u8 {
+        0
+    }
+}
+
+struct S {}
+
+impl S {
+    fn method<U>(self) {}
+    fn assoc<U>() {}
+}
+
+trait Tr<X> {
+    fn t<U>()
+}
+
+impl<X> Tr<X> for S {
+    fn t<U>() {}
+}
+
+fn g<U>() {}
+
+fn needs_marker<U: Marker>() {}
+
+fn direct_call() {
+    g<Foo<NotMarked>>()
+}
+
+fn nested_arg() {
+    g<W<Foo<NotMarked>>>()
+}
+
+fn method_call(s: S) {
+    s.method<Foo<NotMarked>>()
+}
+
+fn assoc_fn() {
+    S::assoc<Foo<NotMarked>>()
+}
+
+fn trait_assoc_fn() {
+    <S as Tr<u8>>::t<Foo<NotMarked>>()
+}
+
+fn type_segment() -> u8 {
+    W<Foo<NotMarked>>::new()
+}
+
+fn qualified_trait_arg() {
+    <S as Tr<Foo<NotMarked>>>::t<u8>()
+}
+
+// The callee's own bound is reported once, as before.
+fn callee_bound() {
+    needs_marker<NotMarked>()
+}
+
+fn ok(s: S) -> u8 {
+    g<Foo<Marked>>()
+    g<W<Foo<Marked>>>()
+    s.method<Foo<Marked>>()
+    S::assoc<Foo<Marked>>()
+    <S as Tr<u8>>::t<Foo<Marked>>()
+    <S as Tr<Foo<Marked>>>::t<u8>()
+    needs_marker<Marked>()
+    W<Foo<Marked>>::new()
+}
