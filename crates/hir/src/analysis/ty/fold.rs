@@ -41,6 +41,16 @@ where
 pub trait TyFolder<'db> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db>;
 
+    /// Specialize a term retained only for diagnostic provenance. Visitors
+    /// already see its semantic occurrence in the enclosing description.
+    fn fold_const_provenance_term(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        term: TyId<'db>,
+    ) -> TyId<'db> {
+        self.fold_ty(db, term)
+    }
+
     fn fold_scope(&mut self, scope: ScopeId<'db>) -> ScopeId<'db> {
         scope
     }

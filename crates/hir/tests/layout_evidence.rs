@@ -1094,6 +1094,16 @@ contract C {
 
 #[test]
 fn non_regular_recursive_effect_handle_views_are_rejected() {
+    assert_non_regular_recursive_effect_handle_is_rejected("ROOT + 1");
+}
+
+#[test]
+fn nested_const_provenance_does_not_duplicate_layout_root_uses() {
+    assert_non_regular_recursive_effect_handle_is_rejected("(ROOT + 1) * 2");
+    assert_non_regular_recursive_effect_handle_is_rejected("ROOT + ROOT + 1");
+}
+
+fn assert_non_regular_recursive_effect_handle_is_rejected(expression: &str) {
     parse_module!(
         trusted db,
         top_mod,
@@ -1120,7 +1130,7 @@ fn inspect<const ROOT: u256>(value: A<ROOT>) {}
 contract C {
     mut value: A,
 }
-"#,
+"#.replace("ROOT + 1", expression).as_str(),
     );
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db);

@@ -750,6 +750,19 @@ impl<'db> TyFolder<'db> for LayoutTemplateInstantiator<'db> {
         ty.super_fold_with(db, self)
     }
 
+    fn fold_const_provenance_term(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        term: TyId<'db>,
+    ) -> TyId<'db> {
+        // Diagnostic provenance repeats the semantic term. Specialize it with
+        // the same landings, but do not count those copies as new root uses.
+        let start = self.root_uses.len();
+        let term = self.fold_ty(db, term);
+        self.root_uses.truncate(start);
+        term
+    }
+
     fn fold_const_capture(
         &mut self,
         db: &'db dyn HirAnalysisDb,

@@ -314,7 +314,7 @@ impl<'db> TyFoldable<'db> for TermProvenance<'db> {
     where
         F: TyFolder<'db>,
     {
-        let term = folder.fold_ty(db, TyId::const_ty(db, self.term));
+        let term = folder.fold_const_provenance_term(db, TyId::const_ty(db, self.term));
         let TyData::ConstTy(term) = term.data(db) else {
             unreachable!("folded term occurrence must remain a constant")
         };
