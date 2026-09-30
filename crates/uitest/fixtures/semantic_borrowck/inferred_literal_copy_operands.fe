@@ -1,0 +1,29 @@
+// An owned operand is moved only when its inferred type is not Copy. String
+// literal types are inferred late, so Copy is decided after inference.
+use std::evm::RawMem
+
+struct Boxed { v: u256 }
+
+// Reads memory so constant folding never removes the calls.
+fn take<T>(_ value: own T) -> u256 uses (mem: mut RawMem) {
+    let buffer = core::ptr::alloc_bytes(32)
+    mem.mload(addr: buffer)
+}
+
+// Accepted: an inferred string literal is a Copy `String<N>`.
+fn inferred_literal_twice() -> u256 uses (mem: mut RawMem) {
+    let text = "Uniswap V2"
+    take(text) + take(text)
+}
+
+// Accepted: the same literal with an explicit type.
+fn annotated_literal_twice() -> u256 uses (mem: mut RawMem) {
+    let text: String<10> = "Uniswap V2"
+    take(text) + take(text)
+}
+
+// Rejected: a non-Copy operand is still moved.
+fn record_twice(_ v: u256) -> u256 uses (mem: mut RawMem) {
+    let boxed = Boxed { v }
+    take(boxed) + take(boxed)
+}

@@ -162,21 +162,18 @@ fn format_type_mismatch_message<'db>(
     format!("expected `{expected_plain}`, but `{given_plain}` is given")
 }
 
+/// A diagnostic whose only label is a primary one on `span`.
 fn primary_diag(
     severity: Severity,
-    message: &str,
-    label: &str,
+    message: impl Into<String>,
+    label: impl Into<String>,
     span: Option<Span>,
     error_code: GlobalErrorCode,
 ) -> CompleteDiagnostic {
     CompleteDiagnostic::new(
         severity,
-        message.to_string(),
-        vec![SubDiagnostic::new(
-            LabelStyle::Primary,
-            label.to_string(),
-            span,
-        )],
+        message.into(),
+        vec![SubDiagnostic::new(LabelStyle::Primary, label.into(), span)],
         vec![],
         error_code,
     )
@@ -867,17 +864,13 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                         SpanKind::NotFound,
                     ))
                 });
-                CompleteDiagnostic {
+                primary_diag(
                     severity,
-                    message: format!("`{ident}` is not found"),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: format!("`{ident}` is not found"),
-                        span,
-                    }],
-                    notes: vec![],
+                    format!("`{ident}` is not found"),
+                    format!("`{ident}` is not found"),
+                    span,
                     error_code,
-                }
+                )
             }
 
             Self::MethodNotFound {
@@ -904,35 +897,27 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 if let Some(ty) = recv_ty
                     && let Some(field_ty) = RecordLike::Type(*ty).record_field_ty(db, *method_name)
                 {
-                    return CompleteDiagnostic {
-                        severity: Severity::Error,
+                    return primary_diag(
+                        Severity::Error,
                         message,
-                        sub_diagnostics: vec![SubDiagnostic {
-                            style: LabelStyle::Primary,
-                            message: format!(
-                                "field `{}` in `{}` has type `{}`",
-                                method_str,
-                                recv_name,
-                                field_ty.pretty_print(db)
-                            ),
-                            span: primary.resolve(db),
-                        }],
-                        notes: vec![],
+                        format!(
+                            "field `{}` in `{}` has type `{}`",
+                            method_str,
+                            recv_name,
+                            field_ty.pretty_print(db)
+                        ),
+                        primary.resolve(db),
                         error_code,
-                    };
+                    );
                 }
 
-                CompleteDiagnostic {
-                    severity: Severity::Error,
+                primary_diag(
+                    Severity::Error,
                     message,
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: format!("method not found in `{recv_name}`"),
-                        span: primary.resolve(db),
-                    }],
-                    notes: vec![],
+                    format!("method not found in `{recv_name}`"),
+                    primary.resolve(db),
                     error_code,
-                }
+                )
             }
 
             Self::Invisible(prim_span, ident, span) => {
@@ -1051,17 +1036,13 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 }
             }
 
-            Self::InfiniteBoundRecursion(span, msg) => CompleteDiagnostic {
+            Self::InfiniteBoundRecursion(span, msg) => primary_diag(
                 severity,
-                message: "infinite trait bound recursion".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: msg.to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+                "infinite trait bound recursion",
+                msg.to_string(),
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::InvalidPathSegment {
                 span: prim_span,
@@ -1104,47 +1085,35 @@ impl DiagnosticVoucher for PathResDiag<'_> {
 
             Self::ExpectedType(prim_span, name, given_kind) => {
                 let name = name.data(db);
-                CompleteDiagnostic {
+                primary_diag(
                     severity,
-                    message: "expected type item here".to_string(),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: format!("expected type here, but found {given_kind} `{name}`"),
-                        span: prim_span.resolve(db),
-                    }],
-                    notes: vec![],
+                    "expected type item here",
+                    format!("expected type here, but found {given_kind} `{name}`"),
+                    prim_span.resolve(db),
                     error_code,
-                }
+                )
             }
 
             Self::ExpectedTrait(prim_span, name, given_kind) => {
                 let name = name.data(db);
-                CompleteDiagnostic {
-                    severity: Severity::Error,
-                    message: "expected trait item here".to_string(),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: format!("expected trait here, but found {given_kind} `{name}`"),
-                        span: prim_span.resolve(db),
-                    }],
-                    notes: vec![],
+                primary_diag(
+                    Severity::Error,
+                    "expected trait item here",
+                    format!("expected trait here, but found {given_kind} `{name}`"),
+                    prim_span.resolve(db),
                     error_code,
-                }
+                )
             }
 
             Self::ExpectedValue(prim_span, name, given_kind) => {
                 let name = name.data(db);
-                CompleteDiagnostic {
-                    severity: Severity::Error,
-                    message: "expected value here".to_string(),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: format!("expected value here, but found {given_kind} `{name}`"),
-                        span: prim_span.resolve(db),
-                    }],
-                    notes: vec![],
+                primary_diag(
+                    Severity::Error,
+                    "expected value here",
+                    format!("expected value here, but found {given_kind} `{name}`"),
+                    prim_span.resolve(db),
                     error_code,
-                }
+                )
             }
 
             Self::ArgNumMismatch {
@@ -1152,41 +1121,33 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 ident,
                 expected,
                 given,
-            } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: format!(
+            } => primary_diag(
+                Severity::Error,
+                format!(
                     "incorrect number of generic arguments for `{}`; expected {expected}, given {given}",
                     ident.data(db)
                 ),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!("expected {expected} arguments, but {given} were given"),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+                format!("expected {expected} arguments, but {given} were given"),
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::ArgKindMismatch {
                 span,
                 ident,
                 expected,
                 given,
-            } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: format!("invalid type argument kind for `{}`", ident.data(db)),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
-                        "expected `{expected}` kind, but `{}` has `{}` kind",
-                        given.pretty_print(db),
-                        given.kind(db)
-                    ),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            } => primary_diag(
+                Severity::Error,
+                format!("invalid type argument kind for `{}`", ident.data(db)),
+                format!(
+                    "expected `{expected}` kind, but `{}` has `{}` kind",
+                    given.pretty_print(db),
+                    given.kind(db)
+                ),
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::ArgTypeMismatch {
                 span,
@@ -1220,45 +1181,33 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                         "unexpected const argument".to_string(),
                     ),
                 };
-                CompleteDiagnostic {
-                    severity: Severity::Error,
-                    message: header,
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message,
-                        span: span.resolve(db),
-                    }],
-                    notes: vec![],
+                primary_diag(
+                    Severity::Error,
+                    header,
+                    message,
+                    span.resolve(db),
                     error_code,
-                }
+                )
             }
 
-            Self::TraitConstHoleArg { span, ident } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: format!(
+            Self::TraitConstHoleArg { span, ident } => primary_diag(
+                Severity::Error,
+                format!(
                     "layout hole `_` is not allowed in trait generic arguments for `{}`",
                     ident.data(db)
                 ),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "replace `_` with an explicit const argument".to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+                "replace `_` with an explicit const argument",
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
-            Self::TypeMustBeKnown(span) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "type must be known here".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "type must be known here".to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            Self::TypeMustBeKnown(span) => primary_diag(
+                Severity::Error,
+                "type must be known here",
+                "type must be known here",
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::AmbiguousInherentMethod {
                 primary,
@@ -1446,17 +1395,13 @@ impl DiagnosticVoucher for ImportDiag<'_> {
             }
             ImportDiag::NotFound(prim_span, ident) => {
                 let ident = ident.data(db);
-                CompleteDiagnostic {
+                primary_diag(
                     severity,
-                    message: format!("`{ident}` is not found"),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: format!("`{ident}` is not found"),
-                        span: prim_span.resolve(db),
-                    }],
-                    notes: vec![],
+                    format!("`{ident}` is not found"),
+                    format!("`{ident}` is not found"),
+                    prim_span.resolve(db),
                     error_code,
-                }
+                )
             }
             ImportDiag::Invisible(prim_span, ident, span) => {
                 let ident = ident.data(db);
@@ -1539,17 +1484,13 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
         match self {
             Self::ExpectedStarKind(span) => {
                 // find expected ty name, num of generic args, etc
-                CompleteDiagnostic {
-                    severity: Severity::Error,
-                    message: "expected `*` kind in this context".to_string(),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: "expected `*` kind here".to_string(),
-                        span: span.resolve(db),
-                    }],
-                    notes: vec![],
+                primary_diag(
+                    Severity::Error,
+                    "expected `*` kind in this context",
+                    "expected `*` kind here",
+                    span.resolve(db),
                     error_code,
-                }
+                )
             }
 
             Self::InvalidTypeArgKind {
@@ -1571,34 +1512,26 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     "too many generic arguments".to_string()
                 };
 
-                CompleteDiagnostic {
-                    severity: Severity::Error,
-                    message: "invalid type argument kind".to_string(),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: msg,
-                        span: span.resolve(db),
-                    }],
-                    notes: vec![],
+                primary_diag(
+                    Severity::Error,
+                    "invalid type argument kind",
+                    msg,
+                    span.resolve(db),
                     error_code,
-                }
+                )
             }
 
             Self::TooManyGenericArgs {
                 span,
                 expected,
                 given,
-            } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: format!("too many generic args; expected {expected}, given {given}"),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!("expected {expected} arguments, but {given} were given"),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            } => primary_diag(
+                Severity::Error,
+                format!("too many generic args; expected {expected}, given {given}"),
+                format!("expected {expected} arguments, but {given} were given"),
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
             // TODO: add hint about indirection (eg *T)
             Self::RecursiveType(cycle) => CompleteDiagnostic {
@@ -1719,17 +1652,13 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
-            Self::KindBoundNotAllowed(span) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "kind bound is not allowed".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "kind bound is not allowed here".to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            Self::KindBoundNotAllowed(span) => primary_diag(
+                Severity::Error,
+                "kind bound is not allowed",
+                "kind bound is not allowed here",
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::GenericParamAlreadyDefinedInParent {
                 span,
@@ -1864,80 +1793,60 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
-            Self::InvalidConstParamTy(span) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "invalid const parameter type".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "only integer, bool, or unit-variant enum types are allowed as a const parameter type"
+            Self::InvalidConstParamTy(span) => primary_diag(
+                Severity::Error,
+                "invalid const parameter type",
+                "only integer, bool, or unit-variant enum types are allowed as a const parameter type"
                         .to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
-            Self::RecursiveConstParamTy(span) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "recursive const parameter type is not allowed".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "recursive const parameter type is detected here".to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            Self::RecursiveConstParamTy(span) => primary_diag(
+                Severity::Error,
+                "recursive const parameter type is not allowed",
+                "recursive const parameter type is detected here",
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::ConstTyMismatch {
                 span,
                 expected,
                 given,
-            } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "given type doesn't match the expected const type".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
+            } => primary_diag(
+                Severity::Error,
+                "given type doesn't match the expected const type",
+                format!(
                         "expected `{}` type here, but `{}` is given",
                         expected.pretty_print(db),
                         given.pretty_print(db)
                     ),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
-            Self::ConstTyExpected { span, expected } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "expected const type".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
+            Self::ConstTyExpected { span, expected } => primary_diag(
+                Severity::Error,
+                "expected const type",
+                format!(
                         "expected const type of `{}` here",
                         expected.pretty_print(db)
                     ),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
-            Self::NormalTypeExpected { span, given } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "expected a normal type".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
+            Self::NormalTypeExpected { span, given } => primary_diag(
+                Severity::Error,
+                "expected a normal type",
+                format!(
                         "expected a normal type here, but `{}` is given",
                         given.pretty_print(db)
                     ),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::StaticSlotSpaceUnresolved { span, ty } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
@@ -2547,29 +2456,21 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
-            Self::NonTrailingDefaultGenericParam(span) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "generic parameters with a default must be trailing".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "must not be followed by a parameter with no default".to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            Self::NonTrailingDefaultGenericParam(span) => primary_diag(
+                Severity::Error,
+                "generic parameters with a default must be trailing",
+                "must not be followed by a parameter with no default",
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
-            Self::GenericDefaultForwardRef { span, name } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "cannot reference generic parameter before it is declared".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!("cannot reference `{}` before it's declared", name.data(db)),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            Self::GenericDefaultForwardRef { span, name } => primary_diag(
+                Severity::Error,
+                "cannot reference generic parameter before it is declared",
+                format!("cannot reference `{}` before it's declared", name.data(db)),
+                span.resolve(db),
                 error_code,
-            },
+            ),
         }
     }
 }
@@ -2614,28 +2515,20 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 span,
                 expected,
                 given,
-            } => CompleteDiagnostic {
+            } => primary_diag(
                 severity,
-                message: "type mismatch".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format_type_mismatch_message(db, *expected, *given),
-                    span: span.resolve(db),
-                }],
+                "type mismatch",
+                format_type_mismatch_message(db, *expected, *given),
+                span.resolve(db),
                 error_code,
-                notes: vec![],
-            },
-            Self::InfiniteOccurrence(span) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "infinite sized type found".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "infinite sized type found".to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            ),
+            Self::InfiniteOccurrence(span) => primary_diag(
+                Severity::Error,
+                "infinite sized type found",
+                "infinite sized type found",
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::DuplicatedBinding {
                 primary,
@@ -2660,41 +2553,29 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
-            Self::BindingsInOrPat(span) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "bindings in `|` patterns are not supported".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "split this into separate arms or remove the binding".to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            Self::BindingsInOrPat(span) => primary_diag(
+                Severity::Error,
+                "bindings in `|` patterns are not supported",
+                "split this into separate arms or remove the binding",
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
-            Self::DuplicatedRestPat(span) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "duplicate `..` in pattern".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "`..` can be used only once".to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            Self::DuplicatedRestPat(span) => primary_diag(
+                Severity::Error,
+                "duplicate `..` in pattern",
+                "`..` can be used only once",
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
-            Self::UnexpectedRestPat(span) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "unexpected `..` in pattern".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "`..` is only allowed inside tuple and record patterns".to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            Self::UnexpectedRestPat(span) => primary_diag(
+                Severity::Error,
+                "unexpected `..` in pattern",
+                "`..` is only allowed inside tuple and record patterns",
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::InvalidPathDomainInPat { primary, resolved } => {
                 let mut labels = vec![SubDiagnostic {
@@ -2816,17 +2697,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary,
                 expected,
                 given,
-            } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "field count mismatch".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!("expected {expected} fields here, but {given} given"),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+            } => primary_diag(
+                Severity::Error,
+                "field count mismatch",
+                format!("expected {expected} fields here, but {given} given"),
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::DuplicatedRecordFieldBind {
                 primary,
@@ -2851,17 +2728,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
-            Self::RecordFieldNotFound { span, label } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "specified field not found".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!("field `{}` not found", label.data(db)),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            Self::RecordFieldNotFound { span, label } => primary_diag(
+                Severity::Error,
+                "specified field not found",
+                format!("field `{}` not found", label.data(db)),
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::ExplicitLabelExpectedInRecord { primary, hint } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
@@ -3084,19 +2957,9 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     .to_opt().map_or_else(|| "<unknown>".to_string(), |n| n.data(db).to_string());
                 let key_str = key.pretty_print(db);
 
-                CompleteDiagnostic {
-                    severity: Severity::Error,
-                    message: "multiple effect candidates found".to_string(),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: format!(
+                primary_diag(Severity::Error, "multiple effect candidates found", format!(
                             "effect `{key_str}` is ambiguous when calling `{func_name}`"
-                        ),
-                        span: primary.resolve(db),
-                    }],
-                    notes: vec![],
-                    error_code,
-                }
+                        ), primary.resolve(db), error_code)
             }
 
             Self::EffectMutabilityMismatch {
@@ -3274,21 +3137,11 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let trait_str = trait_req.pretty_print(db, false);
                 let given_ty = given.pretty_print(db).to_string();
 
-                CompleteDiagnostic {
-                    severity: Severity::Error,
-                    message: format!(
+                primary_diag(Severity::Error, format!(
                         "keyed effect binding `{key_str}` requires `{given_ty}` to implement `{trait_str}`"
-                    ),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: format!(
+                    ), format!(
                             "`{given_ty}` does not implement `{trait_str}` for effect `{key_str}`"
-                        ),
-                        span: primary.resolve(db),
-                    }],
-                    notes: vec![],
-                    error_code,
-                }
+                        ), primary.resolve(db), error_code)
             }
 
             Self::WithEffectTypeUnsatisfied {
@@ -3301,21 +3154,11 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let expected_ty = pretty_print_ty_for_mismatch(db, *expected);
                 let given_ty = pretty_print_ty_for_mismatch(db, *given);
 
-                CompleteDiagnostic {
-                    severity: Severity::Error,
-                    message: format!(
+                primary_diag(Severity::Error, format!(
                         "keyed effect binding `{key_str}` requires a provider compatible with `{expected_ty}`, but `{given_ty}` is given",
-                    ),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: format!(
+                    ), format!(
                             "`{given_ty}` is not compatible with keyed effect `{key_str}`",
-                        ),
-                        span: primary.resolve(db),
-                    }],
-                    notes: vec![],
-                    error_code,
-                }
+                        ), primary.resolve(db), error_code)
             }
 
             Self::ReturnedTypeMismatch {
@@ -3401,22 +3244,18 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 ],
                 error_code,
             },
-            Self::TypeMustBeKnown(span) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "type must be known".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "type must be known here".to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+            Self::TypeMustBeKnown(span) => primary_diag(
+                Severity::Error,
+                "type must be known",
+                "type must be known here",
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::TypeSizeOverflow { primary, ty } => primary_diag(
                 severity,
                 "type is too large",
-                &format!(
+                format!(
                     "`{}` exceeds the supported 64-bit raw-memory layout size",
                     ty.pretty_print(db)
                 ),
@@ -3438,7 +3277,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             } => primary_diag(
                 severity,
                 "const value must be resolvable during type checking",
-                &format!("requires {dependency}"),
+                format!("requires {dependency}"),
                 primary.resolve(db),
                 error_code,
             ),
@@ -3523,34 +3362,20 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary,
                 literal,
                 ty,
-            } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "integer literal out of range".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
+            } => primary_diag(Severity::Error, "integer literal out of range", format!(
                         "`{literal}` is not representable in `{}`",
                         ty.pretty_print(db),
-                    ),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
-                error_code,
-            },
-            Self::ArrayIndexOutOfBounds { primary, index, len } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "index out of bounds".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
+                    ), primary.resolve(db), error_code),
+            Self::ArrayIndexOutOfBounds { primary, index, len } => primary_diag(
+                Severity::Error,
+                "index out of bounds",
+                format!(
                         "index `{}` is out of bounds for array of length `{len}`",
                         index.data(db),
                     ),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+                primary.resolve(db),
                 error_code,
-            },
+            ),
             Self::AccessedFieldNotFound {
                 primary,
                 given_ty,
@@ -3569,17 +3394,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     ),
                 };
 
-                CompleteDiagnostic {
-                    severity: Severity::Error,
-                    message: "invalid field index".to_string(),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message,
-                        span: primary.resolve(db),
-                    }],
-                    notes: vec![],
+                primary_diag(
+                    Severity::Error,
+                    "invalid field index",
+                    message,
+                    primary.resolve(db),
                     error_code,
-                }
+                )
             }
 
             Self::OpsTraitNotImplemented {
@@ -3614,40 +3435,28 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 }
             }
-            Self::UnsupportedMacroCall(primary) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "unsupported macro call".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "only `assert!(...)` is supported".to_string(),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+            Self::UnsupportedMacroCall(primary) => primary_diag(
+                Severity::Error,
+                "unsupported macro call",
+                "only `assert!(...)` is supported",
+                primary.resolve(db),
                 error_code,
-            },
-            Self::UnsupportedUnaryPlus(primary) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "unary `+` is not supported".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "remove the unary `+`".to_string(),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+            ),
+            Self::UnsupportedUnaryPlus(primary) => primary_diag(
+                Severity::Error,
+                "unary `+` is not supported",
+                "remove the unary `+`",
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
-            Self::BorrowFromNonPlace { primary } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "cannot borrow from this expression".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "expected a place expression".to_string(),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+            Self::BorrowFromNonPlace { primary } => primary_diag(
+                Severity::Error,
+                "cannot borrow from this expression",
+                "expected a place expression",
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::CannotBorrowMut { primary, binding } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
@@ -3716,7 +3525,11 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     }],
                     notes: vec![
                         suggestion
-                            .as_ref().map_or_else(|| format!("help: try `{kw} <place>`"), |s| format!("help: try `{s}`")),
+                            .as_ref()
+                            .map_or_else(
+                                || format!("help: try `{kw} <place>`"),
+                                |s| format!("help: try `{s}`"),
+                            ),
                     ],
                     error_code,
                 }
@@ -3805,17 +3618,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
-            Self::NonAssignableExpr(primary) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "not assignable left-hand side of assignment".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "cant assign to this expression".to_string(),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+            Self::NonAssignableExpr(primary) => primary_diag(
+                Severity::Error,
+                "not assignable left-hand side of assignment",
+                "cant assign to this expression",
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::ImmutableAssignment { primary, binding } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
@@ -3934,17 +3743,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             Self::LoopControlOutsideOfLoop { primary, is_break } => {
                 let stmt = if *is_break { "break" } else { "continue" };
 
-                CompleteDiagnostic {
-                    severity: Severity::Error,
-                    message: format!("`{stmt}` is not allowed outside of a loop"),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: format!("`{stmt}` is not allowed here"),
-                        span: primary.resolve(db),
-                    }],
-                    notes: vec![],
+                primary_diag(
+                    Severity::Error,
+                    format!("`{stmt}` is not allowed outside of a loop"),
+                    format!("`{stmt}` is not allowed here"),
+                    primary.resolve(db),
                     error_code,
-                }
+                )
             }
 
             Self::TraitNotImplemented {
@@ -3976,19 +3781,9 @@ impl DiagnosticVoucher for BodyDiag<'_> {
 
             Self::NotCallable(primary, ty) => {
                 let ty = ty.pretty_print(db);
-                CompleteDiagnostic {
-                    severity: Severity::Error,
-                    message: format!("expected function, found `{ty}`"),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: format!(
+                primary_diag(Severity::Error, format!("expected function, found `{ty}`"), format!(
                             "call expression requires function; `{ty}` is not callable"
-                        ),
-                        span: primary.resolve(db),
-                    }],
-                    notes: vec![],
-                    error_code,
-                }
+                        ), primary.resolve(db), error_code)
             }
 
             Self::CallGenericArgNumMismatch {
@@ -4044,29 +3839,21 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             Self::AssertArgNumMismatch {
                 primary,
                 given,
-            } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "`assert!` argument number mismatch".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!("expected 1 or 2 arguments, but {given} given"),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+            } => primary_diag(
+                Severity::Error,
+                "`assert!` argument number mismatch",
+                format!("expected 1 or 2 arguments, but {given} given"),
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
-            Self::AssertMessageMustBeStringLiteral { primary } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "`assert!` message must be a string literal".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "use a string literal for the revert message".to_string(),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+            Self::AssertMessageMustBeStringLiteral { primary } => primary_diag(
+                Severity::Error,
+                "`assert!` message must be a string literal",
+                "use a string literal for the revert message",
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::CallArgLabelMismatch {
                 primary,
@@ -4324,23 +4111,19 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            Self::NotValue { primary, given } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "value is expected".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
+            Self::NotValue { primary, given } => primary_diag(
+                Severity::Error,
+                "value is expected",
+                format!(
                         "`{}` cannot be used as a value",
                         match given {
                             Either::Left(item) => item.kind_name(),
                             Either::Right(_) => "type",
                         }
                     ),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::TypeAnnotationNeeded { span: primary, ty } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
@@ -4380,7 +4163,8 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     MustUseSubject::Function(CallableDef::Func(func)) => {
                         let name = func
                             .name(db)
-                            .to_opt().map_or_else(|| "<anonymous>".to_string(), |name| name.data(db).to_string());
+                            .to_opt()
+                    .map_or_else(|| "<anonymous>".to_string(), |name| name.data(db).to_string());
                         (
                             format!("return value of function `{name}`"),
                             "this function is marked `#[must_use]`".to_string(),
@@ -4818,30 +4602,21 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
         let error_code =
             GlobalErrorCode::new(DiagnosticPass::ImplTraitDefinition, self.local_code());
         match self {
-            Self::ExternalTraitForExternalType(impl_trait) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "external trait cannot be implemented for external type".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "external trait cannot be implemented for external type".to_string(),
-                    span: impl_trait.span().resolve(db),
-                }],
-                notes: vec![],
+            Self::ExternalTraitForExternalType(impl_trait) => primary_diag(
+                Severity::Error,
+                "external trait cannot be implemented for external type",
+                "external trait cannot be implemented for external type",
+                impl_trait.span().resolve(db),
                 error_code,
-            },
+            ),
 
-            Self::UnsafeLocalBoundBlanketImpl(impl_trait) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "external trait blanket impl is not anchored by a sealed local marker"
-                    .to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "external trait blanket impl must be anchored by a sealed local marker trait implemented only for local types".to_string(),
-                    span: impl_trait.span().resolve(db),
-                }],
-                notes: vec![],
+            Self::UnsafeLocalBoundBlanketImpl(impl_trait) => primary_diag(
+                Severity::Error,
+                "external trait blanket impl is not anchored by a sealed local marker".to_string(),
+                "external trait blanket impl must be anchored by a sealed local marker trait implemented only for local types",
+                impl_trait.span().resolve(db),
                 error_code,
-            },
+            ),
 
             Self::ConflictTraitImpl {
                 primary,
@@ -4888,17 +4663,13 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
                 }
             }
 
-            Self::CyclicTraitRef(impl_trait) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "cyclic trait reference prevented lowering this impl".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "trait lowering entered a dependency cycle here".to_string(),
-                    span: impl_trait.span().trait_ref().resolve(db),
-                }],
-                notes: vec![],
+            Self::CyclicTraitRef(impl_trait) => primary_diag(
+                Severity::Error,
+                "cyclic trait reference prevented lowering this impl",
+                "trait lowering entered a dependency cycle here",
+                impl_trait.span().trait_ref().resolve(db),
                 error_code,
-            },
+            ),
         }
     }
 }
@@ -4931,17 +4702,13 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 span,
                 expected,
                 given,
-            } => CompleteDiagnostic {
+            } => primary_diag(
                 severity,
-                message: "given trait argument number mismatch".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!("expected {expected} arguments here, but {given} given"),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+                "given trait argument number mismatch",
+                format!("expected {expected} arguments here, but {given} given"),
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::TraitArgKindMismatch {
                 span,
@@ -4951,19 +4718,15 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 let actual_kind = actual.kind(db);
                 let ty_display = actual.pretty_print(db);
 
-                CompleteDiagnostic {
+                primary_diag(
                     severity,
-                    message: "given trait argument kind mismatch".to_string(),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: format!(
-                            "expected `{expected}` kind, but `{ty_display}` has `{actual_kind}` kind",
-                        ),
-                        span: span.resolve(db),
-                    }],
-                    notes: vec![],
+                    "given trait argument kind mismatch",
+                    format!(
+                        "expected `{expected}` kind, but `{ty_display}` has `{actual_kind}` kind",
+                    ),
+                    span.resolve(db),
                     error_code,
-                }
+                )
             }
 
             Self::TraitBoundNotSat {
@@ -5028,41 +4791,29 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 }
             }
 
-            Self::InfiniteBoundRecursion(span, msg) => CompleteDiagnostic {
+            Self::InfiniteBoundRecursion(span, msg) => primary_diag(
                 severity,
-                message: "infinite trait bound recursion".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: msg.to_string(),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+                "infinite trait bound recursion",
+                msg.to_string(),
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
-            Self::ConcreteTypeBound(span, ty) => CompleteDiagnostic {
+            Self::ConcreteTypeBound(span, ty) => primary_diag(
                 severity,
-                message: "trait bound for concrete type is not allowed".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!("`{}` is a concrete type", ty.pretty_print(db)),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+                "trait bound for concrete type is not allowed",
+                format!("`{}` is a concrete type", ty.pretty_print(db)),
+                span.resolve(db),
                 error_code,
-            },
+            ),
 
-            Self::ConstTyBound(span, ty) => CompleteDiagnostic {
+            Self::ConstTyBound(span, ty) => primary_diag(
                 severity,
-                message: "trait bound for const type is not allowed".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!("`{}` is a const type", ty.pretty_print(db)),
-                    span: span.resolve(db),
-                }],
-                notes: vec![],
+                "trait bound for const type is not allowed",
+                format!("`{}` is a const type", ty.pretty_print(db)),
+                span.resolve(db),
                 error_code,
-            },
+            ),
         }
     }
 }
@@ -5099,21 +4850,17 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 primary,
                 trait_,
                 method_name,
-            } => CompleteDiagnostic {
+            } => primary_diag(
                 severity,
-                message: "method not defined in trait".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
-                        "method `{}` is not defined in trait `{}`",
-                        method_name.data(db),
-                        trait_.name(db).unwrap().data(db)
-                    ),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+                "method not defined in trait",
+                format!(
+                    "method `{}` is not defined in trait `{}`",
+                    method_name.data(db),
+                    trait_.name(db).unwrap().data(db)
+                ),
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::NotAllTraitItemsImplemented {
                 primary,
@@ -5125,38 +4872,30 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     .collect::<Vec<_>>()
                     .join(", ");
 
-                CompleteDiagnostic {
+                primary_diag(
                     severity,
-                    message: "not all trait methods are implemented".to_string(),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: format!("missing implementations: {missing}"),
-                        span: primary.resolve(db),
-                    }],
-                    notes: vec![],
+                    "not all trait methods are implemented",
+                    format!("missing implementations: {missing}"),
+                    primary.resolve(db),
                     error_code,
-                }
+                )
             }
 
             Self::MethodTypeParamNumMismatch { trait_m, impl_m } => {
                 let impl_params = impl_m.explicit_params(db);
                 let trait_params = trait_m.explicit_params(db);
 
-                CompleteDiagnostic {
+                primary_diag(
                     severity,
-                    message: "method type parameter count mismatch".to_string(),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: format!(
-                            "expected {} type parameters, but {} given",
-                            trait_params.len(),
-                            impl_params.len(),
-                        ),
-                        span: impl_m.name_span().resolve(db),
-                    }],
-                    notes: vec![],
+                    "method type parameter count mismatch",
+                    format!(
+                        "expected {} type parameters, but {} given",
+                        trait_params.len(),
+                        impl_params.len(),
+                    ),
+                    impl_m.name_span().resolve(db),
                     error_code,
-                }
+                )
             }
 
             Self::MethodTypeParamKindMismatch {
@@ -5189,34 +4928,26 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     _ => impl_m.param_list_span().resolve(db),
                 };
 
-                CompleteDiagnostic {
+                primary_diag(
                     severity,
-                    message: "method type parameter kind mismatch".to_string(),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message,
-                        span,
-                    }],
-                    notes: vec![],
+                    "method type parameter kind mismatch",
+                    message,
+                    span,
                     error_code,
-                }
+                )
             }
 
-            Self::MethodArgNumMismatch { trait_m, impl_m } => CompleteDiagnostic {
+            Self::MethodArgNumMismatch { trait_m, impl_m } => primary_diag(
                 severity,
-                message: "method argument count mismatch".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
-                        "expected {} arguments, but {} given",
-                        trait_m.arg_tys(db).len(),
-                        impl_m.arg_tys(db).len(),
-                    ),
-                    span: impl_m.param_list_span().resolve(db),
-                }],
-                notes: vec![],
+                "method argument count mismatch",
+                format!(
+                    "expected {} arguments, but {} given",
+                    trait_m.arg_tys(db).len(),
+                    impl_m.arg_tys(db).len(),
+                ),
+                impl_m.param_list_span().resolve(db),
                 error_code,
-            },
+            ),
 
             Self::MethodArgLabelMismatch {
                 trait_m,
@@ -5365,17 +5096,13 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                         .map(|pred| format!("`{}`", pred.pretty_print(db, true)))
                         .join(", ")
                 );
-                CompleteDiagnostic {
+                primary_diag(
                     severity,
-                    message: "method has stricter bounds than trait".to_string(),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message,
-                        span: span.resolve(db),
-                    }],
-                    notes: vec![],
+                    "method has stricter bounds than trait",
+                    message,
+                    span.resolve(db),
                     error_code,
-                }
+                )
             }
 
             Self::InvalidSelfType {
@@ -5396,17 +5123,13 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     )
                 };
 
-                CompleteDiagnostic {
+                primary_diag(
                     severity,
-                    message: "invalid type for `self` parameter".to_string(),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message,
-                        span: span.resolve(db),
-                    }],
-                    notes: vec![],
+                    "invalid type for `self` parameter",
+                    message,
+                    span.resolve(db),
                     error_code,
-                }
+                )
             }
 
             Self::InherentImplIsNotAllowed {
@@ -5420,118 +5143,94 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     "inherent impl is not allowed for non nominal type".to_string()
                 };
 
-                CompleteDiagnostic {
+                primary_diag(
                     severity,
-                    message: "invalid inherent implementation".to_string(),
-                    sub_diagnostics: vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: msg,
-                        span: primary.resolve(db),
-                    }],
-                    notes: vec![],
+                    "invalid inherent implementation",
+                    msg,
+                    primary.resolve(db),
                     error_code,
-                }
+                )
             }
 
             Self::TypeNotDefinedInTrait {
                 primary,
                 trait_,
                 type_name,
-            } => CompleteDiagnostic {
+            } => primary_diag(
                 severity,
-                message: "associated type not defined in trait".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
-                        "associated type `{}` is not defined in trait `{}`",
-                        type_name.data(db),
-                        trait_.name(db).unwrap().data(db)
-                    ),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+                "associated type not defined in trait",
+                format!(
+                    "associated type `{}` is not defined in trait `{}`",
+                    type_name.data(db),
+                    trait_.name(db).unwrap().data(db)
+                ),
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::MissingAssociatedType {
                 primary,
                 type_name,
                 trait_,
-            } => CompleteDiagnostic {
+            } => primary_diag(
                 severity,
-                message: "missing associated type in trait implementation".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
-                        "missing associated type `{}` from trait `{}`",
-                        type_name.data(db),
-                        trait_.name(db).unwrap().data(db)
-                    ),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+                "missing associated type in trait implementation",
+                format!(
+                    "missing associated type `{}` from trait `{}`",
+                    type_name.data(db),
+                    trait_.name(db).unwrap().data(db)
+                ),
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::MissingAssociatedConstValue {
                 primary,
                 const_name,
                 trait_,
-            } => CompleteDiagnostic {
+            } => primary_diag(
                 severity,
-                message: "missing associated const value in trait implementation".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
-                        "missing value for associated const `{}` from trait `{}`",
-                        const_name.data(db),
-                        trait_.name(db).unwrap().data(db)
-                    ),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+                "missing associated const value in trait implementation",
+                format!(
+                    "missing value for associated const `{}` from trait `{}`",
+                    const_name.data(db),
+                    trait_.name(db).unwrap().data(db)
+                ),
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::ConstNotDefinedInTrait {
                 primary,
                 trait_,
                 const_name,
-            } => CompleteDiagnostic {
+            } => primary_diag(
                 severity,
-                message: "associated const not defined in trait".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
-                        "associated const `{}` is not defined in trait `{}`",
-                        const_name.data(db),
-                        trait_.name(db).unwrap().data(db)
-                    ),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+                "associated const not defined in trait",
+                format!(
+                    "associated const `{}` is not defined in trait `{}`",
+                    const_name.data(db),
+                    trait_.name(db).unwrap().data(db)
+                ),
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::MissingAssociatedConst {
                 primary,
                 const_name,
                 trait_,
-            } => CompleteDiagnostic {
+            } => primary_diag(
                 severity,
-                message: "missing associated const in trait implementation".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
-                        "missing associated const `{}` from trait `{}`",
-                        const_name.data(db),
-                        trait_.name(db).unwrap().data(db)
-                    ),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+                "missing associated const in trait implementation",
+                format!(
+                    "missing associated const `{}` from trait `{}`",
+                    const_name.data(db),
+                    trait_.name(db).unwrap().data(db)
+                ),
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::ConstTyMismatchWithTrait {
                 primary,
@@ -5568,41 +5267,33 @@ impl DiagnosticVoucher for ImplDiag<'_> {
             Self::RecursiveAssocConst {
                 primary,
                 const_name,
-            } => CompleteDiagnostic {
+            } => primary_diag(
                 severity,
-                message: format!(
+                format!(
                     "associated const `{}` has a recursive definition",
                     const_name.data(db)
                 ),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
-                        "`{}` cannot be evaluated to a concrete value",
-                        const_name.data(db)
-                    ),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+                format!(
+                    "`{}` cannot be evaluated to a concrete value",
+                    const_name.data(db)
+                ),
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::InherentConstMissingValue {
                 primary,
                 const_name,
-            } => CompleteDiagnostic {
+            } => primary_diag(
                 severity,
-                message: "missing value for associated const".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: format!(
-                        "associated const `{}` in an `impl` block must have a value",
-                        const_name.data(db),
-                    ),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![],
+                "missing value for associated const",
+                format!(
+                    "associated const `{}` in an `impl` block must have a value",
+                    const_name.data(db),
+                ),
+                primary.resolve(db),
                 error_code,
-            },
+            ),
 
             Self::InherentConstConflict {
                 primary,

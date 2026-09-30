@@ -387,54 +387,14 @@ impl<'db> Borrowck<'db> {
             }
         };
         let mut resolved = Resolution::empty(scope);
-        for capability in self.capabilities(
+        let capabilities = self.capabilities(
             state,
             &value,
             occurrence,
             origin,
             CapabilityTraversal::Reachable,
-        )? {
-            let subst = capability.guard.scope().freshening(scope);
-            let mut capability = capability.substitute(self.db, &subst);
-            if matches!(capability.payload, CapabilityRef::Invalidated { .. }) {
-                resolved.invalidated |= NativeValidity::from_region(&capability.region);
-                continue;
-            }
-            if capability.semantics.target_ty != target.ty {
-                let clauses = capability.region.clauses().iter().filter_map(|clause| {
-                    let original = clause.payload.root.contract()?;
-                    if !original.is_abstract(self.db) {
-                        return None;
-                    }
-                    let mut clause = clause.clone();
-                    clause.payload.root = RegionRoot::External(ExternalSource::abstract_target(
-                        &clause.payload.root,
-                        ReferentContract::new(
-                            self.db,
-                            target.ty,
-                            if target.address_space == HandleAddressSpace::Unspecified {
-                                original.address_space
-                            } else {
-                                target.address_space
-                            },
-                        ),
-                    ));
-                    clause.payload.path = RegionPath::default();
-                    clause.payload.views = Default::default();
-                    Some(clause)
-                });
-                capability.region = RegionSet::new(capability.region.scope(), clauses);
-            }
-            resolved.region = resolved
-                .region
-                .union(&capability.region.project(path).close_existentials(scope));
-            if let Some(reference) = capability.payload.loan() {
-                resolved.parents.push(Guarded {
-                    guard: capability.guard,
-                    payload: reference.clone(),
-                });
-            }
-        }
+        )?;
+        self.fold_reachable(capabilities, target, Some(path), scope, &mut resolved);
         Ok(resolved)
     }
 
@@ -453,13 +413,28 @@ impl<'db> Borrowck<'db> {
         if ty == target.ty {
             resolved.region = region.clone();
         }
-        for capability in self.capabilities(
+        let capabilities = self.capabilities(
             state,
             &contents,
             ValueOccurrence::Summary,
             origin,
             CapabilityTraversal::Reachable,
-        )? {
+        )?;
+        self.fold_reachable(capabilities, target, None, scope, &mut resolved);
+        Ok(resolved)
+    }
+
+    /// Accumulate reachable capabilities into `resolved`, retargeting abstract
+    /// contract roots at `target` and projecting each region through `path`.
+    fn fold_reachable(
+        &self,
+        capabilities: Vec<CapabilityOccurrence<'db>>,
+        target: ReferentContract<'db>,
+        path: Option<&RegionPath<IndexExpr<'db>>>,
+        scope: &BinderScope,
+        resolved: &mut Resolution<'db>,
+    ) {
+        for capability in capabilities {
             let subst = capability.guard.scope().freshening(scope);
             let mut capability = capability.substitute(self.db, &subst);
             if matches!(capability.payload, CapabilityRef::Invalidated { .. }) {
@@ -491,9 +466,9 @@ impl<'db> Borrowck<'db> {
                 });
                 capability.region = RegionSet::new(capability.region.scope(), clauses);
             }
-            resolved.region = resolved
-                .region
-                .union(&capability.region.close_existentials(scope));
+            let projected = path.map(|path| capability.region.project(path));
+            let region = projected.as_ref().unwrap_or(&capability.region);
+            resolved.region = resolved.region.union(&region.close_existentials(scope));
             if let Some(reference) = capability.payload.loan() {
                 resolved.parents.push(Guarded {
                     guard: capability.guard,
@@ -501,7 +476,6 @@ impl<'db> Borrowck<'db> {
                 });
             }
         }
-        Ok(resolved)
     }
 
     pub(super) fn ancestors(

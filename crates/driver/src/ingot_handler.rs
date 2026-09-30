@@ -392,152 +392,96 @@ impl<'a> IngotHandler<'a> {
                     }
                 }
 
-                match origin {
-                    IngotOrigin::Local => {
-                        let descriptor = IngotDescriptor::LocalByName {
-                            base: workspace_root.clone(),
-                            name,
-                        };
-                        self.record_dependency_context(&descriptor, ingot_url, &alias);
-                        Some((descriptor, (alias, arguments)))
-                    }
+                let descriptor = match origin {
+                    IngotOrigin::Local => IngotDescriptor::LocalByName {
+                        base: workspace_root.clone(),
+                        name,
+                    },
                     IngotOrigin::Remote {
                         description,
                         checkout_path,
                         ..
                     } => {
-                        match relative_path_within_checkout(checkout_path.as_path(), workspace_root)
-                        {
-                            Ok(relative_path) => {
-                                let mut base = GitDescription::new(
-                                    description.source.clone(),
-                                    description.rev.clone(),
-                                );
-                                if let Some(path) = relative_path {
-                                    base = base.with_path(path);
-                                }
-                                let descriptor = IngotDescriptor::RemoteByName { base, name };
-                                self.record_dependency_context(&descriptor, ingot_url, &alias);
-                                Some((descriptor, (alias, arguments)))
-                            }
-                            Err(error) => {
-                                self.report_error(
-                                    IngotInitDiagnostics::RemotePathResolutionError {
-                                        ingot_url: ingot_url.clone(),
-                                        dependency: alias,
-                                        error,
-                                    },
-                                );
-                                None
-                            }
-                        }
+                        let base = self.checkout_description(
+                            description,
+                            checkout_path.as_path(),
+                            workspace_root,
+                            ingot_url,
+                            &alias,
+                        )?;
+                        IngotDescriptor::RemoteByName { base, name }
                     }
-                }
+                };
+                self.record_dependency_context(&descriptor, ingot_url, &alias);
+                Some((descriptor, (alias, arguments)))
             }
             DependencyLocation::Local(local) => {
-                if let Some(name) = arguments.name.clone() {
-                    match origin {
-                        IngotOrigin::Local => {
-                            let descriptor = IngotDescriptor::LocalByName {
-                                base: local.url,
-                                name,
-                            };
-                            self.record_dependency_context(&descriptor, ingot_url, &alias);
-                            Some((descriptor, (alias, arguments)))
-                        }
-                        IngotOrigin::Remote {
+                let name = arguments.name.clone();
+                let descriptor = match origin {
+                    IngotOrigin::Local => match name {
+                        Some(name) => IngotDescriptor::LocalByName {
+                            base: local.url,
+                            name,
+                        },
+                        None => IngotDescriptor::Local(local.url),
+                    },
+                    IngotOrigin::Remote {
+                        description,
+                        checkout_path,
+                        ..
+                    } => {
+                        let base = self.checkout_description(
                             description,
-                            checkout_path,
-                            ..
-                        } => {
-                            match relative_path_within_checkout(checkout_path.as_path(), &local.url)
-                            {
-                                Ok(relative_path) => {
-                                    let mut base = GitDescription::new(
-                                        description.source.clone(),
-                                        description.rev.clone(),
-                                    );
-                                    if let Some(path) = relative_path {
-                                        base = base.with_path(path);
-                                    }
-                                    let descriptor = IngotDescriptor::RemoteByName { base, name };
-                                    self.record_dependency_context(&descriptor, ingot_url, &alias);
-                                    Some((descriptor, (alias, arguments)))
-                                }
-                                Err(error) => {
-                                    self.report_error(
-                                        IngotInitDiagnostics::RemotePathResolutionError {
-                                            ingot_url: ingot_url.clone(),
-                                            dependency: alias,
-                                            error,
-                                        },
-                                    );
-                                    None
-                                }
-                            }
-                        }
+                            checkout_path.as_path(),
+                            &local.url,
+                            ingot_url,
+                            &alias,
+                        )?;
+                        remote_descriptor(base, name)
                     }
-                } else {
-                    match origin {
-                        IngotOrigin::Local => {
-                            let descriptor = IngotDescriptor::Local(local.url);
-                            self.record_dependency_context(&descriptor, ingot_url, &alias);
-                            Some((descriptor, (alias, arguments)))
-                        }
-                        IngotOrigin::Remote {
-                            description,
-                            checkout_path,
-                            ..
-                        } => {
-                            match relative_path_within_checkout(checkout_path.as_path(), &local.url)
-                            {
-                                Ok(relative_path) => {
-                                    let mut next_description = GitDescription::new(
-                                        description.source.clone(),
-                                        description.rev.clone(),
-                                    );
-                                    if let Some(path) = relative_path {
-                                        next_description = next_description.with_path(path);
-                                    }
-                                    let descriptor = IngotDescriptor::Remote(next_description);
-                                    self.record_dependency_context(&descriptor, ingot_url, &alias);
-                                    Some((descriptor, (alias, arguments)))
-                                }
-                                Err(error) => {
-                                    self.report_error(
-                                        IngotInitDiagnostics::RemotePathResolutionError {
-                                            ingot_url: ingot_url.clone(),
-                                            dependency: alias,
-                                            error,
-                                        },
-                                    );
-                                    None
-                                }
-                            }
-                        }
-                    }
-                }
+                };
+                self.record_dependency_context(&descriptor, ingot_url, &alias);
+                Some((descriptor, (alias, arguments)))
             }
             DependencyLocation::Remote(remote) => {
-                if let Some(name) = arguments.name.clone() {
-                    let mut base =
-                        GitDescription::new(remote.source.clone(), remote.rev.to_string());
-                    if let Some(path) = remote.path {
-                        base = base.with_path(path);
-                    }
-                    let descriptor = IngotDescriptor::RemoteByName { base, name };
-                    self.record_dependency_context(&descriptor, ingot_url, &alias);
-                    Some((descriptor, (alias, arguments)))
-                } else {
-                    let mut next_description =
-                        GitDescription::new(remote.source.clone(), remote.rev.to_string());
-                    if let Some(path) = remote.path {
-                        next_description = next_description.with_path(path);
-                    }
-                    let descriptor = IngotDescriptor::Remote(next_description);
-                    self.record_dependency_context(&descriptor, ingot_url, &alias);
-                    Some((descriptor, (alias, arguments)))
+                let mut base = GitDescription::new(remote.source.clone(), remote.rev.to_string());
+                if let Some(path) = remote.path {
+                    base = base.with_path(path);
                 }
+                let descriptor = remote_descriptor(base, arguments.name.clone());
+                self.record_dependency_context(&descriptor, ingot_url, &alias);
+                Some((descriptor, (alias, arguments)))
+            }
+        }
+    }
+
+    /// The git description for a dependency that lives inside `checkout_path`,
+    /// rooted at `target_url`. Reports a diagnostic and yields `None` when the
+    /// target escapes the checkout.
+    fn checkout_description(
+        &mut self,
+        description: &GitDescription,
+        checkout_path: &Utf8Path,
+        target_url: &Url,
+        ingot_url: &Url,
+        alias: &DependencyAlias,
+    ) -> Option<GitDescription> {
+        match relative_path_within_checkout(checkout_path, target_url) {
+            Ok(relative_path) => {
+                let mut base =
+                    GitDescription::new(description.source.clone(), description.rev.clone());
+                if let Some(path) = relative_path {
+                    base = base.with_path(path);
+                }
+                Some(base)
+            }
+            Err(error) => {
+                self.report_error(IngotInitDiagnostics::RemotePathResolutionError {
+                    ingot_url: ingot_url.clone(),
+                    dependency: alias.clone(),
+                    error,
+                });
+                None
             }
         }
     }
@@ -1413,6 +1357,14 @@ impl<'a>
                 }
             }
         }
+    }
+}
+
+/// A remote descriptor, named when the dependency declared a `name`.
+fn remote_descriptor(base: GitDescription, name: Option<SmolStr>) -> IngotDescriptor {
+    match name {
+        Some(name) => IngotDescriptor::RemoteByName { base, name },
+        None => IngotDescriptor::Remote(base),
     }
 }
 

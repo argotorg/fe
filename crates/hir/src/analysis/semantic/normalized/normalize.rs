@@ -3080,6 +3080,26 @@ mod tests {
     }
 
     #[test]
+    fn function_item_values_normalize_without_constant_folding() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "function_item_values.fe".into(),
+            r#"
+fn answer(value: u256) -> u256 { value }
+
+fn stored(_ x: u256) -> u256 {
+    let f = answer
+    let pair = (f, answer)
+    pair.0(value: x) + f(value: x)
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let artifacts = normalized_func(&db, top_mod, "stored");
+        verify_normalized_body(&db, &artifacts.body).expect("function item values must verify");
+    }
+
+    #[test]
     fn native_call_results_keep_the_declared_carrier_before_contextual_copy_reads() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(

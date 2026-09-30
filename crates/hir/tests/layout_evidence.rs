@@ -14,7 +14,7 @@ use fe_hir::{
             LayoutEvidenceIndex, LayoutEvidenceOperand, LayoutEvidenceVerifyError, NExpr,
             NStatementKind, NormalizedArtifacts, SExpr, SStmtKind, SemanticInstanceKey,
             collect_layout_evidence_diagnostic_vouchers, get_or_build_semantic_instance,
-            identity_semantic_instance_key, layout_evidence_body, normalize_semantic_body,
+            identity_semantic_instance_key, layout_evidence_body, normalize_runtime_semantic_body,
             normalized::{NLayoutLocals, NStatementId},
             verify_layout_evidence_body as verify_normalized_layout_evidence_body,
             verify_layout_evidence_runtime_compatibility as verify_normalized_layout_evidence_runtime_compatibility,
@@ -240,7 +240,7 @@ fn root<const ROOT: u256>(map: StorageMap<u256, u256, ROOT>) -> u256 {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "root"))),
     );
-    let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
+    let normalized = normalize_runtime_semantic_body(&db, instance).expect("normalization failed");
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
     assert!(std::ptr::eq(
         evidence,
@@ -1239,7 +1239,7 @@ fn select<const ROOT: u256>(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(func)),
     );
-    let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
+    let normalized = normalize_runtime_semantic_body(&db, instance).expect("normalization failed");
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
     let source = normalized.body.owner.body(&db);
     let input = source
@@ -1461,7 +1461,7 @@ fn read<const ROOT: u256>(
             .any(|assignment| matches!(assignment.expr, LayoutEvidenceExpr::CallResult { .. }))
     );
 
-    let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
+    let normalized = normalize_runtime_semantic_body(&db, instance).expect("normalization failed");
     verify_layout_evidence_body(&db, &normalized, evidence).expect("evidence must verify");
     let mut malformed = (*evidence).clone();
     let call = malformed
@@ -1535,7 +1535,7 @@ fn forward<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "forward"))),
     );
-    let normalized = normalize_semantic_body(&db, forward).expect("normalization failed");
+    let normalized = normalize_runtime_semantic_body(&db, forward).expect("normalization failed");
     let evidence = layout_evidence_body(&db, forward).expect("layoutization failed");
     let call = evidence
         .statements
@@ -1572,7 +1572,7 @@ fn pass() -> Rooted<7> {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "pass"))),
     );
-    let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
+    let normalized = normalize_runtime_semantic_body(&db, instance).expect("normalization failed");
     let source = instance.body(&db);
     let source_call_ids = source
         .blocks
@@ -1689,7 +1689,7 @@ fn pass<const ROOT: u256>(anchor: Rooted<ROOT>) -> Rooted<ROOT> {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "pass"))),
     );
-    let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
+    let normalized = normalize_runtime_semantic_body(&db, instance).expect("normalization failed");
     assert!(normalized.body.blocks.iter().any(|block| {
         block.statements.iter().any(|statement| {
             matches!(
@@ -1836,7 +1836,7 @@ fn recurse<const ROOT: u256>(value: Rooted<ROOT>, depth: u256) -> Rooted<ROOT> {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "recurse"))),
     );
-    let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
+    let normalized = normalize_runtime_semantic_body(&db, instance).expect("normalization failed");
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
     verify_layout_evidence_runtime_compatibility(&db, &normalized, evidence)
         .expect("recursive call evidence must match the runtime body");
@@ -1864,7 +1864,8 @@ fn rebuild<const ROOT: u256>(seed: Rooted<ROOT>) -> Rooted<ROOT> {
             &db,
             identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, name))),
         );
-        let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
+        let normalized =
+            normalize_runtime_semantic_body(&db, instance).expect("normalization failed");
         let evidence = layout_evidence_body(&db, instance)
             .unwrap_or_else(|error| panic!("{name} layoutization failed: {error:?}"));
         if name == "rebuild" {
@@ -2204,7 +2205,7 @@ fn branch<const ROOT: u256>(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "branch"))),
     );
-    let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
+    let normalized = normalize_runtime_semantic_body(&db, instance).expect("normalization failed");
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
     let (branch_local, branch_index) = evidence
         .statements
@@ -2310,7 +2311,7 @@ fn replace<const ROOT: usize>(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "replace"))),
     );
-    let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
+    let normalized = normalize_runtime_semantic_body(&db, instance).expect("normalization failed");
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
     let (block_idx, statement_idx, index_local) =
         normalized
@@ -2443,7 +2444,7 @@ fn caller<const LEFT: u256, const RIGHT: u256>(
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "caller"))),
     );
-    let normalized = normalize_semantic_body(&db, instance).expect("normalization failed");
+    let normalized = normalize_runtime_semantic_body(&db, instance).expect("normalization failed");
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
 
     let mut malformed = (*evidence).clone();
@@ -2532,7 +2533,7 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "call"))),
     );
     let call_normalized =
-        normalize_semantic_body(&db, call_instance).expect("normalization failed");
+        normalize_runtime_semantic_body(&db, call_instance).expect("normalization failed");
     let call_evidence = layout_evidence_body(&db, call_instance).expect("layoutization failed");
     let three = call_evidence
         .params
@@ -2578,7 +2579,7 @@ fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "first"))),
     );
     let first_normalized =
-        normalize_semantic_body(&db, first_instance).expect("normalization failed");
+        normalize_runtime_semantic_body(&db, first_instance).expect("normalization failed");
     let first_evidence = layout_evidence_body(&db, first_instance).expect("layoutization failed");
     let mut malformed = (*first_evidence).clone();
     let index = malformed
@@ -2788,7 +2789,7 @@ fn inspect_views<const PHYSICAL: u256, const LOGICAL: u256>(
         ),
     );
     let normalized =
-        normalize_semantic_body(&db, replace_raw_caller).expect("normalization failed");
+        normalize_runtime_semantic_body(&db, replace_raw_caller).expect("normalization failed");
     let callee = normalized
         .body
         .blocks
@@ -2803,7 +2804,8 @@ fn inspect_views<const PHYSICAL: u256, const LOGICAL: u256>(
         })
         .expect("missing Handle::replace_raw call");
     let replace_raw = get_or_build_semantic_instance(&db, callee.key);
-    let normalized = normalize_semantic_body(&db, replace_raw).expect("normalization failed");
+    let normalized =
+        normalize_runtime_semantic_body(&db, replace_raw).expect("normalization failed");
     let evidence = layout_evidence_body(&db, replace_raw)
         .expect("physical EffectHandle field writes must preserve target evidence opaquely");
     let mut stores = 0;

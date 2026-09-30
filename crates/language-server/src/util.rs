@@ -1,11 +1,11 @@
 use async_lsp::lsp_types::{
-    DiagnosticRelatedInformation, DiagnosticSeverity, NumberOrString, Position,
+    DiagnosticRelatedInformation, DiagnosticSeverity, NumberOrString, Position, SymbolKind,
 };
 use common::{
     InputDb,
     diagnostics::{CompleteDiagnostic, Severity, Span},
 };
-use hir::{SpannedHirDb, hir_def::scope_graph::ScopeId, span::LazySpan};
+use hir::{SpannedHirDb, hir_def::ItemKind, hir_def::scope_graph::ScopeId, span::LazySpan};
 use rustc_hash::FxHashMap;
 use tracing::error;
 
@@ -243,6 +243,26 @@ use std::path::Path;
 pub trait DummyFilePathConversion {
     fn to_file_path(&self) -> Result<std::path::PathBuf, ()>;
     fn from_file_path<P: AsRef<Path>>(path: P) -> Result<Url, ()>;
+}
+
+/// The LSP symbol kind and display name for an item that carries a name.
+///
+/// Shared by the document-symbol and workspace-symbol handlers. Item kinds
+/// without a name of their own (notably `impl` blocks) are not covered here;
+/// callers that want them handle those kinds themselves.
+pub fn named_item_symbol(db: &dyn SpannedHirDb, item: ItemKind) -> Option<(SymbolKind, String)> {
+    let (kind, keyword, name) = match item {
+        ItemKind::Func(func) => (SymbolKind::FUNCTION, "fn", func.name(db)),
+        ItemKind::Struct(s) => (SymbolKind::STRUCT, "struct", s.name(db)),
+        ItemKind::Enum(e) => (SymbolKind::ENUM, "enum", e.name(db)),
+        ItemKind::Trait(t) => (SymbolKind::INTERFACE, "trait", t.name(db)),
+        ItemKind::TypeAlias(ta) => (SymbolKind::CLASS, "type", ta.name(db)),
+        ItemKind::Const(c) => (SymbolKind::CONSTANT, "const", c.name(db)),
+        ItemKind::Mod(m) => (SymbolKind::MODULE, "mod", m.name(db)),
+        ItemKind::Contract(c) => (SymbolKind::CLASS, "contract", c.name(db)),
+        _ => return None,
+    };
+    Some((kind, format!("{keyword} {}", name.to_opt()?.data(db))))
 }
 
 #[cfg(target_arch = "wasm32")]

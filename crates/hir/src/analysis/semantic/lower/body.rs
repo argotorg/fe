@@ -16,7 +16,8 @@ use crate::{
             SStmtId, SStmtKind, STerminator, STerminatorKind, SValueId, SemConstId, SemConstValue,
             SemOrigin, SemanticBody, SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex,
             bool_const, bytes_const, consts::instantiate_const_template, int_const,
-            reify_runtime_const_for_ty, runtime_size_bytes, sem_const_from_ty, unit_const,
+            reify_runtime_const_for_ty, runtime_size_bytes, sem_const_from_ty, struct_const,
+            unit_const,
         },
         ty::{
             const_expr::{ConstExpr, ConstExprId, ConstInvocation},
@@ -885,13 +886,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     ty.is_func(self.db),
                     "function-item path has non-function type"
                 );
+                // A function item value is the fieldless record of its item
+                // type, a constant rather than an aggregate construction.
                 self.emit_expr_with_origin(
                     SemOrigin::Expr(expr),
                     ty,
-                    SExpr::AggregateMake {
-                        ty,
-                        fields: Box::new([]),
-                    },
+                    SExpr::Const(SConst::from_trusted_source(
+                        self.db,
+                        struct_const(self.db, ty, Box::new([])),
+                    )),
                 )
             }
             None => panic!(

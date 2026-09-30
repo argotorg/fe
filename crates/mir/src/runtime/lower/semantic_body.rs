@@ -7,7 +7,7 @@ use hir::analysis::{
         normalized::{
             NEffectArgValue, NExpr, NLayoutBackingSource, NLayoutLocals, NLayoutPlan, NOperand,
             NPlace, NPlaceBase, NRootId, NRootKind, NStatementKind, NValueId, NormalizedBody,
-            normalize_semantic_body,
+            normalize_runtime_semantic_body,
         },
     },
 };
@@ -80,7 +80,7 @@ impl<'db> RuntimeSemanticBody<'db> {
         db: &'db dyn HirAnalysisDb,
         instance: SemanticInstance<'db>,
     ) -> Result<Self, SemanticNormalizationFailure<'db>> {
-        let artifacts = normalize_semantic_body(db, instance)?;
+        let artifacts = normalize_runtime_semantic_body(db, instance)?;
         let source = instance.body(db).clone();
         let representations = NLayoutLocals::new(&artifacts.body, &artifacts.layout_plan, &source);
         Ok(Self {

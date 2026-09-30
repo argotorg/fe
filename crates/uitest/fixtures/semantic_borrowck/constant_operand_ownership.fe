@@ -1,0 +1,176 @@
+// Ownership and borrow verdicts must not depend on whether operands are
+// constant: runtime constant folding runs only after borrow checking.
+struct Boxed { v: u256 }
+struct Holder { inner: Option<Boxed> }
+
+fn consume(_ b: own Boxed) -> u256 {
+    b.v
+}
+
+// Rejected: a constant non-Copy local cannot be moved twice.
+fn double_move() -> u256 {
+    let b = Boxed { v: 3 }
+    let first = b
+    let second = b
+    first.v + second.v
+}
+
+// Rejected: moving into an aggregate consumes the local.
+fn aggregate_then_move() -> u256 {
+    let b = Boxed { v: 3 }
+    let t = (b,)
+    let moved = b
+    t.0.v + moved.v
+}
+
+// Rejected: a field read after the move.
+fn use_after_move() -> u256 {
+    let b = Boxed { v: 3 }
+    let moved = b
+    b.v + moved.v
+}
+
+// Rejected: a constant-evaluable call still consumes its argument.
+fn call_then_move() -> u256 {
+    let b = Boxed { v: 3 }
+    let first = consume(b)
+    first + consume(b)
+}
+
+// Rejected: repeated by-value matches extract the same payload twice.
+fn match_twice() -> u256 {
+    let o: Option<Boxed> = Option::Some(Boxed { v: 21 })
+    let a = match o {
+        Option::Some(b) => b.v
+        Option::None => 0
+    }
+    let c = match o {
+        Option::Some(b) => b.v
+        Option::None => 0
+    }
+    a + c
+}
+
+// Rejected: `if let` binds the payload by value.
+fn if_let_twice() -> u256 {
+    let o: Option<Boxed> = Option::Some(Boxed { v: 21 })
+    let mut total: u256 = 0
+    if let Option::Some(b) = o {
+        total += b.v
+    }
+    if let Option::Some(b) = o {
+        total += b.v
+    }
+    total
+}
+
+// Rejected: a nested payload is extracted twice.
+fn nested_payload_twice() -> u256 {
+    let h = Holder { inner: Option::Some(Boxed { v: 5 }) }
+    let a = match h.inner {
+        Option::Some(b) => b.v
+        Option::None => 0
+    }
+    let c = match h {
+        Holder { inner: Option::Some(b) } => b.v
+        _ => 0
+    }
+    a + c
+}
+
+// Rejected: a move inside a loop repeats on the backedge.
+fn loop_move() -> u256 {
+    let b = Boxed { v: 3 }
+    let mut total: u256 = 0
+    let mut i: u256 = 0
+    while i < 2 {
+        total += consume(b)
+        i += 1
+    }
+    total
+}
+
+// Rejected: moving a value while it is borrowed.
+fn move_while_borrowed() -> u256 {
+    let b = Boxed { v: 3 }
+    let r = ref b
+    let moved = b
+    r.v + moved.v
+}
+
+// Rejected: a read while a mutable borrow is live.
+fn read_while_mut_borrowed() -> u256 {
+    let mut x: u256 = 1
+    let r = mut x
+    let y = x + 1
+    r = 5
+    y
+}
+
+// Accepted: one move.
+fn single_move() -> u256 {
+    let b = Boxed { v: 3 }
+    let moved = b
+    moved.v
+}
+
+// Accepted: reassignment reinitializes the moved local.
+fn move_and_reinitialize() -> u256 {
+    let mut b = Boxed { v: 3 }
+    let first = b
+    b = Boxed { v: 4 }
+    let second = b
+    first.v + second.v
+}
+
+// Accepted: tag-only reads do not consume the payload.
+fn tag_reads() -> u256 {
+    let o: Option<Boxed> = Option::Some(Boxed { v: 21 })
+    let a: u256 = match o {
+        Option::Some(_) => 1
+        Option::None => 0
+    }
+    let c: u256 = match o {
+        Option::Some(_) => 1
+        Option::None => 0
+    }
+    a + c
+}
+
+// Accepted: Copy payloads may be extracted repeatedly.
+fn copy_reuse() -> u256 {
+    let o: Option<u256> = Option::Some(21)
+    let a = match o {
+        Option::Some(v) => v
+        Option::None => 0
+    }
+    let c = match o {
+        Option::Some(v) => v
+        Option::None => 0
+    }
+    a + c
+}
+
+// Accepted: matching through a borrow does not move the payload.
+fn borrowed_matches() -> u256 {
+    let o: Option<Boxed> = Option::Some(Boxed { v: 21 })
+    let r = ref o
+    let a = match r {
+        Option::Some(b) => b.v
+        Option::None => 0
+    }
+    let c = match r {
+        Option::Some(b) => b.v
+        Option::None => 0
+    }
+    a + c
+}
+
+// Accepted: the borrow ends before the move.
+fn borrow_then_move() -> u256 {
+    let b = Boxed { v: 3 }
+    let r = ref b
+    let seen = r.v
+    let moved = b
+    seen + moved.v
+}

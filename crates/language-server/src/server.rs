@@ -65,19 +65,10 @@ pub(crate) fn spawn_backend(
         .expect("Failed to spawn backend actor")
 }
 
-/// Create an LspService wrapping an existing Backend actor.
-/// Call once per connection (stdio, WS).
-pub(crate) fn setup_service(
-    actor_ref: ActorRef<Backend, LspActorKey>,
-    client: ClientSocket,
-) -> WithFallbackService<LspActorService<Backend>, Router<()>> {
-    let mut lsp_actor_service = LspActorService::with(actor_ref);
-
-    lsp_actor_service
-        // mutating handlers
-        .handle_request_mut::<Initialize>(handlers::initialize)
+/// Register the handlers that every connection kind shares.
+fn register_shared_handlers(service: &mut LspActorService<Backend>) {
+    service
         .handle_request::<GotoDefinition>(goto::handle_goto_definition)
-        .handle_event_mut::<FileChange>(handlers::handle_file_change)
         .handle_event::<FilesNeedDiagnostics>(handlers::handle_files_need_diagnostics)
         .handle_event::<DocReloadExecute>(handlers::handle_doc_reload)
         // non-mutating handlers
@@ -120,12 +111,34 @@ pub(crate) fn setup_service(
         .handle_notification::<DidSaveTextDocument>(handlers::handle_did_save_text_document)
         .handle_notification::<notification::Exit>(handlers::handle_exit)
         .handle_request::<Shutdown>(handlers::handle_shutdown);
+}
 
+/// Wrap a configured actor service in the streaming fallback router.
+fn with_streaming_fallback(
+    lsp_actor_service: LspActorService<Backend>,
+    client: ClientSocket,
+) -> WithFallbackService<LspActorService<Backend>, Router<()>> {
     let mut streaming_router = Router::new(());
     setup_streams(client, &mut streaming_router);
     setup_unhandled(&mut streaming_router);
 
     WithFallbackService::new(lsp_actor_service, streaming_router)
+}
+
+/// Create an LspService wrapping an existing Backend actor.
+/// Call once per connection (stdio, WS).
+pub(crate) fn setup_service(
+    actor_ref: ActorRef<Backend, LspActorKey>,
+    client: ClientSocket,
+) -> WithFallbackService<LspActorService<Backend>, Router<()>> {
+    let mut lsp_actor_service = LspActorService::with(actor_ref);
+
+    lsp_actor_service
+        .handle_request_mut::<Initialize>(handlers::initialize)
+        .handle_event_mut::<FileChange>(handlers::handle_file_change);
+    register_shared_handlers(&mut lsp_actor_service);
+
+    with_streaming_fallback(lsp_actor_service, client)
 }
 
 /// Create an LspService for a secondary (WS) connection sharing an existing Backend.
@@ -138,58 +151,10 @@ pub(crate) fn setup_ws_service(
 ) -> WithFallbackService<LspActorService<Backend>, Router<()>> {
     let mut lsp_actor_service = LspActorService::with(actor_ref);
 
-    lsp_actor_service
-        // Read-only initialize: returns capabilities without mutating backend
-        .handle_request::<Initialize>(handlers::initialize_readonly)
-        .handle_request::<GotoDefinition>(goto::handle_goto_definition)
-        .handle_event::<FilesNeedDiagnostics>(handlers::handle_files_need_diagnostics)
-        .handle_event::<DocReloadExecute>(handlers::handle_doc_reload)
-        // non-mutating handlers
-        .handle_notification::<Initialized>(handlers::initialized)
-        .handle_request::<HoverRequest>(handlers::handle_hover_request)
-        .handle_request::<Completion>(completion::handle_completion)
-        .handle_request::<SignatureHelpRequest>(signature_help::handle_signature_help)
-        .handle_request::<CodeActionRequest>(code_actions::handle_code_action)
-        .handle_request::<References>(references::handle_references)
-        .handle_request::<DocumentHighlightRequest>(highlight::handle_document_highlight)
-        .handle_request::<GotoTypeDefinition>(type_definition::handle_goto_type_definition)
-        .handle_request::<GotoImplementation>(implementations::handle_goto_implementation)
-        .handle_request::<Rename>(rename::handle_rename)
-        .handle_request::<SemanticTokensFullRequest>(semantic_tokens::handle_semantic_tokens_full)
-        .handle_request::<Formatting>(handlers::handle_formatting)
-        .handle_request::<InlayHintRequest>(inlay_hints::handle_inlay_hints)
-        .handle_request::<DocumentSymbolRequest>(document_symbols::handle_document_symbols)
-        .handle_request::<WorkspaceSymbolRequest>(workspace_symbols::handle_workspace_symbols)
-        // call hierarchy
-        .handle_request::<CallHierarchyPrepare>(call_hierarchy::handle_prepare)
-        .handle_request::<CallHierarchyIncomingCalls>(call_hierarchy::handle_incoming_calls)
-        .handle_request::<CallHierarchyOutgoingCalls>(call_hierarchy::handle_outgoing_calls)
-        // type hierarchy
-        .handle_request::<TypeHierarchyPrepare>(type_hierarchy::handle_prepare)
-        .handle_request::<TypeHierarchySupertypes>(type_hierarchy::handle_supertypes)
-        .handle_request::<TypeHierarchySubtypes>(type_hierarchy::handle_subtypes)
-        // code lens
-        .handle_request::<CodeLensRequest>(code_lens::handle_code_lens)
-        // execute command (codegen views)
-        .handle_request_mut::<ExecuteCommand>(codegen_view::handle_execute_command)
-        // selection range
-        .handle_request::<SelectionRangeRequest>(selection_range::handle_selection_range)
-        // folding range
-        .handle_request::<FoldingRangeRequest>(folding_range::handle_folding_range)
-        // go to declaration
-        .handle_request::<GotoDeclaration>(declaration::handle_goto_declaration)
-        .handle_notification::<DidOpenTextDocument>(handlers::handle_did_open_text_document)
-        .handle_notification::<DidChangeTextDocument>(handlers::handle_did_change_text_document)
-        .handle_notification::<DidChangeWatchedFiles>(handlers::handle_did_change_watched_files)
-        .handle_notification::<DidSaveTextDocument>(handlers::handle_did_save_text_document)
-        .handle_notification::<notification::Exit>(handlers::handle_exit)
-        .handle_request::<Shutdown>(handlers::handle_shutdown);
+    lsp_actor_service.handle_request::<Initialize>(handlers::initialize_readonly);
+    register_shared_handlers(&mut lsp_actor_service);
 
-    let mut streaming_router = Router::new(());
-    setup_streams(client, &mut streaming_router);
-    setup_unhandled(&mut streaming_router);
-
-    WithFallbackService::new(lsp_actor_service, streaming_router)
+    with_streaming_fallback(lsp_actor_service, client)
 }
 
 /// Convenience: spawn a backend and create a service in one call.

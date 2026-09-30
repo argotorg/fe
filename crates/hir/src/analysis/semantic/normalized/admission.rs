@@ -5,7 +5,7 @@ use crate::analysis::{
     semantic::{
         BlockedSemanticBody, SemanticBody, SemanticDiagnostic, SemanticDiagnosticId,
         SemanticInstance, SemanticNormalizationFailure,
-        ctfe::canonicalize_semantic_consts_for_admission,
+        ctfe::{canonicalize_semantic_const_refs, canonicalize_semantic_consts_for_runtime},
         diagnostics::{
             normalized_body_error_to_diag, normalized_body_verify_error_to_diag,
             normalized_layout_plan_verify_error_to_diag, smir_lowering_admission_diag,
@@ -38,6 +38,9 @@ pub enum SemanticBodyAdmission<'db> {
     InternalFailure(SemanticDiagnosticId<'db>),
 }
 
+/// The verified operation-preserving body. Const references are resolved, but
+/// no operation is folded: borrow checking and definite assignment see every
+/// move, borrow, read, and call, whether or not its operands are constant.
 pub fn semantic_body_admission<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -50,6 +53,16 @@ pub fn normalize_semantic_body<'db>(
     instance: SemanticInstance<'db>,
 ) -> Result<NormalizedArtifacts<'db>, SemanticNormalizationFailure<'db>> {
     artifacts_from_admission(db, semantic_body_admission(db, instance))
+}
+
+/// The verified body with constant-evaluable operations folded. Layout evidence
+/// and runtime lowering share it; ownership is checked on
+/// [`normalize_semantic_body`] instead.
+pub fn normalize_runtime_semantic_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Result<NormalizedArtifacts<'db>, SemanticNormalizationFailure<'db>> {
+    artifacts_from_admission(db, runtime_admitted_semantic_body_query(db, instance))
 }
 
 pub(crate) fn normalize_semantic_body_provisional<'db>(
@@ -89,8 +102,24 @@ fn admitted_semantic_body_query<'db>(
         Ok(body) => body,
         Err(error) => return admission_failure(db, instance, error),
     };
-    let raw = canonicalize_semantic_consts_for_admission(db, instance, raw);
+    let raw = canonicalize_semantic_const_refs(db, instance, raw);
     normalize_and_verify(db, instance, &raw, instance.assumptions(db))
+}
+
+#[salsa::tracked]
+fn runtime_admitted_semantic_body_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> SemanticBodyAdmission<'db> {
+    let raw = match instance.admitted_body(db) {
+        Ok(body) => body,
+        Err(error) => return admission_failure(db, instance, error),
+    };
+    let folded = canonicalize_semantic_consts_for_runtime(db, instance, raw);
+    if folded == canonicalize_semantic_const_refs(db, instance, raw) {
+        return admitted_semantic_body_query(db, instance);
+    }
+    normalize_and_verify(db, instance, &folded, instance.assumptions(db))
 }
 
 #[salsa::tracked]
@@ -102,7 +131,7 @@ fn provisional_admitted_semantic_body_query<'db>(
         Ok(body) => body,
         Err(error) => return admission_failure(db, instance, error),
     };
-    let raw = canonicalize_semantic_consts_for_admission(db, instance, raw);
+    let raw = canonicalize_semantic_const_refs(db, instance, raw);
     normalize_and_verify(
         db,
         instance,

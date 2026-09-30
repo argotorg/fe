@@ -1,7 +1,10 @@
-use crate::{backend::Backend, util::to_lsp_range_from_span};
+use crate::{
+    backend::Backend,
+    util::{named_item_symbol, to_lsp_range_from_span},
+};
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{
-    Location, SymbolInformation, SymbolKind, WorkspaceSymbolParams, WorkspaceSymbolResponse,
+    Location, SymbolInformation, WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
 use common::InputDb;
 use hir::{hir_def::ItemKind, lower::map_file_to_mod, span::LazySpan};
@@ -52,41 +55,7 @@ fn item_to_workspace_symbol(
     item: ItemKind,
     query: &str,
 ) -> Option<SymbolInformation> {
-    let (kind, name) = match item {
-        ItemKind::Func(func) => (
-            SymbolKind::FUNCTION,
-            format!("fn {}", func.name(db).to_opt()?.data(db)),
-        ),
-        ItemKind::Struct(s) => (
-            SymbolKind::STRUCT,
-            format!("struct {}", s.name(db).to_opt()?.data(db)),
-        ),
-        ItemKind::Enum(e) => (
-            SymbolKind::ENUM,
-            format!("enum {}", e.name(db).to_opt()?.data(db)),
-        ),
-        ItemKind::Trait(t) => (
-            SymbolKind::INTERFACE,
-            format!("trait {}", t.name(db).to_opt()?.data(db)),
-        ),
-        ItemKind::TypeAlias(ta) => (
-            SymbolKind::CLASS,
-            format!("type {}", ta.name(db).to_opt()?.data(db)),
-        ),
-        ItemKind::Const(c) => (
-            SymbolKind::CONSTANT,
-            format!("const {}", c.name(db).to_opt()?.data(db)),
-        ),
-        ItemKind::Mod(m) => (
-            SymbolKind::MODULE,
-            format!("mod {}", m.name(db).to_opt()?.data(db)),
-        ),
-        ItemKind::Contract(c) => (
-            SymbolKind::CLASS,
-            format!("contract {}", c.name(db).to_opt()?.data(db)),
-        ),
-        _ => return None,
-    };
+    let (kind, name) = named_item_symbol(db, item)?;
 
     // Filter by query
     if !query.is_empty() && !name.to_lowercase().contains(query) {

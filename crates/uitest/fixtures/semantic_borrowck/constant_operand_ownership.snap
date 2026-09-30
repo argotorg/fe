@@ -1,0 +1,138 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/constant_operand_ownership.fe
+---
+error[16-0001]: borrow conflict in `fn move_while_borrowed`
+   ┌─ constant_operand_ownership.fe:94:34
+   │
+94 │   fn move_while_borrowed() -> u256 {
+   │ ╭──────────────────────────────────^
+95 │ │     let b = Boxed { v: 3 }
+96 │ │     let r = ref b
+   │ │             ----- borrow created here
+97 │ │     let moved = b
+98 │ │     r.v + moved.v
+99 │ │ }
+   │ ╰─^ cannot mutably borrow this place while an immutable borrow is active
+
+error[16-0001]: borrow conflict in `fn read_while_mut_borrowed`
+    ┌─ constant_operand_ownership.fe:105:13
+    │
+104 │     let r = mut x
+    │             ----- borrow created here
+105 │     let y = x + 1
+    │             ^ cannot immutably borrow this place while a mutable borrow is active
+
+error[16-0002]: move conflict in `fn double_move`
+   ┌─ constant_operand_ownership.fe:11:26
+   │
+11 │     fn double_move() -> u256 {
+   │ ╭────────────────────────────^
+   │ │ ╭──────────────────────────'
+12 │ │ │     let b = Boxed { v: 3 }
+13 │ │ │     let first = b
+14 │ │ │     let second = b
+15 │ │ │     first.v + second.v
+16 │ │ │ }
+   │ ╰─│─^ cannot use a value after it was moved
+   │   ╰─' value is moved here
+
+error[16-0002]: move conflict in `fn aggregate_then_move`
+   ┌─ constant_operand_ownership.fe:19:34
+   │
+19 │   fn aggregate_then_move() -> u256 {
+   │ ╭──────────────────────────────────^
+20 │ │     let b = Boxed { v: 3 }
+21 │ │     let t = (b,)
+   │ │              - value is moved here
+22 │ │     let moved = b
+23 │ │     t.0.v + moved.v
+24 │ │ }
+   │ ╰─^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn use_after_move`
+   ┌─ constant_operand_ownership.fe:30:5
+   │
+27 │   fn use_after_move() -> u256 {
+   │ ╭─────────────────────────────'
+28 │ │     let b = Boxed { v: 3 }
+29 │ │     let moved = b
+30 │ │     b.v + moved.v
+   │ │     ^^^ cannot use a value after it was moved
+31 │ │ }
+   │ ╰─' value is moved here
+
+error[16-0002]: move conflict in `fn call_then_move`
+   ┌─ constant_operand_ownership.fe:37:21
+   │
+36 │     let first = consume(b)
+   │                         - value is moved here
+37 │     first + consume(b)
+   │                     ^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn match_twice`
+   ┌─ constant_operand_ownership.fe:41:26
+   │
+41 │     fn match_twice() -> u256 {
+   │ ╭────────────────────────────^
+   │ │ ╭──────────────────────────'
+42 │ │ │     let o: Option<Boxed> = Option::Some(Boxed { v: 21 })
+43 │ │ │     let a = match o {
+44 │ │ │         Option::Some(b) => b.v
+   · │ │
+51 │ │ │     a + c
+52 │ │ │ }
+   │ ╰─│─^ cannot use a value after it was moved
+   │   ╰─' value is moved here
+
+error[16-0002]: move conflict in `fn if_let_twice`
+   ┌─ constant_operand_ownership.fe:55:27
+   │
+55 │     fn if_let_twice() -> u256 {
+   │ ╭─────────────────────────────^
+   │ │ ╭───────────────────────────'
+56 │ │ │     let o: Option<Boxed> = Option::Some(Boxed { v: 21 })
+57 │ │ │     let mut total: u256 = 0
+58 │ │ │     if let Option::Some(b) = o {
+   · │ │
+64 │ │ │     total
+65 │ │ │ }
+   │ ╰─│─^ cannot use a value after it was moved
+   │   ╰─' value is moved here
+
+error[16-0002]: move conflict in `fn nested_payload_twice`
+   ┌─ constant_operand_ownership.fe:68:35
+   │
+68 │   fn nested_payload_twice() -> u256 {
+   │ ╭───────────────────────────────────^
+69 │ │     let h = Holder { inner: Option::Some(Boxed { v: 5 }) }
+70 │ │     let a = match h.inner {
+   │ │                   ------- value is moved here
+71 │ │         Option::Some(b) => b.v
+   · │
+78 │ │     a + c
+79 │ │ }
+   │ ╰─^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn loop_move`
+   ┌─ constant_operand_ownership.fe:87:26
+   │
+87 │         total += consume(b)
+   │                          ^
+   │                          │
+   │                          cannot use a value after it was moved
+   │                          value is moved here
+
+error[16-0002]: move conflict in `fn move_while_borrowed`
+   ┌─ constant_operand_ownership.fe:98:5
+   │
+94 │   fn move_while_borrowed() -> u256 {
+   │ ╭──────────────────────────────────'
+95 │ │     let b = Boxed { v: 3 }
+96 │ │     let r = ref b
+97 │ │     let moved = b
+98 │ │     r.v + moved.v
+   │ │     ^^^ cannot use a value after it was moved
+99 │ │ }
+   │ ╰─' value is moved here
