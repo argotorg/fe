@@ -713,12 +713,18 @@ impl<'db> Callable<'db> {
                 .unwrap_or(given.expr_prop.ty)
             };
             let mut has_targeted_borrow_diag = false;
+            // A parameter declared without `own` is a view of its value. A
+            // `ref self` receiver borrows it, as an explicit `ref` would.
+            let receiver_ty = |kind| match (kind, given_ty.as_view(db)) {
+                (CapabilityKind::Ref, Some(inner)) => inner,
+                _ => given_ty,
+            };
             if has_receiver
                 && i == 0
                 && let Some((required_kind, required_inner)) = expected.as_capability(db)
                 && matches!(required_kind, CapabilityKind::Mut | CapabilityKind::Ref)
                 && actual == given.expr_prop.ty
-                && tc.ty_unifies(given_ty, required_inner)
+                && tc.ty_unifies(receiver_ty(required_kind), required_inner)
             {
                 if required_kind == CapabilityKind::Mut
                     && !given.expr_prop.is_mut
@@ -730,7 +736,7 @@ impl<'db> Callable<'db> {
                 } else {
                     actual = match required_kind {
                         CapabilityKind::Mut => TyId::borrow_mut_of(db, given_ty),
-                        CapabilityKind::Ref => TyId::borrow_ref_of(db, given_ty),
+                        CapabilityKind::Ref => TyId::borrow_ref_of(db, receiver_ty(required_kind)),
                         CapabilityKind::View => unreachable!(),
                     };
                 }

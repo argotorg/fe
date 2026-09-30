@@ -1,0 +1,77 @@
+// A `ref self` method can be called directly on a parameter declared without
+// `own`, as it can on a local or through an explicit `ref`.
+
+struct Counter {
+    n: u256,
+}
+
+impl Counter {
+    fn get(ref self) -> u256 {
+        self.n
+    }
+
+    fn doubled(ref self) -> u256 {
+        self.get() * 2
+    }
+}
+
+struct Pair {
+    left: Counter,
+    right: Counter,
+}
+
+trait Lookup {
+    fn look(ref self) -> u256
+}
+
+impl Lookup for Counter {
+    fn look(ref self) -> u256 {
+        self.n + 100
+    }
+}
+
+fn on_param(c: Counter) -> u256 {
+    c.get()
+}
+
+fn on_param_twice(c: Counter) -> u256 {
+    c.get() + c.doubled()
+}
+
+fn on_param_field(p: Pair) -> u256 {
+    p.left.get() + p.right.get()
+}
+
+fn on_generic_param<L: Lookup>(_ l: L) -> u256 {
+    l.look()
+}
+
+fn on_trait_method(c: Counter) -> u256 {
+    c.look()
+}
+
+fn explicit_ref(c: Counter) -> u256 {
+    let r: ref Counter = ref c
+    r.get()
+}
+
+fn on_own_param(c: own Counter) -> u256 {
+    c.get()
+}
+
+#[test]
+fn ref_self_on_plain_param() {
+    let c = Counter { n: 7 }
+    assert!(on_param(c) == 7)
+    assert!(on_param_twice(c) == 21)
+    assert!(on_trait_method(c) == 107)
+    assert!(on_generic_param(c) == 107)
+    assert!(explicit_ref(c) == 7)
+    assert!(on_own_param(c) == 7)
+}
+
+#[test]
+fn ref_self_on_plain_param_field() {
+    let p = Pair { left: Counter { n: 3 }, right: Counter { n: 4 } }
+    assert!(on_param_field(p) == 7)
+}

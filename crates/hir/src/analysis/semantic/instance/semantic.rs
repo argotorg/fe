@@ -293,8 +293,12 @@ fn receiver_lowering_plan<'db>(
     let borrowed_ty = normalize_ty(db, borrowed_ty, scope, assumptions);
     let receiver_ty = normalize_ty(db, typed_body.expr_ty(db, receiver), scope, assumptions);
     let (kind, _) = borrowed_ty.as_capability(db)?;
+    // A `view` receiver (a parameter declared without `own`) is borrowed for
+    // a `ref self` method, as an explicit `ref` would borrow it.
+    let receiver_is_view = receiver_ty.as_view(db).is_some();
     if !matches!(kind, CapabilityKind::Mut | CapabilityKind::Ref)
-        || receiver_ty.as_capability(db).is_some()
+        || (receiver_ty.as_capability(db).is_some()
+            && !(kind == CapabilityKind::Ref && receiver_is_view))
     {
         return None;
     }
