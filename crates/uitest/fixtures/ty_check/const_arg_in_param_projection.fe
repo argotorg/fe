@@ -1,0 +1,50 @@
+// Const blocks with generic const arguments in parameter types, resolved
+// through an associated type. Evaluating the `5` in `id<5>` must not need
+// the enclosing function's full parameter list, which is still being built
+// from these same parameter types.
+trait Mk { type Out }
+struct Holder<const N: u256> {}
+impl Mk for Holder<5> { type Out = u8 }
+impl Mk for Holder<6> { type Out = u16 }
+
+const fn id<const N: u256>() -> u256 { N }
+
+const FIVE: u256 = 5
+
+fn one(_ a: Holder<{ id<5>() }>::Out) -> u8 { a }
+
+fn two(_ a: Holder<{ id<5>() }>::Out, _ b: Holder<{ id<6>() }>::Out) -> u16 {
+    let _: u8 = a
+    b
+}
+
+fn arith(_ a: Holder<{ id<{ 2 + 3 }>() }>::Out, _ b: Holder<{ id<FIVE>() }>::Out) {}
+
+fn generic_owner<const M: u256>(_ a: Holder<{ id<5>() }>::Out, _ b: Holder<{ id<6>() }>::Out) {}
+
+struct S {}
+
+impl S {
+    fn method(self, _ a: Holder<{ id<5>() }>::Out, _ b: Holder<{ id<6>() }>::Out) {}
+    fn assoc(_ a: Holder<{ id<5>() }>::Out, _ b: Holder<{ id<6>() }>::Out) {}
+}
+
+trait T {
+    fn required(_ a: Holder<{ id<5>() }>::Out, _ b: Holder<{ id<6>() }>::Out)
+}
+
+type A = Holder<{ id<5>() }>::Out
+
+struct Fields {
+    a: Holder<{ id<5>() }>::Out,
+    b: Holder<{ id<6>() }>::Out,
+}
+
+fn use_all(s: S, f: Fields) -> u16 {
+    let x: A = one(1)
+    arith(x, x)
+    generic_owner<0>(x, 2)
+    s.method(x, 2)
+    S::assoc(f.a, f.b)
+    two(x, 2)
+}

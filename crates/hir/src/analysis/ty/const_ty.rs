@@ -1,3 +1,5 @@
+use std::cell::OnceCell;
+
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, Zero};
 
@@ -1679,7 +1681,7 @@ fn eval_int_expr<'db>(
     body: Body<'db>,
     expr: &Expr<'db>,
     expected: Option<TyId<'db>>,
-    has_captures: bool,
+    has_captures: &dyn Fn() -> bool,
 ) -> Result<BigInt, ConstIntError> {
     match expr {
         Expr::Block(stmts) => {
@@ -1733,7 +1735,7 @@ fn eval_int_expr<'db>(
         }
         // A path's meaning under captured generic arguments needs full CTFE.
         Expr::Path(path) => {
-            if has_captures {
+            if has_captures() {
                 return Err(ConstIntError::NotIntExpr);
             }
             let Some(path) = path.to_opt() else {
@@ -1787,7 +1789,7 @@ pub(super) fn try_eval_const_int_expr<'db>(
         body,
         expr,
         int_ty_shape(db, expected_ty).map(|_| expected_ty),
-        false,
+        &|| false,
     )
     .ok()
 }
@@ -1944,10 +1946,12 @@ pub(crate) fn evaluate_const_ty<'db>(
 
     let expected_ty = expected_ty.or(const_ty_ty);
     let check_ty = template_ty.or(expected_ty);
-    let capture_subst = capture.complete(db);
-    let has_captures = capture_subst
-        .as_ref()
-        .is_some_and(|subst| !subst.values().is_empty());
+    // Materializing an identity capture reads the owner's parameter schema,
+    // which can depend on this very body (a const argument in a parameter
+    // type). Only materialize it where the body can observe the capture.
+    let capture_cell = OnceCell::new();
+    let capture_subst = || capture_cell.get_or_init(|| capture.complete(db)).as_ref();
+    let has_captures = || capture_subst().is_some_and(|subst| !subst.values().is_empty());
 
     let Partial::Present(expr) = body.expr(db).data(db, body) else {
         return ConstTyId::invalid(db, InvalidCause::ParseError);
@@ -1966,7 +1970,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
                     if let TyData::ConstTy(const_ty) = ty.data(db) {
                         if let ConstTyData::TyParam(..) = const_ty.data(db)
-                            && let Some(arg) = capture_subst.as_ref().and_then(|subst| {
+                            && let Some(arg) = capture_subst().and_then(|subst| {
                                 let key = subst.domain().schema(db).original_key(db, ty)?;
                                 subst.get(db, key)
                             })
@@ -1997,11 +2001,8 @@ pub(crate) fn evaluate_const_ty<'db>(
                         inst.assoc_type_bindings(db).clone(),
                     );
                     let inst = capture.specialize(db, inst);
-                    let assumptions = specialize_available_const_assumptions(
-                        db,
-                        assumptions,
-                        capture_subst.as_ref(),
-                    );
+                    let assumptions =
+                        specialize_available_const_assumptions(db, assumptions, capture_subst());
 
                     let mk_abstract = |expected_ty: TyId<'db>| {
                         let expr = ConstExprId::new(
@@ -2035,11 +2036,8 @@ pub(crate) fn evaluate_const_ty<'db>(
                 }
                 PathRes::InherentConst(recv_ty, impl_, name) => {
                     let recv_ty = capture.specialize(db, recv_ty);
-                    let assumptions = specialize_available_const_assumptions(
-                        db,
-                        assumptions,
-                        capture_subst.as_ref(),
-                    );
+                    let assumptions =
+                        specialize_available_const_assumptions(db, assumptions, capture_subst());
                     let mk_abstract = |expected_ty: TyId<'db>| {
                         let use_ = super::assoc_const::InherentConstUse::new(
                             body.scope(),
@@ -2100,7 +2098,7 @@ pub(crate) fn evaluate_const_ty<'db>(
         Expr::Block(..) | Expr::Un(..) | Expr::Bin(..) | Expr::Lit(LitKind::Int(..))
     ) {
         let expected_int_ty = expected_ty.filter(|ty| int_ty_shape(db, *ty).is_some());
-        match eval_int_expr(db, body, &expr, expected_int_ty, has_captures) {
+        match eval_int_expr(db, body, &expr, expected_int_ty, &has_captures) {
             Ok(value) => {
                 if let Some(word) = bigint_to_u256_word(&value) {
                     let mut table = UnificationTable::new(db);

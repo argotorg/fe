@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_arg_in_param_projection_mismatch.fe
+---
+error[8-0000]: type mismatch
+  ┌─ const_arg_in_param_projection_mismatch.fe:8:73
+  │
+8 │ fn f(a: Holder<{ id<5>() }>::Out, b: Holder<{ id<5>() }>::Out) -> u16 { a }
+  │                                                                         ^ expected `u16`, but `u8` is given

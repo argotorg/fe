@@ -1,0 +1,8 @@
+trait Mk { type Out }
+struct Holder<const N: u256> {}
+impl Mk for Holder<5> { type Out = u8 }
+
+const fn id<const N: u256>() -> u256 { N }
+
+// Both parameters are `u8`; returning one as `u16` is still an error.
+fn f(a: Holder<{ id<5>() }>::Out, b: Holder<{ id<5>() }>::Out) -> u16 { a }

@@ -115,6 +115,7 @@ fn valid_generic_type_default_fixtures_pass_check() {
     // The uitest snapshots cover HIR diagnostics; these valid fixtures must
     // also pass the full `fe check` pipeline.
     for fixture in [
+        "const_arg_in_param_projection.fe",
         "generic_type_default_environments.fe",
         "inherent_method_projection_target.fe",
     ] {
