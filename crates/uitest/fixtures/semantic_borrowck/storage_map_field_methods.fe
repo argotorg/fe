@@ -1,0 +1,145 @@
+use std::evm::{Address, StorPtr, StorageMap, TStorPtr}
+
+// A StorageMap entry lives at `keccak256(key ++ salt)`, which is never one of
+// the slots the layout allocates to a contract field. A mutable borrow of such
+// a field therefore does not conflict with the map accesses a method performs.
+
+pub struct Ledger {
+    pub balances: StorageMap<Address, u256>,
+    pub total_supply: u256,
+}
+
+impl Ledger {
+    fn balance(mut self, _ owner: Address) -> u256 {
+        self.balances.get(key: owner)
+    }
+
+    fn credit(mut self, _ to: Address, amount: u256) {
+        let balance = self.balances.get(key: to)
+        self.balances.set(key: to, value: balance + amount)
+    }
+
+    fn mint(mut self, _ to: Address, amount: u256) {
+        self.total_supply += amount
+        self.credit(to, amount)
+    }
+}
+
+pub struct Salted {
+    pub entries: StorageMap<u256, u256, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff>,
+    pub count: u256,
+}
+
+impl Salted {
+    fn record(mut self, _ key: u256) {
+        self.entries.set(key, value: self.count)
+        self.count += 1
+    }
+}
+
+pub struct Outer {
+    pub ledger: Ledger,
+    pub epoch: u256,
+}
+
+msg LedgerMsg {
+    #[selector = 1]
+    Mint { to: Address, amount: u256 },
+    #[selector = 2]
+    Balance { owner: Address } -> u256,
+    #[selector = 3]
+    Hold { to: Address } -> u256,
+}
+
+// Accepted: init and recv arms call receiver methods on a contract field.
+pub contract Direct {
+    mut ledger: Ledger,
+
+    init(owner: Address) uses (mut ledger) {
+        ledger.mint(owner, amount: 100)
+    }
+
+    recv LedgerMsg {
+        Mint { to, amount } uses (mut ledger) {
+            ledger.mint(to, amount)
+        }
+        Balance { owner } -> u256 uses (mut ledger) {
+            ledger.balance(owner)
+        }
+        // A live borrow of the scalar field does not overlap the map entry.
+        Hold { to } -> u256 uses (mut ledger) {
+            let supply = mut ledger.total_supply
+            ledger.balances.set(key: to, value: 7)
+            supply += 1
+            supply
+        }
+    }
+}
+
+fn mint_through(_ to: Address, amount: u256) uses (ledger: mut Ledger) {
+    ledger.mint(to, amount)
+}
+
+fn mint_twice(_ to: Address, amount: u256) uses (ledger: mut Ledger) {
+    mint_through(to, amount)
+    ledger.credit(to, amount)
+}
+
+// Accepted: helpers forward the contract-field provider to receiver methods.
+pub contract Forwarded {
+    mut ledger: Ledger,
+
+    recv LedgerMsg {
+        Mint { to, amount } uses (mut ledger) {
+            mint_twice(to, amount)
+        }
+        Balance { owner } -> u256 uses (mut ledger) {
+            ledger.balance(owner)
+        }
+        Hold { to } -> u256 uses (mut ledger) {
+            mint_through(to, amount: 1)
+            ledger.total_supply
+        }
+    }
+}
+
+// Accepted: nested fields, array elements, and explicit salts.
+pub contract Nested {
+    mut outer: Outer,
+    mut ledgers: [Ledger; 2],
+    mut salted: Salted,
+
+    recv LedgerMsg {
+        Mint { to, amount } uses (mut outer, mut ledgers) {
+            outer.ledger.mint(to, amount)
+            ledgers[1].mint(to, amount)
+        }
+        Balance { owner } -> u256 uses (mut salted) {
+            salted.record(owner.inner)
+            salted.count
+        }
+        Hold { to } -> u256 uses (mut outer) {
+            outer.epoch += 1
+            outer.ledger.balance(to)
+        }
+    }
+}
+
+// Accepted: a top-level storage handle field targets allocated slots, and a
+// transient field cannot alias persistent storage at all.
+pub contract Handles {
+    mut persistent: StorPtr<Ledger>,
+    mut transient: TStorPtr<Ledger>,
+
+    recv LedgerMsg {
+        Mint { to, amount } uses (mut persistent) {
+            persistent.mint(to, amount)
+        }
+        Balance { owner } -> u256 uses (mut transient) {
+            transient.balance(owner)
+        }
+        Hold { to } -> u256 uses (mut persistent) {
+            persistent.balance(to)
+        }
+    }
+}

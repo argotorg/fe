@@ -1,16 +1,19 @@
 //! Typed external storage identities, including followed and widened referents.
 use std::collections::BTreeMap;
 
-use crate::analysis::{
-    HirAnalysisDb,
-    semantic::normalized::NRootId,
-    ty::{
-        ProviderAddressSpace,
-        adt_def::instantiate_adt_field_shape,
-        fold::TyFoldable,
-        provider::ProviderKind,
-        ty_def::{TyData, TyId},
+use crate::{
+    analysis::{
+        HirAnalysisDb,
+        semantic::normalized::NRootId,
+        ty::{
+            ProviderAddressSpace,
+            adt_def::instantiate_adt_field_shape,
+            fold::TyFoldable,
+            provider::{ProviderKind, ProviderLayoutEvidence},
+            ty_def::{TyData, TyId},
+        },
     },
+    semantic::{LayoutViewKind, ProviderSource},
 };
 
 use super::{
@@ -101,6 +104,26 @@ impl<'db> ReferentContract<'db> {
     }
 }
 
+/// Where a numeric address came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AddressProvenance {
+    Raw,
+    /// Exactly a `StorageMap` preimage hash (`keccak256(key_encoding ++ salt)`).
+    /// Under the collision-resistance premise it never equals a
+    /// compiler-allocated contract-field slot, which lies below 2^64. It grants
+    /// no authority, validity, or initialization.
+    HashedStorageSlot,
+}
+
+/// Whether a provider's target is the compiler-allocated storage of a
+/// contract field. This is a function of the interned binding, cached where a
+/// database is available so that aliasing stays database-free.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ProviderStorage {
+    AllocatedField,
+    Other,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ExternalOrigin<'db> {
     /// A typed, conservatively reachable part of an abstract local value.
@@ -109,6 +132,7 @@ pub enum ExternalOrigin<'db> {
     Provider {
         provider: ProviderRegionId<'db>,
         target_ty: TyId<'db>,
+        storage: ProviderStorage,
     },
     OpaqueHandle(OpaqueHandleRef<'db>),
     /// All addresses of this contract, without a distinguished object or loan.
@@ -123,6 +147,7 @@ pub enum ExternalOrigin<'db> {
         contract: ReferentContract<'db>,
         occurrence: AddressOccurrence<'db>,
         arguments: Box<[IndexExpr<'db>]>,
+        provenance: AddressProvenance,
     },
     /// A typed interpretation of raw memory at an element-scaled offset.
     /// This is a memory location, never a structural Index on a scalar type.
@@ -263,12 +288,14 @@ impl<'db> ExternalSource<'db> {
         contract: ReferentContract<'db>,
         occurrence: AddressOccurrence<'db>,
         arguments: Box<[IndexExpr<'db>]>,
+        provenance: AddressProvenance,
     ) -> Self {
         Self {
             origin: ExternalOrigin::Unknown {
                 contract,
                 occurrence,
                 arguments,
+                provenance,
             },
             contract,
             clobber: None,
@@ -287,7 +314,13 @@ impl<'db> ExternalSource<'db> {
                 contract,
                 occurrence,
                 arguments,
-            } => Some(Self::unknown(*contract, *occurrence, arguments.clone())),
+                provenance,
+            } => Some(Self::unknown(
+                *contract,
+                *occurrence,
+                arguments.clone(),
+                *provenance,
+            )),
             _ => None,
         }
     }
@@ -348,10 +381,33 @@ impl<'db> ExternalSource<'db> {
             },
             HandleAddressSpace::Known,
         );
+        // Only a contract field's own persistent target, placed at the slots its
+        // layout allocated, qualifies. Allocated slots are checked `usize`
+        // offsets; the explicit bound keeps the hash premise independent of the
+        // host.
+        let storage = if space == HandleAddressSpace::Known(ProviderAddressSpace::Storage)
+            && binding.semantics.evidence == ProviderLayoutEvidence::ContractField
+            && let ProviderSource::ContractField { field } = &binding.source
+            && binding
+                .layout_env
+                .is_some_and(|env| env.field == *field && env.view == LayoutViewKind::Target)
+            && binding
+                .assigned_field_layout(db)
+                .is_some_and(|(layout, _)| {
+                    layout
+                        .slot_offset
+                        .checked_add(layout.slot_count)
+                        .is_some_and(|end| u64::try_from(end).is_ok())
+                }) {
+            ProviderStorage::AllocatedField
+        } else {
+            ProviderStorage::Other
+        };
         Self {
             origin: ExternalOrigin::Provider {
                 provider,
                 target_ty,
+                storage,
             },
             clobber: None,
             contract: ReferentContract::new(db, target_ty, space),
@@ -574,23 +630,28 @@ impl<'db> ExternalSource<'db> {
                 contract,
                 occurrence,
                 arguments,
+                provenance,
             } => {
                 result.origin = ExternalOrigin::Unknown {
                     contract: contract.substitute(db, subst),
                     occurrence: *occurrence,
                     arguments: arguments.iter().map(|index| subst.apply(*index)).collect(),
+                    provenance: *provenance,
                 };
             }
             ExternalOrigin::OpaqueHandle(handle) => {
                 result.origin = ExternalOrigin::OpaqueHandle(handle.substitute(db, subst))
             }
+            // The interned binding, and so its storage classification, is unchanged.
             ExternalOrigin::Provider {
                 provider,
                 target_ty,
+                storage,
             } => {
                 result.origin = ExternalOrigin::Provider {
                     provider: *provider,
                     target_ty: target_ty.fold_with(db, &mut subst.clone()),
+                    storage: *storage,
                 }
             }
             ExternalOrigin::Allocation(handle) => {
@@ -620,21 +681,17 @@ impl<'db> ExternalSource<'db> {
                 contract,
                 occurrence,
                 arguments,
+                provenance,
             } => ExternalOrigin::Unknown {
                 contract: *contract,
                 occurrence: *occurrence,
                 arguments: arguments.iter().map(|index| subst.apply(*index)).collect(),
+                provenance: *provenance,
             },
             ExternalOrigin::Local(root) => ExternalOrigin::Local(*root),
             ExternalOrigin::OpaqueMemory => ExternalOrigin::OpaqueMemory,
             ExternalOrigin::Input(input) => ExternalOrigin::Input(input.substitute(subst)),
-            ExternalOrigin::Provider {
-                provider,
-                target_ty,
-            } => ExternalOrigin::Provider {
-                provider: *provider,
-                target_ty: *target_ty,
-            },
+            ExternalOrigin::Provider { .. } => self.origin.clone(),
             ExternalOrigin::Memory {
                 base,
                 element,
@@ -830,19 +887,24 @@ impl<'db> ExternalSource<'db> {
                 self.correspondence(&base.source, pairs)?;
                 pairs.push((IndexExpr::Const(0), selector));
             }
+            // Occurrence numbers are not provenance tags: a raw and a hashed
+            // address with equal metadata remain distinct locations.
             (
                 ExternalOrigin::Unknown {
                     contract: left_contract,
                     occurrence: left,
                     arguments: left_args,
+                    provenance: left_provenance,
                 },
                 ExternalOrigin::Unknown {
                     contract: right_contract,
                     occurrence: right,
                     arguments: right_args,
+                    provenance: right_provenance,
                 },
             ) if left_contract == right_contract
                 && left == right
+                && left_provenance == right_provenance
                 && left_args.len() == right_args.len() =>
             {
                 pairs.extend(left_args.iter().copied().zip(right_args.iter().copied()));
@@ -862,16 +924,10 @@ impl<'db> ExternalSource<'db> {
             }
             (ExternalOrigin::Local(left), ExternalOrigin::Local(right)) if left == right => {}
             (ExternalOrigin::OpaqueMemory, ExternalOrigin::OpaqueMemory) => {}
-            (
-                ExternalOrigin::Provider {
-                    provider: left,
-                    target_ty: left_ty,
-                },
-                ExternalOrigin::Provider {
-                    provider: right,
-                    target_ty: right_ty,
-                },
-            ) if left == right && left_ty == right_ty => {}
+            // Comparing the cached storage classification too makes an
+            // inconsistent representation fail closed.
+            (ExternalOrigin::Provider { .. }, ExternalOrigin::Provider { .. })
+                if self.origin == other.origin => {}
             (ExternalOrigin::Input(left), ExternalOrigin::Input(right)) => {
                 left.correspondence(right, pairs)?;
             }
@@ -965,6 +1021,27 @@ impl<'db> ExternalSource<'db> {
         guard.with_equalities(pairs)
     }
 
+    /// Under the hash premise, a `StorageMap` slot is not the direct target of a
+    /// compiler-allocated contract field. Following or widening either source
+    /// forfeits this: a stored pointer can name any slot.
+    fn is_hashed_slot_beside_allocated_field(&self, field: &Self) -> bool {
+        matches!(
+            self.origin,
+            ExternalOrigin::Unknown {
+                provenance: AddressProvenance::HashedStorageSlot,
+                ..
+            }
+        ) && matches!(
+            field.origin,
+            ExternalOrigin::Provider {
+                storage: ProviderStorage::AllocatedField,
+                ..
+            }
+        ) && [self, field]
+            .iter()
+            .all(|source| source.dereferences.is_empty() && !source.reachable)
+    }
+
     pub(super) fn alias_guard(
         &self,
         other: &Self,
@@ -1037,14 +1114,16 @@ impl<'db> ExternalSource<'db> {
             // same object. Unknown manufactured addresses remain conservative.
             // This assumes each raw operation's entire footprint is within its
             // allocated object. Allocation identity is not a raw bounds certificate.
-            let disjoint = matches!(
+            let disjoint = (matches!(
                 (&self.origin, &other.origin),
                 (
                     ExternalOrigin::Allocation(_),
                     ExternalOrigin::Input(_) | ExternalOrigin::Allocation(_)
                 ) | (ExternalOrigin::Input(_), ExternalOrigin::Allocation(_))
             ) && self.dereferences.is_empty()
-                && other.dereferences.is_empty();
+                && other.dereferences.is_empty())
+                || self.is_hashed_slot_beside_allocated_field(other)
+                || other.is_hashed_slot_beside_allocated_field(self);
             (!disjoint && (self.uncertain() || other.uncertain()))
                 .then_some(guard)
                 .filter(|_| self.contract.may_alias(other.contract))

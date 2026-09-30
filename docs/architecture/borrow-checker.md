@@ -216,6 +216,58 @@ not executed or described as proved safe. General raw-bounds inference would
 require allocation-size and whole-footprint containment evidence in addition to
 the provenance tracked here.
 
+## Hashed storage slots
+
+`sload` and `sstore` take a numeric slot, so their accesses name an unknown
+storage address. Such an access may alias any storage cell, including the
+contract field held by a live native borrow. A `StorageMap` computes its slot as
+`keccak256(key_encoding ++ salt)` and reads and writes it through the trusted
+`std::evm::ops::sload_hashed` and `sstore_hashed` builtins instead. Their
+intrinsic contracts mark the address `AddressProvenance::HashedStorageSlot`.
+
+The premise is computational, as in Solidity's storage layout. A hashed slot is
+assumed never to equal a compiler-allocated contract-field slot. The layout
+allocates field slots as checked `usize` offsets, so they lie below `2^64`, and
+one uniform hash output hits that range with probability at most `2^-192`. The
+premise grants no authority, validity, initialization, or freshness. It only
+removes one overlap possibility.
+
+`ExternalSource::provider` classifies a provider as
+`ProviderStorage::AllocatedField` only if all of the following hold:
+- its binding is a contract field with `ContractField` layout evidence;
+- its layout environment names the same field with the target view;
+- the field's allocated slots resolve within that bound;
+- its target is persistent storage.
+
+Region aliasing then treats a hashed slot and such a provider as disjoint when
+neither source follows a dereference or is widened. A pointer stored in a field
+can name any slot, including a map entry, so following it forfeits the premise.
+A formal provider resolves to its actual effect argument at each call, so a
+helper's classification always comes from the caller's real source.
+
+Everything else stays conservative:
+- Raw numeric slots may alias any storage.
+- Providers bound to arbitrary storage pointers, and projected effect arguments,
+  are not classified as allocated fields. An adversary can build a pointer at a
+  map entry's slot.
+- Input places may alias hashed slots.
+- Two hashed slots may alias each other. No native loan can target a map entry,
+  because entries are accessed only by value.
+- Structural matching requires equal provenance, so a raw and a hashed address
+  never share typed-cell identity.
+
+`StoragePackedArray` keeps raw accesses. Its slot `keccak256(salt) + i / lanes`
+takes an unbounded index, so it can reach other storage.
+
+Only the `storage_map` word helpers call the hashed builtins. The `pub(ingot)`
+visibility trusts all of `std`, so this call-site restriction is an audited
+invariant.
+
+One limitation remains. Inside a receiver method, a live borrow of an input
+place such as `self.total_supply` still conflicts with the method's own map
+access. The input may be any storage place, and a local reborrow of an input is
+checked conservatively against unresolved accesses.
+
 ## Entry contents, allocation birth, and opaque overwrites
 
 Entry contents mean the caller's contents at function entry. Substituting an entry
@@ -702,6 +754,7 @@ improvements with empty snapshots. Source comments identify each case.
 | Zero or byte-copy a native-reference slot, then load it | Raw bytes do not establish a valid native reference, nor does returning an uninitialized slot from a loop. Typed reference stores and copies are accepted. | [Native slot initialization](../../crates/uitest/fixtures/semantic_borrowck/native_slot_initialization.fe) |
 | Move one cell, then write through a pointer selecting that cell or another | The write cannot definitely restore the moved cell. An exact destination is accepted. | [Ambiguous reinitialization](../../crates/uitest/fixtures/semantic_borrowck/ambiguous_reinitialization.fe) |
 | Keep a storage borrow live across an external call | CALL conflicts with shared and mutable state loans; STATICCALL conflicts with mutable state loans. Ending the loan before the call and reborrowing afterward is accepted. | [External call state borrows](../../crates/uitest/fixtures/semantic_borrowck/external_call_state_borrows.fe) |
+| Call a `mut self` method that uses a `StorageMap` field on a contract-field struct | Accepted from init and recv arms, through `uses` helpers, for nested fields and array elements, and while a sibling field of the contract field is borrowed. Raw slot accesses, packed arrays, pointer-bound providers, and a live input-field borrow inside the method still conflict. | [Accepted](../../crates/uitest/fixtures/semantic_borrowck/storage_map_field_methods.fe), [rejected](../../crates/uitest/fixtures/semantic_borrowck/storage_map_field_methods_rejected.fe) |
 | Select an allocating factory with a boolean inside a loop, then consume the joined result | Complementary branch guards preserve the selected fresh allocation and accept the move. Moving it twice still conflicts. | [Boolean factory loop](../../crates/uitest/fixtures/semantic_borrowck/boolean_factory_loop.fe) |
 | Recursively return one freshly allocated object | Direct and mutual fresh returns converge through a single-object result port; forwarding an existing pointer retains its alias identity. A stored older object from the same loop allocation is not the result, and unsupported poststate growth still fails closed. | [Recursive fresh return](../../crates/uitest/fixtures/semantic_borrowck/recursive_fresh_return.fe) |
 | Store one typed heap cell, then read `children[index]` | A constant or symbolic store is recovered by a symbolic read when the caller's index matches; an unwritten member keeps unknown contents that may alias the mutable cursor. | [Typed heap cells](../../crates/uitest/fixtures/semantic_borrowck/typed_heap_cells.fe) |

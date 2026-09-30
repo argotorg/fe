@@ -373,6 +373,7 @@ fn raw_return_space<'db>(
         ExternalOrigin::Provider {
             target_ty,
             provider,
+            ..
         } => (
             *target_ty,
             provider.binding(db).provider_ty.as_ptr(db).is_some(),

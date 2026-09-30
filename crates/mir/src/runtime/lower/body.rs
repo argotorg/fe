@@ -4441,14 +4441,15 @@ impl<'db> RmirEmitter<'db> {
                 let [] = args else { return None };
                 builtin(crate::runtime::RuntimeBuiltin::Msize, Some(word.clone()))
             }
-            RuntimeBuiltinFuncKind::Sload => {
+            // Hashed-slot provenance only informs borrow checking.
+            RuntimeBuiltinFuncKind::Sload | RuntimeBuiltinFuncKind::SloadHashed => {
                 let [slot] = args else { return None };
                 builtin(
                     crate::runtime::RuntimeBuiltin::Sload { slot: *slot },
                     Some(word.clone()),
                 )
             }
-            RuntimeBuiltinFuncKind::Sstore => {
+            RuntimeBuiltinFuncKind::Sstore | RuntimeBuiltinFuncKind::SstoreHashed => {
                 let [slot, value] = args else { return None };
                 builtin(
                     crate::runtime::RuntimeBuiltin::Sstore {

@@ -6,6 +6,60 @@ use fe_hir::analysis::ty::corelib::{
 use fe_hir::test_db::HirAnalysisTestDb;
 
 #[test]
+fn hashed_storage_contracts_require_standard_library_identity() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "hashed_storage_contracts.fe".into(),
+        "extern {\n    fn sload_hashed(_: u256) -> u256\n    fn sstore_hashed(slot: u256, value: u256)\n}\nfn anchor() {}",
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let local = |name: &str| {
+        module
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|ident| ident.data(&db) == name)
+            })
+            .unwrap()
+    };
+    let scope = local("anchor").scope();
+    for (name, kind, access) in [
+        (
+            "sload_hashed",
+            RuntimeBuiltinFuncKind::SloadHashed,
+            MemoryAccessKind::Read,
+        ),
+        (
+            "sstore_hashed",
+            RuntimeBuiltinFuncKind::SstoreHashed,
+            MemoryAccessKind::Write,
+        ),
+    ] {
+        // A look-alike declaration outside std is not trusted.
+        assert_eq!(runtime_builtin_func_kind(&db, local(name)), None, "{name}");
+        assert!(intrinsic_contract(&db, local(name)).is_none(), "{name}");
+        let builtin = resolve_lib_func_path(&db, scope, &format!("std::evm::ops::{name}")).unwrap();
+        assert_eq!(runtime_builtin_func_kind(&db, builtin), Some(kind));
+        assert_eq!(
+            intrinsic_contract(&db, builtin)
+                .expect("hashed storage contract")
+                .memory
+                .expect("hashed storage memory contract"),
+            &[IntrinsicMemoryAccess {
+                target: IntrinsicMemoryTarget::HashedStorageSlot(0),
+                kind: access,
+                extent: IntrinsicMemoryExtent::Typed,
+            }],
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn numeric_memory_contracts_require_compiler_defined_identity() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

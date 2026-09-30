@@ -12,7 +12,7 @@ use fe_hir::{
             SemanticAnalysisError, SemanticBodyAdmission, SemanticDiagnosticKind, SemanticInstance,
             SemanticNormalizationFailure, canonicalize_semantic_consts,
             capability::{
-                external::ExternalOrigin,
+                external::{AddressProvenance, ExternalOrigin},
                 footprint::AccessExtent,
                 guard::{ChoiceKey, ValueOccurrence},
                 handle::{AddressOccurrence, HandleAddressSpace},
@@ -36,7 +36,7 @@ use fe_hir::{
             ProviderAddressSpace,
             corelib::{MemoryAccessKind, resolve_lib_func_path},
             ty_check::{BodyOwner, EffectPassMode, LocalBinding},
-            ty_def::{BorrowKind, TyData},
+            ty_def::{BorrowKind, TyData, TyId},
         },
     },
     hir_def::{ItemKind, Partial},
@@ -369,6 +369,151 @@ fn memory() uses (raw: mut RawStorage) {{
             );
         }
     }
+}
+
+#[test]
+fn only_hashed_storage_builtins_produce_hashed_slot_provenance() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("hashed_storage.fe".into(), "fn anchor() {}");
+    let (module, _) = db.top_mod(file);
+    let anchor = find_func(&db, module, "anchor");
+    for (name, kind, expected) in [
+        ("sload", MemoryAccessKind::Read, AddressProvenance::Raw),
+        ("sstore", MemoryAccessKind::Write, AddressProvenance::Raw),
+        (
+            "sload_hashed",
+            MemoryAccessKind::Read,
+            AddressProvenance::HashedStorageSlot,
+        ),
+        (
+            "sstore_hashed",
+            MemoryAccessKind::Write,
+            AddressProvenance::HashedStorageSlot,
+        ),
+    ] {
+        let function =
+            resolve_lib_func_path(&db, anchor.scope(), &format!("std::evm::ops::{name}")).unwrap();
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(function)),
+        );
+        let summary = semantic_borrow_summary(&db, instance).unwrap().unwrap();
+        let [access] = summary.accesses.as_slice() else {
+            panic!("{name}: expected one storage access\n{summary:#?}");
+        };
+        assert_eq!(access.kind, kind, "{name}");
+        assert!(access.authorizers.is_empty(), "{name}: no native authority");
+        let [clause] = access.region.clauses() else {
+            panic!("{name}: expected one storage address");
+        };
+        assert!(
+            matches!(
+                &clause.payload.root,
+                RegionRoot::External(source) if matches!(
+                    &source.origin,
+                    ExternalOrigin::Unknown { contract, provenance, .. }
+                        if *provenance == expected
+                            && contract.ty == TyId::u256(&db)
+                            && contract.address_space
+                                == HandleAddressSpace::Known(ProviderAddressSpace::Storage)
+                )
+            ),
+            "{name}: {clause:?}"
+        );
+    }
+}
+
+#[test]
+fn storage_map_summaries_keep_key_encoder_effects() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "storage_key_effects.fe".into(),
+        r#"
+use std::evm::{StorageKey, StorageMap}
+struct Key {
+    log: *u256,
+    id: u256,
+}
+impl Copy for Key {}
+impl StorageKey for Key {
+    fn encoded_len(self) -> u256 { 32 }
+    fn write_key(ptr: *u8, self) {
+        *self.log = self.id
+        u256::write_key(ptr, self.id)
+    }
+}
+fn read(_ map: StorageMap<Key, u256, 7>, key: Key) -> u256 {
+    map.get(key)
+}
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let instance = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "read"))),
+    );
+    let summary = semantic_borrow_summary(&db, instance).unwrap().unwrap();
+    let has_access = |kind: MemoryAccessKind, origin: &dyn Fn(&ExternalOrigin<'_>) -> bool| {
+        summary.accesses.iter().any(|access| {
+            access.kind == kind
+                && access.region.clauses().iter().any(|clause| {
+                    matches!(&clause.payload.root, RegionRoot::External(source) if origin(&source.origin))
+                })
+        })
+    };
+    // Only the final slot access is trusted; the encoder's own write remains.
+    assert!(
+        has_access(MemoryAccessKind::Read, &|origin| matches!(
+            origin,
+            ExternalOrigin::Unknown {
+                provenance: AddressProvenance::HashedStorageSlot,
+                ..
+            }
+        )),
+        "{summary:#?}"
+    );
+    assert!(
+        has_access(MemoryAccessKind::Write, &|origin| matches!(
+            origin,
+            ExternalOrigin::Input(_)
+        )),
+        "{summary:#?}"
+    );
+}
+
+#[test]
+fn storage_bytes_field_methods_do_not_conflict_with_sibling_fields() {
+    // Borrow-checked here rather than in a source fixture: a StorageBytes
+    // method call from a recv arm still hits an unrelated layout-evidence failure.
+    let diagnostics = checked_borrow_diags(
+        r#"
+use std::evm::StorageBytes
+pub struct Blobs {
+    pub data: StorageBytes<u256>,
+    pub count: u256,
+}
+impl Blobs {
+    fn size(mut self, _ key: u256) -> u256 {
+        self.count += 1
+        self.data.len(key)
+    }
+}
+msg M {
+    #[selector = 1]
+    Size { key: u256 } -> u256,
+}
+pub contract C {
+    mut blobs: Blobs,
+    recv M {
+        Size { key } -> u256 uses (mut blobs) {
+            blobs.size(key)
+        }
+    }
+}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
 }
 
 #[test]

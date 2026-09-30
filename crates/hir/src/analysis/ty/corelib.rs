@@ -133,6 +133,9 @@ pub enum IntrinsicMemoryTarget {
         input: u32,
         space: ProviderAddressSpace,
     },
+    /// A numeric storage slot that is exactly a `StorageMap` preimage hash.
+    /// It is assumed never to equal a compiler-allocated contract-field slot.
+    HashedStorageSlot(u32),
     /// Any compatible location in the current execution context, independent of arguments.
     WholeSpace(ProviderAddressSpace),
 }
@@ -196,6 +199,14 @@ impl IntrinsicMemoryAccess {
             target: IntrinsicMemoryTarget::Address { input, space },
             kind,
             extent,
+        }
+    }
+
+    const fn hashed_storage_slot(input: u32, kind: MemoryAccessKind) -> Self {
+        Self {
+            target: IntrinsicMemoryTarget::HashedStorageSlot(input),
+            kind,
+            extent: IntrinsicMemoryExtent::Typed,
         }
     }
 
@@ -390,6 +401,16 @@ const WRITE_STORAGE: &[IntrinsicMemoryAccess] = &[IntrinsicMemoryAccess::address
     MemoryAccessKind::Write,
     IntrinsicMemoryExtent::Typed,
 )];
+const READ_HASHED_STORAGE: &[IntrinsicMemoryAccess] =
+    &[IntrinsicMemoryAccess::hashed_storage_slot(
+        0,
+        MemoryAccessKind::Read,
+    )];
+const WRITE_HASHED_STORAGE: &[IntrinsicMemoryAccess] =
+    &[IntrinsicMemoryAccess::hashed_storage_slot(
+        0,
+        MemoryAccessKind::Write,
+    )];
 const RAW_STORAGE_READS: &[IntrinsicMemoryAccess] = &[
     IntrinsicMemoryAccess::value(0, MemoryAccessKind::Read),
     IntrinsicMemoryAccess::address(
@@ -481,6 +502,8 @@ define_runtime_intrinsics! {
     Msize => (Std, ["evm", "ops", "msize"], NO_MEMORY_ACCESSES, None),
     Sload => (Std, ["evm", "ops", "sload"], READ_STORAGE, None),
     Sstore => (Std, ["evm", "ops", "sstore"], WRITE_STORAGE, None),
+    SloadHashed => (Std, ["evm", "ops", "sload_hashed"], READ_HASHED_STORAGE, None),
+    SstoreHashed => (Std, ["evm", "ops", "sstore_hashed"], WRITE_HASHED_STORAGE, None),
     CallDataLoad => (Std, ["evm", "ops", "calldataload"], READ_CALLDATA_WORD, None),
     CallDataCopy => (Std, ["evm", "ops", "calldatacopy"], COPY_CALLDATA, None),
     CallDataSize => (Std, ["evm", "ops", "calldatasize"], NO_MEMORY_ACCESSES, None),

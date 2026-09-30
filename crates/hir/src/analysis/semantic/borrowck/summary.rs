@@ -21,7 +21,10 @@ use crate::{
             BorrowActivation, FieldIndex, SemOrigin, SemanticInstance,
             capability::{
                 birth::AllocationBirth,
-                external::{ClobberCondition, ExternalOrigin, ExternalSource, ReferentContract},
+                external::{
+                    AddressProvenance, ClobberCondition, ExternalOrigin, ExternalSource,
+                    ReferentContract,
+                },
                 footprint::{AccessExtent, AccessFootprint},
                 guard::{ChoiceKey, Guard, ValueOccurrence},
                 handle::{
@@ -47,6 +50,7 @@ use crate::{
             },
         },
         ty::{
+            ProviderAddressSpace,
             corelib::{MemoryAccessKind, intrinsic_contract},
             provider::ProviderKind,
             ty_check::BodyOwner,
@@ -531,6 +535,7 @@ impl<'db> Borrowck<'db> {
                         ExternalOrigin::Provider {
                             provider,
                             target_ty,
+                            ..
                         } if !matches!(
                             provider.binding(self.db).source,
                             ProviderSource::UsesParam { .. }
@@ -1560,12 +1565,23 @@ impl<'db> Borrowck<'db> {
             ExternalOrigin::Unknown {
                 contract,
                 occurrence,
+                provenance,
                 ..
             } => {
                 if !matches!(occurrence, AddressOccurrence::Summary(_)) {
                     return Err(invalid(
                         "unknown address contains a callee-local occurrence",
                     ));
+                }
+                if *provenance == AddressProvenance::HashedStorageSlot
+                    && *contract
+                        != ReferentContract::new(
+                            db,
+                            TyId::u256(db),
+                            HandleAddressSpace::Known(ProviderAddressSpace::Storage),
+                        )
+                {
+                    return Err(invalid("hashed slot is not a storage word address"));
                 }
                 (
                     contract.ty,
@@ -1609,9 +1625,16 @@ impl<'db> Borrowck<'db> {
             ExternalOrigin::Provider {
                 provider,
                 target_ty,
+                ..
             } => {
-                if !self.inventory.inputs.iter().any(|input| matches!(input.source.origin,
-                    ExternalOrigin::Provider { provider: actual, target_ty: actual_ty } if actual == *provider && actual_ty == *target_ty)) {
+                // Declared providers are built canonically, so matching the
+                // complete origin also verifies its storage classification.
+                if !self
+                    .inventory
+                    .inputs
+                    .iter()
+                    .any(|input| input.source.origin == external.origin)
+                {
                     return Err(invalid("provider is not declared by the body or a call"));
                 }
                 if external.is_reachable() {
@@ -2678,9 +2701,13 @@ impl<'db> Borrowck<'db> {
                     ty,
                 )
             }
+            // A formal provider resolves to its actual effect argument, which
+            // carries its own storage classification; a concrete binding is
+            // rebuilt canonically. Neither copies the formal's classification.
             ExternalOrigin::Provider {
                 provider,
                 target_ty,
+                ..
             } => {
                 let source = ExternalSource::provider(self.db, *provider, *target_ty);
                 let ty = source.contract.ty;
@@ -2994,6 +3021,7 @@ impl<'db> SignatureValues<'_, 'db> {
                     ReferentContract::memory(db, semantics.target_ty),
                     occurrence,
                     scope.variables().collect(),
+                    AddressProvenance::Raw,
                 ))
             } else {
                 if let Ok(Some(contract)) = OpaqueHandleContract::for_ty(
@@ -3245,14 +3273,14 @@ mod tests {
             semantic::{
                 VariantIndex,
                 capability::{
-                    guard::ChoiceKey, handle::HandleAddressSpace,
+                    external::ProviderStorage, guard::ChoiceKey, handle::HandleAddressSpace,
                     region::CANONICALIZED_REGION_CLAUSES, source::InputSource, test_roots,
                 },
                 identity_semantic_instance_key,
                 normalized::{NRootId, ReadMode},
+                root_semantic_instance_key,
             },
             ty::{
-                ProviderAddressSpace,
                 corelib::{resolve_core_trait, resolve_lib_func_path},
                 ty_check::{BodyOwner, EffectArgLayoutView, EffectPassMode},
             },
@@ -3410,6 +3438,104 @@ fn raw(_ ptr: *Outer) {}
                     .is_err(),
                 forged != HandleAddressSpace::Unspecified,
                 "{name}: widened forged transport contract"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_storage_classification_and_hashed_slot_contracts_are_verified() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "provider_storage_verification.fe".into(),
+            r#"
+use std::evm::{Address, StorageMap}
+pub struct Ledger {
+    pub balances: StorageMap<Address, u256>,
+    pub total_supply: u256,
+}
+msg M {
+    #[selector = 1]
+    Supply -> u256,
+}
+pub contract C {
+    mut ledger: Ledger,
+    recv M {
+        Supply -> u256 uses (ledger) { ledger.total_supply }
+    }
+}
+"#,
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let [contract] = module.all_contracts(&db).as_slice() else {
+            panic!("expected one contract");
+        };
+        let owner = BodyOwner::ContractRecvArm {
+            contract: *contract,
+            recv_idx: 0,
+            arm_idx: 0,
+        };
+        let instance =
+            get_or_build_semantic_instance(&db, root_semantic_instance_key(&db, owner).unwrap());
+        let checker = Borrowck::new(&db, instance).unwrap();
+        let target = checker
+            .inventory
+            .inputs
+            .iter()
+            .find(|target| matches!(target.source.origin, ExternalOrigin::Provider { .. }))
+            .expect("contract-field provider target");
+        let ExternalOrigin::Provider {
+            provider,
+            target_ty,
+            storage,
+        } = target.source.origin.clone()
+        else {
+            unreachable!();
+        };
+        assert_eq!(storage, ProviderStorage::AllocatedField);
+        let mut source = SourceExpr::whole(target.source.clone());
+        assert!(
+            checker
+                .verify_source(&source, &target.scope, None, false)
+                .is_ok()
+        );
+        source.source.origin = ExternalOrigin::Provider {
+            provider,
+            target_ty,
+            storage: ProviderStorage::Other,
+        };
+        assert!(
+            checker
+                .verify_source(&source, &target.scope, None, false)
+                .is_err(),
+            "a forged provider classification was accepted"
+        );
+
+        // Only a hashed slot is constrained to the storage word contract.
+        let scope = BinderScope::default();
+        for (space, provenance, valid) in [
+            (
+                ProviderAddressSpace::Storage,
+                AddressProvenance::HashedStorageSlot,
+                true,
+            ),
+            (
+                ProviderAddressSpace::Memory,
+                AddressProvenance::HashedStorageSlot,
+                false,
+            ),
+            (ProviderAddressSpace::Memory, AddressProvenance::Raw, true),
+        ] {
+            let address = SourceExpr::whole(ExternalSource::unknown(
+                ReferentContract::new(&db, TyId::u256(&db), HandleAddressSpace::Known(space)),
+                AddressOccurrence::Summary(0),
+                Box::new([]),
+                provenance,
+            ));
+            assert_eq!(
+                checker.verify_source(&address, &scope, None, false).is_ok(),
+                valid,
+                "{space:?} {provenance:?}"
             );
         }
     }

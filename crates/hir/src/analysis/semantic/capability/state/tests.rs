@@ -5,7 +5,7 @@ use crate::{
         semantic::{
             BorrowActivation, FieldIndex, SemOrigin,
             capability::{
-                external::{ExternalOrigin, ExternalSource, ReferentContract},
+                external::{AddressProvenance, ExternalOrigin, ExternalSource, ReferentContract},
                 handle::{
                     AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
                     OpaqueWriteSite,
@@ -289,6 +289,7 @@ fn existential_uncertain_object_write_retains_residual_overlap() {
             contract,
             AddressOccurrence::Summary(0),
             Box::new([index]),
+            AddressProvenance::Raw,
         ))
     };
     let initial = handle_in(&mut values, shapes.handle, &family_scope, 0);

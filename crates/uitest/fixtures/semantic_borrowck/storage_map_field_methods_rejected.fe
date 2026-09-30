@@ -1,0 +1,164 @@
+use std::evm::{Address, RawStorage, StorPtr, StorageMap, StoragePackedArray}
+
+pub struct Ledger {
+    pub balances: StorageMap<Address, u256>,
+    pub total_supply: u256,
+}
+
+impl Ledger {
+    // Rejected (known limitation): inside the method the scalar borrow is of
+    // an input place, which could be any slot, including the map entry.
+    fn hold(mut self, _ to: Address) -> u256 {
+        let supply = mut self.total_supply
+        self.balances.set(key: to, value: 7)
+        supply += 1
+        supply
+    }
+
+    fn peek(mut self, _ slot: u256) -> u256 uses (raw: RawStorage) {
+        raw.sload(slot)
+    }
+
+    fn mixed(mut self, _ to: Address, slot: u256) uses (raw: mut RawStorage) {
+        self.balances.set(key: to, value: 1)
+        raw.sstore(slot, value: self.balances.get(key: to))
+    }
+}
+
+msg HoldMsg {
+    #[selector = 1]
+    Hold { to: Address } -> u256,
+}
+
+pub contract Limitation {
+    mut ledger: Ledger,
+
+    recv HoldMsg {
+        Hold { to } -> u256 uses (mut ledger) {
+            ledger.hold(to)
+        }
+    }
+}
+
+msg RawMsg {
+    #[selector = 1]
+    Peek { slot: u256 } -> u256,
+    #[selector = 2]
+    Mixed { to: Address, slot: u256 },
+}
+
+// Rejected: a raw access at an arbitrary slot can alias the borrowed field,
+// even when the same method also uses the map.
+pub contract RawSlots {
+    mut ledger: Ledger,
+
+    recv RawMsg {
+        Peek { slot } -> u256 uses (mut ledger, raw: RawStorage) {
+            ledger.peek(slot)
+        }
+        Mixed { to, slot } uses (mut ledger, raw: mut RawStorage) {
+            ledger.mixed(to, slot)
+        }
+    }
+}
+
+fn forward_mixed(_ to: Address, slot: u256) uses (ledger: mut Ledger, raw: mut RawStorage) {
+    ledger.mixed(to, slot)
+}
+
+fn repeat_mixed(_ to: Address, slot: u256, again: bool)
+    uses (ledger: mut Ledger, raw: mut RawStorage)
+{
+    if again {
+        repeat_mixed(to, slot, again: false)
+    }
+    ledger.mixed(to, slot)
+}
+
+// Rejected: the raw access survives forwarding and recursive summaries.
+pub contract ForwardedRaw {
+    mut ledger: Ledger,
+
+    recv RawMsg {
+        Peek { slot } -> u256 uses (mut ledger, raw: mut RawStorage) {
+            forward_mixed(to: Address { inner: slot }, slot)
+            0
+        }
+        Mixed { to, slot } uses (mut ledger, raw: mut RawStorage) {
+            repeat_mixed(to, slot, again: true)
+        }
+    }
+}
+
+pub struct Bits {
+    pub lanes: StoragePackedArray<8>,
+    pub count: u256,
+}
+
+impl Bits {
+    fn flip(mut self, _ i: u256) {
+        self.lanes.set(i, value: 1)
+        self.count += 1
+    }
+}
+
+msg FlipMsg {
+    #[selector = 1]
+    Flip { i: u256 },
+}
+
+// Rejected: an unbounded packed-array index can address any slot in a wide
+// range, so packed arrays are not hashed-slot containers.
+pub contract Packed {
+    mut bits: Bits,
+
+    recv FlipMsg {
+        Flip { i } uses (mut bits) {
+            bits.flip(i)
+        }
+    }
+}
+
+fn hold_across_set(_ key: u256) uses (slot: mut u256, map: mut StorageMap<u256, u256, 42>) {
+    let held = mut slot
+    map.set(key, value: 7)
+    held = 9
+}
+
+// Rejected: a storage pointer can be built at a map entry's slot, so a
+// provider bound to an arbitrary pointer may alias the map.
+fn through_pointer(_ key: u256, pointer: StorPtr<u256>, map: mut StorageMap<u256, u256, 42>) {
+    with (u256 = pointer, StorageMap<u256, u256, 42> = map) {
+        hold_across_set(key)
+    }
+}
+
+pub struct Vault {
+    pub pointer: StorPtr<u256>,
+    pub balances: StorageMap<u256, u256, 42>,
+}
+
+fn hold_target_across_set(_ key: u256) uses (target: mut u256, map: mut StorageMap<u256, u256, 42>) {
+    let held = mut target
+    map.set(key, value: 7)
+    held = 9
+}
+
+msg VaultMsg {
+    #[selector = 1]
+    Touch { key: u256 },
+}
+
+// Rejected: a pointer stored in a contract field may target any slot; the
+// field's own allocation says nothing about its target.
+pub contract StoredPointer {
+    mut vault: Vault,
+
+    recv VaultMsg {
+        Touch { key } uses (mut vault) {
+            with (u256 = vault.pointer, StorageMap<u256, u256, 42> = vault.balances) {
+                hold_target_across_set(key)
+            }
+        }
+    }
+}

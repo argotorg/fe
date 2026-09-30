@@ -1,6 +1,6 @@
 use super::effects::{Address, RawStorage}
 use super::crypto::keccak256
-use ingot::evm::ops::{mstore, sload, sstore}
+use ingot::evm::ops::{mstore, sload_hashed, sstore_hashed}
 use ingot::evm::word::WordRepr
 use core::{EffectRef, EffectRefMut, ptr}
 
@@ -216,7 +216,7 @@ fn storagemap_get_word_with_salt<K>(key: K, salt: u256) -> u256
     where K: StorageKey
 {
     let storage_slot = storagemap_storage_slot_with_salt(key, salt)
-    sload(storage_slot)
+    sload_hashed(storage_slot)
 }
 
 #[inline(always)]
@@ -224,7 +224,7 @@ fn storagemap_set_word_with_salt<K>(key: K, salt: u256, word: u256)
     where K: StorageKey
 {
     let storage_slot = storagemap_storage_slot_with_salt(key, salt)
-    sstore(slot: storage_slot, value: word)
+    sstore_hashed(slot: storage_slot, value: word)
 }
 
 impl<K: StorageKey, V: WordRepr, const SALT: u256> StorageMap<K, V, SALT> {

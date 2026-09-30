@@ -1,0 +1,27 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/name_resolution/direct_evm_hashed_storage_ops_private.fe
+---
+error[2-0003]: `sstore_hashed` is not visible
+   ┌─ direct_evm_hashed_storage_ops_private.fe:6:10
+   │
+ 6 │     ops::sstore_hashed(slot, value: 1)
+   │          ^^^^^^^^^^^^^ `sstore_hashed` is not visible
+   │
+   ┌─ src/evm/ops.fe:26:19
+   │
+26 │     pub(ingot) fn sstore_hashed(slot: u256, value: u256)
+   │                   ------------- `sstore_hashed` is defined here
+
+error[2-0003]: `sload_hashed` is not visible
+   ┌─ direct_evm_hashed_storage_ops_private.fe:7:10
+   │
+ 7 │     ops::sload_hashed(slot)
+   │          ^^^^^^^^^^^^ `sload_hashed` is not visible
+   │
+   ┌─ src/evm/ops.fe:25:19
+   │
+25 │     pub(ingot) fn sload_hashed(_: u256) -> u256
+   │                   ------------ `sload_hashed` is defined here

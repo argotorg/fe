@@ -12,7 +12,7 @@ use crate::analysis::{
     semantic::{
         FieldIndex, SemOrigin,
         capability::{
-            external::{ExternalOrigin, ExternalSource, ReferentContract},
+            external::{AddressProvenance, ExternalOrigin, ExternalSource, ReferentContract},
             footprint::AccessExtent,
             guard::Guard,
             handle::{
@@ -30,6 +30,7 @@ use crate::analysis::{
         normalized::NValueId,
     },
     ty::{
+        ProviderAddressSpace,
         corelib::{
             IntrinsicContract, IntrinsicMemoryExtent, IntrinsicMemoryTarget,
             IntrinsicPointerReturn, MemoryAccessKind, contract_metadata_kind, intrinsic_contract,
@@ -307,6 +308,21 @@ impl<'db> Borrowck<'db> {
                     source.path,
                 ))
             });
+        let numeric_address = |input, space, provenance| SourceExpr {
+            source: ExternalSource::unknown(
+                ReferentContract::new(
+                    self.db,
+                    TyId::u256(self.db),
+                    HandleAddressSpace::Known(space),
+                ),
+                AddressOccurrence::Summary(input),
+                Box::new([IndexExpr::FormalValue(input)]),
+                provenance,
+            ),
+            path: RegionPath::default(),
+            views: Default::default(),
+            invalidated: false,
+        };
         for access in contracts {
             if let IntrinsicMemoryTarget::Value(param) = access.target {
                 let ty = self.summary_param_ty(param).ok_or_else(|| {
@@ -320,20 +336,14 @@ impl<'db> Borrowck<'db> {
                 }
             }
             let source = match access.target {
-                IntrinsicMemoryTarget::Address { input, space } => Some(SourceExpr {
-                    source: ExternalSource::unknown(
-                        ReferentContract::new(
-                            self.db,
-                            TyId::u256(self.db),
-                            HandleAddressSpace::Known(space),
-                        ),
-                        AddressOccurrence::Summary(input),
-                        Box::new([IndexExpr::FormalValue(input)]),
-                    ),
-                    path: RegionPath::default(),
-                    views: Default::default(),
-                    invalidated: false,
-                }),
+                IntrinsicMemoryTarget::Address { input, space } => {
+                    Some(numeric_address(input, space, AddressProvenance::Raw))
+                }
+                IntrinsicMemoryTarget::HashedStorageSlot(input) => Some(numeric_address(
+                    input,
+                    ProviderAddressSpace::Storage,
+                    AddressProvenance::HashedStorageSlot,
+                )),
                 IntrinsicMemoryTarget::WholeSpace(space) => Some(SourceExpr {
                     // This uncertain source ranges over every compatible slot.
                     // Unknown extent prevents field/offset separation, and this
@@ -346,6 +356,7 @@ impl<'db> Borrowck<'db> {
                         ),
                         AddressOccurrence::Summary(0),
                         Box::new([]),
+                        AddressProvenance::Raw,
                     ),
                     path: RegionPath::default(),
                     views: Default::default(),
@@ -481,6 +492,7 @@ impl<'db> Borrowck<'db> {
                 ReferentContract::new(self.db, TyId::u8(self.db), HandleAddressSpace::Unspecified),
                 AddressOccurrence::Summary(choice),
                 Box::new([]),
+                AddressProvenance::Raw,
             )),
             RegionPath::default(),
         );

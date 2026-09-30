@@ -6,8 +6,11 @@ use std::{
 
 use super::{
     birth::AllocationBirth,
-    external::{ClobberCondition, ExternalOrigin, ExternalSource, ReferentContract},
-    footprint::AccessExtent,
+    external::{
+        AddressProvenance, ClobberCondition, ExternalOrigin, ExternalSource, ProviderStorage,
+        ReferentContract,
+    },
+    footprint::{AccessExtent, AccessFootprint},
     guard::{ChoiceKey, Guard, ValueOccurrence},
     handle::{
         AddressOccurrence, HandleAddressSpace, OpaqueHandleContract, OpaqueHandleRef,
@@ -17,7 +20,7 @@ use super::{
     loan::{CapabilityRef, LoanDef, LoanId, LoanRef},
     opaque::OpaqueWrite,
     path::{Projection, RegionPath, StructuralPath},
-    region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace},
+    region::{OverlapResult, ProviderRegionId, RegionRoot, RegionSet, SymbolicPlace},
     repack::ReferentRepackId,
     semantics::{CapabilityClass, CapabilitySemantics, StorageClass, TransportClass},
     shape::{ArrayLength, CapabilityShape, ShapeChildren, ShapeId, capability_shape},
@@ -34,14 +37,16 @@ use crate::{
             normalized::{NRootId, NValueDefinition, NValueId, normalize_semantic_body},
         },
         ty::{
-            provider::ProviderAddressSpace,
-            ty_check::BodyOwner,
+            provider::{ProviderAddressSpace, ProviderLayoutEvidence},
+            ty_check::{BodyOwner, EffectParamSite},
             ty_def::{BorrowKind, TyId},
         },
     },
     hir_def::ItemKind,
+    semantic::{ContractFieldId, EffectEnvView, LayoutViewKind, ProviderBinding, ProviderSource},
     test_db::{HirAnalysisTestDb, find_func},
 };
+use common::file::File;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct Payload<'db> {
@@ -222,11 +227,19 @@ fn typed_storage_matching_keeps_repeated_and_distinct_index_roles() {
     let (generation_scope, generation) = scope.bind(IndexNamespace::InputSlot);
     let (family_scope, element) = generation_scope.bind(IndexNamespace::InputSlot);
     let contract = ReferentContract::memory(&db, byte);
-    let base =
-        ExternalSource::unknown(contract, AddressOccurrence::Summary(0), [generation].into());
+    let base = ExternalSource::unknown(
+        contract,
+        AddressOccurrence::Summary(0),
+        [generation].into(),
+        AddressProvenance::Raw,
+    );
     let family = ExternalSource::memory(&db, SourceExpr::whole(base), word, Some((byte, element)));
-    let base =
-        ExternalSource::unknown(contract, AddressOccurrence::Summary(0), [runtime(3)].into());
+    let base = ExternalSource::unknown(
+        contract,
+        AddressOccurrence::Summary(0),
+        [runtime(3)].into(),
+        AddressProvenance::Raw,
+    );
     let request = ExternalSource::memory(&db, SourceExpr::whole(base), word, None);
     let witness = family
         .match_instance(&family_scope, &request, &scope)
@@ -262,11 +275,17 @@ fn typed_storage_matching_transports_metadata_without_selecting_a_cell() {
     let scope = BinderScope::default();
     let (family_scope, witness_index) = scope.bind(IndexNamespace::Existential);
     let contract = ReferentContract::memory(&db, TyId::u256(&db));
-    let mut family = ExternalSource::unknown(contract, AddressOccurrence::Summary(0), Box::new([]));
+    let mut family = ExternalSource::unknown(
+        contract,
+        AddressOccurrence::Summary(0),
+        Box::new([]),
+        AddressProvenance::Raw,
+    );
     let metadata = ExternalSource::unknown(
         contract,
         AddressOccurrence::Summary(1),
         [witness_index].into(),
+        AddressProvenance::Raw,
     );
     let metadata = SourceExpr::whole(metadata);
     family.clobber = Some(Box::new(ClobberCondition {
@@ -2574,8 +2593,12 @@ fn allocation_birth_selects_guarded_full_families_and_only_their_own_bytes() {
             )
             .is_none()
     );
-    let unknown =
-        ExternalSource::unknown(source.contract, AddressOccurrence::Summary(0), Box::new([]));
+    let unknown = ExternalSource::unknown(
+        source.contract,
+        AddressOccurrence::Summary(0),
+        Box::new([]),
+        AddressProvenance::Raw,
+    );
     assert!(AllocationBirth::from_source(&unknown, Guard::always(&scope())).is_none());
     assert!(
         birth
@@ -3104,5 +3127,281 @@ fn substituted_projection_prunes_siblings_and_preserves_enum_and_index_domains()
                 );
             }
         }
+    }
+}
+
+const LEDGER_FIELDS: &str = r#"
+use std::evm::{Address, StorageMap, TStorPtr}
+pub struct Ledger {
+    pub balances: StorageMap<Address, u256>,
+    pub total_supply: u256,
+}
+msg M {
+    #[selector = 1]
+    Touch,
+}
+pub contract C {
+    mut ledger: Ledger,
+    mut other: Ledger,
+    mut transient: TStorPtr<Ledger>,
+    recv M {
+        Touch uses (mut ledger, mut other, mut transient) {}
+    }
+}
+fn anchor() {}
+"#;
+
+/// The resolved `ledger`, `other` and `transient` contract-field providers.
+fn ledger_field_bindings(db: &HirAnalysisTestDb, file: File) -> [ProviderBinding<'_>; 3] {
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let [contract] = module.all_contracts(db).as_slice() else {
+        panic!("expected one contract");
+    };
+    let site = EffectParamSite::ContractRecvArm {
+        contract: *contract,
+        recv_idx: 0,
+        arm_idx: 0,
+    };
+    [0, 1, 2].map(|idx| {
+        EffectEnvView::new(site)
+            .resolved_binding(db, idx)
+            .expect("resolved contract-field provider")
+            .provider
+    })
+}
+
+fn provider_source<'db>(
+    db: &'db dyn HirAnalysisDb,
+    binding: &ProviderBinding<'db>,
+) -> ExternalSource<'db> {
+    ExternalSource::provider(
+        db,
+        ProviderRegionId::new(db, binding.clone()),
+        binding.effective_target_ty(),
+    )
+}
+
+#[test]
+fn provider_storage_classifies_only_direct_persistent_allocated_fields() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("provider_storage.fe".into(), LEDGER_FIELDS);
+    let [ledger, other, transient] = ledger_field_bindings(&db, file);
+    let (module, _) = db.top_mod(file);
+    let storage = |binding: &ProviderBinding<'_>| match provider_source(&db, binding).origin {
+        ExternalOrigin::Provider { storage, .. } => storage,
+        _ => unreachable!("provider origin"),
+    };
+    assert_eq!(storage(&ledger), ProviderStorage::AllocatedField);
+    assert_eq!(storage(&other), ProviderStorage::AllocatedField);
+    assert_eq!(storage(&transient), ProviderStorage::Other);
+
+    let ProviderSource::ContractField { field } = ledger.source else {
+        panic!("contract-field source");
+    };
+    let ProviderSource::ContractField { field: other_field } = other.source else {
+        panic!("contract-field source");
+    };
+    let missing = ContractFieldId {
+        contract: field.contract,
+        index: 99,
+    };
+    let mut uses_param = ledger.clone();
+    uses_param.source = ProviderSource::UsesParam {
+        site: EffectParamSite::Func(find_func(&db, module, "anchor")),
+        requirement_idx: 0,
+    };
+    let mut handle_evidence = ledger.clone();
+    handle_evidence.semantics.evidence = ProviderLayoutEvidence::NotHandle;
+    let mut no_layout = ledger.clone();
+    no_layout.layout_env = None;
+    let mut mismatched_field = ledger.clone();
+    mismatched_field.layout_env.as_mut().unwrap().field = other_field;
+    let mut declared_view = ledger.clone();
+    declared_view.layout_env.as_mut().unwrap().view = LayoutViewKind::Declared;
+    let mut unresolved_layout = ledger.clone();
+    unresolved_layout.source = ProviderSource::ContractField { field: missing };
+    unresolved_layout.layout_env.as_mut().unwrap().field = missing;
+    let mut transient_space = ledger.clone();
+    transient_space.semantics.address_space = Some(ProviderAddressSpace::Transient);
+    let mut unresolved_space = ledger.clone();
+    unresolved_space.semantics.address_space = None;
+    for (name, binding) in [
+        ("uses-param source", uses_param),
+        ("handle evidence", handle_evidence),
+        ("no layout environment", no_layout),
+        ("mismatched layout field", mismatched_field),
+        ("declared layout view", declared_view),
+        ("unresolved field layout", unresolved_layout),
+        ("transient space", transient_space),
+        ("unresolved space", unresolved_space),
+    ] {
+        assert_eq!(storage(&binding), ProviderStorage::Other, "{name}");
+    }
+
+    // The classification caches a function of the unchanged interned binding.
+    let field = provider_source(&db, &ledger);
+    let identity = IndexSubst::new(&scope(), &scope(), []).unwrap();
+    assert_eq!(field.substitute(&db, &identity), field);
+}
+
+#[test]
+fn hashed_storage_slots_are_disjoint_only_from_direct_allocated_fields() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("hashed_slots.fe".into(), LEDGER_FIELDS);
+    let [ledger, _, transient] = ledger_field_bindings(&db, file);
+    let scope = scope();
+    let word = ReferentContract::new(
+        &db,
+        TyId::u256(&db),
+        HandleAddressSpace::Known(ProviderAddressSpace::Storage),
+    );
+    let address = |occurrence, provenance| {
+        ExternalSource::unknown(
+            word,
+            AddressOccurrence::Summary(occurrence),
+            Box::new([]),
+            provenance,
+        )
+    };
+    let region = |source, path| RegionSet::singleton(&scope, RegionRoot::External(source), path);
+    let whole = |source| region(source, RegionPath::default());
+    let separated = |left: &RegionSet<'_>, right: &RegionSet<'_>| {
+        [(left, right), (right, left)]
+            .into_iter()
+            .all(|(left, right)| {
+                let (common, uncertain) = left.intersect(right);
+                common.is_empty()
+                    && !uncertain
+                    && left.overlap(&db, right) == OverlapResult::Disjoint
+                    && [
+                        AccessExtent::Unknown,
+                        AccessExtent::Bytes(IndexExpr::Const(32)),
+                    ]
+                    .into_iter()
+                    .all(|extent| {
+                        AccessFootprint {
+                            region: left,
+                            extent,
+                        }
+                        .overlap(&db, AccessFootprint::typed(right))
+                            == OverlapResult::Disjoint
+                    })
+            })
+    };
+    let aliased = |left: &RegionSet<'_>, right: &RegionSet<'_>| {
+        left.overlap(&db, right) != OverlapResult::Disjoint
+            && right.overlap(&db, left) != OverlapResult::Disjoint
+    };
+    let hashed = address(0, AddressProvenance::HashedStorageSlot);
+    let field = provider_source(&db, &ledger);
+    let supply = RegionPath::new([Projection::Field(FieldIndex(1))]);
+
+    assert!(separated(&whole(hashed.clone()), &whole(field.clone())));
+    assert!(separated(
+        &whole(hashed.clone()),
+        &region(field.clone(), supply.clone())
+    ));
+    // A transient field is separated by its address space instead.
+    assert!(separated(
+        &whole(hashed.clone()),
+        &whole(provider_source(&db, &transient))
+    ));
+
+    let mut other_provider = ledger.clone();
+    other_provider.layout_env = None;
+    let opaque = ExternalSource::opaque(
+        &db,
+        OpaqueHandleRef {
+            contract: OpaqueHandleContract {
+                handle_ty: TyId::u256(&db),
+                target_ty: TyId::u256(&db),
+                address_space: HandleAddressSpace::Known(ProviderAddressSpace::Storage),
+            },
+            occurrence: AddressOccurrence::Summary(1),
+            arguments: Box::new([]),
+        },
+    );
+    for (name, other) in [
+        ("raw slot", whole(address(1, AddressProvenance::Raw))),
+        (
+            "another hashed slot",
+            whole(address(1, AddressProvenance::HashedStorageSlot)),
+        ),
+        (
+            "unallocated provider",
+            whole(provider_source(&db, &other_provider)),
+        ),
+        (
+            "followed field",
+            whole(field.follow(supply.clone(), word, false)),
+        ),
+        ("widened field", whole(field.clone().widen())),
+        (
+            "input",
+            whole(ExternalSource::input(InputSource::place(0), word, true)),
+        ),
+        ("opaque handle", whole(opaque)),
+        ("opaque memory", whole(ExternalSource::opaque_memory(word))),
+    ] {
+        assert!(aliased(&whole(hashed.clone()), &other), "{name}");
+    }
+    // Raw slots, and hashed addresses loaded from storage, keep aliasing fields.
+    assert!(aliased(
+        &whole(address(0, AddressProvenance::Raw)),
+        &whole(field.clone())
+    ));
+    assert!(aliased(
+        &whole(hashed.follow(RegionPath::default(), word, false)),
+        &whole(field)
+    ));
+}
+
+#[test]
+fn raw_and_hashed_addresses_never_share_structural_identity() {
+    let db = HirAnalysisTestDb::default();
+    let scope = scope();
+    let word = ReferentContract::new(
+        &db,
+        TyId::u256(&db),
+        HandleAddressSpace::Known(ProviderAddressSpace::Storage),
+    );
+    let address = |provenance| {
+        ExternalSource::unknown(
+            word,
+            AddressOccurrence::Summary(0),
+            Box::new([]),
+            provenance,
+        )
+    };
+    let whole = |source| {
+        RegionSet::singleton(
+            &scope,
+            RegionRoot::External(ExternalSource::clone(source)),
+            RegionPath::default(),
+        )
+    };
+    let raw = address(AddressProvenance::Raw);
+    let hashed = address(AddressProvenance::HashedStorageSlot);
+    for (left, right, same) in [
+        (&raw, &raw, true),
+        (&hashed, &hashed, true),
+        (&raw, &hashed, false),
+        (&hashed, &raw, false),
+    ] {
+        assert_eq!(
+            left.match_instance(&scope, right, &scope).is_some(),
+            same,
+            "{left:?} {right:?}"
+        );
+        assert_eq!(whole(left).provably_covers(&whole(right)), same);
+        let (common, uncertain) = whole(left).intersect(&whole(right));
+        assert!(!common.is_empty());
+        assert_eq!(uncertain, !same);
+    }
+    let identity = IndexSubst::new(&scope, &scope, []).unwrap();
+    for source in [&raw, &hashed] {
+        assert_eq!(source.substitute(&db, &identity), *source);
+        assert_eq!(source.address_base(&db).as_ref(), Some(source));
     }
 }
