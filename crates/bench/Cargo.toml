@@ -1,6 +1,6 @@
 [package]
 name = "fe-bench"
-version = "26.4.0"
+version = "26.4.1"
 edition.workspace = true
 
 [dev-dependencies]
