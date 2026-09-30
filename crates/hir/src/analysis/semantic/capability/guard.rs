@@ -12,7 +12,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     hash::{Hash, Hasher},
     iter,
-    sync::Arc,
+    sync::{Arc, Weak},
     thread::LocalKey,
 };
 
@@ -1295,6 +1295,34 @@ pub struct Guard<'db> {
     condition: Arc<Condition<'db>>,
 }
 
+/// An allocation identity that does not keep a guard's graphs or tables alive.
+/// The weak reference keeps its address reserved after the condition is dropped.
+pub(super) struct WeakGuard<'db> {
+    scope: BinderScope,
+    condition: Weak<Condition<'db>>,
+}
+
+impl PartialEq for WeakGuard<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.scope == other.scope && Weak::ptr_eq(&self.condition, &other.condition)
+    }
+}
+
+impl Eq for WeakGuard<'_> {}
+
+impl Hash for WeakGuard<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.scope.hash(state);
+        self.condition.as_ptr().hash(state);
+    }
+}
+
+impl WeakGuard<'_> {
+    pub(super) fn is_live(&self) -> bool {
+        self.condition.strong_count() > 0
+    }
+}
+
 impl<'db> Guard<'db> {
     pub fn always(scope: &BinderScope) -> Self {
         Self {
@@ -1304,6 +1332,13 @@ impl<'db> Guard<'db> {
     }
     pub fn scope(&self) -> &BinderScope {
         &self.scope
+    }
+
+    pub(super) fn downgrade(&self) -> WeakGuard<'db> {
+        WeakGuard {
+            scope: self.scope.clone(),
+            condition: Arc::downgrade(&self.condition),
+        }
     }
 
     pub fn and(&self, other: &Self) -> Option<Self> {

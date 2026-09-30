@@ -1,6 +1,9 @@
 //! Shape-checked, hash-consed structural values shared by local state and summaries.
+#[cfg(test)]
+mod tests;
+
 use super::{
-    guard::{ChoiceKey, Guard, GuardCache, ValueOccurrence},
+    guard::{ChoiceKey, Guard, GuardCache, ValueOccurrence, WeakGuard},
     index::{BinderScope, IndexError, IndexExpr, IndexNamespace, IndexSubst},
     path::{Projection, StructuralPath},
     semantics::{CapabilityClass, CapabilitySemantics},
@@ -16,7 +19,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
     hash::{BuildHasher, Hash, Hasher},
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, Weak},
 };
 
 pub trait IndexPayload<'db>: Clone + Eq + Ord + Hash {
@@ -46,6 +49,52 @@ impl<P: Eq> Eq for ValueId<'_, P> {}
 impl<P> Hash for ValueId<'_, P> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u64(self.1);
+    }
+}
+
+// Memo keys use allocation identity: an equal but separately built value may miss
+// reuse, while a weak reference prevents its address from being reused underneath
+// a key. Neither keys nor results keep structural values or their guards alive.
+struct WeakValueId<'db, P>(Weak<StructuredValue<'db, P>>, u64);
+
+impl<P> PartialEq for WeakValueId<'_, P> {
+    fn eq(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl<P> Eq for WeakValueId<'_, P> {}
+
+impl<P> Hash for WeakValueId<'_, P> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.as_ptr().hash(state);
+    }
+}
+
+impl<'db, P> WeakValueId<'db, P> {
+    fn upgrade(&self) -> Option<ValueId<'db, P>> {
+        Some(ValueId(self.0.upgrade()?, self.1))
+    }
+
+    fn is_live(&self) -> bool {
+        self.0.strong_count() > 0
+    }
+}
+
+#[derive(PartialEq, Eq, Hash)]
+enum ValueOperation<'db, P> {
+    Join(WeakValueId<'db, P>, WeakValueId<'db, P>),
+    Guard(WeakValueId<'db, P>, WeakGuard<'db>),
+    Widen(WeakValueId<'db, P>, bool),
+}
+
+impl<P> ValueOperation<'_, P> {
+    fn is_live(&self) -> bool {
+        match self {
+            Self::Join(lhs, rhs) => lhs.is_live() && rhs.is_live(),
+            Self::Guard(value, guard) => value.is_live() && guard.is_live(),
+            Self::Widen(value, _) => value.is_live(),
+        }
     }
 }
 
@@ -105,6 +154,7 @@ pub struct ValueMetrics {
     pub nodes_created: usize,
     pub interner_evictions: usize,
     pub widened_nodes: usize,
+    pub operations_evaluated: usize,
 }
 
 pub struct ValueInterner<'db, P> {
@@ -114,12 +164,17 @@ pub struct ValueInterner<'db, P> {
     // costs a missed reuse, which eviction already allows.
     nodes: FxHashMap<u64, ValueId<'db, P>>,
     normalized: FxHashMap<(BinderScope, Guarded<'db, P>), Guarded<'db, P>>,
+    operations: FxHashMap<ValueOperation<'db, P>, WeakValueId<'db, P>>,
     guards: Rc<RefCell<GuardCache<'db>>>,
     limits: ValueLimits,
     metrics: ValueMetrics,
 }
 
 impl<'db, P: IndexPayload<'db>> ValueId<'db, P> {
+    fn downgrade(&self) -> WeakValueId<'db, P> {
+        WeakValueId(Arc::downgrade(&self.0), self.1)
+    }
+
     pub fn direct(&self) -> &[Guarded<'db, P>] {
         &self.0.direct
     }
@@ -191,6 +246,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             db,
             nodes: FxHashMap::default(),
             normalized: FxHashMap::default(),
+            operations: FxHashMap::default(),
             guards: Rc::default(),
             limits,
             metrics: ValueMetrics::default(),
@@ -208,6 +264,39 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
 
     pub fn metrics(&self) -> ValueMetrics {
         self.metrics
+    }
+
+    fn memoized(
+        &mut self,
+        operation: impl FnOnce() -> ValueOperation<'db, P>,
+        evaluate: impl FnOnce(&mut Self) -> ValueId<'db, P>,
+    ) -> ValueId<'db, P> {
+        let limit = self.limits.interned_nodes.filter(|limit| *limit > 0);
+        let operation = limit.map(|_| operation());
+        if let Some(operation) = &operation
+            && let Some(result) = self
+                .operations
+                .get(operation)
+                .and_then(WeakValueId::upgrade)
+        {
+            return result;
+        }
+        self.metrics.operations_evaluated += 1;
+        let result = evaluate(self);
+        if let Some(limit) = limit
+            && let Some(operation) = operation
+        {
+            if self.operations.len() >= limit {
+                self.operations
+                    .retain(|operation, result| operation.is_live() && result.is_live());
+                // Leave at least half the budget free so repeated sweeps amortize.
+                if self.operations.len() >= limit / 2 {
+                    self.operations.clear();
+                }
+            }
+            self.operations.insert(operation, result.downgrade());
+        }
+        result
     }
 
     pub fn empty(&mut self, shape: ShapeId<'db>, scope: &BinderScope) -> ValueId<'db, P> {
@@ -534,6 +623,13 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         if lhs == rhs {
             return lhs.clone();
         }
+        self.memoized(
+            || ValueOperation::Join(lhs.downgrade(), rhs.downgrade()),
+            |this| this.join_nodes(lhs, rhs),
+        )
+    }
+
+    fn join_nodes(&mut self, lhs: &ValueId<'db, P>, rhs: &ValueId<'db, P>) -> ValueId<'db, P> {
         let mut direct = lhs.0.direct.clone();
         direct.extend(rhs.0.direct.iter().cloned());
         let children = match (&lhs.0.children, &rhs.0.children) {
@@ -599,6 +695,13 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         if value.is_empty() {
             return value.clone();
         }
+        self.memoized(
+            || ValueOperation::Guard(value.downgrade(), guard.downgrade()),
+            |this| this.guard_node(value, guard),
+        )
+    }
+
+    fn guard_node(&mut self, value: &ValueId<'db, P>, guard: &Guard<'db>) -> ValueId<'db, P> {
         let direct = value
             .0
             .direct
@@ -1490,6 +1593,13 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
     }
 
     fn widen_node(&mut self, value: &ValueId<'db, P>, force: bool) -> ValueId<'db, P> {
+        self.memoized(
+            || ValueOperation::Widen(value.downgrade(), force),
+            |this| this.widen_structure(value, force),
+        )
+    }
+
+    fn widen_structure(&mut self, value: &ValueId<'db, P>, force: bool) -> ValueId<'db, P> {
         let weaken = force
             || value.0.direct.len() > self.limits.guarded_alternatives
             || value.0.direct.iter().any(|entry| {
@@ -1596,26 +1706,35 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
     }
 
     fn intern(&mut self, mut node: StructuredValue<'db, P>) -> ValueId<'db, P> {
-        let mut canonical = BTreeMap::<(BinderScope, P), Guard<'db>>::new();
-        for entry in std::mem::take(&mut node.direct) {
-            let entry = self.alpha_normalize(&node.scope, entry);
-            match canonical.entry((entry.guard.scope().clone(), entry.payload)) {
-                Entry::Vacant(vacant) => {
-                    vacant.insert(entry.guard);
-                }
-                Entry::Occupied(mut occupied) => {
-                    let guard = self.guards.borrow_mut().or(occupied.get(), &entry.guard);
-                    occupied.insert(guard);
+        let direct = std::mem::take(&mut node.direct);
+        node.direct = if direct.len() <= 1 {
+            // A single entry has nothing to order or merge.
+            direct
+                .into_iter()
+                .map(|entry| self.alpha_normalize(&node.scope, entry))
+                .collect()
+        } else {
+            let mut canonical = BTreeMap::<(BinderScope, P), Guard<'db>>::new();
+            for entry in direct {
+                let entry = self.alpha_normalize(&node.scope, entry);
+                match canonical.entry((entry.guard.scope().clone(), entry.payload)) {
+                    Entry::Vacant(vacant) => {
+                        vacant.insert(entry.guard);
+                    }
+                    Entry::Occupied(mut occupied) => {
+                        let guard = self.guards.borrow_mut().or(occupied.get(), &entry.guard);
+                        occupied.insert(guard);
+                    }
                 }
             }
+            canonical
+                .into_iter()
+                .map(|((_, payload), guard)| Guarded { guard, payload })
+                .collect()
+        };
+        for entry in &mut node.direct {
+            entry.guard = self.guards.borrow_mut().share(entry.guard.clone());
         }
-        node.direct = canonical
-            .into_iter()
-            .map(|((_, payload), guard)| Guarded {
-                guard: self.guards.borrow_mut().share(guard),
-                payload,
-            })
-            .collect();
         let hash = FxBuildHasher.hash_one(&node);
         if let Some(value) = self.nodes.get(&hash).filter(|value| *value.0 == node) {
             return value.clone();
