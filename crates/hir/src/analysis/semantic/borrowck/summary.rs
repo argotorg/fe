@@ -631,7 +631,7 @@ impl<'db> Borrowck<'db> {
             || recursive_unresolved
         {
             if self.summary_mode == BorrowSummaryMode::Final && self.blocked.is_none() {
-                if let Some(diagnostic) = self.analyze_availability().diagnostic {
+                if let Some(diagnostic) = self.availability_diagnostic() {
                     return Err(diagnostic);
                 }
                 self.boundary_requirements
@@ -705,6 +705,9 @@ impl<'db> Borrowck<'db> {
 
     pub fn build_summary(&self) -> Result<BorrowSummary<'db>, SemanticDiagnostic<'db>> {
         let ownership = self.analyze_availability();
+        let _ = self
+            .availability_diagnostic
+            .set(ownership.diagnostic.clone());
         if self.summary_mode == BorrowSummaryMode::Final
             && self.blocked.is_none()
             && let Some(diagnostic) = ownership.diagnostic

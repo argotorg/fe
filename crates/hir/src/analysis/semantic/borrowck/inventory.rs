@@ -1,5 +1,7 @@
 //! Immutable structural input and borrow-occurrence inventory.
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
+
+use rustc_hash::FxHashSet;
 
 use super::{
     control::LoopRegions,
@@ -362,7 +364,7 @@ impl<'db> Inventory<'db> {
         }
         builder.finish_storage()?;
         let mut contracts = Vec::new();
-        let mut shapes = HashSet::new();
+        let mut shapes = FxHashSet::default();
         for shape in &self.shapes {
             if !shapes.insert(*shape) {
                 continue;
@@ -392,7 +394,7 @@ impl<'db> Inventory<'db> {
         // Sealed EVM effect traits admit only the zero-sized EVM token. A
         // symbolic effect witness must not invent hidden pointer-bearing fields.
         let effect_env = instantiated_effect_env(db, instance);
-        let zero_sized_providers: HashSet<_> = instance
+        let zero_sized_providers: FxHashSet<_> = instance
             .assumptions(db)
             .list(db)
             .iter()

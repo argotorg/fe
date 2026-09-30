@@ -4,7 +4,11 @@ use crate::analysis::semantic::diagnostics::{
     BlockedSemanticBody, SemanticDiagnostic, SemanticDiagnosticKind, SemanticDiagnosticSpan,
     SemanticNormalizationFailure, normalized_body_internal_diag,
 };
-use std::{cell::RefCell, collections::BTreeMap, slice};
+use std::{
+    cell::{OnceCell, RefCell},
+    collections::BTreeMap,
+    slice,
+};
 
 use cranelift_entity::EntityRef;
 use num_traits::ToPrimitive;
@@ -110,6 +114,9 @@ pub(super) struct Borrowck<'db> {
         usize,
         FxHashMap<Guarded<'db, CapabilityRef<'db>>, RegionSet<'db>>,
     )>,
+    /// The availability diagnostic of the published states, which the summary
+    /// and the local check would otherwise each recompute.
+    pub(super) availability_diagnostic: OnceCell<Option<SemanticDiagnostic<'db>>>,
 }
 
 impl<'db> Borrowck<'db> {
@@ -169,6 +176,7 @@ impl<'db> Borrowck<'db> {
             storage_facts_changed: false,
             source_generation: 0,
             capability_regions: RefCell::default(),
+            availability_diagnostic: OnceCell::new(),
         };
         checker.prepare_scalar_demand()?;
         Ok(checker)
@@ -792,6 +800,7 @@ impl<'db> Borrowck<'db> {
             }
             self.before = before;
             self.terminal = terminal;
+            self.availability_diagnostic = OnceCell::new();
             self.resolve_operations()?;
             let boundary_requirements = resolve_boundary_requirements(self);
             if !self.loan_facts_changed && !self.storage_facts_changed {

@@ -35,9 +35,9 @@ use crate::{
                 GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
             },
             ty_check::{
-                BodyOwner, ConstIntrinsicKind, EffectParamSite, EffectProviderSpecialization,
-                LocalBinding, ParamSite, ResolvedEffectArg, SemanticExprLowering,
-                SmirLoweringIssue, TypedBody,
+                BodyOwner, Callable, ConstIntrinsicKind, EffectParamSite,
+                EffectProviderSpecialization, LocalBinding, ParamSite, ResolvedEffectArg,
+                SemanticExprLowering, SmirLoweringIssue, TypedBody,
             },
             ty_def::{BorrowKind, CapabilityKind, InvalidCause, TyId},
             ty_lower::{
@@ -283,7 +283,7 @@ pub fn instantiated_typed_body<'db>(
 fn receiver_lowering_plan<'db>(
     db: &'db dyn HirAnalysisDb,
     expr_data: &Expr<'db>,
-    callable: &crate::analysis::ty::ty_check::Callable<'db>,
+    callable: &Callable<'db>,
     typed_body: &TypedBody<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
@@ -430,7 +430,7 @@ fn provisional_for_loop_call_sites<'db>(
 fn provisional_call_site<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    callable: &crate::analysis::ty::ty_check::Callable<'db>,
+    callable: &Callable<'db>,
     nominal_effect_args: &[ResolvedEffectArg<'db>],
     assumptions: PredicateListId<'db>,
     origin: SemOrigin<'db>,
@@ -568,6 +568,8 @@ fn finalize_call_sites<'db>(
     by_site: &FxHashMap<CallSiteId, Vec<CallSiteProviderRefinement>>,
 ) -> Result<(), SemanticDiagnosticId<'db>> {
     let refinements = |site| by_site.get(&site).map(Vec::as_slice);
+    let same_assumptions = instance.assumptions(db)
+        == semantic_instance_base_assumptions_for_key(db, instance.key(db));
     for (expr, expr_data) in body.exprs(db).iter() {
         let Some(site) = call_sites.get_mut(expr.index()).and_then(Option::as_mut) else {
             continue;
@@ -587,15 +589,19 @@ fn finalize_call_sites<'db>(
             typed_body.call_effect_args(expr).unwrap_or(&[]),
             refinements(CallSiteId::Expr(expr)),
             SemOrigin::Expr(expr),
+            same_assumptions,
         )?;
-        site.receiver = receiver_lowering_plan(
-            db,
-            expr_data,
-            callable,
-            typed_body,
-            body.scope(),
-            instance.assumptions(db),
-        );
+        // The provisional plan already used these assumptions.
+        if !same_assumptions {
+            site.receiver = receiver_lowering_plan(
+                db,
+                expr_data,
+                callable,
+                typed_body,
+                body.scope(),
+                instance.assumptions(db),
+            );
+        }
     }
 
     for (stmt, _) in body.stmts(db).iter() {
@@ -616,6 +622,7 @@ fn finalize_call_sites<'db>(
             &seq.len_effect_args,
             refinements(CallSiteId::ForLoopLen(stmt)),
             SemOrigin::Stmt(stmt),
+            same_assumptions,
         )?;
         finalize_call_site(
             db,
@@ -625,6 +632,7 @@ fn finalize_call_sites<'db>(
             &seq.get_effect_args,
             refinements(CallSiteId::ForLoopGet(stmt)),
             SemOrigin::Stmt(stmt),
+            same_assumptions,
         )?;
     }
     Ok(())
@@ -769,10 +777,43 @@ fn method_arg_map_diagnostic<'db>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finalize_call_site<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    callable: &crate::analysis::ty::ty_check::Callable<'db>,
+    callable: &Callable<'db>,
+    site: &mut CallSiteLowering<'db>,
+    nominal_effect_args: &[ResolvedEffectArg<'db>],
+    refinements: Option<&[CallSiteProviderRefinement]>,
+    origin: SemOrigin<'db>,
+    same_assumptions: bool,
+) -> Result<(), SemanticDiagnosticId<'db>> {
+    // A plain call without provider refinements or effect providers, under the
+    // provisional assumptions, resolves exactly as its provisional plan did:
+    // the provider resolution modes differ only for providers and for selected
+    // trait methods.
+    if refinements.is_none()
+        && same_assumptions
+        && callable.trait_inst().is_none()
+        && callable.effect_providers().is_empty()
+    {
+        return Ok(());
+    }
+    replan_call_site(
+        db,
+        instance,
+        callable,
+        site,
+        nominal_effect_args,
+        refinements,
+        origin,
+    )
+}
+
+fn replan_call_site<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    callable: &Callable<'db>,
     site: &mut CallSiteLowering<'db>,
     nominal_effect_args: &[ResolvedEffectArg<'db>],
     refinements: Option<&[CallSiteProviderRefinement]>,
@@ -2348,4 +2389,219 @@ fn known_never_returns_cycle_recover<'db>(
     _instance: SemanticInstance<'db>,
 ) -> salsa::CycleRecoveryAction<bool> {
     salsa::CycleRecoveryAction::Iterate
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        analysis::semantic::{get_or_build_semantic_instance, identity_semantic_instance_key},
+        test_db::{HirAnalysisTestDb, find_func},
+    };
+
+    #[test]
+    fn provisional_plain_calls_equal_full_final_plans() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "plain_call_plans.fe".into(),
+            "struct Item { n: u256 }\n\
+             impl Item { fn read(ref self) -> u256 { self.n } }\n\
+             struct Slot<const ROOT: u256 = _> {}\n\
+             fn target(_ slot: Slot) {}\n\
+             fn generic<T>(_ value: T) {}\n\
+             fn caller<T>(value: T, slot: Slot, item: own Item) {\n\
+                 target(slot)\n\
+                 generic(value)\n\
+                 item.read()\n\
+             }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "caller"))),
+        );
+        assert_plain_call_plans(&db, instance);
+    }
+
+    #[salsa::tracked]
+    fn assert_plain_call_plans<'db>(db: &'db dyn HirAnalysisDb, instance: SemanticInstance<'db>) {
+        let assumptions = instance.assumptions(db);
+        assert_eq!(
+            assumptions,
+            semantic_instance_base_assumptions_for_key(db, instance.key(db))
+        );
+        let typed_body = instance.key(db).typed_body(db);
+        let body = typed_body.body().unwrap();
+        let provisional = provisional_call_sites(db, instance);
+        assert!(provisional.diagnostic.is_none());
+        let mut calls = 0;
+        let mut receivers = 0;
+        for (expr, expr_data) in body.exprs(db).iter() {
+            let Some(SemanticExprLowering::Call { callable }) =
+                typed_body.semantic_expr_lowering(expr)
+            else {
+                continue;
+            };
+            assert!(callable.trait_inst().is_none());
+            assert!(callable.effect_providers().is_empty());
+            let site = provisional.sites[expr.index()].as_ref().unwrap();
+            let mut replanned = site.clone();
+            replan_call_site(
+                db,
+                instance,
+                callable,
+                &mut replanned,
+                typed_body.call_effect_args(expr).unwrap_or(&[]),
+                None,
+                SemOrigin::Expr(expr),
+            )
+            .unwrap();
+            let Partial::Present(expr_data) = expr_data else {
+                unreachable!();
+            };
+            replanned.receiver = receiver_lowering_plan(
+                db,
+                expr_data,
+                callable,
+                typed_body,
+                body.scope(),
+                assumptions,
+            );
+            assert_eq!(site, &replanned);
+            assert_eq!(instance.call_sites(db)[expr.index()].as_ref(), Some(site));
+            calls += 1;
+            receivers += usize::from(site.receiver.is_some());
+        }
+        assert_eq!(calls, 3);
+        assert_eq!(receivers, 1);
+    }
+
+    #[test]
+    fn trait_calls_still_validate_selected_body_signatures() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "trait_call_plans.fe".into(),
+            "trait T { fn value(self) -> bool }\n\
+             impl T for bool { fn value(self) -> bool { self } }\n\
+             fn caller(value: bool) -> bool { value.value() }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "caller"))),
+        );
+        assert_trait_signature_validation(&db, instance);
+    }
+
+    #[salsa::tracked]
+    fn assert_trait_signature_validation<'db>(
+        db: &'db dyn HirAnalysisDb,
+        instance: SemanticInstance<'db>,
+    ) {
+        let typed_body = instance.key(db).typed_body(db);
+        let (expr, mut callable) = typed_body
+            .body()
+            .unwrap()
+            .exprs(db)
+            .iter()
+            .find_map(|(expr, _)| match typed_body.semantic_expr_lowering(expr) {
+                Some(SemanticExprLowering::Call { callable }) => Some((expr, callable.clone())),
+                _ => None,
+            })
+            .unwrap();
+        assert!(callable.trait_inst().is_some());
+        // Keep the selected impl for bool, but corrupt the nominal Self argument.
+        // Provisional planning permits it; final planning must reject it.
+        callable.generic_args_mut()[0] = TyId::u256(db);
+        let mut diagnostic = None;
+        let mut site = provisional_call_site(
+            db,
+            instance,
+            &callable,
+            &[],
+            instance.assumptions(db),
+            SemOrigin::Expr(expr),
+            &mut diagnostic,
+        );
+        assert!(diagnostic.is_none());
+        let error = finalize_call_site(
+            db,
+            instance,
+            &callable,
+            &mut site,
+            &[],
+            None,
+            SemOrigin::Expr(expr),
+            true,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .diag(db)
+                .primary
+                .message
+                .contains("checked call signature mismatch")
+        );
+    }
+
+    #[test]
+    fn final_planning_applies_effect_address_space_refinements() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "refined_call_plans.fe".into(),
+            "fn needs() uses (slot: u256) {}\n\
+             fn caller() uses (slot: u256) { needs() }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "caller"))),
+        );
+        assert_effect_refinement(&db, instance);
+    }
+
+    #[salsa::tracked]
+    fn assert_effect_refinement<'db>(db: &'db dyn HirAnalysisDb, instance: SemanticInstance<'db>) {
+        let typed_body = instance.key(db).typed_body(db);
+        let (expr, callable) = typed_body
+            .body()
+            .unwrap()
+            .exprs(db)
+            .iter()
+            .find_map(|(expr, _)| match typed_body.semantic_expr_lowering(expr) {
+                Some(SemanticExprLowering::Call { callable }) => Some((expr, callable)),
+                _ => None,
+            })
+            .unwrap();
+        let mut site = provisional_call_sites(db, instance).sites[expr.index()]
+            .clone()
+            .unwrap();
+        assert_eq!(site.effect_args.len(), 1);
+        let before = site.clone();
+        let refinement = CallSiteProviderRefinement {
+            call_site: CallSiteId::Expr(expr),
+            binding_idx: site.effect_args[0].binding_idx,
+            provider_idx: None,
+            address_space: ProviderAddressSpace::Storage,
+        };
+        finalize_call_site(
+            db,
+            instance,
+            callable,
+            &mut site,
+            typed_body.call_effect_args(expr).unwrap(),
+            Some(&[refinement]),
+            SemOrigin::Expr(expr),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            site.effect_args[0].provider,
+            Some(ProviderAddressSpace::Storage)
+        );
+        assert_ne!(site, before);
+    }
 }

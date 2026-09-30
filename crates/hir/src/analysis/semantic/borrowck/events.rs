@@ -160,7 +160,7 @@ impl<'db> Borrowck<'db> {
             self.pending.callees.insert(self.instance.key(self.db));
         }
         self.check_conflicts()?;
-        if let Some(diagnostic) = self.analyze_availability().diagnostic {
+        if let Some(diagnostic) = self.availability_diagnostic() {
             return Err(diagnostic);
         }
         Ok(None)

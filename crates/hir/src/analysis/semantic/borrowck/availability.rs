@@ -322,12 +322,25 @@ impl<'db> Borrowck<'db> {
         Ok(Some(resolved))
     }
 
+    /// The availability diagnostic of the published states, computed once.
+    pub(super) fn availability_diagnostic(&self) -> Option<SemanticDiagnostic<'db>> {
+        self.availability_diagnostic
+            .get_or_init(|| self.analyze_availability().diagnostic)
+            .clone()
+    }
+
     pub fn analyze_availability(&self) -> AvailabilityAnalysis<'db> {
         let mut entries = vec![None; self.body.blocks.len()];
         entries[self.body.entry.index()] = Some(AvailabilityState::new());
-        loop {
-            let mut changed = false;
+        // Revisit only blocks whose entry state changed: an unchanged block
+        // would rejoin the same edges into its successors.
+        let mut dirty = vec![false; self.body.blocks.len()];
+        dirty[self.body.entry.index()] = true;
+        while dirty.contains(&true) {
             for (block_index, block) in self.body.blocks.iter().enumerate() {
+                if !std::mem::take(&mut dirty[block_index]) {
+                    continue;
+                }
                 let Some(mut state) = entries[block_index].clone() else {
                     continue;
                 };
@@ -448,15 +461,12 @@ impl<'db> Borrowck<'db> {
                     if let Some(previous) = entry {
                         let old = previous.clone();
                         previous.join(edge);
-                        changed |= *previous != old;
+                        dirty[successor.block.index()] |= *previous != old;
                     } else {
                         *entry = Some(edge);
-                        changed = true;
+                        dirty[successor.block.index()] = true;
                     }
                 }
-            }
-            if !changed {
-                break;
             }
         }
         let mut analysis = AvailabilityAnalysis {
@@ -1084,33 +1094,53 @@ mod tests {
             &db,
             identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "pair"))),
         );
-        let mut body = normalize_semantic_body(&db, instance).unwrap().body;
-        let fields = body
-            .blocks
-            .iter_mut()
-            .flat_map(|block| &mut block.statements)
-            .find_map(|statement| {
-                if let NStatementKind::Define {
-                    expr: NExpr::AggregateMake { fields, .. },
-                    ..
-                } = &mut statement.kind
-                {
-                    (fields.len() == 2).then_some(fields)
-                } else {
-                    None
-                }
-            })
-            .unwrap();
-        fields[1].value = fields[0].value;
-        verify_normalized_body(&db, &body).unwrap();
+        let body = normalize_semantic_body(&db, instance).unwrap().body;
         let mut checker =
             Borrowck::new_with_body(&db, instance, body, BorrowSummaryMode::Final).unwrap();
         checker.solve().unwrap();
-        let diagnostic = checker.analyze_availability().diagnostic.unwrap();
+        assert!(checker.availability_diagnostic().is_none());
+        assert!(checker.availability_diagnostic().is_none());
+        let (block, index) =
+            checker
+                .body
+                .blocks
+                .iter()
+                .enumerate()
+                .find_map(|(block, body)| {
+                    body.statements.iter().position(|statement| matches!(
+                    &statement.kind,
+                    NStatementKind::Define { expr: NExpr::AggregateMake { fields, .. }, .. }
+                        if fields.len() == 2
+                )).map(|index| (block, index))
+                })
+                .unwrap();
+        let NStatementKind::Define {
+            expr: NExpr::AggregateMake { fields, .. },
+            ..
+        } = &mut checker.body.blocks[block].statements[index].kind
+        else {
+            unreachable!();
+        };
+        let original = fields[1].value;
+        fields[1].value = fields[0].value;
+        verify_normalized_body(&db, &checker.body).unwrap();
+        checker.solve().unwrap();
+        let diagnostic = checker.availability_diagnostic().unwrap();
         assert_eq!(diagnostic.kind, SemanticDiagnosticKind::MoveConflict);
         assert_eq!(diagnostic.secondaries.len(), 1);
         assert_ne!(diagnostic.primary.span, diagnostic.secondaries[0].span);
         assert!(checker.build_summary().is_err());
+        let NStatementKind::Define {
+            expr: NExpr::AggregateMake { fields, .. },
+            ..
+        } = &mut checker.body.blocks[block].statements[index].kind
+        else {
+            unreachable!();
+        };
+        fields[1].value = original;
+        checker.solve().unwrap();
+        assert!(checker.availability_diagnostic().is_none());
+        assert!(checker.build_summary().is_ok());
     }
 
     #[test]
