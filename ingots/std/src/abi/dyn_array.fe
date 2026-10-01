@@ -10,6 +10,7 @@ use core::abi::{
 }
 use ingot::abi::{Sol, StaticAbi}
 use core::ptr::{self, MemSpan}
+use core::seq::{Seq, SeqMut}
 use core::size_of
 use ingot::evm::panic::{PANIC_ASSERT, PANIC_INDEX_OUT_OF_BOUNDS, Panic}
 use ingot::evm::revert_error
@@ -364,4 +365,28 @@ fn assemble_dyn_array<T>(_ parts: *MemSpan, count: u256, parts_size: u256) -> Dy
         i += 1
     }
     DynArray::from_abi_tail(data, len: count, size)
+}
+
+impl<T> Seq for MemVec<T>
+    where T: StaticAbi + Decode<Sol> + Encode<Sol> + AbiSize + Copy
+{
+    type Item = T
+
+    fn len(self) -> usize {
+        MemVec::len(self) as usize
+    }
+
+    fn get(self, _ i: usize) -> T {
+        MemVec::get(self, i as u256)
+    }
+}
+
+/// Lets `core::sort` order the copy of an ABI array in place:
+/// `sort(mut MemVec::from_dyn_array(signers))`.
+impl<T> SeqMut for MemVec<T>
+    where T: StaticAbi + Decode<Sol> + Encode<Sol> + AbiSize + Copy
+{
+    fn set(mut self, _ i: usize, _ value: T) {
+        MemVec::set(mut self, index: i as u256, value)
+    }
 }

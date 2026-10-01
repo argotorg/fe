@@ -1,0 +1,191 @@
+//! Sorting and searching for any `SeqMut` of `Ord` elements, after Solady's
+//! `LibSort`.
+//!
+//! Solady has one copy of each routine per element type (`uint256[]`,
+//! `address[]`, `int256[]` through casts and sign-bit flips). Here every
+//! function is generic over both the container and the element: the same
+//! `sort` orders a fixed array, a `MemSlice`, a `MemArray` or a `MemVec`
+//! (in `std`) of integers, signed integers, addresses or any type that
+//! implements `Ord`.
+//!
+//! ```fe
+//! use core::sort::{dedup_sorted, sort}
+//!
+//! let mut ids: [u256; 5] = [7, 3, 7, 1, 3]
+//! sort(mut ids)                     // [1, 3, 3, 7, 7]
+//! let unique = dedup_sorted(mut ids) // 3; ids starts with [1, 3, 7]
+//! ```
+//!
+//! `sort` uses insertion sort for up to 16 elements and heapsort above, so
+//! its cost is `O(n log n)` for every input, including inputs an attacker
+//! arranges to slow down a quicksort. It is not stable.
+use super::marker::Copy
+use super::ops::{Eq, Ord}
+use super::option::Option
+use super::seq::{Seq, SeqMut}
+
+const INSERTION_SORT_MAX_LEN: usize = 16
+
+/// Sorts `seq` in ascending order.
+pub fn sort<S: SeqMut>(_ seq: mut S) where S::Item: Ord + Copy {
+    if seq.len() <= INSERTION_SORT_MAX_LEN {
+        insertion_sort(mut seq)
+    } else {
+        heap_sort(mut seq)
+    }
+}
+
+/// Sorts `seq` in ascending order by insertion: `O(n^2)` comparisons but
+/// cheap for short or nearly sorted sequences. Stable.
+pub fn insertion_sort<S: SeqMut>(_ seq: mut S) where S::Item: Ord + Copy {
+    let n = seq.len()
+    let mut i: usize = 1
+    while i < n {
+        let key = seq.get(i)
+        let mut j = i
+        while j > 0 && key.lt(seq.get(j - 1)) {
+            seq.set(j, seq.get(j - 1))
+            j -= 1
+        }
+        seq.set(j, key)
+        i += 1
+    }
+}
+
+/// Sorts `seq` in ascending order with heapsort: `O(n log n)` for every
+/// input and no extra memory. Not stable.
+pub fn heap_sort<S: SeqMut>(_ seq: mut S) where S::Item: Ord + Copy {
+    let n = seq.len()
+    if n < 2 { return }
+    // Build a max-heap.
+    let mut start = n / 2
+    while start > 0 {
+        start -= 1
+        sift_down(mut seq, start, end: n)
+    }
+    // Move the maximum to the end and restore the heap on the rest.
+    let mut end = n - 1
+    while end > 0 {
+        swap(mut seq, 0, end)
+        sift_down(mut seq, 0, end)
+        end -= 1
+    }
+}
+
+// Moves the element at `root` down until the max-heap property holds for
+// the first `end` elements.
+fn sift_down<S: SeqMut>(_ seq: mut S, _ root: usize, end: usize)
+where S::Item: Ord + Copy
+{
+    let mut parent = root
+    let value = seq.get(parent)
+    while true {
+        let mut child = 2 * parent + 1
+        if child >= end { break }
+        if child + 1 < end && seq.get(child).lt(seq.get(child + 1)) {
+            child += 1
+        }
+        let child_value = seq.get(child)
+        if !value.lt(child_value) {
+            break
+        }
+        seq.set(parent, child_value)
+        parent = child
+    }
+    seq.set(parent, value)
+}
+
+/// Swaps the elements at `i` and `j`.
+pub fn swap<S: SeqMut>(_ seq: mut S, _ i: usize, _ j: usize) where S::Item: Copy {
+    let a = seq.get(i)
+    seq.set(i, seq.get(j))
+    seq.set(j, a)
+}
+
+/// Reverses the order of the elements.
+pub fn reverse<S: SeqMut>(_ seq: mut S) where S::Item: Copy {
+    let n = seq.len()
+    let mut i: usize = 0
+    while i < n / 2 {
+        swap(mut seq, i, n - 1 - i)
+        i += 1
+    }
+}
+
+/// Whether every element is less than or equal to the next.
+pub fn is_sorted<S: Seq>(_ seq: S) -> bool where S::Item: Ord + Copy {
+    let n = seq.len()
+    let mut i: usize = 1
+    while i < n {
+        if seq.get(i).lt(seq.get(i - 1)) {
+            return false
+        }
+        i += 1
+    }
+    true
+}
+
+/// Whether every element is strictly less than the next, i.e. the sequence
+/// is sorted and has no duplicates, like Solady's `isSortedAndUniquified`.
+/// The usual check for signer lists.
+pub fn is_sorted_unique<S: Seq>(_ seq: S) -> bool where S::Item: Ord + Copy {
+    let n = seq.len()
+    let mut i: usize = 1
+    while i < n {
+        if !seq.get(i - 1).lt(seq.get(i)) {
+            return false
+        }
+        i += 1
+    }
+    true
+}
+
+/// The index of the first element of the sorted `seq` that is not less
+/// than `needle`, or `seq.len()` if there is none.
+pub fn lower_bound<S: Seq>(_ seq: S, _ needle: S::Item) -> usize where S::Item: Ord + Copy
+{
+    let mut low: usize = 0
+    let mut high = seq.len()
+    while low < high {
+        let mid = low + (high - low) / 2
+        if seq.get(mid).lt(needle) {
+            low = mid + 1
+        } else {
+            high = mid
+        }
+    }
+    low
+}
+
+/// The index of an element equal to `needle` in the sorted `seq`, like
+/// Solady's `searchSorted`. With duplicates it is the first one.
+pub fn binary_search<S: Seq>(_ seq: S, _ needle: S::Item) -> Option<usize>
+where S::Item: Ord + Eq + Copy
+{
+    let index = lower_bound(seq, needle)
+    if index < seq.len() && seq.get(index) == needle {
+        Option::Some(index)
+    } else {
+        Option::None
+    }
+}
+
+/// Removes consecutive duplicates from the sorted `seq` by moving the
+/// unique elements to the front, like Solady's `uniquifySorted`. Returns
+/// how many there are; the elements after them are unspecified. Truncate
+/// a slice to the result with `MemSlice::truncate`.
+pub fn dedup_sorted<S: SeqMut>(_ seq: mut S) -> usize where S::Item: Eq + Copy {
+    let n = seq.len()
+    if n == 0 { return 0 }
+    let mut unique: usize = 1
+    let mut i: usize = 1
+    while i < n {
+        let value = seq.get(i)
+        if value != seq.get(unique - 1) {
+            seq.set(unique, value)
+            unique += 1
+        }
+        i += 1
+    }
+    unique
+}
