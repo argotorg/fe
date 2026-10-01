@@ -4727,7 +4727,7 @@ impl<'db> RmirEmitter<'db> {
                     Some(word.clone()),
                 )
             }
-            RuntimeBuiltinFuncKind::StaticCall => {
+            RuntimeBuiltinFuncKind::StaticCall | RuntimeBuiltinFuncKind::StaticCallPrecompile => {
                 let [gas, addr, args_offset, args_len, ret_offset, ret_len] = args else {
                     return None;
                 };

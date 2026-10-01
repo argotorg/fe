@@ -75,3 +75,15 @@ pub contract StaticRefBorrow {
         let observed: u256 = held
     }
 }
+
+// Accepted: a precompile cannot call back into the contract, so it may run
+// while an exclusive storage loan is live.
+pub contract PrecompileMutBorrow {
+    mut value: u256,
+    init() uses (mut value) {
+        value = 0
+        let held = mut value
+        let digest = std::evm::crypto::sha256(MemSpan::empty())
+        held = 1
+    }
+}

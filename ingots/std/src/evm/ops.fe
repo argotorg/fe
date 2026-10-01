@@ -88,6 +88,17 @@ extern {
         ret_offset: *u8,
         ret_len: u256,
     ) -> u256
+    /// `STATICCALL` to a precompile. Unlike `staticcall`, the borrow checker
+    /// does not treat it as reading contract state, since a precompile cannot
+    /// call back into the contract. `addr` must be a precompile address.
+    pub(ingot) fn staticcall_precompile(
+        gas: u256,
+        addr: u256,
+        args_offset: *u8,
+        args_len: u256,
+        ret_offset: *u8,
+        ret_len: u256,
+    ) -> u256
     pub(ingot) fn delegatecall(
         gas: u256,
         addr: u256,

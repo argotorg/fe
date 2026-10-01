@@ -360,6 +360,20 @@ const STATIC_CALL_EFFECTS: &[IntrinsicMemoryAccess] = &[
     IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Storage, MemoryAccessKind::Read),
     IntrinsicMemoryAccess::whole_space(ProviderAddressSpace::Transient, MemoryAccessKind::Read),
 ];
+// Precompiles run no contract code, so unlike `staticcall` they cannot call
+// back into the current contract and read its state.
+const STATIC_CALL_PRECOMPILE_EFFECTS: &[IntrinsicMemoryAccess] = &[
+    IntrinsicMemoryAccess::pointee(
+        2,
+        MemoryAccessKind::Read,
+        IntrinsicMemoryExtent::Argument(3),
+    ),
+    IntrinsicMemoryAccess::pointee(
+        4,
+        MemoryAccessKind::Write,
+        IntrinsicMemoryExtent::Argument(5),
+    ),
+];
 const DELEGATE_CALL_EFFECTS: &[IntrinsicMemoryAccess] = &[
     IntrinsicMemoryAccess::pointee(
         2,
@@ -540,6 +554,12 @@ define_runtime_intrinsics! {
     Gas => (Std, ["evm", "ops", "gas"], NO_MEMORY_ACCESSES, None),
     Call => (Std, ["evm", "ops", "call"], CALL_EFFECTS, None),
     StaticCall => (Std, ["evm", "ops", "staticcall"], STATIC_CALL_EFFECTS, None),
+    StaticCallPrecompile => (
+        Std,
+        ["evm", "ops", "staticcall_precompile"],
+        STATIC_CALL_PRECOMPILE_EFFECTS,
+        None
+    ),
     DelegateCall => (Std, ["evm", "ops", "delegatecall"], DELEGATE_CALL_EFFECTS, None),
     Create => (Std, ["evm", "ops", "create"], CREATE_EFFECTS, None),
     Create2 => (Std, ["evm", "ops", "create2"], CREATE_EFFECTS, None),

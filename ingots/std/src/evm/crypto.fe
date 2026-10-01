@@ -75,7 +75,7 @@ fn staticcall_memory(
     ret_len: u256,
 ) -> Result<PrecompileError, MemBuffer> {
     let mut out = MemBuffer::with_capacity(ret_len)
-    let ok: u256 = ops::staticcall(
+    let ok: u256 = ops::staticcall_precompile(
         gas: ops::gas(),
         addr: addr,
         args_offset: args.ptr(),
@@ -102,7 +102,7 @@ fn staticcall_fixed<const N: usize>(
     args: MemSpan,
 ) -> Result<PrecompileError, FixedMemBuffer<N>> {
     let out = FixedMemBuffer<N>::alloc()
-    let ok: u256 = ops::staticcall(
+    let ok: u256 = ops::staticcall_precompile(
         gas: ops::gas(),
         addr,
         args_offset: args.ptr(),
@@ -292,7 +292,7 @@ pub fn ecrecover_raw(
     ops::mstore(addr: offset(buffer.ptr(), 32), value: v)
     ops::mstore(addr: offset(buffer.ptr(), 64), value: r)
     ops::mstore(addr: offset(buffer.ptr(), 96), value: s)
-    let ok: u256 = ops::staticcall(
+    let ok: u256 = ops::staticcall_precompile(
         gas: ops::gas(),
         addr: ECRECOVER_ADDRESS,
         args_offset: buffer.ptr(),

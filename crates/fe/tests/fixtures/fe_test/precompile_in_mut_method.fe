@@ -1,0 +1,65 @@
+// Precompile calls inside a `mut self` method on a contract field. They used
+// to be rejected as borrow conflicts because `STATICCALL` is modeled as a
+// possible read of contract state through a callback, which a precompile
+// cannot make.
+
+use std::evm::{Address, Ctx, Evm}
+use std::evm::crypto::{ecrecover, modexp, sha256}
+use core::ptr::MemSpan
+
+// `cast wallet sign --no-hash` with Anvil's first test key.
+const DIGEST: u256 = 0x638b5b7cd018b718720e306af47675d178ed6cdcfc3af3d0e260dad6c7fc029a
+const SIG_R: u256 = 0x0600bd9459785ad800b2f8eec7d083c848f652a6aba3a0a2854ae54e9585549e
+const SIG_S: u256 = 0x35264dec2c4f0d7c49d3cfb069ad8bbcfd7fa452ed8fb09f9e032943a2dea047
+const SIGNER: u256 = 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+
+pub struct Results {
+    digest: u256,
+    power: u256,
+    signer: u256,
+}
+
+impl Results {
+    pub fn compute(mut self) {
+        self.digest = sha256(MemSpan::empty()).unwrap_or(default: 0)
+        self.power = modexp(base: 3, exp: 5, modulus: 7).unwrap_or(default: 0)
+        self.signer = ecrecover(hash: DIGEST, v: 27, r: SIG_R, s: SIG_S)
+            .unwrap_or(default: Option::None)
+            .unwrap_or(default: 0)
+    }
+}
+
+msg ProbeMsg {
+    #[selector = 0x01]
+    Compute,
+    #[selector = 0x02]
+    Read -> (u256, u256, u256),
+}
+
+pub contract Probe uses (ctx: Ctx) {
+    mut results: Results
+
+    recv ProbeMsg {
+        Compute uses (mut results) {
+            results.compute()
+        }
+        Read -> (u256, u256, u256) uses (results) {
+            (results.digest, results.power, results.signer)
+        }
+    }
+}
+
+#[test]
+fn precompiles_in_mut_method() uses (evm: mut Evm) {
+    let probe = evm.create2<Probe>(value: 0, args: (), salt: 0)
+    evm.call(addr: probe, gas: 1000000, value: 0, message: ProbeMsg::Compute {})
+    let (digest, power, signer): (u256, u256, u256) = evm.call(
+        addr: probe,
+        gas: 100000,
+        value: 0,
+        message: ProbeMsg::Read {},
+    )
+    assert!(digest == 0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855)
+    assert!(power == 5)
+    assert!(signer == SIGNER)
+}

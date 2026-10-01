@@ -472,7 +472,7 @@ fn hash_pair_buffer(_ scratch: *ChunkPair) -> u256 {
 // real EVM, but we don't want to trust silent truncation).
 #[inline(always)]
 fn sha256_64_to(_ offset: *u8, _ out: *u8) -> u256 {
-    let ok: u256 = ops::staticcall(
+    let ok: u256 = ops::staticcall_precompile(
         gas: ops::gas(),
         addr: 2,
         args_offset: offset,
