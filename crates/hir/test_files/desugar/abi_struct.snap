@@ -61,14 +61,17 @@ impl core::abi::Decode<std::abi::Sol> for Key {
         return Self { currency0: currency0, fee: fee }
     }
 
-    #[inline(always)]
     fn decode_from_prechecked_head<__fe_I: core::abi::ByteInput>(_ __fe_abi_struct_input: __fe_I, _ __fe_abi_struct_pos: u256, _ __fe_abi_struct_input_len: u256) -> Self {
         let currency0: u256 = core::abi::decode_field_from_prechecked_head<std::abi::Sol, u256, __fe_I>(__fe_abi_struct_input, base: __fe_abi_struct_pos, head_pos: __fe_abi_struct_pos, input_len: __fe_abi_struct_input_len)
         let fee: u32 = core::abi::decode_field_from_prechecked_head<std::abi::Sol, u32, __fe_I>(__fe_abi_struct_input, base: __fe_abi_struct_pos, head_pos: __fe_abi_struct_pos + core::abi::abi_field_head_size<u256>(), input_len: __fe_abi_struct_input_len)
         return Self { currency0: currency0, fee: fee }
     }
 
-    #[inline(always)]
+    fn decode_from<__fe_I: core::abi::ByteInput>(_ __fe_abi_struct_input: __fe_I, _ __fe_abi_struct_pos: u256) -> Self {
+        let __fe_abi_struct_input_len: u256 = __fe_abi_struct_input.len()
+        return core::abi::decode_frame_from<std::abi::Sol, Self, __fe_I>(__fe_abi_struct_input, __fe_abi_struct_pos, __fe_abi_struct_input_len)
+    }
+
     fn decode_from_bounded<__fe_I: core::abi::ByteInput>(_ __fe_abi_struct_input: __fe_I, _ __fe_abi_struct_pos: u256, _ __fe_abi_struct_input_len: u256) -> Self {
         return core::abi::decode_frame_from<std::abi::Sol, Self, __fe_I>(__fe_abi_struct_input, __fe_abi_struct_pos, __fe_abi_struct_input_len)
     }
@@ -160,7 +163,6 @@ impl core::abi::Decode<std::abi::Sol> for Hop {
         return Self { key: key, data: data, base: base, pos: pos, input_len: input_len, ptr: ptr }
     }
 
-    #[inline(always)]
     fn decode_from_prechecked_head<__fe_I: core::abi::ByteInput>(_ __fe_abi_struct_input: __fe_I, _ __fe_abi_struct_pos: u256, _ __fe_abi_struct_input_len: u256) -> Self {
         let key: Key = core::abi::decode_field_from_prechecked_head<std::abi::Sol, Key, __fe_I>(__fe_abi_struct_input, base: __fe_abi_struct_pos, head_pos: __fe_abi_struct_pos, input_len: __fe_abi_struct_input_len)
         let data: Bytes = core::abi::decode_field_from_prechecked_head<std::abi::Sol, Bytes, __fe_I>(__fe_abi_struct_input, base: __fe_abi_struct_pos, head_pos: __fe_abi_struct_pos + core::abi::abi_field_head_size<Key>(), input_len: __fe_abi_struct_input_len)
@@ -171,7 +173,11 @@ impl core::abi::Decode<std::abi::Sol> for Hop {
         return Self { key: key, data: data, base: base, pos: pos, input_len: input_len, ptr: ptr }
     }
 
-    #[inline(always)]
+    fn decode_from<__fe_I: core::abi::ByteInput>(_ __fe_abi_struct_input: __fe_I, _ __fe_abi_struct_pos: u256) -> Self {
+        let __fe_abi_struct_input_len: u256 = __fe_abi_struct_input.len()
+        return core::abi::decode_frame_from<std::abi::Sol, Self, __fe_I>(__fe_abi_struct_input, __fe_abi_struct_pos, __fe_abi_struct_input_len)
+    }
+
     fn decode_from_bounded<__fe_I: core::abi::ByteInput>(_ __fe_abi_struct_input: __fe_I, _ __fe_abi_struct_pos: u256, _ __fe_abi_struct_input_len: u256) -> Self {
         return core::abi::decode_frame_from<std::abi::Sol, Self, __fe_I>(__fe_abi_struct_input, __fe_abi_struct_pos, __fe_abi_struct_input_len)
     }
