@@ -66,7 +66,7 @@ use super::{
     classify::{
         BodyEnv, BodyStaticFacts, ContractMetadataBuiltin, GenericNumericIntrinsicKind,
         InferClassCache, RuntimeBodyCx, contract_metadata_builtin, generic_numeric_intrinsic_kind,
-        semantic_return_ty,
+        is_immutable_reference, semantic_return_ty,
     },
     consts::{
         aggregate_const_ref_class, aggregate_const_ref_region, collect_const_ref_regions,
@@ -3131,7 +3131,18 @@ impl<'db> RmirEmitter<'db> {
         target: &RuntimeClass<'db>,
     ) {
         let projected = self.project_place_class(&place);
-        if let (
+        if matches!(projected, RuntimeClass::AggregateValue { .. })
+            && is_immutable_reference(target)
+            && self.place_addr_class(&place) == *target
+        {
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst,
+                    expr: RExpr::AddrOf { place },
+                },
+            );
+        } else if let (
             RuntimeClass::AggregateValue { layout },
             RuntimeClass::Ref {
                 pointee,

@@ -703,7 +703,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
             NExpr::Load { place, .. } => match expr_facts {
                 Some(ExprStaticFacts::DirectClass(None)) => return None,
                 Some(ExprStaticFacts::DirectClass(Some(_))) | None => self
-                    .normalized_place_class(carriers, place)
+                    .normalized_load_class(carriers, place)
                     .or_else(|| match expr_facts {
                         Some(ExprStaticFacts::DirectClass(class)) => class.clone(),
                         _ => None,
@@ -762,6 +762,25 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
 }
 
 impl<'a, 'db> BodyEnv<'a, 'db> {
+    fn normalized_load_class(
+        self,
+        carriers: &[RuntimeCarrier<'db>],
+        place: &NPlace<'db>,
+    ) -> Option<RuntimeClass<'db>> {
+        let value = self.normalized_place_class(carriers, place)?;
+        // Delay only plain immutable snapshots: enum loads validate their tags,
+        // and embedded capabilities retain their ordinary transport lowering.
+        // Mutable destinations still materialize a slot.
+        if matches!(value, RuntimeClass::AggregateValue { .. })
+            && snapshot_load_can_be_deferred(self.db, &value)
+            && let Some(address) = self.normalized_place_address_class(carriers, place)
+            && is_immutable_reference(&address)
+        {
+            return Some(address);
+        }
+        Some(value)
+    }
+
     pub(crate) fn normalized_place_class(
         self,
         carriers: &[RuntimeCarrier<'db>],
@@ -2422,14 +2441,36 @@ pub(super) fn local_slot_uses_transport_class(
     mutability: Mutability,
     transport: Option<&RuntimeClass<'_>>,
 ) -> bool {
-    mutability == Mutability::Immutable
-        && matches!(
-            transport,
-            Some(RuntimeClass::Ref {
-                kind: RefKind::Const,
-                ..
-            })
-        )
+    mutability == Mutability::Immutable && transport.is_some_and(is_immutable_reference)
+}
+
+pub(super) fn is_immutable_reference(class: &RuntimeClass<'_>) -> bool {
+    matches!(
+        class,
+        RuntimeClass::Ref {
+            kind: RefKind::Const
+                | RefKind::Provider {
+                    space: AddressSpaceKind::Code | AddressSpaceKind::Calldata,
+                    ..
+                },
+            ..
+        }
+    )
+}
+
+fn snapshot_load_can_be_deferred<'db>(db: &'db dyn MirDb, class: &RuntimeClass<'db>) -> bool {
+    match class {
+        RuntimeClass::Scalar(_) => true,
+        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => false,
+        RuntimeClass::AggregateValue { layout } => match layout.data(db) {
+            Layout::Struct(layout) => layout
+                .fields
+                .iter()
+                .all(|field| snapshot_load_can_be_deferred(db, field)),
+            Layout::Array(layout) => snapshot_load_can_be_deferred(db, &layout.elem),
+            Layout::Enum(_) => false,
+        },
+    }
 }
 
 fn normalized_place_root_transport_class_in_context<'db>(
@@ -2636,7 +2677,7 @@ fn normalized_value_runtime_class<'db>(
             env.normalized_value_structural_class(carriers, value.value)?,
             &path.0,
         )),
-        NExpr::Load { place, .. } => env.normalized_place_class(carriers, place),
+        NExpr::Load { place, .. } => env.normalized_load_class(carriers, place),
         NExpr::MakeView { place, .. } => env.normalized_view_class(carriers, place),
         NExpr::Borrow { place, .. } => env.normalized_place_address_class(carriers, place),
         NExpr::CodeRegionRef { .. }

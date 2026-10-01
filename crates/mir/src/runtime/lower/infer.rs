@@ -1097,8 +1097,10 @@ fn infer_runtime_local_root<'db>(
                     && cx.env.body().root_local(NRootId::from_u32(index as u32)) == Some(local))
                 .then_some(root)
             })
-        && !local_slot_uses_transport_class(root.mutability, transport_class.as_ref())
     {
+        if local_slot_uses_transport_class(root.mutability, transport_class.as_ref()) {
+            return RuntimeLocalRoot::Ref(transport_class.expect("immutable backing reference"));
+        }
         *carrier = RuntimeCarrier::Value(place_class.clone());
         return RuntimeLocalRoot::Slot(place_class);
     }
