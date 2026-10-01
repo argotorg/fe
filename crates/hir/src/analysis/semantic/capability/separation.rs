@@ -483,16 +483,11 @@ impl<'db> SeparationSet<'db> {
                     .suspended
                     .iter()
                     .filter_map(|slice| {
-                        let guard = match clause
-                            .guard
-                            .difference(&slice.guard.in_scope(clause.guard.scope()))
-                        {
-                            None => Guard::always(clause.guard.scope()),
-                            Some(refuted) => Guard::always(clause.guard.scope())
-                                .difference(&refuted.forget_occurrences(&hidden))?,
-                        };
                         Some(Guarded {
-                            guard: projected.and(&guard)?,
+                            guard: slice
+                                .guard
+                                .in_scope(clause.guard.scope())
+                                .forget_occurrences_universally(&clause.guard, &hidden)?,
                             payload: slice.payload.clone(),
                         })
                     })

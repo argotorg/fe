@@ -1164,3 +1164,41 @@ pub fn main() -> i32 {
         assert!(result.status.success(), "O{level}: {result:?}");
     }
 }
+
+#[test]
+fn native_recursive_receiver_authority_converges() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("recursive_buffers.fe");
+    fs::write(
+        &source,
+        r#"
+use std::native::ByteBuffer
+fn write_at_depth(_ buffer: mut ByteBuffer, depth: usize, value: u8) {
+    if depth == 0 {
+        buffer.set_byte(index: 31, value)
+    } else {
+        write_at_depth(mut buffer, depth: depth - 1, value)
+    }
+}
+pub fn main() -> i32 {
+    let mut buffer = ByteBuffer::new()
+    core::assert(buffer.try_resize(32))
+    write_at_depth(mut buffer, depth: 0, value: 19)
+    core::assert(buffer.byte_at(31) == 19)
+    write_at_depth(mut buffer, depth: 32, value: 42)
+    core::assert(buffer.byte_at(31) == 42)
+    buffer.release()
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("recursive_buffers"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}

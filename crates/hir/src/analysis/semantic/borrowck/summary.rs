@@ -1125,8 +1125,47 @@ impl<'db> Borrowck<'db> {
             if region.is_empty() {
                 continue;
             }
+            let mut authorizers = external(&access.authorizers);
+            if authorizers.clauses().iter().any(|clause| {
+                clause
+                    .guard
+                    .occurrences()
+                    .into_iter()
+                    .any(|choice| self.recursive_call_choice(choice))
+            }) {
+                // The effect may run on any recursive execution. Its receiver
+                // authority must hold on every execution that can reach it.
+                // Access witnesses are private to their clauses, so project
+                // them before comparing their execution domain with authority.
+                let domain = external(&access.region)
+                    .clauses()
+                    .iter()
+                    .map(|clause| {
+                        let guard = clause
+                            .guard
+                            .forget_indices(|index| access.region.scope().validate(index).is_err());
+                        let subst = guard
+                            .scope()
+                            .canonical_existentials(access.region.scope(), || guard.indices());
+                        guard.substitute(&subst).expect("access execution domain")
+                    })
+                    .reduce(|left, right| left.or(&right))
+                    .expect("nonempty external effect");
+                authorizers = RegionSet::new(
+                    authorizers.scope(),
+                    authorizers.clauses().iter().filter_map(|clause| {
+                        Some(Guarded {
+                            guard: clause.guard.forget_occurrences_universally(
+                                &domain.in_scope(clause.guard.scope()),
+                                |choice| self.recursive_call_choice(choice),
+                            )?,
+                            payload: clause.payload.clone(),
+                        })
+                    }),
+                );
+            }
             let authorizers = self.summarize_region(
-                &external(&access.authorizers),
+                &authorizers,
                 SemOrigin::Body(self.body.template_owner),
                 &mut choices,
                 &mut access_handles,

@@ -528,6 +528,13 @@ Every cyclic region has a repeated-value set, including an empty set when the
 verified normalized cycle defines no values. Such cycles still participate in
 feedback and no-normal-return analysis.
 
+Recursive memory effects forget choices private to repeated calls. Their
+receiver authority uses universal projection under the original access
+execution domain: it must hold on every hidden execution that can reach the
+access. Possible authority cannot become guaranteed authority. Access-local
+witnesses are projected before comparing that domain with an authorizer's
+independent witness scope.
+
 ### Separation requirements
 
 An input loan protects memory that the caller lends. Inside the body, an access
