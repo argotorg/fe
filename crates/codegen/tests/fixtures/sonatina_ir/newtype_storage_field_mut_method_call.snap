@@ -169,7 +169,7 @@ func private %contract_init_root_NewtypeStorageFieldMutMethodCall() {
         evm_return 0.i256 v3;
 }
 
-func inline(always) private %contract_recv_abi_NewtypeStorageFieldMutMethodCall_1() {
+func private %contract_recv_abi_NewtypeStorageFieldMutMethodCall_1() {
     block0:
         jump block1;
 

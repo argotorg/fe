@@ -388,7 +388,7 @@ func private %contract_init_root_EffectHandleFieldDeref() {
         evm_return 0.i256 v3;
 }
 
-func inline(always) private %contract_recv_abi_EffectHandleFieldDeref_1() {
+func private %contract_recv_abi_EffectHandleFieldDeref_1() {
     block0:
         jump block1;
 
@@ -411,7 +411,7 @@ func inline(always) private %contract_recv_abi_EffectHandleFieldDeref_1() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_EffectHandleFieldDeref_2() {
+func private %contract_recv_abi_EffectHandleFieldDeref_2() {
     block0:
         jump block1;
 
@@ -433,7 +433,7 @@ func inline(always) private %contract_recv_abi_EffectHandleFieldDeref_2() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_EffectHandleFieldDeref_3() {
+func private %contract_recv_abi_EffectHandleFieldDeref_3() {
     block0:
         jump block1;
 

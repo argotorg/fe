@@ -1858,8 +1858,10 @@ fn runtime_function_for_instance<'db>(
         RuntimeInstanceSource::Synthetic(synthetic) => {
             let spec = synthetic.spec(db).clone();
             let inline_hint = match &spec {
-                RuntimeSyntheticSpec::ContractInitAbi { .. }
-                | RuntimeSyntheticSpec::ContractRecvAbi { .. } => RuntimeInlineHint::Always,
+                RuntimeSyntheticSpec::ContractInitAbi { .. } => RuntimeInlineHint::Always,
+                // Let the backend budget receive-wrapper inlining. Forcing every
+                // wrapper into the dispatcher inflates large contracts and their
+                // shared memory footprint, including otherwise small call paths.
                 _ => RuntimeInlineHint::Auto,
             };
             make_runtime_function(

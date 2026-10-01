@@ -143,7 +143,7 @@ func private %contract_init_root_TupleReturnContract() {
         evm_return 0.i256 v3;
 }
 
-func inline(always) private %contract_recv_abi_TupleReturnContract_1() {
+func private %contract_recv_abi_TupleReturnContract_1() {
     block0:
         jump block1;
 

@@ -332,7 +332,7 @@ func private %contract_init_root_Factory() {
         evm_return 0.i256 v3;
 }
 
-func inline(always) private %contract_recv_abi_Factory_1() {
+func private %contract_recv_abi_Factory_1() {
     block0:
         jump block1;
 
@@ -355,7 +355,7 @@ func inline(always) private %contract_recv_abi_Factory_1() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_Factory_2() {
+func private %contract_recv_abi_Factory_2() {
     block0:
         jump block1;
 

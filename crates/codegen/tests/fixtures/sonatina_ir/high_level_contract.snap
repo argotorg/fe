@@ -275,7 +275,7 @@ func private %contract_init_root_EchoContract() {
         evm_return 0.i256 v3;
 }
 
-func inline(always) private %contract_recv_abi_EchoContract_1() {
+func private %contract_recv_abi_EchoContract_1() {
     block0:
         jump block1;
 
@@ -296,7 +296,7 @@ func inline(always) private %contract_recv_abi_EchoContract_1() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_EchoContract_2() {
+func private %contract_recv_abi_EchoContract_2() {
     block0:
         jump block1;
 
@@ -318,7 +318,7 @@ func inline(always) private %contract_recv_abi_EchoContract_2() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_EchoContract_3() {
+func private %contract_recv_abi_EchoContract_3() {
     block0:
         jump block1;
 

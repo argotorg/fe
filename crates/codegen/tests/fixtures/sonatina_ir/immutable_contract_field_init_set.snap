@@ -264,7 +264,7 @@ func private %contract_init_root_ImmutableContractFieldInitSet() {
         evm_return v13 v6;
 }
 
-func inline(always) private %contract_recv_abi_ImmutableContractFieldInitSet_1() {
+func private %contract_recv_abi_ImmutableContractFieldInitSet_1() {
     block0:
         jump block1;
 

@@ -788,7 +788,7 @@ func private %contract_init_root_CoolCoin() {
         evm_return 0.i256 v3;
 }
 
-func inline(always) private %contract_recv_abi_CoolCoin_1086394137() {
+func private %contract_recv_abi_CoolCoin_1086394137() {
     block0:
         jump block1;
 
@@ -811,7 +811,7 @@ func inline(always) private %contract_recv_abi_CoolCoin_1086394137() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_CoolCoin_1117154408() {
+func private %contract_recv_abi_CoolCoin_1117154408() {
     block0:
         jump block1;
 
@@ -833,7 +833,7 @@ func inline(always) private %contract_recv_abi_CoolCoin_1117154408() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_CoolCoin_117300739() {
+func private %contract_recv_abi_CoolCoin_117300739() {
     block0:
         jump block1;
 
@@ -854,7 +854,7 @@ func inline(always) private %contract_recv_abi_CoolCoin_117300739() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_CoolCoin_157198259() {
+func private %contract_recv_abi_CoolCoin_157198259() {
     block0:
         jump block1;
 
@@ -877,7 +877,7 @@ func inline(always) private %contract_recv_abi_CoolCoin_157198259() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_CoolCoin_1889567281() {
+func private %contract_recv_abi_CoolCoin_1889567281() {
     block0:
         jump block1;
 
@@ -899,7 +899,7 @@ func inline(always) private %contract_recv_abi_CoolCoin_1889567281() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_CoolCoin_2043438992() {
+func private %contract_recv_abi_CoolCoin_2043438992() {
     block0:
         jump block1;
 
@@ -922,7 +922,7 @@ func inline(always) private %contract_recv_abi_CoolCoin_2043438992() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_CoolCoin_2514000705() {
+func private %contract_recv_abi_CoolCoin_2514000705() {
     block0:
         jump block1;
 
@@ -943,7 +943,7 @@ func inline(always) private %contract_recv_abi_CoolCoin_2514000705() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_CoolCoin_2757214935() {
+func private %contract_recv_abi_CoolCoin_2757214935() {
     block0:
         jump block1;
 
@@ -966,7 +966,7 @@ func inline(always) private %contract_recv_abi_CoolCoin_2757214935() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_CoolCoin_2835717307() {
+func private %contract_recv_abi_CoolCoin_2835717307() {
     block0:
         jump block1;
 
@@ -989,7 +989,7 @@ func inline(always) private %contract_recv_abi_CoolCoin_2835717307() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_CoolCoin_3714247998() {
+func private %contract_recv_abi_CoolCoin_3714247998() {
     block0:
         jump block1;
 
@@ -1012,7 +1012,7 @@ func inline(always) private %contract_recv_abi_CoolCoin_3714247998() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_CoolCoin_404098525() {
+func private %contract_recv_abi_CoolCoin_404098525() {
     block0:
         jump block1;
 
@@ -1033,7 +1033,7 @@ func inline(always) private %contract_recv_abi_CoolCoin_404098525() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_CoolCoin_599290589() {
+func private %contract_recv_abi_CoolCoin_599290589() {
     block0:
         jump block1;
 
@@ -1057,7 +1057,7 @@ func inline(always) private %contract_recv_abi_CoolCoin_599290589() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_CoolCoin_826074471() {
+func private %contract_recv_abi_CoolCoin_826074471() {
     block0:
         jump block1;
 
@@ -1078,7 +1078,7 @@ func inline(always) private %contract_recv_abi_CoolCoin_826074471() {
         unreachable;
 }
 
-func inline(always) private %contract_recv_abi_CoolCoin_961581905() {
+func private %contract_recv_abi_CoolCoin_961581905() {
     block0:
         jump block1;
 

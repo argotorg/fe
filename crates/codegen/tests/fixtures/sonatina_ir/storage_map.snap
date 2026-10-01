@@ -151,7 +151,7 @@ func private %contract_init_root_C() {
         evm_return 0.i256 v3;
 }
 
-func inline(always) private %contract_recv_abi_C_0() {
+func private %contract_recv_abi_C_0() {
     block0:
         jump block1;
 
