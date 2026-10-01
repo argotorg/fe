@@ -22,6 +22,19 @@ fn keccak_words_matches_abi_encode() uses (mem: mut RawMem) {
 }
 
 #[test]
+fn keccak_words_preserves_full_width_word_order() uses (mem: mut RawMem) {
+    let a = hash_words(1, 2)
+    let b = 1 << 255
+    let c = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    assert(keccak_words([a, b, c]) == keccak_packed((a, b, c)))
+    assert(keccak_words([c, a, b]) == keccak_packed((c, a, b)))
+    assert(keccak_words([a, b, c, 0, 1, 2, 3, 4, 5, 6, 7, 8])
+        == keccak_packed((a, b, c, 0 as u256, 1 as u256, 2 as u256,
+                         3 as u256, 4 as u256, 5 as u256, 6 as u256,
+                         7 as u256, 8 as u256)))
+}
+
+#[test]
 fn keccak_packed_writes_each_type_at_its_width() uses (mem: mut RawMem) {
     // abi.encodePacked(address(0xabc), int24(-60), uint24(3000), true, uint256(7))
     let owner = Address { inner: 0xabc }

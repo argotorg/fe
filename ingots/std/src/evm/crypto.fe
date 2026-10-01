@@ -198,13 +198,9 @@ pub fn keccak256(_ data: MemSpan) -> u256 {
 /// Much cheaper than `keccak_packed` for word tuples: the words are written
 /// into one buffer without the packed builder's per-field bookkeeping.
 pub fn keccak_words<const N: usize>(_ words: [u256; N]) -> u256 {
-    let buffer = MemBuffer::alloc(N as u256 * 32)
-    let mut i: usize = 0
-    while i < N {
-        ops::mstore(addr: offset(buffer.ptr(), i as u256 * 32), value: words[i])
-        i += 1
-    }
-    ops::keccak256(offset: buffer.ptr(), len: N as u256 * 32)
+    let buffer = ptr::alloc<[u256; N]>()
+    *buffer = words
+    ops::keccak256(offset: ptr::byte_ptr(buffer), len: N as u256 * 32)
 }
 
 /// Address of a contract created with `CREATE2` by `deployer`:
