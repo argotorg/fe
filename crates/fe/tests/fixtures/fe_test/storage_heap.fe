@@ -1,0 +1,377 @@
+// Tests for `std::evm::heap::StorageHeap`: a min-heap of integers, a max-heap
+// through `Reverse`, a heap of a user type packed into a word with its own
+// order, bounded top-k queues and the empty-heap error.
+
+use core::error::ErrorVariant
+use core::ops::{Eq, Ord}
+use std::abi::Sol
+use std::evm::{Address, Evm, WordRepr}
+use std::evm::heap::{Enqueued, HeapIsEmpty, Reverse, StorageHeap}
+use std::evm::returndata::is_error
+
+// An order packed into a word: price in the high 128 bits, id in the low
+// 128. The best order (highest price, then lowest id) sorts first.
+struct Order { price: u256, id: u256 }
+
+impl Copy for Order {}
+
+impl Eq for Order {
+    fn eq(self, _ other: Order) -> bool {
+        self.price == other.price && self.id == other.id
+    }
+}
+
+impl Ord for Order {
+    fn lt(self, _ other: Order) -> bool {
+        self.price > other.price || (self.price == other.price && self.id < other.id)
+    }
+    fn le(self, _ other: Order) -> bool {
+        !other.lt(self)
+    }
+    fn gt(self, _ other: Order) -> bool {
+        other.lt(self)
+    }
+    fn ge(self, _ other: Order) -> bool {
+        !self.lt(other)
+    }
+}
+
+impl WordRepr for Order {
+    fn from_word(_ word: u256) -> Self {
+        Order { price: word >> 128, id: word & 0xffffffffffffffffffffffffffffffff }
+    }
+    fn to_word(own self) -> u256 {
+        (self.price << 128) | self.id
+    }
+}
+
+msg HeapMsg {
+    #[selector = 0x01]
+    Push { value: u256 },
+    #[selector = 0x02]
+    Pop -> u256,
+    #[selector = 0x03]
+    Root -> (bool, u256),
+    #[selector = 0x04]
+    Len -> u256,
+    #[selector = 0x05]
+    PushPop { value: u256 } -> u256,
+    #[selector = 0x06]
+    Replace { value: u256 } -> u256,
+    #[selector = 0x07]
+    Enqueue { value: u256, max_len: u256 } -> (u256, u256),
+    #[selector = 0x08]
+    MaxPush { value: u256 },
+    #[selector = 0x09]
+    MaxPop -> u256,
+    #[selector = 0x0a]
+    OrderPush { price: u256, id: u256 },
+    #[selector = 0x0b]
+    OrderPop -> (u256, u256),
+}
+
+pub contract Heaps {
+    mut min: StorageHeap<u256>,
+    mut max: StorageHeap<Reverse<u256>>,
+    mut orders: StorageHeap<Order>,
+
+    recv HeapMsg {
+        Push { value } uses (mut min) {
+            min.push(value)
+        }
+        Pop -> u256 uses (mut min) {
+            min.pop()
+        }
+        Root -> (bool, u256) uses (min) {
+            match min.root() {
+                Option::Some(value,) => (true, value),
+                Option::None => (false, 0),
+            }
+        }
+        Len -> u256 uses (min) {
+            min.len()
+        }
+        PushPop { value } -> u256 uses (mut min) {
+            min.push_pop(value)
+        }
+        Replace { value } -> u256 uses (mut min) {
+            min.replace(value)
+        }
+        // (0, 0) added, (1, 0) rejected, (2, evicted) replaced.
+        Enqueue { value, max_len } -> (u256, u256)
+        uses (mut min)
+        {
+            match min.enqueue(value, max_len) {
+                Enqueued::Added => (0, 0),
+                Enqueued::Rejected => (1, 0),
+                Enqueued::Replaced(evicted,) => (2, evicted),
+            }
+        }
+        MaxPush { value } uses (mut max) {
+            max.push(Reverse { value })
+        }
+        MaxPop -> u256 uses (mut max) {
+            max.pop().value
+        }
+        OrderPush { price, id } uses (mut orders) {
+            orders.push(Order { price, id })
+        }
+        OrderPop -> (u256, u256) uses (mut orders) {
+            let order = orders.pop()
+            (order.price, order.id)
+        }
+    }
+}
+
+fn push(_ heap: Address, _ value: u256) uses (evm: mut Evm) {
+    evm.call(
+        addr: heap,
+        gas: 1000000,
+        value: 0,
+        message: HeapMsg::Push { value },
+    )
+}
+
+fn pop(_ heap: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: heap,
+        gas: 1000000,
+        value: 0,
+        message: HeapMsg::Pop {},
+    )
+}
+
+fn len(_ heap: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: heap,
+        gas: 100000,
+        value: 0,
+        message: HeapMsg::Len {},
+    )
+}
+
+#[test]
+fn min_heap_pops_in_ascending_order() uses (evm: mut Evm) {
+    let heap = evm.create2<Heaps>(value: 0, args: (), salt: 0)
+    let (has_root, _): (bool, u256) = evm
+        .call(
+            addr: heap,
+            gas: 100000,
+            value: 0,
+            message: HeapMsg::Root {},
+        )
+    assert!(!has_root)
+
+    let mut x: u256 = 7
+    let mut i: u256 = 0
+    while i < 20 {
+        x = (x * 1103515245 + 12345) % 2147483648
+        push(heap, x % 1000)
+        i += 1
+    }
+    assert!(len(heap) == 20)
+    let (has_root, root): (bool, u256) = evm
+        .call(
+            addr: heap,
+            gas: 100000,
+            value: 0,
+            message: HeapMsg::Root {},
+        )
+    assert!(has_root)
+
+    let mut previous = pop(heap)
+    assert!(previous == root)
+    let mut k: u256 = 1
+    while k < 20 {
+        let next = pop(heap)
+        assert!(next >= previous)
+        previous = next
+        k += 1
+    }
+    assert!(len(heap) == 0)
+}
+
+#[test]
+fn pop_on_empty_reverts() uses (evm: mut Evm) {
+    let heap = evm.create2<Heaps>(value: 0, args: (), salt: 0)
+    assert!(<HeapIsEmpty as ErrorVariant<Sol>>::SELECTOR == 0xa6ca772e)
+    let outcome = evm.try_call(
+            addr: heap,
+            gas: 100000,
+            value: 0,
+            message: HeapMsg::Pop {},
+        )
+    assert!(!outcome.success())
+    assert!(is_error<HeapIsEmpty>(outcome.returndata()))
+    let outcome = evm
+        .try_call(
+            addr: heap,
+            gas: 100000,
+            value: 0,
+            message: HeapMsg::Replace { value: 1 },
+        )
+    assert!(is_error<HeapIsEmpty>(outcome.returndata()))
+}
+
+#[test]
+fn push_pop_and_replace() uses (evm: mut Evm) {
+    let heap = evm.create2<Heaps>(value: 0, args: (), salt: 0)
+    // On an empty heap push_pop hands the value back.
+    let back: u256 = evm
+        .call(
+            addr: heap,
+            gas: 1000000,
+            value: 0,
+            message: HeapMsg::PushPop { value: 5 },
+        )
+    assert!(back == 5 && len(heap) == 0)
+
+    push(heap, 10)
+    push(heap, 20)
+    // Smaller than the root: returned unchanged.
+    let back: u256 = evm
+        .call(
+            addr: heap,
+            gas: 1000000,
+            value: 0,
+            message: HeapMsg::PushPop { value: 3 },
+        )
+    assert!(back == 3)
+    // Larger: the root comes out, 15 goes in.
+    let back: u256 = evm
+        .call(
+            addr: heap,
+            gas: 1000000,
+            value: 0,
+            message: HeapMsg::PushPop { value: 15 },
+        )
+    assert!(back == 10)
+    // replace always takes the root, even for a smaller value.
+    let back: u256 = evm
+        .call(
+            addr: heap,
+            gas: 1000000,
+            value: 0,
+            message: HeapMsg::Replace { value: 1 },
+        )
+    assert!(back == 15)
+    assert!(pop(heap) == 1 && pop(heap) == 20)
+}
+
+#[test]
+fn enqueue_keeps_the_top_values() uses (evm: mut Evm) {
+    let heap = evm.create2<Heaps>(value: 0, args: (), salt: 0)
+    let scores: [u256; 7] = [50, 10, 70, 30, 90, 20, 60]
+    let mut evicted_total: u256 = 0
+    let mut rejected: u256 = 0
+    for score in scores {
+        let (outcome, evicted): (u256, u256) = evm
+            .call(
+                addr: heap,
+                gas: 1000000,
+                value: 0,
+                message: HeapMsg::Enqueue { value: score, max_len: 3 },
+            )
+        if outcome == 1 {
+            rejected += 1
+        }
+        if outcome == 2 {
+            evicted_total += evicted
+        }
+    }
+    // 30, 90 and 60 each push out the smallest kept score (10, 30, 50);
+    // 20 arrives when all kept scores are larger and is rejected.
+    assert!(rejected == 1)
+    assert!(evicted_total == 10 + 30 + 50)
+    assert!(pop(heap) == 60 && pop(heap) == 70 && pop(heap) == 90)
+}
+
+#[test]
+fn reverse_makes_a_max_heap() uses (evm: mut Evm) {
+    let heap = evm.create2<Heaps>(value: 0, args: (), salt: 0)
+    let values: [u256; 5] = [4, 9, 1, 7, 3]
+    for value in values {
+        evm.call(
+            addr: heap,
+            gas: 1000000,
+            value: 0,
+            message: HeapMsg::MaxPush { value },
+        )
+    }
+    let first: u256 = evm.call(
+            addr: heap,
+            gas: 1000000,
+            value: 0,
+            message: HeapMsg::MaxPop {},
+        )
+    let second: u256 = evm.call(
+            addr: heap,
+            gas: 1000000,
+            value: 0,
+            message: HeapMsg::MaxPop {},
+        )
+    assert!(first == 9 && second == 7)
+    // The min-heap in the same contract is a separate structure.
+    assert!(len(heap) == 0)
+}
+
+#[test]
+fn orders_come_out_best_first() uses (evm: mut Evm) {
+    let heap = evm.create2<Heaps>(value: 0, args: (), salt: 0)
+    evm.call(
+        addr: heap,
+        gas: 1000000,
+        value: 0,
+        message: HeapMsg::OrderPush { price: 100, id: 2 },
+    )
+    evm.call(
+        addr: heap,
+        gas: 1000000,
+        value: 0,
+        message: HeapMsg::OrderPush { price: 300, id: 5 },
+    )
+    evm.call(
+        addr: heap,
+        gas: 1000000,
+        value: 0,
+        message: HeapMsg::OrderPush { price: 100, id: 1 },
+    )
+    evm.call(
+        addr: heap,
+        gas: 1000000,
+        value: 0,
+        message: HeapMsg::OrderPush { price: 200, id: 9 },
+    )
+    let (p1, i1): (u256, u256) = evm
+        .call(
+            addr: heap,
+            gas: 1000000,
+            value: 0,
+            message: HeapMsg::OrderPop {},
+        )
+    let (p2, i2): (u256, u256) = evm
+        .call(
+            addr: heap,
+            gas: 1000000,
+            value: 0,
+            message: HeapMsg::OrderPop {},
+        )
+    let (p3, i3): (u256, u256) = evm
+        .call(
+            addr: heap,
+            gas: 1000000,
+            value: 0,
+            message: HeapMsg::OrderPop {},
+        )
+    let (p4, i4): (u256, u256) = evm
+        .call(
+            addr: heap,
+            gas: 1000000,
+            value: 0,
+            message: HeapMsg::OrderPop {},
+        )
+    assert!(p1 == 300 && i1 == 5)
+    assert!(p2 == 200 && i2 == 9)
+    assert!(p3 == 100 && i3 == 1)
+    assert!(p4 == 100 && i4 == 2)
+}

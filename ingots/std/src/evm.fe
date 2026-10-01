@@ -15,6 +15,7 @@ pub use ops::{self, byte, signextend}
 pub use returndata::{self, *}
 pub use target::{self, *}
 pub use intrinsic::{code_region_len, code_region_offset, contract_field_slot}
+pub use heap::{self}
 pub use mutex::{self, *}
 pub use mapping::SolMapping
 pub use merkle::{self}

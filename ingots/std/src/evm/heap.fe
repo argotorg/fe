@@ -1,0 +1,208 @@
+//! A binary min-heap in contract storage, after Solady's `MinHeapLib`.
+//!
+//! Solady's heap stores `uint256` only; [`StorageHeap<T>`] holds any type
+//! that has an order (`Ord`) and fits a storage word (`WordRepr`), such as
+//! integers or a struct packed into a word. Wrapping the element in
+//! [`Reverse`] turns it into a max-heap:
+//!
+//! ```fe
+//! use std::evm::heap::{Enqueued, Reverse, StorageHeap}
+//!
+//! pub contract Leaderboard {
+//!     mut top: StorageHeap<u256>          // the 10 highest scores
+//!     mut queue: StorageHeap<Reverse<u256>> // largest first
+//!
+//!     recv Msg {
+//!         Submit { score } uses (mut top) {
+//!             match top.enqueue(score, max_len: 10) {
+//!                 Enqueued::Added => {}
+//!                 Enqueued::Replaced(evicted) => { /* `evicted` dropped out */ }
+//!                 Enqueued::Rejected => { /* not in the top 10 */ }
+//!             }
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! Every operation costs `O(log n)` storage reads and writes.
+use core::ops::{Eq, Ord}
+use super::effects::revert_error
+use super::storage_map::StorageMap
+use super::word::WordRepr
+
+/// `pop` or `replace` on an empty heap. Selector `0xa6ca772e`, as in
+/// Solady.
+#[error]
+pub struct HeapIsEmpty {}
+
+/// The outcome of [`StorageHeap::enqueue`].
+pub enum Enqueued<T> {
+    /// The heap had room; the value was added.
+    Added,
+    /// The heap was full and the value was not greater than its minimum;
+    /// nothing changed.
+    Rejected,
+    /// The heap was full; the value replaced the minimum, which is returned.
+    Replaced(T,),
+}
+
+/// Reverses the order of `T`, so a `StorageHeap<Reverse<T>>` is a max-heap.
+pub struct Reverse<T> { pub value: T }
+
+impl<T: Copy> Copy for Reverse<T> {}
+
+impl<T: Eq> Eq for Reverse<T> {
+    fn eq(self, _ other: Reverse<T>) -> bool {
+        self.value == other.value
+    }
+}
+
+impl<T: Ord> Ord for Reverse<T> {
+    fn lt(self, _ other: Reverse<T>) -> bool {
+        <T as Ord>::lt(other.value, self.value)
+    }
+    fn le(self, _ other: Reverse<T>) -> bool {
+        <T as Ord>::le(other.value, self.value)
+    }
+    fn gt(self, _ other: Reverse<T>) -> bool {
+        <T as Ord>::gt(other.value, self.value)
+    }
+    fn ge(self, _ other: Reverse<T>) -> bool {
+        <T as Ord>::ge(other.value, self.value)
+    }
+}
+
+impl<T: WordRepr> WordRepr for Reverse<T> {
+    fn from_word(_ word: u256) -> Self {
+        Reverse { value: T::from_word(word) }
+    }
+    fn to_word(own self) -> u256 {
+        self.value.to_word()
+    }
+}
+
+/// A min-heap of `T` in storage: `root` and `pop` return the smallest
+/// element.
+pub struct StorageHeap<T> { len: u256, items: StorageMap<u256, T> }
+
+impl<T> StorageHeap<T> where T: WordRepr + Ord + Copy {
+    pub fn len(self) -> u256 {
+        self.len
+    }
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    /// The smallest element, or `None` if the heap is empty.
+    pub fn root(self) -> Option<T> {
+        if self.len == 0 {
+            return Option::None
+        }
+        Option::Some(self.items.get(0))
+    }
+
+    /// Adds `value`.
+    pub fn push(mut self, _ value: T) {
+        let index = self.len
+        self.len = index + 1
+        self.sift_up(index, value)
+    }
+
+    /// Removes and returns the smallest element. Reverts with
+    /// `HeapIsEmpty()` if the heap is empty.
+    pub fn pop(mut self) -> T {
+        let len = self.len
+        if len == 0 {
+            revert_error(HeapIsEmpty {})
+        }
+        let smallest = self.items.get(0)
+        let last = self.items.get(len - 1)
+        self.len = len - 1
+        if len > 1 {
+            self.sift_down(0, last)
+        }
+        smallest
+    }
+
+    /// Adds `value` and removes the smallest element, returning it: `value`
+    /// itself, without touching storage, if the heap is empty or `value` is
+    /// not greater than the root.
+    pub fn push_pop(mut self, _ value: T) -> T {
+        if self.len == 0 {
+            return value
+        }
+        let smallest = self.items.get(0)
+        if !smallest.lt(value) {
+            return value
+        }
+        self.sift_down(0, value)
+        smallest
+    }
+
+    /// Removes the smallest element and adds `value`, returning the removed
+    /// element. Reverts with `HeapIsEmpty()` if the heap is empty.
+    pub fn replace(mut self, _ value: T) -> T {
+        if self.len == 0 {
+            revert_error(HeapIsEmpty {})
+        }
+        let smallest = self.items.get(0)
+        self.sift_down(0, value)
+        smallest
+    }
+
+    /// Adds `value` to a heap holding at most `max_len` elements, so the heap
+    /// keeps the `max_len` greatest values seen. Panics if `max_len` is zero.
+    pub fn enqueue(mut self, _ value: T, max_len: u256) -> Enqueued<T> {
+        assert!(max_len != 0)
+        if self.len < max_len {
+            self.push(value)
+            return Enqueued::Added
+        }
+        let smallest = self.items.get(0)
+        if !smallest.lt(value) {
+            return Enqueued::Rejected
+        }
+        self.sift_down(0, value)
+        Enqueued::Replaced(smallest)
+    }
+
+    // Places `value` at the hole `index`, moving it up past larger parents.
+    fn sift_up(mut self, _ index: u256, _ value: T) {
+        let mut hole = index
+        while hole > 0 {
+            let parent = (hole - 1) / 2
+            let parent_value = self.items.get(parent)
+            if !value.lt(parent_value) {
+                break
+            }
+            self.items.set(key: hole, value: parent_value)
+            hole = parent
+        }
+        self.items.set(key: hole, value)
+    }
+
+    // Places `value` at the hole `index`, moving it down past smaller
+    // children, within the first `len` elements.
+    fn sift_down(mut self, _ index: u256, _ value: T) {
+        let len = self.len
+        let mut hole = index
+        while true {
+            let mut child = 2 * hole + 1
+            if child >= len { break }
+            let mut child_value = self.items.get(child)
+            if child + 1 < len {
+                let right = self.items.get(child + 1)
+                if right.lt(child_value) {
+                    child += 1
+                    child_value = right
+                }
+            }
+            if !child_value.lt(value) {
+                break
+            }
+            self.items.set(key: hole, value: child_value)
+            hole = child
+        }
+        self.items.set(key: hole, value)
+    }
+}
