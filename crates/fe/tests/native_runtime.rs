@@ -1060,3 +1060,46 @@ pub fn main() -> i32 {
         assert!(result.status.success(), "O{level}: {result:?}");
     }
 }
+
+#[test]
+fn native_input_reborrows_preserve_independent_buffer_and_scalar_updates() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("forwarded_buffers.fe");
+    fs::write(
+        &source,
+        r#"
+use std::native::ByteBuffer
+struct Frame { data: ByteBuffer, value: u256 }
+fn mixed(_ buffer: mut ByteBuffer, _ value: mut u256) {
+    value += 1
+    core::assert(buffer.try_resize(33))
+    let scalar: u256 = value
+    buffer.set_byte(index: 32, value: scalar.downcast_unchecked())
+    buffer.copy_within(dest: 0, source: 32, len: 1)
+    value += buffer.byte_at(0) as u256
+}
+fn forward(_ buffer: mut ByteBuffer, _ value: mut u256) {
+    mixed(mut buffer, mut value)
+}
+fn run(_ frame: mut Frame) { forward(mut frame.data, mut frame.value) }
+pub fn main() -> i32 {
+    let mut frame = Frame { data: ByteBuffer::new(), value: 20 }
+    run(mut frame)
+    core::assert(frame.value == 42 && frame.data.byte_at(32) == 21)
+    run(mut frame)
+    core::assert(frame.value == 86 && frame.data.byte_at(0) == 43)
+    frame.data.release()
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("forwarded_buffers"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}

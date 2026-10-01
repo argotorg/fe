@@ -911,7 +911,15 @@ impl<'db> Borrowck<'db> {
                     .get_or_init(|| self.permitted(&loan, region, &lift, authority))
                     .as_ref()
             };
-            if !self.inventory.input_loans.contains(&reference.id) {
+            // A reborrow of an input still names caller-supplied memory.
+            // Forward its unresolved separation just as for the original loan;
+            // this creates an obligation, never authority to discharge one.
+            let input_backed = self.inventory.input_loans.contains(&reference.id)
+                || self
+                    .ancestors(loan.payload.authority(&loan.guard))
+                    .iter()
+                    .any(|parent| self.inventory.input_loans.contains(&parent.payload.id));
+            if !input_backed {
                 let (overlap, uncertain) =
                     footprint.intersect(self.db, AccessFootprint::typed(&loan.region));
                 if !uncertain && (overlap.is_empty() || loan.suspended.provably_covers(&overlap)) {

@@ -6,8 +6,8 @@ pub struct Ledger {
 }
 
 impl Ledger {
-    // Rejected (known limitation): inside the method the scalar borrow is of
-    // an input place, which could be any slot, including the map entry.
+    // Accepted control: defer separation of the input-field reborrow; the
+    // contract caller proves its allocated field separate from hashed slots.
     fn hold(mut self, _ to: Address) -> u256 {
         let supply = mut self.total_supply
         self.balances.set(key: to, value: 7)

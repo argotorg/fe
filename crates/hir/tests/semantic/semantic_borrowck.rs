@@ -12117,7 +12117,7 @@ fn drive() {
     foreign(saved, raw: target)
 }
 "#,
-            &["foreign"][..],
+            &["drive"][..],
         ),
         (
             "suspended_shared_control",
@@ -13347,4 +13347,96 @@ fn drive() {{
             assert_eq!(conflicting_functions(&source), expected, "{shape} {stored}");
         }
     }
+}
+
+#[test]
+fn input_reborrows_forward_native_buffer_separation_requirements() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+use std::native::ByteBuffer
+fn mixed(_ buffer: mut ByteBuffer, _ value: mut u256) {
+    value = 1
+    if buffer.try_resize(32) {
+        buffer.set_byte(index: 0, value: 7)
+        value += buffer.byte_at(0) as u256
+    }
+}
+fn forward(_ buffer: mut ByteBuffer, _ value: mut u256) {
+    mixed(mut buffer, mut value)
+}
+fn forward_again(_ buffer: mut ByteBuffer, _ value: mut u256) {
+    forward(mut buffer, mut value)
+}
+fn concrete() -> u256 {
+    let mut buffer = ByteBuffer::new()
+    let mut value: u256 = 0
+    forward_again(mut buffer, mut value)
+    buffer.release()
+    value
+}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn input_reborrow_requirements_reject_concrete_aliases_through_wrappers() {
+    for (borrow, update) in [("mut", "value = 9"), ("ref", "let seen: u256 = value")] {
+        let source = format!(
+            r#"
+use core::ptr
+fn access(_ value: {borrow} u256, _ pointer: *u256) {{
+    *pointer = 5
+    {update}
+}}
+fn forward(_ value: {borrow} u256, _ pointer: *u256) {{
+    access({borrow} value, pointer)
+}}
+fn forward_again(_ value: {borrow} u256, _ pointer: *u256) {{
+    forward({borrow} value, pointer)
+}}
+fn disjoint() {{
+    let left = ptr::alloc<u256>()
+    *left = 0
+    let right = ptr::alloc<u256>()
+    *right = 0
+    forward_again({borrow} *left, right)
+}}
+fn aliased() {{
+    let target = ptr::alloc<u256>()
+    *target = 0
+    forward_again({borrow} *target, target)
+}}
+"#
+        );
+        assert_eq!(conflicting_functions(&source), ["aliased"], "{source}");
+    }
+}
+
+#[test]
+fn reborrowed_fields_keep_the_enclosing_borrow_exclusive() {
+    let source = r#"
+use core::ptr
+struct Pair { left: u256, right: u256 }
+fn write(_ value: mut u256, _ pointer: *u256) {
+    *pointer = 3
+    value = 4
+}
+fn forward(_ pair: mut Pair, _ pointer: *u256) {
+    write(mut pair.left, pointer)
+}
+fn same_field() {
+    let pair = ptr::alloc<Pair>()
+    *pair = Pair { left: 0, right: 0 }
+    forward(mut *pair, ptr::cast<Pair, u256>(pair))
+}
+fn other_field() {
+    let pair = ptr::alloc<Pair>()
+    *pair = Pair { left: 0, right: 0 }
+    forward(mut *pair, ptr::offset(ptr::cast<Pair, u256>(pair), 1))
+}
+"#;
+    // Both pointers point inside the exclusive whole-Pair argument. A
+    // reborrow of left does not authorize a raw write through right either.
+    assert_eq!(conflicting_functions(source), ["other_field", "same_field"]);
 }

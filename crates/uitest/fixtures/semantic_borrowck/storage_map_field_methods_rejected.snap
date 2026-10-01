@@ -4,14 +4,6 @@ assertion_line: 25
 expression: diags
 input_file: fixtures/semantic_borrowck/storage_map_field_methods_rejected.fe
 ---
-error[16-0001]: borrow conflict in `fn hold`
-   ┌─ storage_map_field_methods_rejected.fe:13:9
-   │
-12 │         let supply = mut self.total_supply
-   │                      --------------------- borrow created here
-13 │         self.balances.set(key: to, value: 7)
-   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot mutably borrow this place while a mut borrow is active
-
 error[16-0001]: borrow conflict in `fn RawSlots::recv[0][0]`
    ┌─ storage_map_field_methods_rejected.fe:57:13
    │

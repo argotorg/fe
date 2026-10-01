@@ -263,10 +263,10 @@ Only the `storage_map` word helpers call the hashed builtins. The `pub(ingot)`
 visibility trusts all of `std`, so this call-site restriction is an audited
 invariant.
 
-One limitation remains. Inside a receiver method, a live borrow of an input
-place such as `self.total_supply` still conflicts with the method's own map
-access. The input may be any storage place, and a local reborrow of an input is
-checked conservatively against unresolved accesses.
+Inside a receiver method, a live reborrow of an input place such as
+`self.total_supply` exports its separation from the method's map accesses.
+A concrete caller can establish this for a compiler-allocated contract field.
+An arbitrary storage pointer still cannot establish the required separation.
 
 ## Entry contents, allocation birth, and opaque overwrites
 
@@ -542,6 +542,12 @@ and exports the rest as `BorrowSummary::loan_requirements`. Each clause relates:
 
 All four share one witness scope. Two independently quantified regions would
 pair alternatives that never occurred together.
+
+A reborrow descended from an input loan still names caller-supplied memory, so
+its unresolved separation is also exported. Creating `mut input` or `ref input`
+does not make the referent concrete. An input ancestor permits deferral only;
+it never discharges a separation requirement or authorizes an aliasing access.
+Definite overlap and non-representable endpoints remain conflicts.
 
 Requirements come from local accesses, from call effects, and from accesses of
 arguments and effect arguments. A caller resolves both endpoints of each callee
@@ -825,7 +831,7 @@ improvements with empty snapshots. Source comments identify each case.
 | Zero or byte-copy a native-reference slot, then load it | Raw bytes do not establish a valid native reference, nor does returning an uninitialized slot from a loop. Typed reference stores and copies are accepted. | [Native slot initialization](../../crates/uitest/fixtures/semantic_borrowck/native_slot_initialization.fe) |
 | Move one cell, then write through a pointer selecting that cell or another | The write cannot definitely restore the moved cell. An exact destination is accepted. | [Ambiguous reinitialization](../../crates/uitest/fixtures/semantic_borrowck/ambiguous_reinitialization.fe) |
 | Keep a storage borrow live across an external call | CALL conflicts with shared and mutable state loans; STATICCALL conflicts with mutable state loans. Ending the loan before the call and reborrowing afterward is accepted. | [External call state borrows](../../crates/uitest/fixtures/semantic_borrowck/external_call_state_borrows.fe) |
-| Call a `mut self` method that uses a `StorageMap` field on a contract-field struct | Accepted from init and recv arms, through `uses` helpers, for nested fields and array elements, and while a sibling field of the contract field is borrowed. Raw slot accesses, packed arrays, pointer-bound providers, and a live input-field borrow inside the method still conflict. | [Accepted](../../crates/uitest/fixtures/semantic_borrowck/storage_map_field_methods.fe), [rejected](../../crates/uitest/fixtures/semantic_borrowck/storage_map_field_methods_rejected.fe) |
+| Call a `mut self` method that uses a `StorageMap` field on a contract-field struct | Accepted from init and recv arms, through `uses` helpers, for nested fields and array elements, and while a sibling field of the contract field is borrowed. A live input-field reborrow exports separation for the concrete caller to prove. Raw slot accesses, packed arrays, and pointer-bound providers still conflict. | [Accepted](../../crates/uitest/fixtures/semantic_borrowck/storage_map_field_methods.fe), [rejected](../../crates/uitest/fixtures/semantic_borrowck/storage_map_field_methods_rejected.fe) |
 | Select an allocating factory with a boolean inside a loop, then consume the joined result | Complementary branch guards preserve the selected fresh allocation and accept the move. Moving it twice still conflicts. | [Boolean factory loop](../../crates/uitest/fixtures/semantic_borrowck/boolean_factory_loop.fe) |
 | Recursively return one freshly allocated object | Direct and mutual fresh returns converge through a single-object result port; forwarding an existing pointer retains its alias identity. A stored older object from the same loop allocation is not the result, and unsupported poststate growth still fails closed. | [Recursive fresh return](../../crates/uitest/fixtures/semantic_borrowck/recursive_fresh_return.fe) |
 | Store one typed heap cell, then read `children[index]` | A constant or symbolic store is recovered by a symbolic read when the caller's index matches; an unwritten member keeps unknown contents that may alias the mutable cursor. | [Typed heap cells](../../crates/uitest/fixtures/semantic_borrowck/typed_heap_cells.fe) |
