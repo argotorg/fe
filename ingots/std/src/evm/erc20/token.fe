@@ -1,0 +1,322 @@
+//! An ERC-20 token with EIP-2612 `permit`, after Solady's `ERC20`.
+//!
+//! [`Erc20`] is a storage component: put it in a contract field and answer
+//! the standard messages [`IErc20`] (and optionally [`IErc20Permit`]) by
+//! delegating to it. There is no inheritance and there are no virtual
+//! hooks; a contract customizes behavior in its own handlers, around the
+//! component's methods, and the effects in each method's signature show
+//! what it touches:
+//!
+//! ```fe
+//! use std::evm::erc20::{Erc20, IErc20}
+//!
+//! pub contract Token uses (ctx: Ctx, log: mut Log) {
+//!     mut token: Erc20
+//!
+//!     init(supply: u256) uses (mut token, ctx, mut log) {
+//!         token.mint(ctx.caller(), supply)
+//!     }
+//!
+//!     recv IErc20 {
+//!         TotalSupply -> u256 uses (token) { token.total_supply() }
+//!         BalanceOf { owner } -> u256 uses (token) { token.balance_of(owner) }
+//!         Allowance { owner, spender } -> u256 uses (token) { token.allowance(owner, spender) }
+//!         Transfer { to, amount } -> bool uses (mut token, ctx, mut log) { token.transfer(to, amount) }
+//!         Approve { spender, amount } -> bool uses (mut token, ctx, mut log) { token.approve(spender, amount) }
+//!         TransferFrom { from, to, amount } -> bool uses (mut token, ctx, mut log) {
+//!             token.transfer_from(from, to, amount)
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! A permit is checked and applied in two steps; `permit` only accepts the
+//! proof that `verify_permit` returns:
+//!
+//! ```fe
+//! Permit { owner, spender, value, deadline, v, r, s } uses (mut token, ctx, mut log) {
+//!     let permit = token.verify_permit(owner, spender, value, deadline, v, r, s, name_hash: NAME_HASH)
+//!     token.permit(permit)
+//! }
+//! ```
+//!
+//! `mint` and `burn` perform no access control; the contract decides who
+//! may reach them (for example with an owner or role capability).
+//!
+//! Semantics follow Solady: failures revert with Solady's custom errors,
+//! `transfer`, `transfer_from` and `approve` return `true`, an allowance of
+//! `u256::max()` is never decreased, and transfers to the zero address are
+//! allowed. `permit` additionally rejects malleable (high-`s`) signatures.
+//! The storage layout is Fe's own, not Solady's slots.
+use core::keccak
+use ingot::evm::crypto::{ecrecover, keccak_words}
+use ingot::evm::eip712
+use ingot::evm::effects::{Address, Ctx, Log, revert_error}
+use ingot::evm::storage_map::StorageMap
+use ingot::abi::sol::{Bytes32, sol}
+
+/// `keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)")`.
+pub const PERMIT_TYPEHASH: u256 = keccak(
+    "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)",
+)
+
+/// The EIP-712 version of the permit domain, `keccak256("1")`, as in Solady.
+pub const VERSION_HASH: u256 = keccak("1")
+
+/// The total supply would exceed `u256::max()`.
+#[error]
+pub struct TotalSupplyOverflow {}
+
+/// The balance is less than the amount.
+#[error]
+pub struct InsufficientBalance {}
+
+/// The allowance is less than the amount.
+#[error]
+pub struct InsufficientAllowance {}
+
+/// The permit signature is not the owner's.
+#[error]
+pub struct InvalidPermit {}
+
+/// The permit deadline has passed.
+#[error]
+pub struct PermitExpired {}
+
+#[event]
+pub struct Transfer {
+    #[indexed]
+    pub from: Address,
+    #[indexed]
+    pub to: Address,
+    pub amount: u256,
+}
+
+#[event]
+pub struct Approval {
+    #[indexed]
+    pub owner: Address,
+    #[indexed]
+    pub spender: Address,
+    pub amount: u256,
+}
+
+/// The ERC-20 functions except the metadata (`name`, `symbol`,
+/// `decimals`), which a contract answers with its own constants.
+pub msg IErc20 {
+    #[selector = sol("totalSupply()")]
+    TotalSupply -> u256,
+    #[selector = sol("balanceOf(address)")]
+    BalanceOf { owner: Address } -> u256,
+    #[selector = sol("allowance(address,address)")]
+    Allowance { owner: Address, spender: Address } -> u256,
+    #[selector = sol("transfer(address,uint256)")]
+    Transfer { to: Address, amount: u256 } -> bool,
+    #[selector = sol("approve(address,uint256)")]
+    Approve { spender: Address, amount: u256 } -> bool,
+    #[selector = sol("transferFrom(address,address,uint256)")]
+    TransferFrom { from: Address, to: Address, amount: u256 } -> bool,
+}
+
+/// The EIP-2612 functions.
+pub msg IErc20Permit {
+    #[selector = sol(
+        "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)",
+    )]
+    Permit {
+        owner: Address,
+        spender: Address,
+        value: u256,
+        deadline: u256,
+        v: u8,
+        r: Bytes32,
+        s: Bytes32,
+    },
+    #[selector = sol("nonces(address)")]
+    Nonces { owner: Address } -> u256,
+    #[selector = sol("DOMAIN_SEPARATOR()")]
+    DomainSeparator -> Bytes32,
+}
+
+/// A permit whose signature `Erc20::verify_permit` checked. Only this
+/// module can create one, so `Erc20::permit` cannot be reached with an
+/// unchecked signature.
+pub struct VerifiedPermit { owner: Address, spender: Address, value: u256, nonce: u256 }
+
+/// ERC-20 balances, allowances and permit nonces.
+pub struct Erc20 {
+    total_supply: u256,
+    balances: StorageMap<Address, u256>,
+    allowances: StorageMap<(Address, Address), u256>,
+    nonces: StorageMap<Address, u256>,
+}
+
+impl Erc20 {
+    pub fn total_supply(self) -> u256 {
+        self.total_supply
+    }
+    pub fn balance_of(self, _ owner: Address) -> u256 {
+        self.balances.get(owner)
+    }
+    pub fn allowance(self, _ owner: Address, _ spender: Address) -> u256 {
+        self.allowances.get((owner, spender))
+    }
+
+    /// The next permit nonce of `owner`.
+    pub fn nonces(self, _ owner: Address) -> u256 {
+        self.nonces.get(owner)
+    }
+
+    /// Moves `amount` from the caller to `to`.
+    pub fn transfer(mut self, _ to: Address, _ amount: u256) -> bool
+    uses (ctx: Ctx, log: mut Log)
+    {
+        self.move_balance(from: ctx.caller(), to, amount)
+        true
+    }
+
+    /// Sets the caller's allowance for `spender` to `amount`.
+    pub fn approve(mut self, _ spender: Address, _ amount: u256) -> bool
+    uses (ctx: Ctx, log: mut Log)
+    {
+        self.set_allowance(owner: ctx.caller(), spender, amount)
+        true
+    }
+
+    /// Moves `amount` from `from` to `to`, spending the caller's allowance.
+    pub fn transfer_from(mut self, _ from: Address, _ to: Address, _ amount: u256) -> bool
+    uses (ctx: Ctx, log: mut Log)
+    {
+        self.spend_allowance(owner: from, spender: ctx.caller(), amount)
+        self.move_balance(from, to, amount)
+        true
+    }
+
+    /// Checks an EIP-2612 permit: `owner`'s signature over the domain of
+    /// `name_hash` (`keccak256(bytes(name))`) and version `"1"`, for the
+    /// current nonce. Pass the result to [`Erc20::permit`] to apply it.
+    ///
+    /// Reverts with `PermitExpired()` after `deadline` and with
+    /// `InvalidPermit()` unless the signature recovers to `owner`.
+    /// Malleable (high-`s`) signatures are rejected.
+    pub fn verify_permit(
+        self,
+        owner: Address,
+        spender: Address,
+        value: u256,
+        deadline: u256,
+        v: u8,
+        r: Bytes32,
+        s: Bytes32,
+        name_hash: u256,
+    ) -> VerifiedPermit
+    uses (ctx: Ctx)
+    {
+        if ctx.timestamp() > deadline {
+            revert_error(PermitExpired {})
+        }
+        let nonce = self.nonces.get(owner)
+        let struct_hash = keccak_words(
+            [PERMIT_TYPEHASH, owner.inner, spender.inner, value, nonce, deadline],
+        )
+        let digest = eip712::digest(
+            domain_separator: permit_domain_separator(name_hash),
+            struct_hash,
+        )
+        // A failed recovery maps to a word no address can equal, so it never
+        // matches, not even the zero address.
+        let signer = ecrecover(hash: digest, v: v as u256, r: r.val, s: s.val)
+            .unwrap_or(default: Option::None)
+            .unwrap_or(default: u256::max())
+        if signer != owner.inner {
+            revert_error(InvalidPermit {})
+        }
+        VerifiedPermit { owner, spender, value, nonce }
+    }
+
+    /// Applies a permit checked by [`Erc20::verify_permit`]: consumes the
+    /// owner's nonce and sets the allowance. Reverts with `InvalidPermit()`
+    /// if the nonce was consumed since the check.
+    pub fn permit(mut self, _ permit: VerifiedPermit) uses (log: mut Log) {
+        let owner = permit.owner
+        if self.nonces.get(owner) != permit.nonce {
+            revert_error(InvalidPermit {})
+        }
+        self.nonces.set(key: owner, value: permit.nonce + 1)
+        self.set_allowance(owner, spender: permit.spender, amount: permit.value)
+    }
+
+    /// The EIP-712 domain separator of the permit for the token named by
+    /// `name_hash`, on the current chain and contract.
+    pub fn domain_separator(self, _ name_hash: u256) -> u256 uses (ctx: Ctx) {
+        permit_domain_separator(name_hash)
+    }
+
+    /// Creates `amount` tokens for `to`. Reverts with
+    /// `TotalSupplyOverflow()` if the supply would overflow.
+    pub fn mint(mut self, _ to: Address, _ amount: u256) uses (log: mut Log) {
+        let supply = self.total_supply
+        if amount > u256::max() - supply {
+            revert_error(TotalSupplyOverflow {})
+        }
+        self.total_supply = supply + amount
+        // Cannot overflow: a balance never exceeds the total supply.
+        self.balances.set(key: to, value: self.balances.get(to) + amount)
+        log.emit(Transfer { from: Address::zero(), to, amount })
+    }
+
+    /// Destroys `amount` of `from`'s tokens. Reverts with
+    /// `InsufficientBalance()` if `from` holds less.
+    pub fn burn(mut self, _ from: Address, _ amount: u256) uses (log: mut Log) {
+        let balance = self.balances.get(from)
+        if amount > balance {
+            revert_error(InsufficientBalance {})
+        }
+        self.balances.set(key: from, value: balance - amount)
+        self.total_supply = self.total_supply - amount
+        log.emit(Transfer { from, to: Address::zero(), amount })
+    }
+
+    /// Moves `amount` from `from` to `to` without checking any allowance.
+    pub fn move_balance(mut self, from: Address, to: Address, amount: u256)
+    uses (log: mut Log)
+    {
+        let from_balance = self.balances.get(from)
+        if amount > from_balance {
+            revert_error(InsufficientBalance {})
+        }
+        self.balances.set(key: from, value: from_balance - amount)
+        self.balances.set(key: to, value: self.balances.get(to) + amount)
+        log.emit(Transfer { from, to, amount })
+    }
+
+    /// Decreases `owner`'s allowance for `spender` by `amount`, unless it is
+    /// `u256::max()`. Reverts with `InsufficientAllowance()` if it is lower.
+    pub fn spend_allowance(mut self, owner: Address, spender: Address, amount: u256) {
+        let allowed = self.allowances.get((owner, spender))
+        if allowed == u256::max() {
+            return
+        }
+        if amount > allowed {
+            revert_error(InsufficientAllowance {})
+        }
+        self.allowances.set(key: (owner, spender), value: allowed - amount)
+    }
+
+    /// Sets `owner`'s allowance for `spender` to `amount`.
+    pub fn set_allowance(mut self, owner: Address, spender: Address, amount: u256)
+    uses (log: mut Log)
+    {
+        self.allowances.set(key: (owner, spender), value: amount)
+        log.emit(Approval { owner, spender, amount })
+    }
+}
+
+fn permit_domain_separator(_ name_hash: u256) -> u256 uses (ctx: Ctx) {
+    eip712::domain_separator(
+        name_hash,
+        version_hash: VERSION_HASH,
+        chain_id: ctx.chainid(),
+        verifying_contract: ctx.address(),
+    )
+}
