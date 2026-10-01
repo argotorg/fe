@@ -1,0 +1,289 @@
+// Tests for `core::fixed`. Expected values for `exp`, `ln` and `sqrt` are
+// Solady's FixedPointMathLib test vectors; the rest were computed with Python
+// arbitrary-precision integers.
+
+use core::fixed::{Fixed, Ray, SWad, UFixed, Wad}
+
+const MAX: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+// Evaluated at compile time.
+const FEE: Wad = Wad::from_ratio(3, 1000)
+const ONE_MINUS_FEE: Wad = Wad::one() - FEE
+const KILO: Wad = Wad::from_int(2) ** 10
+
+fn wad(_ raw: u256) -> Wad {
+    Wad::from_raw(raw)
+}
+
+fn swad(_ raw: i256) -> SWad {
+    SWad::from_raw(raw)
+}
+
+#[test]
+fn constructors_and_accessors() {
+    assert!(Wad::SCALE == 1000000000000000000)
+    assert!(Ray::SCALE == 1000000000000000000000000000)
+    assert!(UFixed<6>::SCALE == 1000000)
+    assert!(Wad::one().raw() == 1000000000000000000)
+    assert!(Wad::from_int(7).raw() == 7000000000000000000)
+    assert!(Wad::from_ratio(1, 3).raw() == 333333333333333333)
+    assert!(Wad::zero().is_zero())
+    assert!(wad(2500000000000000000).floor_int() == 2)
+    assert!(wad(2500000000000000000).ceil_int() == 3)
+    assert!(wad(2000000000000000000).ceil_int() == 2)
+    assert!(FEE.raw() == 3000000000000000)
+    assert!(ONE_MINUS_FEE.raw() == 997000000000000000)
+}
+
+#[test]
+fn operators_keep_the_scale() {
+    let a = Wad::from_int(3)
+    let b = wad(500000000000000000)
+    assert!(a + b == wad(3500000000000000000))
+    assert!(a - b == wad(2500000000000000000))
+    assert!(a * b == wad(1500000000000000000))
+    assert!(a / b == Wad::from_int(6))
+    assert!(a.mul_int(4) == Wad::from_int(12))
+    assert!(a.div_int(4) == wad(750000000000000000))
+    assert!(b < a)
+    assert!(a >= a)
+    assert!(a.min(b) == b)
+    assert!(a.max(b) == a)
+    assert!(b.saturating_sub(a).is_zero())
+
+    // Swap output with a 0.3% fee, as in an x*y=k pool.
+    let amount_in = Wad::from_int(10)
+    let reserve_in = Wad::from_int(1000)
+    let reserve_out = Wad::from_int(2000)
+    let in_with_fee = amount_in * ONE_MINUS_FEE
+    let out = in_with_fee * reserve_out / (reserve_in + in_with_fee)
+    assert!(out == wad(19743160687941225977))
+}
+
+#[test]
+fn products_use_full_precision() {
+    // raw * raw overflows u256, the 512-bit intermediate does not.
+    let big = Wad::from_int(100000000000000000000000000000000000000000)
+    assert!(
+        big * Wad::from_int(2) == Wad::from_int(200000000000000000000000000000000000000000),
+    )
+    assert!(
+        big / Wad::from_int(4) == Wad::from_int(25000000000000000000000000000000000000000),
+    )
+}
+
+#[test]
+fn rounding_direction() {
+    let third = Wad::from_ratio(1, 3)
+    assert!(third * third == wad(111111111111111110))
+    assert!(third.mul_up(third) == wad(111111111111111111))
+    assert!(Wad::one() / Wad::from_int(3) == wad(333333333333333333))
+    assert!(
+        Wad::one().div_up(Wad::from_int(3)) == wad(333333333333333334),
+    )
+    assert!(wad(1).mul_up(wad(1)) == wad(1))
+    assert!((wad(1) * wad(1)).is_zero())
+}
+
+#[test]
+fn rescale_between_scales() {
+    let w = wad(1234567890123456789)
+    let r: Ray = w.rescale<27>()
+    assert!(r.raw() == 1234567890123456789000000000)
+    let usdc: UFixed<6> = w.rescale<6>()
+    assert!(usdc.raw() == 1234567)
+    let usdc_up: UFixed<6> = w.rescale_up<6>()
+    assert!(usdc_up.raw() == 1234568)
+    assert!(usdc.rescale<18>() == wad(1234567000000000000))
+}
+
+#[test]
+fn integer_powers() {
+    assert!(wad(1100000000000000000) ** 2 == wad(1210000000000000000))
+    assert!(Wad::from_int(2) ** 10 == Wad::from_int(1024))
+    assert!(Wad::zero() ** 0 == Wad::one())
+    assert!(Wad::zero() ** 5 == Wad::zero())
+    assert!(Wad::from_int(7) ** 0 == Wad::one())
+    assert!(Wad::from_ratio(1, 2) ** 3 == wad(125000000000000000))
+    assert!(KILO == Wad::from_int(1024))
+    // Bases above 128 bits use the full 512-bit product.
+    assert!(
+        Wad::from_int(1000000000000000000000) ** 2
+            == Wad::from_int(1000000000000000000000000000000000000000000),
+    )
+    assert!(
+        wad(340282366920938463463374607431768211457) ** 2
+            == wad(
+                115792089237316195423570985008687907853950549399482440966384,
+            ),
+    )
+    // 5% per second compounded for a year, MakerDAO style.
+    let rate = Ray::from_raw(1000000001547125957863212448)
+    assert!(
+        rate ** 31536000 == Ray::from_raw(1049999999999999999961070145),
+    )
+}
+
+#[test]
+fn sqrt_matches_solady() {
+    assert!(wad(0).sqrt() == wad(0))
+    assert!(wad(1).sqrt() == wad(1000000000))
+    assert!(wad(2).sqrt() == wad(1414213562))
+    assert!(wad(8).sqrt() == wad(2828427124))
+    assert!(
+        wad(1000000000000000000).sqrt() == wad(1000000000000000000),
+    )
+    assert!(
+        wad(4000000000000000000).sqrt() == wad(2000000000000000000),
+    )
+    assert!(wad(255).sqrt() == wad(15968719422))
+    assert!(wad(4294967295).sqrt() == wad(65535999992370))
+    assert!(
+        wad(18446744073709551615).sqrt() == wad(4294967295999999999),
+    )
+    assert!(
+        wad(340282366920938463463374607431768211455).sqrt() == wad(18446744073709551615999999999),
+    )
+    // Radicand beyond 256 bits.
+    assert!(
+        wad(MAX).sqrt() == wad(340282366920938463463374607431768211455999999999),
+    )
+    assert!(
+        Ray::from_raw(MAX).sqrt()
+            == Ray::from_raw(10760673270633032068781057572644926252267065532020114),
+    )
+}
+
+#[test]
+fn exp_matches_solady() {
+    assert!(swad(-41446531673892822313).exp() == wad(0))
+    assert!(swad(-41446531673892822312).exp() == wad(1))
+    assert!(swad(-3000000000000000000).exp() == wad(49787068367863942))
+    assert!(
+        swad(-1000000000000000000).exp() == wad(367879441171442321),
+    )
+    assert!(swad(-300000000000000000).exp() == wad(740818220681717866))
+    assert!(swad(0).exp() == wad(1000000000000000000))
+    assert!(swad(500000000000000000).exp() == wad(1648721270700128146))
+    assert!(
+        swad(1000000000000000000).exp() == wad(2718281828459045235),
+    )
+    assert!(
+        swad(3000000000000000000).exp() == wad(20085536923187667741),
+    )
+    assert!(
+        swad(10000000000000000000).exp() == wad(22026465794806716516980),
+    )
+    assert!(
+        swad(50000000000000000000).exp() == wad(5184705528587072464148529318587763226117),
+    )
+    assert!(
+        swad(100000000000000000000).exp()
+            == wad(
+                26881171418161354484134666106240937146178367581647816351662017,
+            ),
+    )
+    assert!(
+        swad(135305999368893231588).exp()
+            == wad(
+                57896044618658097650144101621524338577433870140581303254786265309376407432913,
+            ),
+    )
+}
+
+#[test]
+fn ln_matches_solady() {
+    assert!(wad(1000000000000000000).ln() == swad(0))
+    assert!(wad(2718281828459045235).ln() == swad(999999999999999999))
+    assert!(
+        wad(11723640096265400935).ln() == swad(2461607324344817918),
+    )
+    assert!(wad(1).ln() == swad(-41446531673892822313))
+    assert!(wad(42).ln() == swad(-37708862055609454007))
+    assert!(wad(10000).ln() == swad(-32236191301916639577))
+    assert!(wad(1000000000).ln() == swad(-20723265836946411157))
+    assert!(
+        wad(
+                0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+            ).ln()
+            == swad(135305999368893231589),
+    )
+    assert!(
+        wad(0x4000000000000000000000000000000000000000000).ln() == swad(76388489021297880288),
+    )
+    assert!(
+        wad(0x100000000000000000000000000000000).ln() == swad(47276307437780177293),
+    )
+}
+
+#[test]
+fn fractional_powers() {
+    // 2^0.5 and 4^1.5, approximately.
+    let root2 = Wad::from_int(2).powf(swad(500000000000000000))
+    assert!(root2 == wad(1414213562373095047))
+    let eight = Wad::from_int(4).powf(swad(1500000000000000000))
+    assert!(eight == wad(7999999999999999989))
+}
+
+#[test]
+fn signed_arithmetic() {
+    let a = SWad::from_int(-3)
+    let b = swad(500000000000000000)
+    assert!(a + b == swad(-2500000000000000000))
+    assert!(a * b == swad(-1500000000000000000))
+    assert!(a / b == SWad::from_int(-6))
+    assert!(-a == SWad::from_int(3))
+    assert!(a.mul_int(-2) == SWad::from_int(6))
+    assert!(a.div_int(2) == swad(-1500000000000000000))
+    assert!(a < b)
+    assert!(a.is_negative())
+    assert!(a.abs() == Wad::from_int(3))
+    // Rounds towards zero, like Solady's sMulWad.
+    let third = Fixed<18>::from_raw(-333333333333333333)
+    assert!(third * third == swad(111111111111111110))
+    assert!(
+        third * SWad::from_raw(333333333333333333) == swad(-111111111111111110),
+    )
+    assert!(Wad::from_int(2).to_signed() == SWad::from_int(2))
+    assert!(SWad::from_int(2).to_unsigned() == Wad::from_int(2))
+}
+
+#[test(should_revert, panic = 0x11)]
+fn mul_overflow_panics() {
+    let _ = Wad::from_raw(MAX) * Wad::from_int(2)
+}
+
+#[test(should_revert, panic = 0x12)]
+fn div_by_zero_panics() {
+    let _ = Wad::one() / Wad::zero()
+}
+
+#[test(should_revert, panic = 0x11)]
+fn sub_underflow_panics() {
+    let _ = Wad::zero() - Wad::one()
+}
+
+#[test(should_revert, panic = 0x11)]
+fn pow_overflow_panics() {
+    let _ = Wad::from_int(1000000000000) ** 10
+}
+
+#[test(should_revert, panic = 0x11)]
+fn exp_overflow_panics() {
+    let _ = swad(135305999368893231589).exp()
+}
+
+#[test(should_revert)]
+fn ln_of_zero_reverts() {
+    let _ = Wad::zero().ln()
+}
+
+#[test(should_revert, panic = 0x11)]
+fn negative_to_unsigned_panics() {
+    let _ = SWad::from_int(-1).to_unsigned()
+}
+
+#[test]
+fn powf_full_precision_underflow() {
+    assert!(Wad::from_int(2).powf(SWad::from_raw(i256::min())) == Wad::zero())
+}
