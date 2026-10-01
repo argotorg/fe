@@ -20,6 +20,7 @@ pub use mapping::SolMapping
 pub use merkle::{self}
 pub use sol_slot::{SolPacked, SolSlot}
 pub use packed::{self, *}
+pub use random::{self}
 pub use ssz::{self, *}
 pub use token::{self, ReceiverCheck, TokenCall}
 pub use storage_bytes::{self, *}

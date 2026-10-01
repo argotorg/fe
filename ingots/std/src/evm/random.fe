@@ -1,0 +1,142 @@
+//! Pseudorandom numbers as an effect, after Solady's `LibPRNG`.
+//!
+//! Code that needs randomness declares the [`Rng`] effect and leaves the
+//! choice of generator to its caller:
+//!
+//! ```fe
+//! use std::evm::random::{KeccakRng, ReplayRng, Rng}
+//!
+//! fn draw_winner<const N: usize>(_ tickets: [Address; N]) -> Address uses (rng: mut Rng) {
+//!     tickets[rng.uniform(N as u256) as usize]
+//! }
+//!
+//! // in a handler: seed from the chain
+//! let mut rng = KeccakRng::seeded(ctx.prevrandao())
+//! let winner = with (Rng = rng) { draw_winner(tickets) }
+//!
+//! // in a test: replay chosen words
+//! let mut rng = ReplayRng::new([3, 0, 7])
+//! let winner = with (Rng = rng) { draw_winner(tickets) }
+//! ```
+//!
+//! Every function that consumes randomness says so in its signature, and a
+//! test can drive the same code with a deterministic generator instead of
+//! mocking block values.
+//!
+//! These generators are deterministic: anyone who knows the seed can
+//! predict every output. `prevrandao` is known when a block is built and
+//! can be biased by its proposer, so do not rely on it where a validator or
+//! searcher profits from choosing the outcome; use a commit-reveal scheme
+//! or a VRF for that.
+use core::ptr::MemSlice
+use super::crypto::keccak_words
+use super::effects::revert_error
+use super::panic::{PANIC_DIVISION_BY_ZERO, Panic}
+
+/// A source of pseudorandom 256-bit words.
+pub trait Rng {
+    /// The next pseudorandom word.
+    fn next(mut self) -> u256
+
+    /// A pseudorandom number in `[0, upper)` without modulo bias, like
+    /// Solady's `uniform`: words below `2^256 mod upper` are rejected and
+    /// redrawn. Panics with `Panic(0x12)` (division by zero) if `upper` is
+    /// zero.
+    #[arithmetic(unchecked)]
+    fn uniform(mut self, _ upper: u256) -> u256 {
+        // The unchecked `%` below would give 0 for a zero bound.
+        if upper == 0 {
+            revert_error(Panic::from(PANIC_DIVISION_BY_ZERO))
+        }
+        let threshold = (0 - upper) % upper
+        let mut word = self.next()
+        while word < threshold {
+            word = self.next()
+        }
+        word % upper
+    }
+
+    /// `true` with probability `numerator / denominator`. Panics with
+    /// `Panic(0x12)` if `denominator` is zero.
+    fn chance(mut self, numerator: u256, denominator: u256) -> bool {
+        self.uniform(denominator) < numerator
+    }
+}
+
+/// Solady's PRNG: each word is the keccak256 of the previous one.
+pub struct KeccakRng { state: u256 }
+
+impl KeccakRng {
+    pub fn seeded(_ seed: u256) -> Self {
+        KeccakRng { state: seed }
+    }
+
+    /// The current state, which seeds a generator that continues this one,
+    /// for example in a later transaction.
+    pub fn state(self) -> u256 {
+        self.state
+    }
+}
+
+impl Rng for KeccakRng {
+    fn next(mut self) -> u256 {
+        self.state = keccak_words([self.state])
+        self.state
+    }
+}
+
+/// Returns the given words in order and then starts over. Meant for tests
+/// that need specific outcomes from code that uses the `Rng` effect.
+///
+/// `uniform(upper)` redraws words below `2^256 mod upper`; if every given
+/// word is that small it never returns (`2^256 mod 10 == 6`, so
+/// `ReplayRng::new([2, 3]).uniform(10)` loops until out of gas).
+pub struct ReplayRng<const N: usize> { words: [u256; N], position: usize }
+
+impl<const N: usize> ReplayRng<N> {
+    pub fn new(_ words: [u256; N]) -> Self {
+        ReplayRng { words, position: 0 }
+    }
+}
+
+impl<const N: usize> Rng for ReplayRng<N> {
+    fn next(mut self) -> u256 {
+        let word = self.words[self.position]
+        self.position = (self.position + 1) % N
+        word
+    }
+}
+
+/// Shuffles `items` in place with an unbiased Fisher-Yates shuffle.
+pub fn shuffle<T, const N: usize>(_ items: mut [T; N])
+uses (rng: mut Rng) where T: Copy
+{
+    let mut i = N
+    while i > 1 {
+        let j = rng.uniform(i as u256) as usize
+        i -= 1
+        let held = items[i]
+        items[i] = items[j]
+        items[j] = held
+    }
+}
+
+/// Shuffles the memory viewed by `items` in place with an unbiased
+/// Fisher-Yates shuffle.
+pub fn shuffle_slice<T>(_ items: MemSlice<T>) uses (rng: mut Rng) where T: Copy {
+    let mut i = items.len()
+    while i > 1 {
+        let j = rng.uniform(i)
+        i -= 1
+        let held = *items.ptr_at(i)
+        *items.ptr_at(i) = *items.ptr_at(j)
+        *items.ptr_at(j) = held
+    }
+}
+
+/// A uniformly chosen element of `items`, which must not be empty.
+pub fn choose<T, const N: usize>(_ items: [T; N]) -> T
+uses (rng: mut Rng) where T: Copy
+{
+    items[rng.uniform(N as u256) as usize]
+}

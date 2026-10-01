@@ -1,0 +1,177 @@
+// Tests for `std::evm::random`. `KeccakRng` must produce Solady's `LibPRNG`
+// sequence, next = keccak256(abi.encode(state)); the expected words were
+// computed with `cast keccak`.
+
+use core::ptr::MemArray
+use std::evm::{Address, Ctx, Evm}
+use std::evm::random::{KeccakRng, ReplayRng, Rng, choose, shuffle, shuffle_slice}
+
+const KECCAK_0: u256 = 0x290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563
+const KECCAK_KECCAK_0: u256 = 0x510e4e770828ddbf7f7b00ab00a9f6adaf81c0dc9cc85f1f8249c256942d61d9
+const KECCAK_42: u256 = 0xbeced09521047d05b8960b7e7bcc1d1292cf3e4b2a6b63f48335cbde5f7545d2
+
+// The code under test only knows that some `Rng` is in scope.
+fn draw_winner<const N: usize>(_ tickets: [Address; N]) -> Address
+uses (rng: mut Rng)
+{
+    choose(tickets)
+}
+
+fn draw_two() -> (u256, u256) uses (rng: mut Rng) {
+    (rng.next(), rng.next())
+}
+
+#[test]
+fn keccak_rng_matches_solady() {
+    let mut rng = KeccakRng::seeded(0)
+    let (first, second) = with (Rng = rng) {
+        draw_two()
+    }
+    assert!(first == KECCAK_0)
+    assert!(second == KECCAK_KECCAK_0)
+    assert!(rng.state() == KECCAK_KECCAK_0)
+
+    let mut other = KeccakRng::seeded(42)
+    assert!(other.next() == KECCAK_42)
+}
+
+#[test]
+fn state_continues_a_generator() {
+    let mut rng = KeccakRng::seeded(0)
+    let _ = rng.next()
+    // A generator seeded with the saved state picks up where it stopped.
+    let mut resumed = KeccakRng::seeded(rng.state())
+    assert!(resumed.next() == KECCAK_KECCAK_0)
+}
+
+#[test]
+fn uniform_rejects_biased_words() {
+    // 2^256 mod 3 == 1, so the word 0 is rejected and 5 gives 5 % 3.
+    let mut rng = ReplayRng::new([0, 5])
+    assert!(rng.uniform(3) == 2)
+    // 2^256 mod 4 == 0: nothing is rejected.
+    let mut exact = ReplayRng::new([0, 5])
+    assert!(exact.uniform(4) == 0)
+
+    let mut keccak = KeccakRng::seeded(7)
+    let mut i: u256 = 0
+    while i < 50 {
+        assert!(keccak.uniform(10) < 10)
+        i += 1
+    }
+}
+
+#[test]
+fn chance_compares_against_the_ratio() {
+    // 2^256 mod 10 == 6, so words below 6 would be redrawn.
+    let mut rng = ReplayRng::new([12, 13])
+    assert!(rng.chance(numerator: 3, denominator: 10))
+    assert!(!rng.chance(numerator: 3, denominator: 10))
+}
+
+// A zero bound panics like a division by zero instead of returning a value.
+#[test(should_revert, panic = 0x12)]
+fn uniform_of_zero_panics() {
+    let mut rng = ReplayRng::new([7])
+    let _ = rng.uniform(0)
+}
+
+#[test(should_revert, panic = 0x12)]
+fn chance_with_zero_denominator_panics() {
+    let mut rng = ReplayRng::new([7])
+    let _ = rng.chance(numerator: 0, denominator: 0)
+}
+
+#[test]
+fn replayed_words_give_a_known_shuffle() {
+    let mut items: [u256; 4] = [10, 20, 30, 40]
+    let mut rng = ReplayRng::new([0, 2, 0])
+    with (Rng = rng) {
+        shuffle(mut items)
+    }
+    assert!(items == [20, 40, 30, 10])
+}
+
+#[test]
+fn shuffles_keep_every_element() {
+    let mut items: [u256; 8] = [1, 2, 3, 4, 5, 6, 7, 8]
+    let mut rng = KeccakRng::seeded(1)
+    with (Rng = rng) {
+        shuffle(mut items)
+    }
+    let mut seen: u256 = 0
+    for item in items {
+        seen |= 1 << item
+    }
+    assert!(seen == 0x1fe)
+    assert!(items != [1, 2, 3, 4, 5, 6, 7, 8])
+
+    let memory = MemArray<u256>::new_zeroed(5)
+    let slice = memory.as_slice()
+    let mut i: u256 = 0
+    while i < 5 {
+        *slice.ptr_at(i) = i + 1
+        i += 1
+    }
+    with (Rng = rng) {
+        shuffle_slice(slice)
+    }
+    let mut total: u256 = 0
+    let mut k: u256 = 0
+    while k < 5 {
+        total += *slice.ptr_at(k)
+        k += 1
+    }
+    assert!(total == 15)
+}
+
+#[test]
+fn a_test_rng_picks_the_winner() {
+    let tickets: [Address; 3] = [
+        Address { inner: 0xa },
+        Address { inner: 0xb },
+        Address { inner: 0xc },
+    ]
+    let mut rng = ReplayRng::new([2])
+    let winner = with (Rng = rng) {
+        draw_winner(tickets)
+    }
+    assert!(winner.inner == 0xc)
+}
+
+msg LotteryMsg {
+    #[selector = 0x01]
+    Draw -> Address,
+}
+
+// In a contract the same function draws with a chain-seeded generator.
+pub contract Lottery uses (ctx: Ctx) {
+    recv LotteryMsg {
+        Draw -> Address uses (ctx) {
+            let tickets: [Address; 3] = [
+                Address { inner: 0xa },
+                Address { inner: 0xb },
+                Address { inner: 0xc },
+            ]
+            let mut rng = KeccakRng::seeded(ctx.prevrandao())
+            with (Rng = rng) {
+                draw_winner(tickets)
+            }
+        }
+    }
+}
+
+#[test]
+fn a_contract_draws_with_a_seeded_rng() uses (evm: mut Evm) {
+    let lottery = evm.create2<Lottery>(value: 0, args: (), salt: 0)
+    let winner: Address = evm
+        .call(
+            addr: lottery,
+            gas: 100000,
+            value: 0,
+            message: LotteryMsg::Draw {},
+        )
+    assert!(
+        winner.inner == 0xa || winner.inner == 0xb || winner.inner == 0xc,
+    )
+}
