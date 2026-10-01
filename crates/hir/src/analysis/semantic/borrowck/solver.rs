@@ -19,7 +19,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        FieldIndex, SConst, SemConstScalar, SemConstValue, SemOrigin, SemanticInstance,
+        EvalOutcome, FieldIndex, SConst, SemConstScalar, SemConstValue, SemOrigin,
+        SemanticInstance,
         capability::{
             birth::AllocationBirth,
             external::{ExternalSource, MemoryOffset},
@@ -37,7 +38,7 @@ use crate::analysis::{
             value::Guarded,
         },
         definite_assignment::literal_bool_cond,
-        get_or_build_semantic_instance,
+        eval_const_ref, get_or_build_semantic_instance,
         normalized::{
             HandleOrigin, NBlockId, NDataPath, NDataProjection, NExpr, NIndex, NOperand, NPlace,
             NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind, NSuccessor,
@@ -226,7 +227,24 @@ impl<'db> Borrowck<'db> {
         )
     }
 
+    /// The index a scalar value contributes to guards and projections.
+    ///
+    /// A named integer constant reaches the normalized body as an unevaluated
+    /// reference; it resolves to the literal it names, so `i == ONE`,
+    /// `i < ONE` and `values[ONE]` relate exactly like `i == 1`, `i < 1` and
+    /// `values[1]`. As opaque runtime indices, an
+    /// `if x == A ... else if x == B` chain made the guards case-split on
+    /// which of the constants are equal.
     pub fn index(&self, value: NValueId) -> IndexExpr<'db> {
+        self.scalar_index(value, true)
+    }
+
+    /// `index`, but leaving named constants opaque.
+    pub(super) fn unresolved_index(&self, value: NValueId) -> IndexExpr<'db> {
+        self.scalar_index(value, false)
+    }
+
+    fn scalar_index(&self, value: NValueId, resolve_named: bool) -> IndexExpr<'db> {
         let Some((_, expr)) = self.body.defining_expr(value) else {
             return IndexExpr::Runtime(value);
         };
@@ -242,11 +260,23 @@ impl<'db> Borrowck<'db> {
                 }
                 IndexExpr::Runtime(value)
             }
-            NExpr::Forward { src } => self.index(src.value),
+            NExpr::Const(SConst::Ref(reference)) if resolve_named => {
+                if let EvalOutcome::Ready(constant) = eval_const_ref(self.db, *reference)
+                    && let SemConstValue::Scalar {
+                        value: SemConstScalar::Int { value: integer },
+                        ..
+                    } = constant.value(self.db)
+                    && let Some(integer) = integer.to_usize()
+                {
+                    return IndexExpr::Const(integer);
+                }
+                IndexExpr::Runtime(value)
+            }
+            NExpr::Forward { src } => self.scalar_index(src.value, resolve_named),
             NExpr::ScalarCast { value: source, to }
                 if self.lossless_scalar_cast(source.value, *to) =>
             {
-                self.index(source.value)
+                self.scalar_index(source.value, resolve_named)
             }
             NExpr::Load { place, .. } if place.path.is_empty() && place.ty.is_integral(self.db) => {
                 match place.base {
@@ -260,7 +290,7 @@ impl<'db> Borrowck<'db> {
                                 NValueDefinition::EntryParam { .. }
                             ) =>
                     {
-                        self.index(carrier)
+                        self.scalar_index(carrier, resolve_named)
                     }
                     _ => IndexExpr::Runtime(value),
                 }
