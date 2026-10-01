@@ -404,13 +404,11 @@ impl<'db> ClobberCondition<'db> {
         }
         target.source.erase_clobber_conditions();
         written.source.erase_clobber_conditions();
-        // A cell outside raw memory is separated from a raw-memory write by
-        // object identity alone; offsets into the written object and paths in
-        // the target cannot refute that overlap. Keeping them would add one
-        // condition per written field, offset and target cell to every
-        // replacement, although a caller can refute all of them only by
-        // telling the two objects apart. A caller that passes one object for
-        // both can no longer refute by field or offset.
+        // Bound raw write selectors by their containing object, but retain
+        // the clobbered cell: a callee's separation precondition may protect
+        // that cell without protecting every field in its containing object.
+        // If the written source is unchanged, its extent stays meaningful too.
+        // A widened written source loses its original offset and extent.
         let object = |place: &SourceExpr<'db>| {
             let mut place = place.clone();
             while place.source.dereferences.is_empty()
@@ -426,9 +424,13 @@ impl<'db> ClobberCondition<'db> {
         let (target_object, written_object) = (object(&target), object(&written));
         if written_object.source.in_raw_memory() && !target_object.source.in_raw_memory() {
             return Self {
-                target: target_object,
+                target,
+                extent: if written_object == written {
+                    extent
+                } else {
+                    AccessExtent::Unknown
+                },
                 written: written_object,
-                extent: AccessExtent::Unknown,
             };
         }
         Self {
@@ -1506,6 +1508,53 @@ impl<'db> ExternalSource<'db> {
             (Some(exact), Some(possible)) => Some(exact.or(&possible)),
             (Some(exact), None) => Some(exact),
             (None, possible) => possible,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        analysis::semantic::capability::path::{Projection, StructuralPath},
+        test_db::HirAnalysisTestDb,
+    };
+
+    #[test]
+    fn clobber_coarsening_keeps_the_target_and_unchanged_write_extent() {
+        let db = HirAnalysisTestDb::default();
+        let memory = HandleAddressSpace::Known(ProviderAddressSpace::Memory);
+        let mut target = SourceExpr::whole(ExternalSource::input(
+            InputSource::slot(0, StructuralPath::default()),
+            ReferentContract::new(&db, TyId::array_with_len(&db, TyId::u256(&db), 2), memory),
+            false,
+        ));
+        target.path = RegionPath::new([Projection::Index(IndexExpr::Const(1))]);
+        let written = SourceExpr::whole(ExternalSource::input(
+            InputSource::slot(1, StructuralPath::default()),
+            ReferentContract::new(&db, TyId::u8(&db), memory),
+            true,
+        ));
+        for extent in [
+            AccessExtent::Typed,
+            AccessExtent::Bytes(IndexExpr::Const(8)),
+            AccessExtent::Unknown,
+        ] {
+            let direct = ClobberCondition::new(target.clone(), written.clone(), extent);
+            assert_eq!(direct.target, target);
+            assert_eq!(direct.written, written);
+            assert_eq!(direct.extent, extent);
+
+            let offset = SourceExpr::whole(ExternalSource::memory(
+                &db,
+                written.clone(),
+                TyId::u8(&db),
+                MemoryOffset::Element(TyId::u8(&db), IndexExpr::Const(1)),
+            ));
+            let widened = ClobberCondition::new(target.clone(), offset, extent);
+            assert_eq!(widened.target, target);
+            assert_eq!(widened.written, written);
+            assert_eq!(widened.extent, AccessExtent::Unknown);
         }
     }
 }
