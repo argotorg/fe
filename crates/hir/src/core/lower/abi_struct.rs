@@ -4,7 +4,7 @@ use salsa::Accumulator as _;
 use super::{
     FileLowerCtxt,
     attr::{has_named_attr, lower_attrs_without_named, named_attr_specs},
-    hir_builder::{DecodeInputBindings, HirBuilder},
+    hir_builder::{DecodeInputBindings, FuncBodySpec, HirBuilder},
     msg::{
         build_decode_head_pos_expr, create_head_size_assoc_const, create_is_dynamic_assoc_const,
         create_payload_size_func,
@@ -416,10 +416,9 @@ fn lower_decode_impl<'db>(
             },
         );
 
-        // The inherited `decode_from_bounded` and `decode_from_prechecked_head`
-        // would decode through `decode_from`, which checks dynamic fields
-        // against the whole input instead of `input_len`. Pass the bound to
-        // every field, like the tuple impls in `core::abi`.
+        // Decode fields directly at their head positions without a mutable
+        // cursor. Check the head once and preserve the bound on dynamic tails.
+        // Let the backend budget these generated direct decoders.
         let u256_ty = builder.ty_ident(builder.ident("u256"));
         let input_ident = builder.generated_ident("abi_struct_input");
         let pos_ident = builder.generated_ident("abi_struct_pos");
@@ -433,12 +432,15 @@ fn lower_decode_impl<'db>(
             builder.param_underscore_named(pos_ident, u256_ty),
             builder.param_underscore_named(input_len_ident, u256_ty),
         ]);
-        builder.func_generic_inline_always(
-            "decode_from_prechecked_head",
-            generic_params,
-            params,
-            Some(builder.self_ty()),
-            modifiers,
+        builder.func_with_body_spec(
+            FuncBodySpec {
+                name: builder.ident("decode_from_prechecked_head"),
+                attrs: builder.empty_attrs(),
+                generic_params,
+                params,
+                ret_ty: Some(builder.self_ty()),
+                modifiers,
+            },
             |body| {
                 let input = DecodeInputBindings {
                     input_ident,
@@ -460,40 +462,52 @@ fn lower_decode_impl<'db>(
             },
         );
 
-        // core::abi::decode_frame_from<Sol, Self, I>(input, pos, input_len)
-        let (generic_params, input_ty) = builder.type_param_with_trait_bound("I", byte_input);
-        let params = builder.params([
-            builder.param_underscore_named(input_ident, input_ty),
-            builder.param_underscore_named(pos_ident, u256_ty),
-            builder.param_underscore_named(input_len_ident, u256_ty),
-        ]);
-        builder.func_generic_inline_always(
-            "decode_from_bounded",
-            generic_params,
-            params,
-            Some(builder.self_ty()),
-            modifiers,
-            |body| {
-                let db = body.db();
-                let callee = body.path_expr(
-                    PathId::from_ident(db, body.roots().core)
-                        .push_str(db, "abi")
-                        .push_str_args(
-                            db,
-                            "decode_frame_from",
-                            GenericArgListId::given_types(
+        for name in ["decode_from", "decode_from_bounded"] {
+            let (generic_params, input_ty) = builder.type_param_with_trait_bound("I", byte_input);
+            let with_input_len = name == "decode_from_bounded";
+            let mut params = vec![
+                builder.param_underscore_named(input_ident, input_ty),
+                builder.param_underscore_named(pos_ident, u256_ty),
+            ];
+            if with_input_len {
+                params.push(builder.param_underscore_named(input_len_ident, u256_ty));
+            }
+            let params = builder.params(params);
+            builder.func_with_body_spec(
+                FuncBodySpec {
+                    name: builder.ident(name),
+                    attrs: builder.empty_attrs(),
+                    generic_params,
+                    params,
+                    ret_ty: Some(builder.self_ty()),
+                    modifiers,
+                },
+                |body| {
+                    if !with_input_len {
+                        body.bind_input_len(input_len_ident, input_ident);
+                    }
+                    // core::abi::decode_frame_from<Sol, Self, I>(input, pos, input_len)
+                    let db = body.db();
+                    let callee = body.path_expr(
+                        PathId::from_ident(db, body.roots().core)
+                            .push_str(db, "abi")
+                            .push_str_args(
                                 db,
-                                [body.sol_ty(), TypeId::fallback_self_ty(db), input_ty],
+                                "decode_frame_from",
+                                GenericArgListId::given_types(
+                                    db,
+                                    [body.sol_ty(), TypeId::fallback_self_ty(db), input_ty],
+                                ),
                             ),
-                        ),
-                );
-                let args = [input_ident, pos_ident, input_len_ident]
-                    .map(|ident| body.ident_expr(ident))
-                    .to_vec();
-                let call = body.call_expr(callee, args);
-                body.emit_return(Some(call));
-            },
-        );
+                    );
+                    let args = [input_ident, pos_ident, input_len_ident]
+                        .map(|ident| body.ident_expr(ident))
+                        .to_vec();
+                    let call = body.call_expr(callee, args);
+                    body.emit_return(Some(call));
+                },
+            );
+        }
     });
 }
 

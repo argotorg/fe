@@ -71,13 +71,13 @@ fn fresh_ident<'db>(db: &'db dyn HirDb, reserved: &FxHashSet<String>, name: &str
     IdentId::new(db, ident)
 }
 
-struct FuncBodySpec<'db> {
-    name: IdentId<'db>,
-    attrs: AttrListId<'db>,
-    generic_params: GenericParamListId<'db>,
-    params: FuncParamListId<'db>,
-    ret_ty: Option<TypeId<'db>>,
-    modifiers: FuncModifiers,
+pub(super) struct FuncBodySpec<'db> {
+    pub(super) name: IdentId<'db>,
+    pub(super) attrs: AttrListId<'db>,
+    pub(super) generic_params: GenericParamListId<'db>,
+    pub(super) params: FuncParamListId<'db>,
+    pub(super) ret_ty: Option<TypeId<'db>>,
+    pub(super) modifiers: FuncModifiers,
 }
 
 impl<'ctxt, 'db, O> HirBuilder<'ctxt, 'db, O>
@@ -516,7 +516,7 @@ where
         )
     }
 
-    fn func_with_body_spec(
+    pub(super) fn func_with_body_spec(
         &mut self,
         spec: FuncBodySpec<'db>,
         build_body: impl FnOnce(&mut BodyBuilder<'_, 'db, O>),

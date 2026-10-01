@@ -409,3 +409,45 @@ fn abi_struct_without_sol_compat_field_round_trips() uses (mem: mut RawMem) {
     assert(decoded.a.value == 1)
     assert(decoded.b.value == 2)
 }
+
+#[test]
+fn struct_decode_from_preserves_nonzero_base() uses (mem: mut RawMem) {
+    let encoded = encode_abi_payload(Hop {
+        key: key(500),
+        data: Bytes::from_word_prefix(word: 0x1122 << 240, len: 2),
+    })
+    let prefixed = MemBuffer::alloc(encoded.len() + 32)
+    ptr::copy(ptr::offset_bytes(prefixed.ptr(), 32), encoded.span())
+    let decoded = <Hop as Decode<Sol>>::decode_from(prefixed.span(), 32)
+    assert(decoded.key.currency0.inner == 0xabc)
+    assert(decoded.key.fee.val == 500)
+    assert(decoded.key.tick_spacing.val == -60)
+    assert(decoded.data.len() == 2)
+    assert(decoded.data.byte_at(1) == 0x22)
+}
+
+#[test(should_revert)]
+fn struct_decode_from_rejects_truncated_static_head() uses (mem: mut RawMem) {
+    let encoded = encode_abi_payload(key(500))
+    let _ = <Key as Decode<Sol>>::decode_from(encoded.span().slice(offset: 0, len: 64), 0)
+}
+
+#[test(should_revert)]
+fn struct_decode_from_rejects_head_position_overflow() uses (mem: mut RawMem) {
+    let encoded = encode_abi_payload(key(500))
+    let _ = <Key as Decode<Sol>>::decode_from(encoded.span(), !(0 as u256) - 31)
+}
+
+#[test(should_revert)]
+fn struct_decode_from_rejects_noncanonical_static_field() uses (mem: mut RawMem) {
+    let encoded = encode_abi_payload(key(500))
+    store_word(ptr: encoded.span().ptr(), value: 1 << 160)
+    let _ = <Key as Decode<Sol>>::decode_from(encoded.span(), 0)
+}
+
+#[test(should_revert)]
+fn struct_decode_from_rejects_dynamic_tail_overflow() uses (mem: mut RawMem) {
+    let input = MemBuffer::alloc(64)
+    store_word(ptr: ptr::offset_bytes(input.ptr(), 32), value: !(0 as u256))
+    let _ = <Blob as Decode<Sol>>::decode_from(input.span(), 32)
+}
