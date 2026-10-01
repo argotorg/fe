@@ -705,21 +705,25 @@ unsigned bound only after a corresponding fill certificate is established.
 ### Recursive fresh results
 
 Recursive forwarding of an input preserves that input's may-alias identity. For a
-call returning one direct capability, fresh alternatives share one call-result
-port: the returned object of that call evaluation. The port is keyed by the
-caller's semantic instance and call-result value, and the enclosing loop
-generation distinguishes actual evaluations. Other exported components may name
-fresh storage only as a stored copy of the result or as invalid contents of fresh
-storage; certified ranges and native requirements disable the port. An
-allocation whose summary arguments are family or existential binders can name
-several objects in one evaluation, so a stored copy of such a family member is
-not identified with the result. Equal abstract values alone never merge objects.
+call with one direct capability result, fresh alternatives share one output
+port: the returned object of that call evaluation. A call without a capability
+result can instead use one fixed capability slot in a directly named input as
+its sole fresh output. Dynamic destinations, multiple fresh slots, and fresh
+objects exported through other summary components disable this extension.
+The port is keyed by the caller's semantic instance and call-result value, and
+the enclosing loop generation distinguishes actual evaluations. Other exported
+components may name fresh storage only as a proven stored copy or invalid
+contents of fresh storage; certified ranges and native requirements disable the
+port. A family can supply the one output object, but its abstract value does not
+identify a second observable family member with it. Stored copies with family or
+existential allocation arguments therefore disable the port. Equal abstract
+values alone never merge objects.
 
 Convergence: each function in a recursive component has finitely many allocation
 and call sites. Fresh alternatives that reach the result reuse their call site's
 port instead of adding a summary choice per recursion depth, and the internal
-recursive choices are projected only from the result's may-sources, stored copies
-of the result, and invalid fresh contents. The source identities reachable in a
+recursive choices are projected from input may-sources, fresh output ports,
+stored copies of the result, and invalid fresh contents. The source identities reachable in a
 component summary are therefore drawn from a finite set, and the guards over them
 join monotonically. Growth outside this representation, such as a poststate that
 exports a distinct fresh object, still reaches the bounded convergence
@@ -745,6 +749,8 @@ normal-return facts, and subsequent iterations compose them. Private opaque
 addresses used only in availability effects are quantified within their clauses,
 which avoids growing call-depth identities or accidentally relating independent
 effects. Such private identities do not establish definite initialization in callers.
+Recursive choices in reinitialization guards are projected universally under the
+normal-return execution domain: a possible write never becomes a definite one.
 Opaque signature contracts conservatively consume exposed non-Copy raw pointees
 and supply no restoration guarantee. Trusted byte-memory intrinsics describe byte
 accesses; a byte write is not an ownership-consuming load.

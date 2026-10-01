@@ -1217,3 +1217,50 @@ pub fn main() -> i32 {
         assert!(result.status.success(), "O{level}: {result:?}");
     }
 }
+
+#[test]
+fn native_recursive_buffer_poststates_converge() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("recursive_poststates.fe");
+    fs::write(
+        &source,
+        r#"
+use std::native::ByteBuffer
+fn grow(_ buffer: mut ByteBuffer, depth: usize, length: u64, value: u8) {
+    if depth == 0 {
+        let mut size: u64 = 1
+        while size <= length {
+            core::assert(buffer.try_resize(size))
+            buffer.set_byte(index: size - 1, value)
+            size += 1
+        }
+    } else { grow(mut buffer, depth: depth - 1, length, value) }
+}
+fn clear(_ buffer: mut ByteBuffer, depth: usize) {
+    if depth == 0 { buffer.clear() }
+    else { clear(mut buffer, depth: depth - 1) }
+}
+pub fn main() -> i32 {
+    let mut buffer = ByteBuffer::new()
+    grow(mut buffer, depth: 32, length: 32, value: 19)
+    core::assert(buffer.len() == 32 && buffer.byte_at(31) == 19)
+    clear(mut buffer, depth: 32)
+    core::assert(buffer.len() == 0)
+    grow(mut buffer, depth: 16, length: 513, value: 42)
+    core::assert(buffer.len() == 513)
+    for index in 0..513 { core::assert(buffer.byte_at(index.downcast_unchecked()) == 42) }
+    buffer.release()
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("recursive_poststates"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}

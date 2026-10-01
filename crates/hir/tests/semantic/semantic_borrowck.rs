@@ -13506,3 +13506,196 @@ fn aliased() {
 "#;
     assert_eq!(conflicting_functions(source), ["aliased"]);
 }
+
+#[test]
+fn recursive_poststate_preserves_fresh_births_and_input_aliases() {
+    for (body, caller, moved) in [
+        (
+            "*slot = initialized()",
+            "store(slot, old, depth: 3)\nconsume(*(*slot))",
+            false,
+        ),
+        (
+            "*slot = initialized()",
+            "store(slot, old, depth: 3)\nconsume(*(*slot))\nconsume(*(*slot))",
+            true,
+        ),
+        (
+            "*slot = old",
+            "consume(*old)\nstore(slot, old, depth: 3)\nconsume(*(*slot))",
+            true,
+        ),
+        (
+            "*slot = initialized()",
+            "store(slot, old, depth: 3)\nlet previous = *slot\nconsume(*previous)\nstore(slot, old, depth: 2)\nconsume(*(*slot))\nconsume(*previous)",
+            true,
+        ),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Item {{ n: u256 }}
+fn consume(_ item: own Item) {{}}
+fn initialized() -> *Item {{
+    let pointer = core::ptr::alloc<Item>()
+    *pointer = Item {{ n: 1 }}
+    pointer
+}}
+fn store(_ slot: **Item, _ old: *Item, depth: u256) {{
+    if depth == 0 {{ {body} }}
+    else {{ store(slot, old, depth: depth - 1) }}
+}}
+fn inspect() {{
+    let slot = core::ptr::alloc<*Item>()
+    let old = initialized()
+    {caller}
+}}
+"#
+        ));
+        if moved {
+            assert!(
+                diagnostics.contains("move conflict in `fn inspect`"),
+                "{body}\n{caller}\n{diagnostics}"
+            );
+            assert!(!diagnostics.contains("did not converge"), "{diagnostics}");
+        } else {
+            assert!(diagnostics.is_empty(), "{diagnostics}");
+        }
+    }
+}
+
+#[test]
+fn sole_poststate_port_does_not_merge_observable_family_members() {
+    for (declaration, writes, previous, current) in [
+        (
+            "struct Pair { previous: *Item, current: *Item }",
+            "(*slot).previous = pointer\n(*slot).current = pointer",
+            "(*slot).previous",
+            "(*slot).current",
+        ),
+        (
+            "type Pair = [*Item; 2]",
+            "(*slot)[0] = pointer\n(*slot)[1] = pointer",
+            "(*slot)[0]",
+            "(*slot)[1]",
+        ),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Item {{ n: u256 }}
+{declaration}
+fn consume(_ item: own Item) {{}}
+fn fill(_ slot: *Pair, count: u256) {{
+    let mut pointer = core::ptr::alloc<Item>()
+    {writes}
+    let mut index: u256 = 0
+    while index < count {{
+        pointer = core::ptr::alloc<Item>()
+        if index + 1 < count {{ {previous} = pointer }}
+        {current} = pointer
+        index += 1
+    }}
+}}
+fn inspect() {{
+    let slot = core::ptr::alloc<Pair>()
+    fill(slot, count: 3)
+    let previous = {previous}
+    let current = {current}
+    *current = Item {{ n: 1 }}
+    consume(*previous)
+    *current = Item {{ n: 2 }}
+    consume(*previous)
+}}
+"#
+        ));
+        assert!(
+            diagnostics.contains("move conflict in `fn inspect`"),
+            "{declaration}: {diagnostics}"
+        );
+    }
+}
+
+#[test]
+fn recursive_poststate_keeps_native_contents_invalid() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+fn store(_ slot: **ref u256, depth: u256) {
+    if depth == 0 { *slot = core::ptr::alloc<ref u256>() }
+    else { store(slot, depth: depth - 1) }
+}
+fn inspect() {
+    let slot = core::ptr::alloc<*ref u256>()
+    store(slot, depth: 3)
+    let loaded: u256 = *(*slot)
+}
+"#,
+    );
+    assert!(
+        diagnostics.contains("cannot use a native borrow"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn recursive_reinitialization_requires_all_returning_paths() {
+    for (write, available) in [
+        ("*pointer = Item { n: 1 }", true),
+        ("if flag { *pointer = Item { n: 1 } }", false),
+        ("if flag { return }\n*pointer = Item { n: 1 }", false),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Item {{ n: u256 }}
+fn consume(_ item: own Item) {{}}
+fn initialize(_ pointer: *Item, flag: bool, depth: u256) {{
+    if depth == 0 {{ {write} }}
+    else {{ initialize(pointer, flag, depth: depth - 1) }}
+}}
+fn inspect(_ pointer: *Item, flag: bool, depth: u256) {{
+    consume(*pointer)
+    initialize(pointer, flag, depth)
+    consume(*pointer)
+}}
+"#
+        ));
+        if available {
+            assert!(diagnostics.is_empty(), "{write}: {diagnostics}");
+        } else {
+            assert!(
+                diagnostics.contains("move conflict in `fn inspect`"),
+                "{write}: {diagnostics}"
+            );
+            assert!(!diagnostics.contains("did not converge"), "{diagnostics}");
+        }
+    }
+}
+
+#[test]
+fn dynamic_poststate_slots_keep_distinct_allocation_members() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+struct Item { n: u256 }
+fn consume(_ item: own Item) {}
+fn fill(_ slots: *[*Item; 2]) {
+    let mut index: usize = 0
+    while index < 2 {
+        (*slots)[index] = core::ptr::alloc<Item>()
+        index += 1
+    }
+}
+fn inspect() {
+    let slots = core::ptr::alloc<[*Item; 2]>()
+    fill(slots)
+    let first = (*slots)[0]
+    let second = (*slots)[1]
+    *second = Item { n: 1 }
+    consume(*first)
+    *second = Item { n: 2 }
+    consume(*first)
+}
+"#,
+    );
+    assert!(
+        diagnostics.contains("move conflict in `fn inspect`"),
+        "{diagnostics}"
+    );
+}
