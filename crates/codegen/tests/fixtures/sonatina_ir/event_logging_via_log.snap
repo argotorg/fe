@@ -118,14 +118,14 @@ func private %emit_transfer(v0.constref<@layout_0>, v1.constref<@layout_0>, v2.i
         jump block1;
 
     block1:
-        v4.objref<@layout_0> = obj.alloc @layout_0;
-        obj.init.const v4 v0;
-        v5.@layout_0 = obj.load v4;
-        v7.objref<@layout_0> = obj.alloc @layout_0;
-        obj.init.const v7 v1;
-        v8.@layout_0 = obj.load v7;
-        v12.@layout_2 = insert_value undef.@layout_2 0.i256 v5;
-        v14.@layout_2 = insert_value v12 1.i256 v8;
+        v6.objref<@layout_0> = obj.alloc @layout_0;
+        obj.init.const v6 v0;
+        v7.@layout_0 = obj.load v6;
+        v8.objref<@layout_0> = obj.alloc @layout_0;
+        obj.init.const v8 v1;
+        v9.@layout_0 = obj.load v8;
+        v12.@layout_2 = insert_value undef.@layout_2 0.i256 v7;
+        v14.@layout_2 = insert_value v12 1.i256 v9;
         v16.@layout_2 = insert_value v14 2.i256 v2;
         call %emit__g4f95 v16;
         return;
