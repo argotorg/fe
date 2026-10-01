@@ -21,6 +21,7 @@ use fe_hir::{
                 index::IndexExpr,
                 path::{Projection as CapabilityProjection, RegionPath, StructuralPath},
                 region::RegionRoot,
+                separation::SEPARATION_CLAUSE_LIMIT,
                 source::InputSource,
                 value::{ValueInterner, ValueLimits},
             },
@@ -13439,4 +13440,39 @@ fn other_field() {
     // Both pointers point inside the exclusive whole-Pair argument. A
     // reborrow of left does not authorize a raw write through right either.
     assert_eq!(conflicting_functions(source), ["other_field", "same_field"]);
+}
+
+#[test]
+fn repeated_separation_requirements_use_the_canonical_clause_budget() {
+    let writes = "    *pointer = 1\n".repeat(SEPARATION_CLAUSE_LIMIT + 1);
+    let source = format!(
+        r#"
+use core::ptr
+fn repeated(_ value: mut u256, _ pointer: *u256) {{
+{writes}
+    value = 2
+}}
+fn disjoint() {{
+    let left = ptr::alloc<u256>()
+    *left = 0
+    let right = ptr::alloc<u256>()
+    *right = 0
+    repeated(mut *left, right)
+}}
+fn aliased() {{
+    let target = ptr::alloc<u256>()
+    *target = 0
+    repeated(mut *target, target)
+}}
+"#
+    );
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("repeated_separation.fe".into(), &source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let summary = semantic_borrow_summary(&db, func_instance(&db, module, "repeated"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(summary.loan_requirements.clauses().len(), 1);
+    assert_eq!(conflicting_functions(&source), ["aliased"]);
 }

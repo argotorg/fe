@@ -157,12 +157,22 @@ impl<'db> BorrowSummary<'db> {
                 }),
             );
         }
+        self.separation_validity = self
+            .separation_validity
+            .forget_occurrences(|choice| matches!(choice, ValueOccurrence::SummaryChoice(_)));
         // Equal relations merge; the first origin in body order names each.
         let scope = BinderScope::default();
         let mut origins = BTreeMap::new();
         let mut clauses = Vec::new();
         for (clause, origin) in separations {
-            let renamed = SeparationSet::new(db, &scope, [clause]).map_occurrences(db, rename);
+            // These are pre-call obligations. A caller must establish them for
+            // every possible private execution of the callee; only argument
+            // choices can restrict which executions it admits at the boundary.
+            let renamed = SeparationSet::new(db, &scope, [clause])
+                .map_occurrences(db, rename)
+                .forget_occurrences(db, |choice| {
+                    matches!(choice, ValueOccurrence::SummaryChoice(_))
+                });
             for clause in renamed.clauses() {
                 origins.entry(clause.payload.clone()).or_insert(origin);
                 clauses.push(clause.clone());
@@ -1276,7 +1286,7 @@ impl<'db> Borrowck<'db> {
         let scalar_result =
             scalar_result.filter(|guard: &Guard<'db>| !Guard::always(guard.scope()).implies(guard));
         let mut separations =
-            self.summarize_separations(&self.conflicts().deferred, &mut choices, &handles)?;
+            self.summarize_separations(&self.conflicts().deferred, &mut choices, &handles);
         // Equal relations take the first origin: prefer one forwarded from a
         // callee, which names the borrow and access where the relation began.
         let owner = self.instance.key(self.db).owner(self.db);
@@ -1339,12 +1349,10 @@ impl<'db> Borrowck<'db> {
         requirements: &[(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)],
         choices: &mut BTreeSet<ValueOccurrence>,
         exposed: &BTreeMap<AddressOccurrence<'db>, u32>,
-    ) -> Result<Vec<(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)>, SemanticDiagnostic<'db>>
-    {
-        let limit = || self.separation_limit_diag(SemOrigin::Body(self.body.template_owner));
-        if requirements.len() > SEPARATION_CLAUSE_LIMIT {
-            return Err(limit());
-        }
+    ) -> Vec<(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)> {
+        // Repeated accesses may export the same relation thousands of times.
+        // The clause budget applies after abstract_choices merges equal
+        // relations, alongside the final guard and validity checks.
         let mut clauses = Vec::new();
         for (clause, origin) in requirements {
             let subst = self.abstract_local_indices(
@@ -1417,12 +1425,9 @@ impl<'db> Borrowck<'db> {
                 guard,
                 payload: relation,
             };
-            if !within_limits(&clause, &BinderScope::default()) {
-                return Err(limit());
-            }
             clauses.push((clause, *origin));
         }
-        Ok(clauses)
+        clauses
     }
 
     fn summarize_availability_region(
@@ -6306,9 +6311,9 @@ fn clobber(slot: *ref u256) {
         }
         for exposed in [BTreeMap::new(), BTreeMap::from([(family, 5)])] {
             let mut choices = BTreeSet::new();
-            let [(exported, _)] = &checker
-                .summarize_separations(&[(clause.clone(), origin)], &mut choices, &exposed)
-                .unwrap()[..]
+            let [(exported, _)] =
+                &checker.summarize_separations(&[(clause.clone(), origin)], &mut choices, &exposed)
+                    [..]
             else {
                 panic!("one exported relation");
             };
@@ -6492,6 +6497,111 @@ fn clobber(slot: *ref u256) {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn separation_limits_apply_after_projecting_guard_only_witnesses() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "separation_projected_budget.fe".into(),
+            "fn holder(_ value: mut u256, _ pointer: *u256) {}",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "holder"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        checker.solve().unwrap();
+        let referents: Vec<_> = checker
+            .body
+            .values
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| matches!(value.definition, NValueDefinition::EntryParam { .. }))
+            .map(|(index, _)| {
+                checker
+                    .resolve_capability(checker.inventory.entry.value(NValueId::new(index)))
+                    .region
+                    .clauses()[0]
+                    .payload
+                    .clone()
+            })
+            .collect();
+        let owner = BinderScope::default();
+        let (scope, witnesses) =
+            (0..44).fold((owner.clone(), Vec::new()), |(scope, mut witnesses), _| {
+                let (scope, witness) = scope.bind(IndexNamespace::Existential);
+                witnesses.push(witness);
+                (scope, witnesses)
+            });
+        let paired = |offset: usize| {
+            witnesses[offset..]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .try_fold(Guard::always(&scope), |guard, pair| {
+                    guard.with_equality(pair[0], pair[1])
+                })
+                .unwrap()
+        };
+        let guard = paired(0).or(&paired(1));
+        assert!(guard.node_count() > SEPARATION_GUARD_NODE_LIMIT);
+        assert!(witnesses.len() > SEPARATION_WITNESS_LIMIT as usize);
+        let private = |number| {
+            ChoiceKey::new(
+                ValueOccurrence::SummaryChoice(number),
+                StructuralPath::default(),
+            )
+        };
+        let private_guard = (0..14).fold(Guard::always(&owner), |guard, index| {
+            let equal = [false, true].map(|value| {
+                Guard::always(&owner)
+                    .with_boolean(private(index), value)
+                    .unwrap()
+                    .with_boolean(private(index + 14), value)
+                    .unwrap()
+            });
+            guard.and(&equal[0].or(&equal[1])).unwrap()
+        });
+        assert!(private_guard.node_count() > SEPARATION_GUARD_NODE_LIMIT);
+        let origin = SeparationOrigin {
+            owner: instance.key(&db).owner(&db),
+            template_owner: checker.body.template_owner,
+            borrow: SemOrigin::Body(checker.body.template_owner),
+            access: SemOrigin::Body(checker.body.template_owner),
+        };
+        for guard in [guard, private_guard] {
+            checker.conflicts = Some(ConflictAnalysis {
+                diagnostic: None,
+                exhausted: false,
+                deferred: vec![(
+                    Guarded {
+                        guard,
+                        payload: Separation {
+                            protected: referents[0].clone(),
+                            protected_kind: BorrowKind::Mut,
+                            access: referents[1].clone(),
+                            access_kind: BorrowKind::Mut,
+                            extent: AccessExtent::Typed,
+                            suspended: Box::new([]),
+                        },
+                    },
+                    origin,
+                )],
+                validity: NativeValidity {
+                    invalid: false,
+                    requirements: RegionSet::empty(&owner),
+                },
+            });
+            let (summary, provenance) = checker.build_summary().unwrap();
+            let [clause] = summary.loan_requirements.clauses() else {
+                panic!("one canonical relation")
+            };
+            assert_eq!(clause.guard, Guard::always(&owner));
+            assert_eq!(provenance, [origin]);
         }
     }
 

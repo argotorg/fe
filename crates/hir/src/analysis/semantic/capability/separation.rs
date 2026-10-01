@@ -464,6 +464,50 @@ impl<'db> SeparationSet<'db> {
         )
     }
 
+    /// Project choices out of a precondition. The access can run on any
+    /// admitted value of a hidden choice, but a slice is suspended only if it
+    /// stays suspended on every admitted value. Projecting a slice's guard
+    /// existentially would incorrectly turn a possible suspension into a fact.
+    pub fn forget_occurrences(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        hidden: impl Fn(ValueOccurrence) -> bool,
+    ) -> Self {
+        Self::new(
+            db,
+            &self.scope,
+            self.clauses.iter().map(|clause| {
+                let projected = clause.guard.forget_occurrences(&hidden);
+                let suspended = clause
+                    .payload
+                    .suspended
+                    .iter()
+                    .filter_map(|slice| {
+                        let guard = match clause
+                            .guard
+                            .difference(&slice.guard.in_scope(clause.guard.scope()))
+                        {
+                            None => Guard::always(clause.guard.scope()),
+                            Some(refuted) => Guard::always(clause.guard.scope())
+                                .difference(&refuted.forget_occurrences(&hidden))?,
+                        };
+                        Some(Guarded {
+                            guard: projected.and(&guard)?,
+                            payload: slice.payload.clone(),
+                        })
+                    })
+                    .collect();
+                Guarded {
+                    guard: projected,
+                    payload: Separation {
+                        suspended,
+                        ..clause.payload.clone()
+                    },
+                }
+            }),
+        )
+    }
+
     /// Rename choice occurrences in every clause and suspension guard at once.
     /// `rename` must be injective over all occurrences in the set, so every
     /// guard keeps its meaning and its relation to the others. Forgetting a
@@ -708,6 +752,72 @@ mod tests {
                 AccessExtent::Bytes(IndexExpr::Const(constant))
             );
             assert_eq!(clause.payload.suspended.len(), slices);
+        }
+    }
+
+    #[test]
+    fn hidden_choices_keep_argument_guards_and_only_definite_suspensions() {
+        let db = HirAnalysisTestDb::default();
+        let owner = BinderScope::default();
+        let argument = ChoiceKey::new(ValueOccurrence::Argument(0), StructuralPath::default());
+        let private = ChoiceKey::new(ValueOccurrence::SummaryChoice(0), StructuralPath::default());
+        let outer = Guard::always(&owner).with_boolean(argument, true).unwrap();
+        for branch in [None, Some(false), Some(true)] {
+            let guard = branch.map_or_else(
+                || outer.clone(),
+                |value| outer.with_boolean(private.clone(), value).unwrap(),
+            );
+            let slices = [
+                Guard::always(&owner)
+                    .with_boolean(private.clone(), true)
+                    .unwrap(),
+                Guard::always(&owner)
+                    .with_boolean(private.clone(), false)
+                    .unwrap(),
+                outer.clone(),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(field, guard)| Guarded {
+                guard,
+                payload: RegionPath::new([Projection::Field(FieldIndex(field as u16))]),
+            })
+            .collect::<Vec<_>>();
+            let before = SeparationSet::new(
+                &db,
+                &owner,
+                [Guarded {
+                    guard,
+                    payload: separation(
+                        place(input(&db, 0), []),
+                        place(input(&db, 1), []),
+                        AccessExtent::Typed,
+                        slices,
+                    ),
+                }],
+            );
+            let after = before.forget_occurrences(&db, |choice| {
+                matches!(choice, ValueOccurrence::SummaryChoice(_))
+            });
+            let [clause] = after.clauses() else {
+                panic!("one relation")
+            };
+            assert_eq!(clause.guard, outer);
+            let paths = clause
+                .payload
+                .suspended
+                .iter()
+                .map(|slice| {
+                    assert_eq!(slice.guard, Guard::always(&owner));
+                    slice.payload.clone()
+                })
+                .collect::<BTreeSet<_>>();
+            let expected = [Some(2), branch.map(|value| if value { 0 } else { 1 })]
+                .into_iter()
+                .flatten()
+                .map(|field| RegionPath::new([Projection::Field(FieldIndex(field))]))
+                .collect();
+            assert_eq!(paths, expected, "{branch:?}");
         }
     }
 

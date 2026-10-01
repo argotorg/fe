@@ -588,6 +588,11 @@ Clauses are normalized as a whole. Witnesses that the relation itself names
 come first. A witness that only guards observe is eliminated: the clause keeps
 it existentially, and a suspended part stays suspended only where it holds on
 every value the clause admits. Equal relations merge their guards.
+Callee-private choices are also projected from these pre-call obligations: the
+access may execute on any admitted private choice, while a suspended slice must
+remain suspended on every admitted choice. Argument and result choices retain
+their boundary identities. Slices outside the access's projected guard are
+irrelevant and are removed.
 
 Limits bound the representation:
 - pairs per comparison;
@@ -597,7 +602,9 @@ Limits bound the representation:
 
 Stored nodes are the sources, projection steps, conversion views and index
 arguments of both endpoints and their dependencies. Exceeding a limit is a
-deterministic analysis failure; it never truncates the requirements.
+deterministic analysis failure; it never truncates the requirements. Summary limits
+apply after witness projection and merging equal relations. Repeated body
+accesses and intermediate guards are not additional exported requirements.
 
 A borrow stored in contract storage or transient storage is invalid native
 contents, because storing one there is rejected. A method on a storage struct

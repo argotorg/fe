@@ -1,0 +1,1 @@
+Normalize deferred borrow-separation preconditions before applying analysis budgets. Repeated accesses, hidden scalar witnesses, and callee-private choices no longer cause false budget exhaustion; conditional reborrows remain definite on every admitted execution.
