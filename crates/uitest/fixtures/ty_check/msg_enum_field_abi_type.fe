@@ -1,0 +1,154 @@
+use std::abi::SolCompat
+
+// No Solidity type: the enum cannot be a `msg` field.
+enum Plain {
+    First,
+    Second,
+}
+
+// Names its Solidity type, but has no ABI codec.
+enum Named {
+    First,
+    Second,
+}
+
+impl SolCompat for Named {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "uint8"
+}
+
+// `SOL_TYPE` values that are not a non-tuple Solidity ABI type.
+enum Tuple {
+    First,
+}
+
+impl SolCompat for Tuple {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "tuple"
+}
+
+enum OddWidth {
+    First,
+}
+
+impl SolCompat for OddWidth {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "uint7"
+}
+
+enum LongBytes {
+    First,
+}
+
+impl SolCompat for LongBytes {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "bytes33"
+}
+
+enum Unknown {
+    First,
+}
+
+impl SolCompat for Unknown {
+    type S = String<3>
+    const SOL_TYPE: Self::S = "foo"
+}
+
+enum BadFixed {
+    First,
+}
+
+impl SolCompat for BadFixed {
+    type S = String<9>
+    const SOL_TYPE: Self::S = "fixed8x81"
+}
+
+enum ZeroFixed {
+    First,
+}
+
+impl SolCompat for ZeroFixed {
+    type S = String<10>
+    const SOL_TYPE: Self::S = "fixed128x0"
+}
+
+// A zero-length fixed array is a canonical ABI type.
+enum EmptyArray {
+    First,
+}
+
+impl SolCompat for EmptyArray {
+    type S = String<8>
+    const SOL_TYPE: Self::S = "uint8[0]"
+}
+
+// Fixed-point types are canonical ABI types too.
+enum Fixed {
+    First,
+}
+
+impl SolCompat for Fixed {
+    type S = String<12>
+    const SOL_TYPE: Self::S = "ufixed128x18"
+}
+
+// `SOL_TYPE` values read through their `AsBytes` impl: a delegated std
+// array type and a byte array.
+enum Delegated {
+    First,
+}
+
+impl SolCompat for Delegated {
+    type S = <[u8; 2] as SolCompat>::S
+    const SOL_TYPE: Self::S = <[u8; 2] as SolCompat>::SOL_TYPE
+}
+
+enum ByteArray {
+    First,
+}
+
+impl SolCompat for ByteArray {
+    type S = [u8; 4]
+    const SOL_TYPE: Self::S = [98, 111, 111, 108]
+}
+
+msg EnumFields {
+    #[selector = sol("plain(uint8)")]
+    WithoutSolCompat { value: Plain },
+
+    #[selector = sol("named(uint8)")]
+    WithoutCodec { value: Named },
+
+    #[selector = sol("mismatch(uint256)")]
+    Mismatch { value: Named },
+
+    #[selector = sol("tuple(uint8)")]
+    TupleType { value: Tuple },
+
+    #[selector = sol("oddWidth(uint8)")]
+    OddWidthType { value: OddWidth },
+
+    #[selector = sol("longBytes(uint8)")]
+    LongBytesType { value: LongBytes },
+
+    #[selector = sol("unknown(uint8)")]
+    UnknownType { value: Unknown },
+
+    #[selector = sol("badFixed(uint8)")]
+    BadFixedType { value: BadFixed },
+
+    #[selector = sol("zeroFixed(uint8)")]
+    ZeroFixedType { value: ZeroFixed },
+
+    #[selector = sol("emptyArray(uint8)")]
+    EmptyArrayType { value: EmptyArray },
+
+    #[selector = sol("fixed(uint8)")]
+    FixedType { value: Fixed },
+
+    #[selector = sol("delegated(uint8)")]
+    DelegatedType { value: Delegated },
+
+    #[selector = sol("byteArray(uint8)")]
+    ByteArrayType { value: ByteArray },
+}

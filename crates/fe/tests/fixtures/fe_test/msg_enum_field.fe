@@ -1,0 +1,174 @@
+// An enum with hand-written ABI impls can be a `msg` field. Its `SolCompat`
+// impl names its Solidity type, here `uint8` like a Solidity enum, which the
+// selector signature check and the JSON ABI use.
+use core::abi::{AbiDecoder, AbiSize, AbiSpan, ByteInput, Decode, Encode, store_word}
+use std::abi::{Bytes, Sol, SolCompat}
+use std::evm::{Evm, revert_empty}
+
+// ERC-4337 `IPaymaster.PostOpMode`.
+pub enum PostOpMode {
+    OpSucceeded,
+    OpReverted,
+    PostOpReverted,
+}
+impl Copy for PostOpMode {}
+
+impl SolCompat for PostOpMode {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "uint8"
+}
+
+impl AbiSize for PostOpMode {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl AbiSpan<Sol> for PostOpMode {
+    fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        pos + 32
+    }
+}
+
+// Like Solidity, decoding reverts on an out-of-range value.
+impl Decode<Sol> for PostOpMode {
+    fn decode_payload<D: AbiDecoder<Sol>>(_ d: mut D) -> Self {
+        match d.read_word() {
+            0 => PostOpMode::OpSucceeded,
+            1 => PostOpMode::OpReverted,
+            2 => PostOpMode::PostOpReverted,
+            _ => revert_empty(),
+        }
+    }
+}
+
+impl Encode<Sol> for PostOpMode {
+    fn encode(own self, _ ptr: *u8) {
+        let value: u256 = match self {
+            PostOpMode::OpSucceeded => 0,
+            PostOpMode::OpReverted => 1,
+            PostOpMode::PostOpReverted => 2,
+        }
+        store_word(ptr, value)
+    }
+}
+
+msg PaymasterMsg {
+    #[selector = sol("postOp(uint8,bytes,uint256,uint256)")]
+    PostOp {
+        mode: PostOpMode,
+        context: Bytes,
+        actualGasCost: u256,
+        actualUserOpFeePerGas: u256,
+    } -> u256,
+    #[selector = sol("lastMode()")]
+    LastMode {} -> PostOpMode,
+}
+
+// The same function with a raw `uint8`, to send out-of-range modes.
+msg RawPaymasterMsg {
+    #[selector = sol("postOp(uint8,bytes,uint256,uint256)")]
+    PostOp { mode: u8, context: Bytes, actualGasCost: u256, actualUserOpFeePerGas: u256 } -> u256,
+}
+
+pub contract Paymaster {
+    mut last: u256,
+
+    init() {}
+
+    recv PaymasterMsg {
+        PostOp { mode, context, actualGasCost, actualUserOpFeePerGas } -> u256
+        uses (mut last)
+        {
+            let code: u256 = match mode {
+                PostOpMode::OpSucceeded => 100,
+                PostOpMode::OpReverted => 200,
+                PostOpMode::PostOpReverted => 300,
+            }
+            last = code / 100
+            code + context.len() + actualGasCost + actualUserOpFeePerGas
+        }
+
+        LastMode {} -> PostOpMode uses (last) {
+            if last == 3 {
+                PostOpMode::PostOpReverted
+            } else if last == 2 {
+                PostOpMode::OpReverted
+            } else {
+                PostOpMode::OpSucceeded
+            }
+        }
+    }
+}
+
+#[test]
+fn enum_msg_field_selector() {
+    // cast sig "postOp(uint8,bytes,uint256,uint256)"
+    assert!(
+        <PaymasterMsg::PostOp as core::message::MsgVariant<Sol>>::SELECTOR == 0x7c627b21,
+    )
+}
+
+#[test]
+fn enum_msg_field_round_trips() uses (evm: mut Evm) {
+    let c = evm.create2<Paymaster>(value: 0, args: (), salt: 0)
+    let context = Bytes::from_word_prefix(word: 0, len: 3)
+    let out: u256 = evm
+        .call(
+            addr: c,
+            gas: 1000000,
+            value: 0,
+            message: PaymasterMsg::PostOp {
+                mode: PostOpMode::OpReverted,
+                context,
+                actualGasCost: 10,
+                actualUserOpFeePerGas: 1,
+            },
+        )
+    assert!(out == 200 + 3 + 10 + 1)
+    let mode: PostOpMode = evm
+        .call(
+            addr: c,
+            gas: 1000000,
+            value: 0,
+            message: PaymasterMsg::LastMode {},
+        )
+    assert!(
+        match mode {
+            PostOpMode::OpReverted => true,
+            _ => false,
+        },
+    )
+
+    // A raw `uint8` with the same value decodes to the same variant.
+    let out: u256 = evm
+        .call(
+            addr: c,
+            gas: 1000000,
+            value: 0,
+            message: RawPaymasterMsg::PostOp {
+                mode: 2,
+                context: Bytes::from_word_prefix(word: 0, len: 0),
+                actualGasCost: 0,
+                actualUserOpFeePerGas: 0,
+            },
+        )
+    assert!(out == 300)
+}
+
+#[test]
+fn enum_msg_field_rejects_out_of_range() uses (evm: mut Evm) {
+    let c = evm.create2<Paymaster>(value: 0, args: (), salt: 0)
+    let failure = evm
+        .try_call(
+            addr: c,
+            gas: 1000000,
+            value: 0,
+            message: RawPaymasterMsg::PostOp {
+                mode: 3,
+                context: Bytes::from_word_prefix(word: 0, len: 0),
+                actualGasCost: 0,
+                actualUserOpFeePerGas: 0,
+            },
+        )
+    assert!(!failure.success())
+}
