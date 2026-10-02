@@ -94,3 +94,15 @@ pub struct PositiveGuard<T> {
 pub struct EmptyArgument<T> {
     next: *EmptyArgument<[T; 0]>,
 }
+
+// An unknown constructor may leave its argument entirely unreachable.
+pub struct Empty<T> {}
+
+pub struct Fine<T, F: * -> *> {
+    value: T,
+    next: *F<Fine<[T; 1], F>>,
+}
+
+fn fine_empty(x: Fine<u256, Empty>) -> u256 {
+    x.value
+}

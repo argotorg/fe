@@ -3588,8 +3588,9 @@ impl<'db> AdtDef<'db> {
 /// first ADT in item order. Only growth by type constructors written in field
 /// types is found: an argument computed by a trait projection or a const
 /// expression, and an effect handle's target, are left to the borrow
-/// checker's referent limit. Array elements are reachable only under a known
-/// positive length; symbolic lengths likewise rely on that limit. Containment
+/// checker's referent limit. Reachability follows only builtin arguments and
+/// exposed ADT arguments, with array elements requiring known positive lengths.
+/// Other heads and symbolic lengths rely on the referent limit. Containment
 /// inside an ADT argument still counts every constructor, including `[T; 0]`.
 /// Shared binary type subterms and parameter states give linear-size reach
 /// clauses and growth flows, solved separately before reconstructing a witness.
@@ -3718,6 +3719,13 @@ pub fn ingot_growing_cycles<'db>(
                 member: None,
             });
         }
+        let gate = match head.data(db) {
+            TyData::TyBase(TyBase::Adt(applied)) => {
+                Some(params.get_index_of(&applied.params(db)[arity - 1]).unwrap())
+            }
+            TyData::TyBase(TyBase::Prim(_)) => None,
+            _ => continue,
+        };
         let array = head.is_array(db) && arity == 2;
         if matches!(lhs.data(db), TyData::TyApp(..))
             && (!array
@@ -3725,11 +3733,6 @@ pub fn ingot_growing_cycles<'db>(
         {
             clause(parent, term_node(*lhs), None);
         }
-        let gate = if let TyData::TyBase(TyBase::Adt(applied)) = head.data(db) {
-            Some(params.get_index_of(&applied.params(db)[arity - 1]).unwrap())
-        } else {
-            None
-        };
         clause(parent, term_node(*rhs), gate);
     }
     let mut facts: Vec<_> = fields

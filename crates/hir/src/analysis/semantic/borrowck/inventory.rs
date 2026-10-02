@@ -52,10 +52,11 @@ use crate::{
 /// trait or const expression can make that set infinite: a projection, an
 /// effect handle's target or a const argument may keep growing the argument
 /// of a recursive type. Written constructor growth is rejected statically
-/// except behind symbolic array lengths, which are checked here after
-/// instantiation. A chain with more than this many distinct instantiations of
-/// one type constructor is treated as growing. Unrelated instantiations reached
-/// from separate roots do not consume one another's budget.
+/// except behind unknown application heads or symbolic array lengths, which
+/// are checked here after instantiation. A chain with more than this many
+/// distinct instantiations of one type constructor is treated as growing.
+/// Unrelated instantiations reached from separate roots do not consume one
+/// another's budget.
 pub(super) const MAX_REFERENT_INSTANTIATIONS: usize = 64;
 
 /// A referent type on an expansion path with its type constructor.

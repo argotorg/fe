@@ -29,3 +29,12 @@ error[16-0011]: unbounded referent types in `fn positive_maybe`
 74 │ │     x.value
 75 │ │ }
    │ ╰─^ more than 64 instantiations of `Maybe` are reachable from here; a trait or const expression may be growing a recursive type
+
+error[16-0011]: unbounded referent types in `fn higher_kinded`
+   ┌─ growing_referents.fe:87:50
+   │
+87 │   fn higher_kinded(x: Fine<u256, Wrapper>) -> u256 {
+   │ ╭──────────────────────────────────────────────────^
+88 │ │     x.value
+89 │ │ }
+   │ ╰─^ more than 64 instantiations of `Wrapper` are reachable from here; a trait or const expression may be growing a recursive type

@@ -73,3 +73,17 @@ pub struct PositiveMaybe<T> {
 fn positive_maybe(x: PositiveMaybe<u256>) -> u256 {
     x.value
 }
+
+// Instantiating an unknown constructor can expose a growing referent chain.
+pub struct Wrapper<T> {
+    value: T,
+}
+
+pub struct Fine<T, F: * -> *> {
+    value: T,
+    next: *F<Fine<[T; 1], F>>,
+}
+
+fn higher_kinded(x: Fine<u256, Wrapper>) -> u256 {
+    x.value
+}
