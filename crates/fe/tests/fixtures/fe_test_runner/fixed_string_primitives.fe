@@ -93,3 +93,26 @@ fn test_string_abi_encoding_ignores_hidden_high_bytes() {
     assert!(input.byte_at(32) == 67)
     assert!(input.byte_at(35) == 76)
 }
+
+
+const fn generic_string_bytes<T: core::AsBytes>(_ value: T) -> [u8; T::N] {
+    value.as_bytes()
+}
+
+const TRAIT_BYTES: [u8; 8] = generic_string_bytes<String<8>>("COOL")
+
+#[test]
+fn test_string_as_bytes_trait_runtime_and_const() {
+    let encoded = encode_alloc<Sol, String<8>>("COOL")
+    let input = encoded.span()
+    let mut padded: [u8; 8] = [0; 8]
+    padded[4] = input.byte_at(32)
+    padded[5] = input.byte_at(33)
+    padded[6] = input.byte_at(34)
+    padded[7] = input.byte_at(35)
+    let text: String<8> = String::from_bytes(padded)
+    let bytes = generic_string_bytes(text)
+    assert!(bytes[0] == 0 && bytes[3] == 0)
+    assert!(bytes[4] == 67 && bytes[7] == 76)
+    assert!(TRAIT_BYTES[0] == 0 && TRAIT_BYTES[4] == 67 && TRAIT_BYTES[7] == 76)
+}

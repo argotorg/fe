@@ -12,7 +12,7 @@ impl<const LEN: usize> AsBytes for [u8; LEN] {
 
 impl<const LEN: usize> AsBytes for String<LEN> {
     const N: usize = LEN
-    const fn as_bytes(self) -> [u8; Self::N] { intrinsic::__as_bytes(self) }
+    const fn as_bytes(self) -> [u8; Self::N] { String<LEN>::as_bytes(self) }
 }
 
 impl AsBytes for u256 {

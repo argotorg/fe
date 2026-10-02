@@ -1352,3 +1352,58 @@ fn native_returned_reference_projections_mutate_the_original_at_o1() {
         .unwrap();
     assert!(result.status.success(), "{result:?}");
 }
+
+#[test]
+fn native_string_as_bytes_trait_preserves_runtime_bytes_and_padding() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("string_bytes.fe");
+    fs::write(
+        &source,
+        r#"
+use core::AsBytes
+use std::io::{Write, host, write, write_bytes}
+
+const fn bytes<T: AsBytes>(_ value: T) -> [u8; T::N] { value.as_bytes() }
+const PADDED: [u8; 5] = bytes<String<5>>("true")
+
+pub fn main(argc: i32, argv: **u8) -> i32 {
+    core::assert(PADDED[0] == 0 && PADDED[1] == 116 && PADDED[4] == 101)
+    let flag = argc == 1
+    let text: String<5> = if flag { "true" } else { "false" }
+    let hidden_word: u256 = if flag { 0xff41 } else { 0xff42 }
+    let hidden: String<1> = hidden_word as String<1>
+    let wide: String<31> = if flag { "1234567890123456789012345678901" } else { "x" }
+    with (Write = host()) {
+        write(text)
+        write(hidden)
+        write_bytes(bytes(wide), 31)
+        write_bytes(bytes<String<0>>(""), 0)
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        for flag in [true, false] {
+            let mut command = Command::new(out.join("string_bytes"));
+            if !flag {
+                command.arg("false");
+            }
+            let output = command.output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+            assert!(output.stderr.is_empty(), "{output:?}");
+            let expected = if flag {
+                b"\0trueA1234567890123456789012345678901".to_vec()
+            } else {
+                let mut expected = b"falseB".to_vec();
+                expected.extend([0; 30]);
+                expected.push(b'x');
+                expected
+            };
+            assert_eq!(output.stdout, expected);
+        }
+    }
+}
