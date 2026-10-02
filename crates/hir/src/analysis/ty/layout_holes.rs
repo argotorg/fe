@@ -374,10 +374,11 @@ fn layout_view_state_is_strict_subterm<'db>(
 /// Opaque or invalid types retain the conservative check: their internal
 /// arguments are not exposed by `decompose_ty_app`.
 ///
-/// The walk is not memoized. On a pair that does not embed it tries both
-/// descents and can reach the same pair of subterms more than once, so its
-/// cost grows faster than the sizes of the two types. Program types are
-/// shallow, and growth is caught at its first repeat, so the walk stays small.
+/// Memoized: on a pair that does not embed, the walk tries both descents and
+/// reaches the same pairs of subterms many times, which is exponential in the
+/// nesting depth (`W<W<..>>` checked against its own fields). Each call
+/// recurses on a strictly smaller pair, so the query cannot cycle.
+#[salsa::tracked]
 pub(crate) fn structural_layout_type_embeds<'db>(
     db: &'db dyn HirAnalysisDb,
     earlier: TyId<'db>,

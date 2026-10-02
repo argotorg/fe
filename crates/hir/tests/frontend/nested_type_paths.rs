@@ -91,3 +91,15 @@ fn deeply_nested_malformed_type_paths_are_resolved_once() {
         assert_eq!(diagnostic_messages(&source), [message], "{source}");
     }
 }
+
+/// A parameter's callable layout walk checks each nested level against every
+/// enclosing one. The structural embedding test it uses was not memoized and,
+/// on types that do not embed, explored exponentially many pairs of subterms.
+#[test]
+fn deeply_nested_parameter_types_are_checked_in_polynomial_time() {
+    let source = format!(
+        "{WRAPPER}fn f(x: {}) {{}}\n",
+        nest(DEPTH, "u8", |ty| format!("W<{ty}>"))
+    );
+    assert_eq!(diagnostic_messages(&source), Vec::<String>::new());
+}
