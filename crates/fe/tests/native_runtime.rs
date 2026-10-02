@@ -1180,6 +1180,13 @@ fn write_at_depth(_ buffer: mut ByteBuffer, depth: usize, value: u8) {
         write_at_depth(mut buffer, depth: depth - 1, value)
     }
 }
+fn write_alternating(_ first: mut ByteBuffer, _ second: mut ByteBuffer, depth: usize, value: u8) {
+    if depth == 0 {
+        first.set_byte(index: 31, value)
+    } else {
+        write_alternating(mut second, mut first, depth: depth - 1, value)
+    }
+}
 pub fn main() -> i32 {
     let mut buffer = ByteBuffer::new()
     core::assert(buffer.try_resize(32))
@@ -1187,6 +1194,14 @@ pub fn main() -> i32 {
     core::assert(buffer.byte_at(31) == 19)
     write_at_depth(mut buffer, depth: 32, value: 42)
     core::assert(buffer.byte_at(31) == 42)
+    let mut other = ByteBuffer::new()
+    core::assert(other.try_resize(32))
+    other.set_byte(index: 31, value: 7)
+    write_alternating(mut buffer, mut other, depth: 32, value: 19)
+    core::assert(buffer.byte_at(31) == 19 && other.byte_at(31) == 7)
+    write_alternating(mut buffer, mut other, depth: 33, value: 42)
+    core::assert(buffer.byte_at(31) == 19 && other.byte_at(31) == 42)
+    other.release()
     buffer.release()
     0
 }
