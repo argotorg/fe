@@ -1,9 +1,9 @@
 //! A binary min-heap in contract storage, after Solady's `MinHeapLib`.
 //!
 //! Solady's heap stores `uint256` only; [`StorageHeap<T>`] holds any type
-//! that has an order (`Ord`) and fits a storage word (`WordRepr`), such as
-//! integers or a struct packed into a word. Wrapping the element in
-//! [`Reverse`] turns it into a max-heap:
+//! that implements `Ord` and `Copy`, using its native storage layout,
+//! including packed structs and values spanning several words. Wrapping the
+//! element in [`Reverse`] turns it into a max-heap:
 //!
 //! ```fe
 //! use std::evm::heap::{Enqueued, Reverse, StorageHeap}
@@ -24,11 +24,11 @@
 //! }
 //! ```
 //!
-//! Every operation costs `O(log n)` storage reads and writes.
+//! Heap updates visit `O(log n)` elements. Each element is read or written
+//! in full, so storage accesses also scale with its native storage footprint.
 use core::ops::{Eq, Ord}
 use super::effects::revert_error
 use super::storage_map::StorageMap
-use super::word::WordRepr
 
 /// `pop` or `replace` on an empty heap. Selector `0xa6ca772e`, as in
 /// Solady.
@@ -72,20 +72,11 @@ impl<T: Ord> Ord for Reverse<T> {
     }
 }
 
-impl<T: WordRepr> WordRepr for Reverse<T> {
-    fn from_word(_ word: u256) -> Self {
-        Reverse { value: T::from_word(word) }
-    }
-    fn to_word(own self) -> u256 {
-        self.value.to_word()
-    }
-}
-
 /// A min-heap of `T` in storage: `root` and `pop` return the smallest
 /// element.
 pub struct StorageHeap<T> { len: u256, items: StorageMap<u256, T> }
 
-impl<T> StorageHeap<T> where T: WordRepr + Ord + Copy {
+impl<T> StorageHeap<T> where T: Ord + Copy {
     pub fn len(self) -> u256 {
         self.len
     }

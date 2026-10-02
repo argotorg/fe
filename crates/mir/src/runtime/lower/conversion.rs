@@ -325,9 +325,11 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 steps.push(RuntimeConversionStep::RetagRef { class: target });
                 Ok(())
             }
+            // A storage lane is planned like a whole reference; lowering
+            // reports that a native reference cannot carry the lane.
             (
                 RuntimeClass::Ref {
-                    view: RefView::Whole,
+                    view: RefView::Whole | RefView::StorageLane(_),
                     ..
                 }
                 | RuntimeClass::RawAddr {

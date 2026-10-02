@@ -1,0 +1,34 @@
+// Narrow struct fields share storage words. A whole-struct write builds each
+// word from its fields and stores it once, without loading it first; a field
+// write loads the word, replaces the field's bytes and stores it back.
+struct Position {
+    collateral: u128,
+    debt: u64,
+    nonce: u32,
+    owner: u32,
+}
+
+msg PositionMsg {
+    #[selector = 1]
+    Open {},
+    #[selector = 2]
+    AddDebt { by: u64 },
+    #[selector = 3]
+    Debt -> u64,
+}
+
+pub contract Book {
+    mut position: Position,
+
+    recv PositionMsg {
+        Open {} uses (mut position) {
+            position = Position { collateral: 2, debt: 3, nonce: 4, owner: 1 }
+        }
+        AddDebt { by } uses (mut position) {
+            position.debt += by
+        }
+        Debt -> u64 uses (position) {
+            position.debt
+        }
+    }
+}

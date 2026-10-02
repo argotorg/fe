@@ -1,5 +1,6 @@
 //! Explicit origins for nominal handles manufactured without an input referent.
 use super::{
+    external::AddressProvenance,
     index::{IndexExpr, IndexSubst},
     path::StructuralPath,
     semantics::UnresolvedCapability,
@@ -174,6 +175,9 @@ pub struct OpaqueHandleRef<'db> {
     pub contract: OpaqueHandleContract<'db>,
     pub occurrence: AddressOccurrence<'db>,
     pub arguments: Box<[IndexExpr<'db>]>,
+    /// Where the handle's raw address came from. Only trusted intrinsics
+    /// produce anything but `Raw`.
+    pub provenance: AddressProvenance,
 }
 
 impl<'db> OpaqueHandleRef<'db> {
@@ -190,6 +194,7 @@ impl<'db> OpaqueHandleRef<'db> {
                 .iter()
                 .map(|index| subst.apply(*index))
                 .collect(),
+            provenance: self.provenance,
         }
     }
 }

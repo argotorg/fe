@@ -2072,6 +2072,7 @@ fn opaque_handle_origins_preserve_copies_but_never_imply_fresh_storage() {
             contract,
             occurrence: AddressOccurrence::Summary(0),
             arguments: Box::new([]),
+            provenance: AddressProvenance::Raw,
         },
     ));
     let second = RegionRoot::External(ExternalSource::opaque(
@@ -2080,6 +2081,7 @@ fn opaque_handle_origins_preserve_copies_but_never_imply_fresh_storage() {
             contract,
             occurrence: AddressOccurrence::Summary(1),
             arguments: Box::new([]),
+            provenance: AddressProvenance::Raw,
         },
     ));
     let left = RegionSet::singleton(
@@ -2119,6 +2121,7 @@ fn opaque_handle_origins_preserve_copies_but_never_imply_fresh_storage() {
                 },
                 occurrence: AddressOccurrence::Summary(0),
                 arguments: Box::new([]),
+                provenance: AddressProvenance::Raw,
             },
         )),
         RegionPath::default(),
@@ -2204,6 +2207,7 @@ fn inspect<const N: usize>(_ ptr: own Ptr<[u256; N]>) {}
         contract,
         occurrence: AddressOccurrence::Summary(4),
         arguments: vec![runtime(2)].into_boxed_slice(),
+        provenance: AddressProvenance::Raw,
     };
     let region = RegionSet::singleton(
         &scope(),
@@ -2565,6 +2569,7 @@ fn allocation_birth_selects_guarded_full_families_and_only_their_own_bytes() {
             },
             occurrence: AddressOccurrence::Summary(0),
             arguments: Box::new([IndexExpr::Const(3), parameter, runtime(4)]),
+            provenance: AddressProvenance::Raw,
         },
         guard,
     };
@@ -2666,6 +2671,7 @@ fn allocation_birth_selection_commutes_with_index_substitution() {
             },
             occurrence: AddressOccurrence::Summary(0),
             arguments: Box::new([runtime(0), parameter]),
+            provenance: AddressProvenance::Raw,
         },
         guard: Guard::always(&template_scope)
             .with_equality(runtime(2), IndexExpr::Const(1))
@@ -3173,6 +3179,7 @@ fn unknown_offsets_preserve_allocation_separation_without_proving_cell_identity(
                 },
                 occurrence: AddressOccurrence::Summary(choice),
                 arguments: Box::new([]),
+                provenance: AddressProvenance::Raw,
             },
         )
     };
@@ -3903,6 +3910,7 @@ fn hashed_storage_slots_are_disjoint_only_from_direct_allocated_fields() {
             },
             occurrence: AddressOccurrence::Summary(1),
             arguments: Box::new([]),
+            provenance: AddressProvenance::Raw,
         },
     );
     for (name, other) in [

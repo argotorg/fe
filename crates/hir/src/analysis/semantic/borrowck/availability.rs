@@ -862,7 +862,7 @@ mod tests {
                 FieldIndex, VariantIndex,
                 borrowck::solver::BorrowSummaryMode,
                 capability::{
-                    external::ExternalSource,
+                    external::{AddressProvenance, ExternalSource},
                     guard::ChoiceKey,
                     handle::{
                         AddressOccurrence, HandleAddressSpace, OpaqueHandleContract,
@@ -901,6 +901,7 @@ mod tests {
                         },
                         occurrence: AddressOccurrence::Summary(choice),
                         arguments: Box::new([IndexExpr::Const(outer), generation]),
+                        provenance: AddressProvenance::Raw,
                     };
                     let guard = Guard::always(&scope)
                         .with_variant(
@@ -1032,6 +1033,7 @@ mod tests {
                     choice: 0,
                 },
                 arguments: Box::new([iteration]),
+                provenance: AddressProvenance::Raw,
             },
         );
         let current = RegionSet::singleton(

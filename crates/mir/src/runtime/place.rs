@@ -16,8 +16,9 @@ use crate::{
     runtime::{
         AddressSpaceKind, ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RLocalId, RefKind,
         RefView, ResolvedPlaceElem, ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody,
-        RuntimeClass, RuntimeLocalRoot, RuntimeProgramView, RuntimeProviderBinding,
-        RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, VariantId,
+        RuntimeClass, RuntimeLocalRoot, RuntimeMemoryLayout, RuntimeProgramView,
+        RuntimeProviderBinding, RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole,
+        StorageLaneView, VariantId,
     },
     verify::VerifyError,
 };
@@ -200,13 +201,68 @@ pub fn resolve_runtime_place_address_class<'db>(
             force_raw = matches!(root_class, RuntimeClass::RawAddr { .. });
         }
     }
+    let view = match (place.path.split_last(), resolved.path.last()) {
+        (Some((PlaceElem::Field(field), parent_path)), Some(ResolvedPlaceElem::Field { .. })) => {
+            let parent = crate::runtime::RuntimePlace {
+                root: place.root.clone(),
+                path: parent_path.to_vec().into(),
+            };
+            let parent_class = resolve_runtime_place(db, program, body, &parent)?.result_class;
+            storage_lane_view(db, &parent_class, *field, root_space)
+        }
+        // Without a projection, the address is the root's own: a lane
+        // reference keeps viewing its lane.
+        (_, None | Some(ResolvedPlaceElem::Deref { .. })) => inherited_lane_view(&root_class),
+        _ => RefView::Whole,
+    };
     Ok(ref_class_for_place_result(
         db,
         &root_class,
         &resolved.result_class,
         root_space,
         force_raw,
+        view,
     ))
+}
+
+/// The lane a reference keeps when its address is taken again unprojected.
+pub(crate) fn inherited_lane_view<'db>(root_class: &RuntimeClass<'db>) -> RefView<'db> {
+    match root_class {
+        RuntimeClass::Ref {
+            view: view @ RefView::StorageLane(_),
+            ..
+        } => view.clone(),
+        _ => RefView::Whole,
+    }
+}
+
+/// How a reference to field `field` of a value of class `parent` in `space`
+/// views its word: a scalar packed into a storage word with other fields, or
+/// placed anywhere but at its word's start, is a lane of that word. A packed
+/// scalar alone at the start of its word is equivalent to the whole word.
+pub(crate) fn storage_lane_view<'db>(
+    db: &'db dyn MirDb,
+    parent: &RuntimeClass<'db>,
+    field: FieldIndex,
+    space: AddressSpaceKind,
+) -> RefView<'db> {
+    if space.is_byte_addressed() {
+        return RefView::Whole;
+    }
+    let Ok(placement) = RuntimeMemoryLayout::for_space(db, space).field_placement(parent, field)
+    else {
+        return RefView::Whole;
+    };
+    match placement.lane {
+        Some(lane) if placement.shared || lane.byte_offset != 0 => {
+            RefView::StorageLane(StorageLaneView {
+                byte_offset: lane.byte_offset as u8,
+                byte_width: lane.byte_width as u8,
+                shared: placement.shared,
+            })
+        }
+        _ => RefView::Whole,
+    }
 }
 
 pub(crate) fn project_place<'db>(
@@ -221,20 +277,28 @@ pub(crate) fn project_place<'db>(
 /// The reference (or raw-address) class produced by taking the address of a
 /// place whose transport root has class `root_class` and whose projected
 /// value has class `value_class`.
+///
+/// `view` says how the reference sees its target; a lane only applies to
+/// provider references into storage.
 pub(crate) fn ref_class_for_place_result<'db>(
     db: &'db dyn MirDb,
     root_class: &RuntimeClass<'db>,
     value_class: &RuntimeClass<'db>,
     root_space: AddressSpaceKind,
     force_raw: bool,
+    view: RefView<'db>,
 ) -> RuntimeClass<'db> {
     if !force_raw {
         match root_class {
             RuntimeClass::Ref { kind, .. } => {
+                let view = match (kind, view) {
+                    (RefKind::Provider { .. }, view @ RefView::StorageLane(_)) => view,
+                    _ => RefView::Whole,
+                };
                 return RuntimeClass::Ref {
                     pointee: Box::new(value_class.clone()),
                     kind: kind.clone(),
-                    view: RefView::Whole,
+                    view,
                 };
             }
             RuntimeClass::Scalar(_) | RuntimeClass::AggregateValue { .. } => {
@@ -671,12 +735,26 @@ mod tests {
             view: RefView::Whole,
         };
         assert_eq!(
-            ref_class_for_place_result(&db, &scalar, &scalar, AddressSpaceKind::Memory, false),
+            ref_class_for_place_result(
+                &db,
+                &scalar,
+                &scalar,
+                AddressSpaceKind::Memory,
+                false,
+                RefView::Whole
+            ),
             object
         );
         let pointer = RuntimeClass::raw_addr(&db, AddressSpaceKind::Memory, scalar.clone());
         assert_eq!(
-            ref_class_for_place_result(&db, &pointer, &scalar, AddressSpaceKind::Memory, true),
+            ref_class_for_place_result(
+                &db,
+                &pointer,
+                &scalar,
+                AddressSpaceKind::Memory,
+                true,
+                RefView::Whole
+            ),
             pointer
         );
     }

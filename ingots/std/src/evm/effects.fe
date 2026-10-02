@@ -134,6 +134,11 @@ impl<T> EffectRef<T> for StorPtr<T> {}
 impl<T> EffectRefMut<T> for StorPtr<T> {}
 
 impl<T> StorPtr<T> {
+    /// A pointer to `slot`, for std types that hand out typed storage places.
+    pub(ingot) fn at_slot_unchecked(_ slot: u256) -> Self {
+        StorPtr { handle: slot }
+    }
+
     /// Reads the pointed-at value.
     pub fn read(self) -> T
         where T: Copy
@@ -149,6 +154,46 @@ impl<T> StorPtr<T> {
         let mut ptr = self
         with (ptr) {
             core::effect_ref::write(ptr, value)
+        }
+    }
+}
+
+/// Read-only storage pointer/handle to a value of type `T`.
+///
+/// Like `StorPtr<T>`, but it only provides the read-only effect, so the
+/// pointed-at value can be read and not written.
+pub struct StorReadPtr<T> { handle: u256 }
+
+impl<T> Copy for StorReadPtr<T> {}
+
+impl<T> EffectHandle for StorReadPtr<T> {
+    type Target = T
+
+    const SPACE: core::effect_ref::AddressSpace = core::effect_ref::AddressSpace::Storage
+    type Raw = u256
+
+    fn raw(self) -> u256 {
+        self.handle
+    }
+}
+
+impl<T> EffectRef<T> for StorReadPtr<T> {}
+// no EffectRefMut: read-only
+
+impl<T> StorReadPtr<T> {
+    /// A read-only pointer to `slot`, for std types that hand out typed
+    /// storage places.
+    pub(ingot) fn at_slot_unchecked(_ slot: u256) -> Self {
+        StorReadPtr { handle: slot }
+    }
+
+    /// Reads the pointed-at value.
+    pub fn read(self) -> T
+        where T: Copy
+    {
+        let ptr = self
+        with (ptr) {
+            core::effect_ref::read(ptr)
         }
     }
 }

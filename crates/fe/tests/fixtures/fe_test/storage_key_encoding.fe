@@ -1,0 +1,134 @@
+// Pin the mapping preimage independently of the numeric conversion helpers.
+// Native storage packing must never change these bytes or the resulting slots.
+use core::ptr
+use std::evm::{Address, StorageKey}
+
+fn assert_word<K: StorageKey>(_ key: K, _ expected: u256) {
+    assert(K::encoded_len(key) == 32)
+    let buf = ptr::alloc_bytes(32)
+    K::write_key(ptr: buf, key)
+    assert(*ptr::cast<u8, u256>(buf) == expected)
+}
+
+#[test]
+fn unsigned_keys_are_zero_extended() {
+    assert_word(0 as u8, 0)
+    assert_word(0xff as u8, 0xff)
+    assert_word(0 as u16, 0)
+    assert_word(0xffff as u16, 0xffff)
+    assert_word(0 as u32, 0)
+    assert_word(0xffffffff as u32, 0xffffffff)
+    assert_word(0 as u64, 0)
+    assert_word(0xffffffffffffffff as u64, 0xffffffffffffffff)
+    assert_word(0 as u128, 0)
+    assert_word(
+        0xffffffffffffffffffffffffffffffff as u128,
+        0xffffffffffffffffffffffffffffffff,
+    )
+    assert_word(0 as u256, 0)
+    assert_word(
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff as u256,
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+    )
+    assert_word(0 as usize, 0)
+    assert_word(
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff as usize,
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+    )
+}
+
+#[test]
+fn signed_keys_are_sign_extended() {
+    let ones: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    let negative: i8 = -1
+    assert_word(negative, ones)
+    let minimum: i8 = -128
+    assert_word(
+        minimum,
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff80,
+    )
+    let maximum: i8 = 127
+    assert_word(maximum, 0x7f)
+    let negative: i16 = -1
+    assert_word(negative, ones)
+    let minimum: i16 = -32768
+    assert_word(
+        minimum,
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff8000,
+    )
+    let maximum: i16 = 32767
+    assert_word(maximum, 0x7fff)
+    let negative: i32 = -1
+    assert_word(negative, ones)
+    let minimum: i32 = -2147483648
+    assert_word(
+        minimum,
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffff80000000,
+    )
+    let maximum: i32 = 2147483647
+    assert_word(maximum, 0x7fffffff)
+    let negative: i64 = -1
+    assert_word(negative, ones)
+    let minimum: i64 = -9223372036854775808
+    assert_word(
+        minimum,
+        0xffffffffffffffffffffffffffffffffffffffffffffffff8000000000000000,
+    )
+    let maximum: i64 = 9223372036854775807
+    assert_word(maximum, 0x7fffffffffffffff)
+    let negative: i128 = -1
+    assert_word(negative, ones)
+    let minimum: i128 = -170141183460469231731687303715884105728
+    assert_word(
+        minimum,
+        0xffffffffffffffffffffffffffffffff80000000000000000000000000000000,
+    )
+    let maximum: i128 = 170141183460469231731687303715884105727
+    assert_word(maximum, 0x7fffffffffffffffffffffffffffffff)
+    let negative: i256 = -1
+    assert_word(negative, ones)
+    let minimum: i256 = -57896044618658097711785492504343953926634992332820282019728792003956564819968
+    assert_word(
+        minimum,
+        0x8000000000000000000000000000000000000000000000000000000000000000,
+    )
+    let maximum: i256 = 57896044618658097711785492504343953926634992332820282019728792003956564819967
+    assert_word(
+        maximum,
+        0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+    )
+    let negative: isize = -1
+    assert_word(negative, ones)
+    let minimum: isize = -57896044618658097711785492504343953926634992332820282019728792003956564819968
+    assert_word(
+        minimum,
+        0x8000000000000000000000000000000000000000000000000000000000000000,
+    )
+    let maximum: isize = 57896044618658097711785492504343953926634992332820282019728792003956564819967
+    assert_word(
+        maximum,
+        0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+    )
+}
+
+#[test]
+fn bool_and_address_keys_keep_their_words() {
+    assert_word(false, 0)
+    assert_word(true, 1)
+    assert_word(Address { inner: 0x1234 }, 0x1234)
+}
+
+#[test]
+fn tuple_keys_keep_separate_word_components() {
+    let negative: i8 = -1
+    let key = (1 as u8, negative, true)
+    assert(key.encoded_len() == 96)
+    let buf = ptr::alloc_bytes(96)
+    <(u8, i8, bool) as StorageKey>::write_key(ptr: buf, key)
+    assert(*ptr::cast<u8, u256>(buf) == 1)
+    assert(
+        *ptr::cast<u8, u256>(ptr::offset_bytes(buf, 32))
+            == 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+    )
+    assert(*ptr::cast<u8, u256>(ptr::offset_bytes(buf, 64)) == 1)
+}

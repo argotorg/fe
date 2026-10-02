@@ -1,0 +1,520 @@
+use std::evm::{Evm, RawStorage, SolMapping, StorageMap}
+use std::evm::effects::TStorPtr
+
+// Struct fields narrower than a word are packed into storage slots the way
+// Solidity packs struct members. The expected raw slots below are what
+// `solc --storage-layout` reports for the same Solidity structs:
+//
+//   struct Small    { uint8 a; uint8 b; uint256 c; }              a: 0/0, b: 0/1, c: 1/0
+//   struct Mixed    { bool flag; uint16 b; int8 c; uint128 d;     flag: 0/0, b: 0/1, c: 0/3,
+//                     uint128 e; uint64 f; }                       d: 0/4, e: 1/0, f: 1/16
+//   struct Inner    { uint8 x; uint16 y; }
+//   struct Nested   { uint8 before; Inner inner; uint8 after; }   before: 0/0, inner: 1, after: 2/0
+//   struct Overflow { uint128 a; uint64 b; uint128 c; }           a: 0/0, b: 0/16, c: 1/0
+//   struct Signed   { int8 a; int16 b; int128 c; }                a: 0/0, b: 0/1, c: 0/3
+//
+// (slot/byte offset from the low-order end of the slot)
+
+struct Small {
+    a: u8,
+    b: u8,
+    c: u256,
+}
+
+struct Mixed {
+    flag: bool,
+    b: u16,
+    c: i8,
+    d: u128,
+    e: u128,
+    f: u64,
+}
+
+struct Inner {
+    x: u8,
+    y: u16,
+}
+
+struct Nested {
+    before: u8,
+    inner: Inner,
+    after: u8,
+}
+
+struct Overflow {
+    a: u128,
+    b: u64,
+    c: u128,
+}
+
+struct Signed {
+    a: i8,
+    b: i16,
+    c: i128,
+}
+
+impl Copy for Small {}
+impl Copy for Inner {}
+impl Copy for Nested {}
+impl Copy for Signed {}
+
+fn bump_u16() uses (value: mut u16) {
+    value += 1
+}
+
+trait Halve {
+    fn halve(mut self)
+}
+
+impl Halve for i16 {
+    fn halve(mut self) {
+        self = self / 2
+    }
+}
+
+msg LayoutMsg {
+    #[selector = 1]
+    Fill {},
+    #[selector = 2]
+    Slot { slot: u256 } -> u256,
+    #[selector = 3]
+    MixedC -> i8,
+    #[selector = 4]
+    MixedFlag -> bool,
+    #[selector = 5]
+    SignedSum -> i256,
+    #[selector = 6]
+    Update {},
+    #[selector = 7]
+    Forward {},
+    #[selector = 8]
+    NestedSum -> u256,
+}
+
+// Slots: small 0..2, mixed 2..4, nested 4..7, overflow 7..9, signed 9.
+pub contract Layouts {
+    mut small: Small,
+    mut mixed: Mixed,
+    mut nested: Nested,
+    mut overflow: Overflow,
+    mut signed: Signed,
+
+    recv LayoutMsg {
+        Fill {} uses (mut small, mut mixed, mut nested, mut overflow, mut signed) {
+            // Whole-struct writes.
+            small = Small { a: 0x11, b: 0x22, c: 0x33 }
+            mixed = Mixed { flag: true, b: 0x4455, c: -2, d: 0x66, e: 0x77, f: 0x88 }
+            nested = Nested { before: 0x01, inner: Inner { x: 0x02, y: 0x0304 }, after: 0x05 }
+            overflow = Overflow { a: 0xaa, b: 0xbb, c: 0xcc }
+            signed = Signed { a: -1, b: -300, c: -5 }
+        }
+        Slot { slot } -> u256 uses (raw: RawStorage) {
+            raw.sload(slot)
+        }
+        MixedC -> i8 uses (mixed) {
+            mixed.c
+        }
+        MixedFlag -> bool uses (mixed) {
+            mixed.flag
+        }
+        SignedSum -> i256 uses (signed) {
+            // Whole-struct read: one SLOAD for the shared word.
+            let value = signed
+            (value.a as i256) + (value.b as i256) + (value.c as i256)
+        }
+        Update {} uses (mut small, mut mixed, mut signed) {
+            // Single-field writes keep the other fields of the word.
+            small.b = 0x99
+            mixed.b += 1
+            mixed.flag = !mixed.flag
+            mixed.c -= 1
+            signed.b = 7
+        }
+        Forward {} uses (mut mixed, mut signed) {
+            // A packed field passed on as an effect, and as a `mut self`
+            // receiver, is updated in its own bytes.
+            with (mut mixed.b) {
+                bump_u16()
+            }
+            signed.b.halve()
+        }
+        NestedSum -> u256 uses (nested) {
+            (nested.before as u256) + (nested.inner.x as u256) + (nested.inner.y as u256)
+                + (nested.after as u256)
+        }
+    }
+}
+
+#[test]
+fn test_layout_matches_solidity() uses (evm: mut Evm) {
+    let c = evm.create2<Layouts>(value: 0, args: (), salt: 1)
+    assert(c.inner != 0)
+    evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Fill {})
+
+    // Small: a and b share slot 0, c takes slot 1.
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 0 }) == 0x2211)
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 1 }) == 0x33)
+
+    // Mixed: flag, b, c and d share slot 2; e and f share slot 3. The int8
+    // -2 is stored as its byte 0xfe, not sign-extended.
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 2 }) == (0x66 << 32) | (0xfe << 24) | (0x4455 << 8) | 0x01)
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 3 }) == (0x88 << 128) | 0x77)
+
+    // Nested: the inner struct starts a new slot, and so does the field after it.
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 4 }) == 0x01)
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 5 }) == (0x0304 << 8) | 0x02)
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 6 }) == 0x05)
+
+    // Overflow: c does not fit beside a and b and starts slot 8.
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 7 }) == (0xbb << 128) | 0xaa)
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 8 }) == 0xcc)
+
+    // Signed: two's-complement bytes of -1 (int8), -300 (int16), -5 (int128).
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 9 }) == (0xfffffffffffffffffffffffffffffffb << 24) | (0xfed4 << 8) | 0xff)
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 10 }) == 0)
+}
+
+#[test]
+fn test_packed_fields_read_and_write() uses (evm: mut Evm) {
+    let c = evm.create2<Layouts>(value: 0, args: (), salt: 2)
+    assert(c.inner != 0)
+    evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Fill {})
+
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::MixedC {}) == -2)
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::MixedFlag {}))
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::SignedSum {}) == -306)
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::NestedSum {}) == 0x01 + 0x02 + 0x0304 + 0x05)
+
+    evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Update {})
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 0 }) == 0x9911)
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 2 }) == (0x66 << 32) | (0xfd << 24) | (0x4456 << 8))
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::MixedC {}) == -3)
+    assert(!evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::MixedFlag {}))
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 9 }) == (0xfffffffffffffffffffffffffffffffb << 24) | (0x0007 << 8) | 0xff)
+
+    evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Forward {})
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 2 }) == (0x66 << 32) | (0xfd << 24) | (0x4457 << 8))
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: LayoutMsg::Slot { slot: 9 }) == (0xfffffffffffffffffffffffffffffffb << 24) | (0x0003 << 8) | 0xff)
+}
+
+// ---------------------------------------------------------------------------
+// Map entries, arrays, and transient storage use the same layout.
+// ---------------------------------------------------------------------------
+
+const POSITIONS_SALT: u256 = 0x7051
+
+struct Position {
+    owner_flags: u8,
+    leverage: u16,
+    opened: bool,
+    size: u128,
+    entry_price: u256,
+}
+
+impl Copy for Position {}
+
+fn add_leverage(_ by: u16) uses (position: mut Position) {
+    position.leverage += by
+}
+
+fn leverage() -> u16 uses (position: Position) {
+    position.leverage
+}
+
+msg CollectionMsg {
+    #[selector = 1]
+    Open { key: u256 },
+    #[selector = 2]
+    Raise { key: u256, by: u16 },
+    #[selector = 3]
+    Leverage { key: u256 } -> u16,
+    #[selector = 4]
+    EntryWord { key: u256, index: u256 } -> u256,
+    #[selector = 5]
+    FillPairs {},
+    #[selector = 6]
+    Slot { slot: u256 } -> u256,
+    #[selector = 7]
+    Transient {} -> u256,
+}
+
+// Slots: pairs 0..4 (two `Small`s of two slots each).
+pub contract Collections {
+    mut pairs: [Small; 2],
+    mut positions: StorageMap<u256, Position, POSITIONS_SALT>,
+
+    recv CollectionMsg {
+        Open { key } uses (mut positions) {
+            positions.mut_ptr(key).write(Position {
+                owner_flags: 0x0f,
+                leverage: 3,
+                opened: true,
+                size: 0x1234,
+                entry_price: 0x5678,
+            })
+        }
+        Raise { key, by } uses (mut positions) {
+            let mut entry = positions.mut_ptr(key)
+            with (entry) {
+                add_leverage(by)
+            }
+        }
+        Leverage { key } -> u16 uses (positions) {
+            with (positions.ptr(key)) {
+                leverage()
+            }
+        }
+        EntryWord { key, index } -> u256 uses (raw: RawStorage) {
+            raw.sload(SolMapping::at(POSITIONS_SALT).slot_of(key) + index)
+        }
+        FillPairs {} uses (mut pairs) {
+            pairs[0] = Small { a: 1, b: 2, c: 3 }
+            pairs[1] = Small { a: 4, b: 5, c: 6 }
+            pairs[1].a = 7
+        }
+        Slot { slot } -> u256 uses (raw: RawStorage) {
+            raw.sload(slot)
+        }
+        Transient {} -> u256 uses (evm: Evm) {
+            let mut value: TStorPtr<Small> = evm.tstor_ptr<Small>(0x40)
+            value.write(Small { a: 0x11, b: 0x22, c: 0x33 })
+            with (value) {
+                set_small_b()
+            }
+            let word: TStorPtr<u256> = evm.tstor_ptr<u256>(0x40)
+            let read_back = value.read()
+            assert!(read_back.a == 0x11 && read_back.b == 0x44 && read_back.c == 0x33)
+            word.read()
+        }
+    }
+}
+
+fn set_small_b() uses (value: mut Small) {
+    value.b = 0x44
+}
+
+#[test]
+fn test_map_entries_arrays_and_transient() uses (evm: mut Evm) {
+    let c = evm.create2<Collections>(value: 0, args: (), salt: 3)
+    assert(c.inner != 0)
+
+    // A map entry packs from its hashed slot like a Solidity mapping value.
+    evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::Open { key: 9 })
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::EntryWord { key: 9, index: 0 }) == (0x1234 << 32) | (0x01 << 24) | (0x0003 << 8) | 0x0f)
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::EntryWord { key: 9, index: 1 }) == 0x5678)
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::EntryWord { key: 9, index: 2 }) == 0)
+    evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::Raise { key: 9, by: 2 })
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::Leverage { key: 9 }) == 5)
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::EntryWord { key: 9, index: 0 }) == (0x1234 << 32) | (0x01 << 24) | (0x0005 << 8) | 0x0f)
+
+    // Array elements are whole packed structs: two slots each.
+    evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::FillPairs {})
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::Slot { slot: 0 }) == 0x0201)
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::Slot { slot: 1 }) == 3)
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::Slot { slot: 2 }) == 0x0507)
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::Slot { slot: 3 }) == 6)
+
+    // Transient storage packs the same way.
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: CollectionMsg::Transient {}) == 0x4411)
+}
+
+// ---------------------------------------------------------------------------
+// Zero-sized fields and lone signed fields.
+// ---------------------------------------------------------------------------
+
+struct Empty {}
+
+// A zero-sized field does not interrupt packing: a and b share slot 0.
+struct Gap {
+    a: u8,
+    empty: Empty,
+    b: u8,
+}
+
+// A lone signed field still keeps only its own byte.
+struct Lone {
+    value: i8,
+}
+
+fn set_minus_one() uses (value: mut i8) {
+    value = -1
+}
+
+trait Negate {
+    fn negate(mut self)
+}
+
+impl Negate for i8 {
+    fn negate(mut self) {
+        self = -self
+    }
+}
+
+msg EdgeMsg {
+    #[selector = 1]
+    WriteGap {},
+    #[selector = 2]
+    Slot { slot: u256 } -> u256,
+    #[selector = 3]
+    GapSum -> u256,
+    #[selector = 4]
+    LoneDirect {},
+    #[selector = 5]
+    LoneForward {},
+    #[selector = 6]
+    LoneSelf {},
+    #[selector = 7]
+    AssignScalar {},
+    #[selector = 8]
+    Scalar -> i16,
+    #[selector = 9]
+    LoneNative {},
+    #[selector = 10]
+    GapNative {},
+}
+
+// Slots: gap 0, lone 1, scalar 2.
+pub contract Edges {
+    mut gap: Gap,
+    mut lone: Lone,
+    mut scalar: i16,
+
+    recv EdgeMsg {
+        WriteGap {} uses (mut gap) {
+            gap = Gap { a: 0x11, empty: Empty {}, b: 0x22 }
+        }
+        Slot { slot } -> u256 uses (raw: RawStorage) {
+            raw.sload(slot)
+        }
+        GapSum -> u256 uses (gap) {
+            (gap.a as u256) + (gap.b as u256)
+        }
+        LoneDirect {} uses (mut lone) {
+            lone.value = -1
+        }
+        LoneForward {} uses (mut lone) {
+            with (mut lone.value) {
+                set_minus_one()
+            }
+        }
+        LoneSelf {} uses (mut lone) {
+            lone.value = 1
+            lone.value.negate()
+        }
+        LoneNative {} uses (mut lone) {
+            let reference = Option::Some(mut lone)
+            match reference {
+                Option::Some(r) => { r.value = -1 }
+                Option::None => {}
+            }
+        }
+        GapNative {} uses (mut gap) {
+            let reference = Option::Some(mut gap)
+            match reference {
+                Option::Some(r) => {
+                    assert(r.a == 0x11)
+                    let field = Option::Some(mut r.b)
+                    match field {
+                        Option::Some(b) => { b = 0x44 }
+                        Option::None => {}
+                    }
+                    assert(r.b == 0x44)
+                }
+                Option::None => {}
+            }
+        }
+        AssignScalar {} uses (mut scalar) {
+            scalar = -2
+        }
+        Scalar -> i16 uses (scalar) {
+            scalar
+        }
+    }
+}
+
+#[test]
+fn test_zero_sized_field_keeps_packed_word() uses (evm: mut Evm) {
+    let c = evm.create2<Edges>(value: 0, args: (), salt: 4)
+    assert(c.inner != 0)
+    evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::WriteGap {})
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::Slot { slot: 0 }) == 0x2211)
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::GapSum {}) == 0x33)
+}
+
+#[test]
+fn test_lone_signed_field_keeps_its_byte() uses (evm: mut Evm) {
+    let c = evm.create2<Edges>(value: 0, args: (), salt: 5)
+    assert(c.inner != 0)
+    // Direct, forwarded and `mut self` writes all store -1 as 0xff.
+    evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::LoneDirect {})
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::Slot { slot: 1 }) == 0xff)
+    evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::LoneSelf {})
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::Slot { slot: 1 }) == 0xff)
+    evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::LoneForward {})
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::Slot { slot: 1 }) == 0xff)
+}
+
+#[test]
+fn test_narrow_signed_contract_field_keeps_its_bytes() uses (evm: mut Evm) {
+    let c = evm.create2<Edges>(value: 0, args: (), salt: 6)
+    assert(c.inner != 0)
+    // A narrow signed contract field outside any struct is stored as its
+    // own bytes too, not sign-extended to the whole slot.
+    evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::AssignScalar {})
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::Slot { slot: 2 }) == 0xfffe)
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::Scalar {}) == -2)
+}
+
+#[test]
+fn test_native_memory_narrow_field_projection() {
+    let mut value = Gap { a: 0x11, empty: Empty {}, b: 0x22 }
+    let reference = Option::Some(mut value)
+    match reference {
+        Option::Some(r) => {
+            assert(r.a == 0x11)
+            assert(r.b == 0x22)
+            r.b = 0x33
+            assert(r.a == 0x11)
+            assert(r.b == 0x33)
+        }
+        Option::None => { assert(false) }
+    }
+    assert(value.b == 0x33)
+}
+
+#[test]
+fn test_storage_native_field_projection() uses (evm: mut Evm) {
+    let c = evm.create2<Edges>(value: 0, args: (), salt: 7)
+    evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::WriteGap {})
+    evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::GapNative {})
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::Slot { slot: 0 }) == 0x4411)
+    evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::LoneNative {})
+    assert(evm.call(addr: c, gas: 10000000, value: 0, message: EdgeMsg::Slot { slot: 1 }) == 0xff)
+}
+
+struct NativeLanes { a: u8, b: i16, c: bool }
+
+fn update_native_lanes() uses (value: mut NativeLanes) {
+    let reference = Option::Some(mut value)
+    match reference {
+        Option::Some(r) => {
+            assert(r.a == 0x11)
+            assert(r.b == -2)
+            assert(r.c)
+            r.b = -3
+            r.c = false
+            assert(r.b == -3)
+            assert(!r.c)
+        }
+        Option::None => {}
+    }
+}
+
+#[test]
+fn test_transient_native_packed_projection() uses (evm: mut Evm) {
+    let mut value: TStorPtr<NativeLanes> = evm.tstor_ptr<NativeLanes>(0x50)
+    value.write(NativeLanes { a: 0x11, b: -2, c: true })
+    with (value) { update_native_lanes() }
+    let word: TStorPtr<u256> = evm.tstor_ptr<u256>(0x50)
+    assert(word.read() == 0xfffd11)
+}

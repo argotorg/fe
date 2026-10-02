@@ -1,13 +1,16 @@
-use mir::{AddressSpaceKind, Layout, ResolvedPlaceElem, RuntimeClass, RuntimeMemoryLayout};
+use common::layout::StorageLane;
+use mir::{
+    AddressSpaceKind, Layout, ResolvedPlaceElem, RuntimeClass, RuntimeMemoryLayout, ScalarRepr,
+};
 use sonatina_ir::{
     Type, ValueId,
     inst::{
-        arith::{Add, Mul, Sub},
+        arith::{Add, Mul, Shl, Shr, Sub},
         cast::Zext,
         cmp::Eq,
         control_flow::{BrTable, Jump, Phi, PhiArgs, Unreachable},
         data::{ConstLoad, Mload, Mstore, ObjLoad, ObjMaterializeHeap},
-        logic::Or,
+        logic::{And, Not, Or},
     },
     types::CompoundType,
 };
@@ -16,14 +19,17 @@ use super::{CopySource, FunctionLowerer, LowerError, Lowered, LoweringInstSet, s
 
 // The descriptor's layout also records the referent's address space. Provider
 // kinds may be erased when a reference is stored inside an ordinary typed slot.
-const REFERENCE_LAYOUTS: [Option<AddressSpaceKind>; 6] = [
+const REFERENCE_LAYOUTS: [Option<AddressSpaceKind>; 8] = [
     Some(AddressSpaceKind::Memory),
     None, // Native Sonatina object layout in memory.
     Some(AddressSpaceKind::Storage),
     Some(AddressSpaceKind::Transient),
     Some(AddressSpaceKind::Calldata),
     Some(AddressSpaceKind::Code),
+    Some(AddressSpaceKind::Storage), // Packed field; byte offset in layout >> 8.
+    Some(AddressSpaceKind::Transient),
 ];
+const PACKED_STORAGE: u64 = 6;
 const NATIVE_MEMORY: u64 = 1;
 
 /// Stored references are one-word pointers to immutable address/layout
@@ -110,6 +116,36 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         self.store_memory_reference(MemoryReference { addr, layout })
     }
 
+    fn reference_layout_tag(&mut self, layout: ValueId) -> ValueId {
+        let mask = self.index_value(0xff);
+        self.fb
+            .insert_inst(And::new(self.module.inst_set(), layout, mask), Type::I256)
+    }
+
+    fn reference_lane_shift(&mut self, layout: ValueId) -> ValueId {
+        let eight = self.index_value(8);
+        let bytes = self
+            .fb
+            .insert_inst(Shr::new(self.module.inst_set(), eight, layout), Type::I256);
+        self.fb
+            .insert_inst(Mul::new(self.module.inst_set(), bytes, eight), Type::I256)
+    }
+
+    fn reference_scalar_lane(class: &RuntimeClass<'db>) -> Option<StorageLane> {
+        let RuntimeClass::Scalar(scalar) = class else {
+            return None;
+        };
+        let byte_width = match scalar.repr {
+            ScalarRepr::Bool => 1,
+            ScalarRepr::Int { bits, .. } if bits < 256 => u32::from(bits / 8),
+            _ => return None,
+        };
+        Some(StorageLane {
+            byte_offset: 0,
+            byte_width,
+        })
+    }
+
     pub(super) fn load_referent(
         &mut self,
         reference: MemoryReference,
@@ -125,6 +161,9 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         let blocks = REFERENCE_LAYOUTS
             .iter()
             .enumerate()
+            .filter(|(tag, _)| {
+                *tag < PACKED_STORAGE as usize || Self::reference_scalar_lane(class).is_some()
+            })
             .filter(|(_, space)| !native || matches!(space, None | Some(AddressSpaceKind::Memory)))
             .map(|(tag, space)| (tag, self.fb.append_block(), *space))
             .collect::<Vec<_>>();
@@ -132,16 +171,32 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
             .iter()
             .map(|(tag, block, _)| (self.index_value(*tag as u64), *block))
             .collect::<Vec<_>>();
+        let tag = if Self::reference_scalar_lane(class).is_some() {
+            self.reference_layout_tag(reference.layout)
+        } else {
+            reference.layout
+        };
         self.fb.insert_inst_no_result(BrTable::new(
             self.module.inst_set(),
-            reference.layout,
+            tag,
             Some(invalid),
             cases,
         ));
         let mut values = PhiArgs::with_capacity(blocks.len());
-        for (_, block, space) in blocks {
+        for (tag, block, space) in blocks {
             self.fb.switch_to_block(block);
-            let value = if let Some(space) = space {
+            let value = if tag >= PACKED_STORAGE as usize {
+                let RuntimeClass::Scalar(scalar) = class else {
+                    unreachable!()
+                };
+                let lane = Self::reference_scalar_lane(class).expect("packed scalar");
+                let word = self.load_word(reference.addr, space.expect("packed space"))?;
+                let shift = self.reference_lane_shift(reference.layout);
+                let word = self
+                    .fb
+                    .insert_inst(Shr::new(self.module.inst_set(), shift, word), Type::I256);
+                self.extract_packed_scalar(word, lane, scalar)
+            } else if let Some(space) = space {
                 self.load_from_ptr(reference.addr, space, class)?
             } else {
                 self.fb
@@ -181,6 +236,9 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         let blocks = REFERENCE_LAYOUTS
             .iter()
             .enumerate()
+            .filter(|(tag, _)| {
+                *tag < PACKED_STORAGE as usize || Self::reference_scalar_lane(class).is_some()
+            })
             .filter(|(_, space)| {
                 (!native || matches!(space, None | Some(AddressSpaceKind::Memory)))
                     && !matches!(
@@ -194,15 +252,46 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
             .iter()
             .map(|(tag, block, _)| (self.index_value(*tag as u64), *block))
             .collect::<Vec<_>>();
+        let tag = if Self::reference_scalar_lane(class).is_some() {
+            self.reference_layout_tag(reference.layout)
+        } else {
+            reference.layout
+        };
         self.fb.insert_inst_no_result(BrTable::new(
             self.module.inst_set(),
-            reference.layout,
+            tag,
             Some(invalid),
             cases,
         ));
-        for (_, block, space) in blocks {
+        for (tag, block, space) in blocks {
             self.fb.switch_to_block(block);
-            if let Some(space) = space {
+            if tag >= PACKED_STORAGE as usize {
+                let RuntimeClass::Scalar(scalar) = class else {
+                    unreachable!()
+                };
+                let lane = Self::reference_scalar_lane(class).expect("packed scalar");
+                let space = space.expect("packed space");
+                let bits = self.packed_scalar_bits(value, lane, scalar)?;
+                let shift = self.reference_lane_shift(reference.layout);
+                let bits = self
+                    .fb
+                    .insert_inst(Shl::new(self.module.inst_set(), shift, bits), Type::I256);
+                let mask = self.fb.make_imm_value(super::lane_mask(lane, false));
+                let mask = self
+                    .fb
+                    .insert_inst(Shl::new(self.module.inst_set(), shift, mask), Type::I256);
+                let keep = self
+                    .fb
+                    .insert_inst(Not::new(self.module.inst_set(), mask), Type::I256);
+                let old = self.load_word(reference.addr, space)?;
+                let kept = self
+                    .fb
+                    .insert_inst(And::new(self.module.inst_set(), old, keep), Type::I256);
+                let word = self
+                    .fb
+                    .insert_inst(Or::new(self.module.inst_set(), kept, bits), Type::I256);
+                self.store_word(reference.addr, space, word)?;
+            } else if let Some(space) = space {
                 self.copy_to_ptr(reference.addr, space, class, value)?;
             } else {
                 self.fb.insert_inst_no_result(Mstore::new(
@@ -237,7 +326,9 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
             CopySource::Const { value, .. } => self
                 .fb
                 .insert_inst(ConstLoad::new(self.module.inst_set(), value), ty),
-            CopySource::Ptr { addr, space, .. } => self.load_from_ptr(addr, space, &class)?,
+            CopySource::Ptr {
+                addr, space, lane, ..
+            } => self.load_from_ptr_lane(addr, space, lane, &class)?,
         };
         self.retype_value_for_class(value, &class, target)
     }
@@ -314,6 +405,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
     ) -> Result<Lowered<(MemoryReference, RuntimeClass<'db>)>, LowerError> {
         let raw = RuntimeMemoryLayout::raw(self.module.db);
         let words = RuntimeMemoryLayout::for_space(self.module.db, AddressSpaceKind::Storage);
+        let mut projected_layout = reference.layout;
         let (offset, class) = match elem {
             ResolvedPlaceElem::Field { field, class } => {
                 let Some(layout) = base.aggregate_layout() else {
@@ -324,6 +416,32 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
                 let Layout::Struct(layout) = layout.data(self.module.db) else {
                     return Err(LowerError::Internal("memory field requires struct".into()));
                 };
+                let placement = words.field_placement(base, *field)?;
+                if let Some(lane) = placement.lane
+                    && (placement.shared || lane.byte_offset != 0)
+                {
+                    // Memory fields remain unpacked. Only storage/transient
+                    // descriptors acquire a packed tag and a byte offset.
+                    for tag in [2u64, 3] {
+                        let old_tag = self.index_value(tag);
+                        let flag = self.fb.insert_inst(
+                            Eq::new(self.module.inst_set(), reference.layout, old_tag),
+                            Type::I1,
+                        );
+                        let flag = self.fb.insert_inst(
+                            Zext::new(self.module.inst_set(), flag, Type::I256),
+                            Type::I256,
+                        );
+                        let delta = self.index_value(4 + (u64::from(lane.byte_offset) << 8));
+                        let delta = self
+                            .fb
+                            .insert_inst(Mul::new(self.module.inst_set(), flag, delta), Type::I256);
+                        projected_layout = self.fb.insert_inst(
+                            Add::new(self.module.inst_set(), projected_layout, delta),
+                            Type::I256,
+                        );
+                    }
+                }
                 let native = layout.fields.iter().take(field.0 as usize).try_fold(
                     0u64,
                     |offset, field| {
@@ -339,7 +457,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
                         reference.layout,
                         raw.field_offset(base, *field)?,
                         native,
-                        words.field_offset(base, *field)?,
+                        placement.offset,
                     ),
                     class,
                 )
@@ -411,7 +529,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         Ok(Lowered::Value((
             MemoryReference {
                 addr,
-                layout: reference.layout,
+                layout: projected_layout,
             },
             class.clone(),
         )))

@@ -7,8 +7,8 @@ use hir::analysis::{
         FieldIndex, Mutability, SConst, SLocal, SLocalId, SemanticInstance, SemanticLocalKind,
         SemanticLocalRole, ValueProvenance, VariantIndex, get_or_build_semantic_instance,
         normalized::{
-            NDataProjection, NEffectArg, NExpr, NIndex, NOperand, NPlace, NPlaceBase, NRootKind,
-            NStatementKind, NValueDefinition, NValueId,
+            NDataPath, NDataProjection, NEffectArg, NExpr, NIndex, NOperand, NPlace, NPlaceBase,
+            NRootKind, NStatementKind, NValueDefinition, NValueId,
         },
     },
     ty::{
@@ -28,7 +28,10 @@ use salsa::Update;
 use crate::{
     db::MirDb,
     instance::{RuntimeInstanceKey, RuntimeInstanceSource},
-    runtime::place::{project_field_class, project_index_class, ref_class_for_place_result},
+    runtime::place::{
+        inherited_lane_view, project_field_class, project_index_class, ref_class_for_place_result,
+        storage_lane_view,
+    },
     runtime::{
         AddressSpaceKind, BorrowAccess, Layout, LayoutId, RefKind, RuntimeBoundarySpec,
         RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan,
@@ -884,12 +887,28 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 ),
             },
         };
+        let projections: Vec<_> = place.path.iter().cloned().collect();
+        let view = match projections.split_last() {
+            Some((NDataProjection::Field(field), parent_path)) => {
+                let root = normalized_place_root_class_in_context(self, place.base, carriers)?;
+                let mut parent = self.walk_data_path_class(root, &NDataPath::new(parent_path));
+                if !parent_path.is_empty()
+                    && let Some(target) = parent.deref_target(self.db)
+                {
+                    parent = target;
+                }
+                storage_lane_view(self.db, &parent, *field, root_space)
+            }
+            None => inherited_lane_view(&root_class),
+            _ => crate::runtime::RefView::Whole,
+        };
         Some(ref_class_for_place_result(
             self.db,
             &root_class,
             &value_class,
             root_space,
             force_raw,
+            view,
         ))
     }
 
