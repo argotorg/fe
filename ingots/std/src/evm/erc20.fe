@@ -1,4 +1,5 @@
-//! Safe ERC20 helpers (OpenZeppelin `SafeERC20` equivalent).
+//! ERC20: a token implementation ([`Erc20`], see `token`) and safe helpers
+//! for calling other tokens (OpenZeppelin `SafeERC20` equivalent).
 //!
 //! Widely used tokens (USDT, BNB, OMG, ...) execute `transfer`/`approve` but
 //! return no data, so strictly decoding a `bool` result reverts on success.
@@ -22,6 +23,22 @@
 //! OpenZeppelin 5 `SafeERC20`, Seaport) is slightly different from the
 //! `safe_*` helpers: the first returned word must be exactly 1, and any
 //! returndata beyond the first word is ignored and never copied.
+
+pub use token::{
+    Approval,
+    Erc20,
+    IErc20,
+    IErc20Permit,
+    InsufficientAllowance,
+    InsufficientBalance,
+    InvalidPermit,
+    PERMIT_TYPEHASH,
+    PermitExpired,
+    TotalSupplyOverflow,
+    Transfer,
+    VERSION_HASH,
+    VerifiedPermit,
+}
 
 use core::ptr::MemBuffer
 use super::effects::{Address, Call, Ctx, RawCallOutcome, revert}
