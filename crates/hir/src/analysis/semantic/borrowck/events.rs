@@ -1414,16 +1414,15 @@ mod tests {
 
     #[test]
     fn stale_occurrence_arguments_never_match_current_authority() {
-        // The inner back edge gives `held` an earlier generation of its loan whose
-        // arguments are witnesses its region leaves unconstrained. Relating each
-        // of them to the current iteration's values grew exponentially.
+        // A loan live across its own loop's feedback keeps an earlier generation
+        // whose arguments, other than those its region names, are fresh witnesses.
+        // Relating each of them to the current iteration's values grew exponentially.
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
             "stale_occurrence.fe".into(),
             "fn update() {\n    let mut cells: [u64; 5] = [0; 5]\n    \
              let mut x: usize = 0\n    while x < 5 {\n        \
-             let held = mut cells[x]\n        let mut y: usize = 0\n        \
-             while y < 5 { y += 1 }\n        held = 1\n        x += 1\n    }\n}",
+             let held = mut cells[x]\n        held = 1\n        x += 1\n    }\n}",
         );
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);
@@ -1433,37 +1432,48 @@ mod tests {
         );
         let mut checker = Borrowck::new(&db, instance).unwrap();
         checker.solve().unwrap();
-        let (mut stale, mut current) = (0, 0);
+        let mut checked = 0;
         for operation in checker.operations.iter().flatten() {
             for access in &operation.accesses {
                 for loan in &operation.active {
-                    let id = loan.payload.loan().unwrap().id;
-                    if !access.authority.iter().any(|entry| entry.payload.id == id) {
+                    let reference = loan.payload.loan().unwrap();
+                    if !access
+                        .authority
+                        .iter()
+                        .any(|entry| entry.payload.id == reference.id)
+                    {
                         continue;
                     }
-                    let region = &access.region;
-                    let fresh = loan.guard.scope().freshening(region.scope());
-                    let loan = loan.substitute(&db, &fresh);
-                    let lift = IndexSubst::new(region.scope(), fresh.destination(), []).unwrap();
-                    let permitted = checker.permitted(&loan, region, &lift, &access.authority);
-                    if loan
-                        .payload
-                        .loan()
-                        .unwrap()
+                    let constrained = loan.region.indices();
+                    let mut scope = loan.guard.scope().clone();
+                    let renewed: Vec<_> = reference
                         .args
                         .iter()
-                        .all(|arg| arg.bound_namespace() == Some(IndexNamespace::Existential))
+                        .filter(|arg| !constrained.contains(arg))
+                        .map(|arg| {
+                            let (nested, witness) = scope.bind(IndexNamespace::Existential);
+                            scope = nested;
+                            (*arg, witness)
+                        })
+                        .collect();
+                    assert!(!renewed.is_empty());
+                    let renew = IndexSubst::new(loan.guard.scope(), &scope, renewed).unwrap();
+                    let region = &access.region;
+                    for (loan, permits) in
+                        [(loan.clone(), true), (loan.substitute(&db, &renew), false)]
                     {
-                        assert!(permitted.is_none());
-                        stale += 1;
-                    } else {
-                        assert!(permitted.is_some());
-                        current += 1;
+                        let fresh = loan.guard.scope().freshening(region.scope());
+                        let loan = loan.substitute(&db, &fresh);
+                        let lift =
+                            IndexSubst::new(region.scope(), fresh.destination(), []).unwrap();
+                        let permitted = checker.permitted(&loan, region, &lift, &access.authority);
+                        assert_eq!(permitted.is_some(), permits);
                     }
+                    checked += 1;
                 }
             }
         }
-        assert!(stale > 0 && current > 0, "stale {stale}, current {current}");
+        assert!(checked > 0);
     }
 
     #[test]

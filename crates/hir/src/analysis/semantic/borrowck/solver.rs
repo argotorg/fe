@@ -602,7 +602,14 @@ impl<'db> Borrowck<'db> {
         parents: Vec<Guarded<'db, LoanRef<'db>>>,
     ) {
         let (region, parents) =
-            if let Some(iteration) = self.inventory.loops.for_value(&self.body, result) {
+            // One definition serves every execution of its site, so it keeps
+            // no choice that any enclosing iteration can renew.
+            if let Some(iteration) = self
+                .inventory
+                .loops
+                .for_value(&self.body, result)
+                .map(|region| self.inventory.loops.outermost(region))
+            {
                 let repeated = |occurrence| {
                     self.inventory
                         .loops
@@ -770,10 +777,14 @@ impl<'db> Borrowck<'db> {
                         {
                             #[cfg(feature = "borrowck-profile")]
                             profile.point("forget_iteration", index, successor_index);
-                            let repeated = self.inventory.loops.repeated(iteration);
-                            edge.forget_iteration(&mut self.inventory.values, incoming[successor.block.index()].as_ref(),
-                            |index| matches!(index, IndexExpr::Iteration(region) if region == iteration) || matches!(index, IndexExpr::Runtime(value) if repeated.contains(&value)),
-                            |occurrence| self.inventory.loops.repeats_occurrence(iteration, occurrence));
+                            let loops = &self.inventory.loops;
+                            edge.forget_iteration(
+                                &mut self.inventory.values,
+                                incoming[successor.block.index()].as_ref(),
+                                |index| loops.repeats_index(iteration, index),
+                                |index| loops.drops_fact(iteration, index),
+                                |occurrence| loops.repeats_occurrence(iteration, occurrence),
+                            );
                         }
                         #[cfg(feature = "borrowck-profile")]
                         profile.point("join", index, successor_index);

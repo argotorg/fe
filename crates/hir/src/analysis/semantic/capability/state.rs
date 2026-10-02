@@ -339,11 +339,17 @@ impl<'db> BorrowState<'db> {
         });
     }
 
+    /// Cross a feedback edge. `renewed` indices get a new instance in the next
+    /// iteration, so identities naming them become previous-iteration
+    /// witnesses. Facts about `dropped` indices, which include the renewed
+    /// ones, are dropped from guards and scalar cells. A caller can forget more
+    /// facts than it renews, since dropping a fact only weakens what is known.
     pub fn forget_iteration(
         &mut self,
         values: &mut CapabilityValues<'db>,
         previous: Option<&Self>,
-        repeated: impl Fn(IndexExpr<'db>) -> bool + Copy,
+        renewed: impl Fn(IndexExpr<'db>) -> bool + Copy,
+        dropped: impl Fn(IndexExpr<'db>) -> bool + Copy,
         occurrence: impl Fn(ValueOccurrence) -> bool + Copy,
     ) {
         self.certified_contents.retain(|certificate| {
@@ -352,9 +358,9 @@ impl<'db> BorrowState<'db> {
                 certificate.family.clone(),
                 RegionPath::default(),
             );
-            !certificate.family.indices().any(repeated)
+            !certificate.family.indices().any(renewed)
                 && family.forget_occurrences(occurrence) == family
-                && !certificate.coverage.indices().into_iter().any(repeated)
+                && !certificate.coverage.indices().into_iter().any(renewed)
                 && !certificate
                     .coverage
                     .occurrences()
@@ -364,23 +370,23 @@ impl<'db> BorrowState<'db> {
                     .leaves(&certificate.contents, ValueOccurrence::Summary)
                     .iter()
                     .any(|leaf| {
-                        leaf.guard.indices().into_iter().any(repeated)
+                        leaf.guard.indices().into_iter().any(renewed)
                             || leaf.guard.occurrences().into_iter().any(occurrence)
-                            || leaf.payload.indices().any(repeated)
+                            || leaf.payload.indices().any(renewed)
                             || leaf.payload.forget_occurrences(occurrence) != leaf.payload
                     })
         });
         self.guard = self
             .guard
             .forget_occurrences(occurrence)
-            .forget_indices(repeated);
+            .forget_indices(dropped);
         for alternatives in self.scalar_cells.values_mut() {
             for entry in alternatives.iter_mut() {
                 entry.guard = entry
                     .guard
                     .forget_occurrences(occurrence)
-                    .forget_indices(repeated);
-                if entry.payload.is_some_and(repeated) {
+                    .forget_indices(dropped);
+                if entry.payload.is_some_and(dropped) {
                     entry.payload = None;
                 }
             }
@@ -399,7 +405,7 @@ impl<'db> BorrowState<'db> {
         let mut sources: FxHashMap<CapabilityValue<'db>, SlotSources<'db>> = FxHashMap::default();
         let mut invariant_replacements = FxHashSet::default();
         let repeats = FeedbackRepeats {
-            index: &repeated,
+            index: &renewed,
             occurrence: &occurrence,
         };
         if let Some(previous) = previous {
@@ -491,8 +497,8 @@ impl<'db> BorrowState<'db> {
                         let indices: BTreeSet<_> = guard
                             .indices()
                             .into_iter()
-                            .chain(payload.indices())
-                            .filter(|index| repeated(*index))
+                            .filter(|index| dropped(*index))
+                            .chain(payload.indices().filter(|index| renewed(*index)))
                             .collect();
                         let bindings: Vec<_> = indices
                             .into_iter()
@@ -502,12 +508,21 @@ impl<'db> BorrowState<'db> {
                                 (index, witness)
                             })
                             .collect();
+                        let identities = IndexSubst::new(
+                            guard.scope(),
+                            &scope,
+                            bindings
+                                .iter()
+                                .copied()
+                                .filter(|(index, _)| renewed(*index)),
+                        )
+                        .expect("previous value occurrence identities");
                         let subst = IndexSubst::new(guard.scope(), &scope, bindings)
                             .expect("previous value occurrence witnesses");
                         let substituted = values.guards().borrow_mut().substitute(&guard, &subst);
                         substituted.map(|guard| Guarded {
                             guard,
-                            payload: payload.substitute(values.db, &subst),
+                            payload: payload.substitute(values.db, &identities),
                         })
                     })
                     .clone()

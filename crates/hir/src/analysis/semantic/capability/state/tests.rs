@@ -1620,7 +1620,13 @@ fn loop_feedback_separates_old_selectors_from_current_execution() {
         }]
     });
     let mut state = BorrowState::new(&mut values, [], [(root(&db, 0), initial)]);
-    state.forget_iteration(&mut values, None, |index| index == selector, |_| false);
+    state.forget_iteration(
+        &mut values,
+        None,
+        |index| index == selector,
+        |index| index == selector,
+        |_| false,
+    );
     let previous = state.storage().next().unwrap().1;
     let entry = &previous.direct()[0];
     let old = entry.payload.loan().unwrap().args[0];
@@ -1634,7 +1640,13 @@ fn loop_feedback_separates_old_selectors_from_current_execution() {
             .is_some()
     );
     let stable = state.clone();
-    state.forget_iteration(&mut values, None, |index| index == selector, |_| false);
+    state.forget_iteration(
+        &mut values,
+        None,
+        |index| index == selector,
+        |index| index == selector,
+        |_| false,
+    );
     assert_eq!(state, stable);
 }
 

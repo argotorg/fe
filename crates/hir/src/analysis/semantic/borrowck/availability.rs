@@ -422,11 +422,8 @@ impl<'db> Borrowck<'db> {
                         .loops
                         .feedback(NBlockId::new(block_index), successor.block)
                     {
-                        let repeated = self.inventory.loops.repeated(iteration);
-                        let repeats_index = |index| {
-                            matches!(index, IndexExpr::Iteration(region) if region == iteration)
-                                || matches!(index, IndexExpr::Runtime(value) if repeated.contains(&value))
-                        };
+                        let repeats_index =
+                            |index| self.inventory.loops.repeats_index(iteration, index);
                         let repeats_occurrence = |occurrence| {
                             self.inventory
                                 .loops
@@ -464,7 +461,9 @@ impl<'db> Borrowck<'db> {
                         );
                         edge.guard = edge
                             .guard
-                            .forget_indices(repeats_index)
+                            .forget_indices(|index| {
+                                self.inventory.loops.drops_fact(iteration, index)
+                            })
                             .forget_occurrences(repeats_occurrence);
                     }
                     edge.moved.retain(|_, fact| !fact.region.is_empty());
