@@ -158,7 +158,8 @@ jobs:
         env:
           FE_SOLC_PATH: ${{ runner.os == 'Windows' && format('{0}\\solc-{1}.exe', runner.temp, env.SOLC_VERSION) || format('{0}/solc-{1}', runner.temp, env.SOLC_VERSION) }}
         run: >-
-          cargo nextest run --release --workspace --all-features --no-fail-fast --locked --exclude fe-bench -- --skip mock_client_tests::
+          cargo nextest run --release --workspace --all-features --no-fail-fast --locked --exclude fe-bench
+          -E 'not (package(=fe-language-server) and test(/^mock_client_tests::/))'
       - name: Upload build timings
         if: always()
         uses: actions/upload-artifact@v4
