@@ -1,9 +1,10 @@
-//! Formatting helpers that build `DynString` values.
+//! Formatting helpers that build `DynString` values, and their parsers.
 //!
 //! String literals can be used directly as `DynString`:
 //! `let s: DynString = "<svg>"`.
 use super::abi::DynString
-use super::num::IntDowncast
+use super::num::{Bounded, IntDowncast}
+use super::option::Option
 use super::ptr::{self, MemSpan}
 
 /// Returns the concatenation of `parts` (Solidity `string.concat`).
@@ -78,6 +79,82 @@ pub fn hex_upper(_ value: u256, _ bytes: u256) -> DynString {
         remaining >>= 4
     }
     out
+}
+
+/// Parses decimal digits as a `u256` (Solidity `Strings.tryParseUint`).
+/// `None` for an empty string (OpenZeppelin returns 0), any byte other
+/// than `0` to `9` (signs and whitespace included) or a value above
+/// `u256::max()` (OpenZeppelin reverts).
+pub fn parse_uint(_ text: DynString) -> Option<u256> {
+    parse_digits(text.payload_span(), radix: 10)
+}
+
+/// Parses decimal digits with an optional `+` or `-` sign as an `i256`
+/// (Solidity `Strings.tryParseInt`). `None` for invalid digits, a missing
+/// digit or a value outside the `i256` range.
+pub fn parse_int(_ text: DynString) -> Option<i256> {
+    let mut digits = text.payload_span()
+    let negative = !digits.is_empty() && digits.byte_at(0) == 45
+    if negative || (!digits.is_empty() && digits.byte_at(0) == 43) {
+        digits = digits.slice(offset: 1, len: digits.len() - 1)
+    }
+    let magnitude = match parse_digits(digits, radix: 10) {
+        Option::Some(value) => value
+        Option::None => return Option::None
+    }
+    let min_magnitude: u256 = 1 << 255
+    if magnitude < min_magnitude {
+        let value: i256 = magnitude.downcast_unchecked()
+        Option::Some(if negative { -value } else { value })
+    } else if negative && magnitude == min_magnitude {
+        Option::Some(i256::min())
+    } else {
+        Option::None
+    }
+}
+
+/// Parses hex digits of either case, with or without a `0x` prefix, as a
+/// `u256` (Solidity `Strings.tryParseHexUint`). `None` for an invalid
+/// digit, no digits or a value above `u256::max()`.
+pub fn parse_hex_uint(_ text: DynString) -> Option<u256> {
+    let mut digits = text.payload_span()
+    if digits.len() >= 2 && digits.byte_at(0) == 48 && digits.byte_at(1) == 120 {
+        digits = digits.slice(offset: 2, len: digits.len() - 2)
+    }
+    parse_digits(digits, radix: 16)
+}
+
+fn parse_digits(_ digits: MemSpan, radix: u256) -> Option<u256> {
+    if digits.is_empty() {
+        return Option::None
+    }
+    let limit = u256::max() / radix
+    let last = u256::max() % radix
+    let mut value: u256 = 0
+    let mut i: u256 = 0
+    while i < digits.len() {
+        let digit = digit_value(digits.byte_at(i))
+        if digit >= radix || value > limit || (value == limit && digit > last) {
+            return Option::None
+        }
+        value = value * radix + digit
+        i += 1
+    }
+    Option::Some(value)
+}
+
+// Value of a decimal or hex digit of either case, 16 for any other byte.
+fn digit_value(_ byte: u8) -> u256 {
+    let c = byte as u256
+    if c >= 48 && c <= 57 {
+        c - 48
+    } else if c >= 97 && c <= 102 {
+        c - 87
+    } else if c >= 65 && c <= 70 {
+        c - 55
+    } else {
+        16
+    }
 }
 
 /// Returns the standard base64 encoding of `data`, with `=` padding
