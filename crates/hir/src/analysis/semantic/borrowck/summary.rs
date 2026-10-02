@@ -1135,8 +1135,8 @@ impl<'db> Borrowck<'db> {
             } else {
                 vec![target]
             };
+            let mut access_handles = handles.clone();
             for target in targets {
-                let mut access_handles = handles.clone();
                 let region = self.summarize_region(
                     &target.forget_occurrences(|occurrence| self.recursive_call_choice(occurrence)),
                     SemOrigin::Body(self.body.template_owner),
@@ -3783,6 +3783,7 @@ mod tests {
             "mismatched",
             "same_target_partial",
             "always",
+            "effect_only_targets",
         ] {
             let mut checker = Borrowck::new(&db, instance).unwrap();
             checker.solve().unwrap();
@@ -3814,7 +3815,25 @@ mod tests {
                     })
                     .unwrap()
             };
-            let (first, second) = (place(0), place(1));
+            let (mut first, mut second) = (place(0), place(1));
+            if case == "effect_only_targets" {
+                for (choice, target) in [&mut first, &mut second].into_iter().enumerate() {
+                    target.root = RegionRoot::External(ExternalSource::unknown(
+                        ReferentContract::new(
+                            &db,
+                            TyId::u256(&db),
+                            HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+                        ),
+                        AddressOccurrence::Value {
+                            instance,
+                            value: recursive,
+                            choice: choice.try_into().unwrap(),
+                        },
+                        Box::new([]),
+                        AddressProvenance::Raw,
+                    ));
+                }
+            }
             let region = RegionSet::new(
                 &scope,
                 [
@@ -3823,7 +3842,7 @@ mod tests {
                         payload: first.clone(),
                     },
                     Guarded {
-                        guard: guard(false),
+                        guard: guard(case == "effect_only_targets"),
                         payload: if case == "same_target_partial" {
                             first.clone()
                         } else {
@@ -3841,7 +3860,7 @@ mod tests {
                         } else {
                             guard(case != "mismatched")
                         },
-                        payload: first.clone(),
+                        payload: place(0),
                     },
                     Guarded {
                         guard: if case == "always" {
@@ -3849,7 +3868,7 @@ mod tests {
                         } else {
                             guard(case == "mismatched")
                         },
-                        payload: second.clone(),
+                        payload: place(1),
                     },
                 ],
             );
@@ -3868,6 +3887,37 @@ mod tests {
             });
             let (summary, _) = checker.build_summary().unwrap();
             checker.verify_summary(&summary).unwrap();
+            if case == "effect_only_targets" {
+                assert_eq!(summary.accesses.len(), 2, "distinct targets collapsed");
+                let occurrences: BTreeSet<_> = summary
+                    .accesses
+                    .iter()
+                    .flat_map(|access| {
+                        access.region.clauses().iter().map(|clause| {
+                            let RegionRoot::External(source) = &clause.payload.root else {
+                                panic!("external target");
+                            };
+                            let ExternalOrigin::Unknown { occurrence, .. } =
+                                source.address_base(&db).unwrap().origin
+                            else {
+                                panic!("unknown address identity");
+                            };
+                            occurrence
+                        })
+                    })
+                    .collect();
+                assert_eq!(
+                    occurrences.len(),
+                    2,
+                    "distinct address identities collapsed"
+                );
+                for access in &summary.accesses {
+                    assert_eq!(access.authorizers.clauses().len(), 1);
+                    assert_eq!(access.authorizers.clauses()[0].payload, place(0));
+                    assert_eq!(access.authorizers.clauses()[0].guard, Guard::always(&scope));
+                }
+                continue;
+            }
             for target in [&first, &second] {
                 let effects: Vec<_> = summary
                     .accesses
@@ -3893,6 +3943,17 @@ mod tests {
                     matches!(case, "alternatives" | "always"),
                     "{case}: {target:?}"
                 );
+                match case {
+                    "alternatives" => assert!(
+                        effects[0]
+                            .authorizers
+                            .clauses()
+                            .iter()
+                            .all(|clause| &clause.payload == target)
+                    ),
+                    "same_target_partial" => assert!(effects[0].authorizers.is_empty()),
+                    _ => {}
+                }
             }
         }
     }

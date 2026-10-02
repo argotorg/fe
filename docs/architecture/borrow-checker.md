@@ -529,11 +529,14 @@ verified normalized cycle defines no values. Such cycles still participate in
 feedback and no-normal-return analysis.
 
 Recursive memory effects forget choices private to repeated calls. Their
-receiver authority uses universal projection under the original access
-execution domain: it must hold on every hidden execution that can reach the
-access. Possible authority cannot become guaranteed authority. Access-local
-witnesses are projected before comparing that domain with an authorizer's
-independent witness scope.
+receiver authority uses universal projection under each canonical target's
+original execution domain: it must hold on every hidden execution that can
+reach that target. Guarded alternative targets remain separate, while guards
+that reach the same target are combined before projection. Split targets and
+their authorizers share the original effect's map of address occurrences, so
+addresses used only by an effect retain distinct identities. Possible authority
+cannot become guaranteed authority. Access-local witnesses are projected before
+comparing that domain with an authorizer's independent witness scope.
 
 ### Separation requirements
 
