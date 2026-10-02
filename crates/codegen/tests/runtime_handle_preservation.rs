@@ -1816,12 +1816,14 @@ pub contract CodeView {
     );
     let forward = sonatina_function_body(&ir, "forward");
     assert!(
-        !forward.contains("evm_code_copy") && !forward.contains("insert_value"),
+        !forward.contains("evm_code_copy")
+            && !forward.contains("evm_code_load")
+            && !forward.contains("insert_value"),
         "forwarding an immutable code view should retain its address:\n{ir}"
     );
     let pick = sonatina_function_body(&ir, "pick");
     assert!(
-        pick.contains("evm_code_copy"),
+        pick.contains("evm_code_load"),
         "fields should be read from code in the consuming helper:\n{ir}"
     );
 }
