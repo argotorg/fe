@@ -87,7 +87,7 @@ jobs:
           toolchain: stable
       - name: Cache tree-sitter parser
         id: tree-sitter-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             crates/tree-sitter-fe/src/parser.c
@@ -120,7 +120,7 @@ jobs:
           npx tree-sitter generate --abi=14
       - name: Cache solc
         id: solc-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.os == 'Windows' && format('{0}\\solc-{1}.exe', runner.temp, env.SOLC_VERSION) || format('{0}/solc-{1}', runner.temp, env.SOLC_VERSION) }}
           key: solc-${{ runner.os }}-${{ env.SOLC_VERSION }}
