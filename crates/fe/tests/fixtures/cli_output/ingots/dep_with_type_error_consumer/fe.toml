@@ -1,0 +1,6 @@
+[ingot]
+name = "dep_with_type_error_consumer"
+version = "0.1.0"
+
+[dependencies]
+dep_with_type_error = { path = "../dep_with_type_error" }

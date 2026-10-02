@@ -1,0 +1,25 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDOUT ===
+Error: Errors in dependency
+
+Dependency: dep_with_type_error (version: 0.1.0)
+URL: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/dep_with_type_error/
+
+error[8-0000]: type mismatch
+  ┌─ src/lib.fe:2:24
+  │
+2 │     let count: usize = value
+  │                        ^^^^^ expected `usize`, but `u256` is given
+
+
+ERROR [<time>] Errors in dependency
+
+test result: FAILED. 0 passed; 1 failed
+
+failures:
+    dep_with_type_error_consumer::compile
+
+=== EXIT CODE: 1 ===

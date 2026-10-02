@@ -3273,6 +3273,15 @@ fn test_cli_library(fixture: Fixture<&str>) {
     snap_test!(output, snapshot_path.to_str().unwrap());
 }
 
+#[test]
+fn test_cli_test_reports_type_error_in_path_dependency() {
+    let ingot_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/ingots/dep_with_type_error_consumer");
+    let (output, _) = run_fe_command("test", ingot_dir.to_str().unwrap());
+    let snapshot_path = ingot_dir.join("dep_with_type_error_consumer_test");
+    snap_test!(output, snapshot_path.to_str().unwrap());
+}
+
 fn workspace_fixture(path: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/cli_output/workspaces")

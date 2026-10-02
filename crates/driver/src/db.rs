@@ -134,6 +134,10 @@ impl DiagnosticsCollection<'_> {
         self.0.is_empty()
     }
 
+    pub fn append(&mut self, other: Self) {
+        self.0.extend(other.0);
+    }
+
     pub fn has_errors(&self, db: &DriverDataBase) -> bool {
         self.finalize(db)
             .iter()
