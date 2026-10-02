@@ -299,6 +299,20 @@ fn display_missing_pattern<'db>(
                             .collect();
                         format!("({})", parts.join(", "))
                     }
+                } else if let Some(struct_) = ty.as_tuple_struct(db) {
+                    let struct_name = match struct_.name(db) {
+                        crate::core::hir_def::Partial::Present(name) => name.data(db).to_string(),
+                        crate::core::hir_def::Partial::Absent => "UnknownStruct".to_string(),
+                    };
+                    if fields.is_empty() {
+                        format!("{struct_name}(..)")
+                    } else {
+                        let parts: Vec<String> = fields
+                            .iter()
+                            .map(|f| display_missing_pattern(db, f))
+                            .collect();
+                        format!("{struct_name}({})", parts.join(", "))
+                    }
                 } else {
                     format!("{} {{ .. }}", ty.pretty_print(db))
                 }

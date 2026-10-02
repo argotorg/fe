@@ -1,0 +1,160 @@
+use core::default::Default
+use core::ops::Eq
+
+pub struct Month(pub u8)
+
+impl Month {
+    pub fn next(self) -> Month {
+        if self.0 == 12 { Month(1) } else { Month(self.0 + 1) }
+    }
+}
+
+impl Eq for Month {
+    fn eq(self, _ other: Month) -> bool {
+        self.0 == other.0
+    }
+}
+
+struct Pair(u256, bool)
+
+struct Wrapper<T>(T)
+
+impl<T> Wrapper<T> {
+    fn into_inner(own self) -> T {
+        let Wrapper(inner) = self
+        inner
+    }
+}
+
+struct Nested(Month, Pair)
+
+struct Defaulted<T>(pub T) where T: Default
+
+mod units {
+    pub struct Meters(pub u256)
+}
+
+fn days_in(_ month: Month) -> u8 {
+    match month {
+        Month(2) => 28
+        Month(4) | Month(6) | Month(9) | Month(11) => 30
+        _ => 31
+    }
+}
+
+fn swap(_ pair: Pair) -> Pair {
+    let Pair(n, flag) = pair
+    Pair(n, !flag)
+}
+
+#[test]
+fn construct_and_access() {
+    let m = Month(10)
+    assert!(m.0 == 10)
+    assert!(m.next().0 == 11)
+    assert!(Month(12).next() == Month(1))
+
+    let p = Pair(7, true)
+    assert!(p.0 == 7)
+    assert!(p.1)
+}
+
+#[test]
+fn field_assignment() {
+    let mut p = Pair(1, false)
+    p.0 = 42
+    p.1 = true
+    assert!(p.0 == 42)
+    assert!(p.1)
+
+    let mut m = Month(3)
+    m.0 += 2
+    assert!(m == Month(5))
+}
+
+#[test]
+fn patterns() {
+    assert!(days_in(Month(2)) == 28)
+    assert!(days_in(Month(6)) == 30)
+    assert!(days_in(Month(7)) == 31)
+
+    let Pair(n, flag) = swap(Pair(9, true))
+    assert!(n == 9)
+    assert!(!flag)
+
+    let Pair(_, ..) = Pair(1, true)
+    let Pair(.., last) = Pair(1, true)
+    assert!(last)
+}
+
+#[test]
+fn generics() {
+    let w = Wrapper(5)
+    let n: u8 = w.0
+    assert!(n == 5)
+
+    let explicit = Wrapper<bool>(true)
+    assert!(explicit.into_inner())
+
+    let nested_generic = Wrapper(Month(4))
+    assert!(nested_generic.0 == Month(4))
+}
+
+#[test]
+fn where_clause_and_ctor_value() {
+    let d: Defaulted<u8> = Defaulted(7)
+    assert!(d.0 == 7)
+
+    let make = Month
+    assert!(make(3) == Month(3))
+}
+
+#[test]
+fn nesting() {
+    let nested = Nested(Month(8), Pair(3, true))
+    assert!(nested.0.0 == 8)
+    assert!(nested.1.0 == 3)
+
+    let Nested(Month(month), Pair(count, _)) = nested
+    assert!(month == 8)
+    assert!(count == 3)
+}
+
+#[test]
+fn qualified_path() {
+    let distance = units::Meters(100)
+    let units::Meters(value) = distance
+    assert!(value == 100)
+}
+
+msg CounterMsg {
+    #[selector = 0x371303c0]
+    Increment,
+    #[selector = 0x06661abd]
+    Count -> u256,
+}
+
+struct Counter(u256)
+
+pub contract CounterContract {
+    mut counter: Counter
+
+    recv CounterMsg {
+        Increment uses (mut counter) {
+            counter.0 += 1
+        }
+
+        Count -> u256 uses (counter) {
+            counter.0
+        }
+    }
+}
+
+#[test]
+fn storage_field() uses (evm: mut Evm) {
+    let addr = evm.create2<CounterContract>(value: 0, args: (), salt: 0)
+    evm.call(addr: addr, gas: 100000, value: 0, message: CounterMsg::Increment {})
+    evm.call(addr: addr, gas: 100000, value: 0, message: CounterMsg::Increment {})
+    let count: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CounterMsg::Count {})
+    assert!(count == 2)
+}

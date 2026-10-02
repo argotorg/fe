@@ -711,13 +711,31 @@ define_lazy_span_node!(
     ast::RecordFieldDef,
     @token {
         (pub_span, pub_kw),
-        (name, name),
     }
     @node {
         (attributes, attr_list, LazyAttrListSpan),
         (ty, ty, LazyTySpan),
     }
 );
+impl<'db> LazyFieldDefSpan<'db> {
+    /// Returns the span of the field name. A tuple struct field has no name,
+    /// so this falls back to the whole field.
+    pub fn name(mut self) -> LazySpanAtom<'db> {
+        fn f(origin: ResolvedOrigin, _: LazyArg) -> ResolvedOrigin {
+            origin.map(|node| {
+                ast::RecordFieldDef::cast(node).map(|field| match field.name() {
+                    Some(name) => name.into(),
+                    None => field.syntax().clone().into(),
+                })
+            })
+        }
+        self.0.push(LazyTransitionFn {
+            f,
+            arg: LazyArg::None,
+        });
+        LazySpanAtom(self.0)
+    }
+}
 
 define_lazy_span_node!(
     LazyVariantDefListSpan,

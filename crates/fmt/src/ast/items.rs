@@ -762,6 +762,16 @@ impl ToDoc for ast::Struct {
         let generics = generics_doc(self, ctx);
         let where_clause = where_doc(self, ctx);
 
+        if let Some(fields) = self.fields().filter(|f| f.is_tuple()) {
+            return attrs
+                .append(modifier)
+                .append(alloc.text("struct "))
+                .append(name)
+                .append(generics)
+                .append(fields.to_doc(ctx))
+                .append(where_clause);
+        }
+
         let fields_doc = self.fields().map_or_else(
             || alloc.text(" {}"),
             |f| alloc.text(" ").append(f.to_doc(ctx)),
@@ -780,6 +790,17 @@ impl ToDoc for ast::Struct {
 impl ToDoc for ast::RecordFieldDefList {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let indent = ctx.config.indent_width as isize;
+        if self.is_tuple() {
+            return block_list_auto(
+                ctx,
+                self.syntax(),
+                "(",
+                ")",
+                ast::RecordFieldDef::cast,
+                indent,
+                true,
+            );
+        }
         block_list_spaced_auto(
             ctx,
             self.syntax(),
@@ -854,9 +875,13 @@ impl ToDoc for ast::RecordFieldDef {
             doc = doc.append(alloc.text("mut "));
         }
 
-        if let Some(name) = self.name() {
-            doc = doc.append(alloc.text(ctx.token(&name)));
-        }
+        let Some(name) = self.name() else {
+            // A tuple struct field has no name.
+            return self
+                .ty()
+                .map_or(doc.clone(), |ty| doc.append(ty.to_doc(ctx)));
+        };
+        doc = doc.append(alloc.text(ctx.token(&name)));
 
         if let Some(ty) = self.ty() {
             doc = doc.append(alloc.text(": ")).append(ty.to_doc(ctx));

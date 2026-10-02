@@ -427,6 +427,9 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
                     item_identity(db, variant.enum_.into()),
                     variant.name(db).unwrap_or("variant")
                 ),
+                CallableDef::StructCtor(struct_) => {
+                    format!("struct_ctor${}", item_identity(db, (*struct_).into()))
+                }
             },
         },
         TyData::TyParam(param) => {

@@ -8,8 +8,8 @@ use super::{
 use crate::{
     hir_def::{
         AttrListId, Body, BodyKind, CompBinOp, EffectParamListId, FuncParamListId,
-        GenericParamListId, IdentId, TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId,
-        item::*,
+        GenericParamListId, IdentId, Partial, TraitRefId, TupleTypeId, TypeBound, TypeId,
+        WhereClauseId, item::*,
     },
     lower::msg::lower_msg_as_mod,
     span::HirOrigin,
@@ -515,6 +515,23 @@ impl<'db> Func<'db> {
 
 impl<'db> Struct<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Struct) -> Self {
+        let is_tuple = ast.fields().is_some_and(|fields| fields.is_tuple());
+        if is_tuple {
+            // Event, error and ABI structs derive their code from named fields.
+            let name = ast.name().map(|name| name.text().to_string());
+            for attr in ["event", "error", "abi"] {
+                report_unsupported_attr(
+                    ctxt,
+                    ast.attr_list(),
+                    attr,
+                    target("tuple struct", name.clone()),
+                    "record structs",
+                );
+            }
+            report_indexed_attrs_outside_event_struct(ctxt, &ast);
+            return Self::lower_plain(ctxt, ast, true);
+        }
+
         let is_event_struct = super::event::is_event_struct(&ast);
         let is_error_struct = super::error::is_error_struct(&ast);
         let is_abi_struct = super::abi_struct::is_abi_struct(&ast);
@@ -538,6 +555,10 @@ impl<'db> Struct<'db> {
             return super::abi_struct::lower_abi_struct(ctxt, ast);
         }
 
+        Self::lower_plain(ctxt, ast, false)
+    }
+
+    fn lower_plain(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Struct, is_tuple: bool) -> Self {
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let id = ctxt.joined_id(TrackedItemVariant::Struct(name));
         ctxt.enter_item_scope(id, false);
@@ -558,6 +579,7 @@ impl<'db> Struct<'db> {
             generic_params,
             where_clause,
             fields,
+            is_tuple,
             ctxt.top_mod(),
             origin,
         );
@@ -1028,9 +1050,19 @@ impl<'db> FieldDefListId<'db> {
         ast: ast::RecordFieldDefList,
         field_kind: &'static str,
     ) -> Self {
+        let is_tuple = ast.is_tuple();
         let fields = ast
             .into_iter()
-            .map(|field| FieldDef::lower_ast_with_context(ctxt, field, field_kind))
+            .enumerate()
+            .map(|(idx, field)| {
+                let mut field = FieldDef::lower_ast_with_context(ctxt, field, field_kind);
+                if is_tuple {
+                    // Tuple fields are named by their position, which is what
+                    // `s.0` resolves against.
+                    field.name = Partial::Present(IdentId::new(ctxt.db(), idx.to_string()));
+                }
+                field
+            })
             .collect::<Vec<_>>();
         Self::new(ctxt.db(), fields)
     }

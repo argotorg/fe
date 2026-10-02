@@ -50,6 +50,9 @@ module.exports = grammar({
     [$._expression, $._condition_atom_no_let, $._path],
     [$._expression, $._condition_atom_no_let, $._path, $.path_segment],
     [$.where_clause],
+    // `pub (` in a tuple struct field is either a visibility restriction such
+    // as `pub(ingot)` or a plain `pub` followed by a tuple type.
+    [$.visibility],
     [$.qualified_path_type, $.qualified_path_expression],
     [$.tuple_type, $.tuple_expression],
     // Self type vs self path segment vs expression
@@ -216,8 +219,28 @@ module.exports = grammar({
       'struct',
       field('name', $.identifier),
       optional($.generic_param_list),
-      optional($.where_clause),
-      field('body', $.record_field_def_list),
+      choice(
+        seq(
+          optional($.where_clause),
+          field('body', $.record_field_def_list),
+        ),
+        seq(
+          field('body', $.tuple_field_def_list),
+          optional($.where_clause),
+        ),
+      ),
+    ),
+
+    tuple_field_def_list: $ => seq(
+      '(',
+      sepTrailing($.tuple_field_def, ','),
+      ')',
+    ),
+
+    tuple_field_def: $ => seq(
+      optional($.attribute_list),
+      optional($.visibility),
+      field('type', $._type),
     ),
 
     record_field_def_list: $ => seq(

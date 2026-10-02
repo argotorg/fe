@@ -229,6 +229,12 @@ fn field_index<'db>(
     let idx = match field {
         FieldIndex::Index(index) => {
             let idx = index.data(db).to_usize()?;
+            if base_ty.as_tuple_struct(db).is_some() {
+                if idx >= base_ty.field_types(db).len() {
+                    return None;
+                }
+                return u16::try_from(idx).ok();
+            }
             let (base_ty, ty_args) = base_ty.decompose_ty_app(db);
             if !base_ty.is_tuple(db) || idx >= ty_args.len() {
                 return None;

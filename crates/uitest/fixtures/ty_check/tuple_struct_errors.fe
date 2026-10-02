@@ -1,0 +1,72 @@
+mod time {
+    pub struct Month(pub u8)
+    pub struct Secret(u8)
+    pub struct Mixed(pub u8, u8)
+
+    fn inside_module() -> u8 {
+        let s = Secret(1)
+        let Secret(raw) = s
+        raw + s.0
+    }
+}
+
+use time::{Month, Secret, Mixed}
+
+struct Point { x: u8 }
+
+type MonthAlias = Month
+
+#[event]
+struct Logged(u8)
+
+fn wrong_arity() {
+    let _ = Month(1, 2)
+    let _ = Month()
+}
+
+fn wrong_type() {
+    let _ = Month(true)
+}
+
+fn record_syntax_on_tuple_struct() {
+    let _ = Month {}
+}
+
+fn record_pattern_on_tuple_struct(m: Month) {
+    let Month { .. } = m
+}
+
+fn tuple_pattern_arity(m: Month) {
+    let Month(a, b) = m
+}
+
+fn call_record_struct() {
+    let _ = Point(1)
+}
+
+fn ctor_through_alias() {
+    let _ = MonthAlias(1)
+}
+
+fn field_out_of_range(m: Month) -> u8 {
+    m.1
+}
+
+fn private_fields(s: Secret, x: Mixed) -> u8 {
+    let _ = Secret(1)
+    let _ = Mixed(1, 2)
+    let Secret(raw) = s
+    s.0 + x.1 + raw
+}
+
+struct BoolWrap(bool)
+
+fn non_exhaustive_match(b: BoolWrap) -> u8 {
+    match b {
+        BoolWrap(true) => 1
+    }
+}
+
+fn bare_path_pattern(m: Month) {
+    let Month = m
+}

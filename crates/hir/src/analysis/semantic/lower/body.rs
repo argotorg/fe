@@ -1102,6 +1102,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     fields: values.into_boxed_slice(),
                 },
             ),
+            CallableDef::StructCtor(_) => self.emit_expr_with_origin(
+                SemOrigin::Expr(expr),
+                ty,
+                SExpr::AggregateMake {
+                    ty,
+                    fields: values.into_boxed_slice(),
+                },
+            ),
             CallableDef::Func(_) => {
                 let call_site = self
                     .call_sites
