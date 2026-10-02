@@ -23,6 +23,15 @@ impl Ledger {
         self.total_supply += amount
         self.credit(to, amount)
     }
+
+    // The sibling borrow reborrows `self`, so callers separate it from the map
+    // entry, as they do the field itself.
+    fn hold(mut self, _ to: Address) -> u256 {
+        let supply = mut self.total_supply
+        self.balances.set(key: to, value: 7)
+        supply += 1
+        supply
+    }
 }
 
 pub struct Salted {
@@ -140,6 +149,28 @@ pub contract Handles {
         }
         Hold { to } -> u256 uses (mut persistent) {
             persistent.balance(to)
+        }
+    }
+}
+
+fn hold_through(_ to: Address) -> u256 uses (ledger: mut Ledger) {
+    ledger.hold(to)
+}
+
+// Accepted: a receiver method keeps a sibling borrow live across its own map
+// access, called directly and through a helper.
+pub contract Methods {
+    mut ledger: Ledger,
+
+    recv LedgerMsg {
+        Mint { to, amount } uses (mut ledger) {
+            ledger.mint(to, amount)
+        }
+        Balance { owner } -> u256 uses (mut ledger) {
+            hold_through(owner)
+        }
+        Hold { to } -> u256 uses (mut ledger) {
+            ledger.hold(to)
         }
     }
 }
