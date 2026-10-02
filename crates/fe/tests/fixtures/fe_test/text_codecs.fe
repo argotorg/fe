@@ -1,9 +1,22 @@
-// Tests for the `core::text` base64 decoder. Vectors are from RFC 4648
-// section 10.
+// Tests for the `core::text` base64 decoder and base58 codec. Base64
+// vectors are from RFC 4648 section 10, base58 vectors from Bitcoin Core's
+// `base58_encode_decode.json`.
 use core::num::IntDowncast
 use core::ptr::{self, MemBuffer}
 use std::abi::{Bytes, DynString}
 use std::text::{self, TextBuilder}
+
+fn from_hex(_ hex: DynString) -> Bytes {
+    let len = hex.len() / 2
+    let buffer = MemBuffer::alloc(len)
+    let mut i: u256 = 0
+    while i < len {
+        let byte = text::parse_hex_uint(hex.slice(start: 2 * i, len: 2)).unwrap()
+        *ptr::offset_bytes(buffer.ptr(), i) = byte.downcast_truncate()
+        i += 1
+    }
+    Bytes::from_payload(source: buffer.span())
+}
 
 fn to_hex(_ bytes: Bytes) -> DynString {
     let mut builder = TextBuilder::new()
@@ -69,4 +82,63 @@ fn base64_rejects() {
     // Nonzero bits under the padding.
     assert!(text::decode_base64("Zh==").is_none())
     assert!(text::decode_base64("Zm9=").is_none())
+}
+
+fn base58_roundtrip(_ hex: DynString, _ encoded: DynString) -> bool {
+    let data = from_hex(hex)
+    text::base58(data.payload_span()) == encoded && text::decode_base58(encoded).unwrap() == data
+}
+
+#[test]
+fn base58_bitcoin_vectors() {
+    assert!(base58_roundtrip("", ""))
+    assert!(base58_roundtrip("61", "2g"))
+    assert!(base58_roundtrip("626262", "a3gV"))
+    assert!(base58_roundtrip("636363", "aPEr"))
+    assert!(
+        base58_roundtrip(
+            "73696d706c792061206c6f6e6720737472696e67",
+            "2cFupjhnEsSn59qHXstmK2ffpLv2",
+        ),
+    )
+    assert!(
+        base58_roundtrip(
+            "00eb15231dfceb60925886b67d065299925915aeb172c06647",
+            "1NS17iag9jJgTHD1VXjvLCEnZuQ3rJDE9L",
+        ),
+    )
+    assert!(base58_roundtrip("516b6fcd0f", "ABnLTmg"))
+    assert!(base58_roundtrip("bf4f89001e670274dd", "3SEo3LWLoPntC"))
+    assert!(base58_roundtrip("572e4794", "3EFU7m"))
+    assert!(base58_roundtrip("ecac89cad93923c02321", "EJDM8drfXA6uyA"))
+    assert!(base58_roundtrip("10c8511e", "Rt5zm"))
+    assert!(base58_roundtrip("00000000000000000000", "1111111111"))
+    assert!(
+        base58_roundtrip(
+            "000111d38e5fc9071ffcd20b4a763cc9ae4f252bb4e48fd66a835e252ada93ff480d6dd43dc62a641155a5",
+            "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz",
+        ),
+    )
+}
+
+#[test]
+fn base58_long_input() {
+    let data = all_bytes()
+    let encoded = text::base58(data.payload_span())
+    assert!(
+        encoded
+            == "1cWB5HCBdLjAuqGGReWE3R3CguuwSjw6RHn39s2yuDRTS5NsBgNiFpWgAnEx6VQi8csexkgYw3mdYrMHr8x9i7aEwP8kZ7vccXWqKDvGv3u1GxFKPuAkn8JCPPGDMf3vMMnbzm6Nh9zh1gcNsMvH3ZNLmP5fSG6DGbbi2tuwMWPthr4boWwCxf7ewSgNQeacyozhKDDQQ1qL5fQFUW52QKUZDZ5fw3KXNQJMcNTcaB723LchjeKun7MuGW5qyCBZYzA1KjofN1gYBV3NqyhQJ3Ns746GNuf9N2pQPmHz4xpnSrrfCvy6TVVz5d4PdrjeshsWQwpZsZGzvbdAdN8MKV5QsBDY",
+    )
+    assert!(text::decode_base58(encoded).unwrap() == data)
+}
+
+#[test]
+fn base58_rejects() {
+    // `0`, `O`, `I` and `l` are not in the alphabet, nor is anything else.
+    assert!(text::decode_base58("0").is_none())
+    assert!(text::decode_base58("1O").is_none())
+    assert!(text::decode_base58("2I").is_none())
+    assert!(text::decode_base58("l1").is_none())
+    assert!(text::decode_base58("2g ").is_none())
+    assert!(text::decode_base58("2g+").is_none())
 }
