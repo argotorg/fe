@@ -79,35 +79,35 @@ func private %test_ref_is_not_a_copy() {
         jump block4;
 
     block3:
-        v29.*i8 = evm_malloc 64.i256;
-        v30.i256 = ptr_to_int v29 i256;
-        mstore v30 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        (v33.i256, v34.i1) = uaddo v30 32.i256;
-        br v34 block16 block17;
+        v27.*i8 = evm_malloc 64.i256;
+        v28.i256 = ptr_to_int v27 i256;
+        mstore v28 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        (v31.i256, v32.i1) = uaddo v28 32.i256;
+        br v32 block16 block17;
 
     block4:
-        v41.i256 = mload v8 i256;
-        v42.i256 = add v8 32.i256;
-        v43.i256 = mload v42 i256;
-        br_table v43 block19 (0.i256 block20) (1.i256 block21) (2.i256 block22) (3.i256 block23) (4.i256 block24) (5.i256 block25);
+        v39.i256 = mload v8 i256;
+        v40.i256 = add v8 32.i256;
+        v41.i256 = mload v40 i256;
+        br_table v41 block19 (0.i256 block20) (1.i256 block21) (2.i256 block22) (3.i256 block23) (4.i256 block24) (5.i256 block25);
 
     block5:
         jump block7;
 
     block6:
-        v54.*i8 = evm_malloc 64.i256;
-        v55.i256 = ptr_to_int v54 i256;
-        mstore v55 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        (v57.i256, v58.i1) = uaddo v55 32.i256;
-        br v58 block16 block26;
+        v50.*i8 = evm_malloc 64.i256;
+        v51.i256 = ptr_to_int v50 i256;
+        mstore v51 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        (v53.i256, v54.i1) = uaddo v51 32.i256;
+        br v54 block16 block26;
 
     block7:
         return;
 
     block8:
-        v25.i256 = phi (v17 block10) (v18 block11) (v19 block12) (v20 block13) (v21 block14) (v24 block15);
-        v26.i1 = eq v25 10.i256;
-        br v26 block2 block3;
+        v23.i256 = phi (v17 block10) (v18 block11) (v19 block12) (v20 block13) (v21 block14) (v22 block15);
+        v24.i1 = eq v23 10.i256;
+        br v24 block2 block3;
 
     block9:
         unreachable;
@@ -133,10 +133,7 @@ func private %test_ref_is_not_a_copy() {
         jump block8;
 
     block15:
-        v22.*i8 = evm_malloc 32.i256;
-        v23.i256 = ptr_to_int v22 i256;
-        evm_code_copy v23 v9 32.i256;
-        v24.i256 = mload v23 i256;
+        v22.i256 = evm_code_load v9;
         jump block8;
 
     block16:
@@ -145,47 +142,44 @@ func private %test_ref_is_not_a_copy() {
         evm_revert 0.i256 36.i256;
 
     block17:
-        mstore v33 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
-        evm_revert v30 36.i256;
+        mstore v31 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
+        evm_revert v28 36.i256;
 
     block18:
-        v52.i256 = phi (v44 block20) (v45 block21) (v46 block22) (v47 block23) (v48 block24) (v51 block25);
-        v53.i1 = eq v52 20.i256;
-        br v53 block5 block6;
+        v48.i256 = phi (v42 block20) (v43 block21) (v44 block22) (v45 block23) (v46 block24) (v47 block25);
+        v49.i1 = eq v48 20.i256;
+        br v49 block5 block6;
 
     block19:
         unreachable;
 
     block20:
-        v44.i256 = mload v41 i256;
+        v42.i256 = mload v39 i256;
         jump block18;
 
     block21:
-        v45.i256 = mload v41 i256;
+        v43.i256 = mload v39 i256;
         jump block18;
 
     block22:
-        v46.i256 = evm_sload v41;
+        v44.i256 = evm_sload v39;
         jump block18;
 
     block23:
-        v47.i256 = evm_tload v41;
+        v45.i256 = evm_tload v39;
         jump block18;
 
     block24:
-        v48.i256 = evm_calldata_load v41;
+        v46.i256 = evm_calldata_load v39;
         jump block18;
 
     block25:
-        v49.*i8 = evm_malloc 32.i256;
-        v50.i256 = ptr_to_int v49 i256;
-        evm_code_copy v50 v41 32.i256;
-        v51.i256 = mload v50 i256;
+        v47.i256 = evm_code_load v39;
         jump block18;
 
     block26:
-        mstore v57 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
-        evm_revert v55 36.i256;
+        mstore v53 26959946667150639794667015087019630673637144422540572481103610249216.i256 i256;
+        evm_revert v51 36.i256;
 }
 
 

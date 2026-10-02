@@ -47,14 +47,14 @@ use sonatina_ir::{
         evm::{
             EvmAddMod, EvmAddress, EvmBalance, EvmBaseFee, EvmBlobBaseFee, EvmBlobHash,
             EvmBlockHash, EvmByte, EvmCall, EvmCallValue, EvmCalldataCopy, EvmCalldataLoad,
-            EvmCalldataSize, EvmCaller, EvmChainId, EvmClz, EvmCodeCopy, EvmCodeSize, EvmCoinBase,
-            EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmExtCodeCopy, EvmExtCodeHash,
-            EvmExtCodeSize, EvmGas, EvmGasLimit, EvmGasPrice, EvmInvalid, EvmKeccak256, EvmLog0,
-            EvmLog1, EvmLog2, EvmLog3, EvmLog4, EvmMalloc, EvmMcopy, EvmMsize, EvmMstore8,
-            EvmMulMod, EvmNumber, EvmOrigin, EvmPrevRandao, EvmReturn, EvmReturnDataCopy,
-            EvmReturnDataSize, EvmRevert, EvmSdiv, EvmSelfBalance, EvmSelfDestruct, EvmSignExtend,
-            EvmSload, EvmSmod, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp, EvmTload,
-            EvmTstore, EvmUdiv, EvmUmod,
+            EvmCalldataSize, EvmCaller, EvmChainId, EvmClz, EvmCodeCopy, EvmCodeLoad, EvmCodeSize,
+            EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmExtCodeCopy,
+            EvmExtCodeHash, EvmExtCodeSize, EvmGas, EvmGasLimit, EvmGasPrice, EvmInvalid,
+            EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4, EvmMalloc, EvmMcopy,
+            EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin, EvmPrevRandao, EvmReturn,
+            EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSdiv, EvmSelfBalance,
+            EvmSelfDestruct, EvmSignExtend, EvmSload, EvmSmod, EvmSstore, EvmStaticCall, EvmStop,
+            EvmTimestamp, EvmTload, EvmTstore, EvmUdiv, EvmUmod,
         },
         logic::{And, Not, Or, Xor},
     },
@@ -4781,21 +4781,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 EvmCalldataLoad::new(self.module.required_inst::<EvmCalldataLoad>()?, addr),
                 Type::I256,
             )),
-            AddressSpaceKind::Code => {
-                let len = self.fb.make_imm_value(I256::from(32u64));
-                let ptr = self.allocate_bytes(len, Type::I8)?;
-                let ptr = self.coerce_value_to_ty(ptr, Type::I256)?;
-                self.fb.insert_inst_no_result(EvmCodeCopy::new(
-                    self.module.required_inst::<EvmCodeCopy>()?,
-                    ptr,
-                    addr,
-                    len,
-                ));
-                Ok(self.fb.insert_inst(
-                    Mload::new(self.module.inst_set(), ptr, Type::I256),
-                    Type::I256,
-                ))
-            }
+            AddressSpaceKind::Code => Ok(self.fb.insert_inst(
+                EvmCodeLoad::new(self.module.required_inst::<EvmCodeLoad>()?, addr),
+                Type::I256,
+            )),
         }
     }
 

@@ -184,9 +184,9 @@ func private %bump(v0.objref<@layout_2>, v1.i256) -> i256 {
         br_table v33 block3 (0.i256 block4) (1.i256 block5) (2.i256 block6) (3.i256 block7) (4.i256 block8) (5.i256 block9);
 
     block2:
-        v44.i256 = phi (v36 block4) (v37 block5) (v38 block6) (v39 block7) (v40 block8) (v43 block9);
-        (v46.i256, v47.i1) = uaddo v44 v1;
-        br v47 block10 block11;
+        v42.i256 = phi (v36 block4) (v37 block5) (v38 block6) (v39 block7) (v40 block8) (v41 block9);
+        (v44.i256, v45.i1) = uaddo v42 v1;
+        br v45 block10 block11;
 
     block3:
         unreachable;
@@ -212,10 +212,7 @@ func private %bump(v0.objref<@layout_2>, v1.i256) -> i256 {
         jump block2;
 
     block9:
-        v41.*i8 = evm_malloc 32.i256;
-        v42.i256 = ptr_to_int v41 i256;
-        evm_code_copy v42 v31 32.i256;
-        v43.i256 = mload v42 i256;
+        v41.i256 = evm_code_load v31;
         jump block2;
 
     block10:
@@ -224,83 +221,80 @@ func private %bump(v0.objref<@layout_2>, v1.i256) -> i256 {
         evm_revert 0.i256 36.i256;
 
     block11:
-        v52.i256 = mload v28 i256;
-        v53.i256 = add v28 32.i256;
-        v54.i256 = mload v53 i256;
-        br_table v54 block13 (0.i256 block14) (1.i256 block15) (2.i256 block16) (3.i256 block17);
+        v50.i256 = mload v28 i256;
+        v51.i256 = add v28 32.i256;
+        v52.i256 = mload v51 i256;
+        br_table v52 block13 (0.i256 block14) (1.i256 block15) (2.i256 block16) (3.i256 block17);
 
     block12:
-        v56.objref<i256> = obj.proj v0 0.i256;
-        v57.i256 = obj.load v56;
+        v54.objref<i256> = obj.proj v0 0.i256;
+        v55.i256 = obj.load v54;
+        v56.i256 = mload v55 i256;
+        v57.i256 = add v55 32.i256;
         v58.i256 = mload v57 i256;
-        v59.i256 = add v57 32.i256;
-        v60.i256 = mload v59 i256;
-        v61.i1 = eq v60 1.i256;
-        v62.i1 = eq v60 2.i256;
-        v63.i1 = eq v60 3.i256;
-        v64.i1 = or v62 v63;
-        v65.i256 = zext v61 i256;
-        v66.i256 = sub 0.i256 0.i256;
-        v67.i256 = mul v65 v66;
-        v68.i256 = add 0.i256 v67;
-        v69.i256 = zext v64 i256;
-        v70.i256 = sub 0.i256 0.i256;
-        v71.i256 = mul v69 v70;
-        v72.i256 = add v68 v71;
-        v73.i256 = add v58 v72;
-        br_table v60 block19 (0.i256 block20) (1.i256 block21) (2.i256 block22) (3.i256 block23) (4.i256 block24) (5.i256 block25);
+        v59.i1 = eq v58 1.i256;
+        v60.i1 = eq v58 2.i256;
+        v61.i1 = eq v58 3.i256;
+        v62.i1 = or v60 v61;
+        v63.i256 = zext v59 i256;
+        v64.i256 = sub 0.i256 0.i256;
+        v65.i256 = mul v63 v64;
+        v66.i256 = add 0.i256 v65;
+        v67.i256 = zext v62 i256;
+        v68.i256 = sub 0.i256 0.i256;
+        v69.i256 = mul v67 v68;
+        v70.i256 = add v66 v69;
+        v71.i256 = add v56 v70;
+        br_table v58 block19 (0.i256 block20) (1.i256 block21) (2.i256 block22) (3.i256 block23) (4.i256 block24) (5.i256 block25);
 
     block13:
         unreachable;
 
     block14:
-        mstore v52 v46 i256;
+        mstore v50 v44 i256;
         jump block12;
 
     block15:
-        mstore v52 v46 i256;
+        mstore v50 v44 i256;
         jump block12;
 
     block16:
-        evm_sstore v52 v46;
+        evm_sstore v50 v44;
         jump block12;
 
     block17:
-        evm_tstore v52 v46;
+        evm_tstore v50 v44;
         jump block12;
 
     block18:
-        v82.i256 = phi (v74 block20) (v75 block21) (v76 block22) (v77 block23) (v78 block24) (v81 block25);
-        return v82;
+        v78.i256 = phi (v72 block20) (v73 block21) (v74 block22) (v75 block23) (v76 block24) (v77 block25);
+        return v78;
 
     block19:
         unreachable;
 
     block20:
-        v74.i256 = mload v73 i256;
+        v72.i256 = mload v71 i256;
         jump block18;
 
     block21:
-        v75.i256 = mload v73 i256;
+        v73.i256 = mload v71 i256;
         jump block18;
 
     block22:
-        v76.i256 = evm_sload v73;
+        v74.i256 = evm_sload v71;
         jump block18;
 
     block23:
-        v77.i256 = evm_tload v73;
+        v75.i256 = evm_tload v71;
         jump block18;
 
     block24:
-        v78.i256 = evm_calldata_load v73;
+        v76.i256 = evm_calldata_load v71;
         jump block18;
 
     block25:
-        v79.*i8 = evm_malloc 32.i256;
-        v80.i256 = ptr_to_int v79 i256;
-        evm_code_copy v80 v73 32.i256;
-        v81.i256 = mload v80 i256;
+        v77.i256 = evm_code_load v71;
         jump block18;
 }
 
