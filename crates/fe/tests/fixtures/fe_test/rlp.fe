@@ -1,0 +1,210 @@
+// Tests for `std::evm::rlp`. Vectors are from the Ethereum RLP
+// specification: https://ethereum.org/developers/docs/data-structures-and-encoding/rlp
+use core::num::IntDowncast
+use core::ptr::{self, MemBuffer, MemSpan}
+use std::abi::{Bytes, DynString}
+use std::evm::Address
+use std::evm::rlp::{self, Item}
+use std::text::{self, TextBuilder}
+
+const LOREM_HEX: DynString = "4c6f72656d20697073756d20646f6c6f722073697420616d65742c20636f6e7365637465747572206164697069736963696e6720656c6974"
+
+fn from_hex(_ hex: DynString) -> Bytes {
+    let len = hex.len() / 2
+    let buffer = MemBuffer::alloc(len)
+    let mut i: u256 = 0
+    while i < len {
+        let byte = text::parse_hex_uint(hex.slice(start: 2 * i, len: 2)).unwrap()
+        *ptr::offset_bytes(buffer.ptr(), i) = byte.downcast_truncate()
+        i += 1
+    }
+    Bytes::from_payload(source: buffer.span())
+}
+
+fn to_hex(_ bytes: Bytes) -> DynString {
+    let mut builder = TextBuilder::new()
+    let mut i: u256 = 0
+    while i < bytes.len() {
+        builder = builder.push(text::hex(bytes.byte_at(i) as u256, 1))
+        i += 1
+    }
+    builder.finish()
+}
+
+fn span_hex(_ span: MemSpan) -> DynString {
+    to_hex(Bytes::from_payload(source: span))
+}
+
+fn encode_str(_ s: DynString) -> Bytes {
+    rlp::encode_bytes(s.payload_span())
+}
+
+fn decode_hex(_ hex: DynString) -> Option<Item> {
+    rlp::decode(from_hex(hex).payload_span())
+}
+
+#[test]
+fn encode_strings() {
+    assert!(to_hex(encode_str("dog")) == "83646f67")
+    assert!(to_hex(encode_str("")) == "80")
+    assert!(to_hex(rlp::encode_bytes(from_hex("00").payload_span())) == "00")
+    assert!(to_hex(rlp::encode_bytes(from_hex("0f").payload_span())) == "0f")
+    assert!(to_hex(rlp::encode_bytes(from_hex("80").payload_span())) == "8180")
+    assert!(to_hex(rlp::encode_bytes(from_hex("0400").payload_span())) == "820400")
+    // 55 bytes is the longest short string, 56 bytes the shortest long one.
+    let lorem = from_hex(LOREM_HEX)
+    assert!(lorem.len() == 56)
+    assert!(
+        to_hex(rlp::encode_bytes(lorem.payload_span().truncate(len: 55)))
+            == text::concat(["b7", LOREM_HEX.slice(start: 0, len: 110)]),
+    )
+    assert!(to_hex(rlp::encode_bytes(lorem.payload_span())) == text::concat(["b838", LOREM_HEX]))
+    let long = rlp::encode_bytes(MemBuffer::alloc(1024).span())
+    assert!(long.len() == 1027)
+    assert!(span_hex(long.payload_span().truncate(len: 3)) == "b90400")
+}
+
+#[test]
+fn encode_scalars() {
+    assert!(to_hex(rlp::encode_uint(0)) == "80")
+    assert!(to_hex(rlp::encode_uint(15)) == "0f")
+    assert!(to_hex(rlp::encode_uint(0x7f)) == "7f")
+    assert!(to_hex(rlp::encode_uint(0x80)) == "8180")
+    assert!(to_hex(rlp::encode_uint(1024)) == "820400")
+    assert!(
+        to_hex(
+                rlp::encode_uint(
+                    0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+                ),
+            )
+            == "a0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    )
+    let address = Address { inner: 0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed }
+    assert!(to_hex(rlp::encode_address(address)) == "945aaeb6053f3e94c9b9a09f33669435e7ef1beaed")
+    let zero = Address { inner: 0 }
+    assert!(to_hex(rlp::encode_address(zero)) == "940000000000000000000000000000000000000000")
+    assert!(to_hex(rlp::encode_bool(true)) == "01")
+    assert!(to_hex(rlp::encode_bool(false)) == "80")
+}
+
+#[test(should_revert)]
+fn encode_noncanonical_address_reverts() {
+    let _ = rlp::encode_address(Address { inner: 1 << 160 })
+}
+
+#[test]
+fn encode_lists() {
+    let pair = rlp::encode_list([encode_str("cat"), encode_str("dog")])
+    assert!(to_hex(pair) == "c88363617483646f67")
+    let empty: [Bytes; 0] = []
+    let nil = rlp::encode_list(empty)
+    assert!(to_hex(nil) == "c0")
+    // The set theoretical representation of three, [ [], [[]], [ [], [[]] ] ].
+    let one = rlp::encode_list([nil])
+    let two = rlp::encode_list([nil, one])
+    assert!(to_hex(rlp::encode_list([nil, one, two])) == "c7c0c1c0c3c0c1c0")
+    let lorem = rlp::encode_bytes(from_hex(LOREM_HEX).payload_span())
+    assert!(
+        to_hex(rlp::encode_list([lorem, encode_str("dog")]))
+            == text::concat(["f83eb838", LOREM_HEX, "83646f67"]),
+    )
+}
+
+#[test]
+fn decode_strings() {
+    let dog = decode_hex("83646f67").unwrap()
+    assert!(!dog.is_list())
+    assert!(span_hex(dog.as_bytes().unwrap()) == "646f67")
+    assert!(decode_hex("80").unwrap().as_bytes().unwrap().is_empty())
+    assert!(span_hex(decode_hex("00").unwrap().as_bytes().unwrap()) == "00")
+    assert!(span_hex(decode_hex("7f").unwrap().payload()) == "7f")
+    let lorem = decode_hex(text::concat(["b838", LOREM_HEX])).unwrap()
+    assert!(span_hex(lorem.as_bytes().unwrap()) == LOREM_HEX)
+    assert!(dog.as_uint().unwrap() == 0x646f67)
+    assert!(dog.items().is_none())
+}
+
+#[test]
+fn decode_scalars() {
+    assert!(decode_hex("80").unwrap().as_uint().unwrap() == 0)
+    assert!(decode_hex("0f").unwrap().as_uint().unwrap() == 15)
+    assert!(decode_hex("820400").unwrap().as_uint().unwrap() == 1024)
+    let max = rlp::encode_uint(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
+    assert!(
+        rlp::decode(max.payload_span()).unwrap().as_uint().unwrap()
+            == 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+    )
+    let address = Address { inner: 0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed }
+    let encoded = rlp::encode_address(address)
+    assert!(rlp::decode(encoded.payload_span()).unwrap().as_address().unwrap() == address)
+    assert!(decode_hex("01").unwrap().as_bool().unwrap())
+    assert!(!decode_hex("80").unwrap().as_bool().unwrap())
+}
+
+#[test]
+fn decode_scalar_rejects() {
+    // Integers with leading zero bytes, including a lone zero byte.
+    assert!(decode_hex("00").unwrap().as_uint().is_none())
+    assert!(decode_hex("820004").unwrap().as_uint().is_none())
+    // More than 32 bytes.
+    assert!(
+        decode_hex("a1010000000000000000000000000000000000000000000000000000000000000000")
+            .unwrap()
+            .as_uint()
+            .is_none(),
+    )
+    assert!(decode_hex("83646f67").unwrap().as_address().is_none())
+    assert!(decode_hex("02").unwrap().as_bool().is_none())
+    assert!(decode_hex("c0").unwrap().as_uint().is_none())
+    assert!(decode_hex("c0").unwrap().as_bytes().is_none())
+}
+
+#[test]
+fn decode_lists() {
+    let pair = decode_hex("c88363617483646f67").unwrap()
+    assert!(pair.is_list())
+    assert!(pair.as_bytes().is_none())
+    let items = pair.items().unwrap()
+    assert!(items.len() == 2)
+    assert!(span_hex(items[0].as_bytes().unwrap()) == "636174")
+    assert!(span_hex(items[1].as_bytes().unwrap()) == "646f67")
+
+    assert!(decode_hex("c0").unwrap().items().unwrap().len() == 0)
+
+    let three = decode_hex("c7c0c1c0c3c0c1c0").unwrap().items().unwrap()
+    assert!(three.len() == 3)
+    assert!(three[0].items().unwrap().len() == 0)
+    assert!(three[1].items().unwrap().len() == 1)
+    let last = three[2].items().unwrap()
+    assert!(last.len() == 2)
+    assert!(last[1].items().unwrap()[0].items().unwrap().len() == 0)
+
+    let encoded = text::concat(["f83eb838", LOREM_HEX, "83646f67"])
+    let long = decode_hex(encoded).unwrap().items().unwrap()
+    assert!(long.len() == 2)
+    assert!(span_hex(long[0].as_bytes().unwrap()) == LOREM_HEX)
+    assert!(span_hex(long[1].as_bytes().unwrap()) == "646f67")
+}
+
+#[test]
+fn decode_rejects() {
+    // Empty, truncated and trailing input.
+    assert!(rlp::decode(MemSpan::empty()).is_none())
+    assert!(decode_hex("83646f").is_none())
+    assert!(decode_hex("83646f6700").is_none())
+    assert!(decode_hex("b838").is_none())
+    assert!(decode_hex("b9").is_none())
+    // A single byte below 0x80 in string form.
+    assert!(decode_hex("8100").is_none())
+    assert!(decode_hex("817f").is_none())
+    // Long form for a payload shorter than 56 bytes.
+    assert!(decode_hex("b803646f67").is_none())
+    assert!(decode_hex("f800").is_none())
+    // Leading zero byte in a long-form length.
+    assert!(decode_hex(text::concat(["b90038", LOREM_HEX])).is_none())
+    // Lists whose payload is not a sequence of canonical items: `decode`
+    // only checks the outer item, `items` the rest.
+    assert!(decode_hex("c28100").unwrap().items().is_none())
+    assert!(decode_hex("c3836461").unwrap().items().is_none())
+    assert!(decode_hex("c3c28100").unwrap().items().unwrap()[0].items().is_none())
+}
