@@ -611,6 +611,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                     &value_class,
                     provider_root_space(&provider, &root_class),
                     false,
+                    crate::runtime::RefView::Whole,
                 );
                 if let Some(selected) =
                     BoundaryMatcher::selected_class(self.env.db(), &class, boundary)
@@ -635,6 +636,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                     &value_class,
                     AddressSpaceKind::Memory,
                     false,
+                    crate::runtime::RefView::Whole,
                 );
                 if let Some(selected) =
                     BoundaryMatcher::selected_class(self.env.db(), &class, boundary)

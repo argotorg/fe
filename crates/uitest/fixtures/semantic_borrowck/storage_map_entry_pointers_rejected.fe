@@ -1,0 +1,65 @@
+use core::ptr
+use std::evm::{RawStorage, StorageMap, StorPtr}
+
+struct Position {
+    owner: u256,
+    debt: u256,
+}
+
+fn bump_debt() uses (p: mut Position) {
+    p.debt += 1
+}
+
+pub struct Book {
+    pub positions: StorageMap<u256, Position>,
+    pub total: u256,
+}
+
+msg BookMsg {
+    #[selector = 1]
+    RawPointer { slot: u256 } -> u256,
+    #[selector = 2]
+    MaybeRawPointer { key: u256, slot: u256, raw_slot: bool } -> u256,
+    #[selector = 3]
+    EntryPointer { key: u256 } -> u256,
+}
+
+pub contract Ledger {
+    mut book: Book,
+
+    recv BookMsg {
+        // Rejected: a pointer built at an arbitrary slot may name the slot of
+        // the borrowed field.
+        RawPointer { slot } -> u256 uses (mut book, raw: mut RawStorage) {
+            let total = mut book.total
+            let mut p: StorPtr<Position> = raw.stor_ptr(slot)
+            with (p) { bump_debt() }
+            total += 1
+            total
+        }
+
+        // Rejected: the handle is an entry pointer on one path only.
+        MaybeRawPointer { key, slot, raw_slot } -> u256 uses (mut book, raw: mut RawStorage) {
+            let cell: *StorPtr<Position> = ptr::alloc<StorPtr<Position>>()
+            if raw_slot {
+                *cell = raw.stor_ptr(slot)
+            } else {
+                *cell = book.positions.mut_ptr(key)
+            }
+            let total = mut book.total
+            let mut p = *cell
+            with (p) { bump_debt() }
+            total += 1
+            total
+        }
+
+        // Accepted: a map entry never overlaps a contract field.
+        EntryPointer { key } -> u256 uses (mut book) {
+            let total = mut book.total
+            let mut p = book.positions.mut_ptr(key)
+            with (p) { bump_debt() }
+            total += 1
+            total
+        }
+    }
+}

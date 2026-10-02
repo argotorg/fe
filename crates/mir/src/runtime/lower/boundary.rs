@@ -216,7 +216,7 @@ impl<'db> BoundaryShapeMatcher<'db> {
                 RuntimeClassShape::Ref {
                     pointee: actual_pointee,
                     kind: RefShapeKind::Provider(space),
-                    view: RefView::Whole,
+                    view: RefView::Whole | RefView::StorageLane(_),
                 } => provider_spaces.contains(space) && **actual_pointee == *pointee,
                 RuntimeClassShape::RawAddr {
                     pointee: Some(actual_pointee),
@@ -226,7 +226,7 @@ impl<'db> BoundaryShapeMatcher<'db> {
                 RuntimeClassShape::Scalar(_)
                 | RuntimeClassShape::AggregateValue { .. }
                 | RuntimeClassShape::Ref {
-                    view: RefView::EnumVariant(_),
+                    view: RefView::EnumVariant(_) | RefView::StorageLane(_),
                     ..
                 } => false,
             },
@@ -652,13 +652,13 @@ impl BoundaryMatcher {
                 RuntimeClass::Ref {
                     pointee: actual_pointee,
                     kind: RefKind::Provider { space, .. },
-                    view: RefView::Whole,
+                    view: RefView::Whole | RefView::StorageLane(_),
                 } => {
                     allow.provider_spaces.contains(space)
                         && runtime_classes_equivalent(db, actual_pointee, pointee)
                 }
                 RuntimeClass::Ref {
-                    view: RefView::EnumVariant(_),
+                    view: RefView::EnumVariant(_) | RefView::StorageLane(_),
                     ..
                 } => false,
                 RuntimeClass::RawAddr {

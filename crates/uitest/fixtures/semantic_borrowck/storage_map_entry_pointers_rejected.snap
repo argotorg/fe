@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/storage_map_entry_pointers_rejected.fe
+---
+error[16-0001]: borrow conflict in `fn Ledger::recv[0][0]`
+   ┌─ storage_map_entry_pointers_rejected.fe:36:24
+   │
+34 │             let total = mut book.total
+   │                         -------------- borrow created here
+35 │             let mut p: StorPtr<Position> = raw.stor_ptr(slot)
+36 │             with (p) { bump_debt() }
+   │                        ^^^^^^^^^^^ cannot immutably borrow this place while a mutable borrow is active
+
+error[16-0001]: borrow conflict in `fn Ledger::recv[0][1]`
+   ┌─ storage_map_entry_pointers_rejected.fe:51:24
+   │
+49 │             let total = mut book.total
+   │                         -------------- borrow created here
+50 │             let mut p = *cell
+51 │             with (p) { bump_debt() }
+   │                        ^^^^^^^^^^^ cannot immutably borrow this place while a mutable borrow is active

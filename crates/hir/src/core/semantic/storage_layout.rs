@@ -1,4 +1,7 @@
-use common::indexmap::IndexMap;
+use common::{
+    indexmap::IndexMap,
+    layout::{StorageFieldShape, StorageLane, storage_fields_layout},
+};
 use num_bigint::{BigInt, BigUint};
 use num_traits::ToPrimitive;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -175,7 +178,26 @@ pub struct ContractLayoutEntry<'db> {
     pub ty: TyId<'db>,
     pub address_space: ProviderAddressSpace,
     pub value: ContractLayoutValue<'db>,
+    /// For a scalar packed with others into one slot, its bytes in the slot.
+    pub lane: Option<ContractLayoutLane>,
     pub kind: ContractLayoutEntryKind,
+}
+
+/// The bytes of a storage slot that hold a packed scalar, counted from the
+/// low-order end like Solidity's `offset`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub struct ContractLayoutLane {
+    pub byte_offset: u8,
+    pub byte_width: u8,
+}
+
+impl From<StorageLane> for ContractLayoutLane {
+    fn from(lane: StorageLane) -> Self {
+        Self {
+            byte_offset: lane.byte_offset as u8,
+            byte_width: lane.byte_width as u8,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -1147,6 +1169,9 @@ struct WalkOutput<'db> {
     inline_span: usize,
     inline_leaves: Vec<InlineLayoutLeaf<'db>>,
     events: Vec<WalkEvent<'db>>,
+    /// The bytes of a scalar that packs with its neighbours in a struct or
+    /// tuple; `None` for values that take whole slots.
+    packable_bytes: Option<u32>,
 }
 
 impl<'db> WalkOutput<'db> {
@@ -1155,22 +1180,48 @@ impl<'db> WalkOutput<'db> {
             inline_span: 0,
             inline_leaves: Vec::new(),
             events: Vec::new(),
+            packable_bytes: None,
         }
     }
 
-    fn scalar(ty: TyId<'db>, place: StoragePlace<'db>, dimensions: &[usize]) -> Self {
+    fn scalar(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        place: StoragePlace<'db>,
+        dimensions: &[usize],
+    ) -> Self {
         Self {
             inline_span: 1,
             inline_leaves: vec![InlineLayoutLeaf {
                 place,
                 ty,
                 offset: 0,
+                lane: None,
                 dimensions: dimensions.to_vec(),
                 strides: vec![0; dimensions.len()],
                 kind: InlineLayoutLeafKind::Field,
             }],
             events: Vec::new(),
+            packable_bytes: storage_packable_bytes(db, ty),
         }
+    }
+}
+
+/// The bytes a scalar struct or tuple field takes in a packed storage slot:
+/// booleans and integers narrower than a word, like Solidity's value types.
+/// Everything else takes whole slots. Runtime lowering classifies scalars
+/// the same way (`mir::runtime::storage_scalar_bytes`).
+fn storage_packable_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<u32> {
+    let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) else {
+        return None;
+    };
+    match prim {
+        PrimTy::Bool | PrimTy::U8 | PrimTy::I8 => Some(1),
+        PrimTy::U16 | PrimTy::I16 => Some(2),
+        PrimTy::U32 | PrimTy::I32 => Some(4),
+        PrimTy::U64 | PrimTy::I64 => Some(8),
+        PrimTy::U128 | PrimTy::I128 => Some(16),
+        _ => None,
     }
 }
 
@@ -1185,6 +1236,8 @@ struct InlineLayoutLeaf<'db> {
     place: StoragePlace<'db>,
     ty: TyId<'db>,
     offset: usize,
+    /// The bytes of slot `offset` holding a packed scalar.
+    lane: Option<ContractLayoutLane>,
     dimensions: Vec<usize>,
     strides: Vec<usize>,
     kind: InlineLayoutLeafKind,
@@ -1626,7 +1679,7 @@ impl<'db> FieldCollector<'db> {
             self.visiting.remove(&(instantiation.ty, place));
             output
         } else {
-            WalkOutput::scalar(instantiation.ty, place, dimensions)
+            WalkOutput::scalar(self.db, instantiation.ty, place, dimensions)
         };
         self.emit_reached_concrete_uses(instantiation, reached_start, mode);
         output
@@ -1662,6 +1715,7 @@ impl<'db> FieldCollector<'db> {
                 inline_span: 0,
                 inline_leaves: Vec::new(),
                 events: vec![event],
+                packable_bytes: None,
             };
         }
         self.reached_concrete_sites.push(ConcreteRootSite {
@@ -1671,7 +1725,7 @@ impl<'db> FieldCollector<'db> {
             default_space: self.active_space,
         });
         if !self.visiting.insert((ty, place.clone())) {
-            return WalkOutput::scalar(ty, place, dimensions);
+            return WalkOutput::scalar(self.db, ty, place, dimensions);
         }
 
         let provider = ty
@@ -1773,6 +1827,7 @@ impl<'db> FieldCollector<'db> {
                 ),
                 dimensions,
                 mode,
+                true,
             )
         } else if ty.is_array(self.db) {
             self.walk_array(views, parent_instance, place.clone(), dimensions, mode)
@@ -1792,7 +1847,7 @@ impl<'db> FieldCollector<'db> {
             if inline_span == 0 {
                 WalkOutput::empty()
             } else {
-                WalkOutput::scalar(ty, place, dimensions)
+                WalkOutput::scalar(self.db, ty, place, dimensions)
             }
         }
     }
@@ -1939,37 +1994,84 @@ impl<'db> FieldCollector<'db> {
         }
     }
 
+    /// Lays out a struct's or tuple's fields (`packed`) or an enum payload.
+    /// Packed sequences place narrow scalars like Solidity places struct
+    /// members, see `common::layout::storage_fields_layout`.
     fn walk_sequence(
         &mut self,
         items: impl IntoIterator<Item = (LayoutInstantiation<'db>, TyId<'db>, StoragePlace<'db>)>,
         dimensions: &[usize],
         mode: WalkMode,
+        packed: bool,
     ) -> WalkOutput<'db> {
+        let outputs: Vec<_> = items
+            .into_iter()
+            .map(|(instantiation, source, place)| {
+                self.walk_instantiation(&instantiation, source, place, dimensions, mode)
+            })
+            .collect();
+        let placements = if packed {
+            let shapes = outputs.iter().map(|output| match output.packable_bytes {
+                Some(bytes) => StorageFieldShape::Scalar { bytes },
+                None => StorageFieldShape::Aggregate {
+                    slots: output.inline_span as u64,
+                },
+            });
+            match storage_fields_layout(shapes) {
+                Ok(layout) => Some(layout),
+                Err(_) => {
+                    self.push_error(ContractLayoutError::LayoutExtentOverflow);
+                    return WalkOutput::empty();
+                }
+            }
+        } else {
+            None
+        };
         let mut inline_span = 0usize;
         let mut inline_leaves = Vec::new();
         let mut events = Vec::new();
-        for (instantiation, source, place) in items {
-            let mut output =
-                self.walk_instantiation(&instantiation, source, place, dimensions, mode);
-            let Some(next) = inline_span.checked_add(output.inline_span) else {
+        for (idx, mut output) in outputs.into_iter().enumerate() {
+            let (start, lane) = match &placements {
+                Some(layout) => {
+                    let placement = layout.placements[idx];
+                    let Ok(slot) = usize::try_from(placement.slot) else {
+                        self.push_error(ContractLayoutError::LayoutExtentOverflow);
+                        continue;
+                    };
+                    (slot, placement.lane.map(ContractLayoutLane::from))
+                }
+                None => (inline_span, None),
+            };
+            let Some(end) = start.checked_add(output.inline_span) else {
                 self.push_error(ContractLayoutError::LayoutExtentOverflow);
                 continue;
             };
             for leaf in &mut output.inline_leaves {
-                let Some(offset) = leaf.offset.checked_add(inline_span) else {
+                let Some(offset) = leaf.offset.checked_add(start) else {
                     self.push_error(ContractLayoutError::LayoutExtentOverflow);
                     continue;
                 };
                 leaf.offset = offset;
+                if lane.is_some() {
+                    leaf.lane = lane;
+                }
             }
-            inline_span = next;
+            inline_span = inline_span.max(end);
             inline_leaves.extend(output.inline_leaves);
             events.extend(output.events);
+        }
+        if let Some(layout) = &placements {
+            let Ok(slots) = usize::try_from(layout.slots) else {
+                self.push_error(ContractLayoutError::LayoutExtentOverflow);
+                return WalkOutput::empty();
+            };
+            inline_span = slots;
         }
         WalkOutput {
             inline_span,
             inline_leaves,
             events,
+            packable_bytes: None,
         }
     }
 
@@ -2061,6 +2163,7 @@ impl<'db> FieldCollector<'db> {
                 inline_span: 0,
                 inline_leaves: output.inline_leaves,
                 events: output.events,
+                packable_bytes: None,
             };
         };
         for leaf in &mut output.inline_leaves {
@@ -2070,6 +2173,7 @@ impl<'db> FieldCollector<'db> {
             inline_span,
             inline_leaves: output.inline_leaves,
             events: output.events,
+            packable_bytes: None,
         }
     }
 
@@ -2167,7 +2271,7 @@ impl<'db> FieldCollector<'db> {
                     let field_place = place.with_step(PlaceStep::StructField(field_idx as u32));
                     items.push((inst, source_field, field_place));
                 }
-                let mut output = self.walk_sequence(items, dimensions, mode);
+                let mut output = self.walk_sequence(items, dimensions, mode, true);
                 direct_events.append(&mut output.events);
                 output.events = direct_events;
                 output
@@ -2178,6 +2282,7 @@ impl<'db> FieldCollector<'db> {
                     place: place.clone(),
                     ty,
                     offset: 0,
+                    lane: None,
                     dimensions: dimensions.to_vec(),
                     strides: vec![0; dimensions.len()],
                     kind: InlineLayoutLeafKind::EnumTag,
@@ -2210,7 +2315,9 @@ impl<'db> FieldCollector<'db> {
                             variant_place.with_step(PlaceStep::EnumPayloadField(field_idx as u32));
                         items.push((inst, source_field, field_place));
                     }
-                    let mut output = self.walk_sequence(items, dimensions, mode);
+                    // Enum payloads are not packed: runtime lowering offsets
+                    // payload fields by whole words.
+                    let mut output = self.walk_sequence(items, dimensions, mode, false);
                     max_payload = max_payload.max(output.inline_span);
                     for leaf in &mut output.inline_leaves {
                         let Some(offset) = leaf.offset.checked_add(1) else {
@@ -2231,6 +2338,7 @@ impl<'db> FieldCollector<'db> {
                     inline_span,
                     inline_leaves,
                     events: direct_events,
+                    packable_bytes: None,
                 }
             }
         };
@@ -3380,6 +3488,7 @@ fn inferred_parameter_entry<'db>(
         ty: occurrence_placeholder_ty(db, occurrence).unwrap_or(occurrence.placeholder),
         address_space,
         value,
+        lane: None,
         kind: ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Inferred),
     }
 }
@@ -3421,6 +3530,7 @@ fn allocated_contract_layout_report<'db>(
                 ty: leaf.ty,
                 address_space: field.address_space,
                 value,
+                lane: leaf.lane,
                 kind,
             });
         }
@@ -3435,6 +3545,7 @@ fn allocated_contract_layout_report<'db>(
                 ty: occurrence.ty,
                 address_space: occurrence.space,
                 value: ContractLayoutValue::Scalar(occurrence.value),
+                lane: None,
                 kind: ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Explicit),
             });
         }

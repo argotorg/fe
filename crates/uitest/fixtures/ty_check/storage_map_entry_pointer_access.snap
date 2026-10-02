@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/storage_map_entry_pointer_access.fe
+---
+error[8-0036]: missing effect `Position` required by `bump_debt`
+   ┌─ storage_map_entry_pointer_access.fe:32:16
+   │
+32 │     with (p) { bump_debt() }
+   │                ^^^^^^^^^^^ `bump_debt` requires effect `Position` to be in scope
+   │
+   = provide it with `with (Position = value)` or require it via `uses Position`
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ storage_map_entry_pointer_access.fe:36:17
+   │
+35 │ pub fn bad_mut_ptr_on_immutable_map(_ m: Positions, key: u256) {
+   │                                       - `m` does not provide mutable access
+36 │     let mut p = m.mut_ptr(key)
+   │                 ^ cannot borrow as `mut`

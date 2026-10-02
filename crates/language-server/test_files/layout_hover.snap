@@ -108,3 +108,17 @@ range: 33:6..33:9
 Invalid: an unresolved const is not a `u256` or `usize` layout root
 
 ---
+
+## packed
+range: 44:6..44:11
+
+### Field Layout
+
+#### Storage
+
+- `0` bytes 0..1: `flags.active` (inline field, `bool`)
+- `0` bytes 1..2: `flags.level` (inline field, `u8`)
+- `0` bytes 2..10: `flags.owner_id` (inline field, `u64`)
+- `1`: `flags.balance` (inline field, `u256`)
+
+---

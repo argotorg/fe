@@ -22,7 +22,7 @@ use crate::analysis::{
         FieldIndex, SConst, SemConstScalar, SemConstValue, SemOrigin, SemanticInstance,
         capability::{
             birth::AllocationBirth,
-            external::{ExternalSource, MemoryOffset},
+            external::{AddressProvenance, ExternalSource, MemoryOffset},
             guard::{ChoiceKey, Guard, ValueOccurrence},
             handle::{AddressOccurrence, OpaqueHandleContract, OpaqueHandleRef, OpaqueWriteSite},
             index::{BinderScope, IndexExpr},
@@ -1057,6 +1057,7 @@ impl<'db> Borrowck<'db> {
                         .map(IndexExpr::Iteration)
                         .into_iter()
                         .collect(),
+                    provenance: AddressProvenance::Raw,
                 },
                 guard: Guard::always(&BinderScope::default()),
             },
@@ -1220,6 +1221,7 @@ impl<'db> Borrowck<'db> {
                                         .loops
                                         .arguments(&self.body, *result)
                                         .into_boxed_slice(),
+                                    provenance: AddressProvenance::Raw,
                                 },
                             )),
                             RegionPath::default(),
@@ -1407,6 +1409,7 @@ impl<'db> Borrowck<'db> {
                             .map(IndexExpr::Iteration)
                             .into_iter()
                             .collect(),
+                        provenance: AddressProvenance::Raw,
                     },
                 )),
             };

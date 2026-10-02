@@ -229,6 +229,43 @@ fn classifies_core_and_std_runtime_builtins() {
 }
 
 #[test]
+fn storage_map_entry_handles_require_standard_library_identity() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "storage_map_entry_handles.fe".into(),
+        "fn storagemap_entry_ptr(_ slot: u256) -> u256 { slot }\nfn storagemap_entry_read_ptr(_ slot: u256) -> u256 { slot }\nfn anchor() {}",
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let local = |name: &str| {
+        module
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|ident| ident.data(&db) == name)
+            })
+            .unwrap()
+    };
+    let scope = local("anchor").scope();
+    for name in ["storagemap_entry_ptr", "storagemap_entry_read_ptr"] {
+        // A look-alike function outside std is not trusted.
+        assert!(intrinsic_contract(&db, local(name)).is_none(), "{name}");
+        let trusted =
+            resolve_lib_func_path(&db, scope, &format!("std::evm::storage_map::{name}")).unwrap();
+        let contract = intrinsic_contract(&db, trusted).expect("entry handle contract");
+        assert_eq!(
+            contract.pointer_return,
+            Some(IntrinsicPointerReturn::HashedStorageSlot),
+            "{name}"
+        );
+        assert_eq!(contract.memory, Some(&[][..]), "{name}");
+    }
+}
+
+#[test]
 fn host_import_memory_contracts_require_standard_library_identity() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

@@ -1,0 +1,29 @@
+// Direct conversion of a packed provider reference to a stored native
+// reference is not supported. Projection through a stored aggregate is.
+struct S {
+    a: u8,
+    b: u8,
+    c: u256,
+}
+
+msg M {
+    #[selector = 1]
+    Go {} -> u8,
+}
+
+pub contract C {
+    mut s: S,
+
+    recv M {
+        Go {} -> u8 uses (mut s) {
+            let o = Option::Some(mut s.b)
+            match o {
+                Option::Some(r) => {
+                    r = 5
+                    r
+                }
+                Option::None => 0,
+            }
+        }
+    }
+}

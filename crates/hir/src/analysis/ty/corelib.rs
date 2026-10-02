@@ -122,6 +122,11 @@ pub enum IntrinsicPointerReturn {
     InputPointee,
     InputArrayElem,
     InputMemArrayElem,
+    /// A storage handle whose raw slot is the `u256` input 0, a
+    /// `StorageMap` preimage hash. The value it addresses starts at that
+    /// slot, so it is assumed never to overlap a compiler-allocated
+    /// contract-field slot.
+    HashedStorageSlot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -792,6 +797,20 @@ pub fn intrinsic_contract<'db>(
         return Some(IntrinsicContract {
             pointer_return: None,
             memory: Some(READ_VALUE_0),
+        });
+    }
+    // `StorageMap` entry handles: their slot argument is the map's preimage
+    // hash, computed in the same module and never exposed for arithmetic.
+    if [
+        "std::evm::storage_map::storagemap_entry_ptr",
+        "std::evm::storage_map::storagemap_entry_read_ptr",
+    ]
+    .iter()
+    .any(|path| lib_func_matches(db, func, path))
+    {
+        return Some(IntrinsicContract {
+            pointer_return: Some(IntrinsicPointerReturn::HashedStorageSlot),
+            memory: Some(NO_MEMORY_ACCESSES),
         });
     }
     let pointer_return = if lib_func_matches(db, func, "core::ptr::array_elem") {

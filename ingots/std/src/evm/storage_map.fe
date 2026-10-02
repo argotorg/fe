@@ -1,8 +1,8 @@
-use super::effects::{Address, RawStorage}
+use super::effects::{Address, RawStorage, StorPtr, StorReadPtr}
 use super::crypto::keccak256
-use ingot::evm::ops::{mstore, sload_hashed, sstore_hashed}
-use ingot::evm::word::WordRepr
-use core::{EffectRef, EffectRefMut, ptr}
+use ingot::evm::ops::mstore
+use core::num::IntWord
+use core::ptr
 
 /// Keys that can be written into the mapping preimage for keccak hashing.
 pub trait StorageKey {
@@ -46,7 +46,7 @@ impl StorageKey for u8 {
     }
 
     fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -56,7 +56,7 @@ impl StorageKey for u16 {
     }
 
     fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -66,7 +66,7 @@ impl StorageKey for u32 {
     }
 
     fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -76,7 +76,7 @@ impl StorageKey for u64 {
     }
 
     fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -86,7 +86,7 @@ impl StorageKey for u128 {
     }
 
     fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -96,11 +96,11 @@ impl StorageKey for usize {
     }
 
     fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
-// Signed integer keys — `to_word()` sign-extends, matching Solidity's
+// Signed integer keys — `IntWord::to_word` sign-extends, matching Solidity's
 // `mapping(intN => V)` convention.
 
 impl StorageKey for i8 {
@@ -109,7 +109,7 @@ impl StorageKey for i8 {
     }
 
     fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -119,7 +119,7 @@ impl StorageKey for i16 {
     }
 
     fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -129,7 +129,7 @@ impl StorageKey for i32 {
     }
 
     fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -139,7 +139,7 @@ impl StorageKey for i64 {
     }
 
     fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -149,7 +149,7 @@ impl StorageKey for i128 {
     }
 
     fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -159,7 +159,7 @@ impl StorageKey for i256 {
     }
 
     fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -169,7 +169,7 @@ impl StorageKey for isize {
     }
 
     fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+        u256::write_key(ptr: ptr, IntWord::to_word(self))
     }
 }
 
@@ -181,17 +181,22 @@ impl StorageKey for bool {
     }
 
     fn write_key(ptr: *u8, self) {
-        u256::write_key(ptr: ptr, self.to_word())
+        u256::write_key(ptr: ptr, if self { 1 } else { 0 })
     }
 }
 
+/// Seals construction of storage maps to the standard library.
+struct StorageMapSeal {}
+
 /// A storage-backed mapping from keys `K` to values `V`.
+///
+/// Values use their native storage layout, including packed struct fields.
+/// `get`/`set` and `ptr`/`mut_ptr` access the same representation; keys use
+/// the separate, stable encoding defined by `StorageKey`.
 ///
 /// `SALT` is the mapping's slot seed (the `slot` component in
 /// `keccak256(key ++ slot)`), chosen explicitly for each mapping instance to
 /// prevent collisions.
-struct StorageMapSeal {}
-
 pub struct StorageMap<K, V, const SALT: u256 = _> {
     seal: StorageMapSeal,
 }
@@ -211,23 +216,22 @@ fn storagemap_storage_slot_with_salt<K>(key: K, salt: u256) -> u256
     keccak256(ptr::MemSpan::from_raw_parts(ptr: scratch, len: key_len + 32))
 }
 
+// Trusted by the borrow checker: the returned handle addresses a value that
+// starts at `slot`, which must be the result of
+// `storagemap_storage_slot_with_salt`. Such a value never overlaps a
+// compiler-allocated contract field.
 #[inline(always)]
-fn storagemap_get_word_with_salt<K>(key: K, salt: u256) -> u256
-    where K: StorageKey
-{
-    let storage_slot = storagemap_storage_slot_with_salt(key, salt)
-    sload_hashed(storage_slot)
+fn storagemap_entry_ptr<V>(_ slot: u256) -> StorPtr<V> {
+    StorPtr::at_slot_unchecked(slot)
 }
 
+// The read-only counterpart of `storagemap_entry_ptr`, with the same trust.
 #[inline(always)]
-fn storagemap_set_word_with_salt<K>(key: K, salt: u256, word: u256)
-    where K: StorageKey
-{
-    let storage_slot = storagemap_storage_slot_with_salt(key, salt)
-    sstore_hashed(slot: storage_slot, value: word)
+fn storagemap_entry_read_ptr<V>(_ slot: u256) -> StorReadPtr<V> {
+    StorReadPtr::at_slot_unchecked(slot)
 }
 
-impl<K: StorageKey, V: WordRepr, const SALT: u256> StorageMap<K, V, SALT> {
+impl<K: StorageKey, V, const SALT: u256> StorageMap<K, V, SALT> {
     pub(ingot) fn new_unchecked() -> Self {
         Self { seal: StorageMapSeal {} }
     }
@@ -238,21 +242,47 @@ impl<K: StorageKey, V: WordRepr, const SALT: u256> StorageMap<K, V, SALT> {
         Self::new_unchecked()
     }
 
+    /// A read-only storage place for the value at `key`.
+    ///
+    /// The value occupies the storage slots from `keccak256(key ++ SALT)`
+    /// onwards, laid out like any value of type `V` in storage. Bind the
+    /// pointer with `with (ptr) { ... }` to read individual fields without
+    /// loading the whole value.
     #[inline(always)]
-    pub(ingot) fn get_unchecked(self, _ key: K) -> V {
-        V::from_word(storagemap_get_word_with_salt(key, salt: SALT))
+    pub fn ptr(self, _ key: K) -> StorReadPtr<V> {
+        storagemap_entry_read_ptr(storagemap_storage_slot_with_salt(key, salt: SALT))
+    }
+
+    /// A writable storage place for the value at `key`.
+    ///
+    /// Like `ptr`, but the place can also be written, either as a whole or
+    /// one field at a time. Requires a mutable map.
+    #[inline(always)]
+    pub fn mut_ptr(mut self, _ key: K) -> StorPtr<V> {
+        storagemap_entry_ptr(storagemap_storage_slot_with_salt(key, salt: SALT))
     }
 
     #[inline(always)]
-    pub fn get(self, _ key: K) -> V {
+    pub(ingot) fn get_unchecked(self, _ key: K) -> V
+        where V: Copy
+    {
+        self.ptr(key).read()
+    }
+
+    /// Copies the whole value from its native storage layout.
+    #[inline(always)]
+    pub fn get(self, _ key: K) -> V
+        where V: Copy
+    {
         self.get_unchecked(key)
     }
 
     #[inline(always)]
     pub(ingot) fn set_unchecked(mut self, key: K, value: own V) {
-        storagemap_set_word_with_salt(key, salt: SALT, word: value.to_word())
+        self.mut_ptr(key).write(value)
     }
 
+    /// Replaces the whole value using the same layout as `ptr` and `mut_ptr`.
     #[inline(always)]
     pub fn set(mut self, key: K, value: own V) {
         self.set_unchecked(key: key, value)

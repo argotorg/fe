@@ -16,7 +16,7 @@ use crate::{
         semantic::{
             BorrowActivation, Mutability, SemOrigin, SemanticInstance,
             capability::{
-                external::{ExternalOrigin, ExternalSource, ReferentContract},
+                external::{AddressProvenance, ExternalOrigin, ExternalSource, ReferentContract},
                 guard::Guard,
                 handle::{AddressOccurrence, HandleAddressSpace, OpaqueHandleRef, OpaqueWriteSite},
                 index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
@@ -291,6 +291,7 @@ impl<'db> Inventory<'db> {
                             .map(IndexExpr::Iteration)
                             .into_iter()
                             .collect(),
+                        provenance: AddressProvenance::Raw,
                     },
                 );
                 inputs.register(source, scope.clone(), CapabilityClass::Handle, true, &[])?;
@@ -912,6 +913,7 @@ mod tests {
                     },
                     occurrence: AddressOccurrence::Summary(0),
                     arguments: Box::new([]),
+                    provenance: AddressProvenance::Raw,
                 },
             );
             inventory
@@ -967,6 +969,7 @@ mod tests {
                 },
                 occurrence: AddressOccurrence::Summary(0),
                 arguments: Box::new([]),
+                provenance: AddressProvenance::Raw,
             },
         );
         let derived = RegionSet::singleton(
