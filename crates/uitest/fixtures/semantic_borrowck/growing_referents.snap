@@ -20,3 +20,12 @@ error[16-0011]: unbounded referent types in `fn count`
 30 │ │     counter.value
 31 │ │ }
    │ ╰─^ more than 64 instantiations of `Count` are reachable from here; a trait or const expression may be growing a recursive type
+
+error[16-0011]: unbounded referent types in `fn positive_maybe`
+   ┌─ growing_referents.fe:73:51
+   │
+73 │   fn positive_maybe(x: PositiveMaybe<u256>) -> u256 {
+   │ ╭───────────────────────────────────────────────────^
+74 │ │     x.value
+75 │ │ }
+   │ ╰─^ more than 64 instantiations of `Maybe` are reachable from here; a trait or const expression may be growing a recursive type

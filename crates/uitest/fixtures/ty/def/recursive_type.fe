@@ -65,3 +65,32 @@ pub struct S16<T> {
     t: T,
     next: *S15<S16<[T; 1]>>,
 }
+
+// A symbolic array exposes its element only once its length is known positive.
+pub struct Maybe<T, const N: usize> {
+    values: [T; N],
+}
+
+pub struct FineZero<T> {
+    value: T,
+    next: *Maybe<FineZero<[T; 1]>, 0>,
+}
+
+fn fine_zero(x: FineZero<u256>) -> u256 {
+    x.value
+}
+
+pub struct SymbolicGuard<T, const N: usize> {
+    value: T,
+    next: [*SymbolicGuard<[T; 1], N>; N],
+}
+
+pub struct PositiveGuard<T> {
+    value: T,
+    next: [*PositiveGuard<[T; 1]>; 1],
+}
+
+// Containment grows an argument even when its element is unreachable.
+pub struct EmptyArgument<T> {
+    next: *EmptyArgument<[T; 0]>,
+}

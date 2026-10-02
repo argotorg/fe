@@ -59,3 +59,17 @@ fn leaves(
 ) -> u256 {
     l8.l7.value
 }
+
+// Symbolic array guards are instantiated by the referent inventory.
+pub struct Maybe<T, const N: usize> {
+    values: [T; N],
+}
+
+pub struct PositiveMaybe<T> {
+    value: T,
+    next: *Maybe<PositiveMaybe<[T; 1]>, 1>,
+}
+
+fn positive_maybe(x: PositiveMaybe<u256>) -> u256 {
+    x.value
+}

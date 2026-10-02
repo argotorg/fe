@@ -51,8 +51,9 @@ use crate::{
 /// Checking enumerates the types reachable from a function's inputs, and a
 /// trait or const expression can make that set infinite: a projection, an
 /// effect handle's target or a const argument may keep growing the argument
-/// of a recursive type. Definitions whose field types grow by constructors
-/// are rejected before checking, so one chain of referents reaching more
+/// of a recursive type. Written constructor growth is rejected statically
+/// except behind symbolic array lengths, which are checked here after
+/// instantiation. One chain of referents reaching more
 /// instantiations of one type constructor than this is treated as such
 /// growth. Storage discovered later stays within the types of the inputs,
 /// the body and the callees, whose own inventories are bounded the same way.
