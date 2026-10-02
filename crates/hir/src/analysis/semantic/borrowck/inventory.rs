@@ -53,10 +53,9 @@ use crate::{
 /// effect handle's target or a const argument may keep growing the argument
 /// of a recursive type. Written constructor growth is rejected statically
 /// except behind symbolic array lengths, which are checked here after
-/// instantiation. One chain of referents reaching more
-/// instantiations of one type constructor than this is treated as such
-/// growth. Storage discovered later stays within the types of the inputs,
-/// the body and the callees, whose own inventories are bounded the same way.
+/// instantiation. A chain with more than this many distinct instantiations of
+/// one type constructor is treated as growing. Unrelated instantiations reached
+/// from separate roots do not consume one another's budget.
 pub(super) const MAX_REFERENT_INSTANTIATIONS: usize = 64;
 
 /// A referent type on an expansion path with its type constructor.
@@ -557,13 +556,14 @@ impl<'db> InputBuilder<'db> {
             }
         } else {
             let (ty, head) = referent(self.db, source.contract.ty);
-            let instantiations: FxHashSet<_> = ancestry
+            let same_head = ancestry
                 .iter()
                 .filter(|(_, ancestor)| *ancestor == head)
-                .map(|(ancestor, _)| *ancestor)
-                .chain([ty])
-                .collect();
-            if instantiations.len() > MAX_REFERENT_INSTANTIATIONS {
+                .map(|(ancestor, _)| *ancestor);
+            if same_head.clone().count() >= MAX_REFERENT_INSTANTIATIONS
+                && same_head.chain([ty]).collect::<FxHashSet<_>>().len()
+                    > MAX_REFERENT_INSTANTIATIONS
+            {
                 return Err(ShapeError::UnboundedReferents(head));
             }
             let shape = self.shape(ty)?;
