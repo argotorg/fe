@@ -711,6 +711,10 @@ where
     U: UnificationStore<'db>,
 {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        if !ty.has_var(db) {
+            return ty;
+        }
+
         let (shallow_resolved, key) = match ty.data(db) {
             TyData::TyVar(var) if !self.var_stack.contains(&var.key) => {
                 if var.key.0 as usize >= self.table.len() {
@@ -779,6 +783,10 @@ where
     U: UnificationStore<'db>,
 {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        if !ty.has_param(db) {
+            return ty;
+        }
+
         let is_param = match ty.data(db) {
             TyData::TyParam(param) => !param.is_effect(),
             TyData::ConstTy(const_ty) => matches!(const_ty.data(db), ConstTyData::TyParam(..)),
@@ -793,5 +801,82 @@ where
         let var = self.table.new_var_from_param(ty);
         self.params.insert(ty, var);
         var
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use camino::Utf8PathBuf;
+
+    use super::*;
+    use crate::{
+        analysis::ty::ty_def::{PrimTy, TyBase},
+        hir_def::CallableDef,
+        test_db::{HirAnalysisTestDb, find_func},
+    };
+
+    #[test]
+    fn resolve_nested_variables_after_binding_and_rollback() {
+        let db = HirAnalysisTestDb::default();
+        let mut table = UnificationTable::new(&db);
+        let elem = table.new_var(TyVarSort::General, &Kind::Star);
+        let len = TyId::const_ty_var(
+            &db,
+            TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize))),
+            table.new_key(&Kind::Star, TyVarSort::General),
+        );
+        let array = TyId::app_structural(&db, TyId::array(&db, elem), len);
+        let closed = TyId::array_with_len(&db, TyId::u256(&db), 8);
+        let mixed = TyId::tuple_with_elems(&db, &[closed, array, elem]);
+        assert!(mixed.has_var(&db));
+        assert_eq!(mixed.fold_with(&db, &mut table), mixed);
+
+        let snapshot = table.snapshot();
+        let resolved_array = TyId::array_with_len(&db, TyId::bool(&db), 3);
+        table.unify(array, resolved_array).unwrap();
+        let expected = TyId::tuple_with_elems(&db, &[closed, resolved_array, TyId::bool(&db)]);
+        assert_eq!(mixed.fold_with(&db, &mut table), expected);
+        assert_eq!(expected.fold_with(&db, &mut table), expected);
+
+        table.rollback_to(snapshot);
+        assert_eq!(mixed.fold_with(&db, &mut table), mixed);
+        let resolved_array = TyId::array_with_len(&db, TyId::u256(&db), 5);
+        table.unify(array, resolved_array).unwrap();
+        assert_eq!(
+            mixed.fold_with(&db, &mut table),
+            TyId::tuple_with_elems(&db, &[closed, resolved_array, TyId::u256(&db)])
+        );
+    }
+
+    #[test]
+    fn freshen_nested_parameters_once_per_instantiation() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("freshen_nested.fe"),
+            "fn f<T, const N: usize>() {}",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let params = CallableDef::Func(find_func(&db, module, "f")).params(&db);
+        let array = TyId::app_structural(&db, TyId::array(&db, params[0]), params[1]);
+        let closed = TyId::array_with_len(&db, TyId::u256(&db), 8);
+        let mixed = TyId::tuple_with_elems(&db, &[closed, array, array]);
+        let mut table = UnificationTable::new(&db);
+        let first = table.instantiate_with_fresh_vars(mixed);
+        let second = table.instantiate_with_fresh_vars(mixed);
+        assert_eq!(table.len(), 4);
+        assert_ne!(first, second);
+        for instantiated in [first, second] {
+            let elems = instantiated.generic_args(&db);
+            assert_eq!(elems[0], closed);
+            assert_eq!(elems[1], elems[2]);
+            assert!(elems[1].has_var(&db));
+            assert!(!instantiated.has_param(&db));
+        }
+        let resolved_array = TyId::array_with_len(&db, TyId::bool(&db), 3);
+        let expected = TyId::tuple_with_elems(&db, &[closed, resolved_array, resolved_array]);
+        table.unify(first, expected).unwrap();
+        assert_eq!(first.fold_with(&db, &mut table), expected);
+        assert_eq!(second.fold_with(&db, &mut table), second);
     }
 }
