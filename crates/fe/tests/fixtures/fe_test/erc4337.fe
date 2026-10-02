@@ -1,0 +1,516 @@
+// std::evm::erc4337: user operations, validation data, an ECDSA account and
+// a paymaster driven by a mock EntryPoint.
+//
+// `user_op` builds the vector. Its hashes are the outputs of `getUserOpHash`
+// of the real EntryPoint v0.7.0 and v0.8.0 (eth-infinitism/account-abstraction
+// tags, deployed at their canonical addresses in a forge test, chain id 1).
+// They also match a manual computation with `cast keccak`/`cast abi-encode`.
+// The signatures are `cast wallet sign --no-hash --private-key <anvil key> <USER_OP_HASH_V08>`
+// and VALIDATE_USER_OP_CALLDATA_HASH is the `cast keccak` of the `cast calldata`
+// for `validateUserOp(<vector signed by OWNER>, USER_OP_HASH_V08, 300)`.
+use core::option::Option
+use core::ptr::{self, MemSpan}
+use std::abi::{Bytes, Bytes32}
+use std::evm::{Address, Call, Ctx, Evm, encode_error, encode_msg_calldata, signature}
+use std::evm::crypto::keccak256
+use std::evm::erc4337::{
+    self,
+    AccountMsg,
+    AccountUnauthorized,
+    PackedUserOperation,
+    PaymasterMsg,
+    PaymasterUnauthorized,
+    PostOpMode,
+    SIG_VALIDATION_FAILED,
+    SIG_VALIDATION_SUCCESS,
+    UserOpSigner,
+    ValidationData,
+}
+
+// Anvil accounts 0 and 1.
+const OWNER: u256 = 0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266
+const OTHER: u256 = 0x70997970c51812dc3a010c7d01b50e0d17dc79c8
+
+const SENDER: u256 = 0x1234567890123456789012345678901234567890
+const PAYMASTER: u256 = 0xabcdefabcdefabcdefabcdefabcdefabcdefabcd
+const ACCOUNT_GAS_LIMITS: u256 = (100000 << 128) | 200000
+const GAS_FEES: u256 = (1000000000 << 128) | 2000000000
+
+const USER_OP_HASH_V07: u256 = 0xf0c71f980ff4ca5b6afdea48e6ddf6df7d9919de173b36f134f68c7f9bb6fa7b
+const USER_OP_HASH_V08: u256 = 0xc297f1bae6709538d960334c3d0ac373e1e619e21a0eede9fd00565c00bed61c
+const VALIDATE_USER_OP_CALLDATA_HASH: u256 = 0xac724c87acb1fadb59fb41145b5825674891d643478cd242465d16196d8c1c72
+
+// USER_OP_HASH_V08 signed by OWNER (v = 28) and by OTHER (v = 27).
+const OWNER_R: u256 = 0xdb3fdaee9b8044b2d78757f947aabcdce265a151e94ec3d0e0dba21bac916270
+const OWNER_S: u256 = 0x6c3490fd2de9e57a70fd245aa41399e46f7cf4ee78b53fe463d4637010306918
+const OTHER_R: u256 = 0xc778e39687a5d74d5adf8eaf96ffecc8bdf541cd1d514b776ebd53ab7601cbeb
+const OTHER_S: u256 = 0x6ec5957418998d3d1a1fc033b0d176d460cc0c818e93efebff444c18ab75724d
+
+/// `len` bytes from the start of `words`.
+fn bytes<const N: usize>(_ words: [u256; N], len: u256) -> Bytes {
+    let buf = ptr::alloc<[u256; N]>()
+    *buf = words
+    Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: ptr::byte_ptr(buf), len))
+}
+
+fn sig(r: u256, s: u256, v: u256) -> Bytes {
+    bytes([r, s, v << 248], len: 65)
+}
+
+/// Paymaster address, verification gas 50000, postOp gas 30000, data 0xcafe.
+fn paymaster_and_data() -> Bytes {
+    bytes(
+        [
+            PAYMASTER << 96,
+            0x0000c35000000000000000000000000000007530cafe00000000000000000000,
+        ],
+        len: 54,
+    )
+}
+
+fn user_op(_ signature: Bytes) -> PackedUserOperation {
+    PackedUserOperation {
+        sender: Address { inner: SENDER },
+        nonce: 42,
+        init_code: bytes([0xdeadbeef << 224], len: 4),
+        call_data: bytes(
+            [
+                0xb61d27f600000000000000000000000000000000000000000000000000000000,
+                0x00000001aa000000000000000000000000000000000000000000000000000000,
+            ],
+            len: 37,
+        ),
+        account_gas_limits: Bytes32 { val: ACCOUNT_GAS_LIMITS },
+        pre_verification_gas: 50000,
+        gas_fees: Bytes32 { val: GAS_FEES },
+        paymaster_and_data: paymaster_and_data(),
+        signature,
+    }
+}
+
+fn owner_signed() -> PackedUserOperation {
+    user_op(sig(r: OWNER_R, s: OWNER_S, v: 28))
+}
+
+fn other_signed() -> PackedUserOperation {
+    user_op(sig(r: OTHER_R, s: OTHER_S, v: 27))
+}
+
+// -----------------------------------------------------------------------------
+// Example account: a single ECDSA owner.
+// -----------------------------------------------------------------------------
+
+struct EcdsaOwner { owner: Address }
+
+impl UserOpSigner for EcdsaOwner {
+    fn is_valid_signature(self, hash: u256, signature: MemSpan) -> bool uses (call: Call) {
+        match signature::recover(digest: hash, signature) {
+            Option::Some(signer) => signer == self.owner,
+            Option::None => false,
+        }
+    }
+}
+
+pub contract Account uses (ctx: Ctx, call: mut Call) {
+    owner: Address,
+    entry_point: Address,
+
+    #[payable]
+    init(owner_address: Address, entry_point_address: Address) uses (mut owner, mut entry_point) {
+        owner = owner_address
+        entry_point = entry_point_address
+    }
+
+    recv AccountMsg {
+        ValidateUserOp { user_op, user_op_hash, missing_account_funds } -> u256
+            uses (owner, entry_point, ctx, mut call)
+        {
+            erc4337::validate_user_op(
+                EcdsaOwner { owner },
+                entry_point,
+                user_op,
+                user_op_hash,
+                missing_account_funds,
+            )
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Example paymaster: sponsors any operation until the time in the first six
+// bytes of its paymaster data, and records the last `postOp`.
+// -----------------------------------------------------------------------------
+
+msg PaymasterStateMsg {
+    #[selector = sol("lastPostOp()")]
+    LastPostOp -> (u256, Address, u256),
+}
+
+pub contract Paymaster uses (ctx: Ctx) {
+    entry_point: Address,
+    mut last_mode: u256,
+    mut last_sender: Address,
+    mut last_cost: u256,
+
+    init(entry_point_address: Address) uses (mut entry_point) {
+        entry_point = entry_point_address
+    }
+
+    recv PaymasterMsg {
+        ValidatePaymasterUserOp { user_op, user_op_hash, max_cost } -> (Bytes, u256)
+            uses (entry_point, ctx)
+        {
+            erc4337::require_paymaster_entry_point(entry_point)
+            let valid_until: u64 = (user_op.paymaster_data().word_at(0) >> 208).downcast_truncate()
+            let context = bytes([user_op.sender.inner], len: 32)
+            (context, erc4337::pack_validation_data(sig_success: true, valid_after: 0, valid_until))
+        }
+
+        PostOp { mode, context, actual_gas_cost, actual_user_op_fee_per_gas }
+            uses (entry_point, ctx, mut last_mode, mut last_sender, mut last_cost)
+        {
+            erc4337::require_paymaster_entry_point(entry_point)
+            last_mode = match PostOpMode::from_u8(mode) {
+                PostOpMode::OpSucceeded => 1,
+                PostOpMode::OpReverted => 2,
+                PostOpMode::PostOpReverted => 3,
+            }
+            last_sender = Address { inner: context.word_at(0) }
+            last_cost = actual_gas_cost
+        }
+    }
+
+    recv PaymasterStateMsg {
+        LastPostOp -> (u256, Address, u256) uses (last_mode, last_sender, last_cost) {
+            (last_mode, last_sender, last_cost)
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Mock EntryPoint: forwards to accounts and paymasters, accepts prefunds.
+// -----------------------------------------------------------------------------
+
+msg EntryPointMsg {
+    #[selector = 0x01]
+    Validate {
+        account: Address,
+        user_op: PackedUserOperation,
+        user_op_hash: Bytes32,
+        missing_account_funds: u256,
+    } -> u256,
+    #[selector = 0x02]
+    ValidatePaymaster { paymaster: Address, user_op: PackedUserOperation } -> (Bytes, u256),
+    #[selector = 0x03]
+    PostOp { paymaster: Address, mode: u8, context: Bytes, actual_gas_cost: u256 },
+}
+
+pub contract EntryPoint uses (call: mut Call) {
+    recv EntryPointMsg {
+        Validate { account, user_op, user_op_hash, missing_account_funds } -> u256 uses (mut call) {
+            account.call(AccountMsg::ValidateUserOp { user_op, user_op_hash, missing_account_funds })
+        }
+        ValidatePaymaster { paymaster, user_op } -> (Bytes, u256) uses (mut call) {
+            paymaster.call(
+                PaymasterMsg::ValidatePaymasterUserOp { user_op, user_op_hash: Bytes32 { val: 0 }, max_cost: 1000 },
+            )
+        }
+        PostOp { paymaster, mode, context, actual_gas_cost } uses (mut call) {
+            paymaster.call(
+                PaymasterMsg::PostOp { mode, context, actual_gas_cost, actual_user_op_fee_per_gas: 1 },
+            )
+        }
+    }
+
+    recv {
+        #[payable]
+        _ {}
+    }
+}
+
+fn addr(_ word: u256) -> Address {
+    Address { inner: word }
+}
+
+fn same_bytes(_ a: MemSpan, _ b: MemSpan) -> bool {
+    Bytes::from_payload(source: a) == Bytes::from_payload(source: b)
+}
+
+// -----------------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------------
+
+#[test]
+fn user_op_hashes_match_entry_point() {
+    let op = owner_signed()
+    assert!(op.hash_v07(entry_point: erc4337::ENTRY_POINT_V07, chain_id: 1) == USER_OP_HASH_V07)
+    assert!(op.hash_v08(entry_point: erc4337::ENTRY_POINT_V08, chain_id: 1) == USER_OP_HASH_V08)
+    // The signature is not part of the hash; the chain and EntryPoint are.
+    assert!(other_signed().hash_v08(entry_point: erc4337::ENTRY_POINT_V08, chain_id: 1) == USER_OP_HASH_V08)
+    assert!(op.hash_v08(entry_point: erc4337::ENTRY_POINT_V08, chain_id: 2) != USER_OP_HASH_V08)
+    assert!(op.hash_v07(entry_point: erc4337::ENTRY_POINT_V08, chain_id: 1) != USER_OP_HASH_V07)
+    assert!(
+        erc4337::PACKED_USEROP_TYPEHASH
+            == 0x29a0bca4af4be3421398da00295e58e6d7de38cb492214754cb6a47507dd6f8e,
+    )
+}
+
+#[test]
+fn validate_user_op_encodes_like_solidity() {
+    let calldata = encode_msg_calldata(
+        AccountMsg::ValidateUserOp {
+            user_op: owner_signed(),
+            user_op_hash: Bytes32 { val: USER_OP_HASH_V08 },
+            missing_account_funds: 300,
+        },
+    )
+    assert!(calldata.len() == 772)
+    assert!(calldata.span().word_at(0) >> 224 == 0x19822f7c)
+    assert!(keccak256(calldata.span()) == VALIDATE_USER_OP_CALLDATA_HASH)
+}
+
+#[test]
+fn gas_fields_unpack() {
+    let op = owner_signed()
+    assert!(op.verification_gas_limit() == 100000)
+    assert!(op.call_gas_limit() == 200000)
+    assert!(op.max_priority_fee_per_gas() == 1000000000)
+    assert!(op.max_fee_per_gas() == 2000000000)
+    assert!(op.paymaster() == addr(PAYMASTER))
+    assert!(op.paymaster_verification_gas_limit() == 50000)
+    assert!(op.paymaster_post_op_gas_limit() == 30000)
+    let data = op.paymaster_data()
+    assert!(data.len() == 2 && data.word_at(0) >> 240 == 0xcafe)
+
+    // Exactly 52 bytes: a paymaster without data.
+    let mut bare = owner_signed()
+    bare.paymaster_and_data = bytes([PAYMASTER << 96, 0x0000c35000000000000000000000000000007530 << 96], len: 52)
+    assert!(bare.paymaster() == addr(PAYMASTER))
+    assert!(bare.paymaster_post_op_gas_limit() == 30000)
+    assert!(bare.paymaster_data().len() == 0)
+
+    // Shorter than 52 bytes (including empty): no paymaster.
+    let mut short = owner_signed()
+    short.paymaster_and_data = bytes([PAYMASTER << 96, 0xffffffff << 224], len: 51)
+    assert!(short.paymaster() == Address::zero())
+    assert!(short.paymaster_verification_gas_limit() == 0)
+    assert!(short.paymaster_post_op_gas_limit() == 0)
+    assert!(short.paymaster_data().len() == 0)
+    short.paymaster_and_data = Bytes::empty()
+    assert!(short.paymaster() == Address::zero())
+}
+
+#[test]
+fn validation_data_round_trips() {
+    assert!(SIG_VALIDATION_SUCCESS == 0 && SIG_VALIDATION_FAILED == 1)
+    assert!(erc4337::pack_validation_data(sig_success: true, valid_after: 0, valid_until: 0) == 0)
+    assert!(erc4337::pack_validation_data(sig_success: false, valid_after: 0, valid_until: 0) == 1)
+
+    let packed = erc4337::pack_validation_data(sig_success: false, valid_after: 0x1234, valid_until: 0xabcdef)
+    assert!(packed == 1 | (0xabcdef << 160) | (0x1234 << 208))
+    let data = ValidationData::unpack(packed)
+    assert!(data.sig_failed())
+    assert!(data.aggregator == addr(1))
+    assert!(data.valid_after == 0x1234 && data.valid_until == 0xabcdef)
+    assert!(data.pack() == packed)
+
+    // An aggregator address and the full 48-bit range.
+    let aggregator = addr(0xffffffffffffffffffffffffffffffffffffffff)
+    let full = ValidationData { aggregator, valid_after: 0xffffffffffff, valid_until: 0xfffffffffffe }
+    let unpacked = ValidationData::unpack(full.pack())
+    assert!(!unpacked.sig_failed())
+    assert!(unpacked.aggregator == aggregator)
+    assert!(unpacked.valid_after == 0xffffffffffff && unpacked.valid_until == 0xfffffffffffe)
+    assert!(unpacked.pack() == full.pack())
+
+    // `valid_until` zero means no expiry and unpacks to the maximum.
+    let open = ValidationData::unpack(SIG_VALIDATION_SUCCESS)
+    assert!(open.aggregator == Address::zero())
+    assert!(open.valid_after == 0 && open.valid_until == 0xffffffffffff)
+    assert!(open.pack() == 0xffffffffffff << 160)
+}
+
+#[test(should_revert)]
+fn pack_rejects_valid_after_above_48_bits() {
+    let _ = erc4337::pack_validation_data(sig_success: true, valid_after: 0x1000000000000, valid_until: 0)
+}
+
+#[test(should_revert)]
+fn pack_rejects_valid_until_above_48_bits() {
+    let _ = erc4337::pack_validation_data(sig_success: true, valid_after: 0, valid_until: 0x1000000000000)
+}
+
+#[test(balance = 1000)]
+fn account_validates_and_pays_prefund() uses (evm: mut Evm) {
+    let entry_point = evm.create2<EntryPoint>(value: 0, args: (), salt: 0)
+    let account = evm.create2<Account>(
+        value: 1000,
+        args: (Address { inner: OWNER }, entry_point),
+        salt: 0,
+    )
+    with (Call = evm, Ctx = evm) {
+        let result: u256 = entry_point.call(
+            EntryPointMsg::Validate {
+                account,
+                user_op: owner_signed(),
+                user_op_hash: Bytes32 { val: USER_OP_HASH_V08 },
+                missing_account_funds: 300,
+            },
+        )
+        assert!(result == SIG_VALIDATION_SUCCESS)
+        assert!(evm.balance(account) == 700)
+        assert!(evm.balance(entry_point) == 300)
+
+        // Nothing is sent when nothing is missing.
+        let result: u256 = entry_point.call(
+            EntryPointMsg::Validate {
+                account,
+                user_op: owner_signed(),
+                user_op_hash: Bytes32 { val: USER_OP_HASH_V08 },
+                missing_account_funds: 0,
+            },
+        )
+        assert!(result == SIG_VALIDATION_SUCCESS)
+        assert!(evm.balance(account) == 700)
+    }
+}
+
+#[test(balance = 1000)]
+fn account_returns_failure_for_bad_signature() uses (evm: mut Evm) {
+    let entry_point = evm.create2<EntryPoint>(value: 0, args: (), salt: 0)
+    let account = evm.create2<Account>(
+        value: 1000,
+        args: (Address { inner: OWNER }, entry_point),
+        salt: 0,
+    )
+    let malformed = user_op(Bytes::from_word_prefix(word: 0, len: 3))
+    with (Call = evm, Ctx = evm) {
+        // Signed by another key: a failure result, not a revert, and the
+        // prefund is still paid.
+        let result: u256 = entry_point.call(
+            EntryPointMsg::Validate {
+                account,
+                user_op: other_signed(),
+                user_op_hash: Bytes32 { val: USER_OP_HASH_V08 },
+                missing_account_funds: 100,
+            },
+        )
+        assert!(result == SIG_VALIDATION_FAILED)
+        assert!(evm.balance(entry_point) == 100)
+
+        // The owner's signature over another hash.
+        let result: u256 = entry_point.call(
+            EntryPointMsg::Validate {
+                account,
+                user_op: owner_signed(),
+                user_op_hash: Bytes32 { val: USER_OP_HASH_V07 },
+                missing_account_funds: 0,
+            },
+        )
+        assert!(result == SIG_VALIDATION_FAILED)
+
+        // Not a signature at all.
+        let result: u256 = entry_point.call(
+            EntryPointMsg::Validate {
+                account,
+                user_op: malformed,
+                user_op_hash: Bytes32 { val: USER_OP_HASH_V08 },
+                missing_account_funds: 0,
+            },
+        )
+        assert!(result == SIG_VALIDATION_FAILED)
+    }
+}
+
+#[test(balance = 1000)]
+fn account_rejects_other_callers() uses (evm: mut Evm) {
+    let entry_point = evm.create2<EntryPoint>(value: 0, args: (), salt: 0)
+    let account = evm.create2<Account>(
+        value: 1000,
+        args: (Address { inner: OWNER }, entry_point),
+        salt: 0,
+    )
+    with (Call = evm, Ctx = evm) {
+        let outcome = account.try_call(
+            AccountMsg::ValidateUserOp {
+                user_op: owner_signed(),
+                user_op_hash: Bytes32 { val: USER_OP_HASH_V08 },
+                missing_account_funds: 300,
+            },
+        )
+        assert!(!outcome.success())
+        let expected = encode_error(AccountUnauthorized { sender: evm.address() })
+        assert!(same_bytes(outcome.returndata(), expected.span()))
+        assert!(evm.balance(account) == 1000)
+    }
+}
+
+#[test]
+fn paymaster_validates_and_runs_post_op() uses (evm: mut Evm) {
+    let entry_point = evm.create2<EntryPoint>(value: 0, args: (), salt: 0)
+    let paymaster = evm.create2<Paymaster>(value: 0, args: (entry_point,), salt: 0)
+    // Paymaster data: valid until 0x0000cafe0000 (the first six bytes).
+    let mut op = owner_signed()
+    op.paymaster_and_data = bytes(
+        [
+            paymaster.inner << 96,
+            0x0000c35000000000000000000000000000007530 << 96 | 0x0000cafe0000 << 48,
+        ],
+        len: 58,
+    )
+    with (Call = evm, Ctx = evm) {
+        let (context, validation): (Bytes, u256) = entry_point.call(
+            EntryPointMsg::ValidatePaymaster { paymaster, user_op: op },
+        )
+        assert!(context.len() == 32 && context.word_at(0) == SENDER)
+        let data = ValidationData::unpack(validation)
+        assert!(!data.sig_failed())
+        assert!(data.valid_after == 0 && data.valid_until == 0x0000cafe0000)
+
+        entry_point.call(
+            EntryPointMsg::PostOp { paymaster, mode: PostOpMode::OpReverted.to_u8(), context, actual_gas_cost: 77 },
+        )
+        let (mode, sender, cost): (u256, Address, u256) = paymaster.call(PaymasterStateMsg::LastPostOp {})
+        assert!(mode == 2 && sender == addr(SENDER) && cost == 77)
+
+        // Only the EntryPoint may call either message.
+        let expected = encode_error(PaymasterUnauthorized { sender: evm.address() })
+        let outcome = paymaster.try_call(
+            PaymasterMsg::ValidatePaymasterUserOp { user_op: op, user_op_hash: Bytes32 { val: 0 }, max_cost: 0 },
+        )
+        assert!(!outcome.success() && same_bytes(outcome.returndata(), expected.span()))
+        let outcome = paymaster.try_call(
+            PaymasterMsg::PostOp {
+                mode: PostOpMode::OpSucceeded.to_u8(),
+                context,
+                actual_gas_cost: 1,
+                actual_user_op_fee_per_gas: 1,
+            },
+        )
+        assert!(!outcome.success() && same_bytes(outcome.returndata(), expected.span()))
+    }
+}
+
+#[test]
+fn post_op_mode_converts_strictly() uses (evm: mut Evm) {
+    assert!(PostOpMode::OpSucceeded.to_u8() == 0)
+    assert!(PostOpMode::OpReverted.to_u8() == 1)
+    assert!(PostOpMode::PostOpReverted.to_u8() == 2)
+
+    // The paymaster's EntryPoint is the test itself.
+    let paymaster = evm.create2<Paymaster>(value: 0, args: (evm.address(),), salt: 0)
+    let context = bytes([SENDER], len: 32)
+    with (Call = evm, Ctx = evm) {
+        let ok = paymaster.try_call(
+            PaymasterMsg::PostOp { mode: 2, context, actual_gas_cost: 5, actual_user_op_fee_per_gas: 1 },
+        )
+        assert!(ok.success())
+        let (mode, _, cost): (u256, Address, u256) = paymaster.call(PaymasterStateMsg::LastPostOp {})
+        assert!(mode == 3 && cost == 5)
+
+        let bad = paymaster.try_call(
+            PaymasterMsg::PostOp { mode: 3, context, actual_gas_cost: 6, actual_user_op_fee_per_gas: 1 },
+        )
+        assert!(!bad.success() && bad.returndata_len() == 0)
+    }
+}

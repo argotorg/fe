@@ -8,6 +8,7 @@ pub use erc20::{self}
 pub use erc721::{self}
 pub use erc1155::{self}
 pub use erc165::{self}
+pub use erc4337::{self}
 pub use signature::{self}
 pub use event::{self, *}
 pub use panic::{self, *}
