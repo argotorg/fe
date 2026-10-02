@@ -1,0 +1,210 @@
+// A reborrow's own live reborrows suspend parts of it; access kinds and byte
+// extents decide the rest.
+use core::ptr
+
+// Accepted: the read is of the suspended field.
+struct FirstSuspendedPair { first: u256, second: u256, third: u256 }
+
+fn first_suspended_foreign(value: mut FirstSuspendedPair, saved: *ref u256) -> u256 {
+    let child = mut value
+    let shared = ref child.first
+    let other = *saved
+    let observed: u256 = other
+    child.third = 9
+    shared + observed
+}
+fn first_suspended_drive() -> u256 {
+    let target = ptr::alloc<FirstSuspendedPair>()
+    *target = FirstSuspendedPair { first: 1, second: 2, third: 3 }
+    let native = mut *target
+    let saved = ptr::alloc<ref u256>()
+    *saved = ref native.first
+    first_suspended_foreign(value: native, saved)
+}
+
+// Rejected in drive: the read is of an unsuspended field.
+struct SecondUnsuspendedPair { first: u256, second: u256, third: u256 }
+
+fn second_unsuspended_foreign(value: mut SecondUnsuspendedPair, saved: *ref u256) -> u256 {
+    let child = mut value
+    let shared = ref child.first
+    let other = *saved
+    let observed: u256 = other
+    child.third = 9
+    shared + observed
+}
+fn second_unsuspended_drive() -> u256 {
+    let target = ptr::alloc<SecondUnsuspendedPair>()
+    *target = SecondUnsuspendedPair { first: 1, second: 2, third: 3 }
+    let native = mut *target
+    let saved = ptr::alloc<ref u256>()
+    *saved = ref native.second
+    second_unsuspended_foreign(value: native, saved)
+}
+
+// Accepted: the guarded slice holds where the read happens.
+struct GuardedSuspendedPair { first: u256, second: u256, third: u256 }
+
+fn guarded_suspended_foreign(value: mut GuardedSuspendedPair, saved: *ref u256, flag: bool) -> u256 {
+    let child = mut value
+    let shared = if flag { ref child.first } else { ref child.second }
+    let other = *saved
+    let observed: u256 = other
+    child.third = 9
+    shared + observed
+}
+fn guarded_suspended_drive() -> u256 {
+    let target = ptr::alloc<GuardedSuspendedPair>()
+    *target = GuardedSuspendedPair { first: 1, second: 2, third: 3 }
+    let native = mut *target
+    let saved = ptr::alloc<ref u256>()
+    *saved = ref native.first
+    guarded_suspended_foreign(value: native, saved, flag: true)
+}
+
+// Rejected in drive: the guarded slice does not hold.
+struct GuardedUnsuspendedPair { first: u256, second: u256, third: u256 }
+
+fn guarded_unsuspended_foreign(value: mut GuardedUnsuspendedPair, saved: *ref u256, flag: bool) -> u256 {
+    let child = mut value
+    let shared = if flag { ref child.first } else { ref child.second }
+    let other = *saved
+    let observed: u256 = other
+    child.third = 9
+    shared + observed
+}
+fn guarded_unsuspended_drive() -> u256 {
+    let target = ptr::alloc<GuardedUnsuspendedPair>()
+    *target = GuardedUnsuspendedPair { first: 1, second: 2, third: 3 }
+    let native = mut *target
+    let saved = ptr::alloc<ref u256>()
+    *saved = ref native.first
+    guarded_unsuspended_foreign(value: native, saved, flag: false)
+}
+
+// Accepted: a shared reborrow suspends the whole child.
+fn whole_foreign(value: mut u256, saved: *ref u256) -> u256 {
+    let child = mut value
+    let shared = ref child
+    let other = *saved
+    let observed: u256 = other
+    shared + observed
+}
+fn whole_drive() -> u256 {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<ref u256>()
+    *saved = ref native
+    whole_foreign(value: native, saved)
+}
+
+// Accepted: shared child, shared read.
+fn ref_ref_foreign(value: ref u256, saved: *ref u256) -> u256 {
+    let child = ref value
+    let other = *saved
+    let seen: u256 = other
+    child
+}
+fn ref_ref_drive() -> u256 {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let separate = ptr::alloc<u256>()
+    *separate = 0
+    let native = mut *target
+    let saved = ptr::alloc<ref u256>()
+    *saved = ref native
+    ref_ref_foreign(value: ref native, saved)
+}
+
+// Rejected in drive: a write while a shared child is live.
+fn ref_write_foreign(value: ref u256, saved: *mut u256) -> u256 {
+    let child = ref value
+    let other = *saved
+    other = 5
+    child
+}
+fn ref_write_drive() -> u256 {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let separate = ptr::alloc<u256>()
+    *separate = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    ref_write_foreign(value: ref native, saved)
+}
+
+// Accepted: indexed child occurrences in a loop nest.
+fn nested_loop_foreign(value: mut [[u256; 2]; 2], saved: *ref [[u256; 2]; 2]) -> u256 {
+    let local = mut value
+    let mut total: u256 = 0
+    let mut i0: usize = 0
+    while i0 < 2 {
+        let mut i1: usize = 0
+        while i1 < 2 {
+            let c0 = ref local[i0][i1]
+            let c1 = ref local[i1][i0]
+            let other = *saved
+            let seen: u256 = other[i0][i1]
+            total = total + c0 + c1 + seen
+            i1 = i1 + 1
+        }
+        i0 = i0 + 1
+    }
+    total
+}
+
+// Accepted: bytes [0, 32) end where the protected word begins.
+fn extent_before_foreign(value: mut u256, dest: *u8, source: *u8, len: u256) {
+    let child = mut value
+    ptr::copy_raw(dest, source, len)
+    child = 9
+}
+fn extent_before_forward(value: mut u256, dest: *u8, source: *u8, len: u256) {
+    extent_before_foreign(value, dest, source, len)
+}
+fn extent_before_drive() {
+    let allocation = ptr::alloc_bytes(96)
+    let target = ptr::cast<u8, u256>(ptr::offset_bytes(allocation, 32))
+    *target = 0
+    let source = ptr::alloc_bytes(96)
+    let dest = ptr::offset_bytes(allocation, 0)
+    extent_before_forward(value: mut *target, dest, source, len: 32)
+}
+
+// Rejected in drive: bytes [31, 33) cross into the protected word.
+fn extent_across_foreign(value: mut u256, dest: *u8, source: *u8, len: u256) {
+    let child = mut value
+    ptr::copy_raw(dest, source, len)
+    child = 9
+}
+fn extent_across_forward(value: mut u256, dest: *u8, source: *u8, len: u256) {
+    extent_across_foreign(value, dest, source, len)
+}
+fn extent_across_drive() {
+    let allocation = ptr::alloc_bytes(96)
+    let target = ptr::cast<u8, u256>(ptr::offset_bytes(allocation, 32))
+    *target = 0
+    let source = ptr::alloc_bytes(96)
+    let dest = ptr::offset_bytes(allocation, 31)
+    extent_across_forward(value: mut *target, dest, source, len: 2)
+}
+
+// Accepted: bytes [64, 80) follow the protected word.
+fn extent_after_foreign(value: mut u256, dest: *u8, source: *u8, len: u256) {
+    let child = mut value
+    ptr::copy_raw(dest, source, len)
+    child = 9
+}
+fn extent_after_forward(value: mut u256, dest: *u8, source: *u8, len: u256) {
+    extent_after_foreign(value, dest, source, len)
+}
+fn extent_after_drive() {
+    let allocation = ptr::alloc_bytes(96)
+    let target = ptr::cast<u8, u256>(ptr::offset_bytes(allocation, 32))
+    *target = 0
+    let source = ptr::alloc_bytes(96)
+    let dest = ptr::offset_bytes(allocation, 64)
+    extent_after_forward(value: mut *target, dest, source, len: 16)
+}

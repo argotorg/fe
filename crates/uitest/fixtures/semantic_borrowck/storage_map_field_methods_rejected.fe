@@ -6,15 +6,6 @@ pub struct Ledger {
 }
 
 impl Ledger {
-    // Accepted control: defer separation of the input-field reborrow; the
-    // contract caller proves its allocated field separate from hashed slots.
-    fn hold(mut self, _ to: Address) -> u256 {
-        let supply = mut self.total_supply
-        self.balances.set(key: to, value: 7)
-        supply += 1
-        supply
-    }
-
     fn peek(mut self, _ slot: u256) -> u256 uses (raw: RawStorage) {
         raw.sload(slot)
     }
@@ -22,21 +13,6 @@ impl Ledger {
     fn mixed(mut self, _ to: Address, slot: u256) uses (raw: mut RawStorage) {
         self.balances.set(key: to, value: 1)
         raw.sstore(slot, value: self.balances.get(key: to))
-    }
-}
-
-msg HoldMsg {
-    #[selector = 1]
-    Hold { to: Address } -> u256,
-}
-
-pub contract Limitation {
-    mut ledger: Ledger,
-
-    recv HoldMsg {
-        Hold { to } -> u256 uses (mut ledger) {
-            ledger.hold(to)
-        }
     }
 }
 

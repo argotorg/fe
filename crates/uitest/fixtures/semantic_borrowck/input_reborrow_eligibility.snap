@@ -1,0 +1,51 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_borrowck/input_reborrow_eligibility.fe
+---
+error[16-0001]: borrow conflict in `fn first_selected_drive`
+   ┌─ input_reborrow_eligibility.fe:23:5
+   │
+ 7 │     let child = if flag { mut first } else { mut second }
+   │                           --------- borrow held across the access
+ 8 │     let other = *saved
+   │                 ------ access that must stay separate from it
+   ·
+23 │     first_selected_foreign(first, second, saved, flag: true)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call accesses memory that the callee keeps borrowed across the access
+
+error[16-0001]: borrow conflict in `fn second_selected_drive`
+   ┌─ input_reborrow_eligibility.fe:65:5
+   │
+49 │     let child = if flag { mut first } else { mut second }
+   │                                              ---------- borrow held across the access
+50 │     let other = *saved
+   │                 ------ access that must stay separate from it
+   ·
+65 │     second_selected_foreign(first, second, saved, flag: false)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call accesses memory that the callee keeps borrowed across the access
+
+error[16-0001]: borrow conflict in `fn partial_foreign`
+   ┌─ input_reborrow_eligibility.fe:92:17
+   │
+91 │     let child = if flag { mut value } else { mut *other }
+   │                                              ---------- borrow created here
+92 │     let alias = *saved
+   │                 ^^^^^^ cannot immutably borrow this place while a mutable borrow is active
+
+error[16-0001]: borrow conflict in `fn ancestry_foreign`
+    ┌─ input_reborrow_eligibility.fe:101:5
+    │
+100 │     let child = mut *holder.raw
+    │                 --------------- borrow created here
+101 │     holder.value = 5
+    │     ^^^^^^^^^^^^^^^^ cannot mutably borrow this place while a mut borrow is active
+
+error[16-0001]: borrow conflict in `fn indexed_foreign`
+    ┌─ input_reborrow_eligibility.fe:108:20
+    │
+107 │     let child = mut values[j]
+    │                 ------------- borrow created here
+108 │     let observed = values[i]
+    │                    ^^^^^^^^^ cannot immutably borrow this place while a mutable borrow is active

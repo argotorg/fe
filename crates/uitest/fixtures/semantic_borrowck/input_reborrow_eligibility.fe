@@ -1,0 +1,111 @@
+// A reborrow of an input owes its separation to callers under the guard that
+// selects the input. Other local borrows are checked locally.
+use core::ptr
+
+// Rejected in drive: the alias is the selected input.
+fn first_selected_foreign(first: mut u256, second: mut u256, saved: *mut u256, flag: bool) {
+    let child = if flag { mut first } else { mut second }
+    let other = *saved
+    other = 5
+    child = 9
+}
+fn first_selected_drive() {
+    let a = ptr::alloc<u256>()
+    let b = ptr::alloc<u256>()
+    let elsewhere = ptr::alloc<u256>()
+    *a = 0
+    *b = 0
+    *elsewhere = 0
+    let first = mut *a
+    let second = mut *b
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut first
+    first_selected_foreign(first, second, saved, flag: true)
+}
+
+// Accepted: the alias is the unselected input.
+fn first_unselected_foreign(first: mut u256, second: mut u256, saved: *mut u256, flag: bool) {
+    let child = if flag { mut first } else { mut second }
+    let other = *saved
+    other = 5
+    child = 9
+}
+fn first_unselected_drive() {
+    let a = ptr::alloc<u256>()
+    let b = ptr::alloc<u256>()
+    let elsewhere = ptr::alloc<u256>()
+    *a = 0
+    *b = 0
+    *elsewhere = 0
+    let first = mut *a
+    let second = mut *b
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut first
+    first_unselected_foreign(first, second, saved, flag: false)
+}
+
+// Rejected in drive: the alias is the selected input.
+fn second_selected_foreign(first: mut u256, second: mut u256, saved: *mut u256, flag: bool) {
+    let child = if flag { mut first } else { mut second }
+    let other = *saved
+    other = 5
+    child = 9
+}
+fn second_selected_drive() {
+    let a = ptr::alloc<u256>()
+    let b = ptr::alloc<u256>()
+    let elsewhere = ptr::alloc<u256>()
+    *a = 0
+    *b = 0
+    *elsewhere = 0
+    let first = mut *a
+    let second = mut *b
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut second
+    second_selected_foreign(first, second, saved, flag: false)
+}
+
+// Accepted: the alias is a third allocation.
+fn elsewhere_foreign(first: mut u256, second: mut u256, saved: *mut u256, flag: bool) {
+    let child = if flag { mut first } else { mut second }
+    let other = *saved
+    other = 5
+    child = 9
+}
+fn elsewhere_drive() {
+    let a = ptr::alloc<u256>()
+    let b = ptr::alloc<u256>()
+    let elsewhere = ptr::alloc<u256>()
+    *a = 0
+    *b = 0
+    *elsewhere = 0
+    let first = mut *a
+    let second = mut *b
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut *elsewhere
+    elsewhere_foreign(first, second, saved, flag: true)
+}
+
+// Rejected in foreign: one alternative borrows a raw pointee.
+fn partial_foreign(value: mut u256, other: *u256, saved: *mut u256, flag: bool) {
+    let child = if flag { mut value } else { mut *other }
+    let alias = *saved
+    alias = 5
+    child = 9
+}
+
+// Rejected in foreign: a raw pointer stored in an input is not a reborrow.
+struct AncestryHolder { value: u256, raw: *u256 }
+fn ancestry_foreign(_ holder: mut AncestryHolder) {
+    let child = mut *holder.raw
+    holder.value = 5
+    child = 9
+}
+
+// Rejected in foreign: a guarded definite overlap stays local.
+fn indexed_foreign(_ values: mut [u256; 2], _ i: usize, _ j: usize) -> u256 {
+    let child = mut values[j]
+    let observed = values[i]
+    child = 9
+    observed
+}
