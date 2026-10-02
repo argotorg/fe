@@ -1,0 +1,47 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_borrowck/input_reborrow_suspension.fe
+---
+error[16-0001]: borrow conflict in `fn second_unsuspended_drive`
+   ┌─ input_reborrow_suspension.fe:42:5
+   │
+29 │     let child = mut value
+   │                 --------- borrow held across the access
+   ·
+32 │     let observed: u256 = other
+   │                          ----- access that must stay separate from it
+   ·
+42 │     second_unsuspended_foreign(value: native, saved)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call accesses memory that the callee keeps borrowed across the access
+
+error[16-0001]: borrow conflict in `fn guarded_unsuspended_drive`
+   ┌─ input_reborrow_suspension.fe:82:5
+   │
+69 │     let child = mut value
+   │                 --------- borrow held across the access
+   ·
+72 │     let observed: u256 = other
+   │                          ----- access that must stay separate from it
+   ·
+82 │     guarded_unsuspended_foreign(value: native, saved, flag: false)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call accesses memory that the callee keeps borrowed across the access
+
+error[16-0001]: borrow conflict in `fn ref_write_drive`
+    ┌─ input_reborrow_suspension.fe:135:5
+    │
+135 │     ref_write_foreign(value: ref native, saved)
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    │     │                        │
+    │     │                        borrow created here
+    │     cannot mutably borrow this place while an immutable borrow is active
+
+error[16-0001]: borrow conflict in `fn extent_across_drive`
+    ┌─ input_reborrow_suspension.fe:191:5
+    │
+191 │     extent_across_forward(value: mut *target, dest, source, len: 2)
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    │     │                            │
+    │     │                            borrow created here
+    │     cannot mutably borrow this place while a mut borrow is active
