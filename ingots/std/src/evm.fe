@@ -19,6 +19,7 @@ pub use heap::{self}
 pub use mutex::{self, *}
 pub use mapping::SolMapping
 pub use merkle::{self}
+pub use multicall::{self}
 pub use sol_slot::{SolPacked, SolSlot}
 pub use sol_array::SolArray
 pub use sol_set::SolEnumerableSet

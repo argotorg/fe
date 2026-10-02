@@ -1,0 +1,70 @@
+//! Batching several calls to a contract into one transaction, like
+//! OpenZeppelin's `Multicall`.
+//!
+//! A contract opts in by handling [`MulticallMsg`] with [`multicall`]:
+//!
+//! ```fe
+//! use std::evm::multicall::{self, MulticallMsg}
+//!
+//! pub contract Token uses (ctx: Ctx, call: mut Call) {
+//!     recv MulticallMsg {
+//!         #[payable]
+//!         Multicall { data } -> Vec<Bytes> uses (ctx, mut call) {
+//!             multicall::multicall(data)
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! Every entry is `DELEGATECALL`ed to the contract itself, so it runs with
+//! the original caller and value and can reach any handler of the contract.
+//! A handler that trusts `ctx.value()` must keep in mind that it is the same
+//! for every entry of a batch, so a `#[payable]` handler could count one
+//! payment several times.
+//!
+//! OpenZeppelin's ERC-2771 context suffix handling is not included.
+use core::abi::{Bytes, DynArray}
+use core::ptr::MemBuffer
+use super::effects::{Call, Ctx, bubble_revert_or}
+use super::returndata::ReturnData
+use super::ops
+use ingot::abi::{DynArrayAccess, DynVec, sol::sol}
+
+/// A batched call failed without revert data. Selector `0xd6bda275`, as
+/// OpenZeppelin's `Errors.FailedCall`.
+#[error]
+pub struct FailedCall {}
+
+pub msg MulticallMsg {
+    #[selector = sol("multicall(bytes[])")]
+    Multicall { data: DynArray<Bytes> } -> DynArray<Bytes>,
+}
+
+/// `DELEGATECALL` every entry of `data` to `ctx.address()` in order, with
+/// all remaining gas, and return their returndata in the same order.
+///
+/// The first entry that fails reverts the whole batch with its revert data
+/// unchanged, or with `FailedCall` when it reverted without data.
+pub fn multicall(_ data: DynArray<Bytes>) -> DynArray<Bytes>
+uses (ctx: Ctx, call: mut Call)
+{
+    let this = ctx.address()
+    let count = data.len()
+    let mut results = DynVec<Bytes>::new()
+    let mut i: u256 = 0
+    while i < count {
+        let mut ret = MemBuffer::empty()
+        let outcome = call.raw_delegatecall(
+            addr: this,
+            gas: ops::gas(),
+            args: data.get(i).payload_span(),
+            ret: mut ret,
+        )
+        if !outcome.success() {
+            bubble_revert_or(FailedCall {})
+        }
+        results.push(ReturnData::new().to_bytes())
+        i += 1
+    }
+    results.to_dyn_array()
+}
