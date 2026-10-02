@@ -14,7 +14,8 @@ PASS  [<time>] test_string_concat_expression_args_runtime
 PASS  [<time>] test_string_concat_uses_effective_len_runtime
 PASS  [<time>] test_string_concat_overflow_truncates
 PASS  [<time>] test_string_abi_encoding_ignores_hidden_high_bytes
+PASS  [<time>] test_string_as_bytes_trait_runtime_and_const
 
-test result: ok. 10 passed; 0 failed
+test result: ok. 11 passed; 0 failed
 
 === EXIT CODE: 0 ===
