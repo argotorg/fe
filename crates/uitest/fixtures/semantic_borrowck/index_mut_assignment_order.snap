@@ -1,0 +1,44 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/index_mut_assignment_order.fe
+---
+error[16-0001]: borrow conflict in `fn explicit_borrow_then_read`
+   ┌─ index_mut_assignment_order.fe:43:9
+   │
+42 │     let q = mut *a.ptr
+   │             ---------- borrow created here
+43 │     q = carry
+   │         ^^^^^ cannot immutably borrow this place while a mutable borrow is active
+
+error[16-0001]: borrow conflict in `fn read_while_local_borrowed`
+   ┌─ index_mut_assignment_order.fe:52:16
+   │
+51 │         let r = mut carry
+   │                 --------- borrow created here
+52 │         a[k] = carry
+   │                ^^^^^ cannot immutably borrow this place while a mutable borrow is active
+
+error[16-0001]: borrow conflict in `fn read_other_input_after_write`
+   ┌─ index_mut_assignment_order.fe:63:10
+   │
+62 │     let q = mut *a.ptr
+   │             ---------- borrow created here
+63 │     q = *b.ptr
+   │          ^^^^^ cannot immutably borrow this place while a mutable borrow is active
+
+error[16-0001]: borrow conflict in `fn read_borrowed_element_in_loop`
+   ┌─ index_mut_assignment_order.fe:71:18
+   │
+70 │         let slot = mut *a.ptr
+   │                    ---------- borrow created here
+71 │         let x = *a.ptr
+   │                  ^^^^^ cannot immutably borrow this place while a mutable borrow is active
+
+error[16-0001]: borrow conflict in `fn compound_assignment`
+   ┌─ index_mut_assignment_order.fe:82:17
+   │
+82 │         a[k] += carry
+   │         ----    ^^^^^ cannot immutably borrow this place while a mutable borrow is active
+   │         │
+   │         borrow created here

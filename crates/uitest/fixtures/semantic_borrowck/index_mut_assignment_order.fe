@@ -1,0 +1,86 @@
+// `a[k] = v` evaluates `v` before calling `index_mut`. A write through a
+// view's element pointer may overwrite the view's own pointer field, and the
+// reloaded pointer may then name any memory, including a local. Reading the
+// local before the element borrow begins avoids that overlap.
+use core::ptr::MemArray
+
+struct Arr {
+    ptr: *u256,
+}
+
+// Accepted: the value is read before each element borrow.
+fn loop_reassigned_value(_ a: MemArray<u256>) {
+    let mut carry: u256 = 10
+    let mut k: usize = 0
+    while k < 2 {
+        a[k] = carry
+        carry = 1
+        k += 1
+    }
+}
+
+// Accepted: the same writes without a loop.
+fn repeated_writes(_ a: MemArray<u256>) {
+    let mut carry: u256 = 10
+    a[0] = carry
+    carry = 1
+    a[1] = carry
+}
+
+// Accepted: a single write.
+fn single_write(_ a: MemArray<u256>) {
+    let mut carry: u256 = 10
+    a[0] = carry
+    carry = 1
+}
+
+// Rejected: an explicit element borrow is live while the local is read.
+fn explicit_borrow_then_read(_ a: Arr) {
+    let mut carry: u256 = 10
+    let p = mut *a.ptr
+    p = carry
+    let q = mut *a.ptr
+    q = carry
+}
+
+// Rejected: the local is read while a mutable borrow of it is live.
+fn read_while_local_borrowed(_ a: MemArray<u256>) {
+    let mut carry: u256 = 10
+    let mut k: usize = 0
+    while k < 2 {
+        let r = mut carry
+        a[k] = carry
+        r = 1
+        k += 1
+    }
+}
+
+// Rejected: a possibly overwritten pointer may alias another input.
+fn read_other_input_after_write(_ a: Arr, _ b: Arr) {
+    let p = mut *a.ptr
+    p = 1
+    let q = mut *a.ptr
+    q = *b.ptr
+}
+
+// Rejected: the element is read while a mutable borrow of it is live.
+fn read_borrowed_element_in_loop(_ a: Arr) {
+    let mut k: usize = 0
+    while k < 2 {
+        let slot = mut *a.ptr
+        let x = *a.ptr
+        slot = x
+        k += 1
+    }
+}
+
+// Rejected: compound assignment borrows the element before reading the value.
+fn compound_assignment(_ a: MemArray<u256>) {
+    let mut carry: u256 = 10
+    let mut k: usize = 0
+    while k < 2 {
+        a[k] += carry
+        carry = 1
+        k += 1
+    }
+}

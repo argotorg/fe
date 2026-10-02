@@ -1,0 +1,80 @@
+use core::ptr::MemArray
+
+// Records `tag` at the next log position.
+fn record(_ log: MemArray<u256>, _ cursor: mut usize, _ tag: u256) {
+    log[cursor] = tag
+    cursor += 1
+}
+
+fn logged_index(_ log: MemArray<u256>, _ cursor: mut usize, _ index: usize) -> usize {
+    record(log, cursor, 1)
+    index
+}
+
+fn logged_value(_ log: MemArray<u256>, _ cursor: mut usize, _ value: u256) -> u256 {
+    record(log, cursor, 2)
+    value
+}
+
+fn overwrite(_ x: mut u256) -> usize {
+    x = 99
+    0
+}
+
+// The assigned value is evaluated before the indexed place, and each side
+// effect runs exactly once.
+#[test]
+fn indexed_assignment_evaluates_value_before_place() {
+    let log = MemArray<u256>::new_zeroed(4)
+    let mut cursor: usize = 0
+    let items = MemArray<u256>::new_zeroed(2)
+    items[logged_index(log, mut cursor, 1)] = logged_value(log, mut cursor, 42)
+    assert!(cursor == 2)
+    assert!(log[0] == 2)
+    assert!(log[1] == 1)
+    assert!(items[0] == 0)
+    assert!(items[1] == 42)
+}
+
+// Builtin array places follow the same order.
+#[test]
+fn array_assignment_evaluates_value_before_place() {
+    let log = MemArray<u256>::new_zeroed(4)
+    let mut cursor: usize = 0
+    let mut items: [u256; 2] = [0, 0]
+    items[logged_index(log, mut cursor, 1)] = logged_value(log, mut cursor, 42)
+    assert!(cursor == 2)
+    assert!(log[0] == 2)
+    assert!(log[1] == 1)
+    assert!(items[0] == 0)
+    assert!(items[1] == 42)
+}
+
+// A mutable binding on the right-hand side is read before the index runs.
+#[test]
+fn indexed_assignment_reads_binding_before_index() {
+    let items = MemArray<u256>::new_zeroed(1)
+    let mut x: u256 = 5
+    items[overwrite(mut x)] = x
+    assert!(items[0] == 5)
+    assert!(x == 99)
+}
+
+fn fill_doubling(_ a: MemArray<u256>) {
+    let mut carry: u256 = 10
+    let mut k: usize = 0
+    while k < 3 {
+        a[k] = carry
+        carry = carry * 2
+        k += 1
+    }
+}
+
+#[test]
+fn indexed_assignment_in_loop_with_reassigned_value() {
+    let a = MemArray<u256>::new_zeroed(3)
+    fill_doubling(a)
+    assert!(a[0] == 10)
+    assert!(a[1] == 20)
+    assert!(a[2] == 40)
+}

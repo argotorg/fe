@@ -631,13 +631,24 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Expr::MethodCall(receiver, _, _, args) => self.lower_call(expr, Some(*receiver), args),
             Expr::Assign(dst, src) => {
+                // The assigned value is evaluated before the assigned place, so
+                // an `index_mut` borrow does not cover the right-hand side. A
+                // mutable binding is otherwise read only by the write itself.
+                let mut value = self.lower_expr(*src);
+                let local = &self.locals[value.index()];
+                if local.source.is_some() && local.mutability == Mutability::Mutable {
+                    value = self.emit_expr_with_origin(
+                        SemOrigin::Expr(*src),
+                        local.ty,
+                        SExpr::UseValue(SOperand::expr(value, *src)),
+                    );
+                }
+                let src = SOperand::expr(value, *src);
                 if self.typed_body.semantic_expr_lowering(*dst).is_some() {
                     let dst = SPlace::new(self.lower_expr(*dst));
-                    let src = self.lower_expr_operand(*src);
                     self.push_stmt(origin, SStmtKind::Store { dst, src });
                 } else {
                     let dst = self.lower_place(*dst);
-                    let src = self.lower_expr_operand(*src);
                     self.push_place_write(origin, dst, src);
                 }
                 self.unit_value()
