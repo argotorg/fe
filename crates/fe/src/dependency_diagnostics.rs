@@ -1,11 +1,14 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{BTreeMap, HashSet, VecDeque, btree_map::Entry},
     fmt::Write as _,
 };
 
-use common::{InputDb, diagnostics::CompleteDiagnostic};
+use common::{
+    InputDb,
+    diagnostics::{CompleteDiagnostic, Severity},
+};
 use driver::{DriverDataBase, db::DiagnosticsCollection};
-use hir::{Ingot, hir_def::TopLevelMod};
+use hir::{Ingot, analysis::semantic::collect_blocked_semantic_bodies, hir_def::TopLevelMod};
 use url::Url;
 
 use crate::workspace_ingot::ingot_has_source_files;
@@ -85,10 +88,11 @@ impl<'db> DependencyIssues<'db> {
                 continue;
             };
             pending.extend(ingot.dependencies(db).into_iter().map(|(_, url)| url));
-            // The compiler-owned embedded libraries are immutable after database
-            // initialization and are validated by dedicated whole-library tests. Source and
+            // Analyzing the whole embedded libraries is far too slow for every run. They are
+            // validated by dedicated whole-library tests, and `collect_reached_builtins`
+            // reports errors in the modules a compilation actually reaches. Source and
             // workspace replacements use ordinary URLs and remain in this validation closure.
-            if matches!(dependency_url.scheme(), "builtin-core" | "builtin-std") {
+            if is_embedded_builtin(&dependency_url) {
                 continue;
             }
             if !ingot_has_source_files(db, ingot) {
@@ -119,6 +123,57 @@ impl<'db> DependencyIssues<'db> {
                     }
                 })
                 .collect();
+        Self { issues }
+    }
+
+    /// Reports HIR diagnostics of the embedded core and std modules that the
+    /// MIR analysis of `roots` reached despite errors.
+    ///
+    /// `collect` skips the embedded libraries, so an error in one of their
+    /// bodies first shows up here: as a blocked body, which the borrow pass
+    /// leaves silent, or as an internal error located in the library. Only the
+    /// modules involved are analyzed, which keeps clean runs free of cost.
+    fn collect_reached_builtins(
+        db: &'db DriverDataBase,
+        roots: &[TopLevelMod<'db>],
+        mir: &[CompleteDiagnostic],
+    ) -> Self {
+        let blocked = roots
+            .iter()
+            .flat_map(|root| collect_blocked_semantic_bodies(db, *root))
+            .map(|body| body.instance.key(db).owner(db).scope().top_mod(db));
+        let mir_errors = mir
+            .iter()
+            .filter(|diag| diag.severity == Severity::Error)
+            .filter_map(|diag| diag.primary_span())
+            .map(|span| db.top_mod(span.file));
+
+        let mut seen = HashSet::new();
+        let mut by_ingot = BTreeMap::<Url, DiagnosticsCollection<'db>>::new();
+        for module in blocked.chain(mir_errors) {
+            let url = module.ingot(db).base(db);
+            if !is_embedded_builtin(&url) || !seen.insert(module) {
+                continue;
+            }
+            let hir = db.run_on_top_mod(module);
+            if !hir.has_errors(db) {
+                continue;
+            }
+            match by_ingot.entry(url) {
+                Entry::Vacant(entry) => {
+                    entry.insert(hir);
+                }
+                Entry::Occupied(mut entry) => entry.get_mut().append(hir),
+            }
+        }
+        let issues = by_ingot
+            .into_iter()
+            .map(|(url, hir)| DependencyIssue::Diagnostics {
+                url,
+                hir,
+                mir: Vec::new(),
+            })
+            .collect();
         Self { issues }
     }
 
@@ -156,6 +211,7 @@ impl<'db> CompilationDiagnostics<'db> {
             db.run_on_top_mod(top_mod),
             || DependencyIssues::collect_all(db, ingot_url),
             || db.mir_diagnostics_for_top_mod(top_mod),
+            || vec![top_mod],
         )
     }
 
@@ -166,6 +222,7 @@ impl<'db> CompilationDiagnostics<'db> {
             db.run_on_ingot(ingot),
             || DependencyIssues::collect_all(db, &ingot_url),
             || db.mir_diagnostics_for_ingot(ingot),
+            || ingot_modules(db, ingot),
         )
     }
 
@@ -180,6 +237,7 @@ impl<'db> CompilationDiagnostics<'db> {
             db.run_on_ingot(ingot),
             || DependencyIssues::collect(db, &ingot_url, seen),
             || db.mir_diagnostics_for_ingot(ingot),
+            || ingot_modules(db, ingot),
         )
     }
 
@@ -188,6 +246,7 @@ impl<'db> CompilationDiagnostics<'db> {
         hir: DiagnosticsCollection<'db>,
         dependencies: impl FnOnce() -> DependencyIssues<'db>,
         mir: impl FnOnce() -> Vec<CompleteDiagnostic>,
+        roots: impl FnOnce() -> Vec<TopLevelMod<'db>>,
     ) -> Self {
         if hir.has_errors(db) {
             return Self {
@@ -198,17 +257,39 @@ impl<'db> CompilationDiagnostics<'db> {
         }
 
         let dependencies = dependencies();
-        let mir = if dependencies.is_empty() {
-            mir()
-        } else {
-            Vec::new()
-        };
+        if !dependencies.is_empty() {
+            return Self {
+                hir,
+                dependencies,
+                mir: Vec::new(),
+            };
+        }
+
+        let mir = mir();
+        let builtins = DependencyIssues::collect_reached_builtins(db, &roots(), &mir);
+        if !builtins.is_empty() {
+            return Self {
+                hir,
+                dependencies: builtins,
+                mir: Vec::new(),
+            };
+        }
         Self {
             hir,
             dependencies,
             mir,
         }
     }
+}
+
+/// The compiler-owned embedded libraries. Source and workspace replacements of
+/// core and std use ordinary URLs and are validated like other dependencies.
+fn is_embedded_builtin(url: &Url) -> bool {
+    matches!(url.scheme(), "builtin-core" | "builtin-std")
+}
+
+fn ingot_modules<'db>(db: &'db DriverDataBase, ingot: Ingot<'db>) -> Vec<TopLevelMod<'db>> {
+    hir::lower::module_tree(db, ingot).all_modules().collect()
 }
 
 fn append_dependency_header(db: &DriverDataBase, dependency_url: &Url, out: &mut String) {
@@ -334,5 +415,68 @@ mod tests {
         assert!(diagnostics.hir.is_empty());
         assert!(diagnostics.dependencies.is_empty());
         assert!(diagnostics.mir.is_empty());
+    }
+
+    /// Appends `core_addition` to the embedded `core::text` module and returns a
+    /// database whose standalone root file calls into it.
+    fn db_with_embedded_core_addition(
+        core_addition: &str,
+        root_source: &str,
+    ) -> (DriverDataBase, Url) {
+        let root_url = Url::parse("file:///dependency_diagnostics_root.fe").unwrap();
+        let mut db = DriverDataBase::default();
+        db.workspace()
+            .touch(&mut db, root_url.clone(), Some(root_source.to_string()));
+
+        let core_url = Url::parse(BUILTIN_CORE_BASE_URL)
+            .unwrap()
+            .join("src/text.fe")
+            .unwrap();
+        let core_file = db.workspace().get(&db, &core_url).unwrap();
+        let mut core_source = core_file.text(&db).to_string();
+        core_source.push_str(core_addition);
+        db.workspace().update(&mut db, core_url, core_source);
+        (db, root_url)
+    }
+
+    #[test]
+    fn reached_embedded_builtin_blocked_body_reports_type_error() {
+        // An invalid cast blocks the body; the borrow pass alone reports nothing.
+        let (db, root_url) = db_with_embedded_core_addition(
+            "\npub fn injected_cast(_ p: *u8) -> u256 { *p as u256 }\n",
+            "use core::text\nfn root(p: *u8) -> u256 { text::injected_cast(p) }\n",
+        );
+        let diagnostics = collect(&db, &root_url);
+        let formatted = diagnostics.dependencies.format(&db);
+
+        assert!(diagnostics.hir.is_empty());
+        assert!(diagnostics.mir.is_empty(), "{formatted}");
+        assert!(formatted.contains("Dependency: core"), "{formatted}");
+        assert!(formatted.contains("URL: builtin-core:/"), "{formatted}");
+        assert!(
+            formatted.contains("cast is not provably lossless"),
+            "{formatted}"
+        );
+    }
+
+    #[test]
+    fn reached_embedded_builtin_internal_error_reports_type_error() {
+        // Indexing with `u256` instead of `usize` otherwise surfaces as an
+        // internal borrow checking error located in the builtin body.
+        let (db, root_url) = db_with_embedded_core_addition(
+            "\npub fn injected_index(_ len: u256) -> u256 {\n    let arr: ptr::MemArray<u256> = ptr::alloc_array(len)\n    arr[len]\n}\n",
+            "use core::text\nfn root() -> u256 { text::injected_index(1) }\n",
+        );
+        let diagnostics = collect(&db, &root_url);
+        let formatted = diagnostics.dependencies.format(&db);
+
+        assert!(diagnostics.hir.is_empty());
+        assert!(diagnostics.mir.is_empty(), "{formatted}");
+        assert!(formatted.contains("URL: builtin-core:/"), "{formatted}");
+        assert!(
+            formatted.contains("expected `usize`, but `u256` is given"),
+            "{formatted}"
+        );
+        assert!(!formatted.contains("internal"), "{formatted}");
     }
 }

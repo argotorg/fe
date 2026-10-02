@@ -1,0 +1,4 @@
+pub fn digit_count(_ value: u256) -> u256 {
+    let count: usize = value
+    value
+}

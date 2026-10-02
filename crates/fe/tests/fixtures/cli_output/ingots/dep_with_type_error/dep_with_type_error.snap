@@ -1,0 +1,13 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDERR ===
+error[8-0000]: type mismatch
+  ┌─ src/lib.fe:2:24
+  │
+2 │     let count: usize = value
+  │                        ^^^^^ expected `usize`, but `u256` is given
+
+
+=== EXIT CODE: 1 ===
