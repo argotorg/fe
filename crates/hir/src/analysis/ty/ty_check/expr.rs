@@ -845,6 +845,31 @@ impl<'db> TyChecker<'db> {
         None
     }
 
+    /// Constructing or destructuring a tuple struct requires all of its fields
+    /// to be visible. Reports the first invisible field at `span` and returns
+    /// `false` if one exists.
+    pub(super) fn check_tuple_struct_fields_visible(
+        &mut self,
+        ty: TyId<'db>,
+        span: DynLazySpan<'db>,
+    ) -> bool {
+        let Some(struct_) = ty.as_tuple_struct(self.db) else {
+            return true;
+        };
+        let parent = FieldParent::Struct(struct_);
+        for (idx, field) in parent.fields(self.db).enumerate() {
+            let scope = ScopeId::Field(parent, idx as u16);
+            if !is_scope_visible_from(self.db, scope, self.env.scope()) {
+                let Some(name) = field.name(self.db) else {
+                    continue;
+                };
+                self.push_diag(PathResDiag::Invisible(span, name, scope.name_span(self.db)));
+                return false;
+            }
+        }
+        true
+    }
+
     /// Returns `true` if `ty` is a single-field struct whose field is not visible
     /// from the current scope.
     fn is_single_field_struct_with_invisible_field(&self, ty: TyId<'db>) -> bool {
@@ -3577,6 +3602,17 @@ impl<'db> TyChecker<'db> {
                         self.env
                             .register_value_path_ref(expr, ValuePathRef::TypeConst(ty));
                         ExprProp::new(self.table.instantiate_to_term(const_ty_ty), true)
+                    } else if matches!(reso, PathRes::Ty(_))
+                        && let Some(ctor_ty) = ty.tuple_struct_ctor_ty(self.db)
+                    {
+                        if !self
+                            .check_tuple_struct_fields_visible(ty, path_expr_span.clone().into())
+                        {
+                            return ExprProp::invalid(self.db);
+                        }
+                        self.env
+                            .register_value_path_ref(expr, ValuePathRef::FunctionItem);
+                        ExprProp::new(self.instantiate_to_term(ctor_ty), true)
                     } else {
                         let diag = if ty.is_struct(self.db) {
                             let record_like = RecordLike::from_ty(ty);
@@ -4090,17 +4126,27 @@ impl<'db> TyChecker<'db> {
             let (ty_base, ty_args) = resolved_field.base_ty.decompose_ty_app(self.db);
             let is_mut = typed_lhs.is_mut || resolved_field.implicit_deref_ty.is_some();
 
-            match field {
-                FieldIndex::Ident(label) => {
+            // Tuple struct fields are named by their position.
+            let label = match field {
+                FieldIndex::Ident(label) => Some(*label),
+                FieldIndex::Index(index)
+                    if resolved_field.base_ty.as_tuple_struct(self.db).is_some() =>
+                {
+                    Some(IdentId::new(self.db, index.data(self.db).to_string()))
+                }
+                FieldIndex::Index(_) => None,
+            };
+            match label {
+                Some(label) => {
                     let record_like = RecordLike::from_ty(resolved_field.base_ty);
-                    if let Some(field_ty) = record_like.record_field_ty(self.db, *label) {
-                        if let Some(scope) = record_like.record_field_scope(self.db, *label)
+                    if let Some(field_ty) = record_like.record_field_ty(self.db, label) {
+                        if let Some(scope) = record_like.record_field_scope(self.db, label)
                             && !is_scope_visible_from(self.db, scope, self.env.scope())
                         {
                             // Check the visibility of the field.
                             let diag = PathResDiag::Invisible(
                                 expr.span(self.body()).into_field_expr().accessor().into(),
-                                *label,
+                                label,
                                 scope.name_span(self.db),
                             );
 
@@ -4123,7 +4169,7 @@ impl<'db> TyChecker<'db> {
                     }
                 }
 
-                FieldIndex::Index(_) => {
+                None => {
                     if ty_base.is_tuple(self.db) {
                         self.env
                             .register_resolved_field_index(expr, resolved_field.index);

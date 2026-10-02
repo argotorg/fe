@@ -1192,7 +1192,7 @@ pub fn complete_default_const_args_for_identity<'db>(
         TyBase::Adt(adt) => collect_generic_params(db, adt.as_generic_param_owner(db)),
         TyBase::Func(func) => match *func {
             CallableDef::Func(def) => collect_generic_params(db, def.into()),
-            CallableDef::VariantCtor(_) => return ty,
+            CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => return ty,
         },
         _ => return ty,
     };

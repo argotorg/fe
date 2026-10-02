@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::{
     hir_def::{
-        Body, Enum, ExprId, GenericParamOwner, IdentId, ItemKind, PathId,
+        Body, Enum, ExprId, GenericParamOwner, IdentId, ItemKind, PathId, Struct,
         TypeAlias as HirTypeAlias, VariantKind,
         prim_ty::{IntTy as HirIntTy, PrimTy as HirPrimTy, UintTy as HirUintTy},
         scope_graph::ScopeId,
@@ -605,6 +605,27 @@ impl<'db> TyId<'db> {
         } else {
             None
         }
+    }
+
+    /// Returns the tuple struct (`struct Month(pub u8)`) this type refers to.
+    pub fn as_tuple_struct(self, db: &'db dyn HirAnalysisDb) -> Option<Struct<'db>> {
+        match self.base_ty(db).adt_ref(db)? {
+            AdtRef::Struct(struct_) if struct_.is_tuple(db) => Some(struct_),
+            _ => None,
+        }
+    }
+
+    /// Returns the constructor function type of a tuple struct type, applied
+    /// to the type's generic arguments, e.g. `fn(u8) -> Month` for `Month`.
+    pub fn tuple_struct_ctor_ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+        let struct_ = self.as_tuple_struct(db)?;
+        let mut ty = TyId::func(db, CallableDef::StructCtor(struct_));
+        for &arg in self.generic_args(db) {
+            if ty.applicable_ty(db).is_some() {
+                ty = TyId::app(db, ty, arg);
+            }
+        }
+        Some(ty)
     }
 
     pub fn as_scope(self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {

@@ -36,6 +36,8 @@ use crate::analysis::{
 
 enum TupleVariantResolution<'db> {
     Resolved(ResolvedVariant<'db>, TupleTypeId<'db>),
+    /// A tuple struct type, e.g. `Month` in `Month(m)`.
+    TupleStruct(TyId<'db>),
     Invalid,
     UnresolvedPath,
 }
@@ -469,7 +471,8 @@ impl<'db> TyChecker<'db> {
         let (actual, analysis) = match res {
             Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty) | PathRes::Func(ty)) => {
                 let record_like = RecordLike::from_ty(ty);
-                if record_like.is_record(self.db) {
+                // Tuple structs must be destructured with `Name(..)`.
+                if record_like.is_record(self.db) || ty.as_tuple_struct(self.db).is_some() {
                     (
                         self.emit_unit_variant_expected(pat, record_like),
                         PatternAnalysisStatus::Invalid,
@@ -686,6 +689,9 @@ impl<'db> TyChecker<'db> {
 
         let (variant, expected_elems) = match self.resolve_tuple_variant_pat(pat, *path) {
             TupleVariantResolution::Resolved(variant, expected_elems) => (variant, expected_elems),
+            TupleVariantResolution::TupleStruct(ty) => {
+                return self.check_tuple_struct_pat(pat, ty, elems, expected, layout);
+            }
             TupleVariantResolution::Invalid => {
                 self.check_tuple_like_pattern_elems(elems, &[], Range::default(), None);
                 return self.finish_pat_check(
@@ -772,6 +778,77 @@ impl<'db> TyChecker<'db> {
         self.finish_pat_check(pat, expected, semantic_ty, analysis)
     }
 
+    fn check_tuple_struct_pat(
+        &mut self,
+        pat: PatId,
+        struct_ty: TyId<'db>,
+        elems: &[PatId],
+        expected: TyId<'db>,
+        layout: Option<&PatternLayoutContext<'db>>,
+    ) -> PatCheckResult<'db> {
+        let pat_span: crate::span::DynLazySpan<'db> = pat.span(self.body()).into();
+        let fields_visible = self.check_tuple_struct_fields_visible(struct_ty, pat_span.clone());
+
+        let semantic_ty = self.equate_ty(struct_ty, expected, pat_span.clone());
+        let semantic_ty = if semantic_ty.has_invalid(self.db) {
+            semantic_ty
+        } else {
+            self.canonical_nominal_ty_from_expected(semantic_ty, expected)
+        };
+        let struct_ty = if semantic_ty.has_invalid(self.db) {
+            self.canonical_nominal_ty_from_expected(struct_ty, expected)
+        } else {
+            semantic_ty
+        };
+        let ctor = self.type_constructor_kind(struct_ty, semantic_ty);
+        let elem_tys = ctor
+            .field_types(self.db)
+            .into_iter()
+            .enumerate()
+            .map(|(idx, ty)| {
+                layout
+                    .and_then(|layout| {
+                        let field = u16::try_from(idx).ok()?;
+                        self.projected_pattern_layout_ty(
+                            layout,
+                            &[LayoutBundlePathStep::Field(field)],
+                        )
+                    })
+                    .unwrap_or(ty)
+            })
+            .collect::<Vec<_>>();
+        let expected_len = elem_tys.len();
+        let UnpackedRestPat {
+            elem_tys: actual_elems,
+            rest_range,
+            is_valid,
+        } = self.unpack_rest_pat(elems, Some(expected_len));
+        let fields =
+            self.check_tuple_like_pattern_elems(elems, &elem_tys, rest_range, Some(struct_ty));
+        if actual_elems.len() != expected_len {
+            let diag = BodyDiag::MismatchedFieldCount {
+                primary: pat_span,
+                expected: expected_len,
+                given: actual_elems.len(),
+            };
+
+            self.push_diag(diag);
+            return self.finish_pat_check(
+                pat,
+                expected,
+                semantic_ty,
+                PatternAnalysisStatus::Invalid,
+            );
+        }
+
+        let analysis = if semantic_ty.has_invalid(self.db) || !is_valid || !fields_visible {
+            PatternAnalysisStatus::Invalid
+        } else {
+            self.ready_constructor(semantic_ty, ctor, fields)
+        };
+        self.finish_pat_check(pat, expected, semantic_ty, analysis)
+    }
+
     fn resolve_tuple_variant_pat(
         &mut self,
         pat: PatId,
@@ -790,6 +867,9 @@ impl<'db> TyChecker<'db> {
             &minter,
         ) {
             Ok(res) => match res {
+                PathRes::Ty(ty) if ty.as_tuple_struct(self.db).is_some() => {
+                    TupleVariantResolution::TupleStruct(ty)
+                }
                 PathRes::Ty(ty)
                 | PathRes::TyAlias(_, ty)
                 | PathRes::Func(ty)

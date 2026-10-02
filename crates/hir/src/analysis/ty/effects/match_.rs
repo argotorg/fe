@@ -627,7 +627,7 @@ fn explicit_param_count_for_effect_identity_base<'db>(
             CallableDef::Func(def) => {
                 collect_generic_params(db, (*def).into()).explicit_param_count(db)
             }
-            CallableDef::VariantCtor(_) => 0,
+            CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => 0,
         },
         _ => 0,
     }
