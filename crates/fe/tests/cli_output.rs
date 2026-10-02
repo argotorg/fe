@@ -3238,6 +3238,215 @@ fn non_integer_balance_value() {}
     }
 }
 
+#[test]
+fn test_explain_failure_maps_the_executed_source_and_keeps_expected_reverts_quiet() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("failure.fe");
+    fs::write(
+        &source,
+        r#"use std::evm::Evm
+#[test]
+fn fails() uses (evm: mut Evm) {
+    assert!(false, "diagnostic smoke")
+}
+#[test(should_revert)]
+fn expected() uses (evm: mut Evm) {
+    assert!(false, "expected")
+}
+#[test(should_revert, panic = 0x11)]
+fn mismatched() uses (evm: mut Evm) {
+    assert!(false)
+}
+"#,
+    )
+    .unwrap();
+    let source = source.to_str().unwrap();
+    let (plain, plain_status) = run_fe_main(&["test", source, "--jobs", "1"]);
+    let (explained, explained_status) =
+        run_fe_main(&["test", source, "--jobs", "1", "--explain-failure"]);
+    assert_eq!(plain_status, 1, "{plain}");
+    assert_eq!(explained_status, plain_status, "{explained}");
+    assert!(!plain.contains("Execution diagnostics"));
+    assert_eq!(
+        explained.matches("Execution diagnostics").count(),
+        2,
+        "{explained}"
+    );
+    assert!(
+        explained.contains("Decoded payload: Error(\"diagnostic smoke\")"),
+        "{explained}"
+    );
+    assert!(explained.contains("Source: failure.fe:4:5"), "{explained}");
+    assert!(explained.contains("1 passed; 2 failed"), "{explained}");
+    assert!(explained.contains("Expected revert data"), "{explained}");
+    assert!(
+        explained.contains("Decoded payload: Panic(0x1)"),
+        "{explained}"
+    );
+
+    let (expected_plain, status) =
+        run_fe_main(&["test", source, "--filter", "expected", "--call-trace"]);
+    assert_eq!(status, 0, "{expected_plain}");
+    let (expected_traced, status) = run_fe_main(&[
+        "test",
+        source,
+        "--filter",
+        "expected",
+        "--call-trace",
+        "--explain-failure",
+    ]);
+    assert_eq!(status, 0, "{expected_traced}");
+    assert_eq!(
+        normalize_timing_output(&expected_plain),
+        normalize_timing_output(&expected_traced)
+    );
+    let debug_dir = temp.path().join("trace-output");
+    let (combined, status) = run_fe_main(&[
+        "test",
+        source,
+        "--filter",
+        "expected",
+        "--call-trace",
+        "--explain-failure",
+        "--trace-evm",
+        "--trace-evm-keep",
+        "1",
+        "--trace-evm-stack-n",
+        "1",
+        "--debug-dir",
+        debug_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(status, 0, "{combined}");
+    assert_eq!(
+        normalize_timing_output(&expected_plain),
+        normalize_timing_output(&combined)
+    );
+    let files = fs::read_dir(&debug_dir)
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(files.len(), 1);
+    let steps = fs::read_to_string(files[0].path()).unwrap();
+    assert!(steps.contains("TRACE execution=0 (last 1 of"), "{steps}");
+    assert!(steps.contains("TRACE execution=1 (last 1 of"), "{steps}");
+    assert_eq!(
+        steps
+            .lines()
+            .filter(|line| line.starts_with("frame="))
+            .count(),
+        2
+    );
+    assert!(steps.contains("stack="), "{steps}");
+}
+
+#[test]
+fn test_explain_failure_decodes_nested_immutable_contract_errors_at_all_optimizations() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/failure_tracing/immutable_custom_error.fe");
+    for level in ["0", "1", "2", "s"] {
+        let (output, status) = run_fe_main(&[
+            "test",
+            source.to_str().unwrap(),
+            "--explain-failure",
+            "--optimize",
+            level,
+        ]);
+        assert_eq!(status, 1, "{level}: {output}");
+        assert!(
+            output.contains("Decoded payload: Unsettled(remaining=7)"),
+            "{level}: {output}"
+        );
+        assert!(
+            output.contains("CREATE2 Manager: Return"),
+            "{level}: {output}"
+        );
+        assert!(output.contains("Call Manager: Revert"), "{level}: {output}");
+        assert!(
+            output.contains("CREATE2 Manager: Revert"),
+            "{level}: {output}"
+        );
+        assert!(
+            output.contains("Decoded payload: Error(\"constructor refused\")"),
+            "{level}: {output}"
+        );
+        // The executed REVERT may map to the standard-library helper at O0.
+        assert!(output.contains("Source: "), "{level}: {output}");
+        assert!(
+            output.contains("immutable_custom_error.fe:"),
+            "{level}: {output}"
+        );
+    }
+}
+
+#[test]
+fn test_explain_failure_parallel_reports_keep_same_named_tests_isolated() {
+    let temp = tempdir().unwrap();
+    let mut inputs = Vec::new();
+    for marker in ["alpha-only-marker", "beta-only-marker"] {
+        let file = temp.path().join(format!("{marker}.fe"));
+        fs::write(&file, format!("use std::evm::Evm\n#[test]\nfn shared_name() uses (evm: mut Evm) {{ assert!(false, \"{marker}\") }}\n")).unwrap();
+        inputs.push(file);
+    }
+    let reports = temp.path().join("reports");
+    let (output, status) = run_fe_main(&[
+        "test",
+        inputs[0].to_str().unwrap(),
+        inputs[1].to_str().unwrap(),
+        "--jobs",
+        "2",
+        "--explain-failure",
+        "--report-dir",
+        reports.to_str().unwrap(),
+    ]);
+    assert_eq!(status, 1, "{output}");
+    let archives = fs::read_dir(&reports)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "gz"))
+        .collect::<Vec<_>>();
+    assert_eq!(archives.len(), 2, "{output}");
+    let mut seen = std::collections::BTreeSet::new();
+    for (index, archive) in archives.iter().enumerate() {
+        let extracted = temp.path().join(format!("extracted-{index}"));
+        fs::create_dir(&extracted).unwrap();
+        let extraction = Command::new("tar")
+            .arg("-xzf")
+            .arg(archive)
+            .arg("-C")
+            .arg(&extracted)
+            .output()
+            .unwrap();
+        assert!(
+            extraction.status.success(),
+            "{}",
+            String::from_utf8_lossy(&extraction.stderr)
+        );
+        let mut explanations = 0;
+        let mut traces = 0;
+        for entry in walkdir::WalkDir::new(&extracted) {
+            let entry = entry.unwrap();
+            if entry.file_name() == "explanation.txt" {
+                explanations += 1;
+                let explanation = fs::read_to_string(entry.path()).unwrap();
+                let alpha = explanation.contains("alpha-only-marker");
+                let beta = explanation.contains("beta-only-marker");
+                assert_ne!(alpha, beta, "mixed report: {explanation}");
+                seen.insert(if alpha { "alpha" } else { "beta" });
+            }
+            if entry.file_name() == "execution-trace.json" {
+                traces += 1;
+                let trace: Value =
+                    serde_json::from_slice(&fs::read(entry.path()).unwrap()).unwrap();
+                assert_eq!(trace["schema_version"], "fe-test-execution-v1");
+                assert_eq!(trace["executions"].as_array().unwrap().len(), 2);
+            }
+        }
+        assert_eq!(explanations, 1);
+        assert_eq!(traces, 1);
+    }
+    assert_eq!(seen.len(), 2);
+}
+
 /// Runs `fe test` and snapshots the output to verify behavior of passing/failing tests and logs.
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test_runner",

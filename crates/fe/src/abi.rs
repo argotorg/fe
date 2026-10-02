@@ -841,6 +841,74 @@ fn derive_state_mutability(
     }
 }
 
+/// Error metadata for a verified test artifact. Reuse typed-body traversal so
+/// errors in reachable helpers are included without changing public ABI output.
+pub(crate) fn diagnostic_error_entries(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    kind: &str,
+    name: &str,
+) -> Result<Vec<serde_json::Value>, String> {
+    let structs = if kind == "contract" {
+        let mut contracts = top_mod.all_contracts(db).iter().filter(|contract| {
+            contract
+                .name(db)
+                .to_opt()
+                .is_some_and(|ident| ident.data(db) == name)
+        });
+        let contract = contracts.next().ok_or("missing diagnostic contract")?;
+        if contracts.next().is_some() {
+            return Err("ambiguous diagnostic contract".into());
+        }
+        collect_contract_event_structs(db, *contract, true)
+    } else if kind == "function" {
+        let mut funcs = top_mod.children_nested(db).filter_map(|item| {
+            let hir::hir_def::ItemKind::Func(func) = item else {
+                return None;
+            };
+            func.name(db)
+                .to_opt()
+                .is_some_and(|ident| ident.data(db) == name)
+                .then_some(func)
+        });
+        let func = funcs.next().ok_or("missing diagnostic function")?;
+        if funcs.next().is_some() {
+            return Err("ambiguous diagnostic function".into());
+        }
+        let (_, typed_body) = hir::analysis::ty::ty_check::check_func_body(db, func);
+        let mut errors = Vec::new();
+        collect_typed_body_event_structs(
+            db,
+            typed_body,
+            &resolve_event_emit_traits(db, func.scope()),
+            true,
+            hir::analysis::ty::corelib::resolve_lib_func_path(
+                db,
+                func.scope(),
+                "std::evm::effects::revert_error",
+            ),
+            &mut errors,
+            &mut HashSet::new(),
+            &mut HashSet::new(),
+        );
+        errors
+    } else {
+        return Err("unknown diagnostic owner kind".into());
+    };
+    structs
+        .into_iter()
+        .map(|struct_| {
+            let mut entry = event_struct_to_abi_entry(db, struct_)?;
+            entry.entry_type = "error".into();
+            entry.anonymous = None;
+            for input in entry.inputs.iter_mut().flatten() {
+                input.indexed = None;
+            }
+            serde_json::to_value(entry).map_err(|error| error.to_string())
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
