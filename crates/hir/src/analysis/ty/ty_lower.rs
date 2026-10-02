@@ -54,8 +54,8 @@ use super::{
     visitor::{TyVisitable, TyVisitor},
 };
 use crate::analysis::name_resolution::{
-    NameDomain, NameResKind, PathRes, PathResErrorKind, resolve_ident_to_bucket,
-    resolve_path_with_minter,
+    NameDomain, NameResKind, PathRes, TypePosition, path_resolver::PathResolutionResult,
+    resolve_ident_to_bucket, resolve_path_with_minter, resolve_type_position_path_with_minter,
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -105,7 +105,9 @@ fn lower_hir_ty_impl<'db>(
             }
         }
 
-        HirTyKind::Path(path) => lower_path_impl(db, scope, *path, assumptions, minter),
+        HirTyKind::Path(path) => {
+            lower_path_impl(db, scope, *path, assumptions, TypePosition::Type, minter)
+        }
 
         HirTyKind::Tuple(tuple_id) => {
             let elems = tuple_id.data(db);
@@ -509,93 +511,104 @@ fn lower_path_impl<'db>(
     scope: ScopeId<'db>,
     path: Partial<PathId<'db>>,
     assumptions: PredicateListId<'db>,
+    position: TypePosition,
     minter: &LoweringContext<'db>,
 ) -> TyId<'db> {
     let Some(path) = path.to_opt() else {
         return TyId::invalid(db, InvalidCause::ParseError);
     };
+    lower_type_position_path(db, path, scope, assumptions, position, minter)
+        .unwrap_or_else(|_| TyId::invalid(db, InvalidCause::PathResolutionFailed { path }))
+}
 
-    match resolve_path_with_minter(db, path, scope, assumptions, false, minter) {
-        Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty) | PathRes::Func(ty)) => ty,
-        Ok(res) => TyId::invalid(db, InvalidCause::NotAType(res)),
-        Err(err) => {
-            // Try to resolve as a value, to find a matching `const` definition
-            if matches!(err.kind, PathResErrorKind::NotFound { .. })
-                && let Ok(resolved) =
-                    resolve_path_with_minter(db, path, scope, assumptions, true, minter)
-            {
-                return match resolved {
-                    PathRes::Const(const_def, ty) => {
-                        if let Some(body) = const_def.body(db).to_opt() {
-                            let const_ty =
-                                ConstTyId::from_body(db, body, Some(ty), Some(const_def));
-                            TyId::const_ty(db, const_ty)
-                        } else {
-                            TyId::invalid(db, InvalidCause::ParseError)
-                        }
-                    }
-                    PathRes::TraitConst(recv_ty, inst, name) => {
-                        let mut args = inst.args(db).clone();
-                        if let Some(self_arg) = args.first_mut() {
-                            *self_arg = recv_ty;
-                        }
-                        let inst = TraitInstId::new(
-                            db,
-                            inst.def(db),
-                            args,
-                            inst.assoc_type_bindings(db).clone(),
-                        );
-
-                        if let Some(expected_ty) = inst
-                            .def(db)
-                            .const_(db, name)
-                            .and_then(|v| v.ty_binder(db))
-                            .map(|b| b.instantiate(db, inst.args(db)))
-                        {
-                            let assoc = AssocConstUse::new(scope, assumptions, inst, name);
-                            if let Some(const_ty) =
-                                super::const_ty::const_ty_or_abstract_from_assoc_const_use(
-                                    db,
-                                    assoc,
-                                    expected_ty,
-                                )
-                            {
-                                TyId::const_ty(db, const_ty)
-                            } else {
-                                TyId::invalid(db, InvalidCause::Other)
-                            }
-                        } else {
-                            TyId::invalid(db, InvalidCause::Other)
-                        }
-                    }
-                    PathRes::InherentConst(recv_ty, impl_, name) => {
-                        if let Some(expected_ty) =
-                            super::const_ty::inherent_const_expected_ty(db, impl_, recv_ty, name)
-                        {
-                            let use_ =
-                                InherentConstUse::new(scope, assumptions, impl_, recv_ty, name);
-                            if let Some(const_ty) =
-                                super::const_ty::const_ty_or_abstract_from_inherent_const_use(
-                                    db,
-                                    use_,
-                                    expected_ty,
-                                )
-                            {
-                                TyId::const_ty(db, const_ty)
-                            } else {
-                                TyId::invalid(db, InvalidCause::Other)
-                            }
-                        } else {
-                            TyId::invalid(db, InvalidCause::Other)
-                        }
-                    }
-                    other => TyId::invalid(db, InvalidCause::NotAType(other)),
-                };
+/// Lowers `path`, written in a type `position`, from its single resolution
+/// ([`resolve_type_position_path_with_minter`]): to the type or constant it
+/// names, or to `NotAType` for anything else. The error is why `path` does
+/// not resolve.
+pub(crate) fn lower_type_position_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    position: TypePosition,
+    minter: &LoweringContext<'db>,
+) -> PathResolutionResult<'db, TyId<'db>> {
+    let res =
+        resolve_type_position_path_with_minter(db, path, scope, assumptions, position, minter)?;
+    Ok(match res {
+        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) | PathRes::Func(ty) => ty,
+        PathRes::Const(const_def, ty) => {
+            if let Some(body) = const_def.body(db).to_opt() {
+                let const_ty = ConstTyId::from_body(db, body, Some(ty), Some(const_def));
+                TyId::const_ty(db, const_ty)
+            } else {
+                TyId::invalid(db, InvalidCause::ParseError)
             }
-
-            TyId::invalid(db, InvalidCause::PathResolutionFailed { path })
         }
-    }
+        PathRes::TraitConst(recv_ty, inst, name) => {
+            let mut args = inst.args(db).clone();
+            if let Some(self_arg) = args.first_mut() {
+                *self_arg = recv_ty;
+            }
+            let inst =
+                TraitInstId::new(db, inst.def(db), args, inst.assoc_type_bindings(db).clone());
+
+            if let Some(expected_ty) = inst
+                .def(db)
+                .const_(db, name)
+                .and_then(|v| v.ty_binder(db))
+                .map(|b| b.instantiate(db, inst.args(db)))
+            {
+                let assoc = AssocConstUse::new(scope, assumptions, inst, name);
+                if let Some(const_ty) = super::const_ty::const_ty_or_abstract_from_assoc_const_use(
+                    db,
+                    assoc,
+                    expected_ty,
+                ) {
+                    TyId::const_ty(db, const_ty)
+                } else {
+                    TyId::invalid(db, InvalidCause::Other)
+                }
+            } else {
+                TyId::invalid(db, InvalidCause::Other)
+            }
+        }
+        PathRes::InherentConst(recv_ty, impl_, name) => {
+            if let Some(expected_ty) =
+                super::const_ty::inherent_const_expected_ty(db, impl_, recv_ty, name)
+            {
+                let use_ = InherentConstUse::new(scope, assumptions, impl_, recv_ty, name);
+                if let Some(const_ty) =
+                    super::const_ty::const_ty_or_abstract_from_inherent_const_use(
+                        db,
+                        use_,
+                        expected_ty,
+                    )
+                {
+                    TyId::const_ty(db, const_ty)
+                } else {
+                    TyId::invalid(db, InvalidCause::Other)
+                }
+            } else {
+                TyId::invalid(db, InvalidCause::Other)
+            }
+        }
+        PathRes::EnumVariant(variant)
+            if position == TypePosition::GenericArg && variant.ty.is_unit_variant_only_enum(db) =>
+        {
+            let const_ty = const_ty_from_sem_const(
+                db,
+                enum_const(
+                    db,
+                    variant.ty,
+                    VariantIndex(variant.variant.idx),
+                    Box::new([]),
+                ),
+            );
+            TyId::const_ty(db, const_ty)
+        }
+        res => TyId::invalid(db, InvalidCause::NotAType(res)),
+    })
 }
 
 fn lower_hir_ty_cycle_initial<'db>(
@@ -674,7 +687,7 @@ fn lower_path<'db>(
         scope,
         assumptions,
     });
-    lower_path_impl(db, scope, path, assumptions, &minter)
+    lower_path_impl(db, scope, path, assumptions, TypePosition::Type, &minter)
 }
 
 pub(crate) fn generic_param_owner_assumptions<'db>(
@@ -3727,97 +3740,20 @@ pub(crate) fn lower_generic_arg_list<'db>(
         .iter()
         .enumerate()
         .map(|(arg_idx, arg)| match arg {
-            GenericArg::Type(ty_arg) => {
-                // Generic args are syntactically ambiguous: `String<N>` may parse `N` as a type
-                // even when `String` expects a const generic arg. When a type-arg is a path that
-                // resolves as a value const/trait-const, lower it as a const-ty argument so
-                // downstream `TyId::app` sees a const generic.
-                if let Some(hir_ty) = ty_arg.ty.to_opt()
-                    && let HirTyKind::Path(path) = hir_ty.data(db)
-                    && let Some(path) = path.to_opt()
-                    && let Ok(resolved) =
-                        resolve_path_with_minter(db, path, scope, assumptions, true, minter)
-                {
-                    match resolved {
-                        PathRes::Const(const_def, ty) => {
-                            if let Some(body) = const_def.body(db).to_opt() {
-                                let const_ty =
-                                    ConstTyId::from_body(db, body, Some(ty), Some(const_def));
-                                return TyId::const_ty(db, const_ty);
-                            }
-                            return TyId::invalid(db, InvalidCause::ParseError);
-                        }
-                        PathRes::TraitConst(recv_ty, inst, name) => {
-                            let mut args = inst.args(db).clone();
-                            if let Some(self_arg) = args.first_mut() {
-                                *self_arg = recv_ty;
-                            }
-                            let inst = TraitInstId::new(
-                                db,
-                                inst.def(db),
-                                args,
-                                inst.assoc_type_bindings(db).clone(),
-                            );
-
-                            if let Some(expected_ty) = inst
-                                .def(db)
-                                .const_(db, name)
-                                .and_then(|v| v.ty_binder(db))
-                                .map(|b| b.instantiate(db, inst.args(db)))
-                            {
-                                let assoc = AssocConstUse::new(scope, assumptions, inst, name);
-                                if let Some(const_ty) =
-                                    super::const_ty::const_ty_or_abstract_from_assoc_const_use(
-                                        db,
-                                        assoc,
-                                        expected_ty,
-                                    )
-                                {
-                                    return TyId::const_ty(db, const_ty);
-                                }
-                            }
-                        }
-                        PathRes::InherentConst(recv_ty, impl_, name) => {
-                            if let Some(expected_ty) = super::const_ty::inherent_const_expected_ty(
-                                db, impl_, recv_ty, name,
-                            ) {
-                                let use_ =
-                                    InherentConstUse::new(scope, assumptions, impl_, recv_ty, name);
-                                if let Some(const_ty) =
-                                    super::const_ty::const_ty_or_abstract_from_inherent_const_use(
-                                        db,
-                                        use_,
-                                        expected_ty,
-                                    )
-                                {
-                                    return TyId::const_ty(db, const_ty);
-                                }
-                            }
-                        }
-                        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
-                            if let TyData::ConstTy(const_ty) = ty.data(db) {
-                                return TyId::const_ty(db, *const_ty);
-                            }
-                        }
-                        PathRes::EnumVariant(variant)
-                            if variant.ty.is_unit_variant_only_enum(db) =>
-                        {
-                            let const_ty = const_ty_from_sem_const(
-                                db,
-                                enum_const(
-                                    db,
-                                    variant.ty,
-                                    VariantIndex(variant.variant.idx),
-                                    Box::new([]),
-                                ),
-                            );
-                            return TyId::const_ty(db, const_ty);
-                        }
-                        _ => {}
-                    }
-                }
-                lower_opt_hir_ty_impl(db, ty_arg.ty, scope, assumptions, minter)
-            }
+            // Generic args are syntactically ambiguous: `String<N>` may parse `N` as a type
+            // even when `String` expects a const generic arg, so a path is lowered as the
+            // constant it names, if it names one.
+            GenericArg::Type(ty_arg) => match ty_arg.ty.to_opt().map(|ty| ty.data(db)) {
+                Some(HirTyKind::Path(path)) => lower_path_impl(
+                    db,
+                    scope,
+                    *path,
+                    assumptions,
+                    TypePosition::GenericArg,
+                    minter,
+                ),
+                _ => lower_opt_hir_ty_impl(db, ty_arg.ty, scope, assumptions, minter),
+            },
             GenericArg::Const(const_arg) => match const_arg.value {
                 ConstGenericArgValue::Expr(body) => {
                     let const_ty = lower_opt_const_body(db, body, scope, assumptions, minter);

@@ -1,0 +1,16 @@
+trait M {
+    type P
+}
+
+struct Wrap<T> {
+    value: T,
+}
+
+impl<T> M for Wrap<T> {
+    type P = T
+}
+
+struct S<T: M> {
+    a: Wrap<<Wrap<<T as M>::Q> as M>::P>,
+    b: <Wrap<Missing> as M>::P,
+}

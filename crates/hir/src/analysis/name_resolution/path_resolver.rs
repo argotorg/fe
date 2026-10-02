@@ -3,7 +3,7 @@ use crate::hir_def::{CallableDef, Func};
 use crate::{
     core::hir_def::{
         Const, Enum, EnumVariant, GenericParamOwner, HirIngot, IdentId, Impl, ImplTrait, ItemKind,
-        PathId, PathKind, Trait, TypeBound, TypeKind, VariantKind, scope_graph::ScopeId,
+        Partial, PathId, PathKind, Trait, TypeBound, TypeKind, VariantKind, scope_graph::ScopeId,
     },
     core::semantic::trait_self_predicate,
     span::{DynLazySpan, path::LazyPathSpan},
@@ -49,6 +49,7 @@ use crate::analysis::{
         ty_lower::{
             TyAlias, collect_generic_params, collect_source_generic_params, lower_generic_arg_list,
             lower_hir_ty_with_minter, lower_type_alias, lower_type_alias_deferred,
+            lower_type_position_path,
         },
         unify::UnificationTable,
     },
@@ -829,6 +830,105 @@ where
     )
 }
 
+/// How a path written where a type is expected chooses between the type and
+/// the value its last segment can name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TypePosition {
+    /// A type. The path names a value only when it names no type.
+    Type,
+    /// A generic argument, which is syntactically ambiguous: `N` in
+    /// `String<N>` is the constant it names, and otherwise a type.
+    GenericArg,
+}
+
+/// Resolves `path`, written in a type `position`, once. Its parent segments
+/// are resolved a single time and only its last segment is tried in each
+/// namespace: resolving the whole path again would lower every generic
+/// argument nested in it again, doubling the work at each nesting level.
+pub(crate) fn resolve_type_position_path_with_minter<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    position: TypePosition,
+    minter: &LoweringContext<'db>,
+) -> PathResolutionResult<'db, PathRes<'db>> {
+    let directive = QueryDirective::for_scope(db, scope);
+    let mut observer = |path: PathId<'db>, res: &PathRes<'db>| minter.record_resolution(path, res);
+    let parent_res = path
+        .parent(db)
+        .map(|parent| {
+            resolve_path_impl(
+                db,
+                parent,
+                scope,
+                assumptions,
+                false,
+                directive,
+                false,
+                &mut observer,
+                minter,
+            )
+        })
+        .transpose()?;
+    let mut resolve_tail = |as_value, decided_by_value: &mut bool| {
+        resolve_segment(
+            db,
+            path,
+            parent_res.clone(),
+            scope,
+            assumptions,
+            as_value,
+            directive,
+            true,
+            &mut observer,
+            minter,
+            decided_by_value,
+        )
+    };
+    let not_found = |res: &PathResolutionResult<'db, PathRes<'db>>| {
+        res.as_ref()
+            .is_err_and(|err| matches!(err.kind, PathResErrorKind::NotFound { .. }))
+    };
+    match position {
+        TypePosition::Type => {
+            let ty = resolve_tail(false, &mut false);
+            // When neither is found, the type's error is the one to report.
+            if not_found(&ty)
+                && let Ok(value) = resolve_tail(true, &mut false)
+            {
+                Ok(value)
+            } else {
+                ty
+            }
+        }
+        TypePosition::GenericArg => {
+            let mut decided_by_value = false;
+            let value = resolve_tail(true, &mut decided_by_value);
+            // An outcome no value-only branch decided is the type's as well. A
+            // value that is not a constant, such as a function, gives way to a
+            // type of the same name; every value-only branch precedes the type
+            // namespace's lowering, so resolving the segment as a type then
+            // repeats none of it.
+            let settled = !decided_by_value
+                || value.as_ref().is_ok_and(|res| match res {
+                    PathRes::Ty(_)
+                    | PathRes::Const(..)
+                    | PathRes::TraitConst(..)
+                    | PathRes::InherentConst(..) => true,
+                    PathRes::EnumVariant(variant) => variant.ty.is_unit_variant_only_enum(db),
+                    _ => false,
+                });
+            if settled {
+                value
+            } else {
+                let ty = resolve_tail(false, &mut false);
+                if not_found(&ty) { value } else { ty }
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn resolve_path_impl<'db, F>(
     db: &'db dyn HirAnalysisDb,
@@ -860,7 +960,41 @@ where
             )
         })
         .transpose()?;
+    resolve_segment(
+        db,
+        path,
+        parent_res,
+        scope,
+        assumptions,
+        resolve_tail_as_value,
+        base_directive,
+        is_tail,
+        observer,
+        minter,
+        &mut false,
+    )
+}
 
+/// Resolves the last segment of `path`, given its parent's resolution. Sets
+/// `decided_by_value` when a branch that only the value namespace takes
+/// decides the outcome; otherwise the outcome is the type namespace's too.
+#[allow(clippy::too_many_arguments)]
+fn resolve_segment<'db, F>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    parent_res: Option<PathRes<'db>>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    resolve_tail_as_value: bool,
+    base_directive: QueryDirective,
+    is_tail: bool,
+    observer: &mut F,
+    minter: &LoweringContext<'db>,
+    decided_by_value: &mut bool,
+) -> PathResolutionResult<'db, PathRes<'db>>
+where
+    F: FnMut(PathId<'db>, &PathRes<'db>),
+{
     if let PathKind::QualifiedType { type_, trait_ } = path.kind(db) {
         if path.parent(db).is_some() {
             return Err(PathResError::new(
@@ -871,27 +1005,28 @@ where
                 path,
             ));
         }
-        let ty = lower_hir_ty_with_minter(db, type_, scope, assumptions, minter);
-        if let Some(cause) = ty.invalid_cause(db) {
-            match cause {
-                InvalidCause::NotAType(res) => {
-                    return Err(PathResError::new(
-                        PathResErrorKind::QualifiedTypeType(Box::new(Ok(res))),
-                        path,
-                    ));
-                }
-                InvalidCause::PathResolutionFailed { path: ty_path } => {
-                    if let Err(inner) =
-                        resolve_path_with_minter(db, ty_path, scope, assumptions, false, minter)
-                    {
-                        return Err(PathResError {
-                            kind: PathResErrorKind::QualifiedTypeType(Box::new(Err(inner))),
-                            failed_at: path,
-                        });
-                    }
-                }
-                _ => {}
-            }
+        // A path keeps the error that its single resolution reports, rather
+        // than being resolved again to recover it.
+        let ty = match type_.data(db) {
+            TypeKind::Path(Partial::Present(ty_path)) => lower_type_position_path(
+                db,
+                *ty_path,
+                scope,
+                assumptions,
+                TypePosition::Type,
+                minter,
+            )
+            .map_err(|inner| PathResError {
+                kind: PathResErrorKind::QualifiedTypeType(Box::new(Err(inner))),
+                failed_at: path,
+            })?,
+            _ => lower_hir_ty_with_minter(db, type_, scope, assumptions, minter),
+        };
+        if let Some(InvalidCause::NotAType(res)) = ty.invalid_cause(db) {
+            return Err(PathResError::new(
+                PathResErrorKind::QualifiedTypeType(Box::new(Ok(res))),
+                path,
+            ));
         }
         let trait_inst_result = match minter.const_bodies() {
             ConstBodyLowering::Eager => lower_trait_ref(db, ty, trait_, scope, assumptions, None),
@@ -961,6 +1096,7 @@ where
                     && resolve_tail_as_value
                     && let Some(&method) = trait_inst.def(db).method_defs(db).get(&ident)
                 {
+                    *decided_by_value = true;
                     let r = PathRes::TraitMethod(*trait_inst, method);
                     observer(path, &r);
                     return Ok(r);
@@ -968,6 +1104,7 @@ where
 
                 // Associated const on a specific trait instance
                 if resolve_tail_as_value && trait_inst.def(db).const_(db, ident).is_some() {
+                    *decided_by_value = true;
                     reject_generic_args(db, path)?;
                     let r = PathRes::TraitConst(trait_inst.self_ty(db), *trait_inst, ident);
                     observer(path, &r);
@@ -1010,6 +1147,7 @@ where
                 if let Some(impl_) =
                     select_inherent_const_candidate(db, ty, ident, scope, assumptions)
                 {
+                    *decided_by_value = true;
                     reject_generic_args(db, path)?;
                     let r = PathRes::InherentConst(ty, impl_, ident);
                     observer(path, &r);
@@ -1020,12 +1158,14 @@ where
                 // `OtherIngotType::CONST` and `ExternalType::LOCAL_TRAIT_CONST` both resolve.
                 match select_assoc_const_candidate(db, ty, ident, scope, assumptions) {
                     AssocConstSelection::Found(inst) => {
+                        *decided_by_value = true;
                         reject_generic_args(db, path)?;
                         let r = PathRes::TraitConst(ty, inst, ident);
                         observer(path, &r);
                         return Ok(r);
                     }
                     AssocConstSelection::Ambiguous(traits) => {
+                        *decided_by_value = true;
                         return Err(PathResError::new(
                             PathResErrorKind::AmbiguousAssociatedConst {
                                 name: ident,
@@ -1053,12 +1193,14 @@ where
                     None,
                 ) {
                     Ok(cand) => {
+                        *decided_by_value = true;
                         let r = PathRes::Method(ty, cand);
                         observer(path, &r);
                         return Ok(r);
                     }
                     Err(MethodSelectionError::NotFound) => {}
                     Err(err) => {
+                        *decided_by_value = true;
                         return Err(PathResError::method_selection(err, path));
                     }
                 }
@@ -1252,6 +1394,7 @@ where
                 && resolve_tail_as_value
                 && let Some(&method) = trait_inst.def(db).method_defs(db).get(&ident)
             {
+                *decided_by_value = true;
                 let r = PathRes::TraitMethod(trait_inst, method);
                 observer(path, &r);
                 return Ok(r);
@@ -1272,6 +1415,7 @@ where
         && resolve_tail_as_value
         && let Ok(res) = bucket.pick(NameDomain::VALUE)
     {
+        *decided_by_value = true;
         res.clone()
     } else {
         pick_type_domain_from_bucket(parent_res, bucket, path, path.parent(db))?
@@ -1971,36 +2115,33 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
     assumptions: PredicateListId<'db>,
     minter: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
-    let args = lower_generic_arg_list(
-        db,
-        path.generic_args(db),
-        scope,
-        assumptions,
-        LayoutHoleArgSite::Path(path),
-        minter,
-    );
+    // Lowered only by the resolutions that apply them: lowering arguments that
+    // are then rejected or ignored repeats the whole nested lowering whenever a
+    // caller resolves the path again in another namespace.
+    let args = || {
+        lower_generic_arg_list(
+            db,
+            path.generic_args(db),
+            scope,
+            assumptions,
+            LayoutHoleArgSite::Path(path),
+            minter,
+        )
+    };
     let res = match nameres.kind {
         NameResKind::Prim(prim) => {
             let ty = TyId::from_hir_prim_ty(db, prim);
-            PathRes::Ty(TyId::foldl(db, ty, &args))
+            PathRes::Ty(TyId::foldl(db, ty, &args()))
         }
         NameResKind::Scope(scope_id) => match scope_id {
             ScopeId::Item(item) => match item {
                 ItemKind::Struct(_) | ItemKind::Enum(_) => {
                     let adt_ref = AdtRef::try_from_item(item).unwrap();
-                    PathRes::Ty(ty_from_adtref(db, path, adt_ref, &args, minter)?)
+                    PathRes::Ty(ty_from_adtref(db, path, adt_ref, &args(), minter)?)
                 }
                 ItemKind::Contract(contract) => {
                     // Contracts have no generic parameters
-                    if !args.is_empty() {
-                        return Err(PathResError::new(
-                            PathResErrorKind::ArgNumMismatch {
-                                expected: 0,
-                                given: args.len(),
-                            },
-                            path,
-                        ));
-                    }
+                    reject_generic_args(db, path)?;
                     PathRes::Ty(TyId::contract(db, contract))
                 }
 
@@ -2021,15 +2162,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                     PathRes::Func(ty)
                 }
                 ItemKind::Const(const_) => {
-                    if !args.is_empty() {
-                        return Err(PathResError::new(
-                            PathResErrorKind::ArgNumMismatch {
-                                expected: 0,
-                                given: args.len(),
-                            },
-                            path,
-                        ));
-                    }
+                    reject_generic_args(db, path)?;
                     // Use semantic const type.
                     let ty = const_.ty(db);
                     PathRes::Const(const_, ty)
@@ -2041,32 +2174,30 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                         ConstBodyLowering::Deferred => lower_type_alias_deferred(db, type_alias),
                     };
                     let expected = alias.params(db).len();
-                    if args.len() > expected {
+                    let given = path.generic_args(db).len(db);
+                    if given > expected {
                         return Err(PathResError::new(
-                            PathResErrorKind::ArgNumMismatch {
-                                expected,
-                                given: args.len(),
-                            },
+                            PathResErrorKind::ArgNumMismatch { expected, given },
                             path,
                         ));
                     }
-                    PathRes::TyAlias(alias.clone(), alias.instantiate(db, &args, minter))
+                    PathRes::TyAlias(alias.clone(), alias.instantiate(db, &args(), minter))
                 }
 
                 ItemKind::Impl(impl_) => {
                     let base = impl_.ty(db);
-                    PathRes::Ty(TyId::foldl(db, base, &args))
+                    PathRes::Ty(TyId::foldl(db, base, &args()))
                 }
                 ItemKind::ImplTrait(impl_) => {
                     let base = impl_.ty(db);
-                    PathRes::Ty(TyId::foldl(db, base, &args))
+                    PathRes::Ty(TyId::foldl(db, base, &args()))
                 }
 
                 ItemKind::Trait(t) => {
                     if path.is_self_ty(db) {
                         let params = collect_generic_params(db, t.into());
                         let ty = params.trait_self(db).unwrap();
-                        let ty = TyId::foldl(db, ty, &args);
+                        let ty = TyId::foldl(db, ty, &args());
                         PathRes::Ty(ty)
                     } else {
                         // Pre-validate type generic arguments of the trait path to surface
@@ -2161,29 +2292,21 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                 let ty = param_set
                     .param_by_original_idx(db, idx as usize)
                     .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
-                let ty = TyId::foldl(db, ty, &args);
+                let ty = TyId::foldl(db, ty, &args());
                 PathRes::Ty(ty)
             }
 
             // A bare associated name inside its trait means `<Self as Trait<..>>`
             // with the trait's own parameters; the name itself takes no arguments.
-            ScopeId::TraitType(..) | ScopeId::TraitConst(..) if !args.is_empty() => {
-                return Err(PathResError::new(
-                    PathResErrorKind::ArgNumMismatch {
-                        expected: 0,
-                        given: args.len(),
-                    },
-                    path,
-                ));
-            }
-
             ScopeId::TraitType(t, idx) => {
+                reject_generic_args(db, path)?;
                 let trait_inst = trait_self_predicate(db, t);
                 let assoc_ty_name = t.assoc_ty_by_index(db, idx as usize).name.unwrap();
                 PathRes::Ty(TyId::assoc_ty(db, trait_inst.trait_ref(db), assoc_ty_name))
             }
 
             ScopeId::TraitConst(t, idx) => {
+                reject_generic_args(db, path)?;
                 let trait_inst = trait_self_predicate(db, t);
                 let const_name = t.const_by_index(idx as usize).name(db).unwrap();
                 PathRes::TraitConst(trait_inst.self_ty(db), trait_inst, const_name)
@@ -2213,15 +2336,7 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                 })
             }
             ScopeId::FuncParam(item, idx) => {
-                if !args.is_empty() {
-                    return Err(PathResError::new(
-                        PathResErrorKind::ArgNumMismatch {
-                            expected: 0,
-                            given: args.len(),
-                        },
-                        path,
-                    ));
-                }
+                reject_generic_args(db, path)?;
                 PathRes::FuncParam(item, idx)
             }
             ScopeId::Field(..) => unreachable!(),

@@ -9,6 +9,7 @@ mod early_path_resolution;
 mod import;
 mod invalid_string_constants;
 mod module_references;
+mod nested_type_paths;
 mod origin_export;
 mod path_binding_reads;
 mod pattern_ir;
