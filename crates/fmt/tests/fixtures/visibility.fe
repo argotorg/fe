@@ -1,0 +1,70 @@
+// Restricted visibility must be kept, never widened to `pub`.
+
+pub(ingot) use m::Thing
+
+pub(ingot) fn helper() -> u8 {
+    1
+}
+
+pub(ingot) mod m {
+    pub(ingot) struct Thing {
+        pub(ingot) a: u8,
+        pub(super) b: u8,
+    }
+
+    impl Thing {
+        pub(ingot) fn new() -> Self {
+            Thing { a: 0, b: 0 }
+        }
+
+        pub(super) fn get(self) -> u8 {
+            self.a
+        }
+    }
+
+    pub(super) const K: u8 = 1
+
+    pub(ingot) enum E {
+        A,
+        B,
+    }
+
+    pub(super) trait T {}
+
+    pub(ingot) type Alias = u8
+
+    pub(super) mod inner {
+        pub(super) fn up() -> u8 {
+            2
+        }
+    }
+}
+
+pub(super) struct Pair { pub(ingot) x: u8, pub(super) y: u8 }
+
+extern {
+    pub(ingot) fn ext_a(x: u256) -> u256
+    fn ext_b(x: u256) -> u256
+}
+
+// With comments inside, items take the comment-preserving path.
+
+pub(ingot) struct Commented {
+    // a comment inside the field list
+    pub(ingot) a: u8,
+}
+
+pub(super) fn with_comment(
+    // leading comment
+    x: u8,
+) -> u8 {
+    x
+}
+
+pub(ingot) const C: u8 = // mid
+1
+
+extern {
+    // Memory
+    pub(ingot) fn mload(_: *u8) -> u256
+}

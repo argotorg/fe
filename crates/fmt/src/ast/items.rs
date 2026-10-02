@@ -7,6 +7,7 @@ use parser::ast::{
     self, ImplItemKind, ItemKind, ItemModifierOwner, TraitItemKind, prelude::AstNode,
 };
 
+use super::attr::attr_lines;
 use super::types::{
     Doc, ToDoc, TokenPiece, block_list_auto, block_list_spaced_auto, block_list_with_comments,
     hardlines, has_comment_tokens, intersperse, newline_count, token_doc, token_doc_until_token,
@@ -20,6 +21,19 @@ macro_rules! token_doc_item_like_if_comments {
     };
 }
 
+fn next_non_trivia_token(token: &parser::SyntaxToken) -> Option<parser::SyntaxToken> {
+    use parser::syntax_kind::SyntaxKind::*;
+
+    let mut next = token.next_token();
+    while let Some(tok) = next {
+        if !matches!(tok.kind(), WhiteSpace | Newline) {
+            return Some(tok);
+        }
+        next = tok.next_token();
+    }
+    None
+}
+
 fn token_piece_basic<'a>(
     ctx: &'a RewriteContext<'a>,
     token: parser::SyntaxToken,
@@ -30,6 +44,11 @@ fn token_piece_basic<'a>(
     let text = alloc.text(token.text().to_string());
     Some(match token.kind() {
         FnKw => TokenPiece::new(alloc.nil()),
+        // `pub` followed by `(` is a visibility restriction (`pub(ingot)`);
+        // keep the paren attached to the keyword.
+        PubKw if next_non_trivia_token(&token).is_some_and(|t| t.kind() == LParen) => {
+            TokenPiece::new(text)
+        }
         PubKw | UnsafeKw | MutKw | StructKw | ContractKw | EnumKw | TraitKw | MsgKw | ModKw
         | UseKw | ConstKw | StaticAssertKw | TypeKw | ExternKw => {
             TokenPiece::new(text).space_after()
@@ -67,6 +86,17 @@ fn token_doc_item_node_piece<'a>(
         ($($expr:expr),+ $(,)?) => {
             None$(.or_else(|| $expr))+
         };
+    }
+
+    // Visibility restriction after `pub(`: the `(` token precedes this node
+    // in the CST, so the piece renders only `ingot)` / `super)`.
+    if let Some(vis) = ast::VisRestriction::cast(node.clone()) {
+        let restriction = if vis.super_kw().is_some() {
+            "super)"
+        } else {
+            "ingot)"
+        };
+        return Some(TokenPiece::new(ctx.alloc.text(restriction)).space_after());
     }
 
     first_some!(
@@ -116,6 +146,16 @@ fn attrs_doc<'a, N: ast::AttrListOwner + AstNode>(
     }
 }
 
+/// Renders `pub `, `pub(ingot) `, or `pub(super) ` depending on the
+/// visibility restriction attached to the `pub` keyword.
+fn pub_text(vis_restriction: Option<&ast::VisRestriction>) -> &'static str {
+    match vis_restriction {
+        Some(vis) if vis.ingot_kw().is_some() => "pub(ingot) ",
+        Some(vis) if vis.super_kw().is_some() => "pub(super) ",
+        _ => "pub ",
+    }
+}
+
 /// Helper to build item modifier document (pub, unsafe).
 fn modifier_doc<'a, N: ItemModifierOwner + AstNode>(
     node: &N,
@@ -124,7 +164,7 @@ fn modifier_doc<'a, N: ItemModifierOwner + AstNode>(
     let alloc = &ctx.alloc;
     let mut doc = alloc.nil();
     if node.pub_kw().is_some() {
-        doc = doc.append(alloc.text("pub "));
+        doc = doc.append(alloc.text(pub_text(node.vis_restriction().as_ref())));
     }
     if node.unsafe_kw().is_some() {
         doc = doc.append(alloc.text("unsafe "));
@@ -168,6 +208,48 @@ fn where_doc<'a, N: ast::WhereClauseOwner + AstNode>(
     }
 }
 
+/// Counts newlines in a node's leading trivia (before its first non-trivia
+/// token or child node).
+fn node_leading_newlines(ctx: &RewriteContext, node: &parser::SyntaxNode) -> usize {
+    use parser::syntax_kind::SyntaxKind;
+    use parser::syntax_node::NodeOrToken;
+
+    let mut count = 0;
+    for child in node.children_with_tokens() {
+        match child {
+            NodeOrToken::Token(token) => match token.kind() {
+                SyntaxKind::Newline => count += newline_count(ctx.snippet(token.text_range())),
+                SyntaxKind::WhiteSpace => {}
+                _ => break,
+            },
+            NodeOrToken::Node(_) => break,
+        }
+    }
+    count
+}
+
+/// Counts newlines in a node's trailing trivia (after its last non-trivia
+/// token or child node).
+fn node_trailing_newlines(ctx: &RewriteContext, node: &parser::SyntaxNode) -> usize {
+    use parser::syntax_kind::SyntaxKind;
+    use parser::syntax_node::NodeOrToken;
+
+    let mut count = 0;
+    let mut child = node.last_child_or_token();
+    while let Some(current) = child {
+        match &current {
+            NodeOrToken::Token(token) => match token.kind() {
+                SyntaxKind::Newline => count += newline_count(ctx.snippet(token.text_range())),
+                SyntaxKind::WhiteSpace => {}
+                _ => break,
+            },
+            NodeOrToken::Node(_) => break,
+        }
+        child = current.prev_sibling_or_token();
+    }
+    count
+}
+
 /// Format a block of items `{ ... }`, preserving whether there was a blank line
 /// between entries in the source (2+ newlines => one blank line; otherwise none).
 /// Takes a syntax node and a function to cast child nodes to the item type.
@@ -185,11 +267,22 @@ fn block_items_doc<'a, T: ToDoc>(
     let mut is_first = true;
 
     for child in syntax.children_with_tokens() {
+        let mut newlines_after_entry = 0usize;
         let entry_doc = match child {
+            // A module's inner attributes (`#![...]`) come before its items.
+            // The line breaks after them belong to the attribute list node.
+            NodeOrToken::Node(node) if ast::AttrList::can_cast(node.kind()) => {
+                newlines_after_entry = node_trailing_newlines(ctx, &node);
+                ast::AttrList::cast(node).and_then(|attrs| attr_lines(&attrs, ctx))
+            }
             NodeOrToken::Node(node) => {
-                let Some(item) = cast_fn(node) else {
+                let Some(item) = cast_fn(node.clone()) else {
                     continue;
                 };
+                // Item nodes own their leading comments and newlines, but the
+                // node's doc drops that leading trivia; count it here so blank
+                // lines between entries are preserved without doubling.
+                pending_newlines += node_leading_newlines(ctx, &node);
                 Some(item.to_doc(ctx))
             }
             NodeOrToken::Token(token) => match token.kind() {
@@ -217,7 +310,7 @@ fn block_items_doc<'a, T: ToDoc>(
             inner = inner.append(hardlines(alloc, pending_newlines));
         }
 
-        pending_newlines = 0;
+        pending_newlines = newlines_after_entry;
         inner = inner.append(entry_doc);
     }
 
@@ -777,7 +870,7 @@ impl ToDoc for ast::RecordFieldDef {
         let mut doc = attrs;
 
         if self.pub_kw().is_some() {
-            doc = doc.append(alloc.text("pub "));
+            doc = doc.append(alloc.text(pub_text(self.vis_restriction().as_ref())));
         }
 
         if self.mut_kw().is_some() {
@@ -1095,7 +1188,17 @@ impl ToDoc for ast::VariantDef {
 
         let kind_doc = match self.kind() {
             ast::VariantKind::Unit => alloc.nil(),
-            ast::VariantKind::Tuple(tuple_type) => tuple_type.to_doc(ctx),
+            // Unlike a one-element tuple type, a single field needs no
+            // trailing comma: `Some(T)`, not `Some(T,)`.
+            ast::VariantKind::Tuple(tuple_type) => block_list_auto(
+                ctx,
+                tuple_type.syntax(),
+                "(",
+                ")",
+                ast::Type::cast,
+                ctx.config.indent_width as isize,
+                true,
+            ),
             ast::VariantKind::Record(fields) => {
                 if has_comment_tokens(fields.syntax()) {
                     return attrs.append(name.clone()).append(alloc.text(" ")).append(

@@ -3,7 +3,7 @@
 use pretty::DocAllocator;
 
 use crate::RewriteContext;
-use parser::ast::{self, StmtKind, prelude::AstNode};
+use parser::ast::{self, AttrListOwner, StmtKind, prelude::AstNode};
 use parser::syntax_kind::SyntaxKind;
 
 use super::expr::{format_chain_with_prefix, is_chain};
@@ -61,28 +61,34 @@ impl ToDoc for ast::ForStmt {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
 
+        // Statement attributes such as `#[unroll(never)]` go on their own
+        // lines above the loop.
+        let attrs = self
+            .attr_list()
+            .map_or_else(|| alloc.nil(), |attrs| attrs.to_doc(ctx));
+
         if !has_comment_tokens(self.syntax()) {
             let pat = match self.pat() {
                 Some(p) => p.to_doc(ctx),
-                None => return alloc.text("for"),
+                None => return attrs.append(alloc.text("for")),
             };
             let iterable = match self.iterable() {
                 Some(i) => i.to_doc(ctx),
-                None => return alloc.text("for ").append(pat),
+                None => return attrs.append(alloc.text("for ")).append(pat),
             };
             let body = match self.body() {
                 Some(b) => b.to_doc(ctx),
                 None => {
-                    return alloc
-                        .text("for ")
+                    return attrs
+                        .append(alloc.text("for "))
                         .append(pat)
                         .append(alloc.text(" in "))
                         .append(iterable);
                 }
             };
 
-            return alloc
-                .text("for ")
+            return attrs
+                .append(alloc.text("for "))
                 .append(pat)
                 .append(alloc.text(" in "))
                 .append(iterable)
@@ -94,7 +100,7 @@ impl ToDoc for ast::ForStmt {
         let mut seen_pat = false;
         let mut expr_count = 0usize;
 
-        token_doc(
+        attrs.append(token_doc(
             ctx,
             self.syntax(),
             indent,
@@ -118,7 +124,7 @@ impl ToDoc for ast::ForStmt {
                 SyntaxKind::InKw => Some(TokenPiece::new(alloc.text("in")).spaces()),
                 _ => None,
             },
-        )
+        ))
     }
 }
 

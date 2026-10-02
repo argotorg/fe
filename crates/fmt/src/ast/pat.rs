@@ -99,9 +99,13 @@ impl ToDoc for ast::PathTuplePat {
             None => return alloc.nil(),
         };
 
-        let elems_doc = self
-            .elems()
-            .map_or_else(|| alloc.text("()"), |elems| elems.to_doc(ctx));
+        // Unlike a one-element tuple pattern, a single field needs no
+        // trailing comma: `Some(x)`, not `Some(x,)`.
+        let indent = ctx.config.indent_width as isize;
+        let elems_doc = self.elems().map_or_else(
+            || alloc.text("()"),
+            |elems| block_list_auto(ctx, elems.syntax(), "(", ")", ast::Pat::cast, indent, true),
+        );
 
         path.append(elems_doc)
     }
