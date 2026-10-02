@@ -5,7 +5,7 @@ use sonatina_ir::{
         arith::{Add, Mul, Sub},
         cast::Zext,
         cmp::Eq,
-        control_flow::{BrTable, Jump, Phi, Unreachable},
+        control_flow::{BrTable, Jump, Phi, PhiArgs, Unreachable},
         data::{ConstLoad, Mload, Mstore, ObjLoad, ObjMaterializeHeap},
         logic::Or,
     },
@@ -138,7 +138,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
             Some(invalid),
             cases,
         ));
-        let mut values = Vec::with_capacity(blocks.len());
+        let mut values = PhiArgs::with_capacity(blocks.len());
         for (_, block, space) in blocks {
             self.fb.switch_to_block(block);
             let value = if let Some(space) = space {

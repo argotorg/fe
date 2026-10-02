@@ -36,7 +36,7 @@ use sonatina_ir::{
         arith::{Add, Mul, Sar, Sdiv, Shl, Shr, Smod, Sub, Udiv, Umod},
         cast::{Bitcast, IntToPtr, PtrToInt, Sext, Trunc, Zext},
         cmp::{Eq, Gt, IsZero, Lt, Ne, Slt},
-        control_flow::{Br, BrTable, Call, Jump, Phi, Return, Unreachable},
+        control_flow::{Br, BrTable, Call, Jump, Phi, PhiArgs, Return, Unreachable},
         data::{
             Alloca, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
             EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
@@ -2117,7 +2117,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             .insert_inst_no_result(Jump::new(self.module.inst_set(), header));
         self.fb.switch_to_block(header);
         let current = self.fb.insert_inst(
-            Phi::new(self.module.inst_set(), vec![(source, entry)]),
+            Phi::new(self.module.inst_set(), smallvec![(source, entry)]),
             Type::I256,
         );
         let tag = self.load_layout_map_word(current, 0)?;
@@ -2238,7 +2238,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
 
         self.fb.switch_to_block(done);
-        let incoming = vec![
+        let incoming = smallvec![
             (affine_result, affine_exit),
             (dense_result, dense_exit),
             (repeat_result, repeat_exit),
@@ -4696,7 +4696,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         let invalid = self.fb.append_block();
         let mut cases = Vec::with_capacity(data.variants.len());
         let mut blocks = Vec::with_capacity(data.variants.len());
-        let mut phi_args = Vec::with_capacity(data.variants.len());
+        let mut phi_args = PhiArgs::with_capacity(data.variants.len());
         let tag_ty = self.fb.type_of(tag);
         for (idx, _) in data.variants.iter().enumerate() {
             let block = self.fb.append_block();
@@ -5203,7 +5203,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             cases,
         ));
 
-        let mut phi_args = Vec::with_capacity(blocks.len());
+        let mut phi_args = PhiArgs::with_capacity(blocks.len());
         for (idx, block) in blocks.into_iter().enumerate() {
             let source_fields = source.variants[idx].fields.as_ref();
             let target_fields = target.variants[idx].fields.as_ref();
@@ -5572,7 +5572,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             self.fb.insert_inst(
                 Phi::new(
                     self.module.inst_set(),
-                    vec![(zero, entry), (result, nonzero)],
+                    smallvec![(zero, entry), (result, nonzero)],
                 ),
                 ty,
             )
@@ -5605,7 +5605,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         self.fb.insert_inst_no_result(Jump::new(inst_set, done));
         self.fb.switch_to_block(done);
         self.fb.insert_inst(
-            Phi::new(inst_set, vec![(sum, add), (difference, subtract)]),
+            Phi::new(inst_set, smallvec![(sum, add), (difference, subtract)]),
             Type::I256,
         )
     }
@@ -5693,13 +5693,13 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             self.fb.switch_to_block(header);
             let result = self
                 .fb
-                .insert_inst(Phi::new(inst_set, vec![(zero, reduce)]), Type::I256);
+                .insert_inst(Phi::new(inst_set, smallvec![(zero, reduce)]), Type::I256);
             let factor = self
                 .fb
-                .insert_inst(Phi::new(inst_set, vec![(lhs, reduce)]), Type::I256);
+                .insert_inst(Phi::new(inst_set, smallvec![(lhs, reduce)]), Type::I256);
             let remaining = self
                 .fb
-                .insert_inst(Phi::new(inst_set, vec![(rhs, reduce)]), Type::I256);
+                .insert_inst(Phi::new(inst_set, smallvec![(rhs, reduce)]), Type::I256);
             let finished = self
                 .fb
                 .insert_inst(IsZero::new(inst_set, remaining), Type::I1);
@@ -5721,7 +5721,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             self.fb.insert_inst_no_result(Jump::new(inst_set, advance));
             self.fb.switch_to_block(advance);
             let next_result = self.fb.insert_inst(
-                Phi::new(inst_set, vec![(result, test_bit), (sum, add_exit)]),
+                Phi::new(inst_set, smallvec![(result, test_bit), (sum, add_exit)]),
                 Type::I256,
             );
             let next_remaining = self
@@ -5744,7 +5744,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             self.fb.insert_inst_no_result(Jump::new(inst_set, header));
             self.fb.switch_to_block(exit);
             self.fb.insert_inst(
-                Phi::new(inst_set, vec![(result, header), (next_result, advance)]),
+                Phi::new(
+                    inst_set,
+                    smallvec![(result, header), (next_result, advance)],
+                ),
                 Type::I256,
             )
         } else {
@@ -5757,7 +5760,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         self.fb.insert_inst_no_result(Jump::new(inst_set, done));
         self.fb.switch_to_block(done);
         self.fb.insert_inst(
-            Phi::new(inst_set, vec![(zero, entry), (result, exit)]),
+            Phi::new(inst_set, smallvec![(zero, entry), (result, exit)]),
             Type::I256,
         )
     }
@@ -5792,15 +5795,18 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         self.fb
             .insert_inst_no_result(Jump::new(self.module.inst_set(), header));
         self.fb.switch_to_block(header);
-        let result = self
-            .fb
-            .insert_inst(Phi::new(self.module.inst_set(), vec![(one, entry)]), ty);
-        let factor = self
-            .fb
-            .insert_inst(Phi::new(self.module.inst_set(), vec![(base, entry)]), ty);
-        let remaining = self
-            .fb
-            .insert_inst(Phi::new(self.module.inst_set(), vec![(exp, entry)]), ty);
+        let result = self.fb.insert_inst(
+            Phi::new(self.module.inst_set(), smallvec![(one, entry)]),
+            ty,
+        );
+        let factor = self.fb.insert_inst(
+            Phi::new(self.module.inst_set(), smallvec![(base, entry)]),
+            ty,
+        );
+        let remaining = self.fb.insert_inst(
+            Phi::new(self.module.inst_set(), smallvec![(exp, entry)]),
+            ty,
+        );
         let done_cond = self
             .fb
             .insert_inst(IsZero::new(self.module.inst_set(), remaining), Type::I1);
@@ -5832,7 +5838,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         let next_result = self.fb.insert_inst(
             Phi::new(
                 self.module.inst_set(),
-                vec![(result, test_bit), (product, multiply_exit)],
+                smallvec![(result, test_bit), (product, multiply_exit)],
             ),
             ty,
         );
@@ -5862,7 +5868,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         Ok(self.fb.insert_inst(
             Phi::new(
                 self.module.inst_set(),
-                vec![(result, header), (next_result, advance)],
+                smallvec![(result, header), (next_result, advance)],
             ),
             ty,
         ))

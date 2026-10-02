@@ -18,6 +18,8 @@ use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
 use mir::{RuntimeSectionName, build_native_executable_package, native_executable_entry};
 use rustc_hash::FxHashSet;
 #[cfg(feature = "cranelift")]
+use smallvec1::smallvec;
+#[cfg(feature = "cranelift")]
 use sonatina_codegen::{Compile, isa::cranelift::CraneliftObjectBackend};
 use sonatina_codegen::{
     EvmCompile, OptLevel as SonatinaOptLevel,
@@ -942,7 +944,7 @@ fn prepare_native_main(
     let zero = fb.make_imm_value(0i64);
     fb.insert_inst_no_result(Jump::new(inst_set, copy));
     fb.switch_to_block(copy);
-    let index = fb.insert_inst(Phi::new(inst_set, vec![(zero, allocate)]), Type::I64);
+    let index = fb.insert_inst(Phi::new(inst_set, smallvec![(zero, allocate)]), Type::I64);
     let source = fb.insert_inst(Gep::new(inst_set, vec![argv, index].into()), argv_ptr);
     let pointer = fb.insert_inst(Mload::new(inst_set, source, byte_ptr), byte_ptr);
     let word = fb.insert_inst(PtrToInt::new(inst_set, pointer, Type::I256), Type::I256);
