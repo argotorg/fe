@@ -2,7 +2,7 @@
 //!
 //! String literals can be used directly as `DynString`:
 //! `let s: DynString = "<svg>"`.
-use super::abi::DynString
+use super::abi::{Bytes, DynString}
 use super::num::{Bounded, IntDowncast}
 use super::option::Option
 use super::ptr::{self, MemSpan}
@@ -179,6 +179,49 @@ pub fn base64(_ data: MemSpan) -> DynString {
     out
 }
 
+/// Decodes standard base64 with `=` padding, the inverse of `base64`.
+/// `None` unless the length is a multiple of 4, every byte is in the
+/// standard alphabet, padding appears only as the last one or two bytes and
+/// the bits it leaves unused are zero, so each byte string has exactly one
+/// accepted encoding (RFC 4648).
+pub fn decode_base64(_ text: DynString) -> Option<Bytes> {
+    let input = text.payload_span()
+    let len = input.len()
+    if len % 4 != 0 {
+        return Option::None
+    }
+    let mut padding: u256 = 0
+    if len > 0 && input.byte_at(len - 1) == 61 {
+        padding = if input.byte_at(len - 2) == 61 { 2 } else { 1 }
+    }
+    let out_len = len / 4 * 3 - padding
+    let out = ptr::alloc_bytes(out_len)
+    let mut i: u256 = 0
+    let mut j: u256 = 0
+    while i < len {
+        let a = base64_value(input.byte_at(i))
+        let b = base64_value(input.byte_at(i + 1))
+        let c = if i + 2 < len - padding { base64_value(input.byte_at(i + 2)) } else { 0 }
+        let d = if i + 3 < len - padding { base64_value(input.byte_at(i + 3)) } else { 0 }
+        if a > 63 || b > 63 || c > 63 || d > 63 {
+            return Option::None
+        }
+        let group = (a << 18) | (b << 12) | (c << 6) | d
+        *ptr::offset_bytes(out, j) = (group >> 16).downcast_truncate()
+        if j + 1 < out_len {
+            *ptr::offset_bytes(out, j + 1) = (group >> 8).downcast_truncate()
+        }
+        if j + 2 < out_len {
+            *ptr::offset_bytes(out, j + 2) = group.downcast_truncate()
+        } else if (group & 0xff) != 0 || (padding == 2 && (group & 0xffff) != 0) {
+            return Option::None
+        }
+        i += 4
+        j += 3
+    }
+    Option::Some(Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: out_len)))
+}
+
 fn base64_digit(_ value: u8) -> u8 {
     if value < 26 {
         value + 65
@@ -190,6 +233,24 @@ fn base64_digit(_ value: u8) -> u8 {
         43
     } else {
         47
+    }
+}
+
+// Inverse of `base64_digit`, 64 for a byte outside the alphabet.
+fn base64_value(_ byte: u8) -> u256 {
+    let c = byte as u256
+    if c >= 65 && c <= 90 {
+        c - 65
+    } else if c >= 97 && c <= 122 {
+        c - 71
+    } else if c >= 48 && c <= 57 {
+        c + 4
+    } else if c == 43 {
+        62
+    } else if c == 47 {
+        63
+    } else {
+        64
     }
 }
 

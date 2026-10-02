@@ -1,0 +1,72 @@
+// Tests for the `core::text` base64 decoder. Vectors are from RFC 4648
+// section 10.
+use core::num::IntDowncast
+use core::ptr::{self, MemBuffer}
+use std::abi::{Bytes, DynString}
+use std::text::{self, TextBuilder}
+
+fn to_hex(_ bytes: Bytes) -> DynString {
+    let mut builder = TextBuilder::new()
+    let mut i: u256 = 0
+    while i < bytes.len() {
+        builder = builder.push(text::hex(bytes.byte_at(i) as u256, 1))
+        i += 1
+    }
+    builder.finish()
+}
+
+// The 256 bytes 0x00, 0x01, ..., 0xff.
+fn all_bytes() -> Bytes {
+    let buffer = MemBuffer::alloc(256)
+    let mut i: u256 = 0
+    while i < 256 {
+        *ptr::offset_bytes(buffer.ptr(), i) = i.downcast_truncate()
+        i += 1
+    }
+    Bytes::from_payload(source: buffer.span())
+}
+
+fn decodes_base64(_ encoded: DynString, _ expected: DynString) -> bool {
+    text::decode_base64(encoded).unwrap() == expected.as_bytes()
+}
+
+#[test]
+fn base64_rfc4648_vectors() {
+    assert!(decodes_base64("", ""))
+    assert!(decodes_base64("Zg==", "f"))
+    assert!(decodes_base64("Zm8=", "fo"))
+    assert!(decodes_base64("Zm9v", "foo"))
+    assert!(decodes_base64("Zm9vYg==", "foob"))
+    assert!(decodes_base64("Zm9vYmE=", "fooba"))
+    assert!(decodes_base64("Zm9vYmFy", "foobar"))
+    assert!(decodes_base64("PHN2Zz4/", "<svg>?"))
+    assert!(to_hex(text::decode_base64("+/+/").unwrap()) == "fbffbf")
+}
+
+#[test]
+fn base64_roundtrip() {
+    let data = all_bytes()
+    let encoded = text::base64(data.payload_span())
+    assert!(text::decode_base64(encoded).unwrap() == data)
+}
+
+#[test]
+fn base64_rejects() {
+    // Wrong length or missing padding.
+    assert!(text::decode_base64("Zg").is_none())
+    assert!(text::decode_base64("Zg=").is_none())
+    assert!(text::decode_base64("Zm9vY").is_none())
+    // Padding anywhere but the end.
+    assert!(text::decode_base64("Z===").is_none())
+    assert!(text::decode_base64("====").is_none())
+    assert!(text::decode_base64("Zg=a").is_none())
+    assert!(text::decode_base64("Zg==Zg==").is_none())
+    // Bytes outside the standard alphabet, including base64url digits.
+    assert!(text::decode_base64("Zm9v!A==").is_none())
+    assert!(text::decode_base64("Zm-v").is_none())
+    assert!(text::decode_base64("Zm_v").is_none())
+    assert!(text::decode_base64("Zm9 ").is_none())
+    // Nonzero bits under the padding.
+    assert!(text::decode_base64("Zh==").is_none())
+    assert!(text::decode_base64("Zm9=").is_none())
+}
