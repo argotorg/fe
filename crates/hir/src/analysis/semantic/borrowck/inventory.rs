@@ -77,7 +77,7 @@ pub(super) fn unbounded_referents_diag<'db>(
         instance,
         SemanticDiagnosticKind::UnboundedReferents,
         format!(
-            "more than {MAX_REFERENT_INSTANTIATIONS} instantiations of `{}` are reachable from here; a trait or const expression may be growing a recursive type",
+            "more than {MAX_REFERENT_INSTANTIATIONS} instantiations of `{}` are reachable from here; a recursive type may be growing its type arguments without bound",
             head.pretty_print(db)
         ),
         SemanticDiagnosticSpan::OriginWithTemplateFallback {
