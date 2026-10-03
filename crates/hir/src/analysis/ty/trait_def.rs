@@ -77,6 +77,24 @@ pub(crate) fn impls_for_trait_def<'db>(
         .collect()
 }
 
+/// Different nominal heads cannot unify after freshening or saturation.
+/// Keep error types and unknown heads for the full unification check.
+fn impl_self_ty_may_match<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_ty: TyId<'db>,
+    ty: TyId<'db>,
+) -> bool {
+    if impl_ty.has_invalid(db) {
+        return true;
+    }
+    let impl_base = impl_ty.base_ty(db);
+    let ty_base = ty.base_ty(db);
+    match (impl_base.data(db), ty_base.data(db)) {
+        (TyData::TyBase(_), TyData::TyBase(_)) => impl_base == ty_base,
+        _ => true,
+    }
+}
+
 /// Returns implementors for `trait_def` whose self type can apply to `ty`.
 ///
 /// Method lookup knows both halves of this key for explicitly selected traits
@@ -108,6 +126,9 @@ pub(crate) fn impls_for_trait_and_ty<'db>(
     implementors
         .into_iter()
         .filter(|implementor| {
+            if !impl_self_ty_may_match(db, implementor.self_ty(db), ty) {
+                return false;
+            }
             let snapshot = table.snapshot();
             let instantiated = table.instantiate_with_fresh_vars(*implementor);
             let impl_ty = table.instantiate_to_term(instantiated.self_ty(db));
@@ -830,6 +851,9 @@ fn impls_for_ty_with_constraint_mode<'db>(
     raw_impls
         .into_iter()
         .filter(|impl_| {
+            if !impl_self_ty_may_match(db, impl_.self_ty(db), ty) {
+                return false;
+            }
             let snapshot = table.snapshot();
 
             let inst = table.instantiate_with_fresh_vars(*impl_);
