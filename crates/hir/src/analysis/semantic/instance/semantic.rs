@@ -58,7 +58,7 @@ use salsa::Update;
 use thin_vec::ThinVec;
 
 use super::{
-    EffectProviderSubst, GenericSubst, ImplEnv, instantiate_typed_body,
+    EffectProviderSubst, GenericSubst, ImplEnv, const_ref::root_impl_env, instantiate_typed_body,
     provisional_semantic_callee_key, semantic_callee_key_with_effect_providers,
     typed_body_template,
 };
@@ -1743,18 +1743,19 @@ pub fn root_semantic_instance_key<'db>(
 ) -> Result<SemanticInstanceKey<'db>, RootSemanticInstanceError<'db>> {
     let generic_args = root_owner_generic_args(db, owner)?;
     let effect_providers = root_owner_effect_providers(db, owner);
+    let subst = match owner {
+        BodyOwner::Func(func) => GenericSubst::for_owner(db, func.into(), generic_args),
+        BodyOwner::Const(_)
+        | BodyOwner::AnonConstBody { .. }
+        | BodyOwner::ContractInit { .. }
+        | BodyOwner::ContractRecvArm { .. } => GenericSubst::none(db),
+    };
     let key = SemanticInstanceKey::new(
         db,
         owner,
-        match owner {
-            BodyOwner::Func(func) => GenericSubst::for_owner(db, func.into(), generic_args),
-            BodyOwner::Const(_)
-            | BodyOwner::AnonConstBody { .. }
-            | BodyOwner::ContractInit { .. }
-            | BodyOwner::ContractRecvArm { .. } => GenericSubst::none(db),
-        },
+        subst,
         EffectProviderSubst::new(db, effect_providers),
-        ImplEnv::empty(db, owner.scope()),
+        root_impl_env(db, owner, subst),
     );
     validate_instantiated_effect_env_key(db, key)
         .map_err(RootSemanticInstanceError::UnclosedEffectEnv)?;
@@ -1765,12 +1766,13 @@ pub fn identity_semantic_instance_key<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> SemanticInstanceKey<'db> {
+    let subst = GenericSubst::for_body_owner(db, owner, Vec::new());
     SemanticInstanceKey::new(
         db,
         owner,
-        GenericSubst::for_body_owner(db, owner, Vec::new()),
+        subst,
         EffectProviderSubst::empty(db),
-        ImplEnv::empty(db, owner.scope()),
+        root_impl_env(db, owner, subst),
     )
 }
 

@@ -1,5 +1,5 @@
 use camino::Utf8PathBuf;
-use common::indexmap::IndexMap;
+use common::{InputDb, indexmap::IndexMap, stdlib::HasBuiltinCore};
 use fe_hir::{
     analysis::{
         semantic::{
@@ -73,6 +73,137 @@ fn second<Y: B>() { target(true) }
         });
         assert_eq!(first, second, "{source}");
     }
+}
+
+#[test]
+fn concrete_roots_share_callee_keys_in_both_query_orders() {
+    for source in [
+        "fn target(_ x: u256) -> u256 { x }
+fn caller() -> u256 { target(7) }",
+        "struct Counter {}
+impl Counter { fn target(_ x: u256) -> u256 { x } }
+fn caller() -> u256 { Counter::target(7) }",
+        "struct Counter { value: u256 }
+impl Counter { fn target(mut self) { self.value += 1 } }
+fn caller(_ x: mut Counter) { x.target() }",
+    ] {
+        for root_first in [true, false] {
+            let mut db = HirAnalysisTestDb::default();
+            let file = db.new_stand_alone(Utf8PathBuf::from("root_callee_sharing.fe"), source);
+            let (module, _) = db.top_mod(file);
+            let target = BodyOwner::Func(
+                module
+                    .all_funcs(&db)
+                    .iter()
+                    .copied()
+                    .find(|func| {
+                        func.name(&db)
+                            .to_opt()
+                            .is_some_and(|name| name.data(&db) == "target")
+                    })
+                    .expect("target function or method"),
+            );
+            let caller = BodyOwner::Func(find_func(&db, module, "caller"));
+            let root = || root_semantic_instance_key(&db, target).expect("closed root");
+            let called = || first_callee_key(&db, identity_semantic_instance_key(&db, caller));
+            let (root, called) = if root_first {
+                (root(), called())
+            } else {
+                let called = called();
+                (root(), called)
+            };
+            assert_eq!(root, called, "{source}");
+            assert_eq!(identity_semantic_instance_key(&db, target), called);
+            let instance = get_or_build_semantic_instance(&db, root);
+            check_semantic_borrows(&db, instance).expect("valid root borrows");
+            db.assert_no_diags(module);
+        }
+    }
+}
+
+#[test]
+fn symbolic_and_effect_roots_keep_their_declaration_environment() {
+    for source in [
+        "trait Value {}
+fn target<T: Value>(_ x: T) -> T { x }",
+        "fn target() uses (value: mut u256) { value += 1 }",
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(Utf8PathBuf::from("root_callee_evidence.fe"), source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let owner = BodyOwner::Func(find_func(&db, module, "target"));
+        let key = identity_semantic_instance_key(&db, owner);
+        assert_eq!(key.impl_env(&db).normalization_scope(&db), owner.scope());
+        let instance = get_or_build_semantic_instance(&db, key);
+        check_semantic_borrows(&db, instance).expect("valid root borrows");
+    }
+}
+
+#[test]
+fn root_callee_sharing_preserves_the_callers_ingot() {
+    let mut db = HirAnalysisTestDb::default();
+    db.initialize_builtin_core();
+    let mut files = Vec::new();
+    for (name, manifest, source) in [
+        (
+            "library",
+            "",
+            "pub fn target(_ x: u256) -> u256 { x }\nfn caller() -> u256 { target(7) }",
+        ),
+        (
+            "first",
+            "[dependencies]\nlibrary = { path = \"../library\" }",
+            "fn caller() -> u256 { library::target(7) }",
+        ),
+        (
+            "second",
+            "[dependencies]\nlibrary = { path = \"../library\" }",
+            "fn caller() -> u256 { library::target(7) }",
+        ),
+    ] {
+        db.workspace().touch(
+            &mut db,
+            format!("file:///root-callee-ingots/{name}/fe.toml")
+                .parse()
+                .unwrap(),
+            Some(format!(
+                "[ingot]\nname = \"{name}\"\nversion = \"0.1.0\"\n{manifest}\n"
+            )),
+        );
+        files.push(
+            db.workspace().touch(
+                &mut db,
+                format!("file:///root-callee-ingots/{name}/src/lib.fe")
+                    .parse()
+                    .unwrap(),
+                Some(source.to_string()),
+            ),
+        );
+    }
+    let keys = files
+        .into_iter()
+        .map(|file| {
+            let (module, _) = db.top_mod(file);
+            db.assert_no_diags(module);
+            first_callee_key(
+                &db,
+                identity_semantic_instance_key(
+                    &db,
+                    BodyOwner::Func(find_func(&db, module, "caller")),
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
+    let root = root_semantic_instance_key(&db, keys[0].owner(&db)).expect("closed library root");
+    assert_eq!(root, keys[0]);
+    for key in &keys[1..] {
+        assert_eq!(root.owner(&db), key.owner(&db));
+        assert_eq!(root.subst(&db), key.subst(&db));
+        assert_eq!(root.effect_providers(&db), key.effect_providers(&db));
+        assert_ne!(root.impl_env(&db), key.impl_env(&db));
+    }
+    assert_ne!(keys[1], keys[2]);
 }
 
 #[test]
