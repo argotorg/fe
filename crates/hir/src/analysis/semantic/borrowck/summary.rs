@@ -146,7 +146,6 @@ impl<'db> BorrowSummary<'db> {
                 &mut self.availability.reinitialized,
                 &mut self.availability.unavailable,
                 &mut self.native_requirements,
-                &mut self.separation_validity,
             ])
         {
             *region = RegionSet::new(
@@ -157,9 +156,17 @@ impl<'db> BorrowSummary<'db> {
                 }),
             );
         }
-        self.separation_validity = self
-            .separation_validity
-            .forget_occurrences(|choice| matches!(choice, ValueOccurrence::SummaryChoice(_)));
+        // Pre-call obligations hide every private choice. Project them before
+        // renaming: moving selectors after argument fields can build an
+        // exponential intermediate graph that projection immediately discards.
+        // The retained Argument/Summary occurrences need no renaming.
+        let private = |choice| {
+            !matches!(
+                choice,
+                ValueOccurrence::Argument(_) | ValueOccurrence::Summary
+            )
+        };
+        self.separation_validity = self.separation_validity.forget_occurrences(private);
         // Equal relations merge; the first origin in body order names each.
         let scope = BinderScope::default();
         let mut origins = BTreeMap::new();
@@ -168,12 +175,9 @@ impl<'db> BorrowSummary<'db> {
             // These are pre-call obligations. A caller must establish them for
             // every possible private execution of the callee; only argument
             // choices can restrict which executions it admits at the boundary.
-            let renamed = SeparationSet::new(db, &scope, [clause])
-                .map_occurrences(db, rename)
-                .forget_occurrences(db, |choice| {
-                    matches!(choice, ValueOccurrence::SummaryChoice(_))
-                });
-            for clause in renamed.clauses() {
+            let projected =
+                SeparationSet::new(db, &scope, [clause]).forget_occurrences(db, private);
+            for clause in projected.clauses() {
                 origins.entry(clause.payload.clone()).or_insert(origin);
                 clauses.push(clause.clone());
             }
