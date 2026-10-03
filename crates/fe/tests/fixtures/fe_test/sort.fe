@@ -1,0 +1,194 @@
+// Tests for `core::sort` across containers (arrays, `MemSlice`, `MemArray`,
+// `MemVec`) and element types (unsigned, signed, `Address`, a user type).
+
+use core::ops::{Eq, Ord}
+use core::ptr::MemArray
+use core::seq::{Seq, SeqMut}
+use core::sort::{
+    binary_search,
+    dedup_sorted,
+    heap_sort,
+    insertion_sort,
+    is_sorted,
+    is_sorted_unique,
+    lower_bound,
+    reverse,
+    sort,
+}
+use std::abi::{DynArray, MemVec}
+use std::abi::dyn_array::dyn_array_from
+use std::evm::Address
+
+// A bid ordered by price, highest first; equal prices by bidder.
+struct Bid { price: u256, bidder: u256 }
+
+impl Copy for Bid {}
+
+impl Eq for Bid {
+    fn eq(self, _ other: Bid) -> bool {
+        self.price == other.price && self.bidder == other.bidder
+    }
+}
+
+impl Ord for Bid {
+    fn lt(self, _ other: Bid) -> bool {
+        self.price > other.price || (self.price == other.price && self.bidder < other.bidder)
+    }
+    fn le(self, _ other: Bid) -> bool {
+        !other.lt(self)
+    }
+    fn gt(self, _ other: Bid) -> bool {
+        other.lt(self)
+    }
+    fn ge(self, _ other: Bid) -> bool {
+        !self.lt(other)
+    }
+}
+
+#[test]
+fn sorts_unsigned_and_signed_arrays() {
+    let mut a: [u256; 6] = [5, 3, 9, 1, 3, 0]
+    sort(mut a)
+    assert!(a == [0, 1, 3, 3, 5, 9])
+
+    // Signed order needs no sign-bit trick.
+    let mut b: [i256; 5] = [2, -7, 0, -1, 100]
+    sort(mut b)
+    assert!(b == [-7, -1, 0, 2, 100])
+
+    let mut c: [u8; 3] = [255, 0, 7]
+    insertion_sort(mut c)
+    assert!(c == [0, 7, 255])
+}
+
+#[test]
+fn sorts_addresses() {
+    let mut signers: [Address; 3] = [
+        Address { inner: 0xc0ffee },
+        Address { inner: 0xa11ce },
+        Address { inner: 0xb0b },
+    ]
+    assert!(!is_sorted_unique(signers))
+    sort(mut signers)
+    assert!(
+        signers[0].inner == 0xb0b && signers[1].inner == 0xa11ce && signers[2].inner == 0xc0ffee,
+    )
+    assert!(is_sorted_unique(signers))
+}
+
+#[test]
+fn sorts_a_user_type_by_its_own_order() {
+    let mut bids: [Bid; 4] = [
+        Bid { price: 10, bidder: 2 },
+        Bid { price: 30, bidder: 1 },
+        Bid { price: 10, bidder: 1 },
+        Bid { price: 20, bidder: 9 },
+    ]
+    sort(mut bids)
+    assert!(bids[0].price == 30)
+    assert!(bids[1].price == 20)
+    assert!(bids[2].price == 10 && bids[2].bidder == 1)
+    assert!(bids[3].price == 10 && bids[3].bidder == 2)
+    assert!(is_sorted(bids))
+}
+
+#[test]
+fn sorts_memory_slices_and_arrays() {
+    let arr = MemArray<u256>::new_zeroed(4)
+    let mut slice = arr.as_slice()
+    slice.set(0, 40)
+    slice.set(1, 10)
+    slice.set(2, 30)
+    slice.set(3, 20)
+    sort(mut slice)
+    // The slice writes through to the array's memory.
+    assert!(arr.get(0) == 10 && arr.get(3) == 40)
+    let mut total: u256 = 0
+    for x in slice {
+        total += x
+    }
+    assert!(total == 100)
+
+    let mut owned = MemArray<i256>::new_zeroed(3)
+    owned.set(0, 3)
+    owned.set(1, -3)
+    owned.set(2, 0)
+    sort(mut owned)
+    assert!(owned.get(0) == -3 && owned.get(2) == 3)
+}
+
+#[test]
+fn sorts_a_copy_of_an_abi_array() {
+    let input: DynArray<Address> = dyn_array_from(
+        [Address { inner: 3 }, Address { inner: 1 }, Address { inner: 2 }],
+    )
+    let mut copy = MemVec::from_dyn_array(input)
+    sort(mut copy)
+    assert!(
+        copy.get(0).inner == 1 && copy.get(1).inner == 2 && copy.get(2).inner == 3,
+    )
+    let sorted: DynArray<Address> = copy.to_dyn_array()
+    assert!(sorted.len() == 3)
+}
+
+#[test]
+fn heap_sort_handles_long_inputs() {
+    // 64 pseudo-random values exercise the heapsort path of `sort`.
+    let mut values: [u256; 64] = [0; 64]
+    let mut x: u256 = 12345
+    let mut i: usize = 0
+    let mut sum: u256 = 0
+    while i < 64 {
+        x = (x * 1103515245 + 12345) % 2147483648
+        values[i] = x % 1000
+        sum += x % 1000
+        i += 1
+    }
+    sort(mut values)
+    assert!(is_sorted(values))
+    let mut after: u256 = 0
+    for v in values {
+        after += v
+    }
+    assert!(after == sum)
+
+    let mut descending: [u256; 20] = [0; 20]
+    let mut k: usize = 0
+    while k < 20 {
+        descending[k] = (20 - k) as u256
+        k += 1
+    }
+    heap_sort(mut descending)
+    assert!(
+        descending[0] == 1 && descending[19] == 20 && is_sorted_unique(descending),
+    )
+}
+
+#[test]
+fn searches_sorted_sequences() {
+    let sorted: [u256; 6] = [1, 3, 3, 5, 8, 13]
+    assert!(binary_search(sorted, 5).unwrap() == 3)
+    assert!(binary_search(sorted, 3).unwrap() == 1)
+    assert!(binary_search(sorted, 4).is_none())
+    assert!(lower_bound(sorted, 4) == 3)
+    assert!(lower_bound(sorted, 0) == 0)
+    assert!(lower_bound(sorted, 100) == 6)
+}
+
+#[test]
+fn dedups_and_reverses() {
+    let mut values: [u256; 7] = [1, 1, 2, 3, 3, 3, 9]
+    let unique = dedup_sorted(mut values)
+    assert!(unique == 4)
+    assert!(
+        values[0] == 1 && values[1] == 2 && values[2] == 3 && values[3] == 9,
+    )
+
+    let mut seq: [u256; 5] = [1, 2, 3, 4, 5]
+    reverse(mut seq)
+    assert!(seq == [5, 4, 3, 2, 1])
+    assert!(!is_sorted(seq))
+
+    let empty: [u256; 0] = []
+    assert!(is_sorted(empty) && is_sorted_unique(empty))
+}

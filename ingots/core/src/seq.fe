@@ -1,4 +1,5 @@
 use ingot::Copy
+use ingot::ptr::{MemArray, MemSlice}
 
 /// Trait for types that can be iterated over.
 pub trait Seq {
@@ -10,6 +11,14 @@ pub trait Seq {
 
     /// Returns the element at the given index.
     fn get(self, _ i: usize) -> Self::Item
+}
+
+/// A sequence whose elements can be replaced in place, such as an array or
+/// a memory slice. Generic algorithms like `core::sort::sort` work on any
+/// `SeqMut`.
+pub trait SeqMut: Seq {
+    /// Replaces the element at the given index.
+    fn set(mut self, _ i: usize, _ value: Self::Item)
 }
 
 /// Array implementation of Seq.
@@ -24,5 +33,58 @@ impl<T, const N: usize> Seq for [T; N]
 
     fn get(self, _ i: usize) -> T {
         self[i]
+    }
+}
+
+impl<T, const N: usize> SeqMut for [T; N]
+    where T: Copy
+{
+    fn set(mut self, _ i: usize, _ value: T) {
+        self[i] = value
+    }
+}
+
+impl<T> Seq for MemSlice<T>
+    where T: Copy
+{
+    type Item = T
+
+    fn len(self) -> usize {
+        MemSlice::len(self) as usize
+    }
+
+    fn get(self, _ i: usize) -> T {
+        *self.ptr_at(i as u256)
+    }
+}
+
+/// Writes through the slice into the memory it views.
+impl<T> SeqMut for MemSlice<T>
+    where T: Copy
+{
+    fn set(mut self, _ i: usize, _ value: T) {
+        *self.ptr_at(i as u256) = value
+    }
+}
+
+impl<T> Seq for MemArray<T>
+    where T: Copy
+{
+    type Item = T
+
+    fn len(self) -> usize {
+        MemArray::len(self) as usize
+    }
+
+    fn get(self, _ i: usize) -> T {
+        *self.ptr_at(i)
+    }
+}
+
+impl<T> SeqMut for MemArray<T>
+    where T: Copy
+{
+    fn set(mut self, _ i: usize, _ value: T) {
+        *self.ptr_at(i) = value
     }
 }
