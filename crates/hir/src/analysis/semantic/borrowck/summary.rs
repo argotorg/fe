@@ -111,7 +111,15 @@ impl<'db> BorrowSummary<'db> {
             ValueOccurrence::Argument(_) | ValueOccurrence::Summary => occurrence,
             _ => ValueOccurrence::SummaryChoice(choices[&occurrence]),
         };
-        let map = |guard: &Guard<'db>| guard.map_occurrences(rename);
+        // Components often share guards. This renaming is fixed for one
+        // summary, so reuse each result without keeping it across exports.
+        let mut renamed = FxHashMap::default();
+        let mut map = |guard: &Guard<'db>| {
+            renamed
+                .entry(guard.clone())
+                .or_insert_with(|| guard.map_occurrences(rename))
+                .clone()
+        };
         for value in std::iter::once(&mut self.result)
             .chain(self.mutable_inputs.iter_mut().map(|input| &mut input.value))
             .chain(
@@ -120,7 +128,7 @@ impl<'db> BorrowSummary<'db> {
                     .map(|range| &mut range.contents),
             )
         {
-            *value = values.map_guards(value, map);
+            *value = values.map_guards(value, &mut map);
         }
         for range in &mut self.certified_ranges {
             range.coverage = map(&range.coverage).expect("injective summary choice renaming");
@@ -156,6 +164,7 @@ impl<'db> BorrowSummary<'db> {
                 }),
             );
         }
+        drop(renamed);
         // Pre-call obligations hide every private choice. Project them before
         // renaming: moving selectors after argument fields can build an
         // exponential intermediate graph that projection immediately discards.
