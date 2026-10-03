@@ -1,0 +1,1 @@
+An enum can now be a `msg` field when it implements the ABI codec traits and `SolCompat`. Its `SolCompat` impl names its Solidity type, such as `uint8` for a Solidity enum, which the selector signature check and the JSON ABI use. Previously every enum field was rejected as an unsupported ABI type, even with hand-written `Encode<Sol>` and `Decode<Sol>` impls.
