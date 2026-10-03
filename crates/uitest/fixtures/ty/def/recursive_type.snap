@@ -51,3 +51,35 @@ error[3-0002]: recursive type definition
    │            ^^ recursive type definition here
 31 │     s: S8<[T; 1]>,
    │        ---------- recursion occurs here
+
+error[3-0057]: recursive type grows without bound
+   ┌─ recursive_type.fe:40:12
+   │
+40 │ pub struct S10<T> {
+   │            ^^^ recursive type definition here
+41 │     t: T,
+42 │     next: *S10<[T; 1]>,
+   │           ------------ recursion occurs here
+   │
+   = each pass through this recursion can grow a type argument, so the type can refer to infinitely many distinct types
+
+error[3-0057]: recursive type grows without bound
+   ┌─ recursive_type.fe:88:12
+   │
+88 │ pub struct PositiveGuard<T> {
+   │            ^^^^^^^^^^^^^ recursive type definition here
+89 │     value: T,
+90 │     next: [*PositiveGuard<[T; 1]>; 1],
+   │           --------------------------- recursion occurs here
+   │
+   = each pass through this recursion can grow a type argument, so the type can refer to infinitely many distinct types
+
+error[3-0057]: recursive type grows without bound
+   ┌─ recursive_type.fe:94:12
+   │
+94 │ pub struct EmptyArgument<T> {
+   │            ^^^^^^^^^^^^^ recursive type definition here
+95 │     next: *EmptyArgument<[T; 0]>,
+   │           ---------------------- recursion occurs here
+   │
+   = each pass through this recursion can grow a type argument, so the type can refer to infinitely many distinct types

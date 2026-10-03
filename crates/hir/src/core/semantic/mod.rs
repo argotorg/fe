@@ -38,6 +38,8 @@ pub use reference::{
     FieldAccessView, HasReferences, MethodCallView, PathView, ReferenceView, Target, UsePathView,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::VecDeque;
+use std::iter;
 pub use storage_layout::{
     AllocatedContractStorageLayout, AssignedLayoutTy, AssignedRootValue, ConcreteRootOccurrence,
     ConcreteRootOccurrenceId, ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind,
@@ -75,6 +77,7 @@ use crate::analysis::ty::binder::Binder;
 use crate::hir_def::*;
 // When adding real methods, prefer calling internal lowering/normalization here
 // rather than exposing raw syntax.
+use crate::analysis::semantic::capability::shape::ArrayLength;
 use crate::analysis::ty::adt_def::{AdtCycleMember, AdtDef, AdtField, AdtRef};
 use crate::analysis::ty::const_ty::{
     CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleAnchor, LoweringContext,
@@ -121,6 +124,7 @@ use crate::analysis::ty::{
 };
 use crate::core::adt_lower::{lower_adt, lower_contract_fields};
 use common::indexmap::IndexMap;
+use common::ingot::Ingot;
 use indexmap::IndexSet;
 use salsa::Update;
 // Re-export from crate root for backwards compatibility
@@ -3553,8 +3557,8 @@ impl<'db> AdtDef<'db> {
                     for field_adt_ref in collect_direct_adts(db, ty.instantiate_identity()) {
                         chain.push(AdtCycleMember {
                             adt,
-                            field_idx: field_idx as u16,
-                            ty_idx: ty_idx as u16,
+                            field_idx,
+                            ty_idx,
                         });
 
                         if let Some(cycle) =
@@ -3571,6 +3575,306 @@ impl<'db> AdtDef<'db> {
 
         impl_check(db, self, self, &[])
     }
+}
+
+/// Finds the growing recursive cycles of `ingot`'s ADTs: cycles of fields
+/// that pass a generic argument back to its own position inside a larger
+/// one, as `Grow<T>` does through a field of type `*Grow<[T; 1]>`.
+/// Indirection keeps such a type finitely sized, but each instantiation
+/// reaches infinitely many distinct types.
+///
+/// One search covers the ingot, so a long chain of definitions is explored
+/// once rather than once per member, and each cycle is reported once, at its
+/// first ADT in item order. Only growth by type constructors written in field
+/// types is found: an argument computed by a trait projection or a const
+/// expression, and an effect handle's target, are left to the borrow
+/// checker's referent limit. Reachability follows only builtin arguments and
+/// exposed ADT arguments, with array elements requiring known positive lengths.
+/// Other heads and symbolic lengths rely on the referent limit. Containment
+/// inside an ADT argument still counts every constructor, including `[T; 0]`.
+/// Shared binary type subterms and parameter states give linear-size reach
+/// clauses and growth flows, solved separately before reconstructing a witness.
+#[salsa::tracked(return_ref)]
+pub fn ingot_growing_cycles<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+) -> IndexMap<AdtDef<'db>, Vec<AdtCycleMember<'db>>> {
+    struct Edge<'db> {
+        from: usize,
+        to: usize,
+        grows: bool,
+        member: Option<AdtCycleMember<'db>>,
+    }
+
+    let adts: Vec<_> = ingot
+        .all_items(db)
+        .iter()
+        .filter_map(|item| AdtRef::try_from_item(*item))
+        .map(|adt| lower_adt(db, adt))
+        .collect();
+    let mut fields = IndexMap::default();
+    let mut params: IndexSet<TyId<'db>> = IndexSet::default();
+    // Postorder over the binary type DAG; cache the head and application
+    // position without repeatedly flattening shared application prefixes.
+    let mut terms: IndexMap<TyId<'db>, (TyId<'db>, usize)> = IndexMap::default();
+    let mut pending = adts.clone();
+    while let Some(adt) = pending.pop() {
+        if fields.contains_key(&adt) {
+            continue;
+        }
+        params.extend(adt.params(db));
+        let adt_fields: Vec<_> = adt
+            .fields(db)
+            .iter()
+            .enumerate()
+            .flat_map(|(field_idx, field)| {
+                field.iter_types(db).enumerate().map(move |(ty_idx, ty)| {
+                    let member = AdtCycleMember {
+                        adt,
+                        field_idx,
+                        ty_idx,
+                    };
+                    (member, ty.instantiate_identity())
+                })
+            })
+            .collect();
+        let mut stack: Vec<_> = adt_fields
+            .iter()
+            .map(|(_, ty)| (*ty, false))
+            .chain(adt.params(db).iter().map(|ty| (*ty, false)))
+            .collect();
+        while let Some((ty, ready)) = stack.pop() {
+            if terms.contains_key(&ty) {
+                continue;
+            }
+            if let TyData::TyApp(lhs, rhs) = ty.data(db) {
+                if ready {
+                    let (head, arity) = terms[lhs];
+                    terms.insert(ty, (head, arity + 1));
+                } else {
+                    stack.extend([(ty, true), (*rhs, false), (*lhs, false)]);
+                }
+            } else {
+                if let TyData::TyBase(TyBase::Adt(applied)) = ty.data(db) {
+                    pending.push(*applied);
+                }
+                terms.insert(ty, (ty, 0));
+            }
+        }
+        fields.insert(adt, adt_fields);
+    }
+
+    let mut computed = vec![false; terms.len()];
+    for (idx, (&ty, _)) in terms.iter().enumerate() {
+        computed[idx] = match ty.data(db) {
+            TyData::AssocTy(_) | TyData::QualifiedTy(_) => true,
+            TyData::ConstTy(value) => {
+                !matches!(value.data(db), ConstTyData::TyParam(..)) && ty.has_param(db)
+            }
+            TyData::TyApp(lhs, rhs) => {
+                computed[terms.get_index_of(lhs).unwrap()]
+                    || computed[terms.get_index_of(rhs).unwrap()]
+            }
+            _ => false,
+        };
+    }
+
+    // Reach and exposure share facts, but never edges with the flow graph.
+    // A reachable application reaches each argument iff that ADT parameter
+    // is exposed. Binary prefixes keep every clause to at most two premises.
+    let term_node = |ty: TyId<'db>| params.len() + terms.get_index_of(&ty).unwrap();
+    let nodes = params.len() + terms.len();
+    let mut conclusions = Vec::new();
+    let mut unmet = Vec::new();
+    let mut waiting = vec![Vec::new(); nodes];
+    let mut clause = |from: usize, to: usize, gate: Option<usize>| {
+        waiting[from].push(conclusions.len());
+        if let Some(gate) = gate {
+            waiting[gate].push(conclusions.len());
+        }
+        conclusions.push((from, to));
+        unmet.push(1 + usize::from(gate.is_some()));
+    };
+    let mut edges = Vec::new();
+    for (state, &param) in params.iter().enumerate() {
+        let term = term_node(param);
+        clause(term, state, None);
+        edges.push(Edge {
+            from: state,
+            to: term,
+            grows: false,
+            member: None,
+        });
+    }
+    for (&ty, &(head, arity)) in &terms {
+        let TyData::TyApp(lhs, rhs) = ty.data(db) else {
+            continue;
+        };
+        let parent = term_node(ty);
+        for child in [*lhs, *rhs] {
+            edges.push(Edge {
+                from: term_node(child),
+                to: parent,
+                grows: true,
+                member: None,
+            });
+        }
+        let gate = match head.data(db) {
+            TyData::TyBase(TyBase::Adt(applied)) => {
+                Some(params.get_index_of(&applied.params(db)[arity - 1]).unwrap())
+            }
+            TyData::TyBase(TyBase::Prim(_)) => None,
+            _ => continue,
+        };
+        let array = head.is_array(db) && arity == 2;
+        if matches!(lhs.data(db), TyData::TyApp(..))
+            && (!array
+                || matches!(ArrayLength::from_ty(db, *rhs), Some(ArrayLength::Known(n)) if n > 0))
+        {
+            clause(parent, term_node(*lhs), None);
+        }
+        clause(parent, term_node(*rhs), gate);
+    }
+    let mut facts: Vec<_> = fields
+        .values()
+        .flatten()
+        .map(|(member, ty)| (term_node(*ty), *member))
+        .collect();
+    let mut reached = vec![None; nodes];
+    while let Some((fact, member)) = facts.pop() {
+        if reached[fact].is_some() {
+            continue;
+        }
+        reached[fact] = Some(member);
+        for &clause in &waiting[fact] {
+            unmet[clause] -= 1;
+            if unmet[clause] == 0 {
+                let (from, to) = conclusions[clause];
+                facts.push((to, reached[from].unwrap()));
+            }
+        }
+    }
+    for (&ty, &(head, arity)) in &terms {
+        if let TyData::TyApp(_, arg) = ty.data(db)
+            && let TyData::TyBase(TyBase::Adt(applied)) = head.data(db)
+            && let Some(member) = reached[term_node(ty)]
+            && !computed[terms.get_index_of(arg).unwrap()]
+        {
+            edges.push(Edge {
+                from: term_node(*arg),
+                to: params.get_index_of(&applied.params(db)[arity - 1]).unwrap(),
+                grows: false,
+                member: Some(member),
+            });
+        }
+    }
+
+    let mut outgoing = vec![Vec::new(); nodes];
+    let mut incoming = vec![Vec::new(); nodes];
+    for (idx, edge) in edges.iter().enumerate() {
+        outgoing[edge.from].push(idx);
+        incoming[edge.to].push(idx);
+    }
+    // Kosaraju: finish order on the flows, then components on the reverse.
+    let mut finished = Vec::with_capacity(nodes);
+    let mut visited = vec![false; nodes];
+    for root in 0..nodes {
+        if visited[root] {
+            continue;
+        }
+        visited[root] = true;
+        let mut stack = vec![(root, 0)];
+        while let Some(&(state, next)) = stack.last() {
+            if let Some(&edge) = outgoing[state].get(next) {
+                stack.last_mut().expect("the stack is not empty").1 += 1;
+                let to = edges[edge].to;
+                if !visited[to] {
+                    visited[to] = true;
+                    stack.push((to, 0));
+                }
+            } else {
+                finished.push(state);
+                stack.pop();
+            }
+        }
+    }
+    let mut component = vec![usize::MAX; nodes];
+    let mut components = 0;
+    for &root in finished.iter().rev() {
+        if component[root] != usize::MAX {
+            continue;
+        }
+        component[root] = components;
+        let mut stack = vec![root];
+        while let Some(state) = stack.pop() {
+            for &edge in &incoming[state] {
+                let from = edges[edge].from;
+                if component[from] == usize::MAX {
+                    component[from] = components;
+                    stack.push(from);
+                }
+            }
+        }
+        components += 1;
+    }
+    // Arguments only ever wrap parameters here, so a component grows exactly
+    // when one of its inner flows does.
+    let mut growing = vec![None; components];
+    for (idx, edge) in edges.iter().enumerate() {
+        if edge.grows && component[edge.from] == component[edge.to] {
+            growing[component[edge.from]].get_or_insert(idx);
+        }
+    }
+
+    // The shortest walk of edges between two states of one component.
+    let walk = |from: usize, to: usize| {
+        let mut entered = FxHashMap::from_iter([(from, None)]);
+        let mut pending = VecDeque::from([from]);
+        while let Some(state) = pending.pop_front()
+            && state != to
+        {
+            for &edge in &outgoing[state] {
+                let next = edges[edge].to;
+                if component[next] == component[from] && !entered.contains_key(&next) {
+                    entered.insert(next, Some(edge));
+                    pending.push_back(next);
+                }
+            }
+        }
+        let mut path: Vec<_> =
+            iter::successors(entered[&to], |edge| entered[&edges[*edge].from]).collect();
+        path.reverse();
+        path
+    };
+    // Report each growing component once, at its first ADT, through a closed
+    // walk from one of its parameters across a growing flow.
+    let mut reported = vec![false; components];
+    let mut cycles = IndexMap::default();
+    for adt in adts {
+        let Some((state, edge)) = adt
+            .params(db)
+            .iter()
+            .filter_map(|param| params.get_index_of(param))
+            .find_map(|state| {
+                growing[component[state]]
+                    .filter(|_| !reported[component[state]])
+                    .map(|edge| (state, edge))
+            })
+        else {
+            continue;
+        };
+        reported[component[state]] = true;
+        let mut seen = FxHashSet::default();
+        let cycle = walk(state, edges[edge].from)
+            .into_iter()
+            .chain([edge])
+            .chain(walk(edges[edge].to, state))
+            .filter_map(|edge| edges[edge].member)
+            .filter(|member| seen.insert(*member))
+            .collect();
+        cycles.insert(adt, cycle);
+    }
+    cycles
 }
 
 /// Collect all ADTs directly appearing inside the given type without

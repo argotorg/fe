@@ -1,0 +1,89 @@
+// An impl or a const expression can make a recursive type grow where its
+// field types do not.
+pub trait Next {
+    type Out
+}
+
+impl Next for u256 {
+    type Out = Grow<[u256; 1]>
+}
+
+impl<T> Next for [T; 1] {
+    type Out = Grow<[[T; 1]; 1]>
+}
+
+pub struct Grow<T: Next> {
+    value: T,
+    next: *T::Out,
+}
+
+fn value(grow: Grow<u256>) -> u256 {
+    grow.value
+}
+
+pub struct Count<const N: u256> {
+    value: u256,
+    next: *Count<{ N + 1 }>,
+}
+
+fn count(counter: Count<0>) -> u256 {
+    counter.value
+}
+
+// Many instantiations of one type are fine when no chain of referents grows.
+pub struct Leaf<const N: u256> {
+    value: u256,
+}
+
+pub struct Leaves<const N: u256> {
+    l0: *Leaf<{ N * 8 }>,
+    l1: *Leaf<{ N * 8 + 1 }>,
+    l2: *Leaf<{ N * 8 + 2 }>,
+    l3: *Leaf<{ N * 8 + 3 }>,
+    l4: *Leaf<{ N * 8 + 4 }>,
+    l5: *Leaf<{ N * 8 + 5 }>,
+    l6: *Leaf<{ N * 8 + 6 }>,
+    l7: *Leaf<{ N * 8 + 7 }>,
+}
+
+fn leaves(
+    l0: Leaves<0>,
+    l1: Leaves<1>,
+    l2: Leaves<2>,
+    l3: Leaves<3>,
+    l4: Leaves<4>,
+    l5: Leaves<5>,
+    l6: Leaves<6>,
+    l7: Leaves<7>,
+    l8: Leaves<8>,
+) -> u256 {
+    l8.l7.value
+}
+
+// Symbolic array guards are instantiated by the referent inventory.
+pub struct Maybe<T, const N: usize> {
+    values: [T; N],
+}
+
+pub struct PositiveMaybe<T> {
+    value: T,
+    next: *Maybe<PositiveMaybe<[T; 1]>, 1>,
+}
+
+fn positive_maybe(x: PositiveMaybe<u256>) -> u256 {
+    x.value
+}
+
+// Instantiating an unknown constructor can expose a growing referent chain.
+pub struct Wrapper<T> {
+    value: T,
+}
+
+pub struct Fine<T, F: * -> *> {
+    value: T,
+    next: *F<Fine<[T; 1], F>>,
+}
+
+fn higher_kinded(x: Fine<u256, Wrapper>) -> u256 {
+    x.value
+}

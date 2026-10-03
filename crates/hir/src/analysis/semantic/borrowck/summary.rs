@@ -702,9 +702,10 @@ impl<'db> Borrowck<'db> {
         self.inventory
             .add_external_sources(self.db, self.instance, bases)
             .map_err(|error| {
-                self.internal_diag(
+                self.storage_error(
                     SemOrigin::Body(self.body.template_owner),
-                    format!("unresolved external call storage: {error:?}"),
+                    error,
+                    "unresolved external call storage",
                 )
             })?;
         Ok(())

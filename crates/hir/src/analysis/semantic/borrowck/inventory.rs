@@ -30,6 +30,7 @@ use crate::{
                 state::{BorrowState, CapabilityValue, CapabilityValues},
                 value::{Guarded, ValueLimits},
             },
+            diagnostics::{SemanticDiagnostic, SemanticDiagnosticKind, SemanticDiagnosticSpan},
             instantiated_effect_env,
             normalized::{
                 HandleOrigin, NBlock, NBlockId, NExpr, NRootId, NRootKind, NStatementKind,
@@ -46,6 +47,46 @@ use crate::{
     },
     hir_def::FuncParamMode,
 };
+
+/// Checking enumerates the types reachable from a function's inputs, and a
+/// trait or const expression can make that set infinite: a projection, an
+/// effect handle's target or a const argument may keep growing the argument
+/// of a recursive type. Written constructor growth is rejected statically
+/// except behind unknown application heads or symbolic array lengths, which
+/// are checked here after instantiation. A chain with more than this many
+/// distinct instantiations of one type constructor is treated as growing.
+/// Unrelated instantiations reached from separate roots do not consume one
+/// another's budget.
+pub(super) const MAX_REFERENT_INSTANTIATIONS: usize = 64;
+
+/// A referent type on an expansion path with its type constructor.
+type Referent<'db> = (TyId<'db>, TyId<'db>);
+
+fn referent<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Referent<'db> {
+    (ty, ty.base_ty(db))
+}
+
+/// The error for inputs that reach too many instantiations of `head`.
+pub(super) fn unbounded_referents_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    template_owner: BodyOwner<'db>,
+    head: TyId<'db>,
+) -> SemanticDiagnostic<'db> {
+    SemanticDiagnostic::new(
+        instance,
+        SemanticDiagnosticKind::UnboundedReferents,
+        format!(
+            "more than {MAX_REFERENT_INSTANTIATIONS} instantiations of `{}` are reachable from here; a recursive type may be growing its type arguments without bound",
+            head.pretty_print(db)
+        ),
+        SemanticDiagnosticSpan::OriginWithTemplateFallback {
+            owner: instance.key(db).owner(db),
+            template_owner,
+            origin: SemOrigin::Body(template_owner),
+        },
+    )
+}
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct InputTarget<'db> {
@@ -118,7 +159,7 @@ struct InputBuilder<'db> {
     input_loans: BTreeMap<(ExternalSource<'db>, bool), LoanId>,
     targets: BTreeMap<ExternalSource<'db>, InputTarget<'db>>,
     storage: BTreeMap<RegionRoot<'db>, CapabilityValue<'db>>,
-    pending: Vec<(InputTarget<'db>, InputOrigin<'db>, Vec<TyId<'db>>)>,
+    pending: Vec<(InputTarget<'db>, InputOrigin<'db>, Vec<Referent<'db>>)>,
 }
 
 impl<'db> Inventory<'db> {
@@ -180,7 +221,12 @@ impl<'db> Inventory<'db> {
                 },
             };
             let contents = if let NRootKind::ParamPlace { param } = root.kind {
-                inputs.value(shape, &scope, InputOrigin::Parameter(param), &[root.ty])?
+                inputs.value(
+                    shape,
+                    &scope,
+                    InputOrigin::Parameter(param),
+                    &[referent(db, root.ty)],
+                )?
             } else if let RegionRoot::External(source) = &region {
                 assert_eq!(
                     shape,
@@ -195,13 +241,13 @@ impl<'db> Inventory<'db> {
                     scope.clone(),
                     CapabilityClass::Handle,
                     true,
-                    &[root.ty],
+                    &[referent(db, root.ty)],
                 )?;
                 inputs.value(
                     shape,
                     &scope,
                     InputOrigin::Referent(source.clone()),
-                    &[root.ty],
+                    &[referent(db, root.ty)],
                 )?
             } else {
                 inputs.values.empty(shape, &scope)
@@ -216,7 +262,7 @@ impl<'db> Inventory<'db> {
                     shapes[index],
                     &scope,
                     InputOrigin::Parameter(param),
-                    &[value.ty],
+                    &[referent(db, value.ty)],
                 )?;
                 entry_values.push((NValueId::new(index), value));
             }
@@ -500,7 +546,7 @@ impl<'db> InputBuilder<'db> {
         scope: BinderScope,
         class: CapabilityClass,
         writable: bool,
-        ancestry: &[TyId<'db>],
+        ancestry: &[Referent<'db>],
     ) -> Result<(), ShapeError<'db>> {
         let (source, scope, _) = canonical_source(self.db, &source, &scope);
         if let Some(target) = self.targets.get_mut(&source) {
@@ -510,7 +556,18 @@ impl<'db> InputBuilder<'db> {
                 target.classes.sort();
             }
         } else {
-            let shape = self.shape(source.contract.ty)?;
+            let (ty, head) = referent(self.db, source.contract.ty);
+            let same_head = ancestry
+                .iter()
+                .filter(|(_, ancestor)| *ancestor == head)
+                .map(|(ancestor, _)| *ancestor);
+            if same_head.clone().count() >= MAX_REFERENT_INSTANTIATIONS
+                && same_head.chain([ty]).collect::<FxHashSet<_>>().len()
+                    > MAX_REFERENT_INSTANTIATIONS
+            {
+                return Err(ShapeError::UnboundedReferents(head));
+            }
+            let shape = self.shape(ty)?;
             let target = InputTarget {
                 ty: source.contract.ty,
                 source: source.clone(),
@@ -532,7 +589,7 @@ impl<'db> InputBuilder<'db> {
             if self.storage.contains_key(&root) {
                 continue;
             }
-            ancestry.push(target.ty);
+            ancestry.push(referent(self.db, target.ty));
             // Reserve the cell before traversing recursively followed handles.
             self.storage
                 .insert(root.clone(), self.values.empty(target.shape, &target.scope));
@@ -562,7 +619,7 @@ impl<'db> InputBuilder<'db> {
         shape: ShapeId<'db>,
         scope: &BinderScope,
         origin: InputOrigin<'db>,
-        ancestry: &[TyId<'db>],
+        ancestry: &[Referent<'db>],
     ) -> Result<CapabilityValue<'db>, ShapeError<'db>> {
         let mut requests = Vec::new();
         let mut views: Vec<(StructuralPath<IndexExpr<'db>>, ExternalSource<'db>)> = Vec::new();
@@ -649,7 +706,7 @@ impl<'db> InputBuilder<'db> {
                         }
                     }
                 };
-                if ancestry.contains(&semantics.target_ty) {
+                if ancestry.iter().any(|(ty, _)| *ty == semantics.target_ty) {
                     source = source.widen();
                 }
                 if semantics.class == CapabilityClass::View {

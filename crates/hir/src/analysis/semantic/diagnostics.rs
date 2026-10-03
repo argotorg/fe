@@ -215,6 +215,7 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
             SemanticDiagnosticKind::StorageViolation => 8,
             SemanticDiagnosticKind::UnresolvedCall => 9,
             SemanticDiagnosticKind::InvalidConcreteType => 10,
+            SemanticDiagnosticKind::UnboundedReferents => 11,
         };
         CompleteDiagnostic::new(
             Severity::Error,
@@ -278,6 +279,10 @@ impl SemanticDiagnosticKind {
             ),
             Self::InvalidConcreteType => format!(
                 "invalid concrete type in `fn {}`",
+                checker_name(db, instance)
+            ),
+            Self::UnboundedReferents => format!(
+                "unbounded referent types in `fn {}`",
                 checker_name(db, instance)
             ),
         }
@@ -454,4 +459,5 @@ pub enum SemanticDiagnosticKind {
     ProviderProvenanceConflict,
     UnresolvedCall,
     InvalidConcreteType,
+    UnboundedReferents,
 }

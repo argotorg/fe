@@ -25,6 +25,7 @@ use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
 };
 use crate::semantic::diagnostics::Diagnosable;
+use crate::semantic::ingot_growing_cycles;
 use crate::span::{DesugaredOrigin, EventDesugared, HirOrigin};
 
 pub mod abi_ty;
@@ -226,15 +227,19 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
 
         let mut diags = vec![];
         let mut cycle_participants = FxHashSet::<AdtDef<'db>>::default();
+        let growing = ingot_growing_cycles(db, top_mod.ingot(db));
 
         for adt_ref in adts {
             diags.extend(adt_ref.diags(db).into_iter().map(|d| d.to_voucher()));
             let adt = lower_adt(db, adt_ref);
-            if !cycle_participants.contains(&adt)
-                && let Some(cycle) = adt.recursive_cycle(db)
-            {
+            if cycle_participants.contains(&adt) {
+                continue;
+            }
+            if let Some(cycle) = adt.recursive_cycle(db) {
                 diags.push(Box::new(TyLowerDiag::RecursiveType(cycle.clone())) as _);
                 cycle_participants.extend(cycle.iter().map(|m| m.adt));
+            } else if let Some(cycle) = growing.get(&adt) {
+                diags.push(Box::new(TyLowerDiag::GrowingRecursiveType(cycle.clone())) as _);
             }
         }
         diags
