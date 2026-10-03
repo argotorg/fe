@@ -1,0 +1,9 @@
+use std::evm::StorPtr
+
+struct Grow<T> { tag: u256, next: Grow<[T; 1]> }
+struct PtrBox<T> { ptr: *T }
+struct RawGrow<T> { tag: u256, next: PtrBox<RawGrow<[T; 1]>> }
+struct Holder<T> { ptr: StorPtr<T> }
+struct StorGrow<T> { tag: u256, next: Holder<StorGrow<(T, T)>> }
+struct Ping<T> { next: StorPtr<Pong<[T; 1]>> }
+struct Pong<T> { next: PtrBox<Ping<Option<T>>> }

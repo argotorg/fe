@@ -433,7 +433,10 @@ pub(crate) enum LayoutViewRecurrence {
 /// Classifies one semantic view state against its active ancestors.
 ///
 /// `ancestors` must be ordered nearest-first. Exact recurrence selects the
-/// nearest matching state. A repeated expansion family remains finite when it
+/// nearest matching state, including across a field independent of its owner's
+/// parameters. `growth_start` is the stack depth after the last such field:
+/// closed declaration fields reset type arguments rather than growing them.
+/// A repeated expansion family remains finite when it
 /// is a permutation or a proper subterm of *any* active state in that family;
 /// restricting the check to the nearest state can reject a value that
 /// legitimately returns to an older finite orbit. Expansion families are
@@ -443,6 +446,7 @@ pub(crate) fn classify_layout_view_recurrence<'db, Family: PartialEq>(
     db: &'db dyn HirAnalysisDb,
     value: TyId<'db>,
     family: Family,
+    growth_start: usize,
     ancestors: impl IntoIterator<Item = (usize, TyId<'db>, Family)>,
 ) -> LayoutViewRecurrence {
     let mut nearest_same_family = None;
@@ -451,7 +455,14 @@ pub(crate) fn classify_layout_view_recurrence<'db, Family: PartialEq>(
         if layout_view_state_descends_from(db, value, ancestor) {
             return LayoutViewRecurrence::BackEdge { ancestor: idx };
         }
-        if family == ancestor_family {
+        // One handle implementation may connect unrelated nominal targets
+        // (A -> B -> A). Such repetition alone is not generic growth. Check
+        // embedding states, which also catches growth through inserted wrappers
+        // and changing const arguments, before constraining the family.
+        if idx >= growth_start
+            && family == ancestor_family
+            && structural_layout_type_embeds(db, ancestor, value)
+        {
             nearest_same_family.get_or_insert(idx);
             finite_family |= layout_view_states_are_permutations(db, value, ancestor)
                 || layout_view_state_is_strict_subterm(db, value, ancestor);

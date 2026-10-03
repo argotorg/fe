@@ -1330,6 +1330,7 @@ struct FieldCollector<'db> {
     reached_concrete_sites: Vec<ConcreteRootSite<'db>>,
     visiting: FxHashSet<(TyId<'db>, StoragePlace<'db>)>,
     expanding_providers: Vec<ExpandingProvider<'db>>,
+    growth_start: usize,
     /// Enclosing arrays, each with the provider expansion depth at its start.
     arrays: Vec<(TyId<'db>, usize)>,
     nonterminal_occurrences: FxHashSet<RootOccurrenceId>,
@@ -1354,6 +1355,7 @@ impl<'db> FieldCollector<'db> {
             reached_concrete_sites: Vec::new(),
             visiting: FxHashSet::default(),
             expanding_providers: Vec::new(),
+            growth_start: 0,
             arrays: Vec::new(),
             nonterminal_occurrences: FxHashSet::default(),
         }
@@ -1768,6 +1770,7 @@ impl<'db> FieldCollector<'db> {
                             },
                             source_elem,
                             place.with_step(PlaceStep::TupleElem(idx as u32)),
+                            false,
                         )
                     },
                 ),
@@ -1811,6 +1814,7 @@ impl<'db> FieldCollector<'db> {
             self.db,
             ty,
             target_edge.impl_instance.selected(),
+            self.growth_start,
             self.expanding_providers
                 .iter()
                 .enumerate()
@@ -1880,6 +1884,10 @@ impl<'db> FieldCollector<'db> {
         let target_start = self.occurrences.len();
         let enclosing_space = self.active_space;
         self.active_space = target_edge.space;
+        let saved_growth = self.growth_start;
+        if !target_edge.target_template.has_param(self.db) {
+            self.growth_start = self.expanding_providers.len();
+        }
         let target_output = self.walk_instantiation(
             &target,
             target.ty,
@@ -1887,6 +1895,7 @@ impl<'db> FieldCollector<'db> {
             dimensions,
             mode,
         );
+        self.growth_start = saved_growth;
         self.active_space = enclosing_space;
 
         let direct_roots = ty
@@ -1941,16 +1950,21 @@ impl<'db> FieldCollector<'db> {
 
     fn walk_sequence(
         &mut self,
-        items: impl IntoIterator<Item = (LayoutInstantiation<'db>, TyId<'db>, StoragePlace<'db>)>,
+        items: impl IntoIterator<Item = (LayoutInstantiation<'db>, TyId<'db>, StoragePlace<'db>, bool)>,
         dimensions: &[usize],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
         let mut inline_span = 0usize;
         let mut inline_leaves = Vec::new();
         let mut events = Vec::new();
-        for (instantiation, source, place) in items {
+        for (instantiation, source, place, resets_growth) in items {
+            let saved_growth = self.growth_start;
+            if resets_growth {
+                self.growth_start = self.expanding_providers.len();
+            }
             let mut output =
                 self.walk_instantiation(&instantiation, source, place, dimensions, mode);
+            self.growth_start = saved_growth;
             let Some(next) = inline_span.checked_add(output.inline_span) else {
                 self.push_error(ContractLayoutError::LayoutExtentOverflow);
                 continue;
@@ -2165,7 +2179,15 @@ impl<'db> FieldCollector<'db> {
                         source_args,
                     );
                     let field_place = place.with_step(PlaceStep::StructField(field_idx as u32));
-                    items.push((inst, source_field, field_place));
+                    items.push((
+                        inst,
+                        source_field,
+                        field_place,
+                        !fields
+                            .ty(self.db, field_idx)
+                            .instantiate_identity()
+                            .has_param(self.db),
+                    ));
                 }
                 let mut output = self.walk_sequence(items, dimensions, mode);
                 direct_events.append(&mut output.events);
@@ -2208,7 +2230,15 @@ impl<'db> FieldCollector<'db> {
                         );
                         let field_place =
                             variant_place.with_step(PlaceStep::EnumPayloadField(field_idx as u32));
-                        items.push((inst, source_field, field_place));
+                        items.push((
+                            inst,
+                            source_field,
+                            field_place,
+                            !variant
+                                .ty(self.db, field_idx)
+                                .instantiate_identity()
+                                .has_param(self.db),
+                        ));
                     }
                     let mut output = self.walk_sequence(items, dimensions, mode);
                     max_payload = max_payload.max(output.inline_span);

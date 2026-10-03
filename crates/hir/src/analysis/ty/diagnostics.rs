@@ -82,6 +82,7 @@ pub enum TyLowerDiag<'db> {
 
     RecursiveType(Vec<AdtCycleMember<'db>>),
     GrowingRecursiveType(Vec<AdtCycleMember<'db>>),
+    RecursiveAbiType(Vec<AdtCycleMember<'db>>),
 
     UnboundTypeAliasParam {
         span: DynLazySpan<'db>,
@@ -292,6 +293,7 @@ impl TyLowerDiag<'_> {
             Self::InvalidTypeArgKind { .. } => 1,
             Self::RecursiveType { .. } => 2,
             Self::GrowingRecursiveType(_) => 57,
+            Self::RecursiveAbiType(_) => 58,
             Self::UnboundTypeAliasParam { .. } => 3,
             Self::TypeAliasCycle { .. } => 4,
             Self::InconsistentKindBound { .. } => 5,

@@ -1,0 +1,8 @@
+use std::abi::DynArray
+
+struct Node { children: DynArray<Node> }
+
+msg TreeMsg {
+    #[selector = sol("tree(bytes)")]
+    Tree { value: Node },
+}

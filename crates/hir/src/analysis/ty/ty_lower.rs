@@ -37,8 +37,7 @@ use super::{
         collect_unique_layout_placeholders_in_order, instantiate_layout_template,
         layout_hole_fallback_ty, layout_root_descends_from, layout_root_id,
         reanchor_template_holes, rewrite_structural_holes, structural_hole_id,
-        structural_layout_type_embeds, substitute_layout_holes_by_placeholder,
-        substitute_layout_holes_by_placeholder_in,
+        substitute_layout_holes_by_placeholder, substitute_layout_holes_by_placeholder_in,
     },
     normalize::{normalize_from_assumptions, normalize_ty},
     provider::{EffectHandleResolution, resolve_effect_handle},
@@ -795,6 +794,7 @@ struct CallableLayoutProjectionCollector<'db> {
     value_occurrences: Vec<CallableLayoutOccurrence<'db>>,
     port_tys: FxHashMap<LayoutPortKey, TyId<'db>>,
     adt_stack: Vec<CallableLayoutAdtFrame<'db>>,
+    growth_start: usize,
     view_aliases: Vec<LayoutViewAlias>,
     unrepresentable: Option<LayoutBundleUnrepresentable>,
     /// Enclosing arrays, each with the ADT stack depth at its start. Array
@@ -1182,23 +1182,11 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
             self.db,
             ty,
             family,
+            self.growth_start,
             self.adt_stack
                 .iter()
                 .enumerate()
                 .rev()
-                // Nominal repetition through ordinary fields can be finite
-                // even when the enclosed types are unrelated. Keep structural
-                // ancestors that exhibit growth. Provider families retain the
-                // stricter selected-implementation recurrence contract.
-                .filter(|(_, frame)| {
-                    !matches!(
-                        (family, frame.family),
-                        (
-                            CallableLayoutExpansionFamily::Adt(_),
-                            CallableLayoutExpansionFamily::Adt(_)
-                        )
-                    ) || structural_layout_type_embeds(self.db, frame.ty, ty)
-                })
                 .map(|(idx, frame)| (idx, frame.ty, frame.family)),
         ) {
             LayoutViewRecurrence::BackEdge { ancestor } => {
@@ -1421,6 +1409,14 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                     if materialized {
                         self.record_ty(path, field.ty, index_lengths);
                     }
+                    let saved_growth = self.growth_start;
+                    if !adt.fields(self.db)[0]
+                        .ty(self.db, field_idx as usize)
+                        .instantiate_identity()
+                        .has_param(self.db)
+                    {
+                        self.growth_start = self.adt_stack.len();
+                    }
                     self.walk(
                         field.ty,
                         field.instance,
@@ -1429,6 +1425,7 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                         index_lengths,
                         materialized,
                     );
+                    self.growth_start = saved_growth;
                     evidence_path.pop();
                     path.pop();
                 }
@@ -1461,6 +1458,14 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                         if materialized {
                             self.record_ty(path, field.ty, index_lengths);
                         }
+                        let saved_growth = self.growth_start;
+                        if !adt.fields(self.db)[variant_idx as usize]
+                            .ty(self.db, field_idx as usize)
+                            .instantiate_identity()
+                            .has_param(self.db)
+                        {
+                            self.growth_start = self.adt_stack.len();
+                        }
                         self.walk(
                             field.ty,
                             field.instance,
@@ -1469,6 +1474,7 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                             index_lengths,
                             materialized,
                         );
+                        self.growth_start = saved_growth;
                         evidence_path.pop();
                         path.pop();
                     }
@@ -1480,6 +1486,7 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
         if let Some(EffectHandleResolution::Resolved {
             impl_instance,
             target_ty,
+            target_template,
             ..
         }) = effect_target
         {
@@ -1492,6 +1499,10 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                 vec![LayoutOccurrenceStep::Normalization],
             );
             evidence_path.push(LayoutEvidencePathStep::EffectTarget);
+            let saved_growth = self.growth_start;
+            if !target_template.has_param(self.db) {
+                self.growth_start = self.adt_stack.len();
+            }
             self.walk(
                 target.ty,
                 target.instance,
@@ -1500,6 +1511,7 @@ impl<'db> CallableLayoutProjectionCollector<'db> {
                 index_lengths,
                 materialized,
             );
+            self.growth_start = saved_growth;
             evidence_path.pop();
         }
         // An expansion that recurs to an enclosing one reaches every root of
@@ -1704,6 +1716,7 @@ fn callable_layout_projections_for_ty_with_effect_targets<'db>(
         value_occurrences: Vec::new(),
         port_tys: FxHashMap::default(),
         adt_stack: Vec::new(),
+        growth_start: 0,
         view_aliases: Vec::new(),
         unrepresentable: None,
         arrays: Vec::new(),

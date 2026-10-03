@@ -1,0 +1,72 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/recursive_wrappers_inline.fe
+---
+error[3-0002]: recursive type definition
+  ┌─ recursive_wrappers_inline.fe:5:8
+  │
+5 │ struct Direct { tag: u256, next: Direct }
+  │        ^^^^^^                    ------ recursion occurs here
+  │        │
+  │        recursive type definition here
+
+error[3-0002]: recursive type definition
+  ┌─ recursive_wrappers_inline.fe:6:8
+  │
+3 │ struct Inline<T> { value: T }
+  │                           - recursion occurs here
+4 │ struct Pair<T, U> { left: T, right: U }
+  │                                     - recursion occurs here
+5 │ struct Direct { tag: u256, next: Direct }
+6 │ struct A { tag: u256, next: Inline<B> }
+  │        ^                    --------- recursion occurs here
+  │        │
+  │        recursive type definition here
+7 │ struct B { tag: u256, next: Pair<u8, A> }
+  │                             ----------- recursion occurs here
+
+error[3-0002]: recursive type definition
+  ┌─ recursive_wrappers_inline.fe:8:8
+  │
+3 │ struct Inline<T> { value: T }
+  │                           - recursion occurs here
+4 │ struct Pair<T, U> { left: T, right: U }
+  │                                     - recursion occurs here
+  ·
+8 │ struct Wrapped { tag: u256, next: Inline<Pair<u8, Inline<Wrapped>>> }
+  │        ^^^^^^^                    --------------------------------- recursion occurs here
+  │        │
+  │        recursive type definition here
+
+error[3-0002]: recursive type definition
+  ┌─ recursive_wrappers_inline.fe:9:8
+  │
+3 │ struct Inline<T> { value: T }
+  │                           - recursion occurs here
+  ·
+9 │ struct TupleArray { tag: u256, next: (u8, [Inline<TupleArray>; 2]) }
+  │        ^^^^^^^^^^                    ----------------------------- recursion occurs here
+  │        │
+  │        recursive type definition here
+
+error[3-0002]: recursive type definition
+   ┌─ recursive_wrappers_inline.fe:11:8
+   │
+10 │ enum InlineLink<T> { Empty, Some { value: T } }
+   │                                           - recursion occurs here
+11 │ struct EnumNode { tag: u256, next: InlineLink<EnumNode> }
+   │        ^^^^^^^^                    -------------------- recursion occurs here
+   │        │
+   │        recursive type definition here
+
+error[3-0002]: recursive type definition
+   ┌─ recursive_wrappers_inline.fe:21:8
+   │
+14 │ struct ValueHandle<T> { handle: *T, value: T }
+   │                                            - recursion occurs here
+   ·
+21 │ struct BadHandle { tag: u256, next: ValueHandle<BadHandle> }
+   │        ^^^^^^^^^                    ---------------------- recursion occurs here
+   │        │
+   │        recursive type definition here

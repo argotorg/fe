@@ -422,7 +422,20 @@ impl<'db> Borrowck<'db> {
         let contents = self.read_region(state, region, shape, ValueOccurrence::Summary, origin)?;
         let mut resolved = Resolution::empty(scope);
         if ty == target.ty {
-            resolved.region = region.clone();
+            // A recursive handle can target the same nominal type as the
+            // enclosing input place. Type equality does not turn that place
+            // into a handle in the target's address space.
+            resolved.region = RegionSet::new(
+                region.scope(),
+                region
+                    .clauses()
+                    .iter()
+                    .filter(|clause| {
+                        target.address_space == HandleAddressSpace::Unspecified
+                            || clause.payload.root.address_space() == target.address_space
+                    })
+                    .cloned(),
+            );
         }
         let capabilities = self.capabilities(
             state,
@@ -479,6 +492,20 @@ impl<'db> Borrowck<'db> {
             }
             let projected = path.map(|path| capability.region.project(path));
             let region = projected.as_ref().unwrap_or(&capability.region);
+            let region = RegionSet::new(
+                region.scope(),
+                region
+                    .clauses()
+                    .iter()
+                    .filter(|clause| {
+                        target.address_space == HandleAddressSpace::Unspecified
+                            || clause.payload.root.address_space() == target.address_space
+                    })
+                    .cloned(),
+            );
+            if region.is_empty() {
+                continue;
+            }
             resolved.region = resolved.region.union(&region.close_existentials(scope));
             if let Some(reference) = capability.payload.loan() {
                 resolved.parents.push(Guarded {

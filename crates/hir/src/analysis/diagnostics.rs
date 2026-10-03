@@ -1727,12 +1727,14 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
             ),
 
             // TODO: add hint about indirection (eg *T)
-            Self::RecursiveType(cycle) | Self::GrowingRecursiveType(cycle) => {
+            Self::RecursiveType(cycle) | Self::GrowingRecursiveType(cycle) | Self::RecursiveAbiType(cycle) => {
                 let growing = matches!(self, Self::GrowingRecursiveType(_));
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: if growing {
                         "recursive type grows without bound"
+                    } else if matches!(self, Self::RecursiveAbiType(_)) {
+                        "recursive ABI type definition"
                     } else {
                         "recursive type definition"
                     }

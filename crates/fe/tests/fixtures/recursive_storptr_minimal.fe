@@ -1,0 +1,10 @@
+use std::evm::StorPtr
+
+struct Node {
+    left: StorPtr<Node>,
+    right: StorPtr<Node>,
+}
+
+contract Foo {
+    mut tree: Node
+}

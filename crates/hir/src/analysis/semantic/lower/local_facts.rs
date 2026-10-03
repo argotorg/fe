@@ -561,12 +561,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             SemanticLocalRole::DirectCarrier { target_ty, .. } => base_role
                 .root_provider(&self.locals)
-                // A handle projected out of a provider-backed place is only
-                // that provider's carrier when it provides the same target;
-                // an unrelated embedded handle (e.g. a `TStorPtr<bool>` field
-                // inside a storage struct) is an ordinary value whose own
-                // transport class would contradict the provider's.
-                .filter(|provider| provider.effective_target_ty() == target_ty)
+                // Stored handles have their own carriers. A recursive handle
+                // can have the same target as the enclosing provider, but
+                // loading it does not forward the enclosing provider's address.
+                .filter(|provider| {
+                    place.path.is_empty() && provider.effective_target_ty() == target_ty
+                })
                 .map_or(fallback, |provider| SemanticLocalRole::DirectCarrier {
                     provider: Some(provider),
                     target_ty,

@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/msg_selector_recursive_dynamic_abi_type.fe
+---
+error[9-0008]: unsupported ABI field type in msg variant `Tree`
+  ┌─ msg_selector_recursive_dynamic_abi_type.fe:7:19
+  │
+7 │     Tree { value: Node },
+  │                   ^^^^ `Node` cannot be represented in the Solidity ABI
+  │
+  = recursive ABI type `Node`

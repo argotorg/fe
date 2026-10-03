@@ -249,6 +249,12 @@ pub(crate) fn semantic_ty_to_abi_desc_with_source<'db>(
                             ty.pretty_print(db)
                         )));
                     }
+                    if adt_ref.as_adt(db).abi_recursive_cycle(db).is_some() {
+                        return Err(AbiTypeError::unsupported(format!(
+                            "recursive ABI type `{}`",
+                            ty.pretty_print(db)
+                        )));
+                    }
                     if source.adt_def(db) != Some(adt_ref.as_adt(db))
                         || source.generic_args(db).len() != ty.generic_args(db).len()
                     {
@@ -351,7 +357,10 @@ fn is_std_address_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>, adt_ref: AdtRef<'_>) 
         .is_some_and(|ingot| ingot.kind(db) == IngotKind::Std)
 }
 
-fn core_dyn_array_elem_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<TyId<'db>> {
+pub(crate) fn core_dyn_array_elem_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Option<TyId<'db>> {
     if let Some((_, inner)) = ty.as_capability(db) {
         return core_dyn_array_elem_ty(db, inner);
     }

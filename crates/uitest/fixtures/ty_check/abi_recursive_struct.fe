@@ -1,6 +1,7 @@
 use std::abi::DynArray
 
-// Reported once as a recursive type, not by the generated impls.
+// The carrier is finite, but its recursively expanded ABI schema is not.
+// Reported once at the declaration, rather than by the generated impls.
 #[abi]
 pub struct Node {
     pub children: DynArray<Node>,
