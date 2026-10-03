@@ -51,13 +51,16 @@ impl Ord for ValueOccurrence {
         // Keep callee-local observations next to the caller values at that call.
         // Separating all Value and CallChoice occurrences makes unions of related
         // conditions exponential, including after they become SummaryChoices.
+        // Within a call, put its branches before the observed aggregate fields.
+        // Otherwise mutually exclusive accesses to independent fields encode
+        // every subset of those fields before the branch can select one.
         let key = |occurrence: &Self| match *occurrence {
-            Self::Value(value) => (0, value.as_u32(), None),
-            Self::CallChoice { result, choice } => (0, result.as_u32(), Some(choice)),
-            Self::Root(root) => (1, root.as_u32(), None),
-            Self::Argument(argument) => (2, argument, None),
-            Self::Summary => (3, 0, None),
-            Self::SummaryChoice(choice) => (4, choice, None),
+            Self::Value(value) => (0, value.as_u32(), true, 0),
+            Self::CallChoice { result, choice } => (0, result.as_u32(), false, choice),
+            Self::Root(root) => (1, root.as_u32(), false, 0),
+            Self::Argument(argument) => (2, argument, false, 0),
+            Self::Summary => (3, 0, false, 0),
+            Self::SummaryChoice(choice) => (4, choice, false, 0),
         };
         key(self).cmp(&key(other))
     }
