@@ -3,7 +3,10 @@
 //! A carrier describes its referent region. Loading that region reads a separate
 //! structural value; updating it never changes the carrier or its loan identity.
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use super::{
     birth::AllocationBirth,
@@ -404,7 +407,9 @@ impl<'db> BorrowState<'db> {
         // holder's shape, so only finitely many such edges occur.
         let mut sources: FxHashMap<CapabilityValue<'db>, SlotSources<'db>> = FxHashMap::default();
         let mut invariant_replacements = FxHashSet::default();
+        let feedback_guards = RefCell::default();
         let repeats = FeedbackRepeats {
+            guards: &feedback_guards,
             index: &renewed,
             occurrence: &occurrence,
         };

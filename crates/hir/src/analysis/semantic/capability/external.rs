@@ -1,5 +1,8 @@
 //! Typed external storage identities, including followed and widened referents.
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -272,16 +275,9 @@ pub(super) struct FeedbackSlot<'a, 'db> {
 /// choice or runtime value computed outside it, still separate clauses.
 #[derive(Clone, Copy)]
 pub(super) struct FeedbackRepeats<'a, 'db> {
+    pub guards: &'a RefCell<FxHashMap<(Guard<'db>, Guard<'db>), Option<Guard<'db>>>>,
     pub index: &'a dyn Fn(IndexExpr<'db>) -> bool,
     pub occurrence: &'a dyn Fn(ValueOccurrence) -> bool,
-}
-
-/// Only facts that hold in every execution separate a recomputed base from a
-/// derived one. Forgetting the repeated ones can only admit more.
-fn feedback_guard<'db>(guard: &Guard<'db>, repeats: FeedbackRepeats<'_, 'db>) -> Guard<'db> {
-    guard
-        .forget_occurrences(|occurrence| (repeats.occurrence)(occurrence))
-        .forget_indices(|index| (repeats.index)(index))
 }
 
 /// A clause guard restricted to the domain of its structural leaf, such as
@@ -293,16 +289,30 @@ pub(super) fn feedback_clause_guard<'db>(
     domain: &Guard<'db>,
     repeats: FeedbackRepeats<'_, 'db>,
 ) -> Option<Guard<'db>> {
-    let guard = if clause
-        .scope()
-        .existential_extension_of(domain.scope())
-        .is_some()
-    {
-        clause.and(&domain.in_scope(clause.scope()))?
-    } else {
-        clause.clone()
-    };
-    Some(feedback_guard(&guard, repeats))
+    // Slots and payloads share guards, and both predicates are fixed for one
+    // feedback edge. Reuse the intersection and projection across all of them.
+    repeats
+        .guards
+        .borrow_mut()
+        .entry((clause.clone(), domain.clone()))
+        .or_insert_with(|| {
+            let guard = if clause
+                .scope()
+                .existential_extension_of(domain.scope())
+                .is_some()
+            {
+                clause.and(&domain.in_scope(clause.scope()))?
+            } else {
+                clause.clone()
+            };
+            // Only facts that hold in every execution can separate addresses.
+            Some(
+                guard
+                    .forget_occurrences(|occurrence| (repeats.occurrence)(occurrence))
+                    .forget_indices(|index| (repeats.index)(index)),
+            )
+        })
+        .clone()
 }
 
 /// Whether aligned selectors of the current clause (left) and an ancestor's
