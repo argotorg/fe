@@ -3579,6 +3579,105 @@ fn test_cli_test_workspace_root_is_workspace_aware() {
 }
 
 #[test]
+fn test_cli_workspace_cache_preserves_member_and_dependency_errors_without_tests() {
+    for dependency_error in [false, true] {
+        let temp = tempdir().expect("workspace fixture");
+        let root = temp.path();
+        fs::write(root.join("fe.toml"),
+            "[workspace]\nname = \"cache_errors\"\nversion = \"0.1.0\"\nmembers = [\"first\", \"second\"]\n"
+        ).unwrap();
+        for name in ["first", "second", "bad"] {
+            fs::create_dir_all(root.join(name).join("src")).unwrap();
+            let dependency = if name == "second" && dependency_error {
+                "[dependencies]\nbad = { path = \"../bad\" }\n"
+            } else {
+                ""
+            };
+            fs::write(
+                root.join(name).join("fe.toml"),
+                format!("[ingot]\nname = \"{name}\"\nversion = \"0.1.0\"\n{dependency}"),
+            )
+            .unwrap();
+            let source = match name {
+                "first" => "#[test]\nfn first_ok() { core::assert(true) }",
+                "second" if dependency_error => "pub fn marker() {}",
+                _ => "pub fn invalid(_ value: u256) -> bool { value }",
+            };
+            fs::write(root.join(name).join("src/lib.fe"), source).unwrap();
+        }
+        for grouped in [false, true] {
+            let mut args = vec!["test", "--jobs", "1"];
+            if grouped {
+                args.push("--grouped");
+            }
+            let (output, exit_code) = run_fe_main_in_dir(&args, root);
+            assert_ne!(exit_code, 0, "invalid zero-test member passed: {output}");
+            assert!(
+                output.contains("first_ok") && output.contains("1 passed"),
+                "{output}"
+            );
+            assert!(output.contains("1 failed"), "{output}");
+            if dependency_error {
+                assert!(output.contains("Errors in dependency"), "{output}");
+            }
+        }
+    }
+}
+
+#[test]
+fn test_cli_workspace_cache_isolates_workspaces_with_identical_member_names() {
+    let temp = tempdir().expect("workspace fixture");
+    let mut workspaces = Vec::new();
+    for (name, value) in [("left", 1), ("right", 2)] {
+        let root = temp.path().join(name);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("fe.toml"),
+            format!("[workspace]\nname = \"{name}\"\nversion = \"0.1.0\"\nmembers = [\"library\", \"app\"]\n")
+        ).unwrap();
+        for member in ["library", "app"] {
+            fs::create_dir_all(root.join(member).join("src")).unwrap();
+            let dependency = if member == "app" {
+                "[dependencies]\nlibrary = true\n"
+            } else {
+                ""
+            };
+            fs::write(
+                root.join(member).join("fe.toml"),
+                format!("[ingot]\nname = \"{member}\"\nversion = \"0.1.0\"\n{dependency}"),
+            )
+            .unwrap();
+            let source = if member == "library" {
+                format!("pub fn value() -> u256 {{ {value} }}")
+            } else {
+                format!(
+                    "#[test]\nfn member_value() {{ core::assert(library::value() == {value}) }}"
+                )
+            };
+            fs::write(root.join(member).join("src/lib.fe"), source).unwrap();
+        }
+        workspaces.push(root);
+    }
+    for grouped in [false, true] {
+        let mut args = vec![
+            "test",
+            "--jobs",
+            "1",
+            workspaces[0].to_str().unwrap(),
+            workspaces[1].to_str().unwrap(),
+        ];
+        if grouped {
+            args.push("--grouped");
+        }
+        let (output, exit_code) = run_fe_main(&args);
+        assert_eq!(exit_code, 0, "{output}");
+        assert!(
+            output.contains("2 passed") && output.contains("0 failed"),
+            "{output}"
+        );
+    }
+}
+
+#[test]
 fn test_cli_test_workspace_preserves_builtin_authority() {
     let root = workspace_fixture("test_workspace_builtin_authority");
     let (output, exit_code) = run_fe_main_in_dir(&["test"], &root);

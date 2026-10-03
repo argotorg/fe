@@ -267,6 +267,55 @@ struct SuiteWorkerConfig {
     prefer_single_when_idle: bool,
 }
 
+/// Retain at most one initialized workspace per suite worker. Queries for shared
+/// dependencies then survive member boundaries, while unrelated inputs still get
+/// separate databases and the bounded cleanup worker owns evicted databases.
+struct WorkspaceDatabaseCache {
+    cached: Option<(Url, DriverDataBase)>,
+    cleanup: Sender<DriverDataBase>,
+}
+
+impl WorkspaceDatabaseCache {
+    fn new(cleanup: Sender<DriverDataBase>) -> Self {
+        Self {
+            cached: None,
+            cleanup,
+        }
+    }
+
+    fn take(&mut self, workspace: Option<&Url>) -> Option<DriverDataBase> {
+        let (previous, db) = self.cached.take()?;
+        if workspace == Some(&previous) {
+            Some(db)
+        } else {
+            self.cleanup
+                .send(db)
+                .expect("database cleanup worker exited");
+            None
+        }
+    }
+
+    fn store(&mut self, workspace: Option<Url>, db: DriverDataBase) {
+        if let Some(workspace) = workspace {
+            self.cached = Some((workspace, db));
+        } else {
+            self.cleanup
+                .send(db)
+                .expect("database cleanup worker exited");
+        }
+    }
+}
+
+impl Drop for WorkspaceDatabaseCache {
+    fn drop(&mut self) {
+        if let Some((_, db)) = self.cached.take() {
+            // If cleanup has already failed, dropping SendError still reclaims
+            // the database here, including during worker unwinding.
+            let _ = self.cleanup.send(db);
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct SingleWorkerConfig {
     shared: Arc<WorkerSharedConfig>,
@@ -1130,6 +1179,7 @@ fn emit_parallel_suite_outcome(
     plan: SuitePlan,
     outcome_tx: &Sender<JobOutcome>,
     cfg: &SuiteWorkerConfig,
+    databases: &mut WorkspaceDatabaseCache,
 ) {
     if cfg.shared.multi {
         let _ = outcome_tx.send(JobOutcome::Status {
@@ -1139,7 +1189,7 @@ fn emit_parallel_suite_outcome(
             message: plan.path.to_string(),
         });
     }
-    let (prepared, output) = prepare_suite_job(&plan, cfg);
+    let (prepared, output) = prepare_suite_job(&plan, cfg, databases);
     if !output.is_empty() {
         let _ = outcome_tx.send(JobOutcome::Text {
             suite_key: plan.suite_key,
@@ -1153,6 +1203,7 @@ fn emit_grouped_suite_outcome(
     plan: SuitePlan,
     outcome_tx: &Sender<JobOutcome>,
     cfg: &SuiteWorkerConfig,
+    databases: &mut WorkspaceDatabaseCache,
 ) {
     if cfg.shared.multi {
         let _ = outcome_tx.send(JobOutcome::Status {
@@ -1162,7 +1213,7 @@ fn emit_grouped_suite_outcome(
             message: plan.path.to_string(),
         });
     }
-    let (prepared, output) = prepare_suite_job(&plan, cfg);
+    let (prepared, output) = prepare_suite_job(&plan, cfg, databases);
     if !output.is_empty() {
         let _ = outcome_tx.send(JobOutcome::Text {
             suite_key: plan.suite_key.clone(),
@@ -1246,12 +1297,14 @@ fn drain_pending_single_jobs(
 }
 
 fn suite_worker_loop_grouped(channels: SuiteWorkerChannels, cfg: SuiteWorkerConfig) {
+    let mut databases = WorkspaceDatabaseCache::new(cfg.database_cleanup.clone());
     while let Ok(plan) = channels.suite_rx.recv() {
-        emit_grouped_suite_outcome(plan, &channels.outcome_tx, &cfg);
+        emit_grouped_suite_outcome(plan, &channels.outcome_tx, &cfg, &mut databases);
     }
 }
 
 fn suite_worker_loop_parallel(channels: SuiteWorkerChannels, cfg: SuiteWorkerConfig) {
+    let mut databases = WorkspaceDatabaseCache::new(cfg.database_cleanup.clone());
     let SuiteWorkerChannels {
         suite_rx,
         single_rx,
@@ -1268,7 +1321,7 @@ fn suite_worker_loop_parallel(channels: SuiteWorkerChannels, cfg: SuiteWorkerCon
 
         match suite_rx.try_recv() {
             Ok(plan) => {
-                emit_parallel_suite_outcome(plan, &outcome_tx, &cfg);
+                emit_parallel_suite_outcome(plan, &outcome_tx, &cfg, &mut databases);
                 continue;
             }
             Err(TryRecvError::Disconnected) => {
@@ -1290,7 +1343,7 @@ fn suite_worker_loop_parallel(channels: SuiteWorkerChannels, cfg: SuiteWorkerCon
 
         if !cfg.allow_single_steal {
             match suite_rx.recv() {
-                Ok(plan) => emit_parallel_suite_outcome(plan, &outcome_tx, &cfg),
+                Ok(plan) => emit_parallel_suite_outcome(plan, &outcome_tx, &cfg, &mut databases),
                 Err(_) => break,
             }
             continue;
@@ -1303,7 +1356,7 @@ fn suite_worker_loop_parallel(channels: SuiteWorkerChannels, cfg: SuiteWorkerCon
                         Ok(job) => emit_single_outcome(job, &outcome_tx, cfg.shared.as_ref()),
                         Err(_) => {
                             match suite_rx.recv() {
-                                Ok(plan) => emit_parallel_suite_outcome(plan, &outcome_tx, &cfg),
+                                Ok(plan) => emit_parallel_suite_outcome(plan, &outcome_tx, &cfg, &mut databases),
                                 Err(_) => break,
                             }
                         }
@@ -1311,7 +1364,7 @@ fn suite_worker_loop_parallel(channels: SuiteWorkerChannels, cfg: SuiteWorkerCon
                 }
                 recv(suite_rx) -> suite => {
                     if let Ok(plan) = suite {
-                        emit_parallel_suite_outcome(plan, &outcome_tx, &cfg);
+                        emit_parallel_suite_outcome(plan, &outcome_tx, &cfg, &mut databases);
                     } else {
                         drain_pending_single_jobs(&single_rx, &outcome_tx, cfg.shared.as_ref());
                         break;
@@ -1322,7 +1375,7 @@ fn suite_worker_loop_parallel(channels: SuiteWorkerChannels, cfg: SuiteWorkerCon
             crossbeam_channel::select_biased! {
                 recv(suite_rx) -> suite => {
                     if let Ok(plan) = suite {
-                        emit_parallel_suite_outcome(plan, &outcome_tx, &cfg);
+                        emit_parallel_suite_outcome(plan, &outcome_tx, &cfg, &mut databases);
                     } else {
                         drain_pending_single_jobs(&single_rx, &outcome_tx, cfg.shared.as_ref());
                         break;
@@ -1353,7 +1406,11 @@ fn background_dropper<T: Send + 'static>(capacity: usize) -> io::Result<Sender<T
     Ok(sender)
 }
 
-fn prepare_suite_job(plan: &SuitePlan, cfg: &SuiteWorkerConfig) -> (PreparedSuite, String) {
+fn prepare_suite_job(
+    plan: &SuitePlan,
+    cfg: &SuiteWorkerConfig,
+    databases: &mut WorkspaceDatabaseCache,
+) -> (PreparedSuite, String) {
     let shared = cfg.shared.as_ref();
     let filter = cfg.filter.as_deref();
     let mut output = String::new();
@@ -1426,13 +1483,19 @@ fn prepare_suite_job(plan: &SuitePlan, cfg: &SuiteWorkerConfig) -> (PreparedSuit
     };
 
     let build_started = Instant::now();
-    let mut db = DriverDataBase::default();
-    db.compiler_options()
-        .set_recovery_mode(&mut db)
-        .to(shared.use_recovery);
-    db.compilation_settings()
-        .set_profile(&mut db)
-        .to(shared.profile.clone().into());
+    let workspace_url = plan.workspace_url.as_ref().filter(|_| plan.path.is_dir());
+    let cached = databases.take(workspace_url);
+    let initialized_workspace = cached.is_some();
+    let mut db = cached.unwrap_or_else(|| {
+        let mut db = DriverDataBase::default();
+        db.compiler_options()
+            .set_recovery_mode(&mut db)
+            .to(shared.use_recovery);
+        db.compilation_settings()
+            .set_profile(&mut db)
+            .to(shared.profile.clone().into());
+        db
+    });
     let prep = if plan.path.is_file() && plan.path.extension() == Some("fe") {
         prepare_tests_single_file(
             &mut db,
@@ -1453,6 +1516,7 @@ fn prepare_suite_job(plan: &SuitePlan, cfg: &SuiteWorkerConfig) -> (PreparedSuit
             &mut db,
             &plan.path,
             plan.workspace_url.as_ref(),
+            initialized_workspace,
             &plan.suite,
             &plan.suite_key,
             filter,
@@ -1474,11 +1538,14 @@ fn prepare_suite_job(plan: &SuitePlan, cfg: &SuiteWorkerConfig) -> (PreparedSuit
             single_jobs: Vec::new(),
         }
     };
-    // The prepared artifacts own their data, so database destruction can run
-    // concurrently with test execution without retaining borrowed compiler data.
-    cfg.database_cleanup
-        .send(db)
-        .expect("database cleanup worker exited");
+    // Failed initialization/compilation is not a reusable workspace snapshot.
+    // Prepared artifacts own their data independently of the retained database.
+    databases.store(
+        workspace_url
+            .filter(|_| prep.results.iter().all(|result| result.passed))
+            .cloned(),
+        db,
+    );
 
     (
         PreparedSuite {
@@ -1781,6 +1848,7 @@ fn prepare_tests_ingot(
     db: &mut DriverDataBase,
     dir_path: &Utf8PathBuf,
     workspace_url: Option<&Url>,
+    initialized_workspace: bool,
     suite: &str,
     suite_key: &str,
     filter: Option<&str>,
@@ -1820,7 +1888,9 @@ fn prepare_tests_ingot(
         }
     };
 
-    let had_init_diagnostics = if let Some(workspace_url) = workspace_url {
+    let had_init_diagnostics = if initialized_workspace {
+        false
+    } else if let Some(workspace_url) = workspace_url {
         driver::init_workspace(db, workspace_url)
     } else {
         driver::init_ingot(db, &ingot_url)
@@ -3009,7 +3079,68 @@ fn print_summary(results: &[TestResult]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::SalsaEventCounters;
     use crossbeam_channel::TrySendError;
+    use std::sync::Mutex;
+
+    #[test]
+    fn workspace_suite_preparation_reuses_completed_queries() {
+        let root = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/cli_output/workspaces/member_resolution");
+        let workspace = Url::from_directory_path(root.as_str()).unwrap();
+        let plan = build_suite_plans(
+            vec![SuiteInput {
+                path: root.join("ingots/app"),
+                workspace_url: Some(workspace.clone()),
+            }],
+            None,
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
+        let cfg = SuiteWorkerConfig {
+            shared: Arc::new(WorkerSharedConfig {
+                show_logs: false,
+                profile: "test".into(),
+                opt_level: OptLevel::O0,
+                backend: BuildBackend::Sonatina,
+                #[cfg(feature = "cranelift")]
+                native_limits: NativeTestLimits {
+                    timeout: Duration::from_secs(60),
+                    output_bytes: 1024 * 1024,
+                },
+                emit: TestEmitSelection::default(),
+                debug: TestDebugOptions::default(),
+                report_failed_only: false,
+                aggregate_report: false,
+                call_trace: false,
+                multi: true,
+                use_recovery: false,
+            }),
+            database_cleanup: background_dropper(1).unwrap(),
+            filter: None,
+            allow_single_steal: false,
+            prefer_single_when_idle: false,
+        };
+        let mut databases = WorkspaceDatabaseCache::new(cfg.database_cleanup.clone());
+        let (first, output) = prepare_suite_job(&plan, &cfg, &mut databases);
+        assert!(first.results.is_empty(), "{output}");
+        let counters = Arc::new(Mutex::new(SalsaEventCounters::default()));
+        let db = &mut databases.cached.as_mut().expect("initialized workspace").1;
+        db.set_salsa_event_counters(Some(Arc::clone(&counters)));
+        let revision = salsa::plumbing::current_revision(db);
+        let (second, output) = prepare_suite_job(&plan, &cfg, &mut databases);
+        assert!(second.results.is_empty(), "{output}");
+        let db = &databases.cached.as_ref().expect("retained workspace").1;
+        assert_eq!(salsa::plumbing::current_revision(db), revision);
+        assert_eq!(counters.lock().unwrap().will_execute, 0);
+        assert!(
+            databases
+                .take(Some(&workspace.join("different/").unwrap()))
+                .is_none()
+        );
+        assert!(databases.cached.is_none());
+    }
 
     #[derive(Debug)]
     struct DropProbe {
