@@ -2642,17 +2642,28 @@ impl<'db> RmirEmitter<'db> {
     ) -> bool {
         let base = match place.base {
             NPlaceBase::CapabilityTarget { carrier } => {
-                if self.semantic_body.normalized.values[carrier.index()]
-                    .ty
-                    .as_ptr(self.db)
-                    .is_some()
-                {
-                    return false;
-                }
                 let Some(local) = self.semantic_body.value_local(carrier) else {
                     return false;
                 };
-                local
+                let value = self.normalized_value_temps[carrier.index()]
+                    .unwrap_or_else(|| self.runtime_value(local));
+                let Some(class) = self.value_class(value).cloned() else {
+                    return false;
+                };
+                // Capability targets load through their emitted transport. A
+                // normalized call result may not share its source local's home.
+                if class.is_transport()
+                    || !matches!(self.locals[value.index()].root, RuntimeLocalRoot::None)
+                {
+                    return false;
+                }
+                return self.lower_value_extract_from_value(
+                    bb,
+                    dst,
+                    value,
+                    class,
+                    &place.path.iter().copied().collect::<Vec<_>>(),
+                );
             }
             NPlaceBase::Root(root_id) => match self.semantic_body.normalized.root(root_id) {
                 Some(root) => match &root.kind {

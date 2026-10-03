@@ -34,6 +34,7 @@ use crate::{
 };
 
 use super::{
+    boundary::BoundaryMatcher,
     classify::{
         AssignmentId, BodyEnv, BodyStaticFacts, RuntimeVisibleReturnPlan, default_return_class,
         desired_runtime_return_plan, selected_visible_return_for_operand,
@@ -328,6 +329,14 @@ pub(crate) fn declaration_runtime_return_class<'db>(
                 class = updated;
             }
         }
+    }
+    // Apply the same boundary recipe as body return selection, including
+    // canonical raw pointees for forwarded aggregate references.
+    if let RuntimeVisibleReturnPlan::Constrained(boundary) =
+        desired_runtime_return_plan(db, semantic)
+        && let Some(selected) = BoundaryMatcher::selected_class(db, &class, &boundary)
+    {
+        class = selected;
     }
     Some(class)
 }
