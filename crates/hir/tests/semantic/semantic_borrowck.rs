@@ -10791,6 +10791,123 @@ fn disjoint() {
     );
 }
 
+fn bounded_recursive_array_borrow_diags(source: &'static str, check: fn(&str) -> String) -> String {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        sender.send(check(source)).unwrap();
+    });
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("recursive array capability traversal must terminate")
+}
+
+#[test]
+fn recursive_array_reachability_terminates() {
+    // Raw pointers already permit these declarations. This regression does
+    // not depend on recursive generic wrappers or storage handles being legal.
+    for source in [
+        r#"
+struct Node { value: u256, links: [*Node; 2] }
+fn follow(_ node: *Node) -> *Node { node.links[0] }
+fn traverse(_ node: *Node) -> u256 { follow(node).links[1].value }
+"#,
+        r#"
+enum Link { None, Some(*Node) }
+struct Node { value: u256, links: [[Link; 2]; 2] }
+fn follow(_ node: *Node, row: usize, column: usize) -> *Node {
+    match node.links[row][column] {
+        Link::None => node,
+        Link::Some(next) => next,
+    }
+}
+"#,
+        r#"
+struct A { links: [*B; 2] }
+struct B { links: [*A; 3] }
+fn follow(_ node: *A) -> *A { node.links[0].links[1] }
+"#,
+    ] {
+        let diagnostics = bounded_recursive_array_borrow_diags(source, checked_borrow_diags);
+        assert!(diagnostics.is_empty(), "{diagnostics}");
+    }
+}
+
+#[test]
+fn recursive_array_effect_handle_reachability_terminates() {
+    let diagnostics = bounded_recursive_array_borrow_diags(
+        r#"
+use core::{AddressSpace, EffectHandle, EffectRef}
+struct Ptr { addr: u256 }
+impl Copy for Ptr {}
+struct Node { value: u256, links: [Ptr; 2] }
+impl Copy for Node {}
+impl EffectHandle for Ptr {
+    type Target = Node
+    const SPACE: AddressSpace = AddressSpace::Storage
+    type Raw = u256
+    fn raw(self) -> u256 { self.addr }
+}
+impl EffectRef<Node> for Ptr {}
+fn copy() -> Node uses (node: Node) { node }
+fn load(_ ptr: Ptr) -> Node { with (Node = ptr) { copy() } }
+"#,
+        checked_trusted_borrow_diags,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn recursive_array_reachability_preserves_native_loan_conflicts() {
+    let diagnostics = bounded_recursive_array_borrow_diags(
+        r#"
+struct Node { value: u256, links: [*Node; 2] }
+fn follow(_ node: *Node, index: usize) -> *Node { node.links[index] }
+fn bad_mut() {
+    let node = core::ptr::alloc<Node>()
+    node.value = 1
+    node.links = [node; 2]
+    let borrowed = mut node.value
+    follow(node, index: 1).value = 2
+    borrowed = 3
+}
+fn bad_ref() {
+    let node = core::ptr::alloc<Node>()
+    node.value = 1
+    node.links = [node; 2]
+    let borrowed = ref node.value
+    follow(node, index: 0).links[1].value = 2
+    let observed = borrowed
+}
+fn disjoint() {
+    let head = core::ptr::alloc<Node>()
+    let tail = core::ptr::alloc<Node>()
+    head.value = 1
+    head.links = [tail; 2]
+    tail.value = 2
+    tail.links = [head; 2]
+    let borrowed = mut head.value
+    head.links[0].value = 3
+    borrowed = 4
+}
+"#,
+        checked_borrow_diags,
+    );
+    for name in ["bad_mut", "bad_ref"] {
+        assert!(
+            diagnostics.contains(&format!("borrow conflict in `fn {name}`")),
+            "{diagnostics}"
+        );
+    }
+    assert!(
+        !diagnostics.contains("borrow conflict in `fn disjoint`"),
+        "{diagnostics}"
+    );
+    assert!(
+        !diagnostics.contains("internal borrow checking error"),
+        "{diagnostics}"
+    );
+}
+
 #[test]
 fn straight_line_pointer_offsets_preserve_allocation_separation() {
     for depth in [4, 5, 12] {

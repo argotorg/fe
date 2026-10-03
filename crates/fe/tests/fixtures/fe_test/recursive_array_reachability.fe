@@ -1,0 +1,38 @@
+// Returning a link through a helper makes borrow-summary reachability follow
+// the array's recursive referents, rather than just the initialized local cells.
+struct Node { value: u256, links: [*Node; 2] }
+
+fn follow(_ node: *Node, index: usize) -> *Node { node.links[index] }
+
+fn walk(_ node: *Node, steps: usize) -> u256 {
+    let mut current = node
+    let mut remaining = steps
+    while remaining > 0 {
+        current = follow(current, index: 0)
+        remaining -= 1
+    }
+    current.value
+}
+
+#[test]
+fn recursive_array_handles_through_helpers() {
+    let head = core::ptr::alloc<Node>()
+    let tail = core::ptr::alloc<Node>()
+    head.value = 10
+    head.links = [tail, head]
+    tail.value = 20
+    tail.links = [head, tail]
+    assert!(follow(head, index: 0).value == 20)
+    assert!(follow(head, index: 1).value == 10)
+    assert!(walk(head, steps: 8) == 10)
+    assert!(walk(head, steps: 9) == 20)
+    follow(head, index: 0).value = 21
+    assert!(tail.value == 21)
+    assert!(walk(head, steps: 3) == 21)
+
+    let borrowed = mut head.value
+    tail.value = 22
+    borrowed = 11
+    assert!(head.value == 11)
+    assert!(follow(head, index: 0).value == 22)
+}

@@ -259,6 +259,7 @@ impl<'db> Borrowck<'db> {
         traversal: CapabilityTraversal,
     ) -> Result<Vec<CapabilityOccurrence<'db>>, SemanticDiagnostic<'db>> {
         let mut result = Vec::new();
+        let traversal_scope = value.scope().without_existentials();
         let mut pending = vec![(value.clone(), Vec::new(), Vec::new(), traversal)];
         let mut reached = BTreeSet::new();
         while let Some((value, prefix, ancestry, traversal)) = pending.pop() {
@@ -321,10 +322,11 @@ impl<'db> Borrowck<'db> {
                     continue;
                 }
                 let target = self.shape(leaf.semantics.target_ty)?;
-                // Reads introduce fresh witnesses, so a recursive referent
-                // returns as an alpha-variant of an ancestor region. Compare
-                // regions with their witnesses closed and renumbered.
-                let visited = region.close_existentials(&region.scope().without_existentials());
+                // Reads and nested array members introduce fresh binders, so
+                // a recursive referent returns as an alpha-variant. Quantify
+                // them relative to the traversal's original lexical scope;
+                // retaining every array binder would grow that scope forever.
+                let visited = region.quantify_into(self.db, &traversal_scope);
                 if !target.contains_capability(self.db)
                     || region.is_empty()
                     || ancestry.contains(&(visited.clone(), target))
