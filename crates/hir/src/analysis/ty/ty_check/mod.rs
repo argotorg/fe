@@ -39,7 +39,8 @@ use crate::{
         WhereClauseOwner,
     },
     span::{
-        DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
+        DynLazySpan, expr::LazyExprSpan, params::LazyGenericArgListSpan, pat::LazyPatSpan,
+        path::LazyPathSpan, types::LazyTySpan,
     },
     visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat},
 };
@@ -6163,6 +6164,23 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
             self.check_unknown(callable_ty, span.into());
         }
 
+        // Neither check above looks at the generic arguments written on a call,
+        // so check each of them on its own. This leaves out the callee's own
+        // bounds, which the call obligations already report. Nested bodies,
+        // such as const arguments, are checked on their own.
+        if self.body.body == Some(ctxt.body()) {
+            match expr_data {
+                Expr::Call(callee, _) => {
+                    self.check_callee_path_generic_args(ctxt.body(), expr, *callee)
+                }
+                Expr::MethodCall(_, _, generic_args, _) => {
+                    let span = ctxt.span().unwrap().into_method_call_expr().generic_args();
+                    self.check_written_generic_args(expr, *generic_args, span);
+                }
+                _ => {}
+            }
+        }
+
         walk_expr(self, ctxt, expr);
     }
 
@@ -6253,6 +6271,68 @@ impl<'db> TyCheckerFinalizer<'db> {
         let solve_cx = TraitSolveCx::new(self.db, self.body.body().unwrap().scope());
         if let Some(diag) = ty.emit_wf_diag(self.db, solve_cx, self.assumptions, span) {
             self.diags.push(diag.into());
+        }
+    }
+
+    /// Checks the generic arguments written on the callee path of `call`: on
+    /// the function segment (`f<T>()`), and on the type or qualified-type
+    /// segment before it (`Foo<T>::f()`, `<S as Trait<T>>::f()`).
+    fn check_callee_path_generic_args(&mut self, body: Body<'db>, call: ExprId, callee: ExprId) {
+        let db = self.db;
+        let Partial::Present(Expr::Path(Partial::Present(path))) = callee.data(db, body) else {
+            return;
+        };
+        let idx = path.segment_index(db);
+        let path_span = callee.span(body).into_path_expr().path();
+        self.check_written_generic_args(
+            call,
+            path.generic_args(db),
+            path_span.clone().segment(idx).generic_args(),
+        );
+
+        let Some(parent) = path.parent(db) else {
+            return;
+        };
+        if parent.generic_args(db).is_empty(db)
+            && !matches!(
+                parent.kind(db),
+                crate::hir_def::PathKind::QualifiedType { .. }
+            )
+        {
+            return;
+        }
+        let Some(callable) = self.body.callable_expr(call) else {
+            return;
+        };
+        let offset = callable.callable_def.offset_to_explicit_params_position(db);
+        let parent_args = callable.generic_args()[..offset].to_vec();
+        for ty in parent_args {
+            self.check_wf(ty, path_span.clone().segment(idx - 1).into());
+        }
+    }
+
+    /// Checks each generic argument written in `args` for the call `call`.
+    fn check_written_generic_args(
+        &mut self,
+        call: ExprId,
+        args: crate::hir_def::GenericArgListId<'db>,
+        span: LazyGenericArgListSpan<'db>,
+    ) {
+        let Some(callable) = self.body.callable_expr(call) else {
+            return;
+        };
+        let offset = callable
+            .callable_def
+            .offset_to_explicit_params_position(self.db);
+        let written: Vec<_> = callable
+            .generic_args()
+            .iter()
+            .skip(offset)
+            .take(args.len(self.db))
+            .copied()
+            .collect();
+        for (idx, ty) in written.into_iter().enumerate() {
+            self.check_wf(ty, span.clone().arg(idx).into());
         }
     }
 }
