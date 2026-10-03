@@ -7,3 +7,9 @@ struct Holder<T> { ptr: StorPtr<T> }
 struct StorGrow<T> { tag: u256, next: Holder<StorGrow<(T, T)>> }
 struct Ping<T> { next: StorPtr<Pong<[T; 1]>> }
 struct Pong<T> { next: PtrBox<Ping<Option<T>>> }
+
+struct Inline<T> { value: T }
+struct WrappedGrow<T> { next: Inline<WrappedGrow<[T; 1]>> }
+
+struct ConstGrow<const ROOT: u256> { next: StorPtr<ConstGrow<{ ROOT + 1 }>> }
+contract GrowingProvider { mut value: ConstGrow<0> }

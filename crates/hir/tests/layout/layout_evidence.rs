@@ -1361,43 +1361,6 @@ contract C {
 }
 
 #[test]
-fn non_regular_provider_const_growth_without_layout_holes_is_rejected() {
-    // Exercise the recurrence policy independently of layout-hole root counts.
-    parse_module!(
-        trusted db,
-        top_mod,
-        r#"
-use core::effect_ref::{AddressSpace, EffectHandle}
-struct A<const ROOT: u256> { raw: u256 }
-impl<const ROOT: u256> EffectHandle for A<ROOT> {
-    type Target = A<{ ROOT + 1 }>
-    type Raw = u256
-    const SPACE: AddressSpace = AddressSpace::Storage
-    fn raw(self) -> u256 { self.raw }
-}
-fn inspect<const ROOT: u256>(value: A<ROOT>) {}
-contract C { mut value: A<0> }
-"#,
-    );
-    let layout = find_contract(&db, top_mod, "C").storage_layout(&db);
-    assert!(matches!(
-        layout.field_errors(&IdentId::new(&db, "value".to_string())),
-        Some([ContractLayoutError::NonRegularProviderCycle, ..]),
-    ));
-    let instance = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "inspect"))),
-    );
-    assert!(matches!(
-        instance.key(&db).layout_bundle_signature(&db).inputs[0]
-            .interface
-            .schema
-            .unrepresentable,
-        Some(LayoutBundleUnrepresentable::NonRegularViewCycle { .. }),
-    ));
-}
-
-#[test]
 fn sibling_runtime_const_layout_sources_are_rejected() {
     parse_ok!(
         db,

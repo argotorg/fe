@@ -11,6 +11,26 @@ error[3-0002]: recursive type definition
   │        │
   │        recursive type definition here
 
+error[3-0002]: recursive type definition
+   ┌─ recursive_wrappers_growing.fe:12:8
+   │
+11 │ struct Inline<T> { value: T }
+   │                           - recursion occurs here
+12 │ struct WrappedGrow<T> { next: Inline<WrappedGrow<[T; 1]>> }
+   │        ^^^^^^^^^^^            --------------------------- recursion occurs here
+   │        │
+   │        recursive type definition here
+
+error[3-0048]: provider target layout is not finitely recursive
+   ┌─ recursive_wrappers_growing.fe:15:39
+   │
+14 │ struct ConstGrow<const ROOT: u256> { next: StorPtr<ConstGrow<{ ROOT + 1 }>> }
+   │        --------- `ConstGrow` is defined here
+15 │ contract GrowingProvider { mut value: ConstGrow<0> }
+   │                                       ^^^^^^^^^^^^ this provider target cycle changes its layout arguments
+   │
+   = recursive `EffectHandle::Target` views must return to the same layout arguments or a finite permutation of them
+
 error[3-0057]: recursive type grows without bound
   ┌─ recursive_wrappers_growing.fe:5:8
   │
@@ -47,3 +67,13 @@ error[3-0057]: recursive type grows without bound
   │                        ----------------------- recursion occurs here
   │
   = each pass through this recursion can grow a type argument, so the type can refer to infinitely many distinct types
+
+error[3-0057]: recursive type grows without bound
+   ┌─ recursive_wrappers_growing.fe:14:8
+   │
+14 │ struct ConstGrow<const ROOT: u256> { next: StorPtr<ConstGrow<{ ROOT + 1 }>> }
+   │        ^^^^^^^^^                           -------------------------------- recursion occurs here
+   │        │
+   │        recursive type definition here
+   │
+   = each pass through this recursion can grow a type argument, so the type can refer to infinitely many distinct types

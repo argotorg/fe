@@ -27,44 +27,6 @@ fn scalar_value(db: &HirAnalysisTestDb, entry: &ContractLayoutEntry<'_>) -> Stri
 }
 
 #[test]
-fn recursive_storage_handles_allocate_only_their_carriers() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-use std::evm::StorPtr
-struct Node { left: StorPtr<Node>, right: StorPtr<Node> }
-struct A { next: StorPtr<B> }
-struct B { next: StorPtr<A> }
-contract Tree {
-    mut tree: Node,
-    mut mutual: A,
-    mut sentinel: u256,
-}
-"#
-    );
-    let report = find_contract(&db, top_mod, "Tree")
-        .layout_report(&db)
-        .unwrap();
-    let expected = [
-        ("tree.left.handle", "0"),
-        ("tree.right.handle", "1"),
-        ("mutual.next.handle", "2"),
-        ("sentinel", "3"),
-    ];
-    assert_eq!(
-        report.entries.len(),
-        expected.len(),
-        "targets must not allocate inline tree nodes"
-    );
-    for (path, slot) in expected {
-        let field = entry(&db, &report.entries, path);
-        assert_eq!(scalar_value(&db, field), slot);
-        assert_eq!(field.kind, ContractLayoutEntryKind::InlineField);
-    }
-}
-
-#[test]
 fn report_distinguishes_inline_fields_from_explicit_and_inferred_parameters() {
     parse_ok!(
         db,

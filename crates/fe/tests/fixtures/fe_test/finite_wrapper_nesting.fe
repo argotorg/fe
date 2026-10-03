@@ -1,0 +1,17 @@
+struct Inline<T> { value: T }
+
+type Nested2<T> = Inline<Inline<T>>
+type Nested4<T> = Nested2<Nested2<T>>
+type Nested8<T> = Nested4<Nested4<T>>
+type Nested16<T> = Nested8<Nested8<T>>
+type Nested32<T> = Nested16<Nested16<T>>
+type Nested64<T> = Nested32<Nested32<T>>
+type Nested128<T> = Nested64<Nested64<T>>
+
+struct Finite { value: Nested128<u256> }
+
+#[test]
+fn finite_wrapper_nesting_has_no_recursion_depth_cutoff() {
+    // Repeated inline constructors are finite when their arguments shrink.
+    assert!(core::size_of<Finite>() == 32)
+}
