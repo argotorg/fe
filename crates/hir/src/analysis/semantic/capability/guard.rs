@@ -1766,10 +1766,12 @@ impl<'db> Guard<'db> {
         if indices.is_empty() {
             return self.clone();
         }
+        // Both projections are existential. Project scalar leaves first so
+        // merging indexed choices does not combine facts being discarded.
         let condition = self
             .condition
-            .forget_keys(|choice| choice.path.indices().any(|index| indices.contains(&index)))
-            .map_leaves(|condition| Arc::new(condition.project(|index| indices.contains(&index))));
+            .map_leaves(|condition| Arc::new(condition.project(|index| indices.contains(&index))))
+            .forget_keys(|choice| choice.path.indices().any(|index| indices.contains(&index)));
         Self::canonical(&self.scope, condition)
             .expect("existential quantification preserves feasibility")
     }

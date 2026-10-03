@@ -790,11 +790,8 @@ impl<'db> Borrowck<'db> {
                 region.clauses().iter().any(|write| {
                     let written = RegionSet::new(region.scope(), [write.clone()]);
                     fact.region.clauses().iter().any(|moved| {
-                        let mut unavailable = RegionSet::new(fact.region.scope(), [moved.clone()]);
-                        if write.guard.scope() == region.scope() {
-                            unavailable = unavailable.with_guard(&write.guard);
-                        }
-                        ((footprint.extent == AccessExtent::Typed
+                        let unavailable = RegionSet::new(fact.region.scope(), [moved.clone()]);
+                        let overlaps = (footprint.extent == AccessExtent::Typed
                             && !written.proven_intersection(&unavailable).is_empty())
                             || !matches!(
                                 AccessFootprint {
@@ -803,8 +800,16 @@ impl<'db> Borrowck<'db> {
                                 }
                                 .overlap(self.db, AccessFootprint::typed(&unavailable)),
                                 OverlapResult::Disjoint
-                            ))
-                            && !written.provably_covers(&unavailable)
+                            );
+                        if !overlaps {
+                            return false;
+                        }
+                        let unavailable = if write.guard.scope() == region.scope() {
+                            unavailable.with_guard(&write.guard)
+                        } else {
+                            unavailable
+                        };
+                        !written.provably_covers(&unavailable)
                     })
                 })
             })

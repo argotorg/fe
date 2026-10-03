@@ -97,7 +97,15 @@ impl<'a, 'db> AccessFootprint<'a, 'db> {
         self.region.clauses().iter().flat_map(move |left| {
             other.region.clauses().iter().filter_map(move |right| {
                 let (left, right, left_subst, right_subst) = open_clause_pair(left, right, scope);
-                let guard = left.guard.and(&right.guard)?;
+                let guard =
+                    if self.extent == AccessExtent::Typed && other.extent == AccessExtent::Typed {
+                        left.payload
+                            .root
+                            .alias_guard(&right.payload.root, left.guard.clone(), true)?
+                            .and(&right.guard)?
+                    } else {
+                        left.guard.and(&right.guard)?
+                    };
                 let left_address = LinearAddress::new(db, &left.payload);
                 let right_address = LinearAddress::new(db, &right.payload);
                 let left_len = extent_length(

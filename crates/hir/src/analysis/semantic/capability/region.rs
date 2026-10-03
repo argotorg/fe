@@ -347,7 +347,18 @@ impl<'db> RegionSet<'db> {
         Self::new(
             &self.scope,
             self.clauses.iter().filter_map(|clause| {
-                let guard = clause.guard.forget_occurrences(occurrence);
+                // Normalization discards guard-only witnesses after renewal.
+                // Project them before merging the old occurrence's branches.
+                let observed: BTreeSet<_> = clause
+                    .payload
+                    .root
+                    .indices()
+                    .chain(clause.payload.path.indices())
+                    .collect();
+                let guard = clause
+                    .guard
+                    .project_witnesses(|index| repeated(index) && !observed.contains(&index))
+                    .forget_occurrences(occurrence);
                 let mut scope = guard.scope().clone();
                 let indices: BTreeSet<_> = guard
                     .indices()
@@ -578,46 +589,39 @@ impl<'db> RegionSet<'db> {
         for left in self.clauses.iter() {
             for right in other.clauses.iter() {
                 let (left, right, ..) = open_clause_pair(left, right, &self.scope);
+                // Separate roots before combining their potentially large path
+                // guards. Most move checks compare unrelated SSA holders.
+                let Some(guard) = left
+                    .payload
+                    .root
+                    .alias_guard(&right.payload.root, left.guard.clone(), allow_unknown)
+                    .and_then(|guard| guard.and(&right.guard))
+                else {
+                    continue;
+                };
                 // Distinct raw-handle occurrences can name overlapping bases.
                 // Their field paths cannot prove disjointness without base identity.
                 if allow_unknown
                     && left.payload.root.may_alias_unknown(&right.payload.root)
                     && (left.payload.root != right.payload.root || left.payload.root.is_widened())
                 {
-                    if let Some(guard) = left.guard.and(&right.guard).and_then(|guard| {
-                        left.payload
-                            .root
-                            .alias_guard(&right.payload.root, guard, allow_unknown)
-                    }) {
-                        uncertain = true;
-                        clauses.push(Guarded {
-                            guard: guard.clone(),
-                            payload: left.payload.clone(),
-                        });
-                        clauses.push(Guarded {
-                            guard,
-                            payload: right.payload.clone(),
-                        });
-                    }
+                    uncertain = true;
+                    clauses.push(Guarded {
+                        guard: guard.clone(),
+                        payload: left.payload.clone(),
+                    });
+                    clauses.push(Guarded {
+                        guard,
+                        payload: right.payload.clone(),
+                    });
                     continue;
                 }
-                let Some(guard) = left
-                    .guard
-                    .and(&right.guard)
-                    .and_then(|guard| {
-                        left.payload
-                            .root
-                            .alias_guard(&right.payload.root, guard, allow_unknown)
-                    })
-                    .and_then(|guard| {
-                        path_alias_guard(
-                            left.payload.path.as_slice(),
-                            right.payload.path.as_slice(),
-                            guard,
-                            allow_unknown,
-                        )
-                    })
-                else {
+                let Some(guard) = path_alias_guard(
+                    left.payload.path.as_slice(),
+                    right.payload.path.as_slice(),
+                    guard,
+                    allow_unknown,
+                ) else {
                     continue;
                 };
                 let exact = left

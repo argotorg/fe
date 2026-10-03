@@ -376,16 +376,18 @@ impl<'db> BorrowState<'db> {
                             || leaf.payload.forget_occurrences(occurrence) != leaf.payload
                     })
         });
+        // Existential projections commute; scalar projection first avoids
+        // joining branch alternatives whose scalar facts will be discarded.
         self.guard = self
             .guard
-            .forget_occurrences(occurrence)
-            .forget_indices(dropped);
+            .forget_indices(dropped)
+            .forget_occurrences(occurrence);
         for alternatives in self.scalar_cells.values_mut() {
             for entry in alternatives.iter_mut() {
                 entry.guard = entry
                     .guard
-                    .forget_occurrences(occurrence)
-                    .forget_indices(dropped);
+                    .forget_indices(dropped)
+                    .forget_occurrences(occurrence);
                 if entry.payload.is_some_and(dropped) {
                     entry.payload = None;
                 }
@@ -481,7 +483,6 @@ impl<'db> BorrowState<'db> {
                                     .map(|pairs| FeedbackSlot { pairs, places })
                             })
                             .collect();
-                        let guard = domain.forget_occurrences(occurrence);
                         let payload = entry
                             .payload
                             .widen_feedback(
@@ -492,6 +493,15 @@ impl<'db> BorrowState<'db> {
                                 &invariant_replacements,
                             )
                             .unwrap_or_else(|| entry.payload.clone())
+                            .forget_occurrences(occurrence);
+                        // Guard-only selectors become unobserved existential
+                        // witnesses below. Project them before joining forgotten
+                        // choices, which can otherwise build a large scalar
+                        // disjunction only to project it during normalization.
+                        let observed: BTreeSet<_> =
+                            payload.indices().filter(|index| renewed(*index)).collect();
+                        let guard = domain
+                            .project_witnesses(|index| dropped(index) && !observed.contains(&index))
                             .forget_occurrences(occurrence);
                         let mut scope = guard.scope().clone();
                         let indices: BTreeSet<_> = guard
