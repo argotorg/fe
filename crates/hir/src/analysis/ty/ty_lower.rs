@@ -3714,6 +3714,9 @@ pub(crate) fn layout_param_root_uses<'db>(
                 .then_some((*param, (idx, *value)))
         })
         .collect::<FxHashMap<_, _>>();
+    if concrete_roots.is_empty() {
+        return Vec::new();
+    }
     let mut collector = LayoutParamRootUseCollector {
         db,
         concrete_roots,
@@ -4637,4 +4640,34 @@ pub(super) fn lower_kind_in_bounds<'db>(bounds: &[TypeBound<'db>]) -> Option<Kin
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_db::{HirAnalysisTestDb, find_func};
+
+    #[test]
+    fn root_use_collection_skips_shared_types_without_candidate_roots() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("empty_layout_roots.fe".into(), "fn marker() {}");
+        let (top_mod, _) = db.top_mod(file);
+        let schema = ParamSchemaId::full(&db, find_func(&db, top_mod, "marker").into());
+        let mut template = TyId::u256(&db);
+        for _ in 0..40 {
+            template = TyId::tuple_with_elems(&db, &[template, template]);
+        }
+        assert!(
+            layout_param_root_uses(
+                &db,
+                template,
+                schema,
+                &[],
+                &[],
+                &FxHashSet::default(),
+                Vec::new(),
+            )
+            .is_empty()
+        );
+    }
 }
