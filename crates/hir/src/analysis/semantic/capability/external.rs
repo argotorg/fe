@@ -1448,17 +1448,22 @@ impl<'db> ExternalSource<'db> {
         guard.with_equalities(pairs)
     }
 
-    /// Under the hash premise, a `StorageMap` slot is not the direct target of a
-    /// compiler-allocated contract field. Following or widening either source
-    /// forfeits this: a stored pointer can name any slot.
+    /// Under the hash premise, a `StorageMap` slot, and the value stored from
+    /// it onwards, is not the target of a compiler-allocated contract field.
+    /// Following or widening either source forfeits this: a stored pointer can
+    /// name any slot.
     fn is_hashed_slot_beside_allocated_field(&self, field: &Self) -> bool {
-        matches!(
-            self.origin,
+        (matches!(
+            &self.origin,
             ExternalOrigin::Unknown {
                 provenance: AddressProvenance::HashedStorageSlot,
                 ..
             }
-        ) && matches!(
+        ) || matches!(
+            &self.origin,
+            ExternalOrigin::OpaqueHandle(handle)
+                if handle.provenance == AddressProvenance::HashedStorageSlot
+        )) && matches!(
             field.origin,
             ExternalOrigin::Provider {
                 storage: ProviderStorage::AllocatedField(_),

@@ -3,7 +3,8 @@ use rustc_hash::FxHashSet;
 use crate::{
     db::MirDb,
     runtime::{
-        Layout, LayoutId, RawPointeeKey, RefView, RuntimeClass, RuntimeProgramView, ScalarRole,
+        Layout, LayoutId, RawPointeeKey, RefKind, RefView, RuntimeClass, RuntimeProgramView,
+        ScalarRole,
     },
     verify::VerifyError,
 };
@@ -28,6 +29,20 @@ pub(super) fn verify_class_layouts<'db>(
             RawPointeeKey::Exact(target) => verify_class_layouts(db, program, target, visited),
         },
         RuntimeClass::AggregateValue { layout } => verify_layout(db, program, *layout, visited),
+        RuntimeClass::Ref {
+            pointee,
+            view: RefView::StorageLane(_),
+            kind,
+        } => {
+            // A storage lane is part of one word: only a provider reference to
+            // a scalar can view one.
+            if !matches!(**pointee, RuntimeClass::Scalar(_))
+                || !matches!(kind, RefKind::Provider { .. })
+            {
+                return Err(VerifyError::InvalidPlace(class.clone()));
+            }
+            Ok(())
+        }
         RuntimeClass::Ref { pointee, view, .. } => {
             if !matches!(view, RefView::Whole | RefView::EnumVariant(_)) {
                 return Err(VerifyError::InvalidLayoutRefView(

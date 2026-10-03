@@ -1314,6 +1314,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             &value_class,
             root_class.address_space().unwrap_or(root_space),
             force_raw,
+            crate::runtime::RefView::Whole,
         ))
     }
 

@@ -1,7 +1,7 @@
 //! Arbitrary replacement contents after a possible byte-level overwrite.
 //! Entry reads have a different denotation and must never be used as havoc.
 use super::{
-    external::{ClobberCondition, ExternalSource, ReferentContract},
+    external::{AddressProvenance, ClobberCondition, ExternalSource, ReferentContract},
     footprint::AccessFootprint,
     guard::Guard,
     handle::{
@@ -97,6 +97,7 @@ impl<'db> OpaqueWrite<'db> {
                                 path.clone(),
                             )),
                             arguments: scope.variables().chain([witness]).collect(),
+                            provenance: AddressProvenance::Raw,
                         },
                     ),
                 )

@@ -340,6 +340,47 @@ impl<'db> Borrowck<'db> {
                                 contract: handle,
                                 occurrence: AddressOccurrence::Summary(0),
                                 arguments: Box::new([]),
+                                provenance: AddressProvenance::Raw,
+                            },
+                        ),
+                        path: RegionPath::default(),
+                        views: Default::default(),
+                    }
+                }
+                IntrinsicPointerReturn::HashedStorageSlot => {
+                    let handle = OpaqueHandleContract::for_ty(
+                        self.db,
+                        self.instance
+                            .key(self.db)
+                            .impl_env(self.db)
+                            .normalization_scope(self.db),
+                        self.instance.assumptions(self.db),
+                        self.instance.normalized_result_ty(self.db),
+                    )
+                    .map_err(|_| {
+                        self.internal_diag(origin, "invalid hashed storage handle type".into())
+                    })?
+                    .filter(|handle| {
+                        handle.address_space
+                            == HandleAddressSpace::Known(ProviderAddressSpace::Storage)
+                    })
+                    .ok_or_else(|| {
+                        self.internal_diag(
+                            origin,
+                            "hashed storage slot intrinsic must return a storage handle".into(),
+                        )
+                    })?;
+                    // The handle's identity is its slot: equal slots name the
+                    // same entry, distinct slots stay possibly aliased.
+                    SourceExpr {
+                        invalidated: false,
+                        source: ExternalSource::opaque(
+                            self.db,
+                            OpaqueHandleRef {
+                                contract: handle,
+                                occurrence: AddressOccurrence::Summary(0),
+                                arguments: Box::new([IndexExpr::FormalValue(0)]),
+                                provenance: AddressProvenance::HashedStorageSlot,
                             },
                         ),
                         path: RegionPath::default(),
@@ -386,7 +427,8 @@ impl<'db> Borrowck<'db> {
                         views: Default::default(),
                     };
                 }
-                IntrinsicPointerReturn::FreshMemory => {}
+                IntrinsicPointerReturn::FreshMemory | IntrinsicPointerReturn::HashedStorageSlot => {
+                }
             }
             result = values.with_direct(
                 &result,
