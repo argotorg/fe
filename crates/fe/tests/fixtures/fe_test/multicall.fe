@@ -1,0 +1,159 @@
+// std::evm::multicall: batched self-delegatecalls with bubbled reverts.
+use core::abi::Encode
+use core::message::MsgVariant
+use std::abi::{Bytes, DynArray, dyn_array_from}
+use std::evm::{Address, Call, Ctx, Evm, CallOutcome, encode_error, encode_msg_calldata, is_error}
+use std::evm::multicall::{self, FailedCall, MulticallMsg}
+
+#[error]
+pub struct TooLarge { pub value: u256 }
+
+msg BoxMsg {
+    #[selector = sol("add(uint256)")]
+    Add { value: u256 } -> u256,
+    #[selector = sol("total()")]
+    Total -> u256,
+    #[selector = sol("sender()")]
+    Sender -> Address,
+    #[selector = sol("echo(bytes)")]
+    Echo { data: Bytes } -> Bytes,
+    #[selector = sol("failEmpty()")]
+    FailEmpty,
+    #[selector = sol("deposit()")]
+    Deposit -> u256,
+}
+
+pub contract Box uses (ctx: Ctx, call: mut Call) {
+    mut total: u256,
+
+    recv BoxMsg {
+        Add { value } -> u256 uses (mut total) {
+            if value > 100 {
+                revert_error(TooLarge { value })
+            }
+            total += value
+            total
+        }
+        Total -> u256 uses (total) {
+            total
+        }
+        Sender -> Address uses (ctx) {
+            ctx.caller()
+        }
+        Echo { data } -> Bytes {
+            data
+        }
+        FailEmpty {} {
+            std::evm::revert_empty()
+        }
+        #[payable]
+        Deposit -> u256 uses (ctx) {
+            ctx.value()
+        }
+    }
+
+    recv MulticallMsg {
+        #[payable]
+        Multicall { data } -> DynArray<Bytes> uses (ctx, mut call) {
+            multicall::multicall(data)
+        }
+    }
+}
+
+fn entry<M>(_ message: own M) -> Bytes
+where M: MsgVariant<Sol> + Encode<Sol>
+{
+    Bytes::from_payload(source: encode_msg_calldata(message).span())
+}
+
+fn batch(_ target: Address, _ data: DynArray<Bytes>) -> CallOutcome uses (call: mut Call) {
+    target.try_call(MulticallMsg::Multicall { data })
+}
+
+fn total(_ target: Address) -> u256 uses (call: mut Call) {
+    target.call(BoxMsg::Total {})
+}
+
+#[test]
+fn batches_run_in_order_and_return_each_result() uses (evm: mut Evm) {
+    let target = evm.create2<Box>(value: 0, args: (), salt: 0)
+    let data = dyn_array_from([
+        entry(BoxMsg::Add { value: 3 }),
+        entry(BoxMsg::Add { value: 4 }),
+        entry(BoxMsg::Sender {}),
+        entry(BoxMsg::Echo { data: Bytes::from_word_prefix(word: 0xabcd << 240, len: 2) }),
+        entry(BoxMsg::Total {}),
+    ])
+    with (Call = evm, Ctx = evm) {
+        let results: DynArray<Bytes> = target.call(MulticallMsg::Multicall { data })
+        assert!(results.len() == 5)
+        assert!(results.get(0).len() == 32 && results.get(0).word_at(0) == 3)
+        assert!(results.get(1).word_at(0) == 7)
+        // Delegatecalls keep the original caller.
+        assert!(results.get(2).word_at(0) == evm.address().inner)
+        // Dynamic returns come back ABI-encoded: offset, length, data.
+        let echo = results.get(3)
+        assert!(echo.len() == 96)
+        assert!(echo.word_at(0) == 32 && echo.word_at(32) == 2 && echo.word_at(64) == 0xabcd << 240)
+        assert!(results.get(4).word_at(0) == 7)
+        assert!(total(target) == 7)
+
+        // An empty batch does nothing.
+        let none: DynArray<Bytes> = target.call(MulticallMsg::Multicall { data: DynArray::empty() })
+        assert!(none.len() == 0)
+    }
+}
+
+#[test]
+fn failing_entry_reverts_batch_with_its_data() uses (evm: mut Evm) {
+    let target = evm.create2<Box>(value: 0, args: (), salt: 0)
+    let data = dyn_array_from([
+        entry(BoxMsg::Add { value: 5 }),
+        entry(BoxMsg::Add { value: 101 }),
+        entry(BoxMsg::Add { value: 6 }),
+    ])
+    with (Call = evm) {
+        let outcome = batch(target, data)
+        assert!(!outcome.success())
+        let expected = encode_error(TooLarge { value: 101 })
+        assert!(
+            Bytes::from_payload(source: outcome.returndata())
+                == Bytes::from_payload(source: expected.span()),
+        )
+        // The first entry was rolled back with the batch.
+        assert!(total(target) == 0)
+    }
+}
+
+#[test]
+fn empty_revert_becomes_failed_call() uses (evm: mut Evm) {
+    let target = evm.create2<Box>(value: 0, args: (), salt: 0)
+    let data = dyn_array_from([entry(BoxMsg::Add { value: 1 }), entry(BoxMsg::FailEmpty {})])
+    // Calldata no handler accepts reverts without data, too.
+    let unknown = dyn_array_from([Bytes::from_word_prefix(word: 0x12345678 << 224, len: 4)])
+    with (Call = evm) {
+        let outcome = batch(target, data)
+        assert!(!outcome.success())
+        assert!(is_error<FailedCall>(outcome.returndata()))
+        let outcome = batch(target, unknown)
+        assert!(!outcome.success())
+        assert!(is_error<FailedCall>(outcome.returndata()))
+        assert!(total(target) == 0)
+    }
+}
+
+#[test(balance = 1000)]
+fn value_reaches_every_entry() uses (evm: mut Evm) {
+    let target = evm.create2<Box>(value: 0, args: (), salt: 0)
+    let data = dyn_array_from([entry(BoxMsg::Deposit {}), entry(BoxMsg::Deposit {})])
+    let results: DynArray<Bytes> = evm.call(
+        addr: target,
+        gas: 1000000,
+        value: 7,
+        message: MulticallMsg::Multicall { data },
+    )
+    // Each entry sees the full value, but it is transferred only once.
+    assert!(results.len() == 2)
+    assert!(results.get(0).word_at(0) == 7 && results.get(1).word_at(0) == 7)
+    assert!(evm.balance(target) == 7)
+}
