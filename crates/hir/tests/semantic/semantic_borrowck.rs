@@ -13699,3 +13699,130 @@ fn inspect() {
         "{diagnostics}"
     );
 }
+
+#[test]
+fn named_constants_separate_indices_like_literals() {
+    // A named constant must compare and index like the literal it names: in
+    // equality and ordering facts, projections and call arguments, however
+    // they are combined.
+    let diagnostics = checked_borrow_diags(
+        r#"
+const ONE: usize = 1
+
+fn named(_ values: mut [u256; 4], _ i: usize) -> u256 {
+    if i == ONE { return 0 }
+    let a = mut values[i]
+    let b = ref values[ONE]
+    a = 5
+    b
+}
+
+fn literal_projection(_ values: mut [u256; 4], _ i: usize) -> u256 {
+    if i == ONE { return 0 }
+    let a = mut values[i]
+    let b = ref values[1]
+    a = 5
+    b
+}
+
+fn bound_once(_ values: mut [u256; 4], _ i: usize) -> u256 {
+    let j = ONE
+    if i == j { return 0 }
+    let a = mut values[i]
+    let b = ref values[j]
+    a = 5
+    b
+}
+
+fn compared_by_name(_ values: mut [u256; 4], _ i: usize) -> u256 {
+    let j = ONE
+    if i == ONE { return 0 }
+    let a = mut values[i]
+    let b = ref values[j]
+    a = 5
+    b
+}
+
+fn ordered(_ values: mut [u256; 4], _ i: usize) -> u256 {
+    if i >= ONE { return 0 }
+    let a = mut values[i]
+    let b = ref values[ONE]
+    a = 5
+    b
+}
+
+fn elem(_ values: mut [u256; 4], _ k: usize) -> mut u256 {
+    mut values[k]
+}
+
+fn through_call(_ values: mut [u256; 4], _ i: usize) {
+    if i == ONE { return }
+    let b = elem(mut values, ONE)
+    let a = mut values[i]
+    a = 5
+    b = 6
+}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn comparisons_against_named_constants_stay_tractable() {
+    // The assertion makes `action` a tracked scalar. If each named constant
+    // were an unknown runtime value, the guards would case-split on which of
+    // them are equal, and this chain would take minutes and tens of GB.
+    let mut source = String::from("use std::evm::revert\n\n");
+    for index in 0..24 {
+        source.push_str(&format!("const A{index}: u256 = {index}\n"));
+    }
+    source.push_str("\npub fn dispatch(_ action: u256) {\n    if action == A0 || action == A1 {\n");
+    for index in 2..24 {
+        source.push_str(&format!("    }} else if action == A{index} {{\n"));
+    }
+    source.push_str("        if action == 7 { revert(()) }\n    } else { revert(()) }\n}\n");
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        sender
+            .send(checked_borrow_diags(&source))
+            .expect("test thread is waiting");
+    });
+    let diagnostics = match receiver.recv_timeout(std::time::Duration::from_secs(60)) {
+        Ok(diagnostics) => diagnostics,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("borrow checking did not finish within 60 seconds")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("borrow checking panicked")
+        }
+    };
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn returned_named_constant_keeps_return_path_facts() {
+    // The result equality with a returned named constant is omitted, but the
+    // fact `i != 1` this return path establishes about the argument survives.
+    let diagnostics = checked_borrow_diags(
+        r#"
+use std::evm::revert
+
+const ONE: usize = 1
+
+fn pick(_ i: usize) -> usize {
+    let j = ONE
+    if i == j { revert(()) }
+    j
+}
+
+fn caller(_ values: mut [u256; 4], _ i: usize) -> u256 {
+    let _k = pick(i)
+    let a = mut values[i]
+    let b = ref values[1]
+    a = 5
+    b
+}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}

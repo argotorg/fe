@@ -956,9 +956,15 @@ impl<'db> Borrowck<'db> {
             let origin = block.terminator.origin;
             // Facts over formal arguments hold on every normal return; an
             // integer result also relates to the value this path returns.
+            // A returned named constant contributes no result fact, though the
+            // path's facts over formal arguments still hold: relating every
+            // caller's result to a concrete value makes generated ABI
+            // decoders with many fields much slower to check.
             let actual = returned
                 .filter(|_| scalar_ty.is_integral(self.db))
-                .map(|returned| self.index(returned.value));
+                .map(|returned| returned.value)
+                .filter(|&returned| self.index(returned) == self.unresolved_index(returned))
+                .map(|returned| self.index(returned));
             let uninformative = actual.is_some_and(|actual| {
                 matches!(actual, IndexExpr::Runtime(value)
                     if !matches!(self.body.values[value.index()].definition,
