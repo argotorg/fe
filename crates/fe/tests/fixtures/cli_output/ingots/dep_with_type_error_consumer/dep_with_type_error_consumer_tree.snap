@@ -1,0 +1,9 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDOUT ===
+dep_with_type_error_consumer v0.1.0
+└── dep_with_type_error v0.1.0
+
+=== EXIT CODE: 0 ===
