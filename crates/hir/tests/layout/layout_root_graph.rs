@@ -2865,6 +2865,62 @@ fn maybe_map<const ROOT: u256>(
 }
 
 #[test]
+fn forwarded_return_sources_trace_tuple_struct_ctor_fields() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+use std::evm::StorageMap
+
+struct Wrapped<const ROOT: u256>(StorageMap<u256, u256, ROOT>)
+
+struct Named<const ROOT: u256> {
+    map: StorageMap<u256, u256, ROOT>,
+}
+
+fn wrap<const ROOT: u256>(map: StorageMap<u256, u256, ROOT>) -> Wrapped<ROOT> {
+    Wrapped(map)
+}
+
+fn name<const ROOT: u256>(map: StorageMap<u256, u256, ROOT>) -> Named<ROOT> {
+    Named { map }
+}
+"#,
+    );
+    let typed_body_of = |name: &str| {
+        let func = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::Func(func)
+                    if func
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|func_name| func_name.data(&db) == name) =>
+                {
+                    Some(func)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing {name} function"));
+        check_func_body(&db, func).1.clone()
+    };
+    let wrap = typed_body_of("wrap");
+    let name = typed_body_of("name");
+
+    let sources = wrap.forwarded_return_sources(&db);
+    assert!(
+        sources.contains(&ReturnSource {
+            result_projection: vec![ReturnProjectionStep::Field(0)],
+            origin: CallableInputLayoutHoleOrigin::ValueParam(0),
+            projection: Vec::new(),
+        }),
+        "tuple struct constructor must forward its field: {sources:?}",
+    );
+    assert_eq!(sources, name.forwarded_return_sources(&db));
+    assert_eq!(wrap.return_provenance(&db), name.return_provenance(&db));
+}
+
+#[test]
 fn forwarded_return_sources_trace_explicit_borrows() {
     parse_ok!(
         db,

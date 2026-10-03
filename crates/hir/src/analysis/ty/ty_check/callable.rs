@@ -236,7 +236,7 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
                 )
                 .map_err(CallGenericArgUnifyError::InvalidArgument)?
         }
-        CallableDef::VariantCtor(_) => given_args
+        CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => given_args
             .clone()
             .unwrap_or_else(|| callable.generic_args[offset..].to_vec()),
     };
@@ -556,7 +556,7 @@ impl<'db> Callable<'db> {
                 }
                 Some(params)
             }
-            CallableDef::VariantCtor(_) => None,
+            CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => None,
         };
         let layout_input_origins = match self.callable_def {
             CallableDef::Func(func) => {
@@ -566,7 +566,7 @@ impl<'db> Callable<'db> {
                     .map(|input| input.origin)
                     .collect::<Vec<_>>()
             }
-            CallableDef::VariantCtor(_) => Vec::new(),
+            CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => Vec::new(),
         };
 
         let mut args = if let Some((receiver_expr, receiver_prop)) = receiver {
@@ -588,7 +588,7 @@ impl<'db> Callable<'db> {
             let arg_idx = if has_receiver { i + 1 } else { i };
             let layout_origin = match self.callable_def {
                 CallableDef::Func(_) => Some(CallableInputLayoutHoleOrigin::ValueParam(arg_idx)),
-                CallableDef::VariantCtor(_) => None,
+                CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => None,
             };
             // Constructors for layout-bearing inputs must see the callee's specialized type so
             // their inferred roots are anchored to the value being passed. Keep this contextual
@@ -598,9 +598,11 @@ impl<'db> Callable<'db> {
             let expected_hint = self
                 .compile_time_string_literal_arg_expected(tc, hir_arg.expr, arg_idx)
                 .or_else(|| {
-                    (matches!(self.callable_def, CallableDef::VariantCtor(_))
-                        || layout_origin
-                            .is_some_and(|origin| layout_input_origins.contains(&origin)))
+                    (matches!(
+                        self.callable_def,
+                        CallableDef::VariantCtor(_) | CallableDef::StructCtor(_)
+                    ) || layout_origin
+                        .is_some_and(|origin| layout_input_origins.contains(&origin)))
                     .then(|| self.arg_ty(db, arg_idx))
                     .flatten()
                     .map(|ty| {
@@ -1066,7 +1068,7 @@ impl<'db> Callable<'db> {
         let instantiated = constraints.instantiate(db, &self.generic_args);
         let definition_assumptions = match self.callable_def {
             CallableDef::Func(func) => param_env(db, func.into()),
-            CallableDef::VariantCtor(_) => declared,
+            CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => declared,
         };
         let definition_solve_cx = TraitSolveCx::new(db, self.callable_def.scope())
             .with_assumptions(definition_assumptions);

@@ -774,7 +774,7 @@ impl<'a, 'db> BodyRequirements<'a, 'db> {
                 self.check_callee_headers(expr, func, args);
                 self.discharge_callee_conditions(expr, func, args);
             }
-            CallableDef::VariantCtor(_) => {
+            CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => {
                 self.check_constructor_value(expr, data, definition, args);
             }
         }

@@ -1,0 +1,137 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/tuple_struct_errors.fe
+---
+error[12-0001]: unsupported `#[event]` attribute on tuple struct `Logged`
+   ┌─ tuple_struct_errors.fe:19:1
+   │
+19 │ #[event]
+   │ ^^^^^^^^ `#[event]` is only supported on record structs
+
+error[2-0003]: `0` is not visible
+   ┌─ tuple_struct_errors.fe:56:13
+   │
+ 3 │     pub struct Secret(u8)
+   │                       -- `0` is defined here
+   ·
+56 │     let _ = Secret(1)
+   │             ^^^^^^ `0` is not visible
+
+error[2-0003]: `1` is not visible
+   ┌─ tuple_struct_errors.fe:57:13
+   │
+ 4 │     pub struct Mixed(pub u8, u8)
+   │                              -- `1` is defined here
+   ·
+57 │     let _ = Mixed(1, 2)
+   │             ^^^^^ `1` is not visible
+
+error[2-0003]: `0` is not visible
+   ┌─ tuple_struct_errors.fe:58:9
+   │
+ 3 │     pub struct Secret(u8)
+   │                       -- `0` is defined here
+   ·
+58 │     let Secret(raw) = s
+   │         ^^^^^^^^^^^ `0` is not visible
+
+error[2-0003]: `0` is not visible
+   ┌─ tuple_struct_errors.fe:59:7
+   │
+ 3 │     pub struct Secret(u8)
+   │                       -- `0` is defined here
+   ·
+59 │     s.0 + x.1 + raw
+   │       ^ `0` is not visible
+
+error[8-0000]: type mismatch
+   ┌─ tuple_struct_errors.fe:28:19
+   │
+28 │     let _ = Month(true)
+   │                   ^^^^ expected `u8`, but `bool` is given
+
+error[8-0004]: expected unit variant
+   ┌─ tuple_struct_errors.fe:44:13
+   │
+44 │     let _ = Point(1)
+   │             ^^^^^
+   │             │
+   │             expected unit variant here, but found struct
+   │             Consider using `Point { x }` instead
+
+error[8-0004]: expected unit variant
+   ┌─ tuple_struct_errors.fe:48:13
+   │
+48 │     let _ = MonthAlias(1)
+   │             ^^^^^^^^^^
+   │             │
+   │             expected unit variant here, but found tuple struct
+   │             Consider using `Month(_)` instead
+
+error[8-0004]: expected unit variant
+   ┌─ tuple_struct_errors.fe:71:9
+   │
+71 │     let Month = m
+   │         ^^^^^
+   │         │
+   │         expected unit variant here, but found tuple struct
+   │         Consider using `Month(_)` instead
+
+error[8-0006]: expected record variant or struct
+   ┌─ tuple_struct_errors.fe:32:13
+   │
+32 │     let _ = Month {}
+   │             ^^^^^
+   │             │
+   │             expected record variant or struct here, but found tuple struct
+   │             Consider using `Month(_)` instead
+
+error[8-0006]: expected record variant or struct
+   ┌─ tuple_struct_errors.fe:36:9
+   │
+36 │     let Month { .. } = m
+   │         ^^^^^^^^^^^^
+   │         │
+   │         expected record variant or struct here, but found tuple struct
+   │         Consider using `Month(_)` instead
+
+error[8-0007]: field count mismatch
+   ┌─ tuple_struct_errors.fe:40:9
+   │
+40 │     let Month(a, b) = m
+   │         ^^^^^^^^^^^ expected 1 fields here, but 2 given
+
+error[8-0015]: invalid field index
+   ┌─ tuple_struct_errors.fe:52:5
+   │
+52 │     m.1
+   │     ^^^ field `1` is not found in `Month`
+
+error[8-0023]: argument number mismatch
+   ┌─ tuple_struct_errors.fe:23:18
+   │
+ 2 │     pub struct Month(pub u8)
+   │                ----- function defined here
+   ·
+23 │     let _ = Month(1, 2)
+   │                  ^^^^^^ expected 1 arguments, but 2 given
+
+error[8-0023]: argument number mismatch
+   ┌─ tuple_struct_errors.fe:24:18
+   │
+ 2 │     pub struct Month(pub u8)
+   │                ----- function defined here
+   ·
+24 │     let _ = Month()
+   │                  ^^ expected 1 arguments, but 0 given
+
+error[8-0034]: non-exhaustive patterns: type `BoolWrap` is not covered
+   ┌─ tuple_struct_errors.fe:65:5
+   │
+65 │ ╭     match b {
+66 │ │         BoolWrap(true) => 1
+67 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │
+   = Not covered: `BoolWrap(false)`

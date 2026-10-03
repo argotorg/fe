@@ -42,7 +42,7 @@ pub fn effect_requirement_decls_for_callable<'db>(
 ) -> SmallVec<[EffectRequirementDecl<'db>; 2]> {
     let bindings: &[EffectRequirement<'db>] = match callable_def {
         CallableDef::Func(func) => func.effective_effect_requirements(db),
-        CallableDef::VariantCtor(_) => &[],
+        CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => &[],
     };
     bindings
         .iter()
@@ -220,7 +220,7 @@ fn generic_param_owner_for_effect_family_base<'db>(
         TyData::TyBase(TyBase::Adt(adt)) => Some(adt.as_generic_param_owner(db)),
         TyData::TyBase(TyBase::Func(func)) => match func {
             CallableDef::Func(def) => Some((*def).into()),
-            CallableDef::VariantCtor(_) => None,
+            CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => None,
         },
         _ => None,
     }

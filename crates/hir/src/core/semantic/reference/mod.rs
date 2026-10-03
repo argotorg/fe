@@ -31,7 +31,8 @@ use crate::{
     },
     hir_def::scope_graph::ScopeId,
     hir_def::{
-        Body, Contract, Expr, ExprId, FieldIndex, ItemKind, Partial, PathId, Use, UsePathSegment,
+        Body, Contract, Expr, ExprId, FieldIndex, IdentId, ItemKind, Partial, PathId, Use,
+        UsePathSegment,
     },
     hir_def::{GenericParamOwner, HirIngot},
     span::{
@@ -436,8 +437,8 @@ impl<'db> FieldAccessView<'db> {
         else {
             return TargetResolution::None;
         };
-        let Partial::Present(FieldIndex::Ident(field_name)) = field_index else {
-            return TargetResolution::None; // Tuple field access (e.g., tuple.0) doesn't have a scope
+        let Partial::Present(field_index) = field_index else {
+            return TargetResolution::None;
         };
 
         // Get the typed body (works for functions, contract init, recv arms)
@@ -454,9 +455,19 @@ impl<'db> FieldAccessView<'db> {
             .as_capability(db)
             .map_or(receiver_ty, |(_, inner)| inner);
 
+        // Tuple struct fields are named by their position. Plain tuple field
+        // access (e.g., tuple.0) doesn't have a scope.
+        let field_name = match field_index {
+            FieldIndex::Ident(field_name) => *field_name,
+            FieldIndex::Index(index) if receiver_ty.as_tuple_struct(db).is_some() => {
+                IdentId::new(db, index.data(db).to_string())
+            }
+            FieldIndex::Index(_) => return TargetResolution::None,
+        };
+
         // Resolve the field scope using RecordLike
         let record_like = RecordLike::from_ty(receiver_ty);
-        match record_like.record_field_scope(db, *field_name) {
+        match record_like.record_field_scope(db, field_name) {
             Some(scope) => TargetResolution::Single(Target::Scope(scope)),
             None => TargetResolution::None,
         }
@@ -500,6 +511,7 @@ impl<'db> MethodCallView<'db> {
                 ScopeId::from_item(ItemKind::Func(method_func))
             }
             crate::hir_def::CallableDef::VariantCtor(variant) => ScopeId::Variant(variant),
+            crate::hir_def::CallableDef::StructCtor(struct_) => struct_.scope(),
         };
         TargetResolution::Single(Target::Scope(scope))
     }
