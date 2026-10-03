@@ -73,11 +73,10 @@ fn edited(source: &str, from: &str, to: &str) -> String {
 fn diagnostics(db: &DriverDataBase, file: File) -> String {
     let ingot = db.top_mod(file).ingot(db);
     let hir = db.run_on_ingot(ingot);
-    let mut errors = if hir.has_errors(db) {
-        hir.format_diags(db)
-    } else {
-        String::new()
-    };
+    if hir.has_errors(db) {
+        return hir.format_diags(db);
+    }
+    let mut errors = String::new();
     let semantic = db.mir_diagnostics_for_ingot(ingot);
     if semantic
         .iter()
