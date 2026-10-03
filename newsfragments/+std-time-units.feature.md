@@ -1,0 +1,1 @@
+Added Solidity-style time units to `std::evm::units` (re-exported from `std::evm`): the `SECOND`, `MINUTE`, `HOUR`, `DAY` and `WEEK` constants and the `seconds`, `minutes`, `hours`, `days` and `weeks` const functions, which convert a duration to seconds, so `days(7)` reads like Solidity's `7 days`.

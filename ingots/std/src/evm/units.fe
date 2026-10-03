@@ -1,8 +1,9 @@
-/// Native ETH denomination units.
+/// Native ETH denomination and time units.
 ///
-/// Mirrors Solidity's built-in `wei` / `gwei` / `ether` unit literals.
+/// Mirrors Solidity's built-in `wei` / `gwei` / `ether` and
+/// `seconds` / `minutes` / `hours` / `days` / `weeks` unit literals.
 /// Use the constants for raw scaling factors or the helper functions for
-/// the Solidity-style `ether(5)` / `gwei(100)` reading. Bare integer
+/// the Solidity-style `ether(5)` / `days(7)` reading. Bare integer
 /// literals in Fe have no default type, so a method form (`5.ether()`)
 /// cannot infer; the function form drives inference through the
 /// parameter type.
@@ -23,3 +24,33 @@ pub const fn gwei(_ n: u256) -> u256 { n * GWEI }
 
 /// Convert an ether-denominated amount to wei.
 pub const fn ether(_ n: u256) -> u256 { n * ETHER }
+
+/// Number of seconds in one second.
+pub const SECOND: u256 = 1
+
+/// Number of seconds in one minute.
+pub const MINUTE: u256 = 60
+
+/// Number of seconds in one hour.
+pub const HOUR: u256 = 3_600
+
+/// Number of seconds in one day.
+pub const DAY: u256 = 86_400
+
+/// Number of seconds in one week.
+pub const WEEK: u256 = 604_800
+
+/// Convert a second-denominated duration to seconds.
+pub const fn seconds(_ n: u256) -> u256 { n }
+
+/// Convert a minute-denominated duration to seconds.
+pub const fn minutes(_ n: u256) -> u256 { n * MINUTE }
+
+/// Convert an hour-denominated duration to seconds.
+pub const fn hours(_ n: u256) -> u256 { n * HOUR }
+
+/// Convert a day-denominated duration to seconds.
+pub const fn days(_ n: u256) -> u256 { n * DAY }
+
+/// Convert a week-denominated duration to seconds.
+pub const fn weeks(_ n: u256) -> u256 { n * WEEK }

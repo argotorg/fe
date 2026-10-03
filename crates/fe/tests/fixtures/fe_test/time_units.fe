@@ -1,0 +1,57 @@
+// Tests for the time units in `std::evm::units`. Values match Solidity's
+// `1 seconds`, `1 minutes`, `1 hours`, `1 days` and `1 weeks`.
+
+use std::evm::units::{DAY, HOUR, MINUTE, SECOND, WEEK, days, hours, minutes, seconds, weeks}
+
+// The helpers are `const fn`s, so they work in constant initializers.
+const LOCK_PERIOD: u256 = weeks(2) + days(3)
+const GRACE_PERIOD: u256 = hours(1) + minutes(30) + seconds(15)
+
+#[test]
+fn constants_match_solidity() {
+    assert!(SECOND == 1)
+    assert!(MINUTE == 60)
+    assert!(HOUR == 3_600)
+    assert!(DAY == 86_400)
+    assert!(WEEK == 604_800)
+}
+
+#[test]
+fn constants_relate_to_each_other() {
+    assert!(MINUTE == 60 * SECOND)
+    assert!(HOUR == 60 * MINUTE)
+    assert!(DAY == 24 * HOUR)
+    assert!(WEEK == 7 * DAY)
+}
+
+#[test]
+fn helpers_scale_to_seconds() {
+    assert!(seconds(0) == 0)
+    assert!(seconds(42) == 42)
+    assert!(minutes(5) == 300)
+    assert!(hours(2) == 7_200)
+    assert!(days(7) == 604_800)
+    assert!(weeks(4) == 2_419_200)
+}
+
+#[test]
+fn helpers_agree_with_constants() {
+    assert!(seconds(1) == SECOND)
+    assert!(minutes(1) == MINUTE)
+    assert!(hours(1) == HOUR)
+    assert!(days(1) == DAY)
+    assert!(weeks(1) == WEEK)
+    assert!(days(7) == weeks(1))
+}
+
+#[test]
+fn helpers_in_const_context() {
+    assert!(LOCK_PERIOD == 1_468_800)
+    assert!(GRACE_PERIOD == 5_415)
+}
+
+#[test]
+fn reexported_from_std_evm() {
+    assert!(std::evm::days(1) == std::evm::DAY)
+    assert!(std::evm::weeks(1) == std::evm::WEEK)
+}
