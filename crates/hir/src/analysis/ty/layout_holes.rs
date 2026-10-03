@@ -564,6 +564,7 @@ pub(crate) fn instantiate_layout_template<'db>(
         path: Vec::new(),
         body_landings: FxHashMap::default(),
         root_uses: Vec::new(),
+        ty_cache: FxHashMap::default(),
     };
     let ty = template.fold_with(db, &mut instantiator);
     debug_assert_eq!(
@@ -597,6 +598,7 @@ struct LayoutTemplateInstantiator<'db> {
     path: LayoutOccurrencePath,
     body_landings: FxHashMap<LayoutRootId<'db>, TyId<'db>>,
     root_uses: Vec<LayoutRootUse<'db>>,
+    ty_cache: FxHashMap<TyId<'db>, TyId<'db>>,
 }
 
 impl<'db> LayoutTemplateInstantiator<'db> {
@@ -685,10 +687,8 @@ impl<'db> LayoutTemplateInstantiator<'db> {
         args.into_iter()
             .fold(base, |ty, arg| TyId::app_structural(db, ty, arg))
     }
-}
 
-impl<'db> TyFolder<'db> for LayoutTemplateInstantiator<'db> {
-    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+    fn fold_uncached(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         if let Some((idx, arg)) = self.param_argument(ty) {
             return if matches!(ty.data(db), TyData::TyParam(_)) {
                 self.type_argument(idx, arg)
@@ -740,6 +740,22 @@ impl<'db> TyFolder<'db> for LayoutTemplateInstantiator<'db> {
         }
 
         ty.super_fold_with(db, self)
+    }
+}
+
+impl<'db> TyFolder<'db> for LayoutTemplateInstantiator<'db> {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        if let Some(&cached) = self.ty_cache.get(&ty) {
+            return cached;
+        }
+        let root_use_count = self.root_uses.len();
+        let folded = self.fold_uncached(db, ty);
+        // Root uses carry occurrence-specific selectors and parameter landings.
+        // Folds that emit none can be reused, including deferred capture binding.
+        if self.root_uses.len() == root_use_count {
+            self.ty_cache.insert(ty, folded);
+        }
+        folded
     }
 
     fn fold_const_capture(
