@@ -2156,13 +2156,9 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
         }
 
         fn visit_ty(&mut self, ty: TyId<'db>) {
-            if matches!(
-                ty.data(self.db),
-                TyData::AssocTy(_) | TyData::QualifiedTy(_)
-            ) {
-                self.flags.insert(TyFlags::HAS_PROJECTION);
-            }
-            walk_ty(self, ty);
+            // Types form an interned DAG. Reuse each child's cached flags so
+            // repeated subtrees are not walked once for every occurrence.
+            self.flags |= ty.flags(self.db);
         }
 
         fn visit_var(&mut self, _: &TyVar) {
@@ -2191,9 +2187,13 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
 
     let mut collector = Collector {
         db,
-        flags: TyFlags::empty(),
+        flags: if matches!(ty.data(db), TyData::AssocTy(_) | TyData::QualifiedTy(_)) {
+            TyFlags::HAS_PROJECTION
+        } else {
+            TyFlags::empty()
+        },
     };
 
-    ty.visit_with(&mut collector);
+    walk_ty(&mut collector, ty);
     collector.flags
 }
