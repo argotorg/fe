@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/trait_const_bound_arg_requires_impl.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_const_bound_arg_requires_impl.fe:16:34
+   │
+16 │ fn ungated<T, const N: usize, U: Has<{ <Marker<T, N> as Size>::LEN }>>() {}
+   │                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Marker<T, const N: usize>` doesn't implement `Size`

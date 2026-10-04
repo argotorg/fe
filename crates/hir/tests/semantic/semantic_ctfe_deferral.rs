@@ -2235,6 +2235,11 @@ const fn guarded<const N: usize>() -> usize {
     let x = 10 / N
     if N == 0 { 0 } else { x }
 }
+const fn signed<const N: i8>() -> usize { if N < 0 { 1 } else if N >= 127 { 2 } else { 3 } }
+const fn ordered<const N: usize>() -> usize {
+    if N <= 3 { 1 } else if N > 7 { 2 } else if N != 5 { 3 } else { 4 }
+}
+const fn flags<const A: bool, const B: bool>() -> usize { if A == B { 3 } else { 7 } }
 "#),
     );
     let (module, _) = db.top_mod(file);
@@ -2251,7 +2256,9 @@ const fn guarded<const N: usize>() -> usize {
             .into_ready()
             .expect("generic declaration must have a description")
     };
-    for name in ["branch", "logical", "either", "chain"] {
+    for name in [
+        "branch", "logical", "either", "chain", "signed", "ordered", "flags",
+    ] {
         let description = describe(name);
         let ConstRepr::Term(term) = description.repr() else {
             panic!("{name} must describe a conditional term: {description:?}");
@@ -2302,6 +2309,26 @@ const fn guarded<const N: usize>() -> usize {
                 "{name}<{len}> must divide by zero: {outcome:?}"
             ),
         }
+    }
+    // Every ordering operator, and signed comparisons at the type's extrema,
+    // keep their meaning through the retained term.
+    for (len, expected) in [(3, 1), (4, 3), (5, 4), (7, 3), (8, 2)] {
+        let owner = BodyOwner::Func(function(&db, module, "ordered"));
+        let outcome =
+            assert_specialization_law(&db, owner, &[integer_const_arg(&db, usize_ty, len)]);
+        assert_integer_result(&db, outcome, usize_ty, expected);
+    }
+    let i8_ty = TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::I8)));
+    for (arg, expected) in [
+        (negative_const_arg(&db, i8_ty, 127), 1),
+        (negative_const_arg(&db, i8_ty, 1), 1),
+        (integer_const_arg(&db, i8_ty, 0), 3),
+        (integer_const_arg(&db, i8_ty, 126), 3),
+        (integer_const_arg(&db, i8_ty, 127), 2),
+    ] {
+        let owner = BodyOwner::Func(function(&db, module, "signed"));
+        let outcome = assert_specialization_law(&db, owner, &[arg]);
+        assert_integer_result(&db, outcome, usize_ty, expected);
     }
 }
 

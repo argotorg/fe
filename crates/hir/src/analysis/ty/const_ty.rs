@@ -4064,5 +4064,37 @@ mod tests {
                 ConstCaptureEnv::Bound(_)
             ));
         }
+
+        // Formals in another order, or another owner's formals, bind the
+        // capture rather than leaving it the identity.
+        let method_identity =
+            ConstCaptureEnv::Identity(ConstCaptureDomain::full(method.into(), ParamBasis::Full))
+                .complete(&db)
+                .unwrap();
+        let mut swapped = method_identity.values().to_vec();
+        assert_eq!(swapped.len(), 2);
+        swapped.reverse();
+        let swapped = CompleteSubst::new(method_identity.domain(), &db, swapped).unwrap();
+        assert!(matches!(
+            ConstCaptureEnv::from_subst(&db, swapped),
+            ConstCaptureEnv::Bound(_)
+        ));
+        let defaulted_identity = ConstCaptureEnv::Identity(ConstCaptureDomain::before(
+            defaulted,
+            ParamBasis::Full,
+            SourceParamIndex(1),
+        ))
+        .complete(&db)
+        .unwrap();
+        let foreign = CompleteSubst::new(
+            defaulted_identity.domain(),
+            &db,
+            method_identity.values()[..1].to_vec(),
+        )
+        .unwrap();
+        assert!(matches!(
+            ConstCaptureEnv::from_subst(&db, foreign),
+            ConstCaptureEnv::Bound(_)
+        ));
     }
 }

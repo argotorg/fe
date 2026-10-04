@@ -1,0 +1,20 @@
+// A generic constant's retained comparison keeps its meaning when
+// specialized: boolean equality and inequality, and signed extrema.
+const fn pick<const A: bool, const B: bool>() -> usize { if A == B { 3 } else { 7 } }
+
+const fn differ<const A: bool, const B: bool>() -> usize { if A != B { 1 } else { 0 } }
+
+const fn sign<const N: i8>() -> usize { if N < 0 { 1 } else if N >= 127 { 2 } else { 3 } }
+
+struct Layout<const K: usize> { data: [u8; K] }
+
+static_assert(pick<false, false>() == 3)
+static_assert(pick<false, true>() == 7)
+static_assert(pick<true, false>() == 7)
+static_assert(pick<true, true>() == 3)
+static_assert(differ<true, false>() == 1)
+static_assert(differ<true, true>() == 0)
+static_assert(sign<{ -128 }>() == 1)
+static_assert(sign<0>() == 3)
+static_assert(sign<127>() == 2)
+static_assert(core::size_of<Layout<{ pick<true, false>() }>>() == 7)
