@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/msg_selector_recursive_dynamic_abi_type.fe
+---
+error[9-0008]: unsupported ABI field type in msg variant `NodeCall`
+   ┌─ msg_selector_recursive_dynamic_abi_type.fe:12:23
+   │
+12 │     NodeCall { value: Node },
+   │                       ^^^^ `Node` cannot be represented in the Solidity ABI
+   │
+   = recursive ABI type `Node`
+
+error[9-0008]: unsupported ABI field type in msg variant `TreeCall`
+   ┌─ msg_selector_recursive_dynamic_abi_type.fe:14:23
+   │
+14 │     TreeCall { value: Tree },
+   │                       ^^^^ `Tree` cannot be represented in the Solidity ABI
+   │
+   = recursive ABI type `Tree`
+
+error[9-0008]: unsupported ABI field type in msg variant `GrowCall`
+   ┌─ msg_selector_recursive_dynamic_abi_type.fe:16:23
+   │
+16 │     GrowCall { value: Grow<u256> },
+   │                       ^^^^^^^^^^ `Grow<u256>` cannot be represented in the Solidity ABI
+   │
+   = recursive ABI type `Grow<u256>`

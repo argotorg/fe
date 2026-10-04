@@ -1,0 +1,17 @@
+use std::abi::DynArray
+
+// These layouts are finite, but selector component expansion must reject
+// dynamic-array recursion without recursing indefinitely.
+struct Node { children: DynArray<Node> }
+struct Wrap<T> { value: T }
+struct Tree { children: DynArray<Wrap<Tree>> }
+struct Grow<T> { children: DynArray<Grow<[T; 1]>> }
+
+msg RecursiveDynamicAbi {
+    #[selector = sol("node(uint256)")]
+    NodeCall { value: Node },
+    #[selector = sol("tree(uint256)")]
+    TreeCall { value: Tree },
+    #[selector = sol("grow(uint256)")]
+    GrowCall { value: Grow<u256> },
+}

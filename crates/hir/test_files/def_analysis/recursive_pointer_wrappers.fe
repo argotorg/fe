@@ -30,3 +30,6 @@ struct Mutual {
 }
 
 fn read_node(_ node: Node) -> u64 { node.value }
+
+// A dynamic-array handle has finite layout even when its element graph cycles.
+struct DynamicNode { children: std::abi::DynArray<DynamicNode> }

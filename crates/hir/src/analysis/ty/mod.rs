@@ -422,6 +422,8 @@ pub(crate) struct UnsupportedAbiStructField<'db> {
 /// their generated impls.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub(crate) struct AbiStructFieldChecks<'db> {
+    /// Finite runtime layouts whose ABI component graph is recursive.
+    pub(crate) recursive: Vec<parser::ast::AstPtr<parser::ast::Struct>>,
     /// Fields lacking a codec trait, each reported once at the field.
     pub(crate) unsupported: Vec<UnsupportedAbiStructField<'db>>,
     /// Structs whose generated impls go undiagnosed, because their fields or
@@ -463,6 +465,15 @@ pub(crate) fn abi_struct_field_checks<'db>(
             .recursive_cycle(db)
             .is_some()
         {
+            checks.reported_at_source.push(origin.clone());
+            continue;
+        }
+        if AdtRef::from(struct_)
+            .as_adt(db)
+            .recursive_abi_cycle(db)
+            .is_some()
+        {
+            checks.recursive.push(abi_origin.abi_struct.clone());
             checks.reported_at_source.push(origin.clone());
             continue;
         }

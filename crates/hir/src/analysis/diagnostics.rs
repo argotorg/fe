@@ -912,6 +912,12 @@ impl DiagnosticVoucher for crate::AbiStructDiagnostic {
                     .to_string(),
                 "remove `#[abi]`",
             ),
+            AbiStructDiagnosticKind::RecursiveType => (
+                5,
+                "recursive ABI type",
+                "this struct's ABI components recursively contain the struct".to_string(),
+                "ABI types must have a finite component description, including dynamic array elements",
+            ),
             AbiStructDiagnosticKind::UnsupportedFieldType { ty, missing } => (
                 4,
                 "unsupported `#[abi]` struct field type",

@@ -1,7 +1,16 @@
 use std::abi::DynArray
 
-// Reported once as a recursive type, not by the generated impls.
+// Finite runtime layout, but recursive ABI components: report once at the struct.
 #[abi]
 pub struct Node {
     pub children: DynArray<Node>,
 }
+
+struct Wrapped<T> { items: DynArray<T> }
+#[abi]
+struct Indirect { children: Wrapped<Indirect> }
+
+#[abi]
+struct Left { children: DynArray<Right> }
+#[abi]
+struct Right { children: DynArray<Left> }

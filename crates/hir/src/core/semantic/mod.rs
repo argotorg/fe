@@ -25,6 +25,7 @@ pub mod reference;
 mod storage_layout;
 pub mod symbol;
 use crate::analysis::HirAnalysisDb;
+use crate::analysis::ty::abi_ty::core_dyn_array_elem_ty;
 use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_func_path};
 use crate::analysis::ty::diagnostics::{ImplDiag, TyLowerDiag};
 use crate::analysis::ty::fold::TyFoldable;
@@ -3534,17 +3535,41 @@ impl<'db> Trait<'db> {
 
 // ADT recursion (semantic) --------------------------------------------------
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum AdtRecursionMode {
+    Layout,
+    Abi,
+}
+
 impl<'db> AdtDef<'db> {
     /// Detects a recursive ADT cycle that is not guarded by an indirect wrapper
     /// (e.g., pointer/reference). Returns the cycle members if the ADT is part
     /// of a cycle; otherwise returns None.
     pub fn recursive_cycle(self, db: &'db dyn HirAnalysisDb) -> Option<Vec<AdtCycleMember<'db>>> {
+        self.recursive_cycle_with(db, AdtRecursionMode::Layout)
+    }
+
+    /// Dynamic array elements contribute to an ABI type even though the array
+    /// handle stores no element inline in its runtime representation.
+    pub(crate) fn recursive_abi_cycle(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<Vec<AdtCycleMember<'db>>> {
+        self.recursive_cycle_with(db, AdtRecursionMode::Abi)
+    }
+
+    fn recursive_cycle_with(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        mode: AdtRecursionMode,
+    ) -> Option<Vec<AdtCycleMember<'db>>> {
         fn impl_check<'db>(
             db: &'db dyn HirAnalysisDb,
             root: AdtDef<'db>,
             adt: AdtDef<'db>,
             chain: &[AdtCycleMember<'db>],
             inline_parameters: &FxHashSet<TyId<'db>>,
+            mode: AdtRecursionMode,
         ) -> Option<Vec<AdtCycleMember<'db>>> {
             if adt == root && !chain.is_empty() {
                 return Some(chain.to_vec());
@@ -3556,7 +3581,7 @@ impl<'db> AdtDef<'db> {
             for (field_idx, field) in adt.fields(db).iter().enumerate() {
                 for (ty_idx, ty) in field.iter_types(db).enumerate() {
                     for field_adt_ref in
-                        collect_direct_adts(db, ty.instantiate_identity(), inline_parameters)
+                        collect_direct_adts(db, ty.instantiate_identity(), inline_parameters, mode)
                     {
                         chain.push(AdtCycleMember {
                             adt,
@@ -3570,6 +3595,7 @@ impl<'db> AdtDef<'db> {
                             lower_adt(db, field_adt_ref),
                             &chain,
                             inline_parameters,
+                            mode,
                         ) {
                             return Some(cycle);
                         }
@@ -3585,7 +3611,8 @@ impl<'db> AdtDef<'db> {
             self,
             self,
             &[],
-            ingot_inline_parameters(db, self.ingot(db)),
+            ingot_inline_parameters(db, self.ingot(db), mode),
+            mode,
         )
     }
 }
@@ -3896,7 +3923,13 @@ pub fn ingot_growing_cycles<'db>(
 fn inline_type_children<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
+    mode: AdtRecursionMode,
 ) -> Vec<(TyId<'db>, Option<TyId<'db>>)> {
+    if mode == AdtRecursionMode::Abi
+        && let Some(element) = core_dyn_array_elem_ty(db, ty)
+    {
+        return vec![(element, None)];
+    }
     if matches!(ty.data(db), TyData::TyApp(..)) {
         let (head, args) = ty.decompose_ty_app(db);
         if matches!(head.data(db), TyData::TyBase(TyBase::Prim(PrimTy::Ptr))) {
@@ -3943,6 +3976,7 @@ fn inline_type_children<'db>(
 fn ingot_inline_parameters<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
+    mode: AdtRecursionMode,
 ) -> FxHashSet<TyId<'db>> {
     let mut pending: Vec<_> = ingot
         .all_items(db)
@@ -3968,7 +4002,7 @@ fn ingot_inline_parameters<'db>(
                     .flat_map(|field| field.iter_types(db).map(|ty| ty.instantiate_identity())),
             );
         }
-        for &(child, gate) in inline_type_children(db, ty) {
+        for &(child, gate) in inline_type_children(db, ty, mode) {
             if let Some(param) = gate
                 && !reached.contains(&param)
             {
@@ -3988,6 +4022,7 @@ fn collect_direct_adts<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
     inline_parameters: &FxHashSet<TyId<'db>>,
+    mode: AdtRecursionMode,
 ) -> FxHashSet<AdtRef<'db>> {
     let mut pending = vec![ty];
     let mut seen = FxHashSet::default();
@@ -4000,7 +4035,7 @@ fn collect_direct_adts<'db>(
             adts.insert(adt.adt_ref(db));
         }
         pending.extend(
-            inline_type_children(db, ty)
+            inline_type_children(db, ty, mode)
                 .iter()
                 .filter_map(|(child, gate)| {
                     gate.is_none_or(|param| inline_parameters.contains(&param))

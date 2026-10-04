@@ -420,6 +420,18 @@ impl ModuleAnalysisPass for AbiStructLowerPass {
         let root = top_mod_ast(db, top_mod).syntax().clone();
         diags.extend(
             abi_struct_field_checks(db, top_mod)
+                .recursive
+                .iter()
+                .map(|ast_struct| {
+                    Box::new(AbiStructDiagnostic {
+                        kind: AbiStructDiagnosticKind::RecursiveType,
+                        file: top_mod.file(db),
+                        primary_range: ast_struct.syntax_node_ptr().text_range(),
+                    }) as _
+                }),
+        );
+        diags.extend(
+            abi_struct_field_checks(db, top_mod)
                 .unsupported
                 .iter()
                 .map(|field| {

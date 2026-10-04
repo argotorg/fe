@@ -3,12 +3,40 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/abi_recursive_struct.fe
 ---
-error[3-0002]: recursive type definition
+error[18-0005]: recursive ABI type
   ┌─ abi_recursive_struct.fe:4:1
   │
-4 │ ╭ ╭ #[abi]
-5 │ │ │ pub struct Node {
-6 │ │ │     pub children: DynArray<Node>,
-7 │ │ │ }
-  │ ╰─│─^ recursive type definition here
-  │   ╰─' recursion occurs here
+4 │ ╭ #[abi]
+5 │ │ pub struct Node {
+6 │ │     pub children: DynArray<Node>,
+7 │ │ }
+  │ ╰─^ this struct's ABI components recursively contain the struct
+  │
+  = ABI types must have a finite component description, including dynamic array elements
+
+error[18-0005]: recursive ABI type
+   ┌─ abi_recursive_struct.fe:10:1
+   │
+10 │ ╭ #[abi]
+11 │ │ struct Indirect { children: Wrapped<Indirect> }
+   │ ╰───────────────────────────────────────────────^ this struct's ABI components recursively contain the struct
+   │
+   = ABI types must have a finite component description, including dynamic array elements
+
+error[18-0005]: recursive ABI type
+   ┌─ abi_recursive_struct.fe:13:1
+   │
+13 │ ╭ #[abi]
+14 │ │ struct Left { children: DynArray<Right> }
+   │ ╰─────────────────────────────────────────^ this struct's ABI components recursively contain the struct
+   │
+   = ABI types must have a finite component description, including dynamic array elements
+
+error[18-0005]: recursive ABI type
+   ┌─ abi_recursive_struct.fe:15:1
+   │
+15 │ ╭ #[abi]
+16 │ │ struct Right { children: DynArray<Left> }
+   │ ╰─────────────────────────────────────────^ this struct's ABI components recursively contain the struct
+   │
+   = ABI types must have a finite component description, including dynamic array elements

@@ -34,6 +34,8 @@ pub struct AbiStructDiagnostic {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AbiStructDiagnosticKind {
     GenericStruct,
+    /// A recursive ABI component graph, even if its runtime layout is finite.
+    RecursiveType,
     /// `#[abi]` together with `#[event]` or `#[error]`.
     AttrConflict,
     /// A field whose type lacks traits the generated codec needs.
