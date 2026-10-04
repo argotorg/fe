@@ -1,0 +1,47 @@
+mod direct {
+    use core::ptr
+    struct Item { value: u64 }
+    struct Holder { pointer: *Item }
+    fn make() -> *Holder {
+        let item = ptr::alloc<Item>()
+        *item = Item { value: 42 }
+        let holder = ptr::alloc<Holder>()
+        *holder = Holder { pointer: item }
+        holder
+    }
+    fn forward() -> *Holder { make() }
+    fn check() {
+        let mut counter: u64 = 0
+        let mut holder = make()
+        for _ in 0..2 { holder = make() }
+        let pointer = (*holder).pointer
+        let item = *pointer
+        counter += 1
+        core::assert(item.value == 42)
+        core::assert(counter == 1)
+    }
+}
+
+mod forwarded {
+    use core::ptr
+    struct Item { value: u64 }
+    struct Holder { pointer: *Item }
+    fn make() -> *Holder {
+        let item = ptr::alloc<Item>()
+        *item = Item { value: 42 }
+        let holder = ptr::alloc<Holder>()
+        *holder = Holder { pointer: item }
+        holder
+    }
+    fn forward() -> *Holder { make() }
+    fn check() {
+        let mut counter: u64 = 0
+        let mut holder = make()
+        for _ in 0..2 { holder = forward() }
+        let pointer = (*holder).pointer
+        let item = *pointer
+        counter += 1
+        core::assert(item.value == 42)
+        core::assert(counter == 1)
+    }
+}
