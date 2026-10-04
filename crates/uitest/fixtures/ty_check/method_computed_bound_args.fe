@@ -1,0 +1,48 @@
+// A method's const parameter types are resolved under its declared bounds
+// with their const arguments left unevaluated, so evaluating a computed
+// bound argument never needs the parameters it is still discovering.
+trait Has<const N: usize> {}
+
+struct X {}
+
+impl Has<4> for X {}
+
+struct Plain {}
+
+impl Plain {
+    fn need<const N: usize, U: Has<{ N + 1 }>>() {}
+}
+
+struct Generic<T> {}
+
+impl<T> Generic<T> {
+    fn need<const N: usize, U: Has<{ N + 1 }>>() {}
+}
+
+trait Tr {
+    fn need<const N: usize, U: Has<{ N + 1 }>>()
+}
+
+impl Tr for Plain {
+    fn need<const N: usize, U: Has<{ N + 1 }>>() {}
+}
+
+trait Width { type Assoc }
+
+impl Width for u8 { type Assoc = usize }
+
+impl<T: Width<Assoc = usize>> Generic<T> {
+    fn projected<const N: T::Assoc, U: Has<{ N + 1 }>>() {}
+}
+
+fn valid() {
+    Plain::need<3, X>()
+    Generic<u8>::need<3, X>()
+    <Plain as Tr>::need<3, X>()
+    Generic<u8>::projected<3, X>()
+}
+
+fn wrong() {
+    Plain::need<4, X>()
+    Generic<u8>::need<4, X>()
+}

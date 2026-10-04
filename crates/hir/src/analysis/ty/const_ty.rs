@@ -3577,7 +3577,7 @@ impl<'db> ConstCaptureEnv<'db> {
             Self::Identity(plan) => {
                 let domain = plan.materialize(db);
                 let schema = domain.schema(db);
-                let values = domain
+                let values: Vec<_> = domain
                     .slots(db)
                     .map(|slot| {
                         schema
@@ -3585,6 +3585,16 @@ impl<'db> ConstCaptureEnv<'db> {
                             .expect("capture slot has a formal")
                     })
                     .collect();
+                // A cycle still discovering the owner's parameters hands out
+                // invalid formals until they settle. Until then the capture
+                // has no substitution, and its body is read in its own
+                // coordinates.
+                if values
+                    .iter()
+                    .any(|formal| matches!(formal.data(db), TyData::Invalid(_)))
+                {
+                    return None;
+                }
                 Some(CompleteSubst::new(domain, db, values).expect("identity capture domain"))
             }
         }
