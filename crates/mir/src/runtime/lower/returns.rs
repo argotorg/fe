@@ -745,6 +745,10 @@ pub(crate) fn evaluate_runtime_return_class<'db>(
     params: &[RuntimeClass<'db>],
     lookup: &mut impl FnMut(RuntimeInstanceKey<'db>) -> Option<RuntimeClass<'db>>,
 ) -> Option<RuntimeClass<'db>> {
+    // A body that never returns constrains no return class.
+    if summary.return_operands.is_empty() {
+        return None;
+    }
     let env = summary.env(db);
     let lookup: ReturnClassLookup<'_, 'db> = lookup;
     let carriers = CarrierInferer::with_space(
@@ -777,6 +781,22 @@ pub(crate) fn evaluate_runtime_return_class<'db>(
         return summary.default_return_class.clone();
     };
     Some(class)
+}
+
+/// Whether the declared return class carries every value the body returns:
+/// joining the body's class into it leaves it unchanged.
+pub(crate) fn declared_return_class_admits<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+    declared: &RuntimeClass<'db>,
+    returned: &RuntimeClass<'db>,
+) -> bool {
+    merged_return_class(
+        db,
+        vec![returned.clone(), declared.clone()],
+        semantic.normalized_result_ty(db).as_borrow(db).is_some(),
+    )
+    .is_some_and(|merged| runtime_classes_equivalent(db, &merged, declared))
 }
 
 fn merged_return_class<'db>(

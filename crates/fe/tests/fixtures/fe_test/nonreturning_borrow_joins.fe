@@ -28,6 +28,29 @@ fn dead_return(pointer: *Frame, fallback: mut Frame, flag: bool) -> mut Frame {
     fallback
 }
 
+fn after_returns(pointer: *Frame, fallback: mut Frame, flag: bool) -> mut Frame {
+    if flag { return mut *pointer } else { return mut *pointer }
+    fallback
+}
+
+fn dead_param(live: mut Frame, dead: mut Frame, flag: bool) -> mut Frame {
+    if flag {
+        live
+    } else {
+        fail()
+        dead
+    }
+}
+
+fn dead_raw(live: mut Frame, pointer: *Frame, flag: bool) -> mut Frame {
+    if flag {
+        live
+    } else {
+        fail()
+        mut *pointer
+    }
+}
+
 pub fn main() -> i32 {
     let pointer = ptr::alloc<u64>()
     *pointer = 41
@@ -38,18 +61,28 @@ pub fn main() -> i32 {
 
     let pointer = ptr::alloc<Frame>()
     *pointer = Frame { first: 7, value: 1000, last: 9 }
-    let frame = aggregate(pointer, flag: true)
-    frame.value += 23
     let mut fallback = Frame { first: 1, value: 2, last: 3 }
+    let frame = aggregate(pointer, flag: true)
+    frame.value += 1
     let frame = dead_continuation(pointer, fallback: mut fallback, flag: true)
-    frame.value += 4
+    frame.value += 2
     let frame = dead_return(pointer, fallback: mut fallback, flag: true)
+    frame.value += 3
+    let frame = after_returns(pointer, fallback: mut fallback, flag: true)
     frame.value += 5
-    core::assert(frame.first == 7)
-    core::assert(frame.value == 1032)
-    core::assert(frame.last == 9)
-    core::assert((*pointer).value == 1032)
-    core::assert(fallback.value == 2)
+    let frame = dead_param(live: mut *pointer, dead: mut fallback, flag: true)
+    frame.value += 8
+    let frame = dead_param(live: mut fallback, dead: mut *pointer, flag: true)
+    frame.value += 9
+    let frame = dead_raw(live: mut *pointer, pointer, flag: true)
+    frame.value += 10
+    let frame = dead_raw(live: mut fallback, pointer, flag: true)
+    frame.value += 11
+    core::assert(frame.first == 1)
+    core::assert((*pointer).first == 7)
+    core::assert((*pointer).value == 1029)
+    core::assert((*pointer).last == 9)
+    core::assert(fallback.value == 22)
     0
 }
 

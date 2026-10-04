@@ -13,7 +13,7 @@ use crate::{
 use super::{
     interface::runtime_param_locals,
     layout_evidence::layout_root_scalar_class,
-    returns::{declaration_runtime_return_class, runtime_return_class_for_body},
+    returns::{declaration_runtime_return_class, declared_return_class_admits},
     semantic_body::RuntimeSemanticBody,
     type_info::RuntimeTypeEnv,
 };
@@ -152,10 +152,14 @@ fn semantic_runtime_abi_plan<'db>(
     }
 }
 
+/// The body implements its declaration contract. The declaration is computed
+/// without the body, so it may be wider than the class the body returns, which
+/// return lowering then adapts; it must never be narrower.
 pub(crate) fn runtime_body_abi_plan<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
     body: &RuntimeSemanticBody<'db>,
+    returned: Option<&RuntimeClass<'db>>,
 ) -> RuntimeAbiPlan<'db> {
     let semantic = key
         .semantic(db)
@@ -165,24 +169,23 @@ pub(crate) fn runtime_body_abi_plan<'db>(
         semantic,
         "runtime ABI body must belong to its semantic instance"
     );
-    let visible = runtime_return_class_for_body(db, key, body);
-    let declaration_visible = declaration_runtime_return_class(db, key);
-    let body_layout = visible
-        .as_ref()
-        .and_then(RuntimeClass::aggregate_layout)
-        .map(|layout| layout.data(db));
-    let declaration_layout = declaration_visible
-        .as_ref()
-        .and_then(RuntimeClass::aggregate_layout)
-        .map(|layout| layout.data(db));
-    assert_eq!(
-        visible,
-        declaration_visible,
-        "admitted runtime body return ABI must match its declaration contract: semantic={:?}, params={:?}, body_layout={body_layout:#?}, declaration_layout={declaration_layout:#?}",
-        semantic.key(db),
-        key.params(db),
-    );
-    let mut plan = semantic_runtime_abi_plan(db, key, semantic, visible);
+    let declared = declaration_runtime_return_class(db, key);
+    if let Some(returned) = returned {
+        let returned_layout = returned.aggregate_layout().map(|layout| layout.data(db));
+        let declared_layout = declared
+            .as_ref()
+            .and_then(RuntimeClass::aggregate_layout)
+            .map(|layout| layout.data(db));
+        assert!(
+            declared.as_ref().is_some_and(|declared| {
+                declared_return_class_admits(db, semantic, declared, returned)
+            }),
+            "admitted runtime body returns must conform to their declaration contract: semantic={:?}, params={:?}, returned={returned:?}, declared={declared:?}, returned_layout={returned_layout:#?}, declared_layout={declared_layout:#?}",
+            semantic.key(db),
+            key.params(db),
+        );
+    }
+    let mut plan = semantic_runtime_abi_plan(db, key, semantic, declared);
     for (param, local) in plan.visible_params.iter_mut().zip(runtime_param_locals(
         db,
         semantic,

@@ -87,7 +87,7 @@ use super::{
     realize::{
         RuntimeArgSource, RuntimeValueUseEmitter, SelectedRuntimeArg, emit_runtime_value_use_plan,
     },
-    returns::declaration_runtime_return_class,
+    returns::{declaration_runtime_return_class, runtime_return_class_for_body},
     semantic_body::{RuntimeOperand, RuntimeSemanticBody},
     source::{
         RuntimeSourceMode, RuntimeSourceQuery, SemanticPlaceValueSource,
@@ -130,7 +130,8 @@ pub fn lower_to_rmir<'db>(
     }
     check_runtime_body_supported(db, semantic.key(db), &normalized_body)?;
     let facts = BodyStaticFacts::new(db, &normalized_body);
-    let abi = runtime_body_abi_plan(db, key, &normalized_body);
+    let returned = runtime_return_class_for_body(db, key, &normalized_body);
+    let abi = runtime_body_abi_plan(db, key, &normalized_body, returned.as_ref());
     let param_locals = crate::runtime::lower::interface::runtime_param_locals(
         db,
         semantic,
@@ -142,11 +143,9 @@ pub fn lower_to_rmir<'db>(
         key.params(db),
         &param_locals,
     );
-    let visible_ret_class = abi.returns.visible.clone();
-    if let Some(ret_class) = visible_ret_class
-        .clone()
-        .filter(|class| class.contains_transport(db))
-    {
+    // Return locals keep the body's own class; return lowering adapts it to
+    // the declaration contract.
+    if let Some(ret_class) = returned.filter(|class| class.contains_transport(db)) {
         let return_locals = normalized_body
             .normalized
             .blocks
