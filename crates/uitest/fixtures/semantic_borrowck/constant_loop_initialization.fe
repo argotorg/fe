@@ -1,0 +1,87 @@
+mod one_member {
+    use core::ptr
+    fn inspect(_ cursor: mut u256) -> u256 {
+        let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+        
+        let mut i: u256 = 0
+        while i < 1 {
+            let data = ptr::MemBuffer::alloc(32)
+            *ptr::cast<u8, u256>(data.ptr()) = 7
+            children[i as usize] = data.span()
+            i += 1
+        }
+        let child = children[0]
+        cursor += 1
+        *ptr::cast<u8, u256>(child.ptr())
+    }
+    fn run() -> u256 {
+        let mut cursor: u256 = 0
+        inspect(mut cursor)
+    }
+}
+
+mod two_members {
+    use core::ptr
+    fn inspect(_ cursor: mut u256) -> u256 {
+        let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+        
+        let mut i: u256 = 0
+        while i < 2 {
+            let data = ptr::MemBuffer::alloc(32)
+            *ptr::cast<u8, u256>(data.ptr()) = 7
+            children[i as usize] = data.span()
+            i += 1
+        }
+        let child = children[1]
+        cursor += 1
+        *ptr::cast<u8, u256>(child.ptr())
+    }
+    fn run() -> u256 {
+        let mut cursor: u256 = 0
+        inspect(mut cursor)
+    }
+}
+
+mod same_member {
+    use core::ptr
+    fn inspect(_ cursor: mut u256) -> u256 {
+        let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+        
+        let mut i: u256 = 0
+        while i < 2 {
+            let data = ptr::MemBuffer::alloc(32)
+            *ptr::cast<u8, u256>(data.ptr()) = 7
+            children[0 as usize] = data.span()
+            i += 1
+        }
+        let child = children[0]
+        cursor += 1
+        *ptr::cast<u8, u256>(child.ptr())
+    }
+    fn run() -> u256 {
+        let mut cursor: u256 = 0
+        inspect(mut cursor)
+    }
+}
+
+mod header_constant {
+    use core::ptr
+    fn inspect(_ cursor: mut u256) -> u256 {
+        let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+        let limit: u256 = 2
+        let mut i: u256 = 0
+        while i < limit {
+            let data = ptr::MemBuffer::alloc(32)
+            *ptr::cast<u8, u256>(data.ptr()) = 7
+            children[i as usize] = data.span()
+            i += 1
+        }
+        let child = children[1]
+        cursor += 1
+        *ptr::cast<u8, u256>(child.ptr())
+    }
+    fn run() -> u256 {
+        let mut cursor: u256 = 0
+        inspect(mut cursor)
+    }
+}
