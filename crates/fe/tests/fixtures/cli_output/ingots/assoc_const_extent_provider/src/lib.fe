@@ -1,0 +1,11 @@
+pub trait Size { const LEN: usize }
+
+pub struct Marker<const N: usize> {}
+
+impl<const N: usize> Size for Marker<N> { const LEN: usize = N + 1 }
+
+pub fn take<const N: usize>(_ x: [u8; <Marker<N> as Size>::LEN]) -> [u8; <Marker<N> as Size>::LEN] {
+    x
+}
+
+pub trait Scaled<const N: usize> { const LEN: usize }

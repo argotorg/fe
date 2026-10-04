@@ -1074,37 +1074,176 @@ fn canonicalize_const_expr_for_mode<'db>(
 
 /// Unification identifies an associated or inherent const use by its trait
 /// instance (or impl and receiver) and name. The scope and assumptions it is
-/// solved under only decide how evaluation finds it; solving reads just the
-/// scope's ingot. Once evaluation has used them, the comparison form keeps
-/// the ingot root and no assumptions, so the uses one constant gets in
-/// different items compare equal.
-struct EraseConstUseEnv;
+/// solved under only decide how evaluation finds it.
+pub(crate) enum RebaseConstUseEnv<'db> {
+    /// The comparison form, once evaluation has used the environment: the
+    /// root of the ingot defining the constant (the trait's, or the inherent
+    /// impl's) and no assumptions, so the uses one constant gets in different
+    /// items and ingots compare equal. Once its implementing type is known, a
+    /// use selects the same impl from any origin: coherence keeps a trait's
+    /// impls in the trait's ingot or the implementing type's.
+    Identity,
+    /// A stored constraint's use, which is evaluated later: the root of the
+    /// ingot it was written in, where selection for a generic `Self` starts
+    /// (a downstream blanket impl lives there), and the predicates, in
+    /// comparison form, that its parameters reach. Selecting the use's impl
+    /// only proves predicates whose subject is built from those parameters,
+    /// or from parameters that such predicates mention; the rest of the list
+    /// is not evidence, and solving under it would evaluate its constants.
+    Stored(Vec<StoredPredicate<'db>>),
+}
 
-impl<'db> TyFolder<'db> for EraseConstUseEnv {
+pub(crate) struct StoredPredicate<'db> {
+    inst: TraitInstId<'db>,
+    subject_params: FxHashSet<TyParam<'db>>,
+    params: FxHashSet<TyParam<'db>>,
+}
+
+/// The generic parameters `value` mentions.
+fn mentioned_params<'db>(
+    db: &'db dyn HirAnalysisDb,
+    value: &impl TyVisitable<'db>,
+) -> FxHashSet<TyParam<'db>> {
+    struct Params<'db> {
+        db: &'db dyn HirAnalysisDb,
+        found: FxHashSet<TyParam<'db>>,
+    }
+
+    impl<'db> TyVisitor<'db> for Params<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_param(&mut self, param: &TyParam<'db>) {
+            self.found.insert(param.clone());
+        }
+
+        fn visit_const_param(&mut self, param: &TyParam<'db>, const_ty_ty: TyId<'db>) {
+            self.found.insert(param.clone());
+            self.visit_ty(const_ty_ty);
+        }
+    }
+
+    let mut params = Params {
+        db,
+        found: FxHashSet::default(),
+    };
+    value.visit_with(&mut params);
+    params.found
+}
+
+impl<'db> RebaseConstUseEnv<'db> {
+    /// The environment a list's uses are stored with: its predicates in
+    /// comparison form, which cannot refer back to the list, together with
+    /// the bounds they imply, such as `T: Gate` from `W: Witness<Item = T>`
+    /// where `Witness::Item: Gate`, whose subject differs from theirs.
+    pub(crate) fn stored(
+        db: &'db dyn HirAnalysisDb,
+        predicates: impl IntoIterator<Item = TraitInstId<'db>>,
+    ) -> Self {
+        let predicates = PredicateListId::new(
+            db,
+            predicates
+                .into_iter()
+                .map(|inst| inst.fold_with(db, &mut Self::Identity))
+                .collect::<Vec<_>>(),
+        );
+        Self::Stored(
+            predicates
+                .extend_all_bounds(db)
+                .list(db)
+                .iter()
+                .map(|&inst| StoredPredicate {
+                    inst,
+                    subject_params: mentioned_params(db, &inst.self_ty(db)),
+                    params: mentioned_params(db, &inst),
+                })
+                .collect(),
+        )
+    }
+
+    /// The scope and assumptions a use written at `origin` of a constant
+    /// defined at `defining` gets, given the parameters the use mentions.
+    fn env(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        origin: ScopeId<'db>,
+        defining: ScopeId<'db>,
+        mut reached: FxHashSet<TyParam<'db>>,
+    ) -> (ScopeId<'db>, PredicateListId<'db>) {
+        let (scope, assumptions) = match self {
+            Self::Identity => (defining, PredicateListId::empty_list(db)),
+            Self::Stored(predicates) => {
+                let mut kept = vec![false; predicates.len()];
+                while let Some(idx) = predicates.iter().enumerate().position(|(idx, pred)| {
+                    !kept[idx]
+                        && (pred.subject_params.is_empty()
+                            || !pred.subject_params.is_disjoint(&reached))
+                }) {
+                    kept[idx] = true;
+                    reached.extend(predicates[idx].params.iter().cloned());
+                }
+                let kept = predicates
+                    .iter()
+                    .zip(kept)
+                    .filter_map(|(pred, kept)| kept.then_some(pred.inst))
+                    .collect::<Vec<_>>();
+                (origin, PredicateListId::new(db, kept))
+            }
+        };
+        (
+            ScopeId::Item(ItemKind::TopMod(scope.ingot(db).root_mod(db))),
+            assumptions,
+        )
+    }
+}
+
+impl<'db> TyFolder<'db> for RebaseConstUseEnv<'db> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        let ty = ty.super_fold_with(db, self);
+        // A use's environment is replaced, never folded: it can hold the
+        // whole list the use was lowered under.
         let TyData::ConstTy(const_ty) = ty.data(db) else {
-            return ty;
+            return ty.super_fold_with(db, self);
         };
         let ConstTyData::Abstract(expr, expected_ty) = const_ty.data(db) else {
-            return ty;
+            return ty.super_fold_with(db, self);
         };
-        let root =
-            |scope: ScopeId<'db>| ScopeId::Item(ItemKind::TopMod(scope.ingot(db).root_mod(db)));
-        let none = PredicateListId::empty_list(db);
-        let erased = match expr.data(db) {
+        let rebased = match expr.data(db) {
             ConstExpr::TraitConst(use_) => {
-                ConstExpr::TraitConst(use_.with_env(root(use_.origin_scope()), none))
+                let inst = use_.inst().fold_with(db, self);
+                let (scope, assumptions) = self.env(
+                    db,
+                    use_.origin_scope(),
+                    inst.def(db).scope(),
+                    mentioned_params(db, &inst),
+                );
+                ConstExpr::TraitConst(AssocConstUse::new(scope, assumptions, inst, use_.name()))
             }
             ConstExpr::InherentConst(use_) => {
-                ConstExpr::InherentConst(use_.with_env(root(use_.origin_scope()), none))
+                let receiver_ty = use_.receiver_ty().fold_with(db, self);
+                let (scope, assumptions) = self.env(
+                    db,
+                    use_.origin_scope(),
+                    use_.impl_().scope(),
+                    mentioned_params(db, &receiver_ty),
+                );
+                ConstExpr::InherentConst(InherentConstUse::new(
+                    scope,
+                    assumptions,
+                    use_.impl_(),
+                    receiver_ty,
+                    use_.name(),
+                ))
             }
-            _ => return ty,
+            _ => return ty.super_fold_with(db, self),
         };
-        let expr = ConstExprId::new(db, erased);
+        let expected_ty = expected_ty.fold_with(db, self);
         TyId::const_ty(
             db,
-            ConstTyId::new(db, ConstTyData::Abstract(expr, *expected_ty)),
+            ConstTyId::new(
+                db,
+                ConstTyData::Abstract(ConstExprId::new(db, rebased), expected_ty),
+            ),
         )
     }
 }
@@ -1636,7 +1775,7 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
         }
         _ => canonicalized,
     };
-    compared.fold_with(db, &mut EraseConstUseEnv)
+    compared.fold_with(db, &mut RebaseConstUseEnv::Identity)
 }
 
 pub(crate) struct ValidatedUnEvaluatedConst<'db> {
