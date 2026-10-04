@@ -13,13 +13,12 @@ use std::{
 };
 
 use cranelift_entity::EntityRef;
-use num_traits::ToPrimitive;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        FieldIndex, SConst, SemConstScalar, SemConstValue, SemOrigin, SemanticInstance,
+        FieldIndex, SConst, SemOrigin, SemanticInstance,
         capability::{
             birth::AllocationBirth,
             external::{ExternalSource, MemoryOffset},
@@ -55,7 +54,7 @@ use super::{
     inventory::{Inventory, unbounded_referents_diag},
     ir::{BoundaryRequirement, PendingSemanticValidation},
     loop_certificate::{FrontierCandidate, PrefixCertificate},
-    scalar::{CONDITION_BUDGET, ScalarDemand},
+    scalar::{CONDITION_BUDGET, ScalarDemand, constant_index},
     summary::CallSummary,
 };
 
@@ -235,17 +234,8 @@ impl<'db> Borrowck<'db> {
             return IndexExpr::Runtime(value);
         };
         match expr {
-            NExpr::Const(SConst::Value(constant)) => {
-                if let SemConstValue::Scalar {
-                    value: SemConstScalar::Int { value: integer },
-                    ..
-                } = constant.value().value(self.db)
-                    && let Some(integer) = integer.to_usize()
-                {
-                    return IndexExpr::Const(integer);
-                }
-                IndexExpr::Runtime(value)
-            }
+            NExpr::Const(constant) => constant_index(self.db, constant)
+                .map_or(IndexExpr::Runtime(value), IndexExpr::Const),
             NExpr::Forward { src } => self.index(src.value),
             NExpr::ScalarCast { value: source, to }
                 if self.lossless_scalar_cast(source.value, *to) =>

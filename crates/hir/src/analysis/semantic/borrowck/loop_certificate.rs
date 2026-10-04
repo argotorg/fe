@@ -33,7 +33,7 @@ use crate::{
 
 use super::{
     control::{LoopEdge, ValidatedLoop, validated_loops},
-    scalar::integer_model,
+    scalar::{constant_index, integer_model},
     solver::{BorrowSummaryMode, Borrowck},
 };
 
@@ -189,7 +189,7 @@ fn frontier_candidate<'db>(
     {
         return Err(FrontierRejection::UnsupportedFrontier);
     }
-    // A scalar operand may reach the comparison through copies of the parameter.
+    // The bound is invariant: an input parameter or an exactly represented literal.
     let mut bound = rhs;
     while let Some((_, NExpr::Forward { src })) = body.defining_expr(bound) {
         bound = src.value;
@@ -197,7 +197,9 @@ fn frontier_candidate<'db>(
     if !matches!(
         body.values[bound.index()].definition,
         NValueDefinition::EntryParam { .. }
-    ) {
+    ) && !matches!(body.defining_expr(bound), Some((_, NExpr::Const(constant)))
+        if constant_index(db, constant).is_some())
+    {
         return Err(FrontierRejection::UnsupportedBound);
     }
     if integer_model(db, body.values[lhs.index()].ty)
@@ -223,14 +225,14 @@ impl<'db> Borrowck<'db> {
         candidate: FrontierCandidate,
     ) -> Result<FrontierStep, FrontierRejection> {
         let loop_region = &candidate.loop_region;
-        // Besides copies of the bound, the header only reads the frontier and compares.
+        // Besides defining or copying the bound, the header only reads and compares the frontier.
         let bound = self.index(candidate.bound);
         let header: Vec<_> = self.body.blocks[loop_region.header.index()]
             .statements
             .iter()
             .filter(|statement| {
                 !matches!(&statement.kind,
-                    NStatementKind::Define { result, expr: NExpr::Forward { .. } }
+                    NStatementKind::Define { result, expr: NExpr::Forward { .. } | NExpr::Const(_) }
                         if self.index(*result) == bound)
             })
             .collect();
@@ -866,10 +868,22 @@ fn repeat_cell(_ cursor: mut u256, _ count: u256) -> u256 {
                 FrontierRejection::UnsupportedCondition,
             ),
             (
-                "let mut i: u256 = 0\n    while i < 4 {",
+                "let mut i: u256 = 0\n    while i < count + 1 {",
                 "children[i as usize] = data.span()",
                 "i += 1",
                 FrontierRejection::UnsupportedBound,
+            ),
+            (
+                "let mut i: u256 = 0\n    while i < 0x100000000000000000000000000000000 {",
+                "children[i as usize] = data.span()",
+                "i += 1",
+                FrontierRejection::UnsupportedBound,
+            ),
+            (
+                "let mut i: i256 = 0\n    while i < 4 {",
+                "children[0] = data.span()",
+                "i += 1",
+                FrontierRejection::UnsupportedScalarType,
             ),
             (
                 "let mut i: u256 = 0\n    while i < count {",
