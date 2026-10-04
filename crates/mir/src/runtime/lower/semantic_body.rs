@@ -82,7 +82,8 @@ impl<'db> RuntimeSemanticBody<'db> {
     ) -> Result<Self, SemanticNormalizationFailure<'db>> {
         let artifacts = normalize_runtime_semantic_body(db, instance)?;
         let source = instance.body(db).clone();
-        let representations = NLayoutLocals::new(&artifacts.body, &artifacts.layout_plan, &source);
+        let representations =
+            NLayoutLocals::new(db, &artifacts.body, &artifacts.layout_plan, &source);
         Ok(Self {
             normalized: artifacts.body,
             layout_plan: artifacts.layout_plan,

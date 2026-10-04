@@ -1,0 +1,55 @@
+// A concrete instance demands the layout of every type it consumes, so a
+// checked fault in a specialized extent is reported where it is demanded,
+// labelled where the length is written: in a repeat, in an unused repeat, in
+// an array a caller receives, returns from a folded call or passes, behind an
+// index, in the arm of a condition that a use selects, and in a field of an
+// unused parameter.
+const fn minus(_ n: usize) -> usize { n - 1 }
+
+const fn lengths(_ n: usize) -> usize {
+    let values: [usize; 2] = [1, 2]
+    values[n]
+}
+
+fn first<const N: usize>() -> u8 { [7 as u8; minus(N)][0] }
+
+fn unused<const N: usize>() { let _values = [7 as u8; { 10 / N }] }
+
+fn make<const N: usize>(_ value: u8) -> [u8; { N - 1 }] { [value; { N - 1 }] }
+
+fn indexed<const N: usize>() -> u8 { [7 as u8; lengths(N)][0] }
+
+fn selected<const N: usize>() -> u8 { [7 as u8; { if N == 0 { 1 } else { 10 / (N - 1) } }][0] }
+
+struct Words<const N: usize> { values: [u8; minus(N)] }
+
+fn produce<const N: usize>() -> [u8; { N - 1 }] { todo() }
+
+fn take<const N: usize>(_ values: [u8; { N - 1 }]) -> u8 { values[0] }
+
+fn runtime(_ value: u8) -> u8 { value }
+
+fn underflow() -> u8 { first<0>() }
+
+fn divide() { unused<0>() }
+
+fn receive() { let _values = make<0>(runtime(7)) }
+
+fn bounds() -> u8 { indexed<2>() }
+
+fn condition() -> u8 { selected<1>() }
+
+fn returned() -> u8 { produce<0>()[0] }
+
+fn passed() -> u8 {
+    let values: [u8; 0] = []
+    take<0>(values)
+}
+
+fn ignored(_ words: Words<0>) {}
+
+pub fn main() -> i32 {
+    unused<2>()
+    let _values = make<2>(runtime(7))
+    (first<2>() + indexed<1>() + selected<0>() + selected<2>() + take<2>([runtime(1)])) as i32
+}

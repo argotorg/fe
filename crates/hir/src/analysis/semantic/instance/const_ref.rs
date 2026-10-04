@@ -606,15 +606,18 @@ fn semantic_callee_key_with_assumptions<'db>(
         && (nominal_func.containing_impl(db).is_some() || !nominal_func.is_associated_func(db))
         && callable.trait_inst().is_none()
         && !has_callable_layout_slots(db, nominal_func)
+        && !collect_flags(db, subst_args.as_slice())
+            .intersects(TyFlags::HAS_INVALID | TyFlags::HAS_VAR | TyFlags::HAS_PROJECTION)
         && is_ground(
-            collect_flags(db, subst_args.as_slice())
-                | collect_flags(db, effect_providers.as_slice())
-                | collect_flags(db, effect_args),
+            collect_flags(db, effect_providers.as_slice()) | collect_flags(db, effect_args),
         )
     {
-        // A concrete free or inherent function sheds caller context when its
-        // bounds hold and its signature and effect keys normalize the same
-        // without the caller's assumptions.
+        // A free or inherent function sheds caller context when its
+        // arguments, signature and effect keys normalize the same without the
+        // caller's assumptions, and its ground bounds hold without them. A
+        // bound on a caller's parameter is one of the callee instance's own
+        // assumptions, so equal calls written in different bodies share one
+        // instance.
         let empty = PredicateListId::empty_list(db);
         let scope = nominal_func.scope();
         let caller_scope = impl_env.normalization_scope(db);
@@ -624,17 +627,20 @@ fn semantic_callee_key_with_assumptions<'db>(
         let bounds = collect_func_decl_constraints(db, CallableDef::Func(nominal_func), true)
             .instantiate(db, &subst_args);
         let independent = bounds.list(db).iter().copied().all(|bound| {
-            matches!(
-                is_goal_satisfiable(db, TraitSolveCx::new(db, scope), bound),
-                GoalSatisfiability::Satisfied(_)
-            )
-        }) && (0..nominal_func.arg_tys(db).len()).all(|idx| {
-            same_without_caller(
-                callable
-                    .arg_ty(db, idx)
-                    .expect("nominal input arity changed"),
-            )
-        }) && same_without_caller(callable.ret_ty(db))
+            collect_flags(db, bound).contains(TyFlags::HAS_PARAM)
+                || matches!(
+                    is_goal_satisfiable(db, TraitSolveCx::new(db, scope), bound),
+                    GoalSatisfiability::Satisfied(_)
+                )
+        }) && subst_args.iter().all(|&arg| same_without_caller(arg))
+            && (0..nominal_func.arg_tys(db).len()).all(|idx| {
+                same_without_caller(
+                    callable
+                        .arg_ty(db, idx)
+                        .expect("nominal input arity changed"),
+                )
+            })
+            && same_without_caller(callable.ret_ty(db))
             && checked_effect_inputs
                 .iter()
                 .all(|&(_, ty)| same_without_caller(ty));

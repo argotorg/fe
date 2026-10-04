@@ -1262,7 +1262,8 @@ fn select<const ROOT: u256>(
     assert_eq!(value.schema.components[0].rank(), 2);
     assert_eq!(evidence.params, [*descriptor]);
     assert_eq!(evidence.locals[descriptor.index()].map_ty.rank(), 2);
-    let representations = NLayoutLocals::new(&normalized.body, &normalized.layout_plan, source);
+    let representations =
+        NLayoutLocals::new(&db, &normalized.body, &normalized.layout_plan, source);
     assert_eq!(evidence.semantic_values.len(), representations.locals.len());
     assert_eq!(evidence.output.schema.components.len(), 1);
     assert_eq!(evidence.output.schema.components[0].rank(), 0);
@@ -2344,6 +2345,7 @@ fn replace<const ROOT: usize>(
             })
             .expect("fresh call must receive a dynamically projected output witness");
     let representations = NLayoutLocals::new(
+        &db,
         &normalized.body,
         &normalized.layout_plan,
         instance.body(&db),

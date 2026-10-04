@@ -2504,7 +2504,7 @@ fn layout_evidence_body_query<'db>(
     let normalized = artifacts.body;
     let layout_plan = artifacts.layout_plan;
     let source = owner.body(db);
-    let representations = NLayoutLocals::new(&normalized, &layout_plan, source);
+    let representations = NLayoutLocals::new(db, &normalized, &layout_plan, source);
     let template_owner = normalized.template_owner;
     let hir_body = template_owner.body(db);
     let identity_key = identity_semantic_instance_key(db, template_owner);

@@ -1,11 +1,14 @@
+use cranelift_entity::EntityRef;
 use fe_hir::{
     analysis::{
         semantic::{
             CtfeError, EvalFailure, EvalOutcome, GenericSubst, SConst, SExpr, SStmtKind,
-            SemConstId, SemConstScalar, SemConstValue, SemanticInstanceKey,
-            canonicalize_semantic_consts, eval_body_owner_const, eval_const_instance,
-            get_or_build_semantic_instance, identity_semantic_instance_key, reify_runtime_const,
-            reify_runtime_const_for_ty, sem_const_ty,
+            SemConstId, SemConstScalar, SemConstValue, SemanticDiagnosticKind, SemanticInstanceKey,
+            SemanticNormalizationFailure, canonicalize_semantic_consts, eval_body_owner_const,
+            eval_const_instance, get_or_build_semantic_instance, identity_semantic_instance_key,
+            normalize_runtime_semantic_body, normalize_semantic_body,
+            normalized::{NLayoutLocals, NValueId},
+            reify_runtime_const, reify_runtime_const_for_ty, sem_const_ty,
         },
         ty::{
             const_ty::ConstTyId,
@@ -1013,6 +1016,443 @@ fn outer<const A: usize, const B: usize>() {}
         assert!(
             aggregate_count >= 4,
             "expected nested aggregate constants in the semantic body"
+        );
+    }
+}
+
+const DEPENDENT_LENGTHS: &str = r#"
+const fn word_len(_ n: usize) -> usize { n / 32 + if n % 32 == 0 { 0 } else { 1 } }
+const fn plus(_ n: usize) -> usize { n + 1 }
+trait Width { const N: usize = 1 }
+struct Two {}
+impl Width for Two { const N: usize = 2 }
+struct Five {}
+impl Width for Five { const N: usize = 5 }
+struct Packed<const N: usize> { words: [u256; word_len(N)] }
+impl<const N: usize> Packed<N> {
+    const ZERO: Packed<N> = Packed { words: [0; word_len(N)] }
+    const fn filled(_ word: u256) -> Self { Self { words: [word; word_len(N)] } }
+}
+const fn packed_words<const N: usize>() -> [u256; word_len(N)] { Packed<N>::filled(7).words }
+const fn zero_words<const N: usize>() -> [u256; word_len(N)] { Packed<N>::ZERO.words }
+const fn computed<const N: usize>() -> [u8; { N + 1 }] { [1; { N + 1 }] }
+const fn called<const N: usize>() -> [u8; plus(N)] { [2; plus(N)] }
+const fn cast<const N: u8>() -> [u8; { N as usize }] { [3; { N as usize }] }
+const fn summed<T0: Width, T1: Width>() -> [u8; { T0::N + T1::N }] { [4; { T0::N + T1::N }] }
+const fn composed<const N: usize>() -> [u8; word_len(plus(N))] { [5; word_len(plus(N))] }
+const fn branch<const N: usize>() -> u8 { [6 as u8; { if N == 0 { 1 } else { N } }][0] }
+const fn bare<const N: usize>() -> [u8; N] { [7; N] }
+const fn projected<T: Width>() -> [u8; T::N] { [8; T::N] }
+const fn annotated<const N: usize>() -> [u8; word_len(N)] {
+    let values: [u8; word_len(N)] = [9; word_len(N)]
+    values
+}
+const fn conditional<const N: usize>() -> [u8; { if N > 1 && N < 9 { N } else if N == 0 { 1 } else { 2 } }] {
+    [10; { if N > 1 && N < 9 { N } else if N == 0 { 1 } else { 2 } }]
+}
+const fn sized<T>() -> [u8; { core::size_of<T>() as usize }] { [11; { core::size_of<T>() as usize }] }
+const fn concrete_sized() -> [u8; 32] { sized<u256>() }
+const fn concrete_sized_small() -> [u8; 2] { sized<u16>() }
+const fn concrete_summed() -> [u8; 7] { summed<Two, Five>() }
+const fn concrete_projected() -> [u8; 5] { projected<Five>() }
+const fn concrete_cast() -> [u8; 6] { cast<6>() }
+const fn concrete_branch() -> u8 { branch<0>() }
+"#;
+
+fn array_elems<'db>(db: &'db HirAnalysisTestDb, value: SemConstId<'db>) -> Vec<usize> {
+    let SemConstValue::Array { elems, .. } = value.value(db) else {
+        panic!("expected array, got {:?}", value.value(db));
+    };
+    elems.iter().map(|elem| scalar(db, *elem)).collect()
+}
+
+#[test]
+fn dependent_repeat_lengths_specialize() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("dependent_lengths.fe".into(), DEPENDENT_LENGTHS);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let usize_ty = TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
+    let evaluate = |name: &str, len: Option<u32>| {
+        let owner = BodyOwner::Func(function(&db, module, name));
+        let Some(len) = len else {
+            return eval_body_owner_const(
+                &db,
+                owner,
+                GenericSubst::for_body_owner(&db, owner, vec![]),
+            )
+            .into_ready()
+            .unwrap_or_else(|| panic!("{name} must evaluate"));
+        };
+        let identity = identity_semantic_instance_key(&db, owner);
+        assert!(
+            matches!(
+                eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![])),
+                EvalOutcome::Blocked(_)
+            ),
+            "{name} must wait for its length"
+        );
+        let arg = TyId::new(
+            &db,
+            TyData::ConstTy(ConstTyId::integer(&db, usize_ty, BigInt::from(len))),
+        );
+        let key = SemanticInstanceKey::new(
+            &db,
+            owner,
+            GenericSubst::for_body_owner(&db, owner, vec![arg]),
+            identity.effect_providers(&db),
+            identity.impl_env(&db),
+        );
+        let instance = get_or_build_semantic_instance(&db, key);
+        let value = eval_const_instance(&db, instance)
+            .into_ready()
+            .unwrap_or_else(|| panic!("{name}<{len}> must evaluate"));
+        let expected = key.typed_body(&db).result_ty();
+        let reified = reify_runtime_const_for_ty(&db, instance, expected, value)
+            .unwrap_or_else(|| panic!("{name}<{len}> must reify"));
+        assert_eq!(reify_runtime_const(&db, instance, value), Some(reified));
+        assert_eq!(
+            sem_const_ty(&db, reified),
+            instance.normalized_ty(&db, expected),
+            "{name}<{len}> type"
+        );
+        assert!(!sem_const_ty(&db, reified).has_param(&db));
+        reified
+    };
+    for (bits, words) in [
+        (0, 0),
+        (1, 1),
+        (31, 1),
+        (32, 1),
+        (33, 2),
+        (63, 2),
+        (64, 2),
+        (65, 3),
+    ] {
+        for (name, element) in [("packed_words", 7), ("zero_words", 0)] {
+            assert_eq!(
+                array_elems(&db, evaluate(name, Some(bits))),
+                vec![element; words],
+                "{name}<{bits}>"
+            );
+        }
+        assert_eq!(
+            array_elems(&db, evaluate("annotated", Some(bits))),
+            vec![9; words],
+            "annotated<{bits}>"
+        );
+    }
+    for (name, len, expected) in [
+        ("computed", 0, vec![1]),
+        ("computed", 3, vec![1; 4]),
+        ("called", 3, vec![2; 4]),
+        ("composed", 31, vec![5]),
+        ("composed", 32, vec![5; 2]),
+        ("bare", 0, vec![]),
+        ("bare", 2, vec![7; 2]),
+        ("conditional", 0, vec![10]),
+        ("conditional", 1, vec![10; 2]),
+        ("conditional", 5, vec![10; 5]),
+        ("conditional", 9, vec![10; 2]),
+    ] {
+        assert_eq!(
+            array_elems(&db, evaluate(name, Some(len))),
+            expected,
+            "{name}<{len}>"
+        );
+    }
+    for (name, expected) in [
+        ("concrete_summed", vec![4; 7]),
+        ("concrete_projected", vec![8; 5]),
+        ("concrete_cast", vec![3; 6]),
+        ("concrete_sized", vec![11; 32]),
+        ("concrete_sized_small", vec![11; 2]),
+    ] {
+        assert_eq!(array_elems(&db, evaluate(name, None)), expected, "{name}");
+    }
+    assert_eq!(scalar(&db, evaluate("concrete_branch", None)), 6);
+}
+
+#[test]
+fn dependent_repeat_lengths_reject_unforceable_extents() {
+    for (source, message) in [
+        (
+            "extern { const fn opaque() -> usize }\nfn closed() { let _values = [0 as u8; opaque()] }",
+            "const value must be resolvable during type checking",
+        ),
+        (
+            "fn runtime(_ n: usize) -> u8 { [0 as u8; { n + 1 }][0] }",
+            "const value must be resolvable during type checking",
+        ),
+        (
+            "fn ordinary(_ n: usize) -> usize { n }\nfn generic<const N: usize>() { let _values = [0 as u8; ordinary(N)] }",
+            "non-const function call in const context",
+        ),
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("unforceable_length.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        let diags = db.run_on_top_mod(module);
+        let rendered = format_diagnostics(&db, &diags);
+        assert_eq!(diags.len(), 1, "{rendered}");
+        assert!(rendered.contains(message), "{source}: {rendered}");
+    }
+}
+
+#[test]
+fn opaque_extern_lengths_fail_where_specialization_forces_them() {
+    for expression in [
+        "[7 as u8; opaque_of(N)][0]",
+        "[7 as u8; { if N == 0 { opaque() } else { opaque() } }][0]",
+        "[7 as u8; wrapped<N>()][0]",
+    ] {
+        let source = format!(
+            r#"
+extern {{
+    const fn opaque() -> usize
+    const fn opaque_of(_ n: usize) -> usize
+}}
+const fn wrapped<const N: usize>() -> usize {{ if N == 0 {{ opaque() }} else {{ opaque() }} }}
+const fn probe<const N: usize>() -> u8 {{ {expression} }}
+"#
+        );
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("opaque_template.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "opaque_use.fe".into(),
+            &format!("{source}const BAD: u8 = probe<1>()\n"),
+        );
+        let (module, _) = db.top_mod(file);
+        let diags = db.run_on_top_mod(module);
+        let rendered = format_diagnostics(&db, &diags);
+        assert_eq!(diags.len(), 1, "{expression}: {rendered}");
+        assert!(
+            rendered.contains("cannot be evaluated at compile time"),
+            "{expression}: {rendered}"
+        );
+        assert!(!rendered.contains("internal"), "{rendered}");
+    }
+}
+
+#[test]
+fn dependent_repeat_faults_report_at_concrete_use() {
+    for (expression, call, fault) in [
+        ("[7 as u8; { N - 1 }][0]", "probe<0, 1>()", "overflow"),
+        ("[7 as u8; minus(N)][0]", "probe<0, 1>()", "overflow"),
+        (
+            "[7 as u8; { 10 / N }][0]",
+            "probe<0, 1>()",
+            "divide by zero",
+        ),
+        (
+            "[7 as u8; [1, 2, 3][N - 1]][0]",
+            "probe<4, 1>()",
+            "index out of bounds",
+        ),
+        (
+            "[7 as u8; { if N == 0 { 1 } else { 10 / (N - 1) } }][0]",
+            "probe<1, 1>()",
+            "divide by zero",
+        ),
+        (
+            "{ let _values = [10 / X; word_len(N)]\n 0 }",
+            "probe<0, 0>()",
+            "divide by zero",
+        ),
+    ] {
+        let source = format!(
+            r#"
+const fn word_len(_ n: usize) -> usize {{ n / 32 + if n % 32 == 0 {{ 0 }} else {{ 1 }} }}
+const fn minus(_ n: usize) -> usize {{ n - 1 }}
+const fn probe<const N: usize, const X: u8>() -> u8 {{ {expression} }}
+"#
+        );
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("dependent_fault_template.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "dependent_fault.fe".into(),
+            &format!("{source}const VALID: u8 = probe<2, 1>()\nconst BAD: u8 = {call}\n"),
+        );
+        let (module, _) = db.top_mod(file);
+        let diags = db.run_on_top_mod(module);
+        let rendered = format_diagnostics(&db, &diags);
+        assert_eq!(diags.len(), 1, "{expression}: {rendered}");
+        assert!(rendered.contains(fault), "{expression}: {rendered}");
+        assert!(!rendered.contains("internal"), "{rendered}");
+    }
+}
+
+#[test]
+fn runtime_admission_demands_specialized_layouts() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "runtime_repeat_admission.fe".into(),
+        r#"
+const fn minus(_ n: usize) -> usize { n - 1 }
+struct Wrap<const N: usize> { values: [u8; minus(N)] }
+fn runtime(_ value: u8) -> u8 { value }
+fn first<const N: usize>() -> u8 { [7 as u8; { N - 1 }][0] }
+fn unused<const N: usize>() { let _values = [7 as u8; { 10 / N }] }
+fn make<const N: usize>(_ value: u8) -> [u8; { N - 1 }] { [value; { N - 1 }] }
+fn receive<const N: usize>() { let _values = make<N>(runtime(7)) }
+fn wrap<const N: usize>(_ value: u8) -> Wrap<N> { Wrap { values: [value; minus(N)] } }
+fn receive_field<const N: usize>() { let _wrapped = wrap<N>(runtime(7)) }
+fn produce<const N: usize>() -> [u8; { N - 1 }] { todo() }
+fn returned<const N: usize>() -> u8 { produce<N>()[0] }
+fn produced() -> u8 { produce<0>()[0] }
+fn ignored<const N: usize>(_ wrapped: Wrap<N>) {}
+fn take<const N: usize>(_ values: [u8; { N - 1 }]) -> u8 { 0 }
+fn passes() -> u8 {
+    let values: [u8; 0] = []
+    take<0>(values)
+}
+fn passes_valid() -> u8 {
+    let values: [u8; 1] = [1]
+    take<2>(values)
+}
+struct Mixed<T, const N: usize> { values: [u8; { N - 1 }], item: T }
+struct Masked<const N: usize> { huge: [u256; 0xffffffffffffffff], values: [u8; { N - 1 }] }
+fn mixed<T>(_ mixed: Mixed<T, 0>) {}
+fn mixed_valid<T>(_ mixed: Mixed<T, 1>) {}
+fn masked(_ masked: Masked<0>) {}
+fn masked_valid(_ masked: Masked<1>) {}
+trait Has { type Item }
+struct Faulty {}
+struct Fine {}
+impl Has for Faulty { type Item = Wrap<0> }
+impl Has for Fine { type Item = Wrap<2> }
+struct Outer<T: Has> { field: T::Item }
+fn projected(_ outer: Outer<Faulty>) {}
+fn projected_valid(_ outer: Outer<Fine>) {}
+fn bounded<T: Has<Item = Wrap<0>>>(_ outer: Outer<T>) {}
+fn bounded_valid<T: Has<Item = Wrap<2>>>(_ outer: Outer<T>) {}
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let usize_ty = TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize)));
+    // A fault reaches a concrete instance through a repeat, a callee's return
+    // or parameter type, or a parameter's field; folding a returned value
+    // must not see it first. A field's fault is known even beside a generic
+    // or an oversized field, or behind a projection the instance resolves.
+    for (name, len, valid) in [
+        ("first", Some(2), true),
+        ("first", Some(0), false),
+        ("unused", Some(5), true),
+        ("unused", Some(0), false),
+        ("receive", Some(2), true),
+        ("receive", Some(0), false),
+        ("receive_field", Some(2), true),
+        ("receive_field", Some(0), false),
+        ("returned", Some(2), true),
+        ("returned", Some(0), false),
+        ("ignored", Some(2), true),
+        ("ignored", Some(0), false),
+        ("produced", None, false),
+        ("passes", None, false),
+        ("passes_valid", None, true),
+        ("mixed", None, false),
+        ("mixed_valid", None, true),
+        ("masked", None, false),
+        ("masked_valid", None, true),
+        ("projected", None, false),
+        ("projected_valid", None, true),
+        ("bounded", None, false),
+        ("bounded_valid", None, true),
+    ] {
+        let owner = BodyOwner::Func(function(&db, module, name));
+        let identity = identity_semantic_instance_key(&db, owner);
+        let key = match len {
+            Some(len) => {
+                assert!(
+                    normalize_semantic_body(&db, get_or_build_semantic_instance(&db, identity))
+                        .is_ok(),
+                    "{name} template must be admitted"
+                );
+                let arg = TyId::new(
+                    &db,
+                    TyData::ConstTy(ConstTyId::integer(&db, usize_ty, BigInt::from(len))),
+                );
+                SemanticInstanceKey::new(
+                    &db,
+                    owner,
+                    GenericSubst::for_body_owner(&db, owner, vec![arg]),
+                    identity.effect_providers(&db),
+                    identity.impl_env(&db),
+                )
+            }
+            None => identity,
+        };
+        let instance = get_or_build_semantic_instance(&db, key);
+        for result in [
+            normalize_semantic_body(&db, instance),
+            normalize_runtime_semantic_body(&db, instance),
+        ] {
+            match result {
+                Ok(_) => assert!(valid, "{name}<{len:?}> must be rejected"),
+                Err(SemanticNormalizationFailure::Rejected(diag)) => {
+                    assert!(!valid, "{name}<{len:?}> must be admitted: {diag:?}");
+                    assert_eq!(diag.kind, SemanticDiagnosticKind::InvalidConcreteType);
+                    assert_eq!(diag.secondaries.len(), 1, "{diag:?}");
+                }
+                Err(failure) => panic!("{name}<{len:?}>: unexpected failure {failure:?}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn runtime_homes_share_the_normalized_value_types() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "runtime_homes.fe".into(),
+        r#"
+trait HasN { const N: usize }
+struct Big {}
+impl HasN for Big { const N: usize = 3 }
+fn ret<T: HasN, const M: usize>() -> [u8; { T::N + M }] {
+    let values: [u8; { T::N + M }] = [3; { T::N + M }]
+    values
+}
+fn caller() -> u8 { ret<Big, 1>()[2] }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let caller = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(function(&db, module, "caller"))),
+    );
+    let key = caller
+        .body(&db)
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .find_map(|stmt| match &stmt.kind {
+            SStmtKind::Assign {
+                expr: SExpr::Call { callee, .. },
+                ..
+            } => Some(callee.key),
+            _ => None,
+        })
+        .expect("caller calls ret");
+    let instance = get_or_build_semantic_instance(&db, key);
+    let runtime = normalize_runtime_semantic_body(&db, instance).expect("runtime body");
+    let homes = NLayoutLocals::new(&db, &runtime.body, &runtime.layout_plan, instance.body(&db));
+    for (index, value) in runtime.body.values.iter().enumerate() {
+        let home = homes
+            .value_local(NValueId::new(index))
+            .expect("every value has a runtime home");
+        assert_eq!(
+            homes.locals[home.index()].ty,
+            value.ty,
+            "a folded value and its home must share one type identity"
         );
     }
 }

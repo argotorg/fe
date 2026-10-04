@@ -1142,3 +1142,92 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
     }
     Ok(size)
 }
+
+/// The first evaluation fault in the layout of `ty`: in the type itself, in
+/// an array extent, or in a field instantiated for its application, walked as
+/// capability shapes walk it, with each part normalized by `normalize`.
+/// Unlike [`runtime_size_bytes`], it looks past generic components and
+/// sizes, so a known fault is found however the rest of the layout turns out.
+pub(crate) fn concrete_layout_fault<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    normalize: &dyn Fn(TyId<'db>) -> TyId<'db>,
+) -> Option<InvalidCause<'db>> {
+    // The walk stops at the first fault, so a view seen before is either on
+    // the current path or free of faults.
+    fn inner<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        source: TyId<'db>,
+        normalize: &dyn Fn(TyId<'db>) -> TyId<'db>,
+        seen: &mut FxHashSet<(TyId<'db>, TyId<'db>)>,
+    ) -> Option<InvalidCause<'db>> {
+        // An instantiated field may still be a projection. The source view
+        // keeps its anonymous const bodies for checked evaluation, so only a
+        // projection is resolved there.
+        let ty = normalize(ty);
+        let source = if source.has_projection(db) {
+            normalize(source)
+        } else {
+            source
+        };
+        if let Some(cause) = ty.invalid_cause(db) {
+            return Some(cause);
+        }
+        if ty.has_invalid(db) {
+            return Some(first_invalid_ty_cause(db, ty).unwrap_or(InvalidCause::Other));
+        }
+        if ty.has_var(db) || !seen.insert((ty, source)) {
+            return None;
+        }
+        let parts = if let Some(target) = ty.as_view(db) {
+            vec![ConcreteTypeView::new(
+                target,
+                source.as_view(db).unwrap_or(target),
+            )]
+        } else if ty.is_tuple(db) {
+            let source_fields = source.field_types(db);
+            ty.field_types(db)
+                .into_iter()
+                .enumerate()
+                .map(|(index, field)| {
+                    ConcreteTypeView::new(field, source_fields.get(index).copied().unwrap_or(field))
+                })
+                .collect()
+        } else if ty.is_array(db) {
+            let (_, args) = ty.decompose_ty_app(db);
+            let (_, source_args) = source.decompose_ty_app(db);
+            let source_args = if source.is_array(db) {
+                source_args
+            } else {
+                args
+            };
+            // An extent faults once the arguments it reads are concrete, even
+            // while other generic arguments its body captures are not.
+            if let (Some(&len), Some(&source_len)) = (args.get(1), source_args.get(1))
+                && let Err(ConcreteArrayLengthError::Invalid(cause)) =
+                    demand_concrete_array_length(db, len, source_len)
+            {
+                return Some(cause);
+            }
+            args.first()
+                .map(|&elem| {
+                    ConcreteTypeView::new(elem, source_args.first().copied().unwrap_or(elem))
+                })
+                .into_iter()
+                .collect()
+        } else if let Some(adt) = ty.adt_def(db) {
+            (0..adt.fields(db).len())
+                .filter_map(|variant| adt_variant_field_views(db, adt, variant, ty, source).ok())
+                .flatten()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        parts
+            .into_iter()
+            .find_map(|part| inner(db, part.canonical, part.source, normalize, seen))
+    }
+
+    inner(db, ty, ty, normalize, &mut FxHashSet::default())
+}

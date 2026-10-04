@@ -102,6 +102,9 @@ fn admitted_semantic_body_query<'db>(
         Ok(body) => body,
         Err(error) => return admission_failure(db, instance, error),
     };
+    if let Some(diag) = instance.concrete_layout_diagnostic(db, raw) {
+        return SemanticBodyAdmission::Rejected(diag);
+    }
     let raw = canonicalize_semantic_const_refs(db, instance, raw);
     normalize_and_verify(db, instance, &raw, instance.assumptions(db))
 }
@@ -115,6 +118,10 @@ fn runtime_admitted_semantic_body_query<'db>(
         Ok(body) => body,
         Err(error) => return admission_failure(db, instance, error),
     };
+    // Folding evaluates values of the body's types, so they must be valid.
+    if let Some(diag) = instance.concrete_layout_diagnostic(db, raw) {
+        return SemanticBodyAdmission::Rejected(diag);
+    }
     let folded = canonicalize_semantic_consts_for_runtime(db, instance, raw);
     if folded == canonicalize_semantic_const_refs(db, instance, raw) {
         return admitted_semantic_body_query(db, instance);
@@ -131,6 +138,9 @@ fn provisional_admitted_semantic_body_query<'db>(
         Ok(body) => body,
         Err(error) => return admission_failure(db, instance, error),
     };
+    if let Some(diag) = instance.concrete_layout_diagnostic(db, raw) {
+        return SemanticBodyAdmission::Rejected(diag);
+    }
     let raw = canonicalize_semantic_const_refs(db, instance, raw);
     normalize_and_verify(
         db,

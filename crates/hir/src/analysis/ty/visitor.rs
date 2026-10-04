@@ -142,6 +142,19 @@ where
                 expr.visit_with(visitor);
                 to.visit_with(visitor);
             }
+            ConstExpr::Compare { lhs, rhs, .. } => {
+                lhs.visit_with(visitor);
+                rhs.visit_with(visitor);
+            }
+            ConstExpr::Select {
+                cond,
+                then,
+                otherwise,
+            } => {
+                cond.visit_with(visitor);
+                then.visit_with(visitor);
+                otherwise.visit_with(visitor);
+            }
             ConstExpr::ArrayRepeat { value, len } => {
                 value.visit_with(visitor);
                 len.visit_with(visitor);

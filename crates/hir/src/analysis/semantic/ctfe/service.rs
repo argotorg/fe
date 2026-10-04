@@ -1,13 +1,14 @@
 use cranelift_entity::EntityRef;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
+use rustc_hash::FxHashSet;
 
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        EffectProviderSubst, ImplEnv, SConst, SExpr, SLocalId, SStmtKind, STerminatorKind,
-        SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticInstance,
-        SemanticInstanceKey, SemanticLocalRole, array_const,
+        EffectProviderSubst, ImplEnv, SConst, SExpr, SLocalId, SStmt, SStmtKind, STerminatorKind,
+        SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody, SemanticInstance,
+        SemanticInstanceKey, SemanticLocalRole, array_const, bool_const,
         consts::{instantiate_const_template, retype_verified_sem_const},
         enum_const, execute_scalar_cast, execute_source_int_binary, execute_source_int_unary,
         get_or_build_semantic_instance, int_const, int_ty_shape, normalize_int_to_shape,
@@ -28,9 +29,10 @@ use crate::analysis::{
     },
 };
 use crate::hir_def::scope_graph::ScopeId;
-use crate::hir_def::{ArithBinOp, BinOp, UnOp};
+use crate::hir_def::{ArithBinOp, BinOp, CompBinOp, UnOp};
 
 use super::{
+    canonicalize::block_successors,
     machine::{
         CtfeConfig, CtfeError, execute_resolved_const_computation_with_steps, primitive_error,
         sem_const_dependency,
@@ -293,9 +295,10 @@ pub fn describe_const_computation<'db>(
     }
 }
 
-/// Accept only a straight-line expression graph in which every assignment
-/// contributes to the result. This rules out discarded bounds checks, calls,
-/// stores, and other obligations that a return-only slice would erase.
+/// Accept only an expression graph in which every assignment contributes to
+/// the result, and whose branches rejoin. This rules out discarded bounds
+/// checks, calls, stores, and other obligations that a return-only slice
+/// would erase.
 fn extract_whole_const_term<'db>(
     db: &'db dyn HirAnalysisDb,
     computation: ConstComputationId<'db>,
@@ -312,15 +315,7 @@ fn extract_whole_const_term<'db>(
         remaining: config.step_limit.min(256),
         depth_limit: config.recursion_limit.min(64),
     };
-    let term = extract_pure_body_term(
-        db,
-        key,
-        &[],
-        computation.parameter_owner(db),
-        &[],
-        &[],
-        &mut extraction,
-    )?;
+    let term = extract_pure_body_term(db, key, &[], &[], &[], &mut extraction)?;
     let mut observed = 0;
     (term.term.ty(db) == computation.result_ty(db)
         && term.preserves_source_order(&mut observed)
@@ -359,12 +354,15 @@ fn extract_pure_body_term<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SemanticInstanceKey<'db>,
     inputs: &[TermProvenance<'db>],
-    parameter_owner: ScopeId<'db>,
     stack: &[BodyOwner<'db>],
     frames: &[TermCallFrame<'db>],
     extraction: &mut TermExtraction,
 ) -> Option<TermProvenance<'db>> {
-    if stack.len() >= extraction.depth_limit || stack.contains(&key.owner(db)) {
+    // Execution rejects a non-const function, so a term must not erase it.
+    if stack.len() >= extraction.depth_limit
+        || stack.contains(&key.owner(db))
+        || matches!(key.owner(db), BodyOwner::Func(func) if !func.is_const(db))
+    {
         return None;
     }
     extraction.remaining = extraction.remaining.checked_sub(1)?;
@@ -376,9 +374,32 @@ fn extract_pure_body_term<'db>(
     if body.entry_locals.len() != inputs.len() || body.blocks.is_empty() {
         return None;
     }
-    let mut terms = vec![None; body.locals.len()];
-    let mut predecessors = vec![Vec::new(); body.locals.len()];
-    let mut assigned = vec![false; body.locals.len()];
+    // The walk charges a step for each block it reaches, so a body that
+    // reaches more blocks than remain cannot be described. Counting them
+    // within that bound also bounds the branch-join analysis, which spans
+    // only the reachable blocks.
+    let mut reachable = vec![false; body.blocks.len()];
+    let mut pending = vec![0];
+    let mut count = 0;
+    while let Some(block) = pending.pop() {
+        if std::mem::replace(reachable.get_mut(block)?, true) {
+            continue;
+        }
+        count += 1;
+        if count > extraction.remaining {
+            return None;
+        }
+        pending.extend(
+            block_successors(&body.blocks[block].terminator.kind)
+                .into_iter()
+                .map(|block| block.index()),
+        );
+    }
+    let mut state = BodyTerms {
+        terms: vec![None; body.locals.len()],
+        predecessors: vec![Vec::new(); body.locals.len()],
+        assigned: vec![false; body.locals.len()],
+    };
     for (local, term) in body.entry_locals.iter().zip(inputs) {
         let slot = body.locals.get(local.index())?;
         let compatible = match slot.role {
@@ -389,325 +410,598 @@ fn extract_pure_body_term<'db>(
             } => value_ty == term.term.ty(db),
             _ => false,
         };
-        if !compatible || assigned[local.index()] {
+        if !compatible || state.assigned[local.index()] {
             return None;
         }
-        terms[local.index()] = Some(term.clone());
-        assigned[local.index()] = true;
+        state.terms[local.index()] = Some(term.clone());
+        state.assigned[local.index()] = true;
     }
-    let mut visited = vec![false; body.blocks.len()];
-    let mut current = 0;
-    loop {
-        if *visited.get(current)? {
+    let mut walk = BodyTermWalk {
+        db,
+        key,
+        body,
+        stack,
+        frames,
+        extraction,
+        reachable,
+        post_dominators: None,
+    };
+    let BodyTermExit::Return(result) = walk.walk(0, None, &mut state)? else {
+        return None;
+    };
+    let mut used = vec![false; state.terms.len()];
+    let mut pending = vec![result];
+    while let Some(local) = pending.pop() {
+        let index = local.index();
+        if !state.assigned.get(index).copied()? {
             return None;
         }
-        visited[current] = true;
-        let block = body.blocks.get(current)?;
-        for stmt in &block.stmts {
-            extraction.remaining = extraction.remaining.checked_sub(1)?;
-            let SStmtKind::Assign { dst, expr } = &stmt.kind else {
-                return None;
-            };
-            let index = dst.index();
-            let local = body.locals.get(index)?;
-            if assigned[index] || !matches!(local.role, SemanticLocalRole::DirectValue { .. }) {
-                return None;
+        if !used[index] {
+            used[index] = true;
+            pending.extend(state.predecessors[index].iter().copied());
+        }
+    }
+    if state
+        .assigned
+        .iter()
+        .zip(&used)
+        .any(|(assigned, used)| assigned != used)
+    {
+        return None;
+    }
+    let term = state.terms.get(result.index()).cloned().flatten()?;
+    (term.term.ty(db) == key.typed_body(db).result_ty()).then_some(term)
+}
+
+/// The terms a path through a body has defined so far.
+#[derive(Clone)]
+struct BodyTerms<'db> {
+    terms: Vec<Option<TermProvenance<'db>>>,
+    predecessors: Vec<Vec<SLocalId>>,
+    assigned: Vec<bool>,
+}
+
+enum BodyTermExit {
+    Join,
+    Return(SLocalId),
+}
+
+struct BodyTermWalk<'a, 'db> {
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+    body: &'db SemanticBody<'db>,
+    stack: Vec<BodyOwner<'db>>,
+    frames: &'a [TermCallFrame<'db>],
+    extraction: &'a mut TermExtraction,
+    reachable: Vec<bool>,
+    post_dominators: Option<Vec<FxHashSet<usize>>>,
+}
+
+impl<'db> BodyTermWalk<'_, 'db> {
+    /// Extracts the blocks from `current` until control reaches `join`, or the
+    /// body returns when there is none. A branch becomes a select term over
+    /// its arms, so only the arm execution takes is ever forced.
+    fn walk(
+        &mut self,
+        mut current: usize,
+        join: Option<usize>,
+        state: &mut BodyTerms<'db>,
+    ) -> Option<BodyTermExit> {
+        loop {
+            self.extraction.remaining = self.extraction.remaining.checked_sub(1)?;
+            let block = self.body.blocks.get(current)?;
+            for stmt in &block.stmts {
+                self.assign(stmt, state)?;
             }
-            // A term tree cannot duplicate a source operation. Moving each
-            // operand also avoids exponential cloning before the order check.
-            let mut read = |local: SLocalId| terms.get_mut(local.index()).and_then(Option::take);
-            let (term, deps) = match expr {
-                SExpr::Const(
-                    constant @ (SConst::Value(..) | SConst::Description(..) | SConst::Evidence(..)),
-                ) => {
-                    let value = match constant {
-                        SConst::Value(value) => value.value(),
-                        SConst::Description(value) | SConst::Evidence(value) => *value,
-                        _ => unreachable!(),
-                    };
-                    let term = const_ty_from_sem_const(db, value);
-                    // Evidence deliberately retains a declaration's formal
-                    // parameter for runtime ABI selection. Translate only this
-                    // explicit template; other operands are already in context.
-                    let term = if matches!(constant, SConst::Evidence(_)) {
-                        instantiate_const_template(
-                            db,
-                            get_or_build_semantic_instance(db, key),
-                            term,
-                        )
+            match &block.terminator.kind {
+                STerminatorKind::Goto(next) if Some(next.index()) == join => {
+                    return Some(BodyTermExit::Join);
+                }
+                STerminatorKind::Goto(next) => current = next.index(),
+                STerminatorKind::Return(Some(result)) if join.is_none() => {
+                    return Some(BodyTermExit::Return(result.value));
+                }
+                STerminatorKind::Branch {
+                    cond,
+                    then_bb,
+                    else_bb,
+                } => {
+                    let merge = self.join_of(current)?;
+                    let cond_term = state.terms.get_mut(cond.value.index())?.take()?;
+                    let mut arms = Vec::with_capacity(2);
+                    for entry in [then_bb, else_bb] {
+                        let mut arm = state.clone();
+                        let BodyTermExit::Join = self.walk(entry.index(), Some(merge), &mut arm)?
+                        else {
+                            return None;
+                        };
+                        arms.push(arm);
+                    }
+                    let [then_arm, else_arm] = <[_; 2]>::try_from(arms).ok()?;
+                    self.select(
+                        cond.value,
+                        cond_term,
+                        block.terminator.origin,
+                        then_arm,
+                        else_arm,
+                        state,
+                    )?;
+                    if Some(merge) == join {
+                        return Some(BodyTermExit::Join);
+                    }
+                    current = merge;
+                }
+                STerminatorKind::Return(_)
+                | STerminatorKind::MatchEnum { .. }
+                | STerminatorKind::Assert { .. } => return None,
+            }
+        }
+    }
+
+    /// Where both arms of the branch at `block` meet again: its immediate
+    /// post-dominator.
+    fn join_of(&mut self, block: usize) -> Option<usize> {
+        let post_dominators = self.post_dominators.get_or_insert_with(|| {
+            // Unreachable blocks keep no successors or post-dominators; no
+            // reachable block leads to them.
+            let successors = self
+                .body
+                .blocks
+                .iter()
+                .zip(&self.reachable)
+                .map(|(block, &reachable)| {
+                    block_successors(&block.terminator.kind)
+                        .into_iter()
+                        .filter(|_| reachable)
+                        .map(|block| block.index())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let all = (0..successors.len())
+                .filter(|&block| self.reachable[block])
+                .collect::<FxHashSet<_>>();
+            let mut post_dominators = successors
+                .iter()
+                .enumerate()
+                .map(|(block, successors)| {
+                    if !self.reachable[block] {
+                        FxHashSet::default()
+                    } else if successors.is_empty() {
+                        FxHashSet::from_iter([block])
                     } else {
-                        term
+                        all.clone()
+                    }
+                })
+                .collect::<Vec<_>>();
+            let mut changed = true;
+            while changed {
+                changed = false;
+                for (block, targets) in successors.iter().enumerate().rev() {
+                    let Some((first, rest)) = targets.split_first() else {
+                        continue;
                     };
-                    let mut provenance =
-                        operation_provenance(term, stmt.origin, Vec::new(), frames, extraction);
-                    provenance.opaque = true;
-                    (provenance, Vec::new())
+                    let mut next = post_dominators[*first].clone();
+                    for target in rest {
+                        next.retain(|post| post_dominators[*target].contains(post));
+                    }
+                    next.insert(block);
+                    changed |= next != post_dominators[block];
+                    post_dominators[block] = next;
                 }
-                SExpr::Const(SConst::Ref(reference))
-                    if matches!(reference.instance(db).owner(db), BodyOwner::Const(..)) =>
+            }
+            post_dominators
+        });
+        post_dominators[block]
+            .iter()
+            .copied()
+            .filter(|post| *post != block)
+            .max_by_key(|post| post_dominators[*post].len())
+    }
+
+    /// Joins the arms of a branch into the state before it. Each local both
+    /// arms define for the join becomes a select over the condition. An arm
+    /// must not consume a term defined before the branch, which execution
+    /// evaluates whichever arm it takes.
+    fn select(
+        &mut self,
+        cond: SLocalId,
+        cond_term: TermProvenance<'db>,
+        origin: SemOrigin<'db>,
+        then_arm: BodyTerms<'db>,
+        else_arm: BodyTerms<'db>,
+        state: &mut BodyTerms<'db>,
+    ) -> Option<()> {
+        let mut cond_term = Some(cond_term);
+        for index in 0..state.terms.len() {
+            if state.assigned[index] {
+                if state.terms[index].is_some()
+                    && (then_arm.terms[index].is_none() || else_arm.terms[index].is_none())
                 {
-                    let mut nested_frames = frames.to_vec();
-                    nested_frames.push(TermCallFrame {
-                        origin: reference.origin(db),
-                        callee: reference.instance(db),
-                    });
-                    (
-                        extract_pure_body_term(
-                            db,
-                            reference.instance(db),
-                            &[],
-                            parameter_owner,
-                            &stack,
-                            &nested_frames,
-                            extraction,
-                        )?,
-                        Vec::new(),
-                    )
+                    return None;
                 }
-                SExpr::Forward(operand) | SExpr::UseValue(operand) => {
-                    (read(operand.value)?, vec![operand.value])
-                }
-                SExpr::Cast { value, .. } if int_ty_shape(db, local.ty).is_some() => {
-                    let operand = read(value.value)?;
-                    int_ty_shape(db, operand.term.ty(db))?;
-                    let term = ConstTyId::new(
-                        db,
-                        ConstTyData::Abstract(
-                            ConstExprId::new(
-                                db,
-                                ConstExpr::Cast {
-                                    expr: TyId::const_ty(db, operand.term),
-                                    to: local.ty,
-                                },
-                            ),
-                            local.ty,
-                        ),
-                    );
-                    (
-                        operation_provenance(term, stmt.origin, vec![operand], frames, extraction),
-                        vec![value.value],
-                    )
-                }
-                SExpr::Unary { op, value } if matches!(op, UnOp::Plus | UnOp::Minus) => {
-                    let operand = read(value.value)?;
-                    let term = ConstTyId::new(
-                        db,
-                        ConstTyData::Abstract(
-                            ConstExprId::new(
-                                db,
-                                ConstExpr::UnOp {
-                                    op: *op,
-                                    mode: body.template_owner.arithmetic_mode(db),
-                                    expr: TyId::const_ty(db, operand.term),
-                                },
-                            ),
-                            local.ty,
-                        ),
-                    );
-                    (
-                        operation_provenance(term, stmt.origin, vec![operand], frames, extraction),
-                        vec![value.value],
-                    )
-                }
-                SExpr::Binary {
-                    op: BinOp::Arith(op),
-                    lhs,
-                    rhs,
-                } if matches!(
-                    op,
-                    ArithBinOp::Add
-                        | ArithBinOp::Sub
-                        | ArithBinOp::Mul
-                        | ArithBinOp::Div
-                        | ArithBinOp::Rem
-                        | ArithBinOp::Pow
-                ) =>
-                {
-                    let lhs_term = read(lhs.value)?;
-                    let rhs_term = read(rhs.value)?;
-                    let term = ConstTyId::new(
-                        db,
-                        ConstTyData::Abstract(
-                            ConstExprId::new(
-                                db,
-                                ConstExpr::ArithBinOp {
-                                    op: *op,
-                                    mode: body.template_owner.arithmetic_mode(db),
-                                    lhs: TyId::const_ty(db, lhs_term.term),
-                                    rhs: TyId::const_ty(db, rhs_term.term),
-                                },
-                            ),
-                            local.ty,
-                        ),
-                    );
-                    (
-                        operation_provenance(
-                            term,
-                            stmt.origin,
-                            vec![lhs_term, rhs_term],
-                            frames,
-                            extraction,
-                        ),
-                        vec![lhs.value, rhs.value],
-                    )
-                }
-                SExpr::Call {
-                    callee,
-                    args,
-                    effect_args,
-                    ..
-                } if effect_args.is_empty() => {
-                    let BodyOwner::Func(func) = callee.key.owner(db) else {
+                continue;
+            }
+            let mut predecessors = then_arm.predecessors[index].clone();
+            predecessors.extend(else_arm.predecessors[index].iter().copied());
+            match (&then_arm.terms[index], &else_arm.terms[index]) {
+                (Some(then_term), Some(else_term)) => {
+                    let ty = self.body.locals[index].ty;
+                    if then_term.term.ty(self.db) != ty || else_term.term.ty(self.db) != ty {
                         return None;
-                    };
-                    let operands = args
-                        .iter()
-                        .map(|arg| read(arg.value))
-                        .collect::<Option<Vec<_>>>()?;
-                    let term = if let Some(kind) =
-                        core_primitive_wrapper_call_kind(db, func, local.ty)
-                    {
-                        let expr = match (kind, operands.as_slice()) {
-                            (
-                                PrimitiveWrapperCallKind::Unary(op @ (UnOp::Plus | UnOp::Minus)),
-                                [value],
-                            ) => ConstExpr::UnOp {
-                                op,
-                                mode: body.template_owner.arithmetic_mode(db),
-                                expr: TyId::const_ty(db, value.term),
+                    }
+                    let cond_term = cond_term.take()?;
+                    let term = ConstTyId::new(
+                        self.db,
+                        ConstTyData::Abstract(
+                            ConstExprId::new(
+                                self.db,
+                                ConstExpr::Select {
+                                    cond: TyId::const_ty(self.db, cond_term.term),
+                                    then: TyId::const_ty(self.db, then_term.term),
+                                    otherwise: TyId::const_ty(self.db, else_term.term),
+                                },
+                            ),
+                            ty,
+                        ),
+                    );
+                    state.terms[index] = Some(operation_provenance(
+                        term,
+                        origin,
+                        vec![cond_term, then_term.clone(), else_term.clone()],
+                        self.frames,
+                        self.extraction,
+                    ));
+                    predecessors.push(cond);
+                }
+                (None, None) => {}
+                // One arm defines a value the join never sees.
+                (Some(_), None) | (None, Some(_)) => return None,
+            }
+            state.assigned[index] = then_arm.assigned[index] || else_arm.assigned[index];
+            state.predecessors[index] = predecessors;
+        }
+        Some(())
+    }
+
+    /// Extracts one assignment, moving each operand's term into its user.
+    fn assign(&mut self, stmt: &SStmt<'db>, state: &mut BodyTerms<'db>) -> Option<()> {
+        let db = self.db;
+        let key = self.key;
+        self.extraction.remaining = self.extraction.remaining.checked_sub(1)?;
+        let SStmtKind::Assign { dst, expr } = &stmt.kind else {
+            return None;
+        };
+        let index = dst.index();
+        let local = self.body.locals.get(index)?;
+        if state.assigned[index] || !matches!(local.role, SemanticLocalRole::DirectValue { .. }) {
+            return None;
+        }
+        // A term tree cannot duplicate a source operation. Moving each
+        // operand also avoids exponential cloning before the order check.
+        let terms = &mut state.terms;
+        let mut read = |local: SLocalId| terms.get_mut(local.index()).and_then(Option::take);
+        // Terms compare integers and booleans, as primitive comparisons do.
+        let comparable = |term: ConstTyId<'db>| {
+            let ty = term.ty(db);
+            (int_ty_shape(db, ty).is_some() || ty.is_bool(db)).then_some(())
+        };
+        let (term, deps) = match expr {
+            SExpr::Const(
+                constant @ (SConst::Value(..) | SConst::Description(..) | SConst::Evidence(..)),
+            ) => {
+                let value = match constant {
+                    SConst::Value(value) => value.value(),
+                    SConst::Description(value) | SConst::Evidence(value) => *value,
+                    _ => unreachable!(),
+                };
+                let term = const_ty_from_sem_const(db, value);
+                // Evidence deliberately retains a declaration's formal
+                // parameter for runtime ABI selection. Translate only this
+                // explicit template; other operands are already in context.
+                let term = if matches!(constant, SConst::Evidence(_)) {
+                    instantiate_const_template(db, get_or_build_semantic_instance(db, key), term)
+                } else {
+                    term
+                };
+                let mut provenance = operation_provenance(
+                    term,
+                    stmt.origin,
+                    Vec::new(),
+                    self.frames,
+                    self.extraction,
+                );
+                provenance.opaque = true;
+                (provenance, Vec::new())
+            }
+            SExpr::Const(SConst::Ref(reference))
+                if matches!(reference.instance(db).owner(db), BodyOwner::Const(..)) =>
+            {
+                let mut nested_frames = self.frames.to_vec();
+                nested_frames.push(TermCallFrame {
+                    origin: reference.origin(db),
+                    callee: reference.instance(db),
+                });
+                (
+                    extract_pure_body_term(
+                        db,
+                        reference.instance(db),
+                        &[],
+                        &self.stack,
+                        &nested_frames,
+                        self.extraction,
+                    )?,
+                    Vec::new(),
+                )
+            }
+            SExpr::Forward(operand) | SExpr::UseValue(operand) => {
+                (read(operand.value)?, vec![operand.value])
+            }
+            SExpr::Cast { value, .. } if int_ty_shape(db, local.ty).is_some() => {
+                let operand = read(value.value)?;
+                int_ty_shape(db, operand.term.ty(db))?;
+                let term = ConstTyId::new(
+                    db,
+                    ConstTyData::Abstract(
+                        ConstExprId::new(
+                            db,
+                            ConstExpr::Cast {
+                                expr: TyId::const_ty(db, operand.term),
+                                to: local.ty,
                             },
-                            (
-                                PrimitiveWrapperCallKind::Binary(BinOp::Arith(
-                                    op @ (ArithBinOp::Add
-                                    | ArithBinOp::Sub
-                                    | ArithBinOp::Mul
-                                    | ArithBinOp::Div
-                                    | ArithBinOp::Rem
-                                    | ArithBinOp::Pow),
-                                )),
-                                [lhs, rhs],
-                            ) => ConstExpr::ArithBinOp {
+                        ),
+                        local.ty,
+                    ),
+                );
+                (
+                    operation_provenance(
+                        term,
+                        stmt.origin,
+                        vec![operand],
+                        self.frames,
+                        self.extraction,
+                    ),
+                    vec![value.value],
+                )
+            }
+            SExpr::Unary { op, value } if matches!(op, UnOp::Plus | UnOp::Minus | UnOp::Not) => {
+                let operand = read(value.value)?;
+                let term = ConstTyId::new(
+                    db,
+                    ConstTyData::Abstract(
+                        ConstExprId::new(
+                            db,
+                            ConstExpr::UnOp {
+                                op: *op,
+                                mode: self.body.template_owner.arithmetic_mode(db),
+                                expr: TyId::const_ty(db, operand.term),
+                            },
+                        ),
+                        local.ty,
+                    ),
+                );
+                (
+                    operation_provenance(
+                        term,
+                        stmt.origin,
+                        vec![operand],
+                        self.frames,
+                        self.extraction,
+                    ),
+                    vec![value.value],
+                )
+            }
+            SExpr::Binary {
+                op: BinOp::Arith(op),
+                lhs,
+                rhs,
+            } if matches!(
+                op,
+                ArithBinOp::Add
+                    | ArithBinOp::Sub
+                    | ArithBinOp::Mul
+                    | ArithBinOp::Div
+                    | ArithBinOp::Rem
+                    | ArithBinOp::Pow
+            ) =>
+            {
+                let lhs_term = read(lhs.value)?;
+                let rhs_term = read(rhs.value)?;
+                let term = ConstTyId::new(
+                    db,
+                    ConstTyData::Abstract(
+                        ConstExprId::new(
+                            db,
+                            ConstExpr::ArithBinOp {
+                                op: *op,
+                                mode: self.body.template_owner.arithmetic_mode(db),
+                                lhs: TyId::const_ty(db, lhs_term.term),
+                                rhs: TyId::const_ty(db, rhs_term.term),
+                            },
+                        ),
+                        local.ty,
+                    ),
+                );
+                (
+                    operation_provenance(
+                        term,
+                        stmt.origin,
+                        vec![lhs_term, rhs_term],
+                        self.frames,
+                        self.extraction,
+                    ),
+                    vec![lhs.value, rhs.value],
+                )
+            }
+            SExpr::Binary {
+                op: BinOp::Comp(op),
+                lhs,
+                rhs,
+            } => {
+                let lhs_term = read(lhs.value)?;
+                let rhs_term = read(rhs.value)?;
+                comparable(lhs_term.term)?;
+                let term = ConstTyId::new(
+                    db,
+                    ConstTyData::Abstract(
+                        ConstExprId::new(
+                            db,
+                            ConstExpr::Compare {
+                                op: *op,
+                                lhs: TyId::const_ty(db, lhs_term.term),
+                                rhs: TyId::const_ty(db, rhs_term.term),
+                            },
+                        ),
+                        local.ty,
+                    ),
+                );
+                (
+                    operation_provenance(
+                        term,
+                        stmt.origin,
+                        vec![lhs_term, rhs_term],
+                        self.frames,
+                        self.extraction,
+                    ),
+                    vec![lhs.value, rhs.value],
+                )
+            }
+            SExpr::Call {
+                callee,
+                args,
+                effect_args,
+                ..
+            } if effect_args.is_empty() => {
+                let BodyOwner::Func(func) = callee.key.owner(db) else {
+                    return None;
+                };
+                let operands = args
+                    .iter()
+                    .map(|arg| read(arg.value))
+                    .collect::<Option<Vec<_>>>()?;
+                let term = if let Some(kind) = core_primitive_wrapper_call_kind(db, func, local.ty)
+                {
+                    let expr = match (kind, operands.as_slice()) {
+                        (
+                            PrimitiveWrapperCallKind::Unary(
+                                op @ (UnOp::Plus | UnOp::Minus | UnOp::Not),
+                            ),
+                            [value],
+                        ) => ConstExpr::UnOp {
+                            op,
+                            mode: self.body.template_owner.arithmetic_mode(db),
+                            expr: TyId::const_ty(db, value.term),
+                        },
+                        (
+                            PrimitiveWrapperCallKind::Binary(BinOp::Arith(
+                                op @ (ArithBinOp::Add
+                                | ArithBinOp::Sub
+                                | ArithBinOp::Mul
+                                | ArithBinOp::Div
+                                | ArithBinOp::Rem
+                                | ArithBinOp::Pow),
+                            )),
+                            [lhs, rhs],
+                        ) => ConstExpr::ArithBinOp {
+                            op,
+                            mode: self.body.template_owner.arithmetic_mode(db),
+                            lhs: TyId::const_ty(db, lhs.term),
+                            rhs: TyId::const_ty(db, rhs.term),
+                        },
+                        (PrimitiveWrapperCallKind::Binary(BinOp::Comp(op)), [lhs, rhs])
+                            if comparable(lhs.term).is_some() =>
+                        {
+                            ConstExpr::Compare {
                                 op,
-                                mode: body.template_owner.arithmetic_mode(db),
                                 lhs: TyId::const_ty(db, lhs.term),
                                 rhs: TyId::const_ty(db, rhs.term),
-                            },
-                            _ => return None,
-                        };
+                            }
+                        }
+                        _ => return None,
+                    };
+                    let term = ConstTyId::new(
+                        db,
+                        ConstTyData::Abstract(ConstExprId::new(db, expr), local.ty),
+                    );
+                    operation_provenance(
+                        term,
+                        stmt.origin,
+                        operands.clone(),
+                        self.frames,
+                        self.extraction,
+                    )
+                } else {
+                    let mut nested_frames = self.frames.to_vec();
+                    nested_frames.push(TermCallFrame {
+                        origin: stmt.origin,
+                        callee: callee.key,
+                    });
+                    let saved_order = self.extraction.next_order;
+                    let inlined = if !func.is_extern(db)
+                        && !func.is_associated_func(db)
+                        && callee.key.effect_providers(db).providers(db).is_empty()
+                    {
+                        extract_pure_body_term(
+                            db,
+                            callee.key,
+                            &operands,
+                            &self.stack,
+                            &nested_frames,
+                            self.extraction,
+                        )
+                    } else {
+                        None
+                    };
+                    if let Some(term) = inlined {
+                        term
+                    } else if !func.is_associated_func(db)
+                        && callee.key.effect_providers(db).providers(db).is_empty()
+                    {
+                        self.extraction.next_order = saved_order;
                         let term = ConstTyId::new(
                             db,
-                            ConstTyData::Abstract(ConstExprId::new(db, expr), local.ty),
+                            ConstTyData::Abstract(
+                                ConstExprId::new(
+                                    db,
+                                    ConstExpr::Invocation(ConstInvocation {
+                                        key: callee.key,
+                                        args: operands
+                                            .iter()
+                                            .map(|operand| TyId::const_ty(db, operand.term))
+                                            .collect(),
+                                    }),
+                                ),
+                                local.ty,
+                            ),
                         );
                         operation_provenance(
                             term,
                             stmt.origin,
-                            operands.clone(),
-                            frames,
-                            extraction,
+                            operands,
+                            self.frames,
+                            self.extraction,
                         )
                     } else {
-                        let mut nested_frames = frames.to_vec();
-                        nested_frames.push(TermCallFrame {
-                            origin: stmt.origin,
-                            callee: callee.key,
-                        });
-                        let saved_order = extraction.next_order;
-                        let inlined = if !func.is_extern(db)
-                            && !func.is_associated_func(db)
-                            && callee.key.effect_providers(db).providers(db).is_empty()
-                        {
-                            extract_pure_body_term(
-                                db,
-                                callee.key,
-                                &operands,
-                                parameter_owner,
-                                &stack,
-                                &nested_frames,
-                                extraction,
-                            )
-                        } else {
-                            None
-                        };
-                        if let Some(term) = inlined {
-                            term
-                        } else if !func.is_associated_func(db)
-                            && callee.key.effect_providers(db).providers(db).is_empty()
-                        {
-                            extraction.next_order = saved_order;
-                            let term = ConstTyId::new(
-                                db,
-                                ConstTyData::Abstract(
-                                    ConstExprId::new(
-                                        db,
-                                        ConstExpr::Invocation(ConstInvocation {
-                                            key: callee.key,
-                                            args: operands
-                                                .iter()
-                                                .map(|operand| TyId::const_ty(db, operand.term))
-                                                .collect(),
-                                            parameter_owner,
-                                        }),
-                                    ),
-                                    local.ty,
-                                ),
-                            );
-                            operation_provenance(term, stmt.origin, operands, frames, extraction)
-                        } else {
-                            extract_pure_body_term(
-                                db,
-                                callee.key,
-                                &operands,
-                                parameter_owner,
-                                &stack,
-                                &nested_frames,
-                                extraction,
-                            )?
-                        }
-                    };
-                    (term, args.iter().map(|arg| arg.value).collect())
-                }
-                _ => return None,
-            };
-            if term.term.ty(db) != local.ty {
-                return None;
-            }
-            terms[index] = Some(term);
-            predecessors[index] = deps;
-            assigned[index] = true;
-        }
-        match &block.terminator.kind {
-            STerminatorKind::Goto(next) => current = next.index(),
-            STerminatorKind::Return(Some(result)) => {
-                let mut used = vec![false; terms.len()];
-                let mut pending = vec![result.value];
-                while let Some(local) = pending.pop() {
-                    let index = local.index();
-                    if !assigned.get(index).copied()? {
-                        return None;
+                        extract_pure_body_term(
+                            db,
+                            callee.key,
+                            &operands,
+                            &self.stack,
+                            &nested_frames,
+                            self.extraction,
+                        )?
                     }
-                    if !used[index] {
-                        used[index] = true;
-                        pending.extend(predecessors[index].iter().copied());
-                    }
-                }
-                if assigned
-                    .iter()
-                    .zip(&used)
-                    .any(|(assigned, used)| assigned != used)
-                {
-                    return None;
-                }
-                let term = terms.get(result.value.index()).cloned().flatten()?;
-                if term.term.ty(db) != key.typed_body(db).result_ty() {
-                    return None;
-                }
-                return Some(term);
+                };
+                (term, args.iter().map(|arg| arg.value).collect())
             }
-            STerminatorKind::Return(None)
-            | STerminatorKind::Branch { .. }
-            | STerminatorKind::MatchEnum { .. }
-            | STerminatorKind::Assert { .. } => return None,
+            _ => return None,
+        };
+        if term.term.ty(db) != local.ty {
+            return None;
         }
+        state.terms[index] = Some(term);
+        state.predecessors[index] = deps;
+        state.assigned[index] = true;
+        Some(())
     }
 }
 
@@ -1148,6 +1442,9 @@ fn force_const_term<'db>(
     provenance: Option<&TermProvenance<'db>>,
 ) -> EvalResult<'db, SemConstId<'db>> {
     if let ConstExpr::Invocation(invocation) = term.data(db) {
+        // Inputs are forced here, so the request is a resolved call owned by
+        // its callee, as `const_computation_for_instance` builds one.
+        let scope = invocation.key.owner(db).scope();
         let inputs = invocation
             .args
             .iter()
@@ -1157,13 +1454,9 @@ fn force_const_term<'db>(
                 TyData::ConstTy(term) => {
                     let child = term_child_provenance(db, provenance, arg, index, origin)?;
                     Ok(if let Some(child) = child {
-                        ConstDesc::term_with_provenance(
-                            db,
-                            invocation.parameter_owner,
-                            child.clone(),
-                        )
+                        ConstDesc::term_with_provenance(db, scope, child.clone())
                     } else {
-                        ConstDesc::term(db, invocation.parameter_owner, *term)
+                        ConstDesc::term(db, scope, *term)
                     })
                 }
                 _ => Err(EvalStop::Failed(EvalFailure::Invariant {
@@ -1175,9 +1468,7 @@ fn force_const_term<'db>(
         let mut values = Vec::with_capacity(inputs.len());
         for input in inputs {
             match force_const_description_in_context(db, &input, cx, origin) {
-                EvalOutcome::Ready(value) => {
-                    values.push(ConstDesc::value(db, value, invocation.parameter_owner))
-                }
+                EvalOutcome::Ready(value) => values.push(ConstDesc::value(db, value, scope)),
                 EvalOutcome::Blocked(info) => return Err(EvalStop::Blocked(info)),
                 EvalOutcome::Failed(failure) => return Err(EvalStop::Failed(failure)),
             }
@@ -1187,7 +1478,7 @@ fn force_const_term<'db>(
             ConstEntry::Resolved(invocation.key),
             values,
             result_ty,
-            invocation.parameter_owner,
+            scope,
             origin,
         );
         let wraps_callee = matches!(invocation.key.owner(db), BodyOwner::Func(func) if func.is_const(db) && !func.is_extern(db));
@@ -1219,7 +1510,57 @@ fn force_const_term<'db>(
         };
     }
     let operation_error = |error| term_operation_error(db, error, provenance);
+    let boolean = |value: SemConstId<'db>| match value.value(db) {
+        SemConstValue::Scalar {
+            value: SemConstScalar::Bool(value),
+            ..
+        } => Ok(*value),
+        _ => Err(operation_error(CtfeError::InvalidOperation {
+            origin,
+            message: "expected a boolean constant term operand".into(),
+        })),
+    };
     match term.data(db) {
+        ConstExpr::Select {
+            cond,
+            then,
+            otherwise,
+        } => {
+            let child = term_child_provenance(db, provenance, *cond, 0, origin)?;
+            let taken = boolean(force_const_term_operand(db, *cond, cx, origin, child)?)?;
+            let (index, arm) = if taken { (1, *then) } else { (2, *otherwise) };
+            let child = term_child_provenance(db, provenance, arm, index, origin)?;
+            return force_const_term_operand(db, arm, cx, origin, child);
+        }
+        ConstExpr::Compare { op, lhs, rhs } => {
+            let lhs_child = term_child_provenance(db, provenance, *lhs, 0, origin)?;
+            let lhs = force_const_term_operand(db, *lhs, cx, origin, lhs_child)?;
+            let rhs_child = term_child_provenance(db, provenance, *rhs, 1, origin)?;
+            let rhs = force_const_term_operand(db, *rhs, cx, origin, rhs_child)?;
+            let ordering = if let (Ok(lhs), Ok(rhs)) = (boolean(lhs), boolean(rhs)) {
+                lhs.cmp(&rhs)
+            } else {
+                term_integer(db, lhs, origin)?.cmp(&term_integer(db, rhs, origin)?)
+            };
+            let holds = match op {
+                CompBinOp::Eq => ordering.is_eq(),
+                CompBinOp::NotEq => ordering.is_ne(),
+                CompBinOp::Lt => ordering.is_lt(),
+                CompBinOp::LtEq => ordering.is_le(),
+                CompBinOp::Gt => ordering.is_gt(),
+                CompBinOp::GtEq => ordering.is_ge(),
+            };
+            return Ok(bool_const(db, holds));
+        }
+        ConstExpr::UnOp {
+            op: UnOp::Not,
+            expr,
+            ..
+        } => {
+            let child = term_child_provenance(db, provenance, *expr, 0, origin)?;
+            let value = boolean(force_const_term_operand(db, *expr, cx, origin, child)?)?;
+            return Ok(bool_const(db, !value));
+        }
         ConstExpr::Cast { expr, to } => {
             if *to != result_ty {
                 return Err(EvalStop::Failed(EvalFailure::Invariant {
