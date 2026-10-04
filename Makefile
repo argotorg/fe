@@ -28,7 +28,7 @@ test: treesitter-generate
 	# Builds and runs the workspace tests, including the tree-sitter grammar
 	# test (crates/parser/tests/tree_sitter_parse.rs), which parses every .fe
 	# fixture against the freshly generated grammar.
-	cargo nextest run --release --workspace --all-features --no-fail-fast \
+	cargo nextest run --cargo-profile test-release --workspace --all-features --no-fail-fast \
 		--exclude fe-bench
 
 .PHONY: check-wasm
@@ -83,7 +83,7 @@ release:
 # Repeat validation after a version bump without rerunning cargo-release.
 release-test:
 	# Optimize compiler-heavy tests and give deeply nested type queries enough stack.
-	RUST_MIN_STACK=16777216 cargo test --release --locked --workspace
+	RUST_MIN_STACK=16777216 cargo test --profile test-release --locked --workspace
 
 push-tag:
 	# Run `make release version=<version>` first

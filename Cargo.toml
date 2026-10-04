@@ -71,6 +71,11 @@ debug = 0
 [profile.release]
 debug = 0
 
+# Keep compiler-heavy tests optimized while checking debug invariants.
+[profile.test-release]
+inherits = "release"
+debug-assertions = true
+
 [profile.dev.package]
 revm = { opt-level = 3 }
 revm-bytecode = { opt-level = 3 }

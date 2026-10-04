@@ -155,12 +155,12 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: Build
-        run: cargo test --release --workspace --all-features --no-run --locked --exclude fe-bench --timings
+        run: cargo test --profile test-release --workspace --all-features --no-run --locked --exclude fe-bench --timings
       - name: Run tests
         env:
           FE_SOLC_PATH: ${{ runner.os == 'Windows' && format('{0}\\solc-{1}.exe', runner.temp, env.SOLC_VERSION) || format('{0}/solc-{1}', runner.temp, env.SOLC_VERSION) }}
         run: >-
-          cargo nextest run --release --workspace --all-features --no-fail-fast --locked --exclude fe-bench
+          cargo nextest run --cargo-profile test-release --workspace --all-features --no-fail-fast --locked --exclude fe-bench
           -E 'not (package(=fe-language-server) and test(/^mock_client_tests::/))'
       - name: Upload build timings
         if: always()

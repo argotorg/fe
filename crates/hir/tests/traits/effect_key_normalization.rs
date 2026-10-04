@@ -424,6 +424,17 @@ where
 "#,
     );
     let (top_mod, _) = db.top_mod(file);
+    let needs = find_func(&db, top_mod, "needs");
+    let requirements = needs.effect_requirements(&db);
+    let key = requirements[0].key.key_trait().expect("trait effect key");
+    let slot_args = key.args(&db)[1].generic_args(&db);
+    assert_eq!(slot_args.len(), 2, "associated type must normalize to Slot");
+    assert_eq!(slot_args[1], CallableDef::Func(needs).params(&db)[0]);
+    assert_eq!(
+        place_effect_provider_param_index_map(&db, needs),
+        &[Some(1)],
+        "the layout slot must precede the provider slot",
+    );
     db.assert_no_diags(top_mod);
 
     let caller = find_func(&db, top_mod, "caller");

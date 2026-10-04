@@ -45,6 +45,10 @@ Run the workspace tests:
 cargo test --workspace
 ```
 
+For optimized tests with debug assertions enabled, use
+`cargo nextest run --cargo-profile test-release --workspace`. CI and `make test`
+use this optimized profile too.
+
 Snapshot tests use [`insta`](https://insta.rs/):
 
 ```bash
