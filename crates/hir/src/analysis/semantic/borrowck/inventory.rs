@@ -606,7 +606,13 @@ impl<'db> InputBuilder<'db> {
                         .normalization_scope(self.db),
                     assumptions: self.instance.assumptions(self.db),
                 }
-                .contents(&mut self.values, target.shape, &target.scope, None)
+                .contents(
+                    &mut self.values,
+                    target.shape,
+                    &target.scope,
+                    Some(&root),
+                    None,
+                )
                 .map_err(|error| ShapeError::UnresolvedCapability(error.0))?,
             };
             self.storage.insert(root, value);

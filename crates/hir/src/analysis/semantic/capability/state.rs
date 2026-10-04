@@ -922,7 +922,8 @@ impl<'db> BorrowState<'db> {
                         values,
                         contents.shape(),
                         contents.scope(),
-                        Some((root, footprint)),
+                        Some(root),
+                        Some(footprint),
                     )
                     .map_err(StateError::OpaqueContents)?;
                 updates.insert(root.clone(), values.join(contents, &unknown));
@@ -1073,7 +1074,8 @@ impl<'db> BorrowState<'db> {
                         values,
                         contents.shape(),
                         contents.scope(),
-                        Some((root, AccessFootprint::typed(region))),
+                        Some(root),
+                        Some(AccessFootprint::typed(region)),
                     )
                     .map_err(StateError::OpaqueContents)?;
                 let unknown = values.with_guard(&unknown, &residual);

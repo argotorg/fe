@@ -35,22 +35,23 @@ impl<'db> OpaqueWrite<'db> {
         values: &mut CapabilityValues<'db>,
         shape: ShapeId<'db>,
         scope: &BinderScope,
-        clobber: Option<(&RegionRoot<'db>, AccessFootprint<'_, 'db>)>,
+        target: Option<&RegionRoot<'db>>,
+        written: Option<AccessFootprint<'_, 'db>>,
     ) -> Result<CapabilityValue<'db>, UnresolvedCapability<'db>> {
         let db = values.db;
         // Keep conditional replacements for identifiable cells. Seeds and
         // replacements inside already arbitrary memory share one closed heap
         // family; retaining their cell parameters would grow at every load.
         let saturated = matches!(self.site, OpaqueWriteSite::Seed)
-            || clobber.is_some_and(
-                |(root, _)| matches!(root, RegionRoot::External(source) if source.is_arbitrary()),
+            || target.is_some_and(
+                |root| matches!(root, RegionRoot::External(source) if source.is_arbitrary()),
             );
         // A raw pointer stored in raw memory and overwritten through an
         // arbitrary address joins the same family. Its condition would repeat
         // an earlier replacement's once per write site, multiplying the cell's
         // alternatives across repeated writes through replaced pointers.
-        let raw_memory_cell = clobber.is_some_and(
-            |(root, _)| matches!(root, RegionRoot::External(source) if source.in_raw_memory()),
+        let raw_memory_cell = target.is_some_and(
+            |root| matches!(root, RegionRoot::External(source) if source.in_raw_memory()),
         );
         let mut failure = None;
         let value = values.from_shape(shape, scope, |semantics, path, scope| {
@@ -73,11 +74,17 @@ impl<'db> OpaqueWrite<'db> {
                 failure = Some(UnresolvedCapability(ty));
                 return Vec::new();
             };
-            let family = ExternalSource::opaque_memory(ReferentContract::new(
+            let mut family = ExternalSource::opaque_memory(ReferentContract::new(
                 db,
                 contract.target_ty,
                 contract.address_space,
             ));
+            // Contents reached through a conditional cell exist only under
+            // that cell's prerequisite. Reuse it without introducing another
+            // overwrite identity or nesting a new condition at each load.
+            if let Some(RegionRoot::External(source)) = target {
+                family.clobber = source.clobber_dependency().cloned().map(Box::new);
+            }
             let (witness_scope, source) = if saturated {
                 (scope.clone(), family.clone())
             } else {
@@ -101,7 +108,9 @@ impl<'db> OpaqueWrite<'db> {
                     ),
                 )
             };
-            let alternatives = if !saturated && let Some((target, written)) = clobber {
+            let alternatives = if !saturated
+                && let (Some(target), Some(written)) = (target, written)
+            {
                 let extent = written.extent;
                 let target = SymbolicPlace {
                     root: target.clone(),

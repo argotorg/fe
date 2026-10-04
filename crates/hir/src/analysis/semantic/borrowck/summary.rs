@@ -3633,7 +3633,7 @@ impl<'db> SignatureValues<'_, 'db> {
         };
         self.choice += 1;
         let arbitrary = overwrite
-            .contents(&mut contents, shape, scope, None)
+            .contents(&mut contents, shape, scope, None, None)
             .map_err(|error| {
                 checker.internal_diag(
                     SemOrigin::Body(checker.body.template_owner),
