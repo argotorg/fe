@@ -45,7 +45,7 @@ func private %match_struct_fields(v0.constref<@layout_0>) -> i8 {
         jump block3;
 
     block2:
-        v6.i8 = phi (0.i8 block7) (v29 block8) (v34 block10) (v44 block14);
+        v6.i8 = phi (0.i8 block7) (v27 block8) (v30 block10) (v36 block14);
         return v6;
 
     block3:
@@ -79,34 +79,26 @@ func private %match_struct_fields(v0.constref<@layout_0>) -> i8 {
         v26.constref<i8> = const.proj v0 0.i256;
         v27.i8 = const.load v26;
         obj.store v2 v27;
-        v28.constref<i8> = const.proj v0 0.i256;
-        v29.i8 = const.load v28;
         jump block2;
 
     block9:
         jump block8;
 
     block10:
-        v31.constref<i8> = const.proj v0 1.i256;
-        v32.i8 = const.load v31;
-        obj.store v1 v32;
-        v33.constref<i8> = const.proj v0 1.i256;
-        v34.i8 = const.load v33;
+        v29.constref<i8> = const.proj v0 1.i256;
+        v30.i8 = const.load v29;
+        obj.store v1 v30;
         jump block2;
 
     block11:
-        v36.constref<i8> = const.proj v0 0.i256;
-        v37.i8 = const.load v36;
-        obj.store v3 v37;
-        v38.constref<i8> = const.proj v0 1.i256;
-        v39.i8 = const.load v38;
-        obj.store v4 v39;
-        v40.constref<i8> = const.proj v0 0.i256;
-        v41.i8 = const.load v40;
-        v42.constref<i8> = const.proj v0 1.i256;
-        v43.i8 = const.load v42;
-        (v44.i8, v45.i1) = uaddo v41 v43;
-        br v45 block13 block14;
+        v32.constref<i8> = const.proj v0 0.i256;
+        v33.i8 = const.load v32;
+        obj.store v3 v33;
+        v34.constref<i8> = const.proj v0 1.i256;
+        v35.i8 = const.load v34;
+        obj.store v4 v35;
+        (v36.i8, v37.i1) = uaddo v33 v35;
+        br v37 block13 block14;
 
     block12:
         jump block11;
