@@ -3,6 +3,7 @@
 //! Index conditions use reduced bit decisions over Fe's 256-bit `usize`, so equality,
 //! disequality, and bounds share one Boolean algebra. Enum decisions have index conditions
 //! as leaves. Neither graph enumerates array elements or depends on construction order.
+use itertools::{EitherOrBoth, Itertools};
 use rustc_hash::{FxHashMap, FxHasher};
 #[cfg(test)]
 use std::cell::Cell;
@@ -118,6 +119,17 @@ struct SlotBit {
 }
 
 impl SlotBit {
+    fn remap(self, slots: &[u16]) -> Self {
+        if slots.is_empty() {
+            self
+        } else {
+            Self {
+                slot: slots[usize::from(self.slot)],
+                ..self
+            }
+        }
+    }
+
     fn new(slot: usize, bit: u16) -> Self {
         Self {
             bit: Reverse(bit),
@@ -140,15 +152,23 @@ enum SlotTarget {
     Const(usize),
 }
 
+/// Strictly ordered slot translations into a merged index table. An empty map
+/// denotes identity. Operands keep their original graphs and cache identities.
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
+struct BitAlignment {
+    left: Box<[u16]>,
+    right: Box<[u16]>,
+}
+
 /// Bit-decision operations name table slots rather than indices, so equal
 /// operations over different indices share one result. Guard algebra repeats
 /// the same few operations across fixpoint iterations and summaries.
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum BitOperation<G = BitDecision> {
-    And(G, G),
-    Or(G, G),
+    And(G, G, BitAlignment),
+    Or(G, G, BitAlignment),
     Not(G),
-    Restrict(G, G),
+    Restrict(G, G, BitAlignment),
     Substitute(G, Box<[SlotTarget]>),
     Exists(G, Box<[u16]>),
 }
@@ -156,10 +176,12 @@ enum BitOperation<G = BitDecision> {
 impl<G> BitOperation<G> {
     fn map_graphs<H>(self, mut map: impl FnMut(G) -> H) -> BitOperation<H> {
         match self {
-            Self::And(left, right) => BitOperation::And(map(left), map(right)),
-            Self::Or(left, right) => BitOperation::Or(map(left), map(right)),
+            Self::And(left, right, slots) => BitOperation::And(map(left), map(right), slots),
+            Self::Or(left, right, slots) => BitOperation::Or(map(left), map(right), slots),
             Self::Not(graph) => BitOperation::Not(map(graph)),
-            Self::Restrict(source, care) => BitOperation::Restrict(map(source), map(care)),
+            Self::Restrict(source, care, slots) => {
+                BitOperation::Restrict(map(source), map(care), slots)
+            }
             Self::Substitute(graph, targets) => BitOperation::Substitute(map(graph), targets),
             Self::Exists(graph, slots) => BitOperation::Exists(map(graph), slots),
         }
@@ -171,6 +193,9 @@ type WeakBitDecision = WeakDecision<SlotBit, bool>;
 impl BitOperation<WeakBitDecision> {
     fn metadata_units(&self) -> usize {
         1 + match self {
+            Self::And(_, _, slots) | Self::Or(_, _, slots) | Self::Restrict(_, _, slots) => {
+                slots.left.len() + slots.right.len()
+            }
             Self::Substitute(_, targets) => targets.len(),
             Self::Exists(_, slots) => slots.len(),
             _ => 0,
@@ -179,9 +204,9 @@ impl BitOperation<WeakBitDecision> {
 
     fn is_live(&self) -> bool {
         match self {
-            Self::And(left, right) | Self::Or(left, right) | Self::Restrict(left, right) => {
-                left.is_live() && right.is_live()
-            }
+            Self::And(left, right, _)
+            | Self::Or(left, right, _)
+            | Self::Restrict(left, right, _) => left.is_live() && right.is_live(),
             Self::Not(graph) | Self::Substitute(graph, _) | Self::Exists(graph, _) => {
                 graph.is_live()
             }
@@ -276,20 +301,34 @@ impl BitOperation {
             return result;
         }
         let result = match &operation {
-            Self::And(lhs, rhs) => Some(lhs.apply(rhs, |left, right| match (left, right) {
-                (Some(false), _) | (_, Some(false)) => Some(false),
-                (Some(left), Some(right)) => Some(*left && *right),
-                _ => None,
-            })),
-            Self::Or(lhs, rhs) => Some(lhs.apply(rhs, |left, right| match (left, right) {
-                (Some(true), _) | (_, Some(true)) => Some(true),
-                (Some(left), Some(right)) => Some(*left || *right),
-                _ => None,
-            })),
-            Self::Not(decision) => Some(decision.map(|bit| Variable::Symbol(*bit), |value| !value)),
-            Self::Restrict(decision, care) => {
-                decision.restrict(care, &false, |value, care| care.then_some(*value))
+            Self::And(lhs, rhs, slots) => {
+                Some(lhs.ordered_view(|bit| bit.remap(&slots.left)).apply(
+                    rhs.ordered_view(|bit| bit.remap(&slots.right)),
+                    |left, right| match (left, right) {
+                        (Some(false), _) | (_, Some(false)) => Some(false),
+                        (Some(left), Some(right)) => Some(*left && *right),
+                        _ => None,
+                    },
+                ))
             }
+            Self::Or(lhs, rhs, slots) => {
+                Some(lhs.ordered_view(|bit| bit.remap(&slots.left)).apply(
+                    rhs.ordered_view(|bit| bit.remap(&slots.right)),
+                    |left, right| match (left, right) {
+                        (Some(true), _) | (_, Some(true)) => Some(true),
+                        (Some(left), Some(right)) => Some(*left || *right),
+                        _ => None,
+                    },
+                ))
+            }
+            Self::Not(decision) => Some(decision.map(|bit| Variable::Symbol(*bit), |value| !value)),
+            Self::Restrict(decision, care, slots) => decision
+                .ordered_view(|bit| bit.remap(&slots.left))
+                .restrict(
+                    care.ordered_view(|bit| bit.remap(&slots.right)),
+                    &false,
+                    |value, care| care.then_some(*value),
+                ),
             Self::Substitute(decision, targets) => Some(decision.map(
                 |bit| match targets[usize::from(bit.slot)] {
                     SlotTarget::Const(value) => Variable::Constant(constant_bit(value, bit.bit.0)),
@@ -446,41 +485,53 @@ impl<'db> IndexCondition<'db> {
         }
     }
 
-    /// Express both decisions over one merged table.
-    fn aligned(&self, other: &Self) -> (Arc<[IndexExpr<'db>]>, BitDecision, BitDecision) {
+    /// Express both decisions over one merged table without rebuilding operands.
+    fn aligned(&self, other: &Self) -> (Arc<[IndexExpr<'db>]>, BitAlignment) {
         if self.indices == other.indices {
-            return (
-                self.indices.clone(),
-                self.decision.clone(),
-                other.decision.clone(),
-            );
+            return (self.indices.clone(), BitAlignment::default());
         }
-        let indices: Arc<[_]> = self
+        let mut indices = Vec::with_capacity(self.indices.len() + other.indices.len());
+        let mut left = Vec::with_capacity(self.indices.len());
+        let mut right = Vec::with_capacity(other.indices.len());
+        for pair in self
             .indices
             .iter()
-            .chain(other.indices.iter())
-            .copied()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        let relabel = |condition: &Self| {
-            if condition.indices.len() == indices.len() {
-                return condition.decision.clone();
-            }
-            let targets = condition
-                .indices
+            .merge_join_by(other.indices.iter(), Ord::cmp)
+        {
+            let slot = u16::try_from(indices.len()).expect("index condition table fits a slot");
+            let index = match pair {
+                EitherOrBoth::Left(index) => {
+                    left.push(slot);
+                    index
+                }
+                EitherOrBoth::Right(index) => {
+                    right.push(slot);
+                    index
+                }
+                EitherOrBoth::Both(index, _) => {
+                    left.push(slot);
+                    right.push(slot);
+                    index
+                }
+            };
+            indices.push(*index);
+        }
+        for slots in [&mut left, &mut right] {
+            if slots
                 .iter()
-                .map(|index| {
-                    let slot = indices.binary_search(index).unwrap();
-                    SlotTarget::Slot(u16::try_from(slot).unwrap())
-                })
-                .collect();
-            BitOperation::Substitute(condition.decision.clone(), targets)
-                .run()
-                .unwrap()
-        };
-        let (lhs, rhs) = (relabel(self), relabel(other));
-        (indices, lhs, rhs)
+                .enumerate()
+                .all(|(index, slot)| index == usize::from(*slot))
+            {
+                slots.clear();
+            }
+        }
+        (
+            indices.into(),
+            BitAlignment {
+                left: left.into(),
+                right: right.into(),
+            },
+        )
     }
 
     fn equal(lhs: IndexExpr<'db>, rhs: IndexExpr<'db>) -> Self {
@@ -537,8 +588,13 @@ impl<'db> IndexCondition<'db> {
         if self.is_never() || other.is_never() {
             return Self::never();
         }
-        let (indices, lhs, rhs) = self.aligned(other);
-        Self::compact(indices, BitOperation::And(lhs, rhs).run().unwrap())
+        let (indices, slots) = self.aligned(other);
+        Self::compact(
+            indices,
+            BitOperation::And(self.decision.clone(), other.decision.clone(), slots)
+                .run()
+                .unwrap(),
+        )
     }
 
     fn or(&self, other: &Self) -> Self {
@@ -551,8 +607,13 @@ impl<'db> IndexCondition<'db> {
         if self.is_always() || other.is_always() {
             return Self::always();
         }
-        let (indices, lhs, rhs) = self.aligned(other);
-        Self::compact(indices, BitOperation::Or(lhs, rhs).run().unwrap())
+        let (indices, slots) = self.aligned(other);
+        Self::compact(
+            indices,
+            BitOperation::Or(self.decision.clone(), other.decision.clone(), slots)
+                .run()
+                .unwrap(),
+        )
     }
 
     fn not(&self) -> Self {
@@ -633,8 +694,8 @@ impl<'db> IndexCondition<'db> {
     fn restrict(&self, care: &Self) -> Option<Self> {
         #[cfg(test)]
         RESTRICTIONS.set(RESTRICTIONS.get() + 1);
-        let (indices, decision, care) = self.aligned(care);
-        BitOperation::Restrict(decision, care)
+        let (indices, slots) = self.aligned(care);
+        BitOperation::Restrict(self.decision.clone(), care.decision.clone(), slots)
             .run()
             .map(|decision| Self::compact(indices, decision))
     }
@@ -2093,9 +2154,13 @@ mod tests {
     fn cached_infeasible_restrictions_follow_operand_lifetimes() {
         let source = BitShape::EqualConst(0x5a32).decision();
         let care = shared(&SHARED_BITS, Decision::leaf(false));
-        let key = BitOperation::Restrict(source.downgrade(), care.downgrade());
+        let key = BitOperation::Restrict(
+            source.downgrade(),
+            care.downgrade(),
+            BitAlignment::default(),
+        );
         assert!(
-            BitOperation::Restrict(source.clone(), care.clone())
+            BitOperation::Restrict(source.clone(), care.clone(), BitAlignment::default())
                 .run()
                 .is_none()
         );
@@ -2504,7 +2569,11 @@ mod tests {
         assert_eq!(cache.results.len(), 1);
         assert_eq!(cache.get(&small), Some(Some(result.clone())));
         assert!(cache.get(&large).is_none());
-        let infeasible = BitOperation::Restrict(source.downgrade(), result.downgrade());
+        let infeasible = BitOperation::Restrict(
+            source.downgrade(),
+            result.downgrade(),
+            BitAlignment::default(),
+        );
         cache.insert(
             infeasible.clone(),
             None,

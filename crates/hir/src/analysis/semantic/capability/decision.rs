@@ -742,6 +742,7 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
 
     /// Canonical completion outside a set of feasible valuations. An infeasible
     /// branch takes its sibling's value and therefore contributes no decision.
+    #[cfg(test)]
     pub(super) fn restrict(
         &self,
         care: &Self,
@@ -911,6 +912,7 @@ impl<V: Clone + Ord + Hash, T: Clone + Eq + Hash> Decision<V, T> {
         result
     }
 
+    #[cfg(test)]
     pub(super) fn apply(
         &self,
         other: &Self,
