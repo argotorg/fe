@@ -679,7 +679,7 @@ impl<'db> InputBuilder<'db> {
                 let outer_view = matches!(origin, InputOrigin::Parameter(_))
                     && path.is_empty()
                     && semantics.class == CapabilityClass::View;
-                let mut source = if let Some((prefix, source)) =
+                let source = if let Some((prefix, source)) =
                     views.iter().rev().find(|(prefix, _)| {
                         !prefix.is_empty()
                             && path.as_slice().starts_with(prefix.as_slice())
@@ -706,9 +706,6 @@ impl<'db> InputBuilder<'db> {
                         }
                     }
                 };
-                if ancestry.iter().any(|(ty, _)| *ty == semantics.target_ty) {
-                    source = source.widen();
-                }
                 if semantics.class == CapabilityClass::View {
                     views.push((path.clone(), source.clone()));
                 }
@@ -751,7 +748,13 @@ impl<'db> InputBuilder<'db> {
                     | CapabilityClass::Handle
                     | CapabilityClass::Pointer
             );
-            self.register(source.clone(), scope, semantics.class, writable, ancestry)?;
+            // A recursive field still denotes this exact stored address. Eager
+            // expansion used to widen it to the input's entire reachable graph,
+            // even when a helper only returned one next pointer. Discover the
+            // recursive referent on demand when a read needs its contents.
+            if !ancestry.iter().any(|(ty, _)| *ty == semantics.target_ty) {
+                self.register(source.clone(), scope, semantics.class, writable, ancestry)?;
+            }
             if outer_view {
                 let param = source.param().expect("outer parameter view");
                 if let Some((_, origin, _)) = self
