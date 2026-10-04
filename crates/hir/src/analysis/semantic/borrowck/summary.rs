@@ -2550,6 +2550,12 @@ impl<'db> Borrowck<'db> {
                 update.value.scope(),
                 inputs,
             )?;
+            // Different absent inputs all resolve to the same empty region,
+            // but their contents need not have the same shape. They write no
+            // caller storage, so they contribute no update to coalesce.
+            if target.region.is_empty() {
+                continue;
+            }
             if let Some((_, existing)) = updates
                 .iter_mut()
                 .find(|(region, _)| *region == target.region)

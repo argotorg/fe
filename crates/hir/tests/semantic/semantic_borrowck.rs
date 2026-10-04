@@ -13922,3 +13922,69 @@ fn inspect() {
     );
     assert!(diagnostics.contains("move conflict"), "{diagnostics}");
 }
+
+#[test]
+fn call_poststates_ignore_empty_destinations() {
+    let declarations = r#"
+use core::{Option, ptr}
+struct One { pointer: *u8 }
+struct Two { pointer: *u8, other: *u8 }
+fn fill(_ one: Option<*One>, _ two: Option<*Two>, _ replacement: *u8) {
+    match one {
+        Option::Some(target) => { *target = One { pointer: replacement } }
+        Option::None => {}
+    }
+    match two {
+        Option::Some(target) => {
+            *target = Two { pointer: replacement, other: replacement }
+        }
+        Option::None => {}
+    }
+}
+"#;
+    // Two absent destinations have incompatible contents, but neither writes.
+    let diagnostics = checked_borrow_diags(&format!(
+        "{declarations}\nfn inspect() {{ fill(Option::None, Option::None, ptr::alloc_bytes(1)) }}"
+    ));
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+    for first in [false, true] {
+        for second in [false, true] {
+            let one = if first {
+                "Option::Some(one)"
+            } else {
+                "Option::None"
+            };
+            let two = if second {
+                "Option::Some(two)"
+            } else {
+                "Option::None"
+            };
+            let source = format!(
+                r#"{declarations}
+fn inspect() {{
+    let shared = ptr::alloc_bytes(1)
+    let one = ptr::alloc<One>()
+    *one = One {{ pointer: ptr::alloc_bytes(1) }}
+    let two = ptr::alloc<Two>()
+    *two = Two {{ pointer: ptr::alloc_bytes(1), other: ptr::alloc_bytes(1) }}
+    fill({one}, {two}, shared)
+}}
+"#
+            );
+            let diagnostics = checked_borrow_diags(&source);
+            assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+            if first && second {
+                // The live updates must still create the replacement alias.
+                let source = source.replace(
+                    "fill(Option::Some(one), Option::Some(two), shared)",
+                    "fill(Option::Some(one), Option::Some(two), shared)\n\
+                     let left = mut *(*one).pointer\n\
+                     let right = mut *(*two).pointer\n\
+                     left = 1\nright = 2",
+                );
+                let diagnostics = checked_borrow_diags(&source);
+                assert!(diagnostics.contains("borrow conflict"), "{diagnostics}");
+            }
+        }
+    }
+}
