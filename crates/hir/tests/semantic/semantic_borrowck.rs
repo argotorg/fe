@@ -13839,3 +13839,86 @@ fn constrain(_ index: usize) -> usize {
         assert!(observed.unconditional.contains(&0), "{observed:?}");
     });
 }
+
+#[test]
+fn owned_values_reinitialized_in_loops_remain_available() {
+    for check in [
+        "core::assert(moved.value == 42)",
+        "require_value(moved.value)",
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Item {{ value: u64 }}
+fn require_value(_ value: u64) {{
+    if value != 42 {{ core::panic() }}
+}}
+fn inspect(mut count: own u64) {{
+    let mut item = Item {{ value: 42 }}
+    while count != 0 {{
+        let moved = item
+        {check}
+        item = Item {{ value: 42 }}
+        count -= 1
+    }}
+}}
+"#
+        ));
+        assert!(diagnostics.is_empty(), "{check}: {diagnostics}");
+    }
+    let diagnostics = checked_borrow_diags(
+        r#"
+use core::Option
+struct Item { value: u64 }
+fn inspect(mut count: own u64) {
+    let mut top = Option::Some(Item { value: 42 })
+    while count != 0 {
+        let moved = match top {
+            Option::Some(item) => item,
+            Option::None => return,
+        }
+        core::assert(moved.value == 42)
+        top = Option::Some(Item { value: 42 })
+        count -= 1
+    }
+}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn returning_path_guards_preserve_real_move_conflicts() {
+    for replacement in ["", "if replace { item = Item { value: 42 } }"] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Item {{ value: u64 }}
+fn inspect(mut count: own u64, replace: bool) {{
+    let mut item = Item {{ value: 42 }}
+    while count != 0 {{
+        let moved = item
+        core::assert(moved.value == 42)
+        {replacement}
+        count -= 1
+    }}
+}}
+"#
+        ));
+        assert!(
+            diagnostics.contains("move conflict"),
+            "{replacement}: {diagnostics}"
+        );
+    }
+    let diagnostics = checked_borrow_diags(
+        r#"
+struct Item { value: u64 }
+fn consume(_ value: own Item) {}
+fn inspect() {
+    let item = Item { value: 42 }
+    consume(item)
+    consume(item)
+    core::assert(false)
+}
+"#,
+    );
+    assert!(diagnostics.contains("move conflict"), "{diagnostics}");
+}

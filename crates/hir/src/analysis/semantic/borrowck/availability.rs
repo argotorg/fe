@@ -361,6 +361,11 @@ impl<'db> Borrowck<'db> {
                 let Some(terminal) = &self.terminal[block_index] else {
                     continue;
                 };
+                // Calls can constrain the paths that reach the terminator. Do
+                // not carry moves from nonreturning paths into loop feedback.
+                if state.restrict(terminal.guard()).is_none() {
+                    continue;
+                }
                 for successor in block.terminator.kind.successors() {
                     let Some(guard) = self.edge_guard(NBlockId::new(block_index), successor) else {
                         continue;
@@ -501,6 +506,9 @@ impl<'db> Borrowck<'db> {
             let Some(terminal) = &self.terminal[block_index] else {
                 continue;
             };
+            if state.restrict(terminal.guard()).is_none() {
+                continue;
+            }
             if let Some(access) = block.terminator.kind.access(self.db, &self.body) {
                 let access = self.resolve_access(terminal, access, block.terminator.origin);
                 self.require_access(&mut analysis, &state, terminal, &access);
