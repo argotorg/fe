@@ -1,0 +1,52 @@
+// A trait reference's const argument is evaluated where the reference is
+// written, so a fault or a non-const call in it is reported there instead of
+// silently dropping the bound. A fault that a default or a named constant
+// declares is reported once, at that declaration; one that only applying a
+// default reveals is reported too.
+fn runtime() -> usize { 1 }
+
+trait Has<const N: usize> {}
+
+struct Plain<const N: usize> {}
+
+fn inline_bound<T: Has<{ 1 / 0 }>>() {}
+
+fn where_clause<T>() where T: Has<{ runtime() }> {}
+
+struct Bounded<T: Has<{ 2 - 3 }>> {}
+
+impl Has<{ runtime() }> for u8 {}
+
+impl Has<{ 4 / 0 }> for Plain<1> {}
+
+trait Defaulted<const N: usize = { 5 / 0 }> {}
+
+fn applies_default<T: Defaulted>() {}
+
+const FAULT: usize = 6 / 0
+
+fn names_constant<T: Has<{ FAULT }>>() {}
+
+fn valid<T: Has<{ 1 / 1 }>>() {}
+
+fn caller() { valid<bool>() }
+
+type Inverse<const N: usize> = [u8; { 7 / N }]
+
+trait Shaped<const N: usize, T = Inverse<N>> {}
+
+fn applies_faulting_default<T: Shaped<0>>() {}
+
+fn applies_valid_default<T: Shaped<1>>() {}
+
+trait Type { type Item }
+
+struct Width<const N: usize> {}
+
+impl<const N: usize> Type for Width<N> { type Item = [u8; { 8 / N }] }
+
+trait Projected<T: Type, U = T::Item> {}
+
+fn projects_faulting_default<X: Projected<Width<0>>>() {}
+
+fn projects_valid_default<X: Projected<Width<1>>>() {}

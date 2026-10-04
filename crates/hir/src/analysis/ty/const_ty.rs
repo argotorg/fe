@@ -1827,21 +1827,23 @@ fn bigint_to_u256_word(value: &BigInt) -> Option<BigUint> {
     }
 }
 
+/// A fault names the expression that raised it, so the diagnostic points where
+/// full CTFE of the same body would.
 #[derive(Clone, Copy, Debug)]
 enum ConstIntError {
-    Overflow,
-    DivisionByZero,
-    NegativeExponent,
+    Overflow(ExprId),
+    DivisionByZero(ExprId),
+    NegativeExponent(ExprId),
     /// The expression is not a pure integer expression. Callers may fall
     /// through to full CTFE rather than reporting an arithmetic error.
     NotIntExpr,
 }
 
-fn const_int_error(fault: PrimitiveFault) -> ConstIntError {
+fn const_int_error(fault: PrimitiveFault, expr: ExprId) -> ConstIntError {
     match fault {
-        PrimitiveFault::ArithmeticOverflow => ConstIntError::Overflow,
-        PrimitiveFault::DivisionByZero => ConstIntError::DivisionByZero,
-        PrimitiveFault::NegativeExponent => ConstIntError::NegativeExponent,
+        PrimitiveFault::ArithmeticOverflow => ConstIntError::Overflow(expr),
+        PrimitiveFault::DivisionByZero => ConstIntError::DivisionByZero(expr),
+        PrimitiveFault::NegativeExponent => ConstIntError::NegativeExponent(expr),
         PrimitiveFault::InvalidPowerExponent
         | PrimitiveFault::OutsideSupportedSubset
         | PrimitiveFault::InvalidCast
@@ -1851,13 +1853,16 @@ fn const_int_error(fault: PrimitiveFault) -> ConstIntError {
 
 fn invalid_cause_from_const_int_error<'db>(
     body: Body<'db>,
-    expr: ExprId,
     err: ConstIntError,
 ) -> Option<InvalidCause<'db>> {
     match err {
-        ConstIntError::Overflow => Some(InvalidCause::ConstEvalArithmeticOverflow { body, expr }),
-        ConstIntError::DivisionByZero => Some(InvalidCause::ConstEvalDivisionByZero { body, expr }),
-        ConstIntError::NegativeExponent => {
+        ConstIntError::Overflow(expr) => {
+            Some(InvalidCause::ConstEvalArithmeticOverflow { body, expr })
+        }
+        ConstIntError::DivisionByZero(expr) => {
+            Some(InvalidCause::ConstEvalDivisionByZero { body, expr })
+        }
+        ConstIntError::NegativeExponent(expr) => {
             Some(InvalidCause::ConstEvalNegativeExponent { body, expr })
         }
         ConstIntError::NotIntExpr => None,
@@ -1867,34 +1872,31 @@ fn invalid_cause_from_const_int_error<'db>(
 fn eval_int_expr<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
-    expr: &Expr<'db>,
+    expr: ExprId,
     expected: Option<TyId<'db>>,
     has_captures: &dyn Fn() -> bool,
 ) -> Result<BigInt, ConstIntError> {
-    match expr {
+    let Partial::Present(data) = expr.data(db, body) else {
+        return Err(ConstIntError::NotIntExpr);
+    };
+    match data {
         Expr::Block(stmts) => {
             let [stmt] = stmts.as_slice() else {
                 return Err(ConstIntError::NotIntExpr);
             };
-            let Partial::Present(stmt) = stmt.data(db, body) else {
+            let Partial::Present(Stmt::Expr(inner)) = stmt.data(db, body) else {
                 return Err(ConstIntError::NotIntExpr);
             };
-            let Stmt::Expr(expr_id) = stmt else {
-                return Err(ConstIntError::NotIntExpr);
-            };
-            let Partial::Present(inner) = expr_id.data(db, body) else {
-                return Err(ConstIntError::NotIntExpr);
-            };
-            eval_int_expr(db, body, inner, expected, has_captures)
+            eval_int_expr(db, body, *inner, expected, has_captures)
         }
         Expr::Lit(LitKind::Int(value)) => Ok(BigInt::from(value.data(db).clone())),
         Expr::Un(inner, op) => {
-            let Partial::Present(inner) = inner.data(db, body) else {
-                return Err(ConstIntError::Overflow);
+            let Partial::Present(_) = inner.data(db, body) else {
+                return Err(ConstIntError::Overflow(expr));
             };
-            let value = eval_int_expr(db, body, inner, expected, has_captures)?;
+            let value = eval_int_expr(db, body, *inner, expected, has_captures)?;
             if matches!(op, UnOp::Minus) && expected.is_none() {
-                return Err(ConstIntError::Overflow);
+                return Err(ConstIntError::Overflow(expr));
             }
             execute_source_int_unary(
                 db,
@@ -1903,23 +1905,22 @@ fn eval_int_expr<'db>(
                 *op,
                 value,
             )
-            .map_err(const_int_error)
+            .map_err(|fault| const_int_error(fault, expr))
         }
-        Expr::Bin(lhs_id, rhs_id, op) => {
-            let Partial::Present(lhs) = lhs_id.data(db, body) else {
-                return Err(ConstIntError::Overflow);
-            };
-            let Partial::Present(rhs) = rhs_id.data(db, body) else {
-                return Err(ConstIntError::Overflow);
+        Expr::Bin(lhs, rhs, op) => {
+            let (Partial::Present(_), Partial::Present(_)) =
+                (lhs.data(db, body), rhs.data(db, body))
+            else {
+                return Err(ConstIntError::Overflow(expr));
             };
             let expected = expected.unwrap_or_else(|| TyId::u256(db));
-            let lhs = eval_int_expr(db, body, lhs, Some(expected), has_captures)?;
-            let rhs = eval_int_expr(db, body, rhs, Some(expected), has_captures)?;
+            let lhs = eval_int_expr(db, body, *lhs, Some(expected), has_captures)?;
+            let rhs = eval_int_expr(db, body, *rhs, Some(expected), has_captures)?;
             let BinOp::Arith(op) = op else {
                 return Err(ConstIntError::NotIntExpr);
             };
             execute_source_int_binary(db, expected, ArithmeticMode::Checked, *op, lhs, rhs)
-                .map_err(const_int_error)
+                .map_err(|fault| const_int_error(fault, expr))
         }
         // A path's meaning under captured generic arguments needs full CTFE.
         Expr::Path(path) => {
@@ -1969,9 +1970,6 @@ pub(super) fn try_eval_const_int_expr<'db>(
     expr: ExprId,
     expected_ty: TyId<'db>,
 ) -> Option<BigInt> {
-    let Partial::Present(expr) = expr.data(db, body) else {
-        return None;
-    };
     eval_int_expr(
         db,
         body,
@@ -2293,7 +2291,7 @@ pub(crate) fn evaluate_const_ty<'db>(
         Expr::Block(..) | Expr::Un(..) | Expr::Bin(..) | Expr::Lit(LitKind::Int(..))
     ) {
         let expected_int_ty = expected_ty.filter(|ty| int_ty_shape(db, *ty).is_some());
-        match eval_int_expr(db, body, &expr, expected_int_ty, &has_captures) {
+        match eval_int_expr(db, body, body.expr(db), expected_int_ty, &has_captures) {
             Ok(value) => {
                 if let Some(word) = bigint_to_u256_word(&value) {
                     let mut table = UnificationTable::new(db);
@@ -2314,8 +2312,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                 // Genuine arithmetic error (overflow, division by zero, etc.).
                 // For Block/Un/Bin, report error. For plain int literals, fall through to CTFE.
                 if matches!(expr, Expr::Block(..) | Expr::Un(..) | Expr::Bin(..))
-                    && let Some(cause) =
-                        invalid_cause_from_const_int_error(body, body.expr(db), err)
+                    && let Some(cause) = invalid_cause_from_const_int_error(body, err)
                 {
                     return ConstTyId::invalid(db, cause);
                 }

@@ -34,10 +34,10 @@ use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_const_ty};
 use crate::hir_def::{CallableDef, ConstGenericArgValue, ImplTrait, Trait};
 use crate::{
     hir_def::{
-        BinOp, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParam,
-        GenericParamOwner, LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId,
-        StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId,
-        WhereClauseOwner,
+        BinOp, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericArg,
+        GenericParam, GenericParamOwner, LitKind, ManualContractRootAttr, Partial, Pat, PatId,
+        PathId, StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId,
+        TypeKind, WhereClauseOwner, scope_graph::ScopeId,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -116,12 +116,13 @@ use crate::analysis::ty::{
     pattern_types::{
         PatternDestructureMode, apply_pattern_borrow_mode, destructure_pattern_source,
     },
-    ty_error::{collect_ty_lower_errors, diag_from_invalid_cause},
+    ty_error::{collect_hir_ty_diags, collect_ty_lower_errors, diag_from_invalid_cause},
 };
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
-        PathRes, PathResError, diagnostics::PathResDiag, resolve_path_with_observer_and_minter,
+        PathRes, PathResError, PathResErrorKind, diagnostics::PathResDiag, resolve_path,
+        resolve_path_with_observer_and_minter,
     },
     ty::{
         ty_def::{TyFlags, inference_keys},
@@ -641,6 +642,75 @@ fn predicate_names_a_type<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> b
         resolved,
         Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) if ty.const_ty_ty(db).is_none()
     )
+}
+
+/// What an effect key that is neither a valid type nor trait key reports. A
+/// key whose path names a type or trait reports the error written in it, at
+/// that error; only a key naming neither is an unresolved effect.
+pub(crate) fn invalid_effect_key_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: EffectParamOwner<'db>,
+    idx: usize,
+    key: HirTyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let span = owner.effect_param_ty_span(db, idx);
+    let written = match key.data(db) {
+        TypeKind::Path(Partial::Present(path)) => {
+            let segment = path.segment_index(db);
+            let path_span = span.clone().into_path_type().path();
+            let arg_diags = || {
+                path.generic_args(db)
+                    .data(db)
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(arg_idx, arg)| {
+                        let arg_span = path_span
+                            .clone()
+                            .segment(segment)
+                            .generic_args()
+                            .arg(arg_idx);
+                        match arg {
+                            GenericArg::Type(arg) => {
+                                Some((arg.ty.to_opt()?, arg_span.into_type_arg().ty()))
+                            }
+                            GenericArg::AssocType(binding) => {
+                                Some((binding.ty.to_opt()?, arg_span.into_assoc_type_arg().ty()))
+                            }
+                            GenericArg::Const(_) => None,
+                        }
+                    })
+                    .flat_map(|(ty, span)| collect_hir_ty_diags(db, scope, ty, span, assumptions))
+                    .collect::<Vec<_>>()
+            };
+            match resolve_path(db, *path, scope, assumptions, false) {
+                Ok(PathRes::Ty(_) | PathRes::TyAlias(..)) => {
+                    collect_hir_ty_diags(db, scope, key, span, assumptions)
+                }
+                Ok(PathRes::Trait(_)) => arg_diags(),
+                // A fault in the reference's own arguments, such as a const
+                // argument failing evaluation, is reported where it is written.
+                Err(err)
+                    if !matches!(err.kind, PathResErrorKind::NotFound { .. })
+                        && (0..=segment)
+                            .any(|seg| path.segment(db, seg) == Some(err.failed_at)) =>
+                {
+                    err.into_trait_ref_diag(db, *path, path_span)
+                        .into_iter()
+                        .collect()
+                }
+                Err(_) => arg_diags(),
+                Ok(_) => Vec::new(),
+            }
+        }
+        _ => collect_hir_ty_diags(db, scope, key, span, assumptions),
+    };
+    if written.is_empty() {
+        vec![BodyDiag::InvalidEffectKey { owner, key, idx }.into()]
+    } else {
+        written.into_iter().map(FuncBodyDiag::Ty).collect()
+    }
 }
 
 #[salsa::tracked(return_ref)]
@@ -1447,11 +1517,16 @@ impl<'db> TyChecker<'db> {
                 ),
                 ResolvedEffectKey::Type(_) | ResolvedEffectKey::Trait(_)
             ) {
-                self.push_diag(BodyDiag::InvalidEffectKey {
-                    owner: EffectParamOwner::Func(func),
-                    key: key_ty,
+                for diag in invalid_effect_key_diags(
+                    self.db,
+                    EffectParamOwner::Func(func),
                     idx,
-                });
+                    key_ty,
+                    func.scope(),
+                    self.env.assumptions(),
+                ) {
+                    self.push_diag(diag);
+                }
             }
         }
     }
@@ -1542,11 +1617,16 @@ impl<'db> TyChecker<'db> {
                         }
                     }
                     ResolvedEffectKey::Invalid | ResolvedEffectKey::Other => {
-                        self.push_diag(BodyDiag::InvalidEffectKey {
+                        for diag in invalid_effect_key_diags(
+                            self.db,
                             owner,
-                            key: key_ty,
                             idx,
-                        });
+                            key_ty,
+                            contract.scope(),
+                            assumptions,
+                        ) {
+                            self.push_diag(diag);
+                        }
                     }
                 }
                 continue;
@@ -1570,7 +1650,7 @@ impl<'db> TyChecker<'db> {
                             binding.provider.source
                     {
                         self.push_diag(BodyDiag::ImmutableContractFieldMutBinding {
-                            primary: owner.effect_param_ty_span(self.db, idx),
+                            primary: owner.effect_param_ty_span(self.db, idx).into(),
                             field: binding.requirement.binding_name,
                             field_span: crate::hir_def::FieldParent::Contract(field.contract)
                                 .field_name_span(field.index as usize),

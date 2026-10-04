@@ -1070,6 +1070,12 @@ pub enum TraitLowerDiag<'db> {
     UnsafeLocalBoundBlanketImpl(ImplTrait<'db>),
     CyclicTraitRef(ImplTrait<'db>),
     CyclicSuperTraits(Vec<Trait<'db>>),
+    /// An impl defines its associated types in its body, so its header has
+    /// nothing to bind.
+    ImplHeaderAssocTypeBinding {
+        span: DynLazySpan<'db>,
+        name: IdentId<'db>,
+    },
 }
 
 impl TraitLowerDiag<'_> {
@@ -1080,6 +1086,7 @@ impl TraitLowerDiag<'_> {
             Self::CyclicSuperTraits { .. } => 2,
             Self::CyclicTraitRef(_) => 3,
             Self::UnsafeLocalBoundBlanketImpl(_) => 4,
+            Self::ImplHeaderAssocTypeBinding { .. } => 5,
         }
     }
 }

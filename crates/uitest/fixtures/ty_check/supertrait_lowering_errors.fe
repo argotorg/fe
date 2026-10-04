@@ -1,0 +1,17 @@
+// A super-trait reference that fails to lower is reported like any other
+// trait reference, rather than being dropped from the trait.
+fn runtime() -> usize { 1 }
+
+trait Has<const N: usize> {}
+
+trait Unknown: Missing {}
+
+trait Arity: Has<1, 2> {}
+
+trait Mistyped: Has<true> {}
+
+trait Faulting: Has<{ 1 / 0 }> {}
+
+trait NonConst: Has<{ runtime() }> {}
+
+trait Valid: Has<1> {}

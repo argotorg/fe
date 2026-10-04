@@ -11,28 +11,34 @@ use smallvec1::SmallVec;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution;
 use crate::analysis::ty;
-use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag};
+use crate::analysis::ty::diagnostics::{
+    TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
+};
 use crate::analysis::ty::generic_defaults::{default_dependencies, type_default_diags};
 use crate::analysis::ty::method_table::{MethodProbe, probe_method};
 use crate::analysis::ty::normalize::normalize_ty;
+use crate::analysis::ty::trait_lower::TraitRefLowerError;
 use crate::analysis::ty::trait_lower::lower_impl_trait;
+use crate::analysis::ty::trait_resolution::PredicateListId;
 use crate::analysis::ty::ty_def::{InvalidCause, TyId};
-use crate::analysis::ty::ty_error::{collect_ty_lower_errors, emit_invalid_ty_error};
+use crate::analysis::ty::ty_error::{
+    collect_hir_ty_diags, collect_ty_lower_errors, emit_invalid_ty_error,
+};
 use crate::analysis::ty::ty_lower::generic_param_owner_assumptions;
 use crate::hir_def::{
-    Contract, Enum, EnumVariant, FieldParent, Func, GenericParam, GenericParamOwner,
+    Contract, Enum, EnumVariant, FieldParent, Func, GenericArg, GenericParam, GenericParamOwner,
     GenericParamView, IdentId, Impl, ImplTrait, ItemKind, Partial, PathId, Struct, Trait,
-    TypeAlias, TypeBound, VariantKind, WhereClauseOwner,
+    TraitRefId, TypeAlias, TypeBound, VariantKind, WhereClauseOwner, scope_graph::ScopeId,
 };
-use crate::span::DynLazySpan;
+use crate::span::{DynLazySpan, params::LazyTraitRefSpan};
 
 use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::binder::Binder;
-use crate::analysis::ty::trait_def::ImplementorId;
+use crate::analysis::ty::trait_def::{ImplementorId, TraitInstId};
 use crate::semantic::{
-    FieldView, FuncParamView, ImplAssocTypeView, InherentImplAdmissibility, SuperTraitRefView,
-    VariantView, WherePredicateBoundView, WherePredicateView, constraints_for,
-    header_constraints_for, lower_hir_kind_local, param_env,
+    FieldView, FuncParamView, ImplAssocTypeView, InherentImplAdmissibility, VariantView,
+    WherePredicateBoundView, WherePredicateView, constraints_for, header_constraints_for,
+    lower_hir_kind_local, param_env,
 };
 
 /// Unified "pull" diagnostics surface for HIR items and views.
@@ -81,69 +87,68 @@ fn cyclic_trait_ref_diag<'db>(span: DynLazySpan<'db>, context: &str) -> TyDiagCo
     .into()
 }
 
-impl<'db> SuperTraitRefView<'db> {
-    /// Diagnostics for this super-trait reference in its owner's context.
-    /// Uses the trait's `Self` as subject and checks WF; kind mismatch is emitted
-    /// elsewhere via `Trait::diags_super_traits`.
-    pub fn diags(self, db: &'db dyn HirAnalysisDb) -> Option<TyDiagCollection<'db>> {
-        use name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
-        use ty::trait_lower::{self, TraitRefLowerError};
-        use ty::trait_resolution::{WellFormedness, check_trait_inst_wf};
+/// Why a trait reference written as a super-trait or associated-type bound
+/// fails to lower, if it does.
+fn trait_ref_lowering_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    error: TraitRefLowerError<'db>,
+    tr: TraitRefId<'db>,
+    span: LazyTraitRefSpan<'db>,
+    context: &'static str,
+) -> Option<TyDiagCollection<'db>> {
+    use name_resolution::diagnostics::PathResDiag;
 
-        let span = self.span();
-        let subject = self.subject_self(db);
-        let scope = self.owner.scope();
-        let assumptions = self.assumptions(db);
-        let tr = self.trait_ref(db);
-
-        let inst = match trait_lower::lower_trait_ref(db, subject, tr, scope, assumptions, None) {
-            Ok(i) => i,
-            Err(TraitRefLowerError::PathResError(err)) => {
-                let path = tr.path(db).unwrap();
-                let diag = err.into_diag(db, path, span.path(), ExpectedPathKind::Trait)?;
-                return Some(diag.into());
-            }
-            Err(TraitRefLowerError::InvalidDomain(res)) => {
-                let path = tr.path(db).unwrap();
-                let ident = path.ident(db).unwrap();
-                return Some(
-                    PathResDiag::ExpectedTrait(span.path().into(), ident, res.kind_name()).into(),
-                );
-            }
-            Err(TraitRefLowerError::Cycle) => {
-                return Some(cyclic_trait_ref_diag(
-                    span.path().into(),
-                    "super-trait bound",
-                ));
-            }
-            Err(TraitRefLowerError::UnsafeLocalBoundBlanketImpl | TraitRefLowerError::Ignored) => {
-                return None;
-            }
-        };
-
-        // Do not emit when subject contains assoc types of params
-        if inst.self_ty(db).contains_assoc_ty_of_param(db) {
-            return None;
+    match error {
+        TraitRefLowerError::UnsafeLocalBoundBlanketImpl | TraitRefLowerError::Ignored => None,
+        TraitRefLowerError::PathResError(err) => {
+            let path = tr.path(db).to_opt()?;
+            // An error inside a generic argument has no place on this path;
+            // the argument's uses report it.
+            (0..=path.segment_index(db))
+                .any(|idx| path.segment(db, idx) == Some(err.failed_at))
+                .then(|| err.into_trait_ref_diag(db, path, span.path()))?
         }
-
-        match check_trait_inst_wf(
-            db,
-            ty::trait_resolution::TraitSolveCx::new(db, scope)
-                .with_assumptions(param_env(db, self.owner.into())),
-            inst,
-        ) {
-            WellFormedness::WellFormed => None,
-            WellFormedness::IllFormed { goal, subgoal } => Some(
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: span.into(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                }
-                .into(),
-            ),
+        TraitRefLowerError::InvalidDomain(res) => {
+            let ident = tr.path(db).to_opt()?.ident(db).to_opt()?;
+            Some(PathResDiag::ExpectedTrait(span.path().into(), ident, res.kind_name()).into())
         }
+        TraitRefLowerError::Cycle => Some(cyclic_trait_ref_diag(span.path().into(), context)),
     }
+}
+
+/// The types a trait reference binds to associated types, as in
+/// `Has<Item = [u8; 2]>`, checked like any written type.
+fn trait_ref_binding_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    tr: TraitRefId<'db>,
+    span: LazyTraitRefSpan<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    let Some(path) = tr.path(db).to_opt() else {
+        return Vec::new();
+    };
+    let segment = path.segment_index(db);
+    path.generic_args(db)
+        .data(db)
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, arg)| match arg {
+            GenericArg::AssocType(binding) => Some((idx, binding.ty.to_opt()?)),
+            _ => None,
+        })
+        .flat_map(|(idx, ty)| {
+            let ty_span = span
+                .clone()
+                .path()
+                .segment(segment)
+                .generic_args()
+                .arg(idx)
+                .into_assoc_type_arg()
+                .ty();
+            collect_hir_ty_diags(db, scope, ty, ty_span, assumptions)
+        })
+        .collect()
 }
 
 impl<'db> WherePredicateView<'db> {
@@ -220,7 +225,7 @@ impl<'db> WherePredicateBoundView<'db> {
         db: &'db dyn HirAnalysisDb,
         subject: ty::ty_def::TyId<'db>,
     ) -> Vec<TyDiagCollection<'db>> {
-        use name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
+        use name_resolution::diagnostics::PathResDiag;
         use ty::trait_lower::{self, TraitRefLowerError};
         use ty::trait_resolution::{WellFormedness, check_trait_inst_wf};
 
@@ -232,6 +237,13 @@ impl<'db> WherePredicateBoundView<'db> {
             matches!(owner_item, ItemKind::Trait(_)) && self.pred.is_self_subject(db);
         let tr = self.trait_ref(db);
         let span = self.trait_ref_span();
+        out.extend(trait_ref_binding_diags(
+            db,
+            tr,
+            span.clone(),
+            scope,
+            assumptions,
+        ));
 
         match trait_lower::lower_trait_ref(
             db,
@@ -284,10 +296,9 @@ impl<'db> WherePredicateBoundView<'db> {
             }
             Err(TraitRefLowerError::PathResError(err)) => {
                 if let Some(path) = tr.path(db).to_opt()
-                    && let Some(diag) =
-                        err.into_diag(db, path, span.path(), ExpectedPathKind::Trait)
+                    && let Some(diag) = err.into_trait_ref_diag(db, path, span.path())
                 {
-                    out.push(diag.into());
+                    out.push(diag);
                 }
             }
             Err(TraitRefLowerError::InvalidDomain(res)) => {
@@ -448,7 +459,79 @@ impl<'db> Trait<'db> {
         out
     }
 
-    /// Diagnostics for super-traits (semantic, kind-mismatch only).
+    /// Diagnostics for associated-type bounds, as in `type Item: Has<1>`:
+    /// references that fail to lower and the types their bindings write.
+    pub fn diags_associated_type_bounds(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<TyDiagCollection<'db>> {
+        use ty::trait_resolution::{TraitSolveCx, WellFormedness, check_ty_wf};
+
+        let scope = self.scope();
+        let assumptions = constraints_for(db, self.into());
+        let self_ty = self.self_param(db);
+        let formal = TraitInstId::new_simple(db, self, self.params(db).to_vec()).trait_ref(db);
+        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(param_env(db, self.into()));
+        let mut diags = Vec::new();
+        for assoc in self.assoc_types(db) {
+            // The bound constrains the associated type, as the trait's
+            // elaborated bounds state it.
+            let subject = assoc
+                .name(db)
+                .map_or(self_ty, |name| TyId::assoc_ty(db, formal, name));
+            for bound in assoc.bounds(db) {
+                let tr = bound.trait_ref(db);
+                diags.extend(trait_ref_binding_diags(
+                    db,
+                    tr,
+                    bound.span(),
+                    scope,
+                    assumptions,
+                ));
+                match ty::trait_lower::lower_trait_ref(
+                    db,
+                    subject,
+                    tr,
+                    scope,
+                    assumptions,
+                    Some(self_ty),
+                ) {
+                    // The arguments a bound passes must be well-formed; the
+                    // bound trait's own requirements on the associated type
+                    // fall to the impls that define it.
+                    Ok(inst) => {
+                        if let Some(WellFormedness::IllFormed { goal, .. }) = inst.args(db)[1..]
+                            .iter()
+                            .chain(inst.assoc_type_bindings(db).values())
+                            .map(|&ty| check_ty_wf(db, solve_cx, ty))
+                            .find(|wf| !wf.is_wf())
+                        {
+                            diags.push(
+                                TraitConstraintDiag::TraitBoundNotSat {
+                                    span: bound.span().into(),
+                                    primary_goal: goal,
+                                    unsat_subgoal: None,
+                                    required_by: None,
+                                }
+                                .into(),
+                            );
+                        }
+                    }
+                    Err(error) => diags.extend(trait_ref_lowering_diag(
+                        db,
+                        error,
+                        tr,
+                        bound.span(),
+                        "associated type bound",
+                    )),
+                }
+            }
+        }
+        diags
+    }
+
+    /// Diagnostics for super-traits: kind mismatches, references that fail
+    /// to lower, and well-formedness of the rest.
     pub fn diags_super_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use ty::trait_resolution::{WellFormedness, check_trait_inst_wf};
 
@@ -465,27 +548,50 @@ impl<'db> Trait<'db> {
                 );
             }
 
-            // Additionally, ensure that the super-trait reference is well-formed
-            if let Ok(inst) = view.trait_inst(db) {
-                match check_trait_inst_wf(
-                    db,
-                    ty::trait_resolution::TraitSolveCx::new(db, self.scope())
-                        .with_assumptions(param_env(db, self.into())),
-                    inst,
-                ) {
-                    WellFormedness::WellFormed => {}
-                    WellFormedness::IllFormed { goal, .. } => {
-                        diags.push(
-                            TraitConstraintDiag::TraitBoundNotSat {
-                                span: view.span().into(),
-                                primary_goal: goal,
-                                unsat_subgoal: None,
-                                required_by: None,
-                            }
-                            .into(),
-                        );
-                    }
+            let tr = view.trait_ref(db);
+            diags.extend(trait_ref_binding_diags(
+                db,
+                tr,
+                view.span(),
+                self.scope(),
+                view.assumptions(db),
+            ));
+            // A reference that lowers must also be well-formed.
+            let inst = match ty::trait_lower::lower_trait_ref(
+                db,
+                view.subject_self(db),
+                tr,
+                self.scope(),
+                view.assumptions(db),
+                None,
+            ) {
+                Ok(inst) => inst,
+                Err(error) => {
+                    diags.extend(trait_ref_lowering_diag(
+                        db,
+                        error,
+                        tr,
+                        view.span(),
+                        "super-trait bound",
+                    ));
+                    continue;
                 }
+            };
+            if let WellFormedness::IllFormed { goal, .. } = check_trait_inst_wf(
+                db,
+                ty::trait_resolution::TraitSolveCx::new(db, self.scope())
+                    .with_assumptions(param_env(db, self.into())),
+                inst,
+            ) {
+                diags.push(
+                    TraitConstraintDiag::TraitBoundNotSat {
+                        span: view.span().into(),
+                        primary_goal: goal,
+                        unsat_subgoal: None,
+                        required_by: None,
+                    }
+                    .into(),
+                );
             }
         }
         diags
@@ -1449,7 +1555,7 @@ impl<'db> GenericParamOwner<'db> {
     }
 
     pub fn diags_trait_bounds(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        use name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
+        use name_resolution::diagnostics::PathResDiag;
         use ty::trait_lower::{self, TraitRefLowerError};
         use ty::trait_resolution::{WellFormedness, check_trait_inst_wf};
 
@@ -1476,6 +1582,13 @@ impl<'db> GenericParamOwner<'db> {
                     .bounds()
                     .bound(i)
                     .trait_bound();
+                out.extend(trait_ref_binding_diags(
+                    db,
+                    *tr,
+                    span.clone(),
+                    scope,
+                    assumptions,
+                ));
                 match trait_lower::lower_trait_ref(
                     db,
                     subject,
@@ -1521,10 +1634,9 @@ impl<'db> GenericParamOwner<'db> {
                     }
                     Err(TraitRefLowerError::PathResError(err)) => {
                         if let Some(path) = tr.path(db).to_opt()
-                            && let Some(diag) =
-                                err.into_diag(db, path, span.path(), ExpectedPathKind::Trait)
+                            && let Some(diag) = err.into_trait_ref_diag(db, path, span.path())
                         {
-                            out.push(diag.into());
+                            out.push(diag);
                         }
                     }
                     Err(TraitRefLowerError::InvalidDomain(res)) => {
@@ -1673,6 +1785,7 @@ impl<'db> Diagnosable<'db> for Trait<'db> {
         }
         out.extend(self.diags_assoc_defaults(db));
         out.extend(self.diags_super_traits(db));
+        out.extend(self.diags_associated_type_bounds(db));
 
         for pred in WhereClauseOwner::Trait(self).clause(db).predicates(db) {
             out.extend(pred.diags(db));
@@ -1698,13 +1811,46 @@ impl<'db> Diagnosable<'db> for ImplTrait<'db> {
     type Diagnostic = TyDiagCollection<'db>;
 
     fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
+        // An impl defines its associated types in its body; a binding in its
+        // header is rejected wherever lowering gets to.
+        let mut out = self
+            .hir_trait_ref(db)
+            .to_opt()
+            .and_then(|tr| tr.path(db).to_opt())
+            .map_or_else(Vec::new, |path| {
+                let segment = path.segment_index(db);
+                path.generic_args(db)
+                    .data(db)
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, arg)| match arg {
+                        GenericArg::AssocType(binding) => Some((idx, binding.name.to_opt()?)),
+                        _ => None,
+                    })
+                    .map(|(idx, name)| {
+                        TraitLowerDiag::ImplHeaderAssocTypeBinding {
+                            span: self
+                                .span()
+                                .trait_ref()
+                                .path()
+                                .segment(segment)
+                                .generic_args()
+                                .arg(idx)
+                                .into(),
+                            name,
+                        }
+                        .into()
+                    })
+                    .collect()
+            });
+
         // Early path/domain/WF checks; bail out on errors to avoid noisy follow-ups
         let (implementor_opt, validity_diags) = self.diags_implementor_validity(db);
+        out.extend(validity_diags);
         let Some(implementor) = implementor_opt else {
-            return validity_diags;
+            return out;
         };
 
-        let mut out = validity_diags;
         out.extend(implementor.diags_method_conformance(db));
         out.extend(self.diags_effect_handle_raw(db, implementor));
         out.extend(self.diags_trait_ref_and_wf(db));

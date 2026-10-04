@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_impl/impl_header_assoc_type_binding.fe
+---
+error[5-0005]: associated type bindings are not allowed in an impl header
+   ┌─ impl_header_assoc_type_binding.fe:11:10
+   │
+11 │ impl Has<Item = Missing> for bool { type Item = u8 }
+   │          ^^^^^^^^^^^^^^ define `Item` in the impl body with `type Item = ...`
+
+error[5-0005]: associated type bindings are not allowed in an impl header
+   ┌─ impl_header_assoc_type_binding.fe:13:10
+   │
+13 │ impl Has<Item = u16> for u8 { type Item = u8 }
+   │          ^^^^^^^^^^ define `Item` in the impl body with `type Item = ...`
+
+error[5-0005]: associated type bindings are not allowed in an impl header
+   ┌─ impl_header_assoc_type_binding.fe:15:10
+   │
+15 │ impl Has<Item = u32> for u32 { type Item = u32 }
+   │          ^^^^^^^^^^ define `Item` in the impl body with `type Item = ...`
+
+error[5-0005]: associated type bindings are not allowed in an impl header
+   ┌─ impl_header_assoc_type_binding.fe:17:11
+   │
+17 │ impl Pair<First = u8, Second = u16> for bool {
+   │           ^^^^^^^^^^ define `First` in the impl body with `type First = ...`
+
+error[5-0005]: associated type bindings are not allowed in an impl header
+   ┌─ impl_header_assoc_type_binding.fe:17:23
+   │
+17 │ impl Pair<First = u8, Second = u16> for bool {
+   │                       ^^^^^^^^^^^^ define `Second` in the impl body with `type Second = ...`

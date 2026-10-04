@@ -4897,6 +4897,17 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
                 impl_trait.span().trait_ref().resolve(db),
                 error_code,
             ),
+
+            Self::ImplHeaderAssocTypeBinding { span, name } => {
+                let name = name.data(db);
+                primary_diag(
+                    Severity::Error,
+                    "associated type bindings are not allowed in an impl header",
+                    format!("define `{name}` in the impl body with `type {name} = ...`"),
+                    span.resolve(db),
+                    error_code,
+                )
+            }
         }
     }
 }

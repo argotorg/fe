@@ -3,6 +3,12 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/assoc_ty_missing.fe
 ---
+error[2-0002]: `T2` is not found
+  ┌─ assoc_ty_missing.fe:3:15
+  │
+3 │     type Bar: T2
+  │               ^^ `T2` is not found
+
 error[6-0012]: missing associated type in trait implementation
   ┌─ assoc_ty_missing.fe:9:13
   │

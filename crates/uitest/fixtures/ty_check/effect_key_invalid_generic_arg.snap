@@ -3,11 +3,8 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/effect_key_invalid_generic_arg.fe
 ---
-error[8-0051]: unresolved effect
-  ┌─ effect_key_invalid_generic_arg.fe:5:37
+error[2-0002]: `u0` is not found
+  ┌─ effect_key_invalid_generic_arg.fe:5:45
   │
 5 │ fn needs_invalid_effect() uses (st: Storage<u0>) {
-  │                                     ^^^^^^^^^^^ cannot resolve `Storage<u0>` as a type or trait
-  │
-  = consider defining a type or trait named `Storage<u0>`
-  = or bind the effect value with `uses (name: Type)`
+  │                                             ^^ `u0` is not found

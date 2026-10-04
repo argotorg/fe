@@ -4334,7 +4334,7 @@ impl<'db> ImplTrait<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> (Option<ImplementorId<'db>>, Vec<TyDiagCollection<'db>>) {
-        use crate::analysis::name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
+        use crate::analysis::name_resolution::diagnostics::PathResDiag;
         use crate::analysis::ty::diagnostics::TraitLowerDiag;
 
         // First check implementor type
@@ -4379,13 +4379,12 @@ impl<'db> ImplTrait<'db> {
                         TraitRefLowerError::PathResError(err) => {
                             if let Some(trait_ref) = self.trait_ref(db).to_opt() {
                                 let path = trait_ref.path(db).unwrap();
-                                if let Some(diag) = err.into_diag(
+                                if let Some(diag) = err.into_trait_ref_diag(
                                     db,
                                     path,
                                     self.span().trait_ref().path(),
-                                    ExpectedPathKind::Trait,
                                 ) {
-                                    diags.push(diag.into());
+                                    diags.push(diag);
                                 }
                             }
                         }
@@ -4772,11 +4771,15 @@ impl<'db> TraitAssocTypeView<'db> {
 }
 
 impl<'db> AssocTypeBoundView<'db> {
-    fn trait_ref(self, db: &'db dyn HirDb) -> TraitRefId<'db> {
+    pub(crate) fn trait_ref(self, db: &'db dyn HirDb) -> TraitRefId<'db> {
         match self.owner.bounds_raw(db)[self.idx] {
             TypeBound::Trait(tr) => tr,
             _ => unreachable!(),
         }
+    }
+
+    pub(crate) fn span(self) -> crate::span::params::LazyTraitRefSpan<'db> {
+        self.owner.span().bounds().bound(self.idx).trait_bound()
     }
 }
 
