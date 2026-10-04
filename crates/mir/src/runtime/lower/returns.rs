@@ -699,17 +699,24 @@ fn retarget_declaration_return_transport<'db>(
     }
 }
 
+/// Whether calls to `semantic` never return. The borrow summary decides this,
+/// as it does for its callers' solves and so for their executable control flow.
+pub(crate) fn semantic_never_returns<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+) -> bool {
+    matches!(semantic_borrow_summary(db, semantic), Ok(Some(summary)) if !summary.may_return)
+}
+
 pub(crate) fn runtime_exit_behavior<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
 ) -> RuntimeExitBehavior {
     match key.source(db) {
-        // The borrow summary's divergence is what its callers' solves, and
-        // so their executable control flow, treat as nonreturning.
-        RuntimeInstanceSource::Semantic(semantic) => match semantic_borrow_summary(db, semantic) {
-            Ok(Some(summary)) if !summary.may_return => RuntimeExitBehavior::NeverReturns,
-            _ => RuntimeExitBehavior::MayReturn,
-        },
+        RuntimeInstanceSource::Semantic(semantic) if semantic_never_returns(db, semantic) => {
+            RuntimeExitBehavior::NeverReturns
+        }
+        RuntimeInstanceSource::Semantic(_) => RuntimeExitBehavior::MayReturn,
         RuntimeInstanceSource::Synthetic(synthetic) => {
             runtime_synthetic_exit_behavior(synthetic.spec(db).clone())
         }

@@ -60,7 +60,9 @@ use super::{
     },
     provider_space::address_space_from_provider,
     realize::SelectedRuntimeArg,
-    returns::{StaticRuntimeReturnDecision, static_runtime_return_decision},
+    returns::{
+        StaticRuntimeReturnDecision, semantic_never_returns, static_runtime_return_decision,
+    },
     semantic_body::{RuntimeOperand, RuntimeSemanticBody},
     type_info::{
         RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env,
@@ -286,6 +288,13 @@ impl<'db> BodyStaticFacts<'db> {
                 let NStatementKind::Define { result, expr } = &statement.kind else {
                     continue;
                 };
+                // A call that never returns ends its executable block, and lowering
+                // never assigns its result.
+                if let NExpr::Call { callee, .. } = expr
+                    && semantic_never_returns(db, get_or_build_semantic_instance(db, callee.key))
+                {
+                    continue;
+                }
                 let dst = body.value_local(*result).unwrap_or_else(|| {
                     panic!("missing runtime representation for normalized value {result:?}")
                 });
@@ -3104,6 +3113,68 @@ mod tests {
             panic!("failed to build root semantic key for `{name}`: {err:?}")
         });
         get_or_build_semantic_instance(db, key)
+    }
+
+    #[test]
+    fn nonreturning_calls_define_no_carrier() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///nonreturning_calls_define_no_carrier.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Frame { value: u64 }
+fn fail() { core::panic() }
+fn fail_frame() -> Frame {
+    fail()
+    Frame { value: 0 }
+}
+fn frame(flag: bool) -> Frame {
+    if flag { Frame { value: 1 } } else { fail_frame() }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let semantic = semantic_instance_for_named_func(&db, top_mod, "frame");
+        let normalized = normalize_semantic_body(&db, semantic)
+            .unwrap_or_else(|err| panic!("failed to normalize frame: {err:?}"));
+        let facts = BodyStaticFacts::new(&db, &normalized);
+        let calls: Vec<_> = normalized
+            .normalized
+            .blocks
+            .iter()
+            .enumerate()
+            .flat_map(|(block_idx, block)| {
+                block
+                    .statements
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, statement)| {
+                        matches!(
+                            statement.kind,
+                            NStatementKind::Define {
+                                expr: NExpr::Call { .. },
+                                ..
+                            }
+                        )
+                    })
+                    .map(move |(stmt_idx, _)| (block_idx, stmt_idx))
+            })
+            .collect();
+        let [(block_idx, stmt_idx)] = calls[..] else {
+            panic!("expected one call to `fail_frame`, found {calls:?}");
+        };
+        assert!(
+            facts.expr(block_idx, stmt_idx).is_none(),
+            "a call that never returns must not define a carrier"
+        );
     }
 
     #[test]

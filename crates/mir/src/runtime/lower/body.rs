@@ -86,7 +86,9 @@ use super::{
     realize::{
         RuntimeArgSource, RuntimeValueUseEmitter, SelectedRuntimeArg, emit_runtime_value_use_plan,
     },
-    returns::{declaration_runtime_return_class, runtime_return_class_for_body},
+    returns::{
+        declaration_runtime_return_class, runtime_return_class_for_body, semantic_never_returns,
+    },
     semantic_body::{RuntimeOperand, RuntimeSemanticBody},
     source::{
         RuntimeSourceMode, RuntimeSourceQuery, SemanticPlaceValueSource,
@@ -1115,6 +1117,19 @@ impl<'db> RmirEmitter<'db> {
             .ty;
         let normalized_id =
             self.semantic_body.normalized.blocks[bb.index()].statements[stmt_idx].id;
+        // A call that never returns ends its executable block and produces no
+        // value, so carrier inference gives its result no class.
+        if let NExpr::Call {
+            callee,
+            args,
+            effect_args,
+            ..
+        } = expr
+            && semantic_never_returns(self.db, get_or_build_semantic_instance(self.db, callee.key))
+        {
+            self.lower_call(bb, normalized_id, *callee, args, effect_args);
+            return;
+        }
         let direct_class = self.current_expr_direct_class(bb.index(), stmt_idx, expr);
         if self.root_provider_value_load_is_lazy(dst, expr)
             || ((matches!(expr, NExpr::MakeView { .. })
