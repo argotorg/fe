@@ -346,10 +346,13 @@ impl<'db> Borrowck<'db> {
         while dirty.contains(&true) {
             #[cfg(feature = "borrowck-profile")]
             profile.sweep(self.inventory.loans.len(), self.source_generation);
-            for (block_index, block) in self.body.blocks.iter().enumerate() {
+            // Forward changes should reach successors in the same sweep,
+            // even when normalization allocated a join before its predecessors.
+            for &block_index in self.inventory.loops.reverse_postorder() {
                 if !std::mem::take(&mut dirty[block_index]) {
                     continue;
                 }
+                let block = &self.body.blocks[block_index];
                 let Some(mut state) = entries[block_index].clone() else {
                     continue;
                 };
