@@ -1,4 +1,5 @@
 use super::intrinsic
+use super::num::IntDowncast
 
 pub trait AsBytes {
     const N: usize
@@ -10,14 +11,37 @@ impl<const LEN: usize> AsBytes for [u8; LEN] {
     const fn as_bytes(self) -> [u8; Self::N] { self }
 }
 
+// These impls are ordinary code rather than `intrinsic::__as_bytes` calls, so
+// that they also work on runtime values, not only when constant folding can
+// evaluate them.
+
 impl<const LEN: usize> AsBytes for String<LEN> {
     const N: usize = LEN
-    const fn as_bytes(self) -> [u8; Self::N] { intrinsic::__as_bytes(self) }
+    const fn as_bytes(self) -> [u8; Self::N] { String::as_bytes(self) }
 }
 
 impl AsBytes for u256 {
     const N: usize = 32
-    const fn as_bytes(self) -> [u8; Self::N] { intrinsic::__as_bytes(self) }
+    /// The big-endian bytes of the value.
+    const fn as_bytes(self) -> [u8; Self::N] {
+        let mut out: [u8; 32] = [0; 32]
+        let mut i: usize = 0
+        while i < 32 {
+            out[i] = (self >> ((31 - i) * 8) as u256).downcast_truncate()
+            i += 1
+        }
+        out
+    }
+}
+
+/// Copy `bytes` into `out` at offset `at` and return the offset after them.
+const fn put<const N: usize, const M: usize>(_ out: mut [u8; N], _ at: usize, _ bytes: [u8; M]) -> usize {
+    let mut i: usize = 0
+    while i < M {
+        out[at + i] = bytes[i]
+        i += 1
+    }
+    at + M
 }
 
 impl<T0> AsBytes for (T0,)
@@ -35,7 +59,10 @@ impl<T0, T1> AsBytes for (T0, T1)
     const fn as_bytes(self) -> [u8; Self::N] {
         let a: [u8; T0::N] = self.0.as_bytes()
         let b: [u8; T1::N] = self.1.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b))
+        let mut out: [u8; Self::N] = [0; Self::N]
+        let mut at: usize = 0
+        at = put(mut out, at, a)
+        put(mut out, at, b)
         out
     }
 }
@@ -50,7 +77,11 @@ impl<T0, T1, T2> AsBytes for (T0, T1, T2)
         let a: [u8; T0::N] = self.0.as_bytes()
         let b: [u8; T1::N] = self.1.as_bytes()
         let c: [u8; T2::N] = self.2.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c))
+        let mut out: [u8; Self::N] = [0; Self::N]
+        let mut at: usize = 0
+        at = put(mut out, at, a)
+        at = put(mut out, at, b)
+        put(mut out, at, c)
         out
     }
 }
@@ -67,7 +98,12 @@ impl<T0, T1, T2, T3> AsBytes for (T0, T1, T2, T3)
         let b: [u8; T1::N] = self.1.as_bytes()
         let c: [u8; T2::N] = self.2.as_bytes()
         let d: [u8; T3::N] = self.3.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d))
+        let mut out: [u8; Self::N] = [0; Self::N]
+        let mut at: usize = 0
+        at = put(mut out, at, a)
+        at = put(mut out, at, b)
+        at = put(mut out, at, c)
+        put(mut out, at, d)
         out
     }
 }
@@ -86,7 +122,13 @@ impl<T0, T1, T2, T3, T4> AsBytes for (T0, T1, T2, T3, T4)
         let c: [u8; T2::N] = self.2.as_bytes()
         let d: [u8; T3::N] = self.3.as_bytes()
         let e: [u8; T4::N] = self.4.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e))
+        let mut out: [u8; Self::N] = [0; Self::N]
+        let mut at: usize = 0
+        at = put(mut out, at, a)
+        at = put(mut out, at, b)
+        at = put(mut out, at, c)
+        at = put(mut out, at, d)
+        put(mut out, at, e)
         out
     }
 }
@@ -107,7 +149,14 @@ impl<T0, T1, T2, T3, T4, T5> AsBytes for (T0, T1, T2, T3, T4, T5)
         let d: [u8; T3::N] = self.3.as_bytes()
         let e: [u8; T4::N] = self.4.as_bytes()
         let f: [u8; T5::N] = self.5.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f))
+        let mut out: [u8; Self::N] = [0; Self::N]
+        let mut at: usize = 0
+        at = put(mut out, at, a)
+        at = put(mut out, at, b)
+        at = put(mut out, at, c)
+        at = put(mut out, at, d)
+        at = put(mut out, at, e)
+        put(mut out, at, f)
         out
     }
 }
@@ -130,7 +179,15 @@ impl<T0, T1, T2, T3, T4, T5, T6> AsBytes for (T0, T1, T2, T3, T4, T5, T6)
         let e: [u8; T4::N] = self.4.as_bytes()
         let f: [u8; T5::N] = self.5.as_bytes()
         let g: [u8; T6::N] = self.6.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g))
+        let mut out: [u8; Self::N] = [0; Self::N]
+        let mut at: usize = 0
+        at = put(mut out, at, a)
+        at = put(mut out, at, b)
+        at = put(mut out, at, c)
+        at = put(mut out, at, d)
+        at = put(mut out, at, e)
+        at = put(mut out, at, f)
+        put(mut out, at, g)
         out
     }
 }
@@ -155,7 +212,16 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7> AsBytes for (T0, T1, T2, T3, T4, T5, T6, T7
         let f: [u8; T5::N] = self.5.as_bytes()
         let g: [u8; T6::N] = self.6.as_bytes()
         let h: [u8; T7::N] = self.7.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h))
+        let mut out: [u8; Self::N] = [0; Self::N]
+        let mut at: usize = 0
+        at = put(mut out, at, a)
+        at = put(mut out, at, b)
+        at = put(mut out, at, c)
+        at = put(mut out, at, d)
+        at = put(mut out, at, e)
+        at = put(mut out, at, f)
+        at = put(mut out, at, g)
+        put(mut out, at, h)
         out
     }
 }
@@ -183,7 +249,17 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8> AsBytes for (T0, T1, T2, T3, T4, T5, T6
         let g: [u8; T6::N] = self.6.as_bytes()
         let h: [u8; T7::N] = self.7.as_bytes()
         let i: [u8; T8::N] = self.8.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h, i))
+        let mut out: [u8; Self::N] = [0; Self::N]
+        let mut at: usize = 0
+        at = put(mut out, at, a)
+        at = put(mut out, at, b)
+        at = put(mut out, at, c)
+        at = put(mut out, at, d)
+        at = put(mut out, at, e)
+        at = put(mut out, at, f)
+        at = put(mut out, at, g)
+        at = put(mut out, at, h)
+        put(mut out, at, i)
         out
     }
 }
@@ -213,7 +289,18 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> AsBytes for (T0, T1, T2, T3, T4, T5
         let h: [u8; T7::N] = self.7.as_bytes()
         let i: [u8; T8::N] = self.8.as_bytes()
         let j: [u8; T9::N] = self.9.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h, i, j))
+        let mut out: [u8; Self::N] = [0; Self::N]
+        let mut at: usize = 0
+        at = put(mut out, at, a)
+        at = put(mut out, at, b)
+        at = put(mut out, at, c)
+        at = put(mut out, at, d)
+        at = put(mut out, at, e)
+        at = put(mut out, at, f)
+        at = put(mut out, at, g)
+        at = put(mut out, at, h)
+        at = put(mut out, at, i)
+        put(mut out, at, j)
         out
     }
 }
@@ -245,7 +332,19 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> AsBytes for (T0, T1, T2, T3, T
         let i: [u8; T8::N] = self.8.as_bytes()
         let j: [u8; T9::N] = self.9.as_bytes()
         let k: [u8; T10::N] = self.10.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h, i, j, k))
+        let mut out: [u8; Self::N] = [0; Self::N]
+        let mut at: usize = 0
+        at = put(mut out, at, a)
+        at = put(mut out, at, b)
+        at = put(mut out, at, c)
+        at = put(mut out, at, d)
+        at = put(mut out, at, e)
+        at = put(mut out, at, f)
+        at = put(mut out, at, g)
+        at = put(mut out, at, h)
+        at = put(mut out, at, i)
+        at = put(mut out, at, j)
+        put(mut out, at, k)
         out
     }
 }
@@ -279,7 +378,20 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> AsBytes for (T0, T1, T2, 
         let j: [u8; T9::N] = self.9.as_bytes()
         let k: [u8; T10::N] = self.10.as_bytes()
         let l: [u8; T11::N] = self.11.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h, i, j, k, l))
+        let mut out: [u8; Self::N] = [0; Self::N]
+        let mut at: usize = 0
+        at = put(mut out, at, a)
+        at = put(mut out, at, b)
+        at = put(mut out, at, c)
+        at = put(mut out, at, d)
+        at = put(mut out, at, e)
+        at = put(mut out, at, f)
+        at = put(mut out, at, g)
+        at = put(mut out, at, h)
+        at = put(mut out, at, i)
+        at = put(mut out, at, j)
+        at = put(mut out, at, k)
+        put(mut out, at, l)
         out
     }
 }
@@ -315,7 +427,21 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> AsBytes for (T0, T1,
         let k: [u8; T10::N] = self.10.as_bytes()
         let l: [u8; T11::N] = self.11.as_bytes()
         let m: [u8; T12::N] = self.12.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h, i, j, k, l, m))
+        let mut out: [u8; Self::N] = [0; Self::N]
+        let mut at: usize = 0
+        at = put(mut out, at, a)
+        at = put(mut out, at, b)
+        at = put(mut out, at, c)
+        at = put(mut out, at, d)
+        at = put(mut out, at, e)
+        at = put(mut out, at, f)
+        at = put(mut out, at, g)
+        at = put(mut out, at, h)
+        at = put(mut out, at, i)
+        at = put(mut out, at, j)
+        at = put(mut out, at, k)
+        at = put(mut out, at, l)
+        put(mut out, at, m)
         out
     }
 }
@@ -353,7 +479,22 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13> AsBytes for (T0
         let l: [u8; T11::N] = self.11.as_bytes()
         let m: [u8; T12::N] = self.12.as_bytes()
         let n: [u8; T13::N] = self.13.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h, i, j, k, l, m, n))
+        let mut out: [u8; Self::N] = [0; Self::N]
+        let mut at: usize = 0
+        at = put(mut out, at, a)
+        at = put(mut out, at, b)
+        at = put(mut out, at, c)
+        at = put(mut out, at, d)
+        at = put(mut out, at, e)
+        at = put(mut out, at, f)
+        at = put(mut out, at, g)
+        at = put(mut out, at, h)
+        at = put(mut out, at, i)
+        at = put(mut out, at, j)
+        at = put(mut out, at, k)
+        at = put(mut out, at, l)
+        at = put(mut out, at, m)
+        put(mut out, at, n)
         out
     }
 }
@@ -393,7 +534,23 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14> AsBytes fo
         let m: [u8; T12::N] = self.12.as_bytes()
         let n: [u8; T13::N] = self.13.as_bytes()
         let o: [u8; T14::N] = self.14.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h, i, j, k, l, m, n, o))
+        let mut out: [u8; Self::N] = [0; Self::N]
+        let mut at: usize = 0
+        at = put(mut out, at, a)
+        at = put(mut out, at, b)
+        at = put(mut out, at, c)
+        at = put(mut out, at, d)
+        at = put(mut out, at, e)
+        at = put(mut out, at, f)
+        at = put(mut out, at, g)
+        at = put(mut out, at, h)
+        at = put(mut out, at, i)
+        at = put(mut out, at, j)
+        at = put(mut out, at, k)
+        at = put(mut out, at, l)
+        at = put(mut out, at, m)
+        at = put(mut out, at, n)
+        put(mut out, at, o)
         out
     }
 }
@@ -435,7 +592,24 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15> AsByt
         let n: [u8; T13::N] = self.13.as_bytes()
         let o: [u8; T14::N] = self.14.as_bytes()
         let p: [u8; T15::N] = self.15.as_bytes()
-        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p))
+        let mut out: [u8; Self::N] = [0; Self::N]
+        let mut at: usize = 0
+        at = put(mut out, at, a)
+        at = put(mut out, at, b)
+        at = put(mut out, at, c)
+        at = put(mut out, at, d)
+        at = put(mut out, at, e)
+        at = put(mut out, at, f)
+        at = put(mut out, at, g)
+        at = put(mut out, at, h)
+        at = put(mut out, at, i)
+        at = put(mut out, at, j)
+        at = put(mut out, at, k)
+        at = put(mut out, at, l)
+        at = put(mut out, at, m)
+        at = put(mut out, at, n)
+        at = put(mut out, at, o)
+        put(mut out, at, p)
         out
     }
 }
