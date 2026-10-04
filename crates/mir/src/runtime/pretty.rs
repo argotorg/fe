@@ -531,7 +531,7 @@ fn format_expr<'db>(db: &'db dyn MirDb, expr: &RExpr<'db>) -> String {
             format_variant(db, *variant),
             field.0
         ),
-        RExpr::EnumGetTag { root } => format!("enum_get_tag {}", format_local_id(*root)),
+        RExpr::EnumGetTag { place } => format!("enum_get_tag {}", format_place(place)),
         RExpr::EnumAssertVariantRef { root, variant } => format!(
             "enum_assert_variant_ref {}, {}",
             format_local_id(*root),

@@ -905,6 +905,12 @@ fn describe_runtime_instance<'db>(
 }
 
 #[derive(Clone, Copy)]
+enum EnumLoad {
+    Value,
+    Tag,
+}
+
+#[derive(Clone, Copy)]
 enum SlotRoot {
     Ptr(ValueId, Type),
     Object(ValueId, Type),
@@ -1800,41 +1806,51 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     ty,
                 )
             }
-            RExpr::EnumGetTag { root }
-                if matches!(
-                    self.body.value_class(*root),
-                    Some(RuntimeClass::Ref {
-                        kind: RefKind::Native,
-                        ..
-                    })
-                ) =>
-            {
-                let class = self
-                    .body
-                    .value_class(*root)
-                    .and_then(RuntimeClass::ref_pointee)
-                    .cloned()
-                    .ok_or_else(|| {
-                        LowerError::Internal("enum get-tag requires reference".into())
-                    })?;
-                let root = self.local_value(*root)?;
-                let reference = self.load_memory_reference(root)?;
-                let value = self.load_referent(reference, &class)?;
-                let dst = dst.ok_or_else(|| {
-                    LowerError::Internal("enum get-tag missing destination".into())
-                })?;
-                let ty = self.local_ty(dst)?;
-                self.fb
-                    .insert_inst(EnumTag::new(self.module.inst_set(), value), ty)
-            }
-            RExpr::EnumGetTag { root } => {
-                let root = self.local_value(*root)?;
-                let dst = dst.ok_or_else(|| {
-                    LowerError::Internal("enum get-tag missing destination".to_string())
-                })?;
-                let ty = self.local_ty(dst)?;
-                self.fb
-                    .insert_inst(EnumGetTag::new(self.module.inst_set(), root), ty)
+            RExpr::EnumGetTag { place } => {
+                let Lowered::Value((terminal, class)) = self.resolve_place_full(place)? else {
+                    return Ok(Lowered::Terminated);
+                };
+                let RuntimeClass::AggregateValue { layout } = class else {
+                    return Err(LowerError::Internal(
+                        "enum get-tag requires an aggregate place".into(),
+                    ));
+                };
+                let Layout::Enum(data) = layout.data(self.module.db) else {
+                    return Err(LowerError::Internal(
+                        "enum get-tag requires enum layout".into(),
+                    ));
+                };
+                let ty = self.module.enum_tag_ty(layout)?;
+                match terminal {
+                    PlaceTerminal::Reference { reference, .. } => {
+                        self.load_referent_enum_tag(reference, layout)?
+                    }
+                    PlaceTerminal::Ptr { addr, space, .. } => self.load_enum_from_ptr(
+                        addr,
+                        ReferentLayout::Raw(space),
+                        layout,
+                        &data,
+                        EnumLoad::Tag,
+                    )?,
+                    PlaceTerminal::StackPtr { addr, .. } => self.load_enum_from_ptr(
+                        addr,
+                        ReferentLayout::Object,
+                        layout,
+                        &data,
+                        EnumLoad::Tag,
+                    )?,
+                    PlaceTerminal::Object { value, .. } => self
+                        .fb
+                        .insert_inst(EnumGetTag::new(self.module.inst_set(), value), ty),
+                    PlaceTerminal::Const { value, .. } => {
+                        let value = self.fb.insert_inst(
+                            ConstLoad::new(self.module.inst_set(), value),
+                            self.module.ty_for_layout(layout)?,
+                        );
+                        self.fb
+                            .insert_inst(EnumTag::new(self.module.inst_set(), value), ty)
+                    }
+                }
             }
             RExpr::EnumAssertVariantRef { root, variant }
                 if matches!(
@@ -1847,17 +1863,23 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             {
                 let root = self.local_value(*root)?;
                 let reference = self.load_memory_reference(root)?;
-                let value = self.load_referent(
-                    reference,
-                    &RuntimeClass::AggregateValue {
-                        layout: variant.enum_layout,
-                    },
-                )?;
-                self.fb.insert_inst_no_result(EnumAssertVariant::new(
+                let tag = self.load_referent_enum_tag(reference, variant.enum_layout)?;
+                let expected = self.fb.make_imm_value(
+                    self.module
+                        .enum_tag_immediate(variant.enum_layout, variant.index)?,
+                );
+                let done = self.fb.append_block();
+                let invalid = self.fb.append_block();
+                self.fb.insert_inst_no_result(BrTable::new(
                     self.module.inst_set(),
-                    value,
-                    self.variant_ref(*variant)?,
+                    tag,
+                    Some(invalid),
+                    vec![(expected, done)],
                 ));
+                self.fb.switch_to_block(invalid);
+                self.fb
+                    .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+                self.fb.switch_to_block(done);
                 root
             }
             RExpr::EnumAssertVariantRef { root, variant } => {
@@ -4345,7 +4367,9 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 }
                 Ok(value)
             }
-            Layout::Enum(data) => self.load_enum_from_ptr(addr, memory, layout, &data),
+            Layout::Enum(data) => {
+                self.load_enum_from_ptr(addr, memory, layout, &data, EnumLoad::Value)
+            }
         }
     }
 
@@ -4355,8 +4379,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         memory: ReferentLayout,
         layout: LayoutId<'db>,
         data: &mir::runtime::EnumLayout<'db>,
+        load: EnumLoad,
     ) -> Result<ValueId, LowerError> {
-        let layout_ty = self.module.ty_for_layout(layout)?;
+        let ty = match load {
+            EnumLoad::Value => self.module.ty_for_layout(layout)?,
+            EnumLoad::Tag => self.module.enum_tag_ty(layout)?,
+        };
         let tag = match memory {
             ReferentLayout::Raw(space) => self.load_scalar(addr, space, &data.tag)?,
             ReferentLayout::Object => {
@@ -4393,29 +4421,36 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
 
         for (idx, block) in blocks.into_iter().enumerate() {
             self.fb.switch_to_block(block);
-            let variant = VariantId {
-                enum_layout: layout,
-                index: idx as u16,
+            let value = match load {
+                EnumLoad::Tag => self
+                    .fb
+                    .make_imm_value(self.module.enum_tag_immediate(layout, idx as u16)?),
+                EnumLoad::Value => {
+                    let variant = VariantId {
+                        enum_layout: layout,
+                        index: idx as u16,
+                    };
+                    let values = data.variants[idx]
+                        .fields
+                        .iter()
+                        .enumerate()
+                        .map(|(field_idx, field)| {
+                            let field_addr =
+                                self.referent_variant_address(addr, memory, variant, field_idx)?;
+                            self.load_memory_value(field_addr, memory, field)
+                        })
+                        .collect::<Result<SmallVec<[ValueId; 2]>, _>>()?;
+                    self.fb.insert_inst(
+                        EnumMake::new(
+                            self.module.inst_set(),
+                            ty,
+                            self.variant_ref(variant)?,
+                            values,
+                        ),
+                        ty,
+                    )
+                }
             };
-            let values = data.variants[idx]
-                .fields
-                .iter()
-                .enumerate()
-                .map(|(field_idx, field)| {
-                    let field_addr =
-                        self.referent_variant_address(addr, memory, variant, field_idx)?;
-                    self.load_memory_value(field_addr, memory, field)
-                })
-                .collect::<Result<SmallVec<[ValueId; 2]>, _>>()?;
-            let value = self.fb.insert_inst(
-                EnumMake::new(
-                    self.module.inst_set(),
-                    layout_ty,
-                    self.variant_ref(variant)?,
-                    values,
-                ),
-                layout_ty,
-            );
             let pred = self
                 .fb
                 .current_block()
@@ -4432,7 +4467,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         self.fb.switch_to_block(done);
         Ok(self
             .fb
-            .insert_inst(Phi::new(self.module.inst_set(), phi_args), layout_ty))
+            .insert_inst(Phi::new(self.module.inst_set(), phi_args), ty))
     }
 
     fn load_word(&mut self, addr: ValueId, space: AddressSpaceKind) -> Result<ValueId, LowerError> {

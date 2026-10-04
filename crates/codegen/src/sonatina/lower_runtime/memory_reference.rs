@@ -1,6 +1,7 @@
 use hir::analysis::semantic::FieldIndex;
 use mir::{
-    AddressSpaceKind, Layout, ResolvedPlaceElem, RuntimeClass, RuntimeMemoryLayout, VariantId,
+    AddressSpaceKind, Layout, LayoutId, ResolvedPlaceElem, RuntimeClass, RuntimeMemoryLayout,
+    VariantId,
 };
 use sonatina_codegen::transform::aggregate::EnumLoweredLayout;
 use sonatina_ir::{
@@ -16,7 +17,9 @@ use sonatina_ir::{
     types::CompoundType,
 };
 
-use super::{CopySource, FunctionLowerer, LowerError, Lowered, LoweringInstSet, scalar_ty};
+use super::{
+    CopySource, EnumLoad, FunctionLowerer, LowerError, Lowered, LoweringInstSet, scalar_ty,
+};
 
 // The descriptor's layout also records the referent's address space. Provider
 // kinds may be erased when a reference is stored inside an ordinary typed slot.
@@ -129,6 +132,32 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
             RuntimeClass::Scalar(scalar) => scalar_ty(scalar),
             _ => self.module.ty_for_class(class)?,
         };
+        self.load_reference_value(reference, ty, |this, memory| {
+            this.load_memory_value(reference.addr, memory, class)
+        })
+    }
+
+    pub(super) fn load_referent_enum_tag(
+        &mut self,
+        reference: MemoryReference,
+        layout: LayoutId<'db>,
+    ) -> Result<ValueId, LowerError> {
+        let Layout::Enum(data) = layout.data(self.module.db) else {
+            return Err(LowerError::Internal("enum tag requires enum layout".into()));
+        };
+        let ty = self.module.enum_tag_ty(layout)?;
+        self.load_reference_value(reference, ty, |this, memory| {
+            // Validate the discriminant without reading or reconstructing payloads.
+            this.load_enum_from_ptr(reference.addr, memory, layout, &data, EnumLoad::Tag)
+        })
+    }
+
+    fn load_reference_value(
+        &mut self,
+        reference: MemoryReference,
+        ty: Type,
+        mut load: impl FnMut(&mut Self, ReferentLayout) -> Result<ValueId, LowerError>,
+    ) -> Result<ValueId, LowerError> {
         let done = self.fb.append_block();
         let invalid = self.fb.append_block();
         let native = self.module.is_native_target();
@@ -151,11 +180,10 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         let mut values = PhiArgs::with_capacity(blocks.len());
         for (_, block, space) in blocks {
             self.fb.switch_to_block(block);
-            let value = if let Some(space) = space {
-                self.load_from_ptr(reference.addr, space, class)?
-            } else {
-                self.load_memory_value(reference.addr, ReferentLayout::Object, class)?
-            };
+            let value = load(
+                self,
+                space.map_or(ReferentLayout::Object, ReferentLayout::Raw),
+            )?;
             let pred = self
                 .fb
                 .current_block()

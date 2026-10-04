@@ -395,7 +395,7 @@ fn runtime_expr_display(expr: &RExpr<'_>) -> String {
             variant,
             field,
         } => format!("enum_extract {value:?}, {variant:?}, {field:?}"),
-        RExpr::EnumGetTag { root } => format!("enum_get_tag {root:?}"),
+        RExpr::EnumGetTag { place } => format!("enum_get_tag {place:?}"),
         RExpr::EnumAssertVariantRef { root, variant } => {
             format!("enum_assert_variant_ref {root:?}, {variant:?}")
         }

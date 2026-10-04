@@ -1475,7 +1475,7 @@ pub enum RExpr<'db> {
         field: FieldIndex,
     },
     EnumGetTag {
-        root: RValueId,
+        place: RuntimePlace<'db>,
     },
     EnumAssertVariantRef {
         root: RValueId,

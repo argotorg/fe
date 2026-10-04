@@ -2980,13 +2980,44 @@ impl<'db> RmirEmitter<'db> {
         self.push_stmt(bb, RStmt::Assign { dst, expr });
     }
 
-    fn lower_enum_tag(&mut self, bb: RBlockId, dst: RLocalId, value: RuntimeOperand) {
+    fn enum_tag_expr(&mut self, bb: RBlockId, value: RuntimeOperand) -> RExpr<'db> {
+        if matches!(
+            self.semantic_local_lowering(value.local),
+            RuntimeLocalLowering::PlaceCarrier {
+                place_class: RuntimeClass::AggregateValue { .. },
+            } | RuntimeLocalLowering::PlaceBoundValue {
+                place_class: RuntimeClass::AggregateValue { .. },
+                ..
+            }
+        ) {
+            // Query the same place a value read would use, without copying its payload.
+            // Value extracts still read the captured value, rather than its source place.
+            let place = match self.semantic_place_value_source(value.local) {
+                Some(SemanticPlaceValueSource::PlaceValue { place, .. }) => {
+                    Some(self.lower_place(bb, &place))
+                }
+                Some(SemanticPlaceValueSource::ValueExtract { .. }) => None,
+                None => Some(self.semantic_place(bb, value.local)),
+            };
+            if let Some(place) = place {
+                return RExpr::EnumGetTag { place };
+            }
+        }
         let value = self.read_semantic_value(bb, value.local);
-        let expr = if matches!(self.value_class(value), Some(RuntimeClass::Ref { .. })) {
-            RExpr::EnumGetTag { root: value }
+        if matches!(self.value_class(value), Some(RuntimeClass::Ref { .. })) {
+            RExpr::EnumGetTag {
+                place: RuntimePlace {
+                    root: PlaceRoot::Ref(value),
+                    path: Box::default(),
+                },
+            }
         } else {
             RExpr::EnumTagOfValue { value }
-        };
+        }
+    }
+
+    fn lower_enum_tag(&mut self, bb: RBlockId, dst: RLocalId, value: RuntimeOperand) {
+        let expr = self.enum_tag_expr(bb, value);
         self.push_stmt(bb, RStmt::Assign { dst, expr });
     }
 
@@ -3000,8 +3031,8 @@ impl<'db> RmirEmitter<'db> {
         let semantic_ty = self.locals[value.local.index()].semantic_ty;
         let enum_layout = self.enum_layout_for_local(value.local);
         let variant_id = self.enum_variant_for_local(value.local, variant);
-        let value = self.read_semantic_value(bb, value.local);
-        if matches!(self.value_class(value), Some(RuntimeClass::Ref { .. })) {
+        let expr = self.enum_tag_expr(bb, value);
+        if matches!(expr, RExpr::EnumGetTag { .. }) {
             let tag_class = RuntimeClass::Scalar(ScalarClass {
                 repr: match enum_layout.data(self.db) {
                     crate::runtime::Layout::Enum(layout) => layout.tag.repr,
@@ -3010,13 +3041,7 @@ impl<'db> RmirEmitter<'db> {
                 role: ScalarRole::EnumTag { enum_layout },
             });
             let tag = self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(tag_class));
-            self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst: tag,
-                    expr: RExpr::EnumGetTag { root: value },
-                },
-            );
+            self.push_stmt(bb, RStmt::Assign { dst: tag, expr });
             let expected = self.alloc_runtime_temp(
                 semantic_ty,
                 RuntimeCarrier::Value(
@@ -3047,6 +3072,9 @@ impl<'db> RmirEmitter<'db> {
                 },
             );
         } else {
+            let RExpr::EnumTagOfValue { value } = expr else {
+                unreachable!("enum tag query must read a value or a place");
+            };
             self.push_stmt(
                 bb,
                 RStmt::Assign {

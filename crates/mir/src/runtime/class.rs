@@ -334,12 +334,9 @@ pub fn expr_result_class<'db>(
             variant,
             field,
         } => Some(enum_extract_class(db, body, *value, *variant, *field)?),
-        RExpr::EnumGetTag { root } => {
-            let RuntimeClass::Ref { pointee, .. } = runtime_value_class(body, *root)?.clone()
+        RExpr::EnumGetTag { place } => {
+            let RuntimeClass::AggregateValue { layout } = project_place(db, program, body, place)?
             else {
-                return Err(VerifyError::InvalidExprClass(dst));
-            };
-            let RuntimeClass::AggregateValue { layout } = *pointee else {
                 return Err(VerifyError::InvalidExprClass(dst));
             };
             if !matches!(program.layout(layout), Layout::Enum(_)) {
