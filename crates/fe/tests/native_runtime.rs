@@ -1288,3 +1288,15 @@ fn native_raw_aggregate_reference_accessors_at_o1() {
         .unwrap();
     assert!(result.status.success(), "{result:?}");
 }
+
+#[test]
+fn native_returned_reference_projections_mutate_the_original_at_o1() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/native/returned_reference_projection.fe");
+    build(&source, temp.path(), "1", &["--standalone"]);
+    let result = Command::new(temp.path().join("returned_reference_projection"))
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+}

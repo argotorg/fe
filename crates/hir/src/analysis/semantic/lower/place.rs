@@ -79,6 +79,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 place.push_dynamic_index(index);
                 Some(place)
             }
+            // A temporary native reference still names its original referent.
+            // Preserve that carrier before projecting, instead of materializing
+            // an owned receiver snapshot for a field or indexed method call.
+            _ if self.expr_ty(expr).as_borrow(self.db).is_some() => {
+                Some(SPlace::new(self.lower_place_operand(expr, capture)))
+            }
             _ => None,
         }
     }

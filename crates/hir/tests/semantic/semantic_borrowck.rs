@@ -13922,3 +13922,33 @@ fn inspect() {
     );
     assert!(diagnostics.contains("move conflict"), "{diagnostics}");
 }
+
+#[test]
+fn returned_reference_projections_preserve_live_loans() {
+    let prefix = r#"
+struct Inner { value: u256 }
+struct Outer { inner: Inner }
+impl Inner { fn add(mut self, _ value: u256) { self.value += value } }
+fn view(_ outer: mut Outer) -> mut Outer { outer }
+"#;
+    for (body, expected) in [
+        ("view(mut outer).inner.add(1)", ""),
+        (
+            "let held = ref outer.inner\nview(mut outer).inner.add(1)\nlet value = held.value",
+            "borrow conflict",
+        ),
+        (
+            "let held = view(mut outer)\nview(mut outer).inner.add(1)\nlet value = held.inner.value",
+            "borrow conflict",
+        ),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            "{prefix}fn run() {{\nlet mut outer = Outer {{ inner: Inner {{ value: 0 }} }}\n{body}\n}}"
+        ));
+        if expected.is_empty() {
+            assert!(diagnostics.is_empty(), "{body}: {diagnostics}");
+        } else {
+            assert!(diagnostics.contains(expected), "{body}: {diagnostics}");
+        }
+    }
+}
