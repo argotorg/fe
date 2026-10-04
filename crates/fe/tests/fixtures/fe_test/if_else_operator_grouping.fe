@@ -1,0 +1,66 @@
+fn add_after_if(_ flag: bool) -> u256 {
+    if flag { 1 } else { 2 } + 3
+}
+
+fn add_after_else_if(_ first: bool, _ second: bool) -> u256 {
+    if first { 1 } else if second { 2 } else { 3 } + 4
+}
+
+fn add_conditional_operands(_ first: bool, _ second: bool) -> u256 {
+    1 + if first { 1 } else { 0 } + if second { 0 } else { 1 }
+}
+
+#[test]
+fn trailing_addition_applies_to_both_branches() {
+    assert!(add_after_if(true) == 4)
+    assert!(add_after_if(false) == 5)
+}
+
+#[test]
+fn trailing_addition_applies_to_every_else_if_branch() {
+    assert!(add_after_else_if(true, true) == 5)
+    assert!(add_after_else_if(true, false) == 5)
+    assert!(add_after_else_if(false, true) == 6)
+    assert!(add_after_else_if(false, false) == 7)
+}
+
+#[test]
+fn conditional_operands_stay_in_the_addition_chain() {
+    assert!(add_conditional_operands(true, true) == 2)
+    assert!(add_conditional_operands(true, false) == 3)
+    assert!(add_conditional_operands(false, true) == 1)
+    assert!(add_conditional_operands(false, false) == 2)
+}
+
+struct Number { value: u256 }
+
+impl Number {
+    fn doubled(self) -> u256 { self.value * 2 }
+}
+
+fn increment(_ value: u256) -> u256 { value + 1 }
+
+fn check_postfix_operators(_ flag: bool) {
+    let expected: u256 = if flag { 2 } else { 5 }
+
+    let field = if flag { Number { value: 2 } } else { Number { value: 5 } }.value
+    assert!(field == expected)
+
+    let method = if flag { Number { value: 2 } } else { Number { value: 5 } }.doubled()
+    assert!(method == expected * 2)
+
+    let index = if flag { [2, 3] } else { [5, 6] }[1]
+    assert!(index == expected + 1)
+
+    let cast = if flag { 2 as u8 } else { 5 as u8 } as u256
+    assert!(cast == expected)
+
+    let call = if flag { increment } else { increment }(7)
+    assert!(call == 8)
+}
+
+#[test]
+fn postfix_operators_apply_to_the_selected_branch() {
+    check_postfix_operators(true)
+    check_postfix_operators(false)
+}
