@@ -698,41 +698,56 @@ impl<'db> Borrowck<'db> {
             let mut incoming = vec![None; self.body.blocks.len()];
             incoming[self.body.entry.index()] = Some(self.inventory.entry.clone());
             let mut certificate_application_failed = false;
-            // Every sweep keeps its per-statement states. The sweep that finds
-            // the fixed point ran with unchanged facts, so its states are the
-            // published snapshots when each block ran from its converged state.
+            // Keep statement snapshots with the inventory generation that
+            // produced them. An unchanged input under that same inventory can
+            // reuse its transfers while the fixed point continues propagating.
             let mut before = vec![Vec::new(); self.body.blocks.len()];
             let mut terminal = vec![None; self.body.blocks.len()];
+            let mut generations = vec![None; self.body.blocks.len()];
             loop {
                 #[cfg(feature = "borrowck-profile")]
                 profile.sweep(self.inventory.loans.len(), self.source_generation);
                 let previous_incoming = incoming.clone();
                 self.loan_facts_changed = false;
                 self.storage_facts_changed = false;
-                before.fill(Vec::new());
-                terminal.fill(None);
                 for &index in &order {
                     let Some(mut state) = incoming[index].clone() else {
                         continue;
                     };
                     state.extend_storage(&self.inventory.entry);
                     let block = self.body.blocks[index].clone();
-                    let mut snapshots = Vec::with_capacity(block.statements.len());
-                    let mut returns = true;
-                    for statement in &block.statements {
-                        #[cfg(feature = "borrowck-profile")]
-                        profile.point("transfer", index, snapshots.len());
-                        snapshots.push(state.clone());
-                        if self.statement_diverges(statement) {
-                            returns = false;
-                            break;
+                    let reusable = generations[index] == Some(self.source_generation)
+                        && before[index].first().or(terminal[index].as_ref()) == Some(&state);
+                    if reusable {
+                        let Some(previous) = terminal[index].clone() else {
+                            continue;
+                        };
+                        state = previous;
+                    } else {
+                        // Transfers depend on the input and inventory. Record the
+                        // generation before visiting: discovered facts invalidate
+                        // this block as well as the blocks that precede it.
+                        generations[index] = Some(self.source_generation);
+                        terminal[index] = None;
+                        let mut snapshots = Vec::with_capacity(block.statements.len());
+                        let mut returns = true;
+                        for statement in &block.statements {
+                            #[cfg(feature = "borrowck-profile")]
+                            profile.point("transfer", index, snapshots.len());
+                            snapshots.push(state.clone());
+                            if self.statement_diverges(statement) {
+                                returns = false;
+                                break;
+                            }
+                            self.transfer(&mut state, statement)?;
                         }
-                        self.transfer(&mut state, statement)?;
+                        before[index] = snapshots;
+                        if !returns {
+                            continue;
+                        }
                     }
-                    before[index] = snapshots;
-                    if !returns {
-                        continue;
-                    }
+                    // Loop feedback also reads the successor's current state,
+                    // so propagate edges even when transfers were reusable.
                     for (successor_index, successor) in
                         block.terminator.kind.successors().into_iter().enumerate()
                     {
@@ -816,6 +831,9 @@ impl<'db> Borrowck<'db> {
                     self.inventory.reset_epoch_loans();
                     self.source_generation += 1;
                     incoming.fill(None);
+                    before.fill(Vec::new());
+                    terminal.fill(None);
+                    generations.fill(None);
                     incoming[self.body.entry.index()] = Some(self.inventory.entry.clone());
                     continue;
                 }
