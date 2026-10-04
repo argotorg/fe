@@ -1,0 +1,17 @@
+struct Pointer<T> { value: *T }
+struct Inline<T> { value: T }
+struct Select<A, B> { pointer: Pointer<A>, value: B }
+enum Maybe<T> { None, Some(T) }
+
+struct Direct { next: Inline<Direct> }
+struct Nested { next: Inline<Inline<Nested>> }
+struct EnumCycle { next: Maybe<EnumCycle> }
+struct Selected { next: Select<u64, Selected> }
+struct ArrayCycle { next: Inline<[ArrayCycle; 1]> }
+struct EmptyArrayCycle { next: Inline<[EmptyArrayCycle; 0]> }
+
+// Exposing T requires following the other wrapper's field before resolving
+// the argument gate; the pointer still breaks the wrapper definitions' cycle.
+struct Left<T> { right: Right<T> }
+struct Right<T> { value: T, left: Pointer<Left<T>> }
+struct Mutual { next: Left<Mutual> }

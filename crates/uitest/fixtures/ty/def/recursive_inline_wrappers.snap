@@ -1,0 +1,60 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/recursive_inline_wrappers.fe
+---
+error[3-0002]: recursive type definition
+  ┌─ recursive_inline_wrappers.fe:6:8
+  │
+6 │ struct Direct { next: Inline<Direct> }
+  │        ^^^^^^         -------------- recursion occurs here
+  │        │
+  │        recursive type definition here
+
+error[3-0002]: recursive type definition
+  ┌─ recursive_inline_wrappers.fe:7:8
+  │
+7 │ struct Nested { next: Inline<Inline<Nested>> }
+  │        ^^^^^^         ---------------------- recursion occurs here
+  │        │
+  │        recursive type definition here
+
+error[3-0002]: recursive type definition
+  ┌─ recursive_inline_wrappers.fe:8:8
+  │
+8 │ struct EnumCycle { next: Maybe<EnumCycle> }
+  │        ^^^^^^^^^         ---------------- recursion occurs here
+  │        │
+  │        recursive type definition here
+
+error[3-0002]: recursive type definition
+  ┌─ recursive_inline_wrappers.fe:9:8
+  │
+9 │ struct Selected { next: Select<u64, Selected> }
+  │        ^^^^^^^^         --------------------- recursion occurs here
+  │        │
+  │        recursive type definition here
+
+error[3-0002]: recursive type definition
+   ┌─ recursive_inline_wrappers.fe:10:8
+   │
+10 │ struct ArrayCycle { next: Inline<[ArrayCycle; 1]> }
+   │        ^^^^^^^^^^         ----------------------- recursion occurs here
+   │        │
+   │        recursive type definition here
+
+error[3-0002]: recursive type definition
+   ┌─ recursive_inline_wrappers.fe:11:8
+   │
+11 │ struct EmptyArrayCycle { next: Inline<[EmptyArrayCycle; 0]> }
+   │        ^^^^^^^^^^^^^^^         ---------------------------- recursion occurs here
+   │        │
+   │        recursive type definition here
+
+error[3-0002]: recursive type definition
+   ┌─ recursive_inline_wrappers.fe:17:8
+   │
+17 │ struct Mutual { next: Left<Mutual> }
+   │        ^^^^^^         ------------ recursion occurs here
+   │        │
+   │        recursive type definition here

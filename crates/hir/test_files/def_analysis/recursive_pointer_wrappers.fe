@@ -1,0 +1,32 @@
+use core::Option
+
+struct Pointer<T> { value: *T }
+struct Inline<T> { value: T }
+struct Phantom<T> {}
+enum Maybe<T> { None, Some(T) }
+struct Select<A, B> { value: A, pointer: Pointer<B> }
+
+struct Node {
+    previous: Option<Pointer<Node>>,
+    value: u64,
+}
+
+struct Nested {
+    next: Maybe<Inline<Pointer<Inline<Nested>>>>,
+}
+
+struct Unused {
+    tag: Phantom<Unused>,
+}
+
+struct Selective {
+    next: Select<u64, Selective>,
+}
+
+struct Left<T> { right: Right<T> }
+struct Right<T> { value: Pointer<T>, left: Pointer<Left<T>> }
+struct Mutual {
+    wrapped: Left<Mutual>,
+}
+
+fn read_node(_ node: Node) -> u64 { node.value }

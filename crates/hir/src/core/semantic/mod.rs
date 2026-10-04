@@ -3544,6 +3544,7 @@ impl<'db> AdtDef<'db> {
             root: AdtDef<'db>,
             adt: AdtDef<'db>,
             chain: &[AdtCycleMember<'db>],
+            inline_parameters: &FxHashSet<TyId<'db>>,
         ) -> Option<Vec<AdtCycleMember<'db>>> {
             if adt == root && !chain.is_empty() {
                 return Some(chain.to_vec());
@@ -3554,16 +3555,22 @@ impl<'db> AdtDef<'db> {
             let mut chain = chain.to_vec();
             for (field_idx, field) in adt.fields(db).iter().enumerate() {
                 for (ty_idx, ty) in field.iter_types(db).enumerate() {
-                    for field_adt_ref in collect_direct_adts(db, ty.instantiate_identity()) {
+                    for field_adt_ref in
+                        collect_direct_adts(db, ty.instantiate_identity(), inline_parameters)
+                    {
                         chain.push(AdtCycleMember {
                             adt,
                             field_idx,
                             ty_idx,
                         });
 
-                        if let Some(cycle) =
-                            impl_check(db, root, lower_adt(db, field_adt_ref), &chain)
-                        {
+                        if let Some(cycle) = impl_check(
+                            db,
+                            root,
+                            lower_adt(db, field_adt_ref),
+                            &chain,
+                            inline_parameters,
+                        ) {
                             return Some(cycle);
                         }
                         chain.pop();
@@ -3573,7 +3580,13 @@ impl<'db> AdtDef<'db> {
             None
         }
 
-        impl_check(db, self, self, &[])
+        impl_check(
+            db,
+            self,
+            self,
+            &[],
+            ingot_inline_parameters(db, self.ingot(db)),
+        )
     }
 }
 
@@ -3877,46 +3890,125 @@ pub fn ingot_growing_cycles<'db>(
     cycles
 }
 
-/// Collect all ADTs directly appearing inside the given type without
-/// traversing through indirect wrappers like pointers or references.
-fn collect_direct_adts<'db>(
+/// The immediate inline children of a type. An ADT argument contributes to
+/// layout only if the corresponding formal parameter is stored inline.
+#[salsa::tracked(return_ref)]
+fn inline_type_children<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
-) -> rustc_hash::FxHashSet<AdtRef<'db>> {
-    use crate::analysis::ty::ty_def::{PrimTy, TyBase};
-    use crate::analysis::ty::visitor::TyVisitable;
-    use rustc_hash::FxHashSet;
-
-    struct AdtCollector<'db> {
-        db: &'db dyn HirAnalysisDb,
-        adts: FxHashSet<AdtRef<'db>>,
+) -> Vec<(TyId<'db>, Option<TyId<'db>>)> {
+    if matches!(ty.data(db), TyData::TyApp(..)) {
+        let (head, args) = ty.decompose_ty_app(db);
+        if matches!(head.data(db), TyData::TyBase(TyBase::Prim(PrimTy::Ptr))) {
+            return Vec::new();
+        }
+        let params = match head.data(db) {
+            TyData::TyBase(TyBase::Adt(adt)) => adt.params(db),
+            _ => &[],
+        };
+        return iter::once((head, None))
+            .chain(
+                args.iter()
+                    .enumerate()
+                    .map(|(idx, arg)| (*arg, params.get(idx).copied())),
+            )
+            .collect();
     }
-    impl<'db> TyVisitor<'db> for AdtCollector<'db> {
+
+    struct Children<'db> {
+        db: &'db dyn HirAnalysisDb,
+        types: Vec<(TyId<'db>, Option<TyId<'db>>)>,
+    }
+    impl<'db> TyVisitor<'db> for Children<'db> {
         fn db(&self) -> &'db dyn HirAnalysisDb {
             self.db
         }
-        fn visit_app(&mut self, abs: TyId<'db>, arg: TyId<'db>) {
-            let is_indirect = match abs.data(self.db) {
-                TyData::TyBase(TyBase::Prim(PrimTy::Ptr)) => true,
-                // Future: handle Ref when introduced.
-                _ => false,
-            };
-            if !is_indirect {
-                walk_ty(self, abs);
-                walk_ty(self, arg)
-            }
-        }
-        fn visit_adt(&mut self, adt: AdtDef<'db>) {
-            self.adts.insert(adt.adt_ref(self.db));
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            self.types.push((ty, None));
         }
     }
-
-    let mut collector = AdtCollector {
+    let mut children = Children {
         db,
-        adts: FxHashSet::default(),
+        types: Vec::new(),
     };
-    ty.visit_with(&mut collector);
-    collector.adts
+    walk_ty(&mut children, ty);
+    children.types
+}
+
+/// Solve inline parameter exposure once for the ingot and the definitions its
+/// fields use. Identity field types keep the graph finite even for recursive
+/// definitions. Waiting arguments are revisited only when their formal becomes
+/// exposed, including through mutually dependent generic wrappers.
+#[salsa::tracked(return_ref)]
+fn ingot_inline_parameters<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+) -> FxHashSet<TyId<'db>> {
+    let mut pending: Vec<_> = ingot
+        .all_items(db)
+        .iter()
+        .filter_map(|item| AdtRef::try_from_item(*item))
+        .map(|adt| TyId::new(db, TyData::TyBase(TyBase::Adt(lower_adt(db, adt)))))
+        .collect();
+    let mut reached = FxHashSet::default();
+    let mut parameters = FxHashSet::default();
+    let mut waiting: FxHashMap<TyId<'db>, Vec<TyId<'db>>> = FxHashMap::default();
+    while let Some(ty) = pending.pop() {
+        if !reached.insert(ty) {
+            continue;
+        }
+        if let Some(arguments) = waiting.remove(&ty) {
+            pending.extend(arguments);
+        }
+        if let TyData::TyBase(TyBase::Adt(adt)) = ty.data(db) {
+            parameters.extend(adt.params(db));
+            pending.extend(
+                adt.fields(db)
+                    .iter()
+                    .flat_map(|field| field.iter_types(db).map(|ty| ty.instantiate_identity())),
+            );
+        }
+        for &(child, gate) in inline_type_children(db, ty) {
+            if let Some(param) = gate
+                && !reached.contains(&param)
+            {
+                waiting.entry(param).or_default().push(child);
+            } else {
+                pending.push(child);
+            }
+        }
+    }
+    parameters.retain(|param| reached.contains(param));
+    parameters
+}
+
+/// Collect inline ADTs without treating phantom or indirect generic arguments
+/// as embedded values. Shared type subterms are visited only once.
+fn collect_direct_adts<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    inline_parameters: &FxHashSet<TyId<'db>>,
+) -> FxHashSet<AdtRef<'db>> {
+    let mut pending = vec![ty];
+    let mut seen = FxHashSet::default();
+    let mut adts = FxHashSet::default();
+    while let Some(ty) = pending.pop() {
+        if !seen.insert(ty) {
+            continue;
+        }
+        if let TyData::TyBase(TyBase::Adt(adt)) = ty.data(db) {
+            adts.insert(adt.adt_ref(db));
+        }
+        pending.extend(
+            inline_type_children(db, ty)
+                .iter()
+                .filter_map(|(child, gate)| {
+                    gate.is_none_or(|param| inline_parameters.contains(&param))
+                        .then_some(*child)
+                }),
+        );
+    }
+    adts
 }
 
 #[derive(Clone, Copy, Debug)]
