@@ -3998,6 +3998,19 @@ impl<'db> ParamSchemaId<'db> {
             )
         })
     }
+
+    /// The source parameter whose allowed default dependencies are the
+    /// leading `len` slots; the inverse of `allowed_default_dependencies`.
+    pub(crate) fn default_dependency_index(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        len: usize,
+    ) -> Option<SourceParamIndex> {
+        let set = self.param_set(db);
+        len.checked_sub(set.offset_to_explicit_params_position(db))
+            .filter(|&index| index < set.explicit_param_count(db))
+            .map(SourceParamIndex)
+    }
 }
 
 /// The leading `len` slots of one parameter schema: the full schema, a

@@ -4,8 +4,9 @@ use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, Zero};
 
 use crate::core::hir_def::{
-    BinOp, Body, Const, Contract, Expr, ExprId, Func, GenericArgListId, GenericParamOwner, IdentId,
-    LitKind, Partial, PatId, PathId, Stmt, TypeAlias as HirTypeAlias, TypeId as HirTypeId, UnOp,
+    BinOp, Body, Const, Contract, Expr, ExprId, Func, GenericArgListId, GenericParamOwner,
+    HirIngot, IdentId, LitKind, Partial, PatId, PathId, Stmt, TypeAlias as HirTypeAlias,
+    TypeId as HirTypeId, UnOp,
 };
 use salsa::Update;
 
@@ -1071,6 +1072,43 @@ fn canonicalize_const_expr_for_mode<'db>(
     }
 }
 
+/// Unification identifies an associated or inherent const use by its trait
+/// instance (or impl and receiver) and name. The scope and assumptions it is
+/// solved under only decide how evaluation finds it; solving reads just the
+/// scope's ingot. Once evaluation has used them, the comparison form keeps
+/// the ingot root and no assumptions, so the uses one constant gets in
+/// different items compare equal.
+struct EraseConstUseEnv;
+
+impl<'db> TyFolder<'db> for EraseConstUseEnv {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        let ty = ty.super_fold_with(db, self);
+        let TyData::ConstTy(const_ty) = ty.data(db) else {
+            return ty;
+        };
+        let ConstTyData::Abstract(expr, expected_ty) = const_ty.data(db) else {
+            return ty;
+        };
+        let root =
+            |scope: ScopeId<'db>| ScopeId::Item(ItemKind::TopMod(scope.ingot(db).root_mod(db)));
+        let none = PredicateListId::empty_list(db);
+        let erased = match expr.data(db) {
+            ConstExpr::TraitConst(use_) => {
+                ConstExpr::TraitConst(use_.with_env(root(use_.origin_scope()), none))
+            }
+            ConstExpr::InherentConst(use_) => {
+                ConstExpr::InherentConst(use_.with_env(root(use_.origin_scope()), none))
+            }
+            _ => return ty,
+        };
+        let expr = ConstExprId::new(db, erased);
+        TyId::const_ty(
+            db,
+            ConstTyId::new(db, ConstTyData::Abstract(expr, *expected_ty)),
+        )
+    }
+}
+
 pub fn evaluate_type_level_const_expr<'db>(
     db: &'db dyn HirAnalysisDb,
     expr: ConstExprId<'db>,
@@ -1327,9 +1365,19 @@ pub fn canonicalize_const_ty_for_mode<'db>(
                 ty: ty.map(|ty| canonicalize_ty_for_mode(db, ty, env, mode)),
                 template_ty: *template_ty,
                 const_def: *const_def,
-                capture: capture
-                    .map_bound_values(|arg| canonicalize_ty_for_mode(db, arg, env, mode)),
-                policy: *policy,
+                capture: match capture {
+                    ConstCaptureEnv::Bound(subst) => ConstCaptureEnv::from_subst(
+                        db,
+                        subst.map_values(|arg| canonicalize_ty_for_mode(db, arg, env, mode)),
+                    ),
+                    ConstCaptureEnv::Empty | ConstCaptureEnv::Identity(_) => capture.clone(),
+                },
+                // The policy says when lowering checks the body, which a
+                // comparison of the value it denotes must not see.
+                policy: match mode {
+                    ConstCanonMode::Identity => UnevaluatedConstPolicy::Evaluate,
+                    ConstCanonMode::Stored | ConstCanonMode::Display => *policy,
+                },
             },
         ),
     };
@@ -1553,11 +1601,23 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
         return canonicalized;
     };
 
-    match const_ty.data(db) {
+    let compared = match const_ty.data(db) {
+        ConstTyData::Abstract(expr, expected_ty)
+            if !matches!(
+                expr.data(db),
+                ConstExpr::TraitConst(_) | ConstExpr::InherentConst(_)
+            ) =>
+        {
+            evaluate_type_level_int_const_expr(db, *expr, *expected_ty)
+                .map_or(canonicalized, |evaluated| TyId::const_ty(db, evaluated))
+        }
+        // A deferred body or a selected constant reduces as far as its
+        // specialized inputs permit, as a type argument's does when applied.
         ConstTyData::UnEvaluated {
             ty: Some(expected_ty),
             ..
-        } => {
+        }
+        | ConstTyData::Abstract(_, expected_ty) => {
             let normalized = const_ty.evaluate(db, Some(*expected_ty));
             if normalized.ty(db).invalid_cause(db).is_none()
                 && !matches!(normalized.data(db), ConstTyData::UnEvaluated { .. })
@@ -1574,12 +1634,9 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
                 canonicalized
             }
         }
-        ConstTyData::Abstract(expr, expected_ty) => {
-            evaluate_type_level_int_const_expr(db, *expr, *expected_ty)
-                .map_or(canonicalized, |evaluated| TyId::const_ty(db, evaluated))
-        }
         _ => canonicalized,
-    }
+    };
+    compared.fold_with(db, &mut EraseConstUseEnv)
 }
 
 pub(crate) struct ValidatedUnEvaluatedConst<'db> {
@@ -2096,6 +2153,14 @@ pub(crate) fn evaluate_const_ty<'db>(
         };
 
         let assumptions = assumptions_for_body(db, body);
+        // Eager lowering records an associated const use in the scope its
+        // type is lowered in, the item around this body; record it the same
+        // way so both lowerings name one constant. Both solve alike there.
+        let mut use_item = body.scope().parent_item(db);
+        while let Some(ItemKind::Body(parent)) = use_item {
+            use_item = parent.scope().parent_item(db);
+        }
+        let use_scope = use_item.map_or(body.scope(), ScopeId::Item);
         if let Ok(resolved_path) = resolve_path(db, path, body.scope(), assumptions, true) {
             match resolved_path {
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
@@ -2139,7 +2204,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                         let expr = ConstExprId::new(
                             db,
                             ConstExpr::TraitConst(AssocConstUse::new(
-                                body.scope(),
+                                use_scope,
                                 assumptions,
                                 inst,
                                 name,
@@ -2148,8 +2213,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                         ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty))
                     };
 
-                    let solve_cx =
-                        TraitSolveCx::new(db, body.scope()).with_assumptions(assumptions);
+                    let solve_cx = TraitSolveCx::new(db, use_scope).with_assumptions(assumptions);
                     if let Some(const_ty) = const_ty_from_trait_const(db, solve_cx, inst, name) {
                         let evaluated = const_ty.evaluate(db, expected_ty);
                         if evaluated.ty(db).has_invalid(db) {
@@ -2171,7 +2235,7 @@ pub(crate) fn evaluate_const_ty<'db>(
                         specialize_available_const_assumptions(db, assumptions, capture_subst());
                     let mk_abstract = |expected_ty: TyId<'db>| {
                         let use_ = super::assoc_const::InherentConstUse::new(
-                            body.scope(),
+                            use_scope,
                             assumptions,
                             impl_,
                             recv_ty,
@@ -2727,7 +2791,7 @@ pub(super) fn const_ty_from_resolved_trait_const<'db>(
     let trait_ = inst.def(db);
     let (body, template_ty, subst) = selected_assoc_const_body_template(db, resolved, name)?;
     let template_ty = Some(template_ty);
-    let capture = ConstCaptureEnv::Bound(subst);
+    let capture = ConstCaptureEnv::from_subst(db, subst);
 
     let declared_ty = trait_
         .const_(db, name)
@@ -3290,11 +3354,44 @@ impl<'db> ConstCaptureEnv<'db> {
             .collect::<Result<Vec<_>, _>>();
         match values {
             Ok(_) if !affected => None,
-            Ok(values) => Some(Ok(Self::Bound(
+            Ok(values) => Some(Ok(Self::from_subst(
+                db,
                 CompleteSubst::new(domain, db, values).expect("identity capture domain"),
             ))),
             Err(error) => Some(Err(error)),
         }
+    }
+
+    /// The capture `subst` describes. A substitution that maps its domain to
+    /// the declared formals is that domain's identity, so both spellings of
+    /// one environment intern as the same type.
+    pub(crate) fn from_subst(db: &'db dyn HirAnalysisDb, subst: CompleteSubst<'db>) -> Self {
+        if subst
+            .values()
+            .iter()
+            .all(|value| value.as_generic_param(db).is_some())
+        {
+            let domain = subst.domain();
+            let schema = domain.schema(db);
+            let before = if domain.len(db) == schema.keys(db).len() {
+                Some(None)
+            } else {
+                schema
+                    .default_dependency_index(db, domain.len(db))
+                    .map(Some)
+            };
+            if let Some(before) = before {
+                let identity = Self::Identity(ConstCaptureDomain {
+                    owner: schema.owner(db),
+                    basis: schema.basis(db),
+                    before,
+                });
+                if identity.complete(db).as_ref() == Some(&subst) {
+                    return identity;
+                }
+            }
+        }
+        Self::Bound(subst)
     }
 
     pub(crate) fn identity_for_body(
@@ -3331,7 +3428,8 @@ impl<'db> ConstCaptureEnv<'db> {
             basis: ParamBasis::Full,
             before,
         };
-        Self::Bound(
+        Self::from_subst(
+            db,
             CompleteSubst::new(domain.materialize(db), db, values).expect("complete const capture"),
         )
     }
@@ -3380,12 +3478,10 @@ impl<'db> ConstCaptureEnv<'db> {
     where
         F: TyFolder<'db>,
     {
-        self.map_bound_values(|value| folder.fold_ty(db, value))
-    }
-
-    fn map_bound_values(&self, f: impl FnMut(TyId<'db>) -> TyId<'db>) -> Self {
         match self {
-            Self::Bound(subst) => Self::Bound(subst.map_values(f)),
+            Self::Bound(subst) => {
+                Self::from_subst(db, subst.map_values(|value| folder.fold_ty(db, value)))
+            }
             Self::Empty | Self::Identity(_) => self.clone(),
         }
     }
@@ -3766,5 +3862,61 @@ mod tests {
         };
         assert_eq!(bound.values(), &[n]);
         assert!(capture.bind_identity_with(&db, &foreign_subst).is_none());
+    }
+
+    #[test]
+    fn bound_captures_of_their_formals_are_identity_captures() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("capture_round_trip.fe"),
+            "struct D<const A: usize, const B: usize = { A }> {}\nstruct S<const N: usize> {}\nimpl<const N: usize> S<N> { fn f<const M: usize>() {} }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let impl_ = module.all_impls(&db)[0];
+        let method = module
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "f")
+            })
+            .expect("missing impl method");
+        let defaulted = GenericParamOwner::Struct(
+            module
+                .all_structs(&db)
+                .iter()
+                .copied()
+                .find(|item| {
+                    item.name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "D")
+                })
+                .expect("missing defaulted struct"),
+        );
+        for capture in [
+            ConstCaptureEnv::Identity(ConstCaptureDomain::full(impl_.into(), ParamBasis::Full)),
+            ConstCaptureEnv::Identity(ConstCaptureDomain::full(method.into(), ParamBasis::Full)),
+            ConstCaptureEnv::Identity(ConstCaptureDomain::full(method.into(), ParamBasis::Source)),
+            ConstCaptureEnv::Identity(ConstCaptureDomain::before(
+                defaulted,
+                ParamBasis::Full,
+                SourceParamIndex(1),
+            )),
+        ] {
+            let identity = capture.complete(&db).unwrap();
+            assert_eq!(
+                ConstCaptureEnv::from_subst(&db, identity.clone()),
+                capture,
+                "binding a capture to its own formals must be its identity"
+            );
+            let bound = identity.map_values(|_| TyId::bool(&db));
+            assert!(matches!(
+                ConstCaptureEnv::from_subst(&db, bound),
+                ConstCaptureEnv::Bound(_)
+            ));
+        }
     }
 }

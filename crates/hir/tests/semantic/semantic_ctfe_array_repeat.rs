@@ -1332,6 +1332,12 @@ fn projected(_ outer: Outer<Faulty>) {}
 fn projected_valid(_ outer: Outer<Fine>) {}
 fn bounded<T: Has<Item = Wrap<0>>>(_ outer: Outer<T>) {}
 fn bounded_valid<T: Has<Item = Wrap<2>>>(_ outer: Outer<T>) {}
+struct Indexed<const N: usize> {}
+impl<const N: usize> Has for Indexed<N> { type Item = [u8; { [3 as usize; 2][N] }] }
+fn indexed(_ outer: Outer<Indexed<2>>) {}
+fn indexed_valid(_ outer: Outer<Indexed<1>>) {}
+fn measured(_ wrapped: Wrap<0>) -> usize { wrapped.values.len() }
+fn measured_valid(_ wrapped: Wrap<2>) -> usize { wrapped.values.len() }
 "#,
     );
     let (module, _) = db.top_mod(file);
@@ -1340,7 +1346,9 @@ fn bounded_valid<T: Has<Item = Wrap<2>>>(_ outer: Outer<T>) {}
     // A fault reaches a concrete instance through a repeat, a callee's return
     // or parameter type, or a parameter's field; folding a returned value
     // must not see it first. A field's fault is known even beside a generic
-    // or an oversized field, or behind a projection the instance resolves.
+    // or an oversized field, or behind a projection the instance resolves,
+    // including an impl's deferred extent, and when a method call on the
+    // faulting value leaves the body unlowerable.
     for (name, len, valid) in [
         ("first", Some(2), true),
         ("first", Some(0), false),
@@ -1365,6 +1373,10 @@ fn bounded_valid<T: Has<Item = Wrap<2>>>(_ outer: Outer<T>) {}
         ("projected_valid", None, true),
         ("bounded", None, false),
         ("bounded_valid", None, true),
+        ("indexed", None, false),
+        ("indexed_valid", None, true),
+        ("measured", None, false),
+        ("measured_valid", None, true),
     ] {
         let owner = BodyOwner::Func(function(&db, module, name));
         let identity = identity_semantic_instance_key(&db, owner);
@@ -1454,5 +1466,38 @@ fn caller() -> u8 { ret<Big, 1>()[2] }
             value.ty,
             "a folded value and its home must share one type identity"
         );
+    }
+}
+
+#[test]
+fn blocked_bodies_report_only_evaluation_faults() {
+    // A body blocked by a reported type error stays blocked; one that also
+    // consumes a faulting extent reports that fault, which type checking
+    // left to concrete demand.
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "blocked_faults.fe".into(),
+        r#"
+const fn minus(_ n: usize) -> usize { n - 1 }
+struct Wrap<const N: usize> { values: [u8; minus(N)] }
+fn upstream(_ value: mut u256) -> mut u256 { value as mut u256 }
+fn both(_ wrapped: Wrap<0>, _ value: mut u256) -> mut u256 {
+    let _length = wrapped.values.len()
+    value as mut u256
+}
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    for (name, rejected) in [("upstream", false), ("both", true)] {
+        let owner = BodyOwner::Func(function(&db, module, name));
+        let instance =
+            get_or_build_semantic_instance(&db, identity_semantic_instance_key(&db, owner));
+        match normalize_semantic_body(&db, instance) {
+            Err(SemanticNormalizationFailure::Rejected(diag)) if rejected => {
+                assert_eq!(diag.kind, SemanticDiagnosticKind::InvalidConcreteType);
+            }
+            Err(SemanticNormalizationFailure::Blocked(_)) if !rejected => {}
+            other => panic!("{name}: unexpected admission {other:?}"),
+        }
     }
 }

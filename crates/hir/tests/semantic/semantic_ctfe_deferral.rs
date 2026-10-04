@@ -11,9 +11,9 @@ use fe_hir::{
             SemConstValue, SemOrigin, SemanticInstanceKey, array_const,
             const_computation_for_instance, describe_const_computation, eval_body_owner_const,
             force_const_computation, force_const_description, get_or_build_semantic_instance,
-            identity_semantic_instance_key, int_const, reify_runtime_const,
-            reify_runtime_const_for_ty, sem_const_ty, specialize_const_computation,
-            specialize_const_description, tuple_const,
+            identity_semantic_instance_key, int_const, normalize_runtime_semantic_body,
+            normalize_semantic_body, reify_runtime_const, reify_runtime_const_for_ty, sem_const_ty,
+            specialize_const_computation, specialize_const_description, tuple_const,
         },
         ty::{
             const_expr::{ConstExpr, ConstExprId, ConstInvocation},
@@ -2302,6 +2302,142 @@ const fn guarded<const N: usize>() -> usize {
                 "{name}<{len}> must divide by zero: {outcome:?}"
             ),
         }
+    }
+}
+
+#[test]
+fn opaque_associated_extents_specialize_with_their_impl() {
+    // An index is outside the term language, so the extent stays a deferred
+    // body, directly or behind a trait const; selecting the impl must still
+    // bind it to the impl's arguments, and a symbolic extent crossing the
+    // selected method, or another function whose bounds differ, keeps one
+    // identity through normalization, whichever lowering or item supplied
+    // each side.
+    for (name, source) in [
+        (
+            "opaque_associated_extent.fe",
+            r#"
+trait Has {
+    type Item
+    fn take(_ x: Self::Item)
+    fn make() -> Self::Item
+}
+struct Marker<const N: usize> {}
+impl<const N: usize> Has for Marker<N> {
+    type Item = [u8; { [3 as usize; 2][N] }]
+    fn take(_ x: Self::Item) { Self::take(x) }
+    fn make() -> Self::Item { Self::make() }
+}
+fn generic<T: Has>(_ x: T::Item) { T::take(x) }
+fn projected() -> Marker<1>::Item { [1, 2, 3] }
+fn via_generic() { generic<Marker<1>>([1, 2, 3]) }
+fn length(_ x: Marker<1>::Item) -> usize { x.len() }
+fn forward<const N: usize>(_ x: Marker<N>::Item) { Marker<N>::take(x) }
+fn forward_result<const N: usize>() -> Marker<N>::Item { Marker<N>::make() }
+"#,
+        ),
+        (
+            "trait_const_associated_extent.fe",
+            r#"
+trait Size { const LEN: usize }
+trait Has {
+    type Item
+    fn take(_ x: Self::Item)
+    fn make() -> Self::Item
+}
+struct Marker<const N: usize> {}
+impl<const N: usize> Size for Marker<N> { const LEN: usize = [2 as usize, 3][N] }
+impl<const N: usize> Has for Marker<N> {
+    type Item = [u8; Marker<N>::LEN]
+    fn take(_ x: Self::Item) { Self::take(x) }
+    fn make() -> Self::Item { Self::make() }
+}
+fn projected() -> Marker<1>::Item { [1, 2, 3] }
+fn forward<const N: usize>(_ x: Marker<N>::Item) { Marker<N>::take(x) }
+fn forward_result<const N: usize>() -> Marker<N>::Item { Marker<N>::make() }
+"#,
+        ),
+        (
+            "cross_item_const_extent.fe",
+            r#"
+trait Size { const LEN: usize }
+trait Other {}
+struct Marker<const N: usize> {}
+impl<const N: usize> Size for Marker<N> { const LEN: usize = [2 as usize, 3][N] }
+impl<const N: usize> Marker<N> { const WIDTH: usize = [4 as usize, 5][N] }
+fn take<const N: usize>(_ x: [u8; Marker<N>::LEN]) -> [u8; Marker<N>::LEN] { x }
+fn forward<const N: usize>(_ x: [u8; Marker<N>::LEN]) -> [u8; Marker<N>::LEN] { take<N>(x) }
+fn take_width<const N: usize>(_ x: [u8; Marker<N>::WIDTH]) -> [u8; Marker<N>::WIDTH] { x }
+fn forward_width<const N: usize>(_ x: [u8; Marker<N>::WIDTH]) -> [u8; Marker<N>::WIDTH] {
+    take_width<N>(x)
+}
+fn take_bound<T: Size>(_ x: [u8; T::LEN]) -> [u8; T::LEN] { x }
+fn forward_bound<T: Size + Other>(_ x: [u8; T::LEN]) -> [u8; T::LEN] { take_bound<T>(x) }
+"#,
+        ),
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(name.into(), source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        for func in module
+            .all_funcs(&db)
+            .iter()
+            .filter(|func| func.body(&db).is_some())
+        {
+            let instance = get_or_build_semantic_instance(
+                &db,
+                identity_semantic_instance_key(&db, BodyOwner::Func(*func)),
+            );
+            let func = func.name(&db).to_opt().map(|name| name.data(&db).clone());
+            for result in [
+                normalize_semantic_body(&db, instance).map(|_| ()),
+                normalize_runtime_semantic_body(&db, instance).map(|_| ()),
+            ] {
+                assert!(result.is_ok(), "{name} {func:?} must normalize: {result:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn identical_deferred_extents_unify() {
+    // An index keeps each extent a deferred body, which unifies with itself
+    // under equal captures, an identity capture standing for its formals.
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "deferred_extent_unification.fe".into(),
+        r#"
+fn pick<const N: usize>(_ x: [u8; N]) -> [u8; { [3 as usize; 2][N] }] { todo() }
+fn again<const N: usize>(_ x: [u8; N]) -> [u8; { [3 as usize; 2][N] }] { again<N>(x) }
+fn inferred<const N: usize>(_ x: [u8; N]) -> [u8; { [3 as usize; 2][N] }] { inferred(x) }
+trait Has {
+    type Item
+    fn make() -> Self::Item
+}
+struct Marker<const N: usize> {}
+impl<const N: usize> Has for Marker<N> {
+    type Item = [u8; { [3 as usize; 2][N] }]
+    fn make() -> Self::Item { Self::make() }
+}
+fn projected<const N: usize>() -> Marker<N>::Item { projected<N>() }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+
+    for source in [
+        "trait Has { type Item }\nstruct Marker<const N: usize> {}\nimpl<const N: usize> Has for Marker<N> { type Item = [u8; { [3 as usize; 2][N] }] }\nfn swap<const N: usize, const M: usize>(_ x: Marker<N>::Item) -> Marker<M>::Item { x }",
+        "fn distinct<const N: usize>(_ x: [u8; { [3 as usize; 2][N] }]) -> [u8; { [4 as usize; 2][N] }] { x }",
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("distinct_deferred_extents.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        let rendered = format_diagnostics(&db, &db.run_on_top_mod(module));
+        assert!(
+            rendered.contains("type mismatch"),
+            "different deferred extents must stay distinct: {rendered}"
+        );
     }
 }
 

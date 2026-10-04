@@ -2,8 +2,8 @@
 // checked fault in a specialized extent is reported where it is demanded,
 // labelled where the length is written: in a repeat, in an unused repeat, in
 // an array a caller receives, returns from a folded call or passes, behind an
-// index, in the arm of a condition that a use selects, and in a field of an
-// unused parameter.
+// index, in the arm of a condition that a use selects, in a field of an
+// unused parameter, and in a field whose length a body asks for.
 const fn minus(_ n: usize) -> usize { n - 1 }
 
 const fn lengths(_ n: usize) -> usize {
@@ -47,6 +47,8 @@ fn passed() -> u8 {
 }
 
 fn ignored(_ words: Words<0>) {}
+
+fn measured(_ words: Words<0>) -> usize { words.values.len() }
 
 pub fn main() -> i32 {
     unused<2>()
