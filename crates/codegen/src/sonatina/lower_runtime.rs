@@ -3,7 +3,7 @@ mod memory_reference;
 #[cfg(test)]
 mod tests;
 
-use memory_reference::MemoryReference;
+use memory_reference::{MemoryReference, ReferentLayout};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -3746,7 +3746,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 class,
             },
             CopySource::Ptr { addr, space, .. } => CopySource::Value {
-                value: self.load_aggregate_from_ptr(addr, space, src_layout)?,
+                value: self.load_aggregate_from_ptr(
+                    addr,
+                    ReferentLayout::Raw(space),
+                    src_layout,
+                )?,
                 class: RuntimeClass::AggregateValue { layout: src_layout },
             },
             source => source,
@@ -4081,9 +4085,31 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         class: &RuntimeClass<'db>,
         src: ValueId,
     ) -> Result<(), LowerError> {
+        self.copy_memory_value(addr, ReferentLayout::Raw(space), class, src)
+    }
+
+    fn copy_memory_value(
+        &mut self,
+        addr: ValueId,
+        memory: ReferentLayout,
+        class: &RuntimeClass<'db>,
+        src: ValueId,
+    ) -> Result<(), LowerError> {
         match class {
             RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
-                self.store_to_ptr(addr, space, class, src)
+                match memory {
+                    ReferentLayout::Raw(space) => self.store_to_ptr(addr, space, class, src),
+                    ReferentLayout::Object => {
+                        let ty = self.module.ty_for_class(class)?;
+                        self.fb.insert_inst_no_result(Mstore::new(
+                            self.module.inst_set(),
+                            addr,
+                            src,
+                            ty,
+                        ));
+                        Ok(())
+                    }
+                }
             }
             RuntimeClass::AggregateValue { layout } => match layout.data(self.module.db) {
                 Layout::Struct(data) => {
@@ -4097,9 +4123,8 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                                 self.fb.type_of(src)
                             )));
                         }
-                        let field_addr =
-                            self.offset_ptr_struct_field_address(addr, &data, idx, space)?;
-                        self.copy_to_ptr(field_addr, space, field, field_value)?;
+                        let field_addr = self.referent_field_address(addr, memory, class, idx)?;
+                        self.copy_memory_value(field_addr, memory, field, field_value)?;
                     }
                     Ok(())
                 }
@@ -4115,13 +4140,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                                 self.fb.type_of(src)
                             )));
                         }
-                        let elem_addr =
-                            self.offset_ptr_array_elem_address(addr, &data, idx, space)?;
-                        self.copy_to_ptr(elem_addr, space, &data.elem, field_value)?;
+                        let elem_addr = self.referent_field_address(addr, memory, class, idx)?;
+                        self.copy_memory_value(elem_addr, memory, &data.elem, field_value)?;
                     }
                     Ok(())
                 }
-                Layout::Enum(data) => self.copy_enum_to_ptr(addr, space, *layout, &data, src),
+                Layout::Enum(data) => self.copy_enum_to_ptr(addr, memory, *layout, &data, src),
             },
         }
     }
@@ -4129,7 +4153,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     fn copy_enum_to_ptr(
         &mut self,
         addr: ValueId,
-        space: AddressSpaceKind,
+        memory: ReferentLayout,
         layout: LayoutId<'db>,
         data: &mir::runtime::EnumLayout<'db>,
         src: ValueId,
@@ -4170,12 +4194,27 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 self.variant_ref(variant)?,
             ));
             let tag_word = self.index_value(idx as u64);
-            self.store_to_ptr(
-                addr,
-                space,
-                &RuntimeClass::Scalar(data.tag.clone()),
-                tag_word,
-            )?;
+            match memory {
+                ReferentLayout::Raw(space) => self.store_to_ptr(
+                    addr,
+                    space,
+                    &RuntimeClass::Scalar(data.tag.clone()),
+                    tag_word,
+                )?,
+                ReferentLayout::Object => {
+                    let ty = self
+                        .native_class_layout(&RuntimeClass::AggregateValue { layout })?
+                        .tag_type()
+                        .ok_or_else(|| LowerError::Internal("enum tag layout missing".into()))?;
+                    let value = self.cast_scalar(tag_word, ty)?;
+                    self.fb.insert_inst_no_result(Mstore::new(
+                        self.module.inst_set(),
+                        addr,
+                        value,
+                        ty,
+                    ));
+                }
+            }
             for (field_idx, field) in data.variants[idx].fields.iter().enumerate() {
                 let field_idx_value = self.index_value(field_idx as u64);
                 let field_value = self.fb.insert_inst(
@@ -4187,13 +4226,8 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     ),
                     self.module.ty_for_class(field)?,
                 );
-                let field_addr = self.offset_ptr_variant_field_address(
-                    addr,
-                    variant,
-                    FieldIndex(field_idx as u16),
-                    space,
-                )?;
-                self.copy_to_ptr(field_addr, space, field, field_value)?;
+                let field_addr = self.referent_variant_address(addr, memory, variant, field_idx)?;
+                self.copy_memory_value(field_addr, memory, field, field_value)?;
             }
             self.fb
                 .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
@@ -4213,6 +4247,27 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         space: AddressSpaceKind,
         class: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
+        self.load_memory_value(addr, ReferentLayout::Raw(space), class)
+    }
+
+    fn load_memory_value(
+        &mut self,
+        addr: ValueId,
+        memory: ReferentLayout,
+        class: &RuntimeClass<'db>,
+    ) -> Result<ValueId, LowerError> {
+        if let RuntimeClass::AggregateValue { layout } = class {
+            return self.load_aggregate_from_ptr(addr, memory, *layout);
+        }
+        let space = match memory {
+            ReferentLayout::Object => {
+                let ty = self.module.ty_for_class(class)?;
+                return Ok(self
+                    .fb
+                    .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty));
+            }
+            ReferentLayout::Raw(space) => space,
+        };
         match class {
             RuntimeClass::Scalar(scalar) => self.load_scalar(addr, space, scalar),
             RuntimeClass::Ref {
@@ -4226,15 +4281,13 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         ..
                     },
                 ..
-            } => self.load_word(addr, space),
-            RuntimeClass::RawAddr { .. }
+            }
+            | RuntimeClass::RawAddr { .. }
             | RuntimeClass::Ref {
                 kind: RefKind::Native,
                 ..
             } => self.load_word(addr, space),
-            RuntimeClass::AggregateValue { layout } => {
-                self.load_aggregate_from_ptr(addr, space, *layout)
-            }
+            RuntimeClass::AggregateValue { .. } => unreachable!(),
             RuntimeClass::Ref { .. } => Err(LowerError::Unsupported(
                 "loading handle values from raw-address places is not supported".to_string(),
             )),
@@ -4244,17 +4297,17 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     fn load_aggregate_from_ptr(
         &mut self,
         addr: ValueId,
-        space: AddressSpaceKind,
+        memory: ReferentLayout,
         layout: LayoutId<'db>,
     ) -> Result<ValueId, LowerError> {
+        let class = RuntimeClass::AggregateValue { layout };
         match layout.data(self.module.db) {
             Layout::Struct(data) => {
                 let ty = self.module.ty_for_layout(layout)?;
                 let mut value = self.fb.make_undef_value(ty);
                 for (idx, field) in data.fields.iter().enumerate() {
-                    let field_addr =
-                        self.offset_ptr_struct_field_address(addr, &data, idx, space)?;
-                    let field_value = self.load_from_ptr(field_addr, space, field)?;
+                    let field_addr = self.referent_field_address(addr, memory, &class, idx)?;
+                    let field_value = self.load_memory_value(field_addr, memory, field)?;
                     let expected_ty = self.module.ty_for_class(field)?;
                     let actual_ty = self.fb.type_of(field_value);
                     if actual_ty != expected_ty {
@@ -4274,8 +4327,8 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let ty = self.module.ty_for_layout(layout)?;
                 let mut value = self.fb.make_undef_value(ty);
                 for idx in 0..data.len as usize {
-                    let elem_addr = self.offset_ptr_array_elem_address(addr, &data, idx, space)?;
-                    let elem = self.load_from_ptr(elem_addr, space, &data.elem)?;
+                    let elem_addr = self.referent_field_address(addr, memory, &class, idx)?;
+                    let elem = self.load_memory_value(elem_addr, memory, &data.elem)?;
                     let expected_ty = self.module.ty_for_class(&data.elem)?;
                     let actual_ty = self.fb.type_of(elem);
                     if actual_ty != expected_ty {
@@ -4292,19 +4345,29 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 }
                 Ok(value)
             }
-            Layout::Enum(data) => self.load_enum_from_ptr(addr, space, layout, &data),
+            Layout::Enum(data) => self.load_enum_from_ptr(addr, memory, layout, &data),
         }
     }
 
     fn load_enum_from_ptr(
         &mut self,
         addr: ValueId,
-        space: AddressSpaceKind,
+        memory: ReferentLayout,
         layout: LayoutId<'db>,
         data: &mir::runtime::EnumLayout<'db>,
     ) -> Result<ValueId, LowerError> {
         let layout_ty = self.module.ty_for_layout(layout)?;
-        let tag = self.load_scalar(addr, space, &data.tag)?;
+        let tag = match memory {
+            ReferentLayout::Raw(space) => self.load_scalar(addr, space, &data.tag)?,
+            ReferentLayout::Object => {
+                let ty = self
+                    .native_class_layout(&RuntimeClass::AggregateValue { layout })?
+                    .tag_type()
+                    .ok_or_else(|| LowerError::Internal("enum tag layout missing".into()))?;
+                self.fb
+                    .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty)
+            }
+        };
         let done = self.fb.append_block();
         let invalid = self.fb.append_block();
         let mut cases = Vec::with_capacity(data.variants.len());
@@ -4339,13 +4402,9 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 .iter()
                 .enumerate()
                 .map(|(field_idx, field)| {
-                    let field_addr = self.offset_ptr_variant_field_address(
-                        addr,
-                        variant,
-                        FieldIndex(field_idx as u16),
-                        space,
-                    )?;
-                    self.load_from_ptr(field_addr, space, field)
+                    let field_addr =
+                        self.referent_variant_address(addr, memory, variant, field_idx)?;
+                    self.load_memory_value(field_addr, memory, field)
                 })
                 .collect::<Result<SmallVec<[ValueId; 2]>, _>>()?;
             let value = self.fb.insert_inst(
@@ -4408,7 +4467,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         scalar: &ScalarClass<'db>,
     ) -> Result<ValueId, LowerError> {
         if self.module.is_native_target() && matches!(space, AddressSpaceKind::Memory) {
-            let ty = self.module.scalar_ty(scalar)?;
+            let ty = scalar_ty(scalar);
             return Ok(self
                 .fb
                 .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty));
@@ -4441,7 +4500,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         let value = match class {
             RuntimeClass::Scalar(scalar) => {
                 let ty = if native_memory {
-                    self.module.scalar_ty(scalar)?
+                    scalar_ty(scalar)
                 } else {
                     scalar_word_ty(scalar)
                 };

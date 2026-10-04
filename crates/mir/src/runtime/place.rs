@@ -357,7 +357,10 @@ pub(crate) fn enum_tag_class_from_value<'db>(
     value: crate::runtime::RValueId,
 ) -> Result<RuntimeClass<'db>, VerifyError<'db>> {
     let class = runtime_value_class(body, value)?.clone();
-    let Some(enum_layout) = class.aggregate_layout() else {
+    let RuntimeClass::AggregateValue {
+        layout: enum_layout,
+    } = class
+    else {
         return Err(VerifyError::InvalidPlace(class));
     };
     Ok(RuntimeClass::Scalar(ScalarClass {

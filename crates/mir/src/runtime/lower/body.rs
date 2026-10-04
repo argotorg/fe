@@ -2981,41 +2981,13 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn lower_enum_tag(&mut self, bb: RBlockId, dst: RLocalId, value: RuntimeOperand) {
-        if self.semantic_local_is_place_bound(value.local) {
-            let value = self.read_semantic_value(bb, value.local);
-            self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst,
-                    expr: RExpr::EnumTagOfValue { value },
-                },
-            );
-            return;
-        }
-        match self.local_class(value.local) {
-            Some(RuntimeClass::Ref { .. }) => {
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::EnumGetTag {
-                            root: self.runtime_value(value.local),
-                        },
-                    },
-                );
-            }
-            _ => {
-                self.push_stmt(
-                    bb,
-                    RStmt::Assign {
-                        dst,
-                        expr: RExpr::EnumTagOfValue {
-                            value: self.runtime_value(value.local),
-                        },
-                    },
-                );
-            }
-        }
+        let value = self.read_semantic_value(bb, value.local);
+        let expr = if matches!(self.value_class(value), Some(RuntimeClass::Ref { .. })) {
+            RExpr::EnumGetTag { root: value }
+        } else {
+            RExpr::EnumTagOfValue { value }
+        };
+        self.push_stmt(bb, RStmt::Assign { dst, expr });
     }
 
     fn lower_is_enum_variant(
@@ -3025,20 +2997,11 @@ impl<'db> RmirEmitter<'db> {
         value: RuntimeOperand,
         variant: VariantIndex,
     ) {
-        if self.semantic_local_is_place_bound(value.local) {
-            let variant = self.enum_variant_for_local(value.local, variant);
-            let value = self.read_semantic_value(bb, value.local);
-            self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst,
-                    expr: RExpr::EnumIsVariant { value, variant },
-                },
-            );
-            return;
-        }
-        if let Some(RuntimeClass::Ref { .. }) = self.local_class(value.local) {
-            let enum_layout = self.enum_layout_for_local(value.local);
+        let semantic_ty = self.locals[value.local.index()].semantic_ty;
+        let enum_layout = self.enum_layout_for_local(value.local);
+        let variant_id = self.enum_variant_for_local(value.local, variant);
+        let value = self.read_semantic_value(bb, value.local);
+        if matches!(self.value_class(value), Some(RuntimeClass::Ref { .. })) {
             let tag_class = RuntimeClass::Scalar(ScalarClass {
                 repr: match enum_layout.data(self.db) {
                     crate::runtime::Layout::Enum(layout) => layout.tag.repr,
@@ -3046,13 +3009,16 @@ impl<'db> RmirEmitter<'db> {
                 },
                 role: ScalarRole::EnumTag { enum_layout },
             });
-            let tag = self.alloc_runtime_temp(
-                self.locals[value.local.index()].semantic_ty,
-                RuntimeCarrier::Value(tag_class),
+            let tag = self.alloc_runtime_temp(semantic_ty, RuntimeCarrier::Value(tag_class));
+            self.push_stmt(
+                bb,
+                RStmt::Assign {
+                    dst: tag,
+                    expr: RExpr::EnumGetTag { root: value },
+                },
             );
-            self.lower_enum_tag(bb, tag, value);
             let expected = self.alloc_runtime_temp(
-                self.locals[value.local.index()].semantic_ty,
+                semantic_ty,
                 RuntimeCarrier::Value(
                     self.value_class(tag)
                         .cloned()
@@ -3081,14 +3047,13 @@ impl<'db> RmirEmitter<'db> {
                 },
             );
         } else {
-            let variant = self.enum_variant_for_local(value.local, variant);
             self.push_stmt(
                 bb,
                 RStmt::Assign {
                     dst,
                     expr: RExpr::EnumIsVariant {
-                        value: self.runtime_value(value.local),
-                        variant,
+                        value,
+                        variant: variant_id,
                     },
                 },
             );
@@ -5250,14 +5215,6 @@ impl<'db> RmirEmitter<'db> {
             RuntimeLocalLowering::DirectValue
                 | RuntimeLocalLowering::PlaceCarrier { .. }
                 | RuntimeLocalLowering::DirectCarrier { .. }
-        )
-    }
-
-    fn semantic_local_is_place_bound(&self, local: SLocalId) -> bool {
-        matches!(
-            self.semantic_local_lowering(local),
-            RuntimeLocalLowering::PlaceCarrier { .. }
-                | RuntimeLocalLowering::PlaceBoundValue { .. }
         )
     }
 
