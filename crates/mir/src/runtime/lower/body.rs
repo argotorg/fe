@@ -151,7 +151,9 @@ pub fn lower_to_rmir<'db>(
             .normalized
             .blocks
             .iter()
-            .filter_map(|block| match &block.terminator.kind {
+            .enumerate()
+            .filter(|(index, _)| facts.terminator_is_reachable(*index))
+            .filter_map(|(_, block)| match &block.terminator.kind {
                 NTerminatorKind::Return(Some(value)) => normalized_body.operand_local(*value),
                 NTerminatorKind::Goto(_)
                 | NTerminatorKind::Branch { .. }
@@ -920,7 +922,11 @@ impl<'db> RmirEmitter<'db> {
         let blocks = self.semantic_body.normalized.blocks.clone();
         for (idx, block) in blocks.iter().enumerate() {
             let bb = RBlockId::from_u32(idx as u32);
-            for (stmt_idx, stmt) in block.statements.iter().enumerate() {
+            let Some(statement_count) = self.facts.reachable_statement_count(idx) else {
+                self.set_terminator(bb, RTerminator::Trap);
+                continue;
+            };
+            for (stmt_idx, stmt) in block.statements.iter().take(statement_count).enumerate() {
                 self.with_current_origin(stmt.origin, |this| this.lower_stmt(bb, stmt_idx, stmt));
                 if self.terminated_blocks[bb.index()] {
                     break;

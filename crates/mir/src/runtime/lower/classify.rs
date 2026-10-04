@@ -74,6 +74,8 @@ use super::{
 #[derive(Clone)]
 pub(crate) struct BodyStaticFacts<'db> {
     local_facts: Vec<LocalStaticFacts<'db>>,
+    reachable_statement_counts: Vec<Option<usize>>,
+    reachable_terminators: Vec<bool>,
     assignments: PrimaryMap<AssignmentId, AssignStaticFacts<'db>>,
     statement_assignments: Vec<Vec<Option<AssignmentId>>>,
     source_locals: Vec<Vec<SLocalId>>,
@@ -262,6 +264,35 @@ impl<'db> BodyStaticFacts<'db> {
         body: &RuntimeSemanticBody<'db>,
         type_env: RuntimeTypeEnv<'db>,
     ) -> Self {
+        // Normalized control flow retains the syntactic continuation of a
+        // nonreturning call. It must not contribute values to runtime joins.
+        let mut reachable_statement_counts = vec![None; body.normalized.blocks.len()];
+        let mut reachable_terminators = vec![false; body.normalized.blocks.len()];
+        let mut pending = vec![body.normalized.entry];
+        while let Some(block_id) = pending.pop() {
+            if reachable_statement_counts[block_id.index()].is_some() {
+                continue;
+            }
+            let block = &body.normalized.blocks[block_id.index()];
+            let terminal_call = block.statements.iter().position(|statement| {
+                matches!(&statement.kind, NStatementKind::Define {
+                    expr: NExpr::Call { callee, .. }, ..
+                } if get_or_build_semantic_instance(db, callee.key).known_never_returns(db))
+            });
+            reachable_statement_counts[block_id.index()] =
+                Some(terminal_call.map_or(block.statements.len(), |index| index + 1));
+            if terminal_call.is_none() {
+                reachable_terminators[block_id.index()] = true;
+                pending.extend(
+                    block
+                        .terminator
+                        .kind
+                        .successors()
+                        .iter()
+                        .map(|edge| edge.block),
+                );
+            }
+        }
         let mut boundary_sites = BoundarySiteAllocator::default();
         let expr_facts_builder = ExprStaticFactsBuilder { db, body, type_env };
         let local_facts: Vec<_> = body
@@ -282,7 +313,10 @@ impl<'db> BodyStaticFacts<'db> {
         let mut assignments_defining_local = vec![Vec::new(); local_count];
         let mut dynamic_dependents = vec![Vec::new(); local_count];
         for (block_idx, block) in body.normalized.blocks.iter().enumerate() {
-            for (stmt_idx, statement) in block.statements.iter().enumerate() {
+            let Some(statement_count) = reachable_statement_counts[block_idx] else {
+                continue;
+            };
+            for (stmt_idx, statement) in block.statements.iter().take(statement_count).enumerate() {
                 let NStatementKind::Define { result, expr } = &statement.kind else {
                     continue;
                 };
@@ -319,6 +353,8 @@ impl<'db> BodyStaticFacts<'db> {
         let root_provider_locals = build_runtime_visible_root_provider_locals(db, body);
         Self {
             local_facts,
+            reachable_statement_counts,
+            reachable_terminators,
             assignments,
             statement_assignments,
             source_locals,
@@ -344,6 +380,14 @@ impl<'db> BodyStaticFacts<'db> {
 
     pub(super) fn assignment(&self, assign_id: AssignmentId) -> Option<&AssignStaticFacts<'db>> {
         self.assignments.get(assign_id)
+    }
+
+    pub(super) fn reachable_statement_count(&self, block: usize) -> Option<usize> {
+        self.reachable_statement_counts[block]
+    }
+
+    pub(super) fn terminator_is_reachable(&self, block: usize) -> bool {
+        self.reachable_terminators[block]
     }
 
     pub(super) fn assignments(&self) -> &PrimaryMap<AssignmentId, AssignStaticFacts<'db>> {

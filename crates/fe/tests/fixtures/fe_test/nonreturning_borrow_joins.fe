@@ -1,0 +1,57 @@
+use core::ptr
+
+struct Frame { first: u8, value: u64, last: u8 }
+
+fn scalar(pointer: *u64, flag: bool) -> mut u64 {
+    if flag { mut *pointer } else { core::panic() }
+}
+
+fn aggregate(pointer: *Frame, flag: bool) -> mut Frame {
+    if flag { mut *pointer } else { core::panic() }
+}
+
+fn fail() { core::panic() }
+fn fail_indirect() { fail() }
+
+fn dead_continuation(pointer: *Frame, fallback: mut Frame, flag: bool) -> mut Frame {
+    if flag {
+        mut *pointer
+    } else {
+        fail_indirect()
+        if flag { fallback } else { fallback }
+    }
+}
+
+fn dead_return(pointer: *Frame, fallback: mut Frame, flag: bool) -> mut Frame {
+    if flag { return mut *pointer }
+    fail_indirect()
+    fallback
+}
+
+pub fn main() -> i32 {
+    let pointer = ptr::alloc<u64>()
+    *pointer = 41
+    let value = scalar(pointer, flag: true)
+    value += 1
+    core::assert(value == 42)
+    core::assert(*pointer == 42)
+
+    let pointer = ptr::alloc<Frame>()
+    *pointer = Frame { first: 7, value: 1000, last: 9 }
+    let frame = aggregate(pointer, flag: true)
+    frame.value += 23
+    let mut fallback = Frame { first: 1, value: 2, last: 3 }
+    let frame = dead_continuation(pointer, fallback: mut fallback, flag: true)
+    frame.value += 4
+    let frame = dead_return(pointer, fallback: mut fallback, flag: true)
+    frame.value += 5
+    core::assert(frame.first == 7)
+    core::assert(frame.value == 1032)
+    core::assert(frame.last == 9)
+    core::assert((*pointer).value == 1032)
+    core::assert(fallback.value == 2)
+    0
+}
+
+#[test]
+fn nonreturning_borrow_joins() { core::assert(main() == 0) }

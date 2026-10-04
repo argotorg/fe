@@ -46,6 +46,7 @@ use super::{
     interface::{runtime_visible_binding_local, runtime_visible_binding_plans},
     provider_space::address_space_from_provider,
     semantic_body::{RuntimeOperand, RuntimeSemanticBody},
+    type_info::{RuntimeTypeEnv, stored_class_for_ty_in_env},
 };
 use crate::runtime::synthetic::runtime_synthetic_exit_behavior;
 
@@ -102,7 +103,9 @@ impl<'db> RuntimeReturnSummary<'db> {
             .normalized
             .blocks
             .iter()
-            .filter_map(|block| match &block.terminator.kind {
+            .enumerate()
+            .filter(|(index, _)| facts.terminator_is_reachable(*index))
+            .filter_map(|(_, block)| match &block.terminator.kind {
                 NTerminatorKind::Return(Some(value)) => semantic_body.runtime_operand(*value),
                 NTerminatorKind::Goto(_)
                 | NTerminatorKind::Branch { .. }
@@ -312,6 +315,21 @@ pub(crate) fn declaration_runtime_return_class<'db>(
             let Some(space) = space else {
                 continue;
             };
+            if projection.is_empty()
+                && let Some((_, target)) = semantic.normalized_result_ty(db).as_borrow(db)
+            {
+                // The summary excludes nonreturning paths and retains pointer
+                // dereferences that type-level forwarding may lose. A bare
+                // borrow keeps that raw transport with its declared target;
+                // stored borrow fields still use their canonical descriptors.
+                let pointee = stored_class_for_ty_in_env(
+                    db,
+                    RuntimeTypeEnv::for_semantic(db, semantic),
+                    target,
+                );
+                class = RuntimeClass::raw_addr(db, space, pointee);
+                continue;
+            }
             let Some(RuntimeClass::Ref { pointee, .. }) =
                 project_declaration_return_source(db, class.clone(), &projection)
             else {
@@ -1239,6 +1257,75 @@ fn choose(first: ref u8, second: ref u8, use_first: bool) -> ref u8 {
             })
         ));
         assert_eq!(declaration, legacy_return_class_for_key(&db, key));
+    }
+
+    #[test]
+    fn nonreturning_paths_do_not_contribute_borrow_return_transports() {
+        let source = r#"
+struct Frame { value: u64 }
+fn fail() { core::panic() }
+fn fail_indirect() { fail() }
+fn scalar(pointer: *u64, flag: bool) -> mut u64 {
+    if flag { mut *pointer } else { core::panic() }
+}
+fn aggregate(pointer: *Frame, flag: bool) -> mut Frame {
+    if flag { mut *pointer } else { core::panic() }
+}
+fn dead_continuation(pointer: *Frame, fallback: mut Frame, flag: bool) -> mut Frame {
+    if flag {
+        mut *pointer
+    } else {
+        fail_indirect()
+        if flag { fallback } else { fallback }
+    }
+}
+fn dead_return(pointer: *Frame, fallback: mut Frame, flag: bool) -> mut Frame {
+    if flag { return mut *pointer }
+    fail_indirect()
+    fallback
+}
+"#;
+        for signature_first in [true, false] {
+            let mut db = DriverDataBase::default();
+            let file = db.workspace().touch(
+                &mut db,
+                Url::parse("file:///nonreturning_borrow_returns.fe").unwrap(),
+                Some(source.to_string()),
+            );
+            let module = db.top_mod(file);
+            let diagnostics = db.run_on_top_mod(module);
+            assert!(diagnostics.is_empty(), "{}", diagnostics.format_diags(&db));
+            for name in ["scalar", "aggregate", "dead_continuation", "dead_return"] {
+                let semantic = semantic_instance_for_named_func(&db, module, name);
+                let instance = runtime_instance_for_semantic(&db, semantic);
+                let key = instance.key(&db);
+                if signature_first {
+                    instance.interface_signature(&db);
+                }
+                let body = instance.body(&db);
+                assert_eq!(body.signature, instance.interface_signature(&db), "{name}");
+                let normalized = RuntimeSemanticBody::admitted(&db, semantic).unwrap();
+                let inferred = runtime_return_class_for_body(&db, key, &normalized);
+                assert_eq!(
+                    inferred,
+                    declaration_runtime_return_class(&db, key),
+                    "{name}"
+                );
+                assert_eq!(inferred, legacy_return_class_for_key(&db, key), "{name}");
+                assert!(
+                    matches!(
+                        inferred,
+                        Some(RuntimeClass::RawAddr {
+                            space: AddressSpaceKind::Memory,
+                            ..
+                        })
+                    ),
+                    "{name}: {inferred:?}"
+                );
+                let program: &dyn MirDb = &db;
+                crate::verify_runtime_body(&db, &program, &body).expect("valid runtime body");
+            }
+        }
     }
 
     #[test]
