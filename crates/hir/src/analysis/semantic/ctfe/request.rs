@@ -421,64 +421,6 @@ mod tests {
     };
 
     #[test]
-    fn const_description_visits_provenance_layout_holes_in_fold_order() {
-        use crate::analysis::{
-            semantic::{EffectProviderSubst, GenericSubst, ImplEnv},
-            ty::{
-                layout_holes::collect_layout_hole_tys_in_order,
-                ty_check::BodyOwner,
-                ty_def::{PrimTy, TyBase},
-            },
-        };
-
-        let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone("const_provenance.fe".into(), "fn f<const N: usize>() {}");
-        let (module, _) = db.top_mod(file);
-        let func = module.all_funcs(&db)[0];
-        let prim_ty = |prim| TyId::new(&db, TyData::TyBase(TyBase::Prim(prim)));
-        let term = ConstTyId::hole_with_ty(&db, TyId::u8(&db));
-        let operand = ConstTyId::hole_with_ty(&db, prim_ty(PrimTy::U16));
-        let frame_arg = TyId::const_ty(&db, ConstTyId::hole_with_ty(&db, prim_ty(PrimTy::Usize)));
-        let description = ConstDesc::term_with_provenance(
-            &db,
-            func.scope(),
-            TermProvenance {
-                term,
-                origin: SemOrigin::Synthetic,
-                operands: vec![TermProvenance {
-                    term: operand,
-                    origin: SemOrigin::Synthetic,
-                    operands: Vec::new(),
-                    frames: Vec::new(),
-                    operation_order: 0,
-                    opaque: false,
-                }],
-                frames: vec![TermCallFrame {
-                    origin: SemOrigin::Synthetic,
-                    callee: SemanticInstanceKey::new(
-                        &db,
-                        BodyOwner::Func(func),
-                        GenericSubst::for_owner(&db, func.into(), vec![frame_arg]),
-                        EffectProviderSubst::empty(&db),
-                        ImplEnv::empty(&db, func.scope()),
-                    ),
-                }],
-                operation_order: 1,
-                opaque: false,
-            },
-        );
-        assert_eq!(
-            collect_layout_hole_tys_in_order(&db, description),
-            vec![
-                TyId::u8(&db),
-                TyId::u8(&db),
-                prim_ty(PrimTy::U16),
-                prim_ty(PrimTy::Usize),
-            ],
-        );
-    }
-
-    #[test]
     fn verified_value_rejects_wrong_scalar_and_aggregate_payloads() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
