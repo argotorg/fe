@@ -1041,70 +1041,43 @@ impl<'db> ExternalSource<'db> {
     }
 
     pub fn substitute(&self, db: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
-        let mut result = self.rename_indices(subst);
-        result.contract = self.contract.substitute(db, subst);
-        result.clobber = self.clobber.as_ref().map(|clobber| {
-            Box::new(ClobberCondition {
-                target: clobber.target.substitute(db, subst),
-                written: clobber.written.substitute(db, subst),
-                extent: clobber.extent.substitute(subst),
-            })
-        });
-        match &self.origin {
-            ExternalOrigin::Unknown {
-                contract,
-                occurrence,
-                arguments,
-                provenance,
-            } => {
-                result.origin = ExternalOrigin::Unknown {
-                    contract: contract.substitute(db, subst),
-                    occurrence: *occurrence,
-                    arguments: arguments.iter().map(|index| subst.apply(*index)).collect(),
-                    provenance: *provenance,
-                };
-            }
-            ExternalOrigin::OpaqueHandle(handle) => {
-                result.origin = ExternalOrigin::OpaqueHandle(handle.substitute(db, subst))
-            }
-            // The interned binding, and so its storage classification, is unchanged.
-            ExternalOrigin::Provider {
-                provider,
-                target_ty,
-                storage,
-            } => {
-                result.origin = ExternalOrigin::Provider {
-                    provider: *provider,
-                    target_ty: target_ty.fold_with(db, &mut subst.clone()),
-                    storage: *storage,
-                }
-            }
-            ExternalOrigin::Allocation(handle) => {
-                result.origin = ExternalOrigin::Allocation(handle.substitute(db, subst));
-            }
-            ExternalOrigin::Memory {
-                base,
-                offset,
-                target_ty,
-            } => {
-                result.origin = ExternalOrigin::Memory {
-                    target_ty: target_ty.fold_with(db, &mut subst.clone()),
-                    base: Box::new(base.substitute(db, subst)),
-                    offset: match *offset {
-                        MemoryOffset::Element(ty, index) => MemoryOffset::Element(
-                            ty.fold_with(db, &mut subst.clone()),
-                            subst.apply(index),
-                        ),
-                        offset => offset,
-                    },
-                };
-            }
-            ExternalOrigin::Input(_) | ExternalOrigin::Local(_) | ExternalOrigin::OpaqueMemory => {}
-        }
-        result
+        self.map_indices(subst, Some(db))
     }
 
     pub(super) fn rename_indices(&self, subst: &IndexSubst<'db>) -> Self {
+        self.map_indices(subst, None)
+    }
+
+    /// Substitute each nested source once. Pure renaming leaves type and view
+    /// metadata intact; full substitution also folds it through the database.
+    fn map_indices(&self, subst: &IndexSubst<'db>, db: Option<&'db dyn HirAnalysisDb>) -> Self {
+        let map_ty = |ty: TyId<'db>| db.map_or(ty, |db| ty.fold_with(db, &mut subst.clone()));
+        let map_contract = |contract: ReferentContract<'db>| {
+            db.map_or(contract, |db| contract.substitute(db, subst))
+        };
+        let map_source = |source: &SourceExpr<'db>| SourceExpr {
+            source: source.source.map_indices(subst, db),
+            path: source.path.substitute(subst),
+            views: db.map_or_else(
+                || source.views.clone(),
+                |db| source.views.substitute(db, subst),
+            ),
+            invalidated: source.invalidated,
+        };
+        let map_handle = |handle: &OpaqueHandleRef<'db>| {
+            db.map_or_else(
+                || OpaqueHandleRef {
+                    contract: handle.contract,
+                    occurrence: handle.occurrence,
+                    arguments: handle
+                        .arguments
+                        .iter()
+                        .map(|index| subst.apply(*index))
+                        .collect(),
+                },
+                |db| handle.substitute(db, subst),
+            )
+        };
         let origin = match &self.origin {
             ExternalOrigin::Unknown {
                 contract,
@@ -1112,7 +1085,7 @@ impl<'db> ExternalSource<'db> {
                 arguments,
                 provenance,
             } => ExternalOrigin::Unknown {
-                contract: *contract,
+                contract: map_contract(*contract),
                 occurrence: *occurrence,
                 arguments: arguments.iter().map(|index| subst.apply(*index)).collect(),
                 provenance: *provenance,
@@ -1120,55 +1093,44 @@ impl<'db> ExternalSource<'db> {
             ExternalOrigin::Local(root) => ExternalOrigin::Local(*root),
             ExternalOrigin::OpaqueMemory => ExternalOrigin::OpaqueMemory,
             ExternalOrigin::Input(input) => ExternalOrigin::Input(input.substitute(subst)),
-            ExternalOrigin::Provider { .. } => self.origin.clone(),
+            // The interned binding, and so its storage classification, is unchanged.
+            ExternalOrigin::Provider {
+                provider,
+                target_ty,
+                storage,
+            } => ExternalOrigin::Provider {
+                provider: *provider,
+                target_ty: map_ty(*target_ty),
+                storage: *storage,
+            },
             ExternalOrigin::Memory {
                 base,
                 offset,
                 target_ty,
             } => ExternalOrigin::Memory {
-                target_ty: *target_ty,
-                base: Box::new(SourceExpr {
-                    invalidated: base.invalidated,
-                    source: base.source.rename_indices(subst),
-                    path: base.path.substitute(subst),
-                    views: base.views.clone(),
-                }),
+                target_ty: map_ty(*target_ty),
+                base: Box::new(map_source(base)),
                 offset: match *offset {
-                    MemoryOffset::Element(ty, index) => {
-                        MemoryOffset::Element(ty, subst.apply(index))
+                    MemoryOffset::Element(original_ty, index) => {
+                        MemoryOffset::Element(map_ty(original_ty), subst.apply(index))
                     }
                     offset => offset,
                 },
             },
-            ExternalOrigin::Allocation(handle) => ExternalOrigin::Allocation(OpaqueHandleRef {
-                arguments: handle
-                    .arguments
-                    .iter()
-                    .map(|index| subst.apply(*index))
-                    .collect(),
-                ..handle.clone()
-            }),
-            ExternalOrigin::OpaqueHandle(handle) => ExternalOrigin::OpaqueHandle(OpaqueHandleRef {
-                arguments: handle
-                    .arguments
-                    .iter()
-                    .map(|index| subst.apply(*index))
-                    .collect(),
-                ..handle.clone()
-            }),
+            ExternalOrigin::Allocation(original) => {
+                ExternalOrigin::Allocation(map_handle(original))
+            }
+            ExternalOrigin::OpaqueHandle(original) => {
+                ExternalOrigin::OpaqueHandle(map_handle(original))
+            }
         };
         Self {
             origin,
-            contract: self.contract,
+            contract: map_contract(self.contract),
             clobber: self.clobber.as_ref().map(|clobber| {
-                let rename = |source: &SourceExpr<'db>| SourceExpr {
-                    source: source.source.rename_indices(subst),
-                    path: source.path.substitute(subst),
-                    ..source.clone()
-                };
                 Box::new(ClobberCondition {
-                    target: rename(&clobber.target),
-                    written: rename(&clobber.written),
+                    target: map_source(&clobber.target),
+                    written: map_source(&clobber.written),
                     extent: clobber.extent.substitute(subst),
                 })
             }),
