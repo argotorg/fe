@@ -36,6 +36,7 @@ use crate::analysis::{
             state::{BorrowState, CapabilityValue},
             value::Guarded,
         },
+        ctfe::eval_const_ref,
         definite_assignment::literal_bool_cond,
         get_or_build_semantic_instance,
         normalized::{
@@ -235,11 +236,17 @@ impl<'db> Borrowck<'db> {
             return IndexExpr::Runtime(value);
         };
         match expr {
-            NExpr::Const(SConst::Value(constant)) => {
-                if let SemConstValue::Scalar {
-                    value: SemConstScalar::Int { value: integer },
-                    ..
-                } = constant.value().value(self.db)
+            NExpr::Const(constant) => {
+                let constant = match constant {
+                    SConst::Value(value) => Some(value.value()),
+                    SConst::Ref(reference) => eval_const_ref(self.db, *reference).into_ready(),
+                    SConst::Description(_) | SConst::Evidence(_) | SConst::Invalid(_) => None,
+                };
+                if let Some(constant) = constant
+                    && let SemConstValue::Scalar {
+                        value: SemConstScalar::Int { value: integer },
+                        ..
+                    } = constant.value(self.db)
                     && let Some(integer) = integer.to_usize()
                 {
                     return IndexExpr::Const(integer);
