@@ -155,6 +155,18 @@ impl<'db> BorrowState<'db> {
         state
     }
 
+    /// Allocation inventory is a template for future births, not live storage.
+    /// An allocation's unknown bytes become possible only when it is born.
+    pub fn before_allocations(&self, values: &mut CapabilityValues<'db>) -> Self {
+        let mut state = self.clone();
+        for (root, contents) in &mut state.contents {
+            if matches!(root, RegionRoot::External(source) if source.is_fresh_allocation()) {
+                *contents = values.empty(contents.shape(), contents.scope());
+            }
+        }
+        state
+    }
+
     pub fn extend_storage(&mut self, inventory: &Self) {
         for (root, initial) in &inventory.contents {
             self.contents
