@@ -1,0 +1,57 @@
+const fn word_len(_ n: usize) -> usize {
+    n / 32 + if n % 32 == 0 { 0 } else { 1 }
+}
+
+struct Packed<const N: usize> { words: [u256; word_len(N)] }
+
+const fn pass<const N: usize>(_ values: [u8; word_len(N)]) -> [u8; word_len(N)] {
+    values
+}
+
+const fn annotated<const N: usize>(_ values: [u8; word_len(N)]) -> [u8; word_len(N)] {
+    let first: [u8; word_len(N)] = values
+    let second: [u8; word_len(N)] = first
+    second
+}
+
+const fn words<const N: usize>(_ packed: Packed<N>) -> [u256; word_len(N)] {
+    packed.words
+}
+
+const fn rebuild<const N: usize>(_ values: [u256; word_len(N)]) -> Packed<N> {
+    Packed { words: values }
+}
+
+const SUM: u8 = pass<33>([1, 2])[1] + annotated<65>([3, 4, 5])[2]
+const LAST: u256 = words<64>(rebuild<64>([6, 7]))[1]
+
+trait Size { const LEN: usize }
+trait Has { type Item }
+struct Marker<const N: usize> {}
+impl<const N: usize> Size for Marker<N> { const LEN: usize = [2 as usize, 3][N] }
+impl<const N: usize> Has for Marker<N> { type Item = [u8; Marker<N>::LEN] }
+
+fn take<const N: usize>(_ values: [u8; Marker<N>::LEN]) -> [u8; Marker<N>::LEN] {
+    values
+}
+
+fn forward<const N: usize>(_ values: [u8; Marker<N>::LEN]) -> [u8; Marker<N>::LEN] {
+    take<N>(values)
+}
+
+fn projected() -> Marker<1>::Item { [1, 2, 3] }
+
+#[test]
+fn shared_invocation_extents_preserve_values_across_items() {
+    assert!(SUM == 7 && LAST == 7)
+    assert!(pass<33>([1, 2])[1] + annotated<65>([3, 4, 5])[2] == SUM)
+    assert!(words<64>(rebuild<64>([6, 7]))[1] == LAST)
+}
+
+#[test]
+fn associated_extents_preserve_concrete_array_shapes() {
+    let pair = forward<0>([4, 5])
+    assert!(pair.len() == 2 && pair[1] == 5)
+    let triple = forward<1>(projected())
+    assert!(triple.len() == 3 && triple[2] == 3)
+}

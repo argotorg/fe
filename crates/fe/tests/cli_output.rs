@@ -543,7 +543,6 @@ fn test_cli_build_native_executes_representative_programs_at_o0_and_o1() {
         "wide_integer",
         "generic_reachability",
         "entry_name_collision",
-        "dependent_repeat",
     ] {
         let source = fs::read_to_string(fixture_dir.join(format!("{name}.fe")))
             .expect("read native fixture");
