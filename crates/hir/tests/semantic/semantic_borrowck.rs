@@ -13922,3 +13922,50 @@ fn inspect() {
     );
     assert!(diagnostics.contains("move conflict"), "{diagnostics}");
 }
+
+#[test]
+fn constant_bound_initialization_preserves_only_written_members() {
+    for (setup, bound, stored, read, valid) in [
+        ("", "0", "i", "0", false),
+        ("", "1", "i", "0", true),
+        ("", "2", "i", "1", true),
+        ("", "1", "i", "1", false),
+        ("", "0", "0", "0", false),
+        ("", "2", "0", "0", true),
+        ("", "2", "0", "1", false),
+        ("let limit: u256 = 2", "limit", "i", "1", true),
+    ] {
+        let source = format!(
+            r#"
+use core::ptr
+fn inspect(_ cursor: mut u256) -> u256 {{
+    let mut children = ptr::MemArray<ptr::MemSpan>::new_uninit(2)
+    {setup}
+    let mut i: u256 = 0
+    while i < {bound} {{
+        let data = ptr::MemBuffer::alloc(32)
+        *ptr::cast<u8, u256>(data.ptr()) = 7
+        children[{stored} as usize] = data.span()
+        i += 1
+    }}
+    let child = children[{read}]
+    cursor += 1
+    *ptr::cast<u8, u256>(child.ptr())
+}}
+fn run() -> u256 {{
+    let mut cursor: u256 = 0
+    inspect(mut cursor)
+}}
+"#
+        );
+        let diagnostics = checked_borrow_diags(&source);
+        if valid {
+            assert!(diagnostics.is_empty(), "{source}\n{diagnostics}");
+        } else {
+            assert!(
+                diagnostics.contains("borrow conflict"),
+                "{source}\n{diagnostics}"
+            );
+        }
+    }
+}
