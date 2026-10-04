@@ -1,0 +1,1 @@
+Compiler diagnostics now follow `--color`. `--color never` no longer prints color codes, and the default `--color auto` only colors diagnostics when stderr is a terminal, so redirected or piped output is plain text.

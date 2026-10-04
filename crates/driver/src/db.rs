@@ -5,6 +5,7 @@ use codespan_reporting::term::{
 };
 use common::file::File;
 use common::{
+    color::{ColorTarget, should_colorize},
     define_input_db,
     diagnostics::{
         CompleteDiagnostic, Severity, cmp_complete_diagnostics, trim_trailing_line_whitespace,
@@ -90,7 +91,7 @@ impl DriverDataBase {
     }
 
     pub fn emit_complete_diagnostics(&self, diagnostics: &[CompleteDiagnostic]) {
-        let writer = BufferWriter::stderr(ColorChoice::Auto);
+        let writer = BufferWriter::stderr(stderr_color_choice());
         let mut buffer = writer.buffer();
         let config = term::Config::default();
         let mut diagnostics = diagnostics.to_vec();
@@ -120,6 +121,16 @@ impl DriverDataBase {
     }
 }
 
+/// Honors `--color` and, in auto mode, only colors a terminal. termcolor's
+/// own `Auto` checks environment variables but not whether stderr is a terminal.
+fn stderr_color_choice() -> ColorChoice {
+    if should_colorize(ColorTarget::Stderr) {
+        ColorChoice::Always
+    } else {
+        ColorChoice::Never
+    }
+}
+
 fn initialize_mir_diagnostics_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
     pass_manager.add_module_pass("SemanticBorrow", Box::new(SemanticBorrowAnalysisPass));
@@ -140,7 +151,7 @@ impl DiagnosticsCollection<'_> {
     }
 
     pub fn emit(&self, db: &DriverDataBase) {
-        let writer = BufferWriter::stderr(ColorChoice::Auto);
+        let writer = BufferWriter::stderr(stderr_color_choice());
         let mut buffer = writer.buffer();
         let config = term::Config::default();
 

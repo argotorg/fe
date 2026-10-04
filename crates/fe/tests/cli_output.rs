@@ -173,6 +173,44 @@ fn f() {
 }
 
 #[test]
+fn test_cli_diagnostics_follow_color_option() {
+    let temp = tempdir().expect("tempdir");
+    let file = temp.path().join("undefined.fe");
+    fs::write(&file, "fn f() -> u8 {\n    nope\n}\n").expect("write fixture");
+
+    // Without NO_COLOR, so only the option and the piped stderr decide.
+    let stderr = |args: &[&str], env: &[(&str, &str)]| {
+        let mut cmd = Command::new(fe_binary());
+        cmd.args(args)
+            .arg(&file)
+            .env_remove("NO_COLOR")
+            .env_remove("CLICOLOR")
+            .env_remove("CLICOLOR_FORCE")
+            .envs(env.iter().copied());
+        let output = cmd.output().expect("run fe check");
+        assert_eq!(output.status.code(), Some(1), "expected check failure");
+        String::from_utf8(output.stderr).expect("utf8 diagnostics")
+    };
+
+    let auto = stderr(&["check"], &[]);
+    assert!(auto.contains("undefined variable `nope`"), "{auto}");
+    assert!(!auto.contains('\x1b'), "auto colored a pipe:\n{auto}");
+
+    let never = stderr(&["check", "--color", "never"], &[("CLICOLOR_FORCE", "1")]);
+    assert!(never.contains("undefined variable `nope`"), "{never}");
+    assert!(
+        !never.contains('\x1b'),
+        "--color never was ignored:\n{never}"
+    );
+
+    let always = stderr(&["check", "--color", "always"], &[]);
+    assert!(
+        always.contains('\x1b'),
+        "--color always was ignored:\n{always}"
+    );
+}
+
+#[test]
 fn test_cli_check_unresolved_record_init_path_reports_error_instead_of_panicking() {
     let temp = tempdir().expect("tempdir");
     let file = temp.path().join("unresolved_record_init_path.fe");
