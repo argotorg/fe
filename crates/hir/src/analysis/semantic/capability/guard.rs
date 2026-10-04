@@ -3,6 +3,7 @@
 //! Index conditions use reduced bit decisions over Fe's 256-bit `usize`, so equality,
 //! disequality, and bounds share one Boolean algebra. Enum decisions have index conditions
 //! as leaves. Neither graph enumerates array elements or depends on construction order.
+use itertools::{EitherOrBoth, Itertools};
 use rustc_hash::{FxHashMap, FxHasher};
 #[cfg(test)]
 use std::cell::Cell;
@@ -82,6 +83,10 @@ impl<'db> ChoiceKey<'db> {
     pub fn new(occurrence: ValueOccurrence, path: StructuralPath<IndexExpr<'db>>) -> Self {
         Self { occurrence, path }
     }
+    fn same_group(&self, other: &Self) -> bool {
+        self.occurrence == other.occurrence && choice_shape(self).eq(choice_shape(other))
+    }
+
     fn alias_condition(&self, other: &Self) -> Option<IndexCondition<'db>> {
         if self.occurrence != other.occurrence
             || self.path.as_slice().len() != other.path.as_slice().len()
@@ -902,13 +907,8 @@ fn choice_groups(choices: &[Arc<ChoiceKey<'_>>]) -> Arc<[u16]> {
     let mut groups = Vec::with_capacity(choices.len());
     let mut group = 0u16;
     for (position, choice) in choices.iter().enumerate() {
-        if position > 0 {
-            let previous = &choices[position - 1];
-            if previous.occurrence != choice.occurrence
-                || !choice_shape(previous).eq(choice_shape(choice))
-            {
-                group += 1;
-            }
+        if position > 0 && !choices[position - 1].same_group(choice) {
+            group += 1;
         }
         groups.push(group);
     }
@@ -1052,17 +1052,44 @@ impl<'db> Condition<'db> {
         &self,
         other: &Self,
     ) -> (Vec<Arc<ChoiceKey<'db>>>, ChoiceRemap, ChoiceRemap) {
-        let mut choices: Vec<_> = self
+        let mut choices: Vec<Arc<ChoiceKey<'db>>> =
+            Vec::with_capacity(self.choices.len() + other.choices.len());
+        let mut left = Vec::with_capacity(self.choices.len());
+        let mut right = Vec::with_capacity(other.choices.len());
+        let mut group = 0u16;
+        // Both tables are sorted and distinct. Build their union and operand
+        // translations together, without sorting or searching the keys again.
+        for pair in self
             .choices
             .iter()
-            .chain(other.choices.iter())
-            .cloned()
-            .collect();
-        choices.sort_by(|left, right| choice_order(left, right));
-        choices.dedup_by(|left, right| choice_order(left, right).is_eq());
-        let left = ChoiceRemap::new(&self.choices, &choices);
-        let right = ChoiceRemap::new(&other.choices, &choices);
-        (choices, left, right)
+            .merge_join_by(other.choices.iter(), |left, right| {
+                choice_order(left, right)
+            })
+        {
+            let (choice, in_left, in_right) = match pair {
+                EitherOrBoth::Left(choice) => (choice, true, false),
+                EitherOrBoth::Right(choice) => (choice, false, true),
+                EitherOrBoth::Both(choice, _) => (choice, true, true),
+            };
+            if choices
+                .last()
+                .is_some_and(|previous| !previous.same_group(choice))
+            {
+                group += 1;
+            }
+            let mapped = (
+                group,
+                u16::try_from(choices.len()).expect("choice table fits a slot"),
+            );
+            if in_left {
+                left.push(mapped);
+            }
+            if in_right {
+                right.push(mapped);
+            }
+            choices.push(choice.clone());
+        }
+        (choices, ChoiceRemap(left), ChoiceRemap(right))
     }
 
     /// Map each table slot once, rather than searching semantic keys at every node.
