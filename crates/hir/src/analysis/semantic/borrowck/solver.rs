@@ -53,7 +53,7 @@ use super::{
     boundary::resolve_boundary_requirements,
     events::ConflictAnalysis,
     inventory::{Inventory, unbounded_referents_diag},
-    ir::{BoundaryRequirement, PendingSemanticValidation},
+    ir::{BoundaryRequirement, ExecutableBlock, ExecutableControlFlow, PendingSemanticValidation},
     loop_certificate::{FrontierCandidate, PrefixCertificate},
     scalar::{CONDITION_BUDGET, ScalarDemand},
     summary::CallSummary,
@@ -422,6 +422,40 @@ impl<'db> Borrowck<'db> {
         matches!(&statement.kind,
             NStatementKind::Define { result, expr: NExpr::Call { .. } }
                 if self.calls.get(result).is_some_and(|call| !call.summary.may_return))
+    }
+
+    /// The converged reachability: a reached block either stops at the
+    /// diverging call it recorded last or runs its terminator, whose edges are
+    /// feasible under the block's terminal guard.
+    pub(super) fn executable_control_flow(&self) -> ExecutableControlFlow {
+        let blocks = self
+            .body
+            .blocks
+            .iter()
+            .zip(self.before.iter().zip(&self.terminal))
+            .enumerate()
+            .map(|(index, (block, (before, terminal)))| match terminal {
+                Some(state) => ExecutableBlock::Continues(
+                    block
+                        .terminator
+                        .kind
+                        .successors()
+                        .into_iter()
+                        .map(|successor| {
+                            self.edge_guard(NBlockId::new(index), successor)
+                                .is_some_and(|guard| state.guard().and(&guard).is_some())
+                        })
+                        .collect(),
+                ),
+                None if before.is_empty() => ExecutableBlock::Unreachable,
+                None => ExecutableBlock::Diverges(
+                    block.statements[before.len() - 1]
+                        .source
+                        .expect("a diverging call is a source statement"),
+                ),
+            })
+            .collect();
+        ExecutableControlFlow(blocks)
     }
 
     pub(super) fn forwarded_value(&self, mut value: NValueId) -> NValueId {

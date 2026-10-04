@@ -777,6 +777,13 @@ the runtime return/argument adapters, and codegen, with handle-preservation test
 covering their interaction. Layout cannot supply ownership facts missing from
 normalized semantics.
 
+The local borrow check publishes the control flow its solve proved executable:
+unreachable blocks, the call at which a block diverges because its callee's
+summary does not return, and infeasible successor edges. Runtime lowering emits
+exactly that flow, with everything else unreachable, and a callee is
+nonreturning at runtime exactly when its summary is. Representation choices and
+return inference therefore see the same returning paths as the summary.
+
 Frontend move marking recognizes dereferences of temporary pointers, including
 selected fields and array elements. Lowering preserves those places through
 normalization; projecting a read snapshot must not replace consuming the original

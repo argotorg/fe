@@ -319,6 +319,19 @@ fn constant_oob_index_terminates_without_continuation_projection(fixture: Fixtur
     );
 }
 
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "nonreturning_continuation_does_not_root_live_storage.fe")]
+fn nonreturning_continuation_does_not_root_live_storage(fixture: Fixture<&str>) {
+    let output = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit")
+    });
+    let demand = sonatina_function_body(&output, "%demand(").expect("`demand` should be emitted");
+
+    assert!(
+        !demand.contains("obj.alloc"),
+        "a borrow after a nonreturning call must not give the value returned on the live path runtime storage:\n{demand}"
+    );
+}
+
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "semantic_never_returning_recv_returns_emit_sonatina_ir.fe")]
 fn semantic_never_returning_recv_returns_emit_sonatina_ir(fixture: Fixture<&str>) {
     let output = with_top_mod_for_source(&fixture, |db, top_mod| {

@@ -103,9 +103,7 @@ impl<'db> RuntimeReturnSummary<'db> {
             .normalized
             .blocks
             .iter()
-            .enumerate()
-            .filter(|(index, _)| facts.terminator_is_reachable(*index))
-            .filter_map(|(_, block)| match &block.terminator.kind {
+            .filter_map(|block| match &block.terminator.kind {
                 NTerminatorKind::Return(Some(value)) => semantic_body.runtime_operand(*value),
                 NTerminatorKind::Goto(_)
                 | NTerminatorKind::Branch { .. }
@@ -706,13 +704,12 @@ pub(crate) fn runtime_exit_behavior<'db>(
     key: RuntimeInstanceKey<'db>,
 ) -> RuntimeExitBehavior {
     match key.source(db) {
-        RuntimeInstanceSource::Semantic(semantic) => {
-            if semantic.known_never_returns(db) {
-                RuntimeExitBehavior::NeverReturns
-            } else {
-                RuntimeExitBehavior::MayReturn
-            }
-        }
+        // The borrow summary's divergence is what its callers' solves, and
+        // so their executable control flow, treat as nonreturning.
+        RuntimeInstanceSource::Semantic(semantic) => match semantic_borrow_summary(db, semantic) {
+            Ok(Some(summary)) if !summary.may_return => RuntimeExitBehavior::NeverReturns,
+            _ => RuntimeExitBehavior::MayReturn,
+        },
         RuntimeInstanceSource::Synthetic(synthetic) => {
             runtime_synthetic_exit_behavior(synthetic.spec(db).clone())
         }
@@ -1067,7 +1064,7 @@ fn caller() {
     }
 
     #[test]
-    fn panic_wrappers_are_known_never_returning() {
+    fn panic_wrappers_never_return() {
         assert_runtime_exit_behavior(
             r#"
 fn fail() {
@@ -1077,11 +1074,16 @@ fn fail() {
 fn fail_indirect() {
     fail()
 }
+
+fn fail_twice() {
+    fail_indirect()
+}
 "#,
-            "panic_wrappers_are_known_never_returning",
+            "panic_wrappers_never_return",
             &[
                 ("fail", RuntimeExitBehavior::NeverReturns),
                 ("fail_indirect", RuntimeExitBehavior::NeverReturns),
+                ("fail_twice", RuntimeExitBehavior::NeverReturns),
             ],
         );
     }

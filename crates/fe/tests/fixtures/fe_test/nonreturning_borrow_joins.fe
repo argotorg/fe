@@ -12,12 +12,14 @@ fn aggregate(pointer: *Frame, flag: bool) -> mut Frame {
 
 fn fail() { core::panic() }
 fn fail_indirect() { fail() }
+fn fail_twice() { fail_indirect() }
+fn fail_borrow() -> mut Frame { core::panic() }
 
 fn dead_continuation(pointer: *Frame, fallback: mut Frame, flag: bool) -> mut Frame {
     if flag {
         mut *pointer
     } else {
-        fail_indirect()
+        fail_twice()
         if flag { fallback } else { fallback }
     }
 }
@@ -28,9 +30,26 @@ fn dead_return(pointer: *Frame, fallback: mut Frame, flag: bool) -> mut Frame {
     fallback
 }
 
+fn diverging_result(pointer: *Frame, flag: bool) -> mut Frame {
+    if flag { mut *pointer } else { fail_borrow() }
+}
+
 fn after_returns(pointer: *Frame, fallback: mut Frame, flag: bool) -> mut Frame {
     if flag { return mut *pointer } else { return mut *pointer }
     fallback
+}
+
+fn constant_branch(pointer: *Frame, fallback: mut Frame) -> mut Frame {
+    let done = true
+    if done { mut *pointer } else { fallback }
+}
+
+fn correlated_branch(pointer: *Frame, fallback: mut Frame, flag: bool) -> mut Frame {
+    if flag {
+        if flag { mut *pointer } else { fallback }
+    } else {
+        mut *pointer
+    }
 }
 
 fn dead_param(live: mut Frame, dead: mut Frame, flag: bool) -> mut Frame {
@@ -68,8 +87,14 @@ pub fn main() -> i32 {
     frame.value += 2
     let frame = dead_return(pointer, fallback: mut fallback, flag: true)
     frame.value += 3
+    let frame = diverging_result(pointer, flag: true)
+    frame.value += 4
     let frame = after_returns(pointer, fallback: mut fallback, flag: true)
     frame.value += 5
+    let frame = constant_branch(pointer, fallback: mut fallback)
+    frame.value += 6
+    let frame = correlated_branch(pointer, fallback: mut fallback, flag: true)
+    frame.value += 7
     let frame = dead_param(live: mut *pointer, dead: mut fallback, flag: true)
     frame.value += 8
     let frame = dead_param(live: mut fallback, dead: mut *pointer, flag: true)
@@ -80,7 +105,7 @@ pub fn main() -> i32 {
     frame.value += 11
     core::assert(frame.first == 1)
     core::assert((*pointer).first == 7)
-    core::assert((*pointer).value == 1029)
+    core::assert((*pointer).value == 1046)
     core::assert((*pointer).last == 9)
     core::assert(fallback.value == 22)
     0

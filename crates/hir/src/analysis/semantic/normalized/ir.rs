@@ -613,6 +613,24 @@ impl NTerminatorKind<'_> {
             Self::Assert { .. } | Self::Return(_) => Vec::new(),
         }
     }
+
+    /// Successors in the same order as [`Self::successors`].
+    pub fn successors_mut(&mut self) -> Vec<&mut NSuccessor> {
+        match self {
+            Self::Goto(target) => vec![target],
+            Self::Branch {
+                then_target,
+                else_target,
+                ..
+            } => vec![then_target, else_target],
+            Self::MatchEnum { cases, default, .. } => cases
+                .iter_mut()
+                .map(|(_, target)| target)
+                .chain(default.iter_mut())
+                .collect(),
+            Self::Assert { .. } | Self::Return(_) => Vec::new(),
+        }
+    }
 }
 
 /// Primitive scalars and raw pointers cross ordinary argument boundaries by

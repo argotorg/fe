@@ -2,20 +2,26 @@ use cranelift_entity::EntityRef;
 use hir::analysis::{
     HirAnalysisDb,
     semantic::{
-        PlaceProvenance, SLocal, SLocalId, SemanticBody, SemanticInstance, SemanticLocalRole,
-        SemanticNormalizationFailure,
+        ExecutableBlock, PlaceProvenance, SLocal, SLocalId, SemOrigin, SemanticBody,
+        SemanticInstance, SemanticLocalRole, layout_evidence_body,
         normalized::{
-            NEffectArgValue, NExpr, NLayoutBackingSource, NLayoutLocals, NLayoutPlan, NOperand,
-            NPlace, NPlaceBase, NRootId, NRootKind, NStatementKind, NValueId, NormalizedBody,
+            NBlock, NBlockId, NEffectArgValue, NExpr, NLayoutBackingSource, NLayoutLocals,
+            NLayoutPlan, NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatementKind,
+            NSuccessor, NTerminator, NTerminatorKind, NValueDefinition, NValueId, NormalizedBody,
             normalize_runtime_semantic_body,
         },
+        semantic_executable_control_flow, verify_layout_evidence_runtime_compatibility,
     },
 };
 use hir::hir_def::ExprId;
 
+use super::body::layout_evidence_failure;
+use crate::runtime::package::LowerError;
+
 /// The admitted semantic and representation artifacts consumed by runtime lowering.
 ///
-/// `NormalizedBody` is the semantic authority. `NLayoutPlan` records source and
+/// `NormalizedBody` is the semantic authority, restricted to the control flow
+/// the borrow check proved executable. `NLayoutPlan` records source and
 /// backing metadata; `value_locals` assigns runtime storage independently of that
 /// source identity. Synthetic values never overwrite their containing source local.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,10 +85,110 @@ impl<'db> RuntimeSemanticBody<'db> {
     pub(crate) fn admitted(
         db: &'db dyn HirAnalysisDb,
         instance: SemanticInstance<'db>,
-    ) -> Result<Self, SemanticNormalizationFailure<'db>> {
-        let artifacts = normalize_runtime_semantic_body(db, instance)?;
+    ) -> Result<Self, LowerError> {
+        let mut artifacts = normalize_runtime_semantic_body(db, instance).map_err(|error| {
+            LowerError::Unsupported(format!(
+                "semantic normalization failed for {:?}: {error:?}",
+                instance.key(db)
+            ))
+        })?;
         let source = instance.body(db).clone();
+        // Layout evidence names the operations of the complete runtime body.
+        let evidence = layout_evidence_body(db, instance)
+            .map_err(|error| layout_evidence_failure(instance.key(db), &error))?;
+        verify_layout_evidence_runtime_compatibility(
+            db,
+            &artifacts.body,
+            &artifacts.layout_plan,
+            &source,
+            evidence,
+        )
+        .map_err(|error| {
+            LowerError::Unsupported(format!(
+                "layout evidence is incompatible with runtime semantic body for {:?}: {error:?}",
+                instance.key(db)
+            ))
+        })?;
         let representations = NLayoutLocals::new(&artifacts.body, &artifacts.layout_plan, &source);
+
+        // Runtime code is the control flow the borrow check proved executable,
+        // so representation choices and the summary's return contract agree on
+        // which paths run. Code after a diverging call, unreachable blocks, and
+        // infeasible edges become unreachable.
+        let executable = semantic_executable_control_flow(db, instance)
+            .expect("runtime lowering requires a solved borrow check");
+        let body = &mut artifacts.body;
+        assert_eq!(
+            executable.0.len(),
+            body.blocks.len(),
+            "executable control flow must cover the runtime body"
+        );
+        let trap = NBlockId::new(body.blocks.len());
+        let mut trapped = false;
+        for (block, executable_block) in body.blocks.iter_mut().zip(&executable.0) {
+            match executable_block {
+                ExecutableBlock::Unreachable => {
+                    block.params = Box::default();
+                    block.statements.clear();
+                    block.terminator.kind = NTerminatorKind::Assert { message: None };
+                }
+                ExecutableBlock::Diverges(call) => {
+                    let end = block
+                        .statements
+                        .iter()
+                        .position(|statement| statement.source == Some(*call))
+                        .expect("a diverging call survives runtime normalization");
+                    block.statements.truncate(end + 1);
+                    block.terminator.kind = NTerminatorKind::Assert { message: None };
+                }
+                ExecutableBlock::Continues(feasible) => {
+                    for (successor, feasible) in block
+                        .terminator
+                        .kind
+                        .successors_mut()
+                        .into_iter()
+                        .zip(feasible)
+                    {
+                        if !feasible
+                            || matches!(
+                                executable.0[successor.block.index()],
+                                ExecutableBlock::Unreachable
+                            )
+                        {
+                            *successor = NSuccessor {
+                                block: trap,
+                                args: Box::default(),
+                            };
+                            trapped = true;
+                        }
+                    }
+                }
+            }
+        }
+        if trapped {
+            body.blocks.push(NBlock {
+                params: Box::default(),
+                statements: Vec::new(),
+                terminator: NTerminator {
+                    origin: SemOrigin::Synthetic,
+                    kind: NTerminatorKind::Assert { message: None },
+                },
+            });
+        }
+        let defined = |value: NValueId| match body.values[value.index()].definition {
+            NValueDefinition::EntryParam { .. } => true,
+            NValueDefinition::BlockParam { block, index } => {
+                (index as usize) < body.blocks[block.index()].params.len()
+            }
+            NValueDefinition::Statement { block, statement } => {
+                (statement as usize) < body.blocks[block.index()].statements.len()
+            }
+        };
+        artifacts
+            .layout_plan
+            .use_backings
+            .retain(|backing| defined(backing.value));
+
         Ok(Self {
             normalized: artifacts.body,
             layout_plan: artifacts.layout_plan,

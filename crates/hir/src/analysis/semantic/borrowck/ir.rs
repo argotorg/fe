@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use crate::analysis::{
     semantic::{
-        CallSiteProviderRefinement, SemOrigin, SemanticInstance, SemanticInstanceKey,
+        CallSiteProviderRefinement, SStmtId, SemOrigin, SemanticInstance, SemanticInstanceKey,
         capability::{
             footprint::{AccessExtent, AccessFootprint},
             guard::Guard,
@@ -221,6 +221,24 @@ pub struct SemanticBorrowAnalysis<'db> {
 pub struct LocalBorrowCheck<'db> {
     pub result: SemanticBorrowCheckResult<'db>,
     pub callees: Vec<SemanticInstance<'db>>,
+    /// `None` when solving the body failed.
+    pub executable: Option<ExecutableControlFlow>,
+}
+
+/// The control flow a solved body can execute: the solver's divergence and
+/// infeasible-edge facts. Block indices and successor positions are those of
+/// the raw semantic body, which every normalization of an instance preserves;
+/// a diverging call is named by its raw statement.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct ExecutableControlFlow(pub Box<[ExecutableBlock]>);
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum ExecutableBlock {
+    Unreachable,
+    /// Execution ends at this call, whose callee does not return.
+    Diverges(SStmtId),
+    /// The terminator executes; each successor edge is feasible or not.
+    Continues(Box<[bool]>),
 }
 
 /// Obligations that must be discharged by rebuilding the concrete semantic

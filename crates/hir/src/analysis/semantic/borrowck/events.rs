@@ -190,6 +190,7 @@ impl<'db> Borrowck<'db> {
                 .filter(|call| !call.pending)
                 .map(|call| call.instance)
                 .collect(),
+            executable: self.is_solved().then(|| self.executable_control_flow()),
         }
     }
 

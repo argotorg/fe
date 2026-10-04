@@ -16,7 +16,6 @@ use hir::analysis::{
             NTerminator, NTerminatorKind, NValueId, ReadMode,
         },
         reify_runtime_const_for_ty, runtime_size_bytes, sem_const_ty,
-        verify_layout_evidence_runtime_compatibility,
     },
     ty::{
         CallableLayoutParamPort, LayoutBundleUnrepresentable,
@@ -111,12 +110,7 @@ pub fn lower_to_rmir<'db>(
     let semantic = key
         .semantic(db)
         .expect("semantic lowering only applies to semantic runtime instances");
-    let normalized_body = RuntimeSemanticBody::admitted(db, semantic).map_err(|error| {
-        LowerError::Unsupported(format!(
-            "semantic normalization failed for {:?}: {error:?}",
-            semantic.key(db)
-        ))
-    })?;
+    let normalized_body = RuntimeSemanticBody::admitted(db, semantic)?;
     let type_env = RuntimeTypeEnv::for_semantic(db, semantic);
     for ty in normalized_body
         .normalized
@@ -150,9 +144,7 @@ pub fn lower_to_rmir<'db>(
             .normalized
             .blocks
             .iter()
-            .enumerate()
-            .filter(|(index, _)| facts.terminator_is_reachable(*index))
-            .filter_map(|(_, block)| match &block.terminator.kind {
+            .filter_map(|block| match &block.terminator.kind {
                 NTerminatorKind::Return(Some(value)) => normalized_body.operand_local(*value),
                 NTerminatorKind::Goto(_)
                 | NTerminatorKind::Branch { .. }
@@ -171,7 +163,7 @@ pub fn lower_to_rmir<'db>(
 
 /// Instantiation-dependent array roots are only visible after specialization,
 /// so they surface here rather than as a definition-site diagnostic.
-fn layout_evidence_failure<'db>(
+pub(super) fn layout_evidence_failure<'db>(
     key: SemanticInstanceKey<'db>,
     error: &LayoutEvidenceError<'db>,
 ) -> LowerError {
@@ -650,19 +642,6 @@ impl<'db> RmirEmitter<'db> {
         let env = RuntimeTypeEnv::for_semantic(db, semantic);
         let layout_evidence = layout_evidence_body(db, semantic)
             .map_err(|error| layout_evidence_failure(semantic.key(db), &error))?;
-        verify_layout_evidence_runtime_compatibility(
-            db,
-            &semantic_body.normalized,
-            &semantic_body.layout_plan,
-            &semantic_body.source,
-            layout_evidence,
-        )
-        .map_err(|error| {
-            LowerError::Unsupported(format!(
-                "layout evidence is incompatible with runtime semantic body for {:?}: {error:?}",
-                semantic.key(db)
-            ))
-        })?;
         let const_ref_regions = collect_const_ref_regions(db, env, &semantic_body);
         let terminated_blocks = vec![false; semantic_body.normalized.blocks.len()];
         let stmt_origins = vec![Vec::new(); semantic_body.normalized.blocks.len()];
@@ -921,11 +900,7 @@ impl<'db> RmirEmitter<'db> {
         let blocks = self.semantic_body.normalized.blocks.clone();
         for (idx, block) in blocks.iter().enumerate() {
             let bb = RBlockId::from_u32(idx as u32);
-            let Some(statement_count) = self.facts.reachable_statement_count(idx) else {
-                self.set_terminator(bb, RTerminator::Trap);
-                continue;
-            };
-            for (stmt_idx, stmt) in block.statements.iter().take(statement_count).enumerate() {
+            for (stmt_idx, stmt) in block.statements.iter().enumerate() {
                 self.with_current_origin(stmt.origin, |this| this.lower_stmt(bb, stmt_idx, stmt));
                 if self.terminated_blocks[bb.index()] {
                     break;
