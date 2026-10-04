@@ -1,5 +1,7 @@
 use super::{
-    index::{IndexExpr, IndexSubst},
+    guard::Guard,
+    index::{BinderScope, IndexExpr, IndexSubst},
+    path::{Projection, RegionPath},
     semantics::{CapabilityClass, CapabilitySemantics, capability_semantics},
 };
 use crate::{
@@ -124,6 +126,37 @@ pub enum ShapeError<'db> {
 impl<'db> ShapeId<'db> {
     pub fn children(self, db: &'db dyn HirAnalysisDb) -> &'db ShapeChildren<'db> {
         &self.data(db).children
+    }
+
+    /// The shape and in-bounds domain at a structural location, independent of contents.
+    pub fn project(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        path: &RegionPath<IndexExpr<'db>>,
+        scope: &BinderScope,
+    ) -> Option<(Self, Guard<'db>)> {
+        let mut shape = self;
+        let mut domain = Guard::always(scope);
+        for step in path.as_slice() {
+            shape = match (step, shape.children(db)) {
+                (Projection::Field(field), ShapeChildren::Product(fields)) => {
+                    fields.iter().find(|(key, _)| key == field)?.1
+                }
+                (Projection::VariantField { variant, field }, ShapeChildren::Sum(variants)) => {
+                    let variant = variants.iter().find(|(key, _)| key == variant)?.1;
+                    let ShapeChildren::Product(fields) = variant.children(db) else {
+                        return None;
+                    };
+                    fields.iter().find(|(key, _)| key == field)?.1
+                }
+                (Projection::Index(index), ShapeChildren::Array { len, element }) => {
+                    domain = domain.with_bound(*index, len.index())?;
+                    *element
+                }
+                _ => return None,
+            };
+        }
+        Some((shape, domain))
     }
 
     pub fn direct(self, db: &'db dyn HirAnalysisDb) -> Option<CapabilitySemantics<'db>> {

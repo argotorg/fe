@@ -802,6 +802,7 @@ impl<'db> Borrowck<'db> {
                             if !edge.certify_family_contents(
                                 &mut self.inventory.values,
                                 &certificate.family,
+                                &certificate.path,
                                 &certificate.family_scope,
                                 &coverage,
                                 &certificate.contents,

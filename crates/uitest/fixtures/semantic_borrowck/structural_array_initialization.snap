@@ -1,0 +1,6 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/structural_array_initialization.fe
+---
+

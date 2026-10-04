@@ -3143,7 +3143,13 @@ fn substituted_projection_prunes_siblings_and_preserves_enum_and_index_domains()
                 let occurrence = ValueOccurrence::Argument(3);
                 let expected = values.project(&full, &path, occurrence);
                 let before = values.metrics().nodes_created;
-                let selected = values.project_substituted(&value, &subst, &path, occurrence);
+                let selected = values.project_substituted(
+                    &value,
+                    &subst,
+                    &path,
+                    occurrence,
+                    StructuralPath::default(),
+                );
                 assert_eq!(selected, expected, "{path:?}");
                 let built = values.metrics().nodes_created - before;
                 assert!(built < 32, "unselected siblings were rebuilt");

@@ -1,0 +1,145 @@
+mod complete_inline {
+    use core::{Option, ptr}
+    struct Cell { pointer: Option<*u8> }
+    struct Holder { cells: *[Cell; 2], len: usize }
+    impl Cell {
+        fn update(mut self) {
+            match self.pointer {
+                Option::Some(pointer) => { *pointer = 0 }
+                Option::None => { self.pointer = Option::Some(ptr::alloc<u8>()) }
+            }
+        }
+    }
+    impl Holder {
+        fn get(mut self) -> mut Cell { mut (*self.cells)[self.len - 1] }
+    }
+
+    fn inspect(_ limit: usize) {
+        if limit != 2 { return }
+        let cells = ptr::alloc<[Cell; 2]>()
+        let mut i: usize = 0
+        while i < limit {
+            (*cells)[i] = Cell { pointer: Option::None }
+            i += 1
+        }
+        let mut holder = Holder { cells, len: 2 }
+        let mut count: u64 = 0
+        while count < 1 {
+            let cell = holder.get()
+            core::assert(count == 0)
+            cell.update()
+            count += 1
+        }
+    }
+}
+
+mod complete_forwarded {
+    use core::{Option, ptr}
+    struct Cell { pointer: Option<*u8> }
+    struct Holder { cells: *[Cell; 2], len: usize }
+    impl Cell {
+        fn update(mut self) {
+            match self.pointer {
+                Option::Some(pointer) => { *pointer = 0 }
+                Option::None => { self.pointer = Option::Some(ptr::alloc<u8>()) }
+            }
+        }
+    }
+    impl Holder {
+        fn get(mut self) -> mut Cell { mut (*self.cells)[self.len - 1] }
+    }
+    fn fill(_ limit: usize) -> *[Cell; 2] {
+    let cells = ptr::alloc<[Cell; 2]>()
+        let mut i: usize = 0
+        while i < limit {
+            (*cells)[i] = Cell { pointer: Option::None }
+            i += 1
+        }
+     cells
+    }
+    fn inspect(_ limit: usize) {
+        if limit != 2 { return }
+        let cells = fill(2)
+        let mut holder = Holder { cells, len: 2 }
+        let mut count: u64 = 0
+        while count < 1 {
+            let cell = holder.get()
+            core::assert(count == 0)
+            cell.update()
+            count += 1
+        }
+    }
+}
+
+mod partial_inline {
+    use core::{Option, ptr}
+    struct Cell { pointer: Option<*u8> }
+    struct Holder { cells: *[Cell; 2], len: usize }
+    impl Cell {
+        fn update(mut self) {
+            match self.pointer {
+                Option::Some(pointer) => { *pointer = 0 }
+                Option::None => { self.pointer = Option::Some(ptr::alloc<u8>()) }
+            }
+        }
+    }
+    impl Holder {
+        fn get(mut self) -> mut Cell { mut (*self.cells)[0] }
+    }
+
+    fn inspect(_ limit: usize) {
+        if limit != 1 { return }
+        let cells = ptr::alloc<[Cell; 2]>()
+        let mut i: usize = 0
+        while i < limit {
+            (*cells)[i] = Cell { pointer: Option::None }
+            i += 1
+        }
+        let mut holder = Holder { cells, len: 1 }
+        let mut count: u64 = 0
+        while count < 1 {
+            let cell = holder.get()
+            core::assert(count == 0)
+            cell.update()
+            count += 1
+        }
+    }
+}
+
+mod partial_forwarded {
+    use core::{Option, ptr}
+    struct Cell { pointer: Option<*u8> }
+    struct Holder { cells: *[Cell; 2], len: usize }
+    impl Cell {
+        fn update(mut self) {
+            match self.pointer {
+                Option::Some(pointer) => { *pointer = 0 }
+                Option::None => { self.pointer = Option::Some(ptr::alloc<u8>()) }
+            }
+        }
+    }
+    impl Holder {
+        fn get(mut self) -> mut Cell { mut (*self.cells)[0] }
+    }
+    fn fill(_ limit: usize) -> *[Cell; 2] {
+    let cells = ptr::alloc<[Cell; 2]>()
+        let mut i: usize = 0
+        while i < limit {
+            (*cells)[i] = Cell { pointer: Option::None }
+            i += 1
+        }
+     cells
+    }
+    fn inspect(_ limit: usize) {
+        if limit != 1 { return }
+        let cells = fill(1)
+        let mut holder = Holder { cells, len: 1 }
+        let mut count: u64 = 0
+        while count < 1 {
+            let cell = holder.get()
+            core::assert(count == 0)
+            cell.update()
+            count += 1
+        }
+    }
+}
