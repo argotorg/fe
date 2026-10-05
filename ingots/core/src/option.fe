@@ -11,6 +11,10 @@ pub enum Option<T> {
     None
 }
 
+impl<T> ingot::marker::Copy for Option<T>
+    where T: ingot::marker::Copy
+{}
+
 impl<T> Option<T> {
     pub fn is_some(own self) -> bool {
         match self {

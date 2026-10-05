@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/method_bound/result_map_chain_second_mapper_bad.fe
 ---
@@ -9,7 +10,7 @@ error[6-0003]: trait bound is not satisfied
 24 │     r.map(ToWrap{}).map(StillNeedsU256{}).unwrap()
    │                     ^^^ `StillNeedsU256` doesn't implement `Fn<Wrap, u256>`
    │
-   ┌─ src/result.fe:63:22
+   ┌─ src/result.fe:67:22
    │
-63 │     pub fn map<U, F: Fn<T, U>>(own self, _ func: F) -> Result<E, U> {
+67 │     pub fn map<U, F: Fn<T, U>>(own self, _ func: F) -> Result<E, U> {
    │                      -------- required by this bound on `map`

@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/option_copy_view_reads.fe
+---
+error[16-0002]: move conflict in `fn name`
+   ┌─ option_copy_view_reads.fe:34:9
+   │
+34 │         self.name
+   │         ^^^^^^^^^ cannot move out of a view parameter or through a borrow handle

@@ -896,6 +896,42 @@ fn native_memory_copy_checks_native_ranges_and_ignores_empty_addresses() {
 }
 
 #[test]
+fn native_copy_options_are_read_out_of_views() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("option_copy.fe");
+    fs::write(
+        &source,
+        r#"
+use core::Option
+struct Slot { value: Option<u64> }
+impl Slot {
+    fn value(self) -> Option<u64> { self.value }
+}
+fn or_zero(_ value: Option<u64>) -> u64 {
+    match value {
+        Option::Some(inner) => inner
+        Option::None => 0
+    }
+}
+pub fn main() -> i32 {
+    let mut slot = Slot { value: Option::Some(40) }
+    let before = slot.value()
+    slot.value = Option::None
+    let total = or_zero(before) + or_zero(slot.value()) + 2
+    total.downcast_unchecked()
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("option_copy")).output().unwrap();
+        assert_eq!(result.status.code(), Some(42), "O{level}: {result:?}");
+    }
+}
+
+#[test]
 fn native_byte_buffer_preserves_contents_and_reuses_zeroed_storage() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("byte_buffer.fe");
