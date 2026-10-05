@@ -3106,48 +3106,47 @@ impl<'db> Borrowck<'db> {
         // ordinary effects can therefore exclude overwrites those preconditions
         // forbid. Checking the preconditions themselves must still resolve every
         // alternative physically, without assuming the fact being proved.
+        // A conditional requirement can become unconditional once the caller's
+        // arguments are substituted, such as a constant buffer length.
         if instantiations.basis == AliasBasis::Assumed
             && let Some(clobber) = &source.source.clobber
-            && self.calls[&result]
-                .summary
-                .loan_requirements
-                .clauses()
-                .iter()
-                .any(|clause| {
-                    clause.payload.suspended.is_empty()
-                        && Guard::always(clause.guard.scope()).implies(&clause.guard)
-                        && SourceExpr::from_place(&clause.payload.protected).is_some_and(
-                            |protected| {
-                                protected.source == clobber.target.source
-                                    && protected.views == clobber.target.views
-                                    && clobber
-                                        .target
-                                        .path
-                                        .as_slice()
-                                        .starts_with(protected.path.as_slice())
-                                    && !clobber.target.invalidated
-                            },
-                        )
-                        && SourceExpr::from_place(&clause.payload.access).is_some_and(|access| {
-                            if clause.payload.extent == AccessExtent::Unknown {
-                                let mut written = &clobber.written;
-                                while access != *written
-                                    && !written.invalidated
-                                    && written.source.dereferences().is_empty()
-                                    && !written.source.is_reachable()
-                                    && let ExternalOrigin::Memory { base, .. } =
-                                        &written.source.origin
-                                {
-                                    written = base;
-                                }
-                                access == *written
-                            } else {
-                                clause.payload.extent == clobber.extent && access == clobber.written
-                            }
-                        })
-                })
         {
-            return Ok(Resolution::empty(scope));
+            for clause in self.calls[&result].summary.loan_requirements.clauses() {
+                if clause.payload.suspended.is_empty()
+                    && SourceExpr::from_place(&clause.payload.protected).is_some_and(|protected| {
+                        protected.source == clobber.target.source
+                            && protected.views == clobber.target.views
+                            && clobber
+                                .target
+                                .path
+                                .as_slice()
+                                .starts_with(protected.path.as_slice())
+                            && !clobber.target.invalidated
+                    })
+                    && SourceExpr::from_place(&clause.payload.access).is_some_and(|access| {
+                        if clause.payload.extent == AccessExtent::Unknown {
+                            let mut written = &clobber.written;
+                            while access != *written
+                                && !written.invalidated
+                                && written.source.dereferences().is_empty()
+                                && !written.source.is_reachable()
+                                && let ExternalOrigin::Memory { base, .. } = &written.source.origin
+                            {
+                                written = base;
+                            }
+                            access == *written
+                        } else {
+                            clause.payload.extent == clobber.extent && access == clobber.written
+                        }
+                    })
+                    && (Guard::always(clause.guard.scope()).implies(&clause.guard)
+                        || instantiations
+                            .guard(self, &clause.guard)?
+                            .is_some_and(|guard| Guard::always(guard.scope()).implies(&guard)))
+                {
+                    return Ok(Resolution::empty(scope));
+                }
+            }
         }
         let CallInputs {
             args,
