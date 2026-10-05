@@ -1,5 +1,6 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/if_.fe
 ---
@@ -197,7 +198,7 @@ note:
    ┌─ if_.fe:27:25
    │
 27 │     if let Option::Some(v) = opt {
-   │                         ^ ref i32
+   │                         ^ i32
 
 note:
    ┌─ if_.fe:27:30
@@ -212,13 +213,13 @@ note:
    │ ╭──────────────────────────────────^
 28 │ │         v
 29 │ │     }
-   │ ╰─────^ ref i32
+   │ ╰─────^ i32
 
 note:
    ┌─ if_.fe:28:9
    │
 28 │         v
-   │         ^ ref i32
+   │         ^ i32
 
 note:
    ┌─ if_.fe:32:29

@@ -13,6 +13,10 @@ pub enum Result<E, T> {
     Ok(T),
 }
 
+impl<E, T> ingot::marker::Copy for Result<E, T>
+    where E: ingot::marker::Copy, T: ingot::marker::Copy
+{}
+
 impl<E, T> Result<E, T> {
     pub fn is_ok(own self) -> bool {
         match self {

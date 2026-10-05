@@ -1,0 +1,46 @@
+// `Option` and `Result` of `Copy` payloads are `Copy`: reading them out of a
+// view or a field copies them, and the copies are independent.
+use core::{Option, Result}
+
+struct Settings { limit: Option<u64>, parsed: Result<u8, u64> }
+
+impl Settings {
+    fn limit(self) -> Option<u64> {
+        self.limit
+    }
+    fn parsed(self) -> Result<u8, u64> {
+        self.parsed
+    }
+}
+
+fn unwrap_or(_ value: Option<u64>, _ fallback: u64) -> u64 {
+    match value {
+        Option::Some(inner,) => inner,
+        Option::None => fallback,
+    }
+}
+
+#[test]
+fn reads_copy_options_from_views() {
+    let mut settings = Settings { limit: Option::Some(7), parsed: Result::Ok(9) }
+    let first = settings.limit()
+    settings.limit = Option::None
+    assert(unwrap_or(first, 0) == 7)
+    assert(unwrap_or(settings.limit(), 3) == 3)
+    let parsed = settings.parsed()
+    settings.parsed = Result::Err(1)
+    match parsed {
+        Result::Ok(value,) => assert(value == 9),
+        Result::Err(_,) => assert(false),
+    }
+    assert(settings.parsed().is_err())
+}
+
+#[test]
+fn copies_are_independent() {
+    let original: Option<u64> = Option::Some(1)
+    let mut copy = original
+    copy = Option::Some(2)
+    assert(unwrap_or(original, 0) == 1)
+    assert(unwrap_or(copy, 0) == 2)
+}
