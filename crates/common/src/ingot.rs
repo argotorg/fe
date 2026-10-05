@@ -65,6 +65,20 @@ impl IngotBaseUrl for Url {
     }
 }
 
+/// The files of an ingot, in URL order.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IngotFiles(Vec<(Url, File)>);
+
+impl IngotFiles {
+    pub fn iter(&self) -> impl Iterator<Item = (Url, File)> + '_ {
+        self.0.iter().map(|(url, file)| (url.clone(), *file))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 #[salsa::interned]
 #[derive(Debug)]
 pub struct Ingot<'db> {
@@ -94,20 +108,32 @@ impl<'db> Ingot<'db> {
         }
     }
 
-    #[salsa::tracked]
-    pub fn files(self, db: &'db dyn InputDb) -> StringPrefixView<Url, File> {
+    /// The files of this ingot: those under its base URL, except files that
+    /// belong to another ingot nested in its directory tree (such as a tool
+    /// ingot in `tools/` that depends on this one), or that no ingot claims.
+    #[salsa::tracked(return_ref)]
+    pub fn files(self, db: &'db dyn InputDb) -> IngotFiles {
         if let Some(standalone_file) = self.standalone_file(db) {
             // For standalone ingots, use the standalone file URL as the base
-            db.workspace().items_at_base(
+            let files = db.workspace().items_at_base(
                 db,
                 standalone_file
                     .url(db)
                     .expect("file should be registered in the index"),
-            )
-        } else {
-            // For regular ingots, use the ingot base URL
-            db.workspace().items_at_base(db, self.base(db))
+            );
+            return IngotFiles(files.iter().collect());
         }
+        let base = self.base(db);
+        let files = db.workspace().items_at_base(db, base.clone());
+        IngotFiles(
+            files
+                .iter()
+                .filter(|(_, file)| {
+                    file.containing_ingot(db)
+                        .is_some_and(|owner| owner.base(db) == base)
+                })
+                .collect(),
+        )
     }
 
     #[salsa::tracked]
