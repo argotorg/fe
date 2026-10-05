@@ -1,0 +1,34 @@
+// With both traits in scope, `u8::SIZE` and `u8::Out` stay ambiguous.
+
+mod one {
+    pub trait One {
+        const SIZE: usize
+        type Out
+    }
+
+    impl One for u8 {
+        const SIZE: usize = 1
+        type Out = u16
+    }
+}
+
+mod two {
+    pub trait Two {
+        const SIZE: usize
+        type Out
+    }
+
+    impl Two for u8 {
+        const SIZE: usize = 2
+        type Out = u32
+    }
+}
+
+use one::One
+use two::Two
+
+fn konst() -> usize {
+    u8::SIZE
+}
+
+fn assoc_ty(_ x: u8::Out) {}
