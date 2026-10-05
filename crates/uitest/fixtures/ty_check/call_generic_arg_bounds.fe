@@ -84,3 +84,55 @@ fn ok(s: S) -> u8 {
     needs_marker<Marked>()
     W<Foo<Marked>>::new()
 }
+
+// The arguments written before a variant constructor are its enum's.
+enum E<T> {
+    Value(u8),
+}
+
+impl<T> E<T> {
+    fn own_variant() -> E<T> {
+        Self::Value(0)
+    }
+}
+
+type Alias<T> = E<T>
+
+fn variant_ctor() {
+    E<Foo<NotMarked>>::Value(0)
+}
+
+fn variant_ctor_through_alias() {
+    Alias<Foo<NotMarked>>::Value(0)
+}
+
+// Checked on its own, not only as part of the call's type.
+fn variant_ctor_with_other_expected_type() {
+    let _e: E<Foo<Marked>> = E<Foo<NotMarked>>::Value(0)
+}
+
+// A written argument that is also part of the call's type is reported once.
+fn wrap<U>() -> W<U> {
+    todo()
+}
+
+impl<T> W<T> {
+    fn make() -> W<T> {
+        todo()
+    }
+}
+
+fn arg_in_call_type() {
+    let _w = wrap<Foo<NotMarked>>()
+}
+
+fn type_segment_arg_in_call_type() {
+    let _w = W<Foo<NotMarked>>::make()
+}
+
+fn ok_variants_and_call_types() {
+    E<Foo<Marked>>::Value(0)
+    Alias<Foo<Marked>>::Value(0)
+    let _w = wrap<Foo<Marked>>()
+    let _w = W<Foo<Marked>>::make()
+}
