@@ -154,7 +154,15 @@ pub(crate) fn select_trait_method_candidates<'db>(
         assumptions,
     };
 
-    selector.select_visible_trait_method_candidates()
+    // Every candidate implements `trait_`, which the caller picked directly
+    // (e.g. `Div` for `/`), so trait visibility in `scope` must not filter
+    // them. Multiple candidates are impls for different generic arguments,
+    // like `Div<u256>` and `Div<Wei>`, and the caller disambiguates them.
+    let traits = &selector.candidates.traits;
+    if traits.is_empty() {
+        return Err(MethodSelectionError::NotFound);
+    }
+    Ok(selector.trait_method_candidates(traits.iter().copied()))
 }
 
 fn assemble_method_candidates<'db>(
@@ -549,35 +557,6 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 Ok(MethodCandidate::NeedsConfirmation(cand))
             }
             TraitCandidateCheck::Rejected => Err(MethodSelectionError::NotFound),
-        }
-    }
-
-    fn select_visible_trait_method_candidates(
-        &self,
-    ) -> Result<AmbiguousTraitMethods<'db>, MethodSelectionError<'db>> {
-        let traits = &self.candidates.traits;
-
-        if traits.len() == 1 {
-            return Ok(self.trait_method_candidates(traits.iter().copied()));
-        }
-
-        let available_traits = self.available_traits();
-        let visible_traits: Vec<_> = traits
-            .iter()
-            .copied()
-            .filter(|cand| available_traits.contains(&cand.trait_def(self.db)))
-            .collect();
-
-        match visible_traits.len() {
-            0 => {
-                if traits.is_empty() {
-                    Err(MethodSelectionError::NotFound)
-                } else {
-                    let traits = traits.iter().map(|cand| cand.trait_def(self.db)).collect();
-                    Err(MethodSelectionError::InvisibleTraitMethod(traits))
-                }
-            }
-            _ => Ok(self.trait_method_candidates(visible_traits)),
         }
     }
 
