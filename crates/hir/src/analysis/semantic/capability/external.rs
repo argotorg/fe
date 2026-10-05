@@ -426,35 +426,9 @@ impl<'db> ClobberCondition<'db> {
         }
         target.source.erase_clobber_conditions();
         written.source.erase_clobber_conditions();
-        // Bound raw write selectors by their containing object, but retain
-        // the clobbered cell: a callee's separation precondition may protect
-        // that cell without protecting every field in its containing object.
-        // If the written source is unchanged, its extent stays meaningful too.
-        // A widened written source loses its original offset and extent.
-        let object = |place: &SourceExpr<'db>| {
-            let mut place = place.clone();
-            while place.source.dereferences.is_empty()
-                && !place.source.reachable
-                && let ExternalOrigin::Memory { base, .. } = &place.source.origin
-            {
-                place = (**base).clone();
-            }
-            place.path = RegionPath::default();
-            place.views = Default::default();
-            place
-        };
-        let (target_object, written_object) = (object(&target), object(&written));
-        if written_object.source.in_raw_memory() && !target_object.source.in_raw_memory() {
-            return Self {
-                target,
-                extent: if written_object == written {
-                    extent
-                } else {
-                    AccessExtent::Unknown
-                },
-                written: written_object,
-            };
-        }
+        // Keep the actual write footprint so a callee's separation requirement
+        // can refute this overwrite at its call sites.
+
         Self {
             target,
             written,
@@ -1581,7 +1555,7 @@ mod tests {
     };
 
     #[test]
-    fn clobber_coarsening_keeps_the_target_and_unchanged_write_extent() {
+    fn clobber_conditions_keep_the_target_and_written_range() {
         let db = HirAnalysisTestDb::default();
         let memory = HandleAddressSpace::Known(ProviderAddressSpace::Memory);
         let mut target = SourceExpr::whole(ExternalSource::input(
@@ -1611,10 +1585,10 @@ mod tests {
                 TyId::u8(&db),
                 MemoryOffset::Element(TyId::u8(&db), IndexExpr::Const(1)),
             ));
-            let widened = ClobberCondition::new(target.clone(), offset, extent);
-            assert_eq!(widened.target, target);
-            assert_eq!(widened.written, written);
-            assert_eq!(widened.extent, AccessExtent::Unknown);
+            let condition = ClobberCondition::new(target.clone(), offset.clone(), extent);
+            assert_eq!(condition.target, target);
+            assert_eq!(condition.written, offset);
+            assert_eq!(condition.extent, extent);
         }
     }
 }
