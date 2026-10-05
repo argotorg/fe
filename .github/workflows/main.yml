@@ -56,7 +56,10 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: Validate release notes entry
-        run: ./newsfragments/validate_files.py
+        run: |
+          git clone --depth 1 https://github.com/fe-lang/eisenbote "$RUNNER_TEMP/eisenbote"
+          make -C "$RUNNER_TEMP/eisenbote" download
+          "$RUNNER_TEMP/eisenbote/bin/eisenbote" check
       - name: Lint with rustfmt
         run: cargo fmt --all -- --check
       - name: Lint with clippy

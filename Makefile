@@ -69,14 +69,32 @@ build-docs:
 README.md: src/main.rs
 	cargo readme --no-title --no-indent-headings > README.md
 
-notes:
-	towncrier build --yes --version $(version)
+# eisenbote (https://github.com/fe-lang/eisenbote) assembles the release notes
+# from newsfragments/. It is checked out next to this repository and built with
+# the Fe compiler about to be released, which also checks the native backend on
+# a real program. If that build fails, eisenbote's last working executable is
+# downloaded instead. Its settings are in pyproject.toml, in towncrier's format.
+EISENBOTE ?= ../eisenbote
+
+.PHONY: eisenbote
+eisenbote:
+	cargo build --release -p fe --features cranelift
+	$(MAKE) -C $(EISENBOTE) -B FE=$(CURDIR)/target/release/fe || { \
+		echo "Building eisenbote with this Fe failed; using its last working executable."; \
+		$(MAKE) -C $(EISENBOTE) download; }
+
+# Any eisenbote executable, for checks that don't need a fresh build.
+$(EISENBOTE)/out/eisenbote:
+	$(MAKE) -C $(EISENBOTE) download
+
+notes: eisenbote
+	$(EISENBOTE)/bin/eisenbote build --yes --version $(version)
 	git commit -m "Compile release notes"
 
 .PHONY: release release-test
-release:
+release: $(EISENBOTE)/out/eisenbote
 	# Ensure release notes where generated before running the release command
-	./newsfragments/validate_files.py is-empty
+	$(EISENBOTE)/bin/eisenbote check --empty
 	cargo release $(version) --execute --all --no-tag --no-push
 	$(MAKE) release-test
 
@@ -85,9 +103,9 @@ release-test:
 	# Optimize compiler-heavy tests and give deeply nested type queries enough stack.
 	RUST_MIN_STACK=16777216 cargo test --profile test-release --locked --workspace
 
-push-tag:
+push-tag: $(EISENBOTE)/out/eisenbote
 	# Run `make release version=<version>` first
-	./newsfragments/validate_files.py is-empty
+	$(EISENBOTE)/bin/eisenbote check --empty
 	# Tag the release with the current version number
 	git tag "v$$(cargo pkgid fe | cut -d# -f2 | cut -d: -f2)"
 	git push --tags upstream

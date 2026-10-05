@@ -21,7 +21,8 @@ So for example: `123.feature.md`, `456.bugfix.md`
 If the PR fixes an issue, use that number here. If there is no issue,
 then open up the PR first and use the PR number for the newsfragment.
 
-Note that the `towncrier` tool will automatically
-reflow your text, so don't try to do any fancy formatting. Run
- `towncrier --draft` to get a preview of what the release notes entry
- will look like in the final release notes.
+The release notes are assembled with
+[eisenbote](https://github.com/fe-lang/eisenbote), checked out next to this
+repository. Run `../eisenbote/bin/eisenbote draft --version <next version>`
+to preview the release notes, and `../eisenbote/bin/eisenbote check` to check
+the fragment names (`make -C ../eisenbote download` fetches its executable).
