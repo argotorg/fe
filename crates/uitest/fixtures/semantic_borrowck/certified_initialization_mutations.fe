@@ -1,0 +1,31 @@
+use core::{Option, ptr}
+struct Cell { pointer: Option<*u8> }
+struct Holder { cell: *Cell }
+impl Cell {
+    fn update(mut self) {
+        match self.pointer {
+            Option::Some(pointer) => { *pointer = 0 }
+            Option::None => { self.pointer = Option::Some(ptr::alloc<u8>()) }
+        }
+    }
+}
+impl Holder {
+    fn get(mut self) -> mut Cell { mut *self.cell }
+}
+fn inspect(_ limit: usize) {
+    let cell = ptr::alloc<Cell>()
+    let mut i: usize = 0
+    while i < limit {
+        *cell = Cell { pointer: Option::None }
+        i += 1
+    }
+    if limit == 0 { return }
+    let mut holder = Holder { cell }
+    let mut count: u64 = 0
+    while count < 2 {
+        let cell = holder.get()
+        core::assert(count < 2)
+        cell.update()
+        count += 1
+    }
+}

@@ -629,11 +629,11 @@ impl<'db> BorrowState<'db> {
         )
     }
 
-    /// Keep a proved range separate from possible contents, whose join may
-    /// widen guards. Reads use this must fact to exclude old possibilities only
-    /// on covered members of the same typed storage family.
+    /// Refine possible contents on a proved range. Also keep the must fact
+    /// separately, since joins may widen the guards on possible contents.
     pub fn certify_family_contents(
         &mut self,
+        values: &mut CapabilityValues<'db>,
         family: &RegionRoot<'db>,
         family_scope: &BinderScope,
         coverage: &Guard<'db>,
@@ -656,6 +656,14 @@ impl<'db> BorrowState<'db> {
         {
             return false;
         }
+        // Preserve the proved contents when a later write invalidates the must
+        // fact. Only members outside its coverage can retain older possibilities.
+        let mut contents = values.with_guard(replacement, coverage);
+        if let Some(uncovered) = Guard::always(family_scope).difference(coverage) {
+            let prior = values.with_guard(&self.contents[family], &uncovered);
+            contents = values.join(&prior, &contents);
+        }
+        self.contents.insert(family.clone(), contents);
         self.certified_contents.push(CertifiedContents {
             family: family.clone(),
             scope: family_scope.clone(),
