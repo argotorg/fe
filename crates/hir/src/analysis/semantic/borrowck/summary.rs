@@ -1322,7 +1322,12 @@ impl<'db> Borrowck<'db> {
                     .iter_mut()
                     .find(|old| old.kind == requirement.kind && old.extent == extent)
                 {
-                    existing.region = existing.region.union(&region);
+                    let guards = values.guard_cache();
+                    existing.region = RegionSet::union_all_with(
+                        &existing.region.scope().clone(),
+                        [existing.region.clone(), region],
+                        |left, right| guards.borrow_mut().or(left, right),
+                    );
                 } else {
                     availability.incoming.push(AvailabilityRequirement {
                         kind: requirement.kind,
@@ -3983,6 +3988,7 @@ mod tests {
                     external::ProviderStorage,
                     guard::ChoiceKey,
                     handle::HandleAddressSpace,
+                    opaque::OPAQUE_CONTENTS,
                     region::CANONICALIZED_REGION_CLAUSES,
                     repack::{ReferentRepackId, ReferentViews},
                     separation::{SEPARATION_GUARD_NODE_LIMIT, SEPARATION_WITNESS_LIMIT},
@@ -4016,6 +4022,64 @@ mod tests {
                 },
             }],
         )
+    }
+
+    /// A reader loop, after a native text tool, whose unknown `Read` provider may
+    /// overwrite the buffer's storage on every iteration.
+    #[test]
+    fn loop_sweeps_reuse_overwrite_replacements() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "loop_overwrite_replacements.fe".into(),
+            r#"
+use std::io::{Read, read_char}
+use std::native::ByteBuffer
+
+pub struct Input {
+    data: ByteBuffer,
+    records: u64,
+}
+
+fn push(_ buf: mut ByteBuffer, _ byte: u8) {
+    let len = buf.len()
+    core::assert(buf.try_resize(len + 1))
+    buf.set_byte(index: len, value: byte)
+}
+
+fn read(_ input: mut Input) -> bool uses (r: mut Read) {
+    let mut c = read_char()
+    while c >= 0 {
+        while c >= 0 && c != 10 {
+            push(mut input.data, c.downcast_unchecked())
+            c = read_char()
+        }
+        if c != 10 {
+            return false
+        }
+        input.records += 1
+        c = read_char()
+    }
+    true
+}
+"#,
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "read"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        let (requested, built) = OPAQUE_CONTENTS.get();
+        checker.solve().unwrap();
+        let (requested, built) = (
+            OPAQUE_CONTENTS.get().0 - requested,
+            OPAQUE_CONTENTS.get().1 - built,
+        );
+        assert!(
+            requested > 0 && built * 2 <= requested,
+            "sweeps rebuilt replacement contents: {built} of {requested}"
+        );
     }
 
     #[test]

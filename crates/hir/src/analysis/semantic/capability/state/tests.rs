@@ -682,6 +682,61 @@ fn raw_overwrites_invalidate_exact_pointer_cells_and_remain_opaque() {
 }
 
 #[test]
+fn repeated_overwrites_reuse_their_replacement_contents() {
+    let (db, file) = database();
+    let overwrite = overwrite(&db, file);
+    let scope = BinderScope::default();
+    let shape = capability_shape(
+        &db,
+        overwrite.scope,
+        overwrite.assumptions,
+        TyId::ptr_to(&db, TyId::u256(&db)),
+    )
+    .unwrap();
+    let destination = region(root(&db, 0));
+    // Each sweep of a fixed point replays the overwrite on an equal state.
+    let replay = |limits: ValueLimits| {
+        let mut values = CapabilityValues::new(&db, limits);
+        let initial = values.from_shape(shape, &scope, |_, _, scope| {
+            vec![Guarded {
+                guard: Guard::always(scope),
+                payload: CapabilityRef::Address(region(root(&db, 1))),
+            }]
+        });
+        let entry = BorrowState::new(&mut values, [], [(root(&db, 0), initial)]);
+        let (requested, built) = super::super::opaque::OPAQUE_CONTENTS.get();
+        let states: Vec<_> = (0..3)
+            .map(|_| {
+                let mut state = entry.clone();
+                state
+                    .invalidate_memory(&mut values, AccessFootprint::typed(&destination), overwrite)
+                    .unwrap();
+                read(&db, &mut values, &state, &destination, shape)
+            })
+            .collect();
+        let (now_requested, now_built) = super::super::opaque::OPAQUE_CONTENTS.get();
+        (states, now_requested - requested, now_built - built)
+    };
+    let (cached, requested, built) = replay(ValueLimits::default());
+    assert_eq!(
+        (requested, built),
+        (3, 1),
+        "later sweeps reuse the contents"
+    );
+    let (uncached, requested, built) = replay(ValueLimits {
+        interned_nodes: None,
+        ..ValueLimits::default()
+    });
+    assert_eq!(
+        (requested, built),
+        (3, 3),
+        "without a cache budget nothing is kept"
+    );
+    assert_eq!(cached, uncached);
+    assert!(cached.windows(2).all(|pair| pair[0] == pair[1]));
+}
+
+#[test]
 fn opaque_field_writes_preserve_disjoint_capability_fields() {
     let (db, file) = database();
     let overwrite = overwrite(&db, file);

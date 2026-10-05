@@ -2,7 +2,7 @@
 //! Entry reads have a different denotation and must never be used as havoc.
 use super::{
     external::{ClobberCondition, ExternalSource, ReferentContract},
-    footprint::AccessFootprint,
+    footprint::{AccessExtent, AccessFootprint},
     guard::Guard,
     handle::{
         AddressOccurrence, OpaqueContentsId, OpaqueHandleContract, OpaqueHandleRef, OpaqueWriteSite,
@@ -22,11 +22,31 @@ use crate::{
     hir_def::scope_graph::ScopeId,
 };
 
-#[derive(Clone, Copy)]
+#[cfg(test)]
+thread_local! {
+    /// Replacement contents requested and actually built, for tests that bound
+    /// the work of repeated sweeps.
+    pub(crate) static OPAQUE_CONTENTS: std::cell::Cell<(usize, usize)> =
+        const { std::cell::Cell::new((0, 0)) };
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OpaqueWrite<'db> {
     pub site: OpaqueWriteSite<'db>,
     pub scope: ScopeId<'db>,
     pub assumptions: PredicateListId<'db>,
+}
+
+/// Everything [`OpaqueWrite::contents`] depends on.
+#[derive(PartialEq, Eq, Hash)]
+pub struct OpaqueContentsKey<'db> {
+    write: OpaqueWrite<'db>,
+    shape: ShapeId<'db>,
+    scope: BinderScope,
+    /// The overwritten cell's root (including its own clobber dependency).
+    target: Option<RegionRoot<'db>>,
+    /// The written footprint.
+    written: Option<(RegionSet<'db>, AccessExtent<'db>)>,
 }
 
 impl<'db> OpaqueWrite<'db> {
@@ -38,6 +58,30 @@ impl<'db> OpaqueWrite<'db> {
         target: Option<&RegionRoot<'db>>,
         written: Option<AccessFootprint<'_, 'db>>,
     ) -> Result<CapabilityValue<'db>, UnresolvedCapability<'db>> {
+        #[cfg(test)]
+        OPAQUE_CONTENTS.set((OPAQUE_CONTENTS.get().0 + 1, OPAQUE_CONTENTS.get().1));
+        let key = OpaqueContentsKey {
+            write: self,
+            shape,
+            scope: scope.clone(),
+            target: target.cloned(),
+            written: written.map(|written| (written.region.clone(), written.extent)),
+        };
+        values.opaque_contents(key, |values| {
+            self.build_contents(values, shape, scope, target, written)
+        })
+    }
+
+    fn build_contents(
+        self,
+        values: &mut CapabilityValues<'db>,
+        shape: ShapeId<'db>,
+        scope: &BinderScope,
+        target: Option<&RegionRoot<'db>>,
+        written: Option<AccessFootprint<'_, 'db>>,
+    ) -> Result<CapabilityValue<'db>, UnresolvedCapability<'db>> {
+        #[cfg(test)]
+        OPAQUE_CONTENTS.set((OPAQUE_CONTENTS.get().0, OPAQUE_CONTENTS.get().1 + 1));
         let db = values.db;
         // Keep conditional replacements for identifiable cells. Seeds and
         // replacements inside already arbitrary memory share one closed heap

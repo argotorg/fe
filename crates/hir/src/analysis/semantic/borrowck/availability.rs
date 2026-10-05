@@ -308,7 +308,9 @@ impl<'db> Borrowck<'db> {
                     target_clauses.extend(target.clauses().iter().cloned());
                 }
             }
-            let target_region = RegionSet::new(&scope, target_clauses);
+            let target_region = RegionSet::new_with(&scope, target_clauses, |left, right| {
+                cache.borrow_mut().or(left, right)
+            });
             if let Some(kind) = kind {
                 resolved.incoming.push((
                     AvailabilityRequirement {

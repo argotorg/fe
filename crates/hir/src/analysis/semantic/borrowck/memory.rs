@@ -134,7 +134,11 @@ impl<'db> Borrowck<'db> {
                             .close_existentials(source_region.scope()),
                     );
                 }
-                regions.push(RegionSet::union_all(source_region.scope(), alternatives));
+                regions.push(RegionSet::union_all_with(
+                    source_region.scope(),
+                    alternatives,
+                    |left, right| cache.borrow_mut().or(left, right),
+                ));
             }
             let authorizers = regions.pop().expect("authorizers");
             let region = regions.pop().expect("access target");
