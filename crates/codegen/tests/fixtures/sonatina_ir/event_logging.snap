@@ -10,9 +10,6 @@ type @layout_1 = {i256, i256, i256};
 type @layout_2 = {@layout_0, @layout_0, i256};
 type @layout_3 = {i256, i256};
 
-global private const @layout_0 $const_region_0 = {1};
-global private const @layout_0 $const_region_1 = {2};
-
 func private %abi_payload_size(v0.@layout_0) -> i256 {
     block0:
         jump block1;
@@ -104,21 +101,15 @@ func inline(always) private %emit(v0.@layout_2) {
         return;
 }
 
-func private %emit_transfer(v0.constref<@layout_0>, v1.constref<@layout_0>, v2.i256) {
+func private %emit_transfer(v0.@layout_0, v1.@layout_0, v2.i256) {
     block0:
         jump block1;
 
     block1:
-        v6.objref<@layout_0> = obj.alloc @layout_0;
-        obj.init.const v6 v0;
-        v7.@layout_0 = obj.load v6;
-        v8.objref<@layout_0> = obj.alloc @layout_0;
-        obj.init.const v8 v1;
-        v9.@layout_0 = obj.load v8;
-        v12.@layout_2 = insert_value undef.@layout_2 0.i256 v7;
-        v14.@layout_2 = insert_value v12 1.i256 v9;
-        v16.@layout_2 = insert_value v14 2.i256 v2;
-        call %emit v16;
+        v8.@layout_2 = insert_value undef.@layout_2 0.i256 v0;
+        v10.@layout_2 = insert_value v8 1.i256 v1;
+        v12.@layout_2 = insert_value v10 2.i256 v2;
+        call %emit v12;
         return;
 }
 
@@ -250,9 +241,9 @@ func private %main() {
         jump block1;
 
     block1:
-        v1.constref<@layout_0> = const.ref $const_region_0;
-        v3.constref<@layout_0> = const.ref $const_region_1;
-        call %emit_transfer v1 v3 100.i256;
+        v3.@layout_0 = insert_value undef.@layout_0 0.i256 1.i256;
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 2.i256;
+        call %emit_transfer v3 v6 100.i256;
         return;
 }
 

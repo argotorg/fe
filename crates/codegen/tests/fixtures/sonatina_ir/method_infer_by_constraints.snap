@@ -8,29 +8,26 @@ target = "evm-ethereum-osaka"
 type @layout_0 = {i64, i64};
 type @layout_1 = {i64};
 
-global private const @layout_1 $const_region_0 = {10};
-
 func private %call() -> @layout_0 {
     block0:
         jump block1;
 
     block1:
-        v1.constref<@layout_1> = const.ref $const_region_0;
-        v2.constref<@layout_1> = const.ref $const_region_0;
-        v3.@layout_0 = call %foo v2;
-        return v3;
+        v3.@layout_1 = insert_value undef.@layout_1 0.i256 10.i64;
+        v5.@layout_1 = insert_value undef.@layout_1 0.i256 10.i64;
+        v6.@layout_0 = call %foo v5;
+        return v6;
 }
 
-func private %foo(v0.constref<@layout_1>) -> @layout_0 {
+func private %foo(v0.@layout_1) -> @layout_0 {
     block0:
         jump block1;
 
     block1:
-        v3.constref<i64> = const.proj v0 0.i256;
-        v4.i64 = const.load v3;
-        v7.@layout_0 = insert_value undef.@layout_0 0.i256 v4;
-        v9.@layout_0 = insert_value v7 1.i256 1.i64;
-        return v9;
+        v3.i64 = extract_value v0 0.i256;
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v3;
+        v8.@layout_0 = insert_value v6 1.i256 1.i64;
+        return v8;
 }
 
 func private %main_root() {

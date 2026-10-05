@@ -15,8 +15,6 @@ type @layout_6 = {i256, i256};
 type @layout_7 = {};
 type @layout_8 = {@layout_7};
 
-global private const @layout_5 $const_region_0 = {0};
-
 func private %__EchoContract_init(v0.i256, v1.i256, v2.i256) {
     block0:
         jump block1;
@@ -842,11 +840,8 @@ func inline(always) private %impl_CallData__new() -> @layout_5 {
         jump block1;
 
     block1:
-        v1.constref<@layout_5> = const.ref $const_region_0;
-        v2.objref<@layout_5> = obj.alloc @layout_5;
-        obj.init.const v2 v1;
-        v3.@layout_5 = obj.load v2;
-        return v3;
+        v2.@layout_5 = insert_value undef.@layout_5 0.i256 0.i256;
+        return v2;
 }
 
 func inline(always) private %impl_Cursor__new__g140d(v0.@layout_2) -> @layout_3 {
@@ -1258,6 +1253,5 @@ object @EchoContract {
     }
     section runtime {
         entry %contract_runtime_root_EchoContract;
-        data $const_region_0;
     }
 }

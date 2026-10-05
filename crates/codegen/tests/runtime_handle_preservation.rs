@@ -2061,8 +2061,10 @@ fn mutable_with_provider_reuses_materialized_root_for_later_readonly_effects() {
 fn readonly_with_provider_can_remain_const_backed() {
     with_test_runtime_package!(
         "readonly_with_provider_can_remain_const_backed.fe",
+        // Two words: a one-word constant struct is passed as the plain word.
         r#"pub struct Counter {
     pub value: u256,
+    pub step: u256,
 }
 
 fn read() -> u256 uses (counter: Counter) {
@@ -2071,10 +2073,10 @@ fn read() -> u256 uses (counter: Counter) {
 
 #[test]
 fn test_readonly_with_provider() {
-    let out: u256 = with (Counter = Counter { value: 7 }) {
+    let out: u256 = with (Counter = Counter { value: 7, step: 1 }) {
         read() + read()
     }
-    let other: u256 = with (Counter = { Counter { value: 9 } }) {
+    let other: u256 = with (Counter = { Counter { value: 9, step: 1 } }) {
         read() + read()
     }
 

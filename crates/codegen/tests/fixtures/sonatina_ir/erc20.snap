@@ -19,8 +19,6 @@ type @layout_10 = {i256, @layout_0};
 type @layout_11 = {};
 type @layout_12 = {@layout_11};
 
-global private const @layout_0 $const_region_0 = {0};
-
 func private %__CoolCoin_init(v0.i256, v1.@layout_0, v2.i256, v3.i256, v4.i256, v5.i256, v6.i256) {
     block0:
         jump block1;
@@ -3180,11 +3178,8 @@ func inline(always) private %impl_CallData__new() -> @layout_0 {
         jump block1;
 
     block1:
-        v1.constref<@layout_0> = const.ref $const_region_0;
-        v2.objref<@layout_0> = obj.alloc @layout_0;
-        obj.init.const v2 v1;
-        v3.@layout_0 = obj.load v2;
-        return v3;
+        v2.@layout_0 = insert_value undef.@layout_0 0.i256 0.i256;
+        return v2;
 }
 
 func inline(always) private %impl_SolDecoder__new__g140d(v0.@layout_3) -> @layout_5 {
@@ -4606,11 +4601,8 @@ func private %zero() -> @layout_0 {
         jump block1;
 
     block1:
-        v1.constref<@layout_0> = const.ref $const_region_0;
-        v2.objref<@layout_0> = obj.alloc @layout_0;
-        obj.init.const v2 v1;
-        v3.@layout_0 = obj.load v2;
-        return v3;
+        v2.@layout_0 = insert_value undef.@layout_0 0.i256 0.i256;
+        return v2;
 }
 
 
@@ -4621,6 +4613,5 @@ object @CoolCoin {
     }
     section runtime {
         entry %contract_runtime_root_CoolCoin;
-        data $const_region_0;
     }
 }
