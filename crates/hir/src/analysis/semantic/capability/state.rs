@@ -11,7 +11,8 @@ use std::{
 use super::{
     birth::AllocationBirth,
     external::{
-        FeedbackPlaces, FeedbackRepeats, FeedbackSlot, StorageMatch, feedback_clause_guard,
+        ClobberCondition, FeedbackPlaces, FeedbackRepeats, FeedbackSlot, StorageMatch,
+        feedback_clause_guard,
     },
     footprint::AccessFootprint,
     guard::{Guard, ValueOccurrence},
@@ -868,6 +869,15 @@ impl<'db> BorrowState<'db> {
                 assert_eq!(selected.shape(), shape, "referent load shape mismatch");
                 let selected = values.with_guard(&selected, &guard);
                 let selected = values.close_existentials(&selected, region.scope());
+                let selected = match &clause.payload.root {
+                    RegionRoot::External(source) => match source.clobber_dependency() {
+                        Some(condition) => {
+                            condition_arbitrary_addresses(values, &selected, condition)
+                        }
+                        None => selected,
+                    },
+                    _ => selected,
+                };
                 result = values.join(&result, &selected);
             }
         }
@@ -1201,3 +1211,52 @@ fn storage_instance<'db>(
 
 #[cfg(test)]
 mod tests;
+
+/// Arbitrary addresses loaded through an address that exists only under a
+/// corruption condition exist only under that condition, too: otherwise the
+/// load reads the memory the address originally denoted. A condition naming
+/// witnesses the loaded clause does not bind cannot be restated there; such
+/// an address stays unconditionally arbitrary.
+fn condition_arbitrary_addresses<'db>(
+    values: &mut CapabilityValues<'db>,
+    value: &CapabilityValue<'db>,
+    condition: &ClobberCondition<'db>,
+) -> CapabilityValue<'db> {
+    let condition_region = |region: &RegionSet<'db>| {
+        RegionSet::new(
+            region.scope(),
+            region
+                .clauses()
+                .iter()
+                .map(|clause| match &clause.payload.root {
+                    RegionRoot::External(source)
+                        if source.is_arbitrary()
+                            && !source.has_clobber_dependency()
+                            && IndexPayload::indices(&condition.target)
+                                .chain(IndexPayload::indices(&condition.written))
+                                .all(|index| clause.guard.scope().validate(index).is_ok()) =>
+                    {
+                        let mut source = source.clone();
+                        source.clobber = Some(Box::new(condition.clone()));
+                        Guarded {
+                            guard: clause.guard.clone(),
+                            payload: SymbolicPlace {
+                                root: RegionRoot::External(source),
+                                path: clause.payload.path.clone(),
+                                views: clause.payload.views.clone(),
+                            },
+                        }
+                    }
+                    _ => clause.clone(),
+                }),
+        )
+    };
+    values.map_each_payload(value, |payload| match payload {
+        CapabilityRef::Address(region) => CapabilityRef::Address(condition_region(region)),
+        CapabilityRef::Invalidated { class, region } => CapabilityRef::Invalidated {
+            class: *class,
+            region: condition_region(region),
+        },
+        other => other.clone(),
+    })
+}

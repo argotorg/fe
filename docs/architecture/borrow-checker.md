@@ -562,6 +562,28 @@ requirements and native-validity obligations still uses the physical basis and
 retains the overwrite until the caller independently proves it impossible.
 Effect and proof resolutions have separate caches.
 
+Ownership conflicts can be deferred the same way. A write or use that reaches a
+moved value only through an address whose clobber condition relates two input
+places (an input pointer cell overwritten through bytes written via another, or
+the same, input pointer) exists only if the caller's memory let that overwrite
+happen. The body exports the condition as an unconditional requirement that
+the clobbered cell is separate from the written footprint, which is the form
+call effects use to exclude the overwrite, and reports only the conflicts that
+remain without such addresses. A caller discharges it physically: a fresh
+allocation or a frame slot cannot overlap a separate cell, while memory that
+points into itself keeps the conflict at the call. The requirement names the
+exact written footprint, so a write whose offset loop feedback widened, such as
+through a pointer advanced in the loop, stays a conflict at the call even for a
+fresh allocation.
+
+Such a condition survives the steps that would otherwise make the address
+unconditionally arbitrary. A write through a conditional address into a frame
+slot keeps the address's own condition, both locally and when a callee's
+overwrite is restated over a caller slot, and arbitrary addresses loaded
+through a conditional address keep that condition too. Clobber conditions
+collapse to their earliest prerequisite, so loop feedback still widens growing
+pointers and the set of conditions stays bounded.
+
 A reborrow descended from an input loan still names caller-supplied memory, so
 its unresolved separation is also exported. Creating `mut input` or `ref input`
 does not make the referent concrete. An input ancestor permits deferral only;

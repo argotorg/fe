@@ -903,6 +903,25 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
         )
     }
 
+    pub fn map_each_payload(
+        &mut self,
+        value: &ValueId<'db, P>,
+        mut map: impl FnMut(&P) -> P,
+    ) -> ValueId<'db, P> {
+        Self::map_node(
+            value,
+            &StructuralPath::default(),
+            &Guard::always(value.scope()),
+            self,
+            &mut |_, _, entry, _| {
+                vec![Guarded {
+                    guard: entry.guard.clone(),
+                    payload: map(&entry.payload),
+                }]
+            },
+        )
+    }
+
     /// A statically out-of-bounds selection has no reachable result.
     pub fn project(
         &mut self,

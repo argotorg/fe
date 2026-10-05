@@ -10674,6 +10674,199 @@ fn native_byte_buffer_owner_cannot_be_reused_or_released_while_borrowed() {
 }
 
 #[test]
+fn native_byte_buffer_fresh_in_loop_survives_guarded_parameter_write() {
+    // Each iteration allocates and releases its own buffer. A guarded write
+    // through an unrelated parameter buffer must not make the previous
+    // iteration's release look like a move of the current buffer.
+    let diagnostics = checked_borrow_diags(
+        r#"
+use std::native::ByteBuffer
+fn render(_ out: mut ByteBuffer) {
+    let mut round: u64 = 0
+    while round < 3 {
+        let buffer = ByteBuffer::new()
+        if buffer.len() > 0 {
+            out.set_byte(index: 0, value: 10)
+        }
+        buffer.release()
+        round += 1
+    }
+}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn native_byte_buffer_released_in_loop_is_still_unavailable_next_iteration() {
+    for body in [
+        "buffer.release()",
+        "if buffer.len() > 0 { out.set_byte(index: 0, value: 10) }\nbuffer.release()",
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            "use std::native::ByteBuffer\nfn render(_ out: mut ByteBuffer) {{\nlet buffer = ByteBuffer::new()\nlet mut round: u64 = 0\nwhile round < 3 {{\n{body}\nround += 1\n}}\n}}"
+        ));
+        assert!(
+            diagnostics.contains("move conflict"),
+            "{body}: {diagnostics}"
+        );
+    }
+}
+
+/// Byte writes through `news.data` inside `run` cannot reach `main`'s fresh
+/// `news` and `out` slots or the argument vector.
+fn interned_arguments() -> String {
+    checked_borrow_diags(
+        r#"
+use std::native::{Arg, Args, ByteBuffer}
+struct Span { start: u64, len: u64 }
+fn push(_ buf: mut ByteBuffer, _ byte: u8) {
+    let len = buf.len()
+    buf.set_byte(index: len, value: byte)
+}
+struct News { data: ByteBuffer }
+impl News {
+    fn intern_arg(mut self, _ arg: Arg) -> Span {
+        let start = self.data.len()
+        let mut i: usize = 0
+        while i < arg.len() {
+            push(mut self.data, arg.byte_at(i))
+            i += 1
+        }
+        Span { start, len: self.data.len() - start }
+    }
+}
+fn run(_ args: Args, _ news: mut News, _ out: mut ByteBuffer) -> i32 {
+    let command = news.intern_arg(args.get(1))
+    if args.len() == 4 { let version = news.intern_arg(args.get(2)) }
+    command.len.downcast_unchecked()
+}
+pub fn main(argc: i32, argv: **u8) -> i32 {
+    let args = Args::new(argc, argv)
+    let mut news = News { data: ByteBuffer::new() }
+    let mut out = ByteBuffer::new()
+    let code = run(args, mut news, mut out)
+    out.release()
+    news.data.release()
+    code
+}
+"#,
+    )
+}
+
+#[test]
+fn byte_writes_through_parameter_buffers_do_not_reach_caller_slots() {
+    let diagnostics = interned_arguments();
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+/// `Buf` writes through its pointer at unknown offsets, like `ByteBuffer`.
+/// Each body moves a fresh `Buf` after `out` may have overwritten its own
+/// pointer. That can reach the moved slot only if a caller passes an `out`
+/// whose data overlaps the pointer cell, so the conflict is the caller's.
+const CLOBBERED_BUFFERS: &str = r#"
+use core::ptr
+struct Buf { data: *u8 }
+impl Buf {
+    fn set(mut self, _ i: u256, _ v: u8) { *ptr::offset(self.data, i) = v }
+    fn done(own self, _ i: u256) { *ptr::offset(self.data, i) = 0 }
+    fn peek(self) -> u8 { *self.data }
+}
+fn straight(_ out: mut Buf, _ fresh: *u8) {
+    let buffer = Buf { data: fresh }
+    let n = buffer.peek()
+    out.set(1, 1)
+    out.set(2, 2)
+    buffer.done(0)
+}
+fn looped(_ out: mut Buf, _ fresh: *u8) {
+    let mut round: u64 = 0
+    while round < 3 {
+        let buffer = Buf { data: fresh }
+        if buffer.peek() > 0 {
+            out.set(1, 1)
+        }
+        buffer.done(round as u256)
+        round += 1
+    }
+}
+fn shifted(_ out: mut Buf, _ fresh: *u8) {
+    let mut round: u64 = 0
+    while round < 3 {
+        let buffer = Buf { data: fresh }
+        if buffer.peek() > 0 {
+            out.set(1, 1)
+            out.data = ptr::offset(out.data, 1)
+        }
+        buffer.done(round as u256)
+        round += 1
+    }
+}
+fn redirected(_ out: mut Buf, _ fresh: *u8, _ next: *u8) {
+    let mut round: u64 = 0
+    while round < 3 {
+        let buffer = Buf { data: fresh }
+        if buffer.peek() > 0 {
+            out.set(0, 1)
+            out.data = next
+            out.set(1, 1)
+        }
+        buffer.done(round as u256)
+        round += 1
+    }
+}
+fn fresh_straight() {
+    let mut out = Buf { data: ptr::alloc_raw(8) }
+    straight(mut out, ptr::alloc_raw(8))
+}
+fn fresh_looped() {
+    let mut out = Buf { data: ptr::alloc_raw(8) }
+    looped(mut out, ptr::alloc_raw(8))
+}
+fn fresh_shifted() {
+    let mut out = Buf { data: ptr::alloc_raw(8) }
+    shifted(mut out, ptr::alloc_raw(8))
+}
+fn fresh_redirected() {
+    let mut out = Buf { data: ptr::alloc_raw(8) }
+    redirected(mut out, ptr::alloc_raw(8), ptr::alloc_raw(8))
+}
+fn self_pointing() -> mut Buf {
+    let cell = ptr::alloc<Buf>()
+    *cell = Buf { data: ptr::cast<Buf, u8>(cell) }
+    mut *cell
+}
+fn aliased_straight() { straight(self_pointing(), ptr::alloc_raw(8)) }
+fn aliased_looped() { looped(self_pointing(), ptr::alloc_raw(8)) }
+fn aliased_shifted() { shifted(self_pointing(), ptr::alloc_raw(8)) }
+fn aliased_redirect() {
+    let cell = ptr::alloc<Buf>()
+    *cell = Buf { data: ptr::alloc_raw(8) }
+    redirected(mut *cell, ptr::alloc_raw(8), ptr::cast<Buf, u8>(cell))
+}
+"#;
+
+#[test]
+fn clobber_only_move_conflicts_are_caller_separation_requirements() {
+    let diagnostics = checked_borrow_diags(CLOBBERED_BUFFERS);
+    assert!(!diagnostics.contains("move conflict"), "{diagnostics}");
+    // A fresh caller of `shifted` is still rejected, conservatively: the
+    // clobber condition keeps the exact write footprint, whose loop-widened
+    // offset from the fresh allocation a caller can't physically separate
+    // from its own `out` slot.
+    assert_eq!(
+        conflicting_functions(CLOBBERED_BUFFERS),
+        [
+            "aliased_looped",
+            "aliased_redirect",
+            "aliased_shifted",
+            "aliased_straight",
+            "fresh_shifted"
+        ]
+    );
+}
+
+#[test]
 fn user_allocator_externs_still_require_effect_contracts() {
     for (declaration, body) in [
         (
