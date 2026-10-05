@@ -1,0 +1,14 @@
+// An explicit length that cannot hold the string literal is still rejected
+// when the parameter's length is a generic const.
+fn width<const N: usize>(_ s: String<N>) -> usize { N }
+
+fn byte_len<const N: usize>(_ bytes: [u8; N]) -> usize { N }
+
+fn explicit_string() -> usize {
+    width<2>("abc")
+}
+
+fn explicit_bytes() -> usize {
+    byte_len<2>("abc")
+}
+
