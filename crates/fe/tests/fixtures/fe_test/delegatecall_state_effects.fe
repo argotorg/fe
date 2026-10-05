@@ -44,15 +44,15 @@ fn delegation_updates_persistent_and_transient_state_with_empty_buffers()
         0x60, 0x29, 0x5f, 0x55, 0x60, 0x11, 0x5f, 0x5d, 0x00,
     ]
     let implementation = evm.create_raw(
-        value: 0,
+        value: Wei::zero(),
         init_code: MemSpan::from_raw_parts(ptr: ptr::byte_ptr(init_code), len: 19),
     )
     assert!(implementation.inner != 0)
-    let caller = evm.create<DelegateCaller>(value: 0, args: ())
+    let caller = evm.create<DelegateCaller>(value: Wei::zero(), args: ())
     let (persistent, transient) = evm.call(
         addr: caller,
         gas: 300000,
-        value: 0,
+        value: Wei::zero(),
         message: DelegatedState::Run { implementation },
     )
     assert!(persistent == 41)

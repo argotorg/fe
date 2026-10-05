@@ -113,46 +113,46 @@ const GAS: u256 = 300000
 
 #[test]
 fn test_unsigned_keys() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
     assert(c.inner != 0)
 
-    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::U8RT  { k: 7,   v: 100 })
+    let r: u256 = evm.call(addr: c, gas: GAS, value: Wei::zero(), message: M::U8RT  { k: 7,   v: 100 })
     assert(r == 100)
-    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::U16RT { k: 1234, v: 200 })
+    let r: u256 = evm.call(addr: c, gas: GAS, value: Wei::zero(), message: M::U16RT { k: 1234, v: 200 })
     assert(r == 200)
-    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::U32RT { k: 0xdeadbeef, v: 300 })
+    let r: u256 = evm.call(addr: c, gas: GAS, value: Wei::zero(), message: M::U32RT { k: 0xdeadbeef, v: 300 })
     assert(r == 300)
-    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::U64RT { k: 0xfeedfacedeadbeef, v: 400 })
+    let r: u256 = evm.call(addr: c, gas: GAS, value: Wei::zero(), message: M::U64RT { k: 0xfeedfacedeadbeef, v: 400 })
     assert(r == 400)
-    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::U128RT { k: 0xcafebabecafebabecafebabecafebabe, v: 500 })
+    let r: u256 = evm.call(addr: c, gas: GAS, value: Wei::zero(), message: M::U128RT { k: 0xcafebabecafebabecafebabecafebabe, v: 500 })
     assert(r == 500)
 }
 
 #[test]
 fn test_bool_keys() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
 
     // Single call writes both keys, then reads both back. If `true` and
     // `false` hashed to the same slot, the second write would overwrite the
     // first and the assertion would fail.
-    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::BoolPair { v_true: 7, v_false: 13 })
+    let r: u256 = evm.call(addr: c, gas: GAS, value: Wei::zero(), message: M::BoolPair { v_true: 7, v_false: 13 })
     assert(r == 7 * 1000 + 13)
 }
 
 #[test]
 fn test_signed_keys() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 2)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 2)
 
     // Each Pair call writes neg_v at the negative key and pos_v at the positive
     // key. The return value is `get(neg)*1000 + get(pos)`, so the answer
     // confirms both ends round-trip through their sign-extended slots without
     // colliding.
-    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::I8Pair   { neg_v: 11, pos_v: 22 })
+    let r: u256 = evm.call(addr: c, gas: GAS, value: Wei::zero(), message: M::I8Pair   { neg_v: 11, pos_v: 22 })
     assert(r == 11 * 1000 + 22)
 
-    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::I32Pair  { neg_v: 33, pos_v: 44 })
+    let r: u256 = evm.call(addr: c, gas: GAS, value: Wei::zero(), message: M::I32Pair  { neg_v: 33, pos_v: 44 })
     assert(r == 33 * 1000 + 44)
 
-    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::I256Pair { neg_v: 55, pos_v: 66 })
+    let r: u256 = evm.call(addr: c, gas: GAS, value: Wei::zero(), message: M::I256Pair { neg_v: 55, pos_v: 66 })
     assert(r == 55 * 1000 + 66)
 }

@@ -1,56 +1,496 @@
-/// Native ETH denomination and time units.
+/// Typed ETH amounts and block time.
 ///
-/// Mirrors Solidity's built-in `wei` / `gwei` / `ether` and
-/// `seconds` / `minutes` / `hours` / `days` / `weeks` unit literals.
-/// Use the constants for raw scaling factors or the helper functions for
-/// the Solidity-style `ether(5)` / `days(7)` reading. Bare integer
-/// literals in Fe have no default type, so a method form (`5.ether()`)
-/// cannot infer; the function form drives inference through the
-/// parameter type.
-/// Number of wei in one wei.
-pub const WEI: u256 = 1
+/// `Wei` is an amount of native ETH, `Timestamp` a point in time (unix
+/// seconds, as returned by `Ctx::timestamp`) and `Duration` a span of
+/// seconds. Each wraps a single `u256` and ABI-encodes as `uint256`, but the
+/// types keep amounts, points in time and durations from being mixed up:
+/// `Timestamp + Duration` is a `Timestamp`, `Timestamp - Timestamp` is a
+/// `Duration` and `Timestamp + Timestamp` does not compile.
+///
+/// The helper functions mirror Solidity's `wei` / `gwei` / `ether` and
+/// `seconds` / `minutes` / `hours` / `days` / `weeks` unit literals, so
+/// `ether(5)` reads like `5 ether` and `days(7)` like `7 days`. They are
+/// `const fn`s and work in constant initializers.
+use core::abi::{Abi, AbiDecoder, AbiSize, AbiSpan, ByteInput, Decode, Encode, store_word}
+use core::num::mul_div
+use core::ops::{Add, AddAssign, Div, Eq, Mul, Ord, Rem, Sub, SubAssign}
+use ingot::abi::sol::types::{SolCompat, StaticAbiElement, StaticAbiElementSeal}
+use ingot::evm::{EncodePacked, Packed, RawMem, SolPacked, StorageKey, TopicValue, WordRepr}
+use ingot::evm::packed::write_word_prefix
 
-/// Number of wei in one gwei.
-pub const GWEI: u256 = 1_000_000_000
+// -----------------------------------------------------------------------------
+// Wei
+// -----------------------------------------------------------------------------
 
-/// Number of wei in one ether.
-pub const ETHER: u256 = 1_000_000_000_000_000_000
+/// An amount of native ETH, counted in wei.
+pub struct Wei { amount: u256 }
 
-/// Convert a wei-denominated amount to wei.
-pub const fn wei(_ n: u256) -> u256 { n }
+impl Wei {
+    /// No ETH.
+    pub const fn zero() -> Self {
+        Wei { amount: 0 }
+    }
 
-/// Convert a gwei-denominated amount to wei.
-pub const fn gwei(_ n: u256) -> u256 { n * GWEI }
+    /// The amount as a plain number of wei.
+    pub const fn as_wei(self) -> u256 {
+        self.amount
+    }
 
-/// Convert an ether-denominated amount to wei.
-pub const fn ether(_ n: u256) -> u256 { n * ETHER }
+    /// `floor(self * numerator / denominator)` with a 512-bit intermediate
+    /// product, for fees and proportional shares such as
+    /// `amount.mul_div(numerator: bps, denominator: 10_000)`.
+    pub const fn mul_div(self, numerator: u256, denominator: u256) -> Self {
+        Wei { amount: mul_div(self.amount, numerator, denominator) }
+    }
+}
 
-/// Number of seconds in one second.
-pub const SECOND: u256 = 1
+/// One wei.
+pub const WEI: Wei = Wei { amount: 1 }
 
-/// Number of seconds in one minute.
-pub const MINUTE: u256 = 60
+/// One gwei.
+pub const GWEI: Wei = Wei { amount: 1_000_000_000 }
 
-/// Number of seconds in one hour.
-pub const HOUR: u256 = 3_600
+/// One ether.
+pub const ETHER: Wei = Wei { amount: 1_000_000_000_000_000_000 }
 
-/// Number of seconds in one day.
-pub const DAY: u256 = 86_400
+/// `n` wei.
+pub const fn wei(_ n: u256) -> Wei { Wei { amount: n } }
 
-/// Number of seconds in one week.
-pub const WEEK: u256 = 604_800
+/// `n` gwei.
+pub const fn gwei(_ n: u256) -> Wei { Wei { amount: n * 1_000_000_000 } }
 
-/// Convert a second-denominated duration to seconds.
-pub const fn seconds(_ n: u256) -> u256 { n }
+/// `n` ether.
+pub const fn ether(_ n: u256) -> Wei { Wei { amount: n * 1_000_000_000_000_000_000 } }
 
-/// Convert a minute-denominated duration to seconds.
-pub const fn minutes(_ n: u256) -> u256 { n * MINUTE }
+impl Copy for Wei {}
 
-/// Convert an hour-denominated duration to seconds.
-pub const fn hours(_ n: u256) -> u256 { n * HOUR }
+impl Default for Wei {
+    fn default() -> Self { Wei::zero() }
+}
 
-/// Convert a day-denominated duration to seconds.
-pub const fn days(_ n: u256) -> u256 { n * DAY }
+impl Eq for Wei {
+    const fn eq(self, _ other: Wei) -> bool { self.amount == other.amount }
+}
 
-/// Convert a week-denominated duration to seconds.
-pub const fn weeks(_ n: u256) -> u256 { n * WEEK }
+impl Ord for Wei {
+    const fn lt(self, _ other: Wei) -> bool { self.amount < other.amount }
+    const fn le(self, _ other: Wei) -> bool { self.amount <= other.amount }
+    const fn gt(self, _ other: Wei) -> bool { self.amount > other.amount }
+    const fn ge(self, _ other: Wei) -> bool { self.amount >= other.amount }
+}
+
+impl Add for Wei {
+    const fn add(own self, _ other: own Wei) -> Wei { Wei { amount: self.amount + other.amount } }
+}
+
+impl Sub for Wei {
+    const fn sub(own self, _ other: own Wei) -> Wei { Wei { amount: self.amount - other.amount } }
+}
+
+/// Scaling an amount, e.g. `price * quantity`.
+impl Mul<u256> for Wei {
+    const fn mul(own self, _ other: own u256) -> Wei { Wei { amount: self.amount * other } }
+}
+
+/// Splitting an amount, e.g. `pot / winners`.
+impl Div<u256> for Wei {
+    const fn div(own self, _ other: own u256) -> Wei { Wei { amount: self.amount / other } }
+}
+
+/// The ratio of two amounts, e.g. `deposit / total`.
+impl Div<Wei> for Wei {
+    type Output = u256
+    const fn div(own self, _ other: own Wei) -> u256 { self.amount / other.amount }
+}
+
+/// What is left after splitting into whole `other`s, e.g. `value % gwei(1)`.
+impl Rem for Wei {
+    const fn rem(own self, _ other: own Wei) -> Wei { Wei { amount: self.amount % other.amount } }
+}
+
+impl AddAssign for Wei {
+    const fn add_assign(mut self, _ other: own Wei) { self = self + other }
+}
+
+impl SubAssign for Wei {
+    const fn sub_assign(mut self, _ other: own Wei) { self = self - other }
+}
+
+// -----------------------------------------------------------------------------
+// Duration
+// -----------------------------------------------------------------------------
+
+/// A span of time, counted in seconds.
+pub struct Duration { secs: u256 }
+
+impl Duration {
+    /// No time.
+    pub const fn zero() -> Self {
+        Duration { secs: 0 }
+    }
+
+    /// The duration as a plain number of seconds.
+    pub const fn as_seconds(self) -> u256 {
+        self.secs
+    }
+}
+
+/// One second.
+pub const SECOND: Duration = Duration { secs: 1 }
+
+/// One minute.
+pub const MINUTE: Duration = Duration { secs: 60 }
+
+/// One hour.
+pub const HOUR: Duration = Duration { secs: 3_600 }
+
+/// One day.
+pub const DAY: Duration = Duration { secs: 86_400 }
+
+/// One week.
+pub const WEEK: Duration = Duration { secs: 604_800 }
+
+/// `n` seconds.
+pub const fn seconds(_ n: u256) -> Duration { Duration { secs: n } }
+
+/// `n` minutes.
+pub const fn minutes(_ n: u256) -> Duration { Duration { secs: n * 60 } }
+
+/// `n` hours.
+pub const fn hours(_ n: u256) -> Duration { Duration { secs: n * 3_600 } }
+
+/// `n` days.
+pub const fn days(_ n: u256) -> Duration { Duration { secs: n * 86_400 } }
+
+/// `n` weeks.
+pub const fn weeks(_ n: u256) -> Duration { Duration { secs: n * 604_800 } }
+
+impl Copy for Duration {}
+
+impl Default for Duration {
+    fn default() -> Self { Duration::zero() }
+}
+
+impl Eq for Duration {
+    const fn eq(self, _ other: Duration) -> bool { self.secs == other.secs }
+}
+
+impl Ord for Duration {
+    const fn lt(self, _ other: Duration) -> bool { self.secs < other.secs }
+    const fn le(self, _ other: Duration) -> bool { self.secs <= other.secs }
+    const fn gt(self, _ other: Duration) -> bool { self.secs > other.secs }
+    const fn ge(self, _ other: Duration) -> bool { self.secs >= other.secs }
+}
+
+impl Add for Duration {
+    const fn add(own self, _ other: own Duration) -> Duration { Duration { secs: self.secs + other.secs } }
+}
+
+impl Sub for Duration {
+    const fn sub(own self, _ other: own Duration) -> Duration { Duration { secs: self.secs - other.secs } }
+}
+
+impl Mul<u256> for Duration {
+    const fn mul(own self, _ other: own u256) -> Duration { Duration { secs: self.secs * other } }
+}
+
+impl Div<u256> for Duration {
+    const fn div(own self, _ other: own u256) -> Duration { Duration { secs: self.secs / other } }
+}
+
+/// How many times `other` fits into `self`, e.g. elapsed periods.
+impl Div<Duration> for Duration {
+    type Output = u256
+    const fn div(own self, _ other: own Duration) -> u256 { self.secs / other.secs }
+}
+
+/// What is left after whole `other`s, e.g. time into the current period.
+impl Rem for Duration {
+    const fn rem(own self, _ other: own Duration) -> Duration { Duration { secs: self.secs % other.secs } }
+}
+
+impl AddAssign for Duration {
+    const fn add_assign(mut self, _ other: own Duration) { self = self + other }
+}
+
+impl SubAssign for Duration {
+    const fn sub_assign(mut self, _ other: own Duration) { self = self - other }
+}
+
+// -----------------------------------------------------------------------------
+// Timestamp
+// -----------------------------------------------------------------------------
+
+/// A point in time, in seconds since the unix epoch.
+pub struct Timestamp { secs: u256 }
+
+impl Timestamp {
+    /// The point `secs` seconds after the unix epoch.
+    pub const fn from_seconds(_ secs: u256) -> Self {
+        Timestamp { secs }
+    }
+
+    /// Seconds since the unix epoch.
+    pub const fn as_seconds(self) -> u256 {
+        self.secs
+    }
+}
+
+impl Copy for Timestamp {}
+
+impl Default for Timestamp {
+    fn default() -> Self { Timestamp { secs: 0 } }
+}
+
+impl Eq for Timestamp {
+    const fn eq(self, _ other: Timestamp) -> bool { self.secs == other.secs }
+}
+
+impl Ord for Timestamp {
+    const fn lt(self, _ other: Timestamp) -> bool { self.secs < other.secs }
+    const fn le(self, _ other: Timestamp) -> bool { self.secs <= other.secs }
+    const fn gt(self, _ other: Timestamp) -> bool { self.secs > other.secs }
+    const fn ge(self, _ other: Timestamp) -> bool { self.secs >= other.secs }
+}
+
+impl Add<Duration> for Timestamp {
+    const fn add(own self, _ other: own Duration) -> Timestamp { Timestamp { secs: self.secs + other.secs } }
+}
+
+impl Sub<Duration> for Timestamp {
+    const fn sub(own self, _ other: own Duration) -> Timestamp { Timestamp { secs: self.secs - other.secs } }
+}
+
+/// The time between two points; reverts if `other` is later than `self`.
+impl Sub<Timestamp> for Timestamp {
+    type Output = Duration
+    const fn sub(own self, _ other: own Timestamp) -> Duration { Duration { secs: self.secs - other.secs } }
+}
+
+impl AddAssign<Duration> for Timestamp {
+    const fn add_assign(mut self, _ other: own Duration) { self = self + other }
+}
+
+impl SubAssign<Duration> for Timestamp {
+    const fn sub_assign(mut self, _ other: own Duration) { self = self - other }
+}
+
+// -----------------------------------------------------------------------------
+// ABI and storage
+// -----------------------------------------------------------------------------
+
+// Every unit type is a plain `uint256` word in ABI encoding, events, storage
+// and packed encoding. The impls are written out per type rather than as
+// blanket impls over a sealed marker: other blanket impls of these traits
+// (e.g. for the `abi::sol` int wrappers) would otherwise make a failing bound
+// on an unrelated type ambiguous and hide which impl it is missing.
+
+impl WordRepr for Wei {
+    fn from_word(_ word: u256) -> Self { Wei { amount: word } }
+    fn to_word(own self) -> u256 { self.amount }
+}
+
+impl AbiSize for Wei {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl<A: Abi> Encode<A> for Wei {
+    fn encode(own self, _ ptr: *u8) {
+        store_word(ptr: ptr, value: self.amount)
+    }
+}
+
+impl<A: Abi> Decode<A> for Wei {
+    #[inline(always)]
+    fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
+        Wei { amount: d.read_word() }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Wei { amount: input.word_at(pos) }
+    }
+}
+
+impl<A: Abi> AbiSpan<A> for Wei {
+    fn payload_end<I: ByteInput>(_: I, base: u256, pos: u256) -> u256 { pos + 32 }
+}
+
+impl StaticAbiElementSeal for Wei {}
+impl StaticAbiElement for Wei {}
+
+impl SolCompat for Wei {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint256"
+}
+
+impl TopicValue for Wei {
+    fn as_topic(self) -> u256 { self.amount }
+}
+
+impl StorageKey for Wei {
+    fn encoded_len(self) -> u256 { 32 }
+    fn write_key(ptr: *u8, self) {
+        store_word(ptr: ptr, value: self.amount)
+    }
+}
+
+impl EncodePacked for Wei {
+    #[inline(always)]
+    fn packed_width(self) -> u256 { 32 }
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        p.u256(self.amount)
+        p
+    }
+    #[inline(always)]
+    fn write_packed(own self, _ dest: *u8) -> u256 uses (mem: mut RawMem) {
+        write_word_prefix(dest, self.amount, 32)
+    }
+}
+
+impl SolPacked for Wei {
+    const BITS: u256 = 256
+    fn to_packed(own self) -> u256 { self.amount }
+    fn from_packed(_ bits: u256) -> Self { Wei { amount: bits } }
+}
+
+impl WordRepr for Duration {
+    fn from_word(_ word: u256) -> Self { Duration { secs: word } }
+    fn to_word(own self) -> u256 { self.secs }
+}
+
+impl AbiSize for Duration {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl<A: Abi> Encode<A> for Duration {
+    fn encode(own self, _ ptr: *u8) {
+        store_word(ptr: ptr, value: self.secs)
+    }
+}
+
+impl<A: Abi> Decode<A> for Duration {
+    #[inline(always)]
+    fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
+        Duration { secs: d.read_word() }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Duration { secs: input.word_at(pos) }
+    }
+}
+
+impl<A: Abi> AbiSpan<A> for Duration {
+    fn payload_end<I: ByteInput>(_: I, base: u256, pos: u256) -> u256 { pos + 32 }
+}
+
+impl StaticAbiElementSeal for Duration {}
+impl StaticAbiElement for Duration {}
+
+impl SolCompat for Duration {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint256"
+}
+
+impl TopicValue for Duration {
+    fn as_topic(self) -> u256 { self.secs }
+}
+
+impl StorageKey for Duration {
+    fn encoded_len(self) -> u256 { 32 }
+    fn write_key(ptr: *u8, self) {
+        store_word(ptr: ptr, value: self.secs)
+    }
+}
+
+impl EncodePacked for Duration {
+    #[inline(always)]
+    fn packed_width(self) -> u256 { 32 }
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        p.u256(self.secs)
+        p
+    }
+    #[inline(always)]
+    fn write_packed(own self, _ dest: *u8) -> u256 uses (mem: mut RawMem) {
+        write_word_prefix(dest, self.secs, 32)
+    }
+}
+
+impl SolPacked for Duration {
+    const BITS: u256 = 256
+    fn to_packed(own self) -> u256 { self.secs }
+    fn from_packed(_ bits: u256) -> Self { Duration { secs: bits } }
+}
+
+impl WordRepr for Timestamp {
+    fn from_word(_ word: u256) -> Self { Timestamp { secs: word } }
+    fn to_word(own self) -> u256 { self.secs }
+}
+
+impl AbiSize for Timestamp {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl<A: Abi> Encode<A> for Timestamp {
+    fn encode(own self, _ ptr: *u8) {
+        store_word(ptr: ptr, value: self.secs)
+    }
+}
+
+impl<A: Abi> Decode<A> for Timestamp {
+    #[inline(always)]
+    fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
+        Timestamp { secs: d.read_word() }
+    }
+
+    #[inline(always)]
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        Timestamp { secs: input.word_at(pos) }
+    }
+}
+
+impl<A: Abi> AbiSpan<A> for Timestamp {
+    fn payload_end<I: ByteInput>(_: I, base: u256, pos: u256) -> u256 { pos + 32 }
+}
+
+impl StaticAbiElementSeal for Timestamp {}
+impl StaticAbiElement for Timestamp {}
+
+impl SolCompat for Timestamp {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint256"
+}
+
+impl TopicValue for Timestamp {
+    fn as_topic(self) -> u256 { self.secs }
+}
+
+impl StorageKey for Timestamp {
+    fn encoded_len(self) -> u256 { 32 }
+    fn write_key(ptr: *u8, self) {
+        store_word(ptr: ptr, value: self.secs)
+    }
+}
+
+impl EncodePacked for Timestamp {
+    #[inline(always)]
+    fn packed_width(self) -> u256 { 32 }
+    fn pack_into(own self, mut _ p: own Packed) -> Packed uses (mem: mut RawMem) {
+        p.u256(self.secs)
+        p
+    }
+    #[inline(always)]
+    fn write_packed(own self, _ dest: *u8) -> u256 uses (mem: mut RawMem) {
+        write_word_prefix(dest, self.secs, 32)
+    }
+}
+
+impl SolPacked for Timestamp {
+    const BITS: u256 = 256
+    fn to_packed(own self) -> u256 { self.secs }
+    fn from_packed(_ bits: u256) -> Self { Timestamp { secs: bits } }
+}

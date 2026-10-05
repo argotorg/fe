@@ -77,50 +77,50 @@ pub contract C {
 
 #[test]
 fn test_storage_map_tuple_keys() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
     assert!(c.inner != 0)
 
     let v3: u256 = evm.call(
         addr: c,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         message: TupleKeyMsg::Put3 { a: 1, b: 2, c: 3, value: 33 },
     )
     assert!(v3 == 33)
-    let v3: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: TupleKeyMsg::Read3 { a: 1, b: 2, c: 3 })
+    let v3: u256 = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: TupleKeyMsg::Read3 { a: 1, b: 2, c: 3 })
     assert!(v3 == 33)
-    let v3_missing: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: TupleKeyMsg::Read3 { a: 1, b: 2, c: 4 })
+    let v3_missing: u256 = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: TupleKeyMsg::Read3 { a: 1, b: 2, c: 4 })
     assert!(v3_missing == 0)
 
     let v4: u256 = evm.call(
         addr: c,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         message: TupleKeyMsg::Put4 { a: 4, b: 5, c: 6, d: 7, value: 44 },
     )
     assert!(v4 == 44)
-    let v4: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: TupleKeyMsg::Read4 { a: 4, b: 5, c: 6, d: 7 })
+    let v4: u256 = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: TupleKeyMsg::Read4 { a: 4, b: 5, c: 6, d: 7 })
     assert!(v4 == 44)
 
     let v5: u256 = evm.call(
         addr: c,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         message: TupleKeyMsg::Put5 { a: 8, b: 9, c: 10, d: 11, e: 12, value: 55 },
     )
     assert!(v5 == 55)
-    let v5: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: TupleKeyMsg::Read5 { a: 8, b: 9, c: 10, d: 11, e: 12 })
+    let v5: u256 = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: TupleKeyMsg::Read5 { a: 8, b: 9, c: 10, d: 11, e: 12 })
     assert!(v5 == 55)
 
     let v6: u256 = evm.call(
         addr: c,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         message: TupleKeyMsg::Put6 { a: 13, b: 14, c: 15, d: 16, e: 17, f: 18, value: 66 },
     )
     assert!(v6 == 66)
-    let v6: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: TupleKeyMsg::Read6 { a: 13, b: 14, c: 15, d: 16, e: 17, f: 18 })
+    let v6: u256 = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: TupleKeyMsg::Read6 { a: 13, b: 14, c: 15, d: 16, e: 17, f: 18 })
     assert!(v6 == 66)
-    let v6_missing: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: TupleKeyMsg::Read6 { a: 13, b: 14, c: 15, d: 16, e: 17, f: 19 })
+    let v6_missing: u256 = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: TupleKeyMsg::Read6 { a: 13, b: 14, c: 15, d: 16, e: 17, f: 19 })
     assert!(v6_missing == 0)
 }

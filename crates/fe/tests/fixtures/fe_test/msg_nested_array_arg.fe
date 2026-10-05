@@ -31,7 +31,7 @@ pub contract Caller uses (call: mut Call) {
             call.call(
                 addr: target,
                 gas: 500000,
-                value: 0,
+                value: Wei::zero(),
                 message: VerifierMsg::Verify {
                     a: [1, 0],
                     b: [[2, 0], [0, 0]],
@@ -45,8 +45,8 @@ pub contract Caller uses (call: mut Call) {
 
 #[test]
 fn test_msg_nested_array_arg() uses (evm: mut Evm) {
-    let verifier = evm.create2<Verifier>(value: 0, args: (), salt: 1)
-    let caller = evm.create2<Caller>(value: 0, args: (), salt: 2)
-    let ok: bool = evm.call(addr: caller, gas: 500000, value: 0, message: CallerMsg::Check { target: verifier })
+    let verifier = evm.create2<Verifier>(value: Wei::zero(), args: (), salt: 1)
+    let caller = evm.create2<Caller>(value: Wei::zero(), args: (), salt: 2)
+    let ok: bool = evm.call(addr: caller, gas: 500000, value: Wei::zero(), message: CallerMsg::Check { target: verifier })
     assert!(ok)
 }

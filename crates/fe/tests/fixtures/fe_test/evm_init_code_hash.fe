@@ -83,7 +83,7 @@ pub contract Factory {
             predict_create2<Plain>(deployer: ctx.address(), args: (), salt: mix(salt, n))
         }
         Make { salt, n } -> Address uses (create: mut Create) {
-            create.create2<Plain>(value: 0, args: (), salt: mix(salt, n))
+            create.create2<Plain>(value: Wei::zero(), args: (), salt: mix(salt, n))
         }
     }
 }
@@ -94,9 +94,9 @@ fn no_arg_contract_address_matches_create2() uses (evm: mut Evm) {
     assert(predicted == create2_address(deployer: evm.address(), salt: 7, init_code_hash: init_code_hash<Plain>(())))
     assert(predicted != predict_create2<Plain>(deployer: evm.address(), args: (), salt: 8))
 
-    let deployed = evm.create2<Plain>(value: 0, args: (), salt: 7)
+    let deployed = evm.create2<Plain>(value: Wei::zero(), args: (), salt: 7)
     assert(deployed == predicted)
-    let got: u256 = evm.call(addr: deployed, gas: 100000, value: 0, message: ChildMsg::Get { x: 5, n: 3 })
+    let got: u256 = evm.call(addr: deployed, gas: 100000, value: Wei::zero(), message: ChildMsg::Get { x: 5, n: 3 })
     assert(got == mix(5, 3))
 }
 
@@ -126,9 +126,9 @@ fn static_args_contract_address_matches_create2() uses (evm: mut Evm) {
     let predicted = predict_create2<WithArgs>(deployer: evm.address(), args: (42, owner), salt: 1)
     assert(predicted != predict_create2<WithArgs>(deployer: evm.address(), args: (43, owner), salt: 1))
 
-    let deployed = evm.create2<WithArgs>(value: 0, args: (42, owner), salt: 1)
+    let deployed = evm.create2<WithArgs>(value: Wei::zero(), args: (42, owner), salt: 1)
     assert(deployed == predicted)
-    let got: u256 = evm.call(addr: deployed, gas: 100000, value: 0, message: ChildMsg::Get { x: 1, n: 2 })
+    let got: u256 = evm.call(addr: deployed, gas: 100000, value: Wei::zero(), message: ChildMsg::Get { x: 1, n: 2 })
     assert(got == 42 + 0xabc + 1 + 2)
 }
 
@@ -137,20 +137,20 @@ fn dynamic_args_contract_address_matches_create2() uses (evm: mut Evm) {
     let predicted = predict_create2<WithName>(deployer: evm.address(), args: ("conduit", 9), salt: 3)
     assert(predicted != predict_create2<WithName>(deployer: evm.address(), args: ("conduits", 9), salt: 3))
 
-    let deployed = evm.create2<WithName>(value: 0, args: ("conduit", 9), salt: 3)
+    let deployed = evm.create2<WithName>(value: Wei::zero(), args: ("conduit", 9), salt: 3)
     assert(deployed == predicted)
-    let got: u256 = evm.call(addr: deployed, gas: 100000, value: 0, message: ChildMsg::Get { x: 0, n: 0 })
+    let got: u256 = evm.call(addr: deployed, gas: 100000, value: Wei::zero(), message: ChildMsg::Get { x: 0, n: 0 })
     assert(got == 9)
 }
 
 #[test]
 fn factory_predicts_its_own_deployments() uses (evm: mut Evm) {
-    let factory = evm.create2<Factory>(value: 0, args: (), salt: 0)
-    let predicted: Address = evm.call(addr: factory, gas: 1000000, value: 0, message: FactoryMsg::Predict { salt: 0x5eed, n: 4 })
+    let factory = evm.create2<Factory>(value: Wei::zero(), args: (), salt: 0)
+    let predicted: Address = evm.call(addr: factory, gas: 1000000, value: Wei::zero(), message: FactoryMsg::Predict { salt: 0x5eed, n: 4 })
     assert(predicted == predict_create2<Plain>(deployer: factory, args: (), salt: mix(0x5eed, 4)))
 
-    let deployed: Address = evm.call(addr: factory, gas: 1000000, value: 0, message: FactoryMsg::Make { salt: 0x5eed, n: 4 })
+    let deployed: Address = evm.call(addr: factory, gas: 1000000, value: Wei::zero(), message: FactoryMsg::Make { salt: 0x5eed, n: 4 })
     assert(deployed == predicted)
-    let got: u256 = evm.call(addr: deployed, gas: 100000, value: 0, message: ChildMsg::Get { x: 5, n: 3 })
+    let got: u256 = evm.call(addr: deployed, gas: 100000, value: Wei::zero(), message: ChildMsg::Get { x: 5, n: 3 })
     assert(got == mix(5, 3))
 }

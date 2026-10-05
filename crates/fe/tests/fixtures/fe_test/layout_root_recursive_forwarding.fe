@@ -172,59 +172,59 @@ pub contract C {
 
 #[test]
 fn recursive_layout_root_matrix() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
     evm.call(
         addr: c,
         gas: 300000,
-        value: 0,
+        value: Wei::zero(),
         message: M::Set { lane: 0, key: 7, value: 11 },
     )
     evm.call(
         addr: c,
         gas: 300000,
-        value: 0,
+        value: Wei::zero(),
         message: M::Set { lane: 1, key: 7, value: 22 },
     )
     let direct_dynamic = evm.call(
         addr: c,
         gas: 300000,
-        value: 0,
+        value: Wei::zero(),
         message: M::GetDirectDynamic { lane: 1, depth: 3, key: 7 },
     )
     let direct_static = evm.call(
         addr: c,
         gas: 300000,
-        value: 0,
+        value: Wei::zero(),
         message: M::GetDirectStatic { depth: 3, key: 7 },
     )
     let mutual = evm.call(
         addr: c,
         gas: 300000,
-        value: 0,
+        value: Wei::zero(),
         message: M::GetMutual { lane: 0, depth: 4, key: 7 },
     )
     let returned = evm.call(
         addr: c,
         gas: 300000,
-        value: 0,
+        value: Wei::zero(),
         message: M::GetReturned { lane: 1, depth: 3, key: 7 },
     )
     let effect = evm.call(
         addr: c,
         gas: 300000,
-        value: 0,
+        value: Wei::zero(),
         message: M::GetEffect { lane: 0, depth: 3, key: 7 },
     )
     let receiver = evm.call(
         addr: c,
         gas: 300000,
-        value: 0,
+        value: Wei::zero(),
         message: M::GetReceiver { lane: 1, depth: 3, key: 7 },
     )
     let default = evm.call(
         addr: c,
         gas: 300000,
-        value: 0,
+        value: Wei::zero(),
         message: M::GetDefault { lane: 0, depth: 3, key: 7 },
     )
     assert!(direct_dynamic == 22)

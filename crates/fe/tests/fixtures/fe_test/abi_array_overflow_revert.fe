@@ -20,7 +20,7 @@ pub contract ArrayReceiver {
 fn rejects_empty(_ offset: u256, _ length: u256, _ salt: u256)
 uses (evm: mut Evm)
 {
-    let receiver = evm.create2<ArrayReceiver>(value: 0, args: (), salt: salt)
+    let receiver = evm.create2<ArrayReceiver>(value: Wei::zero(), args: (), salt: salt)
     let data = MemBuffer::alloc(68)
     evm.mstore(addr: data.ptr(), value: (0x11223344 as u256) << 224)
     evm.mstore(addr: ptr::offset_bytes(data.ptr(), 4), value: offset)
@@ -30,7 +30,7 @@ uses (evm: mut Evm)
         .raw_call(
             addr: receiver,
             gas: 1000000,
-            value: 0,
+            value: Wei::zero(),
             args: data.span(),
             ret: mut ret,
         )
@@ -56,7 +56,7 @@ fn overflowing_array_end_reverts_empty() uses (evm: mut Evm) {
 
 #[test]
 fn overflowing_dynamic_element_tail_reverts_empty() uses (evm: mut Evm) {
-    let receiver = evm.create2<ArrayReceiver>(value: 0, args: (), salt: 5)
+    let receiver = evm.create2<ArrayReceiver>(value: Wei::zero(), args: (), salt: 5)
     let data = MemBuffer::alloc(100)
     evm.mstore(addr: data.ptr(), value: (0x11223345 as u256) << 224)
     evm.mstore(addr: ptr::offset_bytes(data.ptr(), 4), value: 32)
@@ -70,7 +70,7 @@ fn overflowing_dynamic_element_tail_reverts_empty() uses (evm: mut Evm) {
         .raw_call(
             addr: receiver,
             gas: 1000000,
-            value: 0,
+            value: Wei::zero(),
             args: data.span(),
             ret: mut ret,
         )

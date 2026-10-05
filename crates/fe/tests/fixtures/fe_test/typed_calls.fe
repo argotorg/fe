@@ -35,10 +35,10 @@ pub contract Plain {
 
 #[test]
 fn bounded_calls_copy_at_most_capacity() uses (evm: mut Evm) {
-    let target = evm.create2<Target>(value: 0, args: (), salt: 0)
+    let target = evm.create2<Target>(value: Wei::zero(), args: (), salt: 0)
     with (Call = evm, Ctx = evm) {
         let mut ret = MemBuffer::with_capacity(0)
-        let outcome = evm.try_call_into(addr: target, gas: 100000, value: 0, message: TargetMsg::Words { n: 7 }, ret: mut ret)
+        let outcome = evm.try_call_into(addr: target, gas: 100000, value: Wei::zero(), message: TargetMsg::Words { n: 7 }, ret: mut ret)
         assert(outcome.success())
         assert(outcome.returndata_len() == 32)
         assert(ret.len() == 0)
@@ -49,10 +49,10 @@ fn bounded_calls_copy_at_most_capacity() uses (evm: mut Evm) {
         assert(word.span().word_at(0) == 9)
 
         let mut ignored = MemBuffer::with_capacity(0)
-        let failed = evm.try_call_into(addr: target, gas: 100000, value: 0, message: TargetMsg::Fail {}, ret: mut ignored)
+        let failed = evm.try_call_into(addr: target, gas: 100000, value: Wei::zero(), message: TargetMsg::Fail {}, ret: mut ignored)
         assert(!failed.success())
 
-        let raw = evm.try_call_raw(addr: target, gas: 100000, value: 0, args: encode_msg_calldata(TargetMsg::Words { n: 3 }).span())
+        let raw = evm.try_call_raw(addr: target, gas: 100000, value: Wei::zero(), args: encode_msg_calldata(TargetMsg::Words { n: 3 }).span())
         assert(raw.success())
         assert(raw.returndata().word_at(0) == 3)
 
@@ -66,7 +66,7 @@ fn bounded_calls_copy_at_most_capacity() uses (evm: mut Evm) {
 fn send_value_transfers_ether() uses (evm: mut Evm) {
     let receiver = Address { inner: 0xbeef }
     with (Call = evm, Ctx = evm) {
-        let outcome = evm.send_value(addr: receiver, gas: 100000, value: 0)
+        let outcome = evm.send_value(addr: receiver, gas: 100000, value: Wei::zero())
         assert(outcome.success())
         assert(outcome.returndata_len() == 0)
     }
@@ -74,8 +74,8 @@ fn send_value_transfers_ether() uses (evm: mut Evm) {
 
 #[test]
 fn erc165_probes() uses (evm: mut Evm) {
-    let target = evm.create2<Target>(value: 0, args: (), salt: 1)
-    let plain = evm.create2<Plain>(value: 0, args: (), salt: 2)
+    let target = evm.create2<Target>(value: Wei::zero(), args: (), salt: 1)
+    let plain = evm.create2<Plain>(value: Wei::zero(), args: (), salt: 2)
     with (Call = evm) {
         assert(erc165::supports_erc165(target))
         assert(erc165::supports_interface(target, interface_id: 0x12345678))

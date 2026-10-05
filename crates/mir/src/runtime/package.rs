@@ -2855,7 +2855,7 @@ pub contract Unused {}
 
 #[test]
 fn selected() uses (evm: mut Evm) {
-    let addr = evm.create2<Child>(value: 0, args: (), salt: 1)
+    let addr = evm.create2<Child>(value: Wei::zero(), args: (), salt: 1)
     assert!(addr.inner != 0)
 }
 "#,

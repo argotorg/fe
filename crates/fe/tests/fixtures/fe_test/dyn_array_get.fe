@@ -48,12 +48,12 @@ fn make_arr(a: u256, b: u256, c: u256) -> DynArray<u256>
 fn test_get_from_decoded_param()
 uses (evm: mut Evm)
 {
-    let arr = evm.create2<Arr>(value: 0, args: (), salt: 0)
+    let arr = evm.create2<Arr>(value: Wei::zero(), args: (), salt: 0)
     assert!(arr.inner != 0)
 
-    let v0: u256 = evm.call(addr: arr, gas: 1000000, value: 0, message: ArrMsg::GetAt { values: make_arr(a: 11, b: 22, c: 33), index: 0 })
-    let v1: u256 = evm.call(addr: arr, gas: 1000000, value: 0, message: ArrMsg::GetAt { values: make_arr(a: 11, b: 22, c: 33), index: 1 })
-    let v2: u256 = evm.call(addr: arr, gas: 1000000, value: 0, message: ArrMsg::GetAt { values: make_arr(a: 11, b: 22, c: 33), index: 2 })
+    let v0: u256 = evm.call(addr: arr, gas: 1000000, value: Wei::zero(), message: ArrMsg::GetAt { values: make_arr(a: 11, b: 22, c: 33), index: 0 })
+    let v1: u256 = evm.call(addr: arr, gas: 1000000, value: Wei::zero(), message: ArrMsg::GetAt { values: make_arr(a: 11, b: 22, c: 33), index: 1 })
+    let v2: u256 = evm.call(addr: arr, gas: 1000000, value: Wei::zero(), message: ArrMsg::GetAt { values: make_arr(a: 11, b: 22, c: 33), index: 2 })
     assert!(v0 == 11)
     assert!(v1 == 22)
     assert!(v2 == 33)
@@ -107,14 +107,14 @@ fn test_array_constructor_rejects_overflowing_length_header() {
 fn test_dirty_address_element_reverts_on_get()
 uses (evm: mut Evm, call: mut Call, ctx: Ctx)
 {
-    let arr = evm.create2<Arr>(value: 0, args: (), salt: 0)
+    let arr = evm.create2<Arr>(value: Wei::zero(), args: (), salt: 0)
     assert!(arr.inner != 0)
 
     let mut v: MemVec<Address> = MemVec::zeroed(1)
     v.set(index: 0, value: Address { inner: 0xabc })
 
     // Canonical element decodes fine.
-    let got: u256 = evm.call(addr: arr, gas: 1000000, value: 0, message: ArrMsg::AddrAt { addrs: v.to_dyn_array(), index: 0 })
+    let got: u256 = evm.call(addr: arr, gas: 1000000, value: Wei::zero(), message: ArrMsg::AddrAt { addrs: v.to_dyn_array(), index: 0 })
     assert!(got == 0xabc)
 
     let one: u256 = 1
@@ -124,13 +124,13 @@ uses (evm: mut Evm, call: mut Call, ctx: Ctx)
     let args = encode_msg_calldata(ArrMsg::AddrAt { addrs: v.to_dyn_array(), index: 0 })
     store_word(ptr: ptr::offset_bytes(args.ptr(), 100), value: dirty)
     let mut ret = MemBuffer::empty()
-    let outcome = call.raw_call(addr: arr, gas: ctx.gas(), value: 0, args: args.span(), ret: mut ret)
+    let outcome = call.raw_call(addr: arr, gas: ctx.gas(), value: Wei::zero(), args: args.span(), ret: mut ret)
     assert!(!outcome.success())
 
     // AddrLen calldata: selector | offset(0x20) | len | element.
     let args2 = encode_msg_calldata(ArrMsg::AddrLen { addrs: v.to_dyn_array() })
     store_word(ptr: ptr::offset_bytes(args2.ptr(), 68), value: dirty)
-    let outcome2 = call.raw_call(addr: arr, gas: ctx.gas(), value: 0, args: args2.span(), ret: mut ret)
+    let outcome2 = call.raw_call(addr: arr, gas: ctx.gas(), value: Wei::zero(), args: args2.span(), ret: mut ret)
     assert!(outcome2.success())
     let n: u256 = decode_returndata(copy_returndata().span())
     assert!(n == 1)

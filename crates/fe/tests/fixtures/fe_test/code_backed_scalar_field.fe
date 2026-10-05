@@ -19,9 +19,9 @@ pub contract CodeScalarStore {
 
 #[test]
 fn test_code_backed_scalar_field() uses (evm: mut Evm) {
-    let addr = evm.create2<CodeScalarStore>(value: 0, args: (123,), salt: 0)
+    let addr = evm.create2<CodeScalarStore>(value: Wei::zero(), args: (123,), salt: 0)
     assert!(addr.inner != 0)
 
-    let value: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: CodeScalarMsg::Get {})
+    let value: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: CodeScalarMsg::Get {})
     assert!(value == 123)
 }

@@ -91,8 +91,8 @@ fn fields_spelled_like_generated_names() uses (evm: mut Evm) {
     assert(decoded.d.x == 1)
     assert(decoded.i == 2)
     assert(decoded.values[1] == 4)
-    let c = evm.create2<SpellingC>(value: 0, args: (), salt: 0)
-    let sum: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: Spelling::Sum { d: __fe_D { x: 5 }, i: 6 })
+    let c = evm.create2<SpellingC>(value: Wei::zero(), args: (), salt: 0)
+    let sum: u256 = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: Spelling::Sum { d: __fe_D { x: 5 }, i: 6 })
     assert(sum == 11)
 }
 
@@ -107,7 +107,7 @@ fn abi_struct_fields_named_like_generated_params() uses (mem: mut RawMem) {
 
 #[test]
 fn msg_fields_named_like_generated_params() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
-    let sum: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: M::Sum { d: D { x: 3 }, i: I { y: 4 }, l: 5 })
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let sum: u256 = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: M::Sum { d: D { x: 3 }, i: I { y: 4 }, l: 5 })
     assert(sum == 12)
 }

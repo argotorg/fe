@@ -11,7 +11,7 @@ error[16-0001]: borrow conflict in `fn CallBorrow::__init__`
 10 │           let mut output = MemBuffer::empty()
 11 │           let outcome = call.raw_call(
    │ ╭───────────────────────^
-12 │ │             addr: Address { inner: 1 }, gas: 100000, value: 0,
+12 │ │             addr: Address { inner: 1 }, gas: 100000, value: Wei::zero(),
 13 │ │             args: MemSpan::empty(), ret: mut output,
 14 │ │         )
    │ ╰─────────^ cannot immutably borrow this place while a mutable borrow is active
@@ -24,7 +24,7 @@ error[16-0001]: borrow conflict in `fn CallRefBorrow::__init__`
 25 │           let mut output = MemBuffer::empty()
 26 │           let outcome = call.raw_call(
    │ ╭───────────────────────^
-27 │ │             addr: Address { inner: 1 }, gas: 100000, value: 0,
+27 │ │             addr: Address { inner: 1 }, gas: 100000, value: Wei::zero(),
 28 │ │             args: MemSpan::empty(), ret: mut output,
 29 │ │         )
    │ ╰─────────^ cannot mutably borrow this place while an immutable borrow is active

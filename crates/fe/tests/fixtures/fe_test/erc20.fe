@@ -104,38 +104,38 @@ fn test_erc20() uses (evm: mut Evm) {
     let bob = Address { inner: 3 }
 
     let initial_supply: u256 = 1000
-    let contract_addr = evm.create2<CoolCoin>(value: 0, args: (initial_supply, owner), salt: 0)
+    let contract_addr = evm.create2<CoolCoin>(value: Wei::zero(), args: (initial_supply, owner), salt: 0)
     assert!(contract_addr.inner != 0)
 
     // Check initial state
-    let total: u256 = evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20::TotalSupply {})
+    let total: u256 = evm.call(addr: contract_addr, gas: 100000, value: Wei::zero(), message: Erc20::TotalSupply {})
     assert!(total == 1000)
 
-    let bal_owner: u256 = evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20::BalanceOf { account: owner })
+    let bal_owner: u256 = evm.call(addr: contract_addr, gas: 100000, value: Wei::zero(), message: Erc20::BalanceOf { account: owner })
     assert!(bal_owner == 1000)
 
     // Determine my address (the test runner)
-    let me_inner: u256 = evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20::WhoAmI {})
+    let me_inner: u256 = evm.call(addr: contract_addr, gas: 100000, value: Wei::zero(), message: Erc20::WhoAmI {})
     let me = Address { inner: me_inner }
 
     // Mint to me so I can transfer
-    evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20Extended::Mint { to: me, amount: 500 })
+    evm.call(addr: contract_addr, gas: 100000, value: Wei::zero(), message: Erc20Extended::Mint { to: me, amount: 500 })
 
     // Transfer 50 to Alice
-    let res: bool = evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20::Transfer { to: alice, amount: 50 })
+    let res: bool = evm.call(addr: contract_addr, gas: 100000, value: Wei::zero(), message: Erc20::Transfer { to: alice, amount: 50 })
     assert!(res == true)
 
     // Check Alice balance
-    let bal_alice: u256 = evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20::BalanceOf { account: alice })
+    let bal_alice: u256 = evm.call(addr: contract_addr, gas: 100000, value: Wei::zero(), message: Erc20::BalanceOf { account: alice })
     assert!(bal_alice == 50)
 
     // Check my balance
-    let bal_me: u256 = evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20::BalanceOf { account: me })
+    let bal_me: u256 = evm.call(addr: contract_addr, gas: 100000, value: Wei::zero(), message: Erc20::BalanceOf { account: me })
     assert!(bal_me == 450)
 
     // Approve Alice to spend 100 from Me
-    evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20::Approve { spender: alice, amount: 100 })
+    evm.call(addr: contract_addr, gas: 100000, value: Wei::zero(), message: Erc20::Approve { spender: alice, amount: 100 })
 
-    let allow: u256 = evm.call(addr: contract_addr, gas: 100000, value: 0, message: Erc20::Allowance { owner: me, spender: alice })
+    let allow: u256 = evm.call(addr: contract_addr, gas: 100000, value: Wei::zero(), message: Erc20::Allowance { owner: me, spender: alice })
     assert!(allow == 100)
 }

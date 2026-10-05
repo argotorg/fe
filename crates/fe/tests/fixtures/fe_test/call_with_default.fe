@@ -107,7 +107,7 @@ pub contract Caller uses (call: mut Call) {
             call.call_with_default(
                 addr: token,
                 gas: 100000,
-                value: 0,
+                value: Wei::zero(),
                 message: TokenMsg::Transfer { receiver: Address { inner: 9 }, amount: 1 },
                 default: true,
             )
@@ -121,13 +121,13 @@ fn receiver() -> Address {
 
 #[test]
 fn test_present_returndata_is_decoded_not_defaulted() uses (evm: mut Evm) {
-    let token = evm.create2<CompliantToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<CompliantToken>(value: Wei::zero(), args: (), salt: 0)
 
     // default is false; the decoded `true` must win
     let ok: bool = evm.call_with_default(
         addr: token,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: TokenMsg::Transfer { receiver: receiver(), amount: 1 },
         default: false,
     )
@@ -136,18 +136,18 @@ fn test_present_returndata_is_decoded_not_defaulted() uses (evm: mut Evm) {
 
 #[test]
 fn test_try_call_owns_success_and_revert_data() uses (evm: mut Evm, call: mut Call) {
-    let token = evm.create2<CompliantToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<CompliantToken>(value: Wei::zero(), args: (), salt: 0)
     let success = token.try_call(TokenMsg::Transfer { receiver: receiver(), amount: 1 })
     assert!(success.success())
     assert!(success.returndata_len() == 32)
     let decoded: bool = decode_returndata(success.returndata())
     assert!(decoded)
 
-    let reverting = evm.create2<RevertingToken>(value: 0, args: (), salt: 1)
+    let reverting = evm.create2<RevertingToken>(value: Wei::zero(), args: (), salt: 1)
     let failure = evm.try_call(
         addr: reverting,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: TokenMsg::Transfer { receiver: receiver(), amount: 1 },
     )
     assert!(!failure.success())
@@ -158,12 +158,12 @@ fn test_try_call_owns_success_and_revert_data() uses (evm: mut Evm, call: mut Ca
 
 #[test]
 fn test_empty_returndata_yields_default() uses (evm: mut Evm) {
-    let token = evm.create2<NoReturnToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<NoReturnToken>(value: Wei::zero(), args: (), salt: 0)
 
     let ok: bool = evm.call_with_default(
         addr: token,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: TokenMsg::Transfer { receiver: receiver(), amount: 1 },
         default: true,
     )
@@ -172,12 +172,12 @@ fn test_empty_returndata_yields_default() uses (evm: mut Evm) {
 
 #[test]
 fn test_default_never_masks_present_false() uses (evm: mut Evm) {
-    let token = evm.create2<FalseToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<FalseToken>(value: Wei::zero(), args: (), salt: 0)
 
     let ok: bool = evm.call_with_default(
         addr: token,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: TokenMsg::Transfer { receiver: receiver(), amount: 1 },
         default: true,
     )
@@ -186,12 +186,12 @@ fn test_default_never_masks_present_false() uses (evm: mut Evm) {
 
 #[test(should_revert, selector = 0xdeadbeef)]
 fn test_reverting_token_still_bubbles() uses (evm: mut Evm) {
-    let token = evm.create2<RevertingToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<RevertingToken>(value: Wei::zero(), args: (), salt: 0)
 
     let _: bool = evm.call_with_default(
         addr: token,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: TokenMsg::Transfer { receiver: receiver(), amount: 1 },
         default: true,
     )
@@ -199,8 +199,8 @@ fn test_reverting_token_still_bubbles() uses (evm: mut Evm) {
 
 #[test]
 fn test_bubbled_revert_data_survives_verbatim() uses (evm: mut Evm) {
-    let token = evm.create2<RevertingToken>(value: 0, args: (), salt: 0)
-    let caller = evm.create2<Caller>(value: 0, args: (), salt: 1)
+    let token = evm.create2<RevertingToken>(value: Wei::zero(), args: (), salt: 0)
+    let caller = evm.create2<Caller>(value: Wei::zero(), args: (), salt: 1)
 
     // Hand-encode CallerMsg::DoTransfer { token } so we can observe the
     // wrapped call's revert data instead of reverting the test itself.
@@ -211,7 +211,7 @@ fn test_bubbled_revert_data_survives_verbatim() uses (evm: mut Evm) {
     let outcome = evm.raw_call(
         addr: caller,
         gas: 300000,
-        value: 0,
+        value: Wei::zero(),
         args: data.span(),
         ret: mut output,
     )
@@ -226,12 +226,12 @@ fn test_bubbled_revert_data_survives_verbatim() uses (evm: mut Evm) {
 
 #[test(should_revert)]
 fn test_malformed_returndata_still_reverts_in_decoder() uses (evm: mut Evm) {
-    let token = evm.create2<MalformedToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<MalformedToken>(value: Wei::zero(), args: (), salt: 0)
 
     let _: bool = evm.call_with_default(
         addr: token,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: TokenMsg::Transfer { receiver: receiver(), amount: 1 },
         default: true,
     )
@@ -246,7 +246,7 @@ fn test_no_code_address_yields_default() uses (evm: mut Evm) {
     let ok: bool = evm.call_with_default(
         addr: eoa,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: TokenMsg::Transfer { receiver: receiver(), amount: 1 },
         default: true,
     )
@@ -255,13 +255,13 @@ fn test_no_code_address_yields_default() uses (evm: mut Evm) {
 
 #[test]
 fn test_non_bool_return_type() uses (evm: mut Evm) {
-    let token = evm.create2<ValueToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<ValueToken>(value: Wei::zero(), args: (), salt: 0)
 
     // Non-empty path: the decoded value wins over a non-trivial default.
     let value: u256 = evm.call_with_default(
         addr: token,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: ValueQueryMsg::GetValue {},
         default: 777,
     )
@@ -271,7 +271,7 @@ fn test_non_bool_return_type() uses (evm: mut Evm) {
     let value: u256 = evm.call_with_default(
         addr: token,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: ValueQueryMsg::GetNothing {},
         default: 777,
     )
@@ -280,8 +280,8 @@ fn test_non_bool_return_type() uses (evm: mut Evm) {
 
 #[test]
 fn test_address_call_with_default_convenience() uses (evm: mut Evm, call: mut Call) {
-    let compliant = evm.create2<CompliantToken>(value: 0, args: (), salt: 0)
-    let silent = evm.create2<NoReturnToken>(value: 0, args: (), salt: 1)
+    let compliant = evm.create2<CompliantToken>(value: Wei::zero(), args: (), salt: 0)
+    let silent = evm.create2<NoReturnToken>(value: Wei::zero(), args: (), salt: 1)
 
     let ok: bool = compliant.call_with_default(
         TokenMsg::Transfer { receiver: receiver(), amount: 1 },

@@ -221,14 +221,14 @@ pub contract Mandelbrot {
 
 #[test]
 fn test_mandelbrot_known_points() uses (evm: mut Evm) {
-    let addr = evm.create2<Mandelbrot>(value: 0, args: (), salt: 0)
+    let addr = evm.create2<Mandelbrot>(value: Wei::zero(), args: (), salt: 0)
     assert!(addr.inner != 0)
 
     // (0, 0) is in the Mandelbrot set: z stays at 0 forever.
     let res: u256 = evm.call(
         addr: addr,
         gas: 10000000,
-        value: 0,
+        value: Wei::zero(),
         message: MandelbrotMsg::ClassifyPoint {
             re_mag: 0, re_neg: false,
             im_mag: 0, im_neg: false,
@@ -241,7 +241,7 @@ fn test_mandelbrot_known_points() uses (evm: mut Evm) {
     let res: u256 = evm.call(
         addr: addr,
         gas: 10000000,
-        value: 0,
+        value: Wei::zero(),
         message: MandelbrotMsg::ClassifyPoint {
             re_mag: SCALE, re_neg: true,
             im_mag: 0, im_neg: false,
@@ -255,7 +255,7 @@ fn test_mandelbrot_known_points() uses (evm: mut Evm) {
     let res: u256 = evm.call(
         addr: addr,
         gas: 10000000,
-        value: 0,
+        value: Wei::zero(),
         message: MandelbrotMsg::ClassifyPoint {
             re_mag: 2 * SCALE, re_neg: false,
             im_mag: 0, im_neg: false,
@@ -269,7 +269,7 @@ fn test_mandelbrot_known_points() uses (evm: mut Evm) {
     let res: u256 = evm.call(
         addr: addr,
         gas: 10000000,
-        value: 0,
+        value: Wei::zero(),
         message: MandelbrotMsg::ClassifyPoint {
             re_mag: 0, re_neg: false,
             im_mag: 2 * SCALE, im_neg: false,
@@ -283,7 +283,7 @@ fn test_mandelbrot_known_points() uses (evm: mut Evm) {
     let res: u256 = evm.call(
         addr: addr,
         gas: 10000000,
-        value: 0,
+        value: Wei::zero(),
         message: MandelbrotMsg::ClassifyPoint {
             re_mag: SCALE, re_neg: false,
             im_mag: 0, im_neg: false,
@@ -297,7 +297,7 @@ fn test_mandelbrot_known_points() uses (evm: mut Evm) {
     let res: u256 = evm.call(
         addr: addr,
         gas: 10000000,
-        value: 0,
+        value: Wei::zero(),
         message: MandelbrotMsg::ClassifyPoint {
             re_mag: 2 * SCALE, re_neg: true,
             im_mag: 0, im_neg: false,
@@ -309,7 +309,7 @@ fn test_mandelbrot_known_points() uses (evm: mut Evm) {
 
 #[test]
 fn test_mandelbrot_row() uses (evm: mut Evm) {
-    let addr = evm.create2<Mandelbrot>(value: 0, args: (), salt: 1)
+    let addr = evm.create2<Mandelbrot>(value: Wei::zero(), args: (), salt: 1)
     assert!(addr.inner != 0)
 
     // Row along real axis (im=0) from re=-2 to re=2, 5 pixels (step=1.0).
@@ -318,7 +318,7 @@ fn test_mandelbrot_row() uses (evm: mut Evm) {
     let row_sum: u256 = evm.call(
         addr: addr,
         gas: 10000000,
-        value: 0,
+        value: Wei::zero(),
         message: MandelbrotMsg::ComputeRowSum {
             im_mag: 0, im_neg: false,
             re_start_mag: 2 * SCALE, re_start_neg: true,

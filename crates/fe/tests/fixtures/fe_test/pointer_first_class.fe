@@ -273,29 +273,29 @@ fn test_borrowed_pointer_deref() {
 
 #[test]
 fn test_memory_region_bounds_halt_before_access() uses (evm: mut std::evm::Evm) {
-    let bounds = evm.create2<PointerBounds>(value: 0, args: (), salt: 0)
+    let bounds = evm.create2<PointerBounds>(value: Wei::zero(), args: (), salt: 0)
     assert!(!evm.try_call(
         addr: bounds,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: PointerBoundsMsg::MemArrayRead {},
     ).success())
     assert!(!evm.try_call(
         addr: bounds,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: PointerBoundsMsg::MemArrayWrite {},
     ).success())
     assert!(!evm.try_call(
         addr: bounds,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: PointerBoundsMsg::MemSpanSlice {},
     ).success())
     assert!(!evm.try_call(
         addr: bounds,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: PointerBoundsMsg::MemBufferLen {},
     ).success())
 }

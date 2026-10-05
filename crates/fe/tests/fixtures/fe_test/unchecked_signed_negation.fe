@@ -25,13 +25,13 @@ pub contract Negation {
 }
 #[test]
 fn wrapping_negation_roundtrip() uses (evm: mut Evm) {
-    let addr = evm.create2<Negation>(value: 0, args: (), salt: 0)
+    let addr = evm.create2<Negation>(value: Wei::zero(), args: (), salt: 0)
     let min: i256 = ((1 as u256) << 255).downcast_truncate()
     assert!(
         evm.call(
                 addr,
                 gas: 100000,
-                value: 0,
+                value: Wei::zero(),
                 message: NegMsg::Wide { value: min },
             ) == min,
     )
@@ -39,7 +39,7 @@ fn wrapping_negation_roundtrip() uses (evm: mut Evm) {
         evm.call(
                 addr,
                 gas: 100000,
-                value: 0,
+                value: Wei::zero(),
                 message: NegMsg::Wide { value: 0 },
             ) == 0,
     )
@@ -47,7 +47,7 @@ fn wrapping_negation_roundtrip() uses (evm: mut Evm) {
         evm.call(
                 addr,
                 gas: 100000,
-                value: 0,
+                value: Wei::zero(),
                 message: NegMsg::Wide { value: 7 },
             ) == -7,
     )
@@ -55,7 +55,7 @@ fn wrapping_negation_roundtrip() uses (evm: mut Evm) {
         evm.call(
                 addr,
                 gas: 100000,
-                value: 0,
+                value: Wei::zero(),
                 message: NegMsg::Wide { value: -7 },
             ) == 7,
     )
@@ -63,7 +63,7 @@ fn wrapping_negation_roundtrip() uses (evm: mut Evm) {
         evm.call(
                 addr,
                 gas: 100000,
-                value: 0,
+                value: Wei::zero(),
                 message: NegMsg::Narrow { value: -128 },
             ) == -128,
     )
@@ -71,7 +71,7 @@ fn wrapping_negation_roundtrip() uses (evm: mut Evm) {
         evm.call(
                 addr,
                 gas: 100000,
-                value: 0,
+                value: Wei::zero(),
                 message: NegMsg::Narrow { value: 127 },
             ) == -127,
     )

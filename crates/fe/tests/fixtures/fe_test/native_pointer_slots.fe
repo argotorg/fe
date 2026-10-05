@@ -286,10 +286,10 @@ pub contract NativeSlotContract {
 
 #[test]
 fn native_slots_preserve_storage_addresses_and_layouts() uses (evm: mut Evm) {
-    let c = evm.create2<NativeSlotContract>(value: 0, args: (), salt: 0)
-    let first: u256 = evm.call(addr: c, gas: 200000, value: 0, message: NativeSlotMsg::Increment {})
-    let second: u256 = evm.call(addr: c, gas: 200000, value: 0, message: NativeSlotMsg::Increment {})
-    let last: u8 = evm.call(addr: c, gas: 200000, value: 0, message: NativeSlotMsg::ChangeChoice {})
+    let c = evm.create2<NativeSlotContract>(value: Wei::zero(), args: (), salt: 0)
+    let first: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: NativeSlotMsg::Increment {})
+    let second: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: NativeSlotMsg::Increment {})
+    let last: u8 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: NativeSlotMsg::ChangeChoice {})
     assert!(first == 1)
     assert!(second == 2)
     assert!(last == 23)

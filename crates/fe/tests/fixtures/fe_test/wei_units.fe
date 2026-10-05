@@ -1,0 +1,169 @@
+// Tests for `Wei` in `std::evm::units`. Unit values match Solidity's
+// `1 wei`, `1 gwei` and `1 ether`.
+
+use std::evm::{StorageMap, ether, gwei, wei}
+use std::evm::units::{ETHER, GWEI, WEI}
+
+const DEPOSIT: Wei = ether(32)
+const FEE: Wei = gwei(21_000) * 50
+
+#[test]
+fn constants_match_solidity() {
+    assert!(WEI.as_wei() == 1)
+    assert!(GWEI.as_wei() == 1_000_000_000)
+    assert!(ETHER.as_wei() == 1_000_000_000_000_000_000)
+    assert!(GWEI == WEI * 1_000_000_000)
+    assert!(ETHER == GWEI * 1_000_000_000)
+}
+
+#[test]
+fn helpers_agree_with_constants() {
+    assert!(wei(1) == WEI)
+    assert!(gwei(1) == GWEI)
+    assert!(ether(1) == ETHER)
+    assert!(ether(2) == gwei(2_000_000_000))
+    assert!(wei(0) == Wei::zero())
+    assert!(Wei::default() == Wei::zero())
+}
+
+#[test]
+fn helpers_in_const_context() {
+    assert!(DEPOSIT.as_wei() == 32_000_000_000_000_000_000)
+    assert!(FEE == gwei(1_050_000))
+}
+
+#[test]
+fn arithmetic() {
+    assert!(ether(1) + gwei(5) == wei(1_000_000_005_000_000_000))
+    assert!(ether(1) - gwei(5) == wei(999_999_995_000_000_000))
+    // Scaling and splitting by a count.
+    assert!(gwei(3) * 7 == gwei(21))
+    assert!(ether(1) / 4 == wei(250_000_000_000_000_000))
+    // The ratio of two amounts is a plain number.
+    assert!(ether(10) / ether(2) == 5)
+    assert!(wei(1_000_000_123) / GWEI == 1)
+    assert!(wei(1_000_000_123) % GWEI == wei(123))
+
+    let mut balance = ether(1)
+    balance += gwei(1)
+    balance -= wei(1)
+    assert!(balance == wei(1_000_000_000_999_999_999))
+}
+
+#[test]
+fn mul_div_for_fees_and_shares() {
+    // 30 bps of 10 ether.
+    assert!(ether(10).mul_div(numerator: 30, denominator: 10_000) == ether(3) / 100)
+    // The 512-bit intermediate product does not overflow.
+    assert!(wei(2 ** 254).mul_div(numerator: 6, denominator: 3) == wei(2 ** 255))
+}
+
+#[test]
+fn ordering() {
+    assert!(gwei(1) < ether(1))
+    assert!(ether(1) <= ether(1))
+    assert!(ether(2) > ether(1))
+    assert!(ether(1) >= gwei(1))
+}
+
+#[test(should_revert)]
+fn underflow_reverts() {
+    let _ = gwei(1) - ether(1)
+}
+
+// Amounts work as message fields, return values, storage fields and in maps.
+
+msg BankMsg {
+    #[selector = sol("deposit()")]
+    Deposit -> Wei,
+    #[selector = sol("balanceOf(address)")]
+    BalanceOf { owner: Address } -> Wei,
+    #[selector = sol("withdraw(address,uint256)")]
+    Withdraw { to: Address, amount: Wei },
+    #[selector = sol("total()")]
+    Total -> Wei,
+    #[selector = sol("setTier(uint256,uint256)")]
+    SetTier { min: Wei, tier: u256 },
+    #[selector = sol("tier(uint256)")]
+    Tier { min: Wei } -> u256,
+}
+
+#[event]
+struct Deposited {
+    #[indexed]
+    owner: Address,
+    #[indexed]
+    amount: Wei,
+    balance: Wei,
+}
+
+pub contract Bank uses (ctx: Ctx, call: mut Call, log: mut Log) {
+    mut balances: StorageMap<Address, Wei>,
+    mut total: Wei,
+    mut tiers: StorageMap<Wei, u256>,
+
+    recv BankMsg {
+        #[payable]
+        Deposit -> Wei uses (ctx, mut balances, mut total, mut log) {
+            let sender = ctx.caller()
+            let amount = ctx.value()
+            balances.set(key: sender, value: balances.get(key: sender) + amount)
+            total += amount
+            log.emit(Deposited { owner: sender, amount, balance: balances.get(key: sender) })
+            balances.get(key: sender)
+        }
+
+        BalanceOf { owner } -> Wei uses (balances) {
+            balances.get(key: owner)
+        }
+
+        Withdraw { to, amount } uses (ctx, mut call, mut balances, mut total) {
+            let sender = ctx.caller()
+            balances.set(key: sender, value: balances.get(key: sender) - amount)
+            total -= amount
+            assert!(call.send_value(addr: to, gas: 0, value: amount).success())
+        }
+
+        Total -> Wei uses (total) {
+            total
+        }
+
+        SetTier { min, tier } uses (mut tiers) {
+            tiers.set(key: min, value: tier)
+        }
+
+        Tier { min } -> u256 uses (tiers) {
+            tiers.get(key: min)
+        }
+    }
+}
+
+#[test(balance = 10_000_000_000_000_000_000)]
+fn amounts_cross_the_abi_and_storage() uses (evm: mut Evm) {
+    let bank = evm.create2<Bank>(value: Wei::zero(), args: (), salt: 0)
+    let me = evm.address()
+
+    let credited: Wei = evm.call(addr: bank, gas: 200000, value: ether(2), message: BankMsg::Deposit {})
+    assert!(credited == ether(2))
+    assert!(evm.balance(bank) == ether(2))
+
+    let payee = Address { inner: 0xbeef }
+    evm.call(addr: bank, gas: 200000, value: Wei::zero(), message: BankMsg::Withdraw { to: payee, amount: ether(1) / 2 })
+    assert!(evm.balance(payee) == ether(1) / 2)
+    let left: Wei = evm.call(addr: bank, gas: 100000, value: Wei::zero(), message: BankMsg::BalanceOf { owner: me })
+    assert!(left == gwei(1_500_000_000))
+    assert!(evm.balance(bank) == left)
+
+    let total: Wei = evm.call(addr: bank, gas: 100000, value: Wei::zero(), message: BankMsg::Total {})
+    assert!(total == left)
+}
+
+#[test]
+fn amounts_as_map_keys() uses (evm: mut Evm) {
+    let bank = evm.create2<Bank>(value: Wei::zero(), args: (), salt: 0)
+    evm.call(addr: bank, gas: 100000, value: Wei::zero(), message: BankMsg::SetTier { min: ether(1), tier: 1 })
+    evm.call(addr: bank, gas: 100000, value: Wei::zero(), message: BankMsg::SetTier { min: ether(32), tier: 2 })
+    let top: u256 = evm.call(addr: bank, gas: 100000, value: Wei::zero(), message: BankMsg::Tier { min: ether(32) })
+    let none: u256 = evm.call(addr: bank, gas: 100000, value: Wei::zero(), message: BankMsg::Tier { min: gwei(1) })
+    assert!(top == 2 && none == 0)
+}

@@ -61,13 +61,13 @@ pub contract ModeContract {
 
 #[test]
 fn test_mode_receivers_contract() uses (evm: mut Evm) {
-    let contract_addr = evm.create2<ModeContract>(value: 0, args: (), salt: 0)
+    let contract_addr = evm.create2<ModeContract>(value: Wei::zero(), args: (), salt: 0)
     assert!(contract_addr.inner != 0)
 
     let v: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: ModeMsg::Touch { by: 5 }
     )
     assert!(v == 5)
@@ -75,7 +75,7 @@ fn test_mode_receivers_contract() uses (evm: mut Evm) {
     let v: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: ModeMsg::Touch { by: 7 }
     )
     assert!(v == 12)
@@ -83,7 +83,7 @@ fn test_mode_receivers_contract() uses (evm: mut Evm) {
     let snap_value: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: ModeMsg::SnapshotValue {}
     )
     assert!(snap_value == 12)
@@ -91,7 +91,7 @@ fn test_mode_receivers_contract() uses (evm: mut Evm) {
     let snap_ver: u8 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: ModeMsg::SnapshotVer {}
     )
     assert!(snap_ver == 2)

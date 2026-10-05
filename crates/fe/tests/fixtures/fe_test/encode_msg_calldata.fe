@@ -76,7 +76,7 @@ uses (mem: mut std::evm::RawMem)
 
 #[test]
 fn test_encode_msg_calldata_static_args() uses (evm: mut Evm, call: mut Call, ctx: Ctx) {
-    let echo = evm.create2<Echo>(value: 0, args: (), salt: 0)
+    let echo = evm.create2<Echo>(value: Wei::zero(), args: (), salt: 0)
     assert!(echo.inner != 0)
 
     let addr_arg = Address { inner: 0xabcdef }
@@ -84,7 +84,7 @@ fn test_encode_msg_calldata_static_args() uses (evm: mut Evm, call: mut Call, ct
 
     let data = encode_msg_calldata(EchoMsg::DigestStatic { a: 42, b: addr_arg })
     let mut ret = ptr::MemBuffer::empty()
-    let outcome = call.raw_call(addr: echo, gas: ctx.gas(), value: 0, args: data.span(), ret: mut ret)
+    let outcome = call.raw_call(addr: echo, gas: ctx.gas(), value: Wei::zero(), args: data.span(), ret: mut ret)
     assert!(outcome.success())
     let raw_digest: u256 = decode_returndata(copy_returndata().span())
 
@@ -93,14 +93,14 @@ fn test_encode_msg_calldata_static_args() uses (evm: mut Evm, call: mut Call, ct
 
 #[test]
 fn test_encode_msg_calldata_dynamic_bytes() uses (evm: mut Evm, call: mut Call, ctx: Ctx, mem: mut std::evm::RawMem) {
-    let echo = evm.create2<Echo>(value: 0, args: (), salt: 0)
+    let echo = evm.create2<Echo>(value: Wei::zero(), args: (), salt: 0)
     assert!(echo.inner != 0)
 
     let typed_digest: u256 = echo.call(EchoMsg::DigestDynamic { data: build_bytes() })
 
     let data = encode_msg_calldata(EchoMsg::DigestDynamic { data: build_bytes() })
     let mut ret = ptr::MemBuffer::empty()
-    let outcome = call.raw_call(addr: echo, gas: ctx.gas(), value: 0, args: data.span(), ret: mut ret)
+    let outcome = call.raw_call(addr: echo, gas: ctx.gas(), value: Wei::zero(), args: data.span(), ret: mut ret)
     assert!(outcome.success())
     let raw_digest: u256 = decode_returndata(copy_returndata().span())
 
@@ -111,7 +111,7 @@ fn test_encode_msg_calldata_dynamic_bytes() uses (evm: mut Evm, call: mut Call, 
 fn test_raw_copy_apis_use_explicit_source_and_destination_ranges()
 uses (evm: mut Evm, call: mut Call, ctx: Ctx)
 {
-    let echo = evm.create2<Echo>(value: 0, args: (), salt: 0)
+    let echo = evm.create2<Echo>(value: Wei::zero(), args: (), salt: 0)
     assert!(echo.inner != 0)
 
     assert!(echo.call(EchoMsg::CopyCalldataWindow {}) == 0x0203)
@@ -125,7 +125,7 @@ uses (evm: mut Evm, call: mut Call, ctx: Ctx)
     let outcome = call.raw_call(
         addr: echo,
         gas: ctx.gas(),
-        value: 0,
+        value: Wei::zero(),
         args: data.span(),
         ret: mut ignored,
     )

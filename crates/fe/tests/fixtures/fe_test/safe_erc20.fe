@@ -135,7 +135,7 @@ fn bob() -> Address {
 }
 
 fn call_count(token: Address) -> u256 uses (evm: mut Evm) {
-    evm.call(addr: token, gas: 100000, value: 0, message: CallCountMsg::GetCallCount {})
+    evm.call(addr: token, gas: 100000, value: Wei::zero(), message: CallCountMsg::GetCallCount {})
 }
 
 // ---------------------------------------------------------------------------
@@ -144,32 +144,32 @@ fn call_count(token: Address) -> u256 uses (evm: mut Evm) {
 
 #[test]
 fn test_safe_transfer_compliant_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<CompliantToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<CompliantToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_transfer(token, receiver: alice(), amount: 1)
 }
 
 #[test(should_revert, selector = 0xdeadbeef)]
 fn test_safe_transfer_bubbles_token_revert() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<RevertingToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<RevertingToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_transfer(token, receiver: alice(), amount: 1)
 }
 
 #[test]
 fn test_safe_transfer_no_return_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<NoReturnToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<NoReturnToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_transfer(token, receiver: alice(), amount: 1)
     assert!(call_count(token) == 1)
 }
 
 #[test(should_revert)]
 fn test_safe_transfer_reverts_on_false_return() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<FalseToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<FalseToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_transfer(token, receiver: alice(), amount: 1)
 }
 
 #[test(should_revert)]
 fn test_safe_transfer_reverts_on_malformed_returndata() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<MalformedToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<MalformedToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_transfer(token, receiver: alice(), amount: 1)
 }
 
@@ -186,20 +186,20 @@ fn test_safe_transfer_reverts_on_no_code_address() uses (evm: mut Evm, ctx: Ctx,
 
 #[test]
 fn test_safe_transfer_from_compliant_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<CompliantToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<CompliantToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_transfer_from(token, owner: alice(), receiver: bob(), amount: 1)
 }
 
 #[test]
 fn test_safe_transfer_from_no_return_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<NoReturnToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<NoReturnToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_transfer_from(token, owner: alice(), receiver: bob(), amount: 1)
     assert!(call_count(token) == 1)
 }
 
 #[test(should_revert)]
 fn test_safe_transfer_from_reverts_on_false_return() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<FalseToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<FalseToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_transfer_from(token, owner: alice(), receiver: bob(), amount: 1)
 }
 
@@ -209,19 +209,19 @@ fn test_safe_transfer_from_reverts_on_false_return() uses (evm: mut Evm, ctx: Ct
 
 #[test]
 fn test_safe_approve_compliant_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<CompliantToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<CompliantToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_approve(token, spender: alice(), amount: 1)
 }
 
 #[test]
 fn test_safe_approve_no_return_token() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<NoReturnToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<NoReturnToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_approve(token, spender: alice(), amount: 1)
     assert!(call_count(token) == 1)
 }
 
 #[test(should_revert)]
 fn test_safe_approve_reverts_on_false_return() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<FalseToken>(value: 0, args: (), salt: 0)
+    let token = evm.create2<FalseToken>(value: Wei::zero(), args: (), salt: 0)
     erc20::safe_approve(token, spender: alice(), amount: 1)
 }

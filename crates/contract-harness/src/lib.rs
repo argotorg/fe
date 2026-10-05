@@ -799,7 +799,7 @@ impl RuntimeInstance {
     /// Gives the deployed contract the specified balance (in wei).
     ///
     /// This is useful for tests that need the contract to send ETH
-    /// via internal calls (e.g. `evm.call(value: 1, ...)`).
+    /// via internal calls (e.g. `evm.call(value: wei(1), ...)`).
     pub fn fund_contract(&mut self, amount: U256) {
         let address = self.address;
         self.fund_account(address, amount);
@@ -2266,11 +2266,11 @@ pub contract DynamicChild {
 pub contract Create2Parent uses (create: mut Create) {
     recv ParentMsg {
         DeployStatic -> u256 uses (mut create) {
-            create.create2<StaticChild>(value: 0, args: (7,), salt: 1).inner
+            create.create2<StaticChild>(value: Wei::zero(), args: (7,), salt: 1).inner
         }
 
         DeployDynamic { text, count } -> u256 uses (mut create) {
-            create.create2<DynamicChild>(value: 0, args: (text, count), salt: 2).inner
+            create.create2<DynamicChild>(value: Wei::zero(), args: (text, count), salt: 2).inner
         }
     }
 }

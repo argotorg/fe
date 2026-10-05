@@ -575,7 +575,7 @@ fn external_call_intrinsic_summaries_include_current_state_effects() {
 fn delegatecall_conflicts_with_native_state_loans_but_not_disjoint_memory() {
     for (method, value, writes) in [
         ("raw_delegatecall", "", true),
-        ("raw_call", "value: 0,", true),
+        ("raw_call", "value: std::evm::Wei::zero(),", true),
         ("raw_staticcall", "", false),
     ] {
         let operation = format!(
@@ -2714,7 +2714,7 @@ use core::ptr::{MemBuffer, MemSpan}
 use std::evm::{Address, Call}
 fn returned() -> *u8 uses (call: mut Call) {
     let mut ret = MemBuffer::empty()
-    let _ = call.raw_call(addr: Address { inner: 0 }, gas: 0, value: 0, args: MemSpan::empty(), ret: mut ret)
+    let _ = call.raw_call(addr: Address { inner: 0 }, gas: 0, value: std::evm::Wei::zero(), args: MemSpan::empty(), ret: mut ret)
     ret.ptr()
 }
 "#;

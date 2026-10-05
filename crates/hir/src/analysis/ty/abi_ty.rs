@@ -462,7 +462,8 @@ pub(crate) fn non_copy_fixed_array_elem<'db>(
 }
 
 /// Recognise `std::abi::sol` SolCompat wrapper types like `Uint160` / `Int24`
-/// and return their Solidity ABI type string (e.g. `"uint160"`, `"int24"`).
+/// and the `std::evm::units` types (`Wei`, `Timestamp`, `Duration`) and return
+/// their Solidity ABI type string (e.g. `"uint160"`, `"int24"`, `"uint256"`).
 fn std_sol_compat_abi_type<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
@@ -479,6 +480,11 @@ fn std_sol_compat_abi_type<'db>(
         return Ok(None);
     };
     let name = name.data(db).to_string();
+
+    // The `std::evm::units` newtypes are plain `uint256` words.
+    if matches!(name.as_str(), "Wei" | "Timestamp" | "Duration") {
+        return Ok(Some("uint256".to_string()));
+    }
 
     if name == "FixedBytes" {
         let (_, args) = ty.decompose_ty_app(db);

@@ -26,12 +26,12 @@ uses (mem: mut RawMem)
 fn test_msg_call_with_two_dynamic_bytes_fields()
 uses (evm: mut Evm, mem: mut RawMem)
 {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
 
     evm.call(
         addr: c,
         gas: 2000000,
-        value: 0,
+        value: Wei::zero(),
         message: M::Foo { a: build_bytes(), b: build_bytes() },
     )
 }

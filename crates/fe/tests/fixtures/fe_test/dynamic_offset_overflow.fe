@@ -30,13 +30,13 @@ pub contract OffsetProbe {
     }
 }
 fn check_offset(_ mode: u256, _ offset: u256, _ valid: bool) uses (evm: mut Evm) {
-    let target = evm.create2<OffsetProbe>(value: 0, args: (), salt: mode)
+    let target = evm.create2<OffsetProbe>(value: Wei::zero(), args: (), salt: mode)
     let data = MemBuffer::alloc(68)
     evm.mstore(addr: data.ptr(), value: (0x11223344 as u256) << 224)
     evm.mstore(addr: ptr::offset_bytes(data.ptr(), 4), value: mode)
     evm.mstore(addr: ptr::offset_bytes(data.ptr(), 36), value: offset)
     let mut ret = MemBuffer::alloc(64)
-    let result = evm.raw_call(addr: target, gas: 1000000, value: 0, args: data.span(), ret: mut ret)
+    let result = evm.raw_call(addr: target, gas: 1000000, value: Wei::zero(), args: data.span(), ret: mut ret)
     assert!(result.success() == valid)
     if valid {
         assert!(result.returndata_len() == 32)

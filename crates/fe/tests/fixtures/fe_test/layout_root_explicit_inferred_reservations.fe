@@ -40,29 +40,29 @@ pub contract MixedRoots {
 
 #[test]
 fn explicit_and_inferred_storage_maps_do_not_alias() uses (evm: mut Evm) {
-    let c = evm.create2<MixedRoots>(value: 0, args: (), salt: 1)
+    let c = evm.create2<MixedRoots>(value: Wei::zero(), args: (), salt: 1)
     evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: MixedRootsMsg::SetExplicit { key: 7, value: 11 },
     )
     evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: MixedRootsMsg::SetSecondInferred { key: 7, value: 22 },
     )
     let explicit: u256 = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: MixedRootsMsg::GetExplicit { key: 7 },
     )
     let inferred: u256 = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: MixedRootsMsg::GetSecondInferred { key: 7 },
     )
     assert!(explicit == 11)

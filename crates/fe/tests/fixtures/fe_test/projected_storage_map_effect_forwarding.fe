@@ -72,25 +72,25 @@ pub contract ProjectedMapForwarding {
 
 #[test]
 fn test_projected_storage_map_effect_forwarding() uses (evm: mut Evm) {
-    let contract_addr = evm.create2<ProjectedMapForwarding>(value: 0, args: (), salt: 0)
+    let contract_addr = evm.create2<ProjectedMapForwarding>(value: Wei::zero(), args: (), salt: 0)
 
     evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: ProjectedMapMsg::SetPrimary { key: 1, value: 11 },
     )
     evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: ProjectedMapMsg::SetSecondary { key: 1, value: 99 },
     )
 
     let primary: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: ProjectedMapMsg::GetPrimary { key: 1 },
     )
     assert!(primary == 11)
@@ -98,7 +98,7 @@ fn test_projected_storage_map_effect_forwarding() uses (evm: mut Evm) {
     let secondary: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: ProjectedMapMsg::GetSecondary { key: 1 },
     )
     assert!(secondary == 99)

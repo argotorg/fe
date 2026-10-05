@@ -27,11 +27,11 @@ pub contract RootGap {
 
 #[test]
 fn code_layout_roots_reserve_real_immutable_buffer_gaps() uses (evm: mut Evm) {
-    let c = evm.create2<RootGap>(value: 0, args: (), salt: 0)
+    let c = evm.create2<RootGap>(value: Wei::zero(), args: (), salt: 0)
     let values: (u256, u256) = evm.call(
         addr: c,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: RootGapMsg::Values {},
     )
     assert!(values.0 == 11)

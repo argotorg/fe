@@ -55,6 +55,7 @@ use super::effects::{Address, Call, Ctx, revert_error}
 use super::eip712
 use super::ops
 use super::panic::{PANIC_OVERFLOW, Panic}
+use super::units::Wei
 use ingot::abi::sol::sol
 
 /// The canonical EntryPoint v0.7 deployment.
@@ -303,11 +304,11 @@ pub fn require_paymaster_entry_point(_ entry_point: Address) uses (ctx: Ctx) {
     }
 }
 
-/// Send `missing_account_funds` wei to the caller (the EntryPoint), with all
+/// Send `missing_account_funds` to the caller (the EntryPoint), with all
 /// remaining gas. The outcome is ignored, as in OpenZeppelin's `Account`:
 /// the EntryPoint itself checks that it was paid.
-pub fn pay_prefund(_ missing_account_funds: u256) uses (ctx: Ctx, call: mut Call) {
-    if missing_account_funds != 0 {
+pub fn pay_prefund(_ missing_account_funds: Wei) uses (ctx: Ctx, call: mut Call) {
+    if missing_account_funds != Wei::zero() {
         let _ = call.send_value(addr: ctx.caller(), gas: ops::gas(), value: missing_account_funds)
     }
 }
@@ -324,7 +325,7 @@ pub fn validate_user_op<S: UserOpSigner>(
     entry_point: Address,
     user_op: PackedUserOperation,
     user_op_hash: Bytes32,
-    missing_account_funds: u256,
+    missing_account_funds: Wei,
 ) -> u256
 uses (ctx: Ctx, call: mut Call)
 {
@@ -340,7 +341,7 @@ pub msg AccountMsg {
     ValidateUserOp {
         user_op: PackedUserOperation,
         user_op_hash: Bytes32,
-        missing_account_funds: u256,
+        missing_account_funds: Wei,
     } -> u256,
 }
 
@@ -352,13 +353,13 @@ pub msg PaymasterMsg {
     ValidatePaymasterUserOp {
         user_op: PackedUserOperation,
         user_op_hash: Bytes32,
-        max_cost: u256,
+        max_cost: Wei,
     } -> (Bytes, u256),
     #[selector = sol("postOp(uint8,bytes,uint256,uint256)")]
     PostOp {
         mode: u8,
         context: Bytes,
-        actual_gas_cost: u256,
+        actual_gas_cost: Wei,
         actual_user_op_fee_per_gas: u256,
     },
 }

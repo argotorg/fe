@@ -42,39 +42,39 @@ pub contract C uses (log: mut Log) {
 
 #[test]
 fn uint160_abi_roundtrip() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
 
     let max_u160: u256 = ((1 as u256) << 160) - 1
-    let r: Uint160 = evm.call(addr: c, gas: 2000000, value: 0, message: M::RtU160 { v: Uint160 { val: max_u160 } })
+    let r: Uint160 = evm.call(addr: c, gas: 2000000, value: Wei::zero(), message: M::RtU160 { v: Uint160 { val: max_u160 } })
     assert(r.val == max_u160)
 
-    let r: Uint160 = evm.call(addr: c, gas: 2000000, value: 0, message: M::RtU160 { v: Uint160 { val: 0x1234 } })
+    let r: Uint160 = evm.call(addr: c, gas: 2000000, value: Wei::zero(), message: M::RtU160 { v: Uint160 { val: 0x1234 } })
     assert(r.val == 0x1234)
 }
 
 #[test]
 fn int24_abi_roundtrip() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 2)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 2)
 
     // Exercises signed custom-width decode/encode (sign-extension) directly,
     // across the full int24 range including negatives.
-    let r: Int24 = evm.call(addr: c, gas: 2000000, value: 0, message: M::RtI24 { v: Int24 { val: 8388607 } })
+    let r: Int24 = evm.call(addr: c, gas: 2000000, value: Wei::zero(), message: M::RtI24 { v: Int24 { val: 8388607 } })
     assert(r.val == 8388607)
 
-    let r: Int24 = evm.call(addr: c, gas: 2000000, value: 0, message: M::RtI24 { v: Int24 { val: -8388608 } })
+    let r: Int24 = evm.call(addr: c, gas: 2000000, value: Wei::zero(), message: M::RtI24 { v: Int24 { val: -8388608 } })
     assert(r.val == -8388608)
 
-    let r: Int24 = evm.call(addr: c, gas: 2000000, value: 0, message: M::RtI24 { v: Int24 { val: -1 } })
+    let r: Int24 = evm.call(addr: c, gas: 2000000, value: Wei::zero(), message: M::RtI24 { v: Int24 { val: -1 } })
     assert(r.val == -1)
 }
 
 #[test]
 fn event_indexed_uint160_topic() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
     evm.call(
         addr: c,
         gas: 2000000,
-        value: 0,
+        value: Wei::zero(),
         message: M::EmitSwap { sender: Uint160 { val: 0xabcdef }, tick: Int24 { val: -42 } },
     )
 }

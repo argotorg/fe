@@ -29,11 +29,11 @@ pub contract TestSub {
 
 #[test]
 fn test_sub() uses (evm: mut Evm) {
-    let addr = evm.create2<TestSub>(value: 0, args: (), salt: 0)
+    let addr = evm.create2<TestSub>(value: Wei::zero(), args: (), salt: 0)
     assert!(addr.inner != 0)
 
     let res: u256 = evm.call(
-        addr: addr, gas: 1000000, value: 0,
+        addr: addr, gas: 1000000, value: Wei::zero(),
         message: TestMsg::SubTest { a_mag: 42, a_neg: false, b_mag: 0, b_neg: false }
     )
     assert!(res == 42)

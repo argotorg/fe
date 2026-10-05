@@ -54,12 +54,12 @@ pub contract C {
 
 #[test]
 fn test_non_mem_effect_provider_mut_struct_receiver() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 33)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 33)
     assert!(c.inner != 0)
 
-    let moved = evm.call(addr: c, gas: 100000, value: 0, message: Msg::MoveP1 { by: 10 })
+    let moved = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::MoveP1 { by: 10 })
     assert!(moved == 11)
 
-    let snap = evm.call(addr: c, gas: 100000, value: 0, message: Msg::Snapshot {})
+    let snap = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::Snapshot {})
     assert!(snap == 11021020)
 }

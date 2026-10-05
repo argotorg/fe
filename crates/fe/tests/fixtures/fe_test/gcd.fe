@@ -102,14 +102,14 @@ uses (evm: mut Evm)
     evm.call(
         addr: probe,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         message: GcdMsg::Gcd { a, b },
     )
 }
 
 #[test]
 fn gcd_runtime_cases() uses (evm: mut Evm) {
-    let probe = evm.create2<GcdProbe>(value: 0, args: (), salt: 0)
+    let probe = evm.create2<GcdProbe>(value: Wei::zero(), args: (), salt: 0)
     for (a, b, expected) in CASES {
         assert!(runtime_gcd(probe, a, b) == expected)
         assert!(runtime_gcd(probe, b, a) == expected)

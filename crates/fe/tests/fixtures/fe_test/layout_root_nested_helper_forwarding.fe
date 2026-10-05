@@ -48,17 +48,17 @@ pub contract NestedHelper {
 
 #[test]
 fn nested_dynamic_layout_roots_cross_helpers() uses (evm: mut Evm) {
-    let c = evm.create2<NestedHelper>(value: 0, args: (), salt: 1)
+    let c = evm.create2<NestedHelper>(value: Wei::zero(), args: (), salt: 1)
     evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: NestedHelperMsg::Set { lane: 1, key: 7, value: 42 },
     )
     let value: u256 = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: NestedHelperMsg::Get { lane: 1, key: 7 },
     )
     assert!(value == 42)

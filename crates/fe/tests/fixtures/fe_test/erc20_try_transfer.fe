@@ -78,7 +78,7 @@ fn code(_ outcome: TokenCall) -> u256 {
 /// Deploy a token replying with (`word`, `len`) and classify all three calls,
 /// asserting they agree.
 fn classify(word: u256, len: u256, salt: u256) -> u256 uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<RawReplyToken>(value: 0, args: (word, len), salt)
+    let token = evm.create2<RawReplyToken>(value: Wei::zero(), args: (word, len), salt)
     let a = code(erc20::try_transfer(token, receiver: alice(), amount: 1))
     let b = code(erc20::try_transfer_from(token, owner: alice(), receiver: bob(), amount: 1))
     let c = code(erc20::try_approve(token, spender: alice(), amount: 1))
@@ -89,7 +89,7 @@ fn classify(word: u256, len: u256, salt: u256) -> u256 uses (evm: mut Evm, ctx: 
 #[test]
 fn test_true_is_ok() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
     assert!(classify(word: 1, len: 32, salt: 0) == 0)
-    let token = evm.create2<RawReplyToken>(value: 0, args: (1, 32), salt: 1)
+    let token = evm.create2<RawReplyToken>(value: Wei::zero(), args: (1, 32), salt: 1)
     assert!(erc20::try_transfer(token, receiver: alice(), amount: 1).is_ok())
 }
 
@@ -129,14 +129,14 @@ fn test_return_bomb_is_not_copied() uses (evm: mut Evm, ctx: Ctx, call: mut Call
     // Copying it into the caller would cost about as much again, so the
     // bound below only holds because at most 32 bytes are copied.
     let len: u256 = 0x40000
-    let token = evm.create2<RawReplyToken>(value: 0, args: (1, len), salt: 0)
+    let token = evm.create2<RawReplyToken>(value: Wei::zero(), args: (1, len), salt: 0)
     let before = ctx.gas()
     let outcome = erc20::try_transfer(token, receiver: alice(), amount: 1)
     let used = before - ctx.gas()
     assert!(code(outcome) == 0)
     assert!(used < 250000)
 
-    let bad = evm.create2<RawReplyToken>(value: 0, args: (0, len), salt: 1)
+    let bad = evm.create2<RawReplyToken>(value: Wei::zero(), args: (0, len), salt: 1)
     assert!(code(erc20::try_transfer(token: bad, receiver: alice(), amount: 1)) == 2)
 }
 
@@ -148,7 +148,7 @@ fn test_revert_is_reverted() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
 /// The revert payload survives in the returndata buffer for bubbling.
 #[test(should_revert, selector = 0xdeadbeef)]
 fn test_reverted_payload_can_be_bubbled() uses (evm: mut Evm, ctx: Ctx, call: mut Call) {
-    let token = evm.create2<RawReplyToken>(value: 0, args: (0, REVERT), salt: 0)
+    let token = evm.create2<RawReplyToken>(value: Wei::zero(), args: (0, REVERT), salt: 0)
     match erc20::try_transfer(token, receiver: alice(), amount: 1) {
         TokenCall::Reverted => bubble_last_revert(),
         _ => {}

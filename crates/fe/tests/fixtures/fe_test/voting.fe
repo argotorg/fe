@@ -69,66 +69,66 @@ pub contract Voting {
 
 #[test]
 fn test_voting() uses (evm: mut Evm) {
-    let voting = evm.create2<Voting>(value: 0, args: (), salt: 0)
+    let voting = evm.create2<Voting>(value: Wei::zero(), args: (), salt: 0)
     assert!(voting.inner != 0)
 
     // Create 3 proposals
-    let p1: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::CreateProposal {})
+    let p1: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::CreateProposal {})
     assert!(p1 == 1)
-    let p2: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::CreateProposal {})
+    let p2: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::CreateProposal {})
     assert!(p2 == 2)
-    let p3: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::CreateProposal {})
+    let p3: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::CreateProposal {})
     assert!(p3 == 3)
 
-    let count: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::GetNumProposals {})
+    let count: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::GetNumProposals {})
     assert!(count == 3)
 
     // Voter 1 votes for proposal 1
-    let res: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::Vote { voter: 1, proposal: 1 })
+    let res: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::Vote { voter: 1, proposal: 1 })
     assert!(res == 0)
 
     // Voter 2 votes for proposal 1
-    let res: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::Vote { voter: 2, proposal: 1 })
+    let res: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::Vote { voter: 2, proposal: 1 })
     assert!(res == 0)
 
     // Voter 3 votes for proposal 2
-    let res: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::Vote { voter: 3, proposal: 2 })
+    let res: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::Vote { voter: 3, proposal: 2 })
     assert!(res == 0)
 
     // Check vote counts
-    let v1: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::GetVotes { proposal: 1 })
+    let v1: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::GetVotes { proposal: 1 })
     assert!(v1 == 2)
-    let v2: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::GetVotes { proposal: 2 })
+    let v2: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::GetVotes { proposal: 2 })
     assert!(v2 == 1)
-    let v3: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::GetVotes { proposal: 3 })
+    let v3: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::GetVotes { proposal: 3 })
     assert!(v3 == 0)
 
     // Voter 1 already voted on proposal 1 (returns 2 = duplicate)
-    let res: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::Vote { voter: 1, proposal: 1 })
+    let res: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::Vote { voter: 1, proposal: 1 })
     assert!(res == 2)
 
     // Vote count unchanged
-    let v1: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::GetVotes { proposal: 1 })
+    let v1: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::GetVotes { proposal: 1 })
     assert!(v1 == 2)
 
     // Voter 1 can vote on a different proposal
-    let res: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::Vote { voter: 1, proposal: 2 })
+    let res: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::Vote { voter: 1, proposal: 2 })
     assert!(res == 0)
 
-    let v2: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::GetVotes { proposal: 2 })
+    let v2: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::GetVotes { proposal: 2 })
     assert!(v2 == 2)
 
     // Check HasVoted
-    let hv: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::HasVoted { voter: 1, proposal: 1 })
+    let hv: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::HasVoted { voter: 1, proposal: 1 })
     assert!(hv == 1)
-    let hv: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::HasVoted { voter: 2, proposal: 2 })
+    let hv: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::HasVoted { voter: 2, proposal: 2 })
     assert!(hv == 0)
 
     // Invalid proposal (too high)
-    let res: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::Vote { voter: 5, proposal: 99 })
+    let res: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::Vote { voter: 5, proposal: 99 })
     assert!(res == 1)
 
     // Invalid proposal (zero)
-    let res: u256 = evm.call(addr: voting, gas: 100000, value: 0, message: VotingMsg::Vote { voter: 5, proposal: 0 })
+    let res: u256 = evm.call(addr: voting, gas: 100000, value: Wei::zero(), message: VotingMsg::Vote { voter: 5, proposal: 0 })
     assert!(res == 1)
 }

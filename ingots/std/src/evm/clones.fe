@@ -4,6 +4,7 @@
 use core::ptr::{self, MemSpan}
 use core::abi::store_word
 use super::effects::{Address, Create, revert, revert_error}
+use super::units::Wei
 use super::crypto::keccak256
 use super::packed::keccak_packed
 
@@ -45,7 +46,7 @@ uses (mem: mut super::effects::RawMem)
 
 /// Deploy a proxy using CREATE, forwarding `value` to its creation.
 /// Failure (including insufficient balance) reverts with ERC1167FailedCreateClone.
-pub fn clone(_ implementation: Address, value: u256) -> Address
+pub fn clone(_ implementation: Address, value: Wei) -> Address
 uses (create: mut Create)
 {
     let proxy = create.create_raw(value, init_code: clone_initcode(implementation))
@@ -57,7 +58,7 @@ uses (create: mut Create)
 
 /// Deploy a proxy using CREATE2. Reusing an occupied implementation/salt/deployer
 /// address fails; this helper deliberately does not return an existing proxy.
-pub fn clone_deterministic(_ implementation: Address, salt: u256, value: u256) -> Address
+pub fn clone_deterministic(_ implementation: Address, salt: u256, value: Wei) -> Address
 uses (create: mut Create)
 {
     let proxy = create.create2_raw(value, init_code: clone_initcode(implementation), salt)

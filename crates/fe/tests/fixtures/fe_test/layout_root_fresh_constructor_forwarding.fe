@@ -103,11 +103,11 @@ pub contract C {
 
 #[test]
 fn fresh_constructors_and_const_fanout_preserve_layout_roots() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
     let indexed: u256 = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::GetIndexed { lane: 1 },
     )
     assert!(indexed == 1)
@@ -115,7 +115,7 @@ fn fresh_constructors_and_const_fanout_preserve_layout_roots() uses (evm: mut Ev
     let shared: u256 = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::GetShared {},
     )
     assert!(shared == 2)
@@ -123,7 +123,7 @@ fn fresh_constructors_and_const_fanout_preserve_layout_roots() uses (evm: mut Ev
     let independent: (u256, u256) = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::GetIndependent {},
     )
     assert!(independent.0 == 4)

@@ -9,7 +9,7 @@ pub contract CallBorrow {
         let held = mut value
         let mut output = MemBuffer::empty()
         let outcome = call.raw_call(
-            addr: Address { inner: 1 }, gas: 100000, value: 0,
+            addr: Address { inner: 1 }, gas: 100000, value: Wei::zero(),
             args: MemSpan::empty(), ret: mut output,
         )
         held = 1
@@ -24,7 +24,7 @@ pub contract CallRefBorrow {
         let held = ref value
         let mut output = MemBuffer::empty()
         let outcome = call.raw_call(
-            addr: Address { inner: 1 }, gas: 100000, value: 0,
+            addr: Address { inner: 1 }, gas: 100000, value: Wei::zero(),
             args: MemSpan::empty(), ret: mut output,
         )
         let observed: u256 = held
@@ -38,7 +38,7 @@ pub contract CallReborrow {
         value = 0
         let mut output = MemBuffer::empty()
         let outcome = call.raw_call(
-            addr: Address { inner: 1 }, gas: 100000, value: 0,
+            addr: Address { inner: 1 }, gas: 100000, value: Wei::zero(),
             args: MemSpan::empty(), ret: mut output,
         )
         let held = mut value
