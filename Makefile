@@ -80,6 +80,8 @@ README.md: src/main.rs
 # checkout as it is (it is cloned if it doesn't exist).
 EISENBOTE_REPO = https://github.com/fe-lang/eisenbote
 EISENBOTE ?= target/eisenbote
+# EISENBOTE_BUILD=0 skips the build and uses the last working executable.
+EISENBOTE_BUILD ?= 1
 
 .PHONY: eisenbote-checkout
 eisenbote-checkout:
@@ -91,10 +93,16 @@ eisenbote-checkout:
 
 .PHONY: eisenbote
 eisenbote: eisenbote-checkout
+ifeq ($(EISENBOTE_BUILD),0)
+	$(MAKE) -C $(EISENBOTE) download
+else
+	@echo "Building eisenbote with this Fe. To use its last working executable"
+	@echo "instead, run: make $(or $(MAKECMDGOALS),eisenbote) version=$(version) EISENBOTE_BUILD=0"
 	cargo build --release -p fe --features cranelift
 	$(MAKE) -C $(EISENBOTE) -B FE=$(CURDIR)/target/release/fe || { \
 		echo "Building eisenbote with this Fe failed; using its last working executable."; \
 		$(MAKE) -C $(EISENBOTE) download; }
+endif
 
 # Any eisenbote executable, for checks that don't need a fresh build.
 $(EISENBOTE)/out/eisenbote: | eisenbote-checkout
