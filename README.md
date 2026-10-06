@@ -35,7 +35,7 @@ the command reference.
 - `ingots/core/` - `core` ingot, built into every compilation
 - `ingots/std/` - Fe standard library
 - `feup/` - the `feup` installer script
-- `newsfragments/` - release note fragments consumed by towncrier
+- `newsfragments/` - release note fragments consumed by eisenbote (see `eisenbote.toml`)
 
 ## Development
 

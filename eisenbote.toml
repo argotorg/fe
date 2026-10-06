@@ -1,44 +1,36 @@
-[tool.towncrier]
-# Read https://github.com/argotorg/fe/newsfragments/README.md for instructions
-# package = "fe"
-filename = "CHANGELOG.md"
+# Settings for eisenbote (https://github.com/fe-lang/eisenbote), which
+# assembles CHANGELOG.md from newsfragments/. See newsfragments/README.md.
 directory = "newsfragments"
-underlines = ["", ""]
+filename = "CHANGELOG.md"
 issue_format = "[#{issue}](https://github.com/argotorg/fe/issues/{issue})"
-start_string = "[//]: # (towncrier release notes start)"
+start_string = "[//]: # (release notes start)"
 title_format = "## {version} ({project_date})"
 
-[[tool.towncrier.type]]
+[[type]]
 directory = "feature"
 name = "Features"
-showcontent = true
 
-[[tool.towncrier.type]]
+[[type]]
 directory = "bugfix"
 name = "Bugfixes"
-showcontent = true
 
-[[tool.towncrier.type]]
+[[type]]
 directory = "performance"
 name = "Performance improvements"
-showcontent = true
 
-[[tool.towncrier.type]]
+[[type]]
 directory = "doc"
 name = "Improved Documentation"
-showcontent = true
 
-[[tool.towncrier.type]]
+[[type]]
 directory = "removal"
 name = "Deprecations and Removals"
-showcontent = true
 
-[[tool.towncrier.type]]
+[[type]]
 directory = "internal"
 name = "Internal Changes - for Fe Contributors"
-showcontent = true
 
-[[tool.towncrier.type]]
+[[type]]
 directory = "misc"
 name = "Miscellaneous changes"
 showcontent = false

@@ -73,7 +73,7 @@ README.md: src/main.rs
 # from newsfragments/. It is checked out next to this repository and built with
 # the Fe compiler about to be released, which also checks the native backend on
 # a real program. If that build fails, eisenbote's last working executable is
-# downloaded instead. Its settings are in pyproject.toml, in towncrier's format.
+# downloaded instead. Its settings are in eisenbote.toml.
 EISENBOTE ?= ../eisenbote
 
 .PHONY: eisenbote
