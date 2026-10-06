@@ -70,22 +70,40 @@ README.md: src/main.rs
 	cargo readme --no-title --no-indent-headings > README.md
 
 # eisenbote (https://github.com/fe-lang/eisenbote) assembles the release notes
-# from newsfragments/. It is checked out next to this repository and built with
-# the Fe compiler about to be released, which also checks the native backend on
-# a real program. If that build fails, eisenbote's last working executable is
-# downloaded instead. Its settings are in eisenbote.toml.
-EISENBOTE ?= ../eisenbote
+# from newsfragments/, configured in eisenbote.toml. It is built with the Fe
+# compiler about to be released, which also checks the native backend on a
+# real program. If that build fails, eisenbote's last working executable is
+# downloaded instead.
+#
+# By default the Makefile keeps its own clone of eisenbote in target/eisenbote
+# and updates it to eisenbote's latest master. Set EISENBOTE to use another
+# checkout as it is (it is cloned if it doesn't exist).
+EISENBOTE_REPO = https://github.com/fe-lang/eisenbote
+EISENBOTE ?= target/eisenbote
+
+.PHONY: eisenbote-checkout
+eisenbote-checkout:
+	@if [ ! -d "$(EISENBOTE)/.git" ]; then \
+		git clone --quiet --depth 1 $(EISENBOTE_REPO) "$(EISENBOTE)"; \
+	elif [ "$(origin EISENBOTE)" = file ]; then \
+		git -C "$(EISENBOTE)" pull --quiet --ff-only; \
+	fi
 
 .PHONY: eisenbote
-eisenbote:
+eisenbote: eisenbote-checkout
 	cargo build --release -p fe --features cranelift
 	$(MAKE) -C $(EISENBOTE) -B FE=$(CURDIR)/target/release/fe || { \
 		echo "Building eisenbote with this Fe failed; using its last working executable."; \
 		$(MAKE) -C $(EISENBOTE) download; }
 
 # Any eisenbote executable, for checks that don't need a fresh build.
-$(EISENBOTE)/out/eisenbote:
+$(EISENBOTE)/out/eisenbote: | eisenbote-checkout
 	$(MAKE) -C $(EISENBOTE) download
+
+# Check that newsfragments/ only holds well-named fragments (used by CI).
+.PHONY: check-notes
+check-notes: $(EISENBOTE)/out/eisenbote
+	$(EISENBOTE)/bin/eisenbote check
 
 notes: eisenbote
 	$(EISENBOTE)/bin/eisenbote build --yes --version $(version)

@@ -22,7 +22,7 @@ If the PR fixes an issue, use that number here. If there is no issue,
 then open up the PR first and use the PR number for the newsfragment.
 
 The release notes are assembled with
-[eisenbote](https://github.com/fe-lang/eisenbote), checked out next to this
-repository. Run `../eisenbote/bin/eisenbote draft --version <next version>`
-to preview the release notes, and `../eisenbote/bin/eisenbote check` to check
-the fragment names (`make -C ../eisenbote download` fetches its executable).
+[eisenbote](https://github.com/fe-lang/eisenbote), configured in
+`eisenbote.toml`. `make check-notes` checks the fragment names, and
+`target/eisenbote/bin/eisenbote draft --version <next version>` (after any
+eisenbote make target, such as `make check-notes`) previews the release notes.
