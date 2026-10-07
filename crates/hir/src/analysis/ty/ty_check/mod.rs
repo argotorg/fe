@@ -3501,7 +3501,15 @@ impl<'db> TyChecker<'db> {
                 // implement subtyping.
                 let actual = actual.fold_with(self.db, &mut self.table);
                 if actual.is_never(self.db) {
-                    expected
+                    // A diverging expression takes the expected type, except
+                    // while that is still unknown: answering with the open
+                    // variable would hide that the expression diverges.
+                    let expected = expected.fold_with(self.db, &mut self.table);
+                    if matches!(expected.data(self.db), TyData::TyVar(_)) {
+                        actual
+                    } else {
+                        expected
+                    }
                 } else {
                     let expected = expected.fold_with(self.db, &mut self.table);
                     merge_equated_layout_holes(self.db, actual, expected)

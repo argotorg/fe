@@ -456,6 +456,53 @@ pub fn main() -> i32 {
 }
 
 #[test]
+fn native_code_after_partially_diverging_else_if_chain_runs() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("else_if_chain.fe");
+    fs::write(
+        &source,
+        r#"
+fn after_else_if(_ x: u64) -> u64 {
+    let mut r: u64 = 0
+    if x == 0 {
+        return 1
+    } else if x == 5 {
+        r = 3
+    } else {
+        return 2
+    }
+    r + 4
+}
+pub fn main() -> i32 {
+    let mut i: u64 = 0
+    while i < 4 {
+        if i != 1 {
+            i += 1
+            continue
+        } else if i == 1 {
+            i += 0
+        } else {
+            return 100
+        }
+        i += 2
+    }
+    core::assert(i == 4)
+    core::assert(after_else_if(5) == 7)
+    core::assert(after_else_if(6) == 2)
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let status = Command::new(out.join("else_if_chain")).status().unwrap();
+        assert_eq!(status.code(), Some(0), "O{level}: {status:?}");
+    }
+}
+
+#[test]
 fn native_loop_carried_struct_values_reuse_storage_after_reads() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("value_loop.fe");

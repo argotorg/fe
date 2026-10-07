@@ -4789,8 +4789,16 @@ impl<'db> TyChecker<'db> {
                 else_.span(self.body()).into(),
                 else_prop.borrow_provider,
             );
+            // The conditional only diverges if both branches do.
+            let else_ty = else_prop.ty.fold_with(self.db, &mut self.table);
+            let then_ty = then_prop.ty.fold_with(self.db, &mut self.table);
+            let ty = if else_ty.is_never(self.db) && !then_ty.is_never(self.db) {
+                then_prop.ty
+            } else {
+                else_prop.ty
+            };
             ExprProp {
-                ty: else_prop.ty,
+                ty,
                 is_mut: true,
                 binding: None,
                 borrow_provider,
@@ -4830,6 +4838,7 @@ impl<'db> TyChecker<'db> {
         };
 
         let mut match_ty = expected;
+        let mut diverging_arms = 0;
         let mut first_provider: Option<(DynLazySpan<'db>, super::ProviderAddressSpace)> = None;
         let mut provider_unknown = false;
         let mut provider_conflict = false;
@@ -4850,7 +4859,17 @@ impl<'db> TyChecker<'db> {
             } else {
                 self.check_expr(arm.body, match_ty)
             };
-            match_ty = arm_prop.ty;
+            // A diverging arm doesn't determine the type of the match, which
+            // only diverges if every arm does.
+            if arm_prop
+                .ty
+                .fold_with(self.db, &mut self.table)
+                .is_never(self.db)
+            {
+                diverging_arms += 1;
+            } else {
+                match_ty = arm_prop.ty;
+            }
             self.env.leave_scope();
 
             if arm_prop.ty.as_capability(self.db).is_some() {
@@ -4923,6 +4942,10 @@ impl<'db> TyChecker<'db> {
                     self.push_diag(diag);
                 }
             }
+        }
+
+        if !arms.is_empty() && diverging_arms == arms.len() {
+            match_ty = TyId::never(self.db);
         }
 
         ExprProp {

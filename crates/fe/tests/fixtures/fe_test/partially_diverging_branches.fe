@@ -1,0 +1,127 @@
+// A conditional or match whose last branch diverges, but where another branch
+// falls through, must not be treated as diverging: the code after it runs.
+
+fn after_else_if(_ x: u64) -> u64 {
+    let mut r: u64 = 0
+    if x == 0 {
+        return 1
+    } else if x == 5 { r = 3 } else { return 2 }
+    r + 4
+}
+
+#[test]
+fn code_after_else_if_chain_runs() {
+    assert!(after_else_if(0) == 1)
+    assert!(after_else_if(5) == 7)
+    assert!(after_else_if(6) == 2)
+}
+
+fn after_nested_if(_ x: u64) -> u64 {
+    let mut r: u64 = 0
+    if x == 0 {
+        return 1
+    } else {
+        if x == 5 { r = 3 } else { return 2 }
+    }
+    r + 4
+}
+
+#[test]
+fn code_after_nested_if_runs() {
+    assert!(after_nested_if(5) == 7)
+    assert!(after_nested_if(6) == 2)
+}
+
+fn loop_with_continue_and_return(_ limit: u64) -> u64 {
+    let mut i: u64 = 0
+    while i < limit {
+        if i != 1 {
+            i += 1
+            continue
+        } else if i == 1 { i += 0 } else { return 100 }
+        i += 2
+    }
+    i
+}
+
+#[test]
+fn continue_in_else_if_chain_with_return() {
+    assert!(loop_with_continue_and_return(4) == 4)
+    assert!(loop_with_continue_and_return(1) == 1)
+}
+
+#[test]
+fn break_and_continue_in_else_if_chain() {
+    let mut i: u64 = 0
+    let mut evens: u64 = 0
+    while i < 10 {
+        if i == 6 {
+            break
+        } else if i % 2 == 0 {
+            evens += 1
+        } else {
+            i += 1
+            continue
+        }
+        i += 1
+    }
+    assert!(i == 6)
+    assert!(evens == 3)
+}
+
+#[test]
+fn for_loop_else_if_chain_with_continue() {
+    let mut total: u64 = 0
+    let xs: [u64; 4] = [1, 2, 3, 4]
+    for x in xs {
+        if x == 1 {
+            continue
+        } else if x == 3 {
+            total += 100
+        } else {
+            total += 1
+            continue
+        }
+        total += 10
+    }
+    assert!(total == 112)
+}
+
+enum Choice {
+    Exit,
+    Stay,
+    Fail,
+}
+
+fn after_match(_ choice: Choice) -> u64 {
+    let mut r: u64 = 0
+    match choice {
+        Choice::Exit => {
+            return 1
+        },
+        Choice::Stay => {
+            r = 3
+        },
+        Choice::Fail => {
+            return 2
+        },
+    }
+    r + 4
+}
+
+#[test]
+fn code_after_match_with_diverging_arms_runs() {
+    assert!(after_match(Choice::Exit) == 1)
+    assert!(after_match(Choice::Stay) == 7)
+    assert!(after_match(Choice::Fail) == 2)
+}
+
+fn always_returns(_ x: u64) -> u64 {
+    if x == 0 { return 1 } else { return 2 }
+}
+
+#[test]
+fn fully_diverging_conditional_still_returns() {
+    assert!(always_returns(0) == 1)
+    assert!(always_returns(3) == 2)
+}
