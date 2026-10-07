@@ -9,7 +9,7 @@ use cranelift_entity::EntityRef;
 
 use super::{
     access::ResolvedAccess,
-    ir::{AvailabilityRequirement, AvailabilitySummary},
+    ir::{AvailabilityRequirement, AvailabilitySummary, SeparationOrigin},
     solver::Borrowck,
     summary::{CallInputs, SourceInstantiations},
 };
@@ -18,13 +18,14 @@ use crate::analysis::{
         SemOrigin,
         capability::{
             birth::AllocationBirth,
-            external::ExternalOrigin,
+            external::{ClobberCondition, ExternalOrigin},
             footprint::{AccessExtent, AccessFootprint},
             guard::{Guard, ValueOccurrence},
             handle::AddressOccurrence,
             index::{BinderScope, IndexExpr},
             path::RegionPath,
-            region::{OverlapResult, RegionRoot, RegionSet},
+            region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace},
+            separation::{Separation, SeparationSet},
             shape::ShapeId,
             source::{InputOrigin, SourceExpr},
             state::BorrowState,
@@ -32,7 +33,7 @@ use crate::analysis::{
         },
         normalized::{NBlockId, NStatementKind, NTerminatorKind, NValueId, access::AccessPhase},
     },
-    ty::{corelib::MemoryAccessKind, ty_is_copy},
+    ty::{corelib::MemoryAccessKind, ty_def::BorrowKind, ty_is_copy},
 };
 
 impl<'db> AvailabilitySummary<'db> {
@@ -57,6 +58,9 @@ pub(super) struct ResolvedAvailability<'db> {
 
 pub(super) struct AvailabilityAnalysis<'db> {
     pub summary: AvailabilitySummary<'db>,
+    /// Separation preconditions that rule out conflicts caused only by
+    /// corrupted caller memory, in the default owner scope.
+    pub deferred: Vec<(Guarded<'db, Separation<'db>>, SeparationOrigin<'db>)>,
     pub native_validity: NativeValidity<'db>,
     pub diagnostic: Option<SemanticDiagnostic<'db>>,
     report_errors: bool,
@@ -521,6 +525,7 @@ impl<'db> Borrowck<'db> {
         }
         let mut analysis = AvailabilityAnalysis {
             summary: AvailabilitySummary::empty(),
+            deferred: Vec::new(),
             native_validity: NativeValidity::default(),
             diagnostic: None,
             report_errors: true,
@@ -784,6 +789,108 @@ impl<'db> Borrowck<'db> {
         }
     }
 
+    /// The first moved value that an access of `region` would use or write.
+    fn moved_conflict<'a>(
+        &self,
+        state: &'a AvailabilityState<'db>,
+        kind: MemoryAccessKind,
+        extent: AccessExtent<'db>,
+        region: &RegionSet<'db>,
+    ) -> Option<&'a MoveFact<'db>> {
+        if region.is_empty() {
+            return None;
+        }
+        state.moved.values().find(|fact| {
+            if kind != MemoryAccessKind::Write {
+                // Ownership still exists for an empty representation.
+                // Exact structural overlap is a logical conflict even when
+                // the corresponding physical footprint touches no bytes.
+                return (extent == AccessExtent::Typed
+                    && !region.proven_intersection(&fact.region).is_empty())
+                    || !matches!(
+                        AccessFootprint { region, extent }
+                            .overlap(self.db, AccessFootprint::typed(&fact.region)),
+                        OverlapResult::Disjoint
+                    );
+            }
+            // Requirements are conjunctive. A whole-value write elsewhere
+            // cannot authorize an earlier field write through a moved owner.
+            region.clauses().iter().any(|write| {
+                let written = RegionSet::new(region.scope(), [write.clone()]);
+                fact.region.clauses().iter().any(|moved| {
+                    let unavailable = RegionSet::new(fact.region.scope(), [moved.clone()]);
+                    let overlaps = (extent == AccessExtent::Typed
+                        && !written.proven_intersection(&unavailable).is_empty())
+                        || !matches!(
+                            AccessFootprint {
+                                region: &written,
+                                extent,
+                            }
+                            .overlap(self.db, AccessFootprint::typed(&unavailable)),
+                            OverlapResult::Disjoint
+                        );
+                    if !overlaps {
+                        return false;
+                    }
+                    let unavailable = if write.guard.scope() == region.scope() {
+                        unavailable.with_guard(&write.guard)
+                    } else {
+                        unavailable
+                    };
+                    !written.provably_covers(&unavailable)
+                })
+            })
+        })
+    }
+
+    /// Export the separation of a clobber condition's target from its written
+    /// footprint as a caller precondition, as borrow conflicts do.
+    fn defer_clobber_separation(
+        &self,
+        analysis: &mut AvailabilityAnalysis<'db>,
+        region: &RegionSet<'db>,
+        clause_scope: &BinderScope,
+        condition: &ClobberCondition<'db>,
+        fact: &MoveFact<'db>,
+        origin: SemOrigin<'db>,
+    ) {
+        let place = |source: &SourceExpr<'db>| SymbolicPlace {
+            root: RegionRoot::External(source.source.clone()),
+            path: source.path.clone(),
+            views: source.views.clone(),
+        };
+        let separation = Separation {
+            protected: place(&condition.target),
+            protected_kind: BorrowKind::Mut,
+            access: place(&condition.written),
+            access_kind: BorrowKind::Mut,
+            extent: condition.extent,
+            suspended: Box::new([]),
+        };
+        let origin = SeparationOrigin {
+            owner: self.instance.key(self.db).owner(self.db),
+            template_owner: self.body.template_owner,
+            borrow: fact.origin,
+            access: origin,
+        };
+        analysis.deferred.extend(
+            SeparationSet::new(
+                self.db,
+                region.scope(),
+                // The condition's places may name witnesses of the clause
+                // that carries it, beyond the region's scope.
+                [Guarded {
+                    guard: Guard::always(clause_scope),
+                    payload: separation,
+                }],
+            )
+            .quantify_into(self.db, &BinderScope::default())
+            .clauses()
+            .iter()
+            .map(|clause| (clause.clone(), origin)),
+        );
+    }
+
     fn require_available(
         &self,
         analysis: &mut AvailabilityAnalysis<'db>,
@@ -808,69 +915,51 @@ impl<'db> Borrowck<'db> {
             .clauses()
             .iter()
             .all(|clause| matches!(clause.payload.root, RegionRoot::Value(_)));
-        if (analysis.report_errors || independent)
-            && analysis.diagnostic.is_none()
-            && let Some(fact) = state.moved.values().find(|fact| {
-                if kind != MemoryAccessKind::Write {
-                    // Ownership still exists for an empty representation.
-                    // Exact structural overlap is a logical conflict even when
-                    // the corresponding physical footprint touches no bytes.
-                    return (footprint.extent == AccessExtent::Typed
-                        && !region.proven_intersection(&fact.region).is_empty())
-                        || !matches!(
-                            AccessFootprint {
-                                region: &region,
-                                extent: footprint.extent
-                            }
-                            .overlap(self.db, AccessFootprint::typed(&fact.region)),
-                            OverlapResult::Disjoint
-                        );
-                }
-                // Requirements are conjunctive. A whole-value write elsewhere
-                // cannot authorize an earlier field write through a moved owner.
-                region.clauses().iter().any(|write| {
-                    let written = RegionSet::new(region.scope(), [write.clone()]);
-                    fact.region.clauses().iter().any(|moved| {
-                        let unavailable = RegionSet::new(fact.region.scope(), [moved.clone()]);
-                        let overlaps = (footprint.extent == AccessExtent::Typed
-                            && !written.proven_intersection(&unavailable).is_empty())
-                            || !matches!(
-                                AccessFootprint {
-                                    region: &written,
-                                    extent: footprint.extent
-                                }
-                                .overlap(self.db, AccessFootprint::typed(&unavailable)),
-                                OverlapResult::Disjoint
-                            );
-                        if !overlaps {
-                            return false;
-                        }
-                        let unavailable = if write.guard.scope() == region.scope() {
-                            unavailable.with_guard(&write.guard)
-                        } else {
-                            unavailable
-                        };
-                        !written.provably_covers(&unavailable)
-                    })
-                })
-            })
-        {
-            let message = if kind == MemoryAccessKind::Write {
-                "cannot write through a moved value"
+        if (analysis.report_errors || independent) && analysis.diagnostic.is_none() {
+            // An overlap only through an address that exists if a caller's
+            // memory was corrupted is a precondition for that caller: such a
+            // conflict is deferred like a borrow conflict, as the separation
+            // that rules the corruption out.
+            let (conditional, direct): (Vec<_>, Vec<_>) = region
+                .clauses()
+                .iter()
+                .cloned()
+                .partition(|clause| deferrable_condition(clause).is_some());
+            let direct = RegionSet::new(region.scope(), direct);
+            if let Some(fact) = self.moved_conflict(state, kind, footprint.extent, &direct) {
+                let message = if kind == MemoryAccessKind::Write {
+                    "cannot write through a moved value"
+                } else {
+                    "cannot use a value after it was moved"
+                };
+                let mut diagnostic =
+                    self.diag(SemanticDiagnosticKind::MoveConflict, origin, message.into());
+                diagnostic.push_secondary(
+                    "value is moved here".into(),
+                    SemanticDiagnosticSpan::OriginWithTemplateFallback {
+                        owner: self.instance.key(self.db).owner(self.db),
+                        template_owner: self.body.template_owner,
+                        origin: fact.origin,
+                    },
+                );
+                analysis.diagnostic = Some(diagnostic);
             } else {
-                "cannot use a value after it was moved"
-            };
-            let mut diagnostic =
-                self.diag(SemanticDiagnosticKind::MoveConflict, origin, message.into());
-            diagnostic.push_secondary(
-                "value is moved here".into(),
-                SemanticDiagnosticSpan::OriginWithTemplateFallback {
-                    owner: self.instance.key(self.db).owner(self.db),
-                    template_owner: self.body.template_owner,
-                    origin: fact.origin,
-                },
-            );
-            analysis.diagnostic = Some(diagnostic);
+                for clause in &conditional {
+                    let single = RegionSet::new(region.scope(), [clause.clone()]);
+                    if let Some(fact) = self.moved_conflict(state, kind, footprint.extent, &single)
+                    {
+                        let condition = deferrable_condition(clause).expect("partitioned");
+                        self.defer_clobber_separation(
+                            analysis,
+                            &single,
+                            clause.guard.scope(),
+                            condition,
+                            fact,
+                            origin,
+                        );
+                    }
+                }
+            }
         }
         // Local reads still need diagnostics, but cannot be caller preconditions.
         // Fresh allocations cannot impose incoming obligations either. Filtering
@@ -897,6 +986,25 @@ impl<'db> Borrowck<'db> {
             });
         }
     }
+}
+
+/// The caller-checkable corruption condition under which `clause`'s address
+/// exists: both of its places name memory the caller supplied.
+fn deferrable_condition<'a, 'db>(
+    clause: &'a Guarded<'db, SymbolicPlace<'db>>,
+) -> Option<&'a ClobberCondition<'db>> {
+    let RegionRoot::External(source) = &clause.payload.root else {
+        return None;
+    };
+    let condition = source.clobber_dependency()?;
+    [&condition.target, &condition.written]
+        .iter()
+        .all(|place| {
+            !place.invalidated
+                && place.source.param().is_some()
+                && !place.source.names_local_storage()
+        })
+        .then_some(condition)
 }
 
 #[cfg(test)]

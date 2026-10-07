@@ -1472,8 +1472,14 @@ impl<'db> Borrowck<'db> {
         }
         let scalar_result =
             scalar_result.filter(|guard: &Guard<'db>| !Guard::always(guard.scope()).implies(guard));
-        let mut separations =
-            self.summarize_separations(&self.conflicts().deferred, &mut choices, &handles);
+        let deferred: Vec<_> = self
+            .conflicts()
+            .deferred
+            .iter()
+            .chain(&ownership.deferred)
+            .cloned()
+            .collect();
+        let mut separations = self.summarize_separations(&deferred, &mut choices, &handles);
         // Equal relations take the first origin: prefer one forwarded from a
         // callee, which names the borrow and access where the relation began.
         let owner = self.instance.key(self.db).owner(self.db);
@@ -3196,15 +3202,22 @@ impl<'db> Borrowck<'db> {
                         continue;
                     }
                     let mut alternative = source.clone();
-                    alternative.clobber = SourceExpr::from_place(&target_clause.payload)
-                        .zip(SourceExpr::from_place(&written_clause.payload))
-                        .map(|(target, written)| {
-                            Box::new(ClobberCondition::new(
+                    let written = SourceExpr::from_place(&written_clause.payload);
+                    alternative.clobber =
+                        match (SourceExpr::from_place(&target_clause.payload), written) {
+                            (Some(target), Some(written)) => Some(Box::new(ClobberCondition::new(
                                 target,
                                 written,
                                 extent.substitute(&written_subst),
-                            ))
-                        });
+                            ))),
+                            // A caller frame slot is reached only through an
+                            // address that exists under its own condition.
+                            (None, Some(written)) => written
+                                .source
+                                .clobber_dependency()
+                                .map(|condition| Box::new(condition.clone())),
+                            (_, None) => None,
+                        };
                     clauses.push(Guarded {
                         guard,
                         payload: SymbolicPlace {

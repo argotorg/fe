@@ -161,15 +161,23 @@ impl<'db> OpaqueWrite<'db> {
                         } else {
                             family.clone()
                         };
-                        alternative.clobber = SourceExpr::from_place(&target)
-                            .zip(SourceExpr::from_place(&clause.payload))
-                            .map(|(target, written)| {
-                                Box::new(ClobberCondition::new(
-                                    target,
-                                    written.substitute(db, &fresh),
-                                    extent.substitute(&fresh),
-                                ))
-                            });
+                        let written = SourceExpr::from_place(&clause.payload)
+                            .map(|written| written.substitute(db, &fresh));
+                        alternative.clobber = match (SourceExpr::from_place(&target), written) {
+                            (Some(target), Some(written)) => Some(Box::new(ClobberCondition::new(
+                                target,
+                                written,
+                                extent.substitute(&fresh),
+                            ))),
+                            // A frame slot is not a caller-visible endpoint. A
+                            // write through an earlier replacement still reaches
+                            // it only if that replacement's condition held.
+                            (None, Some(written)) => written
+                                .source
+                                .clobber_dependency()
+                                .map(|condition| Box::new(condition.clone())),
+                            (_, None) => None,
+                        };
                         Some((guard, alternative))
                     })
                     .collect::<Vec<_>>()
