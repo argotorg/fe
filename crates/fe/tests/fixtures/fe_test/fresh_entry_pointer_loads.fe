@@ -1,0 +1,19 @@
+use core::ptr
+fn write_beside_fresh_borrow(_ slot: **u256) -> u256 {
+    let fresh = ptr::alloc<u256>()
+    *fresh = 1
+    let held = mut *fresh
+    let older = *slot
+    *older = 3
+    held = 4
+    *fresh
+}
+#[test]
+fn entry_loaded_pointer_stays_separate_from_fresh_allocation() {
+    let original = ptr::alloc<u256>()
+    *original = 2
+    let slot = ptr::alloc<*u256>()
+    *slot = original
+    core::assert(write_beside_fresh_borrow(slot) == 4)
+    core::assert(*original == 3)
+}

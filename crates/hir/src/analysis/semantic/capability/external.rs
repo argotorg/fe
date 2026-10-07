@@ -927,8 +927,8 @@ impl<'db> ExternalSource<'db> {
     pub fn dereferences(&self) -> &[RegionPath<IndexExpr<'db>>] {
         &self.dereferences
     }
-    /// Entry pointers cannot refer to storage first created in the callee's
-    /// frame. Once overwritten, their explicit replacement regions take over.
+    /// Addresses from entry contents predate storage created by this invocation.
+    /// Later writes carry explicit replacement regions instead of entry sources.
     pub fn is_incoming(&self) -> bool {
         match &self.origin {
             ExternalOrigin::Input(_) => true,
@@ -1518,18 +1518,14 @@ impl<'db> ExternalSource<'db> {
         {
             self.alias_guard_in(&right.source, guard, true, false, basis)
         } else {
-            // Distinct fresh allocations and incoming pointers cannot identify the
-            // same object. Unknown manufactured addresses remain conservative.
+            // Entry contents, including pointers loaded from them, predate this
+            // invocation's allocations. Later stores have their own explicit
+            // sources. A pointer followed through an allocation loses freshness.
             // This assumes each raw operation's entire footprint is within its
             // allocated object. Allocation identity is not a raw bounds certificate.
-            let disjoint = (matches!(
-                (&self.origin, &other.origin),
-                (
-                    ExternalOrigin::Allocation(_),
-                    ExternalOrigin::Input(_) | ExternalOrigin::Allocation(_)
-                ) | (ExternalOrigin::Input(_), ExternalOrigin::Allocation(_))
-            ) && self.dereferences.is_empty()
-                && other.dereferences.is_empty())
+            let disjoint = (self.is_fresh_allocation()
+                && (other.is_incoming() || other.is_fresh_allocation()))
+                || (other.is_fresh_allocation() && self.is_incoming())
                 || self.is_hashed_slot_beside_allocated_field(other)
                 || other.is_hashed_slot_beside_allocated_field(self)
                 || (typed && self.is_allocated_field_beside(other));
