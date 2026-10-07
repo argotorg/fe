@@ -1,0 +1,48 @@
+use std::evm::StorPtr
+
+struct Node {
+    left: StorPtr<Node>,
+    right: StorPtr<Node>,
+}
+
+contract Foo { mut tree: Node }
+
+struct A { b: StorPtr<B> }
+struct B { a: StorPtr<A> }
+struct Generic<T> { value: T, next: StorPtr<Generic<T>> }
+
+struct Inline<T> { value: T }
+struct Tagged<T, U> { tag: U, value: T }
+struct Nested { next: Inline<Tagged<Inline<StorPtr<Nested>>, u256>> }
+
+struct PtrBox<T> { ptr: *T }
+struct Indirect<T> { tag: u256, ptr: PtrBox<T> }
+struct RawNode { next: Inline<Indirect<RawNode>> }
+
+struct Phantom<T> { tag: u256 }
+struct PhantomNode { next: Phantom<PhantomNode> }
+struct Dormant<T> { next: Phantom<Dormant<[T; 1]>> }
+
+enum Link<T> {
+    Empty,
+    One(Inline<StorPtr<T>>),
+    Two { links: (StorPtr<T>, [StorPtr<T>; 2]) },
+}
+struct EnumNode { link: Link<EnumNode> }
+
+// Repeated constructors in finite nesting are not a growing family.
+struct Leaf { value: u256 }
+struct Finite { value: Inline<Inline<Inline<Leaf>>> }
+struct Permuted<T, U> { value: T, next: StorPtr<Permuted<U, T>> }
+
+// Symbolic array guards retain the landed growing-referent policy.
+struct SymbolicLinks<T, const N: usize> {
+    value: T,
+    next: [StorPtr<SymbolicLinks<[T; 1], N>>; N],
+}
+// An unrelated provider does not change diagnostics for computed raw-pointer
+// growth, which is checked by the instantiated referent inventory.
+struct ComputedRaw<const N: u256> {
+    handle: StorPtr<u256>,
+    next: *ComputedRaw<{ N + 1 }>,
+}

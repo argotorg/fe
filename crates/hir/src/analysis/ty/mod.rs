@@ -30,6 +30,7 @@ use crate::span::{DesugaredOrigin, EventDesugared, HirOrigin};
 
 pub mod abi_ty;
 pub mod adt_def;
+pub(crate) mod adt_recursion;
 pub mod assoc_const;
 pub mod binder;
 pub mod canonical;
@@ -240,6 +241,15 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
                 cycle_participants.extend(cycle.iter().map(|m| m.adt));
             } else if let Some(cycle) = growing.get(&adt) {
                 diags.push(Box::new(TyLowerDiag::GrowingRecursiveType(cycle.clone())) as _);
+                cycle_participants.extend(cycle.iter().map(|m| m.adt));
+            } else if let Some(cycle) = adt.growing_cycle(db) {
+                diags.push(Box::new(TyLowerDiag::GrowingRecursiveType(cycle.clone())) as _);
+                cycle_participants.extend(cycle.iter().map(|m| m.adt));
+            } else if matches!(adt_ref, AdtRef::Struct(struct_) if matches!(struct_.origin(db), HirOrigin::Desugared(DesugaredOrigin::AbiStruct(_))))
+                && let Some(cycle) = adt.abi_recursive_cycle(db)
+            {
+                diags.push(Box::new(TyLowerDiag::RecursiveAbiType(cycle.clone())) as _);
+                cycle_participants.extend(cycle.iter().map(|m| m.adt));
             }
         }
         diags
@@ -460,7 +470,7 @@ pub(crate) fn abi_struct_field_checks<'db>(
         }
         if AdtRef::from(struct_)
             .as_adt(db)
-            .recursive_cycle(db)
+            .abi_recursive_cycle(db)
             .is_some()
         {
             checks.reported_at_source.push(origin.clone());

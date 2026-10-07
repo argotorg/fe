@@ -1,0 +1,93 @@
+use std::evm::{Evm, StorPtr}
+
+struct A { value: u256, next: StorPtr<B> }
+struct B { value: u256, next: StorPtr<A> }
+impl Copy for A {}
+impl Copy for B {}
+
+struct Generic<T> { value: T, next: StorPtr<Generic<T>> }
+impl<T: Copy> Copy for Generic<T> {}
+
+struct Permuted<T, U> { first: T, second: U, next: StorPtr<Permuted<U, T>> }
+impl<T: Copy, U: Copy> Copy for Permuted<T, U> {}
+
+fn generic_value<T: Copy>(_ ptr: StorPtr<Generic<T>>) -> T {
+    ptr.read().value
+}
+
+struct Wrapped<T> { value: T }
+impl<T: Copy> Copy for Wrapped<T> {}
+struct Tagged<T, U> { tag: U, value: T }
+impl<T: Copy, U: Copy> Copy for Tagged<T, U> {}
+struct Nested {
+    value: u256,
+    next: Wrapped<Tagged<Wrapped<StorPtr<Nested>>, u256>>,
+}
+impl Copy for Nested {}
+
+enum Link<T> { None, Some(StorPtr<T>) }
+impl<T> Copy for Link<T> {}
+struct Aggregate {
+    value: u256,
+    next: (Link<Aggregate>, [StorPtr<Aggregate>; 2]),
+}
+impl Copy for Aggregate {}
+
+struct PtrBox<T> { ptr: *T }
+struct RawNode { value: u256, next: Wrapped<PtrBox<RawNode>> }
+struct Phantom<T> { tag: u256 }
+struct PhantomNode { next: Phantom<PhantomNode> }
+
+#[test]
+fn mutual_and_generic_storage_recursion() uses (evm: Evm) {
+    let a: StorPtr<A> = evm.stor_ptr(100)
+    let b: StorPtr<B> = evm.stor_ptr(200)
+    a.write(A { value: 10, next: b })
+    b.write(B { value: 20, next: a })
+    assert!(a.read().next.read().next.read().value == 10)
+    let g: StorPtr<Generic<u8>> = evm.stor_ptr(300)
+    g.write(Generic { value: 7, next: g })
+    assert!(generic_value(g.read().next.read().next) == 7)
+    let wide: StorPtr<Generic<u256>> = evm.stor_ptr(400)
+    wide.write(Generic { value: 1000, next: wide })
+    assert!(generic_value(wide.read().next) == 1000)
+    let first: StorPtr<Permuted<u8, u256>> = evm.stor_ptr(500)
+    let second: StorPtr<Permuted<u256, u8>> = evm.stor_ptr(600)
+    first.write(Permuted { first: 5, second: 600, next: second })
+    second.write(Permuted { first: 600, second: 5, next: first })
+    assert!(first.read().next.read().first == 600)
+    assert!(first.read().next.read().next.read().first == 5)
+}
+
+#[test]
+fn nested_storage_and_aggregate_wrappers() uses (evm: Evm) {
+    let ptr: StorPtr<Nested> = evm.stor_ptr(100)
+    ptr.write(Nested {
+        value: 17,
+        next: Wrapped { value: Tagged { tag: 99, value: Wrapped { value: ptr } } },
+    })
+    assert!(ptr.read().next.value.value.value.read().value == 17)
+    assert!(ptr.read().next.value.tag == 99)
+    let aggregate: StorPtr<Aggregate> = evm.stor_ptr(200)
+    aggregate.write(Aggregate { value: 23, next: (Link::Some(aggregate), [aggregate; 2]) })
+    let node = aggregate.read()
+    assert!(node.next.1[1].read().value == 23)
+    match node.next.0 {
+        Link::None => assert!(false),
+        Link::Some(next) => assert!(next.read().next.1[0].read().value == 23),
+    }
+}
+
+#[test]
+fn pointer_backed_wrappers_and_phantom_parameters() {
+    let ptr = core::ptr::alloc<RawNode>()
+    ptr.value = 41
+    ptr.next = Wrapped { value: PtrBox { ptr } }
+    assert!(ptr.next.value.ptr.next.value.ptr.value == 41)
+    ptr.next.value.ptr.value = 42
+    assert!(ptr.value == 42)
+    assert!(core::size_of<RawNode>() == 64)
+    let phantom = PhantomNode { next: Phantom { tag: 5 } }
+    assert!(phantom.next.tag == 5)
+    assert!(core::size_of<PhantomNode>() == 32)
+}

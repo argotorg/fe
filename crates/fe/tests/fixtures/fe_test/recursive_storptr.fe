@@ -1,0 +1,111 @@
+use std::evm::{Evm, StorPtr}
+
+struct Node {
+    value: u256,
+    left: StorPtr<Node>,
+    right: StorPtr<Node>,
+}
+
+impl Copy for Node {}
+
+fn follow(_ node: StorPtr<Node>) -> StorPtr<Node> {
+    node.read().left
+}
+
+fn read_value() -> u256 uses (node: Node) {
+    node.value
+}
+
+fn set_value(_ value: u256) uses (node: mut Node) {
+    node.value = value
+}
+
+fn helper_read(_ ptr: StorPtr<Node>) -> u256 {
+    with (ptr) { read_value() }
+}
+
+fn helper_write(_ ptr: StorPtr<Node>, _ value: u256) {
+    with (ptr) { set_value(value) }
+}
+
+msg TreeMsg {
+    #[selector = 1]
+    Read -> u256,
+    #[selector = 2]
+    Update { value: u256 },
+    #[selector = 3]
+    CopyNode,
+    #[selector = 4]
+    ReadCopy -> u256,
+    #[selector = 5]
+    UpdateCopy { value: u256 },
+    #[selector = 6]
+    Sentinel -> u256,
+}
+
+pub contract Tree {
+    mut root: Node,
+    mut copied: Node,
+    mut sentinel: u256,
+
+    init() uses (mut root, mut copied, mut sentinel, evm: Evm) {
+        // Each node occupies three slots. These child ranges are disjoint
+        // from one another and from the seven slots of contract fields.
+        let left: StorPtr<Node> = evm.stor_ptr(100)
+        let right: StorPtr<Node> = evm.stor_ptr(200)
+        let grandchild: StorPtr<Node> = evm.stor_ptr(300)
+        grandchild.write(Node { value: 30, left: grandchild, right: grandchild })
+        left.write(Node { value: 10, left: grandchild, right: right })
+        right.write(Node { value: 20, left: left, right: right })
+        root.value = 1
+        root.left = left
+        root.right = right
+        copied.value = 0
+        copied.left = left
+        copied.right = right
+        sentinel = 777
+    }
+
+    recv TreeMsg {
+        Read -> u256 uses (root) {
+            helper_read(follow(root.left)) + helper_read(root.right)
+        }
+
+        Update { value } uses (root) {
+            helper_write(follow(root.left), value)
+        }
+
+        CopyNode uses (root, mut copied) {
+            // Whole-node read copies the two handles into contract storage.
+            let snapshot = root.left.read()
+            copied = snapshot
+        }
+
+        ReadCopy -> u256 uses (copied) {
+            helper_read(copied.left) + helper_read(copied.right)
+        }
+
+        UpdateCopy { value } uses (copied) {
+            helper_write(copied.left, value)
+        }
+
+        Sentinel -> u256 uses (sentinel) { sentinel }
+    }
+}
+
+#[test]
+fn persistent_recursive_storage_handles() uses (evm: mut Evm) {
+    let tree = evm.create2<Tree>(value: 0, args: (), salt: 71)
+    assert!(tree.inner != 0)
+    let gas = 300000
+    let value = 0
+    assert!(evm.call(addr: tree, gas, value, message: TreeMsg::Read {}) == 50)
+    evm.call(addr: tree, gas, value, message: TreeMsg::Update { value: 31 })
+    assert!(evm.call(addr: tree, gas, value, message: TreeMsg::Read {}) == 51)
+    evm.call(addr: tree, gas, value, message: TreeMsg::CopyNode {})
+    assert!(evm.call(addr: tree, gas, value, message: TreeMsg::ReadCopy {}) == 51)
+    evm.call(addr: tree, gas, value, message: TreeMsg::UpdateCopy { value: 35 })
+    assert!(evm.call(addr: tree, gas, value, message: TreeMsg::Read {}) == 55)
+    assert!(evm.call(addr: tree, gas, value, message: TreeMsg::ReadCopy {}) == 55)
+    assert!(evm.call(addr: tree, gas, value, message: TreeMsg::Sentinel {}) == 777)
+}

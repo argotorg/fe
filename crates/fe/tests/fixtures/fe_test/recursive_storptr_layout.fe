@@ -1,0 +1,65 @@
+use core::effect_ref::EffectHandle
+use std::evm::{Evm, StorPtr}
+
+struct Node { left: StorPtr<Node>, right: StorPtr<Node> }
+
+contract Foo {
+    mut tree: Node,
+}
+
+struct A { next: StorPtr<B> }
+struct B { next: StorPtr<A> }
+
+msg LayoutMsg {
+    #[selector = 1]
+    Verify,
+}
+
+pub contract LayoutTree {
+    mut tree: Node,
+    mut mutual: A,
+    mut sentinel: u256,
+
+    init()
+    uses (mut tree, mut mutual, mut sentinel, evm: Evm)
+    {
+        tree.left = evm.stor_ptr(100)
+        tree.right = evm.stor_ptr(200)
+        mutual.next = evm.stor_ptr(300)
+        sentinel = 777
+    }
+
+    recv LayoutMsg {
+        Verify uses (tree, mutual, sentinel, evm: Evm) {
+            // Targets occupy separate storage. Only the three handles and
+            // the sentinel occupy the contract's first four slots.
+            assert!(evm.stor_ptr<u256>(0).read() == 100)
+            assert!(evm.stor_ptr<u256>(1).read() == 200)
+            assert!(evm.stor_ptr<u256>(2).read() == 300)
+            assert!(evm.stor_ptr<u256>(3).read() == 777)
+            assert!(tree.left.raw() == 100)
+            assert!(tree.right.raw() == 200)
+            assert!(mutual.next.raw() == 300)
+            assert!(sentinel == 777)
+        }
+    }
+}
+
+#[test]
+fn minimal_recursive_storage_contract() uses (evm: mut Evm) {
+    assert!(core::size_of<Node>() == 64)
+    let foo = evm.create2<Foo>(value: 0, args: (), salt: 1)
+    assert!(foo.inner != 0)
+}
+
+#[test]
+fn recursive_targets_do_not_allocate_inline_slots() uses (evm: mut Evm) {
+    let tree = evm.create2<LayoutTree>(value: 0, args: (), salt: 2)
+    assert!(tree.inner != 0)
+    evm.call(
+        addr: tree,
+        gas: 300000,
+        value: 0,
+        message: LayoutMsg::Verify {},
+    )
+}

@@ -3,12 +3,12 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/abi_recursive_struct.fe
 ---
-error[3-0002]: recursive type definition
-  ┌─ abi_recursive_struct.fe:4:1
+error[3-0058]: recursive ABI type definition
+  ┌─ abi_recursive_struct.fe:5:1
   │
-4 │ ╭ ╭ #[abi]
-5 │ │ │ pub struct Node {
-6 │ │ │     pub children: DynArray<Node>,
-7 │ │ │ }
+5 │ ╭ ╭ #[abi]
+6 │ │ │ pub struct Node {
+7 │ │ │     pub children: DynArray<Node>,
+8 │ │ │ }
   │ ╰─│─^ recursive type definition here
   │   ╰─' recursion occurs here

@@ -103,7 +103,7 @@ use crate::analysis::ty::trait_resolution::constraint::{
 };
 use crate::analysis::ty::ty_def::{TyBase, TyData, TyParam};
 use crate::analysis::ty::ty_lower::{GenericParamTypeSet, collect_generic_params};
-use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_ty};
+use crate::analysis::ty::visitor::TyVisitable;
 use crate::analysis::ty::{
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     provider::{
@@ -3566,45 +3566,29 @@ impl<'db> Trait<'db> {
 // ADT recursion (semantic) --------------------------------------------------
 
 impl<'db> AdtDef<'db> {
-    /// Detects a recursive ADT cycle that is not guarded by an indirect wrapper
-    /// (e.g., pointer/reference). Returns the cycle members if the ADT is part
-    /// of a cycle; otherwise returns None.
+    /// Finds inline representation cycles by instantiating stored fields.
     pub fn recursive_cycle(self, db: &'db dyn HirAnalysisDb) -> Option<Vec<AdtCycleMember<'db>>> {
-        fn impl_check<'db>(
-            db: &'db dyn HirAnalysisDb,
-            root: AdtDef<'db>,
-            adt: AdtDef<'db>,
-            chain: &[AdtCycleMember<'db>],
-        ) -> Option<Vec<AdtCycleMember<'db>>> {
-            if adt == root && !chain.is_empty() {
-                return Some(chain.to_vec());
-            } else if chain.iter().any(|member| member.adt == adt) || adt.fields(db).is_empty() {
-                return None;
-            }
+        use crate::analysis::ty::adt_recursion::{RecursionKind, recursive_cycle};
+        recursive_cycle(db, self, RecursionKind::Representation)
+    }
 
-            let mut chain = chain.to_vec();
-            for (field_idx, field) in adt.fields(db).iter().enumerate() {
-                for (ty_idx, ty) in field.iter_types(db).enumerate() {
-                    for field_adt_ref in collect_direct_adts(db, ty.instantiate_identity()) {
-                        chain.push(AdtCycleMember {
-                            adt,
-                            field_idx,
-                            ty_idx,
-                        });
+    /// Checks growing application families reached through provider targets,
+    /// supplementing the ingot-wide analysis of constructor growth in fields.
+    pub(crate) fn growing_cycle(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<Vec<AdtCycleMember<'db>>> {
+        use crate::analysis::ty::adt_recursion::{RecursionKind, recursive_cycle};
+        recursive_cycle(db, self, RecursionKind::Referents)
+    }
 
-                        if let Some(cycle) =
-                            impl_check(db, root, lower_adt(db, field_adt_ref), &chain)
-                        {
-                            return Some(cycle);
-                        }
-                        chain.pop();
-                    }
-                }
-            }
-            None
-        }
-
-        impl_check(db, self, self, &[])
+    /// ABI schemas expand dynamic array elements in addition to stored fields.
+    pub(crate) fn abi_recursive_cycle(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<Vec<AdtCycleMember<'db>>> {
+        use crate::analysis::ty::adt_recursion::{RecursionKind, recursive_cycle};
+        recursive_cycle(db, self, RecursionKind::Abi)
     }
 }
 
@@ -3906,48 +3890,6 @@ pub fn ingot_growing_cycles<'db>(
         cycles.insert(adt, cycle);
     }
     cycles
-}
-
-/// Collect all ADTs directly appearing inside the given type without
-/// traversing through indirect wrappers like pointers or references.
-fn collect_direct_adts<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-) -> rustc_hash::FxHashSet<AdtRef<'db>> {
-    use crate::analysis::ty::ty_def::{PrimTy, TyBase};
-    use crate::analysis::ty::visitor::TyVisitable;
-    use rustc_hash::FxHashSet;
-
-    struct AdtCollector<'db> {
-        db: &'db dyn HirAnalysisDb,
-        adts: FxHashSet<AdtRef<'db>>,
-    }
-    impl<'db> TyVisitor<'db> for AdtCollector<'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-        fn visit_app(&mut self, abs: TyId<'db>, arg: TyId<'db>) {
-            let is_indirect = match abs.data(self.db) {
-                TyData::TyBase(TyBase::Prim(PrimTy::Ptr)) => true,
-                // Future: handle Ref when introduced.
-                _ => false,
-            };
-            if !is_indirect {
-                walk_ty(self, abs);
-                walk_ty(self, arg)
-            }
-        }
-        fn visit_adt(&mut self, adt: AdtDef<'db>) {
-            self.adts.insert(adt.adt_ref(self.db));
-        }
-    }
-
-    let mut collector = AdtCollector {
-        db,
-        adts: FxHashSet::default(),
-    };
-    ty.visit_with(&mut collector);
-    collector.adts
 }
 
 #[derive(Clone, Copy, Debug)]

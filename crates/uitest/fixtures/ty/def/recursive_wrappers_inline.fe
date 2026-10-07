@@ -1,0 +1,21 @@
+use core::effect_ref::{AddressSpace, EffectHandle}
+
+struct Inline<T> { value: T }
+struct Pair<T, U> { left: T, right: U }
+struct Direct { tag: u256, next: Direct }
+struct A { tag: u256, next: Inline<B> }
+struct B { tag: u256, next: Pair<u8, A> }
+struct Wrapped { tag: u256, next: Inline<Pair<u8, Inline<Wrapped>>> }
+struct TupleArray { tag: u256, next: (u8, [Inline<TupleArray>; 2]) }
+enum InlineLink<T> { Empty, Some { value: T } }
+struct EnumNode { tag: u256, next: InlineLink<EnumNode> }
+
+// Being an effect handle cannot erase its inline field.
+struct ValueHandle<T> { handle: *T, value: T }
+impl<T> EffectHandle for ValueHandle<T> {
+    type Target = T
+    const SPACE: AddressSpace = AddressSpace::Memory
+    type Raw = *T
+    fn raw(self) -> *T { self.handle }
+}
+struct BadHandle { tag: u256, next: ValueHandle<BadHandle> }
