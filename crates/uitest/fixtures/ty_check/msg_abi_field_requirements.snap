@@ -17,4 +17,4 @@ error[9-0008]: unsupported ABI field type in msg variant `UnsupportedType`
 15 │     UnsupportedType { value: Choice },
    │                              ^^^^^^ `Choice` cannot be represented in the Solidity ABI
    │
-   = unsupported ABI enum type `Choice`
+   = unsupported ABI enum type `Choice`: an enum needs a `std::abi::SolCompat` impl naming its Solidity type, such as `uint8`
