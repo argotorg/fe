@@ -8,6 +8,7 @@ use hir::analysis::{
             external::{ExternalOrigin, ExternalSource},
             guard::ValueOccurrence,
             handle::HandleAddressSpace,
+            index::IndexExpr,
             path::{Projection, project_referent_ty},
             semantics::CapabilityClass,
             source::{InputOrigin, SourceExpr},
@@ -274,72 +275,85 @@ pub(crate) fn declaration_runtime_return_class<'db>(
         };
         class = updated;
     }
-    // Native references into raw memory retain the pointer's layout. Type-level
-    // layout forwarding alone cannot describe a pointer loaded from a container.
-    // The shared borrow summary retains those load/dereference transitions.
+    // Semantic sources preserve stored-capability loads that type-level layout
+    // forwarding omits. Follow those transitions in the actual parameter class
+    // before choosing the declaration's return carrier.
     if let Ok(Some(summary)) = semantic_borrow_summary(db, semantic) {
         let values = ValueInterner::<SourceExpr<'db>>::new(db, ValueLimits::default());
         let mut transports = BTreeMap::new();
         for leaf in values.leaves(&summary.result, ValueOccurrence::Summary) {
-            if !matches!(leaf.semantics.class, CapabilityClass::Borrow(_)) {
+            let native = matches!(leaf.semantics.class, CapabilityClass::Borrow(_));
+            if !native && leaf.semantics.class != CapabilityClass::Pointer {
                 continue;
             }
-            let projection: Vec<_> = leaf
-                .path
-                .as_slice()
-                .iter()
-                .map(|step| match step {
-                    Projection::Field(field) => ReturnProjectionStep::Field(field.0),
-                    Projection::VariantField { variant, field } => {
-                        ReturnProjectionStep::VariantField {
-                            variant: variant.0,
-                            field: field.0,
-                        }
-                    }
-                    Projection::Index(_) => ReturnProjectionStep::AnyIndex,
-                })
-                .collect();
-            let space = raw_return_space(db, semantic, &leaf.payload.source);
+            let projection = return_projection(leaf.path.as_slice());
+            let transport = input_return_transport(db, key, &leaf.payload).or_else(|| {
+                // Unknown pointer contents keep their typed storage class.
+                // Corrupted native bytes likewise retain their descriptor
+                // representation even though borrow checking forbids use.
+                if !native || leaf.payload.invalidated {
+                    return Some(stored_class_for_ty_in_env(
+                        db,
+                        RuntimeTypeEnv::for_semantic(db, semantic),
+                        leaf.semantics.representation_ty,
+                    ));
+                }
+                let space = raw_return_space(db, semantic, &leaf.payload.source)?;
+                let pointee = if projection.is_empty() {
+                    let (_, target) = semantic.normalized_result_ty(db).as_borrow(db)?;
+                    stored_class_for_ty_in_env(
+                        db,
+                        RuntimeTypeEnv::for_semantic(db, semantic),
+                        target,
+                    )
+                } else {
+                    let RuntimeClass::Ref { pointee, .. } =
+                        project_declaration_return_source(db, class.clone(), &projection)?
+                    else {
+                        return None;
+                    };
+                    *pointee
+                };
+                Some(RuntimeClass::raw_addr(db, space, pointee))
+            });
+            // Borrowing a raw referent selects its concrete pointee recipe;
+            // returning a raw pointer value preserves the stored pointer class.
+            let transport = transport.map(|class| match class {
+                RuntimeClass::RawAddr {
+                    space,
+                    pointee: Some(pointee),
+                } if native => RuntimeClass::raw_addr(db, space, pointee.target(db)),
+                class => class,
+            });
             transports
                 .entry(projection)
-                .and_modify(|previous| {
-                    if *previous != space {
-                        *previous = None;
-                    }
+                .and_modify(|previous: &mut Option<RuntimeClass<'db>>| {
+                    *previous =
+                        previous
+                            .as_ref()
+                            .zip(transport.as_ref())
+                            .and_then(|(left, right)| {
+                                if native {
+                                    join_reference_transports(db, left, right)
+                                } else {
+                                    merge_runtime_class(db, left, right)
+                                }
+                            });
                 })
-                .or_insert(space);
+                .or_insert(transport);
         }
-        for (projection, space) in transports {
-            let Some(space) = space else {
+        for (projection, transport) in transports {
+            let Some(transport) = transport else {
                 continue;
             };
-            if projection.is_empty()
-                && let Some((_, target)) = semantic.normalized_result_ty(db).as_borrow(db)
-            {
-                // The summary excludes nonreturning paths and retains pointer
-                // dereferences that type-level forwarding may lose. A bare
-                // borrow keeps that raw transport with its declared target;
-                // stored borrow fields still use their canonical descriptors.
-                let pointee = stored_class_for_ty_in_env(
-                    db,
-                    RuntimeTypeEnv::for_semantic(db, semantic),
-                    target,
-                );
-                class = RuntimeClass::raw_addr(db, space, pointee);
-                continue;
-            }
-            let Some(RuntimeClass::Ref { pointee, .. }) =
-                project_declaration_return_source(db, class.clone(), &projection)
-            else {
-                continue;
-            };
-            let source = RuntimeClass::raw_addr(db, space, *pointee);
-            if let Some(updated) = merge_declaration_return_source(
+            if projection.is_empty() {
+                class = transport;
+            } else if let Some(updated) = merge_declaration_return_source(
                 db,
                 class.clone(),
                 &projection,
-                &source,
-                &source,
+                &transport,
+                &transport,
                 ReturnSourceMerge::Replace,
             ) {
                 class = updated;
@@ -353,6 +367,62 @@ pub(crate) fn declaration_runtime_return_class<'db>(
         && let Some(selected) = BoundaryMatcher::selected_class(db, &class, &boundary)
     {
         class = selected;
+    }
+    Some(class)
+}
+
+fn return_projection(path: &[Projection<IndexExpr<'_>>]) -> Vec<ReturnProjectionStep> {
+    path.iter()
+        .map(|step| match step {
+            Projection::Field(field) => ReturnProjectionStep::Field(field.0),
+            Projection::VariantField { variant, field } => ReturnProjectionStep::VariantField {
+                variant: variant.0,
+                field: field.0,
+            },
+            Projection::Index(_) => ReturnProjectionStep::AnyIndex,
+        })
+        .collect()
+}
+
+fn input_return_transport<'db>(
+    db: &'db dyn MirDb,
+    key: RuntimeInstanceKey<'db>,
+    source: &SourceExpr<'db>,
+) -> Option<RuntimeClass<'db>> {
+    // A projected borrow or repack needs a separate conversion from the
+    // carrier. Here the result is the actual stored capability value.
+    if source.source.is_reachable()
+        || !source.path.is_empty()
+        || source.views.iter().next().is_some()
+    {
+        return None;
+    }
+    let ExternalOrigin::Input(input) = &source.source.origin else {
+        return None;
+    };
+    let semantic = key.semantic(db)?;
+    let binding = semantic
+        .key(db)
+        .typed_body(db)
+        .param_binding(input.param() as usize)?;
+    let (_, class) = runtime_visible_binding_plans(db, semantic)
+        .iter()
+        .zip(key.params(db))
+        .find(|(entry, _)| entry.binding == binding)?;
+    let mut class = class.clone();
+    if let InputOrigin::Slot { slot, .. } = input.origin() {
+        class = project_declaration_return_source(db, class, &return_projection(slot.as_slice()))?;
+    }
+    for path in input
+        .dereferences()
+        .iter()
+        .chain(source.source.dereferences())
+    {
+        class = project_declaration_return_source(
+            db,
+            class.deref_target(db)?,
+            &return_projection(path.as_slice()),
+        )?;
     }
     Some(class)
 }
