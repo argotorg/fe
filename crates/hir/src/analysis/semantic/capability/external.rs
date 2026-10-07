@@ -1128,8 +1128,29 @@ impl<'db> ExternalSource<'db> {
         instance: &Self,
         instance_scope: &BinderScope,
     ) -> Option<StorageMatch<'db>> {
+        self.match_projected_instance(
+            scope,
+            &RegionPath::default(),
+            instance,
+            instance_scope,
+            &RegionPath::default(),
+        )
+    }
+
+    /// Match a certified subobject against a request for it or one of its
+    /// descendants. Root and path binders participate in the same correspondence.
+    pub fn match_projected_instance(
+        &self,
+        scope: &BinderScope,
+        path: &RegionPath<IndexExpr<'db>>,
+        instance: &Self,
+        instance_scope: &BinderScope,
+        instance_path: &RegionPath<IndexExpr<'db>>,
+    ) -> Option<StorageMatch<'db>> {
         let mut location = Vec::new();
         self.correspondence(instance, &mut location)?;
+        let prefix = instance_path.as_slice().get(..path.as_slice().len())?;
+        aligned_index_pairs(path.as_slice(), prefix, &mut location)?;
         let mut metadata = Vec::new();
         self.metadata_correspondence(instance, &mut metadata)?;
         let mut bindings = BTreeMap::new();

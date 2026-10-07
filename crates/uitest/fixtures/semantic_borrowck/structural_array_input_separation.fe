@@ -1,0 +1,23 @@
+use core::ptr
+fn fill(_ source: *u256, _ count: usize) -> *[*u256; 2] {
+    let cells = ptr::alloc<[*u256; 2]>()
+    let mut i: usize = 0
+    while i < count {
+        (*cells)[i] = source
+        i += 1
+    }
+    cells
+}
+fn inspect(_ target: mut u256, _ source: *u256) -> u256 {
+    let cells = fill(source, 2)
+    let pointer = (*cells)[1]
+    target += 1
+    *pointer
+}
+fn run() -> u256 {
+    let target = ptr::alloc<u256>()
+    let source = ptr::alloc<u256>()
+    *target = 0
+    *source = 7
+    inspect(mut *target, source)
+}

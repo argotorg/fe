@@ -87,6 +87,7 @@ pub struct BorrowState<'db> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CertifiedContents<'db> {
     pub family: RegionRoot<'db>,
+    pub path: RegionPath<IndexExpr<'db>>,
     pub scope: BinderScope,
     pub coverage: Guard<'db>,
     pub contents: CapabilityValue<'db>,
@@ -343,8 +344,9 @@ impl<'db> BorrowState<'db> {
             let family = RegionSet::singleton(
                 &certificate.scope,
                 certificate.family.clone(),
-                RegionPath::default(),
+                certificate.path.clone(),
             )
+            .with_guard(&certificate.coverage)
             .substitute(db, &certificate.scope.freshening(footprint.region.scope()))
             .close_existentials(footprint.region.scope());
             matches!(
@@ -371,9 +373,13 @@ impl<'db> BorrowState<'db> {
             let family = RegionSet::singleton(
                 &certificate.scope,
                 certificate.family.clone(),
-                RegionPath::default(),
+                certificate.path.clone(),
             );
-            !certificate.family.indices().any(renewed)
+            !certificate
+                .family
+                .indices()
+                .chain(certificate.path.indices())
+                .any(renewed)
                 && family.forget_occurrences(occurrence) == family
                 && !certificate.coverage.indices().into_iter().any(renewed)
                 && !certificate
@@ -598,8 +604,13 @@ impl<'db> BorrowState<'db> {
                 if instance.uncertain() || instance.is_reachable() {
                     return None;
                 }
-                let matched =
-                    family.match_instance(&certificate.scope, instance, clause.guard.scope())?;
+                let matched = family.match_projected_instance(
+                    &certificate.scope,
+                    &certificate.path,
+                    instance,
+                    clause.guard.scope(),
+                    &clause.payload.path,
+                )?;
                 let write = matched.write?;
                 let guard = certificate
                     .coverage
@@ -613,8 +624,8 @@ impl<'db> BorrowState<'db> {
             .collect()
     }
 
-    /// Definite typed initialization supplied by a verified whole-cell range.
-    /// The selected request path is retained, so this is also valid for a leaf.
+    /// Definite typed initialization supplied by a verified subobject range.
+    /// A certificate covers its descendants, never a partially initialized parent.
     pub fn certified_initialized_region(&self, region: &RegionSet<'db>) -> RegionSet<'db> {
         RegionSet::new(
             region.scope(),
@@ -635,6 +646,7 @@ impl<'db> BorrowState<'db> {
         &mut self,
         values: &mut CapabilityValues<'db>,
         family: &RegionRoot<'db>,
+        path: &RegionPath<IndexExpr<'db>>,
         family_scope: &BinderScope,
         coverage: &Guard<'db>,
         replacement: &CapabilityValue<'db>,
@@ -651,21 +663,46 @@ impl<'db> BorrowState<'db> {
         );
         if !matches!(family, RegionRoot::External(source) if !source.uncertain() && !source.is_reachable())
             || !self.contents.get(family).is_some_and(|old| {
-                old.scope() == family_scope && old.shape() == replacement.shape()
+                old.scope()
+                    .variables()
+                    .all(|index| family_scope.validate(index).is_ok())
             })
         {
             return false;
         }
         // Preserve the proved contents when a later write invalidates the must
         // fact. Only members outside its coverage can retain older possibilities.
-        let mut contents = values.with_guard(replacement, coverage);
-        if let Some(uncovered) = Guard::always(family_scope).difference(coverage) {
-            let prior = values.with_guard(&self.contents[family], &uncovered);
-            contents = values.join(&prior, &contents);
+        let old = &self.contents[family];
+        let Some((shape, domain)) = old.shape().project(values.db, path, family_scope) else {
+            return false;
+        };
+        if shape != replacement.shape() {
+            return false;
         }
+        let Some(coverage) = coverage.and(&domain) else {
+            return true;
+        };
+        let context = Guarded {
+            guard: Guard::always(old.scope()),
+            payload: old
+                .scope()
+                .variables()
+                .map(|index| (index, index))
+                .collect(),
+        };
+        let Ok(contents) = values.replace_family(
+            old,
+            &StructuralPath::new(path.as_slice()),
+            replacement,
+            &coverage,
+            &context,
+        ) else {
+            return false;
+        };
         self.contents.insert(family.clone(), contents);
         self.certified_contents.push(CertifiedContents {
             family: family.clone(),
+            path: path.clone(),
             scope: family_scope.clone(),
             coverage: coverage.clone(),
             contents: replacement.clone(),
@@ -690,6 +727,7 @@ impl<'db> BorrowState<'db> {
         for prior in &self.certified_contents {
             let matching = other.certified_contents.iter().find(|incoming| {
                 incoming.family == prior.family
+                    && incoming.path == prior.path
                     && incoming.scope == prior.scope
                     && incoming.contents == prior.contents
             });
@@ -716,6 +754,7 @@ impl<'db> BorrowState<'db> {
         for incoming in &other.certified_contents {
             if self.certified_contents.iter().any(|prior| {
                 prior.family == incoming.family
+                    && prior.path == incoming.path
                     && prior.scope == incoming.scope
                     && prior.contents == incoming.contents
             }) {
@@ -846,18 +885,28 @@ impl<'db> BorrowState<'db> {
                         Some(covered) => guard.difference(covered)?,
                         None => guard,
                     };
-                    Some((contents, matched.substitution, guard))
+                    Some((contents, matched.substitution, guard, 0))
                 });
             let certified = certified
                 .into_iter()
                 .map(|(certificate, substitution, guard)| {
-                    (&certificate.contents, substitution, guard)
+                    (
+                        &certificate.contents,
+                        substitution,
+                        guard,
+                        certificate.path.as_slice().len(),
+                    )
                 });
-            for (contents, substitution, guard) in possible.chain(certified) {
-                let path = StructuralPath::new(clause.payload.path.as_slice());
-                let Some(selected) =
-                    values.project_substituted(contents, &substitution, &path, occurrence)
-                else {
+            for (contents, substitution, guard, split) in possible.chain(certified) {
+                let (prefix, suffix) = clause.payload.path.as_slice().split_at(split);
+                let path = StructuralPath::new(suffix);
+                let Some(selected) = values.project_substituted(
+                    contents,
+                    &substitution,
+                    &path,
+                    occurrence,
+                    StructuralPath::new(prefix),
+                ) else {
                     continue;
                 };
                 let selected = clause

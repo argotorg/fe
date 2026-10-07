@@ -10,7 +10,7 @@ use crate::{
                 footprint::{AccessExtent, AccessFootprint},
                 guard::Guard,
                 index::{BinderScope, IndexExpr, IndexNamespace, IndexSubst},
-                path::RegionPath,
+                path::{Projection, RegionPath},
                 region::{OverlapResult, RegionRoot, RegionSet, SymbolicPlace},
                 state::CapabilityValue,
                 value::Guarded,
@@ -86,6 +86,7 @@ pub(super) struct VerifiedFrontierEffects<'db> {
     pub step: FrontierStep,
     pub kind: ContentsCertificateKind,
     pub family: RegionRoot<'db>,
+    pub path: RegionPath<IndexExpr<'db>>,
     pub family_scope: BinderScope,
     pub member: IndexExpr<'db>,
     pub store_value: NValueId,
@@ -94,6 +95,7 @@ pub(super) struct VerifiedFrontierEffects<'db> {
 #[derive(Clone, Debug)]
 pub(super) struct PrefixCertificate<'db> {
     pub family: RegionRoot<'db>,
+    pub path: RegionPath<IndexExpr<'db>>,
     pub family_scope: BinderScope,
     pub coverage: Guard<'db>,
     pub contents: CapabilityValue<'db>,
@@ -361,7 +363,6 @@ impl<'db> Borrowck<'db> {
         };
         if region.definite_write().is_none()
             || !before.guard().implies(&clause.guard)
-            || !clause.payload.path.is_empty()
             || clause.payload.views.iter().next().is_some()
         {
             return Err(FrontierRejection::AmbiguousStore);
@@ -369,11 +370,31 @@ impl<'db> Borrowck<'db> {
         let RegionRoot::External(actual) = &clause.payload.root else {
             return Err(FrontierRejection::UnsupportedFamily);
         };
-        let selector = match &actual.origin {
-            ExternalOrigin::Memory {
-                offset: MemoryOffset::Element(_, selector),
-                ..
-            } => *selector,
+        let path = &clause.payload.path;
+        // One frontier selects a single array dimension. Other dimensions and
+        // discriminant-dependent fields need their own invariant proof.
+        if path
+            .as_slice()
+            .iter()
+            .any(|step| matches!(step, Projection::VariantField { .. }))
+        {
+            return Err(FrontierRejection::UnsupportedFamily);
+        }
+        let selectors: Vec<_> = path.indices().collect();
+        let structural_selector = match selectors.as_slice() {
+            [] => None,
+            [selector] => Some(*selector),
+            _ => return Err(FrontierRejection::UnsupportedFamily),
+        };
+        let selector = match (&actual.origin, structural_selector) {
+            (_, Some(selector)) => selector,
+            (
+                ExternalOrigin::Memory {
+                    offset: MemoryOffset::Element(_, selector),
+                    ..
+                },
+                None,
+            ) => *selector,
             _ if kind == ContentsCertificateKind::LastWrite => IndexExpr::Const(0),
             _ => return Err(FrontierRejection::UnsupportedFamily),
         };
@@ -391,40 +412,66 @@ impl<'db> Borrowck<'db> {
                 let RegionRoot::External(source) = root else {
                     return None;
                 };
-                let member = match &source.origin {
-                    ExternalOrigin::Memory {
-                        offset: MemoryOffset::Element(_, member),
-                        ..
-                    } if member.bound_namespace() == Some(IndexNamespace::InputSlot)
-                        && contents.scope().variables().collect::<Vec<_>>() == vec![*member] =>
-                    {
-                        *member
+                let (family_scope, member, family_path) = if structural_selector.is_some() {
+                    if contents.scope().variables().next().is_some() {
+                        return None;
                     }
-                    _ if kind == ContentsCertificateKind::LastWrite
-                        && contents.scope().variables().next().is_none() =>
-                    {
-                        IndexExpr::Const(0)
+                    match kind {
+                        ContentsCertificateKind::Prefix => {
+                            let (scope, member) = contents.scope().bind(IndexNamespace::InputSlot);
+                            (scope, member, path.map_indices(|_| member))
+                        }
+                        ContentsCertificateKind::LastWrite => {
+                            (contents.scope().clone(), IndexExpr::Const(0), path.clone())
+                        }
                     }
-                    _ => return None,
+                } else {
+                    let member = match &source.origin {
+                        ExternalOrigin::Memory {
+                            offset: MemoryOffset::Element(_, member),
+                            ..
+                        } if member.bound_namespace() == Some(IndexNamespace::InputSlot)
+                            && contents.scope().variables().collect::<Vec<_>>()
+                                == vec![*member] =>
+                        {
+                            *member
+                        }
+                        _ if kind == ContentsCertificateKind::LastWrite
+                            && contents.scope().variables().next().is_none() =>
+                        {
+                            IndexExpr::Const(0)
+                        }
+                        _ => return None,
+                    };
+                    (contents.scope().clone(), member, path.clone())
                 };
                 if source.uncertain()
                     || source.is_reachable()
-                    || contents.shape() != before.value(value.value).shape()
+                    || !contents
+                        .shape()
+                        .project(self.db, &family_path, &family_scope)
+                        .is_some_and(|(shape, _)| shape == before.value(value.value).shape())
                 {
                     return None;
                 }
-                let matched = source.match_instance(contents.scope(), actual, region.scope())?;
+                let matched = source.match_projected_instance(
+                    &family_scope,
+                    &family_path,
+                    actual,
+                    region.scope(),
+                    path,
+                )?;
                 let write = matched.write?;
                 (clause.guard.implies(&matched.guard) && write.guard.proves_equal(member, selector))
-                    .then(|| (root.clone(), contents.scope().clone(), member))
+                    .then(|| (root.clone(), family_scope, member, family_path))
             })
             .collect();
-        let [(family, family_scope, member)] = families.as_slice() else {
+        let [(family, family_scope, member, path)] = families.as_slice() else {
             return Err(FrontierRejection::UnsupportedFamily);
         };
         let scope = BinderScope::default();
         let prior = if *member == IndexExpr::Const(0) {
-            RegionSet::singleton(&scope, family.clone(), RegionPath::default())
+            RegionSet::singleton(&scope, family.clone(), path.clone())
         } else {
             let (opened, witness) = scope.bind(IndexNamespace::Existential);
             let substitution = IndexSubst::new(family_scope, &opened, [(*member, witness)])
@@ -445,7 +492,7 @@ impl<'db> Borrowck<'db> {
                     guard: prior_guard,
                     payload: SymbolicPlace {
                         root: prior_root,
-                        path: RegionPath::default(),
+                        path: path.substitute(&substitution),
                         views: Default::default(),
                     },
                 }],
@@ -558,6 +605,7 @@ impl<'db> Borrowck<'db> {
             step,
             kind,
             family: family.clone(),
+            path: path.clone(),
             family_scope: family_scope.clone(),
             member: *member,
         })
@@ -600,6 +648,7 @@ impl<'db> Borrowck<'db> {
         .ok_or(FrontierRejection::UnsupportedScalarType)?;
         Ok(PrefixCertificate {
             family: proof.family,
+            path: proof.path,
             family_scope: proof.family_scope,
             coverage,
             contents,
