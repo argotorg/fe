@@ -7,6 +7,7 @@ use parser::ast::{
     self, ImplItemKind, ItemKind, ItemModifierOwner, TraitItemKind, prelude::AstNode,
 };
 
+use super::attr::attr_lines;
 use super::types::{
     Doc, ToDoc, TokenPiece, block_list_auto, block_list_spaced_auto, block_list_with_comments,
     hardlines, has_comment_tokens, intersperse, newline_count, token_doc, token_doc_until_token,
@@ -224,6 +225,48 @@ fn where_doc<'a, N: ast::WhereClauseOwner + AstNode>(
     }
 }
 
+/// Counts newlines in a node's leading trivia (before its first non-trivia
+/// token or child node).
+fn node_leading_newlines(ctx: &RewriteContext, node: &parser::SyntaxNode) -> usize {
+    use parser::syntax_kind::SyntaxKind;
+    use parser::syntax_node::NodeOrToken;
+
+    let mut count = 0;
+    for child in node.children_with_tokens() {
+        match child {
+            NodeOrToken::Token(token) => match token.kind() {
+                SyntaxKind::Newline => count += newline_count(ctx.snippet(token.text_range())),
+                SyntaxKind::WhiteSpace => {}
+                _ => break,
+            },
+            NodeOrToken::Node(_) => break,
+        }
+    }
+    count
+}
+
+/// Counts newlines in a node's trailing trivia (after its last non-trivia
+/// token or child node).
+fn node_trailing_newlines(ctx: &RewriteContext, node: &parser::SyntaxNode) -> usize {
+    use parser::syntax_kind::SyntaxKind;
+    use parser::syntax_node::NodeOrToken;
+
+    let mut count = 0;
+    let mut child = node.last_child_or_token();
+    while let Some(current) = child {
+        match &current {
+            NodeOrToken::Token(token) => match token.kind() {
+                SyntaxKind::Newline => count += newline_count(ctx.snippet(token.text_range())),
+                SyntaxKind::WhiteSpace => {}
+                _ => break,
+            },
+            NodeOrToken::Node(_) => break,
+        }
+        child = current.prev_sibling_or_token();
+    }
+    count
+}
+
 /// Format a block of items `{ ... }`, preserving whether there was a blank line
 /// between entries in the source (2+ newlines => one blank line; otherwise none).
 /// Takes a syntax node and a function to cast child nodes to the item type.
@@ -241,28 +284,23 @@ fn block_items_doc<'a, T: ToDoc>(
     let mut is_first = true;
 
     for child in syntax.children_with_tokens() {
+        let mut newlines_after_entry = 0usize;
         let entry_doc = match child {
+            // A module's inner attributes (`#![...]`) come before its items.
+            // The line breaks after them belong to the attribute list node.
+            NodeOrToken::Node(node) if ast::AttrList::can_cast(node.kind()) => {
+                newlines_after_entry = node_trailing_newlines(ctx, &node);
+                ast::AttrList::cast(node).and_then(|attrs| attr_lines(&attrs, ctx))
+            }
             NodeOrToken::Node(node) => {
-                if node.kind() == SyntaxKind::AttrList {
-                    // A module's inner attributes (`#![...]`), one per line,
-                    // each kept exactly as written so string arguments keep
-                    // their whitespace.
-                    Some(intersperse(
-                        alloc,
-                        node.children()
-                            .filter(|attr| attr.kind() == SyntaxKind::Attr)
-                            .map(|attr| {
-                                alloc.text(ctx.snippet(attr.text_range()).trim().to_string())
-                            })
-                            .collect::<Vec<_>>(),
-                        alloc.hardline(),
-                    ))
-                } else {
-                    let Some(item) = cast_fn(node) else {
-                        continue;
-                    };
-                    Some(item.to_doc(ctx))
-                }
+                let Some(item) = cast_fn(node.clone()) else {
+                    continue;
+                };
+                // Item nodes own their leading comments and newlines, but the
+                // node's doc drops that leading trivia; count it here so blank
+                // lines between entries are preserved without doubling.
+                pending_newlines += node_leading_newlines(ctx, &node);
+                Some(item.to_doc(ctx))
             }
             NodeOrToken::Token(token) => match token.kind() {
                 SyntaxKind::Newline => {
@@ -289,7 +327,7 @@ fn block_items_doc<'a, T: ToDoc>(
             inner = inner.append(hardlines(alloc, pending_newlines));
         }
 
-        pending_newlines = 0;
+        pending_newlines = newlines_after_entry;
         inner = inner.append(entry_doc);
     }
 
@@ -1165,7 +1203,17 @@ impl ToDoc for ast::VariantDef {
 
         let kind_doc = match self.kind() {
             ast::VariantKind::Unit => alloc.nil(),
-            ast::VariantKind::Tuple(tuple_type) => tuple_type.to_doc(ctx),
+            // Unlike a one-element tuple type, a single field needs no
+            // trailing comma: `Some(T)`, not `Some(T,)`.
+            ast::VariantKind::Tuple(tuple_type) => block_list_auto(
+                ctx,
+                tuple_type.syntax(),
+                "(",
+                ")",
+                ast::Type::cast,
+                ctx.config.indent_width as isize,
+                true,
+            ),
             ast::VariantKind::Record(fields) => {
                 if has_comment_tokens(fields.syntax()) {
                     return attrs.append(name.clone()).append(alloc.text(" ")).append(

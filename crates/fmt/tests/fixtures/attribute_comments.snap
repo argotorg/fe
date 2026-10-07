@@ -1,0 +1,54 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/attribute_comments.fe
+---
+// Plain comments among an item's doc comments and attributes must be kept.
+
+/// Adds one.
+// The explicit wrap check replaces the checked-arithmetic panic.
+#[arithmetic(unchecked)]
+pub fn add_one(x: u8) -> u8 {
+    x + 1
+}
+
+/// Doc one
+#[attr]
+// plain comment
+/// Doc two
+pub struct S { x: u8 }
+
+#[arithmetic(unchecked)]
+// Note right after the attribute.
+pub fn after_attr(x: u8) -> u8 {
+    x + 1
+}
+
+#[inline] // same-line note
+fn same_line() {}
+
+#[test]
+// first note
+// second note after a blank line
+fn two_notes() {}
+
+#[arithmetic(unchecked)]
+// Note after the attribute, and a comment in the header.
+pub fn with_header_comment(x: u8) // header
+    -> u8 {
+    x + 1
+}
+
+struct T {
+    /// Field docs.
+    // Field note.
+    #[indexed]
+    pub a: u8,
+}
+
+enum E {
+    /// Variant docs.
+    // Variant note.
+    #[attr]
+    A,
+}

@@ -215,6 +215,7 @@ mod strings {
 "#;
     let expected = r#"mod inner {
     #![arithmetic(unchecked)]
+
     pub(ingot) fn sum() -> u256 {
         let mut total: u256 = 0
         #[unroll]
@@ -240,6 +241,7 @@ mod strings {
 
     third")]
     #![other]
+
     fn looped() {
         #[example(text = "one
    two")]
@@ -253,4 +255,143 @@ mod strings {
     assert_eq!(formatted.trim_end(), expected.trim_end());
     let reformatted = format_str(&formatted, &Config::default()).expect("reformat should succeed");
     assert_eq!(reformatted, formatted, "formatting is not stable");
+}
+
+/// Formats `source`, checks the result against `expected`, and checks that it
+/// parses and formats to itself. For syntax that the tree-sitter grammar does
+/// not accept yet, which rules out a file in `tests/fixtures`.
+fn assert_formats_to(source: &str, expected: &str) {
+    let formatted = format_str(source, &Config::default()).expect("format should succeed");
+    assert_eq!(formatted, expected);
+
+    let (_, errors) = parse_source_file(&formatted, RecoveryMode::NoRecover);
+    assert!(errors.is_empty(), "{errors:#?}\n{formatted}");
+    assert_eq!(
+        format_str(&formatted, &Config::default()).expect("reformat should succeed"),
+        formatted,
+    );
+}
+
+#[test]
+fn for_loop_attributes_are_kept() {
+    let source = r#"
+fn sum(xs: [u256; 4]) -> u256 {
+    let mut total: u256 = 0
+    #[unroll(never)]
+    for x in xs {
+        total += x
+    }
+    #[unroll]
+       #[unroll(never)]
+    for   x   in   xs {}
+    for x in xs {
+        #[unroll(never)]
+        for y in xs {
+            // body comment
+        }
+    }
+    total
+}
+"#;
+    let expected = r#"fn sum(xs: [u256; 4]) -> u256 {
+    let mut total: u256 = 0
+    #[unroll(never)]
+    for x in xs {
+        total += x
+    }
+    #[unroll]
+    #[unroll(never)]
+    for x in xs {}
+    for x in xs {
+        #[unroll(never)]
+        for y in xs {
+            // body comment
+        }
+    }
+    total
+}
+"#;
+    assert_formats_to(source, expected);
+}
+
+#[test]
+fn nested_module_inner_attributes_are_kept() {
+    let source = r#"#![arithmetic(checked)]
+
+mod math {
+    #![arithmetic(unchecked)]
+
+    pub fn wrap() -> u8 {
+        let x: u8 = 255
+        x + 1
+    }
+}
+
+mod tight {   #![arithmetic(unchecked)]
+    fn f() {}
+}
+
+mod outer {
+    #![arithmetic(unchecked)]
+    #![payable]
+
+
+    mod inner {
+        #![arithmetic(checked)]
+        fn g() {}
+    }
+}
+
+mod only_attrs {
+    #![arithmetic(unchecked)]
+}
+"#;
+    let expected = r#"#![arithmetic(checked)]
+
+mod math {
+    #![arithmetic(unchecked)]
+
+    pub fn wrap() -> u8 {
+        let x: u8 = 255
+        x + 1
+    }
+}
+
+mod tight {
+    #![arithmetic(unchecked)]
+    fn f() {}
+}
+
+mod outer {
+    #![arithmetic(unchecked)]
+    #![payable]
+
+    mod inner {
+        #![arithmetic(checked)]
+        fn g() {}
+    }
+}
+
+mod only_attrs {
+    #![arithmetic(unchecked)]
+}
+"#;
+    assert_formats_to(source, expected);
+}
+
+#[test]
+fn comments_among_inner_and_loop_attributes_are_kept() {
+    let source = r#"mod m {
+    #![arithmetic(unchecked)]
+    // Comment inside the inner attributes.
+    #![payable]
+    // Comment on the first item.
+    fn f(xs: [u8; 2]) {
+        #[unroll(never)]
+        // Note on the loop.
+        for x in xs {}
+    }
+}
+"#;
+    assert_formats_to(source, source);
 }
