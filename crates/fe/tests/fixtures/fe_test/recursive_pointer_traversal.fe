@@ -1,0 +1,35 @@
+use core::ptr
+
+struct Node { value: u64, next: *Node, other: *Node }
+
+fn node_sum(_ node: *Node, _ n: u64) -> u64 {
+    if n == 0 { 0 } else { node.value + node_sum(node.next, n - 1) }
+}
+
+fn even_sum(_ node: *Node, _ n: u64) -> u64 {
+    if n == 0 { 0 } else { node.value + odd_sum(node.next, n - 1) }
+}
+
+fn odd_sum(_ node: *Node, _ n: u64) -> u64 {
+    if n == 0 { 0 } else { 10 * node.value + even_sum(node.other, n - 1) }
+}
+
+fn bump_all(_ node: *Node, _ n: u64) {
+    if n == 0 { return }
+    node.value += 1
+    bump_all(node.next, n - 1)
+}
+
+#[test]
+fn recursive_pointer_traversal() {
+    let first = ptr::alloc<Node>()
+    let second = ptr::alloc<Node>()
+    *first = Node { value: 1, next: second, other: second }
+    *second = Node { value: 2, next: first, other: second }
+    core::assert(node_sum(first, 3) == 4)
+    core::assert(even_sum(first, 4) == 33)
+    bump_all(first, 3)
+    core::assert(first.value == 3)
+    core::assert(second.value == 3)
+    core::assert(node_sum(second, 4) == 12)
+}

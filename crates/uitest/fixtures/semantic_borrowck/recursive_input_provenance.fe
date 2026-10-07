@@ -111,3 +111,45 @@ fn move_same_node_twice() {
     let second = take(head)
     core::assert(second.value == 2)
 }
+
+// Accepted: a recursive traversal's summary converges for each payload shape.
+fn node_sum(_ node: *Node, _ n: u256) -> u256 {
+    if n == 0 { 0 } else { node.value + node_sum(node.next, n - 1) }
+}
+
+fn even_sum(_ node: *Node, _ n: u256) -> u256 {
+    if n == 0 { 0 } else { node.value + odd_sum(node.next, n - 1) }
+}
+
+fn odd_sum(_ node: *Node, _ n: u256) -> u256 {
+    if n == 0 { 0 } else { even_sum(node.other, n - 1) }
+}
+
+enum Chain { End, Next(*ChainNode) }
+struct ChainNode { value: u256, next: Chain }
+
+fn chain_sum(_ chain: Chain) -> u256 {
+    match chain {
+        Chain::End => 0
+        Chain::Next(node) => node.value + chain_sum(node.next)
+    }
+}
+
+fn chain_sum_ref(_ chain: ref Chain) -> u256 {
+    match chain {
+        Chain::End => 0
+        Chain::Next(node) => node.value + chain_sum_ref(ref node.next)
+    }
+}
+
+fn optional_sum(_ node: ref Option<*OptionalNode>) -> u256 {
+    if let Option::Some(node) = node { node.value + optional_sum(ref node.next) } else { 0 }
+}
+
+// Rejected: the recursive call may write the borrowed node through a cycle.
+fn bump_all(_ node: *Node, _ n: u256) {
+    if n == 0 { return }
+    let borrowed = mut node.value
+    bump_all(node.next, n - 1)
+    borrowed += 1
+}

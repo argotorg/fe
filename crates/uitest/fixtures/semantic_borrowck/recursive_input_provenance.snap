@@ -27,6 +27,14 @@ error[16-0001]: borrow conflict in `fn head_after_16_links`
 83 │     selected.value = 2
    │     ^^^^^^^^^^^^^^^^^^ cannot mutably borrow this place while a mut borrow is active
 
+error[16-0001]: borrow conflict in `fn bump_all`
+    ┌─ recursive_input_provenance.fe:153:5
+    │
+152 │     let borrowed = mut node.value
+    │                    -------------- borrow created here
+153 │     bump_all(node.next, n - 1)
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot immutably borrow this place while a mutable borrow is active
+
 error[16-0002]: move conflict in `fn move_same_node_twice`
     ┌─ recursive_input_provenance.fe:111:18
     │

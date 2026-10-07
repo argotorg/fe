@@ -5,6 +5,7 @@ use rustc_hash::FxHashSet;
 
 use super::{
     control::LoopRegions,
+    solver::may_recurse,
     transport::{InputTransportContract, referent_contract},
 };
 
@@ -640,6 +641,7 @@ impl<'db> InputBuilder<'db> {
                 .and_then(|route| route.cursor),
         };
         let transport = &self.transport;
+        let recursive_field = |ty: TyId<'db>| ancestry.iter().any(|(ancestor, _)| *ancestor == ty);
         let value = self
             .values
             .from_shape(shape, scope, |semantics, path, scope| {
@@ -685,7 +687,7 @@ impl<'db> InputBuilder<'db> {
                 let outer_view = matches!(origin, InputOrigin::Parameter(_))
                     && path.is_empty()
                     && semantics.class == CapabilityClass::View;
-                let source = if let Some((prefix, source)) =
+                let mut source = if let Some((prefix, source)) =
                     views.iter().rev().find(|(prefix, _)| {
                         !prefix.is_empty()
                             && path.as_slice().starts_with(prefix.as_slice())
@@ -712,6 +714,12 @@ impl<'db> InputBuilder<'db> {
                         }
                     }
                 };
+                // A recursive body's summary describes traversals of any depth.
+                // Kept exact, a recursive field would deepen by one dereference
+                // on every summary iteration and never converge.
+                if recursive_field(semantics.target_ty) && may_recurse(db, instance) {
+                    source = source.widen();
+                }
                 if semantics.class == CapabilityClass::View {
                     views.push((path.clone(), source.clone()));
                 }
@@ -754,11 +762,11 @@ impl<'db> InputBuilder<'db> {
                     | CapabilityClass::Handle
                     | CapabilityClass::Pointer
             );
-            // A recursive field still denotes this exact stored address. Eager
-            // expansion used to widen it to the input's entire reachable graph,
-            // even when a helper only returned one next pointer. Discover the
-            // recursive referent on demand when a read needs its contents.
-            if !ancestry.iter().any(|(ty, _)| *ty == semantics.target_ty) {
+            // In a body that cannot recurse, a recursive field still denotes this
+            // exact stored address. Widening it would merge the input's entire
+            // reachable graph, even when a helper only returned one next pointer.
+            // Discover the recursive referent on demand when a read needs it.
+            if !recursive_field(semantics.target_ty) || may_recurse(db, instance) {
                 self.register(source.clone(), scope, semantics.class, writable, ancestry)?;
             }
             if outer_view {

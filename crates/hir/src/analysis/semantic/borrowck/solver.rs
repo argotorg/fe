@@ -488,27 +488,9 @@ impl<'db> Borrowck<'db> {
     fn prepare_recursive_calls(&mut self) {
         let mut reaches_self = FxHashMap::default();
         for (result, call) in &self.calls {
+            // Unknown reachability leaves the call's choices intact.
             let recursive = *reaches_self.entry(call.instance).or_insert_with(|| {
-                let mut seen = FxHashSet::default();
-                let mut pending = vec![call.instance];
-                while let Some(instance) = pending.pop() {
-                    if instance == self.instance {
-                        return true;
-                    }
-                    if seen.len() >= 1024 {
-                        // Unknown reachability leaves the call's choices intact.
-                        return false;
-                    }
-                    if seen.insert(instance) {
-                        pending.extend(
-                            instance
-                                .provisional_callees(self.db)
-                                .iter()
-                                .map(|callee| get_or_build_semantic_instance(self.db, callee.key)),
-                        );
-                    }
-                }
-                false
+                calls_reach(self.db, [call.instance], self.instance) == Some(true)
             });
             if recursive {
                 self.recursive_calls.insert(*result);
@@ -1504,4 +1486,49 @@ impl<'db> Borrowck<'db> {
             error => self.internal_diag(origin, format!("{context}: {error:?}")),
         }
     }
+}
+
+/// Whether calls from `starts` reach `target`, or `None` once the search
+/// exceeds its budget.
+fn calls_reach<'db>(
+    db: &'db dyn HirAnalysisDb,
+    starts: impl IntoIterator<Item = SemanticInstance<'db>>,
+    target: SemanticInstance<'db>,
+) -> Option<bool> {
+    let mut seen = FxHashSet::default();
+    let mut pending: Vec<_> = starts.into_iter().collect();
+    while let Some(instance) = pending.pop() {
+        if instance == target {
+            return Some(true);
+        }
+        if seen.len() >= 1024 {
+            return None;
+        }
+        if seen.insert(instance) {
+            pending.extend(
+                instance
+                    .provisional_callees(db)
+                    .iter()
+                    .map(|callee| get_or_build_semantic_instance(db, callee.key)),
+            );
+        }
+    }
+    Some(false)
+}
+
+/// Whether `instance` may call itself. A search that exceeds its budget
+/// counts as recursive.
+#[salsa::tracked]
+pub(super) fn may_recurse<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> bool {
+    calls_reach(
+        db,
+        instance
+            .provisional_callees(db)
+            .iter()
+            .map(|callee| get_or_build_semantic_instance(db, callee.key)),
+        instance,
+    ) != Some(false)
 }
