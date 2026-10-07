@@ -80,7 +80,8 @@ use super::{
     trait_def::{TraitInstId, resolve_trait_method_instance},
     trait_resolution::{
         CanonicalGoalQuery, GoalSatisfiability, PredicateListId, Selection, TraitSolveCx,
-        goal_query_has_no_distinct_solution, is_goal_query_satisfiable, is_goal_satisfiable,
+        WellFormedness, check_ty_wf, goal_query_has_no_distinct_solution,
+        is_goal_query_satisfiable, is_goal_satisfiable,
     },
     ty_contains_const_hole,
     ty_def::{
@@ -6147,6 +6148,16 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
         expr: ExprId,
         expr_data: &Expr<'db>,
     ) {
+        // Neither check below looks at the generic arguments written on a
+        // call, so check each of them on its own first. This leaves out the
+        // callee's own bounds, which the call obligations already report.
+        // Nested bodies, such as const arguments, are checked on their own.
+        let call_arg_goals = if self.body.body() == Some(ctxt.body()) {
+            self.check_call_generic_args(ctxt.body(), expr, expr_data, ctxt.span().unwrap())
+        } else {
+            Vec::new()
+        };
+
         // Skip the check if the expr is block.
         if !matches!(expr_data, Expr::Block(..)) {
             let prop = self.body.expr_prop(self.db, expr);
@@ -6168,8 +6179,11 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
             }
             let is_direct_call_callee =
                 matches!(expr_data, Expr::Path(..)) && self.direct_call_callees.contains(&expr);
+            // A call's type often contains the generic arguments written on
+            // it (`f<Foo<X>>()` returning `Foo<X>`); a goal already reported
+            // for those arguments is not reported again here.
             if prop.binding.is_none() && !is_direct_call_callee {
-                self.check_wf(prop.ty, span.into());
+                self.check_wf(prop.ty, span.into(), &call_arg_goals);
             }
         }
 
@@ -6268,16 +6282,107 @@ impl<'db> TyCheckerFinalizer<'db> {
         }
     }
 
-    fn check_wf(&mut self, ty: TyId<'db>, span: DynLazySpan<'db>) {
+    /// Reports `ty` at `span` if it is not well-formed, unless the goal it
+    /// fails is one of `reported`. Returns the goal it fails.
+    fn check_wf(
+        &mut self,
+        ty: TyId<'db>,
+        span: DynLazySpan<'db>,
+        reported: &[TraitInstId<'db>],
+    ) -> Option<TraitInstId<'db>> {
         let flags = ty.flags(self.db);
         if flags.contains(TyFlags::HAS_INVALID) || flags.contains(TyFlags::HAS_VAR) {
-            return;
+            return None;
         }
 
         let solve_cx = TraitSolveCx::new(self.db, self.body.body().unwrap().scope());
-        if let Some(diag) = ty.emit_wf_diag(self.db, solve_cx, self.assumptions, span) {
+        let WellFormedness::IllFormed { goal, .. } =
+            check_ty_wf(self.db, solve_cx.with_assumptions(self.assumptions), ty)
+        else {
+            return None;
+        };
+        if !reported.contains(&goal)
+            && let Some(diag) = ty.emit_wf_diag(self.db, solve_cx, self.assumptions, span)
+        {
             self.diags.push(diag.into());
         }
+        Some(goal)
+    }
+
+    /// Checks each generic argument written on the call `call`: on the callee
+    /// segment (`f<T>()`, `x.f<T>()`), and on the segment before it, which
+    /// holds the arguments of the item the callee belongs to (`Foo<T>::f()`,
+    /// `E<T>::Variant()`, `<S as Trait<T>>::f()`). Returns the goals they
+    /// fail.
+    fn check_call_generic_args(
+        &mut self,
+        body: Body<'db>,
+        call: ExprId,
+        call_data: &Expr<'db>,
+        span: LazyExprSpan<'db>,
+    ) -> Vec<TraitInstId<'db>> {
+        let db = self.db;
+        let Some(callable) = self.body.callable_expr(call) else {
+            return Vec::new();
+        };
+        // A variant constructor takes all of its enum's arguments on the
+        // segment before it; a function takes its parent's there and its own
+        // on its segment.
+        let parent_len = match callable.callable_def {
+            CallableDef::Func(_) => callable.callable_def.offset_to_explicit_params_position(db),
+            CallableDef::VariantCtor(_) => callable.generic_args().len(),
+        };
+        let (parent_args, own_args) = callable.generic_args().split_at(parent_len);
+
+        // The number of arguments written on the callee segment, their span,
+        // and the span of the segment before it when that one writes
+        // arguments of its own.
+        let (own_written, own_span, parent_span) = match call_data {
+            Expr::MethodCall(_, _, generic_args, _) => (
+                generic_args.len(db),
+                span.into_method_call_expr().generic_args(),
+                None,
+            ),
+            Expr::Call(callee, _) => {
+                let Partial::Present(Expr::Path(Partial::Present(path))) = callee.data(db, body)
+                else {
+                    return Vec::new();
+                };
+                let idx = path.segment_index(db);
+                let path_span = callee.span(body).into_path_expr().path();
+                let parent_span = path
+                    .parent(db)
+                    .filter(|parent| {
+                        !parent.generic_args(db).is_empty(db)
+                            || matches!(
+                                parent.kind(db),
+                                crate::hir_def::PathKind::QualifiedType { .. }
+                            )
+                    })
+                    .map(|_| DynLazySpan::from(path_span.clone().segment(idx - 1)));
+                (
+                    path.generic_args(db).len(db),
+                    path_span.segment(idx).generic_args(),
+                    parent_span,
+                )
+            }
+            _ => return Vec::new(),
+        };
+
+        let mut checks: Vec<(TyId<'db>, DynLazySpan<'db>)> = own_args
+            .iter()
+            .take(own_written)
+            .enumerate()
+            .map(|(i, &ty)| (ty, own_span.clone().arg(i).into()))
+            .collect();
+        if let Some(parent_span) = parent_span {
+            checks.extend(parent_args.iter().map(|&ty| (ty, parent_span.clone())));
+        }
+
+        checks
+            .into_iter()
+            .filter_map(|(ty, span)| self.check_wf(ty, span, &[]))
+            .collect()
     }
 }
 

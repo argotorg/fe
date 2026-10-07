@@ -1,0 +1,91 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/call_generic_arg_bounds.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ call_generic_arg_bounds.fe:45:7
+   │
+45 │     g<Foo<NotMarked>>()
+   │       ^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ call_generic_arg_bounds.fe:49:7
+   │
+49 │     g<W<Foo<NotMarked>>>()
+   │       ^^^^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ call_generic_arg_bounds.fe:53:14
+   │
+53 │     s.method<Foo<NotMarked>>()
+   │              ^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ call_generic_arg_bounds.fe:57:14
+   │
+57 │     S::assoc<Foo<NotMarked>>()
+   │              ^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ call_generic_arg_bounds.fe:61:22
+   │
+61 │     <S as Tr<u8>>::t<Foo<NotMarked>>()
+   │                      ^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ call_generic_arg_bounds.fe:65:5
+   │
+65 │     W<Foo<NotMarked>>::new()
+   │     ^^^^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ call_generic_arg_bounds.fe:69:5
+   │
+69 │     <S as Tr<Foo<NotMarked>>>::t<u8>()
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ call_generic_arg_bounds.fe:74:5
+   │
+42 │ fn needs_marker<U: Marker>() {}
+   │                    ------ required by this bound on `needs_marker`
+   ·
+74 │     needs_marker<NotMarked>()
+   │     ^^^^^^^^^^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ call_generic_arg_bounds.fe:102:5
+    │
+102 │     E<Foo<NotMarked>>::Value(0)
+    │     ^^^^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ call_generic_arg_bounds.fe:106:5
+    │
+106 │     Alias<Foo<NotMarked>>::Value(0)
+    │     ^^^^^^^^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ call_generic_arg_bounds.fe:111:30
+    │
+111 │     let _e: E<Foo<Marked>> = E<Foo<NotMarked>>::Value(0)
+    │                              ^^^^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ call_generic_arg_bounds.fe:126:19
+    │
+126 │     let _w = wrap<Foo<NotMarked>>()
+    │                   ^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ call_generic_arg_bounds.fe:130:14
+    │
+130 │     let _w = W<Foo<NotMarked>>::make()
+    │              ^^^^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[8-0000]: type mismatch
+    ┌─ call_generic_arg_bounds.fe:111:30
+    │
+111 │     let _e: E<Foo<Marked>> = E<Foo<NotMarked>>::Value(0)
+    │                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `E<Foo<Marked>>`, but `E<Foo<NotMarked>>` is given
