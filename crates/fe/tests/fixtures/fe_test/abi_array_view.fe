@@ -615,3 +615,46 @@ fn test_zero_stride_max_length_rejected() uses (evm: mut Evm) {
     let view: ArrayView<MemSpan, ()> = decode_array_view(mem_input([0x20, MAX]))
     assert!(view.len() == MAX)
 }
+
+// Model an input longer than `2**64` bytes without allocating it: three words
+// at offsets 0, 32 and 64, zero everywhere else. Its frame checks pass for
+// any offset, so only the explicit offset limit rejects `2**64`.
+struct SparseInput { w0: u256, w1: u256, w2: u256 }
+impl Copy for SparseInput {}
+impl ByteInput for SparseInput {
+    fn len(self) -> u256 { !(0 as u256) }
+    fn word_at(self, _ byte_offset: u256) -> u256 {
+        if byte_offset == 0 {
+            self.w0
+        } else if byte_offset == 32 {
+            self.w1
+        } else if byte_offset == 64 {
+            self.w2
+        } else {
+            0
+        }
+    }
+    fn byte_at(self, _: u256) -> u8 { panic() }
+    fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) { panic() }
+}
+
+#[test]
+fn test_offset_below_two_64_accepted_on_long_input() {
+    let view: ArrayView<SparseInput, u256> = decode_array_view(SparseInput { w0: TWO_64 - 32, w1: 0, w2: 0 })
+    assert!(view.is_empty())
+
+    // `bytes[]` with one element whose tail offset is just below the limit.
+    let bytes: ArrayView<SparseInput, Bytes> = decode_array_view(SparseInput { w0: 0x20, w1: 1, w2: TWO_64 - 32 })
+    assert!(bytes.element_pos(0) == 0x40 + TWO_64 - 32)
+}
+
+#[test(should_revert)]
+fn test_array_offset_of_two_64_rejected_on_long_input() {
+    let _: ArrayView<SparseInput, u256> = decode_array_view(SparseInput { w0: TWO_64, w1: 0, w2: 0 })
+}
+
+#[test(should_revert)]
+fn test_element_tail_offset_of_two_64_rejected_on_long_input() {
+    let bytes: ArrayView<SparseInput, Bytes> = decode_array_view(SparseInput { w0: 0x20, w1: 1, w2: TWO_64 })
+    let _ = bytes.element_pos(0)
+}

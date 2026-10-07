@@ -68,9 +68,9 @@ pub fn decode_array_view<T, I>(_ input: own I) -> ArrayView<I, T>
 ///   `base + offset + 32 + len * stride <= input.len()`, where `stride` is
 ///   `T::HEAD_SIZE` for static `T` and 32 for dynamic `T`.
 ///
-/// Solidity additionally rejects offset and length words of `2**64` or more.
+/// Solidity additionally rejects offset and length words of `2**64` or more,
+/// and so does this function, also for inputs longer than `2**64` bytes.
 /// Lengths are checked explicitly, including zero-sized element types.
-/// Offsets are also bounded by the input frame.
 ///
 /// Element tails of dynamic `T` are not inspected here; they are validated
 /// when accessed, exactly like Solidity. Solidity also rejects calldata
@@ -83,7 +83,7 @@ pub fn decode_array_view_at<T, I>(_ input: own I, base: u256, head_pos: u256) ->
     let input_len = input.len()
     let head_at = checked_tail<Sol>(base, head_pos)
     checked_frame_end<Sol>(head_at, 32, input_len)
-    let tail_at = checked_tail<Sol>(base, input.word_at(head_at))
+    let tail_at = checked_tail<Sol>(base, checked_offset(input.word_at(head_at)))
     let elems = checked_frame_end<Sol>(tail_at, 32, input_len)
     let len = input.word_at(tail_at)
     let stride = abi_field_head_size<T>()
@@ -93,6 +93,15 @@ pub fn decode_array_view_at<T, I>(_ input: own I, base: u256, head_pos: u256) ->
         Sol::decode_error()
     }
     ArrayView { input, elems, len }
+}
+
+/// An ABI offset word, rejecting values of `2**64` or more like Solidity.
+/// The frame checks alone only reject them for inputs shorter than that.
+fn checked_offset(_ offset: u256) -> u256 {
+    if offset >= 0x10000000000000000 {
+        Sol::decode_error()
+    }
+    offset
 }
 
 impl<I, T> ArrayView<I, T>
@@ -171,10 +180,11 @@ impl<I, T> ArrayView<I, T>
     /// Byte position in `input` where the encoding of element `index` starts.
     ///
     /// For static `T` this is the element's inline head. For dynamic `T` it is
-    /// the element's tail, after checking that the tail offset does not
-    /// overflow and that the element's own head (`T::HEAD_SIZE` bytes, e.g.
-    /// the length word of a `bytes`) lies within the input. Fields of a
-    /// struct element can then be read with `T`'s field decoders or with
+    /// the element's tail, after checking that the tail offset is below
+    /// `2**64` and does not overflow, and that the element's own head
+    /// (`T::HEAD_SIZE` bytes, e.g. the length word of a `bytes`) lies within
+    /// the input. Fields of a struct element can then be read with `T`'s
+    /// field decoders or with
     /// `decode_array_view_at(input, base: pos, head_pos: field_offset)`.
     ///
     /// Reverts with `Panic(0x32)` if `index >= len()`.
@@ -186,7 +196,7 @@ impl<I, T> ArrayView<I, T>
         if !T::IS_DYNAMIC {
             return head_at
         }
-        let tail_at = checked_tail<Sol>(self.elems, self.input.word_at(head_at))
+        let tail_at = checked_tail<Sol>(self.elems, checked_offset(self.input.word_at(head_at)))
         checked_frame_end<Sol>(tail_at, T::HEAD_SIZE, self.input.len())
         tail_at
     }
