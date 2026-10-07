@@ -13,21 +13,19 @@ type @layout_0 = enum {
 func private %f(v0.@layout_0) -> i256 {
     block0:
         v1.objref<@layout_0> = obj.alloc @layout_0;
-        v2.objref<i256> = obj.alloc i256;
-        v3.enumtag(@layout_0) = enum.tag v0;
-        br_table v3 block5 (0.enumtag(@layout_0) block6) (1.enumtag(@layout_0) block7);
+        v2.enumtag(@layout_0) = enum.tag v0;
+        br_table v2 block5 (0.enumtag(@layout_0) block6) (1.enumtag(@layout_0) block7);
 
     block1:
-        v9.@layout_0 = obj.load v1;
-        v10.enumtag(@layout_0) = enum.tag v9;
-        br_table v10 (0.enumtag(@layout_0) block2) (1.enumtag(@layout_0) block3);
+        v8.@layout_0 = obj.load v1;
+        v9.enumtag(@layout_0) = enum.tag v8;
+        br_table v9 (0.enumtag(@layout_0) block2) (1.enumtag(@layout_0) block3);
 
     block2:
-        v11.objref<@layout_0> = enum.assert_variant_ref v1 #variant_0;
-        v12.objref<i256> = enum.proj v11 #variant_0 0.i256;
-        v13.i256 = obj.load v12;
-        obj.store v2 v13;
-        return v13;
+        v10.objref<@layout_0> = enum.assert_variant_ref v1 #variant_0;
+        v11.objref<i256> = enum.proj v10 #variant_0 0.i256;
+        v12.i256 = obj.load v11;
+        return v12;
 
     block3:
         return 0.i256;
@@ -41,9 +39,9 @@ func private %f(v0.@layout_0) -> i256 {
     block6:
         enum.set_tag v1 #variant_0;
         enum.assert_variant v0 #variant_0;
-        v7.objref<i256> = enum.proj v1 #variant_0 0.i256;
-        v8.i256 = enum.extract v0 #variant_0 0.i256;
-        obj.store v7 v8;
+        v6.objref<i256> = enum.proj v1 #variant_0 0.i256;
+        v7.i256 = enum.extract v0 #variant_0 0.i256;
+        obj.store v6 v7;
         jump block4;
 
     block7:

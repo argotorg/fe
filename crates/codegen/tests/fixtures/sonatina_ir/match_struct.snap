@@ -35,39 +35,35 @@ func private %main_root() {
 
 func private %match_struct_fields(v0.constref<@layout_0>) -> i8 {
     block0:
-        v1.objref<i8> = obj.alloc i8;
-        v2.objref<i8> = obj.alloc i8;
-        v3.objref<i8> = obj.alloc i8;
-        v4.objref<i8> = obj.alloc i8;
         jump block1;
 
     block1:
         jump block3;
 
     block2:
-        v6.i8 = phi (0.i8 block7) (v27 block8) (v30 block10) (v36 block14);
-        return v6;
+        v2.i8 = phi (0.i8 block7) (v22 block8) (v24 block10) (v29 block14);
+        return v2;
 
     block3:
-        v9.constref<i8> = const.proj v0 1.i256;
-        v11.constref<i8> = const.proj v0 1.i256;
-        v12.i8 = const.load v11;
-        v13.i1 = eq v12 0.i8;
-        br v13 block4 block6;
+        v5.constref<i8> = const.proj v0 1.i256;
+        v7.constref<i8> = const.proj v0 1.i256;
+        v8.i8 = const.load v7;
+        v9.i1 = eq v8 0.i8;
+        br v9 block4 block6;
 
     block4:
-        v16.constref<i8> = const.proj v0 0.i256;
-        v17.constref<i8> = const.proj v0 0.i256;
-        v18.i8 = const.load v17;
-        v19.i1 = eq v18 0.i8;
-        br v19 block7 block9;
+        v12.constref<i8> = const.proj v0 0.i256;
+        v13.constref<i8> = const.proj v0 0.i256;
+        v14.i8 = const.load v13;
+        v15.i1 = eq v14 0.i8;
+        br v15 block7 block9;
 
     block5:
-        v21.constref<i8> = const.proj v0 0.i256;
-        v22.constref<i8> = const.proj v0 0.i256;
-        v23.i8 = const.load v22;
-        v24.i1 = eq v23 0.i8;
-        br v24 block10 block12;
+        v17.constref<i8> = const.proj v0 0.i256;
+        v18.constref<i8> = const.proj v0 0.i256;
+        v19.i8 = const.load v18;
+        v20.i1 = eq v19 0.i8;
+        br v20 block10 block12;
 
     block6:
         jump block5;
@@ -76,29 +72,21 @@ func private %match_struct_fields(v0.constref<@layout_0>) -> i8 {
         jump block2;
 
     block8:
-        v26.constref<i8> = const.proj v0 0.i256;
-        v27.i8 = const.load v26;
-        obj.store v2 v27;
+        v22.i8 = const.load v12;
         jump block2;
 
     block9:
         jump block8;
 
     block10:
-        v29.constref<i8> = const.proj v0 1.i256;
-        v30.i8 = const.load v29;
-        obj.store v1 v30;
+        v24.i8 = const.load v5;
         jump block2;
 
     block11:
-        v32.constref<i8> = const.proj v0 0.i256;
-        v33.i8 = const.load v32;
-        obj.store v3 v33;
-        v34.constref<i8> = const.proj v0 1.i256;
-        v35.i8 = const.load v34;
-        obj.store v4 v35;
-        (v36.i8, v37.i1) = uaddo v33 v35;
-        br v37 block13 block14;
+        v27.i8 = const.load v17;
+        v28.i8 = const.load v5;
+        (v29.i8, v30.i1) = uaddo v27 v28;
+        br v30 block13 block14;
 
     block12:
         jump block11;

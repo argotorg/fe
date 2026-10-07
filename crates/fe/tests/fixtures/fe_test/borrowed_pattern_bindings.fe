@@ -1,0 +1,292 @@
+use core::Option
+
+struct Frame { value: u64, words: [u64; 2] }
+struct Store { slot: Option<u64>, frame: Option<Frame> }
+struct Inner { slot: Option<u64> }
+struct Outer { inner: Option<Inner> }
+
+fn scalar_in_arm() {
+    let mut slot: Option<u64> = Option::Some(41)
+    match mut slot {
+        Option::Some(value) => {
+            value += 1
+            core::assert(value == 42)
+        }
+        Option::None => core::panic()
+    }
+    match slot {
+        Option::Some(value) => core::assert(value == 42)
+        Option::None => core::panic()
+    }
+}
+
+fn scalar_match_result() {
+    let mut slot: Option<u64> = Option::Some(17)
+    let value = match mut slot {
+        Option::Some(value) => value
+        Option::None => core::panic()
+    }
+    value += 2
+    core::assert(value == 19)
+    match slot {
+        Option::Some(value) => core::assert(value == 19)
+        Option::None => core::panic()
+    }
+}
+
+fn aggregate_in_arm() {
+    let mut slot = Option::Some(Frame { value: 41, words: [4, 7] })
+    match mut slot {
+        Option::Some(frame) => {
+            frame.value += 1
+            frame.words[1] += frame.words[0]
+            core::assert(frame.value == 42)
+            core::assert(frame.words[1] == 11)
+        }
+        Option::None => core::panic()
+    }
+    match slot {
+        Option::Some(frame) => {
+            core::assert(frame.value == 42)
+            core::assert(frame.words[1] == 11)
+        }
+        Option::None => core::panic()
+    }
+}
+
+fn aggregate_match_result() {
+    let mut slot = Option::Some(Frame { value: 17, words: [5, 9] })
+    let frame = match mut slot {
+        Option::Some(frame) => frame
+        Option::None => core::panic()
+    }
+    frame.value += 2
+    frame.words[0] = frame.value
+    core::assert(frame.value == 19)
+    core::assert(frame.words[0] == 19)
+    let view = match ref slot {
+        Option::Some(frame) => frame
+        Option::None => core::panic()
+    }
+    core::assert(view.value == 19)
+    core::assert(view.words[0] == 19)
+    core::assert(view.words[1] == 9)
+}
+
+fn incr(_ value: mut u64) { value += 1 }
+fn frame_total(_ frame: ref Frame) -> u64 { frame.value + frame.words[1] }
+fn bump_frame(_ frame: mut Frame) { frame.value += 10 }
+
+fn add(by: u64) -> u64 uses (value: mut u64) {
+    value += by
+    value
+}
+
+fn bindings_as_arguments() {
+    let mut slot: Option<u64> = Option::Some(1)
+    match mut slot {
+        Option::Some(value) => {
+            incr(mut value)
+            incr(mut value)
+            let total = with (value) { add(by: 4) }
+            core::assert(total == 7)
+        }
+        Option::None => core::panic()
+    }
+    match slot {
+        Option::Some(value) => core::assert(value == 7)
+        Option::None => core::panic()
+    }
+
+    let mut frames = Option::Some(Frame { value: 1, words: [2, 3] })
+    match mut frames {
+        Option::Some(frame) => {
+            bump_frame(mut frame)
+            core::assert(frame_total(ref frame) == 14)
+        }
+        Option::None => core::panic()
+    }
+    match ref frames {
+        Option::Some(frame) => core::assert(frame_total(frame) == 14)
+        Option::None => core::panic()
+    }
+}
+
+fn bump_store() uses (store: mut Store) {
+    match mut store.slot {
+        Option::Some(value) => { value += 1 }
+        Option::None => core::panic()
+    }
+    match mut store.frame {
+        Option::Some(frame) => {
+            frame.value += 1
+            frame.words[1] += frame.words[0]
+        }
+        Option::None => core::panic()
+    }
+}
+
+fn stored_slot() -> u64 uses (store: Store) {
+    match ref store.slot {
+        Option::Some(value) => value
+        Option::None => 0
+    }
+}
+
+fn stored_frame_total() -> u64 uses (store: Store) {
+    match ref store.frame {
+        Option::Some(frame) => frame.value + frame.words[1]
+        Option::None => 0
+    }
+}
+
+fn effect_provided_bindings() {
+    let mut store = Store {
+        slot: Option::Some(41),
+        frame: Option::Some(Frame { value: 1, words: [2, 3] }),
+    }
+    with (store) {
+        bump_store()
+        core::assert(stored_slot() == 42)
+        core::assert(stored_frame_total() == 7)
+    }
+    match store.slot {
+        Option::Some(value) => core::assert(value == 42)
+        Option::None => core::panic()
+    }
+}
+
+fn bindings_in_loops_and_nested_matches() {
+    let mut slot: Option<u64> = Option::Some(0)
+    let mut i: u64 = 0
+    while i < 5 {
+        match mut slot {
+            Option::Some(value) => { value += i }
+            Option::None => core::panic()
+        }
+        i += 1
+    }
+    match slot {
+        Option::Some(value) => core::assert(value == 10)
+        Option::None => core::panic()
+    }
+
+    let mut outer = Outer { inner: Option::Some(Inner { slot: Option::Some(5) }) }
+    match mut outer.inner {
+        Option::Some(inner) => {
+            match mut inner.slot {
+                Option::Some(value) => { value *= 3 }
+                Option::None => core::panic()
+            }
+        }
+        Option::None => core::panic()
+    }
+    match outer.inner {
+        Option::Some(inner) => match inner.slot {
+            Option::Some(value) => core::assert(value == 15)
+            Option::None => core::panic()
+        }
+        Option::None => core::panic()
+    }
+}
+
+fn nested_value(_ value: ref Option<Option<u64>>) -> u64 {
+    match value {
+        Option::Some(inner) => match inner {
+            Option::Some(value) => value
+            Option::None => 1
+        }
+        Option::None => 0
+    }
+}
+
+fn bump_nested(_ value: mut Option<Option<u64>>) {
+    match value {
+        Option::Some(inner) => match inner {
+            Option::Some(value) => { value += 100 }
+            Option::None => {}
+        }
+        Option::None => {}
+    }
+}
+
+fn nested_parameter_bindings() {
+    let mut value: Option<Option<u64>> = Option::Some(Option::Some(5))
+    core::assert(nested_value(ref value) == 5)
+    bump_nested(mut value)
+    core::assert(nested_value(ref value) == 105)
+    let empty: Option<Option<u64>> = Option::Some(Option::None)
+    core::assert(nested_value(ref empty) == 1)
+}
+
+pub fn main() -> i32 {
+    scalar_in_arm()
+    scalar_match_result()
+    aggregate_in_arm()
+    aggregate_match_result()
+    bindings_as_arguments()
+    effect_provided_bindings()
+    bindings_in_loops_and_nested_matches()
+    nested_parameter_bindings()
+    0
+}
+
+#[test]
+fn borrowed_pattern_bindings() { core::assert(main() == 0) }
+
+msg SlotMsg {
+    #[selector = 1]
+    Bump -> u256,
+    #[selector = 2]
+    Read -> u256,
+    #[selector = 3]
+    BumpResult -> u256,
+}
+
+struct SlotStore { slot: Option<u256> }
+
+pub contract SlotContract {
+    mut store: SlotStore,
+
+    init() uses (mut store) {
+        store.slot = Option::Some(41)
+    }
+
+    recv SlotMsg {
+        Bump -> u256 uses (mut store) {
+            match mut store.slot {
+                Option::Some(value) => {
+                    value += 1
+                    value
+                }
+                Option::None => 0
+            }
+        }
+
+        Read -> u256 uses (store) {
+            match ref store.slot {
+                Option::Some(value) => value
+                Option::None => 0
+            }
+        }
+
+        BumpResult -> u256 uses (mut store) {
+            let value = match mut store.slot {
+                Option::Some(value) => value
+                Option::None => core::panic()
+            }
+            value += 1
+            value
+        }
+    }
+}
+
+#[test]
+fn storage_borrowed_pattern_bindings() uses (evm: mut Evm) {
+    let slot = evm.create2<SlotContract>(value: 0, args: (), salt: 3)
+    assert!(slot.inner != 0)
+    assert!(evm.call(addr: slot, gas: 100000, value: 0, message: SlotMsg::Bump {}) == 42)
+    assert!(evm.call(addr: slot, gas: 100000, value: 0, message: SlotMsg::Read {}) == 42)
+    assert!(evm.call(addr: slot, gas: 100000, value: 0, message: SlotMsg::BumpResult {}) == 43)
+    assert!(evm.call(addr: slot, gas: 100000, value: 0, message: SlotMsg::Read {}) == 43)
+}

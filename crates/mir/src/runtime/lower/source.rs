@@ -337,6 +337,24 @@ pub(super) fn alias_source_place_for_local<'db>(
         .find_map(|representation| normalized_value_place(db, body, representation.value))
 }
 
+/// [`alias_source_place_for_local`] for every local, resolved in one pass.
+pub(super) fn alias_source_places<'db>(
+    db: &'db dyn MirDb,
+    body: &RuntimeSemanticBody<'db>,
+) -> Vec<Option<NPlace<'db>>> {
+    let mut places = vec![None; body.locals.len()];
+    let mut visiting = vec![false; body.normalized.values.len()];
+    for representation in body.layout_plan.value_representations.iter().rev() {
+        if let Some(local) = body.value_local(representation.value)
+            && places[local.index()].is_none()
+        {
+            places[local.index()] =
+                resolve_value_place(db, body, representation.value, &mut visiting);
+        }
+    }
+    places
+}
+
 pub(super) fn declared_root_place_for_local<'db>(
     body: &RuntimeSemanticBody<'db>,
     local: SLocalId,
@@ -405,65 +423,65 @@ fn normalized_value_place<'db>(
     body: &RuntimeSemanticBody<'db>,
     value: NValueId,
 ) -> Option<NPlace<'db>> {
-    fn resolve<'db>(
-        db: &'db dyn MirDb,
-        body: &RuntimeSemanticBody<'db>,
-        value: NValueId,
-        visiting: &mut [bool],
-    ) -> Option<NPlace<'db>> {
-        if std::mem::replace(visiting.get_mut(value.index())?, true) {
-            return None;
-        }
-        let data = body.normalized.value(value)?;
-        let place = match data.definition {
-            NValueDefinition::Statement { block, statement } => match &body
-                .normalized
-                .block(block)?
-                .statements
-                .get(statement as usize)?
-                .kind
-            {
-                NStatementKind::Define {
-                    expr:
-                        NExpr::Load { place, .. }
-                        | NExpr::Borrow { place, .. }
-                        | NExpr::MakeView { place, .. },
-                    ..
-                } => Some(place.clone()),
-                NStatementKind::Define {
-                    expr: NExpr::Forward { src },
-                    ..
-                } => resolve(db, body, src.value, visiting),
-                NStatementKind::Define {
-                    expr: NExpr::ProjectValue { value, path },
-                    ..
-                } => resolve(db, body, value.value, visiting).map(|mut place| {
-                    place.path = place.path.concat(&path.0);
-                    place.ty = data.ty;
-                    place
-                }),
-                NStatementKind::Define { .. } | NStatementKind::Store { .. } => None,
-            },
-            NValueDefinition::EntryParam { .. } | NValueDefinition::BlockParam { .. } => None,
-        }
-        .or_else(|| {
-            data.ty.as_capability(db).map(|(_, ty)| NPlace {
-                base: NPlaceBase::CapabilityTarget { carrier: value },
-                path: Default::default(),
-                ty,
-                origin: data.origin,
-            })
-        });
-        visiting[value.index()] = false;
-        place
-    }
-
-    resolve(
+    resolve_value_place(
         db,
         body,
         value,
         &mut vec![false; body.normalized.values.len()],
     )
+}
+
+/// Leaves `visiting` cleared on return, so one buffer can serve many queries.
+fn resolve_value_place<'db>(
+    db: &'db dyn MirDb,
+    body: &RuntimeSemanticBody<'db>,
+    value: NValueId,
+    visiting: &mut [bool],
+) -> Option<NPlace<'db>> {
+    let data = body.normalized.value(value)?;
+    let definition = match data.definition {
+        NValueDefinition::Statement { block, statement } => Some(
+            &body
+                .normalized
+                .block(block)?
+                .statements
+                .get(statement as usize)?
+                .kind,
+        ),
+        NValueDefinition::EntryParam { .. } | NValueDefinition::BlockParam { .. } => None,
+    };
+    if std::mem::replace(visiting.get_mut(value.index())?, true) {
+        return None;
+    }
+    let place = match definition {
+        Some(NStatementKind::Define {
+            expr:
+                NExpr::Load { place, .. } | NExpr::Borrow { place, .. } | NExpr::MakeView { place, .. },
+            ..
+        }) => Some(place.clone()),
+        Some(NStatementKind::Define {
+            expr: NExpr::Forward { src },
+            ..
+        }) => resolve_value_place(db, body, src.value, visiting),
+        Some(NStatementKind::Define {
+            expr: NExpr::ProjectValue { value, path },
+            ..
+        }) => resolve_value_place(db, body, value.value, visiting).map(|mut place| {
+            place.path = place.path.concat(&path.0);
+            place.ty = data.ty;
+            place
+        }),
+        Some(NStatementKind::Define { .. } | NStatementKind::Store { .. }) | None => None,
+    };
+    visiting[value.index()] = false;
+    place.or_else(|| {
+        data.ty.as_capability(db).map(|(_, ty)| NPlace {
+            base: NPlaceBase::CapabilityTarget { carrier: value },
+            path: Default::default(),
+            ty,
+            origin: data.origin,
+        })
+    })
 }
 
 pub(super) fn local_read_places_extractable_from_value(

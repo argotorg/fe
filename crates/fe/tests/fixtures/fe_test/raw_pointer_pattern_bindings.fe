@@ -1,0 +1,224 @@
+use core::{Option, ptr}
+
+struct Node { value: u64 }
+enum Link { Nil, Cons(*Node) }
+struct Holder { link: Link }
+struct Pair<T> { first: T, second: T }
+struct Frame { value: u64, words: [u64; 2] }
+struct Slots { slot: Option<u64>, nested: Option<Option<u64>>, frame: Option<Frame> }
+struct Store { link: Link, slot: Option<u64> }
+enum Chain { End, Next(*ChainNode) }
+struct ChainNode { value: u64, next: Chain }
+struct OptionalNode { value: u64, next: Option<*OptionalNode> }
+
+fn head(_ link: Link) -> u64 {
+    match link { Link::Nil => 0, Link::Cons(node) => node.value }
+}
+
+fn pointer(_ link: ref Link) -> *Node {
+    match link { Link::Nil => core::panic(), Link::Cons(node) => node }
+}
+
+fn edit(_ link: mut Link) {
+    match link {
+        Link::Nil => {}
+        Link::Cons(node) => { node.value += 1 }
+    }
+}
+
+fn retarget(_ link: mut Link, _ replacement: *Node) {
+    match link {
+        Link::Nil => {}
+        Link::Cons(node) => { node = replacement }
+    }
+}
+
+fn read_pointer(_ node: *Node) -> u64 { node.value }
+fn read_ref(_ node: ref *Node) -> u64 { node.value }
+
+fn destructure(_ pair: Pair<*Node>) -> u64 {
+    let Pair { first, second } = pair
+    read_pointer(first) + read_ref(ref second)
+}
+
+fn optional(_ link: ref Option<*Node>) -> u64 {
+    if let Option::Some(node) = link { (*node).value } else { 0 }
+}
+
+fn frame_total(_ frame: ref Frame) -> u64 { frame.value + frame.words[1] }
+
+fn pointer_backed_bindings() {
+    let slots = ptr::alloc<Slots>()
+    *slots = Slots {
+        slot: Option::Some(10),
+        nested: Option::Some(Option::Some(3)),
+        frame: Option::Some(Frame { value: 1, words: [2, 3] }),
+    }
+    match mut slots.slot {
+        Option::Some(value) => { value += 5 }
+        Option::None => core::panic()
+    }
+    match slots.slot {
+        Option::Some(value) => core::assert(value == 15)
+        Option::None => core::panic()
+    }
+    match mut slots.nested {
+        Option::Some(inner) => {
+            match mut inner {
+                Option::Some(value) => { value += 4 }
+                Option::None => core::panic()
+            }
+        }
+        Option::None => core::panic()
+    }
+    match slots.nested {
+        Option::Some(inner) => match inner {
+            Option::Some(value) => core::assert(value == 7)
+            Option::None => core::panic()
+        }
+        Option::None => core::panic()
+    }
+    match mut slots.frame {
+        Option::Some(frame) => {
+            frame.value += 10
+            core::assert(frame_total(ref frame) == 14)
+        }
+        Option::None => core::panic()
+    }
+    match ref slots.frame {
+        Option::Some(frame) => core::assert(frame_total(frame) == 14)
+        Option::None => core::panic()
+    }
+}
+
+fn add(by: u64) -> u64 uses (value: mut u64) {
+    value += by
+    value
+}
+
+fn stored_head() -> u64 uses (store: Store) {
+    match store.link {
+        Link::Nil => 0
+        Link::Cons(node) => node.value + read_pointer(node) + read_ref(ref node)
+    }
+}
+
+fn edit_provided() uses (link: mut Link) {
+    match link {
+        Link::Nil => {}
+        Link::Cons(node) => { node.value += 1 }
+    }
+}
+
+fn retarget_stored(_ replacement: *Node) uses (store: mut Store) {
+    match mut store.link {
+        Link::Nil => {}
+        Link::Cons(node) => { node = replacement }
+    }
+}
+
+fn add_to_stored_slot() -> u64 uses (store: mut Store) {
+    match mut store.slot {
+        Option::Some(value) => with (value) { add(by: 3) }
+        Option::None => 0
+    }
+}
+
+fn provider_backed_bindings() {
+    let first = ptr::alloc<Node>()
+    *first = Node { value: 7 }
+    let second = ptr::alloc<Node>()
+    *second = Node { value: 20 }
+    let mut store = Store { link: Link::Cons(first), slot: Option::Some(1) }
+    with (store) {
+        core::assert(stored_head() == 21)
+        retarget_stored(second)
+        core::assert(stored_head() == 60)
+        core::assert(add_to_stored_slot() == 4)
+    }
+    match store.slot {
+        Option::Some(value) => core::assert(value == 4)
+        Option::None => core::panic()
+    }
+    let mut link = Link::Cons(first)
+    with (link) { edit_provided() }
+    core::assert(first.value == 8)
+}
+
+fn chain_sum(_ chain: Chain) -> u64 {
+    match chain {
+        Chain::End => 0
+        Chain::Next(node) => node.value + chain_sum(node.next)
+    }
+}
+
+fn chain_sum_ref(_ chain: ref Chain) -> u64 {
+    match chain {
+        Chain::End => 0
+        Chain::Next(node) => node.value + chain_sum_ref(ref node.next)
+    }
+}
+
+fn optional_sum(_ node: ref Option<*OptionalNode>) -> u64 {
+    if let Option::Some(node) = node { node.value + optional_sum(ref node.next) } else { 0 }
+}
+
+fn recursive_bindings() {
+    let last = ptr::alloc<ChainNode>()
+    *last = ChainNode { value: 3, next: Chain::End }
+    let middle = ptr::alloc<ChainNode>()
+    *middle = ChainNode { value: 2, next: Chain::Next(last) }
+    let head = ptr::alloc<ChainNode>()
+    *head = ChainNode { value: 1, next: Chain::Next(middle) }
+    let chain = Chain::Next(head)
+    core::assert(chain_sum(chain) == 6)
+    core::assert(chain_sum_ref(ref chain) == 6)
+    core::assert(chain_sum_ref(ref head.next) == 5)
+
+    let tail = ptr::alloc<OptionalNode>()
+    *tail = OptionalNode { value: 5, next: Option::None }
+    let front = ptr::alloc<OptionalNode>()
+    *front = OptionalNode { value: 4, next: Option::Some(tail) }
+    let nodes: Option<*OptionalNode> = Option::Some(front)
+    core::assert(optional_sum(ref nodes) == 9)
+}
+
+pub fn main() -> i32 {
+    let first = ptr::alloc<Node>()
+    *first = Node { value: 7 }
+    let second = ptr::alloc<Node>()
+    *second = Node { value: 19 }
+    let mut link = Link::Cons(first)
+    core::assert(head(link) == 7)
+    core::assert(pointer(ref link) == first)
+    edit(mut link)
+    core::assert(first.value == 8)
+    retarget(mut link, second)
+    core::assert(pointer(ref link) == second)
+    core::assert(head(link) == 19)
+    core::assert(destructure(Pair { first, second }) == 27)
+    let optional_link = Option::Some(first)
+    core::assert(optional(ref optional_link) == 8)
+    let absent: Option<*Node> = Option::None
+    core::assert(optional(ref absent) == 0)
+    core::assert(head(Link::Nil) == 0)
+
+    // The scrutinee's raw address must be dereferenced before using its payload.
+    let holder = ptr::alloc<Holder>()
+    *holder = Holder { link: Link::Cons(first) }
+    core::assert(head(holder.link) == 8)
+    core::assert(pointer(ref holder.link) == first)
+    match holder.link {
+        Link::Nil => core::panic()
+        Link::Cons(node) => { core::assert(node.value == 8) }
+    }
+    retarget(mut holder.link, second)
+    core::assert(head(holder.link) == 19)
+    pointer_backed_bindings()
+    provider_backed_bindings()
+    recursive_bindings()
+    0
+}
+
+#[test]
+fn raw_pointer_pattern_bindings() { core::assert(main() == 0) }

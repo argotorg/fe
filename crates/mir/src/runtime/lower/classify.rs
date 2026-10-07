@@ -64,6 +64,7 @@ use super::{
         StaticRuntimeReturnDecision, semantic_never_returns, static_runtime_return_decision,
     },
     semantic_body::{RuntimeOperand, RuntimeSemanticBody},
+    source::alias_source_places,
     type_info::{
         RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env,
         provider_address_space_to_runtime, provider_class_for_target_in_env, runtime_array_len,
@@ -206,10 +207,16 @@ struct CachedLocalDynamicFacts<'db> {
 #[derive(Clone)]
 struct LocalStaticFacts<'db> {
     boundary_source_transport_sensitive: bool,
-    semantic_fallback_class: Option<RuntimeClass<'db>>,
+    semantic_fallback: Option<SemanticFallback<'db>>,
     root_place_fallback_class: Option<RuntimeClass<'db>>,
     root_transport_fallback_class: Option<RuntimeClass<'db>>,
     pub(super) materialization_plan: CompiledMaterializationPlan<'db>,
+}
+
+#[derive(Clone)]
+enum SemanticFallback<'db> {
+    TargetValue(RuntimeClass<'db>),
+    PlaceAddress(NPlace<'db>),
 }
 
 #[derive(Clone)]
@@ -269,7 +276,10 @@ impl<'db> BodyStaticFacts<'db> {
         let local_facts: Vec<_> = body
             .locals
             .iter()
-            .map(|local_data| build_local_static_facts(db, type_env, body, local_data))
+            .zip(alias_source_places(db, body))
+            .map(|(local_data, alias_place)| {
+                build_local_static_facts(db, type_env, body, local_data, alias_place)
+            })
             .collect();
         let mut assignments = PrimaryMap::new();
         let local_count = body.locals.len();
@@ -316,9 +326,18 @@ impl<'db> BodyStaticFacts<'db> {
                 });
                 statement_assignments[block_idx][stmt_idx] = Some(assignment);
                 assignments_defining_local[dst.index()].push(assignment);
+                // Erased aliases have no carrier changes of their own. Their
+                // address class still changes with the defining place's base.
+                let dst_is_place_address = matches!(
+                    local_facts[dst.index()].semantic_fallback,
+                    Some(SemanticFallback::PlaceAddress(_))
+                );
                 for source in uses {
                     push_unique(&mut source_locals[dst.index()], source);
                     assignments_using_local[source.index()].push(assignment);
+                    if dst_is_place_address {
+                        push_unique(&mut dynamic_dependents[source.index()], dst);
+                    }
                 }
                 for index in dynamic_indices {
                     push_unique(&mut dynamic_dependents[index.index()], dst);
@@ -970,6 +989,12 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
     ) -> Option<RuntimeClass<'db>> {
         let local_data = self.local(local)?;
         let local_facts = self.local_facts(local)?;
+        let fallback = || match local_facts.semantic_fallback.as_ref()? {
+            SemanticFallback::TargetValue(class) => Some(class.clone()),
+            SemanticFallback::PlaceAddress(place) => {
+                self.normalized_place_address_class(carriers, place)
+            }
+        };
         match local_data.role.kind() {
             SemanticLocalKind::Erased => None,
             SemanticLocalKind::DirectValue => {
@@ -985,8 +1010,9 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 }
             }
             SemanticLocalKind::DirectCarrier => carrier_value_class(local, carriers),
-            SemanticLocalKind::PlaceCarrier => carrier_value_class(local, carriers)
-                .or_else(|| local_facts.semantic_fallback_class.clone()),
+            SemanticLocalKind::PlaceCarrier => {
+                carrier_value_class(local, carriers).or_else(fallback)
+            }
             SemanticLocalKind::PlaceBoundValue => {
                 if matches!(
                     local_data.role,
@@ -995,13 +1021,12 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                         ..
                     }
                 ) && matches!(
-                    local_facts.semantic_fallback_class,
-                    Some(RuntimeClass::Scalar(_))
+                    local_facts.semantic_fallback,
+                    Some(SemanticFallback::TargetValue(RuntimeClass::Scalar(_)))
                 ) {
-                    local_facts.semantic_fallback_class.clone()
+                    fallback()
                 } else {
-                    carrier_value_class(local, carriers)
-                        .or_else(|| local_facts.semantic_fallback_class.clone())
+                    carrier_value_class(local, carriers).or_else(fallback)
                 }
             }
         }
@@ -1062,6 +1087,7 @@ fn build_local_static_facts<'db>(
     type_env: RuntimeTypeEnv<'db>,
     body: &RuntimeSemanticBody<'db>,
     local_data: &SLocal<'db>,
+    alias_place: Option<NPlace<'db>>,
 ) -> LocalStaticFacts<'db> {
     let scope = type_env.scope;
     let assumptions = type_env.assumptions;
@@ -1079,11 +1105,25 @@ fn build_local_static_facts<'db>(
                     .is_some_and(|ty| runtime_zero_sized_transport_ty(db, ty, scope, assumptions)))
     };
     let interface = local_data.role.kind();
-    let semantic_fallback_class = match interface {
+    let semantic_fallback = match interface {
         SemanticLocalKind::PlaceCarrier | SemanticLocalKind::PlaceBoundValue
             if !zero_sized_transport =>
         {
-            lowered_ty.map(|ty| stored_class_for_ty_in_env(db, type_env, ty))
+            lowered_ty.and_then(|ty| {
+                let class = stored_class_for_ty_in_env(db, type_env, ty);
+                let interface_ty = runtime_interface_ty_in_env(db, type_env, local_data.ty);
+                if interface_ty.as_view(db).is_some()
+                    || (!class.is_transport() && interface_ty.as_borrow(db).is_none())
+                {
+                    Some(SemanticFallback::TargetValue(class))
+                } else if matches!(interface, SemanticLocalKind::PlaceBoundValue) {
+                    // A borrow must stay attached to its storage. Materializing
+                    // its contents here would make later reads use a stale copy.
+                    alias_place.map(SemanticFallback::PlaceAddress)
+                } else {
+                    None
+                }
+            })
         }
         SemanticLocalKind::Erased
         | SemanticLocalKind::DirectValue
@@ -1115,7 +1155,7 @@ fn build_local_static_facts<'db>(
             scope,
             assumptions,
         ),
-        semantic_fallback_class,
+        semantic_fallback,
         root_place_fallback_class,
         root_transport_fallback_class: fallback_root_transport_class(
             db,
