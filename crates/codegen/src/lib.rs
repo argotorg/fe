@@ -24,4 +24,7 @@ pub use sonatina::{
     emit_module_native_artifacts, emit_module_native_ir, emit_module_native_object,
     emit_test_module_native,
 };
-pub use test_output::{ExpectedRevert, TestMetadata, TestModuleOutput, parse_expected_revert};
+pub use test_output::{
+    ExpectedRevert, TestDebugCode, TestDebugInfo, TestMetadata, TestModuleOutput,
+    parse_expected_revert,
+};

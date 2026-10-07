@@ -1,4 +1,6 @@
 //! Test harness utilities for compiling Fe contracts and exercising their runtimes with `revm`.
+pub mod execution_trace;
+
 use codegen::{OptLevel, emit_module_sonatina_bytecode};
 use common::InputDb;
 use driver::DriverDataBase;
@@ -264,6 +266,25 @@ fn transact_with_logs(
             Err(HarnessError::Halted { reason, gas_used })
         }
     }
+}
+
+/// Temporarily attach the inspector while retaining the actual context and EVM state.
+fn inspect_commit(
+    evm: &mut MainnetEvm<MainnetContext<InMemoryDB>>,
+    tx: TxEnv,
+    inspector: &mut execution_trace::ExecutionInspector,
+) -> Result<ExecutionResult, HarnessError> {
+    inspector.precompile_addresses = evm.precompiles.warm_addresses().collect();
+    let placeholder = Context::mainnet()
+        .with_db(InMemoryDB::default())
+        .build_mainnet();
+    let owned = std::mem::replace(evm, placeholder);
+    let mut observed = owned.with_inspector(inspector);
+    let result = observed
+        .inspect_tx_commit(tx)
+        .map_err(|err| HarnessError::Execution(err.to_string()));
+    *evm = observed.with_inspector(());
+    result
 }
 
 fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv, options: &EvmTraceOptions) {
@@ -682,71 +703,91 @@ impl RuntimeInstance {
         init_bytecode_hex: &str,
         constructor_args: &[u8],
     ) -> Result<(Self, u64), HarnessError> {
-        let mut init_code = hex_to_bytes(init_bytecode_hex)?;
-        init_code.extend_from_slice(constructor_args);
-        let caller = Address::ZERO;
+        Self::deploy_observed(init_bytecode_hex, constructor_args, None).0
+    }
 
-        let mut db = InMemoryDB::default();
-        // Give the caller some balance for deployment
-        db.insert_account_info(
-            caller,
-            AccountInfo::new(
-                U256::from(1_000_000_000u64),
-                0,
-                Default::default(),
-                Bytecode::default(),
-            ),
-        );
+    /// Deploy once, optionally retaining diagnostics even when creation fails.
+    pub fn deploy_observed(
+        init_bytecode_hex: &str,
+        constructor_args: &[u8],
+        limits: Option<execution_trace::CaptureLimits>,
+    ) -> (
+        Result<(Self, u64), HarnessError>,
+        Option<execution_trace::ExecutionTrace>,
+    ) {
+        let mut inspector =
+            limits.map(|limits| execution_trace::ExecutionInspector::new(limits, false));
+        let result = (|| {
+            let mut init_code = hex_to_bytes(init_bytecode_hex)?;
+            init_code.extend_from_slice(constructor_args);
+            let caller = Address::ZERO;
 
-        let ctx = Context::mainnet()
-            .with_db(db)
-            .modify_cfg_chained(configure_test_cfg);
-        let mut evm = ctx.build_mainnet();
+            let mut db = InMemoryDB::default();
+            // Give the caller some balance for deployment
+            db.insert_account_info(
+                caller,
+                AccountInfo::new(
+                    U256::from(1_000_000_000u64),
+                    0,
+                    Default::default(),
+                    Bytecode::default(),
+                ),
+            );
 
-        // Create deployment transaction (TxKind::Create means contract creation)
-        let tx = TxEnv::builder()
-            .caller(caller)
-            .gas_limit(TEST_GAS_LIMIT)
-            .gas_price(0)
-            .kind(TxKind::Create)
-            .data(EvmBytes::from(init_code))
-            .nonce(0)
-            .build()
-            .map_err(|err| HarnessError::Execution(format!("{err:?}")))?;
+            let ctx = Context::mainnet()
+                .with_db(db)
+                .modify_cfg_chained(configure_test_cfg);
+            let mut evm = ctx.build_mainnet();
 
-        let result = evm
-            .transact_commit(tx)
-            .map_err(|err| HarnessError::Execution(err.to_string()))?;
+            // Create deployment transaction (TxKind::Create means contract creation)
+            let tx = TxEnv::builder()
+                .caller(caller)
+                .gas_limit(TEST_GAS_LIMIT)
+                .gas_price(0)
+                .kind(TxKind::Create)
+                .data(EvmBytes::from(init_code))
+                .nonce(0)
+                .build()
+                .map_err(|err| HarnessError::Execution(format!("{err:?}")))?;
 
-        match result {
-            ExecutionResult::Success {
-                output: Output::Create(_, Some(deployed_address)),
-                gas_used,
-                ..
-            } => {
-                // The contract was deployed successfully; revm has already inserted the account
-                let mut next_nonce_by_caller = HashMap::new();
-                next_nonce_by_caller.insert(caller, 1);
-                Ok((
-                    Self {
-                        evm,
-                        address: deployed_address,
-                        next_nonce_by_caller,
-                        trace_options: None,
-                    },
+            let result = if let Some(inspector) = &mut inspector {
+                inspect_commit(&mut evm, tx, inspector)?
+            } else {
+                evm.transact_commit(tx)
+                    .map_err(|err| HarnessError::Execution(err.to_string()))?
+            };
+
+            match result {
+                ExecutionResult::Success {
+                    output: Output::Create(_, Some(deployed_address)),
                     gas_used,
-                ))
+                    ..
+                } => {
+                    // The contract was deployed successfully; revm has already inserted the account
+                    let mut next_nonce_by_caller = HashMap::new();
+                    next_nonce_by_caller.insert(caller, 1);
+                    Ok((
+                        Self {
+                            evm,
+                            address: deployed_address,
+                            next_nonce_by_caller,
+                            trace_options: None,
+                        },
+                        gas_used,
+                    ))
+                }
+                ExecutionResult::Success { output, .. } => Err(HarnessError::Execution(format!(
+                    "deployment returned unexpected output: {output:?}"
+                ))),
+                ExecutionResult::Revert { output, .. } => {
+                    Err(HarnessError::Revert(RevertData(output.to_vec())))
+                }
+                ExecutionResult::Halt { reason, gas_used } => {
+                    Err(HarnessError::Halted { reason, gas_used })
+                }
             }
-            ExecutionResult::Success { output, .. } => Err(HarnessError::Execution(format!(
-                "deployment returned unexpected output: {output:?}"
-            ))),
-            ExecutionResult::Revert { output, .. } => {
-                Err(HarnessError::Revert(RevertData(output.to_vec())))
-            }
-            ExecutionResult::Halt { reason, gas_used } => {
-                Err(HarnessError::Halted { reason, gas_used })
-            }
-        }
+        })();
+        (result, inspector.map(|inspector| inspector.trace))
     }
 
     /// Deploys another contract into the same in-memory EVM context.
@@ -894,6 +935,61 @@ impl RuntimeInstance {
             options,
             nonce,
             self.trace_options.as_ref(),
+        )
+    }
+
+    /// Execute once and retain structured diagnostics on both success and failure.
+    pub fn call_raw_observed(
+        &mut self,
+        calldata: &[u8],
+        options: ExecutionOptions,
+        limits: execution_trace::CaptureLimits,
+        legacy_trace: bool,
+    ) -> (
+        Result<CallResultWithLogs, HarnessError>,
+        execution_trace::ExecutionTrace,
+        Option<CallTrace>,
+    ) {
+        let mut inspector = execution_trace::ExecutionInspector::new(limits, legacy_trace);
+        let nonce = self.effective_nonce(options);
+        let result = (|| {
+            let tx = TxEnv::builder()
+                .caller(options.caller)
+                .gas_limit(options.gas_limit)
+                .gas_price(options.gas_price)
+                .to(self.address)
+                .value(options.value)
+                .data(EvmBytes::copy_from_slice(calldata))
+                .nonce(nonce)
+                .build()
+                .map_err(|err| HarnessError::Execution(format!("{err:?}")))?;
+            match inspect_commit(&mut self.evm, tx, &mut inspector)? {
+                ExecutionResult::Success {
+                    output: Output::Call(bytes),
+                    gas_used,
+                    logs,
+                    ..
+                } => Ok(CallResultWithLogs {
+                    result: CallResult {
+                        return_data: bytes.to_vec(),
+                        gas_used,
+                    },
+                    logs: format_logs(&logs),
+                    raw_logs: logs,
+                }),
+                ExecutionResult::Success { .. } => Err(HarnessError::UnexpectedOutput),
+                ExecutionResult::Revert { output, .. } => {
+                    Err(HarnessError::Revert(RevertData(output.to_vec())))
+                }
+                ExecutionResult::Halt { reason, gas_used } => {
+                    Err(HarnessError::Halted { reason, gas_used })
+                }
+            }
+        })();
+        (
+            result,
+            inspector.trace,
+            inspector.legacy.map(CallTracer::into_trace),
         )
     }
 
