@@ -1,0 +1,361 @@
+// A reborrow of an input names memory the caller supplied, so callers
+// establish its separation physically, as for the input. Authority recovered
+// through another route never discharges it.
+use core::ptr
+
+// Rejected in drive: the stored borrow aliases the reborrow.
+fn stored_write_foreign(value: mut u256, saved: *mut u256) {
+    let child = mut value
+    let other = *saved
+    other = 5
+    child = 9
+}
+
+fn stored_write_drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    stored_write_foreign(value: native, saved)
+}
+
+// Rejected in drive: a read through a stored shared borrow.
+fn stored_read_foreign(value: mut u256, saved: *ref u256) {
+    let child = mut value
+    let other = *saved
+    let seen = other
+    assert(seen == 0)
+    child = 9
+}
+
+fn stored_read_drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<ref u256>()
+    *saved = ref native
+    stored_read_foreign(value: native, saved)
+}
+
+// Rejected in drive: a fresh argument reborrow.
+fn fresh_argument_foreign(value: mut u256, saved: *mut u256) {
+    let child = mut value
+    let other = *saved
+    other = 5
+    child = 9
+}
+
+fn fresh_argument_drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    fresh_argument_foreign(value: mut native, saved)
+}
+
+// Rejected in drive: the reborrowed input is carried in an owned aggregate.
+struct OwnedAggregateHeld { value: mut u256 }
+fn owned_aggregate_foreign(_ held: own OwnedAggregateHeld, _ saved: *mut u256) {
+    let value = held.value
+    let child = mut value
+    let other = *saved
+    other = 5
+    child = 9
+}
+fn owned_aggregate_drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    owned_aggregate_foreign(OwnedAggregateHeld { value: native }, saved)
+}
+
+// Rejected in drive: an ordinary wrapper forwards the requirement.
+fn wrapper_foreign(value: mut u256, saved: *mut u256) {
+    let child = mut value
+    let other = *saved
+    other = 5
+    child = 9
+}
+
+fn wrapper_forward(_ value: mut u256, _ saved: *mut u256) {
+    wrapper_foreign(value, saved)
+}
+
+fn wrapper_drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    wrapper_forward(native, saved)
+}
+
+// Rejected in aliasing only: a raw pointer stored in the reborrowed input.
+struct SameParameterHolder { value: u256, raw: *u256 }
+fn same_parameter_foreign(_ holder: mut SameParameterHolder) {
+    let child = mut holder.value
+    *holder.raw = 5
+    child = 9
+}
+fn same_parameter_aliasing() {
+    let cell = ptr::alloc<SameParameterHolder>()
+    *cell = SameParameterHolder { value: 0, raw: ptr::alloc<u256>() }
+    let value = ptr::cast<SameParameterHolder, u256>(cell)
+    (*cell).raw = value
+    same_parameter_foreign(mut *cell)
+}
+fn same_parameter_separate() {
+    let cell = ptr::alloc<SameParameterHolder>()
+    *cell = SameParameterHolder { value: 0, raw: ptr::alloc<u256>() }
+    same_parameter_foreign(mut *cell)
+}
+
+// Rejected in drive: forwarded through a wrapper chain.
+fn child_chain_foreign(value: mut u256, saved: *mut u256) {
+    let child = mut value
+    let other = *saved
+    other = 5
+    child = 9
+}
+fn child_chain_wrap0(value: mut u256, saved: *mut u256) { child_chain_foreign(value, saved) }
+fn child_chain_wrap1(value: mut u256, saved: *mut u256) { child_chain_wrap0(value, saved) }
+fn child_chain_wrap2(value: mut u256, saved: *mut u256) { child_chain_wrap1(value, saved) }
+fn child_chain_wrap3(value: mut u256, saved: *mut u256) { child_chain_wrap2(value, saved) }
+fn child_chain_wrap4(value: mut u256, saved: *mut u256) { child_chain_wrap3(value, saved) }
+fn child_chain_wrap5(value: mut u256, saved: *mut u256) { child_chain_wrap4(value, saved) }
+fn child_chain_wrap6(value: mut u256, saved: *mut u256) { child_chain_wrap5(value, saved) }
+fn child_chain_wrap7(value: mut u256, saved: *mut u256) { child_chain_wrap6(value, saved) }
+fn child_chain_drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let elsewhere = ptr::alloc<u256>()
+    *elsewhere = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    child_chain_wrap7(value: native, saved)
+}
+
+// Rejected in drive: forwarded through a diamond of callers.
+fn child_diamond_foreign(value: mut u256, saved: *mut u256) {
+    let child = mut value
+    let other = *saved
+    other = 5
+    child = 9
+}
+fn child_diamond_d0a(value: mut u256, saved: *mut u256) {
+    child_diamond_d1a(value, saved)
+    child_diamond_d1b(value, saved)
+}
+fn child_diamond_d0b(value: mut u256, saved: *mut u256) {
+    child_diamond_d1a(value, saved)
+    child_diamond_d1b(value, saved)
+}
+fn child_diamond_d1a(value: mut u256, saved: *mut u256) {
+    child_diamond_d2a(value, saved)
+    child_diamond_d2b(value, saved)
+}
+fn child_diamond_d1b(value: mut u256, saved: *mut u256) {
+    child_diamond_d2a(value, saved)
+    child_diamond_d2b(value, saved)
+}
+fn child_diamond_d2a(value: mut u256, saved: *mut u256) {
+    child_diamond_d3a(value, saved)
+    child_diamond_d3b(value, saved)
+}
+fn child_diamond_d2b(value: mut u256, saved: *mut u256) {
+    child_diamond_d3a(value, saved)
+    child_diamond_d3b(value, saved)
+}
+fn child_diamond_d3a(value: mut u256, saved: *mut u256) {
+    child_diamond_foreign(value, saved)
+}
+fn child_diamond_d3b(value: mut u256, saved: *mut u256) {
+    child_diamond_foreign(value, saved)
+}
+fn child_diamond_drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let elsewhere = ptr::alloc<u256>()
+    *elsewhere = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    child_diamond_d0a(value: native, saved)
+}
+
+// Rejected in drive: forwarded through recursion.
+fn child_cycle_foreign(value: mut u256, saved: *mut u256) {
+    let child = mut value
+    let other = *saved
+    other = 5
+    child = 9
+}
+fn child_cycle_rec0(value: mut u256, saved: *mut u256, depth: u256) {
+    if depth > 0 { child_cycle_rec1(value, saved, depth: depth - 1) }
+    child_cycle_foreign(value, saved)
+}
+fn child_cycle_rec1(value: mut u256, saved: *mut u256, depth: u256) {
+    if depth > 0 { child_cycle_rec0(value, saved, depth: depth - 1) }
+    child_cycle_foreign(value, saved)
+}
+fn child_cycle_drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let elsewhere = ptr::alloc<u256>()
+    *elsewhere = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    child_cycle_rec0(value: native, saved, depth: 3)
+}
+
+// Rejected in aliasing only: a recursive body behind a direct-input wrapper.
+fn recursive_recurse(value: mut u256, saved: *mut u256, again: bool) {
+    let child = mut value
+    if again { recursive_recurse(value: child, saved, again: false) }
+    let other = *saved
+    other = 5
+    child = 9
+}
+fn recursive_forward(value: mut u256, saved: *mut u256) { recursive_recurse(value, saved, again: true) }
+fn recursive_aliasing() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut native
+    recursive_forward(value: native, saved)
+}
+fn recursive_separate() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let elsewhere = ptr::alloc<u256>()
+    *elsewhere = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut *elsewhere
+    recursive_forward(value: native, saved)
+}
+
+// Accepted: the stored borrow targets another allocation.
+fn stored_separate_foreign(value: mut u256, saved: *mut u256) {
+    let child = mut value
+    let other = *saved
+    other = 5
+    child = 9
+}
+fn stored_separate_drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let elsewhere = ptr::alloc<u256>()
+    *elsewhere = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut *elsewhere
+    stored_separate_foreign(value: native, saved)
+}
+
+// Accepted.
+fn chain_separate_foreign(value: mut u256, saved: *mut u256) {
+    let child = mut value
+    let other = *saved
+    other = 5
+    child = 9
+}
+fn chain_separate_wrap0(value: mut u256, saved: *mut u256) { chain_separate_foreign(value, saved) }
+fn chain_separate_wrap1(value: mut u256, saved: *mut u256) { chain_separate_wrap0(value, saved) }
+fn chain_separate_wrap2(value: mut u256, saved: *mut u256) { chain_separate_wrap1(value, saved) }
+fn chain_separate_wrap3(value: mut u256, saved: *mut u256) { chain_separate_wrap2(value, saved) }
+fn chain_separate_wrap4(value: mut u256, saved: *mut u256) { chain_separate_wrap3(value, saved) }
+fn chain_separate_wrap5(value: mut u256, saved: *mut u256) { chain_separate_wrap4(value, saved) }
+fn chain_separate_wrap6(value: mut u256, saved: *mut u256) { chain_separate_wrap5(value, saved) }
+fn chain_separate_wrap7(value: mut u256, saved: *mut u256) { chain_separate_wrap6(value, saved) }
+fn chain_separate_drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let elsewhere = ptr::alloc<u256>()
+    *elsewhere = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut *elsewhere
+    chain_separate_wrap7(value: native, saved)
+}
+
+// Accepted.
+fn diamond_separate_foreign(value: mut u256, saved: *mut u256) {
+    let child = mut value
+    let other = *saved
+    other = 5
+    child = 9
+}
+fn diamond_separate_d0a(value: mut u256, saved: *mut u256) {
+    diamond_separate_d1a(value, saved)
+    diamond_separate_d1b(value, saved)
+}
+fn diamond_separate_d0b(value: mut u256, saved: *mut u256) {
+    diamond_separate_d1a(value, saved)
+    diamond_separate_d1b(value, saved)
+}
+fn diamond_separate_d1a(value: mut u256, saved: *mut u256) {
+    diamond_separate_d2a(value, saved)
+    diamond_separate_d2b(value, saved)
+}
+fn diamond_separate_d1b(value: mut u256, saved: *mut u256) {
+    diamond_separate_d2a(value, saved)
+    diamond_separate_d2b(value, saved)
+}
+fn diamond_separate_d2a(value: mut u256, saved: *mut u256) {
+    diamond_separate_d3a(value, saved)
+    diamond_separate_d3b(value, saved)
+}
+fn diamond_separate_d2b(value: mut u256, saved: *mut u256) {
+    diamond_separate_d3a(value, saved)
+    diamond_separate_d3b(value, saved)
+}
+fn diamond_separate_d3a(value: mut u256, saved: *mut u256) {
+    diamond_separate_foreign(value, saved)
+}
+fn diamond_separate_d3b(value: mut u256, saved: *mut u256) {
+    diamond_separate_foreign(value, saved)
+}
+fn diamond_separate_drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let elsewhere = ptr::alloc<u256>()
+    *elsewhere = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut *elsewhere
+    diamond_separate_d0a(value: native, saved)
+}
+
+// Accepted.
+fn cycle_separate_foreign(value: mut u256, saved: *mut u256) {
+    let child = mut value
+    let other = *saved
+    other = 5
+    child = 9
+}
+fn cycle_separate_rec0(value: mut u256, saved: *mut u256, depth: u256) {
+    if depth > 0 { cycle_separate_rec1(value, saved, depth: depth - 1) }
+    cycle_separate_foreign(value, saved)
+}
+fn cycle_separate_rec1(value: mut u256, saved: *mut u256, depth: u256) {
+    if depth > 0 { cycle_separate_rec0(value, saved, depth: depth - 1) }
+    cycle_separate_foreign(value, saved)
+}
+fn cycle_separate_drive() {
+    let target = ptr::alloc<u256>()
+    *target = 0
+    let elsewhere = ptr::alloc<u256>()
+    *elsewhere = 0
+    let native = mut *target
+    let saved = ptr::alloc<mut u256>()
+    *saved = mut *elsewhere
+    cycle_separate_rec0(value: native, saved, depth: 3)
+}

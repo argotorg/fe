@@ -1,0 +1,114 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+assertion_line: 25
+expression: diags
+input_file: fixtures/semantic_borrowck/input_reborrow_obligations.fe
+---
+error[16-0001]: borrow conflict in `fn stored_write_drive`
+   ┌─ input_reborrow_obligations.fe:20:5
+   │
+ 8 │     let child = mut value
+   │                 --------- borrow held across the access
+ 9 │     let other = *saved
+   │                 ------ access that must stay separate from it
+   ·
+20 │     stored_write_foreign(value: native, saved)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call accesses memory that the callee keeps borrowed across the access
+
+error[16-0001]: borrow conflict in `fn stored_read_drive`
+   ┌─ input_reborrow_obligations.fe:38:5
+   │
+25 │     let child = mut value
+   │                 --------- borrow held across the access
+   ·
+28 │     assert(seen == 0)
+   │            ---- access that must stay separate from it
+   ·
+38 │     stored_read_foreign(value: native, saved)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call accesses memory that the callee keeps borrowed across the access
+
+error[16-0001]: borrow conflict in `fn fresh_argument_drive`
+   ┌─ input_reborrow_obligations.fe:55:5
+   │
+55 │     fresh_argument_foreign(value: mut native, saved)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   │     │                             │
+   │     │                             borrow created here
+   │     cannot mutably borrow this place while a mut borrow is active
+
+error[16-0001]: borrow conflict in `fn owned_aggregate_drive`
+   ┌─ input_reborrow_obligations.fe:73:5
+   │
+62 │     let child = mut value
+   │                 --------- borrow held across the access
+63 │     let other = *saved
+   │                 ------ access that must stay separate from it
+   ·
+73 │     owned_aggregate_foreign(OwnedAggregateHeld { value: native }, saved)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call accesses memory that the callee keeps borrowed across the access
+
+error[16-0001]: borrow conflict in `fn wrapper_drive`
+   ┌─ input_reborrow_obligations.fe:94:5
+   │
+78 │     let child = mut value
+   │                 --------- borrow held across the access
+79 │     let other = *saved
+   │                 ------ access that must stay separate from it
+   ·
+94 │     wrapper_forward(native, saved)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call accesses memory that the callee keeps borrowed across the access
+
+error[16-0001]: borrow conflict in `fn same_parameter_aliasing`
+    ┌─ input_reborrow_obligations.fe:109:5
+    │
+100 │     let child = mut holder.value
+    │                 ---------------- borrow held across the access
+101 │     *holder.raw = 5
+    │     --------------- access that must stay separate from it
+    ·
+109 │     same_parameter_foreign(mut *cell)
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot prove that this call keeps memory the callee holds borrowed separate from the callee's access
+
+error[16-0001]: borrow conflict in `fn child_chain_drive`
+    ┌─ input_reborrow_obligations.fe:140:5
+    │
+119 │     let child = mut value
+    │                 --------- borrow held across the access
+120 │     let other = *saved
+    │                 ------ access that must stay separate from it
+    ·
+140 │     child_chain_wrap7(value: native, saved)
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call accesses memory that the callee keeps borrowed across the access
+
+error[16-0001]: borrow conflict in `fn child_diamond_drive`
+    ┌─ input_reborrow_obligations.fe:188:5
+    │
+145 │     let child = mut value
+    │                 --------- borrow held across the access
+146 │     let other = *saved
+    │                 ------ access that must stay separate from it
+    ·
+188 │     child_diamond_d0a(value: native, saved)
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call accesses memory that the callee keeps borrowed across the access
+
+error[16-0001]: borrow conflict in `fn child_cycle_drive`
+    ┌─ input_reborrow_obligations.fe:214:5
+    │
+193 │     let child = mut value
+    │                 --------- borrow held across the access
+194 │     let other = *saved
+    │                 ------ access that must stay separate from it
+    ·
+214 │     child_cycle_rec0(value: native, saved, depth: 3)
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call accesses memory that the callee keeps borrowed across the access
+
+error[16-0001]: borrow conflict in `fn recursive_aliasing`
+    ┌─ input_reborrow_obligations.fe:232:5
+    │
+219 │     let child = mut value
+    │                 --------- borrow held across the access
+220 │     if again { recursive_recurse(value: child, saved, again: false) }
+    │                ---------------------------------------------------- access that must stay separate from it
+    ·
+232 │     recursive_forward(value: native, saved)
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call accesses memory that the callee keeps borrowed across the access

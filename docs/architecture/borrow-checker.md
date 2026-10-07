@@ -566,7 +566,9 @@ A reborrow descended from an input loan still names caller-supplied memory, so
 its unresolved separation is also exported. Creating `mut input` or `ref input`
 does not make the referent concrete. An input ancestor permits deferral only;
 it never discharges a separation requirement or authorizes an aliasing access.
-Definite overlap and non-representable endpoints remain conflicts.
+Definite overlap and non-representable endpoints remain conflicts. A borrow
+through a raw pointer is not a reborrow of an input, even when the pointer is
+stored in one, so it stays local.
 
 Requirements come from local accesses, from call effects, and from accesses of
 arguments and effect arguments. A caller resolves both endpoints of each callee
@@ -899,6 +901,7 @@ improvements with empty snapshots. Source comments identify each case.
 | Move one cell, then write through a pointer selecting that cell or another | The write cannot definitely restore the moved cell. An exact destination is accepted. | [Ambiguous reinitialization](../../crates/uitest/fixtures/semantic_borrowck/ambiguous_reinitialization.fe) |
 | Keep a storage borrow live across an external call | CALL conflicts with shared and mutable state loans; STATICCALL conflicts with mutable state loans. Ending the loan before the call and reborrowing afterward is accepted. | [External call state borrows](../../crates/uitest/fixtures/semantic_borrowck/external_call_state_borrows.fe) |
 | Call a `mut self` method that uses a `StorageMap` field on a contract-field struct | Accepted from init and recv arms, through `uses` helpers, for nested fields and array elements, and while a sibling field of the contract field is borrowed. A live input-field reborrow exports separation for the concrete caller to prove. Raw slot accesses, packed arrays, and pointer-bound providers still conflict. | [Accepted](../../crates/uitest/fixtures/semantic_borrowck/storage_map_field_methods.fe), [rejected](../../crates/uitest/fixtures/semantic_borrowck/storage_map_field_methods_rejected.fe) |
+| Keep a reborrow of an input live across an access the function cannot place | Callers establish the separation physically, through wrappers, chains, diamonds and recursion: an aliasing caller is rejected and a disjoint one accepted. Suspended parts of the reborrow, shared reads and disjoint byte ranges are accepted. A raw pointee and a guarded definite overlap stay local. | [Obligations](../../crates/uitest/fixtures/semantic_borrowck/input_reborrow_obligations.fe), [eligibility](../../crates/uitest/fixtures/semantic_borrowck/input_reborrow_eligibility.fe), [suspension](../../crates/uitest/fixtures/semantic_borrowck/input_reborrow_suspension.fe) |
 | Select an allocating factory with a boolean inside a loop, then consume the joined result | Complementary branch guards preserve the selected fresh allocation and accept the move. Moving it twice still conflicts. | [Boolean factory loop](../../crates/uitest/fixtures/semantic_borrowck/boolean_factory_loop.fe) |
 | Recursively return one freshly allocated object | Direct and mutual fresh returns converge through a single-object result port; forwarding an existing pointer retains its alias identity. A stored older object from the same loop allocation is not the result, and unsupported poststate growth still fails closed. | [Recursive fresh return](../../crates/uitest/fixtures/semantic_borrowck/recursive_fresh_return.fe) |
 | Store one typed heap cell, then read `children[index]` | A constant or symbolic store is recovered by a symbolic read when the caller's index matches; an unwritten member keeps unknown contents that may alias the mutable cursor. | [Typed heap cells](../../crates/uitest/fixtures/semantic_borrowck/typed_heap_cells.fe) |

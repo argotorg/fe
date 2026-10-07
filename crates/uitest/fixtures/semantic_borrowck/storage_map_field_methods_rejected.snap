@@ -5,62 +5,62 @@ expression: diags
 input_file: fixtures/semantic_borrowck/storage_map_field_methods_rejected.fe
 ---
 error[16-0001]: borrow conflict in `fn RawSlots::recv[0][0]`
-   ┌─ storage_map_field_methods_rejected.fe:57:13
+   ┌─ storage_map_field_methods_rejected.fe:33:13
    │
-57 │             ledger.peek(slot)
+33 │             ledger.peek(slot)
    │             ^^^^^^^^^^^^^^^^^
    │             │
    │             cannot immutably borrow this place while a mutable borrow is active
    │             borrow created here
 
 error[16-0001]: borrow conflict in `fn RawSlots::recv[0][1]`
-   ┌─ storage_map_field_methods_rejected.fe:60:13
+   ┌─ storage_map_field_methods_rejected.fe:36:13
    │
-60 │             ledger.mixed(to, slot)
+36 │             ledger.mixed(to, slot)
    │             ^^^^^^^^^^^^^^^^^^^^^^
    │             │
    │             cannot mutably borrow this place while a mut borrow is active
    │             borrow created here
 
 error[16-0001]: borrow conflict in `fn forward_mixed`
-   ┌─ storage_map_field_methods_rejected.fe:66:5
+   ┌─ storage_map_field_methods_rejected.fe:42:5
    │
-66 │     ledger.mixed(to, slot)
+42 │     ledger.mixed(to, slot)
    │     ^^^^^^^^^^^^^^^^^^^^^^
    │     │
    │     cannot mutably borrow this place while a mut borrow is active
    │     borrow created here
 
 error[16-0001]: borrow conflict in `fn repeat_mixed`
-   ┌─ storage_map_field_methods_rejected.fe:75:5
+   ┌─ storage_map_field_methods_rejected.fe:51:5
    │
-75 │     ledger.mixed(to, slot)
+51 │     ledger.mixed(to, slot)
    │     ^^^^^^^^^^^^^^^^^^^^^^
    │     │
    │     cannot mutably borrow this place while a mut borrow is active
    │     borrow created here
 
 error[16-0001]: borrow conflict in `fn Packed::recv[0][0]`
-    ┌─ storage_map_field_methods_rejected.fe:117:13
-    │
-117 │             bits.flip(i)
-    │             ^^^^^^^^^^^^
-    │             │
-    │             cannot immutably borrow this place while a mutable borrow is active
-    │             borrow created here
+   ┌─ storage_map_field_methods_rejected.fe:93:13
+   │
+93 │             bits.flip(i)
+   │             ^^^^^^^^^^^^
+   │             │
+   │             cannot immutably borrow this place while a mutable borrow is active
+   │             borrow created here
 
 error[16-0001]: borrow conflict in `fn hold_across_set`
-    ┌─ storage_map_field_methods_rejected.fe:124:5
+    ┌─ storage_map_field_methods_rejected.fe:100:5
     │
-123 │     let held = mut slot
+ 99 │     let held = mut slot
     │                -------- borrow created here
-124 │     map.set(key, value: 7)
+100 │     map.set(key, value: 7)
     │     ^^^^^^^^^^^^^^^^^^^^^^ cannot mutably borrow this place while a mut borrow is active
 
 error[16-0001]: borrow conflict in `fn hold_target_across_set`
-    ┌─ storage_map_field_methods_rejected.fe:143:5
+    ┌─ storage_map_field_methods_rejected.fe:119:5
     │
-142 │     let held = mut target
+118 │     let held = mut target
     │                ---------- borrow created here
-143 │     map.set(key, value: 7)
+119 │     map.set(key, value: 7)
     │     ^^^^^^^^^^^^^^^^^^^^^^ cannot mutably borrow this place while a mut borrow is active
