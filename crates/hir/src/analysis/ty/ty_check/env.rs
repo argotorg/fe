@@ -822,6 +822,10 @@ impl<'db> TyCheckEnv<'db> {
         self.deferred.push(DeferredTask::PrimitiveOp(pending))
     }
 
+    pub(super) fn register_pending_equation(&mut self, pending: PendingEquation<'db>) {
+        self.deferred.push(DeferredTask::Equation(pending))
+    }
+
     pub(super) fn record_implicit_move(&mut self, expr: ExprId, ty: TyId<'db>) {
         self.implicit_moves.insert(expr, ty);
     }
@@ -1561,6 +1565,17 @@ pub(super) enum DeferredTask<'db> {
     Obligation(TraitObligation<'db>),
     Method(PendingMethod<'db>),
     PrimitiveOp(PendingPrimitiveOp),
+    Equation(PendingEquation<'db>),
+}
+
+/// A type equation that could only be checked partially because a const
+/// argument is a projection over unresolved inference variables, such as the
+/// array length `<(?S,) as AsBytes>::N` while a string literal's type is open.
+#[derive(Debug, Clone)]
+pub(super) struct PendingEquation<'db> {
+    pub actual: TyId<'db>,
+    pub expected: TyId<'db>,
+    pub span: DynLazySpan<'db>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

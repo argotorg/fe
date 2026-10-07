@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assoc_const_len_after_literal_fallback_mismatch.fe
+---
+error[8-0000]: type mismatch
+  ┌─ assoc_const_len_after_literal_fallback_mismatch.fe:3:27
+  │
+3 │ const TOO_LONG: [u8; 4] = ("a", "bc").as_bytes()
+  │                           ^^^^^^^^^^^^^^^^^^^^^^ expected `[u8; 4]`, but `[u8; 3]` is given
+
+error[8-0000]: type mismatch
+  ┌─ assoc_const_len_after_literal_fallback_mismatch.fe:6:26
+  │
+6 │     let bytes: [u8; 1] = ("a", "b").as_bytes()
+  │                          ^^^^^^^^^^^^^^^^^^^^^ expected `[u8; 1]`, but `[u8; 2]` is given
+
+error[8-0000]: type mismatch
+   ┌─ assoc_const_len_after_literal_fallback_mismatch.fe:11:27
+   │
+11 │     let words: [u16; 2] = ("a", "b").as_bytes()
+   │                           ^^^^^^^^^^^^^^^^^^^^^ expected `[u16; 2]`, but `[u8; (String<1>, String<1>)::N]` is given
