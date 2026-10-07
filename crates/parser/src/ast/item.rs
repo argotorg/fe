@@ -566,13 +566,23 @@ impl Extern {
 }
 
 ast_node! {
+    /// The field list of a struct: either `{x: i32, y: u32}` for a record
+    /// struct, or `(pub u8, u16)` for a tuple struct. Tuple fields have no
+    /// name.
     pub struct RecordFieldDefList,
-    SK::RecordFieldDefList,
+    SK::RecordFieldDefList | SK::TupleFieldDefList,
     IntoIterator<Item=RecordFieldDef>
 }
+impl RecordFieldDefList {
+    /// Returns `true` if this is the field list of a tuple struct.
+    pub fn is_tuple(&self) -> bool {
+        self.syntax().kind() == SK::TupleFieldDefList
+    }
+}
+
 ast_node! {
     pub struct RecordFieldDef,
-    SK::RecordFieldDef,
+    SK::RecordFieldDef | SK::TupleFieldDef,
 }
 
 impl super::AttrListOwner for RecordFieldDef {}
@@ -936,6 +946,27 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn tuple_struct() {
+        let source = r#"
+                pub struct Pair<T>(pub T, (u8, i32)) where T: Trait
+            "#;
+        let s: Struct = parse_item(source);
+        assert_eq!(s.name().unwrap().text(), "Pair");
+        assert_eq!(s.generic_params().unwrap().iter().count(), 1);
+        assert!(s.where_clause().is_some());
+        let fields = s.fields().unwrap();
+        assert!(fields.is_tuple());
+        let fields: Vec<_> = fields.into_iter().collect();
+        assert_eq!(fields.len(), 2);
+        assert!(fields[0].pub_kw().is_some());
+        assert!(fields[0].name().is_none());
+        assert!(matches!(fields[0].ty().unwrap().kind(), TypeKind::Path(_)));
+        assert!(fields[1].pub_kw().is_none());
+        assert!(matches!(fields[1].ty().unwrap().kind(), TypeKind::Tuple(_)));
     }
 
     #[test]

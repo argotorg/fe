@@ -653,6 +653,14 @@ fn func_arg_ty<'db>(
 }
 
 #[salsa::tracked(return_ref)]
+fn struct_ctor_arg_tys<'db>(
+    db: &'db dyn HirAnalysisDb,
+    struct_: Struct<'db>,
+) -> Vec<Binder<'db, TyId<'db>>> {
+    struct_.as_adt(db).fields(db)[0].iter_types(db).collect()
+}
+
+#[salsa::tracked(return_ref)]
 fn variant_ctor_arg_tys<'db>(
     db: &'db dyn HirAnalysisDb,
     enum_: Enum<'db>,
@@ -995,6 +1003,7 @@ impl<'db> CallableDef<'db> {
         match self {
             Self::Func(func) => func.into(),
             Self::VariantCtor(variant) => variant.enum_.into(),
+            Self::StructCtor(struct_) => struct_.into(),
         }
     }
 
@@ -1002,27 +1011,28 @@ impl<'db> CallableDef<'db> {
         match self {
             Self::Func(func) => func.span().name().into(),
             Self::VariantCtor(v) => v.span().name().into(),
+            Self::StructCtor(s) => s.span().name().into(),
         }
     }
 
     pub fn is_method(self, db: &dyn HirDb) -> bool {
         match self {
             Self::Func(func) => func.is_method(db),
-            Self::VariantCtor(..) => false,
+            Self::VariantCtor(..) | Self::StructCtor(..) => false,
         }
     }
 
     pub fn has_body(self, db: &dyn HirDb) -> bool {
         match self {
             Self::Func(func) => func.body(db).is_some(),
-            Self::VariantCtor(..) => false,
+            Self::VariantCtor(..) | Self::StructCtor(..) => false,
         }
     }
 
     pub fn is_must_use(self, db: &'db dyn HirDb) -> bool {
         match self {
             Self::Func(func) => func.is_must_use(db),
-            Self::VariantCtor(..) => false,
+            Self::VariantCtor(..) | Self::StructCtor(..) => false,
         }
     }
 
@@ -1030,6 +1040,7 @@ impl<'db> CallableDef<'db> {
         match self {
             Self::Func(func) => func.top_mod(db).ingot(db),
             Self::VariantCtor(v) => v.enum_.top_mod(db).ingot(db),
+            Self::StructCtor(s) => s.top_mod(db).ingot(db),
         }
     }
 
@@ -1037,6 +1048,7 @@ impl<'db> CallableDef<'db> {
         match self {
             Self::Func(func) => func.scope(),
             Self::VariantCtor(v) => ScopeId::Variant(v),
+            Self::StructCtor(s) => s.scope(),
         }
     }
 
@@ -1044,6 +1056,7 @@ impl<'db> CallableDef<'db> {
         match self {
             Self::Func(func) => func.span().params().into(),
             Self::VariantCtor(v) => v.span().tuple_type().into(),
+            Self::StructCtor(s) => s.span().fields().into(),
         }
     }
 
@@ -1051,6 +1064,7 @@ impl<'db> CallableDef<'db> {
         match self {
             Self::Func(func) => func.span().params().param(idx).into(),
             Self::VariantCtor(var) => var.span().tuple_type().elem_ty(idx).into(),
+            Self::StructCtor(s) => s.span().fields().field(idx).ty().into(),
         }
     }
 
@@ -1061,6 +1075,7 @@ impl<'db> CallableDef<'db> {
                 let adt = var.enum_.as_adt(db);
                 adt.params(db)
             }
+            Self::StructCtor(s) => s.as_adt(db).params(db),
         }
     }
 
@@ -1071,6 +1086,7 @@ impl<'db> CallableDef<'db> {
                 let adt = var.enum_.as_adt(db);
                 adt.params(db)
             }
+            Self::StructCtor(s) => s.as_adt(db).params(db),
         }
     }
 
@@ -1079,7 +1095,8 @@ impl<'db> CallableDef<'db> {
             Self::Func(func) => {
                 collect_generic_params(db, func.into()).offset_to_explicit_params_position(db)
             }
-            Self::VariantCtor(_) => 0, // Variant constructors don't have implicit self parameters
+            // Constructors don't have implicit self parameters
+            Self::VariantCtor(_) | Self::StructCtor(_) => 0,
         }
     }
 
@@ -1088,20 +1105,21 @@ impl<'db> CallableDef<'db> {
         match self {
             Self::Func(func) => func.name(db).to_opt(),
             Self::VariantCtor(var) => var.ident(db),
+            Self::StructCtor(s) => s.name(db).to_opt(),
         }
     }
 
     pub fn param_label(self, db: &'db dyn HirDb, idx: usize) -> Option<IdentId<'db>> {
         match self {
             Self::Func(func) => func.param_label(db, idx),
-            Self::VariantCtor(_) => None,
+            Self::VariantCtor(_) | Self::StructCtor(_) => None,
         }
     }
 
     pub fn param_label_or_name(self, db: &'db dyn HirDb, idx: usize) -> Option<FuncParamName<'db>> {
         match self {
             Self::Func(func) => func.param_label_or_name(db, idx),
-            Self::VariantCtor(_) => None,
+            Self::VariantCtor(_) | Self::StructCtor(_) => None,
         }
     }
 
@@ -1109,6 +1127,7 @@ impl<'db> CallableDef<'db> {
         match self {
             Self::Func(func) => func.arg_tys(db),
             Self::VariantCtor(var) => variant_ctor_arg_tys(db, var.enum_, var.idx as usize),
+            Self::StructCtor(s) => struct_ctor_arg_tys(db, s),
         }
     }
 
@@ -1120,6 +1139,7 @@ impl<'db> CallableDef<'db> {
                 let adt = var.enum_.as_adt(db);
                 adt.fields(db)[var.idx as usize].iter_types(db).nth(idx)
             }
+            Self::StructCtor(s) => s.as_adt(db).fields(db)[0].iter_types(db).nth(idx),
         }
     }
 
@@ -1134,13 +1154,21 @@ impl<'db> CallableDef<'db> {
                 }
                 Binder::bind(var.enum_.into(), ty)
             }
+            Self::StructCtor(s) => {
+                let adt = s.as_adt(db);
+                let mut ty = TyId::adt(db, adt);
+                for &param in adt.params(db) {
+                    ty = TyId::app(db, ty, param);
+                }
+                Binder::bind(s.into(), ty)
+            }
         }
     }
 
     pub fn receiver_ty(self, db: &'db dyn HirAnalysisDb) -> Option<Binder<'db, TyId<'db>>> {
         match self {
             Self::Func(func) => func.receiver_ty(db),
-            Self::VariantCtor(_) => None,
+            Self::VariantCtor(_) | Self::StructCtor(_) => None,
         }
     }
 }

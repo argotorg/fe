@@ -339,6 +339,8 @@ impl<'db> GenericParamOwner<'db> {
 pub enum CallableDef<'db> {
     Func(Func<'db>),
     VariantCtor(EnumVariant<'db>),
+    /// The constructor of a tuple struct, e.g. `Month` in `Month(10)`.
+    StructCtor(Struct<'db>),
 }
 
 #[derive(
@@ -822,6 +824,9 @@ pub struct Struct<'db> {
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     pub(in crate::core) fields: FieldDefListId<'db>,
+    /// `true` for a tuple struct such as `struct Month(pub u8)`, whose fields
+    /// are named `0`, `1`, ... by position.
+    pub is_tuple: bool,
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]
@@ -854,9 +859,15 @@ impl<'db> Struct<'db> {
     ///    y: i32,
     /// }
     /// ```
-    /// Then this method returns ` { x, y }`.
+    /// Then this method returns ` { x, y }`. For a tuple struct
+    /// `struct P(u64, i32)` it returns `(_, _)`.
     pub fn format_initializer_args(self, db: &dyn HirDb) -> String {
-        self.fields(db).format_initializer_args(db)
+        let fields = self.fields(db);
+        if self.is_tuple(db) {
+            let args = vec!["_"; fields.data(db).len()].join(", ");
+            return format!("({args})");
+        }
+        fields.format_initializer_args(db)
     }
 }
 

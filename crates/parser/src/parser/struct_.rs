@@ -22,6 +22,7 @@ impl super::Parse for StructScope {
         parser.set_scope_recovery_stack(&[
             SyntaxKind::Ident,
             SyntaxKind::Lt,
+            SyntaxKind::LParen,
             SyntaxKind::WhereKw,
             SyntaxKind::LBrace,
         ]);
@@ -32,6 +33,14 @@ impl super::Parse for StructScope {
 
         parser.expect_and_pop_recovery_stack()?;
         parse_generic_params_opt(parser, false)?;
+
+        parser.expect_and_pop_recovery_stack()?;
+        // Tuple struct: `struct Month(pub u8)`, optionally followed by a where
+        // clause.
+        if parser.current_kind() == Some(SyntaxKind::LParen) {
+            parser.parse(TupleFieldDefListScope::default())?;
+            return parse_where_clause_opt(parser, ItemBlock::Absent);
+        }
 
         parser.expect_and_pop_recovery_stack()?;
         parse_where_clause_opt(parser, ItemBlock::Required)?;
@@ -114,5 +123,51 @@ impl super::Parse for RecordFieldDefScope {
             parse_type(parser, None).map(|_| ())?;
         }
         Ok(())
+    }
+}
+
+define_scope! {
+    pub(crate) TupleFieldDefListScope,
+    TupleFieldDefList,
+    (RParen, Comma)
+}
+impl super::Parse for TupleFieldDefListScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parse_list(
+            parser,
+            false,
+            SyntaxKind::TupleFieldDefList,
+            (SyntaxKind::LParen, SyntaxKind::RParen),
+            |parser| parser.parse(TupleFieldDefScope::default()),
+        )
+    }
+}
+
+define_scope! { pub(crate) TupleFieldDefScope, TupleFieldDef }
+impl super::Parse for TupleFieldDefScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parse_attr_list(parser)?;
+
+        if parser.bump_if(SyntaxKind::PubKw) {
+            // Check for visibility restriction: pub(ingot), pub(super), pub(in path).
+            // Unlike record fields, a `(` here may also start a tuple type, as
+            // in `struct S(pub (u8, u8))`.
+            if matches!(
+                parser.peek_two(),
+                (
+                    Some(SyntaxKind::LParen),
+                    Some(SyntaxKind::IngotKw | SyntaxKind::SuperKw | SyntaxKind::InKw)
+                )
+            ) {
+                parser.bump(); // (
+                parse_vis_restriction(parser);
+            }
+        }
+
+        parse_type(parser, None).map(|_| ())
     }
 }

@@ -285,7 +285,7 @@ pub(crate) fn existentialize_omitted_const_args_in_effect_key<'db>(
                     Some(def.into()),
                 )
             }
-            CallableDef::VariantCtor(_) => return ty,
+            CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => return ty,
         },
         _ => return ty,
     };
