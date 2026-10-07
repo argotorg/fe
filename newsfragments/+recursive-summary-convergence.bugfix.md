@@ -1,0 +1,1 @@
+Recursive functions that write memory inside a loop, such as a `mut self` method that recursively walks a tree stored in a `ByteBuffer`, no longer fail borrow checking with "recursive boundary requirements did not converge". Live borrows across such recursive calls are still checked.

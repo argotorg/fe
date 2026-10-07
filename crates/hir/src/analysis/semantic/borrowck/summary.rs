@@ -13,7 +13,7 @@ thread_local! {
 }
 
 use cranelift_entity::EntityRef;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     analysis::{
@@ -88,6 +88,43 @@ pub type SourceValue<'db> = ValueId<'db, SourceExpr<'db>>;
 type SourceValues<'db> = ValueInterner<'db, SourceExpr<'db>>;
 
 impl<'db> BorrowSummary<'db> {
+    /// A recursive call imports the choices of the summary being computed as
+    /// fresh call choices, and exporting them again renames them to new summary
+    /// choices: every fixed-point iteration would add the previous iteration's
+    /// choices, and the summary would never converge. Callers can't observe a
+    /// callee's private choices, so obligations and possible effects only need
+    /// to hold for some execution of the recursive call. Quantify its choices
+    /// existentially there, as loops do for repeated iterations. Must facts
+    /// (reinitialized regions, poststates, coverage) and authority keep them.
+    fn forget_recursive_choices(mut self, recursive: &FxHashSet<NValueId>) -> Self {
+        if recursive.is_empty() {
+            return self;
+        }
+        let repeated = |occurrence| {
+            matches!(occurrence, ValueOccurrence::CallChoice { result, .. }
+                if recursive.contains(&result))
+        };
+        for region in self
+            .requirements
+            .iter_mut()
+            .map(|requirement| &mut requirement.region)
+            .chain(self.accesses.iter_mut().map(|access| &mut access.region))
+            .chain(
+                self.availability
+                    .incoming
+                    .iter_mut()
+                    .map(|requirement| &mut requirement.region),
+            )
+            .chain([
+                &mut self.availability.unavailable,
+                &mut self.native_requirements,
+            ])
+        {
+            *region = region.forget_occurrences(repeated);
+        }
+        self
+    }
+
     /// Number choices only after assembling all summary components. Assigning
     /// numbers on first encounter separates related observations when poststates
     /// and access requirements encounter them in different orders. Preserve the
@@ -406,6 +443,24 @@ impl<'db> Borrowck<'db> {
             );
         }
         Ok(source)
+    }
+
+    /// Results of calls to the instance being summarized.
+    fn recursive_call_results(&self) -> FxHashSet<NValueId> {
+        self.body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| match &statement.kind {
+                NStatementKind::Define {
+                    result,
+                    expr: NExpr::Call { callee, .. },
+                } if get_or_build_semantic_instance(self.db, callee.key) == self.instance => {
+                    Some(*result)
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     pub fn prepare_calls(&mut self) -> Result<(), SemanticDiagnostic<'db>> {
@@ -1505,6 +1560,7 @@ impl<'db> Borrowck<'db> {
             scalar_inputs,
             requirements,
         };
+        let summary = summary.forget_recursive_choices(&self.recursive_call_results());
         let (mut summary, provenance) =
             summary.abstract_choices(self.db, &mut values, choices, separations);
         if (scalar_ty.is_bool(self.db) || scalar_ty.is_integral(self.db))

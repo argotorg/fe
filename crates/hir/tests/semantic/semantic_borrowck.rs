@@ -13952,3 +13952,63 @@ fn view(_ outer: mut Outer) -> mut Outer { outer }
         }
     }
 }
+
+const RECURSIVE_BUFFER_WALK: &str = r#"
+use std::native::ByteBuffer
+struct Cells { bytes: ByteBuffer }
+impl Cells {
+    fn mark(mut self, _ node: u64) {
+        let mut i: u64 = 0
+        while i < 8 {
+            self.bytes.set_byte(index: node + i, value: 1)
+            i += 1
+        }
+        if node < 10 {
+            self.mark(node + 1)
+        }
+    }
+}
+"#;
+
+#[test]
+fn recursive_receiver_writes_in_a_loop_converge() {
+    // Each recursive call used to import the previous iteration's choices as
+    // new summary choices, so the summary grew without converging.
+    let diagnostics = checked_borrow_diags(&format!(
+        "{RECURSIVE_BUFFER_WALK}
+struct Tree {{ nodes: Cells, other: Cells }}
+impl Tree {{
+    fn first(self, _ node: u64) -> u64 {{ self.nodes.bytes.byte_at(node) as u64 }}
+    fn next(self, _ node: u64) -> u64 {{ self.nodes.bytes.byte_at(node + 1) as u64 }}
+    fn freeze(mut self, _ node: u64) {{
+        self.nodes.mark(node)
+        let mut child = self.first(node)
+        while child != 255 {{
+            self.freeze(child)
+            child = self.next(child)
+        }}
+    }}
+}}
+fn run(tree: mut Tree) {{
+    tree.freeze(0)
+    tree.other.mark(3)
+}}"
+    ));
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn recursive_receiver_writes_still_conflict_with_live_borrows() {
+    let diagnostics = checked_borrow_diags(&format!(
+        "{RECURSIVE_BUFFER_WALK}
+fn run(cells: mut Cells) -> u64 {{
+    let view = ref cells.bytes
+    cells.mark(0)
+    view.len()
+}}"
+    ));
+    assert!(
+        diagnostics.contains("borrow conflict in `fn run`"),
+        "{diagnostics}"
+    );
+}
