@@ -1,0 +1,280 @@
+use core::abi::{
+    Abi,
+    AbiSize,
+    ByteInput,
+    BytesView,
+    Decode,
+    DynArray,
+    DynString,
+    StringView,
+    abi_field_head_size,
+    checked_frame_end,
+    checked_tail,
+    decode_field_from_prechecked_head,
+}
+use ingot::abi::{Bytes, Sol}
+use ingot::abi::sol::{decode_bytes_view_at, decode_string_view_at}
+use ingot::evm::panic::{PANIC_INDEX_OUT_OF_BOUNDS, Panic}
+use ingot::evm::revert_error
+
+/// A lazy, validated view of a Solidity ABI `T[]` value inside a `ByteInput`.
+///
+/// This is the equivalent of a Solidity `T[] calldata` parameter: creating
+/// the view validates only the array frame (the offset word, the length
+/// word and the element heads), and elements are decoded one at a time on
+/// access. Nothing is copied to memory, so reading a few elements of a large
+/// or deeply nested array costs gas proportional to what is read rather than
+/// to the size of the whole argument. Use `DynArray<T>` instead when the
+/// whole array is needed in memory (for example to return or re-encode it).
+///
+/// Create a view with `decode_array_view_at` (any input) or
+/// `CallData::array_view` (current calldata). All validation failures revert
+/// with empty returndata, like Solidity ABI decoding errors; an element
+/// index out of range reverts with Solidity `Panic(0x32)`, like indexing a
+/// Solidity calldata array.
+pub struct ArrayView<I, T> {
+    input: I,
+    elems: u256,
+    len: u256,
+}
+
+impl<I, T> Copy for ArrayView<I, T>
+    where I: Copy
+{}
+
+/// View the ABI `T[]` whose head word is at byte 0 of `input`.
+///
+/// Equivalent to `decode_array_view_at(input, base: 0, head_pos: 0)`; use it
+/// for a return payload of a single `T[]` value.
+pub fn decode_array_view<T, I>(_ input: own I) -> ArrayView<I, T>
+    where I: ByteInput, T: AbiSize
+{
+    decode_array_view_at(input, base: 0, head_pos: 0)
+}
+
+/// View an ABI `T[]` inside `input`.
+///
+/// `base` is the start of the enclosing ABI tuple (offsets are relative to
+/// it) and `head_pos` is the byte offset of the array's head word within
+/// that tuple. For the `k`-th argument of an external call use
+/// `CallData::with_base(4)` with `base: 0, head_pos: k * 32` (or
+/// `CallData::array_view`).
+///
+/// Performs the checks Solidity applies to a `T[] calldata` parameter and
+/// reverts with empty returndata if any fails:
+/// - the head word lies within the input;
+/// - the array's length word at `base + offset` lies within the input;
+/// - all `len` element heads lie within the input, that is
+///   `base + offset + 32 + len * stride <= input.len()`, where `stride` is
+///   `T::HEAD_SIZE` for static `T` and 32 for dynamic `T`.
+///
+/// Solidity additionally rejects offset and length words of `2**64` or more,
+/// and so does this function, also for inputs longer than `2**64` bytes.
+/// Lengths are checked explicitly, including zero-sized element types.
+///
+/// Element tails of dynamic `T` are not inspected here; they are validated
+/// when accessed, exactly like Solidity. Solidity also rejects calldata
+/// shorter than the complete static head of all parameters before running
+/// the function body; this function checks only the head word it reads.
+#[arithmetic(unchecked)]
+pub fn decode_array_view_at<T, I>(_ input: own I, base: u256, head_pos: u256) -> ArrayView<I, T>
+    where I: ByteInput, T: AbiSize
+{
+    let input_len = input.len()
+    let head_at = checked_tail<Sol>(base, head_pos)
+    checked_frame_end<Sol>(head_at, 32, input_len)
+    let tail_at = checked_tail<Sol>(base, checked_offset(input.word_at(head_at)))
+    let elems = checked_frame_end<Sol>(tail_at, 32, input_len)
+    let len = input.word_at(tail_at)
+    let stride = abi_field_head_size<T>()
+    // `elems <= input_len` holds after the frame check, and the division
+    // bounds `len * stride` without overflow.
+    if len >= 0x10000000000000000 || (stride != 0 && len > (input_len - elems) / stride) {
+        Sol::decode_error()
+    }
+    ArrayView { input, elems, len }
+}
+
+/// An ABI offset word, rejecting values of `2**64` or more like Solidity.
+/// The frame checks alone only reject them for inputs shorter than that.
+fn checked_offset(_ offset: u256) -> u256 {
+    if offset >= 0x10000000000000000 {
+        Sol::decode_error()
+    }
+    offset
+}
+
+impl<I, T> ArrayView<I, T>
+    where I: ByteInput, T: AbiSize
+{
+    /// Number of elements.
+    pub fn len(self) -> u256 {
+        self.len
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    /// The underlying input.
+    pub fn input(self) -> I {
+        self.input
+    }
+
+    /// Byte position in `input` of the element heads area, that is of the
+    /// head of element 0 (just after the length word).
+    ///
+    /// Tail offsets of dynamic elements are relative to this position. For
+    /// static `T` it equals `element_pos(0)` when the array is non-empty.
+    /// Positions are relative to `input`; add `CallData::base` to get an
+    /// absolute calldata position for `calldataload`.
+    pub fn heads_pos(self) -> u256 {
+        self.elems
+    }
+
+    /// The raw first word of element `index`'s head, at
+    /// `heads_pos() + index * stride`.
+    ///
+    /// For dynamic `T` this is the element's tail offset relative to
+    /// `heads_pos()`, exactly as encoded and without any validation. For
+    /// static `T` it is the first word of the element's inline encoding,
+    /// also unvalidated (e.g. an `Address` with dirty upper bits is returned
+    /// as is). The word itself always lies within the input, as the
+    /// construction checks cover all element heads. A zero-sized static `T`
+    /// (such as `()`) has no head, so the result is 0 and nothing is read.
+    ///
+    /// Reverts with `Panic(0x32)` if `index >= len()`.
+    #[arithmetic(unchecked)]
+    pub fn head_word(self, _ index: u256) -> u256 {
+        self.check_index(index)
+        let stride = abi_field_head_size<T>()
+        if stride == 0 {
+            return 0
+        }
+        self.input.word_at(self.elems + index * stride)
+    }
+
+    /// Like `element_pos`, but without validating the tail of a dynamic
+    /// element: for dynamic `T` it returns `heads_pos() + head_word(index)`
+    /// computed modulo `2**256`, like the `add` of a hand-written decoder
+    /// (`heads + calldataload(heads + index * 32)`). For static `T` it is
+    /// identical to `element_pos`.
+    ///
+    /// The returned position may lie beyond the end of the input or wrap
+    /// around. Only use it when the caller validates the element's encoding
+    /// itself, or when reads past the end are harmless for the input at
+    /// hand, as with `CallData`, where out-of-range reads yield zeros. Prefer
+    /// `element_pos`, `get` or the lazy element accessors otherwise.
+    ///
+    /// Reverts with `Panic(0x32)` if `index >= len()`.
+    #[arithmetic(unchecked)]
+    pub fn unchecked_element_pos(self, _ index: u256) -> u256 {
+        self.check_index(index)
+        let head_at = self.elems + index * abi_field_head_size<T>()
+        if !T::IS_DYNAMIC {
+            return head_at
+        }
+        self.elems + self.input.word_at(head_at)
+    }
+
+    /// Byte position in `input` where the encoding of element `index` starts.
+    ///
+    /// For static `T` this is the element's inline head. For dynamic `T` it is
+    /// the element's tail, after checking that the tail offset is below
+    /// `2**64` and does not overflow, and that the element's own head
+    /// (`T::HEAD_SIZE` bytes, e.g. the length word of a `bytes`) lies within
+    /// the input. Fields of a struct element can then be read with `T`'s
+    /// field decoders or with
+    /// `decode_array_view_at(input, base: pos, head_pos: field_offset)`.
+    ///
+    /// Reverts with `Panic(0x32)` if `index >= len()`.
+    #[arithmetic(unchecked)]
+    pub fn element_pos(self, _ index: u256) -> u256 {
+        self.check_index(index)
+        // The construction check proves the element heads are in bounds.
+        let head_at = self.elems + index * abi_field_head_size<T>()
+        if !T::IS_DYNAMIC {
+            return head_at
+        }
+        let tail_at = checked_tail<Sol>(self.elems, checked_offset(self.input.word_at(head_at)))
+        checked_frame_end<Sol>(tail_at, T::HEAD_SIZE, self.input.len())
+        tail_at
+    }
+
+    /// Decode element `index`.
+    ///
+    /// The element is decoded with the regular Solidity ABI decoder, so each
+    /// word is validated like a function parameter: an `Address` or narrow
+    /// integer with dirty upper bits, a `bool` other than 0 or 1, or an
+    /// out-of-bounds tail of a dynamic element reverts with empty returndata.
+    /// Only element `index` is read and validated.
+    ///
+    /// Dynamic elements (`Bytes`, nested `DynArray`s, structs with dynamic
+    /// fields) are copied into memory; use `bytes_at`, `string_at` or
+    /// `array_at` to keep them lazy instead.
+    ///
+    /// Reverts with `Panic(0x32)` if `index >= len()`.
+    #[arithmetic(unchecked)]
+    pub fn get(self, _ index: u256) -> T
+        where T: Decode<Sol>
+    {
+        self.check_index(index)
+        let head_at = self.elems + index * abi_field_head_size<T>()
+        decode_field_from_prechecked_head<Sol, T, I>(
+            self.input,
+            base: self.elems,
+            head_pos: head_at,
+            input_len: self.input.len(),
+        )
+    }
+
+    fn check_index(self, _ index: u256) {
+        if index >= self.len {
+            revert_error(Panic::from(PANIC_INDEX_OUT_OF_BOUNDS))
+        }
+    }
+}
+
+impl<I> ArrayView<I, Bytes>
+    where I: ByteInput
+{
+    /// A zero-copy view of the `bytes` element `index`.
+    ///
+    /// Validates the element's tail offset, length word and payload bounds
+    /// (reverting with empty returndata), like accessing `bytes[] calldata`
+    /// in Solidity. Reverts with `Panic(0x32)` if `index >= len()`.
+    #[arithmetic(unchecked)]
+    pub fn bytes_at(self, _ index: u256) -> BytesView<I> {
+        self.check_index(index)
+        decode_bytes_view_at(self.input, base: self.elems, head_pos: index * 32)
+    }
+}
+
+impl<I> ArrayView<I, DynString>
+    where I: ByteInput
+{
+    /// A zero-copy view of the `string` element `index`.
+    ///
+    /// Same validation as `ArrayView<I, Bytes>::bytes_at`; the bytes are not
+    /// checked for valid UTF-8, as in Solidity.
+    #[arithmetic(unchecked)]
+    pub fn string_at(self, _ index: u256) -> StringView<I> {
+        self.check_index(index)
+        decode_string_view_at(self.input, base: self.elems, head_pos: index * 32)
+    }
+}
+
+impl<I, U> ArrayView<I, DynArray<U>>
+    where I: ByteInput, U: AbiSize
+{
+    /// A lazy view of the nested array element `index` (`U[][]`).
+    ///
+    /// The nested array frame gets the same checks as `decode_array_view_at`,
+    /// with offsets relative to the start of this array's element heads.
+    /// Reverts with `Panic(0x32)` if `index >= len()`.
+    #[arithmetic(unchecked)]
+    pub fn array_at(self, _ index: u256) -> ArrayView<I, U> {
+        self.check_index(index)
+        decode_array_view_at(self.input, base: self.elems, head_pos: index * 32)
+    }
+}
