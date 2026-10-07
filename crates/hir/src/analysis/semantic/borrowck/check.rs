@@ -445,22 +445,43 @@ pub fn collect_semantic_borrow_diagnostic_vouchers<'db>(
     let mut diags = Vec::new();
     let mut seen_owners = FxHashSet::default();
     let mut seen_diags = FxHashSet::default();
-    collect_top_mod_semantic_borrow_diagnostic_vouchers(
-        db,
-        top_mod,
-        &mut seen_owners,
-        &mut seen_diags,
-        &mut diags,
-    );
+    for_each_top_mod_body_owner(db, top_mod, |owner| {
+        collect_owner(db, owner, &mut seen_owners, &mut seen_diags, &mut diags)
+    });
     diags
 }
 
-fn collect_top_mod_semantic_borrow_diagnostic_vouchers<'db>(
+/// Returns the bodies that block semantic borrow checking of the bodies owned
+/// by `top_mod`.
+///
+/// The borrow pass reports nothing for a blocked body because the HIR
+/// diagnostics explaining it are expected to come from elsewhere. Drivers that
+/// skip HIR analysis for some ingots use this to find the modules whose HIR
+/// diagnostics they still need to report.
+pub fn collect_blocked_semantic_bodies<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
-    seen_owners: &mut FxHashSet<BodyOwner<'db>>,
-    seen_diags: &mut FxHashSet<SemanticDiagnosticId<'db>>,
-    diags: &mut Vec<Box<dyn DiagnosticVoucher + 'db>>,
+) -> Vec<BlockedSemanticBody<'db>> {
+    let mut blocked = Vec::new();
+    let mut seen_owners = FxHashSet::default();
+    for_each_top_mod_body_owner(db, top_mod, |owner| {
+        if !seen_owners.insert(owner) {
+            return;
+        }
+        let instance =
+            get_or_build_semantic_instance(db, identity_semantic_instance_key(db, owner));
+        if let SemanticBorrowCheckResult::Blocked(body) = semantic_borrow_check_query(db, instance)
+        {
+            blocked.push(body);
+        }
+    });
+    blocked
+}
+
+fn for_each_top_mod_body_owner<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+    mut visit: impl FnMut(BodyOwner<'db>),
 ) {
     for item in top_mod
         .all_items(db)
@@ -468,42 +489,22 @@ fn collect_top_mod_semantic_borrow_diagnostic_vouchers<'db>(
         .filter(|item| item.top_mod(db) == top_mod)
     {
         for owner in BodyOwner::const_predicates_of(db, *item) {
-            collect_owner(db, owner, seen_owners, seen_diags, diags);
+            visit(owner);
         }
         match item {
-            ItemKind::Func(func) => {
-                collect_owner(db, BodyOwner::Func(*func), seen_owners, seen_diags, diags)
-            }
-            ItemKind::Const(const_) => collect_owner(
-                db,
-                BodyOwner::Const(*const_),
-                seen_owners,
-                seen_diags,
-                diags,
-            ),
+            ItemKind::Func(func) => visit(BodyOwner::Func(*func)),
+            ItemKind::Const(const_) => visit(BodyOwner::Const(*const_)),
             ItemKind::Contract(contract) => {
-                collect_owner(
-                    db,
-                    BodyOwner::ContractInit {
-                        contract: *contract,
-                    },
-                    seen_owners,
-                    seen_diags,
-                    diags,
-                );
+                visit(BodyOwner::ContractInit {
+                    contract: *contract,
+                });
                 for (recv_idx, recv) in contract.recvs(db).data(db).iter().enumerate() {
                     for arm_idx in 0..recv.arms.data(db).len() {
-                        collect_owner(
-                            db,
-                            BodyOwner::ContractRecvArm {
-                                contract: *contract,
-                                recv_idx: recv_idx as u32,
-                                arm_idx: arm_idx as u32,
-                            },
-                            seen_owners,
-                            seen_diags,
-                            diags,
-                        );
+                        visit(BodyOwner::ContractRecvArm {
+                            contract: *contract,
+                            recv_idx: recv_idx as u32,
+                            arm_idx: arm_idx as u32,
+                        });
                     }
                 }
             }
