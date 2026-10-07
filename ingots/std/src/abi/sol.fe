@@ -254,7 +254,8 @@ pub fn decode_bytes_view<I>(_ input: own I) -> BytesView<I>
 /// offset of the dynamic head within that payload.
 ///
 /// Malformed offsets and lengths, including ones whose sums would overflow,
-/// revert with empty returndata.
+/// revert with empty returndata. Like Solidity, offset and length words of
+/// `2**64` or more are rejected, also for inputs longer than `2**64` bytes.
 // The explicit wrap checks below replace checked-arithmetic panics.
 #[arithmetic(unchecked)]
 pub fn decode_bytes_view_at<I>(_ input: own I, base: u256, head_pos: u256) -> BytesView<I>
@@ -275,7 +276,12 @@ pub fn decode_bytes_view_at<I>(_ input: own I, base: u256, head_pos: u256) -> By
         revert_empty()
     }
 
+    // The bounds checks reject offsets and lengths of `2**64` or more only
+    // for inputs shorter than that, so check them explicitly.
     let tail_rel = input.word_at(head_at)
+    if tail_rel >= 0x10000000000000000 {
+        revert_empty()
+    }
     let tail_at = base + tail_rel
     if tail_at < base {
         revert_empty()
@@ -287,6 +293,9 @@ pub fn decode_bytes_view_at<I>(_ input: own I, base: u256, head_pos: u256) -> By
     }
 
     let data_len = input.word_at(tail_at)
+    if data_len >= 0x10000000000000000 {
+        revert_empty()
+    }
     let data_start = tail_at + 32
     if data_start < tail_at {
         revert_empty()
