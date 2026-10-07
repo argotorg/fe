@@ -1,0 +1,36 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/storage_deep_map_misuse.fe
+---
+error[2-0010]: no method named `get` found for struct `DeepMapCursor`
+   ┌─ storage_deep_map_misuse.fe:18:20
+   │
+18 │     m.at(y).at(mo).get()
+   │                    ^^^ method not found in `DeepMapCursor`
+
+error[2-0010]: no method named `get` found for struct `DeepMapCursor`
+   ┌─ storage_deep_map_misuse.fe:22:32
+   │
+22 │     m.at(y).at(mo).at(d).at(d).get()
+   │                                ^^^ method not found in `DeepMapCursor`
+
+error[2-0010]: no method named `get` found for struct `DeepMapCursor`
+   ┌─ storage_deep_map_misuse.fe:26:28
+   │
+26 │     m.at(y).at(flag).at(d).get()
+   │                            ^^^ method not found in `DeepMapCursor`
+
+error[2-0010]: no method named `set` found for struct `DeepMapCursor`
+   ┌─ storage_deep_map_misuse.fe:30:26
+   │
+30 │     m.at(y).at(mo).at(d).set(value: 1)
+   │                          ^^^ method not found in `DeepMapCursor`
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ storage_deep_map_misuse.fe:34:5
+   │
+33 │ pub fn bad_at_mut_on_immutable_map(_ m: Steps, y: u256, mo: u256, d: u256) {
+   │                                      - `m` does not provide mutable access
+34 │     m.at_mut(y).at(mo).at(d).set(value: 1)
+   │     ^ cannot borrow as `mut`

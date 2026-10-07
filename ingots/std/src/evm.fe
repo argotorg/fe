@@ -31,6 +31,7 @@ pub use rlp::{self}
 pub use ssz::{self, *}
 pub use token::{self, ReceiverCheck, TokenCall}
 pub use storage_bytes::{self, *}
+pub use storage_deep_map::{DeepKey2, DeepKey3, DeepKey4, DeepKey5, DeepKey6, DeepMapCursor, DeepMapCursorMut, StorageDeepMap}
 pub use storage_map::{StorageKey, StorageMap}
 pub use storage_packed_array::{PackedBits, StoragePackedArray, ValidPackedBits}
 pub use units::{self, *}
