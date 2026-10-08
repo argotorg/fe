@@ -76,7 +76,10 @@ impl<'db> RegionRoot<'db> {
     }
 
     pub fn may_alias_unknown(&self, other: &Self) -> bool {
-        if matches!((self, other), (Self::Root { .. }, Self::External(source)) | (Self::External(source), Self::Root { .. }) if source.is_incoming())
+        // Incoming addresses and fresh allocations cannot name this frame's
+        // local storage. Widening an offset retains that allocation identity;
+        // loading a pointer from it does not.
+        if matches!((self, other), (Self::Root { .. }, Self::External(source)) | (Self::External(source), Self::Root { .. }) if source.is_incoming() || source.is_fresh_allocation())
         {
             return false;
         }
