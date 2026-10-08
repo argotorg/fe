@@ -3224,6 +3224,8 @@ impl<'db> TyChecker<'db> {
 
     pub(crate) fn string_literal_should_use_byte_array(&self, expected: TyId<'db>) -> bool {
         let expected = normalize_ty(self.db, expected, self.env.scope(), self.env.assumptions());
+        // A by-value parameter `bytes: [u8; N]` expects `view [u8; N]`.
+        let expected = expected.as_view(self.db).unwrap_or(expected);
         let (base, args) = expected.decompose_ty_app(self.db);
         matches!(
             base.data(self.db),

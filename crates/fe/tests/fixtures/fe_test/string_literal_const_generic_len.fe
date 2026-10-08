@@ -1,0 +1,44 @@
+// A string literal passed to a `String<N>` or `[u8; N]` parameter infers `N`
+// from the literal's byte length unless something else fixes `N`.
+
+fn width<const N: usize>(_ s: String<N>) -> usize { N }
+
+fn pair<const N: usize>(_ a: String<N>, _ b: String<N>) -> usize { N }
+
+fn byte_len<const N: usize>(_ bytes: [u8; N]) -> usize { N }
+
+fn third<const N: usize>(_ bytes: [u8; N]) -> u8 { bytes[2] }
+
+fn forwarded<const N: usize>(_ bytes: [u8; N]) -> usize { byte_len(bytes) }
+
+struct Measure {}
+
+impl Measure {
+    fn bytes<const N: usize>(self, _ bytes: [u8; N]) -> usize { N }
+    fn string<const N: usize>(self, _ s: String<N>) -> usize { N }
+}
+
+#[test]
+fn string_param_length_defaults_to_literal_length() {
+    core::assert(width("abc") == 3)
+    let s = "abcd"
+    core::assert(width(s) == 4)
+    core::assert(Measure {}.string("ab") == 2)
+}
+
+#[test]
+fn string_param_length_keeps_other_constraints() {
+    let padded: String<6> = "ab"
+    core::assert(width(padded) == 6)
+    // Both literals must fit, so `N` is the longer length.
+    core::assert(pair("abc", "abcde") == 5)
+    core::assert(width<8>("abc") == 8)
+}
+
+#[test]
+fn byte_array_param_length_defaults_to_literal_length() {
+    core::assert(byte_len("abc") == 3)
+    core::assert(third("abc") == 99)
+    core::assert(forwarded("abcd") == 4)
+    core::assert(Measure {}.bytes("abcde") == 5)
+}

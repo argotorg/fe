@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/string_literal_const_generic_len_too_small.fe
+---
+error[8-0000]: type mismatch
+  ┌─ string_literal_const_generic_len_too_small.fe:8:14
+  │
+8 │     width<2>("abc")
+  │              ^^^^^ expected `String<2>`, but `String<3>` is given
+
+error[8-0000]: type mismatch
+   ┌─ string_literal_const_generic_len_too_small.fe:12:17
+   │
+12 │     byte_len<2>("abc")
+   │                 ^^^^^ expected `[u8; 2]`, but `[u8; 3]` is given

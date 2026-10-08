@@ -449,7 +449,8 @@ where
                 self.table.unify_var_var(var1.key, var2.key)
             }
 
-            (TyVarSort::String { .. }, TyVarSort::String { .. }) => {
+            (TyVarSort::String { .. }, TyVarSort::String { .. })
+            | (TyVarSort::StringLen { .. }, TyVarSort::StringLen { .. }) => {
                 self.table.unify_var_var(var1.key, var2.key)
             }
 
@@ -527,6 +528,16 @@ where
                     return Ok(());
                 };
 
+                // An inferred length, such as `N` of a generic `String<N>`
+                // parameter: it must hold the literal and defaults to its length.
+                if let ConstTyData::TyVar(len_var, _) = const_ty.data(self.db)
+                    && self.narrow_string_len(len_var.key, min_len)
+                {
+                    return self
+                        .table
+                        .unify_var_value(root_var.key, InferenceValue::Bound(value));
+                }
+
                 let Some(n_value) = const_ty.integer_value(self.db) else {
                     return Ok(());
                 };
@@ -538,6 +549,44 @@ where
                     Err(UnificationError::TypeMismatch)
                 }
             }
+
+            TyVarSort::StringLen { min_len } => {
+                if let TyData::ConstTy(const_ty) = value.data(self.db)
+                    && let Some(n_value) = const_ty.integer_value(self.db)
+                    && n_value < BigInt::from(min_len)
+                {
+                    return Err(UnificationError::TypeMismatch);
+                }
+                self.table
+                    .unify_var_value(root_var.key, InferenceValue::Bound(value))
+            }
+        }
+    }
+
+    /// Require the unbound const variable `key` to be a string length of at
+    /// least `min_len`. Returns false if it is not such a variable.
+    fn narrow_string_len(&mut self, key: InferenceKey<'db>, min_len: usize) -> bool {
+        let InferenceValue::Unbound(kind, sort) = self.table.probe_value(key) else {
+            return false;
+        };
+        let min_len = match sort {
+            TyVarSort::General => min_len,
+            TyVarSort::StringLen { min_len: current } => current.max(min_len),
+            TyVarSort::Integral | TyVarSort::String { .. } => return false,
+        };
+        self.table
+            .unify_var_value(
+                key,
+                InferenceValue::Unbound(kind, TyVarSort::StringLen { min_len }),
+            )
+            .is_ok()
+    }
+
+    /// The sort of `key` if it is still unbound.
+    pub(crate) fn unbound_sort(&mut self, key: InferenceKey<'db>) -> Option<TyVarSort> {
+        match self.table.probe_value(key) {
+            InferenceValue::Unbound(_, sort) => Some(sort),
+            InferenceValue::Bound(_) => None,
         }
     }
 }

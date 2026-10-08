@@ -1,0 +1,1 @@
+A string literal passed to a generic `String<N>` or `[u8; N]` parameter, such as `width("abc")` for `fn width<const N: usize>(_ s: String<N>) -> usize`, now infers `N` from the literal instead of failing with "type annotation is needed". `N` is the literal's length unless something else fixes it, and an explicit `N` that is too small is still rejected.
