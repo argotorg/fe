@@ -5,6 +5,7 @@ mod tests;
 use super::{
     guard::{ChoiceKey, Guard, GuardCache, ValueOccurrence, WeakGuard},
     index::{BinderScope, IndexError, IndexExpr, IndexNamespace, IndexSubst},
+    opaque::OpaqueContentsKey,
     path::{Projection, StructuralPath},
     semantics::{CapabilityClass, CapabilitySemantics},
     shape::{ShapeChildren, ShapeId},
@@ -165,6 +166,8 @@ pub struct ValueInterner<'db, P> {
     nodes: FxHashMap<u64, ValueId<'db, P>>,
     normalized: FxHashMap<(BinderScope, Guarded<'db, P>), Guarded<'db, P>>,
     operations: FxHashMap<ValueOperation<'db, P>, WeakValueId<'db, P>>,
+    /// Replacement contents of byte-level overwrites, see [`OpaqueContentsKey`].
+    opaque_contents: FxHashMap<OpaqueContentsKey<'db>, ValueId<'db, P>>,
     guards: Rc<RefCell<GuardCache<'db>>>,
     limits: ValueLimits,
     metrics: ValueMetrics,
@@ -247,6 +250,7 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             nodes: FxHashMap::default(),
             normalized: FxHashMap::default(),
             operations: FxHashMap::default(),
+            opaque_contents: FxHashMap::default(),
             guards: Rc::default(),
             limits,
             metrics: ValueMetrics::default(),
@@ -264,6 +268,27 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
 
     pub fn metrics(&self) -> ValueMetrics {
         self.metrics
+    }
+
+    /// Byte-level overwrites rebuild the same replacement contents on every
+    /// fixpoint sweep. They are a function of their key, so keep them like the
+    /// interned nodes: within the node limit, and not at all without one.
+    pub(super) fn opaque_contents<E>(
+        &mut self,
+        key: OpaqueContentsKey<'db>,
+        build: impl FnOnce(&mut Self) -> Result<ValueId<'db, P>, E>,
+    ) -> Result<ValueId<'db, P>, E> {
+        if let Some(value) = self.opaque_contents.get(&key) {
+            return Ok(value.clone());
+        }
+        let value = build(self)?;
+        if let Some(limit) = self.limits.interned_nodes {
+            if self.opaque_contents.len() >= limit {
+                self.opaque_contents.clear();
+            }
+            self.opaque_contents.insert(key, value.clone());
+        }
+        Ok(value)
     }
 
     fn memoized(

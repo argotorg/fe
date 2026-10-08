@@ -229,6 +229,17 @@ impl<'db> RegionSet<'db> {
         scope: &BinderScope,
         clauses: impl IntoIterator<Item = Guarded<'db, SymbolicPlace<'db>>>,
     ) -> Self {
+        Self::new_with(scope, clauses, |left, right| left.or(right))
+    }
+
+    /// [`Self::new`], merging the guards of equal places through the caller's
+    /// disjunction. Fixpoint sweeps rebuild the same regions, so callers that
+    /// hold the shared guard cache pass its cached `or` here.
+    pub fn new_with(
+        scope: &BinderScope,
+        clauses: impl IntoIterator<Item = Guarded<'db, SymbolicPlace<'db>>>,
+        mut or: impl FnMut(&Guard<'db>, &Guard<'db>) -> Guard<'db>,
+    ) -> Self {
         let mut canonical = BTreeMap::<(BinderScope, SymbolicPlace<'db>), Guard<'db>>::new();
         for mut clause in clauses {
             #[cfg(test)]
@@ -276,7 +287,7 @@ impl<'db> RegionSet<'db> {
             }
             canonical
                 .entry((clause.guard.scope().clone(), clause.payload))
-                .and_modify(|guard| *guard = guard.or(&clause.guard))
+                .and_modify(|guard| *guard = or(guard, &clause.guard))
                 .or_insert(clause.guard);
         }
         Self {
@@ -419,6 +430,15 @@ impl<'db> RegionSet<'db> {
     /// Canonicalize a collection of regions once, rather than repeatedly
     /// copying and normalizing an ever-growing prefix of alternatives.
     pub fn union_all(scope: &BinderScope, regions: impl IntoIterator<Item = Self>) -> Self {
+        Self::union_all_with(scope, regions, |left, right| left.or(right))
+    }
+
+    /// [`Self::union_all`] through the caller's disjunction, see [`Self::new_with`].
+    pub fn union_all_with(
+        scope: &BinderScope,
+        regions: impl IntoIterator<Item = Self>,
+        or: impl FnMut(&Guard<'db>, &Guard<'db>) -> Guard<'db>,
+    ) -> Self {
         // A clause iterator borrowing each region cannot outlive it, so the
         // alternatives accumulate once here rather than a vector per region.
         let mut clauses = Vec::new();
@@ -426,7 +446,7 @@ impl<'db> RegionSet<'db> {
             assert_eq!(&region.scope, scope, "region scopes must match");
             clauses.extend(region.clauses.iter().cloned());
         }
-        Self::new(scope, clauses)
+        Self::new_with(scope, clauses, or)
     }
 
     /// Replace clause guards with shared representatives. Sharing preserves guard
