@@ -891,6 +891,13 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
             self.reach(NormalizationLimit::Depth);
             return ty;
         }
+        // A shared normal subtree has nothing to rewrite. Walking it as a
+        // tree can expand exponentially before the surrounding projection's
+        // result is measured. The projection still measures the full result
+        // as a tree, including this subtree, in `finish`.
+        if is_already_normal(db, ty) {
+            return ty;
+        }
         self.fold_depth += 1;
         let folded = self.fold_ty_inner(db, ty);
         self.fold_depth -= 1;
