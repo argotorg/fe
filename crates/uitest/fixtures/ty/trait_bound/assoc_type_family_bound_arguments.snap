@@ -1,0 +1,64 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_bound/assoc_type_family_bound_arguments.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_bound_arguments.fe:21:25
+   │
+21 │ trait A1 { type Out<T>: Needs<Provider::F<Other>> }
+   │                         ^^^^^^^^^^^^^^^^^^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_bound_arguments.fe:22:24
+   │
+22 │ trait A2 { type Out<T: Needs<Provider::F<Other>>> }
+   │                        ^^^^^^^^^^^^^^^^^^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_bound_arguments.fe:23:25
+   │
+23 │ trait A3 { type Out<T>: Needs<Wrap<Provider::F<Other>>> }
+   │                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_bound_arguments.fe:26:18
+   │
+26 │     type Out<T>: Needs<<Self::Item as Factory>::F<Other>>
+   │                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_bound_arguments.fe:28:38
+   │
+28 │ trait A5 { type Out: Needs<Provider::F<Other>> }
+   │                                      ^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_bound_arguments.fe:29:10
+   │
+29 │ fn g1<T: Needs<Provider::F<Other>>>() {}
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_bound_arguments.fe:30:21
+   │
+30 │ fn g2<T>() where T: Needs<Provider::F<Other>> {}
+   │                     ^^^^^^^^^^^^^^^^^^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_bound_arguments.fe:31:14
+   │
+31 │ struct S1<T: Needs<Provider::F<Other>>> {}
+   │              ^^^^^^^^^^^^^^^^^^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_bound_arguments.fe:32:9
+   │
+32 │ impl<T: Needs<Provider::F<Other>>> Wrap<T> {}
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_bound_arguments.fe:33:12
+   │
+33 │ trait Sup: Needs<Provider::F<Other>> {}
+   │            ^^^^^^^^^^^^^^^^^^^^^^^^^ `Other` doesn't implement `Allowed`

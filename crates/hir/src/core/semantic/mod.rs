@@ -3390,6 +3390,18 @@ impl<'db> TypeAlias<'db> {
             return Vec::new();
         };
         let assumptions = constraints_for(db, self.into());
+        // The family applications written in the target, checked before
+        // lowering normalizes them away.
+        let written = crate::analysis::ty::ty_error::collect_application_requirement_errors(
+            db,
+            self.scope(),
+            hir_ty,
+            self.span().ty(),
+            assumptions,
+        );
+        if !written.is_empty() {
+            return written;
+        }
         let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
         check_ty_wf(
             db,
@@ -5160,6 +5172,10 @@ impl<'db> TraitAssocTypeView<'db> {
         }))
     }
 
+    pub(crate) fn default_hir_ty(self, db: &'db dyn HirDb) -> Option<crate::hir_def::TypeId<'db>> {
+        self.decl(db).default
+    }
+
     pub(crate) fn candidate_default_ty(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -5465,6 +5481,16 @@ pub struct ImplementorAssocTypeView<'db> {
 }
 
 impl<'db> ImplementorAssocTypeView<'db> {
+    pub(crate) fn parameter_bounds(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        self.assoc
+            .parameter_bounds(
+                db,
+                self.implementor.trait_(db),
+                &self.assoc.family_parameters(db),
+            )
+            .unwrap_or_else(|| PredicateListId::empty_list(db))
+    }
+
     pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
         self.assoc.name(db)
     }
@@ -5588,6 +5614,22 @@ impl<'db> TyId<'db> {
         Some((decl, inst, args))
     }
 
+    /// The family's name, if this applies a family whose parameters have
+    /// bounds to fewer arguments than it has parameters.
+    pub(crate) fn lacks_args_for_parameter_bounds(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<IdentId<'db>> {
+        let (decl, _, args) = self.associated_family_context(db)?;
+        let params = decl.generic_params(db).data(db);
+        // The same bounds that the application must meet: those that lower.
+        let has_bounds = decl
+            .lowered_parameter_bounds(db)
+            .iter()
+            .any(|lowered| lowered.bound.is_ok());
+        (args.len() < params.len() && has_bounds).then(|| decl.name(db))?
+    }
+
     /// The bounds on a family's parameters, instantiated at this application,
     /// if it gives the family all of its arguments. The enclosing trait
     /// obligation is checked separately. `Err` holds that obligation when the
@@ -5604,10 +5646,11 @@ impl<'db> TyId<'db> {
         Some(decl.parameter_bounds(db, inst, args).ok_or(inst))
     }
 
-    /// Declared output rules for a saturated associated family application.
-    /// These are candidates, not assumptions: consumers must establish every
-    /// requirement before using a bound. Keep this separate from normalization,
-    /// which can erase the projection and its formation requirements.
+    /// The bounds declared on an associated type with parameters, for this
+    /// application of it to all of its arguments, with what must hold before
+    /// they can be used: the enclosing trait goal and the bounds on the
+    /// parameters. Normalization can remove the application, so this works on
+    /// the application as written.
     pub(crate) fn family_declared_bounds(
         self,
         db: &'db dyn HirAnalysisDb,

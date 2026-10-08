@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/assoc_type_param_default.fe
+---
+error[3-0064]: type parameters of associated types cannot have defaults
+  ┌─ assoc_type_param_default.fe:4:21
+  │
+4 │     type Out<T, U = u8>
+  │                     ^^ default not allowed here

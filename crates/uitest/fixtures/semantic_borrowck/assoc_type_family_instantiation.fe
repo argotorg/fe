@@ -1,0 +1,30 @@
+// A family application that reaches a normalization limit only when a generic
+// body is instantiated is reported at the instantiating call.
+trait Tr {
+    type Out<T>
+}
+
+struct Base {}
+
+struct Wrap<U> {}
+
+impl Tr for Base {
+    type Out<T> = T
+}
+
+impl<U: Tr> Tr for Wrap<U> {
+    type Out<T> = <U as Tr>::Out<(T, T)>
+}
+
+fn hidden<X: Tr>() -> u8 {
+    let _y: Option<X::Out<u8>> = Option::None
+    0
+}
+
+fn too_large() -> u8 {
+    hidden<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Base>>>>>>>>>>>>>>>>()
+}
+
+fn within() -> u8 {
+    hidden<Wrap<Wrap<Wrap<Base>>>>()
+}

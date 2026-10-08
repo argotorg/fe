@@ -1,0 +1,106 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_bound/assoc_type_family_alias_uses.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_alias_uses.fe:20:27
+   │
+20 │ type Concrete = Provider::Out<Other>
+   │                           ^^^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_alias_uses.fe:21:29
+   │
+21 │ type Generic<T> = Provider::Out<T>
+   │                             ^^^^^^ `T` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_alias_uses.fe:22:23
+   │
+22 │ type Nested<T> = Wrap<Generic<T>>
+   │                       ^^^^^^^^^^ `T` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_alias_uses.fe:23:39
+   │
+23 │ type Defaulted<T = Other> = Provider::Out<T>
+   │                                       ^^^^^^ `T` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_alias_uses.fe:24:38
+   │
+24 │ type DefaultOk<T = bool> = Provider::Out<T>
+   │                                      ^^^^^^ `T` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_alias_uses.fe:27:25
+   │
+27 │ struct ViaConcrete { f: Concrete }
+   │                         ^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_alias_uses.fe:28:19
+   │
+28 │ struct Field { f: Generic<Other> }
+   │                   ^^^^^^^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_alias_uses.fe:29:27
+   │
+29 │ struct ThroughNested { f: Nested<Other> }
+   │                           ^^^^^^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_alias_uses.fe:30:27
+   │
+30 │ struct GenericUse<T> { f: Generic<T> }
+   │                           ^^^^^^^^^^ `T` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_alias_uses.fe:31:15
+   │
+31 │ fn param(_ x: Generic<Other>) {}
+   │               ^^^^^^^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_alias_uses.fe:32:13
+   │
+32 │ fn ret() -> Generic<Other> { make() }
+   │             ^^^^^^^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_alias_uses.fe:34:13
+   │
+34 │     let _a: Generic<T> = make()
+   │             ^^^^^^^^^^ `T` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_alias_uses.fe:35:13
+   │
+35 │     let _b: Defaulted = make()
+   │             ^^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_alias_uses.fe:37:14
+   │
+37 │ impl<T> Wrap<Generic<T>> {}
+   │              ^^^^^^^^^^ `T` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_alias_uses.fe:38:21
+   │
+38 │ trait Tr { const C: Generic<Other> }
+   │                     ^^^^^^^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_alias_uses.fe:39:27
+   │
+39 │ struct LeftToDefault { f: Defaulted }
+   │                           ^^^^^^^^^ `Other` doesn't implement `Allowed`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_alias_uses.fe:40:26
+   │
+40 │ struct GivenDefault { f: Defaulted<Other> }
+   │                          ^^^^^^^^^^^^^^^^ `Other` doesn't implement `Allowed`

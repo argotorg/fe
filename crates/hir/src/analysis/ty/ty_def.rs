@@ -223,6 +223,11 @@ impl<'db> TyId<'db> {
         }
     }
 
+    /// Whether this is a family itself, not applied to any argument.
+    pub(crate) fn is_type_family(self, db: &'db dyn HirAnalysisDb) -> bool {
+        matches!(self.data(db), TyData::TypeFamily { .. })
+    }
+
     pub fn invalid_cause(self, db: &'db dyn HirAnalysisDb) -> Option<InvalidCause<'db>> {
         match self.data(db) {
             TyData::Invalid(cause) => Some(cause.clone()),

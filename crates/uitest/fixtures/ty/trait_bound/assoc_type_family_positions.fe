@@ -1,0 +1,225 @@
+// Every place a type can be written, with a family application whose
+// argument `u256` does not meet the parameter's bound. Each is reported once,
+// at the application.
+trait Allowed {}
+impl Allowed for bool {}
+trait Factory {
+    type Out<T: Allowed>
+}
+struct Provider {}
+impl Factory for Provider {
+    type Out<T> = u256
+}
+struct S {}
+impl S {
+    fn make() -> S {
+        S {}
+    }
+}
+struct Out2 {}
+impl Factory for Out2 {
+    type Out<T> = S
+}
+trait Show {}
+impl Show for u256 {}
+trait Tr2<X> {}
+trait Tr3<X> {
+    type A
+}
+trait Tr4 {
+    type A
+}
+impl<X> Tr3<X> for bool {
+    type A = u256
+}
+struct W1<T> {}
+struct W2<T> {}
+struct W3<T> {}
+struct W4<T> {}
+trait Marker {}
+fn consume<T>() {}
+struct Receiver {}
+impl Receiver {
+    fn consume<T>(self) {}
+}
+
+// Signatures, fields, aliases and constants.
+
+fn signature(_ x: Provider::Out<u256>) {}
+
+fn ret() -> Provider::Out<u256> {
+    1
+}
+
+struct Field {
+    x: Provider::Out<u256>,
+}
+
+enum Payload {
+    A(Provider::Out<u256>),
+}
+
+type Alias = Provider::Out<u256>
+
+const C: Provider::Out<u256> = 1
+
+// Types written in bodies.
+
+fn local() {
+    let _x: Provider::Out<u256> = 1
+}
+
+fn cast(x: u256) -> u256 {
+    x as Provider::Out<u256>
+}
+
+fn generic_local<B: Factory>() {
+    let _y: B::Out<u256>
+}
+
+fn call() {
+    consume<Provider::Out<u256>>()
+}
+
+fn nested_call() {
+    consume<(bool, <Provider as Factory>::Out<u256>)>()
+}
+
+fn method_call(_ r: Receiver) {
+    r.consume<Provider::Out<u256>>()
+}
+
+fn generic_call<T: Allowed>() {
+    consume<Provider::Out<T>>()
+    consume<Provider::Out<u256>>()
+}
+
+fn array() {
+    let _a: [Provider::Out<u256>; 1]
+}
+
+fn tuple() {
+    let _a: (u8, Provider::Out<u256>)
+}
+
+// Paths in expressions and patterns.
+
+fn path_call() -> S {
+    Out2::Out<u256>::make()
+}
+
+fn record() -> S {
+    Out2::Out<u256> {}
+}
+
+fn pattern(x: S) {
+    let Out2::Out<u256> {} = x
+}
+
+fn matched(x: S) {
+    match x {
+        Out2::Out<u256> {} => {}
+    }
+}
+
+// Where-clauses, generic parameters and headers.
+
+fn subject()
+where
+    Provider::Out<u256>: Show,
+{}
+
+fn generic_subject<B: Factory>()
+where
+    B::Out<u256>: Show,
+{}
+
+fn bound_argument<T>()
+where
+    T: Tr2<Provider::Out<u256>>,
+{}
+
+fn param_bound<T: Tr2<Provider::Out<u256>>>() {}
+
+fn param_default<T = Provider::Out<u256>>() {}
+
+struct Defaulted<T = Provider::Out<u256>> {}
+
+struct Guarded<T>
+where
+    T: Tr2<Provider::Out<u256>>,
+{}
+
+struct Bounded<T: Tr2<Provider::Out<u256>>> {}
+
+trait Super: Tr2<Provider::Out<u256>> {}
+
+trait Where
+where
+    Self: Tr2<Provider::Out<u256>>,
+{}
+
+// Written qualified: `impl W1<Provider::Out<..>>` next to an enum variant
+// that names the same type crashes the compiler, also for associated types
+// without parameters (a query cycle through method lookup).
+impl W1<<Provider as Factory>::Out<u256>> {}
+
+impl Tr2<Provider::Out<u256>> for bool {}
+
+impl Marker for Provider::Out<u256> {}
+
+impl<T> Marker for W2<T>
+where
+    T: Tr2<Provider::Out<u256>>,
+{}
+
+impl W1<u8> {
+    fn method(_ x: Provider::Out<u256>) {}
+}
+
+fn where_binding<T>()
+where
+    T: Tr4<A = Provider::Out<u256>>,
+{}
+
+fn param_binding<T: Tr4<A = Provider::Out<u256>>>() {}
+
+trait Super4: Tr4<A = Provider::Out<u256>> {}
+
+impl<T: Tr2<Provider::Out<u256>>> Marker for W3<T> {}
+
+impl<T> Marker for W4<T>
+where
+    T: Tr4<A = Provider::Out<u256>>,
+{}
+
+fn effect() uses (_: Provider::Out<u256>) {}
+
+// Qualified paths, associated types and constants.
+
+fn qualified(_ x: <bool as Tr3<Provider::Out<u256>>>::A) {}
+
+type Qualified = <bool as Tr3<Provider::Out<u256>>>::A
+
+trait Default1 {
+    type A = Provider::Out<u256>
+}
+
+trait Bound1 {
+    type A: Tr2<Provider::Out<u256>>
+}
+
+trait Impl1 {
+    type A
+}
+impl Impl1 for bool {
+    type A = Provider::Out<u256>
+}
+
+trait Const1 {
+    const C: Provider::Out<u256>
+}
+
+trait Bound4 {
+    type B: Tr4<A = Provider::Out<u256>>
+}

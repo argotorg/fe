@@ -61,19 +61,21 @@ impl<'db> EffectParamOwner<'db> {
         }
     }
 
-    pub fn effect_param_ty_span(self, _db: &'db dyn HirAnalysisDb, idx: usize) -> DynLazySpan<'db> {
+    pub fn effect_param_ty_span(self, db: &'db dyn HirAnalysisDb, idx: usize) -> DynLazySpan<'db> {
+        self.effect_param_lazy_ty_span(db, idx).into()
+    }
+
+    pub fn effect_param_lazy_ty_span(
+        self,
+        _db: &'db dyn HirAnalysisDb,
+        idx: usize,
+    ) -> crate::span::types::LazyTySpan<'db> {
         match self {
-            EffectParamOwner::Func(func) => func.span().effects().param_idx(idx).ty().into(),
-            EffectParamOwner::Contract(contract) => {
-                contract.span().effects().param_idx(idx).ty().into()
+            EffectParamOwner::Func(func) => func.span().effects().param_idx(idx).ty(),
+            EffectParamOwner::Contract(contract) => contract.span().effects().param_idx(idx).ty(),
+            EffectParamOwner::ContractInit { contract } => {
+                contract.span().init_block().effects().param_idx(idx).ty()
             }
-            EffectParamOwner::ContractInit { contract } => contract
-                .span()
-                .init_block()
-                .effects()
-                .param_idx(idx)
-                .ty()
-                .into(),
             EffectParamOwner::ContractRecvArm {
                 contract,
                 recv_idx,
@@ -85,8 +87,7 @@ impl<'db> EffectParamOwner<'db> {
                 .arm(arm_idx as usize)
                 .effects()
                 .param_idx(idx)
-                .ty()
-                .into(),
+                .ty(),
         }
     }
 }

@@ -1,0 +1,21 @@
+trait Allowed {}
+
+trait Factory {
+    type Out<T: Allowed>
+}
+
+struct HCell<F: * -> *> {}
+
+struct S {}
+impl Factory for S {
+    type Out<T> = u8
+}
+
+// Without all of its arguments.
+fn partial(_ x: HCell<S::Out>) {}
+
+// Set with a binding.
+fn binding<B: Factory<Out = u8>>() {}
+
+// A parameter bound that does not hold.
+fn unmet(_ x: S::Out<u8>) {}

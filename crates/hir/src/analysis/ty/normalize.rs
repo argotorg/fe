@@ -208,7 +208,9 @@ fn normalize_ty_cycle_recover<'db>(
 
 /// The type a family application written in a path stands for, as
 /// `Provider::Out<bool>` in `Provider::Out<bool>::make()` stands for the type
-/// its definition gives, so that lookups through it see that type. Any other
+/// its definition gives, so that lookups through it see that type. This holds
+/// for the shorthand and the qualified spelling `<Provider as Factory>::Out<bool>`,
+/// and for a family given more arguments than it has parameters. Any other
 /// type is returned unchanged. A limit is returned, for the path to report.
 pub(crate) fn normalize_family_application<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -216,7 +218,13 @@ pub(crate) fn normalize_family_application<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Result<TyId<'db>, NormalizationLimit> {
-    if ty.as_family_application(db).is_some() {
+    let (head, args) = ty.decompose_ty_app(db);
+    let applies_a_family = match head.data(db) {
+        TyData::TypeFamily { owner, .. } => args.len() >= owner.generic_params(db).data(db).len(),
+        TyData::AssocTy(_) => !args.is_empty(),
+        _ => false,
+    };
+    if applies_a_family {
         normalize_ty(db, ty, scope, assumptions)
     } else {
         Ok(ty)
