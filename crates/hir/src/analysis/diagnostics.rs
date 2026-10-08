@@ -42,6 +42,10 @@ use common::file::File;
 fn pretty_print_ty_for_mismatch<'db>(db: &'db dyn SpannedHirAnalysisDb, ty: TyId<'db>) -> String {
     match ty.data(db) {
         TyData::TyVar(_) | TyData::TyParam(_) => ty.pretty_print(db).to_string(),
+        TyData::TypeFamily { .. } => ty.family_as_projection(db).map_or_else(
+            || ty.pretty_print(db).to_string(),
+            |projection| pretty_print_ty_for_mismatch(db, projection),
+        ),
         TyData::AssocTy(assoc_ty) => {
             let self_ty = pretty_print_ty_for_mismatch(db, assoc_ty.trait_.self_ty(db));
             format!(
@@ -1424,6 +1428,17 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 )
             }
 
+            Self::AssocTypeBindingWithParams { span, name } => primary_diag(
+                Severity::Error,
+                format!(
+                    "`{}` takes type parameters, so it cannot be set with `{} = ...`",
+                    name.data(db),
+                    name.data(db)
+                ),
+                "set here",
+                span.resolve(db),
+                error_code,
+            ),
             Self::TraitConstHoleArg { span, ident } => primary_diag(
                 Severity::Error,
                 format!(
@@ -2008,23 +2023,31 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
             }
 
             Self::DuplicateGenericParamName(owner, idxs) => {
-                let message = if let Some(name) = owner.name(db) {
+                use crate::analysis::ty::diagnostics::GenericParamListOwner;
+                let (owner_name, kind_name) = match owner {
+                    GenericParamListOwner::Item(item) => (item.name(db), item.kind_name()),
+                    GenericParamListOwner::AssocType(assoc) => {
+                        (assoc.scope().name(db), "associated type")
+                    }
+                };
+                let message = if let Some(name) = owner_name {
                     format!(
                         "duplicate generic parameter name in {} `{}`",
-                        owner.kind_name(),
+                        kind_name,
                         name.data(db)
                     )
                 } else {
-                    format!(
-                        "duplicate generic parameter name in {} definition",
-                        owner.kind_name()
-                    )
+                    format!("duplicate generic parameter name in {kind_name} definition")
                 };
 
-                let name = owner
-                    .params(db)
-                    .next()
-                    .map(|p| p.param.name().unwrap().data(db))
+                let first = match owner {
+                    GenericParamListOwner::Item(item) => item.params(db).next().map(|p| p.param),
+                    GenericParamListOwner::AssocType(assoc) => {
+                        assoc.generic_params(db).data(db).first()
+                    }
+                };
+                let name = first
+                    .map(|p| p.name().unwrap().data(db))
                     .expect("should be at least one generic param");
 
                 let spans = offending_generic_param_spans(*owner, idxs.as_slice(), db);
@@ -2702,6 +2725,44 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
+            Self::AssocTypeParamDefault(span) => primary_diag(
+                Severity::Error,
+                "type parameters of associated types cannot have defaults",
+                "default not allowed here",
+                span.resolve(db),
+                error_code,
+            ),
+            Self::AssocTypeConstParam(span) => primary_diag(
+                Severity::Error,
+                "associated types cannot have const parameters",
+                "const parameter",
+                span.resolve(db),
+                error_code,
+            ),
+            Self::InvalidAssocTypeParamBound { span, param } => primary_diag(
+                Severity::Error,
+                format!("invalid bound on associated type parameter `{}`", param.data(db)),
+                "this bound cannot be used for the parameter",
+                span.resolve(db),
+                error_code,
+            ),
+            Self::InvalidAssocTypeBound { span, name } => primary_diag(
+                Severity::Error,
+                format!("invalid bound on associated type `{}`", name.data(db)),
+                "this bound cannot be used for the associated type",
+                span.resolve(db),
+                error_code,
+            ),
+            Self::AssocTypeNeedsAllArgs { span, name } => primary_diag(
+                Severity::Error,
+                format!(
+                    "`{}` has bounds on its type parameters, so it needs all of its type arguments",
+                    name.data(db)
+                ),
+                "type arguments missing",
+                span.resolve(db),
+                error_code,
+            ),
             Self::TypeLoweringCycle(span) => primary_diag(
                 Severity::Error,
                 "cycle detected while resolving this type",
@@ -2741,13 +2802,17 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
 }
 
 fn offending_generic_param_spans<'db>(
-    owner: crate::core::hir_def::GenericParamOwner<'db>,
+    owner: crate::analysis::ty::diagnostics::GenericParamListOwner<'db>,
     idxs: &'db [u16],
     db: &'db dyn SpannedHirAnalysisDb,
 ) -> impl Iterator<Item = Option<Span>> + 'db {
-    let params_vec: Vec<_> = owner.params(db).collect();
-    idxs.iter()
-        .map(move |i| params_vec[*i as usize].span().resolve(db))
+    use crate::analysis::ty::diagnostics::GenericParamListOwner;
+    idxs.iter().map(move |&i| match owner {
+        GenericParamListOwner::Item(item) => item.param_view(db, i as usize).span().resolve(db),
+        GenericParamListOwner::AssocType(assoc) => {
+            assoc.span().generic_params().param(i as usize).resolve(db)
+        }
+    })
 }
 
 fn duplicate_name_subdiags<I>(name: &str, spans: I) -> Vec<SubDiagnostic>
@@ -5832,6 +5897,41 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     error_code,
                 }
             }
+
+            Self::AssocTypeParamNumMismatch {
+                primary,
+                expected,
+                given,
+            } => primary_diag(
+                severity,
+                "associated type parameter count mismatch",
+                format!(
+                    "expected {expected} type parameter{}, but {given} given",
+                    if *expected == 1 { "" } else { "s" }
+                ),
+                primary.resolve(db),
+                error_code,
+            ),
+
+            Self::AssocTypeParamKindMismatch {
+                primary,
+                expected,
+                given,
+            } => primary_diag(
+                severity,
+                "associated type parameter does not match the trait",
+                format!("expected `{expected}` kind, but this parameter has `{given}` kind"),
+                primary.resolve(db),
+                error_code,
+            ),
+
+            Self::AssocTypeParamBoundInImpl { primary } => primary_diag(
+                severity,
+                "bounds on associated type parameters must be written in the trait",
+                "move this bound to the trait's declaration",
+                primary.resolve(db),
+                error_code,
+            ),
         }
     }
 }

@@ -1421,7 +1421,7 @@ impl<'db> GenericParamOwner<'db> {
     ) -> impl Iterator<Item = TyDiagCollection<'db>> + 'db {
         let params_iter = self.params(db).map(|v| v.name().to_opt());
         check_duplicate_names(params_iter, |idxs| {
-            TyDiagCollection::from(TyLowerDiag::DuplicateGenericParamName(self, idxs))
+            TyDiagCollection::from(TyLowerDiag::DuplicateGenericParamName(self.into(), idxs))
         })
         .into_iter()
     }

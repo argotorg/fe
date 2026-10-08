@@ -181,6 +181,13 @@ enum Clause<'db> {
     /// The goal could not be normalized within the limits. Its one answer is
     /// the goal itself, unknown.
     Unknown(NormalizationLimit),
+    /// A bound declared on an associated type with parameters, usable for a
+    /// goal on an application of it to all of its arguments once
+    /// `requirements` hold.
+    FamilyBound {
+        bound: TraitInstId<'db>,
+        requirements: super::PredicateListId<'db>,
+    },
 }
 
 #[derive(Clone)]
@@ -479,6 +486,20 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             clauses.extend(
                 (0..prepared.query.assumptions.list(self.db).len()).map(Clause::Assumption),
             );
+            if let Some((requirements, bounds)) = normalized_goal
+                .self_ty(self.db)
+                .family_declared_bounds(self.db)
+            {
+                clauses.extend(
+                    bounds
+                        .list(self.db)
+                        .iter()
+                        .map(|&bound| Clause::FamilyBound {
+                            bound,
+                            requirements,
+                        }),
+                );
+            }
         }
         Ok(CallbackOutcome::Continue(clauses))
     }
@@ -502,6 +523,38 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         let selected_impl = match clause {
             Clause::Unknown(limit) => {
                 return Ok(self.unknown_answer(key, table, query.goal, limit));
+            }
+            Clause::FamilyBound {
+                bound,
+                requirements,
+            } => {
+                let unknown = match unify_trait_inst_with_normalized_assoc_bindings(
+                    self.db,
+                    &mut table,
+                    bound,
+                    normalized_goal,
+                    scope,
+                    query.assumptions,
+                ) {
+                    CandidateMatch::Matches => None,
+                    CandidateMatch::Mismatch => return Ok(Transition::Reject),
+                    CandidateMatch::Unknown(limit) => Some(limit),
+                };
+                let selected_impl =
+                    ImplementorId::assumption(self.db, query.goal.fold_with(self.db, &mut table));
+                let remaining_goals = requirements
+                    .list(self.db)
+                    .iter()
+                    .map(|goal| goal.fold_with(self.db, &mut table))
+                    .collect();
+                let branch = Branch {
+                    table,
+                    root_goal: query.goal,
+                    remaining_goals,
+                    selected_impl,
+                    unknown,
+                };
+                return Ok(self.continue_branch(key, branch, query.assumptions));
             }
             Clause::Implementor(selected_impl) => {
                 if !impl_header_may_match(self.db, selected_impl, normalized_goal) {
@@ -892,6 +945,14 @@ pub(super) fn has_solution<'db>(
 #[salsa::tracked]
 pub(crate) fn ty_depth_impl<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> usize {
     match ty.data(db) {
+        TyData::TypeFamily { args, body, .. } => {
+            args.iter()
+                .chain(std::iter::once(body))
+                .map(|ty| ty_depth_impl(db, *ty))
+                .max()
+                .unwrap_or(0)
+                + 1
+        }
         TyData::ConstTy(cty) => ty_depth_impl(db, cty.ty(db)),
         TyData::Invalid(_)
         | TyData::Never

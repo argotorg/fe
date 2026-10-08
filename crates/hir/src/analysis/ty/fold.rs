@@ -144,6 +144,11 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                 TyId::const_ty(db, const_ty)
             }
 
+            TypeFamily { owner, args, body } => {
+                let args = args.iter().map(|arg| arg.fold_with(db, folder)).collect();
+                let body = body.fold_with(db, folder);
+                TyId::type_family_with_args(db, *owner, args, body)
+            }
             AssocTy(assoc) => {
                 let folded_trait = assoc.trait_.fold_with(db, folder);
 

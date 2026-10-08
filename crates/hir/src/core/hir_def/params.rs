@@ -102,6 +102,16 @@ impl GenericParamListId<'_> {
     pub fn len(&self, db: &dyn HirDb) -> usize {
         self.data(db).len()
     }
+
+    /// Whether, as the parameters of an associated type, this list has
+    /// something associated types do not support: a const parameter, or a
+    /// default.
+    pub fn has_unsupported_assoc_params(self, db: &dyn HirDb) -> bool {
+        self.data(db).iter().any(|param| match param {
+            GenericParam::Type(param) => param.default_ty.is_some(),
+            GenericParam::Const(_) => true,
+        })
+    }
 }
 
 #[salsa::interned]

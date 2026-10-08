@@ -1,0 +1,42 @@
+struct Store<T> {
+    t: T,
+}
+
+struct Pair<A, B> {
+    a: A,
+    b: B,
+}
+
+struct Evm {}
+struct Native {}
+
+trait Backend {
+    type Buffer<T> = Store<T>
+    type Cell<T, U> = Pair<T, U>
+}
+
+impl Backend for Evm {}
+
+impl Backend for Native {
+    type Buffer<T> = Pair<T, T>
+}
+
+fn takes_store_u32(_ x: Store<u32>) {}
+fn inherited_buffer(x: Evm::Buffer<u32>) {
+    takes_store_u32(x)
+}
+
+fn takes_pair_u32_u64(_ x: Pair<u32, u64>) {}
+fn inherited_cell(x: Evm::Cell<u32, u64>) {
+    takes_pair_u32_u64(x)
+}
+
+fn takes_pair_u32_u32(_ x: Pair<u32, u32>) {}
+fn overridden_buffer(x: Native::Buffer<u32>) {
+    takes_pair_u32_u32(x)
+}
+
+fn takes_pair_u8_u16(_ x: Pair<u8, u16>) {}
+fn native_inherited_cell(x: Native::Cell<u8, u16>) {
+    takes_pair_u8_u16(x)
+}

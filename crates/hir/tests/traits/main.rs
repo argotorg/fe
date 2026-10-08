@@ -1,3 +1,4 @@
+mod associated_type_families;
 mod candidate_guard;
 mod const_param_assumptions;
 mod constraints;

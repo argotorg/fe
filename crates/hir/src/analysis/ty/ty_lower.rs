@@ -1,5 +1,6 @@
 use std::iter;
 
+use crate::core::hir_def::scope_graph::AssocTypeOwner;
 use crate::core::hir_def::{
     Body, CallableDef, ConstGenericArgValue, Expr, GenericArg, GenericArgListId, GenericParam,
     GenericParamOwner, GenericParamView, IdentId, KindBound as HirKindBound, Partial, PathId, Stmt,
@@ -3834,6 +3835,10 @@ pub struct LoweredSlot(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum ParamKey<'db> {
+    AssociatedType {
+        owner: AssocTypeOwner<'db>,
+        index: SourceParamIndex,
+    },
     TraitSelf(crate::hir_def::Trait<'db>),
     Source {
         owner: GenericParamOwner<'db>,
@@ -3855,6 +3860,7 @@ pub enum ParamKey<'db> {
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ParamSchemaId<'db> {
+    pub associated_owner: Option<AssocTypeOwner<'db>>,
     pub owner: GenericParamOwner<'db>,
     pub basis: ParamBasis,
     #[return_ref]
@@ -3864,6 +3870,27 @@ pub struct ParamSchemaId<'db> {
 impl<'db> ParamSchemaId<'db> {
     pub fn full(db: &'db dyn HirAnalysisDb, owner: GenericParamOwner<'db>) -> Self {
         param_schema(db, owner, ParamBasis::Full)
+    }
+
+    /// A declaration-local associated type binder uses the same checked
+    /// substitution domains as item parameters, without inheriting trait slots.
+    pub(crate) fn associated_type(db: &'db dyn HirAnalysisDb, owner: AssocTypeOwner<'db>) -> Self {
+        let parent: GenericParamOwner<'db> = match owner {
+            AssocTypeOwner::Trait(trait_, _) => trait_.into(),
+            AssocTypeOwner::Impl(impl_, _) => impl_.into(),
+        };
+        let keys = (0..owner.generic_params(db).data(db).len())
+            .map(|index| ParamKey::AssociatedType {
+                owner,
+                index: SourceParamIndex(index),
+            })
+            .collect::<Vec<_>>();
+        Self::new(db, Some(owner), parent, ParamBasis::Full, keys)
+    }
+
+    pub(crate) fn scope(self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
+        self.associated_owner(db)
+            .map_or_else(|| self.owner(db).scope(), |owner| owner.scope())
     }
 
     pub fn callable(db: &'db dyn HirAnalysisDb, callable: CallableDef<'db>) -> Self {
@@ -3901,6 +3928,9 @@ impl<'db> ParamSchemaId<'db> {
     }
 
     pub fn formal_at(self, db: &'db dyn HirAnalysisDb, slot: LoweredSlot) -> Option<TyId<'db>> {
+        if let Some(owner) = self.associated_owner(db) {
+            return (slot.0 < self.keys(db).len()).then(|| assoc_type_param(db, owner, slot.0));
+        }
         self.param_set(db).params(db).get(slot.0).copied()
     }
 
@@ -3936,6 +3966,9 @@ impl<'db> ParamSchemaId<'db> {
     }
 
     fn parent_schema(self, db: &'db dyn HirAnalysisDb) -> Option<Self> {
+        if self.associated_owner(db).is_some() {
+            return None;
+        }
         match self.owner(db) {
             GenericParamOwner::Func(func) if func.is_associated_func(db) => {
                 Some(Self::full(db, self.owner(db).parent(db)?))
@@ -4133,6 +4166,18 @@ impl<'db> CompleteSubst<'db> {
         )
     }
 
+    pub(crate) fn for_associated_type(
+        db: &'db dyn HirAnalysisDb,
+        owner: AssocTypeOwner<'db>,
+        values: Vec<TyId<'db>>,
+    ) -> Result<Self, SubstError<'db>> {
+        Self::new(
+            ParamDomainId::full(db, ParamSchemaId::associated_type(db, owner)),
+            db,
+            values,
+        )
+    }
+
     /// Binds the leading slots of `domain` to `prefix` and leaves the remaining
     /// slots at their declaration formals.
     pub fn with_prefix(
@@ -4252,6 +4297,7 @@ pub fn param_schema<'db>(
     }
     ParamSchemaId::new(
         db,
+        None,
         owner,
         basis,
         keys.into_iter()
@@ -4670,7 +4716,7 @@ pub(super) fn lower_kind_in_bounds<'db>(bounds: &[TypeBound<'db>]) -> Option<Kin
 /// Lower a family parameter in its declaration-local index space.
 pub(crate) fn assoc_type_param<'db>(
     db: &'db dyn HirAnalysisDb,
-    owner: crate::hir_def::scope_graph::AssocTypeOwner<'db>,
+    owner: AssocTypeOwner<'db>,
     idx: usize,
 ) -> TyId<'db> {
     let params = owner.generic_params(db);
@@ -4680,17 +4726,68 @@ pub(crate) fn assoc_type_param<'db>(
     let Some(name) = param.name.to_opt() else {
         return TyId::invalid(db, InvalidCause::Other);
     };
-    let kind = lower_kind_in_bounds(&param.bounds).unwrap_or(Kind::Star);
     TyId::new(
         db,
         TyData::TyParam(TyParam::normal_param(
             name,
             idx,
-            kind,
+            assoc_type_param_kind(db, owner, idx),
             owner.scope(),
             Some(idx),
         )),
     )
+}
+
+/// The kind of parameter `idx` of an associated type. Bounds on these
+/// parameters belong to the trait, kinds included: an impl that writes no
+/// kind has the declared one. Every use of a family parameter's kind goes
+/// through here.
+pub(crate) fn assoc_type_param_kind<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: AssocTypeOwner<'db>,
+    idx: usize,
+) -> Kind {
+    let written = |params: crate::hir_def::GenericParamListId<'db>| match params.data(db).get(idx) {
+        Some(GenericParam::Type(param)) => lower_kind_in_bounds(&param.bounds),
+        _ => None,
+    };
+    written(owner.generic_params(db))
+        .or_else(|| declared_assoc_params(db, owner).and_then(written))
+        .unwrap_or(Kind::Star)
+}
+
+/// The trait's parameter list for the associated type that `owner` defines in
+/// an impl.
+fn declared_assoc_params<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: AssocTypeOwner<'db>,
+) -> Option<crate::hir_def::GenericParamListId<'db>> {
+    let AssocTypeOwner::Impl(impl_, type_idx) = owner else {
+        return None;
+    };
+    let name = impl_.types(db).get(type_idx as usize)?.name.to_opt()?;
+    let declaration = impl_.trait_def(db)?.assoc_ty(db, name)?;
+    Some(declaration.generic_params)
+}
+
+/// The kind of a family: one arrow per family parameter, ending in the kind of
+/// its body. A parameter list that associated types do not support, with a
+/// const parameter or a default, is reported at the declaration; its kind is
+/// then `Any`, so its uses are not reported again.
+pub(crate) fn assoc_family_kind<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: AssocTypeOwner<'db>,
+    result: Kind,
+) -> Kind {
+    let params = owner.generic_params(db);
+    if params.has_unsupported_assoc_params(db) {
+        return Kind::Any;
+    }
+    (0..params.data(db).len())
+        .rev()
+        .fold(result, |result, idx| {
+            Kind::Abs(Box::new((assoc_type_param_kind(db, owner, idx), result)))
+        })
 }
 
 /// The error value for a written type whose lowering reached `limit`. Like

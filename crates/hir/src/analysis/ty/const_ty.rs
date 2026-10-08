@@ -858,6 +858,43 @@ pub fn demand_concrete_array_length<'db>(
 
 pub(crate) fn ty_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
     match ty.data(db) {
+        TyData::TypeFamily { .. } => {
+            struct Constants<'db> {
+                db: &'db dyn HirAnalysisDb,
+                ground: bool,
+                /// Types already walked, so a shared subtree is walked once.
+                walked: rustc_hash::FxHashSet<TyId<'db>>,
+            }
+            impl<'db> super::visitor::TyVisitor<'db> for Constants<'db> {
+                fn db(&self) -> &'db dyn HirAnalysisDb {
+                    self.db
+                }
+                fn visit_ty(&mut self, ty: TyId<'db>) {
+                    if self.walked.insert(ty) {
+                        super::visitor::walk_ty(self, ty);
+                    }
+                }
+                fn visit_const_ty(&mut self, ty: &ConstTyId<'db>) {
+                    self.ground &= const_ty_is_fully_ground(self.db, *ty);
+                }
+            }
+            if ty.has_param(db)
+                || ty.has_var(db)
+                || ty.has_invalid(db)
+                || ty
+                    .flags(db)
+                    .contains(super::ty_def::TyFlags::HAS_PROJECTION)
+            {
+                return false;
+            }
+            let mut visitor = Constants {
+                db,
+                ground: true,
+                walked: rustc_hash::FxHashSet::default(),
+            };
+            super::visitor::TyVisitable::visit_with(&ty, &mut visitor);
+            visitor.ground
+        }
         TyData::TyVar(_)
         | TyData::TyParam(_)
         | TyData::AssocTy(_)
@@ -1401,6 +1438,14 @@ pub fn canonicalize_ty_for_mode<'db>(
         let env = env.without_assoc_evidence();
 
         let mut ty = match ty.data(db) {
+            TyData::TypeFamily { owner, args, body } => TyId::type_family_with_args(
+                db,
+                *owner,
+                args.iter()
+                    .map(|arg| canonicalize_ty_impl(db, *arg, env, mode, true))
+                    .collect(),
+                canonicalize_ty_impl(db, *body, env, mode, false),
+            ),
             TyData::TyApp(abs, arg) => {
                 let abs = canonicalize_ty_impl(db, *abs, env, mode, false);
                 let arg = canonicalize_ty_impl(db, *arg, env, mode, true);

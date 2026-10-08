@@ -7,7 +7,7 @@ use crate::{
         Body, Enum, ExprId, GenericParamOwner, IdentId, ItemKind, PathId,
         TypeAlias as HirTypeAlias, VariantKind,
         prim_ty::{IntTy as HirIntTy, PrimTy as HirPrimTy, UintTy as HirUintTy},
-        scope_graph::ScopeId,
+        scope_graph::{AssocTypeOwner, ScopeId},
     },
     span::DynLazySpan,
 };
@@ -170,6 +170,59 @@ impl<'db> TyId<'db> {
         }
     }
 
+    /// The body of an associated type with parameters, kept as a family: it
+    /// keeps its own parameters, and the enclosing trait's or impl's
+    /// parameters as its arguments.
+    pub(crate) fn type_family(
+        db: &'db dyn HirAnalysisDb,
+        owner: AssocTypeOwner<'db>,
+        body: Self,
+    ) -> Self {
+        if owner.generic_params(db).data(db).is_empty() {
+            return body;
+        }
+        let item_owner: GenericParamOwner<'db> = match owner {
+            AssocTypeOwner::Trait(trait_, _) => trait_.into(),
+            AssocTypeOwner::Impl(impl_, _) => impl_.into(),
+        };
+        let args = collect_generic_params(db, item_owner).params(db).to_vec();
+        Self::type_family_with_args(db, owner, args, body)
+    }
+
+    pub(crate) fn type_family_with_args(
+        db: &'db dyn HirAnalysisDb,
+        owner: AssocTypeOwner<'db>,
+        args: Vec<Self>,
+        body: Self,
+    ) -> Self {
+        if matches!(body.data(db), TyData::Invalid(_))
+            || owner.generic_params(db).data(db).is_empty()
+        {
+            body
+        } else {
+            Self::new(db, TyData::TypeFamily { owner, args, body })
+        }
+    }
+
+    /// A family applied to exactly its own parameters: the family's owner,
+    /// its definition, and the arguments. This is the one test for a family
+    /// application that normalization can reduce. A further argument, when
+    /// the definition is a type constructor, applies to the reduced type.
+    pub(crate) fn as_family_application(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<(AssocTypeOwner<'db>, TyId<'db>, &'db [TyId<'db>])> {
+        let (head, args) = self.decompose_ty_app(db);
+        match head.data(db) {
+            TyData::TypeFamily { owner, body, .. }
+                if args.len() == owner.generic_params(db).data(db).len() =>
+            {
+                Some((*owner, *body, args))
+            }
+            _ => None,
+        }
+    }
+
     pub fn invalid_cause(self, db: &'db dyn HirAnalysisDb) -> Option<InvalidCause<'db>> {
         match self.data(db) {
             TyData::Invalid(cause) => Some(cause.clone()),
@@ -184,7 +237,8 @@ impl<'db> TyId<'db> {
             TyData::TyVar(_) => TyFlags::HAS_VAR,
             TyData::TyParam(_) => TyFlags::HAS_PARAM,
             TyData::Invalid(_) => TyFlags::HAS_INVALID,
-            TyData::TyApp(..)
+            TyData::TypeFamily { .. }
+            | TyData::TyApp(..)
             | TyData::AssocTy(_)
             | TyData::QualifiedTy(_)
             | TyData::ConstTy(_) => ty_flags(db, self),
@@ -226,6 +280,11 @@ impl<'db> TyId<'db> {
         match self.data(db) {
             TyData::TyVar(var) => var.pretty_print(),
             TyData::TyParam(param) => param.pretty_print(db),
+            // Printed as the projection it stands for, as written.
+            TyData::TypeFamily { .. } => self.family_as_projection(db).map_or_else(
+                || "_".to_string(),
+                |projection| projection.pretty_print_with_mode(db, mode).to_string(),
+            ),
             TyData::AssocTy(assoc_ty) => {
                 let self_ty = assoc_ty.trait_.self_ty(db);
                 format!(
@@ -611,6 +670,7 @@ impl<'db> TyId<'db> {
         match self.base_ty(db).data(db) {
             TyData::TyParam(param) => Some(param.scope(db)),
             TyData::AssocTy(assoc_ty) => assoc_ty.scope(db),
+            TyData::TypeFamily { owner, .. } => Some(owner.scope()),
             TyData::QualifiedTy(trait_inst) => Some(trait_inst.def(db).scope()),
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.scope(db)),
             TyData::TyBase(TyBase::Contract(c)) => Some(c.scope()),
@@ -638,6 +698,7 @@ impl<'db> TyId<'db> {
             TyData::TyVar(_) => None,
             TyData::TyParam(param) => param.scope(db).name_span(db),
             TyData::AssocTy(assoc_ty) => assoc_ty.scope(db)?.name_span(db),
+            TyData::TypeFamily { owner, .. } => Some(owner.span().name().into()),
             TyData::QualifiedTy(trait_inst) => trait_inst.def(db).scope().name_span(db),
 
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.name_span(db)),
@@ -704,6 +765,25 @@ impl<'db> TyId<'db> {
     }
 
     pub fn app(db: &'db dyn HirAnalysisDb, lhs: Self, rhs: Self) -> TyId<'db> {
+        // Keep an invalid head as it is, including the value a query cycle
+        // starts from: wrapping it in a new application on each iteration
+        // keeps a cycle through a family application from converging (see
+        // the test `inherited_and_mutual_recursion_is_rejected`).
+        if matches!(lhs.data(db), TyData::Invalid(_)) {
+            return lhs;
+        }
+        // An associated type whose parameter list is not supported is
+        // reported at its declaration; its applications are not reported
+        // again.
+        if let TyData::AssocTy(assoc) = lhs.data(db)
+            && assoc
+                .trait_
+                .def(db)
+                .assoc_ty(db, assoc.name)
+                .is_some_and(|decl| decl.generic_params.has_unsupported_assoc_params(db))
+        {
+            return Self::invalid(db, InvalidCause::Other);
+        }
         let Some(applicable_ty) = lhs.applicable_ty(db) else {
             return Self::invalid(
                 db,
@@ -1035,6 +1115,15 @@ pub enum TyData<'db> {
     TyParam(TyParam<'db>),
 
     AssocTy(AssocTy<'db>),
+
+    /// The body of an associated type with parameters. Its own parameters
+    /// stay in `body` until it is applied to arguments for them.
+    TypeFamily {
+        owner: AssocTypeOwner<'db>,
+        /// Enclosing item arguments, including those unused by the body.
+        args: Vec<TyId<'db>>,
+        body: TyId<'db>,
+    },
 
     /// Qualified type, e.g., `<T as Iterator>`.
     QualifiedTy(TraitInstId<'db>),
@@ -1895,12 +1984,23 @@ impl HasKind for TyData<'_> {
         match self {
             TyData::TyVar(ty_var) => ty_var.kind(db),
             TyData::TyParam(ty_param) => ty_param.kind.clone(),
-            TyData::AssocTy(assoc) => assoc
-                .trait_
-                .def(db)
-                .assoc_ty(db, assoc.name)
-                .and_then(|decl| super::ty_lower::lower_kind_in_bounds(&decl.bounds))
-                .unwrap_or(Kind::Star),
+            TyData::TypeFamily { owner, body, .. } => {
+                super::ty_lower::assoc_family_kind(db, *owner, body.kind(db).clone())
+            }
+            TyData::AssocTy(assoc) => {
+                let trait_ = assoc.trait_.def(db);
+                let (Some(decl), Some(view)) = (
+                    trait_.assoc_ty(db, assoc.name),
+                    trait_
+                        .assoc_types(db)
+                        .find(|view| view.name(db) == Some(assoc.name)),
+                ) else {
+                    return Kind::Star;
+                };
+                let result =
+                    super::ty_lower::lower_kind_in_bounds(&decl.bounds).unwrap_or(Kind::Star);
+                super::ty_lower::assoc_family_kind(db, view.assoc_owner(), result)
+            }
             TyData::QualifiedTy(_) => Kind::Star,
             TyData::TyBase(base) => base.kind(db),
             TyData::TyApp(abs, _) => match abs.kind(db) {
@@ -2159,6 +2259,12 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
     struct Collector<'db> {
         db: &'db dyn HirAnalysisDb,
         flags: TyFlags,
+        /// Families whose bodies are being walked; their parameters are bound.
+        bound: Vec<ScopeId<'db>>,
+        /// Types already walked inside a family body, with the bound
+        /// families they were walked under, so a subtree shared many times
+        /// is walked once.
+        walked: FxHashSet<(TyId<'db>, Vec<ScopeId<'db>>)>,
     }
 
     impl<'db> TyVisitor<'db> for Collector<'db> {
@@ -2167,21 +2273,38 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
         }
 
         fn visit_ty(&mut self, ty: TyId<'db>) {
-            // Types form an interned DAG. Reuse each child's cached flags so
-            // repeated subtrees are not walked once for every occurrence.
-            self.flags |= ty.flags(self.db);
+            if self.bound.is_empty() {
+                // Types form an interned DAG. Reuse each child's cached flags so
+                // repeated subtrees are not walked once for every occurrence.
+                self.flags |= ty.flags(self.db);
+                return;
+            }
+            if !self.walked.insert((ty, self.bound.clone())) {
+                return;
+            }
+            // Cached flags cannot tell a family's own parameters from free ones.
+            self.flags |= projection_flag(self.db, ty);
+            if let TyData::TypeFamily { owner, args, body } = ty.data(self.db) {
+                self.visit_family(*owner, args, *body);
+            } else {
+                walk_ty(self, ty);
+            }
         }
 
         fn visit_var(&mut self, _: &TyVar) {
             self.flags.insert(TyFlags::HAS_VAR);
         }
 
-        fn visit_param(&mut self, _: &TyParam) {
-            self.flags.insert(TyFlags::HAS_PARAM)
+        fn visit_param(&mut self, param: &TyParam) {
+            if !self.bound.contains(&param.owner) {
+                self.flags.insert(TyFlags::HAS_PARAM);
+            }
         }
 
-        fn visit_const_param(&mut self, _: &TyParam<'db>, _: TyId<'db>) {
-            self.flags.insert(TyFlags::HAS_PARAM)
+        fn visit_const_param(&mut self, param: &TyParam<'db>, _: TyId<'db>) {
+            if !self.bound.contains(&param.owner) {
+                self.flags.insert(TyFlags::HAS_PARAM);
+            }
         }
 
         fn visit_invalid(&mut self, _: &InvalidCause) {
@@ -2196,15 +2319,47 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
         }
     }
 
-    let mut collector = Collector {
-        db,
-        flags: if matches!(ty.data(db), TyData::AssocTy(_) | TyData::QualifiedTy(_)) {
+    impl<'db> Collector<'db> {
+        fn visit_family(
+            &mut self,
+            owner: AssocTypeOwner<'db>,
+            args: &[TyId<'db>],
+            body: TyId<'db>,
+        ) {
+            for &arg in args {
+                self.visit_ty(arg);
+            }
+            self.bound.push(owner.scope());
+            self.visit_ty(body);
+            self.bound.pop();
+        }
+    }
+
+    /// Projections, including a family applied to all of its parameters.
+    fn projection_flag<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlags {
+        let is_projection = match ty.data(db) {
+            TyData::AssocTy(_) | TyData::QualifiedTy(_) => true,
+            TyData::TyApp(..) => ty.as_family_application(db).is_some(),
+            _ => false,
+        };
+        if is_projection {
             TyFlags::HAS_PROJECTION
         } else {
             TyFlags::empty()
-        },
+        }
+    }
+
+    let mut collector = Collector {
+        db,
+        flags: projection_flag(db, ty),
+        bound: Vec::new(),
+        walked: FxHashSet::default(),
     };
 
-    walk_ty(&mut collector, ty);
+    if let TyData::TypeFamily { owner, args, body } = ty.data(db) {
+        collector.visit_family(*owner, args, *body);
+    } else {
+        walk_ty(&mut collector, ty);
+    }
     collector.flags
 }

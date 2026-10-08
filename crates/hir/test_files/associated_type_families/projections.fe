@@ -1,0 +1,21 @@
+trait Backend {
+    type Ptr<T>
+    type Word
+}
+
+struct EvmBackend {}
+
+impl Backend for EvmBackend {
+    type Ptr<T> = u256
+    type Word = u256
+}
+
+fn takes_word(_ a: u256) {}
+
+fn projects(p: EvmBackend::Ptr<u32>) {
+    takes_word(p)
+}
+
+fn generic_ptr<B: Backend>(p: B::Ptr<u32>) -> B::Ptr<u32> {
+    p
+}

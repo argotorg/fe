@@ -35,7 +35,7 @@ use crate::analysis::{
         fold::TyFoldable as _,
         generic_defaults::DefaultApplication,
         method_table::{MethodProbe, probe_method},
-        normalize::{NormalizationLimit, normalize_ty},
+        normalize::{NormalizationLimit, normalize_family_application, normalize_ty},
         trait_def::TraitInstId,
         trait_lower::{
             TraitArgError, TraitRefLowerError, complete_candidate_impl_assoc_ty,
@@ -120,6 +120,9 @@ pub enum PathResErrorKind<'db> {
     },
     TraitConstHoleArg {
         arg_idx: usize,
+    },
+    AssocTypeBindingWithParams {
+        name: IdentId<'db>,
     },
 
     /// Trait path generic argument expected a type; wrong domain was found.
@@ -211,6 +214,9 @@ impl<'db> PathResError<'db> {
             }
             PathResErrorKind::TraitConstHoleArg { .. } => {
                 "Layout hole is not allowed in trait generic arguments".to_string()
+            }
+            PathResErrorKind::AssocTypeBindingWithParams { .. } => {
+                "An associated type with type parameters cannot be set with a binding".to_string()
             }
             PathResErrorKind::TraitGenericArgType { .. } => {
                 "Trait generic argument expects a type".to_string()
@@ -314,6 +320,9 @@ impl<'db> PathResError<'db> {
                 expected,
                 given,
             },
+            PathResErrorKind::AssocTypeBindingWithParams { name } => {
+                PathResDiag::AssocTypeBindingWithParams { span, name }
+            }
 
             PathResErrorKind::ArgKindMisMatch { expected, given } => PathResDiag::ArgKindMismatch {
                 span,
@@ -1096,6 +1105,20 @@ where
 
     match parent_res {
         Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
+            // A family application is looked up as the type its definition
+            // gives. Its parameter bounds are reported on the written path. A
+            // limit reached in it fails the lookup with that limit, at the
+            // head that reached it.
+            let ty = match normalize_family_application(db, ty, scope, assumptions) {
+                Ok(ty) => ty,
+                Err(limit) => {
+                    let head = path.parent(db).unwrap_or(path);
+                    return Err(PathResError::new(
+                        PathResErrorKind::NormalizationLimit(limit),
+                        head,
+                    ));
+                }
+            };
             // Fast paths for qualified types `<A as Trait>::...`.
             //
             // NOTE: This must run before generic associated-const probing, otherwise
@@ -1105,6 +1128,15 @@ where
             if let TyData::QualifiedTy(trait_inst) = ty.data(db) {
                 // Associated type projection
                 if let Some(assoc_ty) = trait_inst.project_assoc_ty(db, ident) {
+                    let args = lower_generic_arg_list(
+                        db,
+                        path.generic_args(db),
+                        scope,
+                        assumptions,
+                        LayoutHoleArgSite::Path(path),
+                        minter,
+                    );
+                    let assoc_ty = apply_associated_type_args(db, path, assoc_ty, &args)?;
                     let r = PathRes::Ty(assoc_ty);
                     observer(path, &r);
                     return Ok(r);
@@ -1293,18 +1325,7 @@ where
                     LayoutHoleArgSite::Path(path),
                     minter,
                 );
-                let assoc_ty = TyId::foldl(db, assoc_ty, &seg_args);
-                if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) =
-                    assoc_ty.data(db)
-                {
-                    return Err(PathResError::new(
-                        PathResErrorKind::ArgNumMismatch {
-                            expected: *expected,
-                            given: *given,
-                        },
-                        path,
-                    ));
-                }
+                let assoc_ty = apply_associated_type_args(db, path, assoc_ty, &seg_args)?;
                 let result = PathRes::Ty(assoc_ty);
                 observer(path, &result);
                 return Ok(result);
@@ -1363,19 +1384,12 @@ where
             let evaluated: Vec<AssocTyEval<'db>> = found
                 .iter()
                 .map(|&((inst, ty_candidate), _)| {
-                    let applied = if seg_args.is_empty() {
-                        ty_candidate
-                    } else {
-                        TyId::foldl(db, ty_candidate, &seg_args)
+                    let applied = match apply_args(db, ty_candidate, &seg_args) {
+                        Ok(applied) => applied,
+                        Err((expected, given)) => {
+                            return AssocTyEval::ArgNumMismatch { expected, given };
+                        }
                     };
-                    if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) =
-                        applied.data(db)
-                    {
-                        return AssocTyEval::ArgNumMismatch {
-                            expected: *expected,
-                            given: *given,
-                        };
-                    }
                     // Interpret each candidate's own equality when comparing
                     // it with other candidates. Normalizing the binding-free
                     // projection under all assumptions can leave conflicting
@@ -2207,6 +2221,23 @@ fn associated_type_candidates<'db>(
         }
     }
 
+    if let Some((_, bounds)) = original_ty.family_declared_bounds(db) {
+        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+        for &bound in bounds.list(db) {
+            if bound.def(db).assoc_ty(db, name).is_none() {
+                continue;
+            }
+            // A declared bound is a candidate once it is proved, like an impl.
+            let mut table = UnificationTable::new(db);
+            let holds = candidates::all_hold(db, solve_cx, &mut table, &[bound], Counting::PROVED);
+            if holds != Holds::No {
+                candidates.push((
+                    (bound, TyId::assoc_ty(db, bound.trait_ref(db), name)),
+                    holds,
+                ));
+            }
+        }
+    }
     let search_ingots = [
         Some(scope_ingot),
         original_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
@@ -2554,6 +2585,9 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                                     TraitArgError::ConstHoleNotAllowed { arg_idx } => {
                                         PathResErrorKind::TraitConstHoleArg { arg_idx }
                                     }
+                                    TraitArgError::AssocTypeBindingWithParams { name } => {
+                                        PathResErrorKind::AssocTypeBindingWithParams { name }
+                                    }
                                     TraitArgError::Ignored => PathResErrorKind::ParseError,
                                 };
                                 return Err(PathResError {
@@ -2597,12 +2631,12 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                 ));
             }
             // A bare associated name inside its trait means `<Self as Trait<..>>`
-            // with the trait's own parameters; the name itself takes no arguments.
+            // with the trait's own parameters; any arguments apply to a family.
             ScopeId::TraitType(t, idx) => {
-                reject_generic_args(db, path)?;
                 let trait_inst = trait_self_predicate(db, t);
                 let assoc_ty_name = t.assoc_ty_by_index(db, idx as usize).name.unwrap();
-                PathRes::Ty(TyId::assoc_ty(db, trait_inst.trait_ref(db), assoc_ty_name))
+                let assoc_ty = TyId::assoc_ty(db, trait_inst.trait_ref(db), assoc_ty_name);
+                PathRes::Ty(apply_associated_type_args(db, path, assoc_ty, &args())?)
             }
 
             ScopeId::TraitConst(t, idx) => {
@@ -2707,6 +2741,32 @@ fn pick_type_domain_from_bucket<'db>(
             }
             err => PathResError::from_name_res_error(err, path),
         })
+}
+
+/// `head` applied to `args`; too many arguments give the number expected and
+/// the number given.
+fn apply_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    head: TyId<'db>,
+    args: &[TyId<'db>],
+) -> Result<TyId<'db>, (usize, usize)> {
+    let applied = TyId::foldl(db, head, args);
+    if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) = applied.data(db)
+    {
+        return Err((*expected, *given));
+    }
+    Ok(applied)
+}
+
+fn apply_associated_type_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    head: TyId<'db>,
+    args: &[TyId<'db>],
+) -> Result<TyId<'db>, PathResError<'db>> {
+    apply_args(db, head, args).map_err(|(expected, given)| {
+        PathResError::new(PathResErrorKind::ArgNumMismatch { expected, given }, path)
+    })
 }
 
 #[cfg(test)]
