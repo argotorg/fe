@@ -746,6 +746,8 @@ impl super::Parse for TraitTypeItemScope {
             parser.bump();
         }
 
+        parse_generic_params_opt(parser, false)?;
+
         if parser.current_kind() == Some(SyntaxKind::Colon) {
             parser.parse(TypeBoundListScope::new(false))?;
         }

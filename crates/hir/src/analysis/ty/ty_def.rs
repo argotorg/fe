@@ -1617,6 +1617,12 @@ impl<'db> TyParam<'db> {
         }
     }
 
+    /// A parameter of an associated type family, bound by the family rather
+    /// than by an item.
+    pub fn is_assoc_ty_param(&self) -> bool {
+        self.owner.assoc_type_owner().is_some()
+    }
+
     pub fn original_idx(&self, db: &'db dyn HirAnalysisDb) -> usize {
         if let Some(index) = self.declared_index {
             return index;
@@ -1639,6 +1645,9 @@ impl<'db> TyParam<'db> {
     pub fn scope(&self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
         match self.variant {
             Variant::TraitSelf => self.owner,
+            Variant::Normal if self.is_assoc_ty_param() => {
+                ScopeId::AssocTypeParam(self.owner.assoc_type_owner().unwrap(), self.idx as u16)
+            }
             Variant::Normal => {
                 ScopeId::GenericParam(self.owner.item(), self.original_idx(db) as u16)
             }

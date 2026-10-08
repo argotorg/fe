@@ -2581,6 +2581,21 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                 PathRes::Ty(ty)
             }
 
+            ScopeId::AssocTypeParam(owner, idx) => {
+                let ty = crate::analysis::ty::ty_lower::assoc_type_param(db, owner, idx as usize);
+                PathRes::Ty(TyId::foldl(db, ty, &args()))
+            }
+            // An impl's associated definition is reached through its trait's
+            // declaration, never by name; a path cannot name it.
+            ScopeId::ImplTraitType(_, _) => {
+                return Err(PathResError::new(
+                    PathResErrorKind::NotFound {
+                        parent: None,
+                        bucket: NameResBucket::default(),
+                    },
+                    path,
+                ));
+            }
             // A bare associated name inside its trait means `<Self as Trait<..>>`
             // with the trait's own parameters; the name itself takes no arguments.
             ScopeId::TraitType(t, idx) => {

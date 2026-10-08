@@ -808,6 +808,7 @@ impl<'db> AssocTyDecl<'db> {
         let default = TypeId::lower_ast_partial(ctxt, ast.ty()).to_opt();
 
         AssocTyDecl {
+            generic_params: GenericParamListId::lower_ast_opt(ctxt, ast.generic_params()),
             attributes,
             name,
             bounds,
@@ -888,6 +889,7 @@ impl<'db> AssocTyDef<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitTypeItem) -> Self {
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         AssocTyDef {
+            generic_params: GenericParamListId::lower_ast_opt(ctxt, ast.generic_params()),
             attributes,
             name: IdentId::lower_token_partial(ctxt, ast.name()),
             type_ref: TypeId::lower_ast_partial(ctxt, ast.ty()),

@@ -4667,6 +4667,32 @@ pub(super) fn lower_kind_in_bounds<'db>(bounds: &[TypeBound<'db>]) -> Option<Kin
     None
 }
 
+/// Lower a family parameter in its declaration-local index space.
+pub(crate) fn assoc_type_param<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: crate::hir_def::scope_graph::AssocTypeOwner<'db>,
+    idx: usize,
+) -> TyId<'db> {
+    let params = owner.generic_params(db);
+    let Some(GenericParam::Type(param)) = params.data(db).get(idx) else {
+        return TyId::invalid(db, InvalidCause::Other);
+    };
+    let Some(name) = param.name.to_opt() else {
+        return TyId::invalid(db, InvalidCause::Other);
+    };
+    let kind = lower_kind_in_bounds(&param.bounds).unwrap_or(Kind::Star);
+    TyId::new(
+        db,
+        TyData::TyParam(TyParam::normal_param(
+            name,
+            idx,
+            kind,
+            owner.scope(),
+            Some(idx),
+        )),
+    )
+}
+
 /// The error value for a written type whose lowering reached `limit`. Like
 /// every lowering error, it is reported where the type is written (see
 /// `diag_from_invalid_cause`).

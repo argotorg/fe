@@ -968,6 +968,10 @@ pub fn walk_trait<'db, V>(
             |span| span.item_list().assoc_type(idx),
             |ctxt| {
                 ctxt.with_new_ctxt(
+                    |span| span.generic_params(),
+                    |ctxt| visitor.visit_generic_param_list(ctxt, assoc.generic_params),
+                );
+                ctxt.with_new_ctxt(
                     |span| span.bounds(),
                     |ctxt| visitor.visit_type_bound_list(ctxt, &assoc.bounds),
                 );
@@ -1024,12 +1028,19 @@ pub fn walk_impl_trait<'db, V>(
     );
 
     for (idx, assoc) in impl_trait.types(ctxt.db).iter().enumerate() {
-        if let Some(ty) = assoc.type_ref.to_opt() {
-            ctxt.with_new_ctxt(
-                |span| span.associated_type(idx).ty(),
-                |ctxt| visitor.visit_ty(ctxt, ty),
-            );
-        }
+        ctxt.with_new_scoped_ctxt(
+            ScopeId::ImplTraitType(impl_trait, idx as u16),
+            |span| span.associated_type(idx),
+            |ctxt| {
+                ctxt.with_new_ctxt(
+                    |span| span.generic_params(),
+                    |ctxt| visitor.visit_generic_param_list(ctxt, assoc.generic_params),
+                );
+                if let Some(ty) = assoc.type_ref.to_opt() {
+                    ctxt.with_new_ctxt(|span| span.ty(), |ctxt| visitor.visit_ty(ctxt, ty));
+                }
+            },
+        );
     }
 
     for item in impl_trait.children_non_nested(ctxt.db) {
@@ -1595,8 +1606,12 @@ pub fn walk_generic_param_list<'db, V>(
 {
     let parent_item = ctxt.scope().item();
     for (i, param) in params.data(ctxt.db).iter().enumerate() {
+        let scope = match ctxt.scope().assoc_type_owner() {
+            Some(owner) => ScopeId::AssocTypeParam(owner, i as u16),
+            None => ScopeId::GenericParam(parent_item, i as u16),
+        };
         ctxt.with_new_scoped_ctxt(
-            ScopeId::GenericParam(parent_item, i as u16),
+            scope,
             |span| span.param(i),
             |ctxt| {
                 visitor.visit_generic_param(ctxt, param);

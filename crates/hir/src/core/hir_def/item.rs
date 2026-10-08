@@ -1221,6 +1221,7 @@ impl<'db> Trait<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocTyDecl<'db> {
+    pub generic_params: GenericParamListId<'db>,
     pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
     pub bounds: Vec<TypeBound<'db>>,
@@ -1309,6 +1310,7 @@ impl<'db> ImplTrait<'db> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AssocTyDef<'db> {
+    pub generic_params: GenericParamListId<'db>,
     pub attributes: AttrListId<'db>,
     pub name: Partial<IdentId<'db>>,
     pub(crate) type_ref: Partial<TypeId<'db>>,

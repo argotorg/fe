@@ -845,7 +845,13 @@ impl NameDomain {
                     GenericParam::Const(_) => NameDomain::TYPE | NameDomain::VALUE,
                 }
             }
-            ScopeId::TraitType(..) => Self::TYPE,
+            ScopeId::AssocTypeParam(owner, idx) => {
+                match &owner.generic_params(db).data(db)[idx as usize] {
+                    GenericParam::Type(_) => Self::TYPE,
+                    GenericParam::Const(_) => Self::TYPE | Self::VALUE,
+                }
+            }
+            ScopeId::TraitType(..) | ScopeId::ImplTraitType(..) => Self::TYPE,
             ScopeId::TraitConst(..) => Self::VALUE,
             ScopeId::ImplConst(..) => Self::VALUE,
             ScopeId::Field(..) => Self::FIELD,

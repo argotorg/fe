@@ -78,6 +78,37 @@ impl<'db> ScopeGraph<'db> {
     }
 }
 
+/// The trait or impl item that declares or defines an associated type, with
+/// the type's position in it. It owns the type's own parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+pub enum AssocTypeOwner<'db> {
+    Trait(Trait<'db>, u16),
+    Impl(ImplTrait<'db>, u16),
+}
+
+impl<'db> AssocTypeOwner<'db> {
+    pub fn scope(self) -> ScopeId<'db> {
+        match self {
+            Self::Trait(owner, idx) => ScopeId::TraitType(owner, idx),
+            Self::Impl(owner, idx) => ScopeId::ImplTraitType(owner, idx),
+        }
+    }
+
+    pub fn generic_params(self, db: &'db dyn HirDb) -> super::GenericParamListId<'db> {
+        match self {
+            Self::Trait(owner, idx) => owner.types(db)[idx as usize].generic_params,
+            Self::Impl(owner, idx) => owner.types(db)[idx as usize].generic_params,
+        }
+    }
+
+    pub fn span(self) -> crate::span::item::LazyTraitTypeSpan<'db> {
+        match self {
+            Self::Trait(owner, idx) => owner.span().item_list().assoc_type(idx as usize),
+            Self::Impl(owner, idx) => owner.span().associated_type(idx as usize),
+        }
+    }
+}
+
 /// An reference to a `[ScopeData]` in a `ScopeGraph`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
 pub enum ScopeId<'db> {
@@ -89,6 +120,10 @@ pub enum ScopeId<'db> {
 
     /// Trait associated type scope.
     TraitType(Trait<'db>, u16),
+    /// Impl associated type definition scope.
+    ImplTraitType(ImplTrait<'db>, u16),
+    /// A local parameter of an associated type declaration or definition.
+    AssocTypeParam(AssocTypeOwner<'db>, u16),
     /// Trait associated const scope.
     TraitConst(Trait<'db>, u16),
     /// Inherent impl associated const scope.
@@ -107,12 +142,22 @@ pub enum ScopeId<'db> {
     Block(Body<'db>, ExprId),
 }
 impl<'db> ScopeId<'db> {
+    pub fn assoc_type_owner(self) -> Option<AssocTypeOwner<'db>> {
+        match self {
+            Self::TraitType(owner, idx) => Some(AssocTypeOwner::Trait(owner, idx)),
+            Self::ImplTraitType(owner, idx) => Some(AssocTypeOwner::Impl(owner, idx)),
+            _ => None,
+        }
+    }
+
     /// Returns the top level module containing this scope.
     pub fn top_mod(&self, db: &'db dyn HirDb) -> TopLevelMod<'db> {
         match self {
             ScopeId::Item(item) => item.top_mod(db),
             ScopeId::GenericParam(item, _) => item.top_mod(db),
             ScopeId::TraitType(t, _) => t.top_mod(db),
+            ScopeId::ImplTraitType(i, _) => i.top_mod(db),
+            ScopeId::AssocTypeParam(owner, _) => owner.scope().top_mod(db),
             ScopeId::TraitConst(t, _) => t.top_mod(db),
             ScopeId::ImplConst(i, _) => i.top_mod(db),
             ScopeId::FuncParam(item, _) => item.top_mod(db),
@@ -155,6 +200,8 @@ impl<'db> ScopeId<'db> {
             ScopeId::GenericParam(item, _) => item,
             ScopeId::FuncParam(item, _) => item,
             ScopeId::TraitType(t, _) => t.into(),
+            ScopeId::ImplTraitType(i, _) => i.into(),
+            ScopeId::AssocTypeParam(owner, _) => owner.scope().item(),
             ScopeId::TraitConst(t, _) => t.into(),
             ScopeId::ImplConst(i, _) => i.into(),
             ScopeId::Field(FieldParent::Struct(s), _) => s.into(),
@@ -186,6 +233,7 @@ impl<'db> ScopeId<'db> {
                 Some(def.attributes)
             }
             ScopeId::TraitType(t, idx) => t.types(db).get(idx as usize).map(|d| d.attributes),
+            ScopeId::ImplTraitType(i, idx) => i.types(db).get(idx as usize).map(|d| d.attributes),
             ScopeId::TraitConst(t, idx) => t.consts(db).get(idx as usize).map(|d| d.attributes),
             ScopeId::ImplConst(i, idx) => i.consts(db).get(idx as usize).map(|d| d.attributes),
             _ => None,
@@ -316,7 +364,7 @@ impl<'db> ScopeId<'db> {
     pub fn is_type(self) -> bool {
         match self {
             ScopeId::Item(item) => item.is_type(),
-            ScopeId::GenericParam(..) => true,
+            ScopeId::GenericParam(..) | ScopeId::AssocTypeParam(..) => true,
             _ => false,
         }
     }
@@ -353,6 +401,13 @@ impl<'db> ScopeId<'db> {
             }
 
             ScopeId::TraitType(t, idx) => t.assoc_ty_by_index(db, idx as usize).name.to_opt(),
+            ScopeId::ImplTraitType(i, idx) => i.types(db).get(idx as usize)?.name.to_opt(),
+            ScopeId::AssocTypeParam(owner, idx) => owner
+                .generic_params(db)
+                .data(db)
+                .get(idx as usize)?
+                .name()
+                .to_opt(),
             ScopeId::TraitConst(t, idx) => t.const_by_index(idx as usize).name(db),
             ScopeId::ImplConst(i, idx) => i.consts(db).get(idx as usize)?.name.to_opt(),
 
@@ -384,6 +439,16 @@ impl<'db> ScopeId<'db> {
                 }
             }
 
+            ScopeId::ImplTraitType(i, idx) => {
+                Some(i.span().associated_type(idx as usize).name().into())
+            }
+            ScopeId::AssocTypeParam(owner, idx) => {
+                let span = owner.span().generic_params().param(idx as usize);
+                match owner.generic_params(db).data(db).get(idx as usize)? {
+                    GenericParam::Type(_) => Some(span.into_type_param().name().into()),
+                    GenericParam::Const(_) => Some(span.into_const_param().name().into()),
+                }
+            }
             ScopeId::TraitType(t, idx) => {
                 Some(t.span().item_list().assoc_type(idx as usize).name().into())
             }
@@ -401,8 +466,8 @@ impl<'db> ScopeId<'db> {
     pub fn kind_name(&self) -> &'static str {
         match self {
             ScopeId::Item(item) => item.kind_name(),
-            ScopeId::GenericParam(_, _) => "type",
-            ScopeId::TraitType(..) => "associated type",
+            ScopeId::GenericParam(_, _) | ScopeId::AssocTypeParam(..) => "type",
+            ScopeId::TraitType(..) | ScopeId::ImplTraitType(..) => "associated type",
             ScopeId::TraitConst(..) => "associated const",
             ScopeId::ImplConst(..) => "associated const",
             ScopeId::FuncParam(_, _) => "value",
@@ -722,6 +787,9 @@ impl<'db> FromScope<'db> for &'db FuncParam<'db> {
 
 impl<'db> FromScope<'db> for &'db GenericParam<'db> {
     fn from_scope(scope: ScopeId<'db>, db: &'db dyn HirDb) -> Option<Self> {
+        if let ScopeId::AssocTypeParam(owner, idx) = scope {
+            return owner.generic_params(db).data(db).get(idx as usize);
+        }
         let ScopeId::GenericParam(parent, idx) = scope else {
             return None;
         };

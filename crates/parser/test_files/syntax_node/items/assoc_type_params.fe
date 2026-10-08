@@ -1,0 +1,9 @@
+trait Factory {
+    type Pair<T>
+    type Out<T: Show, U>: Clone = (T, U)
+}
+
+impl Factory for S {
+    type Pair<T> = (T, bool)
+    type Out<T, U> = (U, T)
+}

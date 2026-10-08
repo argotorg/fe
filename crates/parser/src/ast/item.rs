@@ -355,6 +355,7 @@ ast_node! {
     SK::TraitTypeItem,
 }
 impl super::AttrListOwner for TraitTypeItem {}
+impl super::GenericParamsOwner for TraitTypeItem {}
 impl TraitTypeItem {
     /// Returns the name of the associated type
     pub fn name(&self) -> Option<SyntaxToken> {
