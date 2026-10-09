@@ -795,7 +795,12 @@ impl<'db> Callable<'db> {
                 }
 
                 if !has_targeted_borrow_diag {
-                    tc.equate_ty(actual, expected, given.expr_span.clone());
+                    actual = tc.equate_ty_with_expr(
+                        actual,
+                        expected,
+                        given.expr_span.clone(),
+                        Some(given.expr),
+                    );
                     expected = tc.normalize_ty(expected);
                 }
 
@@ -821,7 +826,12 @@ impl<'db> Callable<'db> {
                     }
                 }
             } else {
-                tc.equate_ty(actual, expected, given.expr_span.clone());
+                actual = tc.equate_ty_with_expr(
+                    actual,
+                    expected,
+                    given.expr_span.clone(),
+                    Some(given.expr),
+                );
                 expected = tc.normalize_ty(expected);
                 // Variant constructors materialize their fields immediately (owned context).
                 tc.record_implicit_move_for_owned_expr(given.expr, expected);

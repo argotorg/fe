@@ -86,6 +86,7 @@ const fn bytes<T: AsBytes>(_ value: T) -> PackedBytes<T::N> { value.as_bytes() }
 const PAIR: PackedBytes<34> = bytes((1 as u256, "ab" as String<2>))
 const NESTED: PackedBytes<36> = bytes((("x" as String<1>, 1 as u256), ("ab" as String<2>, "z" as String<1>)))
 const EMPTY: PackedBytes<0> = bytes(("" as String<0>, "" as String<0>))
+const BARE: PackedBytes<2> = ("a", "b").as_bytes()
 const PAIR_LAST: u8 = PAIR[33]
 const NESTED_WORD_LAST: u8 = NESTED[32]
 
@@ -97,6 +98,7 @@ const fn identity<T0: AsBytes, T1: AsBytes>(_ value: PackedBytes<{T0::N + T1::N}
 const IDENTITY: PackedBytes<34> = identity<u256, String<2>>(PAIR)
 
 fn check_runtime(_ word: u256, _ text: String<2>) -> u8 {
+    assert!(BARE[0] == 97 && BARE[1] == 98)
     let pair = bytes((word, text))
     let nested = bytes((("x" as String<1>, word), (text, "z" as String<1>)))
     assert!(pair.len() == 34 && pair[31] == word.downcast_truncate())
