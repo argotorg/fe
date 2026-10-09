@@ -35,3 +35,20 @@ fn stabilized_projection_headers_preserve_inherent_method_lookup() {
         ));
     }
 }
+
+#[test]
+fn enum_family_application_and_inherent_header_lookup_terminate_in_both_orders() {
+    let declarations = "trait Factory { type Out<T> }\nstruct Provider {}\nimpl Factory for Provider { type Out<T> = T }\nstruct W1<T> {}\n";
+    for (first, second) in [
+        (
+            "enum Payload { A(Provider::Out<u8>) }",
+            "impl W1<Provider::Out<u8>> {}",
+        ),
+        (
+            "impl W1<Provider::Out<u8>> {}",
+            "enum Payload { A(Provider::Out<u8>) }",
+        ),
+    ] {
+        check(&format!("{declarations}\n{first}\n{second}"));
+    }
+}
