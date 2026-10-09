@@ -41,7 +41,7 @@ fn canonical_signed_word(word: u256, mask: u256, sign_bit: u256) -> u256 {
     revert_empty()
 }
 
-/// Compute the 4-byte Solidity selector for a signature string.
+/// Compute the 4-byte Solidity selector from the fixed-width packed encoding.
 ///
 /// For example, `sol("transfer(address,uint256)") == 0xa9059cbb`.
 pub const fn sol<T: AsBytes>(_ sig: T) -> u32 {

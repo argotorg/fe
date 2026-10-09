@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_eval/packed_append_count.fe
+---
+error[3-0036]: assertion failed in const context
+   ┌─ src/bytes.fe:99:9
+   │
+99 │         assert!(self.len >= start && self.len - start == T::N)
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `assert!` evaluated to `false`
+
+error[3-0036]: assertion failed in const context
+    ┌─ src/bytes.fe:106:9
+    │
+106 │         assert!(width <= M - self.len)
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `assert!` evaluated to `false`

@@ -1,7 +1,9 @@
-use core::AsBytes
+use core::{AsBytes, PackedBytes}
 
-const fn bytes<T: AsBytes>(_ value: T) -> [u8; T::N] { value.as_bytes() }
-const PADDED: [u8; 5] = bytes<String<5>>("true")
+const fn bytes<T: AsBytes>(_ value: T) -> PackedBytes<T::N> {
+    value.as_bytes()
+}
+const PADDED: PackedBytes<5> = bytes<String<5>>("true")
 
 fn check_runtime_bytes(_ flag: bool) {
     let text: String<5> = if flag { "true" } else { "false" }
@@ -16,7 +18,11 @@ fn check_runtime_bytes(_ flag: bool) {
     let truncated = bytes(hidden)
     assert!(truncated[0] == if flag { 65 } else { 66 })
 
-    let wide: String<31> = if flag { "1234567890123456789012345678901" } else { "x" }
+    let wide: String<31> = if flag {
+        "1234567890123456789012345678901"
+    } else {
+        "x"
+    }
     let wide_bytes = bytes(wide)
     assert!(wide_bytes[0] == if flag { 49 } else { 0 })
     assert!(wide_bytes[29] == if flag { 48 } else { 0 })

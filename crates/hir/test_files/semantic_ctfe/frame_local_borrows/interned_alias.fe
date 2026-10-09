@@ -1,18 +1,12 @@
-use core::intrinsic
-
-struct Pair {
-    a: u8,
-    b: [u8; 2],
-}
+struct Pair { a: u8, b: [u8; 2] }
 
 enum Entry {
     Empty,
-    Full(Pair),
+    Full(Pair,),
 }
 
 const fn word() -> [u8; 2] {
-    let value: u16 = 26
-    intrinsic::__as_bytes(value)
+    [0, 26]
 }
 
 const PAIRS: [Pair; 2] = [Pair { a: 1, b: [2, 3] }, Pair { a: 4, b: [5, 6] }]
@@ -30,10 +24,10 @@ const fn answer() -> u8 {
     let byte = ref words[0][1]
     let mut total = pair.a + b + byte
     match entries[1] {
-        Entry::Full(inner) => {
+        Entry::Full(inner,) => {
             total += inner.b[1]
-        }
-        Entry::Empty => {}
+        },
+        Entry::Empty => {},
     }
     total
 }

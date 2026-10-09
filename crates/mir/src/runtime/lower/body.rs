@@ -23,8 +23,8 @@ use hir::analysis::{
         const_ty::ConstTyData,
         corelib::{
             PrimitiveWrapperCallKind, RuntimeBuiltinFuncKind, core_primitive_wrapper_call_kind,
-            resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
-            runtime_builtin_func_kind,
+            keccak_packed_input_len, resolve_core_trait, resolve_lib_func_path,
+            resolve_lib_type_path, runtime_builtin_func_kind,
         },
         trait_def::TraitInstId,
         trait_resolution::{
@@ -50,8 +50,8 @@ use crate::{
         AddressSpaceKind, ConstRegionId, ConstScalar, IntrinsicArithBinOp, LayoutId, PlaceElem,
         PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
         RuntimeBody, RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeExitBehavior,
-        RuntimeLocalRoot, RuntimePlace, RuntimeProviderBinding, RuntimeProviderBindingId,
-        ScalarClass, ScalarRepr, ScalarRole, VariantId,
+        RuntimeLocalRoot, RuntimeMemoryLayout, RuntimePlace, RuntimeProviderBinding,
+        RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, VariantId,
         code_region::runtime_code_region_for_semantic_ref,
         package::{LowerError, generated_call_error, runtime_instance_for_semantic},
     },
@@ -97,8 +97,8 @@ use super::{
     },
     tuple::RuntimeTupleFieldEmitter,
     type_info::{
-        RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env,
-        provider_class_for_target_in_env, runtime_array_len, runtime_effect_handle_info,
+        RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env, runtime_array_len,
+        runtime_effect_handle_info, runtime_interface_ty_in_env, runtime_storage_ty_in_env,
         stored_class_for_ty_in_env, top_level_class_for_ty_in_env,
         validate_runtime_array_extents_in_env,
     },
@@ -3616,7 +3616,7 @@ impl<'db> RmirEmitter<'db> {
             return None;
         };
 
-        if let Some(ret) = self.lower_intrinsic_keccak256_call(bb, func, args) {
+        if let Some(ret) = self.lower_intrinsic_keccak256_call(bb, semantic, func, args) {
             return Some(ret);
         }
         if let Some(builtin) = contract_metadata_builtin(self.db, semantic) {
@@ -4663,6 +4663,7 @@ impl<'db> RmirEmitter<'db> {
     fn lower_intrinsic_keccak256_call(
         &mut self,
         bb: RBlockId,
+        semantic: SemanticInstance<'db>,
         func: Func<'db>,
         args: &[NOperand],
     ) -> Option<RLocalId> {
@@ -4671,88 +4672,59 @@ impl<'db> RmirEmitter<'db> {
         {
             return None;
         }
-
-        let [bytes] = args else {
-            return None;
-        };
+        let [bytes] = args else { return None };
         let bytes_ty = self.semantic_body.normalized.value(bytes.value)?.ty;
-        let layout = self.layout_for_ty(bytes_ty);
-        let crate::runtime::Layout::Array(array_layout) = layout.data(self.db) else {
-            panic!(
-                "__keccak256 expects a byte-array argument, found {}",
-                bytes_ty.pretty_print(self.db)
-            );
-        };
-
-        let word_class = RuntimeClass::Scalar(ScalarClass {
-            repr: ScalarRepr::Int {
-                bits: 256,
-                signed: false,
-            },
-            role: ScalarRole::Plain,
-        });
-        let len = self.alloc_runtime_temp(
-            TyId::u256(self.db),
-            RuntimeCarrier::Value(word_class.clone()),
-        );
-        self.push_stmt(
-            bb,
-            RStmt::Assign {
-                dst: len,
-                expr: RExpr::ConstScalar(ConstScalar::Int {
-                    bits: 256,
-                    signed: false,
-                    words: if array_layout.len == 0 {
-                        Vec::new()
-                    } else {
-                        let bytes = array_layout.len.to_be_bytes();
-                        bytes
-                            .into_iter()
-                            .skip_while(|byte| *byte == 0)
-                            .collect::<Vec<_>>()
-                    },
-                }),
-            },
-        );
-
-        let value = self.read_semantic_operand(bb, *bytes);
-        let provider_class = provider_class_for_target_in_env(
+        let width = *semantic
+            .key(self.db)
+            .subst(self.db)
+            .generic_args(self.db)
+            .first()?;
+        let width = runtime_interface_ty_in_env(
             self.db,
-            self.env,
-            Some(bytes_ty),
-            AddressSpaceKind::Memory,
+            RuntimeTypeEnv::for_semantic(self.db, semantic),
+            width,
         );
-        let provider = match self.value_class(value) {
-            Some(
-                RuntimeClass::Ref {
-                    kind:
-                        RefKind::Provider {
-                            space: AddressSpaceKind::Memory,
-                            ..
-                        },
-                    ..
-                }
-                | RuntimeClass::RawAddr {
-                    space: AddressSpaceKind::Memory,
-                    ..
+        let bytes_ty = runtime_storage_ty_in_env(self.db, self.env, bytes_ty);
+        let len = keccak_packed_input_len(self.db, func.scope(), width, bytes_ty)
+            .unwrap_or_else(|| {
+                panic!(
+                    "__keccak256 requires canonical PackedBytes<N> matching its concrete N: N={}, input={}",
+                    width.pretty_print(self.db),
+                    bytes_ty.pretty_print(self.db),
+                )
+            });
+        let layout = self.layout_for_ty(bytes_ty);
+        let size = RuntimeMemoryLayout::raw(self.db)
+            .layout_size(layout)
+            .expect("packed hash input has an admitted raw-memory layout");
+        let size = usize::try_from(size).expect("raw-memory layout size fits usize");
+        assert!(size >= len);
+        let size = self.alloc_u256_const(bb, size);
+        let (raw_ptr, offset) = self.malloc_bytes(bb, size);
+        let class = RuntimeClass::AggregateValue { layout };
+        if !self.class_is_runtime_zst(&class) {
+            let value = self.read_semantic_operand(bb, *bytes);
+            // Export numeric words into fresh raw memory. Memory providers hold
+            // objects, whose addresses and element layouts are not raw pointers.
+            self.write_value_to_place(
+                bb,
+                RuntimePlace {
+                    root: PlaceRoot::Ptr {
+                        addr: raw_ptr,
+                        space: AddressSpaceKind::Memory,
+                        class: class.clone(),
+                    },
+                    path: Box::default(),
                 },
-            ) => value,
-            Some(_) => self.coerce_value(bb, value, &provider_class),
-            None => panic!(
-                "__keccak256 argument should have a runtime class: key={:?}; local={bytes:?}",
-                self.key
-            ),
-        };
-        let offset = self.coerce_value(
-            bb,
-            provider,
-            &RuntimeClass::raw_addr(
-                self.db,
-                AddressSpaceKind::Memory,
-                RuntimeClass::AggregateValue { layout },
-            ),
+                value,
+                &class,
+            );
+        }
+        let len = self.alloc_u256_const(bb, len);
+        let ret = self.alloc_runtime_temp(
+            TyId::u256(self.db),
+            RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
         );
-        let ret = self.alloc_runtime_temp(TyId::u256(self.db), RuntimeCarrier::Value(word_class));
         self.push_stmt(
             bb,
             RStmt::Assign {

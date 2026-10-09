@@ -12,9 +12,9 @@ error[6-0003]: trait bound is not satisfied
     │     `([u8; 25], T, [u8; 6])` doesn't implement `AsBytes`
     │     `T` is only borrowed here; the bound would be satisfied if it were owned
     │
-    ┌─ src/bytes.fe:718:24
+    ┌─ src/bytes.fe:672:24
     │
-718 │ pub const fn keccak<T: AsBytes>(_ x: T) -> u256 {
+672 │ pub const fn keccak<T: AsBytes>(_ x: T) -> u256 {
     │                        ------- required by this bound on `keccak`
     │
     = note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`

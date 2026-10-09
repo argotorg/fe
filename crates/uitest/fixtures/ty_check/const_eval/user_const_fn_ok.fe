@@ -1,9 +1,4 @@
-use core::intrinsic
-
-struct Agg {
-    a: u8,
-    b: u8,
-}
+struct Agg { a: u8, b: u8 }
 
 const fn make_agg() -> Agg {
     Agg { a: 3, b: 2 }
@@ -19,43 +14,16 @@ const fn add(_ a: usize, _ b: usize) -> usize {
 }
 
 const fn pick(_ flag: bool) -> usize {
-    if flag {
-        1
-    } else {
-        2
-    }
-}
-
-const fn bytes_tail() -> usize {
-    let xs: [u16; 2] = [258, 772]
-    let bytes: [u8; 4] = intrinsic::__as_bytes(xs)
-    bytes[3] as usize
-}
-
-enum AddrSpace {
-    Mem,
-    Stor,
-    Tran,
-}
-
-const fn stor_code() -> usize {
-    let bytes: [u8; 32] = intrinsic::__as_bytes(AddrSpace::Stor)
-    (bytes[0] as usize) * 2 + (bytes[31] as usize)
+    if flag { 1 } else { 2 }
 }
 
 type Arr = [u8; add(pick(true), pick(false))]
-type ArrBytes = [u8; bytes_tail()]
-type StorCode = [u8; stor_code()]
 type AggArr = [u8; agg_len()]
 
 fn takes_arr(_: Arr) {}
-fn takes_bytes(_: ArrBytes) {}
-fn takes_stor(_: StorCode) {}
 fn takes_agg(_: AggArr) {}
 
-fn ok(a: Arr, b: ArrBytes, c: StorCode, d: AggArr) {
+fn ok(a: Arr, d: AggArr) {
     takes_arr(a)
-    takes_bytes(b)
-    takes_stor(c)
     takes_agg(d)
 }

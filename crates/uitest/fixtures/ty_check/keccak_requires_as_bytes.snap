@@ -9,7 +9,7 @@ error[6-0003]: trait bound is not satisfied
   5 │     core::keccak(x)
     │     ^^^^^^^^^^^^ `NotBytes` doesn't implement `AsBytes`
     │
-    ┌─ src/bytes.fe:718:24
+    ┌─ src/bytes.fe:672:24
     │
-718 │ pub const fn keccak<T: AsBytes>(_ x: T) -> u256 {
+672 │ pub const fn keccak<T: AsBytes>(_ x: T) -> u256 {
     │                        ------- required by this bound on `keccak`

@@ -1669,6 +1669,35 @@ enum TraitObligationOutcome<'db> {
     Requeue(env::TraitObligation<'db>),
 }
 
+fn depends_on_type_inference<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    struct Computation<'db> {
+        db: &'db dyn HirAnalysisDb,
+        found: bool,
+    }
+    impl<'db> TyVisitor<'db> for Computation<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if self.found || !ty.has_var(self.db) {
+                return;
+            }
+            if matches!(
+                ty.data(self.db),
+                TyData::ConstTy(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
+            ) {
+                self.found = true;
+            } else {
+                walk_ty(self, ty);
+            }
+        }
+    }
+    let mut visitor = Computation { db, found: false };
+    ty.visit_with(&mut visitor);
+    visitor.found
+}
+
 impl<'db> TyChecker<'db> {
     fn string_literal_fallback(&self) -> StringFallback {
         StringFallback::Fixed
@@ -2475,6 +2504,55 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    fn process_type_equality(
+        &mut self,
+        mut equality: env::TypeEquality<'db>,
+        final_pass: bool,
+    ) -> bool {
+        if final_pass {
+            let mut prober = env::Prober::new(&mut self.table, self.env.scope());
+            equality.actual = equality.actual.fold_with(self.db, &mut prober);
+            equality.expected = equality.expected.fold_with(self.db, &mut prober);
+        }
+        equality.actual = self.normalize_ty(equality.actual);
+        equality.expected = self.normalize_ty(equality.expected);
+        if let Some(expr) = equality.expr
+            && let Some(coerced) = self.try_coerce_capability_for_expr_to_expected(
+                expr,
+                equality.actual,
+                equality.expected,
+            )
+        {
+            equality.actual = coerced;
+        }
+        match self.table.unify(equality.actual, equality.expected) {
+            Ok(()) => true,
+            Err(UnificationError::TypeMismatch)
+                if !final_pass
+                    && (depends_on_type_inference(self.db, equality.actual)
+                        || depends_on_type_inference(self.db, equality.expected)) =>
+            {
+                self.env.register_type_equality(equality);
+                false
+            }
+            Err(UnificationError::TypeMismatch) => {
+                if !equality.actual.has_invalid(self.db) && !equality.expected.has_invalid(self.db)
+                {
+                    self.push_diag(BodyDiag::TypeMismatch {
+                        span: equality.span,
+                        expected: equality.expected,
+                        given: equality.actual,
+                    });
+                }
+                true
+            }
+            Err(UnificationError::OccursCheckFailed) => {
+                self.push_diag(BodyDiag::InfiniteOccurrence(equality.span));
+                true
+            }
+        }
+    }
+
     fn resolve_deferred(&mut self) {
         let db = self.db;
         let body = self.env.body();
@@ -2630,6 +2708,9 @@ impl<'db> TyChecker<'db> {
             let tasks = self.env.take_deferred_tasks();
             for task in tasks {
                 match task {
+                    env::DeferredTask::TypeEquality(equality) => {
+                        progressed |= self.process_type_equality(equality, false);
+                    }
                     env::DeferredTask::Obligation(obligation) => {
                         match self.process_trait_obligation(obligation, false) {
                             TraitObligationOutcome::Discharged => {}
@@ -2824,9 +2905,14 @@ impl<'db> TyChecker<'db> {
             }
         }
 
-        // Emit diagnostics for remaining tasks.
+        // Final trait solving can still bind types after literal fallback.
+        // Check retained equalities after those constraints have settled.
+        let mut equalities = Vec::new();
         for task in self.env.take_deferred_tasks() {
             match task {
+                env::DeferredTask::TypeEquality(equality) => {
+                    equalities.push(equality);
+                }
                 env::DeferredTask::Obligation(obligation) => {
                     let _ = self.process_trait_obligation(obligation, true);
                 }
@@ -2879,6 +2965,9 @@ impl<'db> TyChecker<'db> {
                     let _ = self.resolve_pending_primitive_op(&pending);
                 }
             }
+        }
+        for equality in equalities {
+            self.process_type_equality(equality, true);
         }
     }
 
@@ -3526,7 +3615,11 @@ impl<'db> TyChecker<'db> {
     {
         let t = t.into();
         let span = t.clone().span(self.env.body());
-        let actual = self.equate_ty(actual, expected, span);
+        let expr = match &t {
+            Typeable::Expr(expr, _) => Some(*expr),
+            Typeable::Pat(_) => None,
+        };
+        let actual = self.equate_ty_with_expr(actual, expected, span, expr);
 
         self.retype_expr_or_pat(t, actual);
         actual
@@ -3554,6 +3647,16 @@ impl<'db> TyChecker<'db> {
         actual: TyId<'db>,
         expected: TyId<'db>,
         span: DynLazySpan<'db>,
+    ) -> TyId<'db> {
+        self.equate_ty_with_expr(actual, expected, span, None)
+    }
+
+    fn equate_ty_with_expr(
+        &mut self,
+        actual: TyId<'db>,
+        expected: TyId<'db>,
+        span: DynLazySpan<'db>,
+        expr: Option<ExprId>,
     ) -> TyId<'db> {
         // FIXME: This is a temporary workaround, this should be removed when we
         // implement subtyping.
@@ -3590,6 +3693,20 @@ impl<'db> TyChecker<'db> {
             Err(UnificationError::TypeMismatch) => {
                 let actual = actual.fold_with(self.db, &mut self.table);
                 let expected = expected.fold_with(self.db, &mut self.table);
+                // A projection or const computation cannot decide equality while
+                // its receiver/captures still depend on inference. Retain the
+                // equation until other constraints and literal fallback settle.
+                if depends_on_type_inference(self.db, actual)
+                    || depends_on_type_inference(self.db, expected)
+                {
+                    self.env.register_type_equality(env::TypeEquality {
+                        actual,
+                        expected,
+                        span,
+                        expr,
+                    });
+                    return merge_equated_layout_holes(self.db, expected, actual);
+                }
                 if !actual.has_invalid(self.db) && !expected.has_invalid(self.db) {
                     self.push_diag(BodyDiag::TypeMismatch {
                         span,

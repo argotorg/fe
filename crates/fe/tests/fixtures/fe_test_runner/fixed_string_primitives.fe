@@ -1,9 +1,10 @@
+use core::PackedBytes
 use core::abi::{ByteInput, encode_alloc}
 use core::concat
 use std::abi::Sol
 
 fn fifth_byte(_ s: String<8>) -> u8 {
-    let bytes: [u8; 8] = s.as_bytes()
+    let bytes = s.as_bytes()
     bytes[4]
 }
 
@@ -16,7 +17,7 @@ fn test_string_len_runtime() {
 #[test]
 fn test_string_as_bytes_runtime() {
     let s: String<8> = "COOL"
-    let bytes: [u8; 8] = s.as_bytes()
+    let bytes = s.as_bytes()
     assert!(bytes[0] == 0)
     assert!(bytes[3] == 0)
     assert!(bytes[4] == 67)
@@ -34,20 +35,20 @@ fn test_string_as_bytes_param_runtime() {
     padded[6] = input.byte_at(34)
     padded[7] = input.byte_at(35)
 
-    let s: String<8> = String::from_bytes(padded)
+    let s: String<8> = String::from_bytes(PackedBytes::from_array(padded))
     assert!(fifth_byte(s) == 67)
 }
 
 #[test]
 fn test_string_roundtrip_bytes_runtime() {
     let bytes: [u8; 8] = [0, 0, 0, 0, 67, 79, 79, 76]
-    let s: String<8> = String::from_bytes(bytes)
+    let s: String<8> = String::from_bytes(PackedBytes::from_array(bytes))
     assert!(s == "COOL")
 }
 
 #[test]
 fn test_string_from_bytes_expression_runtime() {
-    let s: String<8> = String::from_bytes([0, 0, 0, 0, 67, 79, 79, 76])
+    let s: String<8> = String::from_bytes(PackedBytes::from_array([0, 0, 0, 0, 67, 79, 79, 76]))
     assert!(s == "COOL")
 }
 
@@ -94,12 +95,11 @@ fn test_string_abi_encoding_ignores_hidden_high_bytes() {
     assert!(input.byte_at(35) == 76)
 }
 
-
-const fn generic_string_bytes<T: core::AsBytes>(_ value: T) -> [u8; T::N] {
+const fn generic_string_bytes<T: core::AsBytes>(_ value: T) -> PackedBytes<T::N> {
     value.as_bytes()
 }
 
-const TRAIT_BYTES: [u8; 8] = generic_string_bytes<String<8>>("COOL")
+const TRAIT_BYTES: PackedBytes<8> = generic_string_bytes<String<8>>("COOL")
 
 #[test]
 fn test_string_as_bytes_trait_runtime_and_const() {
@@ -110,9 +110,11 @@ fn test_string_as_bytes_trait_runtime_and_const() {
     padded[5] = input.byte_at(33)
     padded[6] = input.byte_at(34)
     padded[7] = input.byte_at(35)
-    let text: String<8> = String::from_bytes(padded)
+    let text: String<8> = String::from_bytes(PackedBytes::from_array(padded))
     let bytes = generic_string_bytes(text)
     assert!(bytes[0] == 0 && bytes[3] == 0)
     assert!(bytes[4] == 67 && bytes[7] == 76)
-    assert!(TRAIT_BYTES[0] == 0 && TRAIT_BYTES[4] == 67 && TRAIT_BYTES[7] == 76)
+    assert!(
+        TRAIT_BYTES[0] == 0 && TRAIT_BYTES[4] == 67 && TRAIT_BYTES[7] == 76,
+    )
 }

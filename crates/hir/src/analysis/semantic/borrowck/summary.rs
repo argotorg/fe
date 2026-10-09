@@ -5739,7 +5739,7 @@ fn caller(frame: mut Frame, op: u256) {{ dispatch(frame, op) }}
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
             "core_signatures.fe".into(),
-            "fn anchor() {}\nfn bytes(value: u256) -> [u8; 32] { core::intrinsic::__as_bytes(value) }\nfn aggregate(value: [u256; 2]) -> [u8; 64] { core::intrinsic::__as_bytes(value) }",
+            "fn anchor() {}\nfn bytes(value: u256) -> core::PackedBytes<32> { core::AsBytes::as_bytes(value) }\nfn aggregate(value: [u256; 2]) -> core::PackedBytes<64> { core::AsBytes::as_bytes((value[0], value[1])) }",
         );
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);
@@ -5765,18 +5765,15 @@ fn caller(frame: mut Frame, op: u256) {{ dispatch(frame, op) }}
             })
             .collect();
         assert!(!pointer_methods.is_empty());
-        for (path, func) in [
-            "core::intrinsic::__as_bytes",
-            "core::intrinsic::__keccak256",
-        ]
-        .into_iter()
-        .map(|path| (path, resolve_lib_func_path(&db, scope, path).expect(path)))
-        .chain([
-            ("core::ops::IndexMut::index_mut", index_mut),
-            ("bytes", find_func(&db, module, "bytes")),
-            ("aggregate", find_func(&db, module, "aggregate")),
-        ])
-        .chain(pointer_methods)
+        for (path, func) in ["core::intrinsic::__keccak256"]
+            .into_iter()
+            .map(|path| (path, resolve_lib_func_path(&db, scope, path).expect(path)))
+            .chain([
+                ("core::ops::IndexMut::index_mut", index_mut),
+                ("bytes", find_func(&db, module, "bytes")),
+                ("aggregate", find_func(&db, module, "aggregate")),
+            ])
+            .chain(pointer_methods)
         {
             let instance = get_or_build_semantic_instance(
                 &db,
