@@ -1,0 +1,201 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 152
+expression: ir
+---
+target = "evm-ethereum-osaka"
+
+type @layout_0 = {i256};
+type @layout_1 = {i256, i256, i256};
+type @layout_2 = {[i256; 2]};
+type @layout_3 = {@layout_2, i256};
+type @layout_4 = {i256, i256};
+type @layout_5 = {[i256; 1]};
+type @layout_6 = {@layout_5, i256};
+type @layout_7 = {[i256; 3]};
+type @layout_8 = {@layout_7, i256};
+type @layout_9 = {i256, i256};
+type @layout_10 = {i256};
+type @layout_11 = {@layout_9, @layout_10};
+type @layout_12 = {i256, i256, i256};
+type @layout_13 = {};
+type @layout_14 = {@layout_13};
+type @layout_15 = {i256, i256};
+
+global private const @layout_6 $const_region_0 = {{[0]}, 0};
+global private const @layout_8 $const_region_1 = {{[0, 0, 0]}, 0};
+global private const @layout_3 $const_region_2 = {{[0, 0]}, 0};
+global private const @layout_10 $const_region_3 = {0};
+
+func private %contract_init_root_Hashes() {
+    block0:
+        v5.i256 = evm_call_value;
+        v8.i1 = is_zero v5;
+        br v8 block2 block5;
+
+    block5:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v2.i256 = sym_addr &Hashes_runtime;
+        v3.i256 = sym_size &Hashes_runtime;
+        evm_code_copy 0.i256 v2 v3;
+        evm_return 0.i256 v3;
+}
+
+func private %contract_runtime_root_Hashes() {
+    block0:
+        v1.i256 = evm_calldata_size;
+        v2.i1 = lt v1 4.i256;
+        br v2 block3 block2;
+
+    block2:
+        v4.i256 = evm_calldata_load 0.i256;
+        v6.i256 = shr 224.i256 v4;
+        v7.i32 = trunc v6 i32;
+        br_table v7 block3 (1.i32 block9) (2.i32 block27) (3.i32 block45) (4.i32 block63);
+
+    block3:
+        evm_revert 0.i256 0.i256;
+
+    block9:
+        v14.i256 = evm_call_value;
+        v15.i1 = is_zero v14;
+        br v15 block11 block10;
+
+    block10:
+        evm_revert 0.i256 0.i256;
+
+    block11:
+        v18.i256 = evm_calldata_size;
+        v27.i256 = sub v18 4.i256;
+        v29.i1 = slt v27 32.i256;
+        br v29 block15 block16;
+
+    block15:
+        evm_revert 0.i256 0.i256;
+
+    block16:
+        v51.*i8 = evm_malloc 32.i256;
+        v52.i256 = ptr_to_int v51 i256;
+        v35.i256 = evm_calldata_load 4.i256;
+        mstore v52 v35 i256;
+        v55.i256 = evm_keccak256 v52 32.i256;
+        v276.*i8 = evm_malloc 32.i256;
+        v277.i256 = ptr_to_int v276 i256;
+        mstore v277 v55 i256;
+        evm_return v277 32.i256;
+
+    block27:
+        v56.i256 = evm_call_value;
+        v57.i1 = is_zero v56;
+        br v57 block29 block28;
+
+    block28:
+        evm_revert 0.i256 0.i256;
+
+    block29:
+        v60.i256 = evm_calldata_size;
+        v66.i256 = sub v60 4.i256;
+        v67.i1 = slt v66 32.i256;
+        br v67 block33 block34;
+
+    block33:
+        evm_revert 0.i256 0.i256;
+
+    block34:
+        v73.i256 = evm_calldata_load 4.i256;
+        v80.i256 = shl 216.i256 v73;
+        v89.*i8 = evm_malloc 32.i256;
+        v90.i256 = ptr_to_int v89 i256;
+        mstore v90 v80 i256;
+        v93.i256 = evm_keccak256 v90 5.i256;
+        v278.*i8 = evm_malloc 32.i256;
+        v279.i256 = ptr_to_int v278 i256;
+        mstore v279 v93 i256;
+        evm_return v279 32.i256;
+
+    block45:
+        v94.i256 = evm_call_value;
+        v95.i1 = is_zero v94;
+        br v95 block47 block46;
+
+    block46:
+        evm_revert 0.i256 0.i256;
+
+    block47:
+        v98.i256 = evm_calldata_size;
+        v104.i256 = sub v98 4.i256;
+        v105.i1 = slt v104 64.i256;
+        br v105 block51 block52;
+
+    block51:
+        evm_revert 0.i256 0.i256;
+
+    block52:
+        v127.*i8 = evm_malloc 64.i256;
+        v128.i256 = ptr_to_int v127 i256;
+        v111.i256 = evm_calldata_load 4.i256;
+        mstore v128 v111 i256;
+        v132.i256 = add v128 32.i256;
+        v113.i256 = evm_calldata_load 36.i256;
+        mstore v132 v113 i256;
+        v133.i256 = evm_keccak256 v128 64.i256;
+        v280.*i8 = evm_malloc 32.i256;
+        v281.i256 = ptr_to_int v280 i256;
+        mstore v281 v133 i256;
+        evm_return v281 32.i256;
+
+    block63:
+        v134.i256 = evm_call_value;
+        v135.i1 = is_zero v134;
+        br v135 block65 block64;
+
+    block64:
+        evm_revert 0.i256 0.i256;
+
+    block65:
+        v138.i256 = evm_calldata_size;
+        v144.i256 = sub v138 4.i256;
+        v146.i1 = slt v144 96.i256;
+        br v146 block69 block70;
+
+    block69:
+        evm_revert 0.i256 0.i256;
+
+    block70:
+        v154.i256 = evm_calldata_load 36.i256;
+        v166.i256 = shl 216.i256 v154;
+        v157.i256 = evm_calldata_load 68.i256;
+        v169.i256 = shr 40.i256 v157;
+        v171.i256 = or v166 v169;
+        v179.i256 = shl 216.i256 v157;
+        v216.*i8 = evm_malloc 96.i256;
+        v217.i256 = ptr_to_int v216 i256;
+        v152.i256 = evm_calldata_load 4.i256;
+        mstore v217 v152 i256;
+        v221.i256 = add v217 32.i256;
+        mstore v221 v171 i256;
+        v223.i256 = add v217 64.i256;
+        mstore v223 v179 i256;
+        v224.i256 = evm_keccak256 v217 69.i256;
+        v282.*i8 = evm_malloc 32.i256;
+        v283.i256 = ptr_to_int v282 i256;
+        mstore v283 v224 i256;
+        evm_return v283 32.i256;
+}
+
+
+object @Hashes {
+    section init {
+        entry %contract_init_root_Hashes;
+        embed .runtime as &Hashes_runtime;
+    }
+    section runtime {
+        entry %contract_runtime_root_Hashes;
+        data $const_region_0;
+        data $const_region_1;
+        data $const_region_2;
+        data $const_region_3;
+    }
+}
