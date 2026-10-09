@@ -81,30 +81,47 @@ fn cyclic_trait_ref_diag<'db>(span: DynLazySpan<'db>, context: &str) -> TyDiagCo
     .into()
 }
 
-/// The diagnostic for a written trait bound whose path did not lower to a
-/// trait.
-fn trait_bound_lowering_diag<'db>(
+/// The diagnostics for a written trait bound that did not lower to a trait.
+/// A path that fails to resolve inside the bound's arguments, such as
+/// `Missing` in `Needs<Missing>`, is reported where it is written.
+fn trait_bound_lowering_diags<'db>(
     db: &'db dyn HirAnalysisDb,
     trait_ref: crate::hir_def::TraitRefId<'db>,
     span: crate::span::params::LazyTraitRefSpan<'db>,
     error: ty::trait_lower::TraitRefLowerError<'db>,
     context: &str,
-) -> Option<TyDiagCollection<'db>> {
+    scope: crate::hir_def::scope_graph::ScopeId<'db>,
+    assumptions: ty::trait_resolution::PredicateListId<'db>,
+) -> Vec<TyDiagCollection<'db>> {
     use name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
     use ty::trait_lower::TraitRefLowerError;
 
+    let Some(path) = trait_ref.path(db).to_opt() else {
+        return Vec::new();
+    };
     match error {
-        TraitRefLowerError::PathResError(err) => {
-            let path = trait_ref.path(db).to_opt()?;
+        TraitRefLowerError::PathResError(err)
+            if std::iter::successors(Some(path), |path| path.parent(db))
+                .any(|prefix| prefix == err.failed_at) =>
+        {
             err.into_diag(db, path, span.path(), ExpectedPathKind::Trait)
                 .map(Into::into)
+                .into_iter()
+                .collect()
         }
-        TraitRefLowerError::InvalidDomain(res) => {
-            let ident = trait_ref.path(db).to_opt()?.ident(db).to_opt()?;
-            Some(PathResDiag::ExpectedTrait(span.path().into(), ident, res.kind_name()).into())
+        TraitRefLowerError::PathResError(_) => {
+            ty::ty_error::collect_trait_ref_arg_errors(db, scope, trait_ref, span, assumptions)
         }
-        TraitRefLowerError::Cycle => Some(cyclic_trait_ref_diag(span.path().into(), context)),
-        TraitRefLowerError::UnsafeLocalBoundBlanketImpl | TraitRefLowerError::Ignored => None,
+        TraitRefLowerError::InvalidDomain(res) => path
+            .ident(db)
+            .to_opt()
+            .map(|ident| {
+                PathResDiag::ExpectedTrait(span.path().into(), ident, res.kind_name()).into()
+            })
+            .into_iter()
+            .collect(),
+        TraitRefLowerError::Cycle => vec![cyclic_trait_ref_diag(span.path().into(), context)],
+        TraitRefLowerError::UnsafeLocalBoundBlanketImpl | TraitRefLowerError::Ignored => Vec::new(),
     }
 }
 
@@ -247,8 +264,7 @@ impl<'db> WherePredicateBoundView<'db> {
         db: &'db dyn HirAnalysisDb,
         subject: ty::ty_def::TyId<'db>,
     ) -> Vec<TyDiagCollection<'db>> {
-        use name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
-        use ty::trait_lower::{self, TraitRefLowerError};
+        use ty::trait_lower;
         use ty::trait_resolution::check_trait_inst_wf;
 
         let mut out = Vec::new();
@@ -300,28 +316,15 @@ impl<'db> WherePredicateBoundView<'db> {
                     out.push(diag);
                 }
             }
-            Err(TraitRefLowerError::PathResError(err)) => {
-                if let Some(path) = tr.path(db).to_opt()
-                    && let Some(diag) =
-                        err.into_diag(db, path, span.path(), ExpectedPathKind::Trait)
-                {
-                    out.push(diag.into());
-                }
-            }
-            Err(TraitRefLowerError::InvalidDomain(res)) => {
-                if let Some(path) = tr.path(db).to_opt()
-                    && let Some(ident) = path.ident(db).to_opt()
-                {
-                    out.push(
-                        PathResDiag::ExpectedTrait(span.path().into(), ident, res.kind_name())
-                            .into(),
-                    );
-                }
-            }
-            Err(TraitRefLowerError::Cycle) => {
-                out.push(cyclic_trait_ref_diag(span.path().into(), "trait bound"));
-            }
-            Err(TraitRefLowerError::UnsafeLocalBoundBlanketImpl | TraitRefLowerError::Ignored) => {}
+            Err(error) => out.extend(trait_bound_lowering_diags(
+                db,
+                tr,
+                span,
+                error,
+                "trait bound",
+                scope,
+                assumptions,
+            )),
         }
 
         out
@@ -488,24 +491,15 @@ impl<'db> Trait<'db> {
                 ) else {
                     continue;
                 };
-                // Only a failure on the bound's own path is reported here; a
-                // failure inside its generic arguments has no segment of this
-                // path to point at.
-                if let ty::trait_lower::TraitRefLowerError::PathResError(err) = &error
-                    && !trait_ref.path(db).to_opt().is_some_and(|path| {
-                        std::iter::successors(Some(path), |path| path.parent(db))
-                            .any(|prefix| prefix == err.failed_at)
-                    })
-                {
-                    continue;
-                }
                 let span = assoc.span().bounds().bound(bound.index()).trait_bound();
-                diags.extend(trait_bound_lowering_diag(
+                diags.extend(trait_bound_lowering_diags(
                     db,
                     trait_ref,
                     span,
                     error,
                     "associated type bound",
+                    scope,
+                    assumptions,
                 ));
             }
         }
@@ -1638,12 +1632,14 @@ impl<'db> GenericParamOwner<'db> {
                         }
                     }
                     Err(error) => {
-                        out.extend(trait_bound_lowering_diag(
+                        out.extend(trait_bound_lowering_diags(
                             db,
                             *tr,
                             span,
                             error,
                             "trait bound",
+                            scope,
+                            assumptions,
                         ));
                     }
                 }

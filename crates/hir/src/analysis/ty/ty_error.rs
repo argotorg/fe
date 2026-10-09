@@ -143,6 +143,26 @@ fn collect_ty_lower_errors_in_mode<'db>(
     vis.diags
 }
 
+/// Every error in the types written as arguments of a trait reference, each
+/// at its own span, such as `Missing` in `T: Needs<Missing>`.
+pub(crate) fn collect_trait_ref_arg_errors<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    trait_ref: crate::hir_def::TraitRefId<'db>,
+    span: LazyTraitRefSpan<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    let mut visitor = HirTyErrVisitor {
+        db,
+        assumptions,
+        diags: Vec::new(),
+        const_bodies: ConstBodyLowering::Eager,
+    };
+    let mut ctxt = VisitorCtxt::new(db, scope, span);
+    visitor.visit_trait_ref_args(&mut ctxt, trait_ref);
+    visitor.diags
+}
+
 struct HirTyErrVisitor<'db> {
     db: &'db dyn HirAnalysisDb,
     diags: Vec<TyDiagCollection<'db>>,
@@ -151,6 +171,21 @@ struct HirTyErrVisitor<'db> {
 }
 
 impl<'db> HirTyErrVisitor<'db> {
+    /// Visits the types written as arguments of `trait_ref`, but not its path,
+    /// which names a trait rather than a type.
+    fn visit_trait_ref_args(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyTraitRefSpan<'db>>,
+        trait_ref: crate::core::hir_def::TraitRefId<'db>,
+    ) {
+        if let Some(path) = trait_ref.path(self.db).to_opt()
+            && let Some(span) = ctxt.span()
+        {
+            let mut path_ctxt = VisitorCtxt::new(self.db, ctxt.scope(), span.path());
+            walk_path(self, &mut path_ctxt, path);
+        }
+    }
+
     fn path_context(&self, path: PathId<'db>, scope: ScopeId<'db>) -> LoweringContext<'db> {
         LoweringContext::for_const_bodies(
             HoleAnchor::TemplatePath {

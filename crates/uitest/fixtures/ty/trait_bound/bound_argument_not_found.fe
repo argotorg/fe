@@ -1,0 +1,10 @@
+// A name that does not resolve inside a bound's arguments is reported where
+// it is written, in every place a bound can be written.
+trait Needs<V> {}
+struct S<T: Needs<Missing2>> {}
+fn f<T: Needs<Missing3>>() {}
+fn g<T>() where T: Needs<Missing4> {}
+impl<T: Needs<Missing5>> S<T> {}
+trait Tr {
+    type Out: Needs<Missing6>
+}
