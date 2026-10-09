@@ -55,6 +55,7 @@ impl<const M: usize> ByteWriter<M> {
 trait AsBytes {
     const N: usize
     const fn append_to<const M: usize>(self, _ out: mut ByteWriter<M>)
+    #[inline(always)]
     const fn as_bytes(self) -> PackedBytes<Self::N> {
         let mut out = ByteWriter<Self::N>::new()
         out.append(self)

@@ -90,6 +90,7 @@ impl super::Parse for FuncSignatureScope {
             SyntaxKind::ConstKw,
             SyntaxKind::PubKw,
             SyntaxKind::UnsafeKw,
+            SyntaxKind::Pound,
             SyntaxKind::DocComment,
             SyntaxKind::DocCommentAttr,
             SyntaxKind::Newline,
