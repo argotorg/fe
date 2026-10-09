@@ -215,8 +215,20 @@ fn layout_entry_markdown(db: &DriverDataBase, entry: &ContractLayoutEntry<'_>) -
             "inferred parameter"
         }
     };
+    // A packed field names the bytes of its slot, counted from the low-order
+    // end like Solidity's storage layout `offset`.
+    let lane = entry
+        .lane
+        .map(|lane| {
+            format!(
+                " bytes {}..{}",
+                lane.byte_offset,
+                u16::from(lane.byte_offset) + u16::from(lane.byte_width)
+            )
+        })
+        .unwrap_or_default();
     format!(
-        "- `{value}`{}: `{}` ({kind}, `{}`)",
+        "- `{value}`{lane}{}: `{}` ({kind}, `{}`)",
         dimensions.unwrap_or_default(),
         entry.path.display(db),
         entry.ty.pretty_print(db),

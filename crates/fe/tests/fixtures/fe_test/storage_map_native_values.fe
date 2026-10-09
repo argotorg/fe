@@ -1,0 +1,220 @@
+use std::evm::{Evm, RawStorage, SolMapping, StorageMap}
+
+struct Wide { price: u256, id: u256 }
+struct Packed { price: u128, id: u128 }
+struct Nested { pair: Packed, values: [u256; 2], signed: i16, flag: bool }
+struct Owned { value: u256 }
+impl Copy for Wide {}
+impl Copy for Packed {}
+impl Copy for Nested {}
+
+const SIGNED_SALT: u256 = 0x5167
+const ONES: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+fn owned_value() -> u256 uses (value: Owned) {
+    value.value
+}
+
+msg NativeMsg {
+    #[selector = 1]
+    WideRoundTrip {},
+    #[selector = 2]
+    PackedRoundTrip {},
+    #[selector = 3]
+    NestedRoundTrip {},
+    #[selector = 4]
+    OwnedWrite {},
+    #[selector = 5]
+    SignedRoundTrip {},
+    #[selector = 6]
+    SignedRaw { key: u256 } -> u256,
+    #[selector = 7]
+    SignedLegacyWord {},
+}
+
+pub contract NativeValues {
+    mut wide: StorageMap<u256, Wide>,
+    mut packed: StorageMap<u256, Packed>,
+    mut nested: StorageMap<u256, Nested>,
+    mut owned: StorageMap<u256, Owned>,
+    mut signed: StorageMap<u256, i8, SIGNED_SALT>,
+
+    recv NativeMsg {
+        WideRoundTrip {} uses (mut wide) {
+            let large: u256 = 1 << 200
+            wide.set(key: 7, value: Wide { price: large, id: large + 3 })
+            let got = wide.ptr(7).read()
+            assert(got.price == large && got.id == large + 3)
+            wide.mut_ptr(7).write(Wide { price: large + 4, id: large + 5 })
+            let got = wide.get(7)
+            assert(got.price == large + 4 && got.id == large + 5)
+            let empty = wide.get(8)
+            assert(empty.price == 0 && empty.id == 0)
+        }
+        PackedRoundTrip {} uses (mut packed) {
+            packed.set(key: 7, value: Packed { price: 2, id: 3 })
+            let got = packed.ptr(7).read()
+            assert(got.price == 2 && got.id == 3)
+            packed.mut_ptr(7).write(Packed { price: 4, id: 5 })
+            let got = packed.get(7)
+            assert(got.price == 4 && got.id == 5)
+        }
+        NestedRoundTrip {} uses (mut nested) {
+            nested
+                .set(
+                    key: 7,
+                    value: Nested {
+                        pair: Packed { price: 2, id: 3 },
+                        values: [4, 5],
+                        signed: -6,
+                        flag: true,
+                    },
+                )
+            let got = nested.ptr(7).read()
+            assert(got.pair.price == 2 && got.pair.id == 3)
+            assert(got.values[0] == 4 && got.values[1] == 5)
+            assert(got.signed == -6 && got.flag)
+            nested
+                .mut_ptr(7)
+                .write(
+                    Nested {
+                        pair: Packed { price: 7, id: 8 },
+                        values: [9, 10],
+                        signed: -11,
+                        flag: false,
+                    },
+                )
+            let got = nested.get(7)
+            assert(got.pair.price == 7 && got.pair.id == 8)
+            assert(got.values[0] == 9 && got.values[1] == 10)
+            assert(got.signed == -11 && !got.flag)
+        }
+        OwnedWrite {} uses (mut owned) {
+            // Writing a value does not require Copy; whole-value reads do.
+            let value = Owned { value: 42 }
+            owned.set(key: 7, value)
+            let got = with (owned.ptr(7)) {
+                owned_value()
+            }
+            assert(got == 42)
+        }
+        SignedRoundTrip {} uses (mut signed) {
+            let negative: i8 = -1
+            let minimum: i8 = -128
+            let maximum: i8 = 127
+            signed.set(key: 1, value: negative)
+            signed.set(key: 2, value: minimum)
+            signed.set(key: 3, value: maximum)
+            assert(signed.get(1) == negative)
+            assert(signed.get(2) == minimum)
+            assert(signed.get(3) == maximum)
+        }
+        SignedRaw { key } -> u256 uses (raw: RawStorage) {
+            raw.sload(SolMapping::at(SIGNED_SALT).slot_of(key))
+        }
+        SignedLegacyWord {} uses (raw: mut RawStorage, signed) {
+            // Before native storage values, a negative value was stored
+            // sign-extended to the whole word. Such a word still reads back
+            // as the same value.
+            raw.sstore(
+                slot: SolMapping::at(SIGNED_SALT).slot_of(4 as u256),
+                value: ONES,
+            )
+            let negative: i8 = -1
+            assert(signed.get(4) == negative)
+        }
+    }
+}
+
+#[test]
+fn wide_values_use_one_representation() uses (evm: mut Evm) {
+    let c = evm.create2<NativeValues>(value: 0, args: (), salt: 1)
+    assert(c.inner != 0)
+    evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: NativeMsg::WideRoundTrip {},
+    )
+}
+#[test]
+fn packed_values_use_one_representation() uses (evm: mut Evm) {
+    let c = evm.create2<NativeValues>(value: 0, args: (), salt: 2)
+    assert(c.inner != 0)
+    evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: NativeMsg::PackedRoundTrip {},
+    )
+}
+#[test]
+fn nested_values_use_one_representation() uses (evm: mut Evm) {
+    let c = evm.create2<NativeValues>(value: 0, args: (), salt: 3)
+    assert(c.inner != 0)
+    evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: NativeMsg::NestedRoundTrip {},
+    )
+}
+#[test]
+fn set_accepts_non_copy_values() uses (evm: mut Evm) {
+    let c = evm.create2<NativeValues>(value: 0, args: (), salt: 4)
+    assert(c.inner != 0)
+    evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: NativeMsg::OwnedWrite {},
+    )
+}
+#[test]
+fn narrow_signed_values_store_their_own_bytes() uses (evm: mut Evm) {
+    let c = evm.create2<NativeValues>(value: 0, args: (), salt: 5)
+    assert(c.inner != 0)
+    evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: NativeMsg::SignedRoundTrip {},
+    )
+    // Like Solidity's `mapping(uint256 => int8)`: two's-complement bytes,
+    // not sign-extended to the whole slot.
+    assert(
+        evm.call(
+                addr: c,
+                gas: 1000000,
+                value: 0,
+                message: NativeMsg::SignedRaw { key: 1 },
+            ) == 0xff,
+    )
+    assert(
+        evm.call(
+                addr: c,
+                gas: 1000000,
+                value: 0,
+                message: NativeMsg::SignedRaw { key: 2 },
+            ) == 0x80,
+    )
+    assert(
+        evm.call(
+                addr: c,
+                gas: 1000000,
+                value: 0,
+                message: NativeMsg::SignedRaw { key: 3 },
+            ) == 0x7f,
+    )
+}
+#[test]
+fn sign_extended_legacy_words_read_back() uses (evm: mut Evm) {
+    let c = evm.create2<NativeValues>(value: 0, args: (), salt: 6)
+    assert(c.inner != 0)
+    evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: NativeMsg::SignedLegacyWord {},
+    )
+}

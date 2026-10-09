@@ -1,0 +1,157 @@
+use std::evm::{Evm, RawStorage, SolMapping, StorageMap}
+
+// ---------------------------------------------------------------------------
+// Struct values in a StorageMap, accessed through entry pointers.
+// ---------------------------------------------------------------------------
+
+/// What a walker did on one day.
+struct DaySummary {
+    steps: u256,
+    distance_m: u256,
+    calories: u256,
+}
+
+impl Copy for DaySummary {}
+
+fn add_steps(_ steps: u256) uses (day: mut DaySummary) {
+    day.steps += steps
+}
+
+fn steps() -> u256 uses (day: DaySummary) {
+    day.steps
+}
+
+fn calories() -> u256 uses (day: DaySummary) {
+    day.calories
+}
+
+const DAYS_SALT: u256 = 0xd4f5
+
+pub struct Diary {
+    pub days: StorageMap<u256, DaySummary, DAYS_SALT>,
+    pub walks: u256,
+}
+
+msg DiaryMsg {
+    #[selector = 1]
+    Record { day: u256, steps: u256, distance_m: u256, calories: u256 },
+    #[selector = 2]
+    AddSteps { day: u256, steps: u256 },
+    #[selector = 3]
+    Steps { day: u256 } -> u256,
+    #[selector = 4]
+    Calories { day: u256 } -> u256,
+    #[selector = 5]
+    Total { day: u256 } -> u256,
+    #[selector = 6]
+    RawWord { day: u256, index: u256 } -> u256,
+    #[selector = 7]
+    AddStepsCountingWalks { day: u256, steps: u256 } -> u256,
+    #[selector = 8]
+    StepsCountingWalks { day: u256 } -> u256,
+}
+
+pub contract StepDiary {
+    mut diary: Diary,
+
+    recv DiaryMsg {
+        Record { day, steps, distance_m, calories } uses (mut diary) {
+            // Replace the whole value.
+            diary.days.mut_ptr(day).write(DaySummary { steps, distance_m, calories })
+        }
+        AddSteps { day, steps } uses (mut diary) {
+            // Update one field in place: one SLOAD and one SSTORE.
+            let mut entry = diary.days.mut_ptr(day)
+            with (entry) {
+                add_steps(steps)
+            }
+        }
+        Steps { day } -> u256 uses (diary) {
+            // Read one field: one SLOAD.
+            with (diary.days.ptr(day)) {
+                steps()
+            }
+        }
+        Calories { day } -> u256 uses (diary) {
+            with (diary.days.ptr(day)) {
+                calories()
+            }
+        }
+        Total { day } -> u256 uses (diary) {
+            // Read the whole value.
+            let summary = diary.days.ptr(day).read()
+            summary.steps + summary.distance_m + summary.calories
+        }
+        RawWord { day, index } -> u256 uses (raw: RawStorage) {
+            // Solidity layout: the value starts at keccak256(key ++ slot).
+            raw.sload(SolMapping::at(DAYS_SALT).slot_of(day) + index)
+        }
+        AddStepsCountingWalks { day, steps } -> u256 uses (mut diary) {
+            // A borrow of a plain field survives a write through an entry
+            // pointer: map entries never overlap contract fields.
+            let walks = mut diary.walks
+            let mut entry = diary.days.mut_ptr(day)
+            with (entry) {
+                add_steps(steps)
+            }
+            walks += 1
+            walks
+        }
+        StepsCountingWalks { day } -> u256 uses (mut diary) {
+            let walks = mut diary.walks
+            let today = with (diary.days.ptr(day)) {
+                steps()
+            }
+            walks += 1
+            today
+        }
+    }
+}
+
+#[test]
+fn test_struct_entries() uses (evm: mut Evm) {
+    let diary = evm.create2<StepDiary>(value: 0, args: (), salt: 1)
+    assert(diary.inner != 0)
+
+    evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Record { day: 3, steps: 4000, distance_m: 3000, calories: 200 })
+    evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Record { day: 4, steps: 8000, distance_m: 6000, calories: 400 })
+    evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::AddSteps { day: 3, steps: 2500 })
+
+    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Steps { day: 3 }) == 6500)
+    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Calories { day: 3 }) == 200)
+    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Total { day: 3 }) == 9700)
+    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Steps { day: 4 }) == 8000)
+
+    // A never-written key reads as zero.
+    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Total { day: 5 }) == 0)
+
+    // Updating a field of a missing entry starts from zero.
+    evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::AddSteps { day: 6, steps: 100 })
+    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Steps { day: 6 }) == 100)
+    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Calories { day: 6 }) == 0)
+}
+
+#[test]
+fn test_entry_layout_matches_solidity() uses (evm: mut Evm) {
+    let diary = evm.create2<StepDiary>(value: 0, args: (), salt: 2)
+    assert(diary.inner != 0)
+
+    evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Record { day: 7, steps: 11, distance_m: 22, calories: 33 })
+
+    // Fields occupy consecutive slots from keccak256(key ++ slot), in order.
+    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::RawWord { day: 7, index: 0 }) == 11)
+    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::RawWord { day: 7, index: 1 }) == 22)
+    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::RawWord { day: 7, index: 2 }) == 33)
+    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::RawWord { day: 7, index: 3 }) == 0)
+}
+
+#[test]
+fn test_entries_stay_separate_from_fields() uses (evm: mut Evm) {
+    let diary = evm.create2<StepDiary>(value: 0, args: (), salt: 3)
+    assert(diary.inner != 0)
+
+    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::AddStepsCountingWalks { day: 1, steps: 10 }) == 1)
+    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::AddStepsCountingWalks { day: 1, steps: 5 }) == 2)
+    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::StepsCountingWalks { day: 1 }) == 15)
+    assert(evm.call(addr: diary, gas: 10000000, value: 0, message: DiaryMsg::Steps { day: 1 }) == 15)
+}

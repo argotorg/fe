@@ -219,13 +219,26 @@ fn wildcard_storage_map_root_reports_runtime_root_error(fixture: Fixture<&str>) 
     );
 }
 
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "packed_storage_field_native_reference_is_rejected.fe")]
+fn packed_storage_field_native_reference_is_rejected(fixture: Fixture<&str>) {
+    let err = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod)
+            .expect_err("a native reference to a packed storage field should be rejected")
+    });
+    let message = err.to_string();
+    assert!(
+        message.contains("cannot store a reference to a storage field packed into a word"),
+        "unexpected error message:\n{message}"
+    );
+}
+
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "explicit_storage_map_root_compiles_without_a_runtime_provider.fe")]
 fn explicit_storage_map_root_compiles_without_a_runtime_provider(fixture: Fixture<&str>) {
     let output = with_top_mod_for_source(&fixture, |db, top_mod| {
         emit_module_sonatina_ir(db, top_mod).expect("explicit root should compile")
     });
     assert!(
-        output.contains("call %storagemap_get_word_with_salt v0 0.i256"),
+        output.contains("call %storagemap_storage_slot_with_salt v0 0.i256"),
         "explicit root was not lowered as the concrete StorageMap salt:\n{output}"
     );
 }
@@ -239,7 +252,7 @@ fn inferred_storage_map_roots_skip_explicit_contract_salts(fixture: Fixture<&str
     for salt in ["0.i256", "1.i256", "2.i256"] {
         assert!(
             output.lines().any(|line| {
-                line.contains("call %storagemap_get_word_with_salt") && line.contains(salt)
+                line.contains("call %storagemap_storage_slot_with_salt") && line.contains(salt)
             }),
             "missing StorageMap salt {salt}:\n{output}"
         );
@@ -443,28 +456,21 @@ fn repeated_generic_storage_fields_lower_to_distinct_slots(fixture: Fixture<&str
         emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit")
     });
 
-    // `pair.left.set` and `pair.right.get` each lower to a storage-map access
-    // salted by the field's root slot. The two salts must differ. The salt is
-    // the literal `N.i256` operand on the `call %storagemap_*_with_salt` line.
-    let salt = |op: &str| -> String {
-        let needle = format!("call %storagemap_{op}_word_with_salt");
-        let line = ir
-            .lines()
-            .find(|l| l.contains(&needle))
-            .unwrap_or_else(|| panic!("missing {needle}:\n{ir}"));
-        line.split_whitespace()
-            .find_map(|tok| {
-                tok.trim_end_matches(';')
-                    .strip_suffix(".i256")
-                    .filter(|n| n.parse::<u64>().is_ok())
-            })
-            .unwrap_or_else(|| panic!("no salt literal on line `{line}`"))
-            .to_string()
-    };
-    let set_salt = salt("set");
-    let get_salt = salt("get");
-    assert_ne!(
-        set_salt, get_salt,
-        "left/right storage roots aliased (both salt {set_salt})"
-    );
+    // The read and write entry pointers derive their addresses from the
+    // two field roots. The concrete salts passed to the hash must differ.
+    let salts: Vec<_> = ir
+        .lines()
+        .filter(|line| line.contains("call %storagemap_storage_slot_with_salt"))
+        .map(|line| {
+            line.split_whitespace()
+                .find_map(|tok| {
+                    tok.trim_end_matches(';')
+                        .strip_suffix(".i256")
+                        .filter(|n| n.parse::<u64>().is_ok())
+                })
+                .unwrap_or_else(|| panic!("no salt literal on line `{line}`"))
+        })
+        .collect();
+    assert_eq!(salts.len(), 2, "expected both map entry roots:\n{ir}");
+    assert_ne!(salts[0], salts[1], "left/right storage roots aliased");
 }

@@ -1,0 +1,38 @@
+use std::evm::StorageMap
+
+// `ptr` hands out a read-only place; writing needs `mut_ptr`, which in turn
+// needs a mutable map.
+
+struct Position {
+    owner: u256,
+    debt: u256,
+}
+
+fn bump_debt() uses (p: mut Position) {
+    p.debt += 1
+}
+
+fn debt() -> u256 uses (p: Position) {
+    p.debt
+}
+
+type Positions = StorageMap<u256, Position, 0>
+
+pub fn ok_read(_ m: Positions, key: u256) -> u256 {
+    with (m.ptr(key)) { debt() }
+}
+
+pub fn ok_write(_ m: mut Positions, key: u256) {
+    let mut p = m.mut_ptr(key)
+    with (p) { bump_debt() }
+}
+
+pub fn bad_write_through_read_pointer(_ m: mut Positions, key: u256) {
+    let mut p = m.ptr(key)
+    with (p) { bump_debt() }
+}
+
+pub fn bad_mut_ptr_on_immutable_map(_ m: Positions, key: u256) {
+    let mut p = m.mut_ptr(key)
+    with (p) { bump_debt() }
+}

@@ -399,6 +399,7 @@ fn allocation_cell<'db>(
             },
             occurrence: AddressOccurrence::Summary(instance),
             arguments: Box::new([]),
+            provenance: AddressProvenance::Raw,
         },
     );
     RegionRoot::External(ExternalSource::memory(
@@ -1490,6 +1491,7 @@ fn unknown_alias_stores_retain_origins_across_offsets_and_respect_address_spaces
                 },
                 occurrence: AddressOccurrence::Summary(choice),
                 arguments: Box::new([]),
+                provenance: AddressProvenance::Raw,
             },
         ))
     };

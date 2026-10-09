@@ -893,12 +893,12 @@ mod tests {
     };
 
     #[test]
-    fn address_has_wordrepr_impl_in_std_trait_env() {
+    fn address_has_storage_key_impl_in_std_trait_env() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
-            Utf8PathBuf::from("address_has_wordrepr_impl_in_std_trait_env.fe"),
+            Utf8PathBuf::from("address_has_storage_key_impl_in_std_trait_env.fe"),
             r#"
-use std::evm::word::WordRepr
+use std::evm::storage_map::StorageKey
 
 fn test_it() {
     let _ = Address::zero()
@@ -923,9 +923,9 @@ fn test_it() {
             PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
             res => panic!("expected Address to resolve to a type, got {res:?}"),
         };
-        let wordrepr = match resolve_path(
+        let storage_key = match resolve_path(
             &db,
-            PathId::from_ident(&db, IdentId::new(&db, "WordRepr".to_string())),
+            PathId::from_ident(&db, IdentId::new(&db, "StorageKey".to_string())),
             scope,
             assumptions,
             false,
@@ -933,7 +933,7 @@ fn test_it() {
         .unwrap()
         {
             PathRes::Trait(inst) => inst.def(&db),
-            res => panic!("expected WordRepr to resolve to a trait, got {res:?}"),
+            res => panic!("expected StorageKey to resolve to a trait, got {res:?}"),
         };
 
         let std_ingot = address.ingot(&db).expect("Address should come from std");
@@ -944,22 +944,22 @@ fn test_it() {
             .collect();
 
         assert!(
-            impls.iter().any(|imp| imp.trait_def(&db) == wordrepr),
-            "expected WordRepr impl for Address, found {impl_trait_names:?}"
+            impls.iter().any(|imp| imp.trait_def(&db) == storage_key),
+            "expected StorageKey impl for Address, found {impl_trait_names:?}"
         );
     }
 
     #[test]
-    fn address_wordrepr_method_resolves_across_std_modules() {
+    fn address_storage_key_method_resolves_across_std_modules() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
-            Utf8PathBuf::from("address_wordrepr_method_resolves_across_std_modules.fe"),
+            Utf8PathBuf::from("address_storage_key_method_resolves_across_std_modules.fe"),
             r#"
-use std::evm::word::WordRepr
+use std::evm::storage_map::StorageKey
 
 fn test_it() {
     let a = Address { inner: 42 }
-    let _w = a.to_word()
+    let _len = a.encoded_len()
 }
 "#,
         );
@@ -968,10 +968,10 @@ fn test_it() {
     }
 
     #[test]
-    fn storage_map_address_value_uses_wordrepr_impl() {
+    fn storage_map_accepts_address_key_and_value() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
-            Utf8PathBuf::from("storage_map_address_value_uses_wordrepr_impl.fe"),
+            Utf8PathBuf::from("storage_map_accepts_address_key_and_value.fe"),
             r#"
 use std::evm::{RawStorage, StorageMap}
 

@@ -469,10 +469,10 @@ fn read(_ map: StorageMap<Key, u256, 7>, key: Key) -> u256 {
     assert!(
         has_access(MemoryAccessKind::Read, &|origin| matches!(
             origin,
-            ExternalOrigin::Unknown {
-                provenance: AddressProvenance::HashedStorageSlot,
-                ..
-            }
+            ExternalOrigin::OpaqueHandle(handle)
+                if handle.provenance == AddressProvenance::HashedStorageSlot
+                    && handle.contract.address_space
+                        == HandleAddressSpace::Known(ProviderAddressSpace::Storage)
         )),
         "{summary:#?}"
     );

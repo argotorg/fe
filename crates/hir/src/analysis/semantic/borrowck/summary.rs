@@ -2165,6 +2165,13 @@ impl<'db> Borrowck<'db> {
                 if !matches!(handle.occurrence, AddressOccurrence::Summary(_)) {
                     return Err(invalid("opaque source contains a callee-local occurrence"));
                 }
+                if handle.provenance == AddressProvenance::HashedStorageSlot
+                    && (matches!(external.origin, ExternalOrigin::Allocation(_))
+                        || handle.contract.address_space
+                            != HandleAddressSpace::Known(ProviderAddressSpace::Storage))
+                {
+                    return Err(invalid("hashed handle is not a storage handle"));
+                }
                 let declared = OpaqueHandleContract::for_ty(
                     db,
                     self.instance.key(db).impl_env(db).normalization_scope(db),
@@ -3737,6 +3744,7 @@ impl<'db> SignatureValues<'_, 'db> {
                             contract,
                             occurrence,
                             arguments: scope.variables().collect(),
+                            provenance: AddressProvenance::Raw,
                         },
                     ))
                 } else {
@@ -6949,6 +6957,7 @@ fn clobber(slot: *ref u256) {
                     },
                     occurrence: family,
                     arguments: Box::new([checker.index(selector)]),
+                    provenance: AddressProvenance::Raw,
                 },
             )
         };

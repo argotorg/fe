@@ -33,3 +33,14 @@ pub contract Broken {
   mut <|blocked|>good: Good,
   mut <|invalid|>bad: Bad,
 }
+
+struct Flags {
+  active: bool,
+  level: u8,
+  owner_id: u64,
+  balance: u256,
+}
+
+pub contract Packed {
+  mut <|packed|>flags: Flags,
+}

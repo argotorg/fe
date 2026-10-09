@@ -34,5 +34,4 @@ pub use storage_bytes::{self, *}
 pub use storage_map::{StorageKey, StorageMap}
 pub use storage_packed_array::{PackedBits, StoragePackedArray, ValidPackedBits}
 pub use units::{self, *}
-pub use word::{self, *}
 pub use calls::{self}

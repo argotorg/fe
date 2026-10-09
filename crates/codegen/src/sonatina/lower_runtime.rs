@@ -8,6 +8,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use common::layout::StorageLane;
 use common::origin::OriginExportKey;
 use driver::DriverDataBase;
 use hir::{
@@ -15,14 +16,14 @@ use hir::{
     hir_def::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
     projection::IndexSource,
 };
-use mir::runtime::RefKind;
+use mir::runtime::{RefKind, RefView};
 use mir::{
-    AddressSpaceKind, ArrayLayout, ConstNode, ConstRegionId, ConstScalar, IntrinsicArithBinOp,
-    Layout, LayoutId, RBlockId, RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem,
-    ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass, RuntimeFunction,
-    RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot, RuntimeMemoryLayout,
-    RuntimePackage, RuntimePlace, RuntimeSyntheticSpec, SaturatingBinOp, ScalarClass, ScalarRepr,
-    StructLayout, VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
+    AddressSpaceKind, ArrayLayout, ConstNode, ConstRegionId, ConstScalar, FieldPlacement,
+    IntrinsicArithBinOp, Layout, LayoutId, RBlockId, RExpr, RLocalId, RStmt, RTerminator,
+    ResolvedPlaceElem, ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin, RuntimeClass,
+    RuntimeFunction, RuntimeInlineHint, RuntimeInstance, RuntimeLinkage, RuntimeLocalRoot,
+    RuntimeMemoryLayout, RuntimePackage, RuntimePlace, RuntimeSyntheticSpec, SaturatingBinOp,
+    ScalarClass, ScalarRepr, VariantId, instance::RuntimeInstanceSource, resolve_runtime_place,
     scalar_raw_memory_size_bytes,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -929,6 +930,8 @@ enum PlaceTerminal<'db> {
         addr: ValueId,
         space: AddressSpaceKind,
         class: RuntimeClass<'db>,
+        /// For a packed storage field, its bytes in the word at `addr`.
+        lane: Option<PackedLane>,
     },
     Object {
         value: ValueId,
@@ -938,6 +941,39 @@ enum PlaceTerminal<'db> {
         value: ValueId,
         class: RuntimeClass<'db>,
     },
+}
+
+/// The bytes of a storage word that hold a packed scalar struct field.
+#[derive(Clone, Copy, Debug)]
+struct PackedLane {
+    lane: StorageLane,
+    /// Whether other fields share the word, so a write must preserve it.
+    shared: bool,
+}
+
+impl PackedLane {
+    fn from_placement(placement: FieldPlacement) -> Option<Self> {
+        placement.lane.map(|lane| Self {
+            lane,
+            shared: placement.shared,
+        })
+    }
+
+    fn from_view(view: &RefView<'_>) -> Option<Self> {
+        match view {
+            RefView::StorageLane(view) => Some(Self {
+                lane: view.lane(),
+                shared: view.shared,
+            }),
+            RefView::Whole | RefView::EnumVariant(_) => None,
+        }
+    }
+
+    /// Whether a reference to the whole word reaches the same scalar: a
+    /// scalar alone at the start of its word.
+    fn is_whole_word(self) -> bool {
+        !self.shared && self.lane.byte_offset == 0
+    }
 }
 
 enum Lowered<T> {
@@ -963,6 +999,7 @@ enum CopySource<'db> {
         addr: ValueId,
         space: AddressSpaceKind,
         class: RuntimeClass<'db>,
+        lane: Option<PackedLane>,
     },
 }
 
@@ -1650,6 +1687,17 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 })?;
                 let value = self.local_value(*value)?;
                 match class {
+                    // A native reference names a word, not a byte range in it.
+                    RuntimeClass::Ref {
+                        view: RefView::StorageLane(_),
+                        ..
+                    } => {
+                        return Err(LowerError::Unsupported(
+                            "cannot store a reference to a storage field packed into a word \
+                             with other fields; read or write the field directly instead"
+                                .to_string(),
+                        ));
+                    }
                     RuntimeClass::Ref {
                         kind: RefKind::Native,
                         ..
@@ -3002,11 +3050,13 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }),
             RuntimeClass::Ref {
                 kind: RefKind::Provider { space, .. },
+                view,
                 ..
             } => Ok(PlaceTerminal::Ptr {
                 addr: self.local_value(value)?,
                 space,
                 class,
+                lane: PackedLane::from_view(&view),
             }),
             RuntimeClass::AggregateValue { .. } if allow_value_carrier => {
                 Ok(PlaceTerminal::Object {
@@ -3018,6 +3068,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 addr: self.local_value(value)?,
                 space,
                 class,
+                lane: None,
             }),
             RuntimeClass::Scalar(_)
             | RuntimeClass::AggregateValue { .. }
@@ -3076,11 +3127,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             RuntimeClass::Ref {
                 kind: RefKind::Provider { space, .. },
                 pointee,
-                ..
+                view,
             } => Ok(PlaceTerminal::Ptr {
                 addr: value,
                 space: *space,
                 class: (**pointee).clone(),
+                lane: PackedLane::from_view(view),
             }),
             RuntimeClass::RawAddr {
                 space,
@@ -3089,6 +3141,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 addr: value,
                 space: *space,
                 class: pointee.target(self.module.db),
+                lane: None,
             }),
             RuntimeClass::RawAddr { pointee: None, .. } => Err(LowerError::Unsupported(
                 "cannot continue projection through an opaque raw-address carrier".to_string(),
@@ -3122,7 +3175,9 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 ConstLoad::new(self.module.inst_set(), *value),
                 self.module.ty_for_class(class)?,
             )),
-            PlaceTerminal::Ptr { addr, space, .. } => self.load_from_ptr(*addr, *space, class),
+            PlaceTerminal::Ptr {
+                addr, space, lane, ..
+            } => self.load_from_ptr_lane(*addr, *space, *lane, class),
         }
     }
 
@@ -3178,6 +3233,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 addr: self.local_value(addr)?,
                 space,
                 class,
+                lane: None,
             },
         };
 
@@ -3281,18 +3337,25 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         addr,
                         space,
                         class: base_class,
+                        lane: None,
                     },
                     ResolvedPlaceElem::Field { field, class },
-                ) => PlaceTerminal::Ptr {
-                    addr: self.offset_ptr_field_address(addr, &base_class, *field, space)?,
-                    space,
-                    class: class.clone(),
-                },
+                ) => {
+                    let placement = RuntimeMemoryLayout::for_space(self.module.db, space)
+                        .field_placement(&base_class, *field)?;
+                    PlaceTerminal::Ptr {
+                        addr: self.offset_address_unscaled(addr, placement.offset)?,
+                        space,
+                        class: class.clone(),
+                        lane: PackedLane::from_placement(placement),
+                    }
+                }
                 (
                     PlaceTerminal::Ptr {
                         addr,
                         space,
                         class: base_class,
+                        lane: None,
                     },
                     ResolvedPlaceElem::Index { index, class },
                 ) => {
@@ -3314,10 +3377,16 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         ),
                         space,
                         class: class.clone(),
+                        lane: None,
                     }
                 }
                 (
-                    PlaceTerminal::Ptr { addr, space, .. },
+                    PlaceTerminal::Ptr {
+                        addr,
+                        space,
+                        lane: None,
+                        ..
+                    },
                     ResolvedPlaceElem::VariantField {
                         variant,
                         field,
@@ -3327,6 +3396,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     addr: self.offset_ptr_variant_field_address(addr, *variant, *field, space)?,
                     space,
                     class: class.clone(),
+                    lane: None,
                 },
                 (terminal, ResolvedPlaceElem::Deref { carrier_class, .. }) => {
                     let value = self.load_terminal_value(&terminal, carrier_class)?;
@@ -3391,7 +3461,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 ConstLoad::new(self.module.inst_set(), value),
                 self.module.ty_for_class(&class)?,
             ),
-            PlaceTerminal::Ptr { addr, space, class } => self.load_from_ptr(addr, space, &class)?,
+            PlaceTerminal::Ptr {
+                addr,
+                space,
+                class,
+                lane,
+            } => self.load_from_ptr_lane(addr, space, lane, &class)?,
         }))
     }
 
@@ -3476,6 +3551,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 addr: value,
                 space,
                 class,
+                lane: None,
             },
             _ => CopySource::Value { value, class },
         })
@@ -3501,7 +3577,17 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             PlaceTerminal::Object { value, class } => CopySource::Object { value, class },
             PlaceTerminal::Const { value, class } => CopySource::Const { value, class },
-            PlaceTerminal::Ptr { addr, space, class } => CopySource::Ptr { addr, space, class },
+            PlaceTerminal::Ptr {
+                addr,
+                space,
+                class,
+                lane,
+            } => CopySource::Ptr {
+                addr,
+                space,
+                class,
+                lane,
+            },
         })
     }
 
@@ -3586,13 +3672,14 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 addr,
                 space,
                 class: source_class,
+                lane,
             } => {
                 if matches!(source_class, RuntimeClass::AggregateValue { .. }) {
                     return Err(LowerError::Internal(format!(
                         "leaf ptr copy source must not stay aggregate-valued: source={source_class:?} target={class:?}",
                     )));
                 }
-                self.load_from_ptr(*addr, *space, class)?
+                self.load_from_ptr_lane(*addr, *space, *lane, class)?
             }
         })
     }
@@ -3667,11 +3754,16 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                             ),
                             class: src_field.clone(),
                         },
-                        CopySource::Ptr { addr, space, .. } => CopySource::Ptr {
-                            addr: self.offset_ptr_struct_field_address(*addr, &src, idx, *space)?,
-                            space: *space,
-                            class: src_field.clone(),
-                        },
+                        CopySource::Ptr { addr, space, .. } => {
+                            let placement = RuntimeMemoryLayout::for_space(self.module.db, *space)
+                                .struct_field_placement(&src, idx)?;
+                            CopySource::Ptr {
+                                addr: self.offset_address_unscaled(*addr, placement.offset)?,
+                                space: *space,
+                                class: src_field.clone(),
+                                lane: PackedLane::from_placement(placement),
+                            }
+                        }
                     };
                     self.copy_source_into_object(field_source, dst_field, field_object)?;
                 }
@@ -3713,6 +3805,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                             addr: self.offset_ptr_array_elem_address(*addr, &src, idx, *space)?,
                             space: *space,
                             class: src.elem.clone(),
+                            lane: None,
                         },
                     };
                     self.copy_source_into_object(elem_source, &dst.elem, elem_object)?;
@@ -3993,6 +4086,25 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     "borrowing const-backed places requires a const-backed destination".to_string(),
                 ))
             }
+            PlaceTerminal::Ptr {
+                lane: Some(lane), ..
+            } if !lane.is_whole_word()
+                && !dst.is_some_and(|dst| {
+                    matches!(
+                        self.body.value_class(dst),
+                        Some(RuntimeClass::Ref {
+                            view: RefView::StorageLane(view),
+                            ..
+                        }) if view.lane() == lane.lane
+                    )
+                }) =>
+            {
+                Err(LowerError::Unsupported(
+                    "cannot reference a storage field packed into a word with other fields \
+                     from here; read or write the field directly instead"
+                        .to_string(),
+                ))
+            }
             PlaceTerminal::StackPtr { addr, .. } | PlaceTerminal::Ptr { addr, .. } => {
                 if let Some(dst) = dst
                     && matches!(
@@ -4039,8 +4151,13 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     .insert_inst_no_result(Mstore::new(self.module.inst_set(), addr, src, ty));
                 Ok(Lowered::Value(()))
             }
-            PlaceTerminal::Ptr { addr, space, class } => {
-                self.store_to_ptr(addr, space, &class, src)?;
+            PlaceTerminal::Ptr {
+                addr,
+                space,
+                class,
+                lane,
+            } => {
+                self.store_to_ptr_lane(addr, space, lane, &class, src)?;
                 Ok(Lowered::Value(()))
             }
             PlaceTerminal::Object { value, class } => {
@@ -4091,10 +4208,15 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             PlaceTerminal::Const { .. } => Err(LowerError::Unsupported(
                 "cannot copy into const-backed places".to_string(),
             )),
-            PlaceTerminal::Ptr { addr, space, .. } => {
+            PlaceTerminal::Ptr {
+                addr, space, lane, ..
+            } => {
                 let source = self.copy_source_for_local(src, src_value)?;
                 let value = self.copy_source_value(source, &dst_class)?;
-                self.copy_to_ptr(addr, space, &dst_class, value)?;
+                match lane {
+                    Some(_) => self.store_to_ptr_lane(addr, space, lane, &dst_class, value)?,
+                    None => self.copy_to_ptr(addr, space, &dst_class, value)?,
+                }
                 Ok(Lowered::Value(()))
             }
         }
@@ -4135,6 +4257,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             RuntimeClass::AggregateValue { layout } => match layout.data(self.module.db) {
                 Layout::Struct(data) => {
+                    // Packed fields of one word are combined and stored once.
+                    // The struct owns all of its words, so the word's other
+                    // bytes are padding and need not be read first.
+                    let mut packed: Option<(u64, ValueId)> = None;
                     for (idx, field) in data.fields.iter().enumerate() {
                         let field_value = self.extract_aggregate_field(src, idx, field)?;
                         let expected_ty = self.module.ty_for_class(field)?;
@@ -4145,8 +4271,53 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                                 self.fb.type_of(src)
                             )));
                         }
-                        let field_addr = self.referent_field_address(addr, memory, class, idx)?;
-                        self.copy_memory_value(field_addr, memory, field, field_value)?;
+                        let space = match memory {
+                            ReferentLayout::Object => {
+                                let field_addr =
+                                    self.referent_field_address(addr, memory, class, idx)?;
+                                self.copy_memory_value(field_addr, memory, field, field_value)?;
+                                continue;
+                            }
+                            ReferentLayout::Raw(space) => space,
+                        };
+                        let placement = RuntimeMemoryLayout::for_space(self.module.db, space)
+                            .struct_field_placement(&data, idx)?;
+                        // A field without a lane at the word's offset is
+                        // zero-sized and does not end the word.
+                        if let Some((offset, word)) = packed
+                            && placement.offset != offset
+                        {
+                            let word_addr = self.offset_address_unscaled(addr, offset)?;
+                            self.store_word(word_addr, space, word)?;
+                            packed = None;
+                        }
+                        match (placement.lane, field) {
+                            (Some(lane), RuntimeClass::Scalar(scalar)) => {
+                                let bits = self.packed_scalar_bits(field_value, lane, scalar)?;
+                                let word = match packed {
+                                    Some((_, word)) => self.fb.insert_inst(
+                                        Or::new(self.module.inst_set(), word, bits),
+                                        Type::I256,
+                                    ),
+                                    None => bits,
+                                };
+                                packed = Some((placement.offset, word));
+                            }
+                            (Some(_), _) => {
+                                return Err(LowerError::Internal(format!(
+                                    "packed storage lane on a non-scalar field: {field:?}"
+                                )));
+                            }
+                            (None, _) => {
+                                let field_addr =
+                                    self.offset_address_unscaled(addr, placement.offset)?;
+                                self.copy_to_ptr(field_addr, space, field, field_value)?;
+                            }
+                        }
+                    }
+                    if let (Some((offset, word)), ReferentLayout::Raw(space)) = (packed, memory) {
+                        let word_addr = self.offset_address_unscaled(addr, offset)?;
+                        self.store_word(word_addr, space, word)?;
                     }
                     Ok(())
                 }
@@ -4263,6 +4434,150 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         Ok(())
     }
 
+    /// Loads through a pointer that may address a packed storage field.
+    fn load_from_ptr_lane(
+        &mut self,
+        addr: ValueId,
+        space: AddressSpaceKind,
+        lane: Option<PackedLane>,
+        class: &RuntimeClass<'db>,
+    ) -> Result<ValueId, LowerError> {
+        match (lane, class) {
+            (None, _) => self.load_from_ptr(addr, space, class),
+            (Some(lane), RuntimeClass::Scalar(scalar)) => {
+                let word = self.load_word(addr, space)?;
+                Ok(self.extract_packed_scalar(word, lane.lane, scalar))
+            }
+            (Some(_), _) => Err(LowerError::Internal(format!(
+                "packed storage lane on a non-scalar field: {class:?}"
+            ))),
+        }
+    }
+
+    /// Stores through a pointer that may address a packed storage field.
+    fn store_to_ptr_lane(
+        &mut self,
+        addr: ValueId,
+        space: AddressSpaceKind,
+        lane: Option<PackedLane>,
+        class: &RuntimeClass<'db>,
+        src: ValueId,
+    ) -> Result<(), LowerError> {
+        match (lane, class) {
+            (None, _) => self.store_to_ptr(addr, space, class, src),
+            (Some(lane), RuntimeClass::Scalar(scalar)) => {
+                let bits = self.packed_scalar_bits(src, lane.lane, scalar)?;
+                let word = if lane.shared {
+                    // Keep the other fields of the word.
+                    let old = self.load_word(addr, space)?;
+                    let keep = self.fb.make_imm_value(lane_mask(lane.lane, true));
+                    let kept = self
+                        .fb
+                        .insert_inst(And::new(self.module.inst_set(), old, keep), Type::I256);
+                    self.fb
+                        .insert_inst(Or::new(self.module.inst_set(), kept, bits), Type::I256)
+                } else {
+                    bits
+                };
+                self.store_word(addr, space, word)
+            }
+            (Some(_), _) => Err(LowerError::Internal(format!(
+                "packed storage lane on a non-scalar field: {class:?}"
+            ))),
+        }
+    }
+
+    /// The scalar in `lane` of a loaded storage `word`.
+    fn extract_packed_scalar(
+        &mut self,
+        word: ValueId,
+        lane: StorageLane,
+        scalar: &ScalarClass<'db>,
+    ) -> ValueId {
+        let shifted = if lane.byte_offset == 0 {
+            word
+        } else {
+            let shift = self.index_value(u64::from(lane.bit_offset()));
+            self.fb
+                .insert_inst(Shr::new(self.module.inst_set(), shift, word), Type::I256)
+        };
+        let ty = scalar_ty(scalar);
+        if ty == Type::I1 {
+            // A bool is one byte; only that byte decides its value.
+            let mask = self.fb.make_imm_value(lane_mask(
+                StorageLane {
+                    byte_offset: 0,
+                    byte_width: lane.byte_width,
+                },
+                false,
+            ));
+            let byte = self
+                .fb
+                .insert_inst(And::new(self.module.inst_set(), shifted, mask), Type::I256);
+            return condition_to_i1(&mut self.fb, byte, self.module.inst_set());
+        }
+        // Truncating to the scalar's width drops the neighbouring fields.
+        let is = self.module.inst_set();
+        cast_int_value(&mut self.fb, is, shifted, ty, scalar.is_signed_int())
+    }
+
+    /// `src` cleaned to its lane's width and moved into the lane's position,
+    /// with every other bit zero.
+    fn packed_scalar_bits(
+        &mut self,
+        src: ValueId,
+        lane: StorageLane,
+        scalar: &ScalarClass<'db>,
+    ) -> Result<ValueId, LowerError> {
+        let word = self.cast_scalar_with_signedness(src, Type::I256, scalar.is_signed_int())?;
+        let width_mask = self.fb.make_imm_value(lane_mask(
+            StorageLane {
+                byte_offset: 0,
+                byte_width: lane.byte_width,
+            },
+            false,
+        ));
+        // Signed values are sign-extended to a word; keep only their lane's
+        // two's-complement bits, as Solidity stores them.
+        let clean = self.fb.insert_inst(
+            And::new(self.module.inst_set(), word, width_mask),
+            Type::I256,
+        );
+        Ok(if lane.byte_offset == 0 {
+            clean
+        } else {
+            let shift = self.index_value(u64::from(lane.bit_offset()));
+            self.fb
+                .insert_inst(Shl::new(self.module.inst_set(), shift, clean), Type::I256)
+        })
+    }
+
+    fn store_word(
+        &mut self,
+        addr: ValueId,
+        space: AddressSpaceKind,
+        word: ValueId,
+    ) -> Result<(), LowerError> {
+        match space {
+            AddressSpaceKind::Storage => self.fb.insert_inst_no_result(EvmSstore::new(
+                self.module.required_inst::<EvmSstore>()?,
+                addr,
+                word,
+            )),
+            AddressSpaceKind::Transient => self.fb.insert_inst_no_result(EvmTstore::new(
+                self.module.required_inst::<EvmTstore>()?,
+                addr,
+                word,
+            )),
+            other => {
+                return Err(LowerError::Internal(format!(
+                    "packed storage word store into `{other:?}`"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     fn load_from_ptr(
         &mut self,
         addr: ValueId,
@@ -4327,9 +4642,45 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             Layout::Struct(data) => {
                 let ty = self.module.ty_for_layout(layout)?;
                 let mut value = self.fb.make_undef_value(ty);
+                // Packed fields of one word share a single load.
+                let mut packed: Option<(u64, ValueId)> = None;
                 for (idx, field) in data.fields.iter().enumerate() {
-                    let field_addr = self.referent_field_address(addr, memory, &class, idx)?;
-                    let field_value = self.load_memory_value(field_addr, memory, field)?;
+                    let field_value = match memory {
+                        ReferentLayout::Object => {
+                            let field_addr =
+                                self.referent_field_address(addr, memory, &class, idx)?;
+                            self.load_memory_value(field_addr, memory, field)?
+                        }
+                        ReferentLayout::Raw(space) => {
+                            let placement = RuntimeMemoryLayout::for_space(self.module.db, space)
+                                .struct_field_placement(&data, idx)?;
+                            match (placement.lane, field) {
+                                (Some(lane), RuntimeClass::Scalar(scalar)) => {
+                                    let word = match packed {
+                                        Some((offset, word)) if offset == placement.offset => word,
+                                        _ => {
+                                            let word_addr = self
+                                                .offset_address_unscaled(addr, placement.offset)?;
+                                            let word = self.load_word(word_addr, space)?;
+                                            packed = Some((placement.offset, word));
+                                            word
+                                        }
+                                    };
+                                    self.extract_packed_scalar(word, lane, scalar)
+                                }
+                                (Some(_), _) => {
+                                    return Err(LowerError::Internal(format!(
+                                        "packed storage lane on a non-scalar field: {field:?}"
+                                    )));
+                                }
+                                (None, _) => {
+                                    let field_addr =
+                                        self.offset_address_unscaled(addr, placement.offset)?;
+                                    self.load_from_ptr(field_addr, space, field)?
+                                }
+                            }
+                        }
+                    };
                     let expected_ty = self.module.ty_for_class(field)?;
                     let actual_ty = self.fb.type_of(field_value);
                     if actual_ty != expected_ty {
@@ -4539,7 +4890,31 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 } else {
                     scalar_word_ty(scalar)
                 };
-                self.cast_scalar_with_signedness(src, ty, scalar.is_signed_int())
+                let value = self.cast_scalar_with_signedness(src, ty, scalar.is_signed_int())?;
+                match scalar.repr {
+                    // Storage keeps a narrow signed integer as its own bytes,
+                    // like Solidity and like a packed field, not sign-extended
+                    // to the whole word.
+                    ScalarRepr::Int { bits, signed: true }
+                        if bits < 256
+                            && matches!(
+                                space,
+                                AddressSpaceKind::Storage | AddressSpaceKind::Transient
+                            ) =>
+                    {
+                        let mask = self.fb.make_imm_value(lane_mask(
+                            StorageLane {
+                                byte_offset: 0,
+                                byte_width: u32::from(bits / 8),
+                            },
+                            false,
+                        ));
+                        Ok(self
+                            .fb
+                            .insert_inst(And::new(self.module.inst_set(), value, mask), Type::I256))
+                    }
+                    _ => Ok(value),
+                }
             }
             RuntimeClass::Ref {
                 kind:
@@ -5921,30 +6296,6 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             .insert_inst(Add::new(self.module.inst_set(), base, offset), Type::I256))
     }
 
-    fn offset_ptr_field_address(
-        &mut self,
-        base: ValueId,
-        class: &RuntimeClass<'db>,
-        field: FieldIndex,
-        space: AddressSpaceKind,
-    ) -> Result<ValueId, LowerError> {
-        let offset =
-            RuntimeMemoryLayout::for_space(self.module.db, space).field_offset(class, field)?;
-        self.offset_address_unscaled(base, offset)
-    }
-
-    fn offset_ptr_struct_field_address(
-        &mut self,
-        base: ValueId,
-        layout: &StructLayout<'db>,
-        field: usize,
-        space: AddressSpaceKind,
-    ) -> Result<ValueId, LowerError> {
-        let offset = RuntimeMemoryLayout::for_space(self.module.db, space)
-            .struct_field_offset(layout, field)?;
-        self.offset_address_unscaled(base, offset)
-    }
-
     fn offset_ptr_array_elem_address(
         &mut self,
         base: ValueId,
@@ -6081,6 +6432,21 @@ fn scalar_ty<'db>(scalar: &ScalarClass<'db>) -> Type {
         ScalarRepr::FixedBytes { len } => fixed_bytes_ty(len),
         ScalarRepr::Address { .. } => Type::I256,
     }
+}
+
+/// A word mask selecting `lane`'s bytes, or every other byte if `invert`.
+fn lane_mask(lane: StorageLane, invert: bool) -> Immediate {
+    let mut bytes = [0u8; 32];
+    for byte in lane.byte_offset..lane.byte_offset + lane.byte_width {
+        // Byte `k` from the low-order end is byte `31 - k` big-endian.
+        bytes[31 - byte as usize] = 0xff;
+    }
+    if invert {
+        for byte in &mut bytes {
+            *byte = !*byte;
+        }
+    }
+    Immediate::from_i256(I256::from_be_bytes(&bytes), Type::I256)
 }
 
 fn scalar_word_ty<'db>(scalar: &ScalarClass<'db>) -> Type {
