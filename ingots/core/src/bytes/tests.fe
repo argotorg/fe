@@ -1,0 +1,99 @@
+use super::{ByteWriter, PackedBytes, word_len}
+
+const fn roundtrip<const N: usize>() -> bool {
+    let mut array: [u8; N] = [0; N]
+    let mut i: usize = 0
+    while i < N {
+        array[i] = (i as u256).downcast_truncate()
+        i += 1
+    }
+    let packed = PackedBytes::from_array(array)
+    let unpacked = packed.to_array()
+    i = 0
+    while i < N {
+        if packed[i] != array[i] || unpacked[i] != array[i] {
+            return false
+        }
+        i += 1
+    }
+    if N % 32 != 0 {
+        let tail_bits = ((32 - N % 32) * 8) as u256
+        if packed.word(word_len(N) - 1) << (256 - tail_bits) != 0 {
+            return false
+        }
+    }
+    packed.len() == N && packed == PackedBytes::from_array(unpacked)
+}
+
+const ROUNDTRIPS: bool = roundtrip<0>()
+    && roundtrip<1>()
+    && roundtrip<31>()
+    && roundtrip<32>()
+    && roundtrip<33>()
+    && roundtrip<63>()
+    && roundtrip<64>()
+    && roundtrip<65>()
+
+#[test]
+fn packed_roundtrips() {
+    assert!(ROUNDTRIPS)
+    assert!(
+        roundtrip<0>() && roundtrip<1>() && roundtrip<31>() && roundtrip<32>(),
+    )
+    assert!(
+        roundtrip<33>() && roundtrip<63>() && roundtrip<64>() && roundtrip<65>(),
+    )
+}
+
+const fn crossing() -> PackedBytes<65> {
+    let mut writer = ByteWriter<65>::new()
+    writer.push_word(0xff41, width: 1)
+    writer.push_word(1, width: 32)
+    writer.push_bytes(PackedBytes::from_array([42; 31]))
+    writer.push_byte(43)
+    writer.finish()
+}
+const CROSSING: PackedBytes<65> = crossing()
+
+#[test]
+fn packed_word_boundaries() {
+    let runtime = crossing()
+    assert!(runtime == CROSSING)
+    assert!(runtime[0] == 65 && runtime[31] == 0 && runtime[32] == 1)
+    assert!(
+        runtime[33] == 42 && runtime[63] == 42 && runtime[64] == 43,
+    )
+    assert!(runtime.word(2) == (43 as u256) << 248)
+    assert!(runtime != PackedBytes::from_array([0; 65]))
+}
+
+#[test]
+fn packed_empty() {
+    let mut writer = ByteWriter<0>::new()
+    writer.push_word(0xffff, width: 0)
+    writer.push_bytes(PackedBytes::from_array([0; 0]))
+    writer.push_array([0; 0])
+    assert!(writer.finish() == PackedBytes::from_array([0; 0]))
+}
+
+#[test(should_revert)]
+fn packed_index_out_of_bounds() {
+    let _ = CROSSING[65]
+}
+
+#[test(should_revert)]
+fn packed_empty_overflow() {
+    let mut writer = ByteWriter<0>::new()
+    writer.push_byte(1)
+}
+
+#[test(should_revert)]
+fn packed_word_too_wide() {
+    let mut writer = ByteWriter<33>::new()
+    writer.push_word(1, width: 33)
+}
+
+#[test(should_revert)]
+fn packed_incomplete() {
+    let _ = ByteWriter<1>::new().finish()
+}
