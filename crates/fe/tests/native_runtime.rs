@@ -51,6 +51,22 @@ fn build(source: &Path, out: &Path, level: &str, extra: &[&str]) -> Output {
 }
 
 #[test]
+fn native_const_generic_packed_writer_uses_runtime_inputs() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/const_generic_packed_writer.fe");
+    let temp = tempdir().unwrap();
+    for level in ["1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let executable = out.join("const_generic_packed_writer");
+        for args in [&[][..], &["runtime"][..]] {
+            let result = Command::new(&executable).args(args).output().unwrap();
+            assert!(result.status.success(), "{result:?}");
+        }
+    }
+}
+
+#[test]
 fn native_workspace_build_selects_root_entries_and_reachable_dependencies() {
     let temp = tempdir().unwrap();
     let root = temp.path();
@@ -896,6 +912,42 @@ fn native_memory_copy_checks_native_ranges_and_ignores_empty_addresses() {
 }
 
 #[test]
+fn native_copy_options_are_read_out_of_views() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("option_copy.fe");
+    fs::write(
+        &source,
+        r#"
+use core::Option
+struct Slot { value: Option<u64> }
+impl Slot {
+    fn value(self) -> Option<u64> { self.value }
+}
+fn or_zero(_ value: Option<u64>) -> u64 {
+    match value {
+        Option::Some(inner) => inner
+        Option::None => 0
+    }
+}
+pub fn main() -> i32 {
+    let mut slot = Slot { value: Option::Some(40) }
+    let before = slot.value()
+    slot.value = Option::None
+    let total = or_zero(before) + or_zero(slot.value()) + 2
+    total.downcast_unchecked()
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("option_copy")).output().unwrap();
+        assert_eq!(result.status.code(), Some(42), "O{level}: {result:?}");
+    }
+}
+
+#[test]
 fn native_byte_buffer_preserves_contents_and_reuses_zeroed_storage() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("byte_buffer.fe");
@@ -1102,4 +1154,201 @@ pub fn main() -> i32 {
             .unwrap();
         assert!(result.status.success(), "O{level}: {result:?}");
     }
+}
+
+#[test]
+fn native_callee_separation_preserves_fresh_buffer_callers() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("independent_frames.fe");
+    fs::write(
+        &source,
+        r#"
+use std::native::ByteBuffer
+struct Journal { bytes: ByteBuffer }
+struct Frame { data: Journal, value: u256 }
+impl Frame {
+    fn new() -> Self { Self { data: Journal { bytes: ByteBuffer::new() }, value: 0 } }
+    fn run(mut self, state: mut Frame) {
+        self.data.bytes.clear()
+        self.value = 1
+        core::assert(self.data.bytes.try_resize(32))
+        core::assert(state.data.bytes.try_resize(32))
+        self.data.bytes.set_byte(index: 0, value: 2)
+        let mut i: u64 = 0
+        while i < 32 {
+            state.data.bytes.set_byte(index: i, value: 3)
+            i += 1
+        }
+        state.value += 1
+    }
+    fn release(own self) { self.data.bytes.release() }
+}
+fn execute(state: mut Frame) -> Frame {
+    let mut vm = Frame::new()
+    vm.run(state)
+    vm
+}
+fn finish(state: mut Frame) {
+    let mut vm = Frame::new()
+    vm.run(state)
+    vm.release()
+}
+pub fn main() -> i32 {
+    let mut state = Frame::new()
+    let vm = execute(state: mut state)
+    core::assert(vm.value == 1 && state.value == 1)
+    core::assert(vm.data.bytes.byte_at(0) == 2 && state.data.bytes.byte_at(31) == 3)
+    vm.release()
+    finish(state: mut state)
+    core::assert(state.value == 2 && state.data.bytes.byte_at(31) == 3)
+    state.release()
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("independent_frames"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_recursive_receiver_authority_converges() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("recursive_buffers.fe");
+    fs::write(
+        &source,
+        r#"
+use std::native::ByteBuffer
+fn write_at_depth(_ buffer: mut ByteBuffer, depth: usize, value: u8) {
+    if depth == 0 {
+        buffer.set_byte(index: 31, value)
+    } else {
+        write_at_depth(mut buffer, depth: depth - 1, value)
+    }
+}
+fn write_alternating(_ first: mut ByteBuffer, _ second: mut ByteBuffer, depth: usize, value: u8) {
+    if depth == 0 {
+        first.set_byte(index: 31, value)
+    } else {
+        write_alternating(mut second, mut first, depth: depth - 1, value)
+    }
+}
+pub fn main() -> i32 {
+    let mut buffer = ByteBuffer::new()
+    core::assert(buffer.try_resize(32))
+    write_at_depth(mut buffer, depth: 0, value: 19)
+    core::assert(buffer.byte_at(31) == 19)
+    write_at_depth(mut buffer, depth: 32, value: 42)
+    core::assert(buffer.byte_at(31) == 42)
+    let mut other = ByteBuffer::new()
+    core::assert(other.try_resize(32))
+    other.set_byte(index: 31, value: 7)
+    write_alternating(mut buffer, mut other, depth: 32, value: 19)
+    core::assert(buffer.byte_at(31) == 19 && other.byte_at(31) == 7)
+    write_alternating(mut buffer, mut other, depth: 33, value: 42)
+    core::assert(buffer.byte_at(31) == 19 && other.byte_at(31) == 42)
+    other.release()
+    buffer.release()
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("recursive_buffers"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_recursive_buffer_poststates_converge() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("recursive_poststates.fe");
+    fs::write(
+        &source,
+        r#"
+use std::native::ByteBuffer
+fn grow(_ buffer: mut ByteBuffer, depth: usize, length: u64, value: u8) {
+    if depth == 0 {
+        let mut size: u64 = 1
+        while size <= length {
+            core::assert(buffer.try_resize(size))
+            buffer.set_byte(index: size - 1, value)
+            size += 1
+        }
+    } else { grow(mut buffer, depth: depth - 1, length, value) }
+}
+fn clear(_ buffer: mut ByteBuffer, depth: usize) {
+    if depth == 0 { buffer.clear() }
+    else { clear(mut buffer, depth: depth - 1) }
+}
+pub fn main() -> i32 {
+    let mut buffer = ByteBuffer::new()
+    grow(mut buffer, depth: 32, length: 32, value: 19)
+    core::assert(buffer.len() == 32 && buffer.byte_at(31) == 19)
+    clear(mut buffer, depth: 32)
+    core::assert(buffer.len() == 0)
+    grow(mut buffer, depth: 16, length: 513, value: 42)
+    core::assert(buffer.len() == 513)
+    for index in 0..513 { core::assert(buffer.byte_at(index.downcast_unchecked()) == 42) }
+    buffer.release()
+    0
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("recursive_poststates"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+    }
+}
+
+#[test]
+fn native_raw_scalar_reference_accessors_at_o1() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/native/raw_scalar_reference_accessors.fe");
+    build(&source, temp.path(), "1", &["--standalone"]);
+    let result = Command::new(temp.path().join("raw_scalar_reference_accessors"))
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+}
+
+#[test]
+fn native_raw_aggregate_reference_accessors_at_o1() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/native/raw_aggregate_reference_accessors.fe");
+    build(&source, temp.path(), "1", &["--standalone"]);
+    let result = Command::new(temp.path().join("raw_aggregate_reference_accessors"))
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+}
+
+#[test]
+fn native_returned_reference_projections_mutate_the_original_at_o1() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/native/returned_reference_projection.fe");
+    build(&source, temp.path(), "1", &["--standalone"]);
+    let result = Command::new(temp.path().join("returned_reference_projection"))
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
 }

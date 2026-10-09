@@ -45,8 +45,8 @@ fn rebuild<const ROOT: u256>(rooted: Rooted<ROOT>) -> Rooted<ROOT> {
     fresh()
 }
 
-fn choose<const ROOT: u256>(roots: [Rooted<ROOT>; 2], lane: usize) -> Rooted<ROOT> {
-    if lane == 0 { roots[0] } else { roots[1] }
+fn rebuilt_root(rooted: Rooted) -> u256 {
+    rebuild(rooted: rooted).root()
 }
 
 fn shared_root<const ROOT: u256>(two: Two<ROOT>) -> u256 {
@@ -77,13 +77,18 @@ msg Msg {
 }
 
 pub contract C {
-    mut roots: [Rooted; 2],
+    mut first: Rooted,
+    mut second: Rooted,
     mut shared: Two,
     mut independent: Independent,
 
     recv Msg {
-        GetIndexed { lane } -> u256 uses (roots) {
-            rebuild(rooted: choose(roots: roots, lane: lane)).root()
+        GetIndexed { lane } -> u256 uses (first, second) {
+            if lane == 0 {
+                rebuilt_root(rooted: first)
+            } else {
+                rebuilt_root(rooted: second)
+            }
         }
 
         GetShared {} -> u256 uses (shared) {

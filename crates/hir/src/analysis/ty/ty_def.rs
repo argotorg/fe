@@ -680,6 +680,7 @@ impl<'db> TyId<'db> {
                     primary_goal: goal,
                     unsat_subgoal: subgoal,
                     required_by: None,
+                    capability_hint: None,
                 }
                 .into(),
             )
@@ -1226,6 +1227,10 @@ pub enum InvalidCause<'db> {
     /// silently invalid.
     TypeLoweringCycle,
 
+    /// Normalizing this type needed more nested projections, or larger ones,
+    /// than the normalizer allows.
+    TypeNormalizationLimit,
+
     // TraitConstraintNotSat(PredicateId),
     ParseError,
 
@@ -1243,8 +1248,9 @@ pub enum InvalidCause<'db> {
 
 impl<'db> InvalidCause<'db> {
     /// An evaluation fault with the expression it occurred at and its label.
-    /// Type checking leaves these to concrete demand; any other invalid type
-    /// has an upstream report.
+    /// Type checking reports faults in instantiated call return types and
+    /// leaves other specialized layouts to concrete demand; any other invalid
+    /// type has an upstream report.
     pub(crate) fn const_eval_fault(&self) -> Option<(Body<'db>, ExprId, String)> {
         match self {
             InvalidCause::ConstEvalUnsupported { body, expr } => Some((
@@ -1409,6 +1415,7 @@ impl InvalidCause<'_> {
             }
             InvalidCause::ConstEvalRecursiveConst { .. } => "ConstEvalRecursiveConst".into(),
             InvalidCause::TypeLoweringCycle => "TypeLoweringCycle".into(),
+            InvalidCause::TypeNormalizationLimit => "TypeNormalizationLimit".into(),
         }
     }
 }
@@ -2255,13 +2262,9 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
         }
 
         fn visit_ty(&mut self, ty: TyId<'db>) {
-            if matches!(
-                ty.data(self.db),
-                TyData::AssocTy(_) | TyData::QualifiedTy(_)
-            ) {
-                self.flags.insert(TyFlags::HAS_PROJECTION);
-            }
-            walk_ty(self, ty);
+            // Types form an interned DAG. Reuse each child's cached flags so
+            // repeated subtrees are not walked once for every occurrence.
+            self.flags |= ty.flags(self.db);
         }
 
         fn visit_var(&mut self, _: &TyVar) {
@@ -2290,9 +2293,13 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
 
     let mut collector = Collector {
         db,
-        flags: TyFlags::empty(),
+        flags: if matches!(ty.data(db), TyData::AssocTy(_) | TyData::QualifiedTy(_)) {
+            TyFlags::HAS_PROJECTION
+        } else {
+            TyFlags::empty()
+        },
     };
 
-    ty.visit_with(&mut collector);
+    walk_ty(&mut collector, ty);
     collector.flags
 }

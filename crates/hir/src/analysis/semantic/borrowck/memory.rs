@@ -509,6 +509,7 @@ impl<'db> Borrowck<'db> {
             may_return: !self.instance.is_intrinsically_never_returning(self.db),
             result,
             scalar_result: None,
+            observed_params: None,
             mutable_inputs: Vec::new(),
             certified_ranges: Vec::new(),
             scalar_inputs: Vec::new(),

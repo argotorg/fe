@@ -1,4 +1,9 @@
-use mir::{AddressSpaceKind, Layout, ResolvedPlaceElem, RuntimeClass, RuntimeMemoryLayout};
+use hir::analysis::semantic::FieldIndex;
+use mir::{
+    AddressSpaceKind, Layout, LayoutId, ResolvedPlaceElem, RuntimeClass, RuntimeMemoryLayout,
+    VariantId,
+};
+use sonatina_codegen::transform::aggregate::EnumLoweredLayout;
 use sonatina_ir::{
     Type, ValueId,
     inst::{
@@ -6,13 +11,15 @@ use sonatina_ir::{
         cast::Zext,
         cmp::Eq,
         control_flow::{BrTable, Jump, Phi, PhiArgs, Unreachable},
-        data::{ConstLoad, Mload, Mstore, ObjLoad, ObjMaterializeHeap},
+        data::{ConstLoad, Mstore, ObjLoad, ObjMaterializeHeap},
         logic::Or,
     },
     types::CompoundType,
 };
 
-use super::{CopySource, FunctionLowerer, LowerError, Lowered, LoweringInstSet, scalar_ty};
+use super::{
+    CopySource, EnumLoad, FunctionLowerer, LowerError, Lowered, LoweringInstSet, scalar_ty,
+};
 
 // The descriptor's layout also records the referent's address space. Provider
 // kinds may be erased when a reference is stored inside an ordinary typed slot.
@@ -25,6 +32,12 @@ const REFERENCE_LAYOUTS: [Option<AddressSpaceKind>; 6] = [
     Some(AddressSpaceKind::Code),
 ];
 const NATIVE_MEMORY: u64 = 1;
+
+#[derive(Clone, Copy)]
+pub(super) enum ReferentLayout {
+    Raw(AddressSpaceKind),
+    Object,
+}
 
 /// Stored references are one-word pointers to immutable address/layout
 /// descriptors. Copying a reference never copies its referent.
@@ -119,6 +132,32 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
             RuntimeClass::Scalar(scalar) => scalar_ty(scalar),
             _ => self.module.ty_for_class(class)?,
         };
+        self.load_reference_value(reference, ty, |this, memory| {
+            this.load_memory_value(reference.addr, memory, class)
+        })
+    }
+
+    pub(super) fn load_referent_enum_tag(
+        &mut self,
+        reference: MemoryReference,
+        layout: LayoutId<'db>,
+    ) -> Result<ValueId, LowerError> {
+        let Layout::Enum(data) = layout.data(self.module.db) else {
+            return Err(LowerError::Internal("enum tag requires enum layout".into()));
+        };
+        let ty = self.module.enum_tag_ty(layout)?;
+        self.load_reference_value(reference, ty, |this, memory| {
+            // Validate the discriminant without reading or reconstructing payloads.
+            this.load_enum_from_ptr(reference.addr, memory, layout, &data, EnumLoad::Tag)
+        })
+    }
+
+    fn load_reference_value(
+        &mut self,
+        reference: MemoryReference,
+        ty: Type,
+        mut load: impl FnMut(&mut Self, ReferentLayout) -> Result<ValueId, LowerError>,
+    ) -> Result<ValueId, LowerError> {
         let done = self.fb.append_block();
         let invalid = self.fb.append_block();
         let native = self.module.is_native_target();
@@ -141,12 +180,10 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         let mut values = PhiArgs::with_capacity(blocks.len());
         for (_, block, space) in blocks {
             self.fb.switch_to_block(block);
-            let value = if let Some(space) = space {
-                self.load_from_ptr(reference.addr, space, class)?
-            } else {
-                self.fb
-                    .insert_inst(Mload::new(self.module.inst_set(), reference.addr, ty), ty)
-            };
+            let value = load(
+                self,
+                space.map_or(ReferentLayout::Object, ReferentLayout::Raw),
+            )?;
             let pred = self
                 .fb
                 .current_block()
@@ -205,12 +242,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
             if let Some(space) = space {
                 self.copy_to_ptr(reference.addr, space, class, value)?;
             } else {
-                self.fb.insert_inst_no_result(Mstore::new(
-                    self.module.inst_set(),
-                    reference.addr,
-                    value,
-                    ty,
-                ));
+                self.copy_memory_value(reference.addr, ReferentLayout::Object, class, value)?;
             }
             self.fb
                 .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
@@ -242,19 +274,68 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         self.retype_value_for_class(value, &class, target)
     }
 
-    fn native_class_size(&mut self, class: &RuntimeClass<'db>) -> Result<u64, LowerError> {
+    pub(super) fn native_class_layout(
+        &mut self,
+        class: &RuntimeClass<'db>,
+    ) -> Result<EnumLoweredLayout, LowerError> {
         let ty = self.module.ty_for_class(class)?;
-        let size = self
-            .module
-            .builder
-            .ctx
-            .type_layout
-            .size_of(ty, &self.fb.module_builder.ctx)
-            .map_err(|err| {
-                LowerError::Unsupported(format!("unrepresentable native memory layout: {err:?}"))
-            })?;
-        u64::try_from(size)
-            .map_err(|_| LowerError::Unsupported("native layout size exceeds u64".into()))
+        // Stored references address the original Sonatina allocation. Its enum
+        // products and target padding must match the eventual legalization,
+        // without rewriting types while this module is still being emitted.
+        Ok(EnumLoweredLayout::new(&self.fb.module_builder.ctx, ty))
+    }
+
+    pub(super) fn referent_field_address(
+        &mut self,
+        addr: ValueId,
+        memory: ReferentLayout,
+        class: &RuntimeClass<'db>,
+        index: usize,
+    ) -> Result<ValueId, LowerError> {
+        let offset = match memory {
+            ReferentLayout::Object => self
+                .native_class_layout(class)?
+                .field_offset(index)
+                .ok_or_else(|| {
+                    LowerError::Unsupported("unrepresentable native field offset".into())
+                })? as u64,
+            ReferentLayout::Raw(space) => {
+                let layout = class
+                    .aggregate_layout()
+                    .ok_or_else(|| LowerError::Internal("field requires aggregate".into()))?;
+                let raw = RuntimeMemoryLayout::for_space(self.module.db, space);
+                match layout.data(self.module.db) {
+                    Layout::Struct(data) => raw.struct_field_offset(&data, index)?,
+                    Layout::Array(data) => raw.array_element_offset(&data, index as u64)?,
+                    Layout::Enum(_) => {
+                        return Err(LowerError::Internal("enum field requires variant".into()));
+                    }
+                }
+            }
+        };
+        self.offset_address_unscaled(addr, offset)
+    }
+
+    pub(super) fn referent_variant_address(
+        &mut self,
+        addr: ValueId,
+        memory: ReferentLayout,
+        variant: VariantId<'db>,
+        field: usize,
+    ) -> Result<ValueId, LowerError> {
+        let offset = match memory {
+            ReferentLayout::Object => self
+                .native_class_layout(&RuntimeClass::AggregateValue {
+                    layout: variant.enum_layout,
+                })?
+                .variant_field_offset(variant.index as usize, field)
+                .ok_or_else(|| {
+                    LowerError::Unsupported("unrepresentable native variant offset".into())
+                })? as u64,
+            ReferentLayout::Raw(space) => RuntimeMemoryLayout::for_space(self.module.db, space)
+                .variant_field_offset(variant, FieldIndex(field as u16))?,
+        };
+        self.offset_address_unscaled(addr, offset)
     }
 
     fn memory_layout_offset(
@@ -316,29 +397,17 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
         let words = RuntimeMemoryLayout::for_space(self.module.db, AddressSpaceKind::Storage);
         let (offset, class) = match elem {
             ResolvedPlaceElem::Field { field, class } => {
-                let Some(layout) = base.aggregate_layout() else {
-                    return Err(LowerError::Internal(
-                        "memory field requires aggregate".into(),
-                    ));
-                };
-                let Layout::Struct(layout) = layout.data(self.module.db) else {
-                    return Err(LowerError::Internal("memory field requires struct".into()));
-                };
-                let native = layout.fields.iter().take(field.0 as usize).try_fold(
-                    0u64,
-                    |offset, field| {
-                        offset
-                            .checked_add(self.native_class_size(field)?)
-                            .ok_or_else(|| {
-                                LowerError::Unsupported("native field offset overflow".into())
-                            })
-                    },
-                )?;
+                let native = self
+                    .native_class_layout(base)?
+                    .field_offset(field.0 as usize)
+                    .ok_or_else(|| {
+                        LowerError::Unsupported("unrepresentable native field offset".into())
+                    })?;
                 (
                     self.memory_layout_offset(
                         reference.layout,
                         raw.field_offset(base, *field)?,
-                        native,
+                        native as u64,
                         words.field_offset(base, *field)?,
                     ),
                     class,
@@ -348,11 +417,15 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
                 let Lowered::Value(index) = self.checked_index_value(base, index)? else {
                     return Ok(Lowered::Terminated);
                 };
-                let native = self.native_class_size(class)?;
+                let native = self.native_class_layout(class)?.size().map_err(|err| {
+                    LowerError::Unsupported(format!(
+                        "unrepresentable native memory layout: {err:?}"
+                    ))
+                })?;
                 let stride = self.memory_layout_offset(
                     reference.layout,
                     raw.index_stride(base)?,
-                    native,
+                    native as u64,
                     words.index_stride(base)?,
                 );
                 (
@@ -366,33 +439,17 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
                 field,
                 class,
             } => {
-                let Layout::Enum(layout) = variant.enum_layout.data(self.module.db) else {
-                    return Err(LowerError::Internal("variant field requires enum".into()));
-                };
-                // Sonatina concatenates variant payloads; raw Fe memory overlays them.
-                let mut fields = layout
-                    .variants
-                    .iter()
-                    .take(variant.index as usize)
-                    .flat_map(|variant| variant.fields.iter())
-                    .chain(
-                        layout.variants[variant.index as usize]
-                            .fields
-                            .iter()
-                            .take(field.0 as usize),
-                    );
-                let native = fields.try_fold(32u64, |offset, field| {
-                    offset
-                        .checked_add(self.native_class_size(field)?)
-                        .ok_or_else(|| {
-                            LowerError::Unsupported("native variant offset overflow".into())
-                        })
-                })?;
+                let native = self
+                    .native_class_layout(base)?
+                    .variant_field_offset(variant.index as usize, field.0 as usize)
+                    .ok_or_else(|| {
+                        LowerError::Unsupported("unrepresentable native variant offset".into())
+                    })?;
                 (
                     self.memory_layout_offset(
                         reference.layout,
                         raw.variant_field_offset(*variant, *field)?,
-                        native,
+                        native as u64,
                         words.variant_field_offset(*variant, *field)?,
                     ),
                     class,

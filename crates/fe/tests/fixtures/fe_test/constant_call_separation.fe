@@ -1,0 +1,39 @@
+use core::{Option, ptr}
+struct Token { value: u256 }
+struct Slot { pointer: *Option<Token> }
+struct Buffer { data: *u8, marker: u256 }
+fn clear_if(_ state: mut Buffer, clear: bool) {
+    if clear {
+        ptr::zero_bytes(ptr: state.data, len: 1)
+    }
+    state.marker = 1
+}
+fn run_children(_ state: mut Buffer) -> u256 {
+    let slot = ptr::alloc<Option<Token>>()
+    *slot = Option::Some(Token { value: 7 })
+    let mut holder = Slot { pointer: slot }
+    let mut sum = 0
+    while true {
+        let value = *holder.pointer
+        *holder.pointer = Option::None
+        match value {
+            Option::Some(value,) => {
+                clear_if(mut state, clear: true)
+                sum += value.value
+            },
+            Option::None => {
+                break
+            },
+        }
+    }
+    sum
+}
+#[test]
+fn constant_call_preserves_the_pointer_stored_in_a_local() {
+    let data = ptr::alloc<u8>()
+    *data = 12
+    let mut state = Buffer { data, marker: 0 }
+    core::assert(run_children(mut state) == 7)
+    core::assert(*data == 0)
+    core::assert(state.marker == 1)
+}

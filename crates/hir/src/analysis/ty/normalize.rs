@@ -22,8 +22,9 @@ use super::{
     },
     trait_lower::complete_impl_assoc_ty,
     trait_resolution::{PredicateListId, Selection, TraitSolveCx},
-    ty_def::{AssocTy, TyData, TyId, TyParam, collect_variables},
+    ty_def::{AssocTy, InvalidCause, TyData, TyId, TyParam, collect_variables},
     unify::UnificationTable,
+    visitor::{TyVisitor, walk_ty},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -115,7 +116,6 @@ pub(crate) fn normalize_layout_root_uses<'db>(
                             )
                         }),
                         selector: root_use.selector,
-                        index_dimensions: root_use.index_dimensions,
                     };
                     if !uses.contains(&root_use) {
                         uses.push(root_use);
@@ -149,6 +149,13 @@ pub(crate) fn normalize_layout_root_uses<'db>(
     uses
 }
 
+/// How many projections may be in the middle of being resolved at once.
+const PROJECTION_DEPTH_LIMIT: usize = 64;
+
+/// How many type nodes, counted as a tree, the projections resolved by one
+/// normalization may have in total.
+const PROJECTION_WORK_LIMIT: usize = 65536;
+
 pub struct TypeNormalizer<'db> {
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -156,6 +163,12 @@ pub struct TypeNormalizer<'db> {
     resolve_impls: bool,
     // Projection cache: None = in progress (cycle guard), Some(ty) = normalized result
     cache: FxHashMap<AssocTy<'db>, Option<TyId<'db>>>,
+    /// Projections currently being resolved, counted against
+    /// [`PROJECTION_DEPTH_LIMIT`].
+    projection_depth: usize,
+    /// Size of the projections resolved so far, counted against
+    /// [`PROJECTION_WORK_LIMIT`].
+    projection_work: usize,
 }
 
 impl<'db> TypeNormalizer<'db> {
@@ -170,8 +183,75 @@ impl<'db> TypeNormalizer<'db> {
             assumptions,
             resolve_impls: true,
             cache: FxHashMap::default(),
+            projection_depth: 0,
+            projection_work: 0,
         }
     }
+
+    /// Starts resolving the projection `ty`, or returns an invalid type if
+    /// that would exceed the normalization limits.
+    ///
+    /// The cycle guard stops a projection that comes back to itself, but not
+    /// one whose impl defines it through a larger projection, such as
+    /// `type Out = <W<(T, T)> as Tr>::Out`: that chain never repeats. Its
+    /// types can also double at each step, staying small as interned values
+    /// while growing exponentially as trees, which is how resolution walks
+    /// them. So both the nesting and the total size are limited.
+    fn enter_projection(&mut self, ty: TyId<'db>) -> Result<(), TyId<'db>> {
+        let remaining = PROJECTION_WORK_LIMIT - self.projection_work;
+        match tree_size_within(self.db, ty, remaining) {
+            Some(size) if self.projection_depth < PROJECTION_DEPTH_LIMIT => {
+                self.projection_work += size;
+                self.projection_depth += 1;
+                Ok(())
+            }
+            _ => Err(TyId::invalid(self.db, InvalidCause::TypeNormalizationLimit)),
+        }
+    }
+}
+
+/// The number of nodes in `ty` counted as a tree, if it is at most `limit`.
+fn tree_size_within<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, limit: usize) -> Option<usize> {
+    struct Children<'db> {
+        db: &'db dyn HirAnalysisDb,
+        children: Vec<TyId<'db>>,
+    }
+    impl<'db> TyVisitor<'db> for Children<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            self.children.push(ty);
+        }
+    }
+    fn size<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        limit: usize,
+        memo: &mut FxHashMap<TyId<'db>, usize>,
+    ) -> Option<usize> {
+        if let Some(&known) = memo.get(&ty) {
+            return Some(known);
+        }
+        let mut children = Children {
+            db,
+            children: Vec::new(),
+        };
+        walk_ty(&mut children, ty);
+        let mut total = 1usize;
+        for child in children.children {
+            total = total.checked_add(size(db, child, limit, memo)?)?;
+            if total > limit {
+                return None;
+            }
+        }
+        memo.insert(ty, total);
+        Some(total)
+    }
+    if limit == 0 {
+        return None;
+    }
+    size(db, ty, limit, &mut FxHashMap::default())
 }
 
 impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
@@ -209,8 +289,15 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
                     }
                 }
 
-                if let Some(replacement) = self.try_resolve_assoc_ty(ty, assoc_ty) {
-                    let normalized = self.fold_ty(db, replacement);
+                if let Err(limit) = self.enter_projection(ty) {
+                    self.cache.insert(*assoc_ty, Some(limit));
+                    return limit;
+                }
+                let resolved = self
+                    .try_resolve_assoc_ty(ty, assoc_ty)
+                    .map(|replacement| self.fold_ty(db, replacement));
+                self.projection_depth -= 1;
+                if let Some(normalized) = resolved {
                     self.cache.insert(*assoc_ty, Some(normalized));
                     return normalized;
                 }

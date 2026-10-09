@@ -1,0 +1,81 @@
+// Repeated calls to a method whose body is a many-arm match. The borrow checker
+// used to combine every call's possible results, so checking time grew
+// exponentially with the number of calls (20 calls did not finish).
+trait Tagged {
+    fn ordinal(self) -> usize
+}
+
+enum Many {
+    V0,
+    V1,
+    V2,
+    V3,
+    V4,
+    V5,
+    V6,
+    V7,
+    V8,
+    V9,
+    V10,
+    V11,
+    V12,
+    V13,
+    V14,
+    V15,
+    V16,
+    V17,
+    V18,
+    V19,
+}
+
+impl Tagged for Many {
+    fn ordinal(self) -> usize {
+        match self {
+            Many::V0 => 0
+            Many::V1 => 1
+            Many::V2 => 2
+            Many::V3 => 3
+            Many::V4 => 4
+            Many::V5 => 5
+            Many::V6 => 6
+            Many::V7 => 7
+            Many::V8 => 8
+            Many::V9 => 9
+            Many::V10 => 10
+            Many::V11 => 11
+            Many::V12 => 12
+            Many::V13 => 13
+            Many::V14 => 14
+            Many::V15 => 15
+            Many::V16 => 16
+            Many::V17 => 17
+            Many::V18 => 18
+            Many::V19 => 19
+        }
+    }
+}
+
+fn sum() -> usize {
+    let mut total: usize = 0
+    total += Many::V0.ordinal()
+    total += Many::V1.ordinal()
+    total += Many::V2.ordinal()
+    total += Many::V3.ordinal()
+    total += Many::V4.ordinal()
+    total += Many::V5.ordinal()
+    total += Many::V6.ordinal()
+    total += Many::V7.ordinal()
+    total += Many::V8.ordinal()
+    total += Many::V9.ordinal()
+    total += Many::V10.ordinal()
+    total += Many::V11.ordinal()
+    total += Many::V12.ordinal()
+    total += Many::V13.ordinal()
+    total += Many::V14.ordinal()
+    total += Many::V15.ordinal()
+    total += Many::V16.ordinal()
+    total += Many::V17.ordinal()
+    total += Many::V18.ordinal()
+    total += Many::V19.ordinal()
+    total
+}

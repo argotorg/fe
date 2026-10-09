@@ -1682,16 +1682,21 @@ impl<'db, P: IndexPayload<'db>> ValueInterner<'db, P> {
             return normal.clone();
         }
         let (_, entry) = &key;
-        let subst = entry.guard.scope().canonical_existentials(scope, || {
-            entry
-                .guard
-                .indices()
-                .into_iter()
-                .chain(entry.payload.indices())
+        // As for region clauses, project the witnesses only the guard observes:
+        // otherwise each loop generation keeps another equal entry.
+        let guard = if entry.guard.scope() == scope {
+            entry.guard.clone()
+        } else {
+            let observed: BTreeSet<_> = entry.payload.indices().collect();
+            entry.guard.project_witnesses(|index| {
+                scope.validate(index).is_err() && !observed.contains(&index)
+            })
+        };
+        let subst = guard.scope().canonical_existentials(scope, || {
+            guard.indices().into_iter().chain(entry.payload.indices())
         });
         let normal = Guarded {
-            guard: entry
-                .guard
+            guard: guard
                 .substitute(&subst)
                 .expect("clause alpha normalization"),
             payload: entry.payload.substitute(self.db, &subst),

@@ -122,18 +122,11 @@ pub(crate) fn layout_root_lineage<'db>(
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub struct LayoutIndexDimension<'db> {
-    pub instance: LayoutInstantiationId<'db>,
-    pub len: usize,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct LayoutRootUse<'db> {
     pub value: TyId<'db>,
     pub owner: Option<TyId<'db>>,
     pub selector: LayoutOccurrencePath,
-    pub index_dimensions: Vec<LayoutIndexDimension<'db>>,
 }
 
 impl<'db> LayoutRootUse<'db> {
@@ -381,10 +374,11 @@ fn layout_view_state_is_strict_subterm<'db>(
 /// Opaque or invalid types retain the conservative check: their internal
 /// arguments are not exposed by `decompose_ty_app`.
 ///
-/// The walk is not memoized. On a pair that does not embed it tries both
-/// descents and can reach the same pair of subterms more than once, so its
-/// cost grows faster than the sizes of the two types. Program types are
-/// shallow, and growth is caught at its first repeat, so the walk stays small.
+/// Memoized: on a pair that does not embed, the walk tries both descents and
+/// reaches the same pairs of subterms many times, which is exponential in the
+/// nesting depth (`W<W<..>>` checked against its own fields). Each call
+/// recurses on a strictly smaller pair, so the query cannot cycle.
+#[salsa::tracked]
 pub(crate) fn structural_layout_type_embeds<'db>(
     db: &'db dyn HirAnalysisDb,
     earlier: TyId<'db>,
@@ -523,7 +517,6 @@ fn collect_root_uses<'db>(
                 value: placeholder,
                 owner: None,
                 selector: selector.clone(),
-                index_dimensions: Vec::new(),
             });
         }
     }
@@ -571,6 +564,7 @@ pub(crate) fn instantiate_layout_template<'db>(
         path: Vec::new(),
         body_landings: FxHashMap::default(),
         root_uses: Vec::new(),
+        ty_cache: FxHashMap::default(),
     };
     let ty = template.fold_with(db, &mut instantiator);
     debug_assert_eq!(
@@ -604,6 +598,7 @@ struct LayoutTemplateInstantiator<'db> {
     path: LayoutOccurrencePath,
     body_landings: FxHashMap<LayoutRootId<'db>, TyId<'db>>,
     root_uses: Vec<LayoutRootUse<'db>>,
+    ty_cache: FxHashMap<TyId<'db>, TyId<'db>>,
 }
 
 impl<'db> LayoutTemplateInstantiator<'db> {
@@ -671,7 +666,6 @@ impl<'db> LayoutTemplateInstantiator<'db> {
             value: placeholder,
             owner: None,
             selector: occurrence,
-            index_dimensions: Vec::new(),
         });
         placeholder
     }
@@ -693,10 +687,8 @@ impl<'db> LayoutTemplateInstantiator<'db> {
         args.into_iter()
             .fold(base, |ty, arg| TyId::app_structural(db, ty, arg))
     }
-}
 
-impl<'db> TyFolder<'db> for LayoutTemplateInstantiator<'db> {
-    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+    fn fold_uncached(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         if let Some((idx, arg)) = self.param_argument(ty) {
             return if matches!(ty.data(db), TyData::TyParam(_)) {
                 self.type_argument(idx, arg)
@@ -748,6 +740,22 @@ impl<'db> TyFolder<'db> for LayoutTemplateInstantiator<'db> {
         }
 
         ty.super_fold_with(db, self)
+    }
+}
+
+impl<'db> TyFolder<'db> for LayoutTemplateInstantiator<'db> {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        if let Some(&cached) = self.ty_cache.get(&ty) {
+            return cached;
+        }
+        let root_use_count = self.root_uses.len();
+        let folded = self.fold_uncached(db, ty);
+        // Root uses carry occurrence-specific selectors and parameter landings.
+        // Folds that emit none can be reused, including deferred capture binding.
+        if self.root_uses.len() == root_use_count {
+            self.ty_cache.insert(ty, folded);
+        }
+        folded
     }
 
     fn fold_const_capture(

@@ -10,17 +10,17 @@ use crate::analysis::{
         SemanticNormalizationFailure, get_or_build_semantic_instance,
         identity_semantic_instance_key,
         normalized::{
-            NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NIndex, NLayoutLocals,
+            NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NLayoutLocals,
             NLayoutPlan, NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId,
             NStatementKind, NTerminatorKind, NValueId, NormalizedBody,
             normalize_runtime_semantic_body,
         },
     },
     ty::{
-        CallableLayoutParamPort, CallableLayoutPort, LayoutBundleComponent,
-        LayoutBundleComponentId, LayoutBundleComponentKey, LayoutBundleComponentTransport,
-        LayoutBundleInterface, LayoutBundleSchema, LayoutBundleViewMapping, LayoutEvidencePath,
-        LayoutEvidencePathStep, LayoutMapTy, LayoutPortKey,
+        CallableLayoutBundleSignature, CallableLayoutParamPort, CallableLayoutPort,
+        LayoutBundleComponent, LayoutBundleComponentId, LayoutBundleComponentKey,
+        LayoutBundleComponentTransport, LayoutBundleInterface, LayoutBundleSchema,
+        LayoutBundleViewMapping, LayoutEvidencePath, LayoutEvidencePathStep, LayoutPortKey,
         adt_def::instantiate_adt_field_shape,
         const_ty::CallableInputLayoutHoleOrigin,
         provider::{EffectHandleResolution, ProviderLayoutEvidence, resolve_effect_handle},
@@ -29,21 +29,21 @@ use crate::analysis::{
         ty_lower::layout_bundle_schema_for_semantic_value,
     },
 };
-use crate::semantic::{AssignedRootValue, LayoutProjection, LayoutViewKind, ProviderBinding};
+use crate::semantic::{LayoutProjection, LayoutViewKind, ProviderBinding};
 
 use super::{
     LayoutEvidenceAssignment, LayoutEvidenceBase, LayoutEvidenceBody, LayoutEvidenceCall,
     LayoutEvidenceCallArg, LayoutEvidenceComponentValue, LayoutEvidenceConstBinding,
-    LayoutEvidenceConstant, LayoutEvidenceError, LayoutEvidenceExpr, LayoutEvidenceIndex,
-    LayoutEvidenceLocal, LayoutEvidenceLocalId, LayoutEvidenceOperand, LayoutEvidenceReturn,
-    LayoutEvidenceStatement, LayoutEvidenceTerminator, LayoutEvidenceValue,
-    layout_const_param_uses, verify_layout_evidence_body,
+    LayoutEvidenceConstant, LayoutEvidenceError, LayoutEvidenceExpr, LayoutEvidenceLocal,
+    LayoutEvidenceLocalId, LayoutEvidenceOperand, LayoutEvidenceReturn, LayoutEvidenceStatement,
+    LayoutEvidenceTerminator, LayoutEvidenceValue, LayoutSignaturePort, layout_const_param_uses,
+    verify_layout_evidence_body,
 };
 
 #[derive(Clone, PartialEq, Eq)]
 struct ComponentExpr<'db> {
     expr: LayoutEvidenceExpr<'db>,
-    map_ty: LayoutMapTy<'db>,
+    ty: TyId<'db>,
     port: LayoutPortKey,
 }
 
@@ -87,7 +87,7 @@ impl<'db> IntoIterator for LayoutBundleValue<'db> {
     }
 }
 
-/// Concrete layout maps keyed by their structural bundle port at an assigned
+/// Concrete layout roots keyed by their structural bundle port at an assigned
 /// provider boundary.
 ///
 /// The inner value bundle owns the uniqueness index, so entry lowering cannot
@@ -101,7 +101,7 @@ impl<'db> AssignedProviderLayoutEvidence<'db> {
     pub fn component(&self, port: &LayoutPortKey) -> Option<&LayoutEvidenceConstant<'db>> {
         match &self.value.component(port)?.expr {
             LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Constant(value)) => Some(value),
-            _ => unreachable!("assigned provider evidence must be an affine constant"),
+            _ => unreachable!("assigned provider evidence must be a constant"),
         }
     }
 }
@@ -128,17 +128,20 @@ struct DeclaredComponentSource<'db> {
     value: ComponentExpr<'db>,
 }
 
+/// A projection from a value to one of its parts.
+///
+/// Array elements never carry layout roots, so a projection through an index
+/// selects no layout components and records no path beyond the array.
 #[derive(Clone, Default)]
 struct EvidenceProjection {
     path: LayoutEvidencePath,
-    indices: Vec<LayoutEvidenceIndex>,
+    array_element: bool,
 }
 
 #[derive(Clone)]
 struct LayoutTransferSource {
     local: SLocalId,
     component: LayoutBundleComponentId,
-    indices: Vec<LayoutEvidenceIndex>,
 }
 
 #[derive(Clone)]
@@ -149,21 +152,9 @@ enum LayoutTransferExpr<'db> {
         local: SLocalId,
         component: LayoutBundleComponentId,
     },
-    Array {
-        elements: Box<[LayoutTransferSource]>,
-    },
-    Repeat {
-        len: usize,
-        element: LayoutTransferSource,
-    },
     Zero,
     CallResult {
         component: LayoutBundleComponentId,
-    },
-    Update {
-        base: LayoutTransferSource,
-        indices: Box<[LayoutEvidenceIndex]>,
-        value: LayoutTransferSource,
     },
 }
 
@@ -183,7 +174,7 @@ impl<'db> LayoutTransferComponent<'db> {
         Self {
             target_id,
             target: LayoutBundleComponentShape {
-                map_ty: target.map_ty(),
+                ty: target.ty,
                 port: target.port.clone(),
             },
             expr,
@@ -193,14 +184,8 @@ impl<'db> LayoutTransferComponent<'db> {
 
 #[derive(Clone)]
 struct LayoutBundleComponentShape<'db> {
-    map_ty: LayoutMapTy<'db>,
+    ty: TyId<'db>,
     port: LayoutPortKey,
-}
-
-impl<'db> LayoutBundleComponentShape<'db> {
-    fn map_ty(&self) -> LayoutMapTy<'db> {
-        self.map_ty.clone()
-    }
 }
 
 #[derive(Clone, Default)]
@@ -294,10 +279,6 @@ fn layout_projections<'db>(
                 projections.push(LayoutProjection::VariantField { variant, field });
                 idx += 2;
             }
-            LayoutEvidencePathStep::Index => {
-                projections.push(LayoutProjection::Index(None));
-                idx += 1;
-            }
             LayoutEvidencePathStep::EffectTarget => {
                 projections.push(LayoutProjection::EffectTarget);
                 idx += 1;
@@ -305,57 +286,6 @@ fn layout_projections<'db>(
         }
     }
     Ok(projections)
-}
-
-fn assigned_component<'db>(
-    value: AssignedRootValue<'db>,
-    projection: &EvidenceProjection,
-    map_ty: LayoutMapTy<'db>,
-    port: LayoutPortKey,
-) -> Result<ComponentExpr<'db>, LayoutEvidenceError<'db>> {
-    match value {
-        AssignedRootValue::Literal { slot, .. } => Ok(ComponentExpr {
-            expr: LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Constant(
-                LayoutEvidenceConstant {
-                    map_ty: map_ty.clone(),
-                    base: LayoutEvidenceBase::Slot(slot),
-                    strides: vec![0; map_ty.rank()].into_boxed_slice(),
-                },
-            )),
-            map_ty,
-            port,
-        }),
-        AssignedRootValue::Indexed {
-            base,
-            dimensions,
-            strides,
-            ..
-        } => {
-            let consumed = projection.indices.len();
-            if consumed + map_ty.rank() != strides.len() || dimensions.len() != strides.len() {
-                return Err(LayoutEvidenceError::InvalidPlace);
-            }
-            let source_ty = LayoutMapTy {
-                scalar_ty: map_ty.scalar_ty,
-                dimensions: dimensions.iter().map(|dimension| dimension.len).collect(),
-            };
-            let source = LayoutEvidenceOperand::Constant(LayoutEvidenceConstant {
-                map_ty: source_ty,
-                base: LayoutEvidenceBase::Slot(base),
-                strides: strides.into_boxed_slice(),
-            });
-            let indices = projection.indices.clone().into_boxed_slice();
-            Ok(ComponentExpr {
-                expr: if indices.is_empty() {
-                    LayoutEvidenceExpr::Use(source)
-                } else {
-                    LayoutEvidenceExpr::Project { source, indices }
-                },
-                map_ty,
-                port,
-            })
-        }
-    }
 }
 
 fn assigned_provider_components<'db>(
@@ -370,19 +300,12 @@ fn assigned_provider_components<'db>(
     let base_projections = layout_projections(&projection.path)?;
     let mut values = Vec::with_capacity(expected.components.len());
     for component in &expected.components {
-        if let Some(LayoutBundleComponentKey::Static(base)) = &component.representative {
-            values.push(ComponentExpr {
-                expr: LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Constant(
-                    LayoutEvidenceConstant {
-                        map_ty: component.map_ty(),
-                        base: LayoutEvidenceBase::Root(*base),
-                        strides: vec![0; component.rank()].into_boxed_slice(),
-                    },
-                )),
-                map_ty: component.map_ty(),
-                port: component.port.clone(),
-            });
+        if let Some(source) = LayoutEvidenceBuilder::static_component(component) {
+            values.push(source);
             continue;
+        }
+        if projection.array_element {
+            return Err(LayoutEvidenceError::ProviderPlace);
         }
         let (view, component_path) = match component.port.value_path.split_first() {
             Some((LayoutEvidencePathStep::EffectTarget, path)) => (LayoutViewKind::Target, path),
@@ -402,7 +325,7 @@ fn assigned_provider_components<'db>(
         let mut projections = base_projections.clone();
         projections.extend(layout_projections(component_path)?);
         let value = match &component.representative {
-            Some(LayoutBundleComponentKey::Root(root)) => field
+            LayoutBundleComponentKey::Root(root) => field
                 .root_value_for_evidence_projections(view, *root, component.ty, &projections)
                 .ok()
                 .or_else(|| {
@@ -412,45 +335,36 @@ fn assigned_provider_components<'db>(
                         &projections,
                     )
                 }),
-            None
-            | Some(LayoutBundleComponentKey::Param(_) | LayoutBundleComponentKey::Static(_)) => {
+            LayoutBundleComponentKey::Param(_) | LayoutBundleComponentKey::Static(_) => {
                 field.unique_root_value_for_evidence_projections(view, component.ty, &projections)
             }
         }
         .ok_or(LayoutEvidenceError::ProviderPlace)?;
-        let source = assigned_component(
-            value,
-            projection,
-            component.map_ty(),
-            component.port.clone(),
-        )?;
-        if source.map_ty != component.map_ty() {
-            return Err(LayoutEvidenceError::ProviderPlace);
-        }
         values.push(ComponentExpr {
-            expr: source.expr,
-            map_ty: source.map_ty,
+            expr: LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Constant(
+                LayoutEvidenceConstant {
+                    ty: component.ty,
+                    base: LayoutEvidenceBase::Slot(value.slot),
+                },
+            )),
+            ty: component.ty,
             port: component.port.clone(),
         });
     }
     LayoutBundleValue::new(values)
 }
 
-/// Resolves the concrete layout maps supplied by an assigned provider at a
+/// Resolves the concrete layout roots supplied by an assigned provider at a
 /// semantic entry boundary.
 ///
-/// Entry providers are whole values, so their evidence is always an affine
-/// constant. Dynamic projections are introduced only inside the callee body.
+/// Entry providers are whole values, so their evidence is always a constant.
 pub fn assigned_provider_layout_evidence<'db>(
     db: &'db dyn HirAnalysisDb,
     provider: &ProviderBinding<'db>,
     expected: &LayoutBundleSchema<'db>,
 ) -> Result<AssignedProviderLayoutEvidence<'db>, LayoutEvidenceError<'db>> {
-    let projection = EvidenceProjection {
-        path: Vec::new(),
-        indices: Vec::new(),
-    };
-    let value = assigned_provider_components(db, provider, &projection, expected)?;
+    let value =
+        assigned_provider_components(db, provider, &EvidenceProjection::default(), expected)?;
     if value.components.iter().any(|component| {
         !matches!(
             component.expr,
@@ -500,7 +414,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         self.locals.push(LayoutEvidenceLocal {
             semantic_local,
             component: component_id,
-            map_ty: component.map_ty(),
+            ty: component.ty,
             param,
         });
         id
@@ -518,11 +432,10 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             let value = match (transport.component(component_id), &component.representative) {
                 (
                     Some(LayoutBundleComponentTransport::CompileTime),
-                    Some(LayoutBundleComponentKey::Static(base)),
+                    LayoutBundleComponentKey::Static(base),
                 ) => LayoutEvidenceComponentValue::Known(LayoutEvidenceConstant {
-                    map_ty: component.map_ty(),
+                    ty: component.ty,
                     base: LayoutEvidenceBase::Root(*base),
-                    strides: vec![0; component.rank()].into_boxed_slice(),
                 }),
                 (Some(LayoutBundleComponentTransport::Runtime), _) => {
                     LayoutEvidenceComponentValue::Dynamic(self.alloc_local(
@@ -539,9 +452,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                 }
                 (
                     Some(LayoutBundleComponentTransport::CompileTime),
-                    None
-                    | Some(LayoutBundleComponentKey::Root(_))
-                    | Some(LayoutBundleComponentKey::Param(_)),
+                    LayoutBundleComponentKey::Root(_) | LayoutBundleComponentKey::Param(_),
                 ) => {
                     unreachable!("compile-time layout component must have a static key")
                 }
@@ -573,7 +484,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         };
         Ok(ComponentExpr {
             expr: LayoutEvidenceExpr::Use(operand),
-            map_ty: schema.map_ty(),
+            ty: schema.ty,
             port: schema.port.clone(),
         })
     }
@@ -599,11 +510,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
     fn operand(expr: &LayoutEvidenceExpr<'db>) -> Option<LayoutEvidenceOperand<'db>> {
         match expr {
             LayoutEvidenceExpr::Use(operand) => Some(operand.clone()),
-            LayoutEvidenceExpr::Project { .. }
-            | LayoutEvidenceExpr::Array { .. }
-            | LayoutEvidenceExpr::Repeat { .. }
-            | LayoutEvidenceExpr::Update { .. }
-            | LayoutEvidenceExpr::CallResult { .. } => None,
+            LayoutEvidenceExpr::CallResult { .. } => None,
         }
     }
 
@@ -613,45 +520,16 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         component: &LayoutBundleComponentShape<'db>,
         source: ComponentExpr<'db>,
     ) -> Result<ComponentExpr<'db>, LayoutEvidenceError<'db>> {
-        if source.map_ty != component.map_ty() {
-            return Err(LayoutEvidenceError::MapTypeMismatch {
+        if source.ty != component.ty {
+            return Err(LayoutEvidenceError::RootTypeMismatch {
                 dst,
                 component: component_id,
             });
         }
         Ok(ComponentExpr {
             expr: source.expr,
-            map_ty: source.map_ty,
+            ty: source.ty,
             port: component.port.clone(),
-        })
-    }
-
-    fn projected_component(
-        source: ComponentExpr<'db>,
-        projection: &EvidenceProjection,
-        target_ty: LayoutMapTy<'db>,
-        port: LayoutPortKey,
-    ) -> Result<ComponentExpr<'db>, LayoutEvidenceError<'db>> {
-        let operand = Self::operand(&source.expr).ok_or(LayoutEvidenceError::InvalidPlace)?;
-        let Some(projected_ty) = source.map_ty.projected(projection.indices.len()) else {
-            return Err(LayoutEvidenceError::InvalidPlace);
-        };
-        if projected_ty != target_ty {
-            return Err(LayoutEvidenceError::InvalidPlace);
-        }
-        let indices = projection.indices.clone().into_boxed_slice();
-        let expr = if indices.is_empty() {
-            LayoutEvidenceExpr::Use(operand)
-        } else {
-            LayoutEvidenceExpr::Project {
-                source: operand,
-                indices,
-            }
-        };
-        Ok(ComponentExpr {
-            expr,
-            map_ty: target_ty,
-            port,
         })
     }
 
@@ -664,25 +542,19 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             .semantic_values
             .get(local.index())
             .ok_or(LayoutEvidenceError::InvalidPlace)?;
-        let consumed = projection.indices.len();
         let mut projected = Vec::new();
         for (component_idx, component) in value.schema.components.iter().enumerate() {
             let Some(port) = value
                 .schema
-                .projected_port(&component.port, &projection.path)
+                .projected_port(&component.port, &projection.path)?
+                .filter(|_| !projection.array_element)
             else {
                 continue;
             };
-            let target_ty = component
-                .map_ty()
-                .projected(consumed)
-                .ok_or(LayoutEvidenceError::InvalidPlace)?;
-            projected.push(Self::projected_component(
-                self.component_expr(local, component_idx)?,
-                projection,
-                target_ty,
+            projected.push(ComponentExpr {
                 port,
-            )?);
+                ..self.component_expr(local, component_idx)?
+            });
         }
         LayoutBundleValue::new(projected)
     }
@@ -691,44 +563,38 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         &self,
         local: SLocalId,
     ) -> Result<LayoutBundleValue<'db>, LayoutEvidenceError<'db>> {
-        self.project_value(
-            local,
-            &EvidenceProjection {
-                path: Vec::new(),
-                indices: Vec::new(),
-            },
-        )
+        self.project_value(local, &EvidenceProjection::default())
     }
 
     fn transfer_source_for_port(
         &self,
         local: SLocalId,
         port: &LayoutPortKey,
-        indices: Vec<LayoutEvidenceIndex>,
-        map_ty: &LayoutMapTy<'db>,
+        ty: TyId<'db>,
     ) -> Result<LayoutTransferSource, LayoutEvidenceError<'db>> {
         let value = self
             .semantic_values
             .get(local.index())
             .ok_or(LayoutEvidenceError::InvalidPlace)?;
-        let port = value.schema.canonicalize_port(port);
+        let port = value.schema.canonicalize_port(port).map_err(|error| {
+            LayoutEvidenceError::InvalidSchema {
+                local: Some(local),
+                error,
+            }
+        })?;
         let (component, source) = value.schema.component_by_port(&port).ok_or_else(|| {
             LayoutEvidenceError::MissingPort {
                 local,
                 port: port.clone(),
             }
         })?;
-        if source.map_ty().projected(indices.len()).as_ref() != Some(map_ty) {
-            return Err(LayoutEvidenceError::MapTypeMismatch {
+        if source.ty != ty {
+            return Err(LayoutEvidenceError::RootTypeMismatch {
                 dst: local,
                 component,
             });
         }
-        Ok(LayoutTransferSource {
-            local,
-            component,
-            indices,
-        })
+        Ok(LayoutTransferSource { local, component })
     }
 
     fn projected_transfer_source(
@@ -741,21 +607,18 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             .semantic_values
             .get(local.index())
             .ok_or(LayoutEvidenceError::InvalidPlace)?;
-        let candidates = value
-            .schema
-            .indexed_components()
-            .filter(|(_, component)| {
-                value
+        let mut candidates = Vec::new();
+        for (id, component) in value.schema.indexed_components() {
+            if !projection.array_element
+                && component.ty == target.ty
+                && value
                     .schema
-                    .projected_port(&component.port, &projection.path)
+                    .projected_port(&component.port, &projection.path)?
                     .is_some_and(|port| port == target.port)
-                    && component
-                        .map_ty()
-                        .projected(projection.indices.len())
-                        .as_ref()
-                        == Some(&target.map_ty())
-            })
-            .collect::<Vec<_>>();
+            {
+                candidates.push((id, component));
+            }
+        }
         let [(source, _)] = candidates.as_slice() else {
             return Err(LayoutEvidenceError::ShapeMismatch {
                 dst: local,
@@ -766,7 +629,6 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         Ok(LayoutTransferSource {
             local,
             component: *source,
-            indices: projection.indices.clone(),
         })
     }
 
@@ -794,7 +656,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
     fn mapped_transfer_bundle(
         &self,
         local: SLocalId,
-        projection: &EvidenceProjection,
+        path: &[LayoutEvidencePathStep],
         target: &LayoutBundleInterface<'db>,
         mapping: &LayoutBundleViewMapping,
     ) -> Result<LayoutTransferBundle<'db>, LayoutEvidenceError<'db>> {
@@ -817,16 +679,12 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                             component: source_id,
                         })?;
                 if source
-                    .projected_port(&source_component.port, &projection.path)
+                    .projected_port(&source_component.port, path)?
                     .as_ref()
                     != Some(&component.port)
-                    || source_component
-                        .map_ty()
-                        .projected(projection.indices.len())
-                        .as_ref()
-                        != Some(&component.map_ty())
+                    || source_component.ty != component.ty
                 {
-                    return Err(LayoutEvidenceError::MapTypeMismatch {
+                    return Err(LayoutEvidenceError::RootTypeMismatch {
                         dst: local,
                         component: source_id,
                     });
@@ -837,7 +695,6 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                     LayoutTransferExpr::Source(LayoutTransferSource {
                         local,
                         component: source_id,
-                        indices: projection.indices.clone(),
                     }),
                 ))
             })
@@ -859,7 +716,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                 let source = sources
                     .component(&component.port)
                     .ok_or(LayoutEvidenceError::InvalidPlace)?;
-                if source.map_ty != component.map_ty() {
+                if source.ty != component.ty {
                     return Err(LayoutEvidenceError::InvalidPlace);
                 }
                 Ok(LayoutTransferComponent::new(
@@ -908,14 +765,9 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                         .push(LayoutEvidencePathStep::Variant(variant.0));
                     projection.path.push(LayoutEvidencePathStep::Field(field.0));
                 }
-                NDataProjection::Index(index) => {
-                    projection.path.push(LayoutEvidencePathStep::Index);
-                    projection.indices.push(match index {
-                        NIndex::Const(index) => LayoutEvidenceIndex::Constant(*index),
-                        NIndex::Value(value) => {
-                            LayoutEvidenceIndex::Dynamic(self.value_local(*value)?)
-                        }
-                    });
+                NDataProjection::Index(_) => {
+                    projection.array_element = true;
+                    break;
                 }
             }
         }
@@ -930,9 +782,9 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         let target =
             LayoutBundleInterface::all_runtime(self.semantic_values[dst.index()].schema.clone());
         let mapping = target
-            .runtime_call_mapping(&self.semantic_values[source.index()].schema, &[])
+            .runtime_call_mapping(&self.semantic_values[source.index()].schema, &[])?
             .ok_or(LayoutEvidenceError::InvalidPlace)?;
-        self.mapped_transfer_bundle(source, &EvidenceProjection::default(), &target, &mapping)
+        self.mapped_transfer_bundle(source, &[], &target, &mapping)
     }
 
     fn ambient_component(
@@ -946,8 +798,8 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             .schema
             .component(component)
             .ok_or(LayoutEvidenceError::MissingComponent { local, component })?;
-        if destination.port != target.port || destination.map_ty() != target.map_ty() {
-            return Err(LayoutEvidenceError::MapTypeMismatch {
+        if destination.port != target.port || destination.ty != target.ty {
+            return Err(LayoutEvidenceError::RootTypeMismatch {
                 dst: local,
                 component,
             });
@@ -960,24 +812,16 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             Some(LayoutEvidenceComponentValue::Dynamic(_))
         );
         let source = match (is_runtime, &destination.representative) {
-            (false, Some(LayoutBundleComponentKey::Static(_))) => {
-                Self::static_component(destination)
-            }
-            (true, Some(LayoutBundleComponentKey::Static(_))) => self
+            (false, LayoutBundleComponentKey::Static(_)) => Self::static_component(destination),
+            (true, LayoutBundleComponentKey::Static(_)) => self
                 .declared_component_source(local, component, destination)?
                 .or_else(|| Self::static_component(destination)),
-            (
-                true,
-                None
-                | Some(LayoutBundleComponentKey::Root(_))
-                | Some(LayoutBundleComponentKey::Param(_)),
-            ) => self.declared_component_source(local, component, destination)?,
-            (
-                false,
-                None
-                | Some(LayoutBundleComponentKey::Root(_))
-                | Some(LayoutBundleComponentKey::Param(_)),
-            ) => unreachable!("compile-time layout component must have a static key"),
+            (true, LayoutBundleComponentKey::Root(_) | LayoutBundleComponentKey::Param(_)) => {
+                self.declared_component_source(local, component, destination)?
+            }
+            (false, LayoutBundleComponentKey::Root(_) | LayoutBundleComponentKey::Param(_)) => {
+                unreachable!("compile-time layout component must have a static key")
+            }
         }
         .ok_or(LayoutEvidenceError::MissingComponent { local, component })?;
         Self::retarget_component(local, component, target, source)
@@ -997,119 +841,34 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         Ok(component)
     }
 
-    fn evaluate_transfer_source(
-        &self,
-        source: &LayoutTransferSource,
-        map_ty: LayoutMapTy<'db>,
-        port: LayoutPortKey,
-    ) -> Result<ComponentExpr<'db>, LayoutEvidenceError<'db>> {
-        Self::projected_component(
-            self.component_expr(source.local, source.component.index())?,
-            &EvidenceProjection {
-                path: Vec::new(),
-                indices: source.indices.clone(),
-            },
-            map_ty,
-            port,
-        )
-    }
-
     fn evaluate_transfer_component(
         &self,
         transfer: &LayoutTransferComponent<'db>,
     ) -> Result<ComponentExpr<'db>, LayoutEvidenceError<'db>> {
         let target = &transfer.target;
         match &transfer.expr {
-            LayoutTransferExpr::Source(source) => {
-                self.evaluate_transfer_source(source, target.map_ty(), target.port.clone())
-            }
+            LayoutTransferExpr::Source(source) => Self::retarget_component(
+                source.local,
+                source.component,
+                target,
+                self.component_expr(source.local, source.component.index())?,
+            ),
             LayoutTransferExpr::Fixed(expr) => Ok(ComponentExpr {
                 expr: expr.clone(),
-                map_ty: target.map_ty(),
+                ty: target.ty,
                 port: target.port.clone(),
             }),
             LayoutTransferExpr::Ambient { local, component } => {
                 self.ambient_component(*local, *component, target)
-            }
-            LayoutTransferExpr::Array { elements } => {
-                let child_ty = target
-                    .map_ty()
-                    .projected(1)
-                    .ok_or(LayoutEvidenceError::InvalidPlace)?;
-                let child_port = target
-                    .port
-                    .projected(&[LayoutEvidencePathStep::Index])
-                    .ok_or(LayoutEvidenceError::InvalidPlace)?;
-                let elements = elements
-                    .iter()
-                    .map(|source| {
-                        self.evaluate_transfer_source(source, child_ty.clone(), child_port.clone())
-                            .map(|source| source.expr)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(ComponentExpr {
-                    expr: LayoutEvidenceExpr::Array {
-                        elements: elements.into_boxed_slice(),
-                    },
-                    map_ty: target.map_ty(),
-                    port: target.port.clone(),
-                })
-            }
-            LayoutTransferExpr::Repeat { len, element } => {
-                let child_ty = target
-                    .map_ty()
-                    .projected(1)
-                    .ok_or(LayoutEvidenceError::InvalidPlace)?;
-                let child_port = target
-                    .port
-                    .projected(&[LayoutEvidencePathStep::Index])
-                    .ok_or(LayoutEvidenceError::InvalidPlace)?;
-                let element = self.evaluate_transfer_source(element, child_ty, child_port)?;
-                Ok(ComponentExpr {
-                    expr: LayoutEvidenceExpr::Repeat {
-                        len: *len,
-                        element: Box::new(element.expr),
-                    },
-                    map_ty: target.map_ty(),
-                    port: target.port.clone(),
-                })
             }
             LayoutTransferExpr::Zero => Ok(Self::zero_component(target)),
             LayoutTransferExpr::CallResult { component } => Ok(ComponentExpr {
                 expr: LayoutEvidenceExpr::CallResult {
                     component: *component,
                 },
-                map_ty: target.map_ty(),
+                ty: target.ty,
                 port: target.port.clone(),
             }),
-            LayoutTransferExpr::Update {
-                base,
-                indices,
-                value,
-            } => {
-                let base =
-                    self.evaluate_transfer_source(base, target.map_ty(), target.port.clone())?;
-                let base = Self::operand(&base.expr).ok_or(LayoutEvidenceError::InvalidPlace)?;
-                let value_ty = target
-                    .map_ty()
-                    .projected(indices.len())
-                    .ok_or(LayoutEvidenceError::InvalidPlace)?;
-                let value_port = self.transfer_source_component(value)?.port.clone();
-                let value = self.evaluate_transfer_source(value, value_ty, value_port)?;
-                Ok(ComponentExpr {
-                    expr: if indices.is_empty() {
-                        value.expr
-                    } else {
-                        LayoutEvidenceExpr::Update {
-                            source: base,
-                            indices: indices.clone(),
-                            value: Box::new(value.expr),
-                        }
-                    },
-                    map_ty: target.map_ty(),
-                    port: target.port.clone(),
-                })
-            }
         }
     }
 
@@ -1171,8 +930,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                     LayoutTransferExpr::Source(self.transfer_source_for_port(
                         self.operand_local(*field)?,
                         &port,
-                        Vec::new(),
-                        &component.map_ty(),
+                        component.ty,
                     )?)
                 } else {
                     LayoutTransferExpr::Ambient {
@@ -1181,95 +939,6 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                     }
                 };
                 Ok(LayoutTransferComponent::new(target_id, component, expr))
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .and_then(LayoutTransferBundle::new)
-    }
-
-    fn array_transfer_bundle(
-        &self,
-        dst: SLocalId,
-        fields: &[NOperand],
-    ) -> Result<LayoutTransferBundle<'db>, LayoutEvidenceError<'db>> {
-        let target = &self.semantic_values[dst.index()].schema;
-        target
-            .indexed_components()
-            .map(|(target_id, component)| {
-                if component.rank() == 0
-                    || component.port.value_path.first() != Some(&LayoutEvidencePathStep::Index)
-                {
-                    return Err(LayoutEvidenceError::IncompatibleComponent {
-                        dst,
-                        component: target_id,
-                    });
-                }
-                let port = component
-                    .port
-                    .projected(&[LayoutEvidencePathStep::Index])
-                    .ok_or(LayoutEvidenceError::InvalidPlace)?;
-                let child_ty = component
-                    .map_ty()
-                    .projected(1)
-                    .ok_or(LayoutEvidenceError::InvalidPlace)?;
-                let elements = fields
-                    .iter()
-                    .map(|field| {
-                        self.transfer_source_for_port(
-                            self.operand_local(*field)?,
-                            &port,
-                            Vec::new(),
-                            &child_ty,
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(LayoutTransferComponent::new(
-                    target_id,
-                    component,
-                    LayoutTransferExpr::Array {
-                        elements: elements.into_boxed_slice(),
-                    },
-                ))
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .and_then(LayoutTransferBundle::new)
-    }
-
-    fn repeat_transfer_bundle(
-        &self,
-        dst: SLocalId,
-        value: SLocalId,
-    ) -> Result<LayoutTransferBundle<'db>, LayoutEvidenceError<'db>> {
-        let target = &self.semantic_values[dst.index()].schema;
-        target
-            .indexed_components()
-            .map(|(target_id, component)| {
-                if component.port.value_path.first() != Some(&LayoutEvidencePathStep::Index) {
-                    return Err(LayoutEvidenceError::IncompatibleComponent {
-                        dst,
-                        component: target_id,
-                    });
-                }
-                let port = component
-                    .port
-                    .projected(&[LayoutEvidencePathStep::Index])
-                    .ok_or(LayoutEvidenceError::InvalidPlace)?;
-                let child_ty = component
-                    .map_ty()
-                    .projected(1)
-                    .ok_or(LayoutEvidenceError::InvalidPlace)?;
-                Ok(LayoutTransferComponent::new(
-                    target_id,
-                    component,
-                    LayoutTransferExpr::Repeat {
-                        len: component.dimensions[0],
-                        element: self.transfer_source_for_port(
-                            value,
-                            &port,
-                            Vec::new(),
-                            &child_ty,
-                        )?,
-                    },
-                ))
             })
             .collect::<Result<Vec<_>, _>>()
             .and_then(LayoutTransferBundle::new)
@@ -1305,8 +974,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                         LayoutTransferExpr::Source(self.transfer_source_for_port(
                             self.operand_local(*field)?,
                             &port,
-                            Vec::new(),
-                            &component.map_ty(),
+                            component.ty,
                         )?)
                     }
                     [] => self.known_component_expr(dst, target_id.index()).map_or(
@@ -1366,17 +1034,9 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             source_ty = self.normalized.owner.normalized_ty(self.db, next_ty);
         }
         let mapping = expected
-            .runtime_call_mapping(source_schema, &path)
+            .runtime_call_mapping(source_schema, &path)?
             .ok_or(LayoutEvidenceError::InvalidPlace)?;
-        self.mapped_transfer_bundle(
-            local,
-            &EvidenceProjection {
-                path,
-                indices: Vec::new(),
-            },
-            expected,
-            &mapping,
-        )
+        self.mapped_transfer_bundle(local, &path, expected, &mapping)
     }
 
     fn call_input_transfer_bundle(
@@ -1387,12 +1047,11 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         effect_args: &[NEffectArg<'db>],
     ) -> Result<LayoutTransferBundle<'db>, LayoutEvidenceError<'db>> {
         let direct = |local: SLocalId| {
-            let projection = EvidenceProjection::default();
             let source = &self.semantic_values[local.index()].schema;
             let mapping = interface
-                .runtime_call_mapping(source, &[])
+                .runtime_call_mapping(source, &[])?
                 .ok_or(LayoutEvidenceError::InvalidPlace)?;
-            self.mapped_transfer_bundle(local, &projection, interface, &mapping)
+            self.mapped_transfer_bundle(local, &[], interface, &mapping)
         };
         match origin {
             CallableInputLayoutHoleOrigin::Receiver => args
@@ -1457,8 +1116,8 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                             component: target_id,
                         },
                     )?;
-                if output_component.map_ty() != target.map_ty() {
-                    return Err(LayoutEvidenceError::MapTypeMismatch {
+                if output_component.ty != target.ty {
+                    return Err(LayoutEvidenceError::RootTypeMismatch {
                         dst,
                         component: output_id,
                     });
@@ -1511,8 +1170,8 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                             local: dst,
                             component: target_id,
                         })?;
-                    if destination.map_ty() != component.map_ty() {
-                        return Err(LayoutEvidenceError::MapTypeMismatch {
+                    if destination.ty != component.ty {
+                        return Err(LayoutEvidenceError::RootTypeMismatch {
                             dst,
                             component: target_id,
                         });
@@ -1541,7 +1200,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                 }
                 .filter(|value| {
                     value.target.port == param.component.port
-                        && value.target.map_ty() == param.component.map_ty()
+                        && value.target.ty == param.component.ty
                 })
                 .cloned()
                 .ok_or(LayoutEvidenceError::MissingComponent {
@@ -1553,7 +1212,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                     value,
                 })
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, LayoutEvidenceError<'db>>>()?;
         let value = self.call_result_transfer_bundle(dst, &signature.output)?;
         Ok((
             value,
@@ -1573,33 +1232,30 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         src: SLocalId,
     ) -> Result<LayoutTransferBundle<'db>, LayoutEvidenceError<'db>> {
         let target = &self.semantic_values[dst.index()].schema;
+        if projection.array_element {
+            return Ok(LayoutTransferBundle::default());
+        }
         if projection.path.is_empty() {
             return self.source_transfer_bundle(src, &EvidenceProjection::default(), target);
         }
         target
             .indexed_components()
             .filter_map(|(target_id, component)| {
-                let port = target.projected_port(&component.port, &projection.path)?;
-                Some((target_id, component, port))
+                target
+                    .projected_port(&component.port, &projection.path)
+                    .transpose()
+                    .map(|port| port.map(|port| (target_id, component, port)))
             })
-            .map(|(target_id, component, port)| {
-                let value_ty = component
-                    .map_ty()
-                    .projected(projection.indices.len())
-                    .ok_or(LayoutEvidenceError::InvalidPlace)?;
+            .map(|projected| {
+                let (target_id, component, port) = projected?;
                 Ok(LayoutTransferComponent::new(
                     target_id,
                     component,
-                    LayoutTransferExpr::Update {
-                        base: self.transfer_source_for_port(
-                            dst,
-                            &component.port,
-                            Vec::new(),
-                            &component.map_ty(),
-                        )?,
-                        indices: projection.indices.clone().into_boxed_slice(),
-                        value: self.transfer_source_for_port(src, &port, Vec::new(), &value_ty)?,
-                    },
+                    LayoutTransferExpr::Source(self.transfer_source_for_port(
+                        src,
+                        &port,
+                        component.ty,
+                    )?),
                 ))
             })
             .collect::<Result<Vec<_>, _>>()
@@ -1644,23 +1300,12 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                         self.structural_repack_transfer_bundle(dst, self.operand_local(*value)?)?,
                         None,
                     ),
-                    NExpr::AggregateMake { ty, fields }
-                    | NExpr::MakeHandle {
-                        ty,
-                        variant: None,
-                        fields,
-                        ..
-                    } if ty.is_array(self.db) => (self.array_transfer_bundle(dst, fields)?, None),
                     NExpr::AggregateMake { fields, .. }
                     | NExpr::MakeHandle {
                         fields,
                         variant: None,
                         ..
                     } => (self.aggregate_transfer_bundle(dst, fields)?, None),
-                    NExpr::ArrayRepeat { value, .. } => (
-                        self.repeat_transfer_bundle(dst, self.operand_local(*value)?)?,
-                        None,
-                    ),
                     NExpr::EnumMake {
                         variant, fields, ..
                     }
@@ -1671,7 +1316,8 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                     } => (self.enum_transfer_bundle(dst, variant.0, fields)?, None),
                     NExpr::Const(_) if !result_used => (LayoutTransferBundle::default(), None),
                     NExpr::Const(_) => (self.ambient_transfer_bundle(dst)?, None),
-                    NExpr::CodeRegionRef { .. }
+                    NExpr::ArrayRepeat { .. }
+                    | NExpr::CodeRegionRef { .. }
                     | NExpr::Unary { .. }
                     | NExpr::Binary { .. }
                     | NExpr::PointerCast { .. }
@@ -1701,6 +1347,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                 let src = self.operand_local(*value)?;
                 let (root, projection) = self.place_projection(destination)?;
                 let fallback = (!projection.path.is_empty()
+                    || projection.array_element
                     || matches!(&root, EvidencePlaceRoot::Provider(_)))
                 .then(|| {
                     self.place_transfer_bundle(
@@ -1762,7 +1409,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         let compatible = self
             .declared_sources
             .iter()
-            .filter(|source| component.map_ty() == source.component.map_ty())
+            .filter(|source| component.ty == source.component.ty)
             .collect::<Vec<_>>();
         let exact = compatible
             .iter()
@@ -1805,9 +1452,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             .get(local.index())
             .ok_or(LayoutEvidenceError::InvalidPlace)?
             .iter()
-            .filter(|source| {
-                source.value.port == component.port && source.value.map_ty == component.map_ty()
-            })
+            .filter(|source| source.value.port == component.port && source.value.ty == component.ty)
             .collect::<Vec<_>>();
         let required = sources
             .iter()
@@ -1845,8 +1490,8 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                 local,
                 port: source.value.port.clone(),
             })?;
-        if component.map_ty() != source.value.map_ty {
-            return Err(LayoutEvidenceError::MapTypeMismatch {
+        if component.ty != source.value.ty {
+            return Err(LayoutEvidenceError::RootTypeMismatch {
                 dst: local,
                 component: component_id,
             });
@@ -1875,54 +1520,6 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         Ok(())
     }
 
-    fn project_contextual_component(
-        source: ComponentExpr<'db>,
-        projection: &EvidenceProjection,
-        target_ty: LayoutMapTy<'db>,
-        port: LayoutPortKey,
-    ) -> Result<ComponentExpr<'db>, LayoutEvidenceError<'db>> {
-        let projected_ty = source
-            .map_ty
-            .projected(projection.indices.len())
-            .ok_or(LayoutEvidenceError::InvalidPlace)?;
-        if projected_ty != target_ty {
-            return Err(LayoutEvidenceError::InvalidPlace);
-        }
-        let indices = projection.indices.clone();
-        let expr = if indices.is_empty() {
-            source.expr
-        } else {
-            match source.expr {
-                LayoutEvidenceExpr::Use(source) => LayoutEvidenceExpr::Project {
-                    source,
-                    indices: indices.into_boxed_slice(),
-                },
-                LayoutEvidenceExpr::Project {
-                    source,
-                    indices: existing,
-                } => {
-                    let mut combined = existing.into_vec();
-                    combined.extend(indices);
-                    LayoutEvidenceExpr::Project {
-                        source,
-                        indices: combined.into_boxed_slice(),
-                    }
-                }
-                LayoutEvidenceExpr::Array { .. }
-                | LayoutEvidenceExpr::Repeat { .. }
-                | LayoutEvidenceExpr::Update { .. }
-                | LayoutEvidenceExpr::CallResult { .. } => {
-                    return Err(LayoutEvidenceError::InvalidPlace);
-                }
-            }
-        };
-        Ok(ComponentExpr {
-            expr,
-            map_ty: target_ty,
-            port,
-        })
-    }
-
     fn propagate_transfer_source(
         &mut self,
         source: &LayoutTransferSource,
@@ -1930,63 +1527,21 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         queue: &mut VecDeque<SLocalId>,
         queued: &mut FxHashSet<SLocalId>,
     ) -> Result<(), LayoutEvidenceError<'db>> {
-        // A scalar projection cannot define the unobserved members of its
-        // source map. Array construction and updates explicitly project their
-        // destination context before reaching this leaf.
-        if !source.indices.is_empty() {
-            return Ok(());
-        }
         let component = self.transfer_source_component(source)?;
-        let map_ty = component.map_ty();
-        let port = component.port.clone();
-        if map_ty != expected.value.map_ty {
-            return Err(LayoutEvidenceError::MapTypeMismatch {
+        if component.ty != expected.value.ty {
+            return Err(LayoutEvidenceError::RootTypeMismatch {
                 dst: source.local,
                 component: source.component,
             });
         }
+        let port = component.port.clone();
         self.enqueue_contextual_source(
             source.local,
             ContextualComponentExpr {
                 value: ComponentExpr {
-                    expr: expected.value.expr,
-                    map_ty: expected.value.map_ty,
                     port,
+                    ..expected.value
                 },
-                strength: expected.strength,
-            },
-            queue,
-            queued,
-        )
-    }
-
-    fn propagate_projected_transfer_source(
-        &mut self,
-        source: &LayoutTransferSource,
-        indices: Vec<LayoutEvidenceIndex>,
-        expected: ContextualComponentExpr<'db>,
-        queue: &mut VecDeque<SLocalId>,
-        queued: &mut FxHashSet<SLocalId>,
-    ) -> Result<(), LayoutEvidenceError<'db>> {
-        let target_ty = expected
-            .value
-            .map_ty
-            .projected(indices.len())
-            .ok_or(LayoutEvidenceError::InvalidPlace)?;
-        let port = self.transfer_source_component(source)?.port.clone();
-        let value = Self::project_contextual_component(
-            expected.value,
-            &EvidenceProjection {
-                path: Vec::new(),
-                indices,
-            },
-            target_ty,
-            port,
-        )?;
-        self.propagate_transfer_source(
-            source,
-            ContextualComponentExpr {
-                value,
                 strength: expected.strength,
             },
             queue,
@@ -2005,37 +1560,8 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             LayoutTransferExpr::Source(source) => {
                 self.propagate_transfer_source(source, expected, queue, queued)
             }
-            LayoutTransferExpr::Array { elements } => {
-                for (index, source) in elements.iter().enumerate() {
-                    self.propagate_projected_transfer_source(
-                        source,
-                        vec![LayoutEvidenceIndex::Constant(index)],
-                        expected.clone(),
-                        queue,
-                        queued,
-                    )?;
-                }
-                Ok(())
-            }
-            LayoutTransferExpr::Repeat { len: 1, element } => self
-                .propagate_projected_transfer_source(
-                    element,
-                    vec![LayoutEvidenceIndex::Constant(0)],
-                    expected,
-                    queue,
-                    queued,
-                ),
-            LayoutTransferExpr::Update { indices, value, .. } => self
-                .propagate_projected_transfer_source(
-                    value,
-                    indices.to_vec(),
-                    expected,
-                    queue,
-                    queued,
-                ),
             LayoutTransferExpr::Fixed(_)
             | LayoutTransferExpr::Ambient { .. }
-            | LayoutTransferExpr::Repeat { .. }
             | LayoutTransferExpr::Zero
             | LayoutTransferExpr::CallResult { .. } => Ok(()),
         }
@@ -2052,7 +1578,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
             let Some(transfer) = bundle.component_by_port(&expected.value.port) else {
                 continue;
             };
-            if transfer.target.map_ty() != expected.value.map_ty {
+            if transfer.target.ty != expected.value.ty {
                 return Err(LayoutEvidenceError::InvalidPlace);
             }
             self.propagate_transfer_component(transfer, expected.clone(), queue, queued)?;
@@ -2157,23 +1683,7 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                     .iter()
                     .any(|source| source.component.dependent_const_params.contains(&param));
                 match candidates.as_slice() {
-                    [binding] => {
-                        let map_ty = match &binding.value {
-                            LayoutEvidenceOperand::Local(local) => {
-                                &self.locals[local.index()].map_ty
-                            }
-                            LayoutEvidenceOperand::Constant(value) => &value.map_ty,
-                        };
-                        if map_ty.rank() == 0 {
-                            Some(Ok(binding.clone()))
-                        } else {
-                            Some(Err(LayoutEvidenceError::UnprojectedConstBinding {
-                                param,
-                                origin,
-                                source: binding.source.clone(),
-                            }))
-                        }
-                    }
+                    [binding] => Some(Ok(binding.clone())),
                     [] if is_layout_dependency => {
                         Some(Err(LayoutEvidenceError::MissingConstBinding {
                             param,
@@ -2200,29 +1710,27 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
         ComponentExpr {
             expr: LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Constant(
                 LayoutEvidenceConstant {
-                    map_ty: component.map_ty(),
+                    ty: component.ty,
                     base: LayoutEvidenceBase::Slot(0),
-                    strides: vec![0; component.map_ty.rank()].into_boxed_slice(),
                 },
             )),
-            map_ty: component.map_ty(),
+            ty: component.ty,
             port: component.port.clone(),
         }
     }
 
     fn static_component(component: &LayoutBundleComponent<'db>) -> Option<ComponentExpr<'db>> {
-        let Some(LayoutBundleComponentKey::Static(base)) = component.representative else {
+        let LayoutBundleComponentKey::Static(base) = component.representative else {
             return None;
         };
         Some(ComponentExpr {
             expr: LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Constant(
                 LayoutEvidenceConstant {
-                    map_ty: component.map_ty(),
+                    ty: component.ty,
                     base: LayoutEvidenceBase::Root(base),
-                    strides: vec![0; component.rank()].into_boxed_slice(),
                 },
             )),
-            map_ty: component.map_ty(),
+            ty: component.ty,
             port: component.port.clone(),
         })
     }
@@ -2265,12 +1773,11 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                 }
             },
         };
-        let mut path = Vec::new();
-        let mut indices = Vec::new();
+        let mut projection = EvidenceProjection::default();
         for step in place.path.iter() {
             match step {
                 NDataProjection::Field(field) => {
-                    path.push(LayoutEvidencePathStep::Field(field.0));
+                    projection.path.push(LayoutEvidencePathStep::Field(field.0));
                     ty = if ty.is_tuple(self.db) {
                         ty.field_types(self.db)
                             .get(usize::from(field.0))
@@ -2290,8 +1797,10 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                     };
                 }
                 NDataProjection::VariantField { variant, field } => {
-                    path.push(LayoutEvidencePathStep::Variant(variant.0));
-                    path.push(LayoutEvidencePathStep::Field(field.0));
+                    projection
+                        .path
+                        .push(LayoutEvidencePathStep::Variant(variant.0));
+                    projection.path.push(LayoutEvidencePathStep::Field(field.0));
                     let adt = ty
                         .adt_def(self.db)
                         .ok_or(LayoutEvidenceError::InvalidPlace)?;
@@ -2303,23 +1812,13 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                         ty.generic_args(self.db),
                     );
                 }
-                NDataProjection::Index(index) => {
-                    path.push(LayoutEvidencePathStep::Index);
-                    indices.push(match index {
-                        NIndex::Const(index) => LayoutEvidenceIndex::Constant(*index),
-                        NIndex::Value(value) => {
-                            LayoutEvidenceIndex::Dynamic(self.value_local(*value)?)
-                        }
-                    });
-                    ty = ty
-                        .generic_args(self.db)
-                        .first()
-                        .copied()
-                        .ok_or(LayoutEvidenceError::InvalidPlace)?;
+                NDataProjection::Index(_) => {
+                    projection.array_element = true;
+                    break;
                 }
             }
         }
-        Ok((root, EvidenceProjection { path, indices }))
+        Ok((root, projection))
     }
 
     fn provider_value(
@@ -2376,10 +1875,10 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
                 });
             };
             if component.port != transfer.target.port
-                || component.map_ty() != transfer.target.map_ty()
-                || source.map_ty != component.map_ty()
+                || component.ty != transfer.target.ty
+                || source.ty != component.ty
             {
-                return Err(LayoutEvidenceError::MapTypeMismatch {
+                return Err(LayoutEvidenceError::RootTypeMismatch {
                     dst,
                     component: transfer.target_id,
                 });
@@ -2499,6 +1998,8 @@ fn layout_evidence_body_query<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: SemanticInstance<'db>,
 ) -> Result<LayoutEvidenceBody<'db>, LayoutEvidenceError<'db>> {
+    let signature = owner.key(db).layout_bundle_signature(db);
+    validate_layout_bundle_signature(&signature)?;
     let artifacts =
         normalize_runtime_semantic_body(db, owner).map_err(layout_normalization_error)?;
     let normalized = artifacts.body;
@@ -2524,15 +2025,6 @@ fn layout_evidence_body_query<'db>(
             actual: source.locals.len(),
         });
     }
-    let signature = owner.key(db).layout_bundle_signature(db);
-    signature
-        .output
-        .validate()
-        .map_err(|error| LayoutEvidenceError::InvalidInterface { local: None, error })?;
-    signature
-        .output_witnesses
-        .validate()
-        .map_err(|error| LayoutEvidenceError::InvalidInterface { local: None, error })?;
     let mut builder = LayoutEvidenceBuilder {
         db,
         normalized: &normalized,
@@ -2576,7 +2068,7 @@ fn layout_evidence_body_query<'db>(
         interface
             .validate()
             .map_err(|error| LayoutEvidenceError::InvalidInterface {
-                local: Some(semantic_local),
+                local: semantic_local,
                 error,
             })?;
         let value = builder.alloc_value(semantic_local, interface, origin)?;
@@ -2594,7 +2086,7 @@ fn layout_evidence_body_query<'db>(
         let local = builder.alloc_local(None, component_id, component, Some(source.clone()));
         let value = ComponentExpr {
             expr: LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Local(local)),
-            map_ty: component.map_ty(),
+            ty: component.ty,
             port: component.port.clone(),
         };
         builder.declared_sources.push(DeclaredComponentSource {
@@ -2695,6 +2187,31 @@ fn layout_evidence_body_query<'db>(
     verify_layout_evidence_body(db, &normalized, &layout_plan, source, &evidence)
         .map_err(LayoutEvidenceError::Verify)?;
     Ok(evidence)
+}
+
+/// Validates every interface of a callable's layout signature. The signature
+/// does not depend on a body, so callables without one are checked too.
+pub fn validate_layout_bundle_signature<'db>(
+    signature: &CallableLayoutBundleSignature<'db>,
+) -> Result<(), LayoutEvidenceError<'db>> {
+    for input in &signature.inputs {
+        input
+            .interface
+            .validate()
+            .map_err(|error| LayoutEvidenceError::InvalidSignature {
+                port: LayoutSignaturePort::Input(input.origin),
+                error,
+            })?;
+    }
+    for output in [&signature.output, &signature.output_witnesses] {
+        output
+            .validate()
+            .map_err(|error| LayoutEvidenceError::InvalidSignature {
+                port: LayoutSignaturePort::Output,
+                error,
+            })?;
+    }
+    Ok(())
 }
 
 fn layout_normalization_error<'db>(

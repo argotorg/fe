@@ -15,216 +15,50 @@ use crate::analysis::{
     },
     ty::{
         CallableLayoutParamPort, CallableLayoutPort, LayoutBundleComponent,
-        LayoutBundleComponentKey, LayoutBundleInterface, LayoutMapTy,
+        LayoutBundleComponentKey, LayoutBundleInterface,
         const_ty::ConstTyData,
-        ty_def::{PrimTy, TyBase, TyData, TyId},
+        ty_def::{TyData, TyId},
     },
 };
 
 use super::{
     LayoutEvidenceBody, LayoutEvidenceComponentValue, LayoutEvidenceConstBinding,
-    LayoutEvidenceExpr, LayoutEvidenceIndex, LayoutEvidenceLocalId, LayoutEvidenceOperand,
-    LayoutEvidenceVerifyError, layout_const_param_uses,
+    LayoutEvidenceExpr, LayoutEvidenceLocalId, LayoutEvidenceOperand, LayoutEvidenceVerifyError,
+    layout_const_param_uses,
 };
 
-fn operand_map_ty<'db>(
+fn operand_ty<'db>(
     body: &LayoutEvidenceBody<'db>,
     operand: &LayoutEvidenceOperand<'db>,
-) -> Result<LayoutMapTy<'db>, LayoutEvidenceVerifyError> {
+) -> Result<TyId<'db>, LayoutEvidenceVerifyError> {
     match operand {
         LayoutEvidenceOperand::Local(local) => body
             .locals
             .get(local.index())
-            .map(|local| local.map_ty.clone())
+            .map(|local| local.ty)
             .ok_or(LayoutEvidenceVerifyError::InvalidOperand(*local)),
-        LayoutEvidenceOperand::Constant(value) => Ok(value.map_ty.clone()),
+        LayoutEvidenceOperand::Constant(value) => Ok(value.ty),
     }
 }
 
-fn verify_projection_indices(
-    db: &dyn HirAnalysisDb,
-    representations: &NLayoutLocals<'_>,
-    indices: &[LayoutEvidenceIndex],
-    dimensions: &[usize],
-) -> Result<(), LayoutEvidenceVerifyError> {
-    if indices.is_empty() || indices.len() > dimensions.len() {
-        return Err(LayoutEvidenceVerifyError::InvalidProjection);
-    }
-    for (index, dimension) in indices.iter().zip(dimensions) {
-        match index {
-            LayoutEvidenceIndex::Constant(index) if *index >= *dimension => {
-                return Err(LayoutEvidenceVerifyError::InvalidProjection);
-            }
-            LayoutEvidenceIndex::Dynamic(index)
-                if !representations
-                    .locals
-                    .get(index.index())
-                    .is_some_and(|local| {
-                        matches!(
-                            local.ty.data(db),
-                            TyData::TyBase(TyBase::Prim(PrimTy::Usize))
-                        )
-                    }) =>
-            {
-                return Err(LayoutEvidenceVerifyError::InvalidIndexLocal(*index));
-            }
-            LayoutEvidenceIndex::Constant(_) | LayoutEvidenceIndex::Dynamic(_) => {}
-        }
-    }
-    Ok(())
-}
-
-fn expr_map_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    representations: &NLayoutLocals<'db>,
+fn expr_ty<'db>(
     body: &LayoutEvidenceBody<'db>,
     expr: &LayoutEvidenceExpr<'db>,
     call_output: Option<&'db LayoutBundleInterface<'db>>,
     block: usize,
     statement: usize,
-) -> Result<LayoutMapTy<'db>, LayoutEvidenceVerifyError> {
+) -> Result<TyId<'db>, LayoutEvidenceVerifyError> {
     match expr {
-        LayoutEvidenceExpr::Use(operand) => operand_map_ty(body, operand),
-        LayoutEvidenceExpr::Project {
-            source: operand,
-            indices,
-        } => {
-            let source_ty = operand_map_ty(body, operand)?;
-            verify_projection_indices(db, representations, indices, &source_ty.dimensions)?;
-            source_ty
-                .projected(indices.len())
-                .ok_or(LayoutEvidenceVerifyError::MapTypeMismatch)
-        }
-        LayoutEvidenceExpr::Array { elements } => {
-            let Some(first) = elements.first() else {
-                return Err(LayoutEvidenceVerifyError::EmptyArray);
-            };
-            let element_ty = expr_map_ty(
-                db,
-                representations,
-                body,
-                first,
-                call_output,
-                block,
-                statement,
-            )?;
-            for element in &elements[1..] {
-                let actual = expr_map_ty(
-                    db,
-                    representations,
-                    body,
-                    element,
-                    call_output,
-                    block,
-                    statement,
-                )?;
-                if actual != element_ty {
-                    return Err(LayoutEvidenceVerifyError::MapTypeMismatch);
-                }
-            }
-            let mut dimensions = Vec::with_capacity(element_ty.dimensions.len() + 1);
-            dimensions.push(elements.len());
-            dimensions.extend_from_slice(&element_ty.dimensions);
-            Ok(LayoutMapTy {
-                scalar_ty: element_ty.scalar_ty,
-                dimensions,
-            })
-        }
-        LayoutEvidenceExpr::Repeat { len, element } => {
-            let element_ty = expr_map_ty(
-                db,
-                representations,
-                body,
-                element,
-                call_output,
-                block,
-                statement,
-            )?;
-            if *len == 0 {
-                return Err(LayoutEvidenceVerifyError::MapTypeMismatch);
-            }
-            let mut dimensions = Vec::with_capacity(element_ty.dimensions.len() + 1);
-            dimensions.push(*len);
-            dimensions.extend_from_slice(&element_ty.dimensions);
-            Ok(LayoutMapTy {
-                scalar_ty: element_ty.scalar_ty,
-                dimensions,
-            })
-        }
-        LayoutEvidenceExpr::Update {
-            source: operand,
-            indices,
-            value,
-        } => {
-            let source_ty = operand_map_ty(body, operand)?;
-            verify_projection_indices(db, representations, indices, &source_ty.dimensions)?;
-            let value_ty = expr_map_ty(
-                db,
-                representations,
-                body,
-                value,
-                call_output,
-                block,
-                statement,
-            )?;
-            if source_ty.projected(indices.len()).as_ref() != Some(&value_ty) {
-                return Err(LayoutEvidenceVerifyError::MapTypeMismatch);
-            }
-            Ok(source_ty)
-        }
+        LayoutEvidenceExpr::Use(operand) => operand_ty(body, operand),
         LayoutEvidenceExpr::CallResult { component } => call_output
             .filter(|output| output.is_runtime(*component))
             .and_then(|output| output.schema.component(*component))
-            .map(|output| output.map_ty())
+            .map(|output| output.ty)
             .ok_or(LayoutEvidenceVerifyError::InvalidCallResult {
                 block,
                 statement,
                 component: *component,
             }),
-    }
-}
-
-fn expr_inputs(
-    expr: &LayoutEvidenceExpr<'_>,
-    evidence_locals: &mut Vec<LayoutEvidenceLocalId>,
-    index_locals: &mut Vec<SLocalId>,
-) {
-    let push_operand = |locals: &mut Vec<LayoutEvidenceLocalId>,
-                        operand: &LayoutEvidenceOperand<'_>| {
-        if let LayoutEvidenceOperand::Local(local) = operand {
-            locals.push(*local);
-        }
-    };
-    let push_indices = |locals: &mut Vec<SLocalId>, indices: &[LayoutEvidenceIndex]| {
-        locals.extend(indices.iter().filter_map(|index| match index {
-            LayoutEvidenceIndex::Dynamic(index) => Some(*index),
-            LayoutEvidenceIndex::Constant(_) => None,
-        }));
-    };
-    match expr {
-        LayoutEvidenceExpr::Use(operand) => push_operand(evidence_locals, operand),
-        LayoutEvidenceExpr::Project { source, indices } => {
-            push_operand(evidence_locals, source);
-            push_indices(index_locals, indices);
-        }
-        LayoutEvidenceExpr::Array { elements } => {
-            for element in elements {
-                expr_inputs(element, evidence_locals, index_locals);
-            }
-        }
-        LayoutEvidenceExpr::Repeat { element, .. } => {
-            expr_inputs(element, evidence_locals, index_locals)
-        }
-        LayoutEvidenceExpr::Update {
-            source,
-            indices,
-            value,
-        } => {
-            push_operand(evidence_locals, source);
-            push_indices(index_locals, indices);
-            expr_inputs(value, evidence_locals, index_locals);
-        }
-        LayoutEvidenceExpr::CallResult { .. } => {}
     }
 }
 
@@ -312,15 +146,7 @@ fn verify_const_bindings<'db>(
     for param in uses {
         let (candidates, is_layout_dependency) = const_binding_candidates(db, source, body, param);
         match candidates.as_slice() {
-            [candidate] if operand_map_ty(body, &candidate.value)?.rank() == 0 => {
-                expected.push(candidate.clone());
-            }
-            [_] => {
-                return Err(LayoutEvidenceVerifyError::InvalidConstBinding {
-                    block,
-                    statement: statement_idx,
-                });
-            }
+            [candidate] => expected.push(candidate.clone()),
             [] if !is_layout_dependency => {}
             [] => {
                 return Err(LayoutEvidenceVerifyError::InvalidConstBinding {
@@ -358,7 +184,7 @@ fn verify_const_bindings<'db>(
         };
         if binding.param != param
             || candidate != binding
-            || operand_map_ty(body, &binding.value)?.scalar_ty != *scalar_ty
+            || operand_ty(body, &binding.value)? != *scalar_ty
         {
             return Err(LayoutEvidenceVerifyError::InvalidConstBinding {
                 block,
@@ -380,7 +206,6 @@ fn block_successors(kind: &NTerminatorKind<'_>) -> Vec<NBlockId> {
 struct DefinedLocals {
     reached: bool,
     evidence: FxHashSet<LayoutEvidenceLocalId>,
-    semantic: FxHashSet<SLocalId>,
 }
 
 impl JoinSemiLattice for DefinedLocals {
@@ -392,28 +217,20 @@ impl JoinSemiLattice for DefinedLocals {
             *self = other.clone();
             return true;
         }
-        let before = (self.evidence.len(), self.semantic.len());
+        let before = self.evidence.len();
         self.evidence.retain(|local| other.evidence.contains(local));
-        self.semantic.retain(|local| other.semantic.contains(local));
-        before != (self.evidence.len(), self.semantic.len())
+        before != self.evidence.len()
     }
 }
 
 struct DefinitionAnalysis<'a, 'db> {
     normalized: &'a NormalizedBody<'db>,
-    representations: &'a NLayoutLocals<'db>,
-    source: &'a SemanticBody<'db>,
     body: &'a LayoutEvidenceBody<'db>,
     successors: SecondaryMap<NBlockId, Vec<NBlockId>>,
 }
 
 impl<'a, 'db> DefinitionAnalysis<'a, 'db> {
-    fn new(
-        normalized: &'a NormalizedBody<'db>,
-        representations: &'a NLayoutLocals<'db>,
-        source: &'a SemanticBody<'db>,
-        body: &'a LayoutEvidenceBody<'db>,
-    ) -> Self {
+    fn new(normalized: &'a NormalizedBody<'db>, body: &'a LayoutEvidenceBody<'db>) -> Self {
         let mut successors = SecondaryMap::new();
         successors.resize(normalized.blocks.len());
         for (idx, block) in normalized.blocks.iter().enumerate() {
@@ -424,8 +241,6 @@ impl<'a, 'db> DefinitionAnalysis<'a, 'db> {
         }
         Self {
             normalized,
-            representations,
-            source,
             body,
             successors,
         }
@@ -456,9 +271,6 @@ impl ForwardCfgAnalysis for DefinitionAnalysis<'_, '_> {
         let entry = &mut entry_states[self.normalized.entry];
         entry.reached = true;
         entry.evidence.extend(self.body.params.iter().copied());
-        entry
-            .semantic
-            .extend(self.source.entry_locals.iter().copied());
         Ok(())
     }
 
@@ -477,11 +289,6 @@ impl ForwardCfgAnalysis for DefinitionAnalysis<'_, '_> {
                     .iter()
                     .map(|assignment| assignment.dst),
             );
-            if let NStatementKind::Define { result, .. } = statement.kind
-                && let Some(local) = self.representations.value_local(result)
-            {
-                state.semantic.insert(local);
-            }
         }
         Ok(state)
     }
@@ -494,59 +301,39 @@ impl ForwardCfgAnalysis for DefinitionAnalysis<'_, '_> {
 fn verify_expr_definitions(
     expr: &LayoutEvidenceExpr<'_>,
     evidence: &FxHashSet<LayoutEvidenceLocalId>,
-    semantic: &FxHashSet<SLocalId>,
     block: usize,
     statement: usize,
 ) -> Result<(), LayoutEvidenceVerifyError> {
-    let mut index_locals = Vec::new();
-    let mut evidence_locals = Vec::new();
-    expr_inputs(expr, &mut evidence_locals, &mut index_locals);
-    for local in index_locals {
-        if !semantic.contains(&local) {
-            return Err(LayoutEvidenceVerifyError::UndefinedIndexLocal {
-                block,
-                statement,
-                local,
-            });
-        }
-    }
-    for local in evidence_locals {
-        if !evidence.contains(&local) {
-            return Err(LayoutEvidenceVerifyError::UndefinedLocal {
+    match expr {
+        LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Local(local))
+            if !evidence.contains(local) =>
+        {
+            Err(LayoutEvidenceVerifyError::UndefinedLocal {
                 block,
                 statement: Some(statement),
-                local,
-            });
+                local: *local,
+            })
         }
+        LayoutEvidenceExpr::Use(_) | LayoutEvidenceExpr::CallResult { .. } => Ok(()),
     }
-    Ok(())
 }
 
 fn verify_definitions(
     normalized: &NormalizedBody<'_>,
-    representations: &NLayoutLocals<'_>,
-    source: &SemanticBody<'_>,
     body: &LayoutEvidenceBody<'_>,
 ) -> Result<(), LayoutEvidenceVerifyError> {
     if normalized.blocks.is_empty() {
         return Ok(());
     }
-    let entry_states = solve_forward_cfg(&mut DefinitionAnalysis::new(
-        normalized,
-        representations,
-        source,
-        body,
-    ));
+    let entry_states = solve_forward_cfg(&mut DefinitionAnalysis::new(normalized, body));
     let unreachable = DefinedLocals {
         evidence: body.params.iter().copied().collect(),
-        semantic: source.entry_locals.iter().copied().collect(),
         ..DefinedLocals::default()
     };
     for (block_idx, block) in normalized.blocks.iter().enumerate() {
         let entry = &entry_states[NBlockId::new(block_idx)];
         let entry = if entry.reached { entry } else { &unreachable };
         let mut defined_evidence = entry.evidence.clone();
-        let mut defined_semantic = entry.semantic.clone();
         for (statement_idx, normalized_statement) in block.statements.iter().enumerate() {
             if let NStatementKind::Define { result, .. } = normalized_statement.kind {
                 for binding in &body.constant_bindings[result.index()] {
@@ -569,7 +356,6 @@ fn verify_definitions(
                     verify_expr_definitions(
                         &arg.value,
                         &defined_evidence,
-                        &defined_semantic,
                         block_idx,
                         statement_idx,
                     )?;
@@ -579,16 +365,10 @@ fn verify_definitions(
                 verify_expr_definitions(
                     &assignment.expr,
                     &defined_evidence,
-                    &defined_semantic,
                     block_idx,
                     statement_idx,
                 )?;
                 defined_evidence.insert(assignment.dst);
-            }
-            if let NStatementKind::Define { result, .. } = normalized_statement.kind
-                && let Some(local) = representations.value_local(result)
-            {
-                defined_semantic.insert(local);
             }
         }
         for local in body.terminators[block_idx]
@@ -724,8 +504,7 @@ pub fn verify_layout_evidence_runtime_compatibility<'db>(
             }
         }
     }
-    verify_definitions(runtime, &representations, source, body)?;
-    Ok(())
+    verify_definitions(runtime, body)
 }
 
 pub fn verify_layout_evidence_body<'db>(
@@ -737,7 +516,10 @@ pub fn verify_layout_evidence_body<'db>(
 ) -> Result<(), LayoutEvidenceVerifyError> {
     let representations = NLayoutLocals::new(db, normalized, layout_plan, source);
     if body.constant_bindings.len() != normalized.values.len() {
-        return Err(LayoutEvidenceVerifyError::InvalidProjection);
+        return Err(LayoutEvidenceVerifyError::ConstantBindingCount {
+            expected: normalized.values.len(),
+            actual: body.constant_bindings.len(),
+        });
     }
     for (block_idx, block) in normalized.blocks.iter().enumerate() {
         for (statement_idx, statement) in block.statements.iter().enumerate() {
@@ -804,11 +586,10 @@ pub fn verify_layout_evidence_body<'db>(
         {
             match component {
                 LayoutEvidenceComponentValue::Known(value) => {
-                    if value.map_ty != schema.map_ty()
-                        || value.strides.len() != value.map_ty.rank()
+                    if value.ty != schema.ty
                         || matches!(value.base, super::LayoutEvidenceBase::Root(root)
-                            if root.const_ty_ty(db) != Some(value.map_ty.scalar_ty))
-                        || !matches!(schema.representative, Some(LayoutBundleComponentKey::Static(expected))
+                            if root.const_ty_ty(db) != Some(value.ty))
+                        || !matches!(schema.representative, LayoutBundleComponentKey::Static(expected)
                             if value.base == super::LayoutEvidenceBase::Root(expected))
                     {
                         return Err(LayoutEvidenceVerifyError::InvalidComponentValue {
@@ -823,7 +604,7 @@ pub fn verify_layout_evidence_body<'db>(
                     };
                     if metadata.semantic_local != Some(semantic_local)
                         || metadata.component != component_id
-                        || metadata.map_ty != schema.map_ty()
+                        || metadata.ty != schema.ty
                         || metadata.param
                             != representations.locals[local_idx]
                                 .source
@@ -892,7 +673,7 @@ pub fn verify_layout_evidence_body<'db>(
                 };
                 if local.semantic_local.is_some()
                     || local.component != param.component_id
-                    || local.map_ty != param.component.map_ty()
+                    || local.ty != param.component.ty
                 {
                     return Err(LayoutEvidenceVerifyError::InvalidParams);
                 }
@@ -926,23 +707,32 @@ pub fn verify_layout_evidence_body<'db>(
                     result,
                     expr: NExpr::Call { callee, .. },
                 } => (
-                    representations
-                        .value_local(*result)
-                        .ok_or(LayoutEvidenceVerifyError::InvalidProjection)?,
+                    representations.value_local(*result).ok_or(
+                        LayoutEvidenceVerifyError::UnmappedValue {
+                            block: block_idx,
+                            statement: statement_idx,
+                        },
+                    )?,
                     Some(callee.key.layout_bundle_signature(db)),
                     normalized.value_is_used(*result),
                 ),
                 NStatementKind::Define { result, .. } => (
-                    representations
-                        .value_local(*result)
-                        .ok_or(LayoutEvidenceVerifyError::InvalidProjection)?,
+                    representations.value_local(*result).ok_or(
+                        LayoutEvidenceVerifyError::UnmappedValue {
+                            block: block_idx,
+                            statement: statement_idx,
+                        },
+                    )?,
                     None,
                     normalized.value_is_used(*result),
                 ),
                 NStatementKind::Store { value, .. } => (
-                    representations
-                        .value_local(value.value)
-                        .ok_or(LayoutEvidenceVerifyError::InvalidProjection)?,
+                    representations.value_local(value.value).ok_or(
+                        LayoutEvidenceVerifyError::UnmappedValue {
+                            block: block_idx,
+                            statement: statement_idx,
+                        },
+                    )?,
                     None,
                     true,
                 ),
@@ -986,17 +776,9 @@ pub fn verify_layout_evidence_body<'db>(
                     });
                 }
                 for (arg, (target, expected)) in call.args.iter().zip(expected) {
-                    let actual = expr_map_ty(
-                        db,
-                        &representations,
-                        body,
-                        &arg.value,
-                        None,
-                        block_idx,
-                        statement_idx,
-                    )?;
-                    if arg.target != target || actual != expected.map_ty() {
-                        return Err(LayoutEvidenceVerifyError::MapTypeMismatch);
+                    let actual = expr_ty(body, &arg.value, None, block_idx, statement_idx)?;
+                    if arg.target != target || actual != expected.ty {
+                        return Err(LayoutEvidenceVerifyError::RootTypeMismatch);
                     }
                 }
                 let expected_results = if result_used {
@@ -1061,17 +843,15 @@ pub fn verify_layout_evidence_body<'db>(
                         local: assignment.dst,
                     });
                 }
-                let actual = expr_map_ty(
-                    db,
-                    &representations,
+                let actual = expr_ty(
                     body,
                     &assignment.expr,
                     call_output,
                     block_idx,
                     statement_idx,
                 )?;
-                if actual != metadata.map_ty {
-                    return Err(LayoutEvidenceVerifyError::MapTypeMismatch);
+                if actual != metadata.ty {
+                    return Err(LayoutEvidenceVerifyError::RootTypeMismatch);
                 }
                 if let LayoutEvidenceExpr::CallResult { component } = assignment.expr {
                     let output = call_output
@@ -1122,9 +902,8 @@ pub fn verify_layout_evidence_body<'db>(
                     component: component_id,
                 });
             }
-            let actual = operand_map_ty(body, &evidence_return.value)?;
-            if actual != expected.map_ty() {
-                return Err(LayoutEvidenceVerifyError::MapTypeMismatch);
+            if operand_ty(body, &evidence_return.value)? != expected.ty {
+                return Err(LayoutEvidenceVerifyError::RootTypeMismatch);
             }
             if let Some(returned) = returned_local {
                 let value = &body.semantic_values[returned.index()];
@@ -1150,5 +929,5 @@ pub fn verify_layout_evidence_body<'db>(
             }
         }
     }
-    verify_definitions(normalized, &representations, source, body)
+    verify_definitions(normalized, body)
 }

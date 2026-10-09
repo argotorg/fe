@@ -1,0 +1,145 @@
+// Tests for the `core::text` number parsers and `std::evm::parse_address`.
+use std::evm::{Address, checksum_address, parse_address}
+use std::text
+
+const U256_MAX: u256 = 115792089237316195423570985008687907853269984665640564039457584007913129639935
+
+#[test]
+fn parse_uint_values() {
+    assert!(text::parse_uint("0").unwrap() == 0)
+    assert!(text::parse_uint("42").unwrap() == 42)
+    assert!(text::parse_uint("000123").unwrap() == 123)
+    assert!(
+        text::parse_uint(
+                "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+            ).unwrap()
+            == U256_MAX,
+    )
+    assert!(text::parse_uint(text::decimal(1234567890)).unwrap() == 1234567890)
+}
+
+#[test]
+fn parse_uint_rejects() {
+    assert!(text::parse_uint("").is_none())
+    assert!(text::parse_uint("+1").is_none())
+    assert!(text::parse_uint("-1").is_none())
+    assert!(text::parse_uint(" 1").is_none())
+    assert!(text::parse_uint("12a").is_none())
+    assert!(text::parse_uint("0x10").is_none())
+    // u256::max() + 1 and a value ten times too large.
+    assert!(
+        text::parse_uint(
+                "115792089237316195423570985008687907853269984665640564039457584007913129639936",
+            ).is_none(),
+    )
+    assert!(
+        text::parse_uint(
+                "1157920892373161954235709850086879078532699846656405640394575840079131296399350",
+            ).is_none(),
+    )
+}
+
+#[test]
+fn parse_int_values() {
+    assert!(text::parse_int("0").unwrap() == 0)
+    assert!(text::parse_int("-0").unwrap() == 0)
+    assert!(text::parse_int("+17").unwrap() == 17)
+    assert!(text::parse_int("-17").unwrap() == -17)
+    assert!(
+        text::parse_int(
+                "57896044618658097711785492504343953926634992332820282019728792003956564819967",
+            ).unwrap()
+            == i256::max(),
+    )
+    assert!(
+        text::parse_int(
+                "-57896044618658097711785492504343953926634992332820282019728792003956564819968",
+            ).unwrap()
+            == i256::min(),
+    )
+}
+
+#[test]
+fn parse_int_rejects() {
+    assert!(text::parse_int("").is_none())
+    assert!(text::parse_int("-").is_none())
+    assert!(text::parse_int("+").is_none())
+    assert!(text::parse_int("--1").is_none())
+    assert!(text::parse_int("+-1").is_none())
+    assert!(text::parse_int("1-").is_none())
+    assert!(
+        text::parse_int(
+                "57896044618658097711785492504343953926634992332820282019728792003956564819968",
+            ).is_none(),
+    )
+    assert!(
+        text::parse_int(
+                "-57896044618658097711785492504343953926634992332820282019728792003956564819969",
+            ).is_none(),
+    )
+    assert!(
+        text::parse_int(
+                "-115792089237316195423570985008687907853269984665640564039457584007913129639936",
+            ).is_none(),
+    )
+}
+
+#[test]
+fn parse_hex_uint_values() {
+    assert!(text::parse_hex_uint("0").unwrap() == 0)
+    assert!(text::parse_hex_uint("0x0").unwrap() == 0)
+    assert!(text::parse_hex_uint("ff").unwrap() == 255)
+    assert!(text::parse_hex_uint("0xDeadBeef").unwrap() == 0xdeadbeef)
+    assert!(text::parse_hex_uint(text::hex(0x1234abcd, 32)).unwrap() == 0x1234abcd)
+    assert!(
+        text::parse_hex_uint(
+                "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            ).unwrap()
+            == U256_MAX,
+    )
+    // Leading zeros beyond 64 digits do not overflow.
+    assert!(
+        text::parse_hex_uint(
+                "0x00ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            ).unwrap()
+            == U256_MAX,
+    )
+}
+
+#[test]
+fn parse_hex_uint_rejects() {
+    assert!(text::parse_hex_uint("").is_none())
+    assert!(text::parse_hex_uint("0x").is_none())
+    assert!(text::parse_hex_uint("0X10").is_none())
+    assert!(text::parse_hex_uint("0x0x10").is_none())
+    assert!(text::parse_hex_uint("fg").is_none())
+    assert!(text::parse_hex_uint("-1").is_none())
+    assert!(
+        text::parse_hex_uint(
+                "0x10000000000000000000000000000000000000000000000000000000000000000",
+            ).is_none(),
+    )
+}
+
+#[test]
+fn parse_address_values() {
+    let expected = Address { inner: 0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed }
+    assert!(parse_address("0x5aAeb6053F3E94C9b9A09f33669435e7Ef1BeAed").unwrap() == expected)
+    assert!(parse_address("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed").unwrap() == expected)
+    assert!(parse_address("5AAEB6053F3E94C9B9A09F33669435E7EF1BEAED").unwrap() == expected)
+    let zero = Address { inner: 0 }
+    assert!(parse_address("0x0000000000000000000000000000000000000000").unwrap() == zero)
+    let text = checksum_address(expected)
+    assert!(checksum_address(parse_address(text).unwrap()) == text)
+}
+
+#[test]
+fn parse_address_rejects() {
+    // 38 digits after the prefix, 42 digits without it, 39 and 41 digits.
+    assert!(parse_address("0x5aaeb6053f3e94c9b9a09f33669435e7ef1bea").is_none())
+    assert!(parse_address("005aaeb6053f3e94c9b9a09f33669435e7ef1beaed").is_none())
+    assert!(parse_address("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beae").is_none())
+    assert!(parse_address("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed0").is_none())
+    assert!(parse_address("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaeg").is_none())
+    assert!(parse_address("").is_none())
+}

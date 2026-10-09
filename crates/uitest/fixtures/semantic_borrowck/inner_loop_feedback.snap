@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/inner_loop_feedback.fe
+---
+error[16-0001]: borrow conflict in `fn held_written_inside`
+   ┌─ inner_loop_feedback.fe:75:13
+   │
+72 │         let held = mut other[x]
+   │                    ------------ borrow created here
+   ·
+75 │             other[x] = 2
+   │             ^^^^^^^^^^^^ cannot mutably borrow this place while a mut borrow is active
+
+error[16-0002]: move conflict in `fn moved_inside`
+   ┌─ inner_loop_feedback.fe:91:21
+   │
+91 │             consume(*item)
+   │                     ^^^^^
+   │                     │
+   │                     cannot use a value after it was moved
+   │                     value is moved here

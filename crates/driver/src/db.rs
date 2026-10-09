@@ -71,15 +71,14 @@ impl DriverDataBase {
         diagnostics
     }
 
+    /// Collect MIR diagnostics after the caller has checked that HIR analysis
+    /// succeeded. MIR assumes sound HIR; callers must skip this step on HIR errors.
     pub fn mir_diagnostics_for_ingot<'db>(&'db self, ingot: Ingot<'db>) -> Vec<CompleteDiagnostic> {
         // Empty ingots (e.g. deleted during incremental workspace changes)
         // have no root module to analyze.
         if ingot.module_tree(self).root_data().is_none() {
             return Vec::new();
         };
-        if self.run_on_ingot(ingot).has_errors(self) {
-            return Vec::new();
-        }
         let mut pass_manager = initialize_mir_diagnostics_pass();
         let mut diagnostics: Vec<_> = pass_manager
             .run_on_module_tree(self, ingot.module_tree(self))
@@ -91,7 +90,7 @@ impl DriverDataBase {
     }
 
     pub fn emit_complete_diagnostics(&self, diagnostics: &[CompleteDiagnostic]) {
-        let writer = BufferWriter::stderr(ColorChoice::Auto);
+        let writer = BufferWriter::stderr(stderr_color_choice());
         let mut buffer = writer.buffer();
         let config = term::Config::default();
         let mut diagnostics = diagnostics.to_vec();
@@ -121,6 +120,15 @@ impl DriverDataBase {
     }
 }
 
+/// The `--color` preference for diagnostics written to standard error.
+fn stderr_color_choice() -> ColorChoice {
+    if common::color::should_colorize(common::color::ColorTarget::Stderr) {
+        ColorChoice::Always
+    } else {
+        ColorChoice::Never
+    }
+}
+
 fn initialize_mir_diagnostics_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
     pass_manager.add_module_pass("SemanticBorrow", Box::new(SemanticBorrowAnalysisPass));
@@ -141,7 +149,7 @@ impl DiagnosticsCollection<'_> {
     }
 
     pub fn emit(&self, db: &DriverDataBase) {
-        let writer = BufferWriter::stderr(ColorChoice::Auto);
+        let writer = BufferWriter::stderr(stderr_color_choice());
         let mut buffer = writer.buffer();
         let config = term::Config::default();
 

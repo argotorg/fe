@@ -440,83 +440,7 @@ pub enum ScalarRepr {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum ScalarRole<'db> {
     Plain,
-    EnumTag {
-        enum_layout: LayoutId<'db>,
-    },
-    /// An opaque one-word handle to an immutable layout-map node.
-    ///
-    /// The role retains the exact semantic map type across rMIR interfaces;
-    /// codegen alone owns the node's in-memory representation.
-    LayoutMap {
-        scalar_ty: TyId<'db>,
-        dimensions: Vec<usize>,
-    },
-}
-
-/// The exact runtime type of one layout-evidence map.
-///
-/// Rank-zero maps are represented by the root scalar itself. Ranked maps are
-/// opaque one-word handles. Keeping their algebra in [`RExpr`] prevents MIR
-/// lowering and optimization from depending on a tagged aggregate's field
-/// positions or speculatively reading an inactive representation branch.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub struct RuntimeLayoutMap<'db> {
-    scalar_ty: TyId<'db>,
-    scalar: ScalarClass<'db>,
-    dimensions: Vec<usize>,
-}
-
-impl<'db> RuntimeLayoutMap<'db> {
-    pub(crate) fn new(
-        scalar_ty: TyId<'db>,
-        scalar: ScalarClass<'db>,
-        dimensions: Vec<usize>,
-    ) -> Self {
-        Self {
-            scalar_ty,
-            scalar,
-            dimensions,
-        }
-    }
-
-    pub fn scalar_ty(&self) -> TyId<'db> {
-        self.scalar_ty
-    }
-
-    pub fn scalar(&self) -> &ScalarClass<'db> {
-        &self.scalar
-    }
-
-    pub fn dimensions(&self) -> &[usize] {
-        &self.dimensions
-    }
-
-    pub fn rank(&self) -> usize {
-        self.dimensions.len()
-    }
-
-    pub fn class(&self) -> RuntimeClass<'db> {
-        if self.dimensions.is_empty() {
-            RuntimeClass::Scalar(self.scalar.clone())
-        } else {
-            RuntimeClass::Scalar(ScalarClass {
-                repr: ScalarRepr::Int {
-                    bits: 256,
-                    signed: false,
-                },
-                role: ScalarRole::LayoutMap {
-                    scalar_ty: self.scalar_ty,
-                    dimensions: self.dimensions.clone(),
-                },
-            })
-        }
-    }
-
-    pub fn projected(&self) -> Option<Self> {
-        self.dimensions.split_first().map(|(_, dimensions)| {
-            Self::new(self.scalar_ty, self.scalar.clone(), dimensions.to_vec())
-        })
-    }
+    EnumTag { enum_layout: LayoutId<'db> },
 }
 
 #[salsa::interned]
@@ -1529,32 +1453,6 @@ pub enum RExpr<'db> {
         layout: LayoutId<'db>,
         fields: Box<[RValueId]>,
     },
-    LayoutMapAffine {
-        map: RuntimeLayoutMap<'db>,
-        base: RValueId,
-        strides: Box<[RValueId]>,
-    },
-    LayoutMapDense {
-        map: RuntimeLayoutMap<'db>,
-        elements: Box<[RValueId]>,
-    },
-    LayoutMapRepeat {
-        map: RuntimeLayoutMap<'db>,
-        element: RValueId,
-    },
-    LayoutMapProject {
-        map: RuntimeLayoutMap<'db>,
-        source: RValueId,
-        index: RValueId,
-    },
-    /// Functionally replace one child map. The operation is checked: an index
-    /// outside the map's outer dimension reverts before constructing a node.
-    LayoutMapPatch {
-        map: RuntimeLayoutMap<'db>,
-        source: RValueId,
-        index: RValueId,
-        replacement: RValueId,
-    },
     Call {
         callee: RuntimeInstance<'db>,
         args: Box<[RValueId]>,
@@ -1577,7 +1475,7 @@ pub enum RExpr<'db> {
         field: FieldIndex,
     },
     EnumGetTag {
-        root: RValueId,
+        place: RuntimePlace<'db>,
     },
     EnumAssertVariantRef {
         root: RValueId,

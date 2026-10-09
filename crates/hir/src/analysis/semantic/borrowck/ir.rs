@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use crate::analysis::{
     semantic::{
-        CallSiteProviderRefinement, SemOrigin, SemanticInstance, SemanticInstanceKey,
+        CallSiteProviderRefinement, SStmtId, SemOrigin, SemanticInstance, SemanticInstanceKey,
         capability::{
             footprint::{AccessExtent, AccessFootprint},
             guard::Guard,
@@ -23,9 +23,14 @@ pub struct BorrowSummary<'db> {
     /// Whether any admitted path reaches a return.
     pub may_return: bool,
     pub result: ValueId<'db, SourceExpr<'db>>,
-    /// Scalar facts shared by all normal returns. The Result binder names this
-    /// call's returned value; formal values name immutable argument SSA values.
+    /// Scalar facts shared by all normal returns. The Result binder names an
+    /// integral return and the Summary choice a boolean return; formal values
+    /// and Argument choices name immutable argument SSA values.
     pub scalar_result: Option<Guard<'db>>,
+    /// Parameters whose scalar facts this body can read or export, so a caller
+    /// keeps the relations of the values it passes for them. `None` is every
+    /// parameter, for a summary not derived from the body.
+    pub observed_params: Option<ObservedParams>,
     pub mutable_inputs: Vec<InputPoststate<'db>>,
     /// A normal-return must range and its structural contents. The member
     /// binder, guarded coverage, and value share one source-witness namespace.
@@ -46,6 +51,15 @@ pub struct BorrowSummary<'db> {
     /// Native validity of the accesses `loan_requirements` relate. Callers
     /// resolve these, like the relations, with only physical separation.
     pub separation_validity: RegionSet<'db>,
+}
+
+/// The parameters a body observes, split by whether the observation needs its
+/// scalar result: a caller that forgets a dead result's relation leaves the
+/// arguments only that relation named unread.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ObservedParams {
+    pub unconditional: BTreeSet<u32>,
+    pub through_result: BTreeSet<u32>,
 }
 
 /// Where a separation requirement arose: a borrow a body held and the access it
@@ -208,6 +222,24 @@ pub struct SemanticBorrowAnalysis<'db> {
 pub struct LocalBorrowCheck<'db> {
     pub result: SemanticBorrowCheckResult<'db>,
     pub callees: Vec<SemanticInstance<'db>>,
+    /// `None` when solving the body failed.
+    pub executable: Option<ExecutableControlFlow>,
+}
+
+/// The control flow a solved body can execute: the solver's divergence and
+/// infeasible-edge facts. Block indices and successor positions are those of
+/// the raw semantic body, which every normalization of an instance preserves;
+/// a diverging call is named by its raw statement.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct ExecutableControlFlow(pub Box<[ExecutableBlock]>);
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub enum ExecutableBlock {
+    Unreachable,
+    /// Execution ends at this call, whose callee does not return.
+    Diverges(SStmtId),
+    /// The terminator executes; each successor edge is feasible or not.
+    Continues(Box<[bool]>),
 }
 
 /// Obligations that must be discharged by rebuilding the concrete semantic

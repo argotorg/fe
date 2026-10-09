@@ -1,0 +1,73 @@
+// Trait arguments and associated type bindings of a call bound that are
+// written in terms of the bound's self parameter follow the passed value:
+// owning the value owns them too. Positions written independently of it keep
+// suppressing the borrow explanation.
+
+trait Mark {}
+
+struct S {
+    x: u256,
+}
+
+impl Mark for S {}
+
+struct W<A> {
+    a: A,
+}
+
+trait Out {
+    type Item
+}
+
+impl<A: Mark> Out for W<A> {
+    type Item = W<A>
+}
+
+trait OutTup {
+    type Item
+}
+
+impl<A: Mark> OutTup for W<A> {
+    type Item = (W<A>,)
+}
+
+trait RelTup<U> {}
+
+impl<A: Mark> RelTup<(W<A>,)> for W<A> {}
+
+// `Item = X`: owning the value gives `W<S>: Out<Item = W<S>>`, which holds.
+fn need_item<X: Out<Item = X>>(_ x: X) {}
+
+fn assoc_exact(_ s: S) {
+    need_item(W { a: s })
+}
+
+// `Item = (X,)`: owning the value gives `W<S>: OutTup<Item = (W<S>)>`.
+fn need_item_tup<X: OutTup<Item = (X,)>>(_ x: X) {}
+
+fn assoc_nested(_ s: S) {
+    need_item_tup(W { a: s })
+}
+
+// `RelTup<(X,)>`: owning the value gives `W<S>: RelTup<(W<S>)>`.
+fn need_rel_tup<X: RelTup<(X,)>>(_ x: X) {}
+
+fn arg_nested(_ s: S) {
+    need_rel_tup(W { a: s })
+}
+
+// Negative: `Item = W<ref S>` is written out, not in terms of `X`. Owning the
+// value leaves `Item = W<ref S>`, so no borrow explanation.
+fn need_item_fixed<X: Out<Item = W<ref S>>>(_ x: X) {}
+
+fn assoc_fixed(_ s: ref S) {
+    need_item_fixed(W { a: s })
+}
+
+// Negative: the argument follows another parameter `Y`, which is bound to a
+// second borrowed value. Owning only one of them does not help.
+fn need_rel_other<X: RelTup<(Y,)>, Y>(_ x: X, _ y: Y) {}
+
+fn arg_other_param(_ s: S, _ t: S) {
+    need_rel_other(W { a: s }, W { a: t })
+}

@@ -1,0 +1,1 @@
+Added `core::num::gcd(a, b)`, the greatest common divisor of two `u256` values computed with Euclid's algorithm. `gcd(a, 0)` is `a` (so `gcd(0, 0)` is `0`), it never fails, and it can be used in `const` contexts.

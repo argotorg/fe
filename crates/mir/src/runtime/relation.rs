@@ -136,15 +136,7 @@ fn push_class_edges<'db>(
                         pending.push(Obligation::Layout(lhs, rhs));
                         true
                     }
-                    (lhs @ ScalarRole::LayoutMap { .. }, rhs @ ScalarRole::LayoutMap { .. }) => {
-                        lhs == rhs
-                    }
-                    (
-                        ScalarRole::Plain
-                        | ScalarRole::EnumTag { .. }
-                        | ScalarRole::LayoutMap { .. },
-                        _,
-                    ) => false,
+                    (ScalarRole::Plain | ScalarRole::EnumTag { .. }, _) => false,
                 }
         }
         (

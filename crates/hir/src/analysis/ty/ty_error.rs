@@ -1,5 +1,5 @@
 use crate::{
-    hir_def::{GenericArg, PathId, TypeId, TypeKind, scope_graph::ScopeId},
+    hir_def::{GenericArg, PathId, PathKind, TypeId, TypeKind, scope_graph::ScopeId},
     span::{params::LazyGenericArgSpan, path::LazyPathSpan, types::LazyTySpan},
     visitor::{Visitor, VisitorCtxt, prelude::DynLazySpan, walk_generic_arg, walk_path, walk_type},
 };
@@ -15,10 +15,11 @@ use crate::analysis::{
 
 use super::{
     const_ty::{ConstBodyLowering, ConstTyData, HoleAnchor, LoweringContext, ty_is_fully_ground},
-    diagnostics::{TyDiagCollection, TyLowerDiag},
-    trait_resolution::PredicateListId,
+    diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
+    normalize::normalize_ty,
+    trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf},
     ty_def::{InvalidCause, TyData, TyId},
-    ty_lower::lower_hir_ty_in_mode,
+    ty_lower::{lower_hir_ty, lower_hir_ty_in_mode},
 };
 use crate::visitor::prelude::LazyTraitRefSpan;
 
@@ -80,9 +81,30 @@ fn collect_hir_ty_diags_in_mode<'db>(
 
     // Fall back to semantic errors
     let ty = lower_hir_ty_in_mode(db, hir_ty, scope, assumptions, const_bodies);
-    emit_invalid_ty_error(db, ty, span.into())
+    if let Some(diag) = emit_invalid_ty_error(db, ty, span.clone().into()) {
+        return vec![diag];
+    }
+
+    normalization_limit_diag(db, ty, scope, assumptions, span.into())
         .into_iter()
         .collect()
+}
+
+/// Projections in a written type are resolved only when the type is
+/// normalized. Report one that cannot be resolved within the normalization
+/// limits where it is written: elsewhere it would be an invalid type, which
+/// matches any type.
+pub(crate) fn normalization_limit_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    span: DynLazySpan<'db>,
+) -> Option<TyDiagCollection<'db>> {
+    (ty.has_projection(db)
+        && first_invalid_ty_cause(db, normalize_ty(db, ty, scope, assumptions))
+            == Some(InvalidCause::TypeNormalizationLimit))
+    .then(|| TyLowerDiag::TypeNormalizationLimit(span).into())
 }
 
 pub fn collect_ty_lower_errors<'db>(
@@ -435,6 +457,85 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
     }
 }
 
+/// Well-formedness of the types written inside qualified paths in `hir_ty`:
+/// the self type and the trait's generic arguments of `<T as Trait<..>>::Assoc`.
+///
+/// Resolving the projection replaces the qualified path with the associated
+/// type's definition, so a later check of the resolved type never sees these
+/// types. Each ill-formed one is reported at its own span.
+pub(crate) fn qualified_path_wf_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    hir_ty: TypeId<'db>,
+    span: LazyTySpan<'db>,
+    assumptions: PredicateListId<'db>,
+    solve_cx: TraitSolveCx<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    struct QualifiedPathWf<'db> {
+        db: &'db dyn HirAnalysisDb,
+        /// Assumptions for lowering the written types.
+        assumptions: PredicateListId<'db>,
+        solve_cx: TraitSolveCx<'db>,
+        /// How many qualified paths enclose the current type.
+        qualified_depth: usize,
+        diags: Vec<TyDiagCollection<'db>>,
+    }
+
+    impl<'db> Visitor<'db> for QualifiedPathWf<'db> {
+        fn visit_ty(&mut self, ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>, hir_ty: TypeId<'db>) {
+            if self.qualified_depth > 0
+                && let Some(span) = ctxt.span()
+            {
+                let ty = lower_hir_ty(self.db, hir_ty, ctxt.scope(), self.assumptions);
+                if !ty.has_invalid(self.db)
+                    && let WellFormedness::IllFormed { goal, subgoal } =
+                        check_ty_wf(self.db, self.solve_cx, ty)
+                {
+                    self.diags.push(
+                        TraitConstraintDiag::TraitBoundNotSat {
+                            span: span.into(),
+                            primary_goal: goal,
+                            unsat_subgoal: subgoal,
+                            required_by: None,
+                            capability_hint: None,
+                        }
+                        .into(),
+                    );
+                    return;
+                }
+            }
+            walk_type(self, ctxt, hir_ty);
+        }
+
+        fn visit_path(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>,
+            path: PathId<'db>,
+        ) {
+            let qualified = std::iter::successors(Some(path), |path| path.parent(self.db))
+                .any(|segment| matches!(segment.kind(self.db), PathKind::QualifiedType { .. }));
+            if qualified {
+                self.qualified_depth += 1;
+            }
+            walk_path(self, ctxt, path);
+            if qualified {
+                self.qualified_depth -= 1;
+            }
+        }
+    }
+
+    let mut visitor = QualifiedPathWf {
+        db,
+        assumptions,
+        solve_cx,
+        qualified_depth: 0,
+        diags: Vec::new(),
+    };
+    let mut ctxt = VisitorCtxt::new(db, scope, span);
+    visitor.visit_ty(&mut ctxt, hir_ty);
+    visitor.diags
+}
+
 pub(crate) fn first_invalid_ty_cause<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
@@ -668,6 +769,8 @@ pub(crate) fn diag_from_invalid_cause<'db>(
         }
 
         InvalidCause::TypeLoweringCycle => TyLowerDiag::TypeLoweringCycle(span).into(),
+
+        InvalidCause::TypeNormalizationLimit => TyLowerDiag::TypeNormalizationLimit(span).into(),
 
         InvalidCause::NotAType(_) => return None,
 

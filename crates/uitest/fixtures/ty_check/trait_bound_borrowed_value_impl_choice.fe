@@ -1,0 +1,76 @@
+// Counterexamples against the borrow explanation: which impl applies can
+// change with ownership, several borrowed values can be involved, and the
+// borrowed type can be fixed by an annotation.
+
+trait Foo {}
+
+trait Mark {}
+
+struct S {
+    x: u256,
+}
+
+struct M {
+    x: u256,
+}
+
+impl Mark for M {}
+
+struct W<A> {
+    a: A,
+}
+
+// Blanket impl for marked types plus a concrete impl for `S`, which is not
+// `Mark`.
+impl<A: Mark> Foo for W<A> {}
+
+impl Foo for W<S> {}
+
+fn need<X: Foo>(_ x: X) {}
+
+// `W<ref S>: Foo` fails at `ref S: Mark`, but `W<S>: Foo` holds through the
+// concrete impl. Owning the value does satisfy the bound, but no `Mark` impl
+// for `S` may be claimed.
+fn concrete_impl_for_owned(_ s: ref S) {
+    need(W { a: s })
+}
+
+// Two different borrowed types: owning the `M` value alone leaves the
+// borrowed `S`, so no explanation.
+struct P<A, B> {
+    a: A,
+    b: B,
+}
+
+impl<A: Mark, B: Mark> Foo for P<A, B> {}
+
+fn two_borrowed_types(_ m: ref M, _ s: ref S) {
+    need(P { a: m, b: s })
+}
+
+// Nested wrappers: owning the one borrowed `M` satisfies the bound.
+impl<A: Foo> Foo for (A,) {}
+
+fn nested_wrapper(_ m: ref M) {
+    need((W { a: m },))
+}
+
+// The borrowed type need not come from a passed value: it can be written in
+// the bound (`ref M`) or come from the expected return type (`ref S`). The
+// explanation describes the type, not a value.
+fn need_with_fixed<X>(_ x: X)
+where
+    P<X, ref M>: Foo,
+{}
+
+fn borrow_written_in_bound() {
+    need_with_fixed(M { x: 0 })
+}
+
+fn make<X: Foo>() -> X {
+    make()
+}
+
+fn borrow_from_return_type() {
+    let _w: W<ref S> = make()
+}

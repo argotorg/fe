@@ -528,6 +528,16 @@ Every cyclic region has a repeated-value set, including an empty set when the
 verified normalized cycle defines no values. Such cycles still participate in
 feedback and no-normal-return analysis.
 
+Recursive memory effects forget choices private to repeated calls. Their
+receiver authority uses universal projection under each canonical target's
+original execution domain: it must hold on every hidden execution that can
+reach that target. Guarded alternative targets remain separate, while guards
+that reach the same target are combined before projection. Split targets and
+their authorizers share the original effect's map of address occurrences, so
+addresses used only by an effect retain distinct identities. Possible authority
+cannot become guaranteed authority. Access-local witnesses are projected before
+comparing that domain with an authorizer's independent witness scope.
+
 ### Separation requirements
 
 An input loan protects memory that the caller lends. Inside the body, an access
@@ -542,6 +552,15 @@ and exports the rest as `BorrowSummary::loan_requirements`. Each clause relates:
 
 All four share one witness scope. Two independently quantified regions would
 pair alternatives that never occurred together.
+
+Ordinary call effects may use an unconditional callee separation requirement to
+exclude an opaque overwrite: the requirement must protect the clobbered cell
+(or a containing place), cover the written footprint, and have no suspended slices. A matching
+source and extent is covered; an unknown extent also covers writes through
+offsets of that source. This does not establish loan authority. Resolving the callee's
+requirements and native-validity obligations still uses the physical basis and
+retains the overwrite until the caller independently proves it impossible.
+Effect and proof resolutions have separate caches.
 
 A reborrow descended from an input loan still names caller-supplied memory, so
 its unresolved separation is also exported. Creating `mut input` or `ref input`
@@ -624,25 +643,29 @@ preserves the allocation selected by a boolean through a join without reviving a
 moved pointer or turning one-path native initialization into an unconditional
 fact.
 
-Trusted primitive comparisons add same-type integer equality and unsigned
-ordering to those guards. Recognition uses resolved primitive operations and core
-wrapper calls; user methods with similar names contribute nothing. Negation,
-conjunction, and disjunction carry bounded relations. Unsigned widening and
-same-width same-signedness casts share index identity; truncation and signed
-widening do not. Signed comparisons contribute equality only.
+Trusted primitive comparisons add boolean equality, same-type integer equality,
+and unsigned ordering to those guards. Recognition uses resolved primitive
+operations and core wrapper calls; user methods with similar names contribute
+nothing. Negation, conjunction, and disjunction carry bounded relations. Unsigned
+widening and same-width same-signedness casts share index identity; truncation
+and signed widening do not. Signed comparisons contribute equality only.
 
 Scalar facts are generated on demand. Index selectors, loop frontiers,
-representable integer returns, and the integer parameters of a body whose
-branch guards a failed assertion seed the demand; loads, forwards, lossless
-casts, and block parameters close over it. Ordinary loop feedback omits unsigned
-bounds until a loop certificate justifies them. Exact scalar cells remember
+representable integer returns, equality predicates contributing to boolean
+returns, and the integer parameters of a body whose branch guards a failed
+assertion seed the demand; loads, forwards, lossless casts, and block parameters
+close over it. Ordinary loop feedback omits unsigned bounds until a loop
+certificate justifies them. Exact scalar cells remember
 guarded store versions, and a load binds a new SSA value only while no possible
 write has invalidated that cell.
 
 A summary exports the facts that hold on every normal return over formal
-arguments, including the relation to an integer result. A helper whose
-assertion pins a parameter therefore separates the caller's selector, while a
-helper that can return without asserting does not. Summaries also export
+arguments, including the relation to an integer or boolean result. Integral
+returns use the Result index binder; boolean returns use the Summary choice.
+Calls map these to the actual result and existentially project them when no
+fact reads that result. Argument restrictions survive this projection. A helper
+whose assertion pins a parameter therefore separates the caller's selector,
+while a helper that can return without asserting does not. Summaries also export
 definite constant values for writable scalar inputs. Local scalar choices are
 projected before export; public boolean choices map to the caller's actual
 arguments. Calls in a recursive component project their internal call choices
@@ -651,6 +674,28 @@ independent choices. Hidden index witnesses are projected in one shared
 decision-graph traversal. Injective, order-preserving decision renames reuse the
 existing branch order; renames that reorder or identify decisions use Shannon
 expansion.
+
+Scalar-only summaries classify argument observations from the exported relation
+and its projection without the result. A boolean identity observes its input
+through the result, a constant result does not observe an irrelevant branch
+selector, and an assertion keeps its argument observed even when the result is
+discarded. Accesses, ownership effects, mutable poststates, and obligations retain
+conservative observations. Returned predicates demand trusted equality operands
+within the boolean condition budget; arithmetic dependencies and return-only
+unsigned ordering remain untracked. Demand is prepared after callee summaries
+are available and follows their observed scalar arguments when the result is
+live or the observation is unconditional. Observation and fact demand use the
+same dependency transfers for calls, forwards, lossless casts, block parameters,
+and loads of exact scalar cells. Observed integral arguments demand their value
+identities; Boolean arguments demand their predicates within the condition
+budget. A demanded load follows its reaching stored values, excluding stores
+replaced by a later whole-cell write. Cell discovery, liveness, and typed demand
+close together before summary projection. Demanded integer joins retain their
+predecessor equalities; seeding an integer return alone still requires a compact
+join. Selector demand alone admits unsigned bounds; following a call's argument
+preserves value facts without promoting it to a selector. Guard instantiation and boolean join edges bind arguments to their
+trusted predicates before local choices are projected away. Dead results and
+unobserved arguments retain no argument predicate relations.
 
 ### Certified loop contents
 
@@ -686,21 +731,25 @@ unsigned bound only after a corresponding fill certificate is established.
 ### Recursive fresh results
 
 Recursive forwarding of an input preserves that input's may-alias identity. For a
-call returning one direct capability, fresh alternatives share one call-result
-port: the returned object of that call evaluation. The port is keyed by the
-caller's semantic instance and call-result value, and the enclosing loop
-generation distinguishes actual evaluations. Other exported components may name
-fresh storage only as a stored copy of the result or as invalid contents of fresh
-storage; certified ranges and native requirements disable the port. An
-allocation whose summary arguments are family or existential binders can name
-several objects in one evaluation, so a stored copy of such a family member is
-not identified with the result. Equal abstract values alone never merge objects.
+call with one direct capability result, fresh alternatives share one output
+port: the returned object of that call evaluation. A call without a capability
+result can instead use one fixed capability slot in a directly named input as
+its sole fresh output. Dynamic destinations, multiple fresh slots, and fresh
+objects exported through other summary components disable this extension.
+The port is keyed by the caller's semantic instance and call-result value, and
+the enclosing loop generation distinguishes actual evaluations. Other exported
+components may name fresh storage only as a proven stored copy or invalid
+contents of fresh storage; certified ranges and native requirements disable the
+port. A family can supply the one output object, but its abstract value does not
+identify a second observable family member with it. Stored copies with family or
+existential allocation arguments therefore disable the port. Equal abstract
+values alone never merge objects.
 
 Convergence: each function in a recursive component has finitely many allocation
 and call sites. Fresh alternatives that reach the result reuse their call site's
 port instead of adding a summary choice per recursion depth, and the internal
-recursive choices are projected only from the result's may-sources, stored copies
-of the result, and invalid fresh contents. The source identities reachable in a
+recursive choices are projected from input may-sources, fresh output ports,
+stored copies of the result, and invalid fresh contents. The source identities reachable in a
 component summary are therefore drawn from a finite set, and the guards over them
 join monotonically. Growth outside this representation, such as a poststate that
 exports a distinct fresh object, still reaches the bounded convergence
@@ -726,6 +775,8 @@ normal-return facts, and subsequent iterations compose them. Private opaque
 addresses used only in availability effects are quantified within their clauses,
 which avoids growing call-depth identities or accidentally relating independent
 effects. Such private identities do not establish definite initialization in callers.
+Recursive choices in reinitialization guards are projected universally under the
+normal-return execution domain: a possible write never becomes a definite one.
 Opaque signature contracts conservatively consume exposed non-Copy raw pointees
 and supply no restoration guarantee. Trusted byte-memory intrinsics describe byte
 accesses; a byte write is not an ownership-consuming load.
@@ -751,6 +802,13 @@ are implemented in
 the runtime return/argument adapters, and codegen, with handle-preservation tests
 covering their interaction. Layout cannot supply ownership facts missing from
 normalized semantics.
+
+The local borrow check publishes the control flow its solve proved executable:
+unreachable blocks, the call at which a block diverges because its callee's
+summary does not return, and infeasible successor edges. Runtime lowering emits
+exactly that flow, with everything else unreachable, and a callee is
+nonreturning at runtime exactly when its summary is. Representation choices and
+return inference therefore see the same returning paths as the summary.
 
 Frontend move marking recognizes dereferences of temporary pointers, including
 selected fields and array elements. Lowering preserves those places through
@@ -789,7 +847,9 @@ Loading a reference from a slot returns the stored carrier, not the slot address
 Return inference and value forwarding retain normalized operands: a loaded native
 field remains its descriptor even when its semantic local is an erased place alias.
 Copy scalar parameters materialize their value when the calling convention carries
-an implicit view. Declaration and body queries enforce the same return class.
+an implicit view. The declaration query fixes the return class without the
+body, from type-level forwarding and the summary; it may be wider than the class
+the body returns, which return lowering adapts, but never narrower.
 The verifier checks these conversions independently of semantic borrow checking;
 runtime representation never supplies ownership or aliasing authority.
 

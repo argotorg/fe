@@ -36,6 +36,7 @@ use crate::analysis::{
             state::{BorrowState, CapabilityValue},
             value::Guarded,
         },
+        ctfe::eval_const_ref,
         definite_assignment::literal_bool_cond,
         get_or_build_semantic_instance,
         normalized::{
@@ -52,8 +53,8 @@ use super::{
     access::ResolvedOperation,
     boundary::resolve_boundary_requirements,
     events::ConflictAnalysis,
-    inventory::Inventory,
-    ir::{BoundaryRequirement, PendingSemanticValidation},
+    inventory::{Inventory, unbounded_referents_diag},
+    ir::{BoundaryRequirement, ExecutableBlock, ExecutableControlFlow, PendingSemanticValidation},
     loop_certificate::{FrontierCandidate, PrefixCertificate},
     scalar::{CONDITION_BUDGET, ScalarDemand},
     summary::CallSummary,
@@ -140,21 +141,25 @@ impl<'db> Borrowck<'db> {
         summary_mode: BorrowSummaryMode,
     ) -> Result<Self, SemanticDiagnostic<'db>> {
         let inventory = Inventory::new(db, &body).map_err(|error| {
+            let message = match error {
+                ShapeError::UnboundedReferents(head) => {
+                    return unbounded_referents_diag(db, instance, body.template_owner, head);
+                }
+                ShapeError::UnresolvedCapability(ty) => format!(
+                    "unresolved capability inventory for `{}`: {ty:?}",
+                    ty.pretty_print(db)
+                ),
+                error => format!("invalid capability inventory: {error:?}"),
+            };
             normalized_body_internal_diag(
                 db,
                 instance,
                 &body,
                 SemOrigin::Body(body.template_owner),
-                match error {
-                    ShapeError::UnresolvedCapability(ty) => format!(
-                        "unresolved capability inventory for `{}`: {ty:?}",
-                        ty.pretty_print(db)
-                    ),
-                    error => format!("invalid capability inventory: {error:?}"),
-                },
+                message,
             )
         })?;
-        let mut checker = Self {
+        Ok(Self {
             db,
             instance,
             before: vec![Vec::new(); body.blocks.len()],
@@ -183,9 +188,7 @@ impl<'db> Borrowck<'db> {
             source_generation: 0,
             capability_regions: RefCell::default(),
             availability_diagnostic: OnceCell::new(),
-        };
-        checker.prepare_scalar_demand()?;
-        Ok(checker)
+        })
     }
 
     pub fn shape(&self, ty: TyId<'db>) -> Result<ShapeId<'db>, SemanticDiagnostic<'db>> {
@@ -231,11 +234,17 @@ impl<'db> Borrowck<'db> {
             return IndexExpr::Runtime(value);
         };
         match expr {
-            NExpr::Const(SConst::Value(constant)) => {
-                if let SemConstValue::Scalar {
-                    value: SemConstScalar::Int { value: integer },
-                    ..
-                } = constant.value().value(self.db)
+            NExpr::Const(constant) => {
+                let constant = match constant {
+                    SConst::Value(value) => Some(value.value()),
+                    SConst::Ref(reference) => eval_const_ref(self.db, *reference).into_ready(),
+                    SConst::Description(_) | SConst::Evidence(_) | SConst::Invalid(_) => None,
+                };
+                if let Some(constant) = constant
+                    && let SemConstValue::Scalar {
+                        value: SemConstScalar::Int { value: integer },
+                        ..
+                    } = constant.value(self.db)
                     && let Some(integer) = integer.to_usize()
                 {
                     return IndexExpr::Const(integer);
@@ -420,6 +429,40 @@ impl<'db> Borrowck<'db> {
                 if self.calls.get(result).is_some_and(|call| !call.summary.may_return))
     }
 
+    /// The converged reachability: a reached block either stops at the
+    /// diverging call it recorded last or runs its terminator, whose edges are
+    /// feasible under the block's terminal guard.
+    pub(super) fn executable_control_flow(&self) -> ExecutableControlFlow {
+        let blocks = self
+            .body
+            .blocks
+            .iter()
+            .zip(self.before.iter().zip(&self.terminal))
+            .enumerate()
+            .map(|(index, (block, (before, terminal)))| match terminal {
+                Some(state) => ExecutableBlock::Continues(
+                    block
+                        .terminator
+                        .kind
+                        .successors()
+                        .into_iter()
+                        .map(|successor| {
+                            self.edge_guard(NBlockId::new(index), successor)
+                                .is_some_and(|guard| state.guard().and(&guard).is_some())
+                        })
+                        .collect(),
+                ),
+                None if before.is_empty() => ExecutableBlock::Unreachable,
+                None => ExecutableBlock::Diverges(
+                    block.statements[before.len() - 1]
+                        .source
+                        .expect("a diverging call is a source statement"),
+                ),
+            })
+            .collect();
+        ExecutableControlFlow(blocks)
+    }
+
     pub(super) fn forwarded_value(&self, mut value: NValueId) -> NValueId {
         while let Some((_, NExpr::Forward { src })) = self.body.defining_expr(value) {
             value = src.value;
@@ -494,16 +537,7 @@ impl<'db> Borrowck<'db> {
                                 .with_boolean(choice.clone(), value)
                                 .expect("boolean alternative is feasible")
                         };
-                        let include_bounds =
-                            self.inventory
-                                .loops
-                                .for_value(&self.body, cond.value)
-                                .is_none()
-                                || (self.scalar.bounded_readers.contains(&cond.value)
-                                    && (!self.prefix_certificates.is_empty()
-                                        || self.calls.values().any(|call| {
-                                            !call.summary.certified_ranges.is_empty()
-                                        })));
+                        let include_bounds = self.scalar_bounds_enabled(cond.value);
                         let guard = guard.and(&self.condition_guard(
                             cond.value,
                             value,
@@ -564,21 +598,29 @@ impl<'db> Borrowck<'db> {
             .zip(&successor.args)
         {
             if self.body.values[parameter.index()].ty.is_bool(self.db) {
-                let parameter = self.boolean_choice(*parameter);
-                let equal =
-                    if let Some(value) = literal_bool_cond(self.db, &self.body, argument.value) {
-                        always.with_boolean(parameter, value)?
-                    } else {
-                        let argument = self.boolean_choice(argument.value);
-                        [true, false]
-                            .into_iter()
-                            .filter_map(|value| {
-                                always
-                                    .with_boolean(parameter.clone(), value)?
-                                    .with_boolean(argument.clone(), value)
-                            })
-                            .reduce(|left, right| left.or(&right))?
-                    };
+                let choice = self.boolean_choice(*parameter);
+                let equal = if let Some(value) =
+                    literal_bool_cond(self.db, &self.body, argument.value)
+                {
+                    always.with_boolean(choice, value)?
+                } else {
+                    [true, false]
+                        .into_iter()
+                        .filter_map(|value| {
+                            let argument = if self.scalar.live.contains(parameter) {
+                                self.condition_guard(
+                                    argument.value,
+                                    value,
+                                    self.scalar_bounds_enabled(argument.value),
+                                    CONDITION_BUDGET,
+                                )?
+                            } else {
+                                always.with_boolean(self.boolean_choice(argument.value), value)?
+                            };
+                            argument.with_boolean(choice.clone(), value)
+                        })
+                        .reduce(|left, right| left.or(&right))?
+                };
                 selected = selected.and(&equal)?;
             } else if self.scalar.values.contains(parameter)
                 && (self.scalar.selectors.contains(&self.index(*parameter))
@@ -602,7 +644,14 @@ impl<'db> Borrowck<'db> {
         parents: Vec<Guarded<'db, LoanRef<'db>>>,
     ) {
         let (region, parents) =
-            if let Some(iteration) = self.inventory.loops.for_value(&self.body, result) {
+            // One definition serves every execution of its site, so it keeps
+            // no choice that any enclosing iteration can renew.
+            if let Some(iteration) = self
+                .inventory
+                .loops
+                .for_value(&self.body, result)
+                .map(|region| self.inventory.loops.outermost(region))
+            {
                 let repeated = |occurrence| {
                     self.inventory
                         .loops
@@ -654,10 +703,22 @@ impl<'db> Borrowck<'db> {
         })
     }
 
+    fn initial_state(&mut self) -> BorrowState<'db> {
+        let mut state = self
+            .inventory
+            .entry
+            .before_allocations(&mut self.inventory.values);
+        if let Some(guard) = self.inventory.loops.entry_guard(None, self.body.entry) {
+            state.constrain(&guard, &mut self.inventory.values);
+        }
+        state
+    }
+
     pub fn solve(&mut self) -> Result<(), SemanticDiagnostic<'db>> {
         #[cfg(feature = "borrowck-profile")]
         let profile = self.profile_scope("solve");
         self.prepare_calls()?;
+        self.prepare_scalar_demand()?;
         if self
             .calls
             .values()
@@ -677,7 +738,7 @@ impl<'db> Borrowck<'db> {
             self.boundary_requirements = None;
             self.conflicts = None;
             let mut incoming = vec![None; self.body.blocks.len()];
-            incoming[self.body.entry.index()] = Some(self.inventory.entry.clone());
+            incoming[self.body.entry.index()] = Some(self.initial_state());
             let mut certificate_application_failed = false;
             // Every sweep keeps its per-statement states. The sweep that finds
             // the fixed point ran with unchanged facts, so its states are the
@@ -739,6 +800,7 @@ impl<'db> Borrowck<'db> {
                                 continue;
                             };
                             if !edge.certify_family_contents(
+                                &mut self.inventory.values,
                                 &certificate.family,
                                 &certificate.family_scope,
                                 &coverage,
@@ -770,10 +832,22 @@ impl<'db> Borrowck<'db> {
                         {
                             #[cfg(feature = "borrowck-profile")]
                             profile.point("forget_iteration", index, successor_index);
-                            let repeated = self.inventory.loops.repeated(iteration);
-                            edge.forget_iteration(&mut self.inventory.values, incoming[successor.block.index()].as_ref(),
-                            |index| matches!(index, IndexExpr::Iteration(region) if region == iteration) || matches!(index, IndexExpr::Runtime(value) if repeated.contains(&value)),
-                            |occurrence| self.inventory.loops.repeats_occurrence(iteration, occurrence));
+                            let loops = &self.inventory.loops;
+                            edge.forget_iteration(
+                                &mut self.inventory.values,
+                                incoming[successor.block.index()].as_ref(),
+                                |index| loops.repeats_index(iteration, index),
+                                |index| loops.drops_fact(iteration, index),
+                                |occurrence| loops.repeats_occurrence(iteration, occurrence),
+                            );
+                        }
+                        if let Some(guard) = self
+                            .inventory
+                            .loops
+                            .entry_guard(Some(NBlockId::new(index)), successor.block)
+                            && !edge.constrain(&guard, &mut self.inventory.values)
+                        {
+                            continue;
                         }
                         #[cfg(feature = "borrowck-profile")]
                         profile.point("join", index, successor_index);
@@ -793,7 +867,7 @@ impl<'db> Borrowck<'db> {
                     self.inventory.reset_epoch_loans();
                     self.source_generation += 1;
                     incoming.fill(None);
-                    incoming[self.body.entry.index()] = Some(self.inventory.entry.clone());
+                    incoming[self.body.entry.index()] = Some(self.initial_state());
                     continue;
                 }
                 if incoming == previous_incoming && !self.loan_facts_changed {
@@ -852,6 +926,10 @@ impl<'db> Borrowck<'db> {
                     if !certificates.is_empty() {
                         self.prefix_certificates = certificates;
                         self.enable_bounded_readers();
+                        // The proved contents retract earlier possibilities.
+                        // Rebuild loans derived before that refinement as well.
+                        self.inventory.reset_epoch_loans();
+                        self.source_generation += 1;
                         continue;
                     }
                 }
@@ -918,9 +996,7 @@ impl<'db> Borrowck<'db> {
             let changed = self
                 .inventory
                 .add_external_sources(self.db, self.instance, sources.iter().cloned())
-                .map_err(|error| {
-                    self.internal_diag(origin, format!("invalid raw memory storage: {error:?}"))
-                })?;
+                .map_err(|error| self.storage_error(origin, error, "invalid raw memory storage"))?;
             if !changed {
                 let (source, scope) = &sources[0];
                 let root = RegionRoot::External(source.clone());
@@ -1411,5 +1487,21 @@ impl<'db> Borrowck<'db> {
         message: String,
     ) -> SemanticDiagnostic<'db> {
         self.diag(SemanticDiagnosticKind::Internal, origin, message)
+    }
+
+    /// A storage discovery failure. Reaching too many referent types is the
+    /// program's error; any other failure is internal.
+    pub(super) fn storage_error(
+        &self,
+        origin: SemOrigin<'db>,
+        error: ShapeError<'db>,
+        context: &str,
+    ) -> SemanticDiagnostic<'db> {
+        match error {
+            ShapeError::UnboundedReferents(head) => {
+                unbounded_referents_diag(self.db, self.instance, self.body.template_owner, head)
+            }
+            error => self.internal_diag(origin, format!("{context}: {error:?}")),
+        }
     }
 }

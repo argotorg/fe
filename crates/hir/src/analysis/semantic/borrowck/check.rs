@@ -7,9 +7,9 @@ use std::fmt;
 use super::{
     callsite::solved_call_site_refinements,
     ir::{
-        BorrowSummary, BorrowSummaryId, LocalBorrowCheck, PendingSemanticValidation,
-        ProvisionalBorrowAnalysis, SemanticBorrowAnalysis, SemanticBorrowCheckResult,
-        SemanticBorrowSummaryResult, SeparationOrigin,
+        BorrowSummary, BorrowSummaryId, ExecutableControlFlow, LocalBorrowCheck,
+        PendingSemanticValidation, ProvisionalBorrowAnalysis, SemanticBorrowAnalysis,
+        SemanticBorrowCheckResult, SemanticBorrowSummaryResult, SeparationOrigin,
     },
     solver::{BorrowSummaryMode, Borrowck},
     summary::signature_summary,
@@ -288,6 +288,52 @@ fn summary_voucher<'db>(
     }
 }
 
+/// The control flow the borrow check proved executable. Runtime lowering emits
+/// exactly this flow, so it agrees with the summary about which paths return.
+pub fn semantic_executable_control_flow<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Option<&'db ExecutableControlFlow> {
+    local_borrow_check(db, instance).executable.as_ref()
+}
+
+/// The validation of one body, from the analysis's solve when its summary came
+/// from solving the body.
+fn local_borrow_check<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> &'db LocalBorrowCheck<'db> {
+    semantic_borrow_analysis_query(db, instance)
+        .check
+        .as_ref()
+        .unwrap_or_else(|| body_borrow_check_query(db, instance))
+}
+
+/// The body's own solve, for a summary that did not come from solving it.
+#[salsa::tracked(return_ref)]
+fn body_borrow_check_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> LocalBorrowCheck<'db> {
+    let unsolved = |result| LocalBorrowCheck {
+        result,
+        callees: Vec::new(),
+        executable: None,
+    };
+    match Borrowck::new(db, instance) {
+        Ok(mut borrowck) => borrowck.local_check(),
+        Err(SemanticNormalizationFailure::Blocked(blocked)) => {
+            unsolved(SemanticBorrowCheckResult::Blocked(blocked))
+        }
+        Err(
+            SemanticNormalizationFailure::Rejected(diag)
+            | SemanticNormalizationFailure::InternalFailure(diag),
+        ) => unsolved(SemanticBorrowCheckResult::Err(SemanticDiagnosticId::new(
+            db, diag,
+        ))),
+    }
+}
+
 pub fn check_semantic_borrows<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -312,33 +358,20 @@ fn semantic_borrow_check_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> SemanticBorrowCheckResult<'db> {
-    let LocalBorrowCheck { result, callees } =
-        match &semantic_borrow_analysis_query(db, instance).check {
-            Some(check) => check.clone(),
-            None => match Borrowck::new(db, instance) {
-                Ok(mut borrowck) => borrowck.local_check(),
-                Err(SemanticNormalizationFailure::Blocked(blocked)) => {
-                    return SemanticBorrowCheckResult::Blocked(blocked);
-                }
-                Err(
-                    SemanticNormalizationFailure::Rejected(diag)
-                    | SemanticNormalizationFailure::InternalFailure(diag),
-                ) => {
-                    return SemanticBorrowCheckResult::Err(SemanticDiagnosticId::new(db, diag));
-                }
-            },
-        };
+    let LocalBorrowCheck {
+        result, callees, ..
+    } = local_borrow_check(db, instance);
     let mut pending = match result {
         SemanticBorrowCheckResult::Ok => PendingSemanticValidation::default(),
-        SemanticBorrowCheckResult::Pending(pending) => pending,
+        SemanticBorrowCheckResult::Pending(pending) => pending.clone(),
         result @ (SemanticBorrowCheckResult::Blocked(_) | SemanticBorrowCheckResult::Err(_)) => {
-            return result;
+            return result.clone();
         }
     };
     // Summaries describe effects and boundary requirements. Local loan conflicts
     // are a separate validation: check every resolved implementation transitively
     // without making a boundary-only query depend on borrow diagnostics.
-    for callee in callees {
+    for callee in callees.iter().copied() {
         match semantic_borrow_check_query(db, callee) {
             SemanticBorrowCheckResult::Ok => {}
             SemanticBorrowCheckResult::Pending(validation) => {

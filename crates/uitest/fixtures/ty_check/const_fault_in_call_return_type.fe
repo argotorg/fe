@@ -1,0 +1,41 @@
+// A return type that holds a const which faults only once the call's generic
+// arguments are known.
+pub struct S<const N: usize> {}
+
+fn shrink<const N: usize>() -> S<{ N - 5 }> {
+    shrink<N>()
+}
+
+fn shrink_inferred<const N: usize>(_ s: S<N>) -> S<{ N - 5 }> {
+    shrink_inferred<N>(s)
+}
+
+fn divide<const N: usize>() -> S<{ 10 / N }> {
+    divide<N>()
+}
+
+impl<const N: usize> S<N> {
+    fn shrink_method(self) -> S<{ N - 5 }> {
+        self.shrink_method()
+    }
+}
+
+fn explicit() -> u256 {
+    shrink<2>()
+}
+
+fn inferred() -> bool {
+    shrink_inferred(S<2> {})
+}
+
+fn by_zero() -> S<3> {
+    divide<0>()
+}
+
+fn method(s: S<2>) -> bool {
+    s.shrink_method()
+}
+
+fn fine() -> S<1> {
+    shrink<6>()
+}

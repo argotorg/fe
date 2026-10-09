@@ -24,15 +24,24 @@ msg NestedHelperMsg {
 }
 
 pub contract NestedHelper {
-    mut pairs: [Pair<StorageMap<u256, u256>>; 2],
+    mut first: Pair<StorageMap<u256, u256>>,
+    mut second: Pair<StorageMap<u256, u256>>,
 
     recv NestedHelperMsg {
-        Set { lane, key, value } uses (mut pairs) {
-            pairs[lane].set_left(key: key, value: value)
+        Set { lane, key, value } uses (mut first, mut second) {
+            if lane == 0 {
+                first.set_left(key: key, value: value)
+            } else {
+                second.set_left(key: key, value: value)
+            }
         }
 
-        Get { lane, key } -> u256 uses (pairs) {
-            pairs[lane].get_left(key: key)
+        Get { lane, key } -> u256 uses (first, second) {
+            if lane == 0 {
+                first.get_left(key: key)
+            } else {
+                second.get_left(key: key)
+            }
         }
     }
 }

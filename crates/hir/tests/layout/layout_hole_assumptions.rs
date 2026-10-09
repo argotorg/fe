@@ -6,7 +6,7 @@ use fe_hir::analysis::ty::{
     ty_def::TyData,
 };
 use fe_hir::core::semantic::{
-    FieldStorageLayout, LayoutSelection, PlaceStep, RootRole, StoragePlace,
+    ContractLayoutError, FieldStorageLayout, LayoutSelection, PlaceStep, RootRole, StoragePlace,
 };
 use fe_hir::hir_def::{
     CallableDef, Contract, Expr, ExprId, FieldIndex, Func, IdentId, ItemKind, Partial, Pat, PatId,
@@ -2249,7 +2249,7 @@ contract C {
 }
 
 #[test]
-fn contract_field_array_repeated_element_hole_uses_an_indexed_family() {
+fn contract_field_generic_array_of_root_values_is_rejected() {
     parse_module!(
         db,
         top_mod,
@@ -2268,16 +2268,16 @@ contract C {
 "#,
     );
     let contract = find_contract(&db, top_mod, "C");
-    let layout = allocated_fields(&db, contract);
-    let s = layout
-        .get(&IdentId::new(&db, "s".to_string()))
-        .expect("missing `s` field");
-
-    assert_eq!(s.families.len(), 1);
-    assert_eq!(s.families[0].extent, 2);
-    assert_eq!(s.slot_count, 2);
-    assert!(ty_contains_const_hole(&db, s.target.template));
-    assert!(s.target.all_roots_classified(&db));
+    let errors = contract
+        .storage_layout(&db)
+        .field_errors(&IdentId::new(&db, "s".to_string()))
+        .expect("an instantiated array of root values must be rejected");
+    assert!(
+        errors
+            .iter()
+            .any(|error| matches!(error, ContractLayoutError::LayoutRootArray { .. })),
+        "{errors:?}"
+    );
 }
 
 /// Repeated uses of one alias expand the same template; the template's holes
@@ -3622,87 +3622,6 @@ contract C {
         )),
         Some(2)
     );
-}
-
-#[test]
-fn contract_field_array_of_slot_wrappers_uses_a_symbolic_family() {
-    parse_module!(
-        db,
-        top_mod,
-        r#"
-use std::evm::StorPtr
-
-struct Slot<T, const ROOT: u256 = _> {}
-
-contract C {
-    arr: StorPtr<[Slot<u256>; 3]>,
-    after: StorPtr<u256>,
-}
-"#,
-    );
-    let contract = find_contract(&db, top_mod, "C");
-    let layout = allocated_fields(&db, contract);
-    let arr = layout
-        .get(&IdentId::new(&db, "arr".to_string()))
-        .expect("missing `arr` field");
-    let after = layout
-        .get(&IdentId::new(&db, "after".to_string()))
-        .expect("missing `after` field");
-
-    assert_eq!(arr.families.len(), 1);
-    assert_eq!(arr.families[0].extent, 3);
-    assert_eq!(arr.slot_count, 3);
-    assert_eq!(after.slot_offset, 3);
-    assert!(ty_contains_const_hole(&db, arr.target.template));
-}
-
-/// Transient-storage fields get their own slot space: roots restart at zero
-/// independently of persistent storage, including symbolic root families.
-#[test]
-fn contract_field_transient_array_of_slot_wrappers_uses_transient_family() {
-    parse_module!(
-        db,
-        top_mod,
-        r#"
-use std::evm::StorPtr
-use std::evm::TStorPtr
-
-struct Slot<T, const ROOT: u256 = _> {}
-
-contract C {
-    persistent: StorPtr<Slot<u256>>,
-    tarr: TStorPtr<[Slot<u256>; 3]>,
-    tafter: TStorPtr<u256>,
-}
-"#,
-    );
-    let contract = find_contract(&db, top_mod, "C");
-    let layout = allocated_fields(&db, contract);
-    let persistent = layout
-        .get(&IdentId::new(&db, "persistent".to_string()))
-        .expect("missing `persistent` field");
-    let tarr = layout
-        .get(&IdentId::new(&db, "tarr".to_string()))
-        .expect("missing `tarr` field");
-    let tafter = layout
-        .get(&IdentId::new(&db, "tafter".to_string()))
-        .expect("missing `tafter` field");
-
-    assert_ne!(persistent.address_space, tarr.address_space);
-
-    let persistent_root = concrete_target_ty(&db, persistent)
-        .generic_args(&db)
-        .get(1)
-        .copied()
-        .expect("missing persistent ROOT const arg");
-    assert_eq!(const_lit_usize(&db, persistent_root), 0);
-    assert_eq!(persistent.slot_count, 1);
-    assert_eq!(tarr.families.len(), 1);
-    assert_eq!(tarr.families[0].extent, 3);
-    assert_eq!(tarr.families[0].space, tarr.address_space);
-    assert_eq!(tarr.slot_count, 3);
-    assert_eq!(tafter.slot_offset, 3);
-    assert!(ty_contains_const_hole(&db, tarr.target.template));
 }
 
 /// `Mutex` carries its reentrancy lock as a zero-sized `TSlot<bool>` field:

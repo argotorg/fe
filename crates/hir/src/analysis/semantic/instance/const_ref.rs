@@ -352,6 +352,47 @@ pub(crate) fn provisional_semantic_callee_key<'db>(
     )
 }
 
+/// Give a closed, effect-free root the same proof environment as an ordinary
+/// call from its own ingot. Symbolic roots and provider-bearing roots retain
+/// their declaration environment; their identity is not an ordinary call.
+pub(super) fn root_impl_env<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+    subst: GenericSubst<'db>,
+) -> ImplEnv<'db> {
+    let env = ImplEnv::empty(db, owner.scope());
+    let BodyOwner::Func(func) = owner else {
+        return env;
+    };
+    if !(func.containing_impl(db).is_some() || !func.is_associated_func(db))
+        || !func.effect_requirements(db).is_empty()
+        || has_callable_layout_slots(db, func)
+        || !is_ground(collect_flags(db, subst.generic_args(db)))
+    {
+        return env;
+    }
+    let callable = Callable::from_item(
+        db,
+        CallableDef::Func(func),
+        subst.generic_args(db).to_vec(),
+        None,
+    );
+    semantic_callee_key_with_assumptions(
+        db,
+        None,
+        env,
+        &callable,
+        &[],
+        &[],
+        PredicateListId::empty_list(db),
+        ProviderResolutionMode::Final,
+    )
+    .expect("ordinary root has no trait argument mapping")
+    .expect("ordinary root is a function")
+    .key
+    .impl_env(db)
+}
+
 /// Finalizes a compiler-generated call that has no caller body through the
 /// same selection, argument mapping, signature check, and context pruning as
 /// source calls. Inherited arguments come from `trait_inst`; `own_args` are the

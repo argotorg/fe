@@ -1,0 +1,75 @@
+// A loop calls a dispatcher that touches independent optional allocations.
+// Keeping the call's branch choices after every observed aggregate field made
+// the caller's availability requirements grow exponentially with field count.
+// This many fields can reach the separation budget; it must still terminate.
+use std::native::ByteBuffer
+
+struct Frame {
+    b0: ByteBuffer,
+    b1: ByteBuffer,
+    b2: ByteBuffer,
+    b3: ByteBuffer,
+    b4: ByteBuffer,
+    b5: ByteBuffer,
+    b6: ByteBuffer,
+    b7: ByteBuffer,
+    b8: ByteBuffer,
+    b9: ByteBuffer,
+    b10: ByteBuffer,
+    b11: ByteBuffer,
+    b12: ByteBuffer,
+    b13: ByteBuffer,
+    b14: ByteBuffer,
+    b15: ByteBuffer,
+    pc: u64,
+}
+
+impl Frame {
+    fn dispatch(mut self, op: u8, input: ByteBuffer) {
+        if op == 0 {
+            self.b0.set_byte(index: 0, value: input.byte_at(0))
+        } else if op == 1 {
+            self.b1.set_byte(index: 0, value: input.byte_at(1))
+        } else if op == 2 {
+            self.b2.set_byte(index: 0, value: input.byte_at(2))
+        } else if op == 3 {
+            self.b3.set_byte(index: 0, value: input.byte_at(3))
+        } else if op == 4 {
+            self.b4.set_byte(index: 0, value: input.byte_at(4))
+        } else if op == 5 {
+            self.b5.set_byte(index: 0, value: input.byte_at(5))
+        } else if op == 6 {
+            self.b6.set_byte(index: 0, value: input.byte_at(6))
+        } else if op == 7 {
+            self.b7.set_byte(index: 0, value: input.byte_at(7))
+        } else if op == 8 {
+            self.b8.set_byte(index: 0, value: input.byte_at(8))
+        } else if op == 9 {
+            self.b9.set_byte(index: 0, value: input.byte_at(9))
+        } else if op == 10 {
+            self.b10.set_byte(index: 0, value: input.byte_at(10))
+        } else if op == 11 {
+            self.b11.set_byte(index: 0, value: input.byte_at(11))
+        } else if op == 12 {
+            self.b12.set_byte(index: 0, value: input.byte_at(12))
+        } else if op == 13 {
+            self.b13.set_byte(index: 0, value: input.byte_at(13))
+        } else if op == 14 {
+            self.b14.set_byte(index: 0, value: input.byte_at(14))
+        } else if op == 15 {
+            self.b15.set_byte(index: 0, value: input.byte_at(15))
+        }
+    }
+
+    fn run(mut self, code: ByteBuffer, input: ByteBuffer) {
+        while self.pc < code.len() {
+            let op = code.byte_at(self.pc)
+            self.pc += 1
+            self.dispatch(op, input)
+        }
+    }
+}
+
+fn caller(frame: mut Frame, code: ByteBuffer, input: ByteBuffer) {
+    frame.run(code, input)
+}

@@ -55,10 +55,10 @@ tracing-tree = "0.4.0"
 wasm-bindgen-test = "0.3"
 semver = "1.0.26"
 petgraph = "0.8"
-sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "9c35018759aff07516025684fea0be784b0cf6df" }
-sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "9c35018759aff07516025684fea0be784b0cf6df" }
-sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "9c35018759aff07516025684fea0be784b0cf6df" }
-sonatina-verifier = { git = "https://github.com/fe-lang/sonatina", rev = "9c35018759aff07516025684fea0be784b0cf6df" }
+sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "601010bc9364276e598143ebb5749f8273832df6" }
+sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "601010bc9364276e598143ebb5749f8273832df6" }
+sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "601010bc9364276e598143ebb5749f8273832df6" }
+sonatina-verifier = { git = "https://github.com/fe-lang/sonatina", rev = "601010bc9364276e598143ebb5749f8273832df6" }
 
 [profile.dev]
 # Set to 0 to make the build faster and debugging more difficult.
@@ -70,6 +70,11 @@ debug = 0
 
 [profile.release]
 debug = 0
+
+# Keep compiler-heavy tests optimized while checking debug invariants.
+[profile.test-release]
+inherits = "release"
+debug-assertions = true
 
 [profile.dev.package]
 revm = { opt-level = 3 }

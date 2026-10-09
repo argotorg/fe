@@ -28,7 +28,7 @@ test: treesitter-generate
 	# Builds and runs the workspace tests, including the tree-sitter grammar
 	# test (crates/parser/tests/tree_sitter_parse.rs), which parses every .fe
 	# fixture against the freshly generated grammar.
-	cargo nextest run --release --workspace --all-features --no-fail-fast \
+	cargo nextest run --cargo-profile test-release --workspace --all-features --no-fail-fast \
 		--exclude fe-bench
 
 .PHONY: check-wasm
@@ -69,25 +69,69 @@ build-docs:
 README.md: src/main.rs
 	cargo readme --no-title --no-indent-headings > README.md
 
-notes:
-	towncrier build --yes --version $(version)
+# eisenbote (https://github.com/fe-lang/eisenbote) assembles the release notes
+# from newsfragments/, configured in eisenbote.toml. It is built with the Fe
+# compiler about to be released, which also checks the native backend on a
+# real program. If that build fails, eisenbote's last working executable is
+# downloaded instead.
+#
+# By default the Makefile keeps its own clone of eisenbote in target/eisenbote
+# and updates it to eisenbote's latest master. Set EISENBOTE to use another
+# checkout as it is (it is cloned if it doesn't exist).
+EISENBOTE_REPO = https://github.com/fe-lang/eisenbote
+EISENBOTE ?= target/eisenbote
+# EISENBOTE_BUILD=0 skips the build and uses the last working executable.
+EISENBOTE_BUILD ?= 1
+
+.PHONY: eisenbote-checkout
+eisenbote-checkout:
+	@if [ ! -d "$(EISENBOTE)/.git" ]; then \
+		git clone --quiet --depth 1 $(EISENBOTE_REPO) "$(EISENBOTE)"; \
+	elif [ "$(origin EISENBOTE)" = file ]; then \
+		git -C "$(EISENBOTE)" pull --quiet --ff-only; \
+	fi
+
+.PHONY: eisenbote
+eisenbote: eisenbote-checkout
+ifeq ($(EISENBOTE_BUILD),0)
+	$(MAKE) -C $(EISENBOTE) download
+else
+	@echo "Building eisenbote with this Fe. To use its last working executable"
+	@echo "instead, run: make $(or $(MAKECMDGOALS),eisenbote) version=$(version) EISENBOTE_BUILD=0"
+	cargo build --release -p fe --features cranelift
+	$(MAKE) -C $(EISENBOTE) -B FE=$(CURDIR)/target/release/fe || { \
+		echo "Building eisenbote with this Fe failed; using its last working executable."; \
+		$(MAKE) -C $(EISENBOTE) download; }
+endif
+
+# Any eisenbote executable, for checks that don't need a fresh build.
+$(EISENBOTE)/out/eisenbote: | eisenbote-checkout
+	$(MAKE) -C $(EISENBOTE) download
+
+# Check that newsfragments/ only holds well-named fragments (used by CI).
+.PHONY: check-notes
+check-notes: $(EISENBOTE)/out/eisenbote
+	$(EISENBOTE)/bin/eisenbote check
+
+notes: eisenbote
+	$(EISENBOTE)/bin/eisenbote build --yes --version $(version)
 	git commit -m "Compile release notes"
 
 .PHONY: release release-test
-release:
+release: $(EISENBOTE)/out/eisenbote
 	# Ensure release notes where generated before running the release command
-	./newsfragments/validate_files.py is-empty
+	$(EISENBOTE)/bin/eisenbote check --empty
 	cargo release $(version) --execute --all --no-tag --no-push
 	$(MAKE) release-test
 
 # Repeat validation after a version bump without rerunning cargo-release.
 release-test:
 	# Optimize compiler-heavy tests and give deeply nested type queries enough stack.
-	RUST_MIN_STACK=16777216 cargo test --release --locked --workspace
+	RUST_MIN_STACK=16777216 cargo test --profile test-release --locked --workspace
 
-push-tag:
+push-tag: $(EISENBOTE)/out/eisenbote
 	# Run `make release version=<version>` first
-	./newsfragments/validate_files.py is-empty
+	$(EISENBOTE)/bin/eisenbote check --empty
 	# Tag the release with the current version number
 	git tag "v$$(cargo pkgid fe | cut -d# -f2 | cut -d: -f2)"
 	git push --tags upstream

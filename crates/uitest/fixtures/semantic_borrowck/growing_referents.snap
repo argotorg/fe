@@ -1,0 +1,40 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/growing_referents.fe
+---
+error[16-0011]: unbounded referent types in `fn value`
+   ┌─ growing_referents.fe:20:36
+   │
+20 │   fn value(grow: Grow<u256>) -> u256 {
+   │ ╭────────────────────────────────────^
+21 │ │     grow.value
+22 │ │ }
+   │ ╰─^ more than 64 instantiations of `Grow` are reachable from here; a recursive type may be growing its type arguments without bound
+
+error[16-0011]: unbounded referent types in `fn count`
+   ┌─ growing_referents.fe:29:37
+   │
+29 │   fn count(counter: Count<0>) -> u256 {
+   │ ╭─────────────────────────────────────^
+30 │ │     counter.value
+31 │ │ }
+   │ ╰─^ more than 64 instantiations of `Count` are reachable from here; a recursive type may be growing its type arguments without bound
+
+error[16-0011]: unbounded referent types in `fn positive_maybe`
+   ┌─ growing_referents.fe:73:51
+   │
+73 │   fn positive_maybe(x: PositiveMaybe<u256>) -> u256 {
+   │ ╭───────────────────────────────────────────────────^
+74 │ │     x.value
+75 │ │ }
+   │ ╰─^ more than 64 instantiations of `Maybe` are reachable from here; a recursive type may be growing its type arguments without bound
+
+error[16-0011]: unbounded referent types in `fn higher_kinded`
+   ┌─ growing_referents.fe:87:50
+   │
+87 │   fn higher_kinded(x: Fine<u256, Wrapper>) -> u256 {
+   │ ╭──────────────────────────────────────────────────^
+88 │ │     x.value
+89 │ │ }
+   │ ╰─^ more than 64 instantiations of `Wrapper` are reachable from here; a recursive type may be growing its type arguments without bound

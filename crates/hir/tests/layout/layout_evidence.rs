@@ -9,8 +9,8 @@ use fe_hir::{
         semantic::{
             EffectProviderSubst, GenericSubst, ImplEnv, LayoutEvidenceBase, LayoutEvidenceBody,
             LayoutEvidenceComponentValue, LayoutEvidenceError, LayoutEvidenceExpr,
-            LayoutEvidenceIndex, LayoutEvidenceOperand, LayoutEvidenceVerifyError, NExpr,
-            NStatementKind, NormalizedArtifacts, SExpr, SStmtKind, SemanticInstanceKey,
+            LayoutEvidenceOperand, LayoutEvidenceVerifyError, NExpr, NStatementKind,
+            NormalizedArtifacts, SExpr, SStmtKind, SemanticInstanceKey,
             collect_layout_evidence_diagnostic_vouchers, get_or_build_semantic_instance,
             identity_semantic_instance_key, layout_evidence_body, normalize_runtime_semantic_body,
             normalized::{NLayoutLocals, NStatementId},
@@ -19,8 +19,9 @@ use fe_hir::{
         },
         ty::{
             CallableLayoutParamPort, CallableLayoutPort, LayoutBundleComponentId,
-            LayoutBundleComponentTransport, LayoutBundleSchemaError, LayoutEvidencePathStep,
-            LayoutViewAlias, const_ty::CallableInputLayoutHoleOrigin, ty_check::BodyOwner,
+            LayoutBundleComponentTransport, LayoutBundleSchemaError, LayoutBundleUnrepresentable,
+            LayoutEvidencePathStep, LayoutViewAlias, const_ty::CallableInputLayoutHoleOrigin,
+            ty_check::BodyOwner,
         },
     },
     core::semantic::ContractLayoutError,
@@ -103,11 +104,10 @@ fn reports_non_regular_cycle<'db>(
         identity_semantic_instance_key(db, BodyOwner::Func(find_func(db, top_mod, name))),
     );
     let signature = inspect.key(db).layout_bundle_signature(db);
-    signature.inputs[0]
-        .interface
-        .schema
-        .non_regular_view_cycle
-        .is_some()
+    matches!(
+        signature.inputs[0].interface.schema.unrepresentable,
+        Some(LayoutBundleUnrepresentable::NonRegularViewCycle { .. })
+    )
 }
 
 /// Growth through an inserted wrapper, directly or through a second type, is
@@ -498,6 +498,245 @@ fn make<const ROOT: u256>(value: Rooted<ROOT>) {
 }
 
 #[test]
+fn arrays_reaching_roots_through_recursive_provider_targets_are_rejected() {
+    for target in ["([Loop; 2], Rooted)", "(Rooted, [Loop; 2])"] {
+        let source = format!(
+            r#"
+use core::effect_ref::{{AddressSpace, EffectHandle}}
+
+struct Rooted<const ROOT: u256 = _> {{}}
+struct Loop {{ raw: u256 }}
+impl EffectHandle for Loop {{
+    type Target = {target}
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+
+struct Plain {{ raw: u256 }}
+impl EffectHandle for Plain {{
+    type Target = ([Plain; 2], u256)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+
+fn take(l: Loop) {{}}
+
+fn take_plain(p: Plain) {{}}
+"#
+        );
+        parse_ok!(trusted db, top_mod, &source);
+        let mut messages = collect_layout_evidence_diagnostic_vouchers(&db, top_mod)
+            .iter()
+            .map(|diagnostic| diagnostic.to_complete(&db).message)
+            .collect::<Vec<_>>();
+        messages.sort();
+        // `Loop::raw` receives a `Loop`; root-free `Plain` stays valid.
+        assert_eq!(
+            messages,
+            [
+                "array of layout-root values in `raw`",
+                "array of layout-root values in `take`",
+            ],
+            "{target}"
+        );
+    }
+}
+
+#[test]
+fn arrays_reaching_roots_through_chained_provider_back_edges_are_rejected() {
+    // Expanding `Outer`, the array closes a back-edge to `Inner`, which
+    // reaches `Outer`'s roots only through its own back-edge to `Outer`,
+    // directly or by way of `Mid`.
+    for target in [
+        "(Inner, Rooted)",
+        "(Rooted, Inner)",
+        "(Mid, Rooted)",
+        "(Rooted, Mid)",
+    ] {
+        let source = format!(
+            r#"
+use core::effect_ref::{{AddressSpace, EffectHandle}}
+
+struct Rooted<const ROOT: u256 = _> {{}}
+struct Outer {{ raw: u256 }}
+impl EffectHandle for Outer {{
+    type Target = {target}
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct Inner {{ raw: u256 }}
+impl EffectHandle for Inner {{
+    type Target = ([Inner; 2], Outer)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct Mid {{ raw: u256 }}
+impl EffectHandle for Mid {{
+    type Target = (Inner, u256)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+
+struct PlainOuter {{ raw: u256 }}
+impl EffectHandle for PlainOuter {{
+    type Target = (PlainInner, u256)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct PlainInner {{ raw: u256 }}
+impl EffectHandle for PlainInner {{
+    type Target = ([PlainInner; 2], PlainOuter)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+
+fn take_outer(o: Outer) {{}}
+
+fn take_inner(i: Inner) {{}}
+
+fn take_mid(m: Mid) {{}}
+
+fn take_plain(p: PlainOuter) {{}}
+"#
+        );
+        parse_ok!(trusted db, top_mod, &source);
+        let mut messages = collect_layout_evidence_diagnostic_vouchers(&db, top_mod)
+            .iter()
+            .map(|diagnostic| diagnostic.to_complete(&db).message)
+            .collect::<Vec<_>>();
+        messages.sort();
+        // Every `raw` method receives a root-reaching handle; the root-free
+        // chain stays valid.
+        assert_eq!(
+            messages,
+            [
+                "array of layout-root values in `raw`",
+                "array of layout-root values in `raw`",
+                "array of layout-root values in `raw`",
+                "array of layout-root values in `take_inner`",
+                "array of layout-root values in `take_mid`",
+                "array of layout-root values in `take_outer`",
+            ],
+            "{target}"
+        );
+    }
+}
+
+#[test]
+fn arrays_of_layout_root_values_are_rejected() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+struct Rooted<const ROOT: u256 = _> {}
+
+impl<const ROOT: u256> Copy for Rooted<ROOT> {}
+
+fn inferred(values: [Rooted; 2]) {}
+
+fn explicit(values: [Rooted<7>; 2]) {}
+
+fn generic<const ROOT: u256>(values: [Rooted<ROOT>; 2]) {}
+
+fn pair<T: Copy>(_ value: T) -> [T; 2] {
+    [value, value]
+}
+
+fn hidden<T: Copy>(_ value: T) {
+    let values = [value, value]
+}
+
+fn caller<const ROOT: u256>(value: Rooted<ROOT>) {
+    let values = pair(value)
+    hidden(value)
+}
+
+fn empty(values: [Rooted; 0]) {}
+
+fn plain(values: [u256; 2]) {}
+
+trait Api {
+    fn declared(values: [Rooted; 2])
+    fn plain_declared(values: [u256; 2])
+}
+
+extern {
+    fn external() -> [Rooted<7>; 2]
+}
+"#,
+    );
+    let mut messages = collect_layout_evidence_diagnostic_vouchers(&db, top_mod)
+        .iter()
+        .map(|diagnostic| diagnostic.to_complete(&db).message)
+        .collect::<Vec<_>>();
+    messages.sort();
+    assert_eq!(
+        messages,
+        [
+            "array of layout-root values in `caller`",
+            "array of layout-root values in `declared`",
+            "array of layout-root values in `empty`",
+            "array of layout-root values in `explicit`",
+            "array of layout-root values in `external`",
+            "array of layout-root values in `generic`",
+            "array of layout-root values in `inferred`",
+        ]
+    );
+
+    // A generic body's own arrays are only root-bearing after specialization.
+    let caller = get_or_build_semantic_instance(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "caller"))),
+    );
+    let normalized = normalize_runtime_semantic_body(&db, caller).expect("normalization failed");
+    let hidden = normalized
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .find_map(|statement| match &statement.kind {
+            NStatementKind::Define {
+                expr: NExpr::Call { callee, .. },
+                ..
+            } if matches!(
+                callee.key.owner(&db),
+                BodyOwner::Func(func) if func
+                    .name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "hidden")
+            ) =>
+            {
+                Some(get_or_build_semantic_instance(&db, callee.key))
+            }
+            _ => None,
+        })
+        .expect("missing specialized `hidden` call");
+    let error = layout_evidence_body(&db, hidden)
+        .expect_err("the specialized body contains an array of layout-root values");
+    assert!(
+        matches!(
+            error.unrepresentable(),
+            Some(LayoutBundleUnrepresentable::RootArray { .. })
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn ambiguous_runtime_const_layout_sources_are_rejected() {
     parse_ok!(
         db,
@@ -533,39 +772,6 @@ fn root<const ROOT: u256>(
     assert!(rendered.contains("this inferred slot has multiple runtime values"));
     assert!(rendered.contains("value parameter 1"));
     assert!(rendered.contains("value parameter 2"));
-}
-
-#[test]
-fn fresh_call_arguments_do_not_borrow_layout_evidence_from_siblings() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-struct Rooted<const ROOT: u256 = _> {}
-
-impl<const ROOT: u256> Copy for Rooted<ROOT> {}
-
-fn fresh<const ROOT: u256>() -> Rooted<ROOT> {
-    Rooted {}
-}
-
-fn take_same<T>(first: T, second: T) {}
-
-fn forward<const ROOT: u256>(values: [Rooted<ROOT>; 2], lane: usize) {
-    let selected = values[lane]
-    take_same(first: selected, second: fresh())
-}
-"#,
-    );
-    let diagnostics = collect_layout_evidence_diagnostic_vouchers(&db, top_mod);
-    let rendered = diagnostics
-        .iter()
-        .map(|diagnostic| format!("{:?}", diagnostic.to_complete(&db)))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_eq!(diagnostics.len(), 1, "{rendered}");
-    assert!(rendered.contains("cannot determine inferred layout in `forward`"));
-    assert!(rendered.contains("no runtime layout root is available"));
 }
 
 #[test]
@@ -649,7 +855,7 @@ fn forward<const ROOT: u256>(ptr: Ptr<Rooted<ROOT>>) -> Rooted<ROOT> {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "forward"))),
     )];
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     let mut found_load = false;
     while let Some(instance) = pending.pop() {
         if !seen.insert(instance.key(&db)) || instance.key(&db).owner(&db).body(&db).is_none() {
@@ -718,13 +924,14 @@ fn take_right(value: Right) {}
         right.interface.schema.components[0].port
     );
     assert_eq!(
-        left.interface.schema.components[0].map_ty(),
-        right.interface.schema.components[0].map_ty()
+        left.interface.schema.components[0].ty,
+        right.interface.schema.components[0].ty
     );
     assert!(
         right
             .interface
             .runtime_view_mapping(&left.interface.schema, &[])
+            .expect("valid schema")
             .is_none()
     );
 }
@@ -930,10 +1137,6 @@ struct Holder<const ROOT: u256> {
     value: A<ROOT>,
 }
 
-fn forward_array<const ROOT: u256>(values: [A<ROOT>; 2]) -> [A<ROOT>; 2] {
-    values
-}
-
 fn forward_nested<const ROOT: u256>(holder: Holder<ROOT>) -> Holder<ROOT> {
     holder
 }
@@ -1131,13 +1334,10 @@ contract C {
         errors,
         Some([ContractLayoutError::NonRegularProviderCycle, ..])
     ));
-    assert!(
-        signature.inputs[0]
-            .interface
-            .schema
-            .non_regular_view_cycle
-            .is_some()
-    );
+    assert!(matches!(
+        signature.inputs[0].interface.schema.unrepresentable,
+        Some(LayoutBundleUnrepresentable::NonRegularViewCycle { .. })
+    ));
     let field_diagnostics = initialize_analysis_pass()
         .run_on_module(&db, top_mod)
         .iter()
@@ -1157,28 +1357,6 @@ contract C {
     assert!(
         rendered.contains("cannot be represented by a finite layout-evidence interface"),
         "{rendered}"
-    );
-}
-
-#[test]
-fn provider_whole_array_stores_supply_ranked_context() {
-    assert_layoutizes(
-        "provider_whole_array_stores_supply_ranked_context.fe",
-        r#"
-struct Rooted<const ROOT: u256 = _> { value: u256 }
-
-contract C {
-    values: [Rooted; 3],
-
-    init() uses (mut values) {
-        values = [
-            Rooted { value: 1 },
-            Rooted { value: 2 },
-            Rooted { value: 3 },
-        ]
-    }
-}
-"#,
     );
 }
 
@@ -1223,11 +1401,9 @@ fn layout_evidence_uses_one_descriptor_local_per_component() {
 use std::evm::StorageMap
 
 fn select<const ROOT: u256>(
-    maps: [[StorageMap<u256, u256, ROOT>; 3]; 2],
-    row: usize,
-    col: usize,
+    map: StorageMap<u256, u256, ROOT>,
 ) -> StorageMap<u256, u256, ROOT> {
-    maps[row][col]
+    map
 }
 "#,
     );
@@ -1250,23 +1426,20 @@ fn select<const ROOT: u256>(
                 == Some(CallableInputLayoutHoleOrigin::ValueParam(0)))
             .then_some(idx)
         })
-        .expect("missing maps input");
+        .expect("missing map input");
     let value = &evidence.semantic_values[input];
     let [component] = value.components.as_ref() else {
-        panic!("nested map array must have one evidence component")
+        panic!("a map must have one evidence component")
     };
     let LayoutEvidenceComponentValue::Dynamic(descriptor) = component else {
         panic!("generic map roots must be dynamic evidence")
     };
 
-    assert_eq!(value.schema.components[0].rank(), 2);
     assert_eq!(evidence.params, [*descriptor]);
-    assert_eq!(evidence.locals[descriptor.index()].map_ty.rank(), 2);
     let representations =
         NLayoutLocals::new(&db, &normalized.body, &normalized.layout_plan, source);
     assert_eq!(evidence.semantic_values.len(), representations.locals.len());
     assert_eq!(evidence.output.schema.components.len(), 1);
-    assert_eq!(evidence.output.schema.components[0].rank(), 0);
     assert_eq!(evidence.output.runtime_descriptor_count(), 1);
     assert_eq!(evidence.terminators.len(), normalized.body.blocks.len());
     assert_eq!(
@@ -1278,31 +1451,6 @@ fn select<const ROOT: u256>(
             .map(|block| block.statements.len())
             .sum::<usize>()
     );
-    let (source, indices) = evidence
-        .statements
-        .iter()
-        .flat_map(|stmt| stmt.assignments.iter())
-        .find_map(|assignment| match &assignment.expr {
-            LayoutEvidenceExpr::Project { source, indices } => Some((source, indices)),
-            LayoutEvidenceExpr::Use(_)
-            | LayoutEvidenceExpr::Array { .. }
-            | LayoutEvidenceExpr::Repeat { .. }
-            | LayoutEvidenceExpr::Update { .. }
-            | LayoutEvidenceExpr::CallResult { .. } => None,
-        })
-        .expect("nested indexing must emit a descriptor projection");
-    assert_eq!(source, &LayoutEvidenceOperand::Local(evidence.params[0]));
-    assert_eq!(indices.len(), 2);
-    assert_eq!(
-        evidence.locals[descriptor.index()]
-            .map_ty
-            .projected(indices.len())
-            .expect("valid projection")
-            .rank(),
-        0
-    );
-    assert!(matches!(indices[0], LayoutEvidenceIndex::Dynamic(_)));
-    assert!(matches!(indices[1], LayoutEvidenceIndex::Dynamic(_)));
     let returns = evidence
         .terminators
         .iter()
@@ -1310,172 +1458,6 @@ fn select<const ROOT: u256>(
         .expect("missing layout evidence return");
     assert_eq!(returns.len(), 1);
     assert!(matches!(&returns[0].value, LayoutEvidenceOperand::Local(_)));
-}
-
-#[test]
-fn contract_fields_materialize_allocator_strides() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-use std::evm::StorageMap
-
-msg Msg {
-    #[selector = 1]
-    Get { lane: usize, key: u256 } -> u256,
-}
-
-pub contract C {
-    mut maps: [StorageMap<u256, u256>; 2],
-
-    recv Msg {
-        Get { lane, key } -> u256 uses (maps) {
-            maps[lane].get(key: key)
-        }
-    }
-}
-"#,
-    );
-    let contract = find_contract(&db, top_mod, "C");
-    let instance = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(
-            &db,
-            BodyOwner::ContractRecvArm {
-                contract,
-                recv_idx: 0,
-                arm_idx: 0,
-            },
-        ),
-    );
-    let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
-    let (source, indices) = evidence
-        .statements
-        .iter()
-        .flat_map(|stmt| stmt.assignments.iter())
-        .find_map(|assignment| match &assignment.expr {
-            LayoutEvidenceExpr::Project {
-                source, indices, ..
-            } => Some((source, indices)),
-            LayoutEvidenceExpr::Use(_)
-            | LayoutEvidenceExpr::Array { .. }
-            | LayoutEvidenceExpr::Repeat { .. }
-            | LayoutEvidenceExpr::Update { .. }
-            | LayoutEvidenceExpr::CallResult { .. } => None,
-        })
-        .expect("contract array projection must materialize assigned evidence");
-
-    let LayoutEvidenceOperand::Constant(source) = source else {
-        panic!("contract layout must be a known descriptor")
-    };
-    assert_eq!(source.base, LayoutEvidenceBase::Slot(0));
-    assert_eq!(source.strides.as_ref(), [1]);
-    assert_eq!(indices.len(), 1);
-    assert_eq!(source.map_ty.dimensions, [2]);
-    assert!(matches!(indices[0], LayoutEvidenceIndex::Dynamic(_)));
-}
-
-#[test]
-fn calls_pass_and_return_complete_affine_evidence() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-use std::evm::StorageMap
-
-fn lane<const ROOT: u256>(
-    maps: [[StorageMap<u256, u256, ROOT>; 3]; 2],
-    row: usize,
-    col: usize,
-) -> StorageMap<u256, u256, ROOT> {
-    maps[row][col]
-}
-
-fn read<const ROOT: u256>(
-    maps: [[StorageMap<u256, u256, ROOT>; 3]; 2],
-    row: usize,
-    col: usize,
-    key: u256,
-) -> u256 {
-    lane(maps: maps, row: row, col: col).get(key: key)
-}
-"#,
-    );
-    let read = find_func(&db, top_mod, "read");
-    let instance = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(read)),
-    );
-    let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
-    let calls = evidence
-        .statements
-        .iter()
-        .filter_map(|stmt| stmt.call.as_ref())
-        .collect::<Vec<_>>();
-    let family_call = calls
-        .iter()
-        .find(|call| call.args.len() == 1)
-        .expect("missing whole-family call evidence");
-
-    let assignments = evidence
-        .statements
-        .iter()
-        .flat_map(|stmt| stmt.assignments.iter())
-        .collect::<Vec<_>>();
-    let forwarded = family_call
-        .args
-        .iter()
-        .map(|arg| {
-            let mut value = &arg.value;
-            let mut seen = HashSet::new();
-            while let LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Local(local)) = value {
-                assert!(seen.insert(*local), "forwarded evidence must not cycle");
-                let Some(assignment) = assignments
-                    .iter()
-                    .find(|assignment| assignment.dst == *local)
-                else {
-                    break;
-                };
-                value = &assignment.expr;
-            }
-            value.clone()
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        forwarded,
-        evidence
-            .params
-            .iter()
-            .copied()
-            .map(LayoutEvidenceOperand::Local)
-            .map(LayoutEvidenceExpr::Use)
-            .collect::<Vec<_>>()
-    );
-    assert!(
-        evidence
-            .statements
-            .iter()
-            .flat_map(|stmt| stmt.assignments.iter())
-            .any(|assignment| matches!(assignment.expr, LayoutEvidenceExpr::CallResult { .. }))
-    );
-
-    let normalized = normalize_runtime_semantic_body(&db, instance).expect("normalization failed");
-    verify_layout_evidence_body(&db, &normalized, evidence).expect("evidence must verify");
-    let mut malformed = (*evidence).clone();
-    let call = malformed
-        .statements
-        .iter_mut()
-        .find_map(|statement| statement.call.as_mut().filter(|call| call.args.len() == 1))
-        .expect("missing mutable family call");
-    call.args = Box::new([]);
-    assert!(matches!(
-        verify_layout_evidence_body(&db, &normalized, &malformed),
-        Err(LayoutEvidenceVerifyError::CallArgCount {
-            expected: 1,
-            actual: 0,
-            ..
-        })
-    ));
 }
 
 #[test]
@@ -1518,6 +1500,7 @@ fn forward<const ROOT: u256>(value: Mixed<ROOT>) -> Mixed<ROOT> {
     );
     let mapping = input
         .runtime_view_mapping(&input.schema, &[])
+        .expect("valid schema")
         .expect("identity view must map the runtime component");
     assert_eq!(mapping.source(LayoutBundleComponentId(0)), None);
     assert_eq!(
@@ -1912,37 +1895,24 @@ fn fresh_from<const ROOT: u256>(
 }
 
 #[test]
-fn output_witnesses_flow_into_constructed_array_elements() {
+fn output_witness_worklist_composes_nested_struct_and_enum_paths() {
     assert_layoutizes(
-        "output_witnesses_flow_into_constructed_array_elements.fe",
+        "output_witness_worklist_composes_nested_struct_and_enum_paths.fe",
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
-fn fresh<const ROOT: u256>() -> Rooted<ROOT> {
-    Rooted {}
+struct Pair<const ROOT: u256 = _> {
+    left: Rooted<ROOT>,
+    right: Rooted<ROOT>,
 }
-
-fn fresh_pair<const ROOT: u256>() -> [Rooted<ROOT>; 2] {
-    [fresh(), fresh()]
-}
-"#,
-    );
-}
-
-#[test]
-fn output_witness_worklist_composes_nested_array_struct_and_enum_paths() {
-    assert_layoutizes(
-        "output_witness_worklist_composes_nested_array_struct_and_enum_paths.fe",
-        r#"
-struct Rooted<const ROOT: u256 = _> {}
 
 struct Boxed<const ROOT: u256 = _> {
-    rows: [[Rooted<ROOT>; 2]; 2],
+    pair: Pair<ROOT>,
 }
 
 enum Choice<const ROOT: u256 = _> {
     One(Rooted<ROOT>),
-    Many([Rooted<ROOT>; 2]),
+    Two(Pair<ROOT>),
 }
 
 fn fresh<const ROOT: u256>() -> Rooted<ROOT> {
@@ -1951,7 +1921,7 @@ fn fresh<const ROOT: u256>() -> Rooted<ROOT> {
 
 fn nested<const ROOT: u256>() -> Boxed<ROOT> {
     Boxed {
-        rows: [[fresh(), fresh()], [fresh(), fresh()]],
+        pair: Pair { left: fresh(), right: fresh() },
     }
 }
 
@@ -1959,28 +1929,8 @@ fn choice<const ROOT: u256>(one: bool) -> Choice<ROOT> {
     if one {
         Choice::One(fresh())
     } else {
-        Choice::Many([fresh(), fresh()])
+        Choice::Two(Pair { left: fresh(), right: fresh() })
     }
-}
-"#,
-    );
-}
-
-#[test]
-fn output_witness_worklist_propagates_through_indexed_stores() {
-    assert_layoutizes(
-        "output_witness_worklist_propagates_through_indexed_stores.fe",
-        r#"
-struct Rooted<const ROOT: u256 = _> {}
-
-fn fresh<const ROOT: u256>() -> Rooted<ROOT> {
-    Rooted {}
-}
-
-fn replace<const ROOT: u256>(lane: usize) -> [Rooted<ROOT>; 2] {
-    let mut values = [fresh(), fresh()]
-    values[lane] = fresh()
-    values
 }
 "#,
     );
@@ -2049,88 +1999,7 @@ fn choose<const ROOT: u256>(left: bool) -> Rooted<ROOT> {
 }
 
 #[test]
-fn one_value_cannot_consume_two_distinct_output_witness_projections() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-struct Rooted<const ROOT: u256 = _> {}
-
-impl<const ROOT: u256> Copy for Rooted<ROOT> {}
-
-fn fresh<const ROOT: u256>() -> Rooted<ROOT> {
-    Rooted {}
-}
-
-fn duplicate<const ROOT: u256>() -> [Rooted<ROOT>; 2] {
-    let value = fresh()
-    [value, value]
-}
-"#,
-    );
-    let diagnostics = collect_layout_evidence_diagnostic_vouchers(&db, top_mod);
-    let rendered = diagnostics
-        .iter()
-        .map(|diagnostic| format!("{:?}", diagnostic.to_complete(&db)))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_eq!(diagnostics.len(), 1, "{rendered}");
-    assert!(rendered.contains("cannot determine inferred layout in `duplicate`"));
-    assert!(rendered.contains("required to carry two different runtime layout roots"));
-}
-
-#[test]
-fn one_evaluation_satisfies_a_single_element_output_layout_family() {
-    assert_layoutizes(
-        "one_evaluation_satisfies_a_single_element_output_layout_family.fe",
-        r#"
-struct Rooted<const ROOT: u256 = _> {}
-
-impl<const ROOT: u256> Copy for Rooted<ROOT> {}
-
-fn fresh<const ROOT: u256>() -> Rooted<ROOT> {
-    Rooted {}
-}
-
-fn repeat_fresh<const ROOT: u256>() -> [Rooted<ROOT>; 1] {
-    [fresh(); 1]
-}
-"#,
-    );
-}
-
-#[test]
-fn one_evaluation_cannot_satisfy_an_arbitrary_output_layout_family() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-struct Rooted<const ROOT: u256 = _> {}
-
-impl<const ROOT: u256> Copy for Rooted<ROOT> {}
-
-fn fresh<const ROOT: u256>() -> Rooted<ROOT> {
-    Rooted {}
-}
-
-fn repeat_fresh<const ROOT: u256>() -> [Rooted<ROOT>; 2] {
-    [fresh(); 2]
-}
-"#,
-    );
-    let diagnostics = collect_layout_evidence_diagnostic_vouchers(&db, top_mod);
-    let rendered = diagnostics
-        .iter()
-        .map(|diagnostic| format!("{:?}", diagnostic.to_complete(&db)))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_eq!(diagnostics.len(), 1, "{rendered}");
-    assert!(rendered.contains("cannot determine inferred layout in `repeat_fresh`"));
-    assert!(rendered.contains("no runtime layout root is available"));
-}
-
-#[test]
-fn zero_length_arrays_do_not_require_runtime_layout_evidence() {
+fn zero_length_arrays_of_layout_root_values_are_rejected() {
     parse_ok!(
         db,
         top_mod,
@@ -2146,9 +2015,15 @@ fn empty<const ROOT: u256>() -> [Rooted<ROOT>; 0] {
         &db,
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "empty"))),
     );
-    let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
-    assert!(evidence.output.schema.components.is_empty());
-    assert!(evidence.params.is_empty());
+    let error = layout_evidence_body(&db, instance)
+        .expect_err("a zero-length array of layout-root values is still rejected");
+    assert!(
+        matches!(
+            error.unrepresentable(),
+            Some(LayoutBundleUnrepresentable::RootArray { .. })
+        ),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -2167,14 +2042,15 @@ impl<const ROOT: u256> Rooted<ROOT> {
 }
 
 fn choose<const ROOT: u256>(
-    values: [Rooted<ROOT>; 2],
-    lane: usize,
+    first: Rooted<ROOT>,
+    second: Rooted<ROOT>,
+    left: bool,
 ) -> Rooted<ROOT> {
-    if lane == 0 { values[0] } else { values[1] }
+    if left { first } else { second }
 }
 
-fn consume<const ROOT: u256>(values: [Rooted<ROOT>; 2], lane: usize) -> u256 {
-    choose(values: values, lane: lane).root()
+fn consume<const ROOT: u256>(value: Rooted<ROOT>, left: bool) -> u256 {
+    choose(first: value, second: value, left).root()
 }
 "#,
     );
@@ -2188,14 +2064,17 @@ fn verifier_requires_branch_definitions_on_every_path() {
         r#"
 struct Rooted<const ROOT: u256 = _> {}
 
+impl<const ROOT: u256> Copy for Rooted<ROOT> {}
+
 fn consume<const ROOT: u256>(_ value: Rooted<ROOT>) {}
 
-fn branch<const ROOT: u256>(
-    values: [Rooted<ROOT>; 2],
-    left: bool,
-) {
-    let selected = if left { values[0] } else { values[1] }
-    consume(value: selected)
+fn identity<const ROOT: u256>(_ value: Rooted<ROOT>) -> Rooted<ROOT> {
+    value
+}
+
+fn branch<const ROOT: u256>(first: Rooted<ROOT>, second: Rooted<ROOT>, left: bool) {
+    let selected = if left { identity(first) } else { identity(second) }
+    consume(selected)
 }
 "#,
     );
@@ -2205,42 +2084,50 @@ fn branch<const ROOT: u256>(
     );
     let normalized = normalize_runtime_semantic_body(&db, instance).expect("normalization failed");
     let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
-    let (branch_local, branch_index) = evidence
-        .statements
-        .iter()
-        .flat_map(|statement| &statement.assignments)
-        .find_map(|assignment| match &assignment.expr {
-            LayoutEvidenceExpr::Project { indices, .. } => indices.iter().find_map(|index| {
-                if let LayoutEvidenceIndex::Dynamic(index) = index {
-                    Some((assignment.dst, *index))
-                } else {
-                    None
+    let calls_to = |name: &str| {
+        normalized
+            .body
+            .blocks
+            .iter()
+            .enumerate()
+            .flat_map(|(block, data)| {
+                data.statements
+                    .iter()
+                    .enumerate()
+                    .map(move |(statement, data)| (block, statement, data))
+            })
+            .filter_map(|(block, statement, data)| match &data.kind {
+                NStatementKind::Define {
+                    expr: NExpr::Call { callee, .. },
+                    ..
+                } if matches!(
+                    callee.key.owner(&db),
+                    BodyOwner::Func(func) if func
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|callee_name| callee_name.data(&db) == name)
+                ) =>
+                {
+                    Some((block, statement, data.id))
                 }
-            }),
-            LayoutEvidenceExpr::Use(_)
-            | LayoutEvidenceExpr::Array { .. }
-            | LayoutEvidenceExpr::Repeat { .. }
-            | LayoutEvidenceExpr::Update { .. }
-            | LayoutEvidenceExpr::CallResult { .. } => None,
-        })
-        .expect("missing branch-local projection evidence");
-    let (call_block, call_statement, call_id) = normalized
-        .body
-        .blocks
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let (_, _, branch_call) = calls_to("identity")[0];
+    let branch_local = evidence
+        .statement(branch_call)
+        .expect("missing branch call evidence")
+        .assignments
         .iter()
-        .enumerate()
-        .find_map(|(block, data)| {
-            data.statements
-                .iter()
-                .enumerate()
-                .find(|(_, statement)| {
-                    evidence
-                        .statement(statement.id)
-                        .is_some_and(|statement| statement.call.is_some())
-                })
-                .map(|(statement, data)| (block, statement, data.id))
+        .find_map(|assignment| {
+            matches!(assignment.expr, LayoutEvidenceExpr::CallResult { .. })
+                .then_some(assignment.dst)
         })
-        .expect("missing post-merge layout call");
+        .expect("missing branch-local call result evidence");
+    let [(call_block, call_statement, call_id)] = calls_to("consume")[..] else {
+        panic!("expected one post-merge layout call")
+    };
 
     let mut malformed = (*evidence).clone();
     malformed.statements[call_id.index()]
@@ -2255,160 +2142,6 @@ fn branch<const ROOT: u256>(
             block: call_block,
             statement: Some(call_statement),
             local: branch_local,
-        })
-    );
-
-    let mut malformed = (*evidence).clone();
-    malformed.statements[call_id.index()]
-        .call
-        .as_mut()
-        .expect("missing post-merge layout call")
-        .args[0]
-        .value = LayoutEvidenceExpr::Project {
-        source: LayoutEvidenceOperand::Local(evidence.params[0]),
-        indices: Box::new([LayoutEvidenceIndex::Dynamic(branch_index)]),
-    };
-    assert_eq!(
-        verify_layout_evidence_body(&db, &normalized, &malformed),
-        Err(LayoutEvidenceVerifyError::UndefinedIndexLocal {
-            block: call_block,
-            statement: call_statement,
-            local: branch_index,
-        })
-    );
-}
-
-#[test]
-fn indexed_assignment_prepares_destination_before_output_witness_call() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-struct Rooted<const ROOT: usize = _> {}
-
-fn index(value: usize) -> usize {
-    value
-}
-
-fn fresh<const ROOT: usize>() -> Rooted<ROOT> {
-    Rooted {}
-}
-
-fn replace<const ROOT: usize>(
-    values: own [Rooted<ROOT>; 2],
-    lane: usize,
-) -> [Rooted<ROOT>; 2] {
-    let mut result = values
-    result[index(value: lane)] = fresh()
-    let _later = index(value: lane)
-    result
-}
-"#,
-    );
-    let instance = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "replace"))),
-    );
-    let normalized = normalize_runtime_semantic_body(&db, instance).expect("normalization failed");
-    let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
-    let (block_idx, statement_idx, index_local) =
-        normalized
-            .body
-            .blocks
-            .iter()
-            .enumerate()
-            .find_map(|(block_idx, block)| {
-                block.statements.iter().enumerate().find_map(
-                    |(statement_idx, normalized_statement)| {
-                        evidence
-                            .statement(normalized_statement.id)
-                            .and_then(|statement| statement.call.as_ref())
-                            .and_then(|call| {
-                                call.args.iter().find_map(|arg| match &arg.value {
-                                    LayoutEvidenceExpr::Project { indices, .. } => {
-                                        indices.iter().find_map(|index| match index {
-                                            LayoutEvidenceIndex::Dynamic(index) => {
-                                                Some((block_idx, statement_idx, *index))
-                                            }
-                                            LayoutEvidenceIndex::Constant(_) => None,
-                                        })
-                                    }
-                                    LayoutEvidenceExpr::Use(_)
-                                    | LayoutEvidenceExpr::Array { .. }
-                                    | LayoutEvidenceExpr::Repeat { .. }
-                                    | LayoutEvidenceExpr::Update { .. }
-                                    | LayoutEvidenceExpr::CallResult { .. } => None,
-                                })
-                            })
-                    },
-                )
-            })
-            .expect("fresh call must receive a dynamically projected output witness");
-    let representations = NLayoutLocals::new(
-        &db,
-        &normalized.body,
-        &normalized.layout_plan,
-        instance.body(&db),
-    );
-    let index_definition = normalized.body.blocks[block_idx]
-        .statements
-        .iter()
-        .position(|statement| {
-            matches!(
-                statement.kind,
-                NStatementKind::Define { result, .. }
-                    if representations.value_local(result) == Some(index_local)
-            )
-        })
-        .expect("destination index must have a semantic definition");
-    assert!(
-        index_definition < statement_idx,
-        "destination index must be evaluated before the witnessed RHS call"
-    );
-
-    let future_index = normalized.body.blocks[block_idx]
-        .statements
-        .iter()
-        .enumerate()
-        .skip(statement_idx + 1)
-        .find_map(|(_, statement)| match &statement.kind {
-            NStatementKind::Define {
-                result,
-                expr: NExpr::Call { .. },
-            } => representations.value_local(*result).filter(|local| {
-                representations.locals[local.index()].ty
-                    == representations.locals[index_local.index()].ty
-            }),
-            NStatementKind::Define { .. } | NStatementKind::Store { .. } => None,
-        })
-        .expect("fixture must define another usize call result after fresh");
-    let mut malformed = (*evidence).clone();
-    let statement_id = normalized.body.blocks[block_idx].statements[statement_idx].id;
-    let index = malformed.statements[statement_id.index()]
-        .call
-        .as_mut()
-        .and_then(|call| {
-            call.args.iter_mut().find_map(|arg| match &mut arg.value {
-                LayoutEvidenceExpr::Project { indices, .. } => {
-                    indices.iter_mut().find(|index| {
-                        matches!(index, LayoutEvidenceIndex::Dynamic(local) if *local == index_local)
-                    })
-                }
-                LayoutEvidenceExpr::Use(_)
-                | LayoutEvidenceExpr::Array { .. }
-                | LayoutEvidenceExpr::Repeat { .. }
-                | LayoutEvidenceExpr::Update { .. }
-                | LayoutEvidenceExpr::CallResult { .. } => None,
-            })
-        })
-        .expect("missing dynamic output-witness projection");
-    *index = LayoutEvidenceIndex::Dynamic(future_index);
-    assert_eq!(
-        verify_layout_evidence_body(&db, &normalized, &malformed),
-        Err(LayoutEvidenceVerifyError::UndefinedIndexLocal {
-            block: block_idx,
-            statement: statement_idx,
-            local: future_index,
         })
     );
 }
@@ -2505,104 +2238,7 @@ fn caller<const LEFT: u256, const RIGHT: u256>(
 }
 
 #[test]
-fn verifier_rejects_wrong_map_shapes_ports_and_indices() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-struct Rooted<const ROOT: u256 = _> {}
-
-fn take_two<const ROOT: u256>(_ values: [Rooted<ROOT>; 2]) {}
-
-fn call<const ROOT: u256>(
-    two: [Rooted<ROOT>; 2],
-    three: [Rooted<ROOT>; 3],
-) {
-    take_two(values: two)
-}
-
-fn first<const ROOT: u256>(values: [Rooted<ROOT>; 2]) -> Rooted<ROOT> {
-    values[0]
-}
-"#,
-    );
-
-    let call_instance = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "call"))),
-    );
-    let call_normalized =
-        normalize_runtime_semantic_body(&db, call_instance).expect("normalization failed");
-    let call_evidence = layout_evidence_body(&db, call_instance).expect("layoutization failed");
-    let three = call_evidence
-        .params
-        .iter()
-        .copied()
-        .find(|local| call_evidence.locals[local.index()].map_ty.dimensions == [3])
-        .expect("missing length-three evidence parameter");
-
-    let mut malformed = (*call_evidence).clone();
-    let arg = malformed
-        .statements
-        .iter_mut()
-        .find_map(|statement| statement.call.as_mut())
-        .and_then(|call| call.args.first_mut())
-        .expect("missing layout call argument");
-    arg.value = LayoutEvidenceExpr::Use(LayoutEvidenceOperand::Local(three));
-    assert!(matches!(
-        verify_layout_evidence_body(&db, &call_normalized, &malformed),
-        Err(LayoutEvidenceVerifyError::MapTypeMismatch)
-    ));
-
-    let mut malformed = (*call_evidence).clone();
-    let arg = malformed
-        .statements
-        .iter_mut()
-        .find_map(|statement| statement.call.as_mut())
-        .and_then(|call| call.args.first_mut())
-        .expect("missing layout call argument");
-    arg.target = CallableLayoutParamPort::Input(CallableLayoutPort {
-        origin: CallableInputLayoutHoleOrigin::ValueParam(1),
-        component: match &arg.target {
-            CallableLayoutParamPort::Input(port) => port.component.clone(),
-            CallableLayoutParamPort::OutputWitness(_) => panic!("expected input call target"),
-        },
-    });
-    assert!(matches!(
-        verify_layout_evidence_body(&db, &call_normalized, &malformed),
-        Err(LayoutEvidenceVerifyError::MapTypeMismatch)
-    ));
-
-    let first_instance = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "first"))),
-    );
-    let first_normalized =
-        normalize_runtime_semantic_body(&db, first_instance).expect("normalization failed");
-    let first_evidence = layout_evidence_body(&db, first_instance).expect("layoutization failed");
-    let mut malformed = (*first_evidence).clone();
-    let index = malformed
-        .statements
-        .iter_mut()
-        .flat_map(|statement| &mut statement.assignments)
-        .find_map(|assignment| match &mut assignment.expr {
-            LayoutEvidenceExpr::Project { indices, .. } => indices.first_mut(),
-            LayoutEvidenceExpr::Use(_)
-            | LayoutEvidenceExpr::Array { .. }
-            | LayoutEvidenceExpr::Repeat { .. }
-            | LayoutEvidenceExpr::Update { .. }
-            | LayoutEvidenceExpr::CallResult { .. } => None,
-        })
-        .expect("missing constant layout projection");
-    *index = LayoutEvidenceIndex::Constant(2);
-    assert!(matches!(
-        verify_layout_evidence_body(&db, &first_normalized, &malformed),
-        Err(LayoutEvidenceVerifyError::InvalidProjection)
-    ));
-}
-
-#[test]
-fn constructors_preserve_roots_and_array_repeat_uses_zero_stride() {
+fn constructors_preserve_roots() {
     parse_ok!(
         db,
         top_mod,
@@ -2613,10 +2249,6 @@ impl<const ROOT: u256> Copy for Rooted<ROOT> {}
 
 fn rebuild<const ROOT: u256>(value: Rooted<ROOT>) -> Rooted<ROOT> {
     Rooted {}
-}
-
-fn repeat<const ROOT: u256>(value: Rooted<ROOT>) -> [Rooted<ROOT>; 2] {
-    [value; 2]
 }
 "#,
     );
@@ -2632,29 +2264,6 @@ fn repeat<const ROOT: u256>(value: Rooted<ROOT>) -> [Rooted<ROOT>; 2] {
         .expect("missing rebuild evidence return");
     assert_eq!(rebuild.params.len(), 1);
     assert_eq!(rebuild_returns.len(), 1);
-
-    let repeat = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "repeat"))),
-    );
-    let repeat = layout_evidence_body(&db, repeat).expect("repeat layoutization failed");
-    let repeat_returns = repeat
-        .terminators
-        .iter()
-        .find_map(|terminator| (!terminator.returns.is_empty()).then_some(&terminator.returns))
-        .expect("missing repeat evidence return");
-    assert_eq!(repeat.output.schema.components[0].rank(), 1);
-    assert_eq!(repeat_returns.len(), 1);
-    assert!(
-        repeat
-            .statements
-            .iter()
-            .flat_map(|stmt| stmt.assignments.iter())
-            .any(|assignment| matches!(
-                &assignment.expr,
-                LayoutEvidenceExpr::Repeat { len: 2, .. }
-            ))
-    );
 }
 
 #[test]
@@ -2749,11 +2358,8 @@ fn replace_raw_with_nested_target<const LEFT: u256, const RIGHT: u256>(
     handle.replace_raw(raw)
 }
 
-fn marker_at<const META: u256>(
-    handles: [DualHandle<Pair<1, 2>, META>; 2],
-    lane: usize,
-) -> Rooted<META> {
-    handles[lane].marker()
+fn marker_at<const META: u256>(handle: DualHandle<Pair<1, 2>, META>) -> Rooted<META> {
+    handle.marker()
 }
 
 fn inspect_views<const PHYSICAL: u256, const LOGICAL: u256>(
@@ -2829,7 +2435,7 @@ fn inspect_views<const PHYSICAL: u256, const LOGICAL: u256>(
         identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "marker_at"))),
     );
     layout_evidence_body(&db, marker_at)
-        .expect("indexed handles must carry both physical and target layout evidence");
+        .expect("handles must carry both physical and target layout evidence");
 
     let inspect_views = get_or_build_semantic_instance(
         &db,
@@ -2866,214 +2472,6 @@ fn inspect_views<const PHYSICAL: u256, const LOGICAL: u256>(
 }
 
 #[test]
-fn projections_use_the_selected_occurrence_rank() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-use std::evm::StorageMap
-
-struct Mixed<const ROOT: u256> {
-    scalar: StorageMap<u256, u256, ROOT>,
-    family: [StorageMap<u256, u256, ROOT>; 2],
-}
-
-fn scalar<const ROOT: u256>(mixed: Mixed<ROOT>) -> StorageMap<u256, u256, ROOT> {
-    mixed.scalar
-}
-
-fn family<const ROOT: u256>(mixed: Mixed<ROOT>) -> [StorageMap<u256, u256, ROOT>; 2] {
-    mixed.family
-}
-"#,
-    );
-
-    for name in ["scalar", "family"] {
-        let instance = get_or_build_semantic_instance(
-            &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, name))),
-        );
-        layout_evidence_body(&db, instance)
-            .unwrap_or_else(|error| panic!("failed to layoutize {name}: {error:?}"));
-    }
-}
-
-#[test]
-fn distinct_occurrence_families_never_coalesce_after_substitution() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-use std::evm::StorageMap
-
-struct Split<const ROOT: u256> {
-    left: [StorageMap<u256, u256, ROOT>; 2],
-    right: [StorageMap<u256, u256, ROOT>; 2],
-}
-
-struct Mixed<const ROOT: u256> {
-    scalar: StorageMap<u256, u256, ROOT>,
-    family: [StorageMap<u256, u256, ROOT>; 2],
-}
-
-fn split<const ROOT: u256>(
-    left: [StorageMap<u256, u256, ROOT>; 2],
-    right: [StorageMap<u256, u256, ROOT>; 2],
-) -> Split<ROOT> {
-    Split { left, right }
-}
-
-fn mixed<const ROOT: u256>(
-    scalar: StorageMap<u256, u256, ROOT>,
-    family: [StorageMap<u256, u256, ROOT>; 2],
-) -> Mixed<ROOT> {
-    Mixed { scalar, family }
-}
-
-fn right_first<const ROOT: u256>(value: Split<ROOT>) -> StorageMap<u256, u256, ROOT> {
-    value.right[0]
-}
-"#,
-    );
-
-    for (name, ranks) in [
-        ("split", vec![1, 1]),
-        ("mixed", vec![0, 1]),
-        ("right_first", vec![0]),
-    ] {
-        let instance = get_or_build_semantic_instance(
-            &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, name))),
-        );
-        let evidence = layout_evidence_body(&db, instance)
-            .unwrap_or_else(|error| panic!("failed to layoutize {name}: {error:?}"));
-        assert_eq!(
-            evidence
-                .output
-                .schema
-                .components
-                .iter()
-                .map(|component| component.rank())
-                .collect::<Vec<_>>(),
-            ranks,
-        );
-        assert_eq!(
-            evidence
-                .output
-                .schema
-                .components
-                .iter()
-                .map(|component| &component.port)
-                .collect::<std::collections::HashSet<_>>()
-                .len(),
-            evidence.output.schema.components.len(),
-        );
-    }
-}
-
-#[test]
-fn array_construction_supports_affine_and_dense_layout_maps() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-use std::evm::StorageMap
-
-fn rebuild<const ROOT: u256>(
-    maps: [StorageMap<u256, u256, ROOT>; 3],
-) -> [StorageMap<u256, u256, ROOT>; 3] {
-    [maps[0], maps[1], maps[2]]
-}
-
-fn reorder<const ROOT: u256>(
-    maps: [StorageMap<u256, u256, ROOT>; 3],
-) -> [StorageMap<u256, u256, ROOT>; 3] {
-    [maps[0], maps[2], maps[1]]
-}
-"#,
-    );
-    for name in ["rebuild", "reorder"] {
-        let instance = get_or_build_semantic_instance(
-            &db,
-            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, name))),
-        );
-        let evidence = layout_evidence_body(&db, instance)
-            .unwrap_or_else(|error| panic!("failed to layoutize {name}: {error:?}"));
-        assert!(
-            evidence
-                .statements
-                .iter()
-                .flat_map(|statement| &statement.assignments)
-                .any(|assignment| matches!(
-                    &assignment.expr,
-                    LayoutEvidenceExpr::Array { elements } if elements.len() == 3
-                ))
-        );
-    }
-}
-
-#[test]
-fn indexed_stores_produce_layout_map_updates() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-use std::evm::StorageMap
-
-fn replace<const ROOT: u256>(
-    maps: own [StorageMap<u256, u256, ROOT>; 3],
-    lane: usize,
-    map: StorageMap<u256, u256, ROOT>,
-) -> [StorageMap<u256, u256, ROOT>; 3] {
-    let mut result = maps
-    result[lane] = map
-    result
-}
-"#,
-    );
-    let instance = get_or_build_semantic_instance(
-        &db,
-        identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, top_mod, "replace"))),
-    );
-    let evidence = layout_evidence_body(&db, instance).expect("layoutization failed");
-    assert!(
-        evidence
-            .statements
-            .iter()
-            .flat_map(|statement| &statement.assignments)
-            .any(|assignment| matches!(
-                &assignment.expr,
-                LayoutEvidenceExpr::Update { indices, .. }
-                    if indices.len() == 1
-                        && matches!(indices[0], LayoutEvidenceIndex::Dynamic(_))
-            ))
-    );
-}
-
-#[test]
-fn indexed_stores_supply_layout_context_to_fresh_values() {
-    assert_layoutizes(
-        "indexed_stores_supply_layout_context_to_fresh_values.fe",
-        r#"
-struct Rooted<const ROOT: u256 = _> {}
-
-fn fresh<const ROOT: u256>() -> Rooted<ROOT> {
-    Rooted {}
-}
-
-fn replace<const ROOT: u256>(
-    values: own [Rooted<ROOT>; 3],
-    lane: usize,
-) -> [Rooted<ROOT>; 3] {
-    let mut result = values
-    result[lane] = fresh()
-    result
-}
-"#,
-    );
-}
-
-#[test]
 fn provider_stores_supply_layout_context_to_fresh_values() {
     assert_layoutizes(
         "provider_stores_supply_layout_context_to_fresh_values.fe",
@@ -3096,35 +2494,6 @@ contract C {
 }
 
 #[test]
-fn mutable_inferred_root_payloads_can_form_repeated_layout_maps() {
-    assert_layoutizes(
-        "mutable_inferred_root_payloads_can_form_repeated_layout_maps.fe",
-        r#"
-use std::evm::StorageMap
-
-enum MapChoice {
-    Scalar(StorageMap<u256, u256>),
-    Family([StorageMap<u256, u256>; 3]),
-}
-
-impl MapChoice {
-    fn identity(self) -> Self {
-        self
-    }
-
-    fn expand(mut self) {
-        match self {
-            MapChoice::Scalar(map) => self = MapChoice::Family([map, map, map]),
-            MapChoice::Family(_) => {}
-        }
-        self = self.identity()
-    }
-}
-"#,
-    );
-}
-
-#[test]
 fn layout_evidence_covers_existing_forwarding_matrix() {
     for (name, src) in [
         (
@@ -3140,12 +2509,6 @@ fn layout_evidence_covers_existing_forwarding_matrix() {
             ),
         ),
         (
-            "layout_root_return_index_forwarding.fe",
-            include_str!(
-                "../../../fe/tests/fixtures/fe_test/layout_root_return_index_forwarding.fe"
-            ),
-        ),
-        (
             "layout_root_enum_helper_forwarding.fe",
             include_str!(
                 "../../../fe/tests/fixtures/fe_test/layout_root_enum_helper_forwarding.fe"
@@ -3158,10 +2521,6 @@ fn layout_evidence_covers_existing_forwarding_matrix() {
             ),
         ),
         (
-            "layout_root_array_enum_overlay.fe",
-            include_str!("../../../fe/tests/fixtures/fe_test/layout_root_array_enum_overlay.fe"),
-        ),
-        (
             "effect_handle_field_deref.fe",
             include_str!("../../../codegen/tests/fixtures/effect_handle_field_deref.fe"),
         ),
@@ -3169,12 +2528,6 @@ fn layout_evidence_covers_existing_forwarding_matrix() {
             "layout_root_aggregate_effect_forwarding.fe",
             include_str!(
                 "../../../fe/tests/fixtures/fe_test/layout_root_aggregate_effect_forwarding.fe"
-            ),
-        ),
-        (
-            "layout_root_nested_provider_matrix.fe",
-            include_str!(
-                "../../../fe/tests/fixtures/fe_test/layout_root_nested_provider_matrix.fe"
             ),
         ),
         (
@@ -3196,71 +2549,4 @@ fn layout_evidence_covers_existing_forwarding_matrix() {
     ] {
         assert_layoutizes(name, src);
     }
-}
-
-#[test]
-fn specialized_array_enum_leaf_methods_bind_runtime_layout_consts() {
-    parse_ok!(
-        db,
-        top_mod,
-        include_str!("../../../fe/tests/fixtures/fe_test/layout_root_array_enum_overlay.fe"),
-    );
-    let contract = find_contract(&db, top_mod, "C");
-    let mut pending = Vec::new();
-    for (recv_idx, recv) in contract.recvs(&db).data(&db).iter().enumerate() {
-        for (arm_idx, _) in recv.arms.data(&db).iter().enumerate() {
-            pending.push(get_or_build_semantic_instance(
-                &db,
-                identity_semantic_instance_key(
-                    &db,
-                    BodyOwner::ContractRecvArm {
-                        contract,
-                        recv_idx: recv_idx as u32,
-                        arm_idx: arm_idx as u32,
-                    },
-                ),
-            ));
-        }
-    }
-    let mut seen = std::collections::HashSet::new();
-    let mut found = false;
-    while let Some(instance) = pending.pop() {
-        if !seen.insert(instance.key(&db)) || instance.key(&db).owner(&db).body(&db).is_none() {
-            continue;
-        }
-        let evidence = layout_evidence_body(&db, instance).unwrap_or_else(|error| {
-            panic!(
-                "failed to layoutize reachable instance {:?}: {error:?}",
-                instance.key(&db),
-            )
-        });
-        if let BodyOwner::Func(func) = instance.key(&db).owner(&db)
-            && func
-                .name(&db)
-                .to_opt()
-                .is_some_and(|name| name.data(&db) == "root")
-            && func
-                .expected_self_ty(&db)
-                .is_some_and(|ty| ty.pretty_print(&db).to_string().starts_with("Slot<"))
-        {
-            found = true;
-            assert!(
-                evidence
-                    .constant_bindings
-                    .iter()
-                    .any(|bindings| !bindings.is_empty()),
-                "specialized Slot::root must bind ROOT from receiver evidence: {evidence:#?}",
-            );
-        }
-        pending.extend(
-            instance
-                .callees(&db)
-                .iter()
-                .map(|callee| get_or_build_semantic_instance(&db, callee.key)),
-        );
-    }
-    assert!(
-        found,
-        "fixture must reach a specialized Slot::root instance"
-    );
 }

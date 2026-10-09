@@ -18,7 +18,7 @@ pub contract <|spaces|>Spaces {
 }
 
 pub contract Arrays {
-  mut <|array|>maps: [StorageMap<u256, u256>; 3],
+  mut <|array|>values: [u256; 3],
 }
 
 struct Empty {}

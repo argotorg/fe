@@ -18,6 +18,10 @@ fn read_left<const LEFT: u256, const RIGHT: u256>(
     left_map(pair: pair).get(key: key)
 }
 
+fn read_pair_left(pair: Pair, key: u256) -> u256 {
+    read_left(pair: pair, key: key)
+}
+
 msg Msg {
     #[selector = 1]
     Set { lane: usize, key: u256, value: u256 },
@@ -27,15 +31,24 @@ msg Msg {
 }
 
 pub contract C {
-    mut pairs: [Pair; 2],
+    mut first: Pair,
+    mut second: Pair,
 
     recv Msg {
-        Set { lane, key, value } uses (mut pairs) {
-            pairs[lane].left.set(key: key, value: value)
+        Set { lane, key, value } uses (mut first, mut second) {
+            if lane == 0 {
+                first.left.set(key: key, value: value)
+            } else {
+                second.left.set(key: key, value: value)
+            }
         }
 
-        Get { lane, key } -> u256 uses (pairs) {
-            read_left(pair: pairs[lane], key: key)
+        Get { lane, key } -> u256 uses (first, second) {
+            if lane == 0 {
+                read_pair_left(pair: first, key: key)
+            } else {
+                read_pair_left(pair: second, key: key)
+            }
         }
     }
 }
@@ -56,4 +69,11 @@ fn returned_values_preserve_field_layout_sources() uses (evm: mut Evm) {
         message: Msg::Get { lane: 1, key: 7 },
     )
     assert!(value == 42)
+    let untouched: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Get { lane: 0, key: 7 },
+    )
+    assert!(untouched == 0)
 }

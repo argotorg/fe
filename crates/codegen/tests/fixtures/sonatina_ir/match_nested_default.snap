@@ -39,22 +39,20 @@ func private %deeply_nested_wildcard(v0.@layout_2) -> i8 {
         v23.objref<@layout_1> = enum.proj v22 #variant_0 0.i256;
         v24.objref<@layout_2> = enum.assert_variant_ref v1 #variant_0;
         v25.objref<@layout_1> = enum.proj v24 #variant_0 0.i256;
-        v26.@layout_1 = obj.load v25;
-        v27.enumtag(@layout_1) = enum.tag v26;
-        br_table v27 block5 (0.enumtag(@layout_1) block4);
+        v26.enumtag(@layout_1) = enum.get_tag v25;
+        br_table v26 block5 (0.enumtag(@layout_1) block4);
 
     block4:
-        v28.objref<@layout_2> = enum.assert_variant_ref v1 #variant_0;
-        v29.objref<@layout_1> = enum.proj v28 #variant_0 0.i256;
-        v30.objref<@layout_1> = enum.assert_variant_ref v29 #variant_0;
-        v31.objref<@layout_0> = enum.proj v30 #variant_0 0.i256;
-        v32.objref<@layout_2> = enum.assert_variant_ref v1 #variant_0;
-        v33.objref<@layout_1> = enum.proj v32 #variant_0 0.i256;
-        v34.objref<@layout_1> = enum.assert_variant_ref v33 #variant_0;
-        v35.objref<@layout_0> = enum.proj v34 #variant_0 0.i256;
-        v36.@layout_0 = obj.load v35;
-        v37.enumtag(@layout_0) = enum.tag v36;
-        br_table v37 block7 (0.enumtag(@layout_0) block6);
+        v27.objref<@layout_2> = enum.assert_variant_ref v1 #variant_0;
+        v28.objref<@layout_1> = enum.proj v27 #variant_0 0.i256;
+        v29.objref<@layout_1> = enum.assert_variant_ref v28 #variant_0;
+        v30.objref<@layout_0> = enum.proj v29 #variant_0 0.i256;
+        v31.objref<@layout_2> = enum.assert_variant_ref v1 #variant_0;
+        v32.objref<@layout_1> = enum.proj v31 #variant_0 0.i256;
+        v33.objref<@layout_1> = enum.assert_variant_ref v32 #variant_0;
+        v34.objref<@layout_0> = enum.proj v33 #variant_0 0.i256;
+        v35.enumtag(@layout_0) = enum.get_tag v34;
+        br_table v35 block7 (0.enumtag(@layout_0) block6);
 
     block5:
         jump block2;
@@ -158,9 +156,8 @@ func private %exhaustive_inner_outer_wildcard(v0.@layout_1) -> i8 {
         v19.objref<@layout_0> = enum.proj v18 #variant_0 0.i256;
         v20.objref<@layout_1> = enum.assert_variant_ref v1 #variant_0;
         v21.objref<@layout_0> = enum.proj v20 #variant_0 0.i256;
-        v22.@layout_0 = obj.load v21;
-        v23.enumtag(@layout_0) = enum.tag v22;
-        br_table v23 (0.enumtag(@layout_0) block5) (1.enumtag(@layout_0) block6) (2.enumtag(@layout_0) block7);
+        v22.enumtag(@layout_0) = enum.get_tag v21;
+        br_table v22 (0.enumtag(@layout_0) block5) (1.enumtag(@layout_0) block6) (2.enumtag(@layout_0) block7);
 
     block4:
         jump block2;
@@ -293,18 +290,16 @@ func private %nested_with_defaults(v0.@layout_1) -> i8 {
         v19.objref<@layout_0> = enum.proj v18 #variant_0 0.i256;
         v20.objref<@layout_1> = enum.assert_variant_ref v1 #variant_0;
         v21.objref<@layout_0> = enum.proj v20 #variant_0 0.i256;
-        v22.@layout_0 = obj.load v21;
-        v23.enumtag(@layout_0) = enum.tag v22;
-        br_table v23 block6 (0.enumtag(@layout_0) block5);
+        v22.enumtag(@layout_0) = enum.get_tag v21;
+        br_table v22 block6 (0.enumtag(@layout_0) block5);
 
     block4:
-        v24.objref<@layout_1> = enum.assert_variant_ref v1 #variant_1;
-        v25.objref<@layout_0> = enum.proj v24 #variant_1 0.i256;
-        v26.objref<@layout_1> = enum.assert_variant_ref v1 #variant_1;
-        v27.objref<@layout_0> = enum.proj v26 #variant_1 0.i256;
-        v28.@layout_0 = obj.load v27;
-        v29.enumtag(@layout_0) = enum.tag v28;
-        br_table v29 block8 (1.enumtag(@layout_0) block7);
+        v23.objref<@layout_1> = enum.assert_variant_ref v1 #variant_1;
+        v24.objref<@layout_0> = enum.proj v23 #variant_1 0.i256;
+        v25.objref<@layout_1> = enum.assert_variant_ref v1 #variant_1;
+        v26.objref<@layout_0> = enum.proj v25 #variant_1 0.i256;
+        v27.enumtag(@layout_0) = enum.get_tag v26;
+        br_table v27 block8 (1.enumtag(@layout_0) block7);
 
     block5:
         jump block2;
@@ -397,9 +392,8 @@ func private %outer_specific_inner_wildcard(v0.@layout_1) -> i8 {
         v19.objref<@layout_0> = enum.proj v18 #variant_0 0.i256;
         v20.objref<@layout_1> = enum.assert_variant_ref v1 #variant_0;
         v21.objref<@layout_0> = enum.proj v20 #variant_0 0.i256;
-        v22.@layout_0 = obj.load v21;
-        v23.enumtag(@layout_0) = enum.tag v22;
-        br_table v23 block6 (0.enumtag(@layout_0) block5);
+        v22.enumtag(@layout_0) = enum.get_tag v21;
+        br_table v22 block6 (0.enumtag(@layout_0) block5);
 
     block4:
         jump block2;

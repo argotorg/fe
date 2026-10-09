@@ -26,6 +26,7 @@ completions:
   - Default (Interface)
   - Drawable (Interface)
   - DynArrayAccess (Interface)
+  - DynVec (Struct)
   - Encode (Interface)
   - Err (EnumMember)
   - ErrorVariant (Interface)
@@ -105,6 +106,7 @@ note:
 completions:
   - Address (Struct)
   - Bytes (Struct)
+  - DynVec (Struct)
   - Evm (Struct)
   - FixedMemBuffer (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
@@ -181,6 +183,7 @@ note:
 completions:
   - Address (Struct)
   - Bytes (Struct)
+  - DynVec (Struct)
   - Evm (Struct)
   - FixedMemBuffer (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
@@ -247,6 +250,7 @@ note:
 completions:
   - Address (Struct)
   - Bytes (Struct)
+  - DynVec (Struct)
   - Evm (Struct)
   - FixedMemBuffer (Struct)
   - Helper (Struct)
@@ -274,6 +278,7 @@ note:
 completions:
   - Address (Struct)
   - Bytes (Struct)
+  - DynVec (Struct)
   - Evm (Struct)
   - FixedMemBuffer (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+104:use utils::Helpable}

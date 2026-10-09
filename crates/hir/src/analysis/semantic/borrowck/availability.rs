@@ -338,7 +338,11 @@ impl<'db> Borrowck<'db> {
         #[cfg(feature = "borrowck-profile")]
         let profile = self.profile_scope("availability");
         let mut entries = vec![None; self.body.blocks.len()];
-        entries[self.body.entry.index()] = Some(AvailabilityState::new());
+        let mut initial = AvailabilityState::new();
+        if let Some(guard) = self.inventory.loops.entry_guard(None, self.body.entry) {
+            initial.restrict(&guard).expect("initial loop entry");
+        }
+        entries[self.body.entry.index()] = Some(initial);
         // Revisit only blocks whose entry state changed: an unchanged block
         // would rejoin the same edges into its successors.
         let mut dirty = vec![false; self.body.blocks.len()];
@@ -346,10 +350,13 @@ impl<'db> Borrowck<'db> {
         while dirty.contains(&true) {
             #[cfg(feature = "borrowck-profile")]
             profile.sweep(self.inventory.loans.len(), self.source_generation);
-            for (block_index, block) in self.body.blocks.iter().enumerate() {
+            // Forward changes should reach successors in the same sweep,
+            // even when normalization allocated a join before its predecessors.
+            for &block_index in self.inventory.loops.reverse_postorder() {
                 if !std::mem::take(&mut dirty[block_index]) {
                     continue;
                 }
+                let block = &self.body.blocks[block_index];
                 let Some(mut state) = entries[block_index].clone() else {
                     continue;
                 };
@@ -361,6 +368,11 @@ impl<'db> Borrowck<'db> {
                 let Some(terminal) = &self.terminal[block_index] else {
                     continue;
                 };
+                // Calls can constrain the paths that reach the terminator. Do
+                // not carry moves from nonreturning paths into loop feedback.
+                if state.restrict(terminal.guard()).is_none() {
+                    continue;
+                }
                 for successor in block.terminator.kind.successors() {
                     let Some(guard) = self.edge_guard(NBlockId::new(block_index), successor) else {
                         continue;
@@ -422,11 +434,8 @@ impl<'db> Borrowck<'db> {
                         .loops
                         .feedback(NBlockId::new(block_index), successor.block)
                     {
-                        let repeated = self.inventory.loops.repeated(iteration);
-                        let repeats_index = |index| {
-                            matches!(index, IndexExpr::Iteration(region) if region == iteration)
-                                || matches!(index, IndexExpr::Runtime(value) if repeated.contains(&value))
-                        };
+                        let repeats_index =
+                            |index| self.inventory.loops.repeats_index(iteration, index);
                         let repeats_occurrence = |occurrence| {
                             self.inventory
                                 .loops
@@ -440,32 +449,60 @@ impl<'db> Borrowck<'db> {
                             );
                         }
                         // Forgetting a witness is safe for may facts, but cannot
-                        // turn a previous iteration's write into a must fact.
+                        // turn a previous iteration's write into a must fact. A
+                        // write to renewed storage is dropped; any other write
+                        // survives where it held for every execution reaching
+                        // this edge, whatever the renewed facts were.
                         edge.initialized = RegionSet::new(
                             edge.initialized.scope(),
-                            edge.initialized
-                                .clauses()
-                                .iter()
-                                .filter(|clause| {
-                                    !clause
+                            edge.initialized.clauses().iter().filter_map(|clause| {
+                                if clause
+                                    .payload
+                                    .root
+                                    .indices()
+                                    .chain(clause.payload.path.indices())
+                                    .any(repeats_index)
+                                {
+                                    return None;
+                                }
+                                let guard = if clause.guard.indices().into_iter().any(repeats_index)
+                                    || clause
                                         .guard
-                                        .indices()
+                                        .occurrences()
                                         .into_iter()
-                                        .chain(clause.payload.root.indices())
-                                        .chain(clause.payload.path.indices())
-                                        .any(repeats_index)
-                                        && !clause
-                                            .guard
-                                            .occurrences()
-                                            .into_iter()
-                                            .any(repeats_occurrence)
+                                        .any(repeats_occurrence)
+                                {
+                                    clause.guard.project_universally(
+                                        &edge.guard.in_scope(clause.guard.scope()),
+                                        |guard| {
+                                            guard
+                                                .forget_indices(repeats_index)
+                                                .forget_occurrences(repeats_occurrence)
+                                        },
+                                    )?
+                                } else {
+                                    clause.guard.clone()
+                                };
+                                Some(Guarded {
+                                    guard,
+                                    payload: clause.payload.clone(),
                                 })
-                                .cloned(),
+                            }),
                         );
                         edge.guard = edge
                             .guard
-                            .forget_indices(repeats_index)
+                            .forget_indices(|index| {
+                                self.inventory.loops.drops_fact(iteration, index)
+                            })
                             .forget_occurrences(repeats_occurrence);
+                    }
+                    if let Some(guard) = self
+                        .inventory
+                        .loops
+                        .entry_guard(Some(NBlockId::new(block_index)), successor.block)
+                        && edge.restrict(&guard).is_none()
+                    {
+                        continue;
                     }
                     edge.moved.retain(|_, fact| !fact.region.is_empty());
                     let entry = &mut entries[successor.block.index()];
@@ -502,6 +539,9 @@ impl<'db> Borrowck<'db> {
             let Some(terminal) = &self.terminal[block_index] else {
                 continue;
             };
+            if state.restrict(terminal.guard()).is_none() {
+                continue;
+            }
             if let Some(access) = block.terminator.kind.access(self.db, &self.body) {
                 let access = self.resolve_access(terminal, access, block.terminator.origin);
                 self.require_access(&mut analysis, &state, terminal, &access);
@@ -791,11 +831,8 @@ impl<'db> Borrowck<'db> {
                 region.clauses().iter().any(|write| {
                     let written = RegionSet::new(region.scope(), [write.clone()]);
                     fact.region.clauses().iter().any(|moved| {
-                        let mut unavailable = RegionSet::new(fact.region.scope(), [moved.clone()]);
-                        if write.guard.scope() == region.scope() {
-                            unavailable = unavailable.with_guard(&write.guard);
-                        }
-                        ((footprint.extent == AccessExtent::Typed
+                        let unavailable = RegionSet::new(fact.region.scope(), [moved.clone()]);
+                        let overlaps = (footprint.extent == AccessExtent::Typed
                             && !written.proven_intersection(&unavailable).is_empty())
                             || !matches!(
                                 AccessFootprint {
@@ -804,8 +841,16 @@ impl<'db> Borrowck<'db> {
                                 }
                                 .overlap(self.db, AccessFootprint::typed(&unavailable)),
                                 OverlapResult::Disjoint
-                            ))
-                            && !written.provably_covers(&unavailable)
+                            );
+                        if !overlaps {
+                            return false;
+                        }
+                        let unavailable = if write.guard.scope() == region.scope() {
+                            unavailable.with_guard(&write.guard)
+                        } else {
+                            unavailable
+                        };
+                        !written.provably_covers(&unavailable)
                     })
                 })
             })

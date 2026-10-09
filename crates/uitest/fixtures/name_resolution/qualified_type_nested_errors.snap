@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/qualified_type_nested_errors.fe
+---
+error[2-0002]: `Q` is not found
+   ┌─ qualified_type_nested_errors.fe:14:29
+   │
+14 │     a: Wrap<<Wrap<<T as M>::Q> as M>::P>,
+   │                             ^ `Q` is not found
+
+error[2-0002]: `Missing` is not found
+   ┌─ qualified_type_nested_errors.fe:15:14
+   │
+15 │     b: <Wrap<Missing> as M>::P,
+   │              ^^^^^^^ `Missing` is not found

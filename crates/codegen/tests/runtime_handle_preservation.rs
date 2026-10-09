@@ -1779,6 +1779,126 @@ fn entry() -> u8 {
 }
 
 #[test]
+fn immutable_code_view_parameter_forwarding_does_not_load_aggregate() {
+    let ir = sonatina_ir_for_source(
+        "immutable_code_view_parameter_forwarding.fe",
+        r#"
+struct Env {
+    first: u256,
+    second: u256,
+    third: u256,
+}
+impl Copy for Env {}
+
+fn pick(_ env: Env, _ which: u256) -> u256 {
+    if which == env.second { env.third } else { env.first }
+}
+
+fn forward(_ env: Env, _ which: u256) -> u256 {
+    pick(env, which)
+}
+
+msg Query {
+    #[selector = 1]
+    Read { which: u256 } -> u256,
+}
+
+pub contract CodeView {
+    env: Env,
+    init() uses (mut env) {
+        env = Env { first: 11, second: 22, third: 33 }
+    }
+    recv Query {
+        Read { which } -> u256 uses (env) { forward(env, which) }
+    }
+}
+"#,
+    );
+    let forward = sonatina_function_body(&ir, "forward");
+    assert!(
+        !forward.contains("evm_code_copy")
+            && !forward.contains("evm_code_load")
+            && !forward.contains("insert_value"),
+        "forwarding an immutable code view should retain its address:\n{ir}"
+    );
+    let pick = sonatina_function_body(&ir, "pick");
+    assert!(
+        pick.contains("evm_code_load"),
+        "fields should be read from code in the consuming helper:\n{ir}"
+    );
+}
+
+#[test]
+fn immutable_array_snapshots_retain_their_backing() {
+    let cases = [
+        (
+            r#"
+const VALUES: [u256; 3] = [11, 22, 33]
+pub fn entry() -> u256 { forward(VALUES) }
+"#,
+            "const.load",
+        ),
+        (
+            r#"
+fn read_input() -> u256 uses (values: [u256; 3]) { forward(values) }
+pub fn entry() -> u256 uses (evm: std::evm::RawOps) {
+    let data = evm.calldata_ptr<[u256; 3]>(0)
+    with (data) { read_input() }
+}
+"#,
+            "evm_calldata_load",
+        ),
+    ];
+    for (entry, load) in cases {
+        let ir = sonatina_ir_for_source(
+            "immutable_array_snapshots.fe",
+            format!(
+                r#"
+fn pick(_ values: [u256; 3]) -> u256 {{ values[1] }}
+fn forward(_ values: [u256; 3]) -> u256 {{ pick(values) }}
+{entry}
+"#
+            ),
+        );
+        let forward = sonatina_function_body(&ir, "forward");
+        assert!(
+            !forward.contains(load) && !forward.contains("insert_value"),
+            "immutable array forwarding should retain its backing:\n{ir}"
+        );
+        let pick = sonatina_function_body(&ir, "pick");
+        assert!(
+            pick.contains(load),
+            "the consuming helper should load the field:\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn immutable_enum_snapshots_preserve_tag_validation() {
+    let ir = sonatina_ir_for_source(
+        "immutable_enum_snapshots.fe",
+        r#"
+enum Choice { A, B }
+impl Copy for Choice {}
+struct Input { first: u256, choices: [Choice; 2] }
+impl Copy for Input {}
+fn pick(_ input: Input) -> u256 { input.first }
+fn forward(_ input: Input) -> u256 { pick(input) }
+fn read_input() -> u256 uses (input: Input) { forward(input) }
+pub fn entry() -> u256 uses (evm: std::evm::RawOps) {
+    let data = evm.calldata_ptr<Input>(0)
+    with (data) { read_input() }
+}
+"#,
+    );
+    let forward = sonatina_function_body(&ir, "forward");
+    assert!(
+        forward.contains("unreachable"),
+        "snapshotting nested enums must still validate their tags before the call:\n{ir}"
+    );
+}
+
+#[test]
 fn const_backed_array_args_lower_as_const_refs_in_sonatina() {
     let cases = [
         (

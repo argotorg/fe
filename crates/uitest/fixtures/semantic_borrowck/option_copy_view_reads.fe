@@ -1,0 +1,36 @@
+// `Option` and `Result` of `Copy` payloads are `Copy`, so they can be read out
+// of a view. A non-`Copy` payload still can't be moved out of one.
+use core::{Option, Result}
+
+enum Mode {
+    Fast,
+    Slow,
+}
+impl Copy for Mode {}
+
+struct Settings { limit: Option<u64>, mode: Option<Mode>, parsed: Result<u8, u64> }
+
+impl Settings {
+    fn limit(self) -> Option<u64> {
+        self.limit
+    }
+    fn mode(self) -> Option<Mode> {
+        self.mode
+    }
+    fn parsed(self) -> Result<u8, u64> {
+        self.parsed
+    }
+    fn twice(self) -> (Option<u64>, Option<u64>) {
+        (self.limit, self.limit)
+    }
+}
+
+struct Name { len: u64 }
+
+struct Labeled { name: Option<Name> }
+
+impl Labeled {
+    fn name(self) -> Option<Name> {
+        self.name
+    }
+}

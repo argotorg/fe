@@ -3,7 +3,7 @@
 use pretty::DocAllocator;
 
 use crate::RewriteContext;
-use parser::ast::{self, StmtKind, prelude::AstNode};
+use parser::ast::{self, AttrListOwner, StmtKind, prelude::AstNode};
 use parser::syntax_kind::SyntaxKind;
 
 use super::expr::{format_chain_with_prefix, is_chain};
@@ -62,32 +62,26 @@ impl ToDoc for ast::ForStmt {
         let alloc = &ctx.alloc;
 
         if !has_comment_tokens(self.syntax()) {
+            let attrs = self
+                .attr_list()
+                .map_or_else(|| alloc.nil(), |attrs| attrs.to_doc(ctx));
             let pat = match self.pat() {
                 Some(p) => p.to_doc(ctx),
-                None => return alloc.text("for"),
+                None => return attrs.append(alloc.text("for")),
             };
             let iterable = match self.iterable() {
                 Some(i) => i.to_doc(ctx),
-                None => return alloc.text("for ").append(pat),
+                None => return attrs.append(alloc.text("for ")).append(pat),
             };
-            let body = match self.body() {
-                Some(b) => b.to_doc(ctx),
-                None => {
-                    return alloc
-                        .text("for ")
-                        .append(pat)
-                        .append(alloc.text(" in "))
-                        .append(iterable);
-                }
-            };
-
-            return alloc
-                .text("for ")
+            let header = attrs
+                .append(alloc.text("for "))
                 .append(pat)
                 .append(alloc.text(" in "))
-                .append(iterable)
-                .append(alloc.text(" "))
-                .append(body);
+                .append(iterable);
+            return match self.body() {
+                Some(body) => header.append(alloc.text(" ")).append(body.to_doc(ctx)),
+                None => header,
+            };
         }
 
         let indent = ctx.config.indent_width as isize;
@@ -99,6 +93,10 @@ impl ToDoc for ast::ForStmt {
             self.syntax(),
             indent,
             |node| {
+                if let Some(attrs) = ast::AttrList::cast(node.clone()) {
+                    return Some(TokenPiece::new(attrs.to_doc(ctx)));
+                }
+
                 if !seen_pat && let Some(pat) = ast::Pat::cast(node.clone()) {
                     seen_pat = true;
                     return Some(TokenPiece::new(pat.to_doc(ctx)));

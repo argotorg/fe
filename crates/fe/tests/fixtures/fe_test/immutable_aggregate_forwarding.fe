@@ -1,0 +1,118 @@
+use std::evm::{Address, Evm}
+
+struct Env {
+    first: u256,
+    second: u256,
+    third: u256,
+    flag: bool,
+    address: Address,
+}
+impl Copy for Env {}
+
+#[inline(never)]
+fn pick(_ env: Env, _ which: u256) -> u256 {
+    assert!(env.flag)
+    assert!(env.address.inner == 44)
+    if which == env.second { env.third } else { env.first }
+}
+
+#[inline(never)]
+fn prepare(_ which: u256) -> u256 uses (evm: mut Evm) {
+    evm.sstore(slot: 1, value: 77)
+    which
+}
+
+#[inline(never)]
+fn forward(_ env: Env, _ which: u256) -> u256 uses (evm: mut Evm) {
+    pick(env, prepare(which))
+}
+
+#[inline(never)]
+fn changed(mut _ env: own Env) -> Env {
+    env.first = 99
+    env
+}
+
+#[inline(never)]
+fn pick_word(_ values: [u256; 3]) -> u256 { values[1] }
+
+#[inline(never)]
+fn forward_words(_ values: [u256; 3]) -> u256 { pick_word(values) }
+
+fn read_words() -> u256 uses (values: [u256; 3]) { forward_words(values) }
+
+msg Query {
+    #[selector = 1]
+    ReadCode { which: u256 } -> u256,
+    #[selector = 2]
+    ReadStorage { which: u256 } -> u256,
+    #[selector = 3]
+    CopyCode -> u256,
+    #[selector = 4]
+    ReadCalldata { first: u256, second: u256, third: u256 } -> u256,
+}
+
+pub contract Snapshot {
+    env: Env,
+    mut stored: Env,
+
+    init() uses (mut env, mut stored) {
+        env = Env { first: 11, second: 22, third: 33, flag: true, address: Address { inner: 44 } }
+        stored = Env { first: 11, second: 22, third: 33, flag: true, address: Address { inner: 44 } }
+    }
+
+    recv Query {
+        ReadCode { which } -> u256 uses (env, evm: mut Evm) {
+            forward(env, which)
+        }
+        ReadStorage { which } -> u256 uses (stored, evm: mut Evm) {
+            forward(stored, which)
+        }
+        CopyCode -> u256 uses (env) {
+            let copied = changed(env)
+            assert!(env.first == 11)
+            assert!(copied.second == 22)
+            pick(copied, 1)
+        }
+        ReadCalldata { .. } -> u256 uses (evm: Evm) {
+            let data = evm.calldata_ptr<[u256; 3]>(4)
+            with (data) { read_words() }
+        }
+    }
+}
+
+#[test]
+fn immutable_fields_survive_intervening_effects() uses (evm: mut Evm) {
+    let c = evm.create2<Snapshot>(value: 0, args: (), salt: 0)
+    assert!(evm.call(addr: c, gas: 200000, value: 0, message: Query::ReadCode { which: 22 }) == 33)
+    assert!(evm.call(addr: c, gas: 200000, value: 0, message: Query::ReadCode { which: 1 }) == 11)
+}
+
+#[test]
+fn mutable_storage_argument_is_snapshotted_before_later_argument() uses (evm: mut Evm) {
+    let c = evm.create2<Snapshot>(value: 0, args: (), salt: 1)
+    assert!(evm.call(addr: c, gas: 200000, value: 0, message: Query::ReadStorage { which: 22 }) == 33)
+    assert!(evm.call(addr: c, gas: 200000, value: 0, message: Query::ReadStorage { which: 77 }) == 33)
+}
+
+#[test]
+fn mutable_copy_does_not_change_immutable_source() uses (evm: mut Evm) {
+    let c = evm.create2<Snapshot>(value: 0, args: (), salt: 2)
+    assert!(evm.call(addr: c, gas: 200000, value: 0, message: Query::CopyCode {}) == 99)
+    assert!(evm.call(addr: c, gas: 200000, value: 0, message: Query::CopyCode {}) == 99)
+}
+
+#[test]
+fn memory_snapshot_is_independent() {
+    let mut original = Env { first: 11, second: 22, third: 33, flag: true, address: Address { inner: 44 } }
+    let snapshot = original
+    original.third = 99
+    assert!(pick(snapshot, 22) == 33)
+    assert!(pick(original, 22) == 99)
+}
+
+#[test]
+fn calldata_snapshots_preserve_word_layout() uses (evm: mut Evm) {
+    let c = evm.create2<Snapshot>(value: 0, args: (), salt: 3)
+    assert!(evm.call(addr: c, gas: 200000, value: 0, message: Query::ReadCalldata { first: 15, second: 27, third: 39 }) == 27)
+}

@@ -81,11 +81,6 @@ pub fn collect_referenced_code_regions<'db>(
                 | RExpr::Load { .. }
                 | RExpr::AggregateExtract { .. }
                 | RExpr::AggregateMake { .. }
-                | RExpr::LayoutMapAffine { .. }
-                | RExpr::LayoutMapDense { .. }
-                | RExpr::LayoutMapRepeat { .. }
-                | RExpr::LayoutMapProject { .. }
-                | RExpr::LayoutMapPatch { .. }
                 | RExpr::Call { .. }
                 | RExpr::EnumMake { .. }
                 | RExpr::EnumTagOfValue { .. }

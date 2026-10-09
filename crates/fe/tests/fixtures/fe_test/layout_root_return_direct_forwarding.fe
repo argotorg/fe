@@ -12,12 +12,8 @@ fn pass_map_nested<const SALT: u256>(
     return pass_map(map: map)
 }
 
-fn read_lane(
-    maps: [StorageMap<u256, u256>; 2],
-    lane: usize,
-    key: u256,
-) -> u256 {
-    pass_map_nested(map: maps[lane]).get(key: key)
+fn read_map(map: StorageMap<u256, u256>, key: u256) -> u256 {
+    pass_map_nested(map: map).get(key: key)
 }
 
 msg Msg {
@@ -29,15 +25,24 @@ msg Msg {
 }
 
 pub contract C {
-    mut maps: [StorageMap<u256, u256>; 2],
+    mut first: StorageMap<u256, u256>,
+    mut second: StorageMap<u256, u256>,
 
     recv Msg {
-        Set { lane, key, value } uses (mut maps) {
-            maps[lane].set(key: key, value: value)
+        Set { lane, key, value } uses (mut first, mut second) {
+            if lane == 0 {
+                first.set(key: key, value: value)
+            } else {
+                second.set(key: key, value: value)
+            }
         }
 
-        Get { lane, key } -> u256 uses (maps) {
-            read_lane(maps: maps, lane: lane, key: key)
+        Get { lane, key } -> u256 uses (first, second) {
+            if lane == 0 {
+                read_map(map: first, key: key)
+            } else {
+                read_map(map: second, key: key)
+            }
         }
     }
 }
@@ -58,4 +63,11 @@ fn returned_values_preserve_direct_layout_sources() uses (evm: mut Evm) {
         message: Msg::Get { lane: 1, key: 7 },
     )
     assert!(value == 42)
+    let untouched: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Get { lane: 0, key: 7 },
+    )
+    assert!(untouched == 0)
 }

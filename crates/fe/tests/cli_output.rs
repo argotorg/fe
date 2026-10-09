@@ -145,6 +145,32 @@ fn run_fe_main_with_stdin(args: &[&str], stdin_data: &str) -> (String, i32) {
 }
 
 #[test]
+fn test_cli_check_color_flag_controls_diagnostic_escape_codes() {
+    let temp = tempdir().expect("tempdir");
+    let file = temp.path().join("type_error.fe");
+    fs::write(&file, "fn f() -> u8 { true }\n").expect("write fixture");
+    for (choice, colored) in [("never", false), ("always", true)] {
+        let output = Command::new(fe_binary())
+            .args(["check", "--color", choice])
+            .arg(&file)
+            .env("TERM", "xterm-256color")
+            .env_remove("NO_COLOR")
+            .env_remove("CLICOLOR")
+            .env_remove("CLICOLOR_FORCE")
+            .output()
+            .expect("run fe check");
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("error"), "{stderr}");
+        assert_eq!(
+            stderr.contains('\x1b'),
+            colored,
+            "--color {choice}:\n{stderr:?}"
+        );
+    }
+}
+
+#[test]
 fn test_cli_check_invalid_named_const_used_in_type_position_reports_error_instead_of_panicking() {
     let temp = tempdir().expect("tempdir");
     let file = temp.path().join("invalid_const_ty_use.fe");
@@ -170,6 +196,68 @@ fn f() {
         !output.contains("semantic lowering missing for call-like expression"),
         "unexpected semantic lowering panic:\n{output}"
     );
+}
+
+#[test]
+fn test_cli_check_ingot_nested_in_its_dependency() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    let write = |path: &str, text: &str| {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().expect("parent")).expect("create dirs");
+        fs::write(path, text).expect("write fixture");
+    };
+    write(
+        "parent/fe.toml",
+        "[ingot]\nname = \"parent\"\nversion = \"0.1.0\"\n",
+    );
+    write(
+        "parent/src/lib.fe",
+        "pub use inner::answer\npub fn direct() -> u8 { 1 }\n",
+    );
+    write("parent/src/inner.fe", "pub fn answer() -> u8 { 42 }\n");
+    let uses =
+        "pub fn main() -> u8 { parent::answer() + parent::inner::answer() + parent::direct() }\n";
+    // An ingot inside the directory tree of the ingot it depends on, as a
+    // tool or example of a library would be.
+    write(
+        "parent/tools/child/fe.toml",
+        "[ingot]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nparent = { path = \"../..\" }\n",
+    );
+    write("parent/tools/child/src/lib.fe", uses);
+    write(
+        "sibling/fe.toml",
+        "[ingot]\nname = \"sibling\"\nversion = \"0.1.0\"\n\n[dependencies]\nparent = { path = \"../parent\" }\n",
+    );
+    write("sibling/src/lib.fe", uses);
+    // The same layout as members of a workspace.
+    write(
+        "workspace/fe.toml",
+        "[workspace]\nname = \"nested\"\nversion = \"0.1.0\"\nmembers = [\n  { path = \"lib\", name = \"parent\" },\n  { path = \"lib/tools/child\", name = \"child\" },\n]\n",
+    );
+    write(
+        "workspace/lib/fe.toml",
+        "[ingot]\nname = \"parent\"\nversion = \"0.1.0\"\n",
+    );
+    write(
+        "workspace/lib/src/lib.fe",
+        "pub use inner::answer\npub fn direct() -> u8 { 1 }\n",
+    );
+    write(
+        "workspace/lib/src/inner.fe",
+        "pub fn answer() -> u8 { 42 }\n",
+    );
+    write(
+        "workspace/lib/tools/child/fe.toml",
+        "[ingot]\nname = \"child\"\nversion = \"0.1.0\"\n\n[dependencies]\nparent = true\n",
+    );
+    write("workspace/lib/tools/child/src/lib.fe", uses);
+
+    for target in ["parent/tools/child", "sibling", "parent", "workspace"] {
+        let path = root.join(target);
+        let (output, exit_code) = run_fe_check(path.to_str().expect("fixture path utf8"));
+        assert_eq!(exit_code, 0, "`fe check {target}` failed:\n{output}");
+    }
 }
 
 #[test]
@@ -3579,6 +3667,105 @@ fn test_cli_test_workspace_root_is_workspace_aware() {
 }
 
 #[test]
+fn test_cli_workspace_cache_preserves_member_and_dependency_errors_without_tests() {
+    for dependency_error in [false, true] {
+        let temp = tempdir().expect("workspace fixture");
+        let root = temp.path();
+        fs::write(root.join("fe.toml"),
+            "[workspace]\nname = \"cache_errors\"\nversion = \"0.1.0\"\nmembers = [\"first\", \"second\"]\n"
+        ).unwrap();
+        for name in ["first", "second", "bad"] {
+            fs::create_dir_all(root.join(name).join("src")).unwrap();
+            let dependency = if name == "second" && dependency_error {
+                "[dependencies]\nbad = { path = \"../bad\" }\n"
+            } else {
+                ""
+            };
+            fs::write(
+                root.join(name).join("fe.toml"),
+                format!("[ingot]\nname = \"{name}\"\nversion = \"0.1.0\"\n{dependency}"),
+            )
+            .unwrap();
+            let source = match name {
+                "first" => "#[test]\nfn first_ok() { core::assert(true) }",
+                "second" if dependency_error => "pub fn marker() {}",
+                _ => "pub fn invalid(_ value: u256) -> bool { value }",
+            };
+            fs::write(root.join(name).join("src/lib.fe"), source).unwrap();
+        }
+        for grouped in [false, true] {
+            let mut args = vec!["test", "--jobs", "1"];
+            if grouped {
+                args.push("--grouped");
+            }
+            let (output, exit_code) = run_fe_main_in_dir(&args, root);
+            assert_ne!(exit_code, 0, "invalid zero-test member passed: {output}");
+            assert!(
+                output.contains("first_ok") && output.contains("1 passed"),
+                "{output}"
+            );
+            assert!(output.contains("1 failed"), "{output}");
+            if dependency_error {
+                assert!(output.contains("Errors in dependency"), "{output}");
+            }
+        }
+    }
+}
+
+#[test]
+fn test_cli_workspace_cache_isolates_workspaces_with_identical_member_names() {
+    let temp = tempdir().expect("workspace fixture");
+    let mut workspaces = Vec::new();
+    for (name, value) in [("left", 1), ("right", 2)] {
+        let root = temp.path().join(name);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("fe.toml"),
+            format!("[workspace]\nname = \"{name}\"\nversion = \"0.1.0\"\nmembers = [\"library\", \"app\"]\n")
+        ).unwrap();
+        for member in ["library", "app"] {
+            fs::create_dir_all(root.join(member).join("src")).unwrap();
+            let dependency = if member == "app" {
+                "[dependencies]\nlibrary = true\n"
+            } else {
+                ""
+            };
+            fs::write(
+                root.join(member).join("fe.toml"),
+                format!("[ingot]\nname = \"{member}\"\nversion = \"0.1.0\"\n{dependency}"),
+            )
+            .unwrap();
+            let source = if member == "library" {
+                format!("pub fn value() -> u256 {{ {value} }}")
+            } else {
+                format!(
+                    "#[test]\nfn member_value() {{ core::assert(library::value() == {value}) }}"
+                )
+            };
+            fs::write(root.join(member).join("src/lib.fe"), source).unwrap();
+        }
+        workspaces.push(root);
+    }
+    for grouped in [false, true] {
+        let mut args = vec![
+            "test",
+            "--jobs",
+            "1",
+            workspaces[0].to_str().unwrap(),
+            workspaces[1].to_str().unwrap(),
+        ];
+        if grouped {
+            args.push("--grouped");
+        }
+        let (output, exit_code) = run_fe_main(&args);
+        assert_eq!(exit_code, 0, "{output}");
+        assert!(
+            output.contains("2 passed") && output.contains("0 failed"),
+            "{output}"
+        );
+    }
+}
+
+#[test]
 fn test_cli_test_workspace_preserves_builtin_authority() {
     let root = workspace_fixture("test_workspace_builtin_authority");
     let (output, exit_code) = run_fe_main_in_dir(&["test"], &root);
@@ -4438,6 +4625,27 @@ fn unsupported_macro_calls_are_cli_errors() {
             assert!(output.contains("unsupported macro call"), "{output}");
             assert!(!output.contains("panicked at"), "{output}");
         }
+    }
+}
+
+#[test]
+fn immutable_aggregate_forwarding_at_all_optimization_levels() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/immutable_aggregate_forwarding.fe");
+    // The fixture test covers the default level (1).
+    for level in ["0", "2", "s"] {
+        let (output, exit_code) = run_fe_main(&[
+            "test",
+            "--jobs",
+            "1",
+            "--optimize",
+            level,
+            fixture.to_str().expect("fixture path utf8"),
+        ]);
+        assert_eq!(
+            exit_code, 0,
+            "aggregate forwarding failed at -O {level}:\n{output}"
+        );
     }
 }
 

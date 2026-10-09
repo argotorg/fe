@@ -1,0 +1,46 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/qualified_path_written_args_wf.fe
+---
+error[2-0010]: no method named `new` found for S::Item `S::Item`
+   ┌─ qualified_path_written_args_wf.fe:58:38
+   │
+58 │     <S as Tr<Foo<NotMarked>>>::Item::new()
+   │                                      ^^^ method not found in `S::Item`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ qualified_path_written_args_wf.fe:27:21
+   │
+27 │     let x: <S as Tr<Foo<NotMarked>>>::Item = 1
+   │                     ^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ qualified_path_written_args_wf.fe:32:13
+   │
+32 │     let x: <Wrap<Foo<NotMarked>> as Plain>::Item = 1
+   │             ^^^^^^^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ qualified_path_written_args_wf.fe:37:19
+   │
+37 │     v as <S as Tr<Foo<NotMarked>>>::Item
+   │                   ^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ qualified_path_written_args_wf.fe:40:24
+   │
+40 │ fn param(_ x: <S as Tr<Foo<NotMarked>>>::Item) {}
+   │                        ^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ qualified_path_written_args_wf.fe:42:22
+   │
+42 │ fn ret() -> <S as Tr<Foo<NotMarked>>>::Item {
+   │                      ^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ qualified_path_written_args_wf.fe:47:17
+   │
+47 │     f: <S as Tr<Foo<NotMarked>>>::Item,
+   │                 ^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`

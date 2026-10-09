@@ -1,0 +1,145 @@
+// Compiler proof for dependent extents, default const dispatch, mutable writers,
+// nested tuple appends and value indexing at CTFE and runtime.
+use core::abi::{ByteInput, encode_alloc}
+use core::ptr::MemSpan
+use std::abi::Sol
+use core::marker::Copy
+use core::ops::Index
+use core::num::IntDowncast
+
+const fn word_len(_ n: usize) -> usize {
+    n / 32 + if n % 32 == 0 { 0 } else { 1 }
+}
+
+struct PackedBytes<const N: usize> { words: [u256; word_len(N)] }
+impl<const N: usize> Copy for PackedBytes<N> {}
+impl<const N: usize> PackedBytes<N> {
+    const fn zero() -> Self { Self { words: [0; word_len(N)] } }
+    const fn len(self) -> usize { N }
+}
+impl<const N: usize> Index<usize> for PackedBytes<N> {
+    type Output = u8
+    const fn index(self, _ index: usize) -> u8 {
+        assert!(index < N)
+        let shift: u256 = ((31 - index % 32) * 8) as u256
+        (self.words[index / 32] >> shift).downcast_truncate()
+    }
+}
+
+struct ByteWriter<const M: usize> { bytes: PackedBytes<M>, len: usize }
+impl<const M: usize> ByteWriter<M> {
+    const fn new() -> Self { Self { bytes: PackedBytes<M>::zero(), len: 0 } }
+    const fn finish(own self) -> PackedBytes<M> {
+        assert!(self.len == M)
+        self.bytes
+    }
+    const fn push_word(mut self, _ value: u256, width: usize) {
+        assert!(width <= 32)
+        assert!(width <= M - self.len)
+        if width == 0 { return }
+        let a = value << (((32 - width) * 8) as u256)
+        let r = self.len % 32
+        self.bytes.words[self.len / 32] |= a >> ((r * 8) as u256)
+        if r + width > 32 {
+            self.bytes.words[self.len / 32 + 1] |= a << (((32 - r) * 8) as u256)
+        }
+        self.len += width
+    }
+    const fn append<T: AsBytes>(mut self, _ value: T) {
+        let start = self.len
+        value.append_to(mut self)
+        assert!(self.len >= start && self.len - start == T::N)
+    }
+}
+
+trait AsBytes {
+    const N: usize
+    const fn append_to<const M: usize>(self, _ out: mut ByteWriter<M>)
+    const fn as_bytes(self) -> PackedBytes<Self::N> {
+        let mut out = ByteWriter<Self::N>::new()
+        out.append(self)
+        out.finish()
+    }
+}
+impl AsBytes for u256 {
+    const N: usize = 32
+    const fn append_to<const M: usize>(self, _ out: mut ByteWriter<M>) {
+        out.push_word(self, width: 32)
+    }
+}
+impl<const L: usize> AsBytes for String<L> {
+    const N: usize = L
+    const fn append_to<const M: usize>(self, _ out: mut ByteWriter<M>) {
+        out.push_word(self as u256, width: L)
+    }
+}
+impl<T0: AsBytes, T1: AsBytes> AsBytes for (T0, T1) {
+    const N: usize = T0::N + T1::N
+    const fn append_to<const M: usize>(self, _ out: mut ByteWriter<M>) {
+        out.append(self.0)
+        out.append(self.1)
+    }
+}
+
+const fn bytes<T: AsBytes>(_ value: T) -> PackedBytes<T::N> { value.as_bytes() }
+const PAIR: PackedBytes<34> = bytes((1 as u256, "ab" as String<2>))
+const NESTED: PackedBytes<36> = bytes((("x" as String<1>, 1 as u256), ("ab" as String<2>, "z" as String<1>)))
+const EMPTY: PackedBytes<0> = bytes(("" as String<0>, "" as String<0>))
+const PAIR_LAST: u8 = PAIR[33]
+const NESTED_WORD_LAST: u8 = NESTED[32]
+
+const fn identity<T0: AsBytes, T1: AsBytes>(_ value: PackedBytes<{T0::N + T1::N}>) -> PackedBytes<{T0::N + T1::N}> {
+    let first: [u256; word_len({T0::N + T1::N})] = value.words
+    let second: [u256; word_len({T0::N + T1::N})] = first
+    PackedBytes { words: second }
+}
+const IDENTITY: PackedBytes<34> = identity<u256, String<2>>(PAIR)
+
+fn check_runtime(_ word: u256, _ text: String<2>) -> u8 {
+    let pair = bytes((word, text))
+    let nested = bytes((("x" as String<1>, word), (text, "z" as String<1>)))
+    assert!(pair.len() == 34 && pair[31] == word.downcast_truncate())
+    assert!(nested[0] == 120 && nested[32] == word.downcast_truncate())
+    assert!(nested[33] == pair[32] && nested[34] == pair[33] && nested[35] == 122)
+    pair[33]
+}
+
+#[test]
+fn ctfe_proof() {
+    assert!(PAIR[0] == 0 && PAIR[31] == 1 && PAIR[32] == 97 && PAIR_LAST == 98)
+    assert!(NESTED[0] == 120 && NESTED_WORD_LAST == 1 && NESTED[35] == 122)
+    assert!(EMPTY.len() == 0 && IDENTITY[33] == 98)
+    assert!(check_runtime(1, "ab") == 98)
+}
+
+pub fn main(argc: i32, argv: **u8) -> i32 {
+    let _ = argv
+    let word: u256 = if argc == 1 { 1 } else { 2 }
+    let text: String<2> = if argc == 1 { "ab" } else { "cd" }
+    let expected: u8 = if argc == 1 { 98 } else { 100 }
+    assert!(check_runtime(word, text) == expected)
+    assert!(PAIR_LAST == 98 && NESTED_WORD_LAST == 1 && EMPTY.len() == 0)
+    0
+}
+
+#[test]
+fn runtime_memory_proof() {
+    let encoded = encode_alloc<Sol, String<2>>("ab")
+    let input = encoded.span()
+    let a = <MemSpan as ByteInput>::byte_at(input, 32)
+    let b = <MemSpan as ByteInput>::byte_at(input, 33)
+    let text = (((a as u256) << 8) | (b as u256)) as String<2>
+    let word = (a - 96) as u256
+    assert!(check_runtime(word, text) == 98)
+}
+
+#[test]
+fn runtime_calldata_proof() {
+    let input = std::evm::calldata::CallData::new()
+    let word = input.word_at(0)
+    let text = (word & 0xffff) as String<2>
+    let pair = bytes((word, text))
+    assert!(pair[31] == (word & 0xff).downcast_truncate())
+    assert!(pair[32] == ((word >> 8) & 0xff).downcast_truncate())
+    assert!(pair[33] == (word & 0xff).downcast_truncate())
+}

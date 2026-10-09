@@ -147,9 +147,12 @@ impl super::Parse for IfExprScope {
 
         if parser.current_kind() == Some(SyntaxKind::ElseKw) {
             parser.bump();
+            parser.pop_recovery_stack();
 
             parser.expect(&[SyntaxKind::LBrace, SyntaxKind::IfKw], None)?;
-            parse_expr(parser)?;
+            // Only a block or nested conditional belongs to the else arm.
+            // The enclosing expression parser handles any following operators.
+            parse_expr_atom(parser, true)?;
         }
         Ok(())
     }

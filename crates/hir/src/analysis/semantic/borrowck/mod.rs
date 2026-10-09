@@ -22,6 +22,7 @@ pub(crate) use callsite::provisional_call_site_provider_refinements;
 pub use check::{
     SemanticAnalysisError, SemanticBorrowAnalysisPass, check_semantic_borrows,
     collect_semantic_borrow_diagnostic_vouchers, semantic_borrow_summary,
+    semantic_executable_control_flow,
 };
 pub use facts::*;
 pub(crate) use ir::CallSiteRefinements;

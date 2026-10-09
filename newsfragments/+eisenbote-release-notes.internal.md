@@ -1,0 +1,1 @@
+Release notes are now assembled with [eisenbote](https://github.com/fe-lang/eisenbote), a towncrier replacement written in Fe and built with the compiler being released, configured in `eisenbote.toml`. Newsfragments are named and written as before.

@@ -230,36 +230,6 @@ fn explicit_storage_map_root_compiles_without_a_runtime_provider(fixture: Fixtur
     );
 }
 
-#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "persistent_layout_maps_lower_with_checked_projection_control_flow.fe")]
-fn persistent_layout_maps_lower_with_checked_projection_control_flow(fixture: Fixture<&str>) {
-    let output = with_top_mod_for_source(&fixture, |db, top_mod| {
-        emit_module_sonatina_ir(db, top_mod).expect("layout maps should lower")
-    });
-
-    assert!(
-        output.contains("br_table") && output.contains("evm_revert") && output.contains("lt "),
-        "layout-map projection must dispatch safely after a bounds check:\n{output}"
-    );
-    assert!(
-        output.matches("evm_malloc").count() >= 4,
-        "persistent layout-map constructors must allocate their nodes:\n{output}"
-    );
-    let patch = sonatina_function_body(&output, "patch").unwrap_or_else(|| {
-        panic!(
-            "expected the layout-map patch regression function; functions={:?}",
-            sonatina_function_names(&output)
-        )
-    });
-    assert!(
-        patch.contains("lt ") && patch.contains("evm_revert"),
-        "layout-map patches must enforce their own index bounds:\n{patch}"
-    );
-    assert!(
-        !patch.contains("br_table"),
-        "a terminal layout-map patch should not project and dispatch through its source:\n{patch}"
-    );
-}
-
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "inferred_storage_map_roots_skip_explicit_contract_salts.fe")]
 fn inferred_storage_map_roots_skip_explicit_contract_salts(fixture: Fixture<&str>) {
     let output = with_top_mod_for_source(&fixture, |db, top_mod| {
@@ -346,6 +316,19 @@ fn constant_oob_index_terminates_without_continuation_projection(fixture: Fixtur
     assert!(
         !output.contains("obj_index") && !output.contains("const_index"),
         "constant out-of-bounds array access should not continue into index projection IR:\n{output}"
+    );
+}
+
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "nonreturning_continuation_does_not_root_live_storage.fe")]
+fn nonreturning_continuation_does_not_root_live_storage(fixture: Fixture<&str>) {
+    let output = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit")
+    });
+    let demand = sonatina_function_body(&output, "%demand(").expect("`demand` should be emitted");
+
+    assert!(
+        !demand.contains("obj.alloc"),
+        "a borrow after a nonreturning call must not give the value returned on the live path runtime storage:\n{demand}"
     );
 }
 

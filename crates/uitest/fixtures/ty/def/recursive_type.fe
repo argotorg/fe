@@ -35,3 +35,74 @@ pub struct S8<T> {
 pub struct S9 {
     s: S1,
 }
+
+// Indirection permits recursion only if its type arguments do not grow.
+pub struct S10<T> {
+    t: T,
+    next: *S10<[T; 1]>,
+}
+
+pub struct S12<T, const N: u256> {
+    t: T,
+    same: *S12<T, N>,
+    other: *S12<u8, 0>,
+}
+
+// An argument that no field exposes only distinguishes the type.
+pub struct S13<T> {}
+
+pub struct S14<T> {
+    t: T,
+    next: *S13<S14<[T; 1]>>,
+}
+
+// An empty array exposes no element.
+pub struct S15<T> {
+    values: [T; 0],
+}
+
+pub struct S16<T> {
+    t: T,
+    next: *S15<S16<[T; 1]>>,
+}
+
+// A symbolic array exposes its element only once its length is known positive.
+pub struct Maybe<T, const N: usize> {
+    values: [T; N],
+}
+
+pub struct FineZero<T> {
+    value: T,
+    next: *Maybe<FineZero<[T; 1]>, 0>,
+}
+
+fn fine_zero(x: FineZero<u256>) -> u256 {
+    x.value
+}
+
+pub struct SymbolicGuard<T, const N: usize> {
+    value: T,
+    next: [*SymbolicGuard<[T; 1], N>; N],
+}
+
+pub struct PositiveGuard<T> {
+    value: T,
+    next: [*PositiveGuard<[T; 1]>; 1],
+}
+
+// Containment grows an argument even when its element is unreachable.
+pub struct EmptyArgument<T> {
+    next: *EmptyArgument<[T; 0]>,
+}
+
+// An unknown constructor may leave its argument entirely unreachable.
+pub struct Empty<T> {}
+
+pub struct Fine<T, F: * -> *> {
+    value: T,
+    next: *F<Fine<[T; 1], F>>,
+}
+
+fn fine_empty(x: Fine<u256, Empty>) -> u256 {
+    x.value
+}

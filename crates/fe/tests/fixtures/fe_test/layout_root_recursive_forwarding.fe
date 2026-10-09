@@ -1,54 +1,72 @@
 use std::evm::{Evm, StorageMap}
 
 fn direct_dynamic(
-    maps: [StorageMap<u256, u256>; 2],
+    first: StorageMap<u256, u256>,
+    second: StorageMap<u256, u256>,
     lane: usize,
     depth: u256,
     key: u256,
 ) -> u256 {
     if depth == 0 {
-        return maps[lane].get(key: key)
+        return if lane == 0 { first.get(key: key) } else { second.get(key: key) }
     }
-    direct_dynamic(maps, lane, depth: depth - 1, key)
+    direct_dynamic(first, second, lane, depth: depth - 1, key)
 }
 
 fn direct_static(
-    maps: [StorageMap<u256, u256>; 2],
+    first: StorageMap<u256, u256>,
+    second: StorageMap<u256, u256>,
     depth: u256,
     key: u256,
 ) -> u256 {
     if depth == 0 {
-        return maps[1].get(key: key)
+        return second.get(key: key)
     }
-    direct_static(maps, depth: depth - 1, key)
+    direct_static(first, second, depth: depth - 1, key)
 }
 
 fn mutual_a(
-    maps: [StorageMap<u256, u256>; 2],
+    first: StorageMap<u256, u256>,
+    second: StorageMap<u256, u256>,
     lane: usize,
     depth: u256,
     key: u256,
 ) -> u256 {
     if depth == 0 {
-        return maps[lane].get(key: key)
+        return if lane == 0 { first.get(key: key) } else { second.get(key: key) }
     }
-    mutual_b(maps, lane, depth: depth - 1, key)
+    mutual_b(first, second, lane, depth: depth - 1, key)
 }
 
 fn mutual_b(
-    maps: [StorageMap<u256, u256>; 2],
+    first: StorageMap<u256, u256>,
+    second: StorageMap<u256, u256>,
     lane: usize,
     depth: u256,
     key: u256,
 ) -> u256 {
     if depth == 0 {
-        return maps[lane].get(key: key)
+        return if lane == 0 { first.get(key: key) } else { second.get(key: key) }
     }
-    mutual_a(maps, lane, depth: depth - 1, key)
+    mutual_a(first, second, lane, depth: depth - 1, key)
 }
 
 struct Wrapped {
-    maps: [StorageMap<u256, u256>; 2],
+    first: StorageMap<u256, u256>,
+    second: StorageMap<u256, u256>,
+}
+
+impl Wrapped {
+    fn lane(self, lane: usize, key: u256) -> u256 {
+        if lane == 0 { self.first.get(key: key) } else { self.second.get(key: key) }
+    }
+
+    fn receiver_recursive(self, lane: usize, depth: u256, key: u256) -> u256 {
+        if depth == 0 {
+            return self.lane(lane, key)
+        }
+        self.receiver_recursive(lane, depth: depth - 1, key)
+    }
 }
 
 fn recursive_wrapped(wrapped: Wrapped, depth: u256) -> Wrapped {
@@ -62,18 +80,9 @@ fn effect_recursive(lane: usize, depth: u256, key: u256) -> u256
     uses (wrapped: Wrapped)
 {
     if depth == 0 {
-        return wrapped.maps[lane].get(key: key)
+        return wrapped.lane(lane, key)
     }
     effect_recursive(lane, depth: depth - 1, key)
-}
-
-impl Wrapped {
-    fn receiver_recursive(self, lane: usize, depth: u256, key: u256) -> u256 {
-        if depth == 0 {
-            return self.maps[lane].get(key: key)
-        }
-        self.receiver_recursive(lane, depth: depth - 1, key)
-    }
 }
 
 trait RecursiveRead {
@@ -89,7 +98,7 @@ trait RecursiveRead {
 
 impl RecursiveRead for Wrapped {
     fn leaf(self, lane: usize, key: u256) -> u256 {
-        self.maps[lane].get(key: key)
+        self.lane(lane, key)
     }
 }
 
@@ -124,23 +133,27 @@ pub contract C {
 
     recv M {
         Set { lane, key, value } uses (mut wrapped) {
-            wrapped.maps[lane].set(key: key, value: value)
+            if lane == 0 {
+                wrapped.first.set(key: key, value: value)
+            } else {
+                wrapped.second.set(key: key, value: value)
+            }
         }
 
         GetDirectDynamic { lane, depth, key } -> u256 uses (wrapped) {
-            direct_dynamic(maps: wrapped.maps, lane, depth, key)
+            direct_dynamic(first: wrapped.first, second: wrapped.second, lane, depth, key)
         }
 
         GetDirectStatic { depth, key } -> u256 uses (wrapped) {
-            direct_static(maps: wrapped.maps, depth, key)
+            direct_static(first: wrapped.first, second: wrapped.second, depth, key)
         }
 
         GetMutual { lane, depth, key } -> u256 uses (wrapped) {
-            mutual_a(maps: wrapped.maps, lane, depth, key)
+            mutual_a(first: wrapped.first, second: wrapped.second, lane, depth, key)
         }
 
         GetReturned { lane, depth, key } -> u256 uses (wrapped) {
-            recursive_wrapped(wrapped, depth).maps[lane].get(key: key)
+            recursive_wrapped(wrapped, depth).lane(lane, key)
         }
 
         GetEffect { lane, depth, key } -> u256 uses (wrapped) {

@@ -9,29 +9,26 @@ use fe_hir::{
         },
         ty::{
             LayoutBundleComponentId, LayoutBundleComponentKey, LayoutBundleComponentTransport,
-            LayoutBundleInterfaceError, LayoutBundlePathStep, LayoutBundleSchemaError,
+            LayoutBundleInterfaceError, LayoutBundlePathStep, LayoutBundleUnrepresentable,
             LayoutEvidencePathStep, ProviderAddressSpace,
             const_ty::CallableInputLayoutHoleOrigin,
             ty_check::{
                 BodyOwner, ReturnProjectionStep, ReturnProvenance, ReturnSource,
                 check_contract_init_body, check_func_body,
             },
-            ty_def::TyId,
             ty_lower::{
-                CallableInputLayoutBackingSource, callable_input_layout_backing_index_lengths,
                 callable_input_layout_backing_sources, callable_input_layout_bundle_schema,
                 callable_layout_bundle_signature,
             },
         },
     },
     core::semantic::{
-        AllocatedContractStorageLayout, AllocationUnitId, AssignedRootValue, ContractFieldId,
-        ContractLayoutError, EnumOverlayGroup, FieldStorageLayout, LayoutBinding,
-        LayoutBindingTarget, LayoutInvariantError, LayoutProjection, LayoutRootFamilyId,
-        LayoutViewKind, PlaceStep, RootRole, StoragePlace, validate_allocated_contract_layout,
+        AllocatedContractStorageLayout, ContractFieldId, ContractLayoutError, EnumOverlayGroup,
+        FieldStorageLayout, LayoutBinding, LayoutInvariantError, LayoutProjection, LayoutViewKind,
+        PlaceStep, RootCellId, RootRole, StoragePlace, validate_allocated_contract_layout,
     },
     hir_def::{CallableDef, Contract, Expr, IdentId, ItemKind, Partial},
-    test_db::{HirAnalysisTestDb, find_contract, find_func, format_diagnostics},
+    test_db::{HirAnalysisTestDb, find_contract, format_diagnostics},
 };
 
 fn field<'db>(
@@ -307,11 +304,8 @@ contract C {
     mut holder: Holder,
     mut tuple: (u256, Handle<Root>),
     mut choice: Choice,
-    mut array: [Handle<Root>; 2],
-    mut holder_array: [Holder; 2],
     mut alias: AliasHolder,
     mut nested: Handle<Handle<Root>>,
-    mut nested_array: [Handle<Handle<Root>>; 2],
 }
 "#,
     );
@@ -322,11 +316,8 @@ contract C {
         ("holder", 1, 2),
         ("tuple", 2, 3),
         ("choice", 2, 3),
-        ("array", 2, 4),
-        ("holder_array", 2, 4),
         ("alias", 1, 2),
         ("nested", 1, 2),
-        ("nested_array", 2, 4),
     ] {
         let field = field(&db, contract, name);
         assert_eq!(field.inline_span, inline_span, "{name}");
@@ -343,62 +334,6 @@ contract C {
                 .contains(&PlaceStep::ProviderTarget)
         );
     }
-    let array = field(&db, contract, "array");
-    assert_eq!(array.families.len(), 1);
-    assert_eq!(array.families[0].dimensions.len(), 1);
-    assert_eq!(array.families[0].dimensions[0].len, 2);
-    assert!(
-        array.occurrences[0]
-            .place
-            .steps
-            .contains(&PlaceStep::ProviderTarget)
-    );
-    let holder_array = field(&db, contract, "holder_array");
-    let [family] = holder_array.families.as_slice() else {
-        panic!("nested provider array should have one root family")
-    };
-    let assigned = holder_array
-        .root_value_for_visible_projections(
-            LayoutViewKind::Target,
-            family.lane,
-            TyId::u256(&db),
-            &[
-                LayoutProjection::Index(None),
-                LayoutProjection::Field(0),
-                LayoutProjection::ConstParam(0),
-            ],
-        )
-        .unwrap();
-    let AssignedRootValue::Indexed { dimensions, .. } = assigned else {
-        panic!("dynamic nested-provider projection should retain its root family")
-    };
-    assert_eq!(
-        dimensions
-            .iter()
-            .map(|dimension| dimension.len)
-            .collect::<Vec<_>>(),
-        [2]
-    );
-    let assigned = holder_array
-        .root_value_for_visible_projections(
-            LayoutViewKind::Target,
-            family.lane,
-            TyId::u256(&db),
-            &[
-                LayoutProjection::Index(Some(1)),
-                LayoutProjection::Field(0),
-                LayoutProjection::ConstParam(0),
-            ],
-        )
-        .unwrap();
-    assert_eq!(
-        assigned,
-        AssignedRootValue::Literal {
-            space: family.space,
-            slot: family.slot_for_indices(&[1]).unwrap(),
-            ty: TyId::u256(&db),
-        }
-    );
     let choice = field(&db, contract, "choice");
     assert_eq!(choice.cells.len(), 2);
     assert_eq!(choice.overlay_groups.len(), 1);
@@ -419,31 +354,6 @@ contract C {
             .count(),
         2
     );
-    let nested_array = field(&db, contract, "nested_array");
-    let [nested_family] = nested_array.families.as_slice() else {
-        panic!("doubly nested provider array should have one root family")
-    };
-    assert_eq!(
-        nested_array.occurrences[0]
-            .place
-            .steps
-            .iter()
-            .filter(|step| **step == PlaceStep::ProviderTarget)
-            .count(),
-        2
-    );
-    assert!(matches!(
-        nested_array.root_value_for_visible_projections(
-            LayoutViewKind::Target,
-            nested_family.lane,
-            TyId::u256(&db),
-            &[
-                LayoutProjection::Index(None),
-                LayoutProjection::ConstParam(0),
-            ],
-        ),
-        Ok(AssignedRootValue::Indexed { .. })
-    ));
     validate_allocated_contract_layout(&db, layout).unwrap();
 }
 
@@ -553,7 +463,6 @@ struct Phantom<T> { value: u256 }
 
 contract C {
     mut phantom: Phantom<Handle<Root>>,
-    mut zero: [Handle<Root>; 0],
     mut live: Root,
 }
 "#,
@@ -562,7 +471,6 @@ contract C {
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
     assert!(field(&db, contract, "phantom").occurrences.is_empty());
-    assert!(field(&db, contract, "zero").occurrences.is_empty());
     assert_eq!(
         field(&db, contract, "live").cells[0]
             .allocation
@@ -831,7 +739,6 @@ struct Phantom<T> { value: u256 }
 struct Slot<const ROOT: u256 = _> {}
 
 contract C {
-    mut zero: [Rooted<1>; 0],
     mut phantom: Phantom<Rooted<2>>,
     mut live: Rooted<3>,
     mut first: Slot,
@@ -843,7 +750,6 @@ contract C {
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
 
-    assert!(field(&db, contract, "zero").concrete_occurrences.is_empty());
     assert!(
         field(&db, contract, "phantom")
             .concrete_occurrences
@@ -1204,34 +1110,6 @@ contract C {
 }
 
 #[test]
-fn indexed_families_move_as_one_contiguous_region() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-struct Slot<const ROOT: u256 = _> {}
-
-contract C {
-    mut reserved: Slot<1>,
-    mut values: [Slot; 3],
-}
-"#,
-    );
-    let contract = find_contract(&db, top_mod, "C");
-    let values = field(&db, contract, "values");
-
-    assert_eq!(values.slot_offset, 2);
-    assert_eq!(values.slot_count, 3);
-    assert_eq!(values.families[0].allocation.unwrap().slot, 2);
-    assert_eq!(values.families[0].extent, 3);
-    validate_allocated_contract_layout(
-        &db,
-        contract.storage_layout(&db).allocated.as_ref().unwrap(),
-    )
-    .unwrap();
-}
-
-#[test]
 fn explicit_reservations_are_sparse_and_address_space_local() {
     parse_ok!(
         db,
@@ -1290,7 +1168,7 @@ contract C {
 }
 
 #[test]
-fn explicit_arrays_share_while_enum_variants_reserve_every_value() {
+fn explicit_enum_variant_roots_reserve_every_value() {
     parse_ok!(
         db,
         top_mod,
@@ -1299,9 +1177,9 @@ struct Slot<const ROOT: u256 = _> {}
 enum Choice { A(Slot<1>), B(Slot<4>) }
 
 contract C {
-    mut repeated: [Slot<1>; 3],
+    mut repeated: Slot<1>,
     mut choice: Choice,
-    mut inferred: [Slot; 2],
+    mut inferred: Slot,
 }
 "#,
     );
@@ -1312,8 +1190,7 @@ contract C {
 
     assert_eq!(repeated.concrete_occurrences.len(), 1);
     assert_eq!(layout.explicit_reservations.len(), 2);
-    assert_eq!(inferred.families[0].allocation.unwrap().slot, 2);
-    assert_eq!(inferred.families[0].extent, 2);
+    assert_eq!(inferred.cells[0].allocation.unwrap().slot, 2);
     validate_allocated_contract_layout(&db, layout).unwrap();
 }
 
@@ -1439,81 +1316,10 @@ contract C { mut value: Wrapper<Slot> }
     };
     assert_eq!(leaves.len(), 2);
     assert!(
-        leaves
-            .iter()
-            .all(|leaf| matches!(leaf.target, LayoutBindingTarget::Scalar(_)))
-    );
-    assert!(
         layout
             .declared_concrete_ty(&db, &Default::default())
             .is_err()
     );
-}
-
-#[test]
-fn fixed_arrays_use_symbolic_families_and_checked_row_major_projection() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-struct Slot<const ROOT: u256 = _> {}
-struct Pair<T> { left: T, right: T }
-
-contract C {
-    mut zero: [Slot; 0],
-    mut one: [Slot; 1],
-    mut three: [Slot; 3],
-    mut pair: [Pair<Slot>; 3],
-    mut nested: [[Slot; 2]; 3],
-    mut concrete: [Slot<7>; 3],
-    mut huge: [Slot; 1000000],
-}
-"#,
-    );
-    let contract = find_contract(&db, top_mod, "C");
-
-    assert!(field(&db, contract, "zero").cells.is_empty());
-    assert!(field(&db, contract, "zero").families.is_empty());
-    assert_eq!(field(&db, contract, "one").cells.len(), 1);
-    assert_eq!(field(&db, contract, "three").families.len(), 1);
-    assert_eq!(field(&db, contract, "three").families[0].extent, 3);
-    assert_eq!(field(&db, contract, "pair").families.len(), 2);
-    let nested = &field(&db, contract, "nested").families[0];
-    let allocation = nested.allocation.unwrap();
-    assert_eq!(nested.extent, 6);
-    assert_eq!(nested.strides, [2, 1]);
-    assert_eq!(nested.slot_for_indices(&[2, 1]), Some(allocation.slot + 5));
-    assert_eq!(field(&db, contract, "huge").families.len(), 1);
-    assert_eq!(field(&db, contract, "huge").occurrences.len(), 1);
-    assert!(field(&db, contract, "concrete").cells.is_empty());
-    assert!(field(&db, contract, "concrete").families.is_empty());
-}
-
-#[test]
-fn nested_array_family_extent_overflow_rejects_the_contract() {
-    parse_module!(
-        db,
-        top_mod,
-        r#"
-struct Slot<const ROOT: u256 = _> {}
-
-contract C {
-    mut huge: [[Slot; 4294967296]; 4294967296],
-}
-"#,
-    );
-    let contract = find_contract(&db, top_mod, "C");
-    let result = contract.storage_layout(&db);
-    let errors = result
-        .field_errors(&IdentId::new(&db, "huge".to_string()))
-        .expect("overflowing family extent must reject the field");
-
-    assert!(
-        errors
-            .iter()
-            .any(|error| matches!(error, ContractLayoutError::LayoutExtentOverflow))
-    );
-    assert!(result.allocated.is_none());
 }
 
 #[test]
@@ -1530,7 +1336,7 @@ impl<const ROOT: u256> StaticSlot for CodeSlot<ROOT> {
 }
 
 contract C {
-    mut huge: [CodeSlot; 576460752303423488],
+    huge: [u256; 576460752303423488],
 }
 "#,
     );
@@ -1712,103 +1518,209 @@ fn pass<const VALUE: u8>(value: Ordinary<VALUE>) -> Ordinary<VALUE> {
 }
 
 #[test]
-fn root_bearing_arrays_require_a_known_length_before_allocation() {
+fn arrays_reaching_roots_through_recursive_provider_targets_are_rejected() {
+    // An embedded handle is already expanding when its target reaches the
+    // array, so the element closes a back-edge instead of walking the target.
+    for target in ["([Loop; 2], Rooted)", "(Rooted, [Loop; 2])"] {
+        let source = format!(
+            r#"
+use core::effect_ref::{{AddressSpace, EffectHandle}}
+
+struct Rooted<const ROOT: u256 = _> {{}}
+struct Loop {{ raw: u256 }}
+impl EffectHandle for Loop {{
+    type Target = {target}
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct Holder {{ l: Loop }}
+struct Plain {{ raw: u256 }}
+impl EffectHandle for Plain {{
+    type Target = ([Plain; 2], u256)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct PlainHolder {{ p: Plain }}
+
+contract C {{
+    mut direct: Loop,
+    mut embedded: Holder,
+    mut plain: PlainHolder,
+}}
+"#
+        );
+        parse_module!(trusted db, top_mod, &source);
+        let contract = find_contract(&db, top_mod, "C");
+        for field in ["direct", "embedded"] {
+            let errors = contract
+                .storage_layout(&db)
+                .field_errors(&IdentId::new(&db, field.to_string()))
+                .unwrap_or_else(|| panic!("{target}: `{field}` must be rejected"));
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| matches!(error, ContractLayoutError::LayoutRootArray { .. })),
+                "{target}: {field}: {errors:?}"
+            );
+        }
+        // Recursion through an array of root-free handles stays valid.
+        assert!(
+            contract
+                .storage_layout(&db)
+                .field_errors(&IdentId::new(&db, "plain".to_string()))
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn arrays_reaching_roots_through_chained_provider_back_edges_are_rejected() {
+    // Expanding `Outer`, the array closes a back-edge to `Inner`, which
+    // reaches `Outer`'s roots only through its own back-edge to `Outer`,
+    // directly or by way of `Mid`.
+    for target in [
+        "(Inner, Rooted)",
+        "(Rooted, Inner)",
+        "(Mid, Rooted)",
+        "(Rooted, Mid)",
+    ] {
+        let source = format!(
+            r#"
+use core::effect_ref::{{AddressSpace, EffectHandle}}
+
+struct Rooted<const ROOT: u256 = _> {{}}
+struct Outer {{ raw: u256 }}
+impl EffectHandle for Outer {{
+    type Target = {target}
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct Inner {{ raw: u256 }}
+impl EffectHandle for Inner {{
+    type Target = ([Inner; 2], Outer)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct Mid {{ raw: u256 }}
+impl EffectHandle for Mid {{
+    type Target = (Inner, u256)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct Holder {{ o: Outer }}
+
+struct PlainOuter {{ raw: u256 }}
+impl EffectHandle for PlainOuter {{
+    type Target = (PlainInner, u256)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct PlainInner {{ raw: u256 }}
+impl EffectHandle for PlainInner {{
+    type Target = ([PlainInner; 2], PlainOuter)
+    type Raw = u256
+    const SPACE: AddressSpace = AddressSpace::Storage
+
+    fn raw(self) -> u256 {{ self.raw }}
+}}
+struct PlainHolder {{ o: PlainOuter }}
+
+contract C {{
+    mut outer: Outer,
+    mut inner: Inner,
+    mut mid: Mid,
+    mut embedded: Holder,
+    mut plain: PlainHolder,
+}}
+"#
+        );
+        parse_module!(trusted db, top_mod, &source);
+        let contract = find_contract(&db, top_mod, "C");
+        for field in ["outer", "inner", "mid", "embedded"] {
+            let errors = contract
+                .storage_layout(&db)
+                .field_errors(&IdentId::new(&db, field.to_string()))
+                .unwrap_or_else(|| panic!("{target}: `{field}` must be rejected"));
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| matches!(error, ContractLayoutError::LayoutRootArray { .. })),
+                "{target}: {field}: {errors:?}"
+            );
+        }
+        // A root-free recursive chain stays valid.
+        assert!(
+            contract
+                .storage_layout(&db)
+                .field_errors(&IdentId::new(&db, "plain".to_string()))
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn root_bearing_array_fields_are_rejected() {
     parse_module!(
         db,
         top_mod,
         r#"
 struct Slot<const ROOT: u256 = _> {}
+struct Holder { slot: Slot }
 type Slots<const LEN: usize = _> = [Slot; LEN]
 
-contract C { mut values: Slots }
-"#,
-    );
-    let contract = find_contract(&db, top_mod, "C");
-    let errors = contract
-        .storage_layout(&db)
-        .field_errors(&IdentId::new(&db, "values".to_string()))
-        .expect("unknown root-bearing array length must reject the field");
-
-    assert!(errors.iter().any(|error| matches!(
-        error,
-        ContractLayoutError::UnknownArrayLengthWithLayoutRoots { .. }
-    )));
-    assert!(contract.storage_layout(&db).allocated.is_none());
-}
-
-#[test]
-fn specialized_adt_field_array_extent_preserves_indexed_root_layout() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-struct Slot<const ROOT: u256 = _> {}
-struct Slots<const N: usize> { values: [Slot; { 10 / N }] }
-
 contract C {
-    mut first: Slots<2>,
-    mut second: Slots<5>,
+    mut inferred: [Slot; 2],
+    mut explicit: [Slot<7>; 2],
+    mut nested: [Holder; 2],
+    mut unknown_len: Slots,
+    mut empty: [Slot; 0],
+    mut explicit_empty: [Slot<7>; 0],
+    mut plain: [u256; 2],
+    mut plain_empty: [u256; 0],
 }
 "#,
     );
     let contract = find_contract(&db, top_mod, "C");
     let layout = contract.storage_layout(&db);
-    let first = field(&db, contract, "first");
-    let second = field(&db, contract, "second");
-    assert_eq!(first.families.len(), 1);
-    assert_eq!(second.families.len(), 1);
-    assert_eq!(first.families[0].extent, 5);
-    assert_eq!(second.families[0].extent, 2);
-    assert_eq!(first.families[0].dimensions[0].len, 5);
-    assert_eq!(second.families[0].dimensions[0].len, 2);
-    assert_ne!(first.families[0].lane, second.families[0].lane);
-    validate_allocated_contract_layout(&db, layout.allocated.as_ref().unwrap()).unwrap();
-}
-
-#[test]
-fn one_source_can_bind_scalar_and_multiple_indexed_landings() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-struct Slot<const ROOT: u256> {}
-struct Mixed<const ROOT: u256 = _> {
-    scalar: Slot<ROOT>,
-    first: [Slot<ROOT>; 3],
-    second: [Slot<ROOT>; 3],
-}
-
-contract C { mut value: Mixed }
-"#,
-    );
-    let layout = field(&db, find_contract(&db, top_mod, "C"), "value");
-    assert_eq!(layout.cells.len(), 1);
-    assert_eq!(layout.families.len(), 2);
-    assert_eq!(layout.slot_count, 7);
-    let LayoutBinding::Bound(leaves) = layout
-        .target
-        .bindings
-        .values()
-        .next()
-        .expect("source root should be classified")
-    else {
-        panic!("source root unexpectedly non-physical");
-    };
-    assert_eq!(leaves.len(), 3);
-    assert_eq!(
-        leaves
-            .iter()
-            .filter(|leaf| matches!(leaf.target, LayoutBindingTarget::Scalar(_)))
-            .count(),
-        1
-    );
-    assert_eq!(
-        leaves
-            .iter()
-            .filter(|leaf| matches!(leaf.target, LayoutBindingTarget::Indexed(_)))
-            .count(),
-        2
-    );
+    for field in [
+        "inferred",
+        "explicit",
+        "nested",
+        "unknown_len",
+        "empty",
+        "explicit_empty",
+    ] {
+        let errors = layout
+            .field_errors(&IdentId::new(&db, field.to_string()))
+            .unwrap_or_else(|| panic!("`{field}` must be rejected"));
+        assert!(
+            errors
+                .iter()
+                .any(|error| matches!(error, ContractLayoutError::LayoutRootArray { .. })),
+            "{field}: {errors:?}"
+        );
+    }
+    for field in ["plain", "plain_empty"] {
+        assert!(
+            layout
+                .field_errors(&IdentId::new(&db, field.to_string()))
+                .is_none(),
+            "`{field}` must be accepted"
+        );
+    }
+    assert!(layout.allocated.is_none());
 }
 
 #[test]
@@ -1855,44 +1767,6 @@ contract C {
         wrapper.cells[0].allocation.unwrap().slot,
         wrapper.slot_offset + 1
     );
-}
-
-#[test]
-fn wrapper_only_array_roots_form_materialize_only_families() {
-    parse_ok!(
-        trusted db,
-        top_mod,
-        r#"
-use core::effect_ref::{AddressSpace, EffectHandle}
-
-struct Slot<const ROOT: u256> {}
-struct Wrapper<const ROOT: u256 = _> {
-    slots: [Slot<ROOT>; 3],
-    raw: u256,
-}
-
-impl<const ROOT: u256> EffectHandle for Wrapper<ROOT> {
-    type Target = u256
-    type Raw = u256
-    const SPACE: AddressSpace = AddressSpace::Storage
-
-    fn raw(self) -> u256 { self.raw }
-}
-
-contract C { mut value: Wrapper }
-"#,
-    );
-    let layout = field(&db, find_contract(&db, top_mod, "C"), "value");
-
-    assert_eq!(layout.inline_span, 1);
-    assert!(layout.cells.is_empty());
-    assert_eq!(layout.families.len(), 1);
-    assert_eq!(layout.families[0].role, RootRole::MaterializeOnly);
-    assert_eq!(layout.families[0].extent, 3);
-    assert_eq!(layout.slot_count, 4);
-    assert!(layout.declared.all_roots_classified(&db));
-    assert!(layout.target.all_roots_classified(&db));
-    assert!(layout.slot_basis.all_roots_classified(&db));
 }
 
 #[test]
@@ -1988,229 +1862,6 @@ contract C {
 }
 
 #[test]
-fn enum_overlay_groups_preserve_identity_and_reserve_max_family_extent() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-struct Slot<const ROOT: u256 = _> {}
-enum Choice {
-    Two([Slot; 2]),
-    Three([Slot; 3]),
-}
-
-contract C {
-    mut choice: Choice,
-    mut after: u256,
-}
-"#,
-    );
-    let contract = find_contract(&db, top_mod, "C");
-    let choice = field(&db, contract, "choice");
-    assert_eq!(choice.inline_span, 1);
-    assert_eq!(choice.families.len(), 2);
-    assert_ne!(choice.families[0].lane, choice.families[1].lane);
-    assert_eq!(choice.overlay_groups.len(), 1);
-    assert_eq!(choice.overlay_groups[0].reserved_extent, 3);
-    assert_eq!(
-        choice.families[0].allocation.unwrap().slot,
-        choice.families[1].allocation.unwrap().slot
-    );
-    assert_eq!(choice.slot_count, 4);
-    assert_eq!(field(&db, contract, "after").slot_offset, 4);
-}
-
-#[test]
-fn array_of_enums_overlays_root_families_per_element() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-struct Slot<const ROOT: u256 = _> {}
-enum Choice {
-    Scalar(Slot),
-    Family([Slot; 3]),
-}
-enum Reverse {
-    Family([Slot; 3]),
-    Scalar(Slot),
-}
-
-contract C {
-    mut values: [Choice; 2],
-    mut after: u256,
-}
-contract D {
-    mut values: [Reverse; 2],
-    mut after: u256,
-}
-"#,
-    );
-    let contract = find_contract(&db, top_mod, "C");
-    let values = field(&db, contract, "values");
-
-    assert_eq!(values.inline_span, 2);
-    assert_eq!(values.families.len(), 2);
-    assert_eq!(values.overlay_groups.len(), 1);
-    let scalar = values
-        .families
-        .iter()
-        .find(|family| family.dimensions.len() == 1)
-        .unwrap();
-    let family = values
-        .families
-        .iter()
-        .find(|family| family.dimensions.len() == 2)
-        .unwrap();
-
-    assert_eq!(
-        scalar.allocation.unwrap().slot,
-        family.allocation.unwrap().slot
-    );
-    assert_eq!(scalar.slot_for_indices(&[0]), Some(2));
-    assert_eq!(scalar.slot_for_indices(&[1]), Some(5));
-    assert_eq!(family.slot_for_indices(&[0, 1]), Some(3));
-    assert_eq!(family.slot_for_indices(&[1, 0]), Some(5));
-    assert_eq!(values.overlay_groups[0].reserved_extent, 6);
-    assert_eq!(values.slot_count, 8);
-    assert_eq!(field(&db, contract, "after").slot_offset, 8);
-    validate_allocated_contract_layout(
-        &db,
-        contract.storage_layout(&db).allocated.as_ref().unwrap(),
-    )
-    .unwrap();
-
-    let reverse_contract = find_contract(&db, top_mod, "D");
-    let reverse = field(&db, reverse_contract, "values");
-    let reverse_scalar = reverse
-        .families
-        .iter()
-        .find(|family| family.dimensions.len() == 1)
-        .unwrap();
-    let reverse_family = reverse
-        .families
-        .iter()
-        .find(|family| family.dimensions.len() == 2)
-        .unwrap();
-    assert_eq!(reverse_scalar.strides, [3]);
-    assert_eq!(reverse_family.strides, [3, 1]);
-    assert_eq!(reverse_scalar.slot_for_indices(&[1]), Some(5));
-    assert_eq!(reverse_family.slot_for_indices(&[0, 1]), Some(3));
-    assert_eq!(field(&db, reverse_contract, "after").slot_offset, 8);
-
-    let mut invalid = contract
-        .storage_layout(&db)
-        .allocated
-        .as_ref()
-        .unwrap()
-        .clone();
-    let values = invalid
-        .fields
-        .get_mut(&IdentId::new(&db, "values".to_string()))
-        .unwrap();
-    values
-        .families
-        .iter_mut()
-        .find(|family| family.dimensions.len() == 1)
-        .unwrap()
-        .strides[0] = 1;
-    assert!(matches!(
-        validate_allocated_contract_layout(&db, &invalid),
-        Err(LayoutInvariantError::InvalidFamilyRegion { .. })
-    ));
-
-    let mut invalid = contract
-        .storage_layout(&db)
-        .allocated
-        .as_ref()
-        .unwrap()
-        .clone();
-    invalid
-        .fields
-        .get_mut(&IdentId::new(&db, "values".to_string()))
-        .unwrap()
-        .overlay_groups[0]
-        .reserved_extent -= 1;
-    assert!(matches!(
-        validate_allocated_contract_layout(&db, &invalid),
-        Err(LayoutInvariantError::InvalidOverlayGroup { .. })
-    ));
-}
-
-#[test]
-fn nested_array_enum_overlays_compose_inner_and_outer_strides() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-struct Slot<const ROOT: u256 = _> {}
-enum Inner {
-    Two([Slot; 2]),
-    Three([Slot; 3]),
-}
-enum Outer {
-    Nested([Inner; 2]),
-    Eight([Slot; 8]),
-}
-
-contract C {
-    mut values: [Outer; 2],
-    mut after: u256,
-}
-"#,
-    );
-    let contract = find_contract(&db, top_mod, "C");
-    let values = field(&db, contract, "values");
-    let family = |dimensions: &[usize]| {
-        values
-            .families
-            .iter()
-            .find(|family| {
-                family
-                    .dimensions
-                    .iter()
-                    .map(|dimension| dimension.len)
-                    .eq(dimensions.iter().copied())
-            })
-            .unwrap()
-    };
-    let two = family(&[2, 2, 2]);
-    let three = family(&[2, 2, 3]);
-    let eight = family(&[2, 8]);
-
-    assert_eq!(values.inline_span, 6);
-    assert_eq!(values.overlay_groups.len(), 2);
-    assert_eq!(two.strides, [8, 3, 1]);
-    assert_eq!(two.extent, 13);
-    assert_eq!(three.strides, [8, 3, 1]);
-    assert_eq!(three.extent, 14);
-    assert_eq!(eight.strides, [8, 1]);
-    assert_eq!(eight.extent, 16);
-    assert_eq!(two.allocation.unwrap().slot, eight.allocation.unwrap().slot);
-    assert_eq!(
-        three.allocation.unwrap().slot,
-        eight.allocation.unwrap().slot
-    );
-    let mut overlay_extents = values
-        .overlay_groups
-        .iter()
-        .map(|group| group.reserved_extent)
-        .collect::<Vec<_>>();
-    overlay_extents.sort_unstable();
-    assert_eq!(overlay_extents, [14, 16]);
-    assert_eq!(two.slot_for_indices(&[1, 0, 0]), Some(14));
-    assert_eq!(three.slot_for_indices(&[0, 1, 2]), Some(11));
-    assert_eq!(eight.slot_for_indices(&[1, 0]), Some(14));
-    assert_eq!(values.slot_count, 22);
-    assert_eq!(field(&db, contract, "after").slot_offset, 22);
-    validate_allocated_contract_layout(
-        &db,
-        contract.storage_layout(&db).allocated.as_ref().unwrap(),
-    )
-    .unwrap();
-}
-
-#[test]
 fn nested_enum_overlays_retain_each_explicit_enum_relation() {
     parse_ok!(
         db,
@@ -2218,12 +1869,12 @@ fn nested_enum_overlays_retain_each_explicit_enum_relation() {
         r#"
 struct Slot<const ROOT: u256 = _> {}
 enum Inner {
-    Two([Slot; 2]),
-    Three([Slot; 3]),
+    Two(Slot),
+    Three(Slot),
 }
 enum Outer {
     Nested(Inner),
-    Four([Slot; 4]),
+    Four(Slot),
 }
 
 contract C { mut value: Outer }
@@ -2232,7 +1883,7 @@ contract C { mut value: Outer }
     let contract = find_contract(&db, top_mod, "C");
     let layout = field(&db, contract, "value");
 
-    assert_eq!(layout.families.len(), 3);
+    assert_eq!(layout.cells.len(), 3);
     assert_eq!(layout.overlay_groups.len(), 2);
     let inner = layout
         .overlay_groups
@@ -2244,15 +1895,12 @@ contract C { mut value: Outer }
         [PlaceStep::EnumVariant(0), PlaceStep::EnumPayloadField(0)]
     );
     assert_eq!(inner.members.len(), 2);
-    assert_eq!(inner.reserved_extent, 3);
     let outer = layout
         .overlay_groups
         .iter()
         .find(|group| group.enum_place.steps.is_empty())
         .expect("outer enum overlay must be explicit");
     assert_eq!(outer.members.len(), 3);
-    assert_eq!(outer.reserved_extent, 4);
-    assert_eq!(layout.slot_count, 6);
     validate_allocated_contract_layout(
         &db,
         contract.storage_layout(&db).allocated.as_ref().unwrap(),
@@ -2305,10 +1953,7 @@ contract C {
 
     assert_eq!(shared_one, shared_two);
     assert_ne!(shared_one, other);
-    let slot = |target| match target {
-        LayoutBindingTarget::Scalar(cell) => choice.cells[cell.0 as usize].allocation.unwrap().slot,
-        LayoutBindingTarget::Indexed(_) => panic!("enum roots should be scalar"),
-    };
+    let slot = |cell: RootCellId| choice.cells[cell.0 as usize].allocation.unwrap().slot;
     assert_ne!(slot(shared_one), slot(other));
     assert!(choice.overlay_groups.is_empty());
     assert_eq!(choice.slot_count, 3);
@@ -2329,25 +1974,16 @@ contract C {
         .fields
         .get_mut(&IdentId::new(&db, "choice".to_string()))
         .unwrap();
-    let (LayoutBindingTarget::Scalar(shared), LayoutBindingTarget::Scalar(other)) =
-        (shared_one, other)
-    else {
-        unreachable!()
-    };
     choice.cells[other.0 as usize]
         .allocation
         .as_mut()
         .unwrap()
-        .slot = choice.cells[shared.0 as usize].allocation.unwrap().slot;
+        .slot = choice.cells[shared_one.0 as usize].allocation.unwrap().slot;
     choice.overlay_groups.push(EnumOverlayGroup {
         enum_place: root,
         lane: 0,
-        members: vec![
-            AllocationUnitId::Scalar(shared),
-            AllocationUnitId::Scalar(other),
-        ],
+        members: vec![shared_one, other],
         space: ProviderAddressSpace::Storage,
-        reserved_extent: 1,
     });
     assert!(matches!(
         validate_allocated_contract_layout(&db, &invalid),
@@ -2369,13 +2005,12 @@ impl<const ROOT: u256> StaticSlot for Routed<ROOT> {
     const SPACE: AddressSpace = AddressSpace::TransientStorage
 }
 enum Choice {
-    Two([Slot; 2]),
-    Three([Slot; 3]),
+    Two(Slot),
+    Three(Slot),
 }
 
 contract C {
     mut scalar: Slot,
-    mut family: [Slot; 2],
     mut choice: Choice,
     mut explicit: Routed<5>,
 }
@@ -2385,7 +2020,6 @@ contract C {
     let layout = contract.storage_layout(&db).allocated.as_ref().unwrap();
     validate_allocated_contract_layout(&db, layout).unwrap();
     let scalar = IdentId::new(&db, "scalar".to_string());
-    let family = IdentId::new(&db, "family".to_string());
     let choice = IdentId::new(&db, "choice".to_string());
     let explicit = IdentId::new(&db, "explicit".to_string());
 
@@ -2413,21 +2047,6 @@ contract C {
             invalid.fields.get_mut(&scalar).unwrap().cells[0].role = RootRole::MaterializeOnly;
         }),
         LayoutInvariantError::InvalidScalarCell { .. }
-    ));
-
-    assert!(matches!(
-        mutated_layout_error(&db, layout, |invalid| {
-            invalid.fields.get_mut(&family).unwrap().families[0].space =
-                ProviderAddressSpace::Transient;
-        }),
-        LayoutInvariantError::InvalidOccurrenceGraph { .. }
-    ));
-
-    assert!(matches!(
-        mutated_layout_error(&db, layout, |invalid| {
-            invalid.fields.get_mut(&family).unwrap().families[0].id = LayoutRootFamilyId(u32::MAX);
-        }),
-        LayoutInvariantError::InvalidFamilyRegion { .. }
     ));
 
     assert!(matches!(
@@ -2477,7 +2096,7 @@ contract C {
     assert!(matches!(
         mutated_layout_error(&db, layout, |invalid| {
             invalid.fields.get_mut(&choice).unwrap().overlay_groups[0].members[0] =
-                AllocationUnitId::Indexed(LayoutRootFamilyId(u32::MAX));
+                RootCellId(u32::MAX);
         }),
         LayoutInvariantError::InvalidOverlayGroup { .. }
     ));
@@ -2573,68 +2192,6 @@ contract C {
 }
 
 #[test]
-fn callable_projection_sources_retain_nested_array_dimensions() {
-    parse_ok!(
-        db,
-        top_mod,
-        r#"
-struct Slot<const ROOT: u256 = _> {}
-
-fn get_slot<const ROOT: u256>(values: [[Slot<ROOT>; 3]; 2], row: usize, col: usize) {
-    let value = values[row][col]
-}
-"#,
-    );
-    let func = top_mod
-        .children_non_nested(&db)
-        .find_map(|item| match item {
-            ItemKind::Func(func)
-                if func
-                    .name(&db)
-                    .to_opt()
-                    .is_some_and(|name| name.data(&db) == "get_slot") =>
-            {
-                Some(func)
-            }
-            _ => None,
-        })
-        .expect("missing get_slot function");
-    let expected_path = vec![
-        LayoutBundlePathStep::Index,
-        LayoutBundlePathStep::Index,
-        LayoutBundlePathStep::ConstParam(0),
-    ];
-    let sources = (0..CallableDef::Func(func).params(&db).len())
-        .flat_map(|param_idx| callable_input_layout_backing_sources(&db, func, param_idx))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        sources,
-        [CallableInputLayoutBackingSource {
-            origin: CallableInputLayoutHoleOrigin::ValueParam(0),
-            projection: expected_path,
-        }]
-    );
-
-    assert_eq!(
-        callable_input_layout_backing_index_lengths(&db, func, &sources[0]),
-        Some(vec![2, 3])
-    );
-    let schema = callable_input_layout_bundle_schema(
-        &db,
-        func,
-        CallableInputLayoutHoleOrigin::ValueParam(0),
-    )
-    .expect("missing nested-array evidence schema");
-    assert_eq!(schema.components.len(), 1);
-    assert_eq!(schema.components[0].rank(), 2);
-    assert_eq!(
-        schema.components[0].port.value_path,
-        [LayoutEvidencePathStep::Index, LayoutEvidencePathStep::Index]
-    );
-    assert_eq!(schema.components[0].dimensions, [2, 3]);
-}
-
-#[test]
 fn callable_layout_bundle_signature_is_declared_for_inputs_and_outputs() {
     parse_ok!(
         db,
@@ -2650,7 +2207,6 @@ fn identity<const ROOT: u256>(
 
 fn concrete(map: StorageMap<u256, u256, 7>) {}
 
-fn concrete_array(maps: [StorageMap<u256, u256, 7>; 2]) {}
 "#,
     );
     let func = top_mod
@@ -2678,14 +2234,12 @@ fn concrete_array(maps: [StorageMap<u256, u256, 7>; 2]) {}
     assert_eq!(signature.output.schema.components.len(), 1);
     assert!(matches!(
         signature.inputs[0].interface.schema.components[0].representative,
-        Some(LayoutBundleComponentKey::Param(_))
+        LayoutBundleComponentKey::Param(_)
     ));
     assert_eq!(
         signature.inputs[0].interface.schema.components[0].representative,
         signature.output.schema.components[0].representative
     );
-    assert_eq!(signature.inputs[0].interface.schema.components[0].rank(), 0);
-    assert_eq!(signature.output.schema.components[0].rank(), 0);
     assert_eq!(signature.inputs[0].interface.runtime_descriptor_count(), 1);
     assert_eq!(signature.output.runtime_descriptor_count(), 1);
     assert_eq!(signature.output.schema.components[0].port.value_path, []);
@@ -2737,11 +2291,11 @@ fn concrete_array(maps: [StorageMap<u256, u256, 7>; 2]) {}
     let specialized = key.layout_bundle_signature(&db);
     assert!(matches!(
         specialized.inputs[0].interface.schema.components[0].representative,
-        Some(LayoutBundleComponentKey::Static(value)) if value == root
+        LayoutBundleComponentKey::Static(value) if value == root
     ));
     assert!(matches!(
         specialized.output.schema.components[0].representative,
-        Some(LayoutBundleComponentKey::Static(value)) if value == root
+        LayoutBundleComponentKey::Static(value) if value == root
     ));
     assert_eq!(
         specialized.inputs[0]
@@ -2762,46 +2316,6 @@ fn concrete_array(maps: [StorageMap<u256, u256, 7>; 2]) {}
         1
     );
     assert_eq!(specialized.output.runtime_descriptor_count(), 1);
-
-    let concrete_array = top_mod
-        .children_non_nested(&db)
-        .find_map(|item| match item {
-            ItemKind::Func(func)
-                if func
-                    .name(&db)
-                    .to_opt()
-                    .is_some_and(|name| name.data(&db) == "concrete_array") =>
-            {
-                Some(func)
-            }
-            _ => None,
-        })
-        .expect("missing concrete_array function");
-    let array_signature = callable_layout_bundle_signature(&db, concrete_array);
-    assert_eq!(array_signature.inputs.len(), 1);
-    assert_eq!(
-        array_signature.inputs[0].interface.schema.components.len(),
-        1
-    );
-    assert_eq!(
-        array_signature.inputs[0].interface.schema.components[0].rank(),
-        1
-    );
-    assert_eq!(
-        array_signature.inputs[0]
-            .interface
-            .runtime_descriptor_count(),
-        0
-    );
-    let mut invalid = array_signature.inputs[0].interface.schema.clone();
-    invalid.components[0].dimensions[0] = 0;
-    assert!(matches!(
-        invalid.validate(),
-        Err(LayoutBundleSchemaError::EmptyDimension {
-            component: LayoutBundleComponentId(0),
-            axis: 0,
-        })
-    ));
 }
 
 #[test]
@@ -3117,7 +2631,7 @@ fn consume_outer<const WRAPPER: u256, const TARGET: u256>(
 }
 
 #[test]
-fn callable_layout_bundle_groups_array_base_and_indexed_landing() {
+fn callable_array_input_of_layout_roots_is_unrepresentable() {
     parse_ok!(
         db,
         top_mod,
@@ -3149,95 +2663,15 @@ fn read(maps: [StorageMap<u256, u256>; 2], lane: usize, key: u256) -> u256 {
         CallableInputLayoutHoleOrigin::ValueParam(0),
     )
     .expect("missing array input layout bundle");
-    assert_eq!(schema.components.len(), 1);
-    assert!(schema.components[0].supplied_const_params.len() >= 2);
-    assert_eq!(schema.components[0].rank(), 1);
-    assert_eq!(schema.components[0].dimensions, [2]);
+    assert!(schema.components.is_empty());
     assert_eq!(
-        schema.components[0].port.value_path,
-        [LayoutEvidencePathStep::Index]
+        schema.unrepresentable,
+        Some(LayoutBundleUnrepresentable::RootArray { array: Vec::new() })
     );
 }
 
 #[test]
-fn callable_array_slots_are_structural_while_evidence_follows_extents() {
-    for (extent, materialized) in [
-        ("2", true),
-        ("{ 1 + 1 }", true),
-        ("0", false),
-        ("{ 1 - 1 }", false),
-        ("N", false),
-    ] {
-        for validate_first in [false, true] {
-            let mut db = HirAnalysisTestDb::default();
-            let source = format!(
-                r#"
-struct Slot<const ROOT: u256 = _> {{}}
-fn probe<const N: usize>(_ value: ([Slot; {extent}], Slot, [[Slot; 2]; {extent}], [Slot; 2])) {{}}
-"#
-            );
-            let file = db.new_stand_alone("structural_array_slots.fe".into(), &source);
-            let (top_mod, _) = db.top_mod(file);
-            let func = find_func(&db, top_mod, "probe");
-            if validate_first {
-                db.assert_no_diags(top_mod);
-            }
-            let params = CallableDef::Func(func).params(&db);
-            // Four source roots and four indexed landings precede N,
-            // independently of whether either array has physical elements.
-            assert_eq!(params.len(), 9, "{extent}, validate_first {validate_first}");
-            let schema = callable_input_layout_bundle_schema(
-                &db,
-                func,
-                CallableInputLayoutHoleOrigin::ValueParam(0),
-            )
-            .expect("missing tuple input schema");
-            assert_eq!(
-                schema.components.len(),
-                if materialized { 4 } else { 2 },
-                "{schema:#?}"
-            );
-            for (field, indices, dimensions) in [(1, vec![1], vec![]), (3, vec![3, 7], vec![2])] {
-                let component = schema
-                    .components
-                    .iter()
-                    .find(|component| {
-                        component.port.value_path.first()
-                            == Some(&LayoutEvidencePathStep::Field(field))
-                    })
-                    .expect("missing sibling component");
-                assert_eq!(
-                    component.supplied_const_params,
-                    indices
-                        .into_iter()
-                        .map(|idx| params[idx])
-                        .collect::<Vec<_>>(),
-                    "{extent}"
-                );
-                assert_eq!(component.dimensions, dimensions);
-            }
-            if materialized {
-                for (field, dimensions, slots) in [(0, vec![2], 2), (2, vec![2, 2], 3)] {
-                    let component = schema
-                        .components
-                        .iter()
-                        .find(|component| {
-                            component.port.value_path.first()
-                                == Some(&LayoutEvidencePathStep::Field(field))
-                        })
-                        .expect("missing indexed component");
-                    assert_eq!(component.dimensions, dimensions);
-                    assert_eq!(component.supplied_const_params.len(), slots);
-                }
-            }
-            assert!(schema.validate().is_ok());
-            db.assert_no_diags(top_mod);
-        }
-    }
-}
-
-#[test]
-fn zero_length_callable_arrays_have_no_layout_evidence() {
+fn zero_length_callable_arrays_of_layout_roots_are_unrepresentable() {
     parse_ok!(
         db,
         top_mod,
@@ -3269,10 +2703,9 @@ fn ignore(values: [Slot; 0]) {}
     .expect("missing zero-length input schema");
 
     assert!(schema.components.is_empty());
-    assert!(
-        callable_layout_bundle_signature(&db, func)
-            .inputs
-            .is_empty()
+    assert_eq!(
+        schema.unrepresentable,
+        Some(LayoutBundleUnrepresentable::RootArray { array: Vec::new() })
     );
 }
 
@@ -4086,52 +3519,6 @@ fn consume_independent<const FIRST: u256, const SECOND: u256>(
 }
 
 #[test]
-fn nested_enum_families_forward_each_callable_root() {
-    parse_module!(
-        db,
-        top_mod,
-        r#"
-struct Slot<const ROOT: u256 = _> {}
-
-impl<const ROOT: u256> Slot<ROOT> {
-    fn root(self) -> u256 { ROOT }
-}
-
-enum Choice {
-    Small([Slot; 2]),
-    Large([Slot; 3]),
-}
-
-impl Choice {
-    fn root(self, lane: usize) -> u256 {
-        match self {
-            Choice::Small(slots) => slots[lane].root(),
-            Choice::Large(slots) => slots[lane].root(),
-        }
-    }
-}
-
-msg Msg {
-    #[selector = 1]
-    Get { lane: usize } -> u256,
-}
-
-contract C {
-    mut choice: Choice,
-
-    recv Msg {
-        Get { lane } -> u256 uses (choice) {
-            choice.root(lane: lane)
-        }
-    }
-}
-"#,
-    );
-    let rendered = format_diagnostics(&db, &initialize_analysis_pass().run_on_module(&db, top_mod));
-    assert!(rendered.is_empty(), "unexpected diagnostics:\n{rendered}");
-}
-
-#[test]
 fn shared_roots_forward_through_every_enum_overlay_shape() {
     parse_ok!(
         db,
@@ -4309,12 +3696,12 @@ impl<const ROOT: u256> Slot<ROOT> {
 }
 
 struct Payload {
-    slots: [Slot; 2],
+    slot: Slot,
 }
 
 impl Payload {
-    fn root(self, lane: usize) -> u256 {
-        self.slots[lane].root()
+    fn root(self) -> u256 {
+        self.slot.root()
     }
 }
 
@@ -4332,15 +3719,15 @@ impl<const WRAPPER_ROOT: u256> EffectHandle for Wrapper<WRAPPER_ROOT> {
 
 msg Msg {
     #[selector = 1]
-    Get { lane: usize } -> u256,
+    Get -> u256,
 }
 
 contract C {
     mut payload: Wrapper,
 
     recv Msg {
-        Get { lane } -> u256 uses (payload) {
-            payload.root(lane: lane)
+        Get -> u256 uses (payload) {
+            payload.root()
         }
     }
 }

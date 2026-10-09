@@ -282,17 +282,17 @@ msg LayoutMsg {
 
 pub contract Layouts {
     mut words: [[u256; 2]; 2],
-    mut maps: [StorageMap<u256, u256>; 2],
+    mut maps: StorageMap<u256, u256>,
     mut temp: TStorPtr<u256>,
-    fixed: [Rooted; 2],
+    fixed: Rooted,
 
     init() uses (mut fixed) {
-        fixed = [Rooted { value: 11 }, Rooted { value: 22 }]
+        fixed = Rooted { value: 11 }
     }
 
     recv LayoutMsg {
         Read -> u256 uses (words, maps, temp, fixed) {
-            words[0][0] + maps[0].get(key: 0) + temp + fixed[0].value
+            words[0][0] + maps.get(key: 0) + temp + fixed.value
         }
     }
 }
@@ -524,7 +524,7 @@ pub contract Other {
                 (words, ProviderAddressSpace::Storage, 4),
                 (maps, ProviderAddressSpace::Storage, 0),
                 (temp, ProviderAddressSpace::Transient, 1),
-                (fixed, ProviderAddressSpace::Code, 2),
+                (fixed, ProviderAddressSpace::Code, 1),
             ] {
                 let hir = contract
                     .storage_layout(db)

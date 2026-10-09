@@ -1,0 +1,124 @@
+trait Foo {
+    fn foo(self) -> u256
+}
+
+// `Rel` has no `Self` default, so its argument is never rewritten.
+trait Rel<U> {}
+
+struct S {
+    x: u256,
+}
+
+impl Rel<S> for S {}
+
+struct P<A, B> {
+    a: A,
+    b: B,
+}
+
+impl<A: Rel<B>, B> Foo for P<A, B> {
+    fn foo(self) -> u256 {
+        0
+    }
+}
+
+fn need<X: Foo>(_ x: X) -> u256 {
+    x.foo()
+}
+
+// The goal is `ref S: Rel<ref S>`. Owning the first value would still leave
+// `S: Rel<ref S>` unsatisfied, so this is not a borrow-only failure.
+fn explicit_arg(_ a: ref S, _ b: ref S) -> u256 {
+    need(P { a, b })
+}
+
+// `RelSelf` defaults its argument to `Self`, but these bounds supply `ref S`
+// explicitly. Owning the value still leaves `S: RelSelf<ref S>` unsatisfied,
+// so no borrow-only hint may be given.
+trait RelSelf<U = Self> {}
+
+impl RelSelf<S> for S {}
+
+struct W<A> {
+    a: A,
+}
+
+impl<A: RelSelf<ref S>> Foo for W<A> {
+    fn foo(self) -> u256 {
+        0
+    }
+}
+
+fn explicit_self_default_arg(_ s: ref S) -> u256 {
+    need(W { a: s })
+}
+
+fn need_rel<X: RelSelf<ref S>>(_ x: X) {}
+
+fn explicit_self_default_arg_direct(_ s: ref S) {
+    need_rel(s)
+}
+
+// Two borrowed values of the same type: owning only the value behind the
+// failing bound still leaves `B: Mark` unsatisfied, so the borrow cannot be
+// attributed to one value and no hint is given.
+trait Mark {}
+
+impl Mark for S {}
+
+struct Two<A, B> {
+    a: A,
+    b: B,
+}
+
+impl<A: Mark, B: Mark> Foo for Two<A, B> {
+    fn foo(self) -> u256 {
+        0
+    }
+}
+
+fn two_borrowed(_ a: ref S, _ b: ref S) -> u256 {
+    need(Two { a, b })
+}
+
+// Only the explicit `RelRef<ref S>` impl exists. Owning the value satisfies
+// the bound, so the borrow is explained.
+trait RelRef<U = Self> {}
+
+impl RelRef<ref S> for S {}
+
+struct V<A> {
+    a: A,
+}
+
+impl<A: RelRef<ref S>> Foo for V<A> {
+    fn foo(self) -> u256 {
+        0
+    }
+}
+
+fn explicit_arg_holds(_ s: ref S) -> u256 {
+    need(V { a: s })
+}
+
+// The impl bound writes `ref U` explicitly, so for `V2<ref T>: Foo2<T>` the
+// failing sub-goal is `ref T: Rel<ref T>`, and `T: Rel<ref T>` is unknown.
+// With `t` owned, `V2<T>: Foo2<T>` holds by the assumption, which is all the
+// explanation claims; it names no `Rel` impl.
+trait Foo2<U> {}
+
+struct V2<A> {
+    a: A,
+}
+
+impl<A: Rel<ref U>, U> Foo2<U> for V2<A> {}
+
+fn need2<X: Foo2<Y>, Y>(_ x: X, _ y: Y) {}
+
+fn assumed_owned_goal<T>(_ t: ref T, _ u: T)
+where
+    V2<T>: Foo2<T>,
+    T: Rel<T>,
+{
+    need2(V2 { a: t }, u)
+}

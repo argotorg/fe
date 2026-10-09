@@ -1,39 +1,30 @@
-use hir::analysis::ty::{LayoutMapTy, ty_def::TyId};
+use hir::analysis::ty::ty_def::TyId;
 
 use crate::{
     db::MirDb,
-    runtime::{ConstScalar, RuntimeLayoutMap, ScalarRepr},
+    runtime::{ConstScalar, ScalarClass, ScalarRepr},
 };
 
 use super::type_info::{RuntimeTypeEnv, scalar_class_for_ty_in_env};
 
-pub(crate) fn runtime_layout_map_for_shape<'db>(
+/// The runtime scalar class of a layout root whose const type is `ty`.
+pub(crate) fn layout_root_scalar_class<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,
-    scalar_ty: TyId<'db>,
-    dimensions: &[usize],
-) -> RuntimeLayoutMap<'db> {
-    let scalar = scalar_class_for_ty_in_env(db, env, scalar_ty)
-        .unwrap_or_else(|| panic!("layout evidence must have a scalar const type: {scalar_ty:?}"));
-    RuntimeLayoutMap::new(scalar_ty, scalar, dimensions.to_vec())
+    ty: TyId<'db>,
+) -> ScalarClass<'db> {
+    scalar_class_for_ty_in_env(db, env, ty)
+        .unwrap_or_else(|| panic!("layout root must have a scalar const type: {ty:?}"))
 }
 
-pub(crate) fn runtime_layout_map_for_map_ty<'db>(
-    db: &'db dyn MirDb,
-    env: RuntimeTypeEnv<'db>,
-    map_ty: &LayoutMapTy<'db>,
-) -> RuntimeLayoutMap<'db> {
-    runtime_layout_map_for_shape(db, env, map_ty.scalar_ty, &map_ty.dimensions)
-}
-
-pub(crate) fn runtime_layout_scalar_const(map: &RuntimeLayoutMap<'_>, value: usize) -> ConstScalar {
-    let ScalarRepr::Int { bits, signed } = map.scalar().repr else {
-        panic!("layout-map scalar must be an integer")
+pub(crate) fn layout_root_scalar_const(scalar: &ScalarClass<'_>, value: usize) -> ConstScalar {
+    let ScalarRepr::Int { bits, signed } = scalar.repr else {
+        panic!("layout root scalar must be an integer")
     };
-    assert!(!signed, "layout-map scalar must be unsigned");
+    assert!(!signed, "layout root scalar must be unsigned");
     assert!(
         usize::BITS - value.leading_zeros() <= u32::from(bits),
-        "layout-map scalar cannot represent {value}"
+        "layout root scalar cannot represent {value}"
     );
     ConstScalar::Int {
         bits,

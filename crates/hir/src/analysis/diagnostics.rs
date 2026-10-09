@@ -75,6 +75,42 @@ fn pretty_print_ty_for_mismatch<'db>(db: &'db dyn SpannedHirAnalysisDb, ty: TyId
     }
 }
 
+/// Label and notes for a bound that is unsatisfied because a type in it is
+/// borrowed (the capability type `cap_ty`) and that would be satisfied if the
+/// type were owned. The borrowed type need not come from a passed value (it
+/// can be written in the bound or inferred from an expected type), so the
+/// label describes the type.
+///
+/// Default parameters (`x: T` without `own`) are borrowed read-only. That
+/// capability has no source syntax, so it is described in words rather than
+/// printed as a type. No impl is named, since the impl that applies to the
+/// owned value may differ from the one whose bound failed, and no edit is
+/// suggested, since the borrow may come from a projection or destructuring
+/// rather than from a binding the user can change to `own`.
+fn capability_bound_notes<'db>(
+    db: &'db dyn HirAnalysisDb,
+    cap_ty: TyId<'db>,
+) -> Option<(String, Vec<String>)> {
+    use crate::analysis::ty::ty_def::CapabilityKind;
+
+    let (kind, inner) = cap_ty.as_capability(db)?;
+    let inner_str = inner.pretty_print(db);
+    let held = match kind {
+        CapabilityKind::View => "is only borrowed here".to_string(),
+        CapabilityKind::Ref => format!("is borrowed here as `ref {inner_str}`"),
+        CapabilityKind::Mut => format!("is borrowed here as `mut {inner_str}`"),
+    };
+    let label = format!("`{inner_str}` {held}; the bound would be satisfied if it were owned");
+    let mut notes = Vec::new();
+    if kind == CapabilityKind::View {
+        notes.push(
+            "note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`"
+                .to_string(),
+        );
+    }
+    Some((label, notes))
+}
+
 fn pretty_print_ty_app_for_mismatch<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     ty: TyId<'db>,
@@ -1691,31 +1727,41 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
             ),
 
             // TODO: add hint about indirection (eg *T)
-            Self::RecursiveType(cycle) => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "recursive type definition".to_string(),
-                sub_diagnostics: {
-                    let head = cycle.first().unwrap();
-                    let mut subs = vec![SubDiagnostic {
-                        style: LabelStyle::Primary,
-                        message: "recursive type definition here".to_string(),
-                        span: head.adt.adt_ref(db).name_span(db).resolve(db),
-                    }];
-                    subs.extend(cycle.iter().map(|m| {
-                        SubDiagnostic {
+            Self::RecursiveType(cycle) | Self::GrowingRecursiveType(cycle) => {
+                let growing = matches!(self, Self::GrowingRecursiveType(_));
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: if growing {
+                        "recursive type grows without bound"
+                    } else {
+                        "recursive type definition"
+                    }
+                    .to_string(),
+                    sub_diagnostics: {
+                        let head = cycle.first().unwrap();
+                        let mut subs = vec![SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: "recursive type definition here".to_string(),
+                            span: head.adt.adt_ref(db).name_span(db).resolve(db),
+                        }];
+                        subs.extend(cycle.iter().map(|m| SubDiagnostic {
                             style: LabelStyle::Secondary,
                             message: "recursion occurs here".to_string(),
-                            span: m
-                                .adt
-                                .variant_ty_span(db, m.field_idx as usize, m.ty_idx as usize)
-                                .resolve(db),
-                        }
-                    }));
-                    subs
-                },
-                notes: vec![],
-                error_code,
-            },
+                            span: m.adt.variant_ty_span(db, m.field_idx, m.ty_idx).resolve(db),
+                        }));
+                        subs
+                    },
+                    notes: if growing {
+                        vec![
+                            "each pass through this recursion can grow a type argument, so the type can refer to infinitely many distinct types"
+                                .to_string(),
+                        ]
+                    } else {
+                        vec![]
+                    },
+                    error_code,
+                }
+            }
             Self::UnboundTypeAliasParam {
                 span,
                 alias,
@@ -2117,30 +2163,28 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
-            Self::ContractFieldUnknownLayoutArrayLength { span, ty } => {
+            Self::ContractFieldLayoutRootArray { span, element } => {
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message:
-                        "this root-bearing array does not have a compile-time-known length"
-                            .to_string(),
+                    message: "the elements of this array carry storage layout roots".to_string(),
                     span: span.resolve(db),
                 }];
-                if let Some(name_span) = ty.name_span(db) {
-                    let type_name = ty.base_ty(db).pretty_print(db);
+                if let Some(name_span) = element.name_span(db) {
+                    let type_name = element.base_ty(db).pretty_print(db);
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!("`{type_name}` is defined here"),
+                        message: format!("`{type_name}` carries storage layout roots"),
                         span: name_span.resolve(db),
                     });
                 }
 
                 CompleteDiagnostic {
                     severity: Severity::Error,
-                    message: "cannot allocate a layout-root array with an unknown length"
-                        .to_string(),
+                    message: "arrays of layout-root values are not supported".to_string(),
                     sub_diagnostics,
                     notes: vec![
-                        "indexed root families reserve one checked contiguous region, so every dimension must evaluate before contract layout".to_string(),
+                        "every element of an array has the same type, so the elements cannot have distinct layout roots".to_string(),
+                        "use separate fields, or one map whose key includes the index".to_string(),
                     ],
                     error_code,
                 }
@@ -2292,17 +2336,17 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     ContractFieldLayoutIssue::ConflictingRootSpaces => (
                         "one layout root was routed to conflicting address spaces",
                         "this field gives one semantic root incompatible storage spaces",
-                        "a scalar cell or indexed family has exactly one address space",
+                        "a layout root has exactly one address space",
                     ),
                     ContractFieldLayoutIssue::ExtentOverflow => (
                         "contract-field layout extent overflowed",
-                        "this field's inline span or indexed-family extent is too large",
+                        "this field's inline span is too large",
                         "all layout extents and row-major strides are computed with checked arithmetic",
                     ),
                     ContractFieldLayoutIssue::IncompleteProjection => (
                         "contract-field layout is incomplete",
                         "this field contains an ADT or array application that cannot be projected completely",
-                        "every layout-bearing application must have its full declared generic arity and every root-bearing array must have a known length",
+                        "every layout-bearing application must have its full declared generic arity and every array must have a known length",
                     ),
                     ContractFieldLayoutIssue::InconsistentArrayLength => (
                         "contract-field array length is inconsistent",
@@ -2323,11 +2367,6 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                         "layout root requires a concrete landing",
                         "this field observes a source root with more than one structural landing",
                         "select a concrete field or target place before requesting a scalar root value",
-                    ),
-                    ContractFieldLayoutIssue::RootNeedsIndex => (
-                        "layout root requires a concrete array index",
-                        "this field observes an indexed family without all required indices",
-                        "select every array dimension or use an operation that accepts a runtime affine root",
                     ),
                     ContractFieldLayoutIssue::InternalGraph => (
                         "contract layout graph failed validation",
@@ -2609,6 +2648,14 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 Severity::Error,
                 "cycle detected while resolving this type",
                 "this type's definition depends on itself",
+                span.resolve(db),
+                error_code,
+            ),
+
+            Self::TypeNormalizationLimit(span) => primary_diag(
+                Severity::Error,
+                "type normalization limit exceeded",
+                "the associated types here cannot be resolved within the limit",
                 span.resolve(db),
                 error_code,
             ),
@@ -3524,6 +3571,25 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     primary.resolve(db),
                     error_code,
                 )
+            }
+
+            Self::CallReturnTypeConstFault { call, fault } => {
+                let mut diag = fault.to_complete(db);
+                for sub in &mut diag.sub_diagnostics {
+                    if sub.style == LabelStyle::Primary {
+                        sub.style = LabelStyle::Secondary;
+                    }
+                }
+                diag.sub_diagnostics.insert(
+                    0,
+                    SubDiagnostic::new(
+                        LabelStyle::Primary,
+                        "in the return type of this call".into(),
+                        call.resolve(db),
+                    ),
+                );
+                diag.error_code = error_code;
+                diag
             }
 
             Self::StaticAssertFailed {
@@ -4972,6 +5038,7 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 primary_goal,
                 unsat_subgoal,
                 required_by,
+                capability_hint,
             } => {
                 let msg = format!(
                     "`{}` doesn't implement `{}`",
@@ -4984,19 +5051,27 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 // trait the reader cannot name (e.g. a private sealed marker in
                 // another module) is unactionable noise, so we keep just the
                 // primary goal in that case.
-                let unsat_subgoal = unsat_subgoal
-                    .filter(|unsat| {
-                        let Some(from_scope) = span.scope() else {
-                            return true;
-                        };
-                        is_scope_visible_from(db, unsat.def(db).scope(), from_scope)
-                    })
-                    .map(|unsat| {
-                        format!(
-                            "trait bound `{}` is not satisfied",
-                            unsat.pretty_print(db, true)
-                        )
-                    });
+                let visible_unsat = unsat_subgoal.filter(|unsat| {
+                    let Some(from_scope) = span.scope() else {
+                        return true;
+                    };
+                    is_scope_visible_from(db, unsat.def(db).scope(), from_scope)
+                });
+
+                // A bound that fails only because the value is borrowed gets
+                // an explanation instead of the generic sub-goal line, which
+                // would print the borrowed value's type as if it were owned
+                // (e.g. "`T: AsBytes` is not satisfied" although it is). It
+                // names no trait, so it needs no visibility filter.
+                let capability =
+                    capability_hint.and_then(|cap_ty| capability_bound_notes(db, cap_ty));
+
+                let unsat_subgoal = visible_unsat.map(|unsat| {
+                    format!(
+                        "trait bound `{}` is not satisfied",
+                        unsat.pretty_print(db, true)
+                    )
+                });
 
                 let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -5004,7 +5079,11 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                     span: span.resolve(db),
                 }];
 
-                if let Some(subgoal) = unsat_subgoal {
+                let subgoal_label = match &capability {
+                    Some((label, _)) => Some(label.clone()),
+                    None => unsat_subgoal,
+                };
+                if let Some(subgoal) = subgoal_label {
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
                         message: subgoal,
@@ -5020,11 +5099,13 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                     });
                 }
 
+                let notes = capability.map(|(_, notes)| notes).unwrap_or_default();
+
                 CompleteDiagnostic {
                     severity,
                     message: "trait bound is not satisfied".to_string(),
                     sub_diagnostics,
-                    notes: vec![],
+                    notes,
                     error_code,
                 }
             }

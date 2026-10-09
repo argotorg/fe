@@ -10,6 +10,21 @@
 //! SolSlot::at(0).write(offset: 20, value: true)
 //! ```
 //!
+//! `read`/`write` cost one `sload` (and one `sstore`) per field. To read or
+//! update several fields of one slot with a single `sload`/`sstore`, `load`
+//! the slot into a `SolWord` and `store` it back:
+//!
+//! ```fe
+//! let slot = SolSlot::at(0)
+//! let mut word = slot.load()
+//! let owner: Address = word.get(offset: 0)
+//! word.set(offset: 20, value: false)
+//! slot.store(word)
+//! ```
+//!
+//! A `SolWord` is only a value, so it also packs or unpacks a word obtained
+//! some other way: `SolWord { word: raw }.get(offset: 2)`.
+//!
 //! `read_bytes`/`write_bytes` (and the `string` variants) use Solidity's
 //! layout for a `bytes` or `string` state variable in the slot.
 use core::abi::{ByteInput, Bytes, DynString, store_word}
@@ -54,9 +69,58 @@ impl SolSlot {
     /// slot.
     pub fn write<T: SolPacked>(self, offset: u256, value: own T) uses (storage: mut RawStorage) {
         let shift = field_shift(offset, bits: T::BITS)
+        if T::BITS == 256 {
+            // The field is the whole slot: nothing to preserve.
+            storage.sstore(slot: self.slot, value: value.to_packed())
+        } else {
+            let mask = field_mask(T::BITS) << shift
+            let bits = (value.to_packed() << shift) & mask
+            storage.sstore(slot: self.slot, value: (storage.sload(self.slot) & !mask) | bits)
+        }
+    }
+
+    /// Loads the whole slot with one `sload`, for reading or updating
+    /// several packed fields; see `SolWord`.
+    pub fn load(self) -> SolWord uses (storage: RawStorage) {
+        SolWord { word: storage.sload(self.slot) }
+    }
+
+    /// Writes `word` to the slot with one `sstore`, replacing all of it,
+    /// including changes made to the slot since `word` was loaded.
+    pub fn store(self, _ word: SolWord) uses (storage: mut RawStorage) {
+        storage.sstore(slot: self.slot, value: word.word)
+    }
+}
+
+/// A 32-byte word of Solidity-packed fields, such as the value of a storage
+/// slot loaded by `SolSlot::load`.
+///
+/// `get` and `set` address a field by its byte offset from the low end of the
+/// word, with the same encoding and bounds checks as `SolSlot::read`/`write`,
+/// but only compute on the value: storage changes only when the word is
+/// written with `SolSlot::store`. `SolWord { word }` packs or unpacks a word
+/// obtained any other way, e.g. read through `RawOps` or returned by a call.
+pub struct SolWord {
+    pub word: u256,
+}
+
+impl Copy for SolWord {}
+
+impl SolWord {
+    /// The `T` stored `offset` bytes above the low end of the word. Reverts
+    /// if the field does not fit in the word.
+    pub fn get<T: SolPacked>(self, offset: u256) -> T {
+        let shift = field_shift(offset, bits: T::BITS)
+        T::from_packed((self.word >> shift) & field_mask(T::BITS))
+    }
+
+    /// Replaces the `T` stored `offset` bytes above the low end of the word,
+    /// keeping the other bytes. Reverts if the field does not fit in the
+    /// word.
+    pub fn set<T: SolPacked>(mut self, offset: u256, value: own T) {
+        let shift = field_shift(offset, bits: T::BITS)
         let mask = field_mask(T::BITS) << shift
-        let bits = (value.to_packed() << shift) & mask
-        storage.sstore(slot: self.slot, value: (storage.sload(self.slot) & !mask) | bits)
+        self.word = (self.word & !mask) | ((value.to_packed() << shift) & mask)
     }
 }
 
@@ -139,8 +203,9 @@ impl SolSlot {
     }
 }
 
-// First data slot of a long value: `keccak256(abi.encode(slot))`.
-fn data_slot(_ slot: u256) -> u256 {
+// First data slot of a long value (or of a dynamic array):
+// `keccak256(abi.encode(slot))`.
+pub(ingot) fn data_slot(_ slot: u256) -> u256 {
     let buffer = MemBuffer::alloc(32)
     mstore(addr: buffer.ptr(), value: slot)
     keccak256(buffer.span())
@@ -183,7 +248,7 @@ fn field_shift(_ offset: u256, bits: u256) -> u256 {
     offset * 8
 }
 
-fn field_mask(_ bits: u256) -> u256 {
+pub(ingot) fn field_mask(_ bits: u256) -> u256 {
     if bits >= 256 { u256::max() } else { ((1 as u256) << bits) - 1 }
 }
 

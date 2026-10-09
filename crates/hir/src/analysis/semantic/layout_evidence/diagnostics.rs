@@ -16,16 +16,18 @@ use crate::{
             identity_semantic_instance_key,
         },
         ty::{
-            CallableLayoutParamPort, LayoutBundleInterfaceError, LayoutBundleSchemaError,
-            LayoutEvidencePathStep, LayoutPortKey, const_ty::CallableInputLayoutHoleOrigin,
-            ty_check::BodyOwner,
+            CallableLayoutParamPort, LayoutBundleUnrepresentable, LayoutEvidencePathStep,
+            LayoutPortKey, const_ty::CallableInputLayoutHoleOrigin, ty_check::BodyOwner,
         },
     },
     hir_def::{ItemKind, TopLevelMod},
     span::LazySpan,
 };
 
-use super::{LayoutEvidenceError, layout_evidence_body};
+use super::{
+    LayoutEvidenceError, LayoutSignaturePort, layout_evidence_body,
+    validate_layout_bundle_signature,
+};
 
 #[derive(Clone, Debug)]
 pub struct LayoutEvidenceDiagnostic<'db> {
@@ -110,16 +112,30 @@ fn collect_owner<'db>(
     seen: &mut FxHashSet<SemanticInstanceKey<'db>>,
     diagnostics: &mut Vec<Box<dyn DiagnosticVoucher + 'db>>,
 ) {
-    if owner.body(db).is_none() {
+    if owner.body(db).is_some() {
+        let key = identity_semantic_instance_key(db, owner);
+        collect_instance(
+            db,
+            get_or_build_semantic_instance(db, key),
+            seen,
+            diagnostics,
+        );
+        return;
+    }
+    // A callable without a body, such as a required trait method, is never
+    // lowered, but its signature must still be representable.
+    if !matches!(owner, BodyOwner::Func(_)) {
         return;
     }
     let key = identity_semantic_instance_key(db, owner);
-    collect_instance(
-        db,
-        get_or_build_semantic_instance(db, key),
-        seen,
-        diagnostics,
-    );
+    if seen.insert(key)
+        && let Err(error) = validate_layout_bundle_signature(&key.layout_bundle_signature(db))
+    {
+        diagnostics.push(Box::new(LayoutEvidenceDiagnostic {
+            instance: get_or_build_semantic_instance(db, key),
+            error,
+        }));
+    }
 }
 
 fn collect_instance<'db>(
@@ -148,18 +164,32 @@ impl DiagnosticVoucher for LayoutEvidenceDiagnostic<'_> {
             return diagnostic.to_complete(db);
         }
 
+        let unrepresentable = self.error.unrepresentable();
+        if let Some(LayoutBundleUnrepresentable::RootArray { .. }) = unrepresentable {
+            return CompleteDiagnostic::new(
+                Severity::Error,
+                format!(
+                    "array of layout-root values in `{}`",
+                    checker_name(db, self.instance)
+                ),
+                vec![SubDiagnostic::new(
+                    LabelStyle::Primary,
+                    "the elements of this array carry storage layout roots".to_string(),
+                    self.primary_span(db),
+                )],
+                vec![
+                    "every element of an array has the same type, so the elements cannot have distinct layout roots".to_string(),
+                    "use separate fields, or one map whose key includes the index".to_string(),
+                ],
+                GlobalErrorCode::new(DiagnosticPass::SemanticLayoutEvidence, 8),
+            );
+        }
         let (local_code, message, internal) = match &self.error {
-            LayoutEvidenceError::InvalidSchema {
-                error: LayoutBundleSchemaError::NonRegularViewCycle { .. },
-                ..
-            }
-            | LayoutEvidenceError::InvalidInterface {
-                error:
-                    LayoutBundleInterfaceError::Schema(
-                        LayoutBundleSchemaError::NonRegularViewCycle { .. },
-                    ),
-                ..
-            } => (
+            _ if matches!(
+                unrepresentable,
+                Some(LayoutBundleUnrepresentable::NonRegularViewCycle { .. })
+            ) =>
+            (
                 7,
                 "a recursive `EffectHandle::Target` cycle changes its layout arguments and cannot be represented by a finite layout-evidence interface".to_string(),
                 false,
@@ -185,14 +215,6 @@ impl DiagnosticVoucher for LayoutEvidenceDiagnostic<'_> {
                 format!(
                     "this inferred slot has multiple runtime values: {}",
                     format_sources(sources)
-                ),
-                false,
-            ),
-            LayoutEvidenceError::UnprojectedConstBinding { source, .. } => (
-                4,
-                format!(
-                    "this inferred slot refers to the indexed layout family {}; project a specific element before using the slot as a scalar",
-                    format_source(source)
                 ),
                 false,
             ),
@@ -238,23 +260,23 @@ impl LayoutEvidenceDiagnostic<'_> {
         let owner = self.instance.key(db).owner(db);
         let span = match &self.error {
             LayoutEvidenceError::AmbiguousConstBinding { origin, .. }
-            | LayoutEvidenceError::MissingConstBinding { origin, .. }
-            | LayoutEvidenceError::UnprojectedConstBinding { origin, .. } => {
+            | LayoutEvidenceError::MissingConstBinding { origin, .. } => {
                 span_for_origin_from_body(db, owner.body(db), *origin)
+            }
+            LayoutEvidenceError::InvalidSignature { port, .. } => {
+                signature_port_span(db, owner, *port)
             }
             LayoutEvidenceError::InvalidSchema {
                 local: Some(local), ..
             }
-            | LayoutEvidenceError::InvalidInterface {
-                local: Some(local), ..
-            }
+            | LayoutEvidenceError::InvalidInterface { local, .. }
             | LayoutEvidenceError::ShapeMismatch { dst: local, .. }
             | LayoutEvidenceError::MissingComponent { local, .. }
             | LayoutEvidenceError::MissingPort { local, .. }
             | LayoutEvidenceError::ConflictingContextualSource { local, .. }
             | LayoutEvidenceError::AmbiguousComponentBinding { local, .. }
             | LayoutEvidenceError::IncompatibleComponent { dst: local, .. }
-            | LayoutEvidenceError::MapTypeMismatch { dst: local, .. } => {
+            | LayoutEvidenceError::RootTypeMismatch { dst: local, .. } => {
                 resolve_local_source_span(db, self.instance, *local)
             }
             LayoutEvidenceError::Blocked(_)
@@ -263,7 +285,6 @@ impl LayoutEvidenceDiagnostic<'_> {
             | LayoutEvidenceError::TemplateLocalCountMismatch { .. }
             | LayoutEvidenceError::InvalidStatementIdentity(_)
             | LayoutEvidenceError::InvalidSchema { local: None, .. }
-            | LayoutEvidenceError::InvalidInterface { local: None, .. }
             | LayoutEvidenceError::DuplicateInput(_)
             | LayoutEvidenceError::InvalidPlace
             | LayoutEvidenceError::ProviderPlace
@@ -280,6 +301,31 @@ impl LayoutEvidenceDiagnostic<'_> {
                 })
                 .and_then(|body| body.span().resolve(db))
         })
+    }
+}
+
+/// The source of one signature port. Contract entry points fall back to their
+/// body span.
+fn signature_port_span(
+    db: &dyn SpannedHirAnalysisDb,
+    owner: BodyOwner<'_>,
+    port: LayoutSignaturePort,
+) -> Option<common::diagnostics::Span> {
+    let BodyOwner::Func(func) = owner else {
+        return None;
+    };
+    let span = func.span();
+    match port {
+        LayoutSignaturePort::Input(CallableInputLayoutHoleOrigin::Receiver) => {
+            span.params().param(0).resolve(db)
+        }
+        LayoutSignaturePort::Input(CallableInputLayoutHoleOrigin::ValueParam(idx)) => {
+            span.params().param(idx).ty().resolve(db)
+        }
+        LayoutSignaturePort::Input(CallableInputLayoutHoleOrigin::Effect(idx)) => {
+            span.effects().param_idx(idx).resolve(db)
+        }
+        LayoutSignaturePort::Output => span.ret_ty().resolve(db),
     }
 }
 
@@ -322,7 +368,6 @@ fn format_port(port: &LayoutPortKey) -> String {
         match step {
             LayoutEvidencePathStep::Field(index) => path.push_str(&format!(".field#{index}")),
             LayoutEvidencePathStep::Variant(index) => path.push_str(&format!("::variant#{index}")),
-            LayoutEvidencePathStep::Index => path.push_str("[]"),
             LayoutEvidencePathStep::EffectTarget => path.push_str(".target"),
         }
     }

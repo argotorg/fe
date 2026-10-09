@@ -29,6 +29,23 @@ fn read_after_same_source_field_assignment<const LEFT: u256, const RIGHT: u256>(
     pair.left.get(key: key)
 }
 
+fn read_constructed(
+    left: StorageMap<u256, u256>,
+    right: StorageMap<u256, u256>,
+    key: u256,
+) -> u256 {
+    let pair = make_pair(left: left, right: right)
+    read_left(pair: pair, key: key)
+}
+
+fn read_reassigned(
+    left: StorageMap<u256, u256>,
+    right: StorageMap<u256, u256>,
+    key: u256,
+) -> u256 {
+    read_after_same_source_field_assignment(left: left, right: right, key: key)
+}
+
 msg Msg {
     #[selector = 1]
     Set { lane: usize, key: u256, value: u256 },
@@ -41,24 +58,32 @@ msg Msg {
 }
 
 pub contract C {
-    mut maps: [StorageMap<u256, u256>; 2],
+    mut first: StorageMap<u256, u256>,
+    mut second: StorageMap<u256, u256>,
 
     recv Msg {
-        Set { lane, key, value } uses (mut maps) {
-            maps[lane].set(key: key, value: value)
+        Set { lane, key, value } uses (mut first, mut second) {
+            if lane == 0 {
+                first.set(key: key, value: value)
+            } else {
+                second.set(key: key, value: value)
+            }
         }
 
-        Get { lane, key } -> u256 uses (maps) {
-            let pair = make_pair(left: maps[lane], right: maps[0])
-            read_left(pair: pair, key: key)
+        Get { lane, key } -> u256 uses (first, second) {
+            if lane == 0 {
+                read_constructed(left: first, right: first, key: key)
+            } else {
+                read_constructed(left: second, right: first, key: key)
+            }
         }
 
-        GetReassigned { lane, key } -> u256 uses (maps) {
-            read_after_same_source_field_assignment(
-                left: maps[lane],
-                right: maps[0],
-                key: key,
-            )
+        GetReassigned { lane, key } -> u256 uses (first, second) {
+            if lane == 0 {
+                read_reassigned(left: first, right: first, key: key)
+            } else {
+                read_reassigned(left: second, right: first, key: key)
+            }
         }
     }
 }

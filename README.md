@@ -35,7 +35,7 @@ the command reference.
 - `ingots/core/` - `core` ingot, built into every compilation
 - `ingots/std/` - Fe standard library
 - `feup/` - the `feup` installer script
-- `newsfragments/` - release note fragments consumed by towncrier
+- `newsfragments/` - release note fragments consumed by eisenbote (see `eisenbote.toml`)
 
 ## Development
 
@@ -44,6 +44,10 @@ Run the workspace tests:
 ```bash
 cargo test --workspace
 ```
+
+For optimized tests with debug assertions enabled, use
+`cargo nextest run --cargo-profile test-release --workspace`. CI and `make test`
+use this optimized profile too.
 
 Snapshot tests use [`insta`](https://insta.rs/):
 

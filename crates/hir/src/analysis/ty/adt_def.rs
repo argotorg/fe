@@ -82,7 +82,7 @@ impl<'db> AdtDef<'db> {
                 }
             }
 
-            AdtRef::Struct(s) => s.span().fields().field(field_idx).ty().into(),
+            AdtRef::Struct(s) => s.span().fields().field(ty_idx).ty().into(),
         }
     }
 
@@ -251,8 +251,8 @@ impl<'db> AdtRef<'db> {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct AdtCycleMember<'db> {
     pub adt: AdtDef<'db>,
-    pub field_idx: u16,
-    pub ty_idx: u16,
+    pub field_idx: usize,
+    pub ty_idx: usize,
 }
 
 /// Instantiates an ADT field as a source-level type shape. This deliberately
@@ -426,7 +426,6 @@ pub(crate) fn instantiate_adt_field_layout<'db>(
             value,
             owner,
             selector,
-            index_dimensions: root_use.index_dimensions,
         };
         if !instantiated.root_uses.contains(&root_use) {
             instantiated.root_uses.push(root_use);

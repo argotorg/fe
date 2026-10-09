@@ -30,6 +30,14 @@ fn token_piece_basic<'a>(
     let text = alloc.text(token.text().to_string());
     Some(match token.kind() {
         FnKw => TokenPiece::new(alloc.nil()),
+        // `pub(ingot)`: the restriction follows without a space.
+        PubKw
+            if token
+                .next_sibling_or_token()
+                .is_some_and(|next| next.kind() == LParen) =>
+        {
+            TokenPiece::new(text)
+        }
         PubKw | UnsafeKw | MutKw | StructKw | ContractKw | EnumKw | TraitKw | MsgKw | ModKw
         | UseKw | ConstKw | StaticAssertKw | TypeKw | ExternKw => {
             TokenPiece::new(text).space_after()
@@ -71,6 +79,12 @@ fn token_doc_item_node_piece<'a>(
 
     first_some!(
         piece!(ast::AttrList),
+        // The `(` of a restriction is a token of the item; the node holds the
+        // rest, such as `ingot)`.
+        ast::VisRestriction::cast(node.clone()).map(|restriction| {
+            TokenPiece::new(vis_restriction_body(&restriction, ctx).append(ctx.alloc.text(")")))
+                .space_after()
+        }),
         piece!(ast::FuncSignature),
         piece!(ast::FuncParamList),
         piece!(ast::GenericParamList),
@@ -116,16 +130,58 @@ fn attrs_doc<'a, N: ast::AttrListOwner + AstNode>(
     }
 }
 
+/// The inside of a visibility restriction: `ingot` in `pub(ingot)`.
+fn vis_restriction_body<'a>(
+    restriction: &ast::VisRestriction,
+    ctx: &'a RewriteContext<'a>,
+) -> Doc<'a> {
+    let alloc = &ctx.alloc;
+    if restriction.ingot_kw().is_some() {
+        alloc.text("ingot")
+    } else if restriction.super_kw().is_some() {
+        alloc.text("super")
+    } else if restriction.in_kw().is_some() {
+        let path = restriction
+            .path()
+            .map_or_else(|| alloc.nil(), |path| path.to_doc(ctx));
+        alloc.text("in ").append(path)
+    } else {
+        alloc.nil()
+    }
+}
+
+/// `pub `, `pub(ingot) `, or nothing.
+fn visibility_doc<'a>(
+    pub_kw: Option<parser::SyntaxToken>,
+    restriction: Option<ast::VisRestriction>,
+    ctx: &'a RewriteContext<'a>,
+) -> Doc<'a> {
+    let alloc = &ctx.alloc;
+    if pub_kw.is_none() {
+        return alloc.nil();
+    }
+    let restriction = restriction.map_or_else(
+        || alloc.nil(),
+        |restriction| {
+            alloc
+                .text("(")
+                .append(vis_restriction_body(&restriction, ctx))
+                .append(alloc.text(")"))
+        },
+    );
+    alloc
+        .text("pub")
+        .append(restriction)
+        .append(alloc.text(" "))
+}
+
 /// Helper to build item modifier document (pub, unsafe).
 fn modifier_doc<'a, N: ItemModifierOwner + AstNode>(
     node: &N,
     ctx: &'a RewriteContext<'a>,
 ) -> Doc<'a> {
     let alloc = &ctx.alloc;
-    let mut doc = alloc.nil();
-    if node.pub_kw().is_some() {
-        doc = doc.append(alloc.text("pub "));
-    }
+    let mut doc = visibility_doc(node.pub_kw(), node.vis_restriction(), ctx);
     if node.unsafe_kw().is_some() {
         doc = doc.append(alloc.text("unsafe "));
     }
@@ -187,10 +243,26 @@ fn block_items_doc<'a, T: ToDoc>(
     for child in syntax.children_with_tokens() {
         let entry_doc = match child {
             NodeOrToken::Node(node) => {
-                let Some(item) = cast_fn(node) else {
-                    continue;
-                };
-                Some(item.to_doc(ctx))
+                if node.kind() == SyntaxKind::AttrList {
+                    // A module's inner attributes (`#![...]`), one per line,
+                    // each kept exactly as written so string arguments keep
+                    // their whitespace.
+                    Some(intersperse(
+                        alloc,
+                        node.children()
+                            .filter(|attr| attr.kind() == SyntaxKind::Attr)
+                            .map(|attr| {
+                                alloc.text(ctx.snippet(attr.text_range()).trim().to_string())
+                            })
+                            .collect::<Vec<_>>(),
+                        alloc.hardline(),
+                    ))
+                } else {
+                    let Some(item) = cast_fn(node) else {
+                        continue;
+                    };
+                    Some(item.to_doc(ctx))
+                }
             }
             NodeOrToken::Token(token) => match token.kind() {
                 SyntaxKind::Newline => {
@@ -776,9 +848,7 @@ impl ToDoc for ast::RecordFieldDef {
 
         let mut doc = attrs;
 
-        if self.pub_kw().is_some() {
-            doc = doc.append(alloc.text("pub "));
-        }
+        doc = doc.append(visibility_doc(self.pub_kw(), self.vis_restriction(), ctx));
 
         if self.mut_kw().is_some() {
             doc = doc.append(alloc.text("mut "));

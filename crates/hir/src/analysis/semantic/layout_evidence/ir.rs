@@ -9,8 +9,8 @@ use crate::analysis::{
     },
     ty::{
         CallableLayoutParamPort, LayoutBundleComponentId, LayoutBundleInterface,
-        LayoutBundleInterfaceError, LayoutBundleSchema, LayoutBundleSchemaError, LayoutMapTy,
-        LayoutPortKey,
+        LayoutBundleInterfaceError, LayoutBundleSchema, LayoutBundleSchemaError,
+        LayoutBundleUnrepresentable, LayoutPortKey,
         const_ty::{CallableInputLayoutHoleOrigin, ConstTyData},
         ty_check::BodyOwner,
         ty_def::TyId,
@@ -57,7 +57,8 @@ entity_impl!(LayoutEvidenceLocalId);
 pub struct LayoutEvidenceLocal<'db> {
     pub semantic_local: Option<SLocalId>,
     pub component: LayoutBundleComponentId,
-    pub map_ty: LayoutMapTy<'db>,
+    /// The root's scalar type.
+    pub ty: TyId<'db>,
     pub param: Option<CallableLayoutParamPort>,
 }
 
@@ -79,19 +80,12 @@ pub enum LayoutEvidenceBase<'db> {
     Slot(usize),
 }
 
-/// A compile-time affine layout map. Dense maps are runtime expressions and
-/// are never expanded into this constant representation.
+/// A layout root known at compile time.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct LayoutEvidenceConstant<'db> {
-    pub map_ty: LayoutMapTy<'db>,
+    /// The root's scalar type.
+    pub ty: TyId<'db>,
     pub base: LayoutEvidenceBase<'db>,
-    pub strides: Box<[usize]>,
-}
-
-impl LayoutEvidenceConstant<'_> {
-    pub fn rank(&self) -> usize {
-        self.map_ty.rank()
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -100,39 +94,10 @@ pub enum LayoutEvidenceOperand<'db> {
     Constant(LayoutEvidenceConstant<'db>),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
-pub enum LayoutEvidenceIndex {
-    Constant(usize),
-    Dynamic(SLocalId),
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum LayoutEvidenceExpr<'db> {
     Use(LayoutEvidenceOperand<'db>),
-    /// Select one or more outer axes. The descriptor performs affine offset
-    /// arithmetic or dense lookup according to its runtime representation.
-    Project {
-        source: LayoutEvidenceOperand<'db>,
-        indices: Box<[LayoutEvidenceIndex]>,
-    },
-    /// Build one array axis from independently supplied elements.
-    Array {
-        elements: Box<[LayoutEvidenceExpr<'db>]>,
-    },
-    /// Build one array axis by repeating the same complete child map.
-    Repeat {
-        len: usize,
-        element: Box<LayoutEvidenceExpr<'db>>,
-    },
-    /// Functionally replace one indexed sub-map.
-    Update {
-        source: LayoutEvidenceOperand<'db>,
-        indices: Box<[LayoutEvidenceIndex]>,
-        value: Box<LayoutEvidenceExpr<'db>>,
-    },
-    CallResult {
-        component: LayoutBundleComponentId,
-    },
+    CallResult { component: LayoutBundleComponentId },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -157,13 +122,13 @@ pub struct LayoutEvidenceCall<'db> {
 }
 
 /// An explicit binding from a callable's inferred const parameter to the
-/// layout-map input port that supplies its runtime value.
+/// layout input port that supplies its runtime value.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct LayoutEvidenceConstBinding<'db> {
     /// Declaration-level const parameter supplied by this binding.
     pub param: TyId<'db>,
     pub source: CallableLayoutParamPort,
-    /// Scalar layout-map value that supplies the runtime const.
+    /// Layout root value that supplies the runtime const.
     pub value: LayoutEvidenceOperand<'db>,
 }
 
@@ -210,6 +175,13 @@ impl<'db> LayoutEvidenceBody<'db> {
     }
 }
 
+/// A position in a callable's layout signature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum LayoutSignaturePort {
+    Input(CallableInputLayoutHoleOrigin),
+    Output,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum LayoutEvidenceError<'db> {
     Blocked(BlockedSemanticBody<'db>),
@@ -225,7 +197,11 @@ pub enum LayoutEvidenceError<'db> {
         error: LayoutBundleSchemaError,
     },
     InvalidInterface {
-        local: Option<SLocalId>,
+        local: SLocalId,
+        error: LayoutBundleInterfaceError,
+    },
+    InvalidSignature {
+        port: LayoutSignaturePort,
         error: LayoutBundleInterfaceError,
     },
     DuplicateInput(CallableInputLayoutHoleOrigin),
@@ -257,7 +233,7 @@ pub enum LayoutEvidenceError<'db> {
         dst: SLocalId,
         component: LayoutBundleComponentId,
     },
-    MapTypeMismatch {
+    RootTypeMismatch {
         dst: SLocalId,
         component: LayoutBundleComponentId,
     },
@@ -270,12 +246,41 @@ pub enum LayoutEvidenceError<'db> {
         param: TyId<'db>,
         origin: crate::analysis::semantic::SemOrigin<'db>,
     },
-    UnprojectedConstBinding {
-        param: TyId<'db>,
-        origin: crate::analysis::semantic::SemOrigin<'db>,
-        source: CallableLayoutParamPort,
-    },
     Verify(LayoutEvidenceVerifyError),
+}
+
+impl<'db> LayoutEvidenceError<'db> {
+    /// The value shape that a finite layout-evidence interface cannot
+    /// represent, when that is the cause of this error.
+    pub fn unrepresentable(&self) -> Option<&LayoutBundleUnrepresentable> {
+        match self {
+            Self::InvalidSchema {
+                error: LayoutBundleSchemaError::Unrepresentable(unrepresentable),
+                ..
+            }
+            | Self::InvalidInterface {
+                error:
+                    LayoutBundleInterfaceError::Schema(LayoutBundleSchemaError::Unrepresentable(
+                        unrepresentable,
+                    )),
+                ..
+            }
+            | Self::InvalidSignature {
+                error:
+                    LayoutBundleInterfaceError::Schema(LayoutBundleSchemaError::Unrepresentable(
+                        unrepresentable,
+                    )),
+                ..
+            } => Some(unrepresentable),
+            _ => None,
+        }
+    }
+}
+
+impl From<LayoutBundleSchemaError> for LayoutEvidenceError<'_> {
+    fn from(error: LayoutBundleSchemaError) -> Self {
+        Self::InvalidSchema { local: None, error }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -369,10 +374,15 @@ pub enum LayoutEvidenceVerifyError {
         actual: usize,
     },
     InvalidOperand(LayoutEvidenceLocalId),
-    InvalidIndexLocal(SLocalId),
-    InvalidProjection,
-    EmptyArray,
-    MapTypeMismatch,
+    ConstantBindingCount {
+        expected: usize,
+        actual: usize,
+    },
+    UnmappedValue {
+        block: usize,
+        statement: usize,
+    },
+    RootTypeMismatch,
     InvalidConstBinding {
         block: usize,
         statement: usize,
@@ -381,10 +391,5 @@ pub enum LayoutEvidenceVerifyError {
         block: usize,
         statement: Option<usize>,
         local: LayoutEvidenceLocalId,
-    },
-    UndefinedIndexLocal {
-        block: usize,
-        statement: usize,
-        local: SLocalId,
     },
 }

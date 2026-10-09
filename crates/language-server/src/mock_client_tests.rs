@@ -1098,7 +1098,7 @@ pub contract Spaces {
 }
 
 #[tokio::test]
-async fn mock_lsp_hover_shows_layout_families_and_transactional_failures() {
+async fn mock_lsp_hover_shows_indexed_layouts_and_transactional_failures() {
     let mut client = MockLspClient::start().await;
     client.initialize().await;
 
@@ -1106,20 +1106,17 @@ async fn mock_lsp_hover_shows_layout_families_and_transactional_failures() {
     client.did_open(&uri, "");
     client.wait_for_text(&uri, "").await;
 
-    let family_code = r#"use std::evm::StorageMap
-
-pub contract C {
-  mut maps: [StorageMap<u256, u256>; 3]
+    let array_code = r#"pub contract C {
+  mut values: [u256; 3]
 }
 "#;
-    client.did_change(&uri, 710, family_code);
-    client.wait_for_text(&uri, family_code).await;
-    let family_hover = hover_at(&mut client, &uri, 3, 7).await;
-    let family_text = hover_text(&family_hover);
+    client.did_change(&uri, 710, array_code);
+    client.wait_for_text(&uri, array_code).await;
+    let array_hover = hover_at(&mut client, &uri, 1, 7).await;
+    let array_text = hover_text(&array_hover);
     assert!(
-        family_text.contains("- `0 + i0` (i0: 0..3): `maps[i0].SALT` ")
-            && family_text.contains("(inferred parameter, `u256`)"),
-        "expected indexed-family details, got:\n{family_text}"
+        array_text.contains("- `0 + i0` (i0: 0..3): `values[i0]` (inline field, `u256`)"),
+        "expected indexed inline details, got:\n{array_text}"
     );
 
     let invalid_code = r#"struct Good<const ROOT: u256 = _> {}

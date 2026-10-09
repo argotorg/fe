@@ -1,0 +1,23 @@
+use core::ptr
+
+struct Pair { first: u64, second: u64 }
+fn read(_ pointer: *Pair) -> ref Pair { ref *pointer }
+fn edit(_ pointer: *Pair) -> mut Pair { mut *pointer }
+fn read_generic<T>(_ pointer: *T) -> ref T { ref *pointer }
+fn forward<T>(_ pointer: *T) -> ref T { read_generic(pointer) }
+fn second(_ pointer: *Pair) -> ref u64 { ref (*pointer).second }
+
+pub fn main() -> i32 {
+    let pointer = ptr::alloc<Pair>()
+    *pointer = Pair { first: 4, second: 2 }
+    let view = edit(pointer)
+    view.first += 1
+    core::assert(read(pointer).first == 5)
+    core::assert(read_generic(pointer).second == 2)
+    core::assert(forward(pointer).first == 5)
+    core::assert(second(pointer) == 2)
+    let array = ptr::alloc<[u8; 257]>()
+    *array = [7; 257]
+    core::assert(read_generic(array)[256] == 7)
+    0
+}

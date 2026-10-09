@@ -1,0 +1,117 @@
+// Tests for `core::num::gcd`.
+// Expected values were computed with Python's `math.gcd`.
+
+use std::evm::{Address, Evm}
+use core::num::gcd
+
+const MAX: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+// Consecutive Fibonacci numbers F(369) and F(370), the largest pair below
+// 2^256: Euclid's worst case, 368 remainder steps.
+const FIB_369: u256 = 0x814675988eb7041005ee9f4355a59a00629b7c0123408b65d25f59ec1a328e62
+const FIB_370: u256 = 0xd12bf5c7f45a49f54fdf4e79a339eb28e1cc739052cbfa4bcc70eb22d7c28187
+
+// (a, b, gcd(a, b))
+const CASES: [(u256, u256, u256); 41] = [
+    // Zeros.
+    (0, 0, 0),
+    (0, 1, 1),
+    (7, 0, 7),
+    (MAX, 0, MAX),
+    // Small values.
+    (1, 1, 1),
+    (12, 18, 6),
+    (48, 180, 12),
+    (270, 192, 6),
+    (1071, 462, 21),
+    (100, 10, 10),
+    // Coprime.
+    (17, 5, 1),
+    (35, 64, 1),
+    (1, MAX, 1),
+    // Equal.
+    (9, 9, 9),
+    (MAX, MAX, MAX),
+    // Near 2^256 - 1.
+    (MAX, MAX - 1, 1),
+    (MAX, 0x280fd7f, 0x280fd7f),
+    (MAX - 1, 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff, 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff),
+    (
+        0x8000000000000000000000000000000000000000000000000000000000000000,
+        0x300000000000000000000000000000000000000000000000000,
+        0x100000000000000000000000000000000000000000000000000,
+    ),
+    (FIB_370, FIB_369, 1),
+    (FIB_370, FIB_370 - FIB_369, 1),
+    // Random vectors.
+    (0xafd514550a4dc1dbe3946fc8a97d3ce0d178e81f43043d675ed662, 0x9fff9034674a39b3ad2c37f4ff139b52efba5d3cdb5e524, 0x494cc5bd978b11d21091a6bce),
+    (0x3f96e3fdbcb4eb3930ebca4e7f4a, 0xce1c7da018f0643c6496d585fa334, 0x2),
+    (0x334030abb62de8f8, 0x16237473b142, 0xec2e),
+    (0x4a63e7ecbf457e22c263, 0xd1696cc57ba0186aaf5d273a2b32a52066cade4dde8ab6c9, 0x4a63e7ecbf457e22c263),
+    (0x1248d39634c29aca07dde097f01d63d6260eddfc0320fa7ca8b, 0xd5c63a00420bf614195054082593ab3add7fe1eb01c1b2e, 0x33f2f60b4b77d412bdd08f4f),
+    (0x2cccedde7f2c625dd25db1344ada2c44521f0347adacb50, 0x343b9108b0075a828, 0x37b7011a555d2d58),
+    (0x21a35f6c373647a3af315ca, 0x2320a76dccd16838233814df67e499c38d77c06a, 0x22cd298d888e),
+    (0x55d568f55d7ffb16db212dba041e22a870, 0x85a893462afbfcab80d4cb200028390e530e82ad8, 0x14606c8e9a5fc2bfe2bccc8),
+    (0x65b3144347da9b099b4a36058a8c, 0x4cb0576b3177ed98e28ee35fa4, 0x26f2cecb95b3d049e194),
+    (0x4f2e5b3ea01623b533e01a03e00b8716ff5491594672658, 0xbfb582e2633cdbe3abf2ad90032968e262, 0x288ee538a6ce24a785cce7a6a2ea),
+    (0xa2e2197, 0x380254438001f6c2746, 0x7064d),
+    (0x6f9a33f59d918733c951cb3e09e6f6ca529f33ca7f8cd17, 0x293d34251fd3f035f5a48cd7aab1246680ceb28, 0x542764b6b851e0d42376e6e43999ba7),
+    (0x7449c0f0f57fa13165037f3150ae109c7aeff626ba47649e4e1ac87be6e0fa2, 0x8dcc8ea5db2a09e9d4f7350b1235715853de2400897559db3e84cd6ec797b021, 0x1),
+    (0x7a6983954804f7f158f37574a2f8f41f10c806106c95763bc6d49fb1d10a4cfc, 0xc0132e6434a153d73fbf33476df9ef2249c7146ddd5cf2196c072f2e252471da, 0x2),
+    (0x4ee153f930d3630f33e5bf6292770ca530f556c27336a354ca36e54f4850900, 0x9777ec1b8c581fc437b8239c2a2a5b835c7e9765cf6151bb69c070540055af9a, 0x2),
+    (0xd5303a595c80e8dd2d13dc1def5175e63e5659ec4bec339c2d3a2bfea68d66dd, 0x2729a45111ac3c7aa99bed712850b94f94c3f06a8de47c0751f0c788ac200d10, 0x1),
+    (0x1107e74ac18a1ae709958f85db2a385530484223453fa105bb19543d3e86d340, 0x12854779748078a8db9b77d4f8abc5470c66ece3d05ef5d2ef82976d38982ea8, 0x8),
+    (0xcc0566b8f90ade401aff0109d8b38de522e8bced7a54b4a0ac89e58b26476d22, 0x1a303dccf54bb72927a35f51a213992e36d2bc408c221f127ba9903a1cd3cf51, 0x13),
+    (0x50382329d1b0c6efddcef60ead2a1eb53b189cd04dc6c2e2b7f6ef777b6a546b, 0xd789521c197d88b3090d16150760c6a17d29f06c5d6b5426910241935ac7f5fa, 0x1),
+    (0xf13738612f498fa8463468e4fabaf66d12c5250f01fce6896c7cca17b2cb1283, 0x6a28965d8fce2003b8302f400aa5fd8fb5cfdae8872ea6ed13f81cbfccca8384, 0x1),
+]
+
+#[test]
+fn gcd_cases() {
+    for (a, b, expected) in CASES {
+        assert!(gcd(a, b) == expected)
+        assert!(gcd(b, a) == expected)
+    }
+}
+
+const COMPILE_TIME: u256 = gcd(1071, 462)
+
+#[test]
+fn gcd_is_const() {
+    assert!(COMPILE_TIME == 21)
+}
+
+// Calldata arguments keep the operands out of constant evaluation, so these
+// cases exercise the runtime lowering.
+msg GcdMsg {
+    #[selector = 0x11111111]
+    Gcd { a: u256, b: u256 } -> u256,
+}
+
+pub contract GcdProbe {
+    recv GcdMsg {
+        Gcd { a, b } -> u256 {
+            gcd(a, b)
+        }
+    }
+}
+
+fn runtime_gcd(_ probe: Address, _ a: u256, _ b: u256) -> u256
+uses (evm: mut Evm)
+{
+    evm.call(
+        addr: probe,
+        gas: 1000000,
+        value: 0,
+        message: GcdMsg::Gcd { a, b },
+    )
+}
+
+#[test]
+fn gcd_runtime_cases() uses (evm: mut Evm) {
+    let probe = evm.create2<GcdProbe>(value: 0, args: (), salt: 0)
+    for (a, b, expected) in CASES {
+        assert!(runtime_gcd(probe, a, b) == expected)
+        assert!(runtime_gcd(probe, b, a) == expected)
+    }
+}

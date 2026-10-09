@@ -23,8 +23,8 @@ use crate::{
                 demand_concrete_array_length,
             },
             layout_holes::{
-                LayoutIndexDimension, LayoutInstantiation, LayoutTemplateSubst,
-                LayoutViewRecurrence, classify_layout_view_recurrence, instantiate_layout_template,
+                LayoutInstantiation, LayoutTemplateSubst, LayoutViewRecurrence,
+                classify_layout_view_recurrence, instantiate_layout_template,
                 layout_hole_fallback_ty, layout_root_descends_from, layout_root_id,
                 layout_root_lineage, layout_shape_key, rewrite_structural_holes,
                 structural_hole_id,
@@ -99,15 +99,6 @@ pub struct ConcreteRootOccurrenceId(pub u32);
 pub struct RootCellId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub struct LayoutRootFamilyId(pub u32);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum AllocationUnitId {
-    Scalar(RootCellId),
-    Indexed(LayoutRootFamilyId),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum RootRole {
     Counted,
     MaterializeOnly,
@@ -136,7 +127,6 @@ pub struct RootOccurrence<'db> {
     pub placeholder: TyId<'db>,
     pub place: StoragePlace<'db>,
     pub selector: Vec<PlaceStep>,
-    pub index_dimensions: Vec<LayoutIndexDimension<'db>>,
     pub role: RootRole,
     pub space: ProviderAddressSpace,
     pub order: u32,
@@ -150,7 +140,6 @@ pub struct ConcreteRootOccurrence<'db> {
     pub owner: TyId<'db>,
     pub place: StoragePlace<'db>,
     pub selector: Vec<PlaceStep>,
-    pub index_dimensions: Vec<LayoutIndexDimension<'db>>,
     pub role: RootRole,
     pub space: ProviderAddressSpace,
     pub order: u32,
@@ -286,56 +275,18 @@ pub struct RootCell<'db> {
     pub allocation: Option<RootAllocation>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Update)]
-pub struct LayoutRootFamily<'db> {
-    pub id: LayoutRootFamilyId,
-    pub lane: LayoutRootId<'db>,
-    pub dimensions: Vec<LayoutIndexDimension<'db>>,
-    pub strides: Vec<usize>,
-    pub extent: usize,
-    pub occurrences: Vec<RootOccurrenceId>,
-    pub role: RootRole,
-    pub space: ProviderAddressSpace,
-    pub allocation: Option<RootAllocation>,
-}
-
-impl LayoutRootFamily<'_> {
-    pub fn slot_for_indices(&self, indices: &[usize]) -> Option<usize> {
-        let allocation = self.allocation?;
-        if indices.len() != self.dimensions.len() {
-            return None;
-        }
-        let mut offset = 0usize;
-        for ((index, dimension), stride) in indices.iter().zip(&self.dimensions).zip(&self.strides)
-        {
-            if *index >= dimension.len {
-                return None;
-            }
-            offset = offset.checked_add(index.checked_mul(*stride)?)?;
-        }
-        allocation.slot.checked_add(offset)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct EnumOverlayGroup<'db> {
     pub enum_place: StoragePlace<'db>,
     pub lane: u32,
-    pub members: Vec<AllocationUnitId>,
+    pub members: Vec<RootCellId>,
     pub space: ProviderAddressSpace,
-    pub reserved_extent: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum LayoutBindingTarget {
-    Scalar(RootCellId),
-    Indexed(LayoutRootFamilyId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct LayoutBindingLeaf {
     pub selector: Vec<PlaceStep>,
-    pub target: LayoutBindingTarget,
+    pub target: RootCellId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
@@ -355,7 +306,7 @@ pub enum LayoutViewKind {
 pub enum LayoutProjection {
     Field(u16),
     VariantField { variant: u16, field: u16 },
-    Index(Option<usize>),
+    Index,
     ConstParam(u16),
     EffectTarget,
 }
@@ -363,7 +314,6 @@ pub enum LayoutProjection {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update, Default)]
 pub struct LayoutSelection {
     pub selector: Vec<PlaceStep>,
-    pub indices: Vec<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
@@ -371,8 +321,6 @@ pub enum LayoutViewError<'db> {
     RootNotClassified { root: LayoutRootId<'db> },
     NonPhysicalRoot { root: LayoutRootId<'db> },
     RootNeedsLanding { root: LayoutRootId<'db> },
-    RootNeedsIndex { root: LayoutRootId<'db> },
-    InvalidIndex { root: LayoutRootId<'db> },
     MissingAllocation { root: LayoutRootId<'db> },
     InvalidProjection,
 }
@@ -445,7 +393,7 @@ fn layout_projection_path(
                     field: field.try_into().ok()?,
                 });
             }
-            PlaceStep::ArrayElem(_) => projections.push(LayoutProjection::Index(None)),
+            PlaceStep::ArrayElem(_) => projections.push(LayoutProjection::Index),
             PlaceStep::ConstParam(param) => {
                 projections.push(LayoutProjection::ConstParam(param.try_into().ok()?));
             }
@@ -458,29 +406,6 @@ fn layout_projection_path(
         }
     }
     Some(projections)
-}
-
-fn visible_layout_projection_matches(
-    requested: LayoutProjection,
-    candidate: LayoutProjection,
-) -> bool {
-    requested == candidate
-        || matches!(
-            (requested, candidate),
-            (LayoutProjection::Index(_), LayoutProjection::Index(_))
-        )
-}
-
-fn visible_layout_projection_is_prefix(
-    requested: &[LayoutProjection],
-    candidate: &[LayoutProjection],
-) -> bool {
-    requested.len() <= candidate.len()
-        && requested
-            .iter()
-            .copied()
-            .zip(candidate.iter().copied())
-            .all(|(requested, candidate)| visible_layout_projection_matches(requested, candidate))
 }
 
 fn project_layout_template<'db>(
@@ -557,19 +482,10 @@ fn project_layout_template<'db>(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub enum AssignedRootValue<'db> {
-    Literal {
-        space: ProviderAddressSpace,
-        slot: usize,
-        ty: TyId<'db>,
-    },
-    Indexed {
-        space: ProviderAddressSpace,
-        base: usize,
-        dimensions: Vec<LayoutIndexDimension<'db>>,
-        strides: Vec<usize>,
-        ty: TyId<'db>,
-    },
+pub struct AssignedRootValue<'db> {
+    pub space: ProviderAddressSpace,
+    pub slot: usize,
+    pub ty: TyId<'db>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
@@ -588,13 +504,12 @@ pub enum ContractLayoutError<'db> {
     UnresolvedStaticSlotSpace { owner: TyId<'db> },
     AmbiguousStaticSlot { owner: TyId<'db> },
     ConflictingLayoutRootSpaces { root: LayoutRootId<'db> },
-    UnknownArrayLengthWithLayoutRoots { array: TyId<'db> },
+    LayoutRootArray { array: TyId<'db> },
     LayoutExtentOverflow,
     IncompleteAdtLayoutProjection { ty: TyId<'db> },
     AmbiguousLayoutBindingSelector { root: LayoutRootId<'db> },
     InconsistentLayoutRootType { root: LayoutRootId<'db> },
     LayoutRootNeedsLanding { root: LayoutRootId<'db> },
-    LayoutRootNeedsIndex { root: LayoutRootId<'db> },
     InternalLayoutGraph,
 }
 
@@ -627,9 +542,7 @@ impl ContractLayoutError<'_> {
             Self::ConflictingLayoutRootSpaces { .. } => {
                 "one layout root has conflicting address spaces"
             }
-            Self::UnknownArrayLengthWithLayoutRoots { .. } => {
-                "root-bearing array length is not known"
-            }
+            Self::LayoutRootArray { .. } => "array elements carry layout roots",
             Self::LayoutExtentOverflow => "layout extent overflowed",
             Self::IncompleteAdtLayoutProjection { .. } => "layout projection is incomplete",
             Self::AmbiguousLayoutBindingSelector { .. } => "layout binding selector is ambiguous",
@@ -637,7 +550,6 @@ impl ContractLayoutError<'_> {
                 "one layout root has inconsistent const types"
             }
             Self::LayoutRootNeedsLanding { .. } => "layout root needs a concrete landing",
-            Self::LayoutRootNeedsIndex { .. } => "layout root needs a concrete index",
             Self::InternalLayoutGraph => "layout graph failed internal validation",
         }
     }
@@ -652,14 +564,6 @@ pub enum LayoutInvariantError<'db> {
     MissingScalarAllocation {
         field: ContractFieldId<'db>,
         cell: RootCellId,
-    },
-    MissingFamilyAllocation {
-        field: ContractFieldId<'db>,
-        family: LayoutRootFamilyId,
-    },
-    InvalidFamilyRegion {
-        field: ContractFieldId<'db>,
-        family: LayoutRootFamilyId,
     },
     InvalidOverlayGroup {
         field: ContractFieldId<'db>,
@@ -707,7 +611,7 @@ pub enum LayoutInvariantError<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
 struct AllocationLane<'db> {
-    members: Vec<AllocationUnitId>,
+    members: Vec<RootCellId>,
     overlays: Vec<AllocationOverlay<'db>>,
     space: ProviderAddressSpace,
 }
@@ -716,7 +620,7 @@ struct AllocationLane<'db> {
 struct AllocationOverlay<'db> {
     place: StoragePlace<'db>,
     lane: u32,
-    members: Vec<AllocationUnitId>,
+    members: Vec<RootCellId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
@@ -736,9 +640,8 @@ pub struct FieldStorageLayout<'db> {
     pub occurrences: Vec<RootOccurrence<'db>>,
     pub concrete_occurrences: Vec<ConcreteRootOccurrence<'db>>,
     pub cells: Vec<RootCell<'db>>,
-    pub families: Vec<LayoutRootFamily<'db>>,
     pub overlay_groups: Vec<EnumOverlayGroup<'db>>,
-    pub place_roots: IndexMap<StoragePlace<'db>, Vec<LayoutBindingTarget>>,
+    pub place_roots: IndexMap<StoragePlace<'db>, Vec<RootCellId>>,
     pub root_bindings: IndexMap<LayoutRootId<'db>, LayoutBinding>,
 }
 
@@ -759,8 +662,6 @@ impl<'db> FieldStorageLayout<'db> {
     ) -> Result<LayoutSelection, LayoutViewError<'db>> {
         let mut ty = self.view(kind).template;
         let mut selector = self.view_selector(kind);
-        let mut indices = Vec::new();
-        let mut all_indices_static = true;
         for projection in projections {
             while let Some((_, inner)) = ty.as_capability(db) {
                 selector.push(PlaceStep::TransparentInner);
@@ -790,18 +691,8 @@ impl<'db> FieldStorageLayout<'db> {
                 LayoutProjection::Field(_) | LayoutProjection::VariantField { .. } => {
                     return Err(LayoutViewError::InvalidProjection);
                 }
-                LayoutProjection::Index(index) if ty.is_array(db) => {
-                    if let Some(index) = index {
-                        if all_indices_static {
-                            indices.push(index);
-                        }
-                    } else {
-                        all_indices_static = false;
-                        indices.clear();
-                    }
-                    vec![PlaceStep::ArrayElem(0)]
-                }
-                LayoutProjection::Index(_) => return Err(LayoutViewError::InvalidProjection),
+                LayoutProjection::Index if ty.is_array(db) => vec![PlaceStep::ArrayElem(0)],
+                LayoutProjection::Index => return Err(LayoutViewError::InvalidProjection),
                 LayoutProjection::ConstParam(param) => {
                     vec![PlaceStep::ConstParam(param as u32)]
                 }
@@ -810,7 +701,7 @@ impl<'db> FieldStorageLayout<'db> {
             ty = project_layout_template(db, ty, &steps)?;
             selector.extend(steps);
         }
-        Ok(LayoutSelection { selector, indices })
+        Ok(LayoutSelection { selector })
     }
 
     fn view_selector(&self, kind: LayoutViewKind) -> Vec<PlaceStep> {
@@ -858,21 +749,19 @@ impl<'db> FieldStorageLayout<'db> {
         self.try_concrete_ty(db, &view, selection)
     }
 
-    pub fn root_target_for_place(&self, place: &StoragePlace<'db>) -> Option<LayoutBindingTarget> {
+    pub fn root_target_for_place(&self, place: &StoragePlace<'db>) -> Option<RootCellId> {
         let [target] = self.place_roots.get(place)?.as_slice() else {
             return None;
         };
         Some(*target)
     }
 
-    pub fn root_targets_for_place(&self, place: &StoragePlace<'db>) -> &[LayoutBindingTarget] {
+    pub fn root_targets_for_place(&self, place: &StoragePlace<'db>) -> &[RootCellId] {
         self.place_roots.get(place).map_or(&[], Vec::as_slice)
     }
 
     pub fn root_allocation_for_place(&self, place: &StoragePlace<'db>) -> Option<RootAllocation> {
-        let LayoutBindingTarget::Scalar(cell) = self.root_target_for_place(place)? else {
-            return None;
-        };
+        let cell = self.root_target_for_place(place)?;
         self.cells.get(cell.0 as usize)?.allocation
     }
 
@@ -883,38 +772,15 @@ impl<'db> FieldStorageLayout<'db> {
 
     pub fn assigned_root_value(
         &self,
-        target: LayoutBindingTarget,
+        cell: RootCellId,
         ty: TyId<'db>,
-        indices: &[usize],
     ) -> Option<AssignedRootValue<'db>> {
-        match target {
-            LayoutBindingTarget::Scalar(cell) => {
-                let allocation = self.cells.get(cell.0 as usize)?.allocation?;
-                Some(AssignedRootValue::Literal {
-                    space: allocation.space,
-                    slot: allocation.slot,
-                    ty,
-                })
-            }
-            LayoutBindingTarget::Indexed(family) => {
-                let family = self.families.get(family.0 as usize)?;
-                let allocation = family.allocation?;
-                if indices.is_empty() {
-                    return Some(AssignedRootValue::Indexed {
-                        space: allocation.space,
-                        base: allocation.slot,
-                        dimensions: family.dimensions.clone(),
-                        strides: family.strides.clone(),
-                        ty,
-                    });
-                }
-                Some(AssignedRootValue::Literal {
-                    space: allocation.space,
-                    slot: family.slot_for_indices(indices)?,
-                    ty,
-                })
-            }
-        }
+        let allocation = self.cells.get(cell.0 as usize)?.allocation?;
+        Some(AssignedRootValue {
+            space: allocation.space,
+            slot: allocation.slot,
+            ty,
+        })
     }
 
     pub fn root_value(
@@ -931,7 +797,7 @@ impl<'db> FieldStorageLayout<'db> {
             return Err(LayoutViewError::NonPhysicalRoot { root });
         };
         let leaves = matching_binding_leaves(leaves, &selection.selector);
-        self.root_value_from_leaves(root, ty, &selection.indices, &leaves)
+        self.root_value_from_leaves(root, ty, &leaves)
     }
 
     /// Resolves a root from a source-level projection path. Layout-only graph edges such as
@@ -984,30 +850,10 @@ impl<'db> FieldStorageLayout<'db> {
                 leaf.selector
                     .strip_prefix(view_selector.as_slice())
                     .and_then(|selector| layout_projection_path(selector, include_effect_targets))
-                    .is_some_and(|candidate| {
-                        visible_layout_projection_is_prefix(projections, &candidate)
-                    })
+                    .is_some_and(|candidate| candidate.starts_with(projections))
             })
             .collect::<Vec<_>>();
-        let mut indices = Vec::new();
-        let mut all_indices_static = true;
-        for projection in projections {
-            match projection {
-                LayoutProjection::Index(Some(index)) if all_indices_static => {
-                    indices.push(*index);
-                }
-                LayoutProjection::Index(None) => {
-                    all_indices_static = false;
-                    indices.clear();
-                }
-                LayoutProjection::Field(_)
-                | LayoutProjection::VariantField { .. }
-                | LayoutProjection::Index(Some(_))
-                | LayoutProjection::ConstParam(_)
-                | LayoutProjection::EffectTarget => {}
-            }
-        }
-        self.root_value_from_leaves(root, ty, &indices, &leaves)
+        self.root_value_from_leaves(root, ty, &leaves)
     }
 
     /// Resolves a source projection whose semantic root remains runtime-selected.
@@ -1052,7 +898,6 @@ impl<'db> FieldStorageLayout<'db> {
         &self,
         root: LayoutRootId<'db>,
         ty: TyId<'db>,
-        indices: &[usize],
         leaves: &[&LayoutBindingLeaf],
     ) -> Result<AssignedRootValue<'db>, LayoutViewError<'db>> {
         let Some(target) = leaves.first().map(|leaf| leaf.target) else {
@@ -1061,22 +906,8 @@ impl<'db> FieldStorageLayout<'db> {
         if leaves.iter().any(|leaf| leaf.target != target) {
             return Err(LayoutViewError::RootNeedsLanding { root });
         }
-        if let LayoutBindingTarget::Indexed(family) = target {
-            let family = self
-                .families
-                .get(family.0 as usize)
-                .ok_or(LayoutViewError::MissingAllocation { root })?;
-            if !indices.is_empty() && indices.len() != family.dimensions.len() {
-                return Err(LayoutViewError::RootNeedsIndex { root });
-            }
-        }
-        let value = self
-            .assigned_root_value(target, ty, indices)
-            .ok_or(match target {
-                LayoutBindingTarget::Indexed(_) => LayoutViewError::InvalidIndex { root },
-                LayoutBindingTarget::Scalar(_) => LayoutViewError::MissingAllocation { root },
-            })?;
-        Ok(value)
+        self.assigned_root_value(target, ty)
+            .ok_or(LayoutViewError::MissingAllocation { root })
     }
 
     pub fn try_concrete_ty(
@@ -1096,15 +927,7 @@ impl<'db> FieldStorageLayout<'db> {
                 layout_hole_fallback_ty(db, hole_ty),
                 selection,
             ) {
-                Ok(AssignedRootValue::Literal { slot, ty, .. }) => {
-                    Some(slot_const_ty(db, slot, ty))
-                }
-                Ok(AssignedRootValue::Indexed { .. }) => {
-                    error = Some(LayoutViewError::RootNeedsIndex {
-                        root: hole.root(db),
-                    });
-                    None
-                }
+                Ok(AssignedRootValue { slot, ty, .. }) => Some(slot_const_ty(db, slot, ty)),
                 Err(view_error) => {
                     error = Some(view_error);
                     None
@@ -1132,8 +955,8 @@ impl<'db> FieldStorageLayout<'db> {
 
     /// Type used to identify a whole contract-field effect binding. Scalar
     /// layouts retain their assigned literals. A whole view that intentionally
-    /// requires a structural landing, runtime index, or has only non-physical
-    /// roots uses its source shape together with the binding's `layout_env`.
+    /// requires a structural landing or has only non-physical roots uses its
+    /// source shape together with the binding's `layout_env`.
     /// Graph/allocation failures remain errors and are never erased.
     pub fn target_effect_binding_ty(
         &self,
@@ -1142,9 +965,7 @@ impl<'db> FieldStorageLayout<'db> {
         match self.target_concrete_ty(db, &LayoutSelection::default()) {
             Ok(ty) => Ok(ty),
             Err(
-                LayoutViewError::NonPhysicalRoot { .. }
-                | LayoutViewError::RootNeedsLanding { .. }
-                | LayoutViewError::RootNeedsIndex { .. },
+                LayoutViewError::NonPhysicalRoot { .. } | LayoutViewError::RootNeedsLanding { .. },
             ) => Ok(self.target.shape_ty()),
             Err(error) => Err(error),
         }
@@ -1174,9 +995,8 @@ pub struct ValidatedFieldLayoutPlan<'db> {
     occurrences: Vec<RootOccurrence<'db>>,
     concrete_occurrences: Vec<ConcreteRootOccurrence<'db>>,
     cells: Vec<RootCell<'db>>,
-    families: Vec<LayoutRootFamily<'db>>,
     overlay_groups: Vec<EnumOverlayGroup<'db>>,
-    place_roots: IndexMap<StoragePlace<'db>, Vec<LayoutBindingTarget>>,
+    place_roots: IndexMap<StoragePlace<'db>, Vec<RootCellId>>,
     bindings: IndexMap<LayoutRootId<'db>, LayoutBinding>,
     counted_lanes: Vec<AllocationLane<'db>>,
     materialize_only_lanes: Vec<AllocationLane<'db>>,
@@ -1338,11 +1158,7 @@ impl<'db> WalkOutput<'db> {
         }
     }
 
-    fn scalar(
-        ty: TyId<'db>,
-        place: StoragePlace<'db>,
-        dimensions: &[LayoutIndexDimension<'db>],
-    ) -> Self {
+    fn scalar(ty: TyId<'db>, place: StoragePlace<'db>, dimensions: &[usize]) -> Self {
         Self {
             inline_span: 1,
             inline_leaves: vec![InlineLayoutLeaf {
@@ -1369,7 +1185,7 @@ struct InlineLayoutLeaf<'db> {
     place: StoragePlace<'db>,
     ty: TyId<'db>,
     offset: usize,
-    dimensions: Vec<LayoutIndexDimension<'db>>,
+    dimensions: Vec<usize>,
     strides: Vec<usize>,
     kind: InlineLayoutLeafKind,
 }
@@ -1384,7 +1200,6 @@ struct ConcreteApplication<'db> {
 struct ConcreteRootSite<'db> {
     owner: TyId<'db>,
     place: StoragePlace<'db>,
-    dimensions: Vec<LayoutIndexDimension<'db>>,
     mode: WalkMode,
     default_space: ProviderAddressSpace,
 }
@@ -1396,10 +1211,19 @@ struct ProviderTargetEdge<'db> {
     space: ProviderAddressSpace,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ExpandingProvider<'db> {
     ty: TyId<'db>,
     implementation: ImplementorId<'db>,
+    /// Root and concrete occurrence counts when the expansion began.
+    occurrences: (usize, usize),
+    /// Stack index of the outermost expansion that this one closes a
+    /// back-edge to, directly or through a nested expansion; its own index if
+    /// none. This expansion reaches every root that one reaches.
+    recurs_to: usize,
+    /// Arrays whose elements reach this expansion's roots, which are known
+    /// only once its outermost recurrence finishes.
+    back_edge_arrays: Vec<TyId<'db>>,
 }
 
 fn instantiate_provider_target_layout<'db>(
@@ -1469,7 +1293,6 @@ fn instantiate_provider_target_layout<'db>(
                 )
             }),
             selector: root_use.selector,
-            index_dimensions: root_use.index_dimensions,
         };
         if !target.root_uses.contains(&root_use) {
             target.root_uses.push(root_use);
@@ -1507,6 +1330,8 @@ struct FieldCollector<'db> {
     reached_concrete_sites: Vec<ConcreteRootSite<'db>>,
     visiting: FxHashSet<(TyId<'db>, StoragePlace<'db>)>,
     expanding_providers: Vec<ExpandingProvider<'db>>,
+    /// Enclosing arrays, each with the provider expansion depth at its start.
+    arrays: Vec<(TyId<'db>, usize)>,
     nonterminal_occurrences: FxHashSet<RootOccurrenceId>,
 }
 
@@ -1529,6 +1354,7 @@ impl<'db> FieldCollector<'db> {
             reached_concrete_sites: Vec::new(),
             visiting: FxHashSet::default(),
             expanding_providers: Vec::new(),
+            arrays: Vec::new(),
             nonterminal_occurrences: FxHashSet::default(),
         }
     }
@@ -1596,12 +1422,8 @@ impl<'db> FieldCollector<'db> {
         placeholder: TyId<'db>,
         place: StoragePlace<'db>,
         selector: Vec<PlaceStep>,
-        dimensions: &[LayoutIndexDimension<'db>],
         mode: WalkMode,
     ) -> Option<WalkEvent<'db>> {
-        if dimensions.iter().any(|dimension| dimension.len == 0) {
-            return None;
-        }
         let hole = structural_hole_id(self.db, placeholder)?;
         if matches!(
             hole.origin(self.db),
@@ -1627,7 +1449,6 @@ impl<'db> FieldCollector<'db> {
             placeholder,
             place,
             selector,
-            index_dimensions: dimensions.to_vec(),
             role: mode.into(),
             space,
             order: id.0,
@@ -1644,7 +1465,6 @@ impl<'db> FieldCollector<'db> {
         let ConcreteRootSite {
             owner,
             place,
-            dimensions,
             mode,
             default_space,
         } = site;
@@ -1700,7 +1520,6 @@ impl<'db> FieldCollector<'db> {
                 && occurrence.owner == owner
                 && occurrence.place == place
                 && occurrence.selector == selector
-                && occurrence.index_dimensions == dimensions
                 && occurrence.role == mode.into()
                 && occurrence.space == space
         }) {
@@ -1714,7 +1533,6 @@ impl<'db> FieldCollector<'db> {
             owner,
             place,
             selector,
-            index_dimensions: dimensions,
             role: mode.into(),
             space,
             order: id.0,
@@ -1768,7 +1586,7 @@ impl<'db> FieldCollector<'db> {
         instantiation: &LayoutInstantiation<'db>,
         source: TyId<'db>,
         place: StoragePlace<'db>,
-        dimensions: &[LayoutIndexDimension<'db>],
+        dimensions: &[usize],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
         let reached_start = self.reached_concrete_sites.len();
@@ -1787,14 +1605,13 @@ impl<'db> FieldCollector<'db> {
         &mut self,
         instantiation: &LayoutInstantiation<'db>,
         place: StoragePlace<'db>,
-        dimensions: &[LayoutIndexDimension<'db>],
+        dimensions: &[usize],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
         let reached_start = self.reached_concrete_sites.len();
         self.reached_concrete_sites.push(ConcreteRootSite {
             owner: instantiation.ty,
             place: place.clone(),
-            dimensions: dimensions.to_vec(),
             mode,
             default_space: self.active_space,
         });
@@ -1836,13 +1653,11 @@ impl<'db> FieldCollector<'db> {
         views: ConcreteTypeView<'db>,
         parent_instance: LayoutInstantiationId<'db>,
         place: StoragePlace<'db>,
-        dimensions: &[LayoutIndexDimension<'db>],
+        dimensions: &[usize],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
         let ty = views.canonical;
-        if let Some(event) =
-            self.emit_root(ty, place.clone(), place.steps.clone(), dimensions, mode)
-        {
+        if let Some(event) = self.emit_root(ty, place.clone(), place.steps.clone(), mode) {
             return WalkOutput {
                 inline_span: 0,
                 inline_leaves: Vec::new(),
@@ -1852,7 +1667,6 @@ impl<'db> FieldCollector<'db> {
         self.reached_concrete_sites.push(ConcreteRootSite {
             owner: ty,
             place: place.clone(),
-            dimensions: dimensions.to_vec(),
             mode,
             default_space: self.active_space,
         });
@@ -1897,7 +1711,7 @@ impl<'db> FieldCollector<'db> {
         views: ConcreteTypeView<'db>,
         parent_instance: LayoutInstantiationId<'db>,
         place: StoragePlace<'db>,
-        dimensions: &[LayoutIndexDimension<'db>],
+        dimensions: &[usize],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
         let ConcreteTypeView {
@@ -1988,7 +1802,7 @@ impl<'db> FieldCollector<'db> {
         views: ConcreteTypeView<'db>,
         parent_instance: LayoutInstantiationId<'db>,
         place: StoragePlace<'db>,
-        dimensions: &[LayoutIndexDimension<'db>],
+        dimensions: &[usize],
         mode: WalkMode,
         target_edge: ProviderTargetEdge<'db>,
     ) -> WalkOutput<'db> {
@@ -2003,7 +1817,20 @@ impl<'db> FieldCollector<'db> {
                 .rev()
                 .map(|(idx, frame)| (idx, frame.ty, frame.implementation)),
         ) {
-            LayoutViewRecurrence::BackEdge { .. } => {
+            LayoutViewRecurrence::BackEdge { ancestor } => {
+                if let Some(&(array, depth)) = self.arrays.last()
+                    && ancestor < depth
+                {
+                    let frame = &mut self.expanding_providers[ancestor];
+                    if !frame.back_edge_arrays.contains(&array) {
+                        frame.back_edge_arrays.push(array);
+                    }
+                }
+                let frame = self
+                    .expanding_providers
+                    .last_mut()
+                    .expect("a back-edge closes inside a provider expansion");
+                frame.recurs_to = frame.recurs_to.min(ancestor);
                 return self.walk_ty_representation(
                     views,
                     parent_instance,
@@ -2027,6 +1854,9 @@ impl<'db> FieldCollector<'db> {
         self.expanding_providers.push(ExpandingProvider {
             ty,
             implementation: target_edge.impl_instance.selected(),
+            occurrences: (self.occurrences.len(), self.concrete_occurrences.len()),
+            recurs_to: self.expanding_providers.len(),
+            back_edge_arrays: Vec::new(),
         });
 
         let declared_start = self.occurrences.len();
@@ -2043,7 +1873,7 @@ impl<'db> FieldCollector<'db> {
             Ok(target) => target,
             Err(error) => {
                 self.push_error(error);
-                self.expanding_providers.pop();
+                self.finish_provider_expansion();
                 return output;
             }
         };
@@ -2079,14 +1909,40 @@ impl<'db> FieldCollector<'db> {
             .collect::<Vec<_>>();
         self.nonterminal_occurrences.extend(nonterminal);
         output.events.extend(target_output.events);
-        self.expanding_providers.pop();
+        self.finish_provider_expansion();
         output
+    }
+
+    /// Ends the innermost provider expansion. An expansion that recurs to an
+    /// enclosing one reaches every root of the enclosing one, so it defers its
+    /// back-edge and arrays to its parent. The outermost expansion of a
+    /// recurrence reaches exactly the roots it produced, so its arrays carry
+    /// roots exactly when it produced any.
+    fn finish_provider_expansion(&mut self) {
+        let frame = self
+            .expanding_providers
+            .pop()
+            .expect("a provider expansion must be active");
+        if frame.recurs_to < self.expanding_providers.len()
+            && let Some(parent) = self.expanding_providers.last_mut()
+        {
+            parent.recurs_to = parent.recurs_to.min(frame.recurs_to);
+            for array in frame.back_edge_arrays {
+                if !parent.back_edge_arrays.contains(&array) {
+                    parent.back_edge_arrays.push(array);
+                }
+            }
+        } else if (self.occurrences.len(), self.concrete_occurrences.len()) != frame.occurrences {
+            for array in frame.back_edge_arrays {
+                self.push_error(ContractLayoutError::LayoutRootArray { array });
+            }
+        }
     }
 
     fn walk_sequence(
         &mut self,
         items: impl IntoIterator<Item = (LayoutInstantiation<'db>, TyId<'db>, StoragePlace<'db>)>,
-        dimensions: &[LayoutIndexDimension<'db>],
+        dimensions: &[usize],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
         let mut inline_span = 0usize;
@@ -2122,7 +1978,7 @@ impl<'db> FieldCollector<'db> {
         views: ConcreteTypeView<'db>,
         parent_instance: LayoutInstantiationId<'db>,
         place: StoragePlace<'db>,
-        dimensions: &[LayoutIndexDimension<'db>],
+        dimensions: &[usize],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
         let ConcreteTypeView {
@@ -2164,17 +2020,12 @@ impl<'db> FieldCollector<'db> {
         }
         let Some(len) = len else {
             if contains_layout_roots(self.db, element) {
-                self.push_error(ContractLayoutError::UnknownArrayLengthWithLayoutRoots {
-                    array: ty,
-                });
+                self.push_error(ContractLayoutError::LayoutRootArray { array: ty });
             } else {
                 self.push_error(ContractLayoutError::IncompleteAdtLayoutProjection { ty });
             }
             return WalkOutput::empty();
         };
-        if len == 0 {
-            return WalkOutput::empty();
-        }
         let element = instantiate_layout_template(
             self.db,
             element,
@@ -2184,10 +2035,9 @@ impl<'db> FieldCollector<'db> {
             vec![LayoutOccurrenceStep::ArrayDimension(dimensions.len() as u32)],
         );
         let mut element_dimensions = dimensions.to_vec();
-        element_dimensions.push(LayoutIndexDimension {
-            instance: element.instance,
-            len,
-        });
+        element_dimensions.push(len);
+        let occurrences = (self.occurrences.len(), self.concrete_occurrences.len());
+        self.arrays.push((ty, self.expanding_providers.len()));
         let mut output = self.walk_ty(
             ConcreteTypeView::new(element.ty, source_element),
             element.instance,
@@ -2195,6 +2045,16 @@ impl<'db> FieldCollector<'db> {
             &element_dimensions,
             mode,
         );
+        self.arrays.pop();
+        // Every element shares one element type, so the elements cannot carry
+        // distinct layout roots. This holds at every extent, including zero.
+        if (self.occurrences.len(), self.concrete_occurrences.len()) != occurrences {
+            self.push_error(ContractLayoutError::LayoutRootArray { array: ty });
+            return WalkOutput::empty();
+        }
+        if len == 0 {
+            return WalkOutput::empty();
+        }
         let Some(inline_span) = output.inline_span.checked_mul(len) else {
             self.push_error(ContractLayoutError::LayoutExtentOverflow);
             return WalkOutput {
@@ -2219,7 +2079,7 @@ impl<'db> FieldCollector<'db> {
         adt: AdtDef<'db>,
         parent_instance: LayoutInstantiationId<'db>,
         place: StoragePlace<'db>,
-        dimensions: &[LayoutIndexDimension<'db>],
+        dimensions: &[usize],
         mode: WalkMode,
     ) -> WalkOutput<'db> {
         let ConcreteTypeView {
@@ -2252,7 +2112,6 @@ impl<'db> FieldCollector<'db> {
                     arg,
                     place.clone(),
                     place.with_step(PlaceStep::ConstParam(idx as u32)).steps,
-                    dimensions,
                     mode,
                 )
             {
@@ -2268,7 +2127,6 @@ impl<'db> FieldCollector<'db> {
                     ConcreteRootSite {
                         owner: ty,
                         place: place.clone(),
-                        dimensions: dimensions.to_vec(),
                         mode,
                         default_space: self.active_space,
                     },
@@ -2417,33 +2275,7 @@ fn ty_has_incomplete_adt_application<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'
     inner(db, ty, &mut FxHashSet::default())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct FamilyKey<'db> {
-    root: LayoutRootId<'db>,
-    dimensions: Vec<LayoutInstantiationId<'db>>,
-}
-
-fn row_major_family_geometry(
-    dimensions: &[LayoutIndexDimension<'_>],
-) -> Option<(usize, Vec<usize>)> {
-    let mut extent = 1usize;
-    for dimension in dimensions {
-        extent = extent.checked_mul(dimension.len)?;
-    }
-    let mut stride = 1usize;
-    let mut reversed = Vec::with_capacity(dimensions.len());
-    for dimension in dimensions.iter().rev() {
-        reversed.push(stride);
-        stride = stride.checked_mul(dimension.len)?;
-    }
-    reversed.reverse();
-    Some((extent, reversed))
-}
-
-fn affine_family_extent(
-    dimensions: &[LayoutIndexDimension<'_>],
-    strides: &[usize],
-) -> Option<usize> {
+fn affine_extent(dimensions: &[usize], strides: &[usize]) -> Option<usize> {
     if dimensions.len() != strides.len() {
         return None;
     }
@@ -2451,196 +2283,32 @@ fn affine_family_extent(
         .iter()
         .zip(strides)
         .try_fold(0usize, |offset, (dimension, stride)| {
-            offset.checked_add(dimension.len.checked_sub(1)?.checked_mul(*stride)?)
+            offset.checked_add(dimension.checked_sub(1)?.checked_mul(*stride)?)
         })?
         .checked_add(1)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct FamilyGeometry {
-    strides: Vec<usize>,
-    extent: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FamilyGeometryError {
-    Overflow,
-    InvalidFamily(LayoutRootFamilyId),
-    InvalidOverlay(usize),
-}
-
-fn unit_occurrence_at_overlay<'a, 'db>(
-    occurrences: &'a [RootOccurrence<'db>],
-    cells: &[RootCell<'db>],
-    families: &[LayoutRootFamily<'db>],
-    unit: AllocationUnitId,
-    enum_place: &StoragePlace<'db>,
-) -> Option<&'a RootOccurrence<'db>> {
-    allocation_unit_occurrences(cells, families, unit)?
-        .iter()
-        .filter_map(|occurrence| occurrences.get(occurrence.0 as usize))
-        .find(|occurrence| {
-            occurrence.place.steps.starts_with(&enum_place.steps)
-                && matches!(
-                    occurrence.place.steps.get(enum_place.steps.len()),
-                    Some(PlaceStep::EnumVariant(_))
-                )
-        })
-}
-
-fn derive_family_geometry<'db>(
-    occurrences: &[RootOccurrence<'db>],
-    cells: &[RootCell<'db>],
-    families: &[LayoutRootFamily<'db>],
-    overlay_groups: &[EnumOverlayGroup<'db>],
-) -> Result<(Vec<FamilyGeometry>, Vec<usize>), FamilyGeometryError> {
-    let mut geometry = families
-        .iter()
-        .map(|family| {
-            let (extent, strides) = row_major_family_geometry(&family.dimensions)
-                .ok_or(FamilyGeometryError::Overflow)?;
-            Ok(FamilyGeometry { strides, extent })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut group_indices = (0..overlay_groups.len()).collect::<Vec<_>>();
-    group_indices.sort_by_key(|idx| std::cmp::Reverse(overlay_groups[*idx].enum_place.steps.len()));
-
-    for group_idx in group_indices {
-        let group = &overlay_groups[group_idx];
-        let prefix_len = group
-            .enum_place
-            .steps
-            .iter()
-            .filter(|step| matches!(step, PlaceStep::ArrayElem(_)))
-            .count();
-        let mut prefix = None;
-        let mut block_extent = 0usize;
-        for member in &group.members {
-            let occurrence = unit_occurrence_at_overlay(
-                occurrences,
-                cells,
-                families,
-                *member,
-                &group.enum_place,
-            )
-            .ok_or(FamilyGeometryError::InvalidOverlay(group_idx))?;
-            if occurrence.index_dimensions.len() < prefix_len
-                || prefix.as_ref().is_some_and(|prefix: &Vec<_>| {
-                    prefix.as_slice() != &occurrence.index_dimensions[..prefix_len]
-                })
-            {
-                return Err(FamilyGeometryError::InvalidOverlay(group_idx));
-            }
-            prefix.get_or_insert_with(|| occurrence.index_dimensions[..prefix_len].to_vec());
-            let member_extent = match member {
-                AllocationUnitId::Scalar(_) => {
-                    if occurrence
-                        .index_dimensions
-                        .iter()
-                        .any(|dimension| dimension.len != 1)
-                    {
-                        return Err(FamilyGeometryError::InvalidOverlay(group_idx));
-                    }
-                    1
-                }
-                AllocationUnitId::Indexed(family) => {
-                    let family_data = families
-                        .get(family.0 as usize)
-                        .ok_or(FamilyGeometryError::InvalidFamily(*family))?;
-                    let family_geometry = geometry
-                        .get(family.0 as usize)
-                        .ok_or(FamilyGeometryError::InvalidFamily(*family))?;
-                    if family_data.dimensions.get(..prefix_len)
-                        != occurrence.index_dimensions.get(..prefix_len)
-                    {
-                        return Err(FamilyGeometryError::InvalidOverlay(group_idx));
-                    }
-                    affine_family_extent(
-                        &family_data.dimensions[prefix_len..],
-                        &family_geometry.strides[prefix_len..],
-                    )
-                    .ok_or(FamilyGeometryError::Overflow)?
-                }
-            };
-            block_extent = block_extent.max(member_extent);
-        }
-        if block_extent == 0 {
-            return Err(FamilyGeometryError::InvalidOverlay(group_idx));
-        }
-        for member in &group.members {
-            let AllocationUnitId::Indexed(family) = member else {
-                continue;
-            };
-            let family_data = families
-                .get(family.0 as usize)
-                .ok_or(FamilyGeometryError::InvalidFamily(*family))?;
-            let family_geometry = geometry
-                .get_mut(family.0 as usize)
-                .ok_or(FamilyGeometryError::InvalidFamily(*family))?;
-            let mut stride = block_extent;
-            for dimension_idx in (0..prefix_len).rev() {
-                family_geometry.strides[dimension_idx] =
-                    family_geometry.strides[dimension_idx].max(stride);
-                stride = family_geometry.strides[dimension_idx]
-                    .checked_mul(family_data.dimensions[dimension_idx].len)
-                    .ok_or(FamilyGeometryError::Overflow)?;
-            }
-            family_geometry.extent =
-                affine_family_extent(&family_data.dimensions, &family_geometry.strides)
-                    .ok_or(FamilyGeometryError::Overflow)?;
-        }
-    }
-
-    let group_extents = overlay_groups
-        .iter()
-        .enumerate()
-        .map(|(group_idx, group)| {
-            group
-                .members
-                .iter()
-                .try_fold(0usize, |extent, member| {
-                    let member_extent = match member {
-                        AllocationUnitId::Scalar(_) => 1,
-                        AllocationUnitId::Indexed(family) => {
-                            geometry
-                                .get(family.0 as usize)
-                                .ok_or(FamilyGeometryError::InvalidFamily(*family))?
-                                .extent
-                        }
-                    };
-                    Ok(extent.max(member_extent))
-                })
-                .and_then(|extent| {
-                    (extent != 0)
-                        .then_some(extent)
-                        .ok_or(FamilyGeometryError::InvalidOverlay(group_idx))
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok((geometry, group_extents))
-}
-
-fn collect_event_units<'db>(
+fn collect_event_cells<'db>(
     events: &[WalkEvent<'db>],
-    occurrence_units: &[Option<AllocationUnitId>],
-    seen: &mut FxHashSet<AllocationUnitId>,
-    units: &mut Vec<AllocationUnitId>,
+    occurrence_cells: &[Option<RootCellId>],
+    seen: &mut FxHashSet<RootCellId>,
+    cells: &mut Vec<RootCellId>,
 ) {
     for event in events {
         match event {
             WalkEvent::Root(occurrence) => {
-                if let Some(unit) = occurrence_units
+                if let Some(cell) = occurrence_cells
                     .get(occurrence.0 as usize)
                     .copied()
                     .flatten()
-                    && seen.insert(unit)
+                    && seen.insert(cell)
                 {
-                    units.push(unit);
+                    cells.push(cell);
                 }
             }
             WalkEvent::Enum { variants, .. } => {
                 for variant in variants {
-                    collect_event_units(variant, occurrence_units, seen, units);
+                    collect_event_cells(variant, occurrence_cells, seen, cells);
                 }
             }
         }
@@ -2672,34 +2340,18 @@ fn mutually_exclusive_enum_place<'db>(
     None
 }
 
-fn allocation_unit_occurrences<'a, 'db>(
-    cells: &'a [RootCell<'db>],
-    families: &'a [LayoutRootFamily<'db>],
-    unit: AllocationUnitId,
-) -> Option<&'a [RootOccurrenceId]> {
-    match unit {
-        AllocationUnitId::Scalar(cell) => cells
-            .get(cell.0 as usize)
-            .map(|cell| cell.occurrences.as_slice()),
-        AllocationUnitId::Indexed(family) => families
-            .get(family.0 as usize)
-            .map(|family| family.occurrences.as_slice()),
-    }
-}
-
 /// Returns every enum place that proves at least one occurrence pair mutually
 /// exclusive, but only when *all* occurrence pairs are mutually exclusive.
 /// Identity-equal roots can occur in several variants, so checking one pair or
 /// one positional enum lane is not sufficient to prove an allocation overlay.
-fn allocation_unit_overlay_witnesses<'db>(
+fn cell_overlay_witnesses<'db>(
     occurrences: &[RootOccurrence<'db>],
     cells: &[RootCell<'db>],
-    families: &[LayoutRootFamily<'db>],
-    first: AllocationUnitId,
-    second: AllocationUnitId,
+    first: RootCellId,
+    second: RootCellId,
 ) -> Option<Vec<StoragePlace<'db>>> {
-    let first_occurrences = allocation_unit_occurrences(cells, families, first)?;
-    let second_occurrences = allocation_unit_occurrences(cells, families, second)?;
+    let first_occurrences = &cells.get(first.0 as usize)?.occurrences;
+    let second_occurrences = &cells.get(second.0 as usize)?.occurrences;
     let mut witnesses = Vec::new();
     for first in first_occurrences {
         let first = occurrences.get(first.0 as usize)?;
@@ -2714,84 +2366,49 @@ fn allocation_unit_overlay_witnesses<'db>(
     (!witnesses.is_empty()).then_some(witnesses)
 }
 
-fn allocation_unit_space<'db>(
-    cells: &[RootCell<'db>],
-    families: &[LayoutRootFamily<'db>],
-    unit: AllocationUnitId,
-) -> Option<ProviderAddressSpace> {
-    match unit {
-        AllocationUnitId::Scalar(cell) => cells.get(cell.0 as usize).map(|cell| cell.space),
-        AllocationUnitId::Indexed(family) => {
-            families.get(family.0 as usize).map(|family| family.space)
-        }
-    }
-}
-
-fn allocation_unit_role<'db>(
-    cells: &[RootCell<'db>],
-    families: &[LayoutRootFamily<'db>],
-    unit: AllocationUnitId,
-) -> Option<RootRole> {
-    match unit {
-        AllocationUnitId::Scalar(cell) => cells.get(cell.0 as usize).map(|cell| cell.role),
-        AllocationUnitId::Indexed(family) => {
-            families.get(family.0 as usize).map(|family| family.role)
-        }
-    }
-}
-
 fn finalize_lanes<'db>(
     events: &[WalkEvent<'db>],
-    occurrence_units: &[Option<AllocationUnitId>],
+    occurrence_cells: &[Option<RootCellId>],
     occurrences: &[RootOccurrence<'db>],
     cells: &[RootCell<'db>],
-    families: &[LayoutRootFamily<'db>],
     role: RootRole,
 ) -> Vec<AllocationLane<'db>> {
-    let mut units = Vec::new();
-    collect_event_units(
+    let mut event_cells = Vec::new();
+    collect_event_cells(
         events,
-        occurrence_units,
+        occurrence_cells,
         &mut FxHashSet::default(),
-        &mut units,
+        &mut event_cells,
     );
     let mut lanes = Vec::<AllocationLane<'db>>::new();
-    for unit in units {
-        if allocation_unit_role(cells, families, unit) != Some(role) {
-            continue;
-        }
-        let Some(space) = allocation_unit_space(cells, families, unit) else {
+    for cell in event_cells {
+        let Some(data) = cells.get(cell.0 as usize) else {
             continue;
         };
+        if data.role != role {
+            continue;
+        }
         if let Some(lane) = lanes.iter_mut().find(|lane| {
-            lane.space == space
+            lane.space == data.space
                 && lane.members.iter().all(|member| {
-                    allocation_unit_overlay_witnesses(occurrences, cells, families, *member, unit)
-                        .is_some()
+                    cell_overlay_witnesses(occurrences, cells, *member, cell).is_some()
                 })
         }) {
-            lane.members.push(unit);
+            lane.members.push(cell);
         } else {
             lanes.push(AllocationLane {
-                members: vec![unit],
+                members: vec![cell],
                 overlays: Vec::new(),
-                space,
+                space: data.space,
             });
         }
     }
     for (lane_idx, lane) in lanes.iter_mut().enumerate() {
-        let mut overlay_members: IndexMap<StoragePlace<'db>, Vec<AllocationUnitId>> =
-            IndexMap::new();
+        let mut overlay_members: IndexMap<StoragePlace<'db>, Vec<RootCellId>> = IndexMap::new();
         for (idx, first) in lane.members.iter().enumerate() {
             for second in lane.members.iter().skip(idx + 1) {
-                let witnesses = allocation_unit_overlay_witnesses(
-                    occurrences,
-                    cells,
-                    families,
-                    *first,
-                    *second,
-                )
-                .expect("one allocation lane must contain only mutually exclusive units");
+                let witnesses = cell_overlay_witnesses(occurrences, cells, *first, *second)
+                    .expect("one allocation lane must contain only mutually exclusive cells");
                 for witness in witnesses {
                     let members = overlay_members.entry(witness).or_default();
                     for member in [*first, *second] {
@@ -2935,11 +2552,9 @@ fn finish_field_plan<'db>(
     let materialize_events = remap_walk_events(materialize_events, &occurrence_map);
 
     let mut cells = Vec::<RootCell<'db>>::new();
-    let mut families = Vec::<LayoutRootFamily<'db>>::new();
     let mut cell_by_root = FxHashMap::<LayoutRootId<'db>, RootCellId>::default();
-    let mut family_by_key = FxHashMap::<FamilyKey<'db>, LayoutRootFamilyId>::default();
-    let mut occurrence_units = vec![None; occurrences.len()];
-    let mut place_roots: IndexMap<StoragePlace<'db>, Vec<LayoutBindingTarget>> = IndexMap::new();
+    let mut occurrence_cells = vec![None; occurrences.len()];
+    let mut place_roots: IndexMap<StoragePlace<'db>, Vec<RootCellId>> = IndexMap::new();
     let mut expected_by_root = FxHashMap::default();
     let mut errors = Vec::new();
 
@@ -2954,46 +2569,7 @@ fn finish_field_plan<'db>(
                 root: occurrence.root,
             });
         }
-        let is_family = occurrence
-            .index_dimensions
-            .iter()
-            .any(|dimension| dimension.len > 1);
-        let unit = if is_family {
-            let key = FamilyKey {
-                root: occurrence.root,
-                dimensions: occurrence
-                    .index_dimensions
-                    .iter()
-                    .map(|dimension| dimension.instance)
-                    .collect(),
-            };
-            if let Some(id) = family_by_key.get(&key).copied() {
-                let family = &mut families[id.0 as usize];
-                if family.space != occurrence.space {
-                    errors.push(ContractLayoutError::ConflictingLayoutRootSpaces {
-                        root: occurrence.root,
-                    });
-                }
-                family.role = family.role.join(occurrence.role);
-                family.occurrences.push(occurrence.id);
-                AllocationUnitId::Indexed(id)
-            } else {
-                let id = LayoutRootFamilyId(families.len() as u32);
-                families.push(LayoutRootFamily {
-                    id,
-                    lane: occurrence.root,
-                    dimensions: occurrence.index_dimensions.clone(),
-                    strides: Vec::new(),
-                    extent: 0,
-                    occurrences: vec![occurrence.id],
-                    role: occurrence.role,
-                    space: occurrence.space,
-                    allocation: None,
-                });
-                family_by_key.insert(key, id);
-                AllocationUnitId::Indexed(id)
-            }
-        } else if let Some(id) = cell_by_root.get(&occurrence.root).copied() {
+        let cell = if let Some(id) = cell_by_root.get(&occurrence.root).copied() {
             let cell = &mut cells[id.0 as usize];
             if cell.space != occurrence.space {
                 errors.push(ContractLayoutError::ConflictingLayoutRootSpaces {
@@ -3002,7 +2578,7 @@ fn finish_field_plan<'db>(
             }
             cell.role = cell.role.join(occurrence.role);
             cell.occurrences.push(occurrence.id);
-            AllocationUnitId::Scalar(id)
+            id
         } else {
             let id = RootCellId(cells.len() as u32);
             cells.push(RootCell {
@@ -3014,44 +2590,34 @@ fn finish_field_plan<'db>(
                 allocation: None,
             });
             cell_by_root.insert(occurrence.root, id);
-            AllocationUnitId::Scalar(id)
+            id
         };
-        occurrence_units[occurrence.id.0 as usize] = Some(unit);
-        let target = match unit {
-            AllocationUnitId::Scalar(id) => LayoutBindingTarget::Scalar(id),
-            AllocationUnitId::Indexed(id) => LayoutBindingTarget::Indexed(id),
-        };
-        let place_targets = place_roots.entry(occurrence.place.clone()).or_default();
-        if !place_targets.contains(&target) {
-            place_targets.push(target);
+        occurrence_cells[occurrence.id.0 as usize] = Some(cell);
+        let place_cells = place_roots.entry(occurrence.place.clone()).or_default();
+        if !place_cells.contains(&cell) {
+            place_cells.push(cell);
         }
     }
 
     let counted_lanes = finalize_lanes(
         &counted_events,
-        &occurrence_units,
+        &occurrence_cells,
         &occurrences,
         &cells,
-        &families,
         RootRole::Counted,
     );
     let materialize_only_lanes = finalize_lanes(
         &materialize_events,
-        &occurrence_units,
+        &occurrence_cells,
         &occurrences,
         &cells,
-        &families,
         RootRole::MaterializeOnly,
     );
 
     let mut bound_leaves: IndexMap<LayoutRootId<'db>, Vec<LayoutBindingLeaf>> = IndexMap::new();
     for occurrence in &occurrences {
-        let Some(unit) = occurrence_units[occurrence.id.0 as usize] else {
+        let Some(target) = occurrence_cells[occurrence.id.0 as usize] else {
             continue;
-        };
-        let target = match unit {
-            AllocationUnitId::Scalar(id) => LayoutBindingTarget::Scalar(id),
-            AllocationUnitId::Indexed(id) => LayoutBindingTarget::Indexed(id),
         };
         let leaf = LayoutBindingLeaf {
             selector: occurrence.selector.clone(),
@@ -3090,29 +2656,11 @@ fn finish_field_plan<'db>(
                 lane: overlay.lane,
                 members: overlay.members.clone(),
                 space: lane.space,
-                reserved_extent: 0,
             };
             if !overlay_groups.contains(&group) {
                 overlay_groups.push(group);
             }
         }
-    }
-    let (geometry, group_extents) =
-        match derive_family_geometry(&occurrences, &cells, &families, &overlay_groups) {
-            Ok(geometry) => geometry,
-            Err(FamilyGeometryError::Overflow) => {
-                return Err(vec![ContractLayoutError::LayoutExtentOverflow]);
-            }
-            Err(FamilyGeometryError::InvalidFamily(_) | FamilyGeometryError::InvalidOverlay(_)) => {
-                return Err(vec![ContractLayoutError::InternalLayoutGraph]);
-            }
-        };
-    for (family, geometry) in families.iter_mut().zip(geometry) {
-        family.strides = geometry.strides;
-        family.extent = geometry.extent;
-    }
-    for (group, extent) in overlay_groups.iter_mut().zip(group_extents) {
-        group.reserved_extent = extent;
     }
 
     Ok(ValidatedFieldLayoutPlan {
@@ -3129,7 +2677,6 @@ fn finish_field_plan<'db>(
         occurrences,
         concrete_occurrences,
         cells,
-        families,
         overlay_groups,
         place_roots,
         bindings,
@@ -3344,46 +2891,6 @@ fn contract_layout_error_for_provider_failure<'db>(
     }
 }
 
-fn allocation_unit_extent<'db>(
-    plan: &ValidatedFieldLayoutPlan<'db>,
-    unit: AllocationUnitId,
-) -> Option<usize> {
-    match unit {
-        AllocationUnitId::Scalar(_) => Some(1),
-        AllocationUnitId::Indexed(family) => Some(plan.families.get(family.0 as usize)?.extent),
-    }
-}
-
-fn assign_allocation_unit<'db>(
-    plan: &mut ValidatedFieldLayoutPlan<'db>,
-    unit: AllocationUnitId,
-    space: ProviderAddressSpace,
-    base: usize,
-) -> Option<()> {
-    match unit {
-        AllocationUnitId::Scalar(cell) => {
-            plan.cells.get_mut(cell.0 as usize)?.allocation =
-                Some(RootAllocation { space, slot: base });
-        }
-        AllocationUnitId::Indexed(family) => {
-            let family = plan.families.get_mut(family.0 as usize)?;
-            family.allocation = Some(RootAllocation { space, slot: base });
-        }
-    }
-    Some(())
-}
-
-fn allocation_lane_extent<'db>(
-    plan: &ValidatedFieldLayoutPlan<'db>,
-    lane: &AllocationLane<'db>,
-) -> Result<usize, ContractLayoutError<'db>> {
-    lane.members.iter().try_fold(0usize, |extent, member| {
-        allocation_unit_extent(plan, *member)
-            .map(|member_extent| extent.max(member_extent))
-            .ok_or(ContractLayoutError::LayoutExtentOverflow)
-    })
-}
-
 fn field_block_extents<'db>(
     plan: &ValidatedFieldLayoutPlan<'db>,
 ) -> Result<IndexMap<ProviderAddressSpace, usize>, ContractLayoutError<'db>> {
@@ -3394,10 +2901,9 @@ fn field_block_extents<'db>(
         .iter()
         .chain(&plan.materialize_only_lanes)
     {
-        let extent = allocation_lane_extent(plan, lane)?;
         let total = extents.entry(lane.space).or_insert(0usize);
         *total = total
-            .checked_add(extent)
+            .checked_add(1)
             .ok_or(ContractLayoutError::LayoutExtentOverflow)?;
     }
     Ok(extents)
@@ -3460,14 +2966,18 @@ fn allocate_lanes<'db>(
     cursors: &mut FxHashMap<ProviderAddressSpace, usize>,
 ) -> Result<(), ContractLayoutError<'db>> {
     for lane in lanes {
-        let extent = allocation_lane_extent(plan, lane)?;
-        let base = *cursors.entry(lane.space).or_insert(0);
-        let next = base
-            .checked_add(extent)
+        let slot = *cursors.entry(lane.space).or_insert(0);
+        let next = slot
+            .checked_add(1)
             .ok_or(ContractLayoutError::LayoutExtentOverflow)?;
         for member in &lane.members {
-            assign_allocation_unit(plan, *member, lane.space, base)
-                .ok_or(ContractLayoutError::LayoutExtentOverflow)?;
+            plan.cells
+                .get_mut(member.0 as usize)
+                .ok_or(ContractLayoutError::InternalLayoutGraph)?
+                .allocation = Some(RootAllocation {
+                space: lane.space,
+                slot,
+            });
         }
         cursors.insert(lane.space, next);
     }
@@ -3568,7 +3078,6 @@ fn allocate_contract<'db>(
                 occurrences: plan.occurrences,
                 concrete_occurrences: plan.concrete_occurrences,
                 cells: plan.cells,
-                families: plan.families,
                 overlay_groups: plan.overlay_groups,
                 place_roots: plan.place_roots,
                 root_bindings: plan.bindings,
@@ -3585,7 +3094,7 @@ fn allocate_contract<'db>(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum IntervalOwner<'db> {
     Inline(ContractFieldId<'db>),
-    Unit(ContractFieldId<'db>, AllocationUnitId),
+    Cell(ContractFieldId<'db>, RootCellId),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3793,7 +3302,7 @@ fn resolve_storage_place_with_dimensions<'db>(
     db: &'db dyn HirAnalysisDb,
     field: &FieldStorageLayout<'db>,
     place: &StoragePlace<'db>,
-    dimensions: &[LayoutIndexDimension<'db>],
+    dimensions: &[usize],
 ) -> Option<ResolvedStoragePlace<'db>> {
     let resolved = resolve_storage_place(db, field, place)?;
     resolved
@@ -3803,17 +3312,18 @@ fn resolve_storage_place_with_dimensions<'db>(
             ContractLayoutPathSegment::ArrayElement { len, .. } => Some(*len),
             _ => None,
         })
-        .eq(dimensions.iter().map(|dimension| dimension.len))
+        .eq(dimensions.iter().copied())
         .then_some(resolved)
 }
 
+/// Resolves the const type of a layout parameter. Layout roots never sit
+/// under an array element, so the place must not cross one.
 fn resolved_layout_parameter_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     field: &FieldStorageLayout<'db>,
     place: &StoragePlace<'db>,
-    dimensions: &[LayoutIndexDimension<'db>],
 ) -> Option<TyId<'db>> {
-    let resolved = resolve_storage_place_with_dimensions(db, field, place, dimensions)?;
+    let resolved = resolve_storage_place_with_dimensions(db, field, place, &[])?;
     let TyData::ConstTy(const_ty) = resolved.ty.data(db) else {
         return None;
     };
@@ -3841,13 +3351,13 @@ fn layout_integer<'db>(db: &'db dyn HirAnalysisDb, value: usize) -> IntegerId<'d
 fn indexed_layout_value<'db>(
     db: &'db dyn HirAnalysisDb,
     base: usize,
-    dimensions: &[LayoutIndexDimension<'db>],
+    dimensions: &[usize],
     strides: &[usize],
     extent: usize,
 ) -> ContractLayoutValue<'db> {
     ContractLayoutValue::Indexed {
         base: layout_integer(db, base),
-        dimensions: dimensions.iter().map(|dimension| dimension.len).collect(),
+        dimensions: dimensions.to_vec(),
         strides: strides.to_vec(),
         extent,
     }
@@ -3893,8 +3403,8 @@ fn allocated_contract_layout_report<'db>(
                     base,
                     &leaf.dimensions,
                     &leaf.strides,
-                    affine_family_extent(&leaf.dimensions, &leaf.strides)
-                        .expect("validated inline layout family must have finite extent"),
+                    affine_extent(&leaf.dimensions, &leaf.strides)
+                        .expect("validated inline layout must have a finite extent"),
                 )
             };
             let mut path = contract_layout_path(db, field, &leaf.place);
@@ -3940,27 +3450,6 @@ fn allocated_contract_layout_report<'db>(
                     occurrence,
                     allocation.space,
                     ContractLayoutValue::Scalar(layout_integer(db, allocation.slot)),
-                ));
-            }
-        }
-        for family in &field.families {
-            let Some(allocation) = family.allocation else {
-                continue;
-            };
-            for occurrence in &family.occurrences {
-                let occurrence = &field.occurrences[occurrence.0 as usize];
-                entries.push(inferred_parameter_entry(
-                    db,
-                    field,
-                    occurrence,
-                    allocation.space,
-                    indexed_layout_value(
-                        db,
-                        allocation.slot,
-                        &family.dimensions,
-                        &family.strides,
-                        family.extent,
-                    ),
                 ));
             }
         }
@@ -4060,11 +3549,11 @@ pub fn validate_allocated_contract_layout<'db>(
             return Err(LayoutInvariantError::InvalidFieldExtent { field: field.field });
         }
         for leaf in &field.inline_leaves {
-            let Some(extent) = affine_family_extent(&leaf.dimensions, &leaf.strides) else {
+            let Some(extent) = affine_extent(&leaf.dimensions, &leaf.strides) else {
                 return Err(LayoutInvariantError::InvalidFieldExtent { field: field.field });
             };
             if leaf.place.field != field.field
-                || leaf.dimensions.iter().any(|dimension| dimension.len == 0)
+                || leaf.dimensions.contains(&0)
                 || resolve_storage_place_with_dimensions(db, field, &leaf.place, &leaf.dimensions)
                     .is_none()
                 || leaf
@@ -4087,37 +3576,9 @@ pub fn validate_allocated_contract_layout<'db>(
                 });
             }
         }
-        let (expected_family_geometry, expected_group_extents) = match derive_family_geometry(
-            &field.occurrences,
-            &field.cells,
-            &field.families,
-            &field.overlay_groups,
-        ) {
-            Ok(geometry) => geometry,
-            Err(FamilyGeometryError::Overflow) => {
-                return Err(LayoutInvariantError::InvalidFieldExtent { field: field.field });
-            }
-            Err(FamilyGeometryError::InvalidFamily(family)) => {
-                return Err(LayoutInvariantError::InvalidFamilyRegion {
-                    field: field.field,
-                    family,
-                });
-            }
-            Err(FamilyGeometryError::InvalidOverlay(group_idx)) => {
-                return Err(LayoutInvariantError::InvalidOverlayGroup {
-                    field: field.field,
-                    lane: field
-                        .overlay_groups
-                        .get(group_idx)
-                        .map_or(u32::MAX, |group| group.lane),
-                });
-            }
-        };
-
-        let mut occurrence_units = FxHashMap::default();
+        let mut occurrence_cells = FxHashMap::default();
         let mut expected_by_root = FxHashMap::default();
         let mut scalar_roots = FxHashSet::default();
-        let mut family_keys = FxHashSet::default();
 
         for (idx, occurrence) in field.concrete_occurrences.iter().enumerate() {
             let valid_ty = matches!(
@@ -4133,13 +3594,8 @@ pub fn validate_allocated_contract_layout<'db>(
                 || occurrence.order != occurrence.id.0
                 || occurrence.place.field != field.field
                 || !occurrence.selector.starts_with(&occurrence.place.steps)
-                || occurrence
-                    .index_dimensions
-                    .iter()
-                    .any(|dimension| dimension.len == 0)
                 || !valid_ty
-                || resolved_layout_parameter_ty(db, field, &selector, &occurrence.index_dimensions)
-                    != Some(occurrence.ty)
+                || resolved_layout_parameter_ty(db, field, &selector) != Some(occurrence.ty)
                 || owner_space != Some(occurrence.space)
             {
                 return Err(LayoutInvariantError::InvalidConcreteOccurrence {
@@ -4203,15 +3659,8 @@ pub fn validate_allocated_contract_layout<'db>(
                     || storage_place_root_space(db, field, &data.place) != Some(data.space)
                     || data.place.field != field.field
                     || !data.selector.starts_with(&data.place.steps)
-                    || data
-                        .index_dimensions
-                        .iter()
-                        .any(|dimension| dimension.len != 1)
-                    || resolved_layout_parameter_ty(db, field, &selector, &data.index_dimensions)
-                        != Some(expected)
-                    || occurrence_units
-                        .insert(*occurrence, AllocationUnitId::Scalar(cell.id))
-                        .is_some()
+                    || resolved_layout_parameter_ty(db, field, &selector) != Some(expected)
+                    || occurrence_cells.insert(*occurrence, cell.id).is_some()
                 {
                     return Err(LayoutInvariantError::InvalidOccurrenceGraph {
                         field: field.field,
@@ -4255,129 +3704,13 @@ pub fn validate_allocated_contract_layout<'db>(
                 .or_default()
                 .push(AllocationInterval {
                     field: field.field,
-                    owner: IntervalOwner::Unit(field.field, AllocationUnitId::Scalar(cell.id)),
+                    owner: IntervalOwner::Cell(field.field, cell.id),
                     start: allocation.slot,
                     end,
                 });
         }
 
-        for (family_idx, family) in field.families.iter().enumerate() {
-            let family_key = FamilyKey {
-                root: family.lane,
-                dimensions: family
-                    .dimensions
-                    .iter()
-                    .map(|dimension| dimension.instance)
-                    .collect(),
-            };
-            if family.id.0 as usize != family_idx
-                || family.occurrences.is_empty()
-                || family.dimensions.is_empty()
-                || family.dimensions.iter().any(|dimension| dimension.len == 0)
-                || !family.dimensions.iter().any(|dimension| dimension.len > 1)
-                || family.extent == 0
-                || family.strides.len() != family.dimensions.len()
-                || !family_keys.insert(family_key)
-            {
-                return Err(LayoutInvariantError::InvalidFamilyRegion {
-                    field: field.field,
-                    family: family.id,
-                });
-            }
-            let mut role = RootRole::MaterializeOnly;
-            for occurrence in &family.occurrences {
-                let Some(data) = field.occurrences.get(occurrence.0 as usize) else {
-                    return Err(LayoutInvariantError::InvalidOccurrenceGraph {
-                        field: field.field,
-                        occurrence: *occurrence,
-                    });
-                };
-                let Some(expected) = occurrence_placeholder_ty(db, data) else {
-                    return Err(LayoutInvariantError::InvalidOccurrenceGraph {
-                        field: field.field,
-                        occurrence: *occurrence,
-                    });
-                };
-                let selector = StoragePlace {
-                    field: data.place.field,
-                    steps: data.selector.clone(),
-                };
-                if data.id != *occurrence
-                    || data.root != family.lane
-                    || data.index_dimensions != family.dimensions
-                    || data.space != family.space
-                    || storage_place_root_space(db, field, &data.place) != Some(data.space)
-                    || data.place.field != field.field
-                    || !data.selector.starts_with(&data.place.steps)
-                    || resolved_layout_parameter_ty(db, field, &selector, &data.index_dimensions)
-                        != Some(expected)
-                    || occurrence_units
-                        .insert(*occurrence, AllocationUnitId::Indexed(family.id))
-                        .is_some()
-                {
-                    return Err(LayoutInvariantError::InvalidOccurrenceGraph {
-                        field: field.field,
-                        occurrence: *occurrence,
-                    });
-                }
-                if let Some(previous) = expected_by_root.insert(data.root, expected)
-                    && previous != expected
-                {
-                    return Err(LayoutInvariantError::InvalidOccurrenceGraph {
-                        field: field.field,
-                        occurrence: *occurrence,
-                    });
-                }
-                role = role.join(data.role);
-            }
-            if role != family.role {
-                return Err(LayoutInvariantError::InvalidFamilyRegion {
-                    field: field.field,
-                    family: family.id,
-                });
-            }
-            let allocation =
-                family
-                    .allocation
-                    .ok_or(LayoutInvariantError::MissingFamilyAllocation {
-                        field: field.field,
-                        family: family.id,
-                    })?;
-            let expected_geometry = &expected_family_geometry[family_idx];
-            if expected_geometry.extent != family.extent
-                || expected_geometry.strides != family.strides
-                || allocation.space != family.space
-                || family.slot_for_indices(
-                    &family
-                        .dimensions
-                        .iter()
-                        .map(|dimension| dimension.len - 1)
-                        .collect::<Vec<_>>(),
-                ) != allocation.slot.checked_add(family.extent - 1)
-            {
-                return Err(LayoutInvariantError::InvalidFamilyRegion {
-                    field: field.field,
-                    family: family.id,
-                });
-            }
-            let end = allocation.slot.checked_add(family.extent).ok_or(
-                LayoutInvariantError::InvalidFamilyRegion {
-                    field: field.field,
-                    family: family.id,
-                },
-            )?;
-            intervals
-                .entry(allocation.space)
-                .or_default()
-                .push(AllocationInterval {
-                    field: field.field,
-                    owner: IntervalOwner::Unit(field.field, AllocationUnitId::Indexed(family.id)),
-                    start: allocation.slot,
-                    end,
-                });
-        }
-
-        if occurrence_units.len() != field.occurrences.len()
+        if occurrence_cells.len() != field.occurrences.len()
             || field
                 .occurrences
                 .iter()
@@ -4385,13 +3718,13 @@ pub fn validate_allocated_contract_layout<'db>(
                 .any(|(idx, occurrence)| {
                     occurrence.id.0 as usize != idx
                         || occurrence.order != occurrence.id.0
-                        || !occurrence_units.contains_key(&occurrence.id)
+                        || !occurrence_cells.contains_key(&occurrence.id)
                 })
         {
             let occurrence = field
                 .occurrences
                 .iter()
-                .find(|occurrence| !occurrence_units.contains_key(&occurrence.id))
+                .find(|occurrence| !occurrence_cells.contains_key(&occurrence.id))
                 .map_or(RootOccurrenceId(u32::MAX), |occurrence| occurrence.id);
             return Err(LayoutInvariantError::InvalidOccurrenceGraph {
                 field: field.field,
@@ -4400,14 +3733,9 @@ pub fn validate_allocated_contract_layout<'db>(
         }
 
         let mut expected_bindings = IndexMap::new();
-        let mut expected_places: IndexMap<StoragePlace<'db>, Vec<LayoutBindingTarget>> =
-            IndexMap::new();
+        let mut expected_places: IndexMap<StoragePlace<'db>, Vec<RootCellId>> = IndexMap::new();
         for occurrence in &field.occurrences {
-            let unit = occurrence_units[&occurrence.id];
-            let target = match unit {
-                AllocationUnitId::Scalar(cell) => LayoutBindingTarget::Scalar(cell),
-                AllocationUnitId::Indexed(family) => LayoutBindingTarget::Indexed(family),
-            };
+            let target = occurrence_cells[&occurrence.id];
             let targets = expected_places.entry(occurrence.place.clone()).or_default();
             if !targets.contains(&target) {
                 targets.push(target);
@@ -4479,18 +3807,14 @@ pub fn validate_allocated_contract_layout<'db>(
             return Err(LayoutInvariantError::InvalidPlaceBinding { field: field.field });
         }
 
-        for (group_idx, group) in field.overlay_groups.iter().enumerate() {
-            if group.enum_place.field != field.field
-                || group.members.len() < 2
-                || group.reserved_extent == 0
-            {
+        for group in &field.overlay_groups {
+            if group.enum_place.field != field.field || group.members.len() < 2 {
                 return Err(LayoutInvariantError::InvalidOverlayGroup {
                     field: field.field,
                     lane: group.lane,
                 });
             }
             let mut base = None;
-            let mut extent = 0usize;
             let mut seen_members = FxHashSet::default();
             for member in &group.members {
                 if !seen_members.insert(*member) {
@@ -4499,58 +3823,23 @@ pub fn validate_allocated_contract_layout<'db>(
                         lane: group.lane,
                     });
                 }
-                let (member_space, member_base, member_extent) = match member {
-                    AllocationUnitId::Scalar(cell) => {
-                        let cell = field.cells.get(cell.0 as usize).ok_or(
-                            LayoutInvariantError::InvalidOverlayGroup {
-                                field: field.field,
-                                lane: group.lane,
-                            },
-                        )?;
-                        let allocation =
-                            cell.allocation
-                                .ok_or(LayoutInvariantError::InvalidOverlayGroup {
-                                    field: field.field,
-                                    lane: group.lane,
-                                })?;
-                        (cell.space, allocation.slot, 1)
-                    }
-                    AllocationUnitId::Indexed(family) => {
-                        let family = field.families.get(family.0 as usize).ok_or(
-                            LayoutInvariantError::InvalidOverlayGroup {
-                                field: field.field,
-                                lane: group.lane,
-                            },
-                        )?;
-                        let allocation =
-                            family
-                                .allocation
-                                .ok_or(LayoutInvariantError::InvalidOverlayGroup {
-                                    field: field.field,
-                                    lane: group.lane,
-                                })?;
-                        (family.space, allocation.slot, family.extent)
-                    }
+                let invalid = LayoutInvariantError::InvalidOverlayGroup {
+                    field: field.field,
+                    lane: group.lane,
                 };
-                if member_space != group.space || base.is_some_and(|base| base != member_base) {
-                    return Err(LayoutInvariantError::InvalidOverlayGroup {
-                        field: field.field,
-                        lane: group.lane,
-                    });
+                let cell = field.cells.get(member.0 as usize).ok_or(invalid.clone())?;
+                let allocation = cell.allocation.ok_or(invalid.clone())?;
+                if cell.space != group.space || base.is_some_and(|base| base != allocation.slot) {
+                    return Err(invalid);
                 }
-                base = Some(member_base);
-                extent = extent.max(member_extent);
+                base = Some(allocation.slot);
             }
             let mut witnessed_members = FxHashSet::default();
             for (idx, member) in group.members.iter().enumerate() {
                 for other in group.members.iter().skip(idx + 1) {
-                    let Some(witnesses) = allocation_unit_overlay_witnesses(
-                        &field.occurrences,
-                        &field.cells,
-                        &field.families,
-                        *member,
-                        *other,
-                    ) else {
+                    let Some(witnesses) =
+                        cell_overlay_witnesses(&field.occurrences, &field.cells, *member, *other)
+                    else {
                         return Err(LayoutInvariantError::InvalidOverlayGroup {
                             field: field.field,
                             lane: group.lane,
@@ -4561,19 +3850,16 @@ pub fn validate_allocated_contract_layout<'db>(
                         witnessed_members.insert(*other);
                     }
                     permitted_overlaps.insert((
-                        IntervalOwner::Unit(field.field, *member),
-                        IntervalOwner::Unit(field.field, *other),
+                        IntervalOwner::Cell(field.field, *member),
+                        IntervalOwner::Cell(field.field, *other),
                     ));
                     permitted_overlaps.insert((
-                        IntervalOwner::Unit(field.field, *other),
-                        IntervalOwner::Unit(field.field, *member),
+                        IntervalOwner::Cell(field.field, *other),
+                        IntervalOwner::Cell(field.field, *member),
                     ));
                 }
             }
-            if witnessed_members.len() != group.members.len()
-                || extent != group.reserved_extent
-                || expected_group_extents[group_idx] != group.reserved_extent
-            {
+            if witnessed_members.len() != group.members.len() {
                 return Err(LayoutInvariantError::InvalidOverlayGroup {
                     field: field.field,
                     lane: group.lane,

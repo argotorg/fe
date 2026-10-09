@@ -1,10 +1,11 @@
-//! Formatting helpers that build `DynString` values.
+//! Formatting helpers that build `DynString` values, and their parsers.
 //!
 //! String literals can be used directly as `DynString`:
 //! `let s: DynString = "<svg>"`.
-use super::abi::DynString
-use super::num::IntDowncast
-use super::ptr::{self, MemSpan}
+use super::abi::{Bytes, DynString}
+use super::num::{Bounded, IntDowncast}
+use super::option::Option
+use super::ptr::{self, MemArray, MemSpan}
 
 /// Returns the concatenation of `parts` (Solidity `string.concat`).
 pub fn concat<const N: usize>(_ parts: [DynString; N]) -> DynString {
@@ -80,6 +81,82 @@ pub fn hex_upper(_ value: u256, _ bytes: u256) -> DynString {
     out
 }
 
+/// Parses decimal digits as a `u256` (Solidity `Strings.tryParseUint`).
+/// `None` for an empty string (OpenZeppelin returns 0), any byte other
+/// than `0` to `9` (signs and whitespace included) or a value above
+/// `u256::max()` (OpenZeppelin reverts).
+pub fn parse_uint(_ text: DynString) -> Option<u256> {
+    parse_digits(text.payload_span(), radix: 10)
+}
+
+/// Parses decimal digits with an optional `+` or `-` sign as an `i256`
+/// (Solidity `Strings.tryParseInt`). `None` for invalid digits, a missing
+/// digit or a value outside the `i256` range.
+pub fn parse_int(_ text: DynString) -> Option<i256> {
+    let mut digits = text.payload_span()
+    let negative = !digits.is_empty() && digits.byte_at(0) == 45
+    if negative || (!digits.is_empty() && digits.byte_at(0) == 43) {
+        digits = digits.slice(offset: 1, len: digits.len() - 1)
+    }
+    let magnitude = match parse_digits(digits, radix: 10) {
+        Option::Some(value) => value
+        Option::None => return Option::None
+    }
+    let min_magnitude: u256 = 1 << 255
+    if magnitude < min_magnitude {
+        let value: i256 = magnitude.downcast_unchecked()
+        Option::Some(if negative { -value } else { value })
+    } else if negative && magnitude == min_magnitude {
+        Option::Some(i256::min())
+    } else {
+        Option::None
+    }
+}
+
+/// Parses hex digits of either case, with or without a `0x` prefix, as a
+/// `u256` (Solidity `Strings.tryParseHexUint`). `None` for an invalid
+/// digit, no digits or a value above `u256::max()`.
+pub fn parse_hex_uint(_ text: DynString) -> Option<u256> {
+    let mut digits = text.payload_span()
+    if digits.len() >= 2 && digits.byte_at(0) == 48 && digits.byte_at(1) == 120 {
+        digits = digits.slice(offset: 2, len: digits.len() - 2)
+    }
+    parse_digits(digits, radix: 16)
+}
+
+fn parse_digits(_ digits: MemSpan, radix: u256) -> Option<u256> {
+    if digits.is_empty() {
+        return Option::None
+    }
+    let limit = u256::max() / radix
+    let last = u256::max() % radix
+    let mut value: u256 = 0
+    let mut i: u256 = 0
+    while i < digits.len() {
+        let digit = digit_value(digits.byte_at(i))
+        if digit >= radix || value > limit || (value == limit && digit > last) {
+            return Option::None
+        }
+        value = value * radix + digit
+        i += 1
+    }
+    Option::Some(value)
+}
+
+// Value of a decimal or hex digit of either case, 16 for any other byte.
+fn digit_value(_ byte: u8) -> u256 {
+    let c = byte as u256
+    if c >= 48 && c <= 57 {
+        c - 48
+    } else if c >= 97 && c <= 102 {
+        c - 87
+    } else if c >= 65 && c <= 70 {
+        c - 55
+    } else {
+        16
+    }
+}
+
 /// Returns the standard base64 encoding of `data`, with `=` padding
 /// (Solidity `Base64.encode`).
 pub fn base64(_ data: MemSpan) -> DynString {
@@ -102,6 +179,49 @@ pub fn base64(_ data: MemSpan) -> DynString {
     out
 }
 
+/// Decodes standard base64 with `=` padding, the inverse of `base64`.
+/// `None` unless the length is a multiple of 4, every byte is in the
+/// standard alphabet, padding appears only as the last one or two bytes and
+/// the bits it leaves unused are zero, so each byte string has exactly one
+/// accepted encoding (RFC 4648).
+pub fn decode_base64(_ text: DynString) -> Option<Bytes> {
+    let input = text.payload_span()
+    let len = input.len()
+    if len % 4 != 0 {
+        return Option::None
+    }
+    let mut padding: u256 = 0
+    if len > 0 && input.byte_at(len - 1) == 61 {
+        padding = if input.byte_at(len - 2) == 61 { 2 } else { 1 }
+    }
+    let out_len = len / 4 * 3 - padding
+    let out = ptr::alloc_bytes(out_len)
+    let mut i: u256 = 0
+    let mut j: u256 = 0
+    while i < len {
+        let a = base64_value(input.byte_at(i))
+        let b = base64_value(input.byte_at(i + 1))
+        let c = if i + 2 < len - padding { base64_value(input.byte_at(i + 2)) } else { 0 }
+        let d = if i + 3 < len - padding { base64_value(input.byte_at(i + 3)) } else { 0 }
+        if a > 63 || b > 63 || c > 63 || d > 63 {
+            return Option::None
+        }
+        let group = (a << 18) | (b << 12) | (c << 6) | d
+        *ptr::offset_bytes(out, j) = (group >> 16).downcast_truncate()
+        if j + 1 < out_len {
+            *ptr::offset_bytes(out, j + 1) = (group >> 8).downcast_truncate()
+        }
+        if j + 2 < out_len {
+            *ptr::offset_bytes(out, j + 2) = group.downcast_truncate()
+        } else if (group & 0xff) != 0 || (padding == 2 && (group & 0xffff) != 0) {
+            return Option::None
+        }
+        i += 4
+        j += 3
+    }
+    Option::Some(Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: out, len: out_len)))
+}
+
 fn base64_digit(_ value: u8) -> u8 {
     if value < 26 {
         value + 65
@@ -113,6 +233,198 @@ fn base64_digit(_ value: u8) -> u8 {
         43
     } else {
         47
+    }
+}
+
+// Inverse of `base64_digit`, 64 for a byte outside the alphabet.
+fn base64_value(_ byte: u8) -> u256 {
+    let c = byte as u256
+    if c >= 65 && c <= 90 {
+        c - 65
+    } else if c >= 97 && c <= 122 {
+        c - 71
+    } else if c >= 48 && c <= 57 {
+        c + 4
+    } else if c == 43 {
+        62
+    } else if c == 47 {
+        63
+    } else {
+        64
+    }
+}
+
+// Limb bases for base58 conversion: 10 base58 digits (58^10) or 24 bytes.
+const BASE58_LIMB: u256 = 430804206899405824
+const BYTES_LIMB: u256 = 1 << 192
+
+/// Returns the Bitcoin base58 encoding of `data` (OpenZeppelin
+/// `Base58.encode`), where each leading zero byte becomes a `1`. The cost
+/// grows quadratically with the length of `data`.
+pub fn base58(_ data: MemSpan) -> DynString {
+    let len = data.len()
+    let mut zeros: u256 = 0
+    while zeros < len && data.byte_at(zeros) == 0 {
+        zeros += 1
+    }
+    // A 24-byte chunk at a time, into limbs of 10 digits. One limb holds
+    // more than 7.32 bytes, so 0.137 limbs per byte suffice.
+    let limbs = MemArray<u256>::new_zeroed((len - zeros) * 137 / 1000 + 1)
+    let mut used: usize = 0
+    let mut i = zeros
+    while i < len {
+        let end = if len - i > 24 { i + 24 } else { len }
+        let mut chunk: u256 = 0
+        let mut j = i
+        while j < end {
+            chunk = (chunk << 8) | (data.byte_at(j) as u256)
+            j += 1
+        }
+        used = mul_add(limbs, used, base: BASE58_LIMB, factor: 1 << ((end - i) * 8), addend: chunk)
+        i = end
+    }
+    // Every limb but the most significant one has all 10 digits.
+    let mut digits: u256 = 0
+    if used > 0 {
+        let mut top = limbs[used - 1]
+        while top != 0 {
+            digits += 1
+            top /= 58
+        }
+        digits += (used as u256 - 1) * 10
+    }
+    let out = DynString::zeroed(zeros + digits)
+    let dest = out.payload_span().ptr()
+    i = 0
+    while i < zeros {
+        *ptr::offset_bytes(dest, i) = 49
+        i += 1
+    }
+    let mut pos = zeros + digits
+    let mut k: usize = 0
+    while pos > zeros {
+        let mut limb = limbs[k]
+        let mut n: u256 = 0
+        while n < 10 && pos > zeros {
+            pos -= 1
+            *ptr::offset_bytes(dest, pos) = base58_digit((limb % 58).downcast_truncate())
+            limb /= 58
+            n += 1
+        }
+        k += 1
+    }
+    out
+}
+
+/// Decodes Bitcoin base58, the inverse of `base58` (OpenZeppelin
+/// `Base58.decode`): each leading `1` becomes a zero byte. `None` if any
+/// byte is outside the alphabet.
+pub fn decode_base58(_ text: DynString) -> Option<Bytes> {
+    let input = text.payload_span()
+    let len = input.len()
+    let mut zeros: u256 = 0
+    while zeros < len && input.byte_at(zeros) == 49 {
+        zeros += 1
+    }
+    // Ten digits at a time, into limbs of 24 bytes. One limb holds more
+    // than 32.7 digits, so 0.031 limbs per digit suffice.
+    let limbs = MemArray<u256>::new_zeroed((len - zeros) * 31 / 1000 + 1)
+    let mut used: usize = 0
+    let mut i = zeros
+    while i < len {
+        let end = if len - i > 10 { i + 10 } else { len }
+        let mut chunk: u256 = 0
+        let mut factor: u256 = 1
+        let mut j = i
+        while j < end {
+            let value = base58_value(input.byte_at(j))
+            if value > 57 {
+                return Option::None
+            }
+            chunk = chunk * 58 + (value as u256)
+            factor *= 58
+            j += 1
+        }
+        used = mul_add(limbs, used, base: BYTES_LIMB, factor, addend: chunk)
+        i = end
+    }
+    // Every limb but the most significant one has all 24 bytes.
+    let mut bytes: u256 = 0
+    if used > 0 {
+        let mut top = limbs[used - 1]
+        while top != 0 {
+            bytes += 1
+            top >>= 8
+        }
+        bytes += (used as u256 - 1) * 24
+    }
+    let out = ptr::alloc_bytes(zeros + bytes)
+    ptr::zero_bytes(out, zeros)
+    let mut pos = zeros + bytes
+    let mut k: usize = 0
+    while pos > zeros {
+        let mut limb = limbs[k]
+        let mut n: u256 = 0
+        while n < 24 && pos > zeros {
+            pos -= 1
+            *ptr::offset_bytes(out, pos) = limb.downcast_truncate()
+            limb >>= 8
+            n += 1
+        }
+        k += 1
+    }
+    let decoded = MemSpan::from_raw_parts(ptr: out, len: zeros + bytes)
+    Option::Some(Bytes::from_payload(source: decoded))
+}
+
+// Sets the number in `limbs` (base `base`, least significant limb first,
+// `used` limbs significant) to `number * factor + addend` and returns the
+// new count of significant limbs. `limbs` must be long enough to hold it.
+fn mul_add(_ limbs: MemArray<u256>, used: usize, base: u256, factor: u256, addend: u256) -> usize {
+    let mut carry = addend
+    let mut k: usize = 0
+    while carry != 0 || k < used {
+        carry += limbs[k] * factor
+        *limbs.ptr_at(k) = carry % base
+        carry /= base
+        k += 1
+    }
+    k
+}
+
+fn base58_digit(_ value: u8) -> u8 {
+    if value < 9 {
+        value + 49
+    } else if value < 17 {
+        value + 56
+    } else if value < 22 {
+        value + 57
+    } else if value < 33 {
+        value + 58
+    } else if value < 44 {
+        value + 64
+    } else {
+        value + 65
+    }
+}
+
+// Inverse of `base58_digit`, 58 for a byte outside the alphabet (`0`, `I`,
+// `O`, `l` and anything not alphanumeric).
+fn base58_value(_ byte: u8) -> u8 {
+    if byte >= 49 && byte <= 57 {
+        byte - 49
+    } else if byte >= 65 && byte <= 72 {
+        byte - 56
+    } else if byte >= 74 && byte <= 78 {
+        byte - 57
+    } else if byte >= 80 && byte <= 90 {
+        byte - 58
+    } else if byte >= 97 && byte <= 107 {
+        byte - 64
+    } else if byte >= 109 && byte <= 122 {
+        byte - 65
+    } else {
+        58
     }
 }
 

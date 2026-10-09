@@ -1,0 +1,28 @@
+mod m {
+    // Private sealed marker backing a public impl.
+    trait Seal {}
+
+    pub trait Marker {}
+
+    pub struct S {
+        pub x: u256,
+    }
+
+    impl Seal for S {}
+
+    pub struct W<A> {
+        pub a: A,
+    }
+
+    impl<A: Seal> Marker for W<A> {}
+}
+
+use m::{Marker, S, W}
+
+fn need<X: Marker>(_ x: X) {}
+
+// The borrowed `S` fails the private `Seal` bound. The error explains the
+// borrow but must not name the inaccessible trait.
+fn borrowed(_ s: S) {
+    need(W { a: s })
+}

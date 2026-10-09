@@ -1,6 +1,6 @@
 # Changelog
 
-[//]: # (towncrier release notes start)
+[//]: # (release notes start)
 ## 26.4.0 (2026-09-30)
 
 ### Features

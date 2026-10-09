@@ -10,6 +10,8 @@ use core::abi::{
 }
 use ingot::abi::{Sol, StaticAbi}
 use core::ptr::{self, MemSpan}
+use core::seq::{Seq, SeqMut}
+use core::size_of
 use ingot::evm::panic::{PANIC_ASSERT, PANIC_INDEX_OUT_OF_BOUNDS, Panic}
 use ingot::evm::revert_error
 
@@ -118,7 +120,7 @@ pub fn canonical_dyn_array<T>(_ values: DynArray<T>) -> DynArray<T>
     // Encode each element's tail once while sizing and copy the tails into
     // place afterwards, instead of decoding every element a second time.
     let tails = ptr::alloc_array<MemSpan>(count)
-    let mut size = 32 + count * head
+    let mut size: u256 = 0
     let mut i: u256 = 0
     while i < count {
         let encoded = encode_alloc<Sol, T>(values.get(i)).span()
@@ -126,19 +128,7 @@ pub fn canonical_dyn_array<T>(_ values: DynArray<T>) -> DynArray<T>
         tails[i as usize] = encoded
         i += 1
     }
-    let data = ptr::alloc_bytes(size)
-    store_word(ptr: data, value: count)
-    let root = ptr::offset_bytes(data, 32)
-    let mut tail = count * head
-    i = 0
-    while i < count {
-        let encoded = tails[i as usize]
-        store_word(ptr: ptr::offset_bytes(root, i * head), value: tail)
-        ptr::copy(ptr::offset_bytes(root, tail), encoded)
-        tail += encoded.len()
-        i += 1
-    }
-    DynArray::from_abi_tail(data, len: count, size)
+    assemble_dyn_array<T>(tails.ptr(), count, parts_size: size)
 }
 
 /// `StaticAbi` is public, so a downstream type can implement it despite a
@@ -240,5 +230,163 @@ impl<T> MemVec<T>
             MemSpan::from_raw_parts(ptr: self.ptr, len: payload),
         )
         DynArray::from_abi_tail(data: data, len: self.len, size: size)
+    }
+}
+
+/// A growable builder for ABI arrays of any element type, including dynamic
+/// ones such as `Bytes`, `DynArray<U>` (`T[][]`) and `#[abi]` structs with
+/// dynamic fields.
+///
+/// `MemVec` stores elements at their fixed head size and therefore needs
+/// `StaticAbi` elements. `DynVec` instead ABI-encodes every element into its
+/// own allocation as soon as it is passed to `push`, `set` or `filled`, and
+/// only keeps a table of those encodings. The element value is consumed
+/// there, so non-`Copy` element types work, and the builder never has to move
+/// a value back out of an array. `to_dyn_array` then lays the encodings out
+/// as the tails of one `DynArray<T>` payload, with head offsets in the
+/// canonical Solidity layout (tails in index order, no gaps).
+///
+/// Elements are encoded with their `Encode<Sol>` implementation, so an element
+/// that is itself a decoded `DynArray` or `Bytes` is copied as-is, including a
+/// non-canonical inner layout (see `canonical_dyn_array`). Static element
+/// types work as well and produce the same bytes as `MemVec`, which is the
+/// cheaper choice for them.
+///
+/// Memory and gas: each `push`/`set` allocates and writes the element's full
+/// encoding once (plus one extra copy for `DynArray`/`Bytes` elements, whose
+/// encoding is a copy of their payload). A replaced encoding is not reclaimed;
+/// EVM memory is never freed. The table holds one 64-byte entry per slot and
+/// doubles when `push` outgrows it. `to_dyn_array` allocates
+/// `32 + len * 32 + (sum of element encodings)` bytes and copies every
+/// encoding once more, so the final array is independent of the builder.
+pub struct DynVec<T> {
+    parts: *MemSpan,
+    capacity: u256,
+    len: u256,
+    parts_size: u256,
+}
+
+impl<T> DynVec<T>
+    where T: Encode<Sol> + AbiSize
+{
+    /// An empty builder. Allocates nothing until the first `push`.
+    pub fn new() -> Self {
+        DynVec { parts: ptr::cast<u8, MemSpan>(ptr::alloc_bytes(0)), capacity: 0, len: 0, parts_size: 0 }
+    }
+
+    /// A builder with `len` elements that all equal `value`.
+    ///
+    /// `value` is encoded once and the encoding is shared by every slot until
+    /// it is replaced with `set`, so pre-filling is cheap even for large
+    /// elements. Use it with a neutral value (e.g. `DynArray::empty()` or
+    /// `Bytes::empty()`) when elements are filled in out of order or some may
+    /// stay unset.
+    pub fn filled(_ len: u256, value: own T) -> Self {
+        let part = encode_alloc<Sol, T>(value).span()
+        let parts = ptr::cast<u8, MemSpan>(ptr::alloc_bytes(len * size_of<MemSpan>()))
+        let mut i: u256 = 0
+        while i < len {
+            *ptr::offset(parts, i) = part
+            i += 1
+        }
+        DynVec { parts, capacity: len, len, parts_size: len * part.len() }
+    }
+
+    /// Number of elements.
+    pub fn len(self) -> u256 {
+        self.len
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    /// Append `value`, growing the element table if needed.
+    pub fn push(mut self, _ value: own T) {
+        if self.len == self.capacity {
+            let capacity = if self.capacity == 0 { 4 } else { self.capacity * 2 }
+            let parts = ptr::cast<u8, MemSpan>(ptr::alloc_bytes(capacity * size_of<MemSpan>()))
+            ptr::copy_raw(
+                ptr::byte_ptr(parts),
+                source: ptr::byte_ptr(self.parts),
+                len: self.len * size_of<MemSpan>(),
+            )
+            self.parts = parts
+            self.capacity = capacity
+        }
+        let part = encode_alloc<Sol, T>(value).span()
+        *ptr::offset(self.parts, self.len) = part
+        self.parts_size += part.len()
+        self.len += 1
+    }
+
+    /// Replace the element at `index` with `value`. Reverts with Solidity
+    /// `Panic(0x32)` if `index >= len()`.
+    pub fn set(mut self, index: u256, value: own T) {
+        if index >= self.len {
+            revert_error(Panic::from(PANIC_INDEX_OUT_OF_BOUNDS))
+        }
+
+        let part = encode_alloc<Sol, T>(value).span()
+        let slot = ptr::offset(self.parts, index)
+        self.parts_size = self.parts_size - (*slot).len() + part.len()
+        *slot = part
+    }
+
+    /// Assemble the elements into an ABI-encodable `DynArray`.
+    ///
+    /// This is a fresh allocation in canonical layout; later `push`/`set`
+    /// calls on the builder do not affect it.
+    pub fn to_dyn_array(self) -> DynArray<T> {
+        assemble_dyn_array<T>(self.parts, count: self.len, parts_size: self.parts_size)
+    }
+}
+
+/// Lays out `count` element encodings as one `DynArray<T>` payload: the length
+/// word, then (for dynamic `T`) one offset word per element, then the
+/// encodings back to back in index order.
+fn assemble_dyn_array<T>(_ parts: *MemSpan, count: u256, parts_size: u256) -> DynArray<T>
+    where T: AbiSize
+{
+    let head = if T::IS_DYNAMIC { 32 } else { 0 }
+    let size = 32 + count * head + parts_size
+    let data = ptr::alloc_bytes(size)
+    store_word(ptr: data, value: count)
+    let root = ptr::offset_bytes(data, 32)
+    let mut tail = count * head
+    let mut i: u256 = 0
+    while i < count {
+        let part = *ptr::offset(parts, i)
+        if T::IS_DYNAMIC {
+            store_word(ptr: ptr::offset_bytes(root, i * 32), value: tail)
+        }
+        ptr::copy(ptr::offset_bytes(root, tail), part)
+        tail += part.len()
+        i += 1
+    }
+    DynArray::from_abi_tail(data, len: count, size)
+}
+
+impl<T> Seq for MemVec<T>
+    where T: StaticAbi + Decode<Sol> + Encode<Sol> + AbiSize + Copy
+{
+    type Item = T
+
+    fn len(self) -> usize {
+        MemVec::len(self) as usize
+    }
+
+    fn get(self, _ i: usize) -> T {
+        MemVec::get(self, i as u256)
+    }
+}
+
+/// Lets `core::sort` order the copy of an ABI array in place:
+/// `sort(mut MemVec::from_dyn_array(signers))`.
+impl<T> SeqMut for MemVec<T>
+    where T: StaticAbi + Decode<Sol> + Encode<Sol> + AbiSize + Copy
+{
+    fn set(mut self, _ i: usize, _ value: T) {
+        MemVec::set(mut self, index: i as u256, value)
     }
 }

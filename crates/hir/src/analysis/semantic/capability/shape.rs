@@ -114,6 +114,8 @@ pub struct ShapeId<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub enum ShapeError<'db> {
     RecursiveValue(TyId<'db>),
+    /// Too many instantiations of this type constructor are reachable.
+    UnboundedReferents(TyId<'db>),
     UnresolvedCapability(TyId<'db>),
     UnknownArrayLength(TyId<'db>),
     TooManyFields(TyId<'db>),

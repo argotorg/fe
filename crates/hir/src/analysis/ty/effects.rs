@@ -240,6 +240,9 @@ pub(crate) fn lower_effect_key_schema<'db>(
             ResolvedEffectKey::Type(schema)
         }
         Ok(PathRes::Trait(trait_inst)) => {
+            // Associated equalities can expose layout holes. Normalize before
+            // callable input binding so slot discovery sees those holes too.
+            let trait_inst = normalize_from_assumptions(db, trait_inst, scope, assumptions);
             let schema = TraitKeySchema::from_canonical_trait_binding(db, trait_inst);
             ResolvedEffectKey::Trait(schema)
         }

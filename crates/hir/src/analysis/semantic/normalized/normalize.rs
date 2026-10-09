@@ -2699,13 +2699,18 @@ impl RawCfg {
             }
         }
         let mut reachable = vec![false; body.blocks.len()];
-        let mut pending = vec![0usize];
-        while let Some(block) = pending.pop() {
-            if reachable[block] {
+        let mut postorder = Vec::new();
+        let mut pending = vec![(0usize, false)];
+        while let Some((block, finished)) = pending.pop() {
+            if finished {
+                postorder.push(block);
                 continue;
             }
-            reachable[block] = true;
-            pending.extend(successors[block].iter().copied());
+            if std::mem::replace(&mut reachable[block], true) {
+                continue;
+            }
+            pending.push((block, true));
+            pending.extend(successors[block].iter().map(|next| (*next, false)));
         }
         let reachable_set = reachable
             .iter()
@@ -2761,8 +2766,12 @@ impl RawCfg {
             }
         }
         let mut dom_children = vec![Vec::new(); body.blocks.len()];
-        for (block, parent) in idom.iter().copied().enumerate() {
-            if let Some(parent) = parent {
+        // Renaming still follows the dominator tree, but visit siblings in CFG
+        // reverse postorder. Block allocation order can put a short-circuit
+        // continuation before its RHS, giving later calls lower value IDs than
+        // their controlling conditions and interleaving unrelated guard choices.
+        for block in postorder.into_iter().rev() {
+            if let Some(parent) = idom[block] {
                 dom_children[parent].push(block);
             }
         }

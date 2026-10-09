@@ -612,13 +612,13 @@ fn opaque_contents_preserve_families_without_manufacturing_native_loans() {
     let scope = BinderScope::default();
     for shape in [shapes.handle, shapes.pair, shapes.array] {
         let unknown = overwrite
-            .contents(&mut values, shape, &scope, None)
+            .contents(&mut values, shape, &scope, None, None)
             .unwrap();
         assert_eq!(unknown.shape(), shape);
         assert_eq!(
             unknown,
             overwrite
-                .contents(&mut values, shape, &scope, None)
+                .contents(&mut values, shape, &scope, None, None)
                 .unwrap()
         );
         let leaves = values.leaves(&unknown, ValueOccurrence::Summary);
@@ -1620,7 +1620,13 @@ fn loop_feedback_separates_old_selectors_from_current_execution() {
         }]
     });
     let mut state = BorrowState::new(&mut values, [], [(root(&db, 0), initial)]);
-    state.forget_iteration(&mut values, None, |index| index == selector, |_| false);
+    state.forget_iteration(
+        &mut values,
+        None,
+        |index| index == selector,
+        |index| index == selector,
+        |_| false,
+    );
     let previous = state.storage().next().unwrap().1;
     let entry = &previous.direct()[0];
     let old = entry.payload.loan().unwrap().args[0];
@@ -1634,7 +1640,13 @@ fn loop_feedback_separates_old_selectors_from_current_execution() {
             .is_some()
     );
     let stable = state.clone();
-    state.forget_iteration(&mut values, None, |index| index == selector, |_| false);
+    state.forget_iteration(
+        &mut values,
+        None,
+        |index| index == selector,
+        |index| index == selector,
+        |_| false,
+    );
     assert_eq!(state, stable);
 }
 
@@ -1703,7 +1715,7 @@ fn arbitrary_memory_weak_updates_preserve_native_loans_and_invalidity() {
     let destination = region(cell.clone());
     assert!(destination.definite_write().is_none());
     let initial = seed
-        .contents(&mut values, shapes.handle, &scope, None)
+        .contents(&mut values, shapes.handle, &scope, None, None)
         .unwrap();
     let mut state = BorrowState::new(&mut values, [], [(cell, initial)]);
     for id in [0, 1] {
@@ -1786,9 +1798,13 @@ fn arbitrary_memory_offsets_may_overlap_without_becoming_typed_identity() {
         ..overwrite
     };
     let scope = BinderScope::default();
-    let plain = seed.contents(&mut values, shape, &scope, None).unwrap();
+    let plain = seed
+        .contents(&mut values, shape, &scope, None, None)
+        .unwrap();
     let (family, _) = scope.bind(IndexNamespace::InputSlot);
-    let family_seed = seed.contents(&mut values, shape, &family, None).unwrap();
+    let family_seed = seed
+        .contents(&mut values, shape, &family, None, None)
+        .unwrap();
     for seeded in [&plain, &family_seed] {
         let leaf = &seeded.direct()[0];
         assert!(leaf.payload.loan().is_none());

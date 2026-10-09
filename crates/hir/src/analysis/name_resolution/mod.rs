@@ -24,10 +24,11 @@ pub use path_resolver::{
     resolve_name_res, resolve_path,
 };
 pub(crate) use path_resolver::{
-    earliest_conflicting_inherent_const_impl, shadowed_inherent_fn_for_const,
+    TypePosition, resolve_name_res_with_minter, resolve_path_with_minter,
+    resolve_path_with_observer_and_minter, resolve_type_position_path_with_minter,
 };
 pub(crate) use path_resolver::{
-    resolve_name_res_with_minter, resolve_path_with_minter, resolve_path_with_observer_and_minter,
+    earliest_conflicting_inherent_const_impl, shadowed_inherent_fn_for_const,
 };
 use tracing::debug;
 pub use traits_in_scope::available_traits_in_scope;

@@ -169,3 +169,88 @@ fn const_where_predicates_survive_formatting_in_source_order() {
     );
     assert!(formatted.contains("// keep this condition"), "{formatted}");
 }
+
+/// Inner attributes of a module and attributes on `for` loops are kept, and
+/// a multiline string argument keeps its whitespace. This source is inline
+/// rather than a fixture because the tree-sitter grammar, which parses every
+/// formatter fixture, does not accept these attribute positions yet.
+#[test]
+fn inner_and_loop_attributes_survive_formatting() {
+    let source = r#"mod inner {
+    #![arithmetic(unchecked)]
+
+    pub(ingot) fn sum() -> u256 {
+        let mut total: u256 = 0
+        #[unroll]
+        for i in 0..4 {
+            total += i
+        }
+        total
+    }
+}
+
+fn commented_loop() {
+    // comment before the loop
+    #[unroll]
+    for i in 0..2 { // trailing comment
+        let _ = i
+    }
+}
+
+mod strings {
+    #![example(text = "first
+  second
+
+    third")]
+    #![other]
+
+    fn looped() {
+        #[example(text = "one
+   two")]
+        for i in 0..2 {
+            let _ = i
+        }
+    }
+}
+"#;
+    let expected = r#"mod inner {
+    #![arithmetic(unchecked)]
+    pub(ingot) fn sum() -> u256 {
+        let mut total: u256 = 0
+        #[unroll]
+        for i in 0 .. 4 {
+            total += i
+        }
+        total
+    }
+}
+
+fn commented_loop() {
+    // comment before the loop
+    #[unroll]
+    for i in 0 .. 2 {
+        // trailing comment
+        let _ = i
+    }
+}
+
+mod strings {
+    #![example(text = "first
+  second
+
+    third")]
+    #![other]
+    fn looped() {
+        #[example(text = "one
+   two")]
+        for i in 0 .. 2 {
+            let _ = i
+        }
+    }
+}
+"#;
+    let formatted = format_str(source, &Config::default()).expect("format should succeed");
+    assert_eq!(formatted.trim_end(), expected.trim_end());
+    let reformatted = format_str(&formatted, &Config::default()).expect("reformat should succeed");
+    assert_eq!(reformatted, formatted, "formatting is not stable");
+}

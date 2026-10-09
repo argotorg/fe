@@ -1,0 +1,19 @@
+struct Frame { first: u8, value: u64, last: u8 }
+
+fn fail() { core::panic() }
+fn fail_indirect() { fail() }
+fn fail_twice() { fail_indirect() }
+
+fn touch(frame: mut Frame) { frame.value = 5 }
+
+fn demand(flag: bool) -> Frame {
+    let mut frame = Frame { first: 1, value: 2, last: 3 }
+    if flag { return frame }
+    fail_twice()
+    touch(frame: mut frame)
+    frame
+}
+
+fn main() -> u64 {
+    demand(flag: true).value
+}

@@ -1,0 +1,152 @@
+// A write before a loop survives loop feedback wherever it held on every
+// execution reaching the backedge, so callers see the definite restoration.
+
+// Accepted: the restoration precedes a counted loop.
+mod counted {
+    use core::ptr
+    struct Item { value: u64 }
+    fn consume(_ value: own Item) {}
+    fn reinit(_ pointer: *Item, _ count: usize) {
+        *pointer = Item { value: 1 }
+        let mut i: usize = 0
+        while i < count { i += 1 }
+    }
+    fn caller(count: usize) {
+        let pointer = ptr::alloc<Item>()
+        *pointer = Item { value: 42 }
+        consume(*pointer)
+        reinit(pointer, count)
+        consume(*pointer)
+    }
+}
+
+// Accepted: the restoration precedes nested range loops.
+mod nested {
+    use core::ptr
+    struct Item { value: u64 }
+    fn consume(_ value: own Item) {}
+    fn reinit(_ pointer: *Item, _ count: usize) {
+        *pointer = Item { value: 1 }
+        for _ in 0..count {
+            for _ in 0..count {}
+        }
+    }
+    fn caller(count: usize) {
+        let pointer = ptr::alloc<Item>()
+        *pointer = Item { value: 42 }
+        consume(*pointer)
+        reinit(pointer, count)
+        consume(*pointer)
+    }
+}
+
+// Accepted: the function returns from inside the loop after the restoration.
+mod returning {
+    use core::ptr
+    struct Item { value: u64 }
+    fn consume(_ value: own Item) {}
+    fn reinit(_ pointer: *Item, _ count: usize) {
+        *pointer = Item { value: 1 }
+        let mut i: usize = 0
+        while true {
+            if i == count { return }
+            i += 1
+        }
+    }
+    fn caller(count: usize) {
+        let pointer = ptr::alloc<Item>()
+        *pointer = Item { value: 42 }
+        consume(*pointer)
+        reinit(pointer, count)
+        consume(*pointer)
+    }
+}
+
+// Accepted: each iteration moves the callee's own value and restores it.
+mod restored_each_iteration {
+    use core::ptr
+    struct Item { value: u64 }
+    fn consume(_ value: own Item) {}
+    fn reinit(_ pointer: *Item, _ count: usize) {
+        *pointer = Item { value: 1 }
+        let mut i: usize = 0
+        while i < count {
+            consume(*pointer)
+            *pointer = Item { value: 2 }
+            i += 1
+        }
+    }
+    fn caller(count: usize) {
+        let pointer = ptr::alloc<Item>()
+        *pointer = Item { value: 42 }
+        consume(*pointer)
+        reinit(pointer, count)
+        consume(*pointer)
+    }
+}
+
+// Rejected: the callee can return after moving its restored value.
+mod moved_on_return {
+    use core::ptr
+    struct Item { value: u64 }
+    fn consume(_ value: own Item) {}
+    fn reinit(_ pointer: *Item, _ count: usize) {
+        *pointer = Item { value: 1 }
+        let mut i: usize = 0
+        while i < count {
+            consume(*pointer)
+            if i == 3 { return }
+            *pointer = Item { value: 2 }
+            i += 1
+        }
+    }
+    fn caller(count: usize) {
+        let pointer = ptr::alloc<Item>()
+        *pointer = Item { value: 42 }
+        consume(*pointer)
+        reinit(pointer, count)
+        consume(*pointer)
+    }
+}
+
+// Rejected: only some iterations restore the value.
+mod conditional_write_in_loop {
+    use core::ptr
+    struct Item { value: u64 }
+    fn consume(_ value: own Item) {}
+    fn reinit(_ pointer: *Item, _ count: usize) {
+        let mut i: usize = 0
+        while i < count {
+            if i == 3 { *pointer = Item { value: 1 } }
+            i += 1
+        }
+    }
+    fn caller(count: usize) {
+        let pointer = ptr::alloc<Item>()
+        *pointer = Item { value: 42 }
+        consume(*pointer)
+        reinit(pointer, count)
+        consume(*pointer)
+    }
+}
+
+// Rejected: the loop that restores the value can run zero times.
+mod possibly_empty_loop {
+    use core::ptr
+    struct Item { value: u64 }
+    fn consume(_ value: own Item) {}
+    fn reinit(_ pointer: *Item, _ count: usize) {
+        let mut i: usize = 0
+        while i < count {
+            *pointer = Item { value: 1 }
+            i += 1
+        }
+    }
+    fn caller(count: usize) {
+        let pointer = ptr::alloc<Item>()
+        *pointer = Item { value: 42 }
+        consume(*pointer)
+        reinit(pointer, count)
+        consume(*pointer)
+    }
+}

@@ -305,6 +305,9 @@ where
         if let Some(&ty) = self.subst.get(&ty) {
             return ty;
         }
+        if !ty.has_var(db) {
+            return ty;
+        }
 
         match ty.data(db) {
             TyData::TyVar(var) => {
@@ -333,7 +336,7 @@ where
 mod tests {
     use super::{Canonical, Canonicalized};
     use crate::analysis::ty::{
-        ty_def::{Kind, TyId, TyVarSort},
+        ty_def::{Kind, PrimTy, TyBase, TyData, TyId, TyVarSort},
         unify::UnificationTable,
     };
     use crate::test_db::HirAnalysisTestDb;
@@ -342,13 +345,27 @@ mod tests {
     fn canonical_extract_identity_handles_preseeded_tables() {
         let db = HirAnalysisTestDb::default();
         let mut table = UnificationTable::new(&db);
-        let original = table.new_var(TyVarSort::General, &Kind::Star);
+        let elem = table.new_var(TyVarSort::General, &Kind::Star);
+        let len = TyId::const_ty_var(
+            &db,
+            TyId::new(&db, TyData::TyBase(TyBase::Prim(PrimTy::Usize))),
+            table.new_key(&Kind::Star, TyVarSort::General),
+        );
+        let array = TyId::app_structural(&db, TyId::array(&db, elem), len);
+        let closed = TyId::array_with_len(&db, TyId::u256(&db), 8);
+        let original = TyId::tuple_with_elems(&db, &[closed, array, array]);
         let canonical = Canonical::new(&db, original);
 
         let mut scratch = UnificationTable::new(&db);
         let _ = scratch.new_var(TyVarSort::General, &Kind::Star);
 
-        assert!(canonical.extract_identity(&mut scratch).is_ty_var(&db));
+        let extracted = canonical.extract_identity(&mut scratch);
+        let elems = extracted.generic_args(&db);
+        assert_eq!(scratch.len(), 3);
+        assert_eq!(elems[0], closed);
+        assert_eq!(elems[1], elems[2]);
+        assert_ne!(elems[1], array);
+        assert!(elems[1].has_var(&db));
     }
 
     /// When a query variable is solved during probing, fresh solution-only

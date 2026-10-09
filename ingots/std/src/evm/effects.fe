@@ -61,6 +61,23 @@ impl core::ops::Eq for Address {
 
 impl Copy for Address {}
 
+/// Orders addresses by their numeric value, like Solidity's `<` on
+/// `address`, so signer lists can be sorted and checked for duplicates.
+impl core::ops::Ord for Address {
+    const fn lt(self, _ other: Address) -> bool {
+        self.inner < other.inner
+    }
+    const fn le(self, _ other: Address) -> bool {
+        self.inner <= other.inner
+    }
+    const fn gt(self, _ other: Address) -> bool {
+        self.inner > other.inner
+    }
+    const fn ge(self, _ other: Address) -> bool {
+        self.inner >= other.inner
+    }
+}
+
 impl Default for Address {
     fn default() -> Self {
         Address::zero()

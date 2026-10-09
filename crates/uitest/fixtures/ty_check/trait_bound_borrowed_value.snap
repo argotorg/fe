@@ -1,0 +1,74 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/trait_bound_borrowed_value.fe
+---
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value.fe:40:5
+    │
+ 40 │     core::keccak(("abcdefghijklmnopqrstuvwxy", dims, "abcdef"))
+    │     ^^^^^^^^^^^^
+    │     │
+    │     `([u8; 25], T, [u8; 6])` doesn't implement `AsBytes`
+    │     `T` is only borrowed here; the bound would be satisfied if it were owned
+    │
+    ┌─ src/bytes.fe:443:24
+    │
+443 │ pub const fn keccak<T: AsBytes>(_ x: T) -> u256 {
+    │                        ------- required by this bound on `keccak`
+    │
+    = note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_bound_borrowed_value.fe:44:5
+   │
+33 │ fn need<X: Foo>(_ x: X) -> u256 {
+   │            --- required by this bound on `need`
+   ·
+44 │     need(W { a: t })
+   │     ^^^^
+   │     │
+   │     `W<T>` doesn't implement `Foo`
+   │     `T` is only borrowed here; the bound would be satisfied if it were owned
+   │
+   = note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_bound_borrowed_value.fe:48:5
+   │
+33 │ fn need<X: Foo>(_ x: X) -> u256 {
+   │            --- required by this bound on `need`
+   ·
+48 │     need((s,))
+   │     ^^^^
+   │     │
+   │     `(S)` doesn't implement `Foo`
+   │     `S` is only borrowed here; the bound would be satisfied if it were owned
+   │
+   = note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_bound_borrowed_value.fe:69:5
+   │
+33 │ fn need<X: Foo>(_ x: X) -> u256 {
+   │            --- required by this bound on `need`
+   ·
+69 │     need(W { a: t })
+   │     ^^^^
+   │     │
+   │     `W<ref T>` doesn't implement `Foo`
+   │     `T` is borrowed here as `ref T`; the bound would be satisfied if it were owned
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_bound_borrowed_value.fe:79:5
+   │
+33 │ fn need<X: Foo>(_ x: X) -> u256 {
+   │            --- required by this bound on `need`
+   ·
+79 │     need(W { a: t })
+   │     ^^^^
+   │     │
+   │     `W<T>` doesn't implement `Foo`
+   │     `T` is only borrowed here; the bound would be satisfied if it were owned
+   │
+   = note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`

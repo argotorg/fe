@@ -287,6 +287,7 @@ impl<'db> WherePredicateBoundView<'db> {
                                     primary_goal: goal,
                                     unsat_subgoal: None,
                                     required_by: None,
+                                    capability_hint: None,
                                 }
                                 .into(),
                             );
@@ -359,7 +360,18 @@ impl<'db> Func<'db> {
 
             // Then run kind/const checks on the lowered semantic type
             let ret = self.return_ty(db);
-            let span = self.span().ret_ty().into();
+            let span: DynLazySpan<'db> = self.span().ret_ty().into();
+            let solve_cx = ty::trait_resolution::TraitSolveCx::new(db, self.scope())
+                .with_assumptions(param_env(db, self.into()));
+            if let Some(diag) = ty::ty_error::normalization_limit_diag(
+                db,
+                ret,
+                self.scope(),
+                self.assumptions(db),
+                span.clone(),
+            ) {
+                return vec![diag];
+            }
             if !ret.has_star_kind(db) {
                 diags.push(TyLowerDiag::ExpectedStarKind(span).into());
             } else if ret.is_const_ty(db) {
@@ -367,22 +379,25 @@ impl<'db> Func<'db> {
             } else if ty::ty_contains_const_hole(db, ret) {
                 diags.push(TyLowerDiag::ConstHoleInValuePosition { span, ty: ret }.into());
             } else if let ty::trait_resolution::WellFormedness::IllFormed { goal, subgoal } =
-                ty::trait_resolution::check_ty_wf(
-                    db,
-                    ty::trait_resolution::TraitSolveCx::new(db, self.scope())
-                        .with_assumptions(param_env(db, self.into())),
-                    ret,
-                )
+                ty::trait_resolution::check_ty_wf(db, solve_cx, ret)
             {
-                diags.push(
-                    TraitConstraintDiag::TraitBoundNotSat {
-                        span,
-                        primary_goal: goal,
-                        unsat_subgoal: subgoal,
-                        required_by: None,
-                    }
-                    .into(),
-                );
+                // Point at the written type inside a qualified path when that
+                // is what is ill-formed.
+                let precise = self.ret_ty_qualified_path_wf_diags(db, solve_cx);
+                if precise.is_empty() {
+                    diags.push(
+                        TraitConstraintDiag::TraitBoundNotSat {
+                            span,
+                            primary_goal: goal,
+                            unsat_subgoal: subgoal,
+                            required_by: None,
+                            capability_hint: None,
+                        }
+                        .into(),
+                    );
+                } else {
+                    diags.extend(precise);
+                }
             }
         }
         diags
@@ -440,6 +455,7 @@ impl<'db> Trait<'db> {
                                 primary_goal: trait_inst,
                                 unsat_subgoal: None,
                                 required_by: None,
+                                capability_hint: None,
                             }
                             .into(),
                         );
@@ -512,6 +528,7 @@ impl<'db> Trait<'db> {
                                     primary_goal: goal,
                                     unsat_subgoal: None,
                                     required_by: None,
+                                    capability_hint: None,
                                 }
                                 .into(),
                             );
@@ -589,6 +606,7 @@ impl<'db> Trait<'db> {
                         primary_goal: goal,
                         unsat_subgoal: None,
                         required_by: None,
+                        capability_hint: None,
                     }
                     .into(),
                 );
@@ -635,6 +653,7 @@ impl<'db> Impl<'db> {
                         primary_goal: goal,
                         unsat_subgoal: subgoal,
                         required_by: None,
+                        capability_hint: None,
                     }
                     .into(),
                 );
@@ -1110,6 +1129,7 @@ impl<'db> ImplTrait<'db> {
                             primary_goal: bound_inst,
                             unsat_subgoal: None,
                             required_by: None,
+                            capability_hint: None,
                         }
                         .into(),
                     );
@@ -1143,6 +1163,7 @@ impl<'db> ImplTrait<'db> {
                     primary_goal: goal,
                     unsat_subgoal: subgoal,
                     required_by: None,
+                    capability_hint: None,
                 }
                 .into(),
             );
@@ -1160,6 +1181,7 @@ impl<'db> ImplTrait<'db> {
                             primary_goal: goal,
                             unsat_subgoal: None,
                             required_by: None,
+                            capability_hint: None,
                         }
                         .into(),
                     );
@@ -1304,6 +1326,7 @@ impl<'db> VariantView<'db> {
                             primary_goal: goal,
                             unsat_subgoal: subgoal,
                             required_by: None,
+                            capability_hint: None,
                         }
                         .into(),
                     );
@@ -1555,8 +1578,7 @@ impl<'db> GenericParamOwner<'db> {
     }
 
     pub fn diags_trait_bounds(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        use name_resolution::diagnostics::PathResDiag;
-        use ty::trait_lower::{self, TraitRefLowerError};
+        use ty::trait_lower;
         use ty::trait_resolution::{WellFormedness, check_trait_inst_wf};
 
         let mut out = Vec::new();
@@ -1627,39 +1649,15 @@ impl<'db> GenericParamOwner<'db> {
                                     primary_goal: goal,
                                     unsat_subgoal: None,
                                     required_by: None,
+                                    capability_hint: None,
                                 }
                                 .into(),
                             ),
                         }
                     }
-                    Err(TraitRefLowerError::PathResError(err)) => {
-                        if let Some(path) = tr.path(db).to_opt()
-                            && let Some(diag) = err.into_trait_ref_diag(db, path, span.path())
-                        {
-                            out.push(diag);
-                        }
+                    Err(error) => {
+                        out.extend(trait_ref_lowering_diag(db, error, *tr, span, "trait bound"));
                     }
-                    Err(TraitRefLowerError::InvalidDomain(res)) => {
-                        if let Some(path) = tr.path(db).to_opt()
-                            && let Some(ident) = path.ident(db).to_opt()
-                        {
-                            out.push(
-                                PathResDiag::ExpectedTrait(
-                                    span.path().into(),
-                                    ident,
-                                    res.kind_name(),
-                                )
-                                .into(),
-                            );
-                        }
-                    }
-                    Err(TraitRefLowerError::Cycle) => {
-                        out.push(cyclic_trait_ref_diag(span.path().into(), "trait bound"));
-                    }
-                    Err(
-                        TraitRefLowerError::UnsafeLocalBoundBlanketImpl
-                        | TraitRefLowerError::Ignored,
-                    ) => {}
                 }
             }
         }

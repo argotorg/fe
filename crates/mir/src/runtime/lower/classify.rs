@@ -60,7 +60,9 @@ use super::{
     },
     provider_space::address_space_from_provider,
     realize::SelectedRuntimeArg,
-    returns::{StaticRuntimeReturnDecision, static_runtime_return_decision},
+    returns::{
+        StaticRuntimeReturnDecision, semantic_never_returns, static_runtime_return_decision,
+    },
     semantic_body::{RuntimeOperand, RuntimeSemanticBody},
     type_info::{
         RuntimeTypeEnv, effect_handle_transport_class_for_ty_in_env,
@@ -286,6 +288,13 @@ impl<'db> BodyStaticFacts<'db> {
                 let NStatementKind::Define { result, expr } = &statement.kind else {
                     continue;
                 };
+                // A call that never returns ends its executable block, and lowering
+                // never assigns its result.
+                if let NExpr::Call { callee, .. } = expr
+                    && semantic_never_returns(db, get_or_build_semantic_instance(db, callee.key))
+                {
+                    continue;
+                }
                 let dst = body.value_local(*result).unwrap_or_else(|| {
                     panic!("missing runtime representation for normalized value {result:?}")
                 });
@@ -703,7 +712,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
             NExpr::Load { place, .. } => match expr_facts {
                 Some(ExprStaticFacts::DirectClass(None)) => return None,
                 Some(ExprStaticFacts::DirectClass(Some(_))) | None => self
-                    .normalized_place_class(carriers, place)
+                    .normalized_load_class(carriers, place)
                     .or_else(|| match expr_facts {
                         Some(ExprStaticFacts::DirectClass(class)) => class.clone(),
                         _ => None,
@@ -762,6 +771,25 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
 }
 
 impl<'a, 'db> BodyEnv<'a, 'db> {
+    fn normalized_load_class(
+        self,
+        carriers: &[RuntimeCarrier<'db>],
+        place: &NPlace<'db>,
+    ) -> Option<RuntimeClass<'db>> {
+        let value = self.normalized_place_class(carriers, place)?;
+        // Delay only plain immutable snapshots: enum loads validate their tags,
+        // and embedded capabilities retain their ordinary transport lowering.
+        // Mutable destinations still materialize a slot.
+        if matches!(value, RuntimeClass::AggregateValue { .. })
+            && snapshot_load_can_be_deferred(self.db, &value)
+            && let Some(address) = self.normalized_place_address_class(carriers, place)
+            && is_immutable_reference(&address)
+        {
+            return Some(address);
+        }
+        Some(value)
+    }
+
     pub(crate) fn normalized_place_class(
         self,
         carriers: &[RuntimeCarrier<'db>],
@@ -1698,12 +1726,7 @@ pub(crate) fn provider_erases_runtime_root<'db>(
             .values()
             .find(|field| field.field == field_id)
             .is_none_or(|field| {
-                field.inline_span == 0
-                    && field.cells.iter().all(|cell| cell.allocation.is_none())
-                    && field
-                        .families
-                        .iter()
-                        .all(|family| family.allocation.is_none())
+                field.inline_span == 0 && field.cells.iter().all(|cell| cell.allocation.is_none())
             });
     }
 
@@ -2422,14 +2445,36 @@ pub(super) fn local_slot_uses_transport_class(
     mutability: Mutability,
     transport: Option<&RuntimeClass<'_>>,
 ) -> bool {
-    mutability == Mutability::Immutable
-        && matches!(
-            transport,
-            Some(RuntimeClass::Ref {
-                kind: RefKind::Const,
-                ..
-            })
-        )
+    mutability == Mutability::Immutable && transport.is_some_and(is_immutable_reference)
+}
+
+pub(super) fn is_immutable_reference(class: &RuntimeClass<'_>) -> bool {
+    matches!(
+        class,
+        RuntimeClass::Ref {
+            kind: RefKind::Const
+                | RefKind::Provider {
+                    space: AddressSpaceKind::Code | AddressSpaceKind::Calldata,
+                    ..
+                },
+            ..
+        }
+    )
+}
+
+fn snapshot_load_can_be_deferred<'db>(db: &'db dyn MirDb, class: &RuntimeClass<'db>) -> bool {
+    match class {
+        RuntimeClass::Scalar(_) => true,
+        RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => false,
+        RuntimeClass::AggregateValue { layout } => match layout.data(db) {
+            Layout::Struct(layout) => layout
+                .fields
+                .iter()
+                .all(|field| snapshot_load_can_be_deferred(db, field)),
+            Layout::Array(layout) => snapshot_load_can_be_deferred(db, &layout.elem),
+            Layout::Enum(_) => false,
+        },
+    }
 }
 
 fn normalized_place_root_transport_class_in_context<'db>(
@@ -2636,7 +2681,7 @@ fn normalized_value_runtime_class<'db>(
             env.normalized_value_structural_class(carriers, value.value)?,
             &path.0,
         )),
-        NExpr::Load { place, .. } => env.normalized_place_class(carriers, place),
+        NExpr::Load { place, .. } => env.normalized_load_class(carriers, place),
         NExpr::MakeView { place, .. } => env.normalized_view_class(carriers, place),
         NExpr::Borrow { place, .. } => env.normalized_place_address_class(carriers, place),
         NExpr::CodeRegionRef { .. }
@@ -2970,9 +3015,8 @@ mod tests {
         analysis::semantic::{
             EffectProviderSubst, GenericSubst, ImplEnv, NEffectArg, NPlace, NPlaceBase, NRootKind,
             NStatementKind, NTerminatorKind, SemanticCalleeRef, SemanticInstance,
-            SemanticInstanceKey, SemanticNormalizationFailure, get_or_build_semantic_instance,
-            owner_effect_bindings, resolved_provider_binding_for_instance_effect,
-            root_semantic_instance_key,
+            SemanticInstanceKey, get_or_build_semantic_instance, owner_effect_bindings,
+            resolved_provider_binding_for_instance_effect, root_semantic_instance_key,
         },
         analysis::ty::{
             trait_def::TraitInstId,
@@ -3002,6 +3046,7 @@ mod tests {
             returns::declaration_runtime_return_class,
             semantic_body::RuntimeSemanticBody,
         },
+        package::LowerError,
         package::runtime_instance_for_semantic,
         package::runtime_instance_for_semantic_with_visible_param_overrides,
     };
@@ -3009,7 +3054,7 @@ mod tests {
     fn normalize_semantic_body<'db>(
         db: &'db DriverDataBase,
         instance: SemanticInstance<'db>,
-    ) -> Result<RuntimeSemanticBody<'db>, SemanticNormalizationFailure<'db>> {
+    ) -> Result<RuntimeSemanticBody<'db>, LowerError> {
         RuntimeSemanticBody::admitted(db, instance)
     }
 
@@ -3068,6 +3113,68 @@ mod tests {
             panic!("failed to build root semantic key for `{name}`: {err:?}")
         });
         get_or_build_semantic_instance(db, key)
+    }
+
+    #[test]
+    fn nonreturning_calls_define_no_carrier() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///nonreturning_calls_define_no_carrier.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Frame { value: u64 }
+fn fail() { core::panic() }
+fn fail_frame() -> Frame {
+    fail()
+    Frame { value: 0 }
+}
+fn frame(flag: bool) -> Frame {
+    if flag { Frame { value: 1 } } else { fail_frame() }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let semantic = semantic_instance_for_named_func(&db, top_mod, "frame");
+        let normalized = normalize_semantic_body(&db, semantic)
+            .unwrap_or_else(|err| panic!("failed to normalize frame: {err:?}"));
+        let facts = BodyStaticFacts::new(&db, &normalized);
+        let calls: Vec<_> = normalized
+            .normalized
+            .blocks
+            .iter()
+            .enumerate()
+            .flat_map(|(block_idx, block)| {
+                block
+                    .statements
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, statement)| {
+                        matches!(
+                            statement.kind,
+                            NStatementKind::Define {
+                                expr: NExpr::Call { .. },
+                                ..
+                            }
+                        )
+                    })
+                    .map(move |(stmt_idx, _)| (block_idx, stmt_idx))
+            })
+            .collect();
+        let [(block_idx, stmt_idx)] = calls[..] else {
+            panic!("expected one call to `fail_frame`, found {calls:?}");
+        };
+        assert!(
+            facts.expr(block_idx, stmt_idx).is_none(),
+            "a call that never returns must not define a carrier"
+        );
     }
 
     #[test]

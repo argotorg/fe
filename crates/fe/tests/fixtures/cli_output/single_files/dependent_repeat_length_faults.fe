@@ -1,9 +1,9 @@
-// A concrete instance demands the layout of every type it consumes, so a
-// checked fault in a specialized extent is reported where it is demanded,
-// labelled where the length is written: in a repeat, in an unused repeat, in
-// an array a caller receives, returns from a folded call or passes, behind an
-// index, in the arm of a condition that a use selects, in a field of an
-// unused parameter, and in a field whose length a body asks for.
+// Concrete layout demand reports specialized faults in repeats, passed
+// arrays, indexing, selected branches and fields of unused or read parameters.
+// Each error retains the source of its checked length computation.
+// Return-type errors live in dependent_repeat_return_type_faults.fe: those
+// are diagnosed during HIR checking and would suppress this file's later
+// MIR layout diagnostics at the normal compilation phase boundary.
 const fn minus(_ n: usize) -> usize { n - 1 }
 
 const fn lengths(_ n: usize) -> usize {
@@ -23,8 +23,6 @@ fn selected<const N: usize>() -> u8 { [7 as u8; { if N == 0 { 1 } else { 10 / (N
 
 struct Words<const N: usize> { values: [u8; minus(N)] }
 
-fn produce<const N: usize>() -> [u8; { N - 1 }] { todo() }
-
 fn take<const N: usize>(_ values: [u8; { N - 1 }]) -> u8 { values[0] }
 
 fn runtime(_ value: u8) -> u8 { value }
@@ -33,13 +31,9 @@ fn underflow() -> u8 { first<0>() }
 
 fn divide() { unused<0>() }
 
-fn receive() { let _values = make<0>(runtime(7)) }
-
 fn bounds() -> u8 { indexed<2>() }
 
 fn condition() -> u8 { selected<1>() }
-
-fn returned() -> u8 { produce<0>()[0] }
 
 fn passed() -> u8 {
     let values: [u8; 0] = []

@@ -1,0 +1,1 @@
+`Option<T>` is now `Copy` when `T` is, and `Result<E, T>` when both `E` and `T` are, like tuples and arrays. An `Option<u64>` field can now be read out of a `self` view, and `let copy = original` no longer moves `original`. Matching a borrowed `Option` of a `Copy` payload binds the payload by value.

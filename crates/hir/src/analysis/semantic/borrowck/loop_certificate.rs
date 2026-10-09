@@ -573,7 +573,6 @@ impl<'db> Borrowck<'db> {
             .loops
             .feedback(backedge.from, backedge.to)
             .ok_or(FrontierRejection::UnsupportedLoopShape)?;
-        let repeated = self.inventory.loops.repeated(iteration).clone();
         let block = proof.step.candidate.body.index();
         let before = &self.before[block][proof.step.store_statement];
         let mut state = before.clone();
@@ -581,10 +580,8 @@ impl<'db> Borrowck<'db> {
         state.forget_iteration(
             &mut self.inventory.values,
             Some(before),
-            |index| {
-                matches!(index, IndexExpr::Iteration(region) if region == iteration)
-                    || matches!(index, IndexExpr::Runtime(value) if repeated.contains(&value))
-            },
+            |index| loops.repeats_index(iteration, index),
+            |index| loops.drops_fact(iteration, index),
             |occurrence| loops.repeats_occurrence(iteration, occurrence),
         );
         let contents = state.value(proof.store_value);

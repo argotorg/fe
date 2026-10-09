@@ -1,0 +1,70 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/trait_bound_borrowed_value_derived_positions.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_bound_borrowed_value_derived_positions.fe:42:5
+   │
+39 │ fn need_item<X: Out<Item = X>>(_ x: X) {}
+   │                 ------------- required by this bound on `need_item`
+   ·
+42 │     need_item(W { a: s })
+   │     ^^^^^^^^^
+   │     │
+   │     `W<S>` doesn't implement `Out<Item = W<S>>`
+   │     `S` is only borrowed here; the bound would be satisfied if it were owned
+   │
+   = note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_bound_borrowed_value_derived_positions.fe:49:5
+   │
+46 │ fn need_item_tup<X: OutTup<Item = (X,)>>(_ x: X) {}
+   │                     ------------------- required by this bound on `need_item_tup`
+   ·
+49 │     need_item_tup(W { a: s })
+   │     ^^^^^^^^^^^^^
+   │     │
+   │     `W<S>` doesn't implement `OutTup<Item = (W<S>)>`
+   │     `S` is only borrowed here; the bound would be satisfied if it were owned
+   │
+   = note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_bound_borrowed_value_derived_positions.fe:56:5
+   │
+53 │ fn need_rel_tup<X: RelTup<(X,)>>(_ x: X) {}
+   │                    ------------ required by this bound on `need_rel_tup`
+   ·
+56 │     need_rel_tup(W { a: s })
+   │     ^^^^^^^^^^^^
+   │     │
+   │     `W<S>` doesn't implement `RelTup<(W<S>)>`
+   │     `S` is only borrowed here; the bound would be satisfied if it were owned
+   │
+   = note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_bound_borrowed_value_derived_positions.fe:64:5
+   │
+61 │ fn need_item_fixed<X: Out<Item = W<ref S>>>(_ x: X) {}
+   │                       -------------------- required by this bound on `need_item_fixed`
+   ·
+64 │     need_item_fixed(W { a: s })
+   │     ^^^^^^^^^^^^^^^
+   │     │
+   │     `W<ref S>` doesn't implement `Out<Item = W<ref S>>`
+   │     trait bound `ref S: Mark` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_bound_borrowed_value_derived_positions.fe:72:5
+   │
+69 │ fn need_rel_other<X: RelTup<(Y,)>, Y>(_ x: X, _ y: Y) {}
+   │                      ------------ required by this bound on `need_rel_other`
+   ·
+72 │     need_rel_other(W { a: s }, W { a: t })
+   │     ^^^^^^^^^^^^^^
+   │     │
+   │     `W<S>` doesn't implement `RelTup<(W<S>)>`
+   │     trait bound `S: Mark` is not satisfied

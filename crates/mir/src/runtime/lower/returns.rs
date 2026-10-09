@@ -34,6 +34,7 @@ use crate::{
 };
 
 use super::{
+    boundary::BoundaryMatcher,
     classify::{
         AssignmentId, BodyEnv, BodyStaticFacts, RuntimeVisibleReturnPlan, default_return_class,
         desired_runtime_return_plan, selected_visible_return_for_operand,
@@ -45,6 +46,7 @@ use super::{
     interface::{runtime_visible_binding_local, runtime_visible_binding_plans},
     provider_space::address_space_from_provider,
     semantic_body::{RuntimeOperand, RuntimeSemanticBody},
+    type_info::{RuntimeTypeEnv, stored_class_for_ty_in_env},
 };
 use crate::runtime::synthetic::runtime_synthetic_exit_behavior;
 
@@ -311,6 +313,21 @@ pub(crate) fn declaration_runtime_return_class<'db>(
             let Some(space) = space else {
                 continue;
             };
+            if projection.is_empty()
+                && let Some((_, target)) = semantic.normalized_result_ty(db).as_borrow(db)
+            {
+                // The summary excludes nonreturning paths and retains pointer
+                // dereferences that type-level forwarding may lose. A bare
+                // borrow keeps that raw transport with its declared target;
+                // stored borrow fields still use their canonical descriptors.
+                let pointee = stored_class_for_ty_in_env(
+                    db,
+                    RuntimeTypeEnv::for_semantic(db, semantic),
+                    target,
+                );
+                class = RuntimeClass::raw_addr(db, space, pointee);
+                continue;
+            }
             let Some(RuntimeClass::Ref { pointee, .. }) =
                 project_declaration_return_source(db, class.clone(), &projection)
             else {
@@ -328,6 +345,14 @@ pub(crate) fn declaration_runtime_return_class<'db>(
                 class = updated;
             }
         }
+    }
+    // Apply the same boundary recipe as body return selection, including
+    // canonical raw pointees for forwarded aggregate references.
+    if let RuntimeVisibleReturnPlan::Constrained(boundary) =
+        desired_runtime_return_plan(db, semantic)
+        && let Some(selected) = BoundaryMatcher::selected_class(db, &class, &boundary)
+    {
+        class = selected;
     }
     Some(class)
 }
@@ -674,18 +699,24 @@ fn retarget_declaration_return_transport<'db>(
     }
 }
 
+/// Whether calls to `semantic` never return. The borrow summary decides this,
+/// as it does for its callers' solves and so for their executable control flow.
+pub(crate) fn semantic_never_returns<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+) -> bool {
+    matches!(semantic_borrow_summary(db, semantic), Ok(Some(summary)) if !summary.may_return)
+}
+
 pub(crate) fn runtime_exit_behavior<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
 ) -> RuntimeExitBehavior {
     match key.source(db) {
-        RuntimeInstanceSource::Semantic(semantic) => {
-            if semantic.known_never_returns(db) {
-                RuntimeExitBehavior::NeverReturns
-            } else {
-                RuntimeExitBehavior::MayReturn
-            }
+        RuntimeInstanceSource::Semantic(semantic) if semantic_never_returns(db, semantic) => {
+            RuntimeExitBehavior::NeverReturns
         }
+        RuntimeInstanceSource::Semantic(_) => RuntimeExitBehavior::MayReturn,
         RuntimeInstanceSource::Synthetic(synthetic) => {
             runtime_synthetic_exit_behavior(synthetic.spec(db).clone())
         }
@@ -718,6 +749,10 @@ pub(crate) fn evaluate_runtime_return_class<'db>(
     params: &[RuntimeClass<'db>],
     lookup: &mut impl FnMut(RuntimeInstanceKey<'db>) -> Option<RuntimeClass<'db>>,
 ) -> Option<RuntimeClass<'db>> {
+    // A body that never returns constrains no return class.
+    if summary.return_operands.is_empty() {
+        return None;
+    }
     let env = summary.env(db);
     let lookup: ReturnClassLookup<'_, 'db> = lookup;
     let carriers = CarrierInferer::with_space(
@@ -750,6 +785,22 @@ pub(crate) fn evaluate_runtime_return_class<'db>(
         return summary.default_return_class.clone();
     };
     Some(class)
+}
+
+/// Whether the declared return class carries every value the body returns:
+/// joining the body's class into it leaves it unchanged.
+pub(crate) fn declared_return_class_admits<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+    declared: &RuntimeClass<'db>,
+    returned: &RuntimeClass<'db>,
+) -> bool {
+    merged_return_class(
+        db,
+        vec![returned.clone(), declared.clone()],
+        semantic.normalized_result_ty(db).as_borrow(db).is_some(),
+    )
+    .is_some_and(|merged| runtime_classes_equivalent(db, &merged, declared))
 }
 
 fn merged_return_class<'db>(
@@ -1020,7 +1071,7 @@ fn caller() {
     }
 
     #[test]
-    fn panic_wrappers_are_known_never_returning() {
+    fn panic_wrappers_never_return() {
         assert_runtime_exit_behavior(
             r#"
 fn fail() {
@@ -1030,11 +1081,16 @@ fn fail() {
 fn fail_indirect() {
     fail()
 }
+
+fn fail_twice() {
+    fail_indirect()
+}
 "#,
-            "panic_wrappers_are_known_never_returning",
+            "panic_wrappers_never_return",
             &[
                 ("fail", RuntimeExitBehavior::NeverReturns),
                 ("fail_indirect", RuntimeExitBehavior::NeverReturns),
+                ("fail_twice", RuntimeExitBehavior::NeverReturns),
             ],
         );
     }

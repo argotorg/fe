@@ -1,0 +1,439 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/trait_bound_borrowed_value_repeated_param.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_bound_borrowed_value_repeated_param.fe:32:5
+   │
+28 │     P<X, X>: Foo,
+   │              --- required by this bound on `need_pp`
+   ·
+32 │     need_pp(W { a: s })
+   │     ^^^^^^^
+   │     │
+   │     `P<S, S>` doesn't implement `Foo`
+   │     `S` is only borrowed here; the bound would be satisfied if it were owned
+   │
+   = note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_bound_borrowed_value_repeated_param.fe:36:5
+   │
+28 │     P<X, X>: Foo,
+   │              --- required by this bound on `need_pp`
+   ·
+36 │     need_pp(W { a: s })
+   │     ^^^^^^^
+   │     │
+   │     `P<ref S, ref S>` doesn't implement `Foo`
+   │     `S` is borrowed here as `ref S`; the bound would be satisfied if it were owned
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_bound_borrowed_value_repeated_param.fe:40:5
+   │
+28 │     P<X, X>: Foo,
+   │              --- required by this bound on `need_pp`
+   ·
+40 │     need_pp(W { a: s })
+   │     ^^^^^^^
+   │     │
+   │     `P<mut S, mut S>` doesn't implement `Foo`
+   │     `S` is borrowed here as `mut S`; the bound would be satisfied if it were owned
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_bound_borrowed_value_repeated_param.fe:62:5
+   │
+58 │     P<W<X>, W<X>>: FooNested,
+   │                    --------- required by this bound on `need_nested`
+   ·
+62 │     need_nested(W { a: s })
+   │     ^^^^^^^^^^^
+   │     │
+   │     `P<W<ref S>, W<ref S>>` doesn't implement `FooNested`
+   │     `S` is borrowed here as `ref S`; the bound would be satisfied if it were owned
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_bound_borrowed_value_repeated_param.fe:78:5
+   │
+74 │     P<X, W<X>>: FooMixed,
+   │                 -------- required by this bound on `need_mixed`
+   ·
+78 │     need_mixed(W { a: s })
+   │     ^^^^^^^^^^
+   │     │
+   │     `P<S, W<S>>` doesn't implement `FooMixed`
+   │     `S` is only borrowed here; the bound would be satisfied if it were owned
+   │
+   = note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_bound_borrowed_value_repeated_param.fe:90:5
+   │
+86 │     P<X, X>: Rel<(X,)>,
+   │              --------- required by this bound on `need_arg`
+   ·
+90 │     need_arg(W { a: s })
+   │     ^^^^^^^^
+   │     │
+   │     `P<S, S>` doesn't implement `Rel<(S)>`
+   │     `S` is only borrowed here; the bound would be satisfied if it were owned
+   │
+   = note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:102:5
+    │
+ 98 │     P<X, X>: Same,
+    │              ---- required by this bound on `need_default`
+    ·
+102 │     need_default(W { a: s })
+    │     ^^^^^^^^^^^^
+    │     │
+    │     `P<ref S, ref S>` doesn't implement `Same<P<ref S, ref S>>`
+    │     `S` is borrowed here as `ref S`; the bound would be satisfied if it were owned
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:119:5
+    │
+115 │     P<X, X>: Out<Item = W<X>>,
+    │              ---------------- required by this bound on `need_item`
+    ·
+119 │     need_item(W { a: s })
+    │     ^^^^^^^^^
+    │     │
+    │     `P<S, S>` doesn't implement `Out<Item = W<S>>`
+    │     `S` is only borrowed here; the bound would be satisfied if it were owned
+    │
+    = note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:123:5
+    │
+ 28 │     P<X, X>: Foo,
+    │              --- required by this bound on `need_pp`
+    ·
+123 │     need_pp(W { a: t })
+    │     ^^^^^^^
+    │     │
+    │     `P<T, T>` doesn't implement `Foo`
+    │     `T` is only borrowed here; the bound would be satisfied if it were owned
+    │
+    = note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:130:5
+    │
+ 28 │     P<X, X>: Foo,
+    │              --- required by this bound on `need_pp`
+    ·
+130 │     need_pp(W { a: t })
+    │     ^^^^^^^
+    │     │
+    │     `P<T, T>` doesn't implement `Foo`
+    │     `T` is only borrowed here; the bound would be satisfied if it were owned
+    │
+    = note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:146:5
+    │
+142 │     P<X, X>: Foo,
+    │              --- required by this bound on `rec`
+    ·
+146 │     rec(W { a: ref w.a })
+    │     ^^^
+    │     │
+    │     `P<ref X, ref X>` doesn't implement `Foo`
+    │     `X` is borrowed here as `ref X`; the bound would be satisfied if it were owned
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:161:16
+    │
+156 │         P<T, T>: Foo,
+    │                  --- required by this bound on `check_parent`
+    ·
+161 │     H { t: s }.check_parent()
+    │                ^^^^^^^^^^^^
+    │                │
+    │                `P<S, S>` doesn't implement `Foo`
+    │                `S` is only borrowed here; the bound would be satisfied if it were owned
+    │
+    = note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:178:16
+    │
+167 │         P<Self, Self>: FooNested
+    │                        --------- required by this bound on `check_self`
+    ·
+178 │     W { a: s }.check_self()
+    │                ^^^^^^^^^^
+    │                │
+    │                `P<W<ref S>, W<ref S>>` doesn't implement `FooNested`
+    │                `S` is borrowed here as `ref S`; the bound would be satisfied if it were owned
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:191:5
+    │
+183 │ fn need_pair_single<X: Mark>(_ first: W<X>, _ second: W<X>) {}
+    │                        ---- required by this bound on `need_pair_single`
+    ·
+191 │     need_pair_single(W { a: s }, W { a: t })
+    │     ^^^^^^^^^^^^^^^^
+    │     │
+    │     `ref S` doesn't implement `Mark`
+    │     `S` is borrowed here as `ref S`; the bound would be satisfied if it were owned
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:192:5
+    │
+187 │     P<X, X>: Foo,
+    │              --- required by this bound on `need_pair`
+    ·
+192 │     need_pair(W { a: s }, W { a: t })
+    │     ^^^^^^^^^
+    │     │
+    │     `P<ref S, ref S>` doesn't implement `Foo`
+    │     `S` is borrowed here as `ref S`; the bound would be satisfied if it were owned
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:206:5
+    │
+202 │     P<X, X>: Foo,
+    │              --- required by this bound on `need_aggregate`
+    ·
+206 │     need_aggregate(Two { a: s, b: t })
+    │     ^^^^^^^^^^^^^^
+    │     │
+    │     `P<ref S, ref S>` doesn't implement `Foo`
+    │     `S` is borrowed here as `ref S`; the bound would be satisfied if it were owned
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:216:5
+    │
+212 │     P<X, Y>: Foo,
+    │              --- required by this bound on `need_independent`
+    ·
+216 │     need_independent(W { a: s }, W { a: t })
+    │     ^^^^^^^^^^^^^^^^
+    │     │
+    │     `P<ref S, ref S>` doesn't implement `Foo`
+    │     trait bound `ref S: Mark` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:217:5
+    │
+212 │     P<X, Y>: Foo,
+    │              --- required by this bound on `need_independent`
+    ·
+217 │     need_independent(W { a: s }, W { a: s })
+    │     ^^^^^^^^^^^^^^^^
+    │     │
+    │     `P<ref S, ref S>` doesn't implement `Foo`
+    │     trait bound `ref S: Mark` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:233:5
+    │
+225 │ fn need_two_single<X: FooTwo>(_ x: X) {}
+    │                       ------ required by this bound on `need_two_single`
+    ·
+233 │     need_two_single(Two { a: s, b: t })
+    │     ^^^^^^^^^^^^^^^
+    │     │
+    │     `Two<ref S, ref S>` doesn't implement `FooTwo`
+    │     trait bound `ref S: Mark` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:234:5
+    │
+229 │     P<X, X>: FooTwo,
+    │              ------ required by this bound on `need_two_repeated`
+    ·
+234 │     need_two_repeated(W { a: Two { a: s, b: t } })
+    │     ^^^^^^^^^^^^^^^^^
+    │     │
+    │     `P<Two<ref S, ref S>, Two<ref S, ref S>>` doesn't implement `FooTwo`
+    │     trait bound `ref S: Mark` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:248:5
+    │
+244 │     P<X, ref S>: FooFixed,
+    │                  -------- required by this bound on `need_fixed_self`
+    ·
+248 │     need_fixed_self(W { a: s })
+    │     ^^^^^^^^^^^^^^^
+    │     │
+    │     `P<ref S, ref S>` doesn't implement `FooFixed`
+    │     trait bound `ref S: Mark` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:257:5
+    │
+253 │     P<X, X>: Rel<ref S>,
+    │              ---------- required by this bound on `need_fixed_arg`
+    ·
+257 │     need_fixed_arg(W { a: s })
+    │     ^^^^^^^^^^^^^^
+    │     │
+    │     `P<ref S, ref S>` doesn't implement `Rel<ref S>`
+    │     trait bound `ref S: Mark` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:262:5
+    │
+253 │     P<X, X>: Rel<ref S>,
+    │              ---------- required by this bound on `need_fixed_arg`
+    ·
+262 │     need_fixed_arg(W { a: s })
+    │     ^^^^^^^^^^^^^^
+    │     │
+    │     `P<S, S>` doesn't implement `Rel<ref S>`
+    │     `S` is only borrowed here; the bound would be satisfied if it were owned
+    │
+    = note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:279:5
+    │
+275 │     P<X, X>: FixedOut<Item = ref S>,
+    │              ---------------------- required by this bound on `need_fixed_item`
+    ·
+279 │     need_fixed_item(W { a: s })
+    │     ^^^^^^^^^^^^^^^
+    │     │
+    │     `P<ref S, ref S>` doesn't implement `FixedOut<Item = ref S>`
+    │     trait bound `ref S: Mark` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:293:5
+    │
+284 │     P<X, X>: Rel<Y>,
+    │              ------ required by this bound on `need_other_arg`
+    ·
+293 │     need_other_arg(W { a: s }, W { a: t })
+    │     ^^^^^^^^^^^^^^
+    │     │
+    │     `P<ref S, ref S>` doesn't implement `Rel<ref S>`
+    │     trait bound `ref S: Mark` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:294:5
+    │
+284 │     P<X, X>: Rel<Y>,
+    │              ------ required by this bound on `need_other_arg`
+    ·
+294 │     need_other_arg(W { a: s }, W { a: n })
+    │     ^^^^^^^^^^^^^^
+    │     │
+    │     `P<ref S, ref S>` doesn't implement `Rel<u256>`
+    │     trait bound `ref S: Mark` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:295:5
+    │
+289 │     P<X, X>: FixedOut<Item = Y>,
+    │              ------------------ required by this bound on `need_other_item`
+    ·
+295 │     need_other_item(W { a: s }, W { a: t })
+    │     ^^^^^^^^^^^^^^^
+    │     │
+    │     `P<ref S, ref S>` doesn't implement `FixedOut<Item = ref S>`
+    │     trait bound `ref S: Mark` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:304:5
+    │
+300 │     P<ref X, ref X>: Foo,
+    │                      --- required by this bound on `need_fixed_constructor`
+    ·
+304 │     need_fixed_constructor(W { a: s })
+    │     ^^^^^^^^^^^^^^^^^^^^^^
+    │     │
+    │     `P<ref S, ref S>` doesn't implement `Foo`
+    │     trait bound `ref S: Mark` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:312:5
+    │
+ 28 │     P<X, X>: Foo,
+    │              --- required by this bound on `need_pp`
+    ·
+312 │     need_pp(W { a: s })
+    │     ^^^^^^^
+    │     │
+    │     `P<ref Unmarked, ref Unmarked>` doesn't implement `Foo`
+    │     trait bound `ref Unmarked: Mark` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:339:5
+    │
+335 │     P<X, X>: FooDep<Y>,
+    │              --------- required by this bound on `need_dep`
+    ·
+339 │     need_dep(W { a: s })
+    │     ^^^^^^^^
+    │     │
+    │     `P<ref S, ref S>` doesn't implement `FooDep<u8>`
+    │     trait bound `ref S: Mark` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:343:5
+    │
+335 │     P<X, X>: FooDep<Y>,
+    │              --------- required by this bound on `need_dep`
+    ·
+343 │     need_dep(W { a: s })
+    │     ^^^^^^^^ `P<S, S>` doesn't implement `FooDep<u16>`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:354:5
+    │
+350 │     P<X, X>: FooDep<<W<X> as Pick>::Item>,
+    │              ---------------------------- required by this bound on `need_projection`
+    ·
+354 │     need_projection(W { a: s })
+    │     ^^^^^^^^^^^^^^^
+    │     │
+    │     `P<ref S, ref S>` doesn't implement `FooDep<u8>`
+    │     trait bound `ref S: Mark` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:366:5
+    │
+362 │     P<X, X>: Count<3>,
+    │              -------- required by this bound on `need_fixed_const`
+    ·
+366 │     need_fixed_const(W { a: s })
+    │     ^^^^^^^^^^^^^^^^
+    │     │
+    │     `P<ref S, ref S>` doesn't implement `Count<3>`
+    │     `S` is borrowed here as `ref S`; the bound would be satisfied if it were owned
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:375:5
+    │
+371 │     P<X, X>: Count<N>,
+    │              -------- required by this bound on `need_const_param`
+    ·
+375 │     need_const_param<ref S, 3>(W { a: s })
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    │     │
+    │     `P<ref S, ref S>` doesn't implement `Count<3>`
+    │     trait bound `ref S: Mark` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_bound_borrowed_value_repeated_param.fe:402:5
+    │
+398 │     sealed::P<X, X>: sealed::Foo,
+    │                      ----------- required by this bound on `need_sealed`
+    ·
+402 │     need_sealed(W { a: s })
+    │     ^^^^^^^^^^^
+    │     │
+    │     `P<S, S>` doesn't implement `Foo`
+    │     `S` is only borrowed here; the bound would be satisfied if it were owned
+    │
+    = note: values reached through a parameter declared without `own` are borrowed, and a borrowed value cannot be used as an owned one unless its type is `Copy`

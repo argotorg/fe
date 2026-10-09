@@ -2044,28 +2044,11 @@ fn entry_semantic_args_sort_key<'db>(
         .iter()
         .map(|arg| {
             let target = callable_layout_param_port_sort_key(&arg.target);
-            let map_ty = &arg.value.map_ty;
-            let dimensions = map_ty
-                .dimensions
-                .iter()
-                .map(usize::to_string)
-                .collect::<Vec<_>>()
-                .join(".");
-            let strides = arg
-                .value
-                .strides
-                .iter()
-                .map(usize::to_string)
-                .collect::<Vec<_>>()
-                .join(".");
             let base = match arg.value.base {
                 LayoutEvidenceBase::Root(root) => format!("root:{}", type_identity(db, root)),
                 LayoutEvidenceBase::Slot(slot) => format!("slot:{slot}"),
             };
-            format!(
-                "{target}:{}:[{dimensions}]:{base}:[{strides}]",
-                type_identity(db, map_ty.scalar_ty),
-            )
+            format!("{target}:{}:{base}", type_identity(db, arg.value.ty))
         })
         .collect::<Vec<_>>()
         .join(",");
@@ -2094,7 +2077,6 @@ fn callable_layout_param_port_sort_key(port: &CallableLayoutParamPort) -> String
         .map(|step| match step {
             LayoutEvidencePathStep::Field(field) => format!("f{field}"),
             LayoutEvidencePathStep::Variant(variant) => format!("v{variant}"),
-            LayoutEvidencePathStep::Index => "i".to_string(),
             LayoutEvidencePathStep::EffectTarget => "t".to_string(),
         })
         .collect::<Vec<_>>()
@@ -2295,18 +2277,6 @@ fn scalar_role_sort_key<'db>(db: &'db dyn MirDb, role: &ScalarRole<'db>) -> Stri
         ScalarRole::EnumTag { enum_layout } => {
             format!("enum_tag:{}", layout_sort_key(db, *enum_layout))
         }
-        ScalarRole::LayoutMap {
-            scalar_ty,
-            dimensions,
-        } => format!(
-            "layout_map:{}:[{}]",
-            type_identity(db, *scalar_ty),
-            dimensions
-                .iter()
-                .map(usize::to_string)
-                .collect::<Vec<_>>()
-                .join(".")
-        ),
     }
 }
 
@@ -2786,70 +2756,6 @@ fn invalid(result: mut u256) -> mut u256 {
     }
 
     #[test]
-    fn contract_entry_plan_carries_each_terminal_layout_family() {
-        let mut db = DriverDataBase::default();
-        let file_url = Url::parse("file:///contract_entry_layout_families.fe").unwrap();
-        let file = db.workspace().touch(
-            &mut db,
-            file_url,
-            Some(
-                r#"
-use std::abi::sol
-
-struct Slot<const ROOT: u256> {}
-
-enum Choice<const ROOT: u256 = _> {
-    Scalar(Slot<ROOT>),
-    Family([Slot<ROOT>; 3]),
-}
-
-msg Msg {
-    #[selector = sol("get()")]
-    Get {} -> u256,
-}
-
-contract C {
-    values: [Choice; 2],
-
-    recv Msg {
-        Get {} -> u256 uses (values) { 0 }
-    }
-}
-"#
-                .to_string(),
-            ),
-        );
-        let top_mod = db.top_mod(file);
-        let plan = recv_wrapper_plan(&db, top_mod, "get()");
-        assert_eq!(plan.entry_args.effects.len(), 1);
-        assert_eq!(plan.entry_args.layout_evidence.len(), 2);
-        assert_eq!(
-            plan.entry_args
-                .layout_evidence
-                .iter()
-                .map(|arg| arg.value.map_ty.dimensions.clone())
-                .collect::<Vec<_>>(),
-            [vec![2], vec![2, 3]],
-        );
-        assert_eq!(
-            plan.entry_args
-                .layout_evidence
-                .iter()
-                .map(|arg| arg.value.base)
-                .collect::<Vec<_>>(),
-            [LayoutEvidenceBase::Slot(2), LayoutEvidenceBase::Slot(2)],
-        );
-        assert_eq!(
-            plan.entry_args
-                .layout_evidence
-                .iter()
-                .map(|arg| arg.value.strides.as_ref())
-                .collect::<Vec<_>>(),
-            [&[3][..], &[3, 1][..]],
-        );
-    }
-
-    #[test]
     fn usize_layout_evidence_uses_usize_scalar_constants() {
         with_test_runtime_package(
             "usize_layout_evidence_uses_usize_scalar_constants.fe",
@@ -2864,17 +2770,17 @@ impl<const ROOT: usize> Rooted<ROOT> {
     }
 }
 
-fn select<const ROOT: usize>(values: [Rooted<ROOT>; 2], lane: usize) -> usize {
-    values[lane].root()
+fn select(value: Rooted) -> usize {
+    value.root()
 }
 
 #[test]
-fn usize_layout_maps_lower() {
-    let values: [Rooted<7>; 2] = [Rooted {}; 2]
-    assert!(select(values: values, lane: 1) == 7)
+fn usize_layout_roots_lower() {
+    let value: Rooted<7> = Rooted {}
+    assert!(select(value) == 7)
 }
 "#,
-            Some("usize_layout_maps_lower"),
+            Some("usize_layout_roots_lower"),
             |_, _| {},
         );
     }

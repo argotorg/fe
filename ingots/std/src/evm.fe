@@ -1,4 +1,4 @@
-pub use address::{self, checksum_address}
+pub use address::{self, checksum_address, parse_address}
 pub use clones::{self}
 pub use calldata::{self, *}
 pub use crypto::{self, *}
@@ -8,6 +8,7 @@ pub use erc20::{self}
 pub use erc721::{self}
 pub use erc1155::{self}
 pub use erc165::{self}
+pub use erc4337::{self}
 pub use signature::{self}
 pub use event::{self, *}
 pub use panic::{self, *}
@@ -19,8 +20,14 @@ pub use heap::{self}
 pub use mutex::{self, *}
 pub use mapping::SolMapping
 pub use merkle::{self}
+pub use multicall::{self}
 pub use sol_slot::{SolPacked, SolSlot}
+pub use sol_array::SolArray
+pub use sol_set::SolEnumerableSet
+pub use sol_slot::{SolPacked, SolSlot, SolWord}
 pub use packed::{self, *}
+pub use random::{self}
+pub use rlp::{self}
 pub use ssz::{self, *}
 pub use token::{self, ReceiverCheck, TokenCall}
 pub use storage_bytes::{self, *}

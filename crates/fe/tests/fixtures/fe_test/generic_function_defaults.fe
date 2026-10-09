@@ -54,7 +54,7 @@ fn effect_default<T: Root = bool>() -> u256 uses (slot: Slot<T::ROOT>) {
     slot.value
 }
 
-fn array_tail<const N: usize>(_ value: ([Slot<7>; N], Slot<7>)) -> u256 {
+fn array_tail<const N: usize>(_ value: ([u256; N], Slot<7>)) -> u256 {
     value.1.value
 }
 
@@ -153,7 +153,7 @@ fn layout_and_effect_defaults() {
         assert!(effect_default<bool>() == 15)
     }
     assert!(array_tail<0>(([], Slot<7, 9> { value: 16 })) == 16)
-    assert!(array_tail<2>(([Slot<7, 9> { value: 17 }, Slot<7, 9> { value: 17 }], Slot<7, 10> { value: 18 })) == 18)
+    assert!(array_tail<2>(([17, 17], Slot<7, 10> { value: 18 })) == 18)
     assert!(generic_selected_slot<bool>(AssocSlot<7> { value: 21 }) == 21)
     assert!(<bool as HasAssocSlot>::take(AssocSlot<7> { value: 22 }) == 22)
     with (AssocSlot<7> = AssocSlot<7> { value: 23 }) {

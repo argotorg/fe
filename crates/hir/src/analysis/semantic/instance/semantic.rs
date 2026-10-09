@@ -5,9 +5,8 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            CallSiteId, PlaceProvenance, RuntimeSizeError, SBlockId, SExpr, SLocalId, SStmtKind,
-            STerminatorKind, SemOrigin, SemanticBody, SemanticCalleeRef, SemanticLocalRole,
-            ValueProvenance, VariantIndex,
+            CallSiteId, PlaceProvenance, RuntimeSizeError, SExpr, SLocalId, SStmtKind, SemOrigin,
+            SemanticBody, SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex,
             borrowck::CallSiteRefinements,
             concrete_layout_fault,
             diagnostics::{
@@ -59,7 +58,7 @@ use salsa::Update;
 use thin_vec::ThinVec;
 
 use super::{
-    EffectProviderSubst, GenericSubst, ImplEnv, instantiate_typed_body,
+    EffectProviderSubst, GenericSubst, ImplEnv, const_ref::root_impl_env, instantiate_typed_body,
     provisional_semantic_callee_key, semantic_callee_key_with_effect_providers,
     typed_body_template,
 };
@@ -132,7 +131,7 @@ pub fn semantic_layout_bundle_signature<'db>(
                         origin,
                         instance.binding_ty(db, binding),
                     );
-                    (!interface.schema.components.is_empty())
+                    (!interface.schema.is_empty())
                         .then_some(CallableLayoutBundleInput { origin, interface })
                 })
                 .collect();
@@ -1163,75 +1162,6 @@ impl<'db> SemanticInstance<'db> {
         self.normalized_ty(db, self.key(db).typed_body(db).result_ty())
     }
 
-    #[salsa::tracked(
-        cycle_fn=known_never_returns_cycle_recover,
-        cycle_initial=known_never_returns_cycle_initial
-    )]
-    pub fn known_never_returns(self, db: &'db dyn HirAnalysisDb) -> bool {
-        if self.is_intrinsically_never_returning(db) {
-            return true;
-        }
-
-        let Ok(body) = self.admitted_body(db) else {
-            return false;
-        };
-        if body.blocks.is_empty() {
-            return false;
-        }
-
-        let mut pending = vec![SBlockId::from_u32(0)];
-        let mut visited = FxHashSet::default();
-        while let Some(block_id) = pending.pop() {
-            if !visited.insert(block_id) {
-                continue;
-            }
-            let Some(block) = body.block(block_id) else {
-                continue;
-            };
-            let mut terminated_in_stmt = false;
-            for stmt in &block.stmts {
-                let SStmtKind::Assign {
-                    expr: SExpr::Call { callee, .. },
-                    ..
-                } = &stmt.kind
-                else {
-                    continue;
-                };
-                let callee = SemanticInstance::new(db, callee.key);
-                if callee.is_intrinsically_never_returning(db)
-                    || (callee.contains_direct_intrinsic_never_returning_call(db)
-                        && callee.known_never_returns(db))
-                {
-                    terminated_in_stmt = true;
-                    break;
-                }
-            }
-            if terminated_in_stmt {
-                continue;
-            }
-
-            match &block.terminator.kind {
-                STerminatorKind::Return(_) => return false,
-                STerminatorKind::Assert { .. } => {}
-                STerminatorKind::Goto(next) => pending.push(*next),
-                STerminatorKind::Branch {
-                    then_bb, else_bb, ..
-                } => {
-                    pending.push(*then_bb);
-                    pending.push(*else_bb);
-                }
-                STerminatorKind::MatchEnum { cases, default, .. } => {
-                    pending.extend(cases.iter().map(|(_, block)| *block));
-                    if let Some(default) = default {
-                        pending.push(*default);
-                    }
-                }
-            }
-        }
-
-        true
-    }
-
     #[salsa::tracked(return_ref)]
     pub fn body(self, db: &'db dyn HirAnalysisDb) -> SemanticBody<'db> {
         lower_semantic_body(db, self)
@@ -1434,29 +1364,6 @@ impl<'db> SemanticInstance<'db> {
                     | RuntimeBuiltinFuncKind::Todo
             )
         )
-    }
-
-    fn contains_direct_intrinsic_never_returning_call(self, db: &'db dyn HirAnalysisDb) -> bool {
-        if self.is_intrinsically_never_returning(db) {
-            return true;
-        }
-
-        let Ok(body) = self.admitted_body(db) else {
-            return false;
-        };
-        body.blocks.iter().any(|block| {
-            block.stmts.iter().any(|stmt| {
-                if let SStmtKind::Assign {
-                    expr: SExpr::Call { callee, .. },
-                    ..
-                } = &stmt.kind
-                {
-                    SemanticInstance::new(db, callee.key).is_intrinsically_never_returning(db)
-                } else {
-                    false
-                }
-            })
-        })
     }
 }
 
@@ -1818,18 +1725,19 @@ pub fn root_semantic_instance_key<'db>(
 ) -> Result<SemanticInstanceKey<'db>, RootSemanticInstanceError<'db>> {
     let generic_args = root_owner_generic_args(db, owner)?;
     let effect_providers = root_owner_effect_providers(db, owner);
+    let subst = match owner {
+        BodyOwner::Func(func) => GenericSubst::for_owner(db, func.into(), generic_args),
+        BodyOwner::Const(_)
+        | BodyOwner::AnonConstBody { .. }
+        | BodyOwner::ContractInit { .. }
+        | BodyOwner::ContractRecvArm { .. } => GenericSubst::none(db),
+    };
     let key = SemanticInstanceKey::new(
         db,
         owner,
-        match owner {
-            BodyOwner::Func(func) => GenericSubst::for_owner(db, func.into(), generic_args),
-            BodyOwner::Const(_)
-            | BodyOwner::AnonConstBody { .. }
-            | BodyOwner::ContractInit { .. }
-            | BodyOwner::ContractRecvArm { .. } => GenericSubst::none(db),
-        },
+        subst,
         EffectProviderSubst::new(db, effect_providers),
-        ImplEnv::empty(db, owner.scope()),
+        root_impl_env(db, owner, subst),
     );
     validate_instantiated_effect_env_key(db, key)
         .map_err(RootSemanticInstanceError::UnclosedEffectEnv)?;
@@ -1840,12 +1748,13 @@ pub fn identity_semantic_instance_key<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> SemanticInstanceKey<'db> {
+    let subst = GenericSubst::for_body_owner(db, owner, Vec::new());
     SemanticInstanceKey::new(
         db,
         owner,
-        GenericSubst::for_body_owner(db, owner, Vec::new()),
+        subst,
         EffectProviderSubst::empty(db),
-        ImplEnv::empty(db, owner.scope()),
+        root_impl_env(db, owner, subst),
     )
 }
 
@@ -2448,22 +2357,6 @@ where
     }
     substitute_complete(db, value, mapping)
         .map_err(|error| SemanticEffectEnvInstantiationError::Generic { owner, error })
-}
-
-fn known_never_returns_cycle_initial<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _instance: SemanticInstance<'db>,
-) -> bool {
-    false
-}
-
-fn known_never_returns_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &bool,
-    _count: u32,
-    _instance: SemanticInstance<'db>,
-) -> salsa::CycleRecoveryAction<bool> {
-    salsa::CycleRecoveryAction::Iterate
 }
 
 #[cfg(test)]

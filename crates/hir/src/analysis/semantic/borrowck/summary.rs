@@ -78,6 +78,7 @@ use super::{
         CertifiedRangePoststate, InputPoststate, MemoryAccess, PendingSemanticValidation,
         ScalarInputPoststate, SeparationOrigin,
     },
+    scalar::CONDITION_BUDGET,
     solver::{BorrowSummaryMode, Borrowck, Resolution},
     transport::{TransportRoute, referent_contract},
     validation::can_specialize,
@@ -111,7 +112,15 @@ impl<'db> BorrowSummary<'db> {
             ValueOccurrence::Argument(_) | ValueOccurrence::Summary => occurrence,
             _ => ValueOccurrence::SummaryChoice(choices[&occurrence]),
         };
-        let map = |guard: &Guard<'db>| guard.map_occurrences(rename);
+        // Components often share guards. This renaming is fixed for one
+        // summary, so reuse each result without keeping it across exports.
+        let mut renamed = FxHashMap::default();
+        let mut map = |guard: &Guard<'db>| {
+            renamed
+                .entry(guard.clone())
+                .or_insert_with(|| guard.map_occurrences(rename))
+                .clone()
+        };
         for value in std::iter::once(&mut self.result)
             .chain(self.mutable_inputs.iter_mut().map(|input| &mut input.value))
             .chain(
@@ -120,7 +129,7 @@ impl<'db> BorrowSummary<'db> {
                     .map(|range| &mut range.contents),
             )
         {
-            *value = values.map_guards(value, map);
+            *value = values.map_guards(value, &mut map);
         }
         for range in &mut self.certified_ranges {
             range.coverage = map(&range.coverage).expect("injective summary choice renaming");
@@ -146,7 +155,6 @@ impl<'db> BorrowSummary<'db> {
                 &mut self.availability.reinitialized,
                 &mut self.availability.unavailable,
                 &mut self.native_requirements,
-                &mut self.separation_validity,
             ])
         {
             *region = RegionSet::new(
@@ -157,9 +165,18 @@ impl<'db> BorrowSummary<'db> {
                 }),
             );
         }
-        self.separation_validity = self
-            .separation_validity
-            .forget_occurrences(|choice| matches!(choice, ValueOccurrence::SummaryChoice(_)));
+        drop(renamed);
+        // Pre-call obligations hide every private choice. Project them before
+        // renaming: moving selectors after argument fields can build an
+        // exponential intermediate graph that projection immediately discards.
+        // The retained Argument/Summary occurrences need no renaming.
+        let private = |choice| {
+            !matches!(
+                choice,
+                ValueOccurrence::Argument(_) | ValueOccurrence::Summary
+            )
+        };
+        self.separation_validity = self.separation_validity.forget_occurrences(private);
         // Equal relations merge; the first origin in body order names each.
         let scope = BinderScope::default();
         let mut origins = BTreeMap::new();
@@ -168,12 +185,9 @@ impl<'db> BorrowSummary<'db> {
             // These are pre-call obligations. A caller must establish them for
             // every possible private execution of the callee; only argument
             // choices can restrict which executions it admits at the boundary.
-            let renamed = SeparationSet::new(db, &scope, [clause])
-                .map_occurrences(db, rename)
-                .forget_occurrences(db, |choice| {
-                    matches!(choice, ValueOccurrence::SummaryChoice(_))
-                });
-            for clause in renamed.clauses() {
+            let projected =
+                SeparationSet::new(db, &scope, [clause]).forget_occurrences(db, private);
+            for clause in projected.clauses() {
                 origins.entry(clause.payload.clone()).or_insert(origin);
                 clauses.push(clause.clone());
             }
@@ -220,10 +234,10 @@ impl CallInputs<'_, '_> {
     }
 }
 
-/// How a summary component may refer to the single object a call returns.
+/// How a summary component may refer to a call's single fresh output.
 #[derive(Clone, Copy)]
 enum PortUse {
-    Result,
+    Output,
     Copy,
     Other,
 }
@@ -352,7 +366,7 @@ pub(super) struct CallSummary<'db> {
     pub pending: bool,
     updates: Vec<CapabilityValue<'db>>,
     births: Vec<AllocationBirth<'db>>,
-    single_result_port: bool,
+    single_fresh_port: bool,
 }
 
 impl<'db> Borrowck<'db> {
@@ -361,10 +375,10 @@ impl<'db> Borrowck<'db> {
         mut source: ExternalSource<'db>,
         result: NValueId,
         origin: SemOrigin<'db>,
-        single_result_port: bool,
+        single_fresh_port: bool,
     ) -> Result<ExternalSource<'db>, SemanticDiagnostic<'db>> {
         let mut invalid = false;
-        let fresh = single_result_port && source.is_fresh_allocation();
+        let fresh = single_fresh_port && source.is_fresh_allocation();
         source.map_occurrences(&mut |occurrence, arguments| {
             let AddressOccurrence::Summary(choice) = *occurrence else {
                 invalid = true;
@@ -486,6 +500,43 @@ impl<'db> Borrowck<'db> {
                 })
                 .collect();
             let sources = SourceValues::new(self.db, ValueLimits::default());
+            // Without a capability result, one concrete slot in caller storage
+            // can be the sole fresh output. Multiple slots or dynamic array
+            // elements can expose distinct members of an allocation family.
+            let mut poststate_slot = None;
+            let mut single_poststate = !summary.result.shape().contains_capability(self.db);
+            for (index, update) in summary.mutable_inputs.iter().enumerate() {
+                for leaf in sources.leaves(&update.value, ValueOccurrence::Summary) {
+                    if !contains_allocation_origin(&leaf.payload.source) {
+                        continue;
+                    }
+                    if leaf.payload.source.fresh_allocation().is_none()
+                        || !matches!(&update.destination.source.origin, ExternalOrigin::Input(input)
+                            if !input.is_reachable() && input.dereferences().is_empty())
+                        || update.destination.source.is_reachable()
+                        || !update.destination.source.dereferences().is_empty()
+                        || update.destination.source.clobber.is_some()
+                        || update
+                            .destination
+                            .indices()
+                            .any(|index| !matches!(index, IndexExpr::Const(_)))
+                        || leaf
+                            .path
+                            .indices()
+                            .any(|index| !matches!(index, IndexExpr::Const(_)))
+                    {
+                        single_poststate = false;
+                    }
+                    let slot = (index, leaf.path);
+                    if poststate_slot
+                        .as_ref()
+                        .is_some_and(|previous| previous != &slot)
+                    {
+                        single_poststate = false;
+                    }
+                    poststate_slot = Some(slot);
+                }
+            }
             let mut external = Vec::new();
             for leaf in sources.leaves(&summary.result, ValueOccurrence::Summary) {
                 let scope = leaf.guard.scope().clone();
@@ -493,10 +544,10 @@ impl<'db> Borrowck<'db> {
                     leaf.payload.source,
                     scope,
                     Some(leaf.guard),
-                    PortUse::Result,
+                    PortUse::Output,
                 ));
             }
-            for update in &summary.mutable_inputs {
+            for (index, update) in summary.mutable_inputs.iter().enumerate() {
                 let leaves = sources.leaves(&update.value, ValueOccurrence::Summary);
                 let port = if update.value == summary.result
                     || (update.destination.source.fresh_allocation().is_some()
@@ -507,6 +558,13 @@ impl<'db> Borrowck<'db> {
                     PortUse::Other
                 };
                 for leaf in leaves {
+                    let port = if single_poststate
+                        && poststate_slot.as_ref() == Some(&(index, leaf.path.clone()))
+                    {
+                        PortUse::Output
+                    } else {
+                        port
+                    };
                     let scope = leaf.guard.scope().clone();
                     external.push((leaf.payload.source, scope, Some(leaf.guard), port));
                 }
@@ -581,21 +639,20 @@ impl<'db> Borrowck<'db> {
                         })
                     }),
             );
-            // A direct capability result carries only one object in a call
-            // evaluation. Its fresh alternatives therefore share one finite
-            // call-result port when every other exported fresh object is that
-            // same object: a stored copy of the result or invalid contents of
-            // its fresh storage. Allocation arguments bound by a family or an
-            // existential can name several objects in one evaluation, so an
-            // equal abstract value does not identify a copy with the result.
-            // The Value occurrence and enclosing loop arguments still
-            // distinguish different calls.
-            let single_result_port = summary.result.shape().direct(self.db).is_some()
+            // A direct result or sole concrete poststate slot carries one
+            // fresh object per call evaluation. Its alternatives share a finite
+            // port only if every other exported fresh reference is a proven
+            // copy. A family can supply the sole output, but equal abstract
+            // family values do not prove that a second output is the same
+            // member. The call occurrence and loop arguments still distinguish
+            // births from different evaluations.
+            let single_fresh_port = (summary.result.shape().direct(self.db).is_some()
+                || (single_poststate && poststate_slot.is_some()))
                 && summary.certified_ranges.is_empty()
                 && summary.native_requirements.is_empty()
                 && summary.separation_validity.is_empty()
                 && external.iter().all(|(source, _, _, port)| match port {
-                    PortUse::Result => true,
+                    PortUse::Output => true,
                     PortUse::Copy => source.fresh_allocation().is_none_or(|handle| {
                         handle.arguments.iter().all(|argument| {
                             !matches!(argument, IndexExpr::Bound(_) | IndexExpr::Iteration(_))
@@ -612,7 +669,7 @@ impl<'db> Borrowck<'db> {
                     births.push(birth);
                 }
                 let base = if let Some(base) = source.address_base(self.db) {
-                    self.instantiate_address_base(base, result, origin, single_result_port)?
+                    self.instantiate_address_base(base, result, origin, single_fresh_port)?
                 } else {
                     match source.origin {
                         // A conditional replacement's base is its whole family.
@@ -652,16 +709,17 @@ impl<'db> Borrowck<'db> {
                     pending,
                     updates,
                     births,
-                    single_result_port,
+                    single_fresh_port,
                 },
             );
         }
         self.inventory
             .add_external_sources(self.db, self.instance, bases)
             .map_err(|error| {
-                self.internal_diag(
+                self.storage_error(
                     SemOrigin::Body(self.body.template_owner),
-                    format!("unresolved external call storage: {error:?}"),
+                    error,
+                    "unresolved external call storage",
                 )
             })?;
         Ok(())
@@ -911,8 +969,8 @@ impl<'db> Borrowck<'db> {
             };
             may_return = true;
             let origin = block.terminator.origin;
-            // Facts over formal arguments hold on every normal return; an
-            // integer result also relates to the value this path returns.
+            // Facts over formal arguments hold on every normal return. Relate
+            // an integral result by its index and a boolean result by its choice.
             let actual = returned
                 .filter(|_| scalar_ty.is_integral(self.db))
                 .map(|returned| self.index(returned.value));
@@ -930,7 +988,34 @@ impl<'db> Borrowck<'db> {
                     Some(actual) => guard
                         .with_equality(scalar_scope.1, actual)
                         .expect("a fresh result can equal a returned scalar"),
-                    None => guard,
+                    None => {
+                        if let Some(returned) = returned
+                            && scalar_ty.is_bool(self.db)
+                        {
+                            let choice =
+                                ChoiceKey::new(ValueOccurrence::Summary, StructuralPath::default());
+                            [false, true]
+                                .into_iter()
+                                .filter_map(|value| {
+                                    guard
+                                        .and(
+                                            &self
+                                                .condition_guard(
+                                                    returned.value,
+                                                    value,
+                                                    true,
+                                                    CONDITION_BUDGET,
+                                                )?
+                                                .in_scope(&scalar_scope.0),
+                                        )?
+                                        .with_boolean(choice.clone(), value)
+                                })
+                                .reduce(|left, right| left.or(&right))
+                                .expect("an admitted boolean return has a feasible value")
+                        } else {
+                            guard
+                        }
+                    }
                 };
                 let subst = IndexSubst::new(
                     &scalar_scope.0,
@@ -965,7 +1050,10 @@ impl<'db> Borrowck<'db> {
                     })
                     .expect("scalar choice renaming preserves feasibility")
                     .forget_occurrences(|occurrence| {
-                        !matches!(occurrence, ValueOccurrence::Argument(_))
+                        !matches!(
+                            occurrence,
+                            ValueOccurrence::Argument(_) | ValueOccurrence::Summary
+                        )
                     })
                     .forget_indices(|index| {
                         matches!(index, IndexExpr::Runtime(_) | IndexExpr::Iteration(_))
@@ -1037,6 +1125,10 @@ impl<'db> Borrowck<'db> {
             .filter(|(block, _)| matches!(block.terminator.kind, NTerminatorKind::Return(_)))
             .filter_map(|(_, state)| state.as_ref())
             .collect();
+        let return_guard = return_states
+            .iter()
+            .map(|state| state.guard().clone())
+            .reduce(|left, right| left.or(&right));
         let scalar_inputs = self
             .inventory
             .inputs
@@ -1101,7 +1193,6 @@ impl<'db> Borrowck<'db> {
             // shared. An address used only by this effect is existential within
             // the effect: retaining call-depth identities would grow recursive
             // summaries forever without distinguishing their possible targets.
-            let mut access_handles = handles.clone();
             let external = |region: &RegionSet<'db>| {
                 RegionSet::new(
                     region.scope(),
@@ -1115,30 +1206,86 @@ impl<'db> Borrowck<'db> {
                         .cloned(),
                 )
             };
-            let region = self.summarize_region(
-                &external(&access.region)
-                    .forget_occurrences(|occurrence| self.recursive_call_choice(occurrence)),
-                SemOrigin::Body(self.body.template_owner),
-                &mut choices,
-                &mut access_handles,
-            )?;
-            if region.is_empty() {
-                continue;
-            }
-            let authorizers = self.summarize_region(
-                &external(&access.authorizers),
-                SemOrigin::Body(self.body.template_owner),
-                &mut choices,
-                &mut access_handles,
-            )?;
-            let access = MemoryAccess {
-                kind: access.kind,
-                extent: self.summarize_extent(access.extent),
-                region,
-                authorizers,
+            let target = external(&access.region);
+            let external_authorizers = external(&access.authorizers);
+            let project_authorizers = external_authorizers.clauses().iter().any(|clause| {
+                clause
+                    .guard
+                    .occurrences()
+                    .into_iter()
+                    .any(|choice| self.recursive_call_choice(choice))
+            });
+            // Different targets can have different receivers on hidden branches.
+            // Keep their domains separate, while canonical clauses still combine
+            // every execution that can reach the same target.
+            let targets = if project_authorizers {
+                target
+                    .clauses()
+                    .iter()
+                    .map(|clause| RegionSet::new(target.scope(), [clause.clone()]))
+                    .collect()
+            } else {
+                vec![target]
             };
-            if !accesses.contains(&access) {
-                accesses.push(access);
+            let mut access_handles = handles.clone();
+            for target in targets {
+                let region = self.summarize_region(
+                    &target.forget_occurrences(|occurrence| self.recursive_call_choice(occurrence)),
+                    SemOrigin::Body(self.body.template_owner),
+                    &mut choices,
+                    &mut access_handles,
+                )?;
+                if region.is_empty() {
+                    continue;
+                }
+                let mut authorizers = external_authorizers.clone();
+                if project_authorizers {
+                    // The effect may run on any recursive execution. Its receiver
+                    // authority must hold on every execution that can reach it.
+                    // Access witnesses are private to their clauses, so project
+                    // them before comparing their execution domain with authority.
+                    let domain = target
+                        .clauses()
+                        .iter()
+                        .map(|clause| {
+                            let guard = clause.guard.forget_indices(|index| {
+                                access.region.scope().validate(index).is_err()
+                            });
+                            let subst = guard
+                                .scope()
+                                .canonical_existentials(access.region.scope(), || guard.indices());
+                            guard.substitute(&subst).expect("access execution domain")
+                        })
+                        .reduce(|left, right| left.or(&right))
+                        .expect("nonempty external effect");
+                    authorizers = RegionSet::new(
+                        authorizers.scope(),
+                        authorizers.clauses().iter().filter_map(|clause| {
+                            Some(Guarded {
+                                guard: clause.guard.forget_occurrences_universally(
+                                    &domain.in_scope(clause.guard.scope()),
+                                    |choice| self.recursive_call_choice(choice),
+                                )?,
+                                payload: clause.payload.clone(),
+                            })
+                        }),
+                    );
+                }
+                let authorizers = self.summarize_region(
+                    &authorizers,
+                    SemOrigin::Body(self.body.template_owner),
+                    &mut choices,
+                    &mut access_handles,
+                )?;
+                let access = MemoryAccess {
+                    kind: access.kind,
+                    extent: self.summarize_extent(access.extent),
+                    region,
+                    authorizers,
+                };
+                if !accesses.contains(&access) {
+                    accesses.push(access);
+                }
             }
         }
         accesses.sort();
@@ -1186,8 +1333,32 @@ impl<'db> Borrowck<'db> {
             }
         }
         availability.incoming.sort();
+        let mut reinitialized = external(&ownership.summary.reinitialized, false);
+        if reinitialized.clauses().iter().any(|clause| {
+            clause
+                .guard
+                .occurrences()
+                .into_iter()
+                .any(|choice| self.recursive_call_choice(choice))
+        }) && let Some(returned) = &return_guard
+        {
+            // A definite write must hold on every admitted normal return, not
+            // merely on executions selected by that write's own hidden guard.
+            reinitialized = RegionSet::new(
+                reinitialized.scope(),
+                reinitialized.clauses().iter().filter_map(|clause| {
+                    Some(Guarded {
+                        guard: clause.guard.forget_occurrences_universally(
+                            &returned.in_scope(clause.guard.scope()),
+                            |choice| self.recursive_call_choice(choice),
+                        )?,
+                        payload: clause.payload.clone(),
+                    })
+                }),
+            );
+        }
         availability.reinitialized = self.summarize_availability_region(
-            &external(&ownership.summary.reinitialized, false),
+            &reinitialized,
             origin,
             &mut choices,
             &handles,
@@ -1233,6 +1404,22 @@ impl<'db> Borrowck<'db> {
         }
         let mut certified_ranges = Vec::new();
         for (family, scope, coverage, contents) in common_ranges {
+            // Local execution facts can occur in a proved range's guard without
+            // identifying its storage. Export the must fact only where it holds
+            // for every normal return represented by those private scalars.
+            let returned = return_guard
+                .as_ref()
+                .expect("certified return")
+                .in_scope(&scope);
+            let abstraction = self.abstract_local_indices(
+                &scope,
+                coverage.indices().into_iter().chain(returned.indices()),
+            );
+            let Some(coverage) = coverage.forget_indices_universally(&returned, |index| {
+                scope.validate(abstraction.apply(index)).is_err()
+            }) else {
+                continue;
+            };
             if contents.iter().any(|value| {
                 self.inventory
                     .values
@@ -1312,13 +1499,65 @@ impl<'db> Borrowck<'db> {
             may_return,
             result,
             scalar_result,
+            observed_params: Some(self.scalar.observed.clone()),
             mutable_inputs: updates,
             certified_ranges,
             scalar_inputs,
             requirements,
         };
-        let (summary, provenance) =
+        let (mut summary, provenance) =
             summary.abstract_choices(self.db, &mut values, choices, separations);
+        if (scalar_ty.is_bool(self.db) || scalar_ty.is_integral(self.db))
+            && summary.mutable_inputs.is_empty()
+            && summary.scalar_inputs.is_empty()
+            && summary.certified_ranges.is_empty()
+            && summary.requirements.is_empty()
+            && summary.accesses.is_empty()
+            && summary.availability.incoming.is_empty()
+            && summary.availability.reinitialized.is_empty()
+            && summary.availability.unavailable.is_empty()
+            && summary.native_requirements.is_empty()
+            && summary.loan_requirements.is_empty()
+            && summary.separation_validity.is_empty()
+        {
+            // With only a scalar postcondition, a branch can expose an argument
+            // only through the result or a fact shared by every normal return.
+            // Merely selecting a discarded result must not keep its inputs live.
+            let parameters = |guard: &Guard<'db>| {
+                guard
+                    .occurrences()
+                    .into_iter()
+                    .filter_map(|occurrence| {
+                        if let ValueOccurrence::Argument(param) = occurrence {
+                            Some(param)
+                        } else {
+                            None
+                        }
+                    })
+                    .chain(guard.indices().into_iter().filter_map(|index| {
+                        if let IndexExpr::FormalValue(param) = index {
+                            Some(param)
+                        } else {
+                            None
+                        }
+                    }))
+                    .collect::<BTreeSet<_>>()
+            };
+            let mut unconditional = self.scalar.non_branch_params.clone();
+            let mut through_result = BTreeSet::new();
+            if let Some(guard) = &summary.scalar_result {
+                through_result = parameters(guard);
+                let (_, returned) = BinderScope::default().bind(IndexNamespace::Result);
+                let guard = guard
+                    .forget_occurrences(|occurrence| occurrence == ValueOccurrence::Summary)
+                    .forget_indices(|index| index == returned);
+                unconditional.extend(parameters(&guard));
+                through_result.retain(|param| !unconditional.contains(param));
+            }
+            let observed = summary.observed_params.as_mut().expect("body observations");
+            observed.unconditional = unconditional;
+            observed.through_result = through_result;
+        }
         // Merging equal relations ORs their guards, so check the final clauses.
         let requirements = &summary.loan_requirements;
         let validity = &summary.separation_validity;
@@ -1573,8 +1812,8 @@ impl<'db> Borrowck<'db> {
                         };
                         payload.invalidated =
                             matches!(entry.payload, CapabilityRef::Invalidated { .. });
-                        // A direct result contains one address per call evaluation.
-                        // The finite call-result port names that fresh address;
+                        // A direct result or sole concrete poststate slot holds
+                        // one fresh address per call. Its finite port names it;
                         // deeper recursive choices only select which fresh
                         // alternative reached it. Project those choices from
                         // the may-source, while the call result and loop
@@ -1585,17 +1824,16 @@ impl<'db> Borrowck<'db> {
                         let input = matches!(&payload.source.origin, ExternalOrigin::Input(_));
                         let result = input || payload.source.is_fresh_allocation();
                         let projected = match role {
-                            SummaryValueRole::Return => result,
+                            SummaryValueRole::Return | SummaryValueRole::Retained => result,
                             SummaryValueRole::MirroredResult => result || payload.invalidated,
                             SummaryValueRole::FreshInvalidPoststate => payload.invalidated,
-                            SummaryValueRole::Retained => false,
                         };
                         let guard = if projected {
                             clause.guard.forget_occurrences(|occurrence| {
                                 self.recursive_call_choice(occurrence)
                                     && (input
                                         || matches!(occurrence, ValueOccurrence::CallChoice { result, .. }
-                                            if self.calls[&result].single_result_port))
+                                            if self.calls[&result].single_fresh_port))
                             })
                         } else {
                             clause.guard.clone()
@@ -2045,15 +2283,19 @@ impl<'db> Borrowck<'db> {
         }
         if let Some(guard) = &summary.scalar_result {
             let (scope, _) = BinderScope::default().bind(IndexNamespace::Result);
-            // Only an integer result can be named by the postcondition.
-            let integral = self
-                .instance
-                .normalized_result_ty(self.db)
-                .is_integral(self.db);
+            let result_ty = self.instance.normalized_result_ty(self.db);
+            let integral = result_ty.is_integral(self.db);
             if guard.scope() != &scope
-                || guard.occurrences().into_iter().any(|occurrence| {
-                    !matches!(occurrence, ValueOccurrence::Argument(param) if self.summary_param_ty(param).is_some_and(|ty| ty.is_bool(self.db)))
-                })
+                || guard
+                    .occurrences()
+                    .into_iter()
+                    .any(|occurrence| match occurrence {
+                        ValueOccurrence::Argument(param) => !self
+                            .summary_param_ty(param)
+                            .is_some_and(|ty| ty.is_bool(self.db)),
+                        ValueOccurrence::Summary => !result_ty.is_bool(self.db),
+                        _ => true,
+                    })
                 || guard.indices().into_iter().any(|index| match index {
                     IndexExpr::Bound(_) => !integral || scope.validate(index).is_err(),
                     IndexExpr::FormalValue(param) => !self
@@ -2296,6 +2538,7 @@ impl<'db> Borrowck<'db> {
             .any(|occurrence| match occurrence {
                 ValueOccurrence::Value(_)
                 | ValueOccurrence::Root(_)
+                | ValueOccurrence::LoopEntry(_)
                 | ValueOccurrence::CallChoice { .. } => true,
                 ValueOccurrence::Argument(param) => self.summary_param_ty(*param).is_none(),
                 ValueOccurrence::Summary | ValueOccurrence::SummaryChoice(_) => false,
@@ -2357,7 +2600,7 @@ impl<'db> Borrowck<'db> {
                 source,
                 result,
                 inputs.origin,
-                call.single_result_port,
+                call.single_fresh_port,
             )?;
             let birth =
                 AllocationBirth::from_source(&source, guard).expect("allocation birth origin");
@@ -2411,6 +2654,12 @@ impl<'db> Borrowck<'db> {
                 update.value.scope(),
                 inputs,
             )?;
+            // Different absent inputs all resolve to the same empty region,
+            // but their contents need not have the same shape. They write no
+            // caller storage, so they contribute no update to coalesce.
+            if target.region.is_empty() {
+                continue;
+            }
             if let Some((_, existing)) = updates
                 .iter_mut()
                 .find(|(region, _)| *region == target.region)
@@ -2494,8 +2743,35 @@ impl<'db> Borrowck<'db> {
             &births,
         );
         let overwrite = self.opaque_write(statement.id);
-        for access in accesses {
-            if access.access.kind == MemoryAccessKind::Write {
+        for (template, access) in call
+            .summary
+            .accesses
+            .iter()
+            .zip(accesses)
+            .filter(|(_, access)| access.access.kind == MemoryAccessKind::Write)
+        {
+            // Typed poststates already replay their writes and invalidate aliases.
+            // Havoc first would survive a weak destination update and invent
+            // corrupted contents. Prove coverage before caller substitution can
+            // turn one input into an existential selection of caller places.
+            let covered = template.extent == AccessExtent::Typed
+                && template.region.clauses().iter().all(|clause| {
+                    call.summary.mutable_inputs.iter().any(|update| {
+                        let destination = &update.destination;
+                        update.value.scope() == template.region.scope()
+                            && !destination.invalidated
+                            && !destination.source.is_widened()
+                            && matches!(&clause.payload.root, RegionRoot::External(source)
+                                if source == &destination.source)
+                            && clause.payload.views == destination.views
+                            && clause
+                                .payload
+                                .path
+                                .as_slice()
+                                .starts_with(destination.path.as_slice())
+                    })
+                });
+            if !covered {
                 state
                     .invalidate_memory(
                         &mut self.inventory.values,
@@ -2547,6 +2823,7 @@ impl<'db> Borrowck<'db> {
                 continue;
             };
             state.certify_family_contents(
+                &mut self.inventory.values,
                 &clause.payload.root,
                 region.scope(),
                 &coverage,
@@ -2560,6 +2837,16 @@ impl<'db> Borrowck<'db> {
         }
         if let Some(postcondition) = &call.summary.scalar_result {
             let (_, returned) = BinderScope::default().bind(IndexNamespace::Result);
+            // Keep facts about the arguments, but drop the relation for a result
+            // no other fact can name. Otherwise each call adds its return
+            // alternatives, and repeated calls multiply them.
+            let postcondition = if self.scalar.live.contains(&result) {
+                postcondition.clone()
+            } else {
+                postcondition
+                    .forget_occurrences(|occurrence| occurrence == ValueOccurrence::Summary)
+                    .forget_indices(|index| index == returned)
+            };
             let subst = IndexSubst::new(
                 postcondition.scope(),
                 &BinderScope::default(),
@@ -2766,6 +3053,7 @@ impl<'db> Borrowck<'db> {
                     ValueOccurrence::Summary => ValueOccurrence::Value(result),
                     ValueOccurrence::Value(_)
                     | ValueOccurrence::Root(_)
+                    | ValueOccurrence::LoopEntry(_)
                     | ValueOccurrence::CallChoice { .. } => {
                         invalid = true;
                         occurrence
@@ -2773,6 +3061,7 @@ impl<'db> Borrowck<'db> {
                 })
             })
             .and_then(|mut guard| {
+                let mut occurrences = None;
                 for arg in inputs.args {
                     let occurrence = ValueOccurrence::Value(self.forwarded_value(arg.value));
                     if let Some(value) = literal_bool_cond(self.db, &self.body, arg.value) {
@@ -2781,6 +3070,25 @@ impl<'db> Borrowck<'db> {
                             value,
                         )?;
                         guard = guard.forget_occurrences(|candidate| candidate == occurrence);
+                    } else if self.body.values[arg.value.index()].ty.is_bool(self.db)
+                        && occurrences
+                            .get_or_insert_with(|| guard.occurrences())
+                            .contains(&occurrence)
+                    {
+                        // A formal boolean names the actual predicate's choice.
+                        // Bind that choice before summary export projects it out.
+                        let predicate = [false, true]
+                            .into_iter()
+                            .filter_map(|expected| {
+                                self.condition_guard(
+                                    arg.value,
+                                    expected,
+                                    self.scalar_bounds_enabled(arg.value),
+                                    CONDITION_BUDGET,
+                                )
+                            })
+                            .reduce(|left, right| left.or(&right))?;
+                        guard = guard.and(&predicate.in_scope(guard.scope()))?;
                     } else if let Some(variant) =
                         literal_enum_variant(self.db, &self.body, arg.value)
                     {
@@ -2922,6 +3230,52 @@ impl<'db> Borrowck<'db> {
         let state = instantiations.state;
         let result = instantiations.result;
         let inputs = instantiations.inputs;
+        // Valid calls establish the callee's separation preconditions. Its
+        // ordinary effects can therefore exclude overwrites those preconditions
+        // forbid. Checking the preconditions themselves must still resolve every
+        // alternative physically, without assuming the fact being proved.
+        // A conditional requirement can become unconditional once the caller's
+        // arguments are substituted, such as a constant buffer length.
+        if instantiations.basis == AliasBasis::Assumed
+            && let Some(clobber) = &source.source.clobber
+        {
+            for clause in self.calls[&result].summary.loan_requirements.clauses() {
+                if clause.payload.suspended.is_empty()
+                    && SourceExpr::from_place(&clause.payload.protected).is_some_and(|protected| {
+                        protected.source == clobber.target.source
+                            && protected.views == clobber.target.views
+                            && clobber
+                                .target
+                                .path
+                                .as_slice()
+                                .starts_with(protected.path.as_slice())
+                            && !clobber.target.invalidated
+                    })
+                    && SourceExpr::from_place(&clause.payload.access).is_some_and(|access| {
+                        if clause.payload.extent == AccessExtent::Unknown {
+                            let mut written = &clobber.written;
+                            while access != *written
+                                && !written.invalidated
+                                && written.source.dereferences().is_empty()
+                                && !written.source.is_reachable()
+                                && let ExternalOrigin::Memory { base, .. } = &written.source.origin
+                            {
+                                written = base;
+                            }
+                            access == *written
+                        } else {
+                            clause.payload.extent == clobber.extent && access == clobber.written
+                        }
+                    })
+                    && (Guard::always(clause.guard.scope()).implies(&clause.guard)
+                        || instantiations
+                            .guard(self, &clause.guard)?
+                            .is_some_and(|guard| Guard::always(guard.scope()).implies(&guard)))
+                {
+                    return Ok(Resolution::empty(scope));
+                }
+            }
+        }
         let CallInputs {
             args,
             effects,
@@ -3027,7 +3381,7 @@ impl<'db> Borrowck<'db> {
                     external.address_base(self.db).expect("address origin"),
                     result,
                     origin,
-                    self.calls[&result].single_result_port,
+                    self.calls[&result].single_fresh_port,
                 )?;
                 let ty = source.contract.ty;
                 let region = self.conditional_region(
@@ -3433,7 +3787,7 @@ impl<'db> SignatureValues<'_, 'db> {
         };
         self.choice += 1;
         let arbitrary = overwrite
-            .contents(&mut contents, shape, scope, None)
+            .contents(&mut contents, shape, scope, None, None)
             .map_err(|error| {
                 checker.internal_diag(
                     SemOrigin::Body(checker.body.template_owner),
@@ -3604,6 +3958,7 @@ pub(super) fn signature_summary<'db>(
         may_return: opaque && !instance.is_intrinsically_never_returning(db),
         result,
         scalar_result: None,
+        observed_params: None,
         mutable_inputs,
         certified_ranges: Vec::new(),
         scalar_inputs: Vec::new(),
@@ -3617,6 +3972,7 @@ pub(super) fn signature_summary<'db>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::{access::ResolvedOperation, memory::ResolvedMemoryAccess};
     use super::*;
     use crate::{
         analysis::{
@@ -3660,6 +4016,199 @@ mod tests {
                 },
             }],
         )
+    }
+
+    #[test]
+    fn recursive_effect_authority_stays_correlated_with_each_target() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "recursive_effect_authority.fe".into(),
+            "fn holder(_ first: mut u256, _ second: mut u256) {}",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "holder"))),
+        );
+        for case in [
+            "alternatives",
+            "mismatched",
+            "same_target_partial",
+            "always",
+            "effect_only_targets",
+        ] {
+            let mut checker = Borrowck::new(&db, instance).unwrap();
+            checker.solve().unwrap();
+            let recursive = NValueId::new(0);
+            checker.recursive_calls.insert(recursive);
+            let scope = BinderScope::default();
+            let choice = ChoiceKey::new(
+                ValueOccurrence::CallChoice {
+                    result: recursive,
+                    choice: 0,
+                },
+                StructuralPath::default(),
+            );
+            let guard = |value| {
+                Guard::always(&scope)
+                    .with_boolean(choice.clone(), value)
+                    .unwrap()
+            };
+            let place = |param| {
+                checker
+                    .inventory
+                    .inputs
+                    .iter()
+                    .find(|input| input.source.param() == Some(param))
+                    .map(|input| SymbolicPlace {
+                        root: RegionRoot::External(input.source.clone()),
+                        path: RegionPath::default(),
+                        views: Default::default(),
+                    })
+                    .unwrap()
+            };
+            let (mut first, mut second) = (place(0), place(1));
+            if case == "effect_only_targets" {
+                for (choice, target) in [&mut first, &mut second].into_iter().enumerate() {
+                    target.root = RegionRoot::External(ExternalSource::unknown(
+                        ReferentContract::new(
+                            &db,
+                            TyId::u256(&db),
+                            HandleAddressSpace::Known(ProviderAddressSpace::Memory),
+                        ),
+                        AddressOccurrence::Value {
+                            instance,
+                            value: recursive,
+                            choice: choice.try_into().unwrap(),
+                        },
+                        Box::new([]),
+                        AddressProvenance::Raw,
+                    ));
+                }
+            }
+            let region = RegionSet::new(
+                &scope,
+                [
+                    Guarded {
+                        guard: guard(true),
+                        payload: first.clone(),
+                    },
+                    Guarded {
+                        guard: guard(case == "effect_only_targets"),
+                        payload: if case == "same_target_partial" {
+                            first.clone()
+                        } else {
+                            second.clone()
+                        },
+                    },
+                ],
+            );
+            let authorizers = RegionSet::new(
+                &scope,
+                [
+                    Guarded {
+                        guard: if case == "always" {
+                            Guard::always(&scope)
+                        } else {
+                            guard(case != "mismatched")
+                        },
+                        payload: place(0),
+                    },
+                    Guarded {
+                        guard: if case == "always" {
+                            Guard::always(&scope)
+                        } else {
+                            guard(case == "mismatched")
+                        },
+                        payload: place(1),
+                    },
+                ],
+            );
+            checker.operations[0].push(ResolvedOperation {
+                calls: vec![ResolvedMemoryAccess {
+                    invalidated: NativeValidity::default(),
+                    access: MemoryAccess {
+                        kind: MemoryAccessKind::Write,
+                        extent: AccessExtent::Unknown,
+                        region,
+                        authorizers,
+                    },
+                    authority: Vec::new(),
+                }],
+                ..ResolvedOperation::default()
+            });
+            let (summary, _) = checker.build_summary().unwrap();
+            checker.verify_summary(&summary).unwrap();
+            if case == "effect_only_targets" {
+                assert_eq!(summary.accesses.len(), 2, "distinct targets collapsed");
+                let occurrences: BTreeSet<_> = summary
+                    .accesses
+                    .iter()
+                    .flat_map(|access| {
+                        access.region.clauses().iter().map(|clause| {
+                            let RegionRoot::External(source) = &clause.payload.root else {
+                                panic!("external target");
+                            };
+                            let ExternalOrigin::Unknown { occurrence, .. } =
+                                source.address_base(&db).unwrap().origin
+                            else {
+                                panic!("unknown address identity");
+                            };
+                            occurrence
+                        })
+                    })
+                    .collect();
+                assert_eq!(
+                    occurrences.len(),
+                    2,
+                    "distinct address identities collapsed"
+                );
+                for access in &summary.accesses {
+                    assert_eq!(access.authorizers.clauses().len(), 1);
+                    assert_eq!(access.authorizers.clauses()[0].payload, place(0));
+                    assert_eq!(access.authorizers.clauses()[0].guard, Guard::always(&scope));
+                }
+                continue;
+            }
+            for target in [&first, &second] {
+                let effects: Vec<_> = summary
+                    .accesses
+                    .iter()
+                    .filter(|access| {
+                        access
+                            .region
+                            .clauses()
+                            .iter()
+                            .any(|clause| &clause.payload == target)
+                    })
+                    .collect();
+                if case == "same_target_partial" && target == &second {
+                    assert!(effects.is_empty());
+                    continue;
+                }
+                assert_eq!(effects.len(), 1, "{case}: {target:?}");
+                let authorized = effects[0].authorizers.clauses().iter().any(|clause| {
+                    &clause.payload == target && clause.guard == Guard::always(&scope)
+                });
+                assert_eq!(
+                    authorized,
+                    matches!(case, "alternatives" | "always"),
+                    "{case}: {target:?}"
+                );
+                match case {
+                    "alternatives" => assert!(
+                        effects[0]
+                            .authorizers
+                            .clauses()
+                            .iter()
+                            .all(|clause| &clause.payload == target)
+                    ),
+                    "same_target_partial" => assert!(effects[0].authorizers.is_empty()),
+                    _ => {}
+                }
+            }
+        }
     }
 
     #[test]
@@ -4435,7 +4984,7 @@ pub contract C {
                     pending: false,
                     updates: Vec::new(),
                     births: Vec::new(),
-                    single_result_port: false,
+                    single_fresh_port: false,
                 },
             );
             let before = CANONICALIZED_REGION_CLAUSES.get();
@@ -4654,7 +5203,7 @@ pub contract C {
                     pending: false,
                     updates: Vec::new(),
                     births: Vec::new(),
-                    single_result_port: false,
+                    single_fresh_port: false,
                 },
             );
             let shape = checker
@@ -5677,6 +6226,171 @@ fn clobber(slot: *ref u256) {
                     payload: payload(semantics),
                 }]
             })
+    }
+
+    #[test]
+    fn callee_separation_filters_effects_without_assuming_its_own_proof() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "callee_separation_effects.fe".into(),
+            "fn leaf(_ a: *u256, _ b: *u256, _ flag: bool) {}\n\
+             fn wrapper(_ a: *u256, _ b: *u256, _ flag: bool) { leaf(a, b, flag) }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let instance = get_or_build_semantic_instance(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "wrapper"))),
+        );
+        let mut checker = Borrowck::new(&db, instance).unwrap();
+        checker.solve().unwrap();
+        let ((block, index), result, args) = first_call(&checker);
+        let state = checker.before[block][index].clone();
+        let scope = BinderScope::default();
+        let inputs = CallInputs {
+            args: &args,
+            effects: &[],
+            origin: SemOrigin::Body(checker.body.template_owner),
+        };
+        let input = |param| summary_input(&db, param);
+        let place = |param| SymbolicPlace {
+            root: RegionRoot::External(input(param).source),
+            path: RegionPath::default(),
+            views: Default::default(),
+        };
+        for case in [
+            "exact",
+            "unknown_extent",
+            "unknown_offset",
+            "unknown_offset_exact",
+            "unknown_nested_offset_exact",
+            "unknown_nested_offset_intermediate",
+            "typed_offset",
+            "invalidated",
+            "conditional",
+            "suspended",
+            "extent",
+            "endpoint",
+            "missing",
+        ] {
+            let mut written = input(1);
+            if matches!(
+                case,
+                "unknown_offset"
+                    | "unknown_offset_exact"
+                    | "unknown_nested_offset_exact"
+                    | "unknown_nested_offset_intermediate"
+                    | "typed_offset"
+            ) {
+                written = SourceExpr::whole(ExternalSource::memory(
+                    &db,
+                    written,
+                    TyId::u256(&db),
+                    MemoryOffset::Element(TyId::u256(&db), IndexExpr::Const(3)),
+                ));
+            }
+            let mut access = place(1);
+            if case == "unknown_nested_offset_intermediate" {
+                access.root = RegionRoot::External(written.source.clone());
+            }
+            if matches!(
+                case,
+                "unknown_nested_offset_exact" | "unknown_nested_offset_intermediate"
+            ) {
+                written = SourceExpr::whole(ExternalSource::memory(
+                    &db,
+                    written,
+                    TyId::u256(&db),
+                    MemoryOffset::Element(TyId::u256(&db), IndexExpr::Const(7)),
+                ));
+            }
+            if matches!(case, "unknown_offset_exact" | "unknown_nested_offset_exact") {
+                access.root = RegionRoot::External(written.source.clone());
+            }
+            written.invalidated = case == "invalidated";
+            let mut source = SourceExpr::from_place(&clobbered(&db, input(0), written)).unwrap();
+            source.invalidated = true;
+            let mut relation = Separation {
+                protected: place(0),
+                protected_kind: BorrowKind::Mut,
+                access,
+                access_kind: BorrowKind::Mut,
+                extent: AccessExtent::Typed,
+                suspended: Box::new([]),
+            };
+            let mut guard = Guard::always(&scope);
+            match case {
+                "unknown_extent"
+                | "unknown_offset"
+                | "unknown_offset_exact"
+                | "unknown_nested_offset_exact"
+                | "unknown_nested_offset_intermediate" => relation.extent = AccessExtent::Unknown,
+                "conditional" => {
+                    guard = guard
+                        .with_boolean(
+                            ChoiceKey::new(ValueOccurrence::Argument(2), StructuralPath::default()),
+                            true,
+                        )
+                        .unwrap();
+                }
+                "suspended" => {
+                    relation.suspended = Box::new([Guarded {
+                        guard: guard.clone(),
+                        payload: RegionPath::default(),
+                    }])
+                }
+                "extent" => relation.extent = AccessExtent::Bytes(IndexExpr::Const(1)),
+                "endpoint" => relation.access = place(0),
+                _ => {}
+            }
+            checker
+                .calls
+                .get_mut(&result)
+                .unwrap()
+                .summary
+                .loan_requirements = SeparationSet::new(
+                &db,
+                &scope,
+                (case != "missing").then_some(Guarded {
+                    guard,
+                    payload: relation,
+                }),
+            );
+            let mut assumed = SourceInstantiations::new(&state, result, inputs);
+            let mut physical = SourceInstantiations::physical(&state, result, inputs);
+            let effect = assumed.resolve(&mut checker, &source, &scope).unwrap();
+            let proof = physical.resolve(&mut checker, &source, &scope).unwrap();
+            let excluded = matches!(
+                case,
+                "exact"
+                    | "unknown_extent"
+                    | "unknown_offset"
+                    | "unknown_offset_exact"
+                    | "unknown_nested_offset_exact"
+                    | "unknown_nested_offset_intermediate"
+            );
+            assert_eq!(effect.region.is_empty(), excluded, "{case}");
+            assert!(!proof.region.is_empty(), "{case}");
+            assert!(!proof.invalidated.requirements.is_empty(), "{case}");
+            if excluded {
+                assert!(!effect.invalidated.invalid && effect.invalidated.requirements.is_empty());
+            }
+            // Cached effects cannot substitute for the independent proof.
+            assert_eq!(
+                assumed
+                    .resolve(&mut checker, &source, &scope)
+                    .unwrap()
+                    .region,
+                effect.region
+            );
+            assert_eq!(
+                physical
+                    .resolve(&mut checker, &source, &scope)
+                    .unwrap()
+                    .region,
+                proof.region
+            );
+        }
     }
 
     #[test]

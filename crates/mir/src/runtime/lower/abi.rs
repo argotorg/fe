@@ -1,5 +1,5 @@
 use cranelift_entity::EntityRef;
-use hir::analysis::ty::{CallableLayoutParamPort, LayoutBundleComponentId, LayoutMapTy};
+use hir::analysis::ty::{CallableLayoutParamPort, LayoutBundleComponentId, ty_def::TyId};
 
 use crate::{
     db::MirDb,
@@ -12,8 +12,8 @@ use crate::{
 
 use super::{
     interface::runtime_param_locals,
-    layout_evidence::runtime_layout_map_for_map_ty,
-    returns::{declaration_runtime_return_class, runtime_return_class_for_body},
+    layout_evidence::layout_root_scalar_class,
+    returns::{declaration_runtime_return_class, declared_return_class_admits},
     semantic_body::RuntimeSemanticBody,
     type_info::RuntimeTypeEnv,
 };
@@ -21,14 +21,16 @@ use super::{
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeAbiEvidenceParam<'db> {
     pub source: CallableLayoutParamPort,
-    pub map_ty: LayoutMapTy<'db>,
+    /// The layout root's const type.
+    pub ty: TyId<'db>,
     pub param: RuntimeParam<'db>,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeAbiEvidenceResult<'db> {
     pub component_id: LayoutBundleComponentId,
-    pub map_ty: LayoutMapTy<'db>,
+    /// The layout root's const type.
+    pub ty: TyId<'db>,
     pub class: RuntimeClass<'db>,
 }
 
@@ -104,35 +106,25 @@ fn semantic_runtime_abi_plan<'db>(
     let signature = semantic.key(db).layout_bundle_signature(db);
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
     let first_local = visible_params.len();
-    let evidence_param_specs = signature
+    let evidence_params = signature
         .runtime_params()
-        .map(|param| (param.source, param.component.map_ty()))
-        .collect::<Vec<_>>();
-    let evidence_params = evidence_param_specs
-        .into_iter()
         .enumerate()
-        .map(|(index, (source, map_ty))| {
-            let param = RuntimeParam {
+        .map(|(index, param)| RuntimeAbiEvidenceParam {
+            source: param.source,
+            ty: param.component.ty,
+            param: RuntimeParam {
                 local: RLocalId::from_u32(first_local as u32 + index as u32),
-                class: runtime_layout_map_for_map_ty(db, env, &map_ty).class(),
-            };
-            RuntimeAbiEvidenceParam {
-                source,
-                map_ty,
-                param,
-            }
+                class: RuntimeClass::Scalar(layout_root_scalar_class(db, env, param.component.ty)),
+            },
         })
         .collect::<Vec<_>>();
 
     let evidence = signature
         .runtime_results()
-        .map(|result| {
-            let map_ty = result.component.map_ty();
-            RuntimeAbiEvidenceResult {
-                component_id: result.component_id,
-                class: runtime_layout_map_for_map_ty(db, env, &map_ty).class(),
-                map_ty,
-            }
+        .map(|result| RuntimeAbiEvidenceResult {
+            component_id: result.component_id,
+            ty: result.component.ty,
+            class: RuntimeClass::Scalar(layout_root_scalar_class(db, env, result.component.ty)),
         })
         .collect::<Vec<_>>();
     let (class, layout) = if evidence.is_empty() {
@@ -160,10 +152,14 @@ fn semantic_runtime_abi_plan<'db>(
     }
 }
 
+/// The body implements its declaration contract. The declaration is computed
+/// without the body, so it may be wider than the class the body returns, which
+/// return lowering then adapts; it must never be narrower.
 pub(crate) fn runtime_body_abi_plan<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
     body: &RuntimeSemanticBody<'db>,
+    returned: Option<&RuntimeClass<'db>>,
 ) -> RuntimeAbiPlan<'db> {
     let semantic = key
         .semantic(db)
@@ -173,24 +169,23 @@ pub(crate) fn runtime_body_abi_plan<'db>(
         semantic,
         "runtime ABI body must belong to its semantic instance"
     );
-    let visible = runtime_return_class_for_body(db, key, body);
-    let declaration_visible = declaration_runtime_return_class(db, key);
-    let body_layout = visible
-        .as_ref()
-        .and_then(RuntimeClass::aggregate_layout)
-        .map(|layout| layout.data(db));
-    let declaration_layout = declaration_visible
-        .as_ref()
-        .and_then(RuntimeClass::aggregate_layout)
-        .map(|layout| layout.data(db));
-    assert_eq!(
-        visible,
-        declaration_visible,
-        "admitted runtime body return ABI must match its declaration contract: semantic={:?}, params={:?}, body_layout={body_layout:#?}, declaration_layout={declaration_layout:#?}",
-        semantic.key(db),
-        key.params(db),
-    );
-    let mut plan = semantic_runtime_abi_plan(db, key, semantic, visible);
+    let declared = declaration_runtime_return_class(db, key);
+    if let Some(returned) = returned {
+        let returned_layout = returned.aggregate_layout().map(|layout| layout.data(db));
+        let declared_layout = declared
+            .as_ref()
+            .and_then(RuntimeClass::aggregate_layout)
+            .map(|layout| layout.data(db));
+        assert!(
+            declared.as_ref().is_some_and(|declared| {
+                declared_return_class_admits(db, semantic, declared, returned)
+            }),
+            "admitted runtime body returns must conform to their declaration contract: semantic={:?}, params={:?}, returned={returned:?}, declared={declared:?}, returned_layout={returned_layout:#?}, declared_layout={declared_layout:#?}",
+            semantic.key(db),
+            key.params(db),
+        );
+    }
+    let mut plan = semantic_runtime_abi_plan(db, key, semantic, declared);
     for (param, local) in plan.visible_params.iter_mut().zip(runtime_param_locals(
         db,
         semantic,

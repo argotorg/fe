@@ -1,0 +1,400 @@
+//! ERC-4337 account abstraction for the v0.7 and v0.8 EntryPoint, after
+//! OpenZeppelin's `ERC4337Utils`, `Account` and `Paymaster`.
+//!
+//! An account handles [`AccountMsg`] and passes its signature check to
+//! [`validate_user_op`], which also restricts the caller to the EntryPoint
+//! and pays the prefund:
+//!
+//! ```fe
+//! use std::evm::{erc4337, signature}
+//! use std::evm::erc4337::{AccountMsg, UserOpSigner}
+//!
+//! struct Owner { owner: Address }
+//!
+//! impl UserOpSigner for Owner {
+//!     fn is_valid_signature(self, hash: u256, signature: MemSpan) -> bool uses (call: Call) {
+//!         match signature::recover(digest: hash, signature) {
+//!             Option::Some(signer) => signer == self.owner,
+//!             Option::None => false,
+//!         }
+//!     }
+//! }
+//!
+//! pub contract Account uses (ctx: Ctx, call: mut Call) {
+//!     owner: Address,
+//!
+//!     init(initial_owner: Address) uses (mut owner) {
+//!         owner = initial_owner
+//!     }
+//!
+//!     recv AccountMsg {
+//!         ValidateUserOp { user_op, user_op_hash, missing_account_funds } -> u256
+//!             uses (owner, ctx, mut call)
+//!         {
+//!             erc4337::validate_user_op(
+//!                 Owner { owner },
+//!                 entry_point: erc4337::ENTRY_POINT_V08,
+//!                 user_op,
+//!                 user_op_hash,
+//!                 missing_account_funds,
+//!             )
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! Accounts that return time ranges or an aggregator build the pieces
+//! themselves with [`require_entry_point`], [`pay_prefund`] and
+//! [`ValidationData`].
+use core::abi::Bytes
+use ingot::abi::Bytes32
+use core::num::IntDowncast
+use core::ptr::MemSpan
+use super::crypto::{keccak256, keccak_words}
+use super::effects::{Address, Call, Ctx, revert_error}
+use super::eip712
+use super::ops
+use super::panic::{PANIC_OVERFLOW, Panic}
+use ingot::abi::sol::sol
+
+/// The canonical EntryPoint v0.7 deployment.
+pub const ENTRY_POINT_V07: Address = Address { inner: 0x0000000071727de22e5e9d8baf0edac6f37da032 }
+
+/// The canonical EntryPoint v0.8 deployment.
+pub const ENTRY_POINT_V08: Address = Address { inner: 0x4337084d9e255ff0702461cf8895ce9e3b5ff108 }
+
+/// Validation data of a user operation whose signature is valid, with no
+/// time range.
+pub const SIG_VALIDATION_SUCCESS: u256 = 0
+
+/// Validation data of a user operation whose signature is invalid. Accounts
+/// return it instead of reverting, so that gas estimation works with dummy
+/// signatures.
+pub const SIG_VALIDATION_FAILED: u256 = 1
+
+/// `keccak256` of the EIP-712 type of a user operation in EntryPoint v0.8.
+pub const PACKED_USEROP_TYPEHASH: u256 = core::keccak(
+    "PackedUserOperation(address sender,uint256 nonce,bytes initCode,bytes callData,bytes32 accountGasLimits,uint256 preVerificationGas,bytes32 gasFees,bytes paymasterAndData)",
+)
+
+const MAX_U48: u256 = 0xffffffffffff
+const MAX_U128: u256 = 0xffffffffffffffffffffffffffffffff
+const ADDRESS_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffff
+// Paymaster address (20 bytes), verification and postOp gas limits (16 each).
+const PAYMASTER_DATA_OFFSET: u256 = 52
+
+/// The validator of an account was called by an address other than the
+/// EntryPoint. Selector `0x7cf8632b`, as OpenZeppelin's `Account`.
+#[error]
+pub struct AccountUnauthorized { pub sender: Address }
+
+/// The validator of a paymaster was called by an address other than the
+/// EntryPoint. Selector `0x327499a7`, as OpenZeppelin's `Paymaster`.
+#[error]
+pub struct PaymasterUnauthorized { pub sender: Address }
+
+/// A user operation as the v0.7 and v0.8 EntryPoint pass it to accounts and
+/// paymasters, the Solidity `PackedUserOperation`.
+///
+/// `account_gas_limits` packs the verification gas limit (high 128 bits) and
+/// the call gas limit (low 128 bits); `gas_fees` packs the max priority fee
+/// (high 128 bits) and the max fee per gas (low 128 bits). The methods unpack
+/// them, and those of the paymaster fields in `paymaster_and_data`.
+#[abi]
+pub struct PackedUserOperation {
+    pub sender: Address,
+    pub nonce: u256,
+    pub init_code: Bytes,
+    pub call_data: Bytes,
+    pub account_gas_limits: Bytes32,
+    pub pre_verification_gas: u256,
+    pub gas_fees: Bytes32,
+    pub paymaster_and_data: Bytes,
+    pub signature: Bytes,
+}
+
+impl Copy for PackedUserOperation {}
+
+impl PackedUserOperation {
+    pub fn verification_gas_limit(self) -> u256 {
+        self.account_gas_limits.val >> 128
+    }
+
+    pub fn call_gas_limit(self) -> u256 {
+        self.account_gas_limits.val & MAX_U128
+    }
+
+    pub fn max_priority_fee_per_gas(self) -> u256 {
+        self.gas_fees.val >> 128
+    }
+
+    pub fn max_fee_per_gas(self) -> u256 {
+        self.gas_fees.val & MAX_U128
+    }
+
+    /// The first 20 bytes of `paymaster_and_data`. Zero when it is shorter
+    /// than 52 bytes, which includes operations without a paymaster.
+    pub fn paymaster(self) -> Address {
+        if self.paymaster_and_data.len() < PAYMASTER_DATA_OFFSET {
+            return Address::zero()
+        }
+        Address { inner: self.paymaster_and_data.word_at(0) >> 96 }
+    }
+
+    /// Bytes 20 to 36 of `paymaster_and_data`, or zero when it is shorter
+    /// than 52 bytes.
+    pub fn paymaster_verification_gas_limit(self) -> u256 {
+        if self.paymaster_and_data.len() < PAYMASTER_DATA_OFFSET {
+            return 0
+        }
+        self.paymaster_and_data.word_at(20) >> 128
+    }
+
+    /// Bytes 36 to 52 of `paymaster_and_data`, or zero when it is shorter
+    /// than 52 bytes.
+    pub fn paymaster_post_op_gas_limit(self) -> u256 {
+        if self.paymaster_and_data.len() < PAYMASTER_DATA_OFFSET {
+            return 0
+        }
+        self.paymaster_and_data.word_at(36) >> 128
+    }
+
+    /// `paymaster_and_data` from byte 52 on, the paymaster's own data. Empty
+    /// when it is shorter than 52 bytes.
+    pub fn paymaster_data(self) -> MemSpan {
+        let len = self.paymaster_and_data.len()
+        if len < PAYMASTER_DATA_OFFSET {
+            return MemSpan::empty()
+        }
+        self.paymaster_and_data.payload_span().slice(
+            offset: PAYMASTER_DATA_OFFSET,
+            len: len - PAYMASTER_DATA_OFFSET,
+        )
+    }
+
+    /// The hash EntryPoint v0.7 at `entry_point` on chain `chain_id` gives
+    /// this operation: `keccak256(abi.encode(keccak256(packed), entry_point,
+    /// chain_id))`, where `packed` is the ABI encoding of every field but the
+    /// signature, with `bytes` fields replaced by their `keccak256`.
+    pub fn hash_v07(self, entry_point: Address, chain_id: u256) -> u256 {
+        let packed = keccak_words(
+            [
+                self.sender.inner,
+                self.nonce,
+                keccak256(self.init_code.payload_span()),
+                keccak256(self.call_data.payload_span()),
+                self.account_gas_limits.val,
+                self.pre_verification_gas,
+                self.gas_fees.val,
+                keccak256(self.paymaster_and_data.payload_span()),
+            ],
+        )
+        keccak_words([packed, entry_point.inner, chain_id])
+    }
+
+    /// The hash EntryPoint v0.8 at `entry_point` on chain `chain_id` gives
+    /// this operation: its EIP-712 digest under `PACKED_USEROP_TYPEHASH` in
+    /// the domain named "ERC4337", version "1", with `entry_point` as
+    /// verifying contract.
+    ///
+    /// For an EIP-7702 `init_code` (whose first 20 bytes are `0x7702`
+    /// followed by zeros) the EntryPoint hashes the sender's delegate in place
+    /// of those bytes; that case is not covered here.
+    pub fn hash_v08(self, entry_point: Address, chain_id: u256) -> u256 {
+        let struct_hash = keccak_words(
+            [
+                PACKED_USEROP_TYPEHASH,
+                self.sender.inner,
+                self.nonce,
+                keccak256(self.init_code.payload_span()),
+                keccak256(self.call_data.payload_span()),
+                self.account_gas_limits.val,
+                self.pre_verification_gas,
+                self.gas_fees.val,
+                keccak256(self.paymaster_and_data.payload_span()),
+            ],
+        )
+        let separator = eip712::domain_separator(
+            name_hash: core::keccak("ERC4337"),
+            version_hash: core::keccak("1"),
+            chain_id,
+            verifying_contract: entry_point,
+        )
+        eip712::digest(domain_separator: separator, struct_hash)
+    }
+}
+
+/// Unpacked validation data: an `aggregator` (zero for a valid signature,
+/// `Address { inner: 1 }` for `SIG_VALIDATION_FAILED`, otherwise a signature
+/// aggregator) and the time range `valid_after..=valid_until` in which the
+/// operation is valid.
+pub struct ValidationData {
+    pub aggregator: Address,
+    pub valid_after: u64,
+    pub valid_until: u64,
+}
+
+impl Copy for ValidationData {}
+
+impl ValidationData {
+    /// `aggregator` in the low 160 bits, `valid_until` in the next 48 and
+    /// `valid_after` in the top 48, like OpenZeppelin's
+    /// `ERC4337Utils.packValidationData`. A `valid_until` of zero means no
+    /// expiry. Reverts with `Panic(0x11)` if a time does not fit in 48 bits.
+    pub fn pack(self) -> u256 {
+        let valid_after = self.valid_after as u256
+        let valid_until = self.valid_until as u256
+        if valid_after > MAX_U48 || valid_until > MAX_U48 {
+            revert_error(Panic::from(PANIC_OVERFLOW))
+        }
+        (self.aggregator.inner & ADDRESS_MASK) | (valid_until << 160) | (valid_after << 208)
+    }
+
+    /// The fields of packed validation data, like OpenZeppelin's
+    /// `ERC4337Utils.parseValidationData`: a zero `valid_until` becomes
+    /// `2^48 - 1`, so `pack` after `unpack` keeps the meaning but not the
+    /// word.
+    pub fn unpack(_ data: u256) -> Self {
+        let mut valid_until = (data >> 160) & MAX_U48
+        if valid_until == 0 {
+            valid_until = MAX_U48
+        }
+        let valid_after: u64 = (data >> 208).downcast_truncate()
+        ValidationData {
+            aggregator: Address { inner: data & ADDRESS_MASK },
+            valid_after,
+            valid_until: valid_until.downcast_truncate(),
+        }
+    }
+
+    /// Whether `aggregator` is the `SIG_VALIDATION_FAILED` marker.
+    pub fn sig_failed(self) -> bool {
+        self.aggregator.inner == SIG_VALIDATION_FAILED
+    }
+}
+
+/// `SIG_VALIDATION_SUCCESS` or `SIG_VALIDATION_FAILED` packed with a time
+/// range, like OpenZeppelin's `ERC4337Utils.packValidationData(bool, ...)`.
+pub fn pack_validation_data(sig_success: bool, valid_after: u64, valid_until: u64) -> u256 {
+    let aggregator = if sig_success { SIG_VALIDATION_SUCCESS } else { SIG_VALIDATION_FAILED }
+    ValidationData { aggregator: Address { inner: aggregator }, valid_after, valid_until }.pack()
+}
+
+/// The account's own signature check for `validate_user_op`, OpenZeppelin's
+/// `_rawSignatureValidation`.
+pub trait UserOpSigner {
+    /// Whether `signature` is valid for this account over `hash`.
+    fn is_valid_signature(self, hash: u256, signature: MemSpan) -> bool uses (call: Call)
+}
+
+/// Revert with `AccountUnauthorized` unless the caller is `entry_point`.
+pub fn require_entry_point(_ entry_point: Address) uses (ctx: Ctx) {
+    let sender = ctx.caller()
+    if sender != entry_point {
+        revert_error(AccountUnauthorized { sender })
+    }
+}
+
+/// Revert with `PaymasterUnauthorized` unless the caller is `entry_point`.
+pub fn require_paymaster_entry_point(_ entry_point: Address) uses (ctx: Ctx) {
+    let sender = ctx.caller()
+    if sender != entry_point {
+        revert_error(PaymasterUnauthorized { sender })
+    }
+}
+
+/// Send `missing_account_funds` wei to the caller (the EntryPoint), with all
+/// remaining gas. The outcome is ignored, as in OpenZeppelin's `Account`:
+/// the EntryPoint itself checks that it was paid.
+pub fn pay_prefund(_ missing_account_funds: u256) uses (ctx: Ctx, call: mut Call) {
+    if missing_account_funds != 0 {
+        let _ = call.send_value(addr: ctx.caller(), gas: ops::gas(), value: missing_account_funds)
+    }
+}
+
+/// `validateUserOp` of an account whose signatures `signer` checks, like
+/// OpenZeppelin's `Account.validateUserOp`: reverts with
+/// `AccountUnauthorized` unless called by `entry_point`, checks
+/// `user_op.signature` over `user_op_hash`, pays the prefund and returns
+/// `SIG_VALIDATION_SUCCESS` or `SIG_VALIDATION_FAILED`.
+///
+/// The nonce is not checked; the EntryPoint does that.
+pub fn validate_user_op<S: UserOpSigner>(
+    _ signer: S,
+    entry_point: Address,
+    user_op: PackedUserOperation,
+    user_op_hash: Bytes32,
+    missing_account_funds: u256,
+) -> u256
+uses (ctx: Ctx, call: mut Call)
+{
+    require_entry_point(entry_point)
+    let valid = signer.is_valid_signature(hash: user_op_hash.val, signature: user_op.signature.payload_span())
+    pay_prefund(missing_account_funds)
+    if valid { SIG_VALIDATION_SUCCESS } else { SIG_VALIDATION_FAILED }
+}
+
+/// Messages the EntryPoint sends to accounts.
+pub msg AccountMsg {
+    #[selector = sol("validateUserOp((address,uint256,bytes,bytes,bytes32,uint256,bytes32,bytes,bytes),bytes32,uint256)")]
+    ValidateUserOp {
+        user_op: PackedUserOperation,
+        user_op_hash: Bytes32,
+        missing_account_funds: u256,
+    } -> u256,
+}
+
+/// Messages the EntryPoint sends to paymasters. `ValidatePaymasterUserOp`
+/// returns the context passed on to `PostOp` (empty to skip it) and the
+/// validation data.
+pub msg PaymasterMsg {
+    #[selector = sol("validatePaymasterUserOp((address,uint256,bytes,bytes,bytes32,uint256,bytes32,bytes,bytes),bytes32,uint256)")]
+    ValidatePaymasterUserOp {
+        user_op: PackedUserOperation,
+        user_op_hash: Bytes32,
+        max_cost: u256,
+    } -> (Bytes, u256),
+    #[selector = sol("postOp(uint8,bytes,uint256,uint256)")]
+    PostOp {
+        mode: u8,
+        context: Bytes,
+        actual_gas_cost: u256,
+        actual_user_op_fee_per_gas: u256,
+    },
+}
+
+/// Why the EntryPoint calls `postOp`, the Solidity `IPaymaster.PostOpMode`.
+///
+/// Fe messages cannot carry enums, so `PaymasterMsg::PostOp` receives the
+/// `uint8` and `PostOpMode::from_u8` converts it.
+pub enum PostOpMode {
+    /// The user operation succeeded.
+    OpSucceeded,
+    /// The user operation reverted; the paymaster still pays for its gas.
+    OpReverted,
+    /// Only used internally by the EntryPoint, never passed to `postOp`.
+    PostOpReverted,
+}
+
+impl Copy for PostOpMode {}
+
+impl PostOpMode {
+    /// The mode encoded as `mode`. Other values revert without data, like
+    /// Solidity's decoder for an out-of-range enum.
+    pub fn from_u8(_ mode: u8) -> Self {
+        match mode {
+            0 => PostOpMode::OpSucceeded,
+            1 => PostOpMode::OpReverted,
+            2 => PostOpMode::PostOpReverted,
+            _ => ops::revert_empty(),
+        }
+    }
+
+    pub fn to_u8(self) -> u8 {
+        match self {
+            PostOpMode::OpSucceeded => 0,
+            PostOpMode::OpReverted => 1,
+            PostOpMode::PostOpReverted => 2,
+        }
+    }
+}

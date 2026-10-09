@@ -489,41 +489,6 @@ fn format_expr<'db>(db: &'db dyn MirDb, expr: &RExpr<'db>) -> String {
                 .join(", ");
             format!("aggregate_make {}({fields})", format_layout(db, *layout))
         }
-        RExpr::LayoutMapAffine { base, strides, .. } => {
-            let strides = strides
-                .iter()
-                .map(|value| format_local_id(*value))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("layout_map_affine {} [{strides}]", format_local_id(*base))
-        }
-        RExpr::LayoutMapDense { elements, .. } => {
-            let elements = elements
-                .iter()
-                .map(|value| format_local_id(*value))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("layout_map_dense [{elements}]")
-        }
-        RExpr::LayoutMapRepeat { element, .. } => {
-            format!("layout_map_repeat {}", format_local_id(*element))
-        }
-        RExpr::LayoutMapProject { source, index, .. } => format!(
-            "layout_map_project {}, {}",
-            format_local_id(*source),
-            format_local_id(*index)
-        ),
-        RExpr::LayoutMapPatch {
-            source,
-            index,
-            replacement,
-            ..
-        } => format!(
-            "layout_map_patch {}, {} := {}",
-            format_local_id(*source),
-            format_local_id(*index),
-            format_local_id(*replacement)
-        ),
         RExpr::Call { callee, args } => {
             let args = args
                 .iter()
@@ -566,7 +531,7 @@ fn format_expr<'db>(db: &'db dyn MirDb, expr: &RExpr<'db>) -> String {
             format_variant(db, *variant),
             field.0
         ),
-        RExpr::EnumGetTag { root } => format!("enum_get_tag {}", format_local_id(*root)),
+        RExpr::EnumGetTag { place } => format!("enum_get_tag {}", format_place(place)),
         RExpr::EnumAssertVariantRef { root, variant } => format!(
             "enum_assert_variant_ref {}, {}",
             format_local_id(*root),
@@ -1025,13 +990,6 @@ fn format_scalar_class<'db>(db: &'db dyn MirDb, class: &ScalarClass<'db>) -> Str
         ScalarRole::EnumTag { enum_layout } => {
             format!("{repr}<tag {}>", format_layout(db, *enum_layout))
         }
-        ScalarRole::LayoutMap {
-            scalar_ty,
-            dimensions,
-        } => format!(
-            "{repr}<layout_map {} {dimensions:?}>",
-            scalar_ty.pretty_print(db)
-        ),
     }
 }
 

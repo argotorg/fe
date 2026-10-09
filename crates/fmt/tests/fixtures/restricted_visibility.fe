@@ -1,0 +1,19 @@
+pub(ingot) fn ingot_fn() -> u256 { 1 }
+
+pub(super) const LIMIT: u256 = 16
+
+pub(ingot) struct Point {
+    pub(ingot) x: u256,
+    pub(super) y: u256,
+    z: u256,
+}
+
+extern {
+    pub(ingot) fn mload(_: *u8) -> u256
+    pub(super) fn mstore(addr: *u8, value: u256)
+}
+
+pub(ingot) struct Commented // comment in the header
+{
+    pub(ingot) value: u256,
+}

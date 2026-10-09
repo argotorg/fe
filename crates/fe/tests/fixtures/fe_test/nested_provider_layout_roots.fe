@@ -70,12 +70,6 @@ msg NestedProviderMsg {
 
     #[selector = 9]
     GetTaggedHandleTag -> u256,
-
-    #[selector = 10]
-    SetTaggedArray { lane: usize, key: u256, value: u256 },
-
-    #[selector = 11]
-    GetTaggedArray { lane: usize, key: u256 } -> u256,
 }
 
 pub contract NestedProviderMaps {
@@ -83,14 +77,11 @@ pub contract NestedProviderMaps {
     mut explicit: Holder<StorageMap<u256, u256, 1>>,
     mut direct: StorageMap<u256, u256>,
     mut tagged: TaggedHolder<StorageMap<u256, u256>>,
-    mut tagged_array: [TaggedHolder<StorageMap<u256, u256>>; 2],
 
-    init() uses (mut inferred, mut explicit, mut tagged, mut tagged_array, evm: Evm) {
+    init() uses (mut inferred, mut explicit, mut tagged, evm: Evm) {
         inferred.attach(slot: 0)
         explicit.attach(slot: 0)
         tagged.attach(slot: 0)
-        tagged_array[0].attach(slot: 0)
-        tagged_array[1].attach(slot: 0)
     }
 
     recv NestedProviderMsg {
@@ -133,15 +124,6 @@ pub contract NestedProviderMaps {
             let mut ptr = tagged.ptr
             ptr.tag = 99
             tagged_handle_tag(ptr)
-        }
-
-        SetTaggedArray { lane, key, value } uses (tagged_array) {
-            let mut map = tagged_array[lane].ptr.read()
-            map.set(key, value)
-        }
-
-        GetTaggedArray { lane, key } -> u256 uses (tagged_array) {
-            tagged_array[lane].ptr.read().get(key)
         }
     }
 }
@@ -204,35 +186,9 @@ fn nested_provider_roots_are_distinct_and_reserve_explicit_values() uses (evm: m
         value: 0,
         message: NestedProviderMsg::GetTaggedHandleTag {},
     )
-    evm.call(
-        addr: c,
-        gas: 200000,
-        value: 0,
-        message: NestedProviderMsg::SetTaggedArray { lane: 0, key, value: 55 },
-    )
-    evm.call(
-        addr: c,
-        gas: 200000,
-        value: 0,
-        message: NestedProviderMsg::SetTaggedArray { lane: 1, key, value: 66 },
-    )
-    let tagged_array_0 = evm.call(
-        addr: c,
-        gas: 200000,
-        value: 0,
-        message: NestedProviderMsg::GetTaggedArray { lane: 0, key },
-    )
-    let tagged_array_1 = evm.call(
-        addr: c,
-        gas: 200000,
-        value: 0,
-        message: NestedProviderMsg::GetTaggedArray { lane: 1, key },
-    )
     assert!(inferred == 11)
     assert!(explicit == 22)
     assert!(direct == 33)
     assert!(tagged == 44)
     assert!(tag == 99)
-    assert!(tagged_array_0 == 55)
-    assert!(tagged_array_1 == 66)
 }

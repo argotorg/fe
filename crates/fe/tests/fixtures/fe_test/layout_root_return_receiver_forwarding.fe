@@ -10,6 +10,10 @@ impl<const ROOT: u256> Wrapped<ROOT> {
     }
 }
 
+fn read_wrapped(wrapped: Wrapped, key: u256) -> u256 {
+    wrapped.into_map().get(key: key)
+}
+
 msg Msg {
     #[selector = 1]
     Set { lane: usize, key: u256, value: u256 },
@@ -19,15 +23,24 @@ msg Msg {
 }
 
 pub contract C {
-    mut wrapped: [Wrapped; 2],
+    mut first: Wrapped,
+    mut second: Wrapped,
 
     recv Msg {
-        Set { lane, key, value } uses (mut wrapped) {
-            wrapped[lane].map.set(key: key, value: value)
+        Set { lane, key, value } uses (mut first, mut second) {
+            if lane == 0 {
+                first.map.set(key: key, value: value)
+            } else {
+                second.map.set(key: key, value: value)
+            }
         }
 
-        Get { lane, key } -> u256 uses (wrapped) {
-            wrapped[lane].into_map().get(key: key)
+        Get { lane, key } -> u256 uses (first, second) {
+            if lane == 0 {
+                read_wrapped(wrapped: first, key: key)
+            } else {
+                read_wrapped(wrapped: second, key: key)
+            }
         }
     }
 }
@@ -48,4 +61,11 @@ fn returned_receiver_fields_preserve_layout_sources() uses (evm: mut Evm) {
         message: Msg::Get { lane: 1, key: 7 },
     )
     assert!(value == 42)
+    let untouched: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Get { lane: 0, key: 7 },
+    )
+    assert!(untouched == 0)
 }

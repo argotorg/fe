@@ -1,0 +1,446 @@
+// Repeated positions of one type binding can follow its owned form. This is
+// a type-level explanation, not a promise that owning one argument fixes a
+// call. Two capability positions inside the binding are still independent.
+
+trait Mark {}
+trait Foo {}
+
+struct S {
+    x: u256,
+}
+
+impl Mark for S {}
+impl Mark for u256 {}
+
+struct W<A> {
+    a: A,
+}
+
+struct P<A, B> {
+    a: A,
+    b: B,
+}
+
+impl<A: Mark, B: Mark> Foo for P<A, B> {}
+
+fn need_pp<X>(_ w: W<X>)
+where
+    P<X, X>: Foo,
+{}
+
+fn one_view(_ s: S) {
+    need_pp(W { a: s })
+}
+
+fn one_ref(_ s: ref S) {
+    need_pp(W { a: s })
+}
+
+fn one_mut(_ s: mut S) {
+    need_pp(W { a: s })
+}
+
+fn one_owned(_ s: own S) {
+    need_pp(W { a: s })
+}
+
+fn one_copy(_ n: u256) {
+    need_pp(W { a: n })
+}
+
+// The impl exposes the capability itself as the failing prerequisite, not
+// `W<ref S>: Mark`, which would never enter the capability explanation.
+trait FooNested {}
+impl<A: Mark, B: Mark> FooNested for P<W<A>, W<B>> {}
+
+fn need_nested<X>(_ w: W<X>)
+where
+    P<W<X>, W<X>>: FooNested,
+{}
+
+fn nested(_ s: ref S) {
+    need_nested(W { a: s })
+}
+
+fn nested_owned(_ s: own S) {
+    need_nested(W { a: s })
+}
+
+trait FooMixed {}
+impl<A: Mark, B: Mark> FooMixed for P<A, W<B>> {}
+
+fn need_mixed<X>(_ w: W<X>)
+where
+    P<X, W<X>>: FooMixed,
+{}
+
+fn mixed_depth(_ s: S) {
+    need_mixed(W { a: s })
+}
+
+trait Rel<U> {}
+impl<A: Mark, B: Mark, U> Rel<U> for P<A, B> {}
+
+fn need_arg<X>(_ w: W<X>)
+where
+    P<X, X>: Rel<(X,)>,
+{}
+
+fn dependent_arg(_ s: S) {
+    need_arg(W { a: s })
+}
+
+trait Same<U = Self> {}
+impl<A: Mark, B: Mark> Same<P<A, B>> for P<A, B> {}
+
+fn need_default<X>(_ w: W<X>)
+where
+    P<X, X>: Same,
+{}
+
+fn self_default(_ s: ref S) {
+    need_default(W { a: s })
+}
+
+trait Out {
+    type Item
+}
+
+impl<A: Mark, B: Mark> Out for P<A, B> {
+    type Item = W<A>
+}
+
+fn need_item<X>(_ w: W<X>)
+where
+    P<X, X>: Out<Item = W<X>>,
+{}
+
+fn dependent_item(_ s: S) {
+    need_item(W { a: s })
+}
+
+fn generic<T: Mark>(_ t: T) {
+    need_pp(W { a: t })
+}
+
+fn assumed<T>(_ t: T)
+where
+    P<T, T>: Foo,
+{
+    need_pp(W { a: t })
+}
+
+fn assumed_owned<T>(_ t: own T)
+where
+    P<T, T>: Foo,
+{
+    need_pp(W { a: t })
+}
+
+fn rec<X>(_ w: W<X>)
+where
+    P<X, X>: Foo,
+{
+    // Field access retains X. Borrow it explicitly so the recursive call
+    // binds its X to ref X, containing the caller's identical parameter.
+    rec(W { a: ref w.a })
+}
+
+struct H<T> {
+    t: T,
+}
+
+impl<T> H<T> {
+    fn check_parent(self)
+    where
+        P<T, T>: Foo,
+    {}
+}
+
+fn inherited(_ s: S) {
+    H { t: s }.check_parent()
+}
+
+trait RepeatedSelf {
+    fn check_self(self)
+    where
+        P<Self, Self>: FooNested
+}
+
+impl<A> RepeatedSelf for W<A> {
+    fn check_self(self)
+    where
+        P<Self, Self>: FooNested,
+    {}
+}
+
+fn trait_self(_ s: ref S) {
+    W { a: s }.check_self()
+}
+
+// Multiple actual inputs can share one type binding. Pin the existing
+// single-occurrence proof alongside the repeated-binding explanation.
+fn need_pair_single<X: Mark>(_ first: W<X>, _ second: W<X>) {}
+
+fn need_pair<X>(_ first: W<X>, _ second: W<X>)
+where
+    P<X, X>: Foo,
+{}
+
+fn shared_inputs(_ s: ref S, _ t: ref S) {
+    need_pair_single(W { a: s }, W { a: t })
+    need_pair(W { a: s }, W { a: t })
+}
+
+struct Two<A, B> {
+    a: A,
+    b: B,
+}
+
+fn need_aggregate<X>(_ pair: Two<X, X>)
+where
+    P<X, X>: Foo,
+{}
+
+fn shared_aggregate(_ s: ref S, _ t: ref S) {
+    need_aggregate(Two { a: s, b: t })
+}
+
+// Distinct parameter keys stay distinct even with identical actual types.
+fn need_independent<X, Y>(_ first: W<X>, _ second: W<Y>)
+where
+    P<X, Y>: Foo,
+{}
+
+fn independent(_ s: ref S, _ t: ref S) {
+    need_independent(W { a: s }, W { a: t })
+    need_independent(W { a: s }, W { a: s })
+}
+
+// A single binding containing two capability positions is not eligible.
+trait FooTwo {}
+impl<A: Mark, B: Mark> FooTwo for Two<A, B> {}
+impl<A: Mark, B: Mark> FooTwo for P<Two<A, B>, Two<A, B>> {}
+
+fn need_two_single<X: FooTwo>(_ x: X) {}
+
+fn need_two_repeated<X>(_ w: W<X>)
+where
+    P<X, X>: FooTwo,
+{}
+
+fn two_positions(_ s: ref S, _ t: ref S) {
+    need_two_single(Two { a: s, b: t })
+    need_two_repeated(W { a: Two { a: s, b: t } })
+}
+
+// The owned bound holds in these fixed-position cases. Only the retained
+// occurrence of the exact offending capability must suppress the hint.
+trait FooFixed {}
+impl<A: Mark> FooFixed for P<A, ref S> {}
+
+fn need_fixed_self<X>(_ w: W<X>)
+where
+    P<X, ref S>: FooFixed,
+{}
+
+fn fixed_self(_ s: ref S) {
+    need_fixed_self(W { a: s })
+}
+
+fn need_fixed_arg<X>(_ w: W<X>)
+where
+    P<X, X>: Rel<ref S>,
+{}
+
+fn fixed_arg(_ s: ref S) {
+    need_fixed_arg(W { a: s })
+}
+
+// View and Ref over the same S are different capability types.
+fn different_kind(_ s: S) {
+    need_fixed_arg(W { a: s })
+}
+
+trait FixedOut {
+    type Item
+}
+
+impl<A: Mark, B: Mark> FixedOut for P<A, B> {
+    type Item = ref S
+}
+
+fn need_fixed_item<X>(_ w: W<X>)
+where
+    P<X, X>: FixedOut<Item = ref S>,
+{}
+
+fn fixed_item(_ s: ref S) {
+    need_fixed_item(W { a: s })
+}
+
+fn need_other_arg<X, Y>(_ first: W<X>, _ second: W<Y>)
+where
+    P<X, X>: Rel<Y>,
+{}
+
+fn need_other_item<X, Y>(_ first: W<X>, _ second: W<Y>)
+where
+    P<X, X>: FixedOut<Item = Y>,
+{}
+
+fn other_binding(_ s: ref S, _ t: ref S, _ n: u256) {
+    need_other_arg(W { a: s }, W { a: t })
+    need_other_arg(W { a: s }, W { a: n })
+    need_other_item(W { a: s }, W { a: t })
+}
+
+fn need_fixed_constructor<X>(_ w: W<X>)
+where
+    P<ref X, ref X>: Foo,
+{}
+
+fn fixed_constructor(_ s: own S) {
+    need_fixed_constructor(W { a: s })
+}
+
+struct Unmarked {
+    x: u256,
+}
+
+fn owned_still_unsatisfied(_ s: ref Unmarked) {
+    need_pp(W { a: s })
+}
+
+// A second binding can change with ownership through a separate constraint.
+// Freezing Y = u8 would prove the wrong owned goal: the owned call uses u16.
+trait Pick {
+    type Item
+}
+
+impl Pick for W<ref S> {
+    type Item = u8
+}
+
+impl Pick for W<S> {
+    type Item = u16
+}
+
+trait FooDep<U> {}
+impl<A: Mark, B: Mark> FooDep<u8> for P<A, B> {}
+
+fn need_dep<X, Y>(_ w: W<X>)
+where
+    W<X>: Pick<Item = Y>,
+    P<X, X>: FooDep<Y>,
+{}
+
+fn dependent_binding(_ s: ref S) {
+    need_dep(W { a: s })
+}
+
+fn dependent_binding_owned(_ s: own S) {
+    need_dep(W { a: s })
+}
+
+// Reusing the borrowed projection's evidence for the owned type is unsafe.
+fn need_projection<X>(_ w: W<X>)
+where
+    W<X>: Pick,
+    P<X, X>: FooDep<<W<X> as Pick>::Item>,
+{}
+
+fn projected(_ s: ref S) {
+    need_projection(W { a: s })
+}
+
+trait Count<const N: u256> {}
+impl<A: Mark, B: Mark, const N: u256> Count<N> for P<A, B> {}
+
+fn need_fixed_const<X>(_ w: W<X>)
+where
+    P<X, X>: Count<3>,
+{}
+
+fn fixed_const(_ s: ref S) {
+    need_fixed_const(W { a: s })
+}
+
+fn need_const_param<X, const N: u256>(_ w: W<X>)
+where
+    P<X, X>: Count<N>,
+{}
+
+fn const_param(_ s: ref S) {
+    need_const_param<ref S, 3>(W { a: s })
+}
+
+mod sealed {
+    trait Seal {}
+    pub trait Foo {}
+
+    pub struct S {
+        x: u256,
+    }
+
+    impl Seal for S {}
+
+    pub struct P<A, B> {
+        a: A,
+        b: B,
+    }
+
+    impl<A: Seal, B: Seal> Foo for P<A, B> {}
+}
+
+fn need_sealed<X>(_ w: W<X>)
+where
+    sealed::P<X, X>: sealed::Foo,
+{}
+
+fn private_marker(_ s: sealed::S) {
+    need_sealed(W { a: s })
+}
+
+fn private_owned(_ s: own sealed::S) {
+    need_sealed(W { a: s })
+}
+
+fn owned_dependent(_ mixed: own S, _ arg: own S, _ default: own S, _ item: own S) {
+    need_mixed(W { a: mixed })
+    need_arg(W { a: arg })
+    need_default(W { a: default })
+    need_item(W { a: item })
+}
+
+fn owned_shared(_ first: own S, _ second: own S, _ left: own S, _ right: own S) {
+    need_pair(W { a: first }, W { a: second })
+    need_aggregate(Two { a: left, b: right })
+}
+
+fn owned_methods(_ parent: own S, _ receiver: own S, _ count: own S) {
+    H { t: parent }.check_parent()
+    W { a: receiver }.check_self()
+    need_fixed_const(W { a: count })
+}
+
+// These controls confirm that fixed Ref positions do not stop the owned
+// bound from holding: their negative cases exercise the occurrence guard.
+fn owned_fixed(_ self_ty: own S, _ arg: own S, _ item: own S) {
+    need_fixed_self(W { a: self_ty })
+    need_fixed_arg(W { a: arg })
+    need_fixed_item(W { a: item })
+}
+
+fn copy_controls(_ n: u256) {
+    need_nested(W { a: n })
+    need_mixed(W { a: n })
+    need_arg(W { a: n })
+    need_default(W { a: n })
+    need_item(W { a: n })
+    need_pair(W { a: n }, W { a: n })
+    need_aggregate(Two { a: n, b: n })
+    H { t: n }.check_parent()
+    W { a: n }.check_self()
+    need_fixed_const(W { a: n })
+}

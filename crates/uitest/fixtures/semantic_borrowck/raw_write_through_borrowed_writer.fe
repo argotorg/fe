@@ -29,8 +29,8 @@ fn local_writer(_ q: Arr, _ p: *u256) -> u256 {
     *again.p
 }
 
-// Rejected: a writer in raw memory may point into itself, so the callee may
-// write to `local` through a corrupted pointer while `r` is live.
+// Rejected: the caller cannot establish separation of the borrowed writer
+// in raw memory from the callee's raw read and write effects.
 fn raw_writer(_ q: Arr, _ wp: *Writer) {
     let mut local: u256 = 0
     let r = mut local

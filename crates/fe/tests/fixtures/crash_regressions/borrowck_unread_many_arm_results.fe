@@ -1,0 +1,543 @@
+// Many-arm call results that no fact reads. Each call's result alternatives are
+// forgotten rather than multiplied across calls: comparisons no condition
+// reads, results passed only to a dead wrapper result, a cell nothing loads,
+// stores after the cell's only load, selectors narrowed by a lossy cast, and
+// fields of a returned aggregate.
+trait Tagged {
+    fn ordinal(self) -> usize
+}
+
+enum Many {
+    V0,
+    V1,
+    V2,
+    V3,
+    V4,
+    V5,
+    V6,
+    V7,
+    V8,
+    V9,
+    V10,
+    V11,
+    V12,
+    V13,
+    V14,
+    V15,
+    V16,
+    V17,
+    V18,
+    V19,
+}
+
+impl Tagged for Many {
+    fn ordinal(self) -> usize {
+        match self {
+            Many::V0 => 0
+            Many::V1 => 1
+            Many::V2 => 2
+            Many::V3 => 3
+            Many::V4 => 4
+            Many::V5 => 5
+            Many::V6 => 6
+            Many::V7 => 7
+            Many::V8 => 8
+            Many::V9 => 9
+            Many::V10 => 10
+            Many::V11 => 11
+            Many::V12 => 12
+            Many::V13 => 13
+            Many::V14 => 14
+            Many::V15 => 15
+            Many::V16 => 16
+            Many::V17 => 17
+            Many::V18 => 18
+            Many::V19 => 19
+        }
+    }
+}
+
+fn unused_comparisons(k: usize) -> usize {
+    let c0 = Many::V0.ordinal() == k
+    let c1 = Many::V1.ordinal() == k
+    let c2 = Many::V2.ordinal() == k
+    let c3 = Many::V3.ordinal() == k
+    let c4 = Many::V4.ordinal() == k
+    let c5 = Many::V5.ordinal() == k
+    let c6 = Many::V6.ordinal() == k
+    let c7 = Many::V7.ordinal() == k
+    let c8 = Many::V8.ordinal() == k
+    let c9 = Many::V9.ordinal() == k
+    let c10 = Many::V10.ordinal() == k
+    let c11 = Many::V11.ordinal() == k
+    let c12 = Many::V12.ordinal() == k
+    let c13 = Many::V13.ordinal() == k
+    let c14 = Many::V14.ordinal() == k
+    let c15 = Many::V15.ordinal() == k
+    let c16 = Many::V16.ordinal() == k
+    let c17 = Many::V17.ordinal() == k
+    let c18 = Many::V18.ordinal() == k
+    let c19 = Many::V19.ordinal() == k
+    k
+}
+
+fn identity(_ x: usize) -> usize {
+    x
+}
+
+fn dead_wrapper_results() {
+    let unused0 = identity(Many::V0.ordinal())
+    let unused1 = identity(Many::V1.ordinal())
+    let unused2 = identity(Many::V2.ordinal())
+    let unused3 = identity(Many::V3.ordinal())
+    let unused4 = identity(Many::V4.ordinal())
+    let unused5 = identity(Many::V5.ordinal())
+    let unused6 = identity(Many::V6.ordinal())
+    let unused7 = identity(Many::V7.ordinal())
+    let unused8 = identity(Many::V8.ordinal())
+    let unused9 = identity(Many::V9.ordinal())
+    let unused10 = identity(Many::V10.ordinal())
+    let unused11 = identity(Many::V11.ordinal())
+    let unused12 = identity(Many::V12.ordinal())
+    let unused13 = identity(Many::V13.ordinal())
+    let unused14 = identity(Many::V14.ordinal())
+    let unused15 = identity(Many::V15.ordinal())
+    let unused16 = identity(Many::V16.ordinal())
+    let unused17 = identity(Many::V17.ordinal())
+    let unused18 = identity(Many::V18.ordinal())
+    let unused19 = identity(Many::V19.ordinal())
+}
+
+fn unread_cell() {
+    let mut sink: usize = 0
+    sink = Many::V0.ordinal()
+    sink = Many::V1.ordinal()
+    sink = Many::V2.ordinal()
+    sink = Many::V3.ordinal()
+    sink = Many::V4.ordinal()
+    sink = Many::V5.ordinal()
+    sink = Many::V6.ordinal()
+    sink = Many::V7.ordinal()
+    sink = Many::V8.ordinal()
+    sink = Many::V9.ordinal()
+    sink = Many::V10.ordinal()
+    sink = Many::V11.ordinal()
+    sink = Many::V12.ordinal()
+    sink = Many::V13.ordinal()
+    sink = Many::V14.ordinal()
+    sink = Many::V15.ordinal()
+    sink = Many::V16.ordinal()
+    sink = Many::V17.ordinal()
+    sink = Many::V18.ordinal()
+    sink = Many::V19.ordinal()
+}
+
+fn narrowed_selectors(_ arr: [u64; 256]) -> u64 {
+    let mut total: u64 = 0
+    let s0: u8 = Many::V0.ordinal().downcast_truncate()
+    total += arr[s0 as usize]
+    let s1: u8 = Many::V1.ordinal().downcast_truncate()
+    total += arr[s1 as usize]
+    let s2: u8 = Many::V2.ordinal().downcast_truncate()
+    total += arr[s2 as usize]
+    let s3: u8 = Many::V3.ordinal().downcast_truncate()
+    total += arr[s3 as usize]
+    let s4: u8 = Many::V4.ordinal().downcast_truncate()
+    total += arr[s4 as usize]
+    let s5: u8 = Many::V5.ordinal().downcast_truncate()
+    total += arr[s5 as usize]
+    let s6: u8 = Many::V6.ordinal().downcast_truncate()
+    total += arr[s6 as usize]
+    let s7: u8 = Many::V7.ordinal().downcast_truncate()
+    total += arr[s7 as usize]
+    let s8: u8 = Many::V8.ordinal().downcast_truncate()
+    total += arr[s8 as usize]
+    let s9: u8 = Many::V9.ordinal().downcast_truncate()
+    total += arr[s9 as usize]
+    let s10: u8 = Many::V10.ordinal().downcast_truncate()
+    total += arr[s10 as usize]
+    let s11: u8 = Many::V11.ordinal().downcast_truncate()
+    total += arr[s11 as usize]
+    let s12: u8 = Many::V12.ordinal().downcast_truncate()
+    total += arr[s12 as usize]
+    let s13: u8 = Many::V13.ordinal().downcast_truncate()
+    total += arr[s13 as usize]
+    let s14: u8 = Many::V14.ordinal().downcast_truncate()
+    total += arr[s14 as usize]
+    let s15: u8 = Many::V15.ordinal().downcast_truncate()
+    total += arr[s15 as usize]
+    let s16: u8 = Many::V16.ordinal().downcast_truncate()
+    total += arr[s16 as usize]
+    let s17: u8 = Many::V17.ordinal().downcast_truncate()
+    total += arr[s17 as usize]
+    let s18: u8 = Many::V18.ordinal().downcast_truncate()
+    total += arr[s18 as usize]
+    let s19: u8 = Many::V19.ordinal().downcast_truncate()
+    total += arr[s19 as usize]
+    total
+}
+
+fn stores_after_read(_ arr: [u64; 32]) -> u64 {
+    let mut cell: usize = 0
+    let seen = arr[cell]
+    cell = Many::V0.ordinal()
+    cell = Many::V1.ordinal()
+    cell = Many::V2.ordinal()
+    cell = Many::V3.ordinal()
+    cell = Many::V4.ordinal()
+    cell = Many::V5.ordinal()
+    cell = Many::V6.ordinal()
+    cell = Many::V7.ordinal()
+    cell = Many::V8.ordinal()
+    cell = Many::V9.ordinal()
+    cell = Many::V10.ordinal()
+    cell = Many::V11.ordinal()
+    cell = Many::V12.ordinal()
+    cell = Many::V13.ordinal()
+    cell = Many::V14.ordinal()
+    cell = Many::V15.ordinal()
+    cell = Many::V16.ordinal()
+    cell = Many::V17.ordinal()
+    cell = Many::V18.ordinal()
+    cell = Many::V19.ordinal()
+    seen
+}
+
+fn aggregate_return() -> [usize; 20] {
+    [Many::V0.ordinal(), Many::V1.ordinal(), Many::V2.ordinal(), Many::V3.ordinal(), Many::V4.ordinal(), Many::V5.ordinal(), Many::V6.ordinal(), Many::V7.ordinal(), Many::V8.ordinal(), Many::V9.ordinal(), Many::V10.ordinal(), Many::V11.ordinal(), Many::V12.ordinal(), Many::V13.ordinal(), Many::V14.ordinal(), Many::V15.ordinal(), Many::V16.ordinal(), Many::V17.ordinal(), Many::V18.ordinal(), Many::V19.ordinal()]
+}
+
+// A branch selecting a discarded result must not keep its input facts live.
+fn choose_branch(_ index: usize) -> usize { if index == 0 { 0 } else { 1 } }
+fn dead_integer_branch_results() {
+    let unused0 = choose_branch(Many::V0.ordinal())
+    let unused1 = choose_branch(Many::V1.ordinal())
+    let unused2 = choose_branch(Many::V2.ordinal())
+    let unused3 = choose_branch(Many::V3.ordinal())
+    let unused4 = choose_branch(Many::V4.ordinal())
+    let unused5 = choose_branch(Many::V5.ordinal())
+    let unused6 = choose_branch(Many::V6.ordinal())
+    let unused7 = choose_branch(Many::V7.ordinal())
+    let unused8 = choose_branch(Many::V8.ordinal())
+    let unused9 = choose_branch(Many::V9.ordinal())
+    let unused10 = choose_branch(Many::V10.ordinal())
+    let unused11 = choose_branch(Many::V11.ordinal())
+    let unused12 = choose_branch(Many::V12.ordinal())
+    let unused13 = choose_branch(Many::V13.ordinal())
+    let unused14 = choose_branch(Many::V14.ordinal())
+    let unused15 = choose_branch(Many::V15.ordinal())
+    let unused16 = choose_branch(Many::V16.ordinal())
+    let unused17 = choose_branch(Many::V17.ordinal())
+    let unused18 = choose_branch(Many::V18.ordinal())
+    let unused19 = choose_branch(Many::V19.ordinal())
+}
+// Observing a constant result as an index does not observe its branch input.
+fn constant_branch(_ index: usize) -> usize { if index == 0 { 0 } else { 0 } }
+fn used_constant_branch_results(_ arr: [u64; 1]) -> u64 {
+    let mut sum: u64 = 0
+    sum += arr[constant_branch(Many::V0.ordinal())]
+    sum += arr[constant_branch(Many::V1.ordinal())]
+    sum += arr[constant_branch(Many::V2.ordinal())]
+    sum += arr[constant_branch(Many::V3.ordinal())]
+    sum += arr[constant_branch(Many::V4.ordinal())]
+    sum += arr[constant_branch(Many::V5.ordinal())]
+    sum += arr[constant_branch(Many::V6.ordinal())]
+    sum += arr[constant_branch(Many::V7.ordinal())]
+    sum += arr[constant_branch(Many::V8.ordinal())]
+    sum += arr[constant_branch(Many::V9.ordinal())]
+    sum += arr[constant_branch(Many::V10.ordinal())]
+    sum += arr[constant_branch(Many::V11.ordinal())]
+    sum += arr[constant_branch(Many::V12.ordinal())]
+    sum += arr[constant_branch(Many::V13.ordinal())]
+    sum += arr[constant_branch(Many::V14.ordinal())]
+    sum += arr[constant_branch(Many::V15.ordinal())]
+    sum += arr[constant_branch(Many::V16.ordinal())]
+    sum += arr[constant_branch(Many::V17.ordinal())]
+    sum += arr[constant_branch(Many::V18.ordinal())]
+    sum += arr[constant_branch(Many::V19.ordinal())]
+    sum
+}
+
+// Boolean result relations must be projected before repeated calls multiply them.
+fn integer_predicate(_ index: usize) -> bool { index == 0 }
+fn boolean_branch(_ index: usize) -> bool { if index == 0 { true } else { false } }
+fn constant_boolean_branch(_ index: usize) -> bool { if index == 0 { true } else { true } }
+fn dead_boolean_predicate_results() {
+    let unused0 = integer_predicate(Many::V0.ordinal())
+    let unused1 = integer_predicate(Many::V1.ordinal())
+    let unused2 = integer_predicate(Many::V2.ordinal())
+    let unused3 = integer_predicate(Many::V3.ordinal())
+    let unused4 = integer_predicate(Many::V4.ordinal())
+    let unused5 = integer_predicate(Many::V5.ordinal())
+    let unused6 = integer_predicate(Many::V6.ordinal())
+    let unused7 = integer_predicate(Many::V7.ordinal())
+    let unused8 = integer_predicate(Many::V8.ordinal())
+    let unused9 = integer_predicate(Many::V9.ordinal())
+    let unused10 = integer_predicate(Many::V10.ordinal())
+    let unused11 = integer_predicate(Many::V11.ordinal())
+    let unused12 = integer_predicate(Many::V12.ordinal())
+    let unused13 = integer_predicate(Many::V13.ordinal())
+    let unused14 = integer_predicate(Many::V14.ordinal())
+    let unused15 = integer_predicate(Many::V15.ordinal())
+    let unused16 = integer_predicate(Many::V16.ordinal())
+    let unused17 = integer_predicate(Many::V17.ordinal())
+    let unused18 = integer_predicate(Many::V18.ordinal())
+    let unused19 = integer_predicate(Many::V19.ordinal())
+}
+fn dead_boolean_branch_results() {
+    let unused0 = boolean_branch(Many::V0.ordinal())
+    let unused1 = boolean_branch(Many::V1.ordinal())
+    let unused2 = boolean_branch(Many::V2.ordinal())
+    let unused3 = boolean_branch(Many::V3.ordinal())
+    let unused4 = boolean_branch(Many::V4.ordinal())
+    let unused5 = boolean_branch(Many::V5.ordinal())
+    let unused6 = boolean_branch(Many::V6.ordinal())
+    let unused7 = boolean_branch(Many::V7.ordinal())
+    let unused8 = boolean_branch(Many::V8.ordinal())
+    let unused9 = boolean_branch(Many::V9.ordinal())
+    let unused10 = boolean_branch(Many::V10.ordinal())
+    let unused11 = boolean_branch(Many::V11.ordinal())
+    let unused12 = boolean_branch(Many::V12.ordinal())
+    let unused13 = boolean_branch(Many::V13.ordinal())
+    let unused14 = boolean_branch(Many::V14.ordinal())
+    let unused15 = boolean_branch(Many::V15.ordinal())
+    let unused16 = boolean_branch(Many::V16.ordinal())
+    let unused17 = boolean_branch(Many::V17.ordinal())
+    let unused18 = boolean_branch(Many::V18.ordinal())
+    let unused19 = boolean_branch(Many::V19.ordinal())
+}
+fn live_constant_boolean_branch_results() -> usize {
+    let mut sum: usize = 0
+    if constant_boolean_branch(Many::V0.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V1.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V2.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V3.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V4.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V5.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V6.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V7.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V8.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V9.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V10.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V11.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V12.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V13.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V14.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V15.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V16.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V17.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V18.ordinal()) { sum += 1 }
+    if constant_boolean_branch(Many::V19.ordinal()) { sum += 1 }
+    sum
+}
+
+// Binding a live wrapper's arguments must leave dead predicate results unread.
+fn pass_boolean(_ flag: bool) -> bool { flag }
+fn constant_boolean(_ flag: bool) -> bool { true }
+fn dead_boolean_argument_predicates(k: usize) {
+    let unused0 = pass_boolean(pass_boolean(Many::V0.ordinal() == k))
+    let unused1 = pass_boolean(pass_boolean(Many::V1.ordinal() == k))
+    let unused2 = pass_boolean(pass_boolean(Many::V2.ordinal() == k))
+    let unused3 = pass_boolean(pass_boolean(Many::V3.ordinal() == k))
+    let unused4 = pass_boolean(pass_boolean(Many::V4.ordinal() == k))
+    let unused5 = pass_boolean(pass_boolean(Many::V5.ordinal() == k))
+    let unused6 = pass_boolean(pass_boolean(Many::V6.ordinal() == k))
+    let unused7 = pass_boolean(pass_boolean(Many::V7.ordinal() == k))
+    let unused8 = pass_boolean(pass_boolean(Many::V8.ordinal() == k))
+    let unused9 = pass_boolean(pass_boolean(Many::V9.ordinal() == k))
+    let unused10 = pass_boolean(pass_boolean(Many::V10.ordinal() == k))
+    let unused11 = pass_boolean(pass_boolean(Many::V11.ordinal() == k))
+    let unused12 = pass_boolean(pass_boolean(Many::V12.ordinal() == k))
+    let unused13 = pass_boolean(pass_boolean(Many::V13.ordinal() == k))
+    let unused14 = pass_boolean(pass_boolean(Many::V14.ordinal() == k))
+    let unused15 = pass_boolean(pass_boolean(Many::V15.ordinal() == k))
+    let unused16 = pass_boolean(pass_boolean(Many::V16.ordinal() == k))
+    let unused17 = pass_boolean(pass_boolean(Many::V17.ordinal() == k))
+    let unused18 = pass_boolean(pass_boolean(Many::V18.ordinal() == k))
+    let unused19 = pass_boolean(pass_boolean(Many::V19.ordinal() == k))
+}
+
+// A live constant result observes neither its Boolean argument nor its inputs.
+fn live_constant_boolean_arguments(k: usize) -> usize {
+    let mut sum: usize = 0
+    if constant_boolean(Many::V0.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V1.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V2.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V3.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V4.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V5.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V6.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V7.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V8.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V9.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V10.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V11.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V12.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V13.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V14.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V15.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V16.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V17.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V18.ordinal() == k) { sum += 1 }
+    if constant_boolean(Many::V19.ordinal() == k) { sum += 1 }
+    sum
+}
+
+// Whole-cell stores kill dead call results before predicate demand propagates.
+fn choose_boolean(_ flag: bool) -> usize { if flag { 1 } else { 0 } }
+fn overwritten_boolean_argument_predicates(k: usize) -> usize {
+    let mut result: usize = 0
+    result = choose_boolean(Many::V0.ordinal() == k)
+    result = choose_boolean(Many::V1.ordinal() == k)
+    result = choose_boolean(Many::V2.ordinal() == k)
+    result = choose_boolean(Many::V3.ordinal() == k)
+    result = choose_boolean(Many::V4.ordinal() == k)
+    result = choose_boolean(Many::V5.ordinal() == k)
+    result = choose_boolean(Many::V6.ordinal() == k)
+    result = choose_boolean(Many::V7.ordinal() == k)
+    result = choose_boolean(Many::V8.ordinal() == k)
+    result = choose_boolean(Many::V9.ordinal() == k)
+    result = choose_boolean(Many::V10.ordinal() == k)
+    result = choose_boolean(Many::V11.ordinal() == k)
+    result = choose_boolean(Many::V12.ordinal() == k)
+    result = choose_boolean(Many::V13.ordinal() == k)
+    result = choose_boolean(Many::V14.ordinal() == k)
+    result = choose_boolean(Many::V15.ordinal() == k)
+    result = choose_boolean(Many::V16.ordinal() == k)
+    result = choose_boolean(Many::V17.ordinal() == k)
+    result = choose_boolean(Many::V18.ordinal() == k)
+    result = choose_boolean(Many::V19.ordinal() == k)
+    result = 0
+    result
+}
+
+// Integral argument demand must also respect dead and ignored call inputs.
+fn different_integral(_ first: usize, _ second: usize) -> bool { first != second }
+fn constant_integral(_ ignored: usize) -> bool { true }
+fn dead_copied_integral_arguments(k: usize) {
+    let mut first0: usize = Many::V0.ordinal()
+    let mut copy0: usize = first0
+    let unused0 = different_integral(copy0, k)
+    let mut first1: usize = Many::V1.ordinal()
+    let mut copy1: usize = first1
+    let unused1 = different_integral(copy1, k)
+    let mut first2: usize = Many::V2.ordinal()
+    let mut copy2: usize = first2
+    let unused2 = different_integral(copy2, k)
+    let mut first3: usize = Many::V3.ordinal()
+    let mut copy3: usize = first3
+    let unused3 = different_integral(copy3, k)
+    let mut first4: usize = Many::V4.ordinal()
+    let mut copy4: usize = first4
+    let unused4 = different_integral(copy4, k)
+    let mut first5: usize = Many::V5.ordinal()
+    let mut copy5: usize = first5
+    let unused5 = different_integral(copy5, k)
+    let mut first6: usize = Many::V6.ordinal()
+    let mut copy6: usize = first6
+    let unused6 = different_integral(copy6, k)
+    let mut first7: usize = Many::V7.ordinal()
+    let mut copy7: usize = first7
+    let unused7 = different_integral(copy7, k)
+    let mut first8: usize = Many::V8.ordinal()
+    let mut copy8: usize = first8
+    let unused8 = different_integral(copy8, k)
+    let mut first9: usize = Many::V9.ordinal()
+    let mut copy9: usize = first9
+    let unused9 = different_integral(copy9, k)
+    let mut first10: usize = Many::V10.ordinal()
+    let mut copy10: usize = first10
+    let unused10 = different_integral(copy10, k)
+    let mut first11: usize = Many::V11.ordinal()
+    let mut copy11: usize = first11
+    let unused11 = different_integral(copy11, k)
+    let mut first12: usize = Many::V12.ordinal()
+    let mut copy12: usize = first12
+    let unused12 = different_integral(copy12, k)
+    let mut first13: usize = Many::V13.ordinal()
+    let mut copy13: usize = first13
+    let unused13 = different_integral(copy13, k)
+    let mut first14: usize = Many::V14.ordinal()
+    let mut copy14: usize = first14
+    let unused14 = different_integral(copy14, k)
+    let mut first15: usize = Many::V15.ordinal()
+    let mut copy15: usize = first15
+    let unused15 = different_integral(copy15, k)
+    let mut first16: usize = Many::V16.ordinal()
+    let mut copy16: usize = first16
+    let unused16 = different_integral(copy16, k)
+    let mut first17: usize = Many::V17.ordinal()
+    let mut copy17: usize = first17
+    let unused17 = different_integral(copy17, k)
+    let mut first18: usize = Many::V18.ordinal()
+    let mut copy18: usize = first18
+    let unused18 = different_integral(copy18, k)
+    let mut first19: usize = Many::V19.ordinal()
+    let mut copy19: usize = first19
+    let unused19 = different_integral(copy19, k)
+}
+
+fn live_ignored_copied_integral_arguments() -> usize {
+    let mut sum: usize = 0
+    let mut first0: usize = Many::V0.ordinal()
+    let mut copy0: usize = first0
+    if constant_integral(copy0) { sum += 1 }
+    let mut first1: usize = Many::V1.ordinal()
+    let mut copy1: usize = first1
+    if constant_integral(copy1) { sum += 1 }
+    let mut first2: usize = Many::V2.ordinal()
+    let mut copy2: usize = first2
+    if constant_integral(copy2) { sum += 1 }
+    let mut first3: usize = Many::V3.ordinal()
+    let mut copy3: usize = first3
+    if constant_integral(copy3) { sum += 1 }
+    let mut first4: usize = Many::V4.ordinal()
+    let mut copy4: usize = first4
+    if constant_integral(copy4) { sum += 1 }
+    let mut first5: usize = Many::V5.ordinal()
+    let mut copy5: usize = first5
+    if constant_integral(copy5) { sum += 1 }
+    let mut first6: usize = Many::V6.ordinal()
+    let mut copy6: usize = first6
+    if constant_integral(copy6) { sum += 1 }
+    let mut first7: usize = Many::V7.ordinal()
+    let mut copy7: usize = first7
+    if constant_integral(copy7) { sum += 1 }
+    let mut first8: usize = Many::V8.ordinal()
+    let mut copy8: usize = first8
+    if constant_integral(copy8) { sum += 1 }
+    let mut first9: usize = Many::V9.ordinal()
+    let mut copy9: usize = first9
+    if constant_integral(copy9) { sum += 1 }
+    let mut first10: usize = Many::V10.ordinal()
+    let mut copy10: usize = first10
+    if constant_integral(copy10) { sum += 1 }
+    let mut first11: usize = Many::V11.ordinal()
+    let mut copy11: usize = first11
+    if constant_integral(copy11) { sum += 1 }
+    let mut first12: usize = Many::V12.ordinal()
+    let mut copy12: usize = first12
+    if constant_integral(copy12) { sum += 1 }
+    let mut first13: usize = Many::V13.ordinal()
+    let mut copy13: usize = first13
+    if constant_integral(copy13) { sum += 1 }
+    let mut first14: usize = Many::V14.ordinal()
+    let mut copy14: usize = first14
+    if constant_integral(copy14) { sum += 1 }
+    let mut first15: usize = Many::V15.ordinal()
+    let mut copy15: usize = first15
+    if constant_integral(copy15) { sum += 1 }
+    let mut first16: usize = Many::V16.ordinal()
+    let mut copy16: usize = first16
+    if constant_integral(copy16) { sum += 1 }
+    let mut first17: usize = Many::V17.ordinal()
+    let mut copy17: usize = first17
+    if constant_integral(copy17) { sum += 1 }
+    let mut first18: usize = Many::V18.ordinal()
+    let mut copy18: usize = first18
+    if constant_integral(copy18) { sum += 1 }
+    let mut first19: usize = Many::V19.ordinal()
+    let mut copy19: usize = first19
+    if constant_integral(copy19) { sum += 1 }
+    sum
+}

@@ -1,0 +1,115 @@
+//! OpenZeppelin `EnumerableSet` storage at a runtime slot.
+//!
+//! An `EnumerableSet.Set` at slot `s` is the struct
+//! `{ bytes32[] _values; mapping(bytes32 => uint256) _positions; }`: the
+//! values array at `s` and, at `s + 1`, a mapping from each value to its
+//! index in the array plus one (0 means absent). `SolEnumerableSet` reads
+//! and writes exactly that layout, so `SolEnumerableSet<Address>`,
+//! `SolEnumerableSet<u256>` and `SolEnumerableSet<Bytes32>` are storage
+//! compatible with OZ's `AddressSet`, `UintSet` and `Bytes32Set`.
+//!
+//! ```fe
+//! // `EnumerableSet.AddressSet operators;` at slot 4
+//! let operators = SolEnumerableSet<Address>::at(4)
+//! if operators.add(operator) { /* newly added */ }
+//! let n = operators.len()
+//! ```
+use core::abi::{AbiSize, DynArray, Encode}
+use core::ops::WrappingAdd
+use ingot::abi::{Sol, StaticAbiElement}
+use super::effects::RawStorage
+use super::mapping::SolMapping
+use super::sol_array::{SolArray, read_dyn_array}
+use super::sol_slot::{SolPacked, data_slot, field_mask}
+
+pub struct SolEnumerableSet<T> { pub slot: u256 }
+
+impl<T> Copy for SolEnumerableSet<T> {}
+
+// Each element is stored as its `SolPacked` bits in a full word, which is
+// `bytes32(uint256(uint160(a)))` for an address, like OZ.
+impl<T: SolPacked> SolEnumerableSet<T> {
+    /// The set stored at `slot` (and `slot + 1`).
+    pub fn at(_ slot: u256) -> Self {
+        SolEnumerableSet { slot }
+    }
+
+    /// Number of elements.
+    pub fn len(self) -> u256 uses (storage: RawStorage) {
+        self.array().len()
+    }
+
+    /// Whether `value` is in the set.
+    pub fn contains(self, _ value: own T) -> bool uses (storage: RawStorage) {
+        storage.sload(self.position_slot(value.to_packed())) != 0
+    }
+
+    /// The element at `index` in the set's internal order, like OZ's `at`.
+    /// The order changes when elements are removed. Reverts with
+    /// `Panic(0x32)` if `index >= len()`.
+    pub fn get(self, _ index: u256) -> T uses (storage: RawStorage) {
+        T::from_packed(self.array().get(index) & field_mask(T::BITS))
+    }
+
+    /// All elements in the set's internal order (the order of `get`), like
+    /// OZ's `values`.
+    ///
+    /// Costs one `sload` per element and allocates `32 * (len() + 1)`
+    /// bytes, so the gas grows with the size of the set without bound. Meant
+    /// for view calls, as OZ warns; a state-changing function calling it can
+    /// be made to run out of gas by growing the set.
+    pub fn values(self) -> DynArray<T>
+    uses (storage: RawStorage) where T: StaticAbiElement + Encode<Sol> + AbiSize
+    {
+        read_dyn_array(
+            first_slot: data_slot(self.slot),
+            len: self.len(),
+            per_slot: 1,
+        )
+    }
+
+    /// Adds `value`; returns false if it was already present.
+    pub fn add(self, _ value: own T) -> bool uses (storage: mut RawStorage) {
+        let word = value.to_packed()
+        let position_slot = self.position_slot(word)
+        if storage.sload(position_slot) != 0 {
+            return false
+        }
+        let values = self.array()
+        values.push(word)
+        storage.sstore(slot: position_slot, value: values.len())
+        true
+    }
+
+    /// Removes `value` by moving the last element into its place and
+    /// popping the array, like OZ; returns false if it was absent.
+    pub fn remove(self, _ value: own T) -> bool uses (storage: mut RawStorage) {
+        let word = value.to_packed()
+        let position_slot = self.position_slot(word)
+        let position = storage.sload(position_slot)
+        if position == 0 {
+            return false
+        }
+        let values = self.array()
+        let index = position - 1
+        let last = values.len() - 1
+        if index != last {
+            let last_word = storage.sload(values.element_slot(last))
+            storage.sstore(slot: values.element_slot(index), value: last_word)
+            storage.sstore(slot: self.position_slot(last_word), value: position)
+        }
+        values.pop()
+        storage.sstore(slot: position_slot, value: 0)
+        true
+    }
+
+    fn array(self) -> SolArray<u256> {
+        SolArray::at(self.slot)
+    }
+
+    fn position_slot(self, _ word: u256) -> u256 {
+        // Slot arithmetic wraps like Solidity's: the set at `u256::max()`
+        // keeps its mapping at slot 0.
+        SolMapping::at(self.slot.wrapping_add(1)).slot_of(word)
+    }
+}

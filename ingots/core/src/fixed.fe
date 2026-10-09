@@ -1,0 +1,513 @@
+//! Decimal fixed-point numbers whose scale is part of the type.
+//!
+//! `UFixed<D>` is an unsigned number stored as `raw / 10^D`; `Fixed<D>` is
+//! its signed counterpart. The common scales have aliases: `Wad` (18
+//! decimals, ETH and most ERC20s), `Ray` (27 decimals, MakerDAO / Aave
+//! rates) and `SWad` (signed 18 decimals).
+//!
+//! Because the scale is a type parameter, `Wad * Ray` or `wad + raw_u256`
+//! does not compile; values move between scales only through `rescale`.
+//! The arithmetic operators keep the scale and use a 512-bit intermediate
+//! product, so `a * b / c` never overflows in the middle:
+//!
+//! ```fe
+//! use core::fixed::{Wad, Ray}
+//!
+//! const FEE: Wad = Wad::from_ratio(3, 1000)          // 0.3%
+//! let out = amount * (Wad::one() - FEE) / price     // all Wad
+//! let rate: Ray = out.rescale<27>()
+//! let compounded = rate ** 365                       // Ray, rounded half up
+//! ```
+//!
+//! Multiplication and division round down (towards zero for `Fixed`);
+//! `mul_up` and `div_up` round up. Overflow and division by zero fail like
+//! checked integer arithmetic (`Panic(0x11)` and `Panic(0x12)`).
+//!
+//! `SWad::exp`, `Wad::ln` and `Wad::powf` port Solady's `expWad`, `lnWad`
+//! and `powWad` (Remco Bloemen's rational approximations, MIT) and return
+//! the same values bit for bit. They are only defined for 18 decimals, so
+//! calling them on another scale is a type error rather than a silent
+//! precision bug.
+use super::default::Default
+use super::marker::Copy
+use super::num::{IntWord, UnsignedAbs, isqrt, leading_zeros, mul_div, mul_div_ceil, mulmod}
+use super::ops::{Add, Div, Eq, Mul, Neg, Ord, Pow, Sub}
+use super::panics::PANIC_OVERFLOW
+
+/// Unsigned decimal fixed-point number with `D` decimals.
+pub struct UFixed<const D: u256> { raw: u256 }
+
+/// Signed decimal fixed-point number with `D` decimals.
+pub struct Fixed<const D: u256> { raw: i256 }
+
+/// 18-decimal unsigned fixed point (`1e18 == 1.0`).
+pub type Wad = UFixed<18>
+
+/// 27-decimal unsigned fixed point (`1e27 == 1.0`).
+pub type Ray = UFixed<27>
+
+/// 18-decimal signed fixed point.
+pub type SWad = Fixed<18>
+
+const I256_MAX: u256 = 0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+impl<const D: u256> Copy for UFixed<D> {}
+impl<const D: u256> Copy for Fixed<D> {}
+
+impl<const D: u256> UFixed<D> {
+    /// `10^D`, the raw value of `1.0`.
+    pub const SCALE: u256 = 10 ** D
+
+    /// The number whose raw representation is `raw`, i.e. `raw / 10^D`.
+    pub const fn from_raw(_ raw: u256) -> Self {
+        UFixed { raw }
+    }
+
+    /// The integer `n`. Fails on overflow.
+    pub const fn from_int(_ n: u256) -> Self {
+        UFixed { raw: n * Self::SCALE }
+    }
+
+    /// `numerator / denominator`, rounded down.
+    pub const fn from_ratio(_ numerator: u256, _ denominator: u256) -> Self {
+        UFixed { raw: mul_div(numerator, Self::SCALE, denominator) }
+    }
+    pub const fn zero() -> Self {
+        UFixed { raw: 0 }
+    }
+    pub const fn one() -> Self {
+        UFixed { raw: Self::SCALE }
+    }
+
+    /// The raw representation, `self * 10^D`.
+    pub const fn raw(self) -> u256 {
+        self.raw
+    }
+    pub const fn is_zero(self) -> bool {
+        self.raw == 0
+    }
+
+    /// The integer part, rounded down.
+    pub const fn floor_int(self) -> u256 {
+        self.raw / Self::SCALE
+    }
+
+    /// The integer part, rounded up.
+    pub const fn ceil_int(self) -> u256 {
+        let int = self.raw / Self::SCALE
+        if self.raw % Self::SCALE == 0 {
+            int
+        } else {
+            int + 1
+        }
+    }
+
+    /// `self * n` for an integer `n`.
+    pub const fn mul_int(self, _ n: u256) -> Self {
+        UFixed { raw: self.raw * n }
+    }
+
+    /// `self / n` for an integer `n`, rounded down.
+    pub const fn div_int(self, _ n: u256) -> Self {
+        UFixed { raw: self.raw / n }
+    }
+
+    /// `self * other`, rounded up.
+    pub const fn mul_up(self, _ other: Self) -> Self {
+        UFixed { raw: mul_div_ceil(self.raw, other.raw, Self::SCALE) }
+    }
+
+    /// `self / other`, rounded up.
+    pub const fn div_up(self, _ other: Self) -> Self {
+        UFixed { raw: mul_div_ceil(self.raw, Self::SCALE, other.raw) }
+    }
+
+    /// The same number with `E` decimals, rounded down.
+    pub const fn rescale<const E: u256>(self) -> UFixed<E> {
+        UFixed { raw: mul_div(self.raw, UFixed<E>::SCALE, Self::SCALE) }
+    }
+
+    /// The same number with `E` decimals, rounded up.
+    pub const fn rescale_up<const E: u256>(self) -> UFixed<E> {
+        UFixed { raw: mul_div_ceil(self.raw, UFixed<E>::SCALE, Self::SCALE) }
+    }
+
+    /// The signed number with the same value. Fails if it exceeds `i256`.
+    pub const fn to_signed(self) -> Fixed<D> {
+        if self.raw > I256_MAX {
+            super::panic_code(PANIC_OVERFLOW)
+        }
+        Fixed { raw: i256::from_word(self.raw) }
+    }
+    pub const fn min(self, _ other: Self) -> Self {
+        if self.raw <= other.raw { self } else { other }
+    }
+    pub const fn max(self, _ other: Self) -> Self {
+        if self.raw >= other.raw { self } else { other }
+    }
+
+    /// `self - other`, or zero if `other > self`.
+    pub const fn saturating_sub(self, _ other: Self) -> Self {
+        if self.raw > other.raw {
+            UFixed { raw: self.raw - other.raw }
+        } else {
+            UFixed { raw: 0 }
+        }
+    }
+
+    /// The square root, rounded down.
+    pub fn sqrt(self) -> Self {
+        let x = self.raw
+        let scale = Self::SCALE
+        if x <= u256::max() / scale {
+            return UFixed { raw: isqrt(x * scale) }
+        }
+        // sqrt(x * scale) with a 512-bit radicand. The seed is at least the
+        // root, and Newton's iteration decreases monotonically from above
+        // until it reaches the floor.
+        let mut z = (isqrt(x) + 1) * (isqrt(scale) + 1)
+        let mut next = newton_step(x, scale, z)
+        while next < z {
+            z = next
+            next = newton_step(x, scale, z)
+        }
+        UFixed { raw: z }
+    }
+}
+
+// One Newton step for sqrt(x * scale): floor((z + x * scale / z) / 2),
+// averaging without overflow.
+fn newton_step(_ x: u256, _ scale: u256, _ z: u256) -> u256 {
+    let q = mul_div(x, scale, z)
+    (z & q) + ((z ^ q) >> 1)
+}
+
+/// `self ** n` by squaring, rounding each step half up, like Solady's
+/// `rpow` and MakerDAO's `rpow` with `base = 10^D`. Each step uses a 512-bit
+/// intermediate product, so it only fails when a scaled result overflows.
+impl<const D: u256> Pow<u256> for UFixed<D> {
+    const fn pow(own self, _ n: own u256) -> Self {
+        let scale = Self::SCALE
+        let mut x = self.raw
+        let mut y = n
+        if x == 0 {
+            return UFixed { raw: if y == 0 { scale } else { 0 } }
+        }
+        let mut z = if y & 1 == 0 { scale } else { x }
+        y >>= 1
+        while y != 0 {
+            x = mul_div_half_up(x, x, scale)
+            if y & 1 != 0 {
+                z = mul_div_half_up(z, x, scale)
+            }
+            y >>= 1
+        }
+        UFixed { raw: z }
+    }
+}
+
+// `a * b / d` with a 512-bit intermediate product, rounded half up.
+const fn mul_div_half_up(_ a: u256, _ b: u256, _ d: u256) -> u256 {
+    let quotient = mul_div(a, b, d)
+    if mulmod(a, b, d) >= d - (d >> 1) {
+        quotient + 1
+    } else {
+        quotient
+    }
+}
+
+impl<const D: u256> Add for UFixed<D> {
+    const fn add(own self, _ other: own Self) -> Self {
+        UFixed { raw: self.raw + other.raw }
+    }
+}
+
+impl<const D: u256> Sub for UFixed<D> {
+    const fn sub(own self, _ other: own Self) -> Self {
+        UFixed { raw: self.raw - other.raw }
+    }
+}
+
+/// Full-precision product, rounded down.
+impl<const D: u256> Mul for UFixed<D> {
+    const fn mul(own self, _ other: own Self) -> Self {
+        UFixed { raw: mul_div(self.raw, other.raw, Self::SCALE) }
+    }
+}
+
+/// Full-precision quotient, rounded down.
+impl<const D: u256> Div for UFixed<D> {
+    const fn div(own self, _ other: own Self) -> Self {
+        UFixed { raw: mul_div(self.raw, Self::SCALE, other.raw) }
+    }
+}
+
+impl<const D: u256> Eq for UFixed<D> {
+    const fn eq(self, _ other: Self) -> bool {
+        self.raw == other.raw
+    }
+}
+
+impl<const D: u256> Ord for UFixed<D> {
+    const fn lt(self, _ other: Self) -> bool {
+        self.raw < other.raw
+    }
+    const fn le(self, _ other: Self) -> bool {
+        self.raw <= other.raw
+    }
+    const fn gt(self, _ other: Self) -> bool {
+        self.raw > other.raw
+    }
+    const fn ge(self, _ other: Self) -> bool {
+        self.raw >= other.raw
+    }
+}
+
+impl<const D: u256> Default for UFixed<D> {
+    fn default() -> Self {
+        UFixed { raw: 0 }
+    }
+}
+
+impl<const D: u256> Fixed<D> {
+    /// `10^D`, the raw value of `1.0`. Scales beyond `i256` (`D > 76`) fail
+    /// to evaluate.
+    pub const SCALE: u256 = signed_scale(D)
+    pub const fn from_raw(_ raw: i256) -> Self {
+        Fixed { raw }
+    }
+
+    /// The integer `n`. Fails on overflow.
+    pub const fn from_int(_ n: i256) -> Self {
+        Fixed { raw: n * i256::from_word(Self::SCALE) }
+    }
+    pub const fn zero() -> Self {
+        Fixed { raw: 0 }
+    }
+    pub const fn one() -> Self {
+        Fixed { raw: i256::from_word(Self::SCALE) }
+    }
+    pub const fn raw(self) -> i256 {
+        self.raw
+    }
+
+    /// `self * n` for an integer `n`.
+    pub const fn mul_int(self, _ n: i256) -> Self {
+        Fixed { raw: self.raw * n }
+    }
+
+    /// `self / n` for an integer `n`, rounded towards zero.
+    pub const fn div_int(self, _ n: i256) -> Self {
+        Fixed { raw: self.raw / n }
+    }
+    pub const fn is_negative(self) -> bool {
+        self.raw < 0
+    }
+    pub const fn abs(self) -> UFixed<D> {
+        UFixed { raw: self.raw.unsigned_abs() }
+    }
+
+    /// The unsigned number with the same value. Fails if `self` is negative.
+    pub const fn to_unsigned(self) -> UFixed<D> {
+        if self.raw < 0 {
+            super::panic_code(PANIC_OVERFLOW)
+        }
+        UFixed { raw: IntWord::to_word(self.raw) }
+    }
+    pub const fn min(self, _ other: Self) -> Self {
+        if self.raw <= other.raw { self } else { other }
+    }
+    pub const fn max(self, _ other: Self) -> Self {
+        if self.raw >= other.raw { self } else { other }
+    }
+}
+
+// `10^d`; the subtraction overflows when it does not fit in `i256`.
+const fn signed_scale(_ d: u256) -> u256 {
+    let scale = 10 ** d
+    let _ = I256_MAX - scale
+    scale
+}
+
+// `a * b / d` on signed values with a 512-bit intermediate product, rounded
+// towards zero like Solidity's `sdiv`.
+#[arithmetic(unchecked)]
+const fn signed_mul_div(_ a: i256, _ b: i256, _ d: i256) -> i256 {
+    let negative = ((a < 0) != (b < 0)) != (d < 0)
+    let magnitude = mul_div(a.unsigned_abs(), b.unsigned_abs(), d.unsigned_abs())
+    if negative {
+        // -2^255 is representable.
+        if magnitude > I256_MAX + 1 {
+            super::panic_code(PANIC_OVERFLOW)
+        }
+        i256::from_word(0 - magnitude)
+    } else {
+        if magnitude > I256_MAX {
+            super::panic_code(PANIC_OVERFLOW)
+        }
+        i256::from_word(magnitude)
+    }
+}
+
+impl<const D: u256> Add for Fixed<D> {
+    const fn add(own self, _ other: own Self) -> Self {
+        Fixed { raw: self.raw + other.raw }
+    }
+}
+
+impl<const D: u256> Sub for Fixed<D> {
+    const fn sub(own self, _ other: own Self) -> Self {
+        Fixed { raw: self.raw - other.raw }
+    }
+}
+
+impl<const D: u256> Neg for Fixed<D> {
+    const fn neg(own self) -> Self {
+        Fixed { raw: -self.raw }
+    }
+}
+
+/// Full-precision product, rounded towards zero.
+impl<const D: u256> Mul for Fixed<D> {
+    const fn mul(own self, _ other: own Self) -> Self {
+        Fixed { raw: signed_mul_div(self.raw, other.raw, i256::from_word(Self::SCALE)) }
+    }
+}
+
+/// Full-precision quotient, rounded towards zero.
+impl<const D: u256> Div for Fixed<D> {
+    const fn div(own self, _ other: own Self) -> Self {
+        Fixed { raw: signed_mul_div(self.raw, i256::from_word(Self::SCALE), other.raw) }
+    }
+}
+
+impl<const D: u256> Eq for Fixed<D> {
+    const fn eq(self, _ other: Self) -> bool {
+        self.raw == other.raw
+    }
+}
+
+impl<const D: u256> Ord for Fixed<D> {
+    const fn lt(self, _ other: Self) -> bool {
+        self.raw < other.raw
+    }
+    const fn le(self, _ other: Self) -> bool {
+        self.raw <= other.raw
+    }
+    const fn gt(self, _ other: Self) -> bool {
+        self.raw > other.raw
+    }
+    const fn ge(self, _ other: Self) -> bool {
+        self.raw >= other.raw
+    }
+}
+
+impl<const D: u256> Default for Fixed<D> {
+    fn default() -> Self {
+        Fixed { raw: 0 }
+    }
+}
+
+impl Fixed<18> {
+    /// `e^self`, Solady's `expWad`. Rounds to zero below
+    /// `-41.446531673892822313` and fails with `Panic(0x11)` from
+    /// `135.305999368893231589`, where the result no longer fits an `int256`
+    /// wad.
+    #[arithmetic(unchecked)]
+    pub fn exp(self) -> UFixed<18> {
+        let mut x = self.raw
+        if x <= -41446531673892822313 {
+            return UFixed { raw: 0 }
+        }
+        if x >= 135305999368893231589 {
+            super::panic_code(PANIC_OVERFLOW)
+        }
+
+        // Convert from 1e18 to 2^96 fixed point: x * 2^96 / 1e18 = (x << 78) / 5^18.
+        x = (x << 78) / 3814697265625
+
+        // Reduce the range to (-ln(2) / 2, ln(2) / 2) * 2^96 by factoring out
+        // k = round(x / ln(2)), so exp(x) = exp(x') * 2^k with k in [-61, 195].
+        let k = ((x << 96) / 54916777467707473351141471128 + (1 << 95)) >> 96
+        x = x - k * 54916777467707473351141471128
+
+        // (6, 7)-term rational approximation; `p` is monic and left in the
+        // 2^192 basis so the division lands in 2^96.
+        let mut y = x + 1346386616545796478920950773328
+        y = ((y * x) >> 96) + 57155421227552351082224309758442
+        let mut p = y + x - 94201549194550492254356042504812
+        p = ((p * y) >> 96) + 28719021644029726153956944680412240
+        p = p * x + (4385272521454847904659076985693276 << 96)
+
+        let mut q = x - 2855989394907223263936484059900
+        q = ((q * x) >> 96) + 50020603652535783019961831881945
+        q = ((q * x) >> 96) - 533845033583426703283633433725380
+        q = ((q * x) >> 96) + 3604857256930695427073651918091429
+        q = ((q * x) >> 96) - 14423608567350463180887372962807573
+        q = ((q * x) >> 96) + 26449188498355588339934803723976023
+
+        // q has no real roots, and r is in (0.09, 0.25) * 2^96.
+        let r = p / q
+
+        // Multiply by the scale factor s ~ 6.031367120, by 2^k and by
+        // 1e18 / 2^96 at once, in a 2^213 basis.
+        let shift: u256 = IntWord::to_word(195 - k)
+        UFixed {
+            raw: (IntWord::to_word(r) * 3822833074963236453042738258902158003155416615667) >> shift,
+        }
+    }
+}
+
+impl UFixed<18> {
+    /// `ln(self)`, Solady's `lnWad`. Fails for zero, where the logarithm is
+    /// undefined.
+    #[arithmetic(unchecked)]
+    pub fn ln(self) -> Fixed<18> {
+        assert!(self.raw != 0)
+        // Solady's lnWad takes an int256; larger inputs are out of its domain.
+        if self.raw > I256_MAX {
+            super::panic_code(PANIC_OVERFLOW)
+        }
+
+        // r = 255 - log2(x); the input is not converted from 1e18 to 2^96
+        // because ln(x * C) = ln(x) + ln(C) is added back at the end.
+        let r = leading_zeros(self.raw)
+
+        // Reduce the range of x to (1, 2) * 2^96: ln(2^k * x) = k * ln(2) + ln(x).
+        let x: i256 = i256::from_word((self.raw << r) >> 159)
+
+        // (8, 8)-term rational approximation; `p` is monic and left in the
+        // 2^192 basis.
+        let mut p = ((((((3273285459638523848632254066296 + x) * x) >> 96)
+                    + 24828157081833163892658089445524) *
+                x)
+            >> 96)
+        p = (((p + 43456485725739037958740375743393) * x) >> 96) - 11111509109440967052023855526967
+        p = ((p * x) >> 96) - 45023709667254063763336534515857
+        p = ((p * x) >> 96) - 14706773417378608786704636184526
+        p = p * x - (795164235651350426258249787498 << 96)
+
+        let mut q = 5573035233440673466300451813936 + x
+        q = 71694874799317883764090561454958 + ((x * q) >> 96)
+        q = 283447036172924575727196451306956 + ((x * q) >> 96)
+        q = 401686690394027663651624208769553 + ((x * q) >> 96)
+        q = 204048457590392012362485061816622 + ((x * q) >> 96)
+        q = 31853899698501571402653359427138 + ((x * q) >> 96)
+        q = 909429971244387300277376558375 + ((x * q) >> 96)
+
+        // p / q is in (0, 0.125) * 2^96. Multiply by the scale factor
+        // s * 5^18 * 2^96, add k * ln(2) and ln(2^96 / 1e18) in the
+        // 5^18 * 2^192 basis, then convert to 1e18.
+        let mut l = (p / q) * 1677202110996718588342820967067443963516166
+        let k: i256 = 159 - i256::from_word(r)
+        l = 16597577552685614221487285958193947469193820559219878177908093499208371 * k + l
+        l = 600920179829731861736702779321621459595472258049074101567377883020018308 + l
+        Fixed { raw: l >> 174 }
+    }
+
+    /// `self^y` for a fractional exponent, Solady's `powWad`:
+    /// `exp(ln(self) * y)`. An approximation; fails for a zero base.
+    pub fn powf(self, _ y: Fixed<18>) -> UFixed<18> {
+        Fixed { raw: signed_mul_div(self.ln().raw, y.raw, 1000000000000000000) }.exp()
+    }
+}

@@ -26,12 +26,12 @@ pub type LayoutBundlePath = Vec<LayoutBundlePathStep>;
 ///
 /// `EffectTarget` is an opaque view transition, not a physical field. Keeping
 /// it explicit prevents a handle's representation roots from aliasing the
-/// roots of the logical value reached through `EffectHandle::Target`.
+/// roots of the logical value reached through `EffectHandle::Target`. There
+/// is no index step: array elements never carry layout roots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum LayoutEvidencePathStep {
     Field(u16),
     Variant(u16),
-    Index,
     EffectTarget,
 }
 
@@ -46,9 +46,9 @@ pub struct LayoutRootPort {
     pub ordinal: usize,
 }
 
-/// The stable structural identity of one physical layout-map component.
+/// The stable structural identity of one physical layout-root component.
 ///
-/// `value_path` identifies the physical occurrence family in the runtime value
+/// `value_path` identifies the physical occurrence in the runtime value
 /// shape. `root` identifies the root within the terminal const argument. The
 /// instantiated const value is intentionally absent: two components do not
 /// become interchangeable merely because specialization gives them equal
@@ -61,7 +61,7 @@ pub struct LayoutPortKey {
 
 /// A finite back-edge in the semantic layout-view graph.
 ///
-/// Every component below `alias` is the same runtime map as the corresponding
+/// Every component below `alias` is the same runtime root as the corresponding
 /// component below `canonical`. This represents recursive effect-target views
 /// without unrolling an infinite family of path-prefixed ABI components.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
@@ -70,10 +70,18 @@ pub struct LayoutViewAlias {
     pub canonical: LayoutEvidencePath,
 }
 
+/// A value shape that no finite layout-evidence interface can represent.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub struct NonRegularLayoutViewCycle {
-    pub canonical: LayoutEvidencePath,
-    pub recursive: LayoutEvidencePath,
+pub enum LayoutBundleUnrepresentable {
+    /// A recursive effect-handle target view changes its layout arguments.
+    NonRegularViewCycle {
+        canonical: LayoutEvidencePath,
+        recursive: LayoutEvidencePath,
+    },
+    /// Every element of an array shares one element type, so the elements
+    /// cannot carry distinct layout roots. Arrays of root-bearing values are
+    /// rejected rather than given per-element roots.
+    RootArray { array: LayoutEvidencePath },
 }
 
 /// One component port in the complete callable input interface.
@@ -91,29 +99,6 @@ pub struct CallableLayoutPort {
 pub enum CallableLayoutParamPort {
     Input(CallableLayoutPort),
     OutputWitness(LayoutPortKey),
-}
-
-/// The exact semantic type of a layout map.
-///
-/// Equal rank is insufficient: dimensions determine legal projections and the
-/// scalar type determines arithmetic and ABI representation.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub struct LayoutMapTy<'db> {
-    pub scalar_ty: TyId<'db>,
-    pub dimensions: Vec<usize>,
-}
-
-impl<'db> LayoutMapTy<'db> {
-    pub fn rank(&self) -> usize {
-        self.dimensions.len()
-    }
-
-    pub fn projected(&self, axes: usize) -> Option<Self> {
-        self.dimensions.get(axes..).map(|dimensions| Self {
-            scalar_ty: self.scalar_ty,
-            dimensions: dimensions.to_vec(),
-        })
-    }
 }
 
 impl LayoutPortKey {
@@ -175,21 +160,20 @@ pub enum LayoutBundleComponentTransport {
     Runtime,
 }
 
-/// One physical runtime-root transport, possibly serving an indexed family.
+/// One physical runtime-root transport.
 ///
-/// A component has exactly one occurrence family. Distinct value paths never
+/// A component has exactly one occurrence. Distinct value paths never
 /// share a descriptor merely because generic substitution makes their const
 /// arguments equal: value transformations can change either path
 /// independently. `port` retains physical occurrence identity,
 /// `declaration` relates components through the callable's declared type, and
-/// `representative` is an optional instantiated scalar used only for
-/// allocation lookup and explicit const resolution. Ranked maps whose members
-/// specialize to different scalar values deliberately have no representative.
+/// `representative` is the instantiated root key, used only for allocation
+/// lookup and explicit const resolution.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct LayoutBundleComponent<'db> {
     pub port: LayoutPortKey,
     pub declaration: LayoutBundleComponentDeclaration<'db>,
-    pub representative: Option<LayoutBundleComponentKey<'db>>,
+    pub representative: LayoutBundleComponentKey<'db>,
     pub ty: TyId<'db>,
     /// Declaration-level const parameters whose exact scalar value is
     /// supplied by this port. These identities survive specialization:
@@ -199,34 +183,14 @@ pub struct LayoutBundleComponent<'db> {
     /// A dependency is deliberately not a supplied value: `{ROOT + 1}` cannot
     /// reify `ROOT` at runtime.
     pub dependent_const_params: Vec<TyId<'db>>,
-    /// Complete enclosing array dimensions for `port.value_path`.
-    pub dimensions: Vec<usize>,
 }
 
 impl<'db> LayoutBundleComponent<'db> {
-    /// Number of runtime axes carried after the component's base.
-    ///
-    /// Strides are evidence, not derivable schema data: enum overlay can widen
-    /// allocator geometry, array repetition introduces a zero stride, and
-    /// arbitrary value transformations may require a dense map.
-    pub fn rank(&self) -> usize {
-        self.dimensions.len()
-    }
-
-    pub fn map_ty(&self) -> LayoutMapTy<'db> {
-        LayoutMapTy {
-            scalar_ty: self.ty,
-            dimensions: self.dimensions.clone(),
-        }
-    }
-
     /// Whether this component's formal root is available from `candidate`
     /// inside the same callable declaration. Exact declaration identity is
     /// required for explicit const expressions: sharing dependencies does not
     /// make `ROOT` and `ROOT + 1` the same layout value. Formal-parameter
     /// fallback exists only for structural roots re-anchored at a boundary.
-    /// Map shape is deliberately ignored because the body may project a
-    /// ranked input before returning it.
     pub fn formally_derivable_from(&self, candidate: &Self) -> bool {
         self.declaration == candidate.declaration
             || (matches!(
@@ -247,20 +211,11 @@ impl<'db> LayoutBundleComponent<'db> {
 pub struct LayoutBundleSchema<'db> {
     pub components: Vec<LayoutBundleComponent<'db>>,
     pub view_aliases: Vec<LayoutViewAlias>,
-    pub non_regular_view_cycle: Option<NonRegularLayoutViewCycle>,
+    pub unrepresentable: Option<LayoutBundleUnrepresentable>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum LayoutBundleSchemaError {
-    InvalidOccurrenceRank {
-        component: LayoutBundleComponentId,
-        path_indices: usize,
-        dimensions: usize,
-    },
-    EmptyDimension {
-        component: LayoutBundleComponentId,
-        axis: usize,
-    },
     DuplicateComponent {
         first: LayoutBundleComponentId,
         second: LayoutBundleComponentId,
@@ -288,36 +243,32 @@ pub enum LayoutBundleSchemaError {
         first: usize,
         second: usize,
     },
-    NonRegularViewCycle {
-        canonical: LayoutEvidencePath,
-        recursive: LayoutEvidencePath,
-    },
+    Unrepresentable(LayoutBundleUnrepresentable),
 }
 
 impl<'db> LayoutBundleSchema<'db> {
+    /// Whether the value carries no layout. An unrepresentable schema is never
+    /// empty: it records a value shape that cannot cross a callable boundary.
+    pub fn is_empty(&self) -> bool {
+        self.components.is_empty() && self.unrepresentable.is_none()
+    }
+
     pub fn validate(&self) -> Result<(), LayoutBundleSchemaError> {
-        if let Some(cycle) = &self.non_regular_view_cycle {
-            return Err(LayoutBundleSchemaError::NonRegularViewCycle {
-                canonical: cycle.canonical.clone(),
-                recursive: cycle.recursive.clone(),
-            });
+        if let Some(unrepresentable) = &self.unrepresentable {
+            return Err(LayoutBundleSchemaError::Unrepresentable(
+                unrepresentable.clone(),
+            ));
         }
         for (idx, alias) in self.view_aliases.iter().enumerate() {
             if alias.alias.len() <= alias.canonical.len()
                 || !alias.alias.starts_with(&alias.canonical)
-                || alias
-                    .alias
-                    .iter()
-                    .filter(|step| matches!(step, LayoutEvidencePathStep::Index))
-                    .count()
-                    != alias
-                        .canonical
-                        .iter()
-                        .filter(|step| matches!(step, LayoutEvidencePathStep::Index))
-                        .count()
             {
                 return Err(LayoutBundleSchemaError::InvalidViewAlias { alias: idx });
             }
+        }
+        // Establish every rule's decreasing measure before following any rule.
+        // A later malformed rule can otherwise trap an earlier target walk.
+        for (idx, alias) in self.view_aliases.iter().enumerate() {
             if let Some(first) = self.view_aliases[..idx]
                 .iter()
                 .position(|other| other.alias == alias.alias)
@@ -329,36 +280,15 @@ impl<'db> LayoutBundleSchema<'db> {
             }) {
                 return Err(LayoutBundleSchemaError::OverlappingViewAlias { first, second: idx });
             }
-            if self.canonicalize_view_path(&alias.canonical) != alias.canonical {
+        }
+        for (idx, alias) in self.view_aliases.iter().enumerate() {
+            if self.canonicalize_view_path(&alias.canonical)? != alias.canonical {
                 return Err(LayoutBundleSchemaError::InvalidViewAlias { alias: idx });
             }
         }
         let mut component_ports = FxHashMap::default();
         for (idx, component) in self.components.iter().enumerate() {
             let id = LayoutBundleComponentId::from_index(idx);
-            let path_indices = component
-                .port
-                .value_path
-                .iter()
-                .filter(|step| matches!(step, LayoutEvidencePathStep::Index))
-                .count();
-            if path_indices != component.dimensions.len() {
-                return Err(LayoutBundleSchemaError::InvalidOccurrenceRank {
-                    component: id,
-                    path_indices,
-                    dimensions: component.dimensions.len(),
-                });
-            }
-            if let Some(axis) = component
-                .dimensions
-                .iter()
-                .position(|dimension| *dimension == 0)
-            {
-                return Err(LayoutBundleSchemaError::EmptyDimension {
-                    component: id,
-                    axis,
-                });
-            }
             if let Some(first) = component_ports.insert(&component.port, id) {
                 return Err(LayoutBundleSchemaError::DuplicateComponent { first, second: id });
             }
@@ -387,7 +317,7 @@ impl<'db> LayoutBundleSchema<'db> {
             {
                 return Err(LayoutBundleSchemaError::InvalidSuppliedConstParam { component: id });
             }
-            if self.canonicalize_view_path(&component.port.value_path) != component.port.value_path
+            if self.canonicalize_view_path(&component.port.value_path)? != component.port.value_path
             {
                 return Err(LayoutBundleSchemaError::NonCanonicalComponent { component: id });
             }
@@ -395,20 +325,31 @@ impl<'db> LayoutBundleSchema<'db> {
         Ok(())
     }
 
-    pub fn canonicalize_view_path(&self, path: &[LayoutEvidencePathStep]) -> LayoutEvidencePath {
+    /// Canonicalizes with at most the original path length's worth of rewrites.
+    /// Each selected rule must strictly shorten the path, even for raw schemas.
+    /// Full schema validation remains the publication boundary; this check does
+    /// not revalidate the entire alias table on each projection.
+    pub fn canonicalize_view_path(
+        &self,
+        path: &[LayoutEvidencePathStep],
+    ) -> Result<LayoutEvidencePath, LayoutBundleSchemaError> {
         let mut path = path.to_vec();
         loop {
-            let Some(alias) = self
+            let Some((idx, alias)) = self
                 .view_aliases
                 .iter()
-                .filter(|alias| path.starts_with(&alias.alias))
-                .max_by_key(|alias| alias.alias.len())
+                .enumerate()
+                .filter(|(_, alias)| path.starts_with(&alias.alias))
+                .max_by_key(|(_, alias)| alias.alias.len())
             else {
-                return path;
+                return Ok(path);
             };
-            let mut canonical = alias.canonical.clone();
-            canonical.extend_from_slice(&path[alias.alias.len()..]);
-            path = canonical;
+            if alias.alias.len() <= alias.canonical.len()
+                || !alias.alias.starts_with(&alias.canonical)
+            {
+                return Err(LayoutBundleSchemaError::InvalidViewAlias { alias: idx });
+            }
+            path.drain(alias.canonical.len()..alias.alias.len());
         }
     }
 
@@ -422,8 +363,8 @@ impl<'db> LayoutBundleSchema<'db> {
         &self,
         port: &LayoutPortKey,
         prefix: &[LayoutEvidencePathStep],
-    ) -> Option<LayoutPortKey> {
-        let prefix = self.canonicalize_view_path(prefix);
+    ) -> Result<Option<LayoutPortKey>, LayoutBundleSchemaError> {
+        let prefix = self.canonicalize_view_path(prefix)?;
         let direct = port.value_path.strip_prefix(prefix.as_slice());
         let aliased = self
             .view_aliases
@@ -435,20 +376,23 @@ impl<'db> LayoutBundleSchema<'db> {
                 path.strip_prefix(prefix.as_slice()).map(<[_]>::to_vec)
             })
             .min_by_key(Vec::len);
-        direct
+        Ok(direct
             .map(<[_]>::to_vec)
             .or(aliased)
             .map(|value_path| LayoutPortKey {
                 value_path,
                 root: port.root,
-            })
+            }))
     }
 
-    pub fn canonicalize_port(&self, port: &LayoutPortKey) -> LayoutPortKey {
-        LayoutPortKey {
-            value_path: self.canonicalize_view_path(&port.value_path),
+    pub fn canonicalize_port(
+        &self,
+        port: &LayoutPortKey,
+    ) -> Result<LayoutPortKey, LayoutBundleSchemaError> {
+        Ok(LayoutPortKey {
+            value_path: self.canonicalize_view_path(&port.value_path)?,
             root: port.root,
-        }
+        })
     }
 
     pub fn indexed_components(
@@ -494,7 +438,7 @@ impl LayoutBundleTransport {
                 .map(|component| {
                     if matches!(
                         component.representative,
-                        Some(LayoutBundleComponentKey::Static(_))
+                        LayoutBundleComponentKey::Static(_)
                     ) {
                         LayoutBundleComponentTransport::CompileTime
                     } else {
@@ -555,7 +499,7 @@ impl<'db> LayoutBundleInterface<'db> {
             if matches!(transport, LayoutBundleComponentTransport::CompileTime)
                 && !matches!(
                     component.representative,
-                    Some(LayoutBundleComponentKey::Static(_))
+                    LayoutBundleComponentKey::Static(_)
                 )
             {
                 return Err(LayoutBundleInterfaceError::InvalidCompileTimeComponent {
@@ -611,40 +555,39 @@ impl<'db> LayoutBundleInterface<'db> {
         source: &LayoutBundleSchema<'db>,
         view: &[LayoutEvidencePathStep],
         mut compatible: impl FnMut(&LayoutBundleComponent<'db>, &LayoutBundleComponent<'db>) -> bool,
-    ) -> Option<LayoutBundleViewMapping> {
+    ) -> Result<Option<LayoutBundleViewMapping>, LayoutBundleSchemaError> {
         let mut sources = vec![None; self.schema.components.len()];
         for (target, component) in self.runtime_components() {
-            let mut candidates = source
-                .indexed_components()
-                .filter(|(_, candidate)| {
-                    compatible(component, candidate)
-                        && source.projected_port(&candidate.port, view).as_ref()
-                            == Some(&component.port)
-                })
-                .map(|(source, _)| source);
-            let source = candidates.next()?;
-            if candidates.next().is_some() {
-                return None;
+            let mut selected = None;
+            for (id, candidate) in source.indexed_components() {
+                if compatible(component, candidate)
+                    && source.projected_port(&candidate.port, view)?.as_ref()
+                        == Some(&component.port)
+                    && selected.replace(id).is_some()
+                {
+                    return Ok(None);
+                }
             }
-            sources[target.index()] = Some(source);
+            if selected.is_none() {
+                return Ok(None);
+            }
+            sources[target.index()] = selected;
         }
-        Some(LayoutBundleViewMapping { sources })
+        Ok(Some(LayoutBundleViewMapping { sources }))
     }
 
     /// Maps a type-checked value projection to a specialized callable input.
     ///
     /// The semantic type relation already proves that the value may cross the
     /// boundary. Substitution and structural-hole re-anchoring can change root
-    /// declarations, so exact port and map shape are the remaining transport
+    /// declarations, so exact port and root type are the remaining transport
     /// identity at this boundary.
     pub fn runtime_call_mapping(
         &self,
         source: &LayoutBundleSchema<'db>,
         view: &[LayoutEvidencePathStep],
-    ) -> Option<LayoutBundleViewMapping> {
-        self.runtime_mapping(source, view, |target, candidate| {
-            target.map_ty() == candidate.map_ty()
-        })
+    ) -> Result<Option<LayoutBundleViewMapping>, LayoutBundleSchemaError> {
+        self.runtime_mapping(source, view, |target, candidate| target.ty == candidate.ty)
     }
 
     /// Maps every runtime target component to its unique source component in
@@ -657,9 +600,9 @@ impl<'db> LayoutBundleInterface<'db> {
         &self,
         source: &LayoutBundleSchema<'db>,
         view: &[LayoutEvidencePathStep],
-    ) -> Option<LayoutBundleViewMapping> {
+    ) -> Result<Option<LayoutBundleViewMapping>, LayoutBundleSchemaError> {
         self.runtime_mapping(source, view, |target, candidate| {
-            target.map_ty() == candidate.map_ty() && target.formally_derivable_from(candidate)
+            target.ty == candidate.ty && target.formally_derivable_from(candidate)
         })
     }
 }

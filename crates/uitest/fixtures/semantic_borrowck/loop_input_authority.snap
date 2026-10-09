@@ -1,0 +1,21 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/loop_input_authority.fe
+---
+error[16-0001]: borrow conflict in `fn theta_held`
+   ┌─ loop_input_authority.fe:68:17
+   │
+64 │             let held = mut state[x]
+   │                        ------------ borrow created here
+   ·
+68 │                 state[x + 5 * y] ^= delta
+   │                 ^^^^^^^^^^^^^^^^^^^^^^^^^ cannot immutably borrow this place while a mutable borrow is active
+
+error[16-0001]: borrow conflict in `fn theta_aliased`
+   ┌─ loop_input_authority.fe:86:44
+   │
+86 │                 swap(mut state[x + 5 * y], mut state[x])
+   │                      --------------------  ^^^^^^^^^^^^ cannot mutably borrow this place while a mut borrow is active
+   │                      │
+   │                      borrow created here

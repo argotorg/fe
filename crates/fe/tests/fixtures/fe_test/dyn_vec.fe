@@ -1,0 +1,228 @@
+// `DynVec<T>` builds ABI arrays of dynamic elements. Expected byte layouts
+// come from `cast abi-encode`, e.g. `cast abi-encode "f(bytes[])" "[0xaa,0x,0x11..11]"`.
+use core::ptr::{self, MemBuffer, MemSpan}
+use std::abi::{Bytes, DynArray, DynVec, MemVec, dyn_array_from}
+use std::evm::{Address, Call, Ctx, Evm, copy_returndata, encode_msg_calldata}
+
+// Not `Copy`: elements are moved into the builder.
+#[abi]
+pub struct Entry {
+    pub id: u256,
+    pub data: Bytes,
+}
+
+msg Build {
+    #[selector = 0x01]
+    Parts {} -> DynArray<Bytes>,
+    #[selector = 0x02]
+    Nested {} -> DynArray<DynArray<u256>>,
+    #[selector = 0x03]
+    Entries {} -> DynArray<Entry>,
+    #[selector = 0x04]
+    NoParts {} -> DynArray<Bytes>,
+}
+
+pub contract Builder {
+    recv Build {
+        Parts {} -> DynArray<Bytes> {
+            bytes_parts()
+        }
+        Nested {} -> DynArray<DynArray<u256>> {
+            nested()
+        }
+        Entries {} -> DynArray<Entry> {
+            entries()
+        }
+        NoParts {} -> DynArray<Bytes> {
+            DynVec<Bytes>::new().to_dyn_array()
+        }
+    }
+}
+
+const ONES: u256 = 0x1111111111111111111111111111111111111111111111111111111111111111
+
+/// `bytes[]` `[0xaa, 0x, 0x11..11]`
+fn bytes_parts() -> DynArray<Bytes> {
+    let mut parts = DynVec<Bytes>::new()
+    parts.push(Bytes::from_word_prefix(word: 0xaa << 248, len: 1))
+    parts.push(Bytes::empty())
+    parts.push(Bytes::from_word_prefix(word: ONES, len: 32))
+    parts.to_dyn_array()
+}
+
+/// `uint256[][]` `[[1,2],[],[3]]`, filled out of order.
+fn nested() -> DynArray<DynArray<u256>> {
+    let mut rows = DynVec<DynArray<u256>>::filled(3, value: DynArray::empty())
+    rows.set(index: 2, value: dyn_array_from([3]))
+    rows.set(index: 0, value: dyn_array_from([1, 2]))
+    rows.to_dyn_array()
+}
+
+/// `(uint256,bytes)[]` `[(7,0xbeef),(8,0x)]`
+fn entries() -> DynArray<Entry> {
+    let mut out = DynVec<Entry>::new()
+    out.push(Entry { id: 7, data: Bytes::from_word_prefix(word: 0xbeef << 240, len: 2) })
+    out.push(Entry { id: 8, data: Bytes::empty() })
+    out.to_dyn_array()
+}
+
+fn assert_words<const N: usize>(_ data: MemSpan, _ expected: [u256; N]) {
+    assert(data.len() == (N as u256) * 32)
+    let mut i: usize = 0
+    while i < N {
+        assert(data.word_at((i as u256) * 32) == expected[i])
+        i += 1
+    }
+}
+
+/// Checks the array payload (without the outer `0x20` offset word).
+fn assert_payload<T, const N: usize>(_ array: DynArray<T>, _ expected: [u256; N]) {
+    assert_words(array.encoded_span(), expected)
+}
+
+#[test]
+fn bytes_elements() {
+    let parts = bytes_parts()
+    assert_payload(parts, [3, 0x60, 0xa0, 0xc0, 1, 0xaa << 248, 0, 32, ONES])
+    assert(parts.get(0).byte_at(0) == 0xaa)
+    assert(parts.get(1).len() == 0)
+    assert(parts.get(2).len() == 32)
+}
+
+#[test]
+fn nested_array_elements() {
+    let rows = nested()
+    assert_payload(rows, [3, 0x60, 0xc0, 0xe0, 2, 1, 2, 0, 1, 3])
+    assert(rows.get(0).get(1) == 2)
+    assert(rows.get(1).is_empty())
+    assert(rows.get(2).get(0) == 3)
+}
+
+#[test]
+fn abi_struct_elements() {
+    let out = entries()
+    assert_payload(out, [2, 0x40, 0xc0, 7, 0x40, 2, 0xbeef << 240, 8, 0x40, 0])
+    assert(out.get(0).data.byte_at(1) == 0xef)
+    assert(out.get(1).id == 8)
+}
+
+#[test]
+fn empty_builders() {
+    let none = DynVec<Bytes>::new()
+    assert(none.is_empty())
+    let array = none.to_dyn_array()
+    assert(array.is_empty())
+    assert_payload(array, [0])
+
+    let zero = DynVec<Bytes>::filled(0, value: Bytes::from_word_prefix(word: 0xaa << 248, len: 1))
+    assert(zero.len() == 0)
+    assert_payload(zero.to_dyn_array(), [0])
+}
+
+#[test]
+fn filled_shares_one_encoding() {
+    let mut parts = DynVec<Bytes>::filled(2, value: Bytes::from_word_prefix(word: 0xaa << 248, len: 1))
+    assert_payload(parts.to_dyn_array(), [2, 0x40, 0x80, 1, 0xaa << 248, 1, 0xaa << 248])
+    // Replacing one slot leaves the other untouched.
+    parts.set(index: 1, value: Bytes::empty())
+    assert_payload(parts.to_dyn_array(), [2, 0x40, 0x80, 1, 0xaa << 248, 0])
+}
+
+#[test]
+fn push_grows_past_initial_capacity() {
+    let mut rows = DynVec<DynArray<u256>>::new()
+    let mut i: u256 = 0
+    while i < 9 {
+        rows.push(dyn_array_from([i, i * 10]))
+        i += 1
+    }
+    assert(rows.len() == 9)
+    rows.set(index: 4, value: DynArray::empty())
+    let array = rows.to_dyn_array()
+    assert(array.len() == 9)
+    assert(array.encoded_size() == 32 + 9 * 32 + 8 * 96 + 32)
+    assert(array.get(0).get(0) == 0)
+    assert(array.get(4).is_empty())
+    assert(array.get(8).get(1) == 80)
+    // Head offsets are canonical: tails follow each other without gaps.
+    assert(array.encoded_span().word_at(32) == 9 * 32)
+    assert(array.encoded_span().word_at(32 + 5 * 32) == 9 * 32 + 4 * 96 + 32)
+}
+
+#[test]
+fn to_dyn_array_is_a_snapshot() {
+    let mut parts = DynVec<Bytes>::new()
+    parts.push(Bytes::from_word_prefix(word: 0xaa << 248, len: 1))
+    let first = parts.to_dyn_array()
+    parts.set(index: 0, value: Bytes::from_word_prefix(word: 0xbb << 248, len: 1))
+    parts.push(Bytes::empty())
+    assert(first.len() == 1)
+    assert(first.get(0).byte_at(0) == 0xaa)
+    let second = parts.to_dyn_array()
+    assert(second.len() == 2)
+    assert(second.get(0).byte_at(0) == 0xbb)
+}
+
+#[test]
+fn static_elements_match_mem_vec() {
+    let mut dynamic = DynVec<u256>::filled(2, value: 5)
+    dynamic.push(6)
+    dynamic.set(index: 0, value: 4)
+    let mut fixed: MemVec<u256> = MemVec::zeroed(3)
+    fixed.set(index: 0, value: 4)
+    fixed.set(index: 1, value: 5)
+    fixed.set(index: 2, value: 6)
+    let a = dynamic.to_dyn_array()
+    let b = fixed.to_dyn_array()
+    assert_payload(a, [3, 4, 5, 6])
+    assert(a.encoded_size() == b.encoded_size())
+}
+
+#[test(should_revert, panic = 0x32)]
+fn set_out_of_range_panics() {
+    let mut parts = DynVec<Bytes>::filled(2, value: Bytes::empty())
+    parts.set(index: 2, value: Bytes::empty())
+}
+
+#[test(should_revert, panic = 0x32)]
+fn set_on_empty_panics() {
+    let mut parts = DynVec<Bytes>::new()
+    parts.set(index: 0, value: Bytes::empty())
+}
+
+fn call_returndata(_ addr: Address, _ args: MemBuffer) -> MemBuffer
+uses (call: mut Call, ctx: Ctx)
+{
+    let mut ret = MemBuffer::empty()
+    let outcome = call.raw_call(addr, gas: ctx.gas(), value: 0, args: args.span(), ret: mut ret)
+    assert(outcome.success())
+    copy_returndata()
+}
+
+/// Returned from a `recv` arm, the arrays encode exactly like Solidity's
+/// `abi.encode` of the same values (`cast abi-encode` output).
+#[test]
+fn returndata_matches_solidity_encoding()
+uses (evm: mut Evm, call: mut Call, ctx: Ctx)
+{
+    let addr = evm.create2<Builder>(value: 0, args: (), salt: 0)
+    assert_words(
+        call_returndata(addr, encode_msg_calldata(Build::Parts {})).span(),
+        [0x20, 3, 0x60, 0xa0, 0xc0, 1, 0xaa << 248, 0, 32, ONES],
+    )
+    assert_words(
+        call_returndata(addr, encode_msg_calldata(Build::Nested {})).span(),
+        [0x20, 3, 0x60, 0xc0, 0xe0, 2, 1, 2, 0, 1, 3],
+    )
+    assert_words(
+        call_returndata(addr, encode_msg_calldata(Build::Entries {})).span(),
+        [0x20, 2, 0x40, 0xc0, 7, 0x40, 2, 0xbeef << 240, 8, 0x40, 0],
+    )
+    assert_words(call_returndata(addr, encode_msg_calldata(Build::NoParts {})).span(), [0x20, 0])
+
+    // And they decode back through the typed call path.
+    let parts: DynArray<Bytes> = evm.call(addr, gas: 1000000, value: 0, message: Build::Parts {})
+    assert(parts.get(2).len() == 32)
+    let entries: DynArray<Entry> = evm.call(addr, gas: 1000000, value: 0, message: Build::Entries {})
+    assert(entries.get(0).data.len() == 2)
+}

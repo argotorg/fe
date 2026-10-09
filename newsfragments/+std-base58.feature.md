@@ -1,0 +1,1 @@
+Added Bitcoin base58 to `core::text`: `base58` encodes bytes and `decode_base58` decodes text, mapping leading zero bytes to `1` like OpenZeppelin's `Base58`. Decoding returns `None` for characters outside the alphabet.

@@ -1,0 +1,1 @@
+An ingot inside the directory of an ingot it depends on, such as a tool in `tools/` of a library, no longer breaks the library: its items, including those the library re-exports with `pub use`, now resolve as they do for an ingot next to it.

@@ -1,5 +1,8 @@
 //! Typed external storage identities, including followed and widened referents.
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -272,16 +275,9 @@ pub(super) struct FeedbackSlot<'a, 'db> {
 /// choice or runtime value computed outside it, still separate clauses.
 #[derive(Clone, Copy)]
 pub(super) struct FeedbackRepeats<'a, 'db> {
+    pub guards: &'a RefCell<FxHashMap<(Guard<'db>, Guard<'db>), Option<Guard<'db>>>>,
     pub index: &'a dyn Fn(IndexExpr<'db>) -> bool,
     pub occurrence: &'a dyn Fn(ValueOccurrence) -> bool,
-}
-
-/// Only facts that hold in every execution separate a recomputed base from a
-/// derived one. Forgetting the repeated ones can only admit more.
-fn feedback_guard<'db>(guard: &Guard<'db>, repeats: FeedbackRepeats<'_, 'db>) -> Guard<'db> {
-    guard
-        .forget_occurrences(|occurrence| (repeats.occurrence)(occurrence))
-        .forget_indices(|index| (repeats.index)(index))
 }
 
 /// A clause guard restricted to the domain of its structural leaf, such as
@@ -293,16 +289,30 @@ pub(super) fn feedback_clause_guard<'db>(
     domain: &Guard<'db>,
     repeats: FeedbackRepeats<'_, 'db>,
 ) -> Option<Guard<'db>> {
-    let guard = if clause
-        .scope()
-        .existential_extension_of(domain.scope())
-        .is_some()
-    {
-        clause.and(&domain.in_scope(clause.scope()))?
-    } else {
-        clause.clone()
-    };
-    Some(feedback_guard(&guard, repeats))
+    // Slots and payloads share guards, and both predicates are fixed for one
+    // feedback edge. Reuse the intersection and projection across all of them.
+    repeats
+        .guards
+        .borrow_mut()
+        .entry((clause.clone(), domain.clone()))
+        .or_insert_with(|| {
+            let guard = if clause
+                .scope()
+                .existential_extension_of(domain.scope())
+                .is_some()
+            {
+                clause.and(&domain.in_scope(clause.scope()))?
+            } else {
+                clause.clone()
+            };
+            // Only facts that hold in every execution can separate addresses.
+            Some(
+                guard
+                    .forget_occurrences(|occurrence| (repeats.occurrence)(occurrence))
+                    .forget_indices(|index| (repeats.index)(index)),
+            )
+        })
+        .clone()
 }
 
 /// Whether aligned selectors of the current clause (left) and an ancestor's
@@ -416,35 +426,9 @@ impl<'db> ClobberCondition<'db> {
         }
         target.source.erase_clobber_conditions();
         written.source.erase_clobber_conditions();
-        // Bound raw write selectors by their containing object, but retain
-        // the clobbered cell: a callee's separation precondition may protect
-        // that cell without protecting every field in its containing object.
-        // If the written source is unchanged, its extent stays meaningful too.
-        // A widened written source loses its original offset and extent.
-        let object = |place: &SourceExpr<'db>| {
-            let mut place = place.clone();
-            while place.source.dereferences.is_empty()
-                && !place.source.reachable
-                && let ExternalOrigin::Memory { base, .. } = &place.source.origin
-            {
-                place = (**base).clone();
-            }
-            place.path = RegionPath::default();
-            place.views = Default::default();
-            place
-        };
-        let (target_object, written_object) = (object(&target), object(&written));
-        if written_object.source.in_raw_memory() && !target_object.source.in_raw_memory() {
-            return Self {
-                target,
-                extent: if written_object == written {
-                    extent
-                } else {
-                    AccessExtent::Unknown
-                },
-                written: written_object,
-            };
-        }
+        // Keep the actual write footprint so a callee's separation requirement
+        // can refute this overwrite at its call sites.
+
         Self {
             target,
             written,
@@ -521,7 +505,7 @@ impl<'db> ExternalSource<'db> {
 
     /// The corruption condition under which this address, or the base it
     /// is offset from, exists.
-    fn clobber_dependency(&self) -> Option<&ClobberCondition<'db>> {
+    pub(super) fn clobber_dependency(&self) -> Option<&ClobberCondition<'db>> {
         let mut dependency = self;
         loop {
             if let Some(condition) = &dependency.clobber {
@@ -1031,70 +1015,43 @@ impl<'db> ExternalSource<'db> {
     }
 
     pub fn substitute(&self, db: &'db dyn HirAnalysisDb, subst: &IndexSubst<'db>) -> Self {
-        let mut result = self.rename_indices(subst);
-        result.contract = self.contract.substitute(db, subst);
-        result.clobber = self.clobber.as_ref().map(|clobber| {
-            Box::new(ClobberCondition {
-                target: clobber.target.substitute(db, subst),
-                written: clobber.written.substitute(db, subst),
-                extent: clobber.extent.substitute(subst),
-            })
-        });
-        match &self.origin {
-            ExternalOrigin::Unknown {
-                contract,
-                occurrence,
-                arguments,
-                provenance,
-            } => {
-                result.origin = ExternalOrigin::Unknown {
-                    contract: contract.substitute(db, subst),
-                    occurrence: *occurrence,
-                    arguments: arguments.iter().map(|index| subst.apply(*index)).collect(),
-                    provenance: *provenance,
-                };
-            }
-            ExternalOrigin::OpaqueHandle(handle) => {
-                result.origin = ExternalOrigin::OpaqueHandle(handle.substitute(db, subst))
-            }
-            // The interned binding, and so its storage classification, is unchanged.
-            ExternalOrigin::Provider {
-                provider,
-                target_ty,
-                storage,
-            } => {
-                result.origin = ExternalOrigin::Provider {
-                    provider: *provider,
-                    target_ty: target_ty.fold_with(db, &mut subst.clone()),
-                    storage: *storage,
-                }
-            }
-            ExternalOrigin::Allocation(handle) => {
-                result.origin = ExternalOrigin::Allocation(handle.substitute(db, subst));
-            }
-            ExternalOrigin::Memory {
-                base,
-                offset,
-                target_ty,
-            } => {
-                result.origin = ExternalOrigin::Memory {
-                    target_ty: target_ty.fold_with(db, &mut subst.clone()),
-                    base: Box::new(base.substitute(db, subst)),
-                    offset: match *offset {
-                        MemoryOffset::Element(ty, index) => MemoryOffset::Element(
-                            ty.fold_with(db, &mut subst.clone()),
-                            subst.apply(index),
-                        ),
-                        offset => offset,
-                    },
-                };
-            }
-            ExternalOrigin::Input(_) | ExternalOrigin::Local(_) | ExternalOrigin::OpaqueMemory => {}
-        }
-        result
+        self.map_indices(subst, Some(db))
     }
 
     pub(super) fn rename_indices(&self, subst: &IndexSubst<'db>) -> Self {
+        self.map_indices(subst, None)
+    }
+
+    /// Substitute each nested source once. Pure renaming leaves type and view
+    /// metadata intact; full substitution also folds it through the database.
+    fn map_indices(&self, subst: &IndexSubst<'db>, db: Option<&'db dyn HirAnalysisDb>) -> Self {
+        let map_ty = |ty: TyId<'db>| db.map_or(ty, |db| ty.fold_with(db, &mut subst.clone()));
+        let map_contract = |contract: ReferentContract<'db>| {
+            db.map_or(contract, |db| contract.substitute(db, subst))
+        };
+        let map_source = |source: &SourceExpr<'db>| SourceExpr {
+            source: source.source.map_indices(subst, db),
+            path: source.path.substitute(subst),
+            views: db.map_or_else(
+                || source.views.clone(),
+                |db| source.views.substitute(db, subst),
+            ),
+            invalidated: source.invalidated,
+        };
+        let map_handle = |handle: &OpaqueHandleRef<'db>| {
+            db.map_or_else(
+                || OpaqueHandleRef {
+                    contract: handle.contract,
+                    occurrence: handle.occurrence,
+                    arguments: handle
+                        .arguments
+                        .iter()
+                        .map(|index| subst.apply(*index))
+                        .collect(),
+                },
+                |db| handle.substitute(db, subst),
+            )
+        };
         let origin = match &self.origin {
             ExternalOrigin::Unknown {
                 contract,
@@ -1102,7 +1059,7 @@ impl<'db> ExternalSource<'db> {
                 arguments,
                 provenance,
             } => ExternalOrigin::Unknown {
-                contract: *contract,
+                contract: map_contract(*contract),
                 occurrence: *occurrence,
                 arguments: arguments.iter().map(|index| subst.apply(*index)).collect(),
                 provenance: *provenance,
@@ -1110,55 +1067,44 @@ impl<'db> ExternalSource<'db> {
             ExternalOrigin::Local(root) => ExternalOrigin::Local(*root),
             ExternalOrigin::OpaqueMemory => ExternalOrigin::OpaqueMemory,
             ExternalOrigin::Input(input) => ExternalOrigin::Input(input.substitute(subst)),
-            ExternalOrigin::Provider { .. } => self.origin.clone(),
+            // The interned binding, and so its storage classification, is unchanged.
+            ExternalOrigin::Provider {
+                provider,
+                target_ty,
+                storage,
+            } => ExternalOrigin::Provider {
+                provider: *provider,
+                target_ty: map_ty(*target_ty),
+                storage: *storage,
+            },
             ExternalOrigin::Memory {
                 base,
                 offset,
                 target_ty,
             } => ExternalOrigin::Memory {
-                target_ty: *target_ty,
-                base: Box::new(SourceExpr {
-                    invalidated: base.invalidated,
-                    source: base.source.rename_indices(subst),
-                    path: base.path.substitute(subst),
-                    views: base.views.clone(),
-                }),
+                target_ty: map_ty(*target_ty),
+                base: Box::new(map_source(base)),
                 offset: match *offset {
-                    MemoryOffset::Element(ty, index) => {
-                        MemoryOffset::Element(ty, subst.apply(index))
+                    MemoryOffset::Element(original_ty, index) => {
+                        MemoryOffset::Element(map_ty(original_ty), subst.apply(index))
                     }
                     offset => offset,
                 },
             },
-            ExternalOrigin::Allocation(handle) => ExternalOrigin::Allocation(OpaqueHandleRef {
-                arguments: handle
-                    .arguments
-                    .iter()
-                    .map(|index| subst.apply(*index))
-                    .collect(),
-                ..handle.clone()
-            }),
-            ExternalOrigin::OpaqueHandle(handle) => ExternalOrigin::OpaqueHandle(OpaqueHandleRef {
-                arguments: handle
-                    .arguments
-                    .iter()
-                    .map(|index| subst.apply(*index))
-                    .collect(),
-                ..handle.clone()
-            }),
+            ExternalOrigin::Allocation(original) => {
+                ExternalOrigin::Allocation(map_handle(original))
+            }
+            ExternalOrigin::OpaqueHandle(original) => {
+                ExternalOrigin::OpaqueHandle(map_handle(original))
+            }
         };
         Self {
             origin,
-            contract: self.contract,
+            contract: map_contract(self.contract),
             clobber: self.clobber.as_ref().map(|clobber| {
-                let rename = |source: &SourceExpr<'db>| SourceExpr {
-                    source: source.source.rename_indices(subst),
-                    path: source.path.substitute(subst),
-                    ..source.clone()
-                };
                 Box::new(ClobberCondition {
-                    target: rename(&clobber.target),
-                    written: rename(&clobber.written),
+                    target: map_source(&clobber.target),
+                    written: map_source(&clobber.written),
                     extent: clobber.extent.substitute(subst),
                 })
             }),
@@ -1609,7 +1555,7 @@ mod tests {
     };
 
     #[test]
-    fn clobber_coarsening_keeps_the_target_and_unchanged_write_extent() {
+    fn clobber_conditions_keep_the_target_and_written_range() {
         let db = HirAnalysisTestDb::default();
         let memory = HandleAddressSpace::Known(ProviderAddressSpace::Memory);
         let mut target = SourceExpr::whole(ExternalSource::input(
@@ -1639,10 +1585,10 @@ mod tests {
                 TyId::u8(&db),
                 MemoryOffset::Element(TyId::u8(&db), IndexExpr::Const(1)),
             ));
-            let widened = ClobberCondition::new(target.clone(), offset, extent);
-            assert_eq!(widened.target, target);
-            assert_eq!(widened.written, written);
-            assert_eq!(widened.extent, AccessExtent::Unknown);
+            let condition = ClobberCondition::new(target.clone(), offset.clone(), extent);
+            assert_eq!(condition.target, target);
+            assert_eq!(condition.written, offset);
+            assert_eq!(condition.extent, extent);
         }
     }
 }

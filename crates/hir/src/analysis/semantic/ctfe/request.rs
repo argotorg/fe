@@ -343,13 +343,14 @@ impl<'db> TyVisitable<'db> for TermProvenance<'db> {
     where
         V: TyVisitor<'db> + ?Sized,
     {
-        // The description already visits the full term. Frames carry additional
-        // callable context which also participates in specialization.
-        for frame in &self.frames {
-            frame.callee.visit_with(visitor);
-        }
+        // Provenance terms also participate in folding and specialization;
+        // visit every occurrence in the same order as the folder.
+        TyId::const_ty(visitor.db(), self.term).visit_with(visitor);
         for operand in &self.operands {
             operand.visit_with(visitor);
+        }
+        for frame in &self.frames {
+            frame.callee.visit_with(visitor);
         }
     }
 }

@@ -380,24 +380,6 @@ fn runtime_expr_display(expr: &RExpr<'_>) -> String {
         RExpr::AggregateMake { layout, fields } => {
             format!("aggregate_make {layout:?}, {fields:?}")
         }
-        RExpr::LayoutMapAffine { map, base, strides } => {
-            format!("layout_map_affine {map:?}, {base:?}, {strides:?}")
-        }
-        RExpr::LayoutMapDense { map, elements } => {
-            format!("layout_map_dense {map:?}, {elements:?}")
-        }
-        RExpr::LayoutMapRepeat { map, element } => {
-            format!("layout_map_repeat {map:?}, {element:?}")
-        }
-        RExpr::LayoutMapProject { map, source, index } => {
-            format!("layout_map_project {map:?}, {source:?}, {index:?}")
-        }
-        RExpr::LayoutMapPatch {
-            map,
-            source,
-            index,
-            replacement,
-        } => format!("layout_map_patch {map:?}, {source:?}, {index:?}, {replacement:?}"),
         RExpr::Call { callee, args } => format!("call {callee:?}({args:?})"),
         RExpr::EnumMake {
             layout,
@@ -413,7 +395,7 @@ fn runtime_expr_display(expr: &RExpr<'_>) -> String {
             variant,
             field,
         } => format!("enum_extract {value:?}, {variant:?}, {field:?}"),
-        RExpr::EnumGetTag { root } => format!("enum_get_tag {root:?}"),
+        RExpr::EnumGetTag { place } => format!("enum_get_tag {place:?}"),
         RExpr::EnumAssertVariantRef { root, variant } => {
             format!("enum_assert_variant_ref {root:?}, {variant:?}")
         }

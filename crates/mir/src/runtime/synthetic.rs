@@ -28,9 +28,9 @@ use crate::{
         InitArgsPlan, LowerError, PlaceElem, PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId,
         RStmt, RTerminator, RuntimeBody, RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier,
         RuntimeClass, RuntimeExitBehavior, RuntimeInputPlan, RuntimeInterfaceSignature,
-        RuntimeLayoutMap, RuntimeLocalRoot, RuntimeMemoryLayout, RuntimeParamPlan, RuntimePlace,
-        RuntimeReturnPlan, RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
-        TargetRootProviderBinding, TargetRootProviderMaterialization,
+        RuntimeLocalRoot, RuntimeMemoryLayout, RuntimeParamPlan, RuntimePlace, RuntimeReturnPlan,
+        RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole, TargetRootProviderBinding,
+        TargetRootProviderMaterialization,
         lower::{
             abi::runtime_declaration_abi_plan,
             boundary::{RuntimeValueAddress, RuntimeValueSource},
@@ -38,7 +38,7 @@ use crate::{
             const_scalar_from_value,
             conversion::{RuntimeConversionEmitter, emit_runtime_coercion},
             interface::runtime_visible_binding_plans,
-            layout_evidence::{runtime_layout_map_for_map_ty, runtime_layout_scalar_const},
+            layout_evidence::{layout_root_scalar_class, layout_root_scalar_const},
             realize::{
                 RuntimeValueArgSelectionCx, RuntimeValueArgSelector, RuntimeValueUseEmitter,
                 SelectedRuntimeValueArg, emit_selected_runtime_value_args,
@@ -901,7 +901,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     );
                 };
                 assert_eq!(
-                    arg.value.map_ty, param.map_ty,
+                    arg.value.ty, param.ty,
                     "synthetic layout-evidence argument type mismatch for {:?}",
                     param.source,
                 );
@@ -925,73 +925,29 @@ impl<'db> SyntheticBodyBuilder<'db> {
         env: RuntimeTypeEnv<'db>,
         value: &LayoutEvidenceConstant<'db>,
     ) -> RLocalId {
-        let map = runtime_layout_map_for_map_ty(self.db, env, &value.map_ty);
-        assert_eq!(map.rank(), value.strides.len());
-        let base = match value.base {
-            LayoutEvidenceBase::Slot(slot) => self.push_layout_scalar(bb, &map, slot),
+        let scalar = layout_root_scalar_class(self.db, env, value.ty);
+        let constant = match value.base {
+            LayoutEvidenceBase::Slot(slot) => layout_root_scalar_const(&scalar, slot),
             LayoutEvidenceBase::Root(root) => {
                 let TyData::ConstTy(_) = root.data(self.db) else {
                     panic!("static layout root must be a const value: {root:?}")
                 };
-                let value = prepare_static_layout_root_value(self.db, root, map.scalar_ty())
+                let root = prepare_static_layout_root_value(self.db, root, value.ty)
                     .expect("static entry layout root must evaluate to a scalar");
-                let scalar = const_scalar_from_value(self.db, env, value)
-                    .expect("static entry layout root must evaluate to a scalar");
-                self.push_layout_const_scalar(bb, &map, scalar)
+                const_scalar_from_value(self.db, env, root)
+                    .expect("static entry layout root must evaluate to a scalar")
             }
         };
-        if map.rank() == 0 {
-            return base;
-        }
-        let strides = value
-            .strides
-            .iter()
-            .map(|stride| self.push_layout_scalar(bb, &map, *stride))
-            .collect::<Vec<_>>();
-        let result = self.push_local(
-            map.scalar_ty(),
-            RuntimeCarrier::Value(map.class()),
-            RuntimeLocalRoot::None,
-        );
-        self.push_stmt(
-            bb,
-            RStmt::Assign {
-                dst: result,
-                expr: RExpr::LayoutMapAffine {
-                    map,
-                    base,
-                    strides: strides.into_boxed_slice(),
-                },
-            },
-        );
-        result
-    }
-
-    fn push_layout_scalar(
-        &mut self,
-        bb: RBlockId,
-        map: &RuntimeLayoutMap<'db>,
-        value: usize,
-    ) -> RLocalId {
-        self.push_layout_const_scalar(bb, map, runtime_layout_scalar_const(map, value))
-    }
-
-    fn push_layout_const_scalar(
-        &mut self,
-        bb: RBlockId,
-        map: &RuntimeLayoutMap<'db>,
-        value: ConstScalar,
-    ) -> RLocalId {
         let dst = self.push_local(
-            map.scalar_ty(),
-            RuntimeCarrier::Value(RuntimeClass::Scalar(map.scalar().clone())),
+            value.ty,
+            RuntimeCarrier::Value(RuntimeClass::Scalar(scalar)),
             RuntimeLocalRoot::None,
         );
         self.push_stmt(
             bb,
             RStmt::Assign {
                 dst,
-                expr: RExpr::ConstScalar(value),
+                expr: RExpr::ConstScalar(constant),
             },
         );
         dst
@@ -1120,11 +1076,11 @@ impl<'db> SyntheticBodyBuilder<'db> {
             initial_abi
                 .evidence_params
                 .iter()
-                .map(|param| (&param.source, &param.map_ty))
+                .map(|param| (&param.source, param.ty))
                 .collect::<Vec<_>>(),
             abi.evidence_params
                 .iter()
-                .map(|param| (&param.source, &param.map_ty))
+                .map(|param| (&param.source, param.ty))
                 .collect::<Vec<_>>(),
             "synthetic call specialization changed its layout-evidence ABI"
         );

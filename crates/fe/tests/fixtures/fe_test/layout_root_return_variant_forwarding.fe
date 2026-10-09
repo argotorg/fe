@@ -11,6 +11,10 @@ fn unwrap_map<const ROOT: u256>(
     map
 }
 
+fn read_wrapped(wrapped: Wrapped, key: u256) -> u256 {
+    unwrap_map(wrapped: wrapped).get(key: key)
+}
+
 msg Msg {
     #[selector = 1]
     Set { lane: usize, key: u256, value: u256 },
@@ -20,17 +24,28 @@ msg Msg {
 }
 
 pub contract C {
-    mut wrapped: [Wrapped; 2],
+    mut first: Wrapped,
+    mut second: Wrapped,
 
     recv Msg {
-        Set { lane, key, value } uses (mut wrapped) {
-            match wrapped[lane] {
-                Wrapped::Map(mut map) => map.set(key: key, value: value),
+        Set { lane, key, value } uses (mut first, mut second) {
+            if lane == 0 {
+                match first {
+                    Wrapped::Map(mut map) => map.set(key: key, value: value),
+                }
+            } else {
+                match second {
+                    Wrapped::Map(mut map) => map.set(key: key, value: value),
+                }
             }
         }
 
-        Get { lane, key } -> u256 uses (wrapped) {
-            unwrap_map(wrapped: wrapped[lane]).get(key: key)
+        Get { lane, key } -> u256 uses (first, second) {
+            if lane == 0 {
+                read_wrapped(wrapped: first, key: key)
+            } else {
+                read_wrapped(wrapped: second, key: key)
+            }
         }
     }
 }
@@ -51,4 +66,11 @@ fn returned_variant_values_preserve_layout_sources() uses (evm: mut Evm) {
         message: Msg::Get { lane: 1, key: 7 },
     )
     assert!(value == 42)
+    let untouched: u256 = evm.call(
+        addr: c,
+        gas: 200000,
+        value: 0,
+        message: Msg::Get { lane: 0, key: 7 },
+    )
+    assert!(untouched == 0)
 }

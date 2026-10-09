@@ -1,0 +1,1 @@
+"Trait bound is not satisfied" errors no longer claim that `T: Trait` fails when `T` does implement the trait but the value is only borrowed (for example a parameter declared without `own` placed in a tuple). When owning the value would satisfy the bound, the error now says that the value is only borrowed and explains why.

@@ -1,0 +1,56 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/loop_entry_ownership.fe
+---
+error[16-0002]: move conflict in `fn inspect`
+   ┌─ loop_entry_ownership.fe:38:21
+   │
+38 │             consume(*selected)
+   │                     ^^^^^^^^^
+   │                     │
+   │                     cannot use a value after it was moved
+   │                     value is moved here
+
+error[16-0002]: move conflict in `fn inspect`
+   ┌─ loop_entry_ownership.fe:82:25
+   │
+82 │                 consume(*selected)
+   │                         ^^^^^^^^^
+   │                         │
+   │                         cannot use a value after it was moved
+   │                         value is moved here
+
+error[16-0002]: move conflict in `fn consumed`
+    ┌─ loop_entry_ownership.fe:119:17
+    │
+118 │         drain(pointer)
+    │         -------------- value is moved here
+119 │         consume(*pointer)
+    │                 ^^^^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn redrained`
+    ┌─ loop_entry_ownership.fe:127:9
+    │
+126 │         drain(pointer)
+    │         -------------- value is moved here
+127 │         drain(pointer)
+    │         ^^^^^^^^^^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn consumed`
+    ┌─ loop_entry_ownership.fe:177:17
+    │
+174 │             consume(*selected)
+    │                     --------- value is moved here
+    ·
+177 │         consume(*pointer)
+    │                 ^^^^^^^^ cannot use a value after it was moved
+
+error[16-0002]: move conflict in `fn redrained`
+    ┌─ loop_entry_ownership.fe:193:9
+    │
+190 │             consume(*selected)
+    │                     --------- value is moved here
+    ·
+193 │         drain(pointer)
+    │         ^^^^^^^^^^^^^^ cannot use a value after it was moved

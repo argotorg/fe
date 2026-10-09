@@ -1,5 +1,6 @@
 ---
 source: crates/language-server/src/functionality/hover.rs
+assertion_line: 604
 expression: snapshot
 input_file: test_files/layout_hover.fe
 ---
@@ -71,13 +72,13 @@ range: 16:2..16:11
 ---
 
 ## array
-range: 20:6..20:10
+range: 20:6..20:12
 
 ### Field Layout
 
 #### Storage
 
-- `0 + i0` (i0: 0..3): `maps[i0].SALT` (inferred parameter, `u256`)
+- `0 + i0` (i0: 0..3): `values[i0]` (inline field, `u256`)
 
 ---
 

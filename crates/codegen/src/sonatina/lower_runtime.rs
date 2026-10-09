@@ -3,7 +3,7 @@ mod memory_reference;
 #[cfg(test)]
 mod tests;
 
-use memory_reference::MemoryReference;
+use memory_reference::{MemoryReference, ReferentLayout};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -73,11 +73,6 @@ const MAX_DIRECT_CALL_ARGS: usize = 16;
 
 const PANIC_OVERFLOW: u64 = 0x11;
 const PANIC_DIVISION_BY_ZERO: u64 = 0x12;
-
-const LAYOUT_MAP_AFFINE: u64 = 0;
-const LAYOUT_MAP_DENSE: u64 = 1;
-const LAYOUT_MAP_REPEAT: u64 = 2;
-const LAYOUT_MAP_PATCH: u64 = 3;
 
 macro_rules! define_lowering_inst_set {
     ($($inst:ty),+ $(,)?) => {
@@ -910,6 +905,12 @@ fn describe_runtime_instance<'db>(
 }
 
 #[derive(Clone, Copy)]
+enum EnumLoad {
+    Value,
+    Tag,
+}
+
+#[derive(Clone, Copy)]
 enum SlotRoot {
     Ptr(ValueId, Type),
     Object(ValueId, Type),
@@ -1727,24 +1728,6 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             RExpr::AggregateMake { layout, fields } => {
                 self.make_aggregate_value(*layout, fields)?
             }
-            RExpr::LayoutMapAffine { map, base, strides } => {
-                self.lower_layout_map_affine(map, *base, strides)?
-            }
-            RExpr::LayoutMapDense { map, elements } => {
-                self.lower_layout_map_dense(map, elements)?
-            }
-            RExpr::LayoutMapRepeat { map, element } => {
-                self.lower_layout_map_repeat(map, *element)?
-            }
-            RExpr::LayoutMapProject { map, source, index } => {
-                self.lower_layout_map_project(map, *source, *index)?
-            }
-            RExpr::LayoutMapPatch {
-                map,
-                source,
-                index,
-                replacement,
-            } => self.lower_layout_map_patch(map, *source, *index, *replacement)?,
             RExpr::Call { callee, args } => {
                 let callee_ref = self.module.func_ref(*callee)?;
                 let args = self.lower_call_args(*callee, args)?;
@@ -1823,41 +1806,51 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     ty,
                 )
             }
-            RExpr::EnumGetTag { root }
-                if matches!(
-                    self.body.value_class(*root),
-                    Some(RuntimeClass::Ref {
-                        kind: RefKind::Native,
-                        ..
-                    })
-                ) =>
-            {
-                let class = self
-                    .body
-                    .value_class(*root)
-                    .and_then(RuntimeClass::ref_pointee)
-                    .cloned()
-                    .ok_or_else(|| {
-                        LowerError::Internal("enum get-tag requires reference".into())
-                    })?;
-                let root = self.local_value(*root)?;
-                let reference = self.load_memory_reference(root)?;
-                let value = self.load_referent(reference, &class)?;
-                let dst = dst.ok_or_else(|| {
-                    LowerError::Internal("enum get-tag missing destination".into())
-                })?;
-                let ty = self.local_ty(dst)?;
-                self.fb
-                    .insert_inst(EnumTag::new(self.module.inst_set(), value), ty)
-            }
-            RExpr::EnumGetTag { root } => {
-                let root = self.local_value(*root)?;
-                let dst = dst.ok_or_else(|| {
-                    LowerError::Internal("enum get-tag missing destination".to_string())
-                })?;
-                let ty = self.local_ty(dst)?;
-                self.fb
-                    .insert_inst(EnumGetTag::new(self.module.inst_set(), root), ty)
+            RExpr::EnumGetTag { place } => {
+                let Lowered::Value((terminal, class)) = self.resolve_place_full(place)? else {
+                    return Ok(Lowered::Terminated);
+                };
+                let RuntimeClass::AggregateValue { layout } = class else {
+                    return Err(LowerError::Internal(
+                        "enum get-tag requires an aggregate place".into(),
+                    ));
+                };
+                let Layout::Enum(data) = layout.data(self.module.db) else {
+                    return Err(LowerError::Internal(
+                        "enum get-tag requires enum layout".into(),
+                    ));
+                };
+                let ty = self.module.enum_tag_ty(layout)?;
+                match terminal {
+                    PlaceTerminal::Reference { reference, .. } => {
+                        self.load_referent_enum_tag(reference, layout)?
+                    }
+                    PlaceTerminal::Ptr { addr, space, .. } => self.load_enum_from_ptr(
+                        addr,
+                        ReferentLayout::Raw(space),
+                        layout,
+                        &data,
+                        EnumLoad::Tag,
+                    )?,
+                    PlaceTerminal::StackPtr { addr, .. } => self.load_enum_from_ptr(
+                        addr,
+                        ReferentLayout::Object,
+                        layout,
+                        &data,
+                        EnumLoad::Tag,
+                    )?,
+                    PlaceTerminal::Object { value, .. } => self
+                        .fb
+                        .insert_inst(EnumGetTag::new(self.module.inst_set(), value), ty),
+                    PlaceTerminal::Const { value, .. } => {
+                        let value = self.fb.insert_inst(
+                            ConstLoad::new(self.module.inst_set(), value),
+                            self.module.ty_for_layout(layout)?,
+                        );
+                        self.fb
+                            .insert_inst(EnumTag::new(self.module.inst_set(), value), ty)
+                    }
+                }
             }
             RExpr::EnumAssertVariantRef { root, variant }
                 if matches!(
@@ -1870,17 +1863,23 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             {
                 let root = self.local_value(*root)?;
                 let reference = self.load_memory_reference(root)?;
-                let value = self.load_referent(
-                    reference,
-                    &RuntimeClass::AggregateValue {
-                        layout: variant.enum_layout,
-                    },
-                )?;
-                self.fb.insert_inst_no_result(EnumAssertVariant::new(
+                let tag = self.load_referent_enum_tag(reference, variant.enum_layout)?;
+                let expected = self.fb.make_imm_value(
+                    self.module
+                        .enum_tag_immediate(variant.enum_layout, variant.index)?,
+                );
+                let done = self.fb.append_block();
+                let invalid = self.fb.append_block();
+                self.fb.insert_inst_no_result(BrTable::new(
                     self.module.inst_set(),
-                    value,
-                    self.variant_ref(*variant)?,
+                    tag,
+                    Some(invalid),
+                    vec![(expected, done)],
                 ));
+                self.fb.switch_to_block(invalid);
+                self.fb
+                    .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
+                self.fb.switch_to_block(done);
                 root
             }
             RExpr::EnumAssertVariantRef { root, variant } => {
@@ -1912,370 +1911,6 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 ptr_ty,
             )
         })
-    }
-
-    fn alloc_layout_map_words(&mut self, words: usize) -> Result<ValueId, LowerError> {
-        let bytes = words.checked_mul(32).ok_or_else(|| {
-            LowerError::Internal(format!("layout-map allocation overflow: {words} words"))
-        })?;
-        let bytes = u64::try_from(bytes).map_err(|_| {
-            LowerError::Internal(format!(
-                "layout-map allocation is not addressable: {bytes} bytes"
-            ))
-        })?;
-        let size = self.index_value(bytes);
-        let ptr = self.allocate_bytes(size, Type::I8)?;
-        self.coerce_value_to_ty(ptr, Type::I256)
-    }
-
-    fn layout_map_addr(&mut self, node: ValueId, word: usize) -> Result<ValueId, LowerError> {
-        let node = self.coerce_value_to_ty(node, Type::I256)?;
-        let word = u64::try_from(word).map_err(|_| {
-            LowerError::Internal(format!("layout-map word is not addressable: {word}"))
-        })?;
-        let offset = word.checked_mul(32).ok_or_else(|| {
-            LowerError::Internal(format!("layout-map byte offset overflow: {word} words"))
-        })?;
-        self.offset_address_unscaled(node, offset)
-    }
-
-    fn store_layout_map_word(
-        &mut self,
-        node: ValueId,
-        word: usize,
-        value: ValueId,
-    ) -> Result<(), LowerError> {
-        let addr = self.layout_map_addr(node, word)?;
-        let value = self.coerce_value_to_ty(value, Type::I256)?;
-        self.fb
-            .insert_inst_no_result(Mstore::new(self.module.inst_set(), addr, value, Type::I256));
-        Ok(())
-    }
-
-    fn load_layout_map_word(&mut self, node: ValueId, word: usize) -> Result<ValueId, LowerError> {
-        let addr = self.layout_map_addr(node, word)?;
-        Ok(self.fb.insert_inst(
-            Mload::new(self.module.inst_set(), addr, Type::I256),
-            Type::I256,
-        ))
-    }
-
-    fn lower_layout_map_affine(
-        &mut self,
-        map: &mir::RuntimeLayoutMap<'db>,
-        base: RLocalId,
-        strides: &[RLocalId],
-    ) -> Result<ValueId, LowerError> {
-        if map.rank() == 0 || strides.len() != map.rank() {
-            return Err(LowerError::Internal(format!(
-                "invalid affine layout map: map={map:?}, strides={}",
-                strides.len()
-            )));
-        }
-        let node = self.alloc_layout_map_words(map.rank() + 2)?;
-        let tag = self.index_value(LAYOUT_MAP_AFFINE);
-        self.store_layout_map_word(node, 0, tag)?;
-        let base = self.local_value(base)?;
-        self.store_layout_map_word(node, 1, base)?;
-        for (axis, stride) in strides.iter().enumerate() {
-            let stride = self.local_value(*stride)?;
-            self.store_layout_map_word(node, axis + 2, stride)?;
-        }
-        Ok(node)
-    }
-
-    fn lower_layout_map_dense(
-        &mut self,
-        map: &mir::RuntimeLayoutMap<'db>,
-        elements: &[RLocalId],
-    ) -> Result<ValueId, LowerError> {
-        if map.dimensions().first().copied() != Some(elements.len()) || elements.is_empty() {
-            return Err(LowerError::Internal(format!(
-                "invalid dense layout map: map={map:?}, elements={}",
-                elements.len()
-            )));
-        }
-        let data = self.alloc_layout_map_words(elements.len())?;
-        for (idx, element) in elements.iter().enumerate() {
-            let element = self.local_value(*element)?;
-            self.store_layout_map_word(data, idx, element)?;
-        }
-        let node = self.alloc_layout_map_words(2)?;
-        let tag = self.index_value(LAYOUT_MAP_DENSE);
-        self.store_layout_map_word(node, 0, tag)?;
-        self.store_layout_map_word(node, 1, data)?;
-        Ok(node)
-    }
-
-    fn lower_layout_map_repeat(
-        &mut self,
-        map: &mir::RuntimeLayoutMap<'db>,
-        element: RLocalId,
-    ) -> Result<ValueId, LowerError> {
-        if map.rank() == 0 {
-            return Err(LowerError::Internal(
-                "layout-map repeat requires a ranked map".to_string(),
-            ));
-        }
-        let node = self.alloc_layout_map_words(2)?;
-        let tag = self.index_value(LAYOUT_MAP_REPEAT);
-        let element = self.local_value(element)?;
-        self.store_layout_map_word(node, 0, tag)?;
-        self.store_layout_map_word(node, 1, element)?;
-        Ok(node)
-    }
-
-    fn lower_layout_map_patch(
-        &mut self,
-        map: &mir::RuntimeLayoutMap<'db>,
-        source: RLocalId,
-        index: RLocalId,
-        replacement: RLocalId,
-    ) -> Result<ValueId, LowerError> {
-        if map.rank() == 0 {
-            return Err(LowerError::Internal(
-                "layout-map patch requires a ranked map".to_string(),
-            ));
-        }
-        let source = self.local_value(source)?;
-        let index = self.local_value(index)?;
-        let index = self.check_layout_map_index(map, index)?;
-        let replacement = self.local_value(replacement)?;
-        let node = self.alloc_layout_map_words(4)?;
-        let tag = self.index_value(LAYOUT_MAP_PATCH);
-        self.store_layout_map_word(node, 0, tag)?;
-        self.store_layout_map_word(node, 1, source)?;
-        self.store_layout_map_word(node, 2, index)?;
-        self.store_layout_map_word(node, 3, replacement)?;
-        Ok(node)
-    }
-
-    fn check_layout_map_index(
-        &mut self,
-        map: &mir::RuntimeLayoutMap<'db>,
-        index: ValueId,
-    ) -> Result<ValueId, LowerError> {
-        let index = self.coerce_value_to_ty(index, Type::I256)?;
-        let len = map
-            .dimensions()
-            .first()
-            .copied()
-            .and_then(|len| u64::try_from(len).ok())
-            .ok_or_else(|| {
-                LowerError::Internal(format!(
-                    "layout-map operation has an invalid outer dimension: {map:?}"
-                ))
-            })?;
-        let len = self.index_value(len);
-        let in_bounds = self
-            .fb
-            .insert_inst(Lt::new(self.module.inst_set(), index, len), Type::I1);
-        let out_of_bounds = self
-            .fb
-            .insert_inst(IsZero::new(self.module.inst_set(), in_bounds), Type::I1);
-        self.emit_empty_revert(out_of_bounds)?;
-        Ok(index)
-    }
-
-    fn lower_layout_map_project(
-        &mut self,
-        map: &mir::RuntimeLayoutMap<'db>,
-        source: RLocalId,
-        index: RLocalId,
-    ) -> Result<ValueId, LowerError> {
-        let child = map.projected().ok_or_else(|| {
-            LowerError::Internal("layout-map projection requires a ranked map".to_string())
-        })?;
-        let result_ty = if child.rank() == 0 {
-            scalar_ty(child.scalar())
-        } else {
-            Type::I256
-        };
-        if result_ty != Type::I256 {
-            return Err(LowerError::Internal(format!(
-                "layout-map roots must be word-sized, found {result_ty:?}"
-            )));
-        }
-        let source = self.local_value(source)?;
-        let index = self.local_value(index)?;
-        let index = self.check_layout_map_index(map, index)?;
-        let entry = self
-            .fb
-            .current_block()
-            .expect("layout-map projection requires a current block");
-        let header = self.fb.append_block();
-        let affine = self.fb.append_block();
-        let dense = self.fb.append_block();
-        let repeat = self.fb.append_block();
-        let patch = self.fb.append_block();
-        let patch_match = self.fb.append_block();
-        let patch_miss = self.fb.append_block();
-        let invalid = self.fb.append_block();
-        let done = self.fb.append_block();
-
-        self.fb
-            .insert_inst_no_result(Jump::new(self.module.inst_set(), header));
-        self.fb.switch_to_block(header);
-        let current = self.fb.insert_inst(
-            Phi::new(self.module.inst_set(), smallvec![(source, entry)]),
-            Type::I256,
-        );
-        let tag = self.load_layout_map_word(current, 0)?;
-        let cases = vec![
-            (self.index_value(LAYOUT_MAP_AFFINE), affine),
-            (self.index_value(LAYOUT_MAP_DENSE), dense),
-            (self.index_value(LAYOUT_MAP_REPEAT), repeat),
-            (self.index_value(LAYOUT_MAP_PATCH), patch),
-        ];
-        self.fb.insert_inst_no_result(BrTable::new(
-            self.module.inst_set(),
-            tag,
-            Some(invalid),
-            cases,
-        ));
-
-        self.fb.switch_to_block(affine);
-        let base = self.load_layout_map_word(current, 1)?;
-        let stride = self.load_layout_map_word(current, 2)?;
-        let base = self.cast_scalar(base, scalar_ty(map.scalar()))?;
-        let stride = self.cast_scalar(stride, scalar_ty(map.scalar()))?;
-        let affine_index = self.cast_scalar(index, scalar_ty(map.scalar()))?;
-        let offset = self.lower_checked_layout_map_arith(
-            IntrinsicArithBinOp::Mul,
-            affine_index,
-            stride,
-            map.scalar(),
-        )?;
-        let affine_base = self.lower_checked_layout_map_arith(
-            IntrinsicArithBinOp::Add,
-            base,
-            offset,
-            map.scalar(),
-        )?;
-        let affine_result = if child.rank() == 0 {
-            affine_base
-        } else {
-            let node = self.alloc_layout_map_words(child.rank() + 2)?;
-            let tag = self.index_value(LAYOUT_MAP_AFFINE);
-            self.store_layout_map_word(node, 0, tag)?;
-            self.store_layout_map_word(node, 1, affine_base)?;
-            for axis in 0..child.rank() {
-                let stride = self.load_layout_map_word(current, axis + 3)?;
-                self.store_layout_map_word(node, axis + 2, stride)?;
-            }
-            node
-        };
-        let affine_exit = self
-            .fb
-            .current_block()
-            .expect("affine layout-map projection must remain in a block");
-        self.fb
-            .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
-
-        self.fb.switch_to_block(dense);
-        let data = self.load_layout_map_word(current, 1)?;
-        let word_size = self.index_value(32);
-        let offset = self.fb.insert_inst(
-            Mul::new(self.module.inst_set(), index, word_size),
-            Type::I256,
-        );
-        let addr = self
-            .fb
-            .insert_inst(Add::new(self.module.inst_set(), data, offset), Type::I256);
-        let dense_result = self.fb.insert_inst(
-            Mload::new(self.module.inst_set(), addr, Type::I256),
-            Type::I256,
-        );
-        let dense_exit = self
-            .fb
-            .current_block()
-            .expect("dense layout-map projection must remain in a block");
-        self.fb
-            .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
-
-        self.fb.switch_to_block(repeat);
-        let repeat_result = self.load_layout_map_word(current, 1)?;
-        let repeat_exit = self
-            .fb
-            .current_block()
-            .expect("repeat layout-map projection must remain in a block");
-        self.fb
-            .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
-
-        self.fb.switch_to_block(patch);
-        let expected = self.load_layout_map_word(current, 2)?;
-        let matches = self
-            .fb
-            .insert_inst(Eq::new(self.module.inst_set(), index, expected), Type::I1);
-        self.fb.insert_inst_no_result(Br::new(
-            self.module.inst_set(),
-            matches,
-            patch_match,
-            patch_miss,
-        ));
-
-        self.fb.switch_to_block(patch_match);
-        let patch_result = self.load_layout_map_word(current, 3)?;
-        let patch_match_exit = self
-            .fb
-            .current_block()
-            .expect("matching layout-map patch must remain in a block");
-        self.fb
-            .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
-
-        self.fb.switch_to_block(patch_miss);
-        let next = self.load_layout_map_word(current, 1)?;
-        let patch_miss_exit = self
-            .fb
-            .current_block()
-            .expect("non-matching layout-map patch must remain in a block");
-        self.fb.append_phi_arg(current, next, patch_miss_exit);
-        self.fb
-            .insert_inst_no_result(Jump::new(self.module.inst_set(), header));
-
-        self.fb.switch_to_block(invalid);
-        self.fb
-            .insert_inst_no_result(Unreachable::new(self.module.inst_set()));
-
-        self.fb.switch_to_block(done);
-        let incoming = smallvec![
-            (affine_result, affine_exit),
-            (dense_result, dense_exit),
-            (repeat_result, repeat_exit),
-            (patch_result, patch_match_exit),
-        ];
-        Ok(self
-            .fb
-            .insert_inst(Phi::new(self.module.inst_set(), incoming), result_ty))
-    }
-
-    fn lower_checked_layout_map_arith(
-        &mut self,
-        op: IntrinsicArithBinOp,
-        lhs: ValueId,
-        rhs: ValueId,
-        class: &ScalarClass<'db>,
-    ) -> Result<ValueId, LowerError> {
-        if !matches!(op, IntrinsicArithBinOp::Add | IntrinsicArithBinOp::Mul) {
-            return Err(LowerError::Internal(format!(
-                "unsupported checked layout-map arithmetic: {op:?}"
-            )));
-        }
-        let ty = scalar_ty(class);
-        let value = self.lower_arith(
-            intrinsic_arith_binop(op),
-            true,
-            lhs,
-            rhs,
-            ty,
-            class.is_signed_int(),
-        )?;
-        if self.fb.type_of(value) != ty {
-            return Err(LowerError::Internal(
-                "layout-map arithmetic produced an unexpected type".to_string(),
-            ));
-        }
-        Ok(value)
     }
 
     fn lower_builtin(&mut self, builtin: &RuntimeBuiltin<'db>) -> Result<ValueId, LowerError> {
@@ -4133,7 +3768,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 class,
             },
             CopySource::Ptr { addr, space, .. } => CopySource::Value {
-                value: self.load_aggregate_from_ptr(addr, space, src_layout)?,
+                value: self.load_aggregate_from_ptr(
+                    addr,
+                    ReferentLayout::Raw(space),
+                    src_layout,
+                )?,
                 class: RuntimeClass::AggregateValue { layout: src_layout },
             },
             source => source,
@@ -4468,9 +4107,31 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         class: &RuntimeClass<'db>,
         src: ValueId,
     ) -> Result<(), LowerError> {
+        self.copy_memory_value(addr, ReferentLayout::Raw(space), class, src)
+    }
+
+    fn copy_memory_value(
+        &mut self,
+        addr: ValueId,
+        memory: ReferentLayout,
+        class: &RuntimeClass<'db>,
+        src: ValueId,
+    ) -> Result<(), LowerError> {
         match class {
             RuntimeClass::Scalar(_) | RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
-                self.store_to_ptr(addr, space, class, src)
+                match memory {
+                    ReferentLayout::Raw(space) => self.store_to_ptr(addr, space, class, src),
+                    ReferentLayout::Object => {
+                        let ty = self.module.ty_for_class(class)?;
+                        self.fb.insert_inst_no_result(Mstore::new(
+                            self.module.inst_set(),
+                            addr,
+                            src,
+                            ty,
+                        ));
+                        Ok(())
+                    }
+                }
             }
             RuntimeClass::AggregateValue { layout } => match layout.data(self.module.db) {
                 Layout::Struct(data) => {
@@ -4484,9 +4145,8 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                                 self.fb.type_of(src)
                             )));
                         }
-                        let field_addr =
-                            self.offset_ptr_struct_field_address(addr, &data, idx, space)?;
-                        self.copy_to_ptr(field_addr, space, field, field_value)?;
+                        let field_addr = self.referent_field_address(addr, memory, class, idx)?;
+                        self.copy_memory_value(field_addr, memory, field, field_value)?;
                     }
                     Ok(())
                 }
@@ -4502,13 +4162,12 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                                 self.fb.type_of(src)
                             )));
                         }
-                        let elem_addr =
-                            self.offset_ptr_array_elem_address(addr, &data, idx, space)?;
-                        self.copy_to_ptr(elem_addr, space, &data.elem, field_value)?;
+                        let elem_addr = self.referent_field_address(addr, memory, class, idx)?;
+                        self.copy_memory_value(elem_addr, memory, &data.elem, field_value)?;
                     }
                     Ok(())
                 }
-                Layout::Enum(data) => self.copy_enum_to_ptr(addr, space, *layout, &data, src),
+                Layout::Enum(data) => self.copy_enum_to_ptr(addr, memory, *layout, &data, src),
             },
         }
     }
@@ -4516,7 +4175,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     fn copy_enum_to_ptr(
         &mut self,
         addr: ValueId,
-        space: AddressSpaceKind,
+        memory: ReferentLayout,
         layout: LayoutId<'db>,
         data: &mir::runtime::EnumLayout<'db>,
         src: ValueId,
@@ -4557,12 +4216,27 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 self.variant_ref(variant)?,
             ));
             let tag_word = self.index_value(idx as u64);
-            self.store_to_ptr(
-                addr,
-                space,
-                &RuntimeClass::Scalar(data.tag.clone()),
-                tag_word,
-            )?;
+            match memory {
+                ReferentLayout::Raw(space) => self.store_to_ptr(
+                    addr,
+                    space,
+                    &RuntimeClass::Scalar(data.tag.clone()),
+                    tag_word,
+                )?,
+                ReferentLayout::Object => {
+                    let ty = self
+                        .native_class_layout(&RuntimeClass::AggregateValue { layout })?
+                        .tag_type()
+                        .ok_or_else(|| LowerError::Internal("enum tag layout missing".into()))?;
+                    let value = self.cast_scalar(tag_word, ty)?;
+                    self.fb.insert_inst_no_result(Mstore::new(
+                        self.module.inst_set(),
+                        addr,
+                        value,
+                        ty,
+                    ));
+                }
+            }
             for (field_idx, field) in data.variants[idx].fields.iter().enumerate() {
                 let field_idx_value = self.index_value(field_idx as u64);
                 let field_value = self.fb.insert_inst(
@@ -4574,13 +4248,8 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     ),
                     self.module.ty_for_class(field)?,
                 );
-                let field_addr = self.offset_ptr_variant_field_address(
-                    addr,
-                    variant,
-                    FieldIndex(field_idx as u16),
-                    space,
-                )?;
-                self.copy_to_ptr(field_addr, space, field, field_value)?;
+                let field_addr = self.referent_variant_address(addr, memory, variant, field_idx)?;
+                self.copy_memory_value(field_addr, memory, field, field_value)?;
             }
             self.fb
                 .insert_inst_no_result(Jump::new(self.module.inst_set(), done));
@@ -4600,6 +4269,27 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         space: AddressSpaceKind,
         class: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
+        self.load_memory_value(addr, ReferentLayout::Raw(space), class)
+    }
+
+    fn load_memory_value(
+        &mut self,
+        addr: ValueId,
+        memory: ReferentLayout,
+        class: &RuntimeClass<'db>,
+    ) -> Result<ValueId, LowerError> {
+        if let RuntimeClass::AggregateValue { layout } = class {
+            return self.load_aggregate_from_ptr(addr, memory, *layout);
+        }
+        let space = match memory {
+            ReferentLayout::Object => {
+                let ty = self.module.ty_for_class(class)?;
+                return Ok(self
+                    .fb
+                    .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty));
+            }
+            ReferentLayout::Raw(space) => space,
+        };
         match class {
             RuntimeClass::Scalar(scalar) => self.load_scalar(addr, space, scalar),
             RuntimeClass::Ref {
@@ -4613,15 +4303,13 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         ..
                     },
                 ..
-            } => self.load_word(addr, space),
-            RuntimeClass::RawAddr { .. }
+            }
+            | RuntimeClass::RawAddr { .. }
             | RuntimeClass::Ref {
                 kind: RefKind::Native,
                 ..
             } => self.load_word(addr, space),
-            RuntimeClass::AggregateValue { layout } => {
-                self.load_aggregate_from_ptr(addr, space, *layout)
-            }
+            RuntimeClass::AggregateValue { .. } => unreachable!(),
             RuntimeClass::Ref { .. } => Err(LowerError::Unsupported(
                 "loading handle values from raw-address places is not supported".to_string(),
             )),
@@ -4631,17 +4319,17 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     fn load_aggregate_from_ptr(
         &mut self,
         addr: ValueId,
-        space: AddressSpaceKind,
+        memory: ReferentLayout,
         layout: LayoutId<'db>,
     ) -> Result<ValueId, LowerError> {
+        let class = RuntimeClass::AggregateValue { layout };
         match layout.data(self.module.db) {
             Layout::Struct(data) => {
                 let ty = self.module.ty_for_layout(layout)?;
                 let mut value = self.fb.make_undef_value(ty);
                 for (idx, field) in data.fields.iter().enumerate() {
-                    let field_addr =
-                        self.offset_ptr_struct_field_address(addr, &data, idx, space)?;
-                    let field_value = self.load_from_ptr(field_addr, space, field)?;
+                    let field_addr = self.referent_field_address(addr, memory, &class, idx)?;
+                    let field_value = self.load_memory_value(field_addr, memory, field)?;
                     let expected_ty = self.module.ty_for_class(field)?;
                     let actual_ty = self.fb.type_of(field_value);
                     if actual_ty != expected_ty {
@@ -4661,8 +4349,8 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let ty = self.module.ty_for_layout(layout)?;
                 let mut value = self.fb.make_undef_value(ty);
                 for idx in 0..data.len as usize {
-                    let elem_addr = self.offset_ptr_array_elem_address(addr, &data, idx, space)?;
-                    let elem = self.load_from_ptr(elem_addr, space, &data.elem)?;
+                    let elem_addr = self.referent_field_address(addr, memory, &class, idx)?;
+                    let elem = self.load_memory_value(elem_addr, memory, &data.elem)?;
                     let expected_ty = self.module.ty_for_class(&data.elem)?;
                     let actual_ty = self.fb.type_of(elem);
                     if actual_ty != expected_ty {
@@ -4679,19 +4367,35 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 }
                 Ok(value)
             }
-            Layout::Enum(data) => self.load_enum_from_ptr(addr, space, layout, &data),
+            Layout::Enum(data) => {
+                self.load_enum_from_ptr(addr, memory, layout, &data, EnumLoad::Value)
+            }
         }
     }
 
     fn load_enum_from_ptr(
         &mut self,
         addr: ValueId,
-        space: AddressSpaceKind,
+        memory: ReferentLayout,
         layout: LayoutId<'db>,
         data: &mir::runtime::EnumLayout<'db>,
+        load: EnumLoad,
     ) -> Result<ValueId, LowerError> {
-        let layout_ty = self.module.ty_for_layout(layout)?;
-        let tag = self.load_scalar(addr, space, &data.tag)?;
+        let ty = match load {
+            EnumLoad::Value => self.module.ty_for_layout(layout)?,
+            EnumLoad::Tag => self.module.enum_tag_ty(layout)?,
+        };
+        let tag = match memory {
+            ReferentLayout::Raw(space) => self.load_scalar(addr, space, &data.tag)?,
+            ReferentLayout::Object => {
+                let ty = self
+                    .native_class_layout(&RuntimeClass::AggregateValue { layout })?
+                    .tag_type()
+                    .ok_or_else(|| LowerError::Internal("enum tag layout missing".into()))?;
+                self.fb
+                    .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty)
+            }
+        };
         let done = self.fb.append_block();
         let invalid = self.fb.append_block();
         let mut cases = Vec::with_capacity(data.variants.len());
@@ -4717,33 +4421,36 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
 
         for (idx, block) in blocks.into_iter().enumerate() {
             self.fb.switch_to_block(block);
-            let variant = VariantId {
-                enum_layout: layout,
-                index: idx as u16,
+            let value = match load {
+                EnumLoad::Tag => self
+                    .fb
+                    .make_imm_value(self.module.enum_tag_immediate(layout, idx as u16)?),
+                EnumLoad::Value => {
+                    let variant = VariantId {
+                        enum_layout: layout,
+                        index: idx as u16,
+                    };
+                    let values = data.variants[idx]
+                        .fields
+                        .iter()
+                        .enumerate()
+                        .map(|(field_idx, field)| {
+                            let field_addr =
+                                self.referent_variant_address(addr, memory, variant, field_idx)?;
+                            self.load_memory_value(field_addr, memory, field)
+                        })
+                        .collect::<Result<SmallVec<[ValueId; 2]>, _>>()?;
+                    self.fb.insert_inst(
+                        EnumMake::new(
+                            self.module.inst_set(),
+                            ty,
+                            self.variant_ref(variant)?,
+                            values,
+                        ),
+                        ty,
+                    )
+                }
             };
-            let values = data.variants[idx]
-                .fields
-                .iter()
-                .enumerate()
-                .map(|(field_idx, field)| {
-                    let field_addr = self.offset_ptr_variant_field_address(
-                        addr,
-                        variant,
-                        FieldIndex(field_idx as u16),
-                        space,
-                    )?;
-                    self.load_from_ptr(field_addr, space, field)
-                })
-                .collect::<Result<SmallVec<[ValueId; 2]>, _>>()?;
-            let value = self.fb.insert_inst(
-                EnumMake::new(
-                    self.module.inst_set(),
-                    layout_ty,
-                    self.variant_ref(variant)?,
-                    values,
-                ),
-                layout_ty,
-            );
             let pred = self
                 .fb
                 .current_block()
@@ -4760,7 +4467,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         self.fb.switch_to_block(done);
         Ok(self
             .fb
-            .insert_inst(Phi::new(self.module.inst_set(), phi_args), layout_ty))
+            .insert_inst(Phi::new(self.module.inst_set(), phi_args), ty))
     }
 
     fn load_word(&mut self, addr: ValueId, space: AddressSpaceKind) -> Result<ValueId, LowerError> {
@@ -4795,7 +4502,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         scalar: &ScalarClass<'db>,
     ) -> Result<ValueId, LowerError> {
         if self.module.is_native_target() && matches!(space, AddressSpaceKind::Memory) {
-            let ty = self.module.scalar_ty(scalar)?;
+            let ty = scalar_ty(scalar);
             return Ok(self
                 .fb
                 .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty));
@@ -4828,7 +4535,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         let value = match class {
             RuntimeClass::Scalar(scalar) => {
                 let ty = if native_memory {
-                    self.module.scalar_ty(scalar)?
+                    scalar_ty(scalar)
                 } else {
                     scalar_word_ty(scalar)
                 };

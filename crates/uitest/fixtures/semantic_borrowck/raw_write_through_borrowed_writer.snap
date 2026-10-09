@@ -6,10 +6,11 @@ input_file: fixtures/semantic_borrowck/raw_write_through_borrowed_writer.fe
 error[16-0001]: borrow conflict in `fn raw_writer`
    ┌─ raw_write_through_borrowed_writer.fe:37:5
    │
-36 │     let r = mut local
-   │             --------- borrow created here
 37 │     copy_in_loop(q, w: mut *wp)
-   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot immutably borrow this place while a mutable borrow is active
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   │     │                  │
+   │     │                  borrow created here
+   │     cannot immutably borrow this place while a mutable borrow is active
 
 error[16-0001]: borrow conflict in `fn overlapping_writer_loans`
    ┌─ raw_write_through_borrowed_writer.fe:45:24

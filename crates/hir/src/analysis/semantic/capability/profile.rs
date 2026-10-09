@@ -1,6 +1,8 @@
 //! Optional accounting for retained graphs, construction churn, and solver progress.
 //! `FE_BORROWCK_PROFILE=1` enables diagnostics in a `borrowck-profile` build.
 //! `FE_BORROWCK_SUBGRAPHS=1` additionally enables expensive subgraph census.
+#![allow(clippy::print_stderr)] // Opt-in profiling reports are intentionally written to stderr.
+
 use super::{
     decision::{GraphFingerprint, LiveGraphs, live_graphs},
     guard,

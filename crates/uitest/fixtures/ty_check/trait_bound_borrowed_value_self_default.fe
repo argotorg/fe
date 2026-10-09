@@ -1,0 +1,103 @@
+use core::ops::Eq
+
+trait Foo {
+    fn foo(self) -> u256
+}
+
+struct W<A> {
+    a: A,
+}
+
+// `Eq` is `Eq<T = Self>`, so the bound is `A: Eq<A>`.
+impl<A: Eq> Foo for W<A> {
+    fn foo(self) -> u256 {
+        0
+    }
+}
+
+fn need<X: Foo>(_ x: X) -> u256 {
+    x.foo()
+}
+
+struct S {
+    x: u256,
+}
+
+impl Eq for S {
+    fn eq(self, _ other: S) -> bool {
+        self.x == other.x
+    }
+}
+
+// The borrowed value gets `view T: Eq<view T>`; the owned `T: Eq<T>` holds.
+fn generic<T: Eq>(_ t: T) -> u256 {
+    need(W { a: t })
+}
+
+fn concrete(_ s: S) -> u256 {
+    need(W { a: s })
+}
+
+// An explicit `ref` borrow: the label names no impl, in particular not the
+// borrowed goal's `Eq<ref S>`.
+fn explicit_ref(_ s: ref S) -> u256 {
+    need(W { a: s })
+}
+
+// A composite `Self` default: the bound is `A: RelTup<(A,)>`, so the borrowed
+// goal is `view S: RelTup<(view S)>` and the owned one `S: RelTup<(S)>`.
+trait RelTup<U = (Self,)> {}
+
+impl RelTup<(S,)> for S {}
+
+struct Z<A> {
+    a: A,
+}
+
+impl<A: RelTup> Foo for Z<A> {
+    fn foo(self) -> u256 {
+        0
+    }
+}
+
+fn composite_default(_ s: S) -> u256 {
+    need(Z { a: s })
+}
+
+// Direct `Self`-defaulted bounds: `X: Eq` is `X: Eq<X>`, so passing
+// `W { a: t }` for a borrowed `t` gives `W<view T>: Eq<W<view T>>`. The
+// argument follows `X`, so owning the value gives `W<T>: Eq<W<T>>`, which
+// holds.
+impl<A: Eq> Eq for W<A> {
+    fn eq(self, _ other: W<A>) -> bool {
+        true
+    }
+}
+
+fn need_eq<X: Eq>(_ x: X) {}
+
+fn need_eq_explicit<X: Eq<X>>(_ x: X) {}
+
+fn direct_generic<T: Eq>(_ t: T) {
+    need_eq(W { a: t })
+}
+
+fn direct_concrete(_ s: S) {
+    need_eq(W { a: s })
+}
+
+fn direct_ref(_ s: ref S) {
+    need_eq(W { a: s })
+}
+
+fn direct_explicit_self_arg(_ s: S) {
+    need_eq_explicit(W { a: s })
+}
+
+// Here the argument is written out as `W<ref S>` and does not follow `X`:
+// owning the value gives `W<S>: Eq<W<ref S>>`, so no borrow explanation.
+fn need_eq_ref<X: Eq<W<ref S>>>(_ x: X) {}
+
+fn direct_explicit_ref_arg(_ s: ref S) {
+    need_eq_ref(W { a: s })
+}

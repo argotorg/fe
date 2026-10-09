@@ -1,5 +1,6 @@
-//! Ethereum address formatting.
+//! Ethereum address formatting and parsing.
 use core::abi::DynString
+use core::option::Option
 use core::ptr
 use core::text
 use super::effects::{Address, revert}
@@ -28,4 +29,21 @@ pub fn checksum_address(_ address: Address) -> DynString {
         i += 1
     }
     DynString::from_payload(source: ptr::MemSpan::from_raw_parts(ptr: data, len: 42))
+}
+
+/// Parses `0x` and 40 hex digits, or the 40 digits alone, as an address
+/// (Solidity `Strings.tryParseAddress`). Digits of either case are accepted
+/// and the ERC-55 checksum is not verified; compare the input with
+/// `checksum_address` of the result to require it. `None` for any other
+/// length or an invalid digit.
+pub fn parse_address(_ text: DynString) -> Option<Address> {
+    let len = text.len()
+    let prefixed = len >= 2 && text.byte_at(0) == 48 && text.byte_at(1) == 120
+    if len != (if prefixed { 42 } else { 40 }) {
+        return Option::None
+    }
+    match text::parse_hex_uint(text) {
+        Option::Some(inner) => Option::Some(Address { inner })
+        Option::None => Option::None
+    }
 }

@@ -3,7 +3,10 @@
 //! A carrier describes its referent region. Loading that region reads a separate
 //! structural value; updating it never changes the carrier or its loan identity.
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use super::{
     birth::AllocationBirth,
@@ -148,6 +151,18 @@ impl<'db> BorrowState<'db> {
                 value.scope().validate(index).expect("free storage binder");
             }
             assert!(state.contents.insert(root, value).is_none());
+        }
+        state
+    }
+
+    /// Allocation inventory is a template for future births, not live storage.
+    /// An allocation's unknown bytes become possible only when it is born.
+    pub fn before_allocations(&self, values: &mut CapabilityValues<'db>) -> Self {
+        let mut state = self.clone();
+        for (root, contents) in &mut state.contents {
+            if matches!(root, RegionRoot::External(source) if source.is_fresh_allocation()) {
+                *contents = values.empty(contents.shape(), contents.scope());
+            }
         }
         state
     }
@@ -339,11 +354,17 @@ impl<'db> BorrowState<'db> {
         });
     }
 
+    /// Cross a feedback edge. `renewed` indices get a new instance in the next
+    /// iteration, so identities naming them become previous-iteration
+    /// witnesses. Facts about `dropped` indices, which include the renewed
+    /// ones, are dropped from guards and scalar cells. A caller can forget more
+    /// facts than it renews, since dropping a fact only weakens what is known.
     pub fn forget_iteration(
         &mut self,
         values: &mut CapabilityValues<'db>,
         previous: Option<&Self>,
-        repeated: impl Fn(IndexExpr<'db>) -> bool + Copy,
+        renewed: impl Fn(IndexExpr<'db>) -> bool + Copy,
+        dropped: impl Fn(IndexExpr<'db>) -> bool + Copy,
         occurrence: impl Fn(ValueOccurrence) -> bool + Copy,
     ) {
         self.certified_contents.retain(|certificate| {
@@ -352,9 +373,9 @@ impl<'db> BorrowState<'db> {
                 certificate.family.clone(),
                 RegionPath::default(),
             );
-            !certificate.family.indices().any(repeated)
+            !certificate.family.indices().any(renewed)
                 && family.forget_occurrences(occurrence) == family
-                && !certificate.coverage.indices().into_iter().any(repeated)
+                && !certificate.coverage.indices().into_iter().any(renewed)
                 && !certificate
                     .coverage
                     .occurrences()
@@ -364,23 +385,25 @@ impl<'db> BorrowState<'db> {
                     .leaves(&certificate.contents, ValueOccurrence::Summary)
                     .iter()
                     .any(|leaf| {
-                        leaf.guard.indices().into_iter().any(repeated)
+                        leaf.guard.indices().into_iter().any(renewed)
                             || leaf.guard.occurrences().into_iter().any(occurrence)
-                            || leaf.payload.indices().any(repeated)
+                            || leaf.payload.indices().any(renewed)
                             || leaf.payload.forget_occurrences(occurrence) != leaf.payload
                     })
         });
+        // Existential projections commute; scalar projection first avoids
+        // joining branch alternatives whose scalar facts will be discarded.
         self.guard = self
             .guard
-            .forget_occurrences(occurrence)
-            .forget_indices(repeated);
+            .forget_indices(dropped)
+            .forget_occurrences(occurrence);
         for alternatives in self.scalar_cells.values_mut() {
             for entry in alternatives.iter_mut() {
                 entry.guard = entry
                     .guard
-                    .forget_occurrences(occurrence)
-                    .forget_indices(repeated);
-                if entry.payload.is_some_and(repeated) {
+                    .forget_indices(dropped)
+                    .forget_occurrences(occurrence);
+                if entry.payload.is_some_and(dropped) {
                     entry.payload = None;
                 }
             }
@@ -398,8 +421,10 @@ impl<'db> BorrowState<'db> {
         // holder's shape, so only finitely many such edges occur.
         let mut sources: FxHashMap<CapabilityValue<'db>, SlotSources<'db>> = FxHashMap::default();
         let mut invariant_replacements = FxHashSet::default();
+        let feedback_guards = RefCell::default();
         let repeats = FeedbackRepeats {
-            index: &repeated,
+            guards: &feedback_guards,
+            index: &renewed,
             occurrence: &occurrence,
         };
         if let Some(previous) = previous {
@@ -475,7 +500,6 @@ impl<'db> BorrowState<'db> {
                                     .map(|pairs| FeedbackSlot { pairs, places })
                             })
                             .collect();
-                        let guard = domain.forget_occurrences(occurrence);
                         let payload = entry
                             .payload
                             .widen_feedback(
@@ -487,12 +511,21 @@ impl<'db> BorrowState<'db> {
                             )
                             .unwrap_or_else(|| entry.payload.clone())
                             .forget_occurrences(occurrence);
+                        // Guard-only selectors become unobserved existential
+                        // witnesses below. Project them before joining forgotten
+                        // choices, which can otherwise build a large scalar
+                        // disjunction only to project it during normalization.
+                        let observed: BTreeSet<_> =
+                            payload.indices().filter(|index| renewed(*index)).collect();
+                        let guard = domain
+                            .project_witnesses(|index| dropped(index) && !observed.contains(&index))
+                            .forget_occurrences(occurrence);
                         let mut scope = guard.scope().clone();
                         let indices: BTreeSet<_> = guard
                             .indices()
                             .into_iter()
-                            .chain(payload.indices())
-                            .filter(|index| repeated(*index))
+                            .filter(|index| dropped(*index))
+                            .chain(payload.indices().filter(|index| renewed(*index)))
                             .collect();
                         let bindings: Vec<_> = indices
                             .into_iter()
@@ -502,12 +535,21 @@ impl<'db> BorrowState<'db> {
                                 (index, witness)
                             })
                             .collect();
+                        let identities = IndexSubst::new(
+                            guard.scope(),
+                            &scope,
+                            bindings
+                                .iter()
+                                .copied()
+                                .filter(|(index, _)| renewed(*index)),
+                        )
+                        .expect("previous value occurrence identities");
                         let subst = IndexSubst::new(guard.scope(), &scope, bindings)
                             .expect("previous value occurrence witnesses");
                         let substituted = values.guards().borrow_mut().substitute(&guard, &subst);
                         substituted.map(|guard| Guarded {
                             guard,
-                            payload: payload.substitute(values.db, &subst),
+                            payload: payload.substitute(values.db, &identities),
                         })
                     })
                     .clone()
@@ -587,11 +629,11 @@ impl<'db> BorrowState<'db> {
         )
     }
 
-    /// Keep a proved range separate from possible contents, whose join may
-    /// widen guards. Reads use this must fact to exclude old possibilities only
-    /// on covered members of the same typed storage family.
+    /// Refine possible contents on a proved range. Also keep the must fact
+    /// separately, since joins may widen the guards on possible contents.
     pub fn certify_family_contents(
         &mut self,
+        values: &mut CapabilityValues<'db>,
         family: &RegionRoot<'db>,
         family_scope: &BinderScope,
         coverage: &Guard<'db>,
@@ -614,6 +656,14 @@ impl<'db> BorrowState<'db> {
         {
             return false;
         }
+        // Preserve the proved contents when a later write invalidates the must
+        // fact. Only members outside its coverage can retain older possibilities.
+        let mut contents = values.with_guard(replacement, coverage);
+        if let Some(uncovered) = Guard::always(family_scope).difference(coverage) {
+            let prior = values.with_guard(&self.contents[family], &uncovered);
+            contents = values.join(&prior, &contents);
+        }
+        self.contents.insert(family.clone(), contents);
         self.certified_contents.push(CertifiedContents {
             family: family.clone(),
             scope: family_scope.clone(),
@@ -880,7 +930,8 @@ impl<'db> BorrowState<'db> {
                         values,
                         contents.shape(),
                         contents.scope(),
-                        Some((root, footprint)),
+                        Some(root),
+                        Some(footprint),
                     )
                     .map_err(StateError::OpaqueContents)?;
                 updates.insert(root.clone(), values.join(contents, &unknown));
@@ -1031,7 +1082,8 @@ impl<'db> BorrowState<'db> {
                         values,
                         contents.shape(),
                         contents.scope(),
-                        Some((root, AccessFootprint::typed(region))),
+                        Some(root),
+                        Some(AccessFootprint::typed(region)),
                     )
                     .map_err(StateError::OpaqueContents)?;
                 let unknown = values.with_guard(&unknown, &residual);

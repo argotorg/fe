@@ -1,0 +1,24 @@
+use core::ptr
+
+fn read(_ pointer: *u256) -> ref u256 { ref *pointer }
+fn edit(_ pointer: *u256) -> mut u256 { mut *pointer }
+fn read_generic<T>(_ pointer: *T) -> ref T { ref *pointer }
+fn forward<T>(_ pointer: *T) -> ref T { read_generic(pointer) }
+
+pub fn main() -> i32 {
+    let pointer = ptr::alloc<u256>()
+    *pointer = 42
+    core::assert(read(pointer) == 42)
+    core::assert(read_generic(pointer) == 42)
+    core::assert(forward(pointer) == 42)
+    let view = edit(pointer)
+    view += 1
+    core::assert(read(pointer) == 43)
+    let byte = ptr::alloc<u8>()
+    *byte = 231
+    core::assert(read_generic(byte) == 231)
+    let flag = ptr::alloc<bool>()
+    *flag = true
+    core::assert(read_generic(flag))
+    0
+}

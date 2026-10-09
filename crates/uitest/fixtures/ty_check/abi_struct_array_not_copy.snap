@@ -49,9 +49,9 @@ error[6-0003]: trait bound is not satisfied
  22 │     let _values: MemVec<[Key; 2]> = MemVec::zeroed(1)
     │                                     ^^^^^^^^^^^^^^ `[Key; 2]` doesn't implement `StaticAbi`
     │
-    ┌─ src/abi/dyn_array.fe:172:14
+    ┌─ src/abi/dyn_array.fe:162:14
     │
-172 │     where T: StaticAbi + Decode<Sol> + Encode<Sol> + AbiSize
+162 │     where T: StaticAbi + Decode<Sol> + Encode<Sol> + AbiSize
     │              --------- required by this bound on `zeroed`
 
 error[6-0003]: trait bound is not satisfied
@@ -63,9 +63,9 @@ error[6-0003]: trait bound is not satisfied
     │                                     `[Key; 2]` doesn't implement `Decode<Sol>`
     │                                     trait bound `Key: Copy` is not satisfied
     │
-    ┌─ src/abi/dyn_array.fe:172:26
+    ┌─ src/abi/dyn_array.fe:162:26
     │
-172 │     where T: StaticAbi + Decode<Sol> + Encode<Sol> + AbiSize
+162 │     where T: StaticAbi + Decode<Sol> + Encode<Sol> + AbiSize
     │                          ----------- required by this bound on `zeroed`
 
 error[6-0003]: trait bound is not satisfied
@@ -74,9 +74,9 @@ error[6-0003]: trait bound is not satisfied
  22 │     let _values: MemVec<[Key; 2]> = MemVec::zeroed(1)
     │                                     ^^^^^^^^^^^^^^ `[Key; 2]` doesn't implement `Encode<Sol>`
     │
-    ┌─ src/abi/dyn_array.fe:172:40
+    ┌─ src/abi/dyn_array.fe:162:40
     │
-172 │     where T: StaticAbi + Decode<Sol> + Encode<Sol> + AbiSize
+162 │     where T: StaticAbi + Decode<Sol> + Encode<Sol> + AbiSize
     │                                        ----------- required by this bound on `zeroed`
 
 error[6-0003]: trait bound is not satisfied
@@ -85,7 +85,7 @@ error[6-0003]: trait bound is not satisfied
  22 │     let _values: MemVec<[Key; 2]> = MemVec::zeroed(1)
     │                                     ^^^^^^^^^^^^^^ `[Key; 2]` doesn't implement `AbiSize`
     │
-    ┌─ src/abi/dyn_array.fe:172:54
+    ┌─ src/abi/dyn_array.fe:162:54
     │
-172 │     where T: StaticAbi + Decode<Sol> + Encode<Sol> + AbiSize
+162 │     where T: StaticAbi + Decode<Sol> + Encode<Sol> + AbiSize
     │                                                      ------- required by this bound on `zeroed`

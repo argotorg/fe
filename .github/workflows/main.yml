@@ -30,16 +30,16 @@ jobs:
     env:
       RUSTFLAGS: "-D warnings"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
       - name: Install rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: stable
           components: rustfmt, clippy
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
       - name: Generate tree-sitter parser
@@ -52,11 +52,12 @@ jobs:
           npm rebuild tree-sitter-cli
           npx tree-sitter generate --abi=14
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: Validate release notes entry
-        run: ./newsfragments/validate_files.py
+        # Outside target/, which the Rust cache keeps between runs.
+        run: make check-notes EISENBOTE="$RUNNER_TEMP/eisenbote"
       - name: Lint with rustfmt
         run: cargo fmt --all -- --check
       - name: Lint with clippy
@@ -78,16 +79,16 @@ jobs:
       # binaries. Only affects Windows builds.
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: rust-lld.exe
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
       - name: Install rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: stable
       - name: Cache tree-sitter parser
         id: tree-sitter-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             crates/tree-sitter-fe/src/parser.c
@@ -104,7 +105,7 @@ jobs:
         run: touch src/parser.c src/grammar.json src/node-types.json
       - name: Setup Node
         if: steps.tree-sitter-cache.outputs.cache-hit != 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
       - name: Generate tree-sitter parser
@@ -120,7 +121,7 @@ jobs:
           npx tree-sitter generate --abi=14
       - name: Cache solc
         id: solc-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.os == 'Windows' && format('{0}\\solc-{1}.exe', runner.temp, env.SOLC_VERSION) || format('{0}/solc-{1}', runner.temp, env.SOLC_VERSION) }}
           key: solc-${{ runner.os }}-${{ env.SOLC_VERSION }}
@@ -143,21 +144,25 @@ jobs:
           $output = "$env:RUNNER_TEMP\solc-$env:SOLC_VERSION.exe"
           Invoke-WebRequest -Uri $url -OutFile $output
       - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+        uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
         with:
           version: ${{ env.FOUNDRY_VERSION }}
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@badb8c3638e0b773c6c17a6025c2306a8f1c4303 # nextest
+        with:
+          tool: nextest
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: Build
-        run: cargo test --release --workspace --all-features --no-run --locked --exclude fe-bench --timings
+        run: cargo test --profile test-release --workspace --all-features --no-run --locked --exclude fe-bench --timings
       - name: Run tests
         env:
           FE_SOLC_PATH: ${{ runner.os == 'Windows' && format('{0}\\solc-{1}.exe', runner.temp, env.SOLC_VERSION) || format('{0}/solc-{1}', runner.temp, env.SOLC_VERSION) }}
-        run: cargo nextest run --release --workspace --all-features --no-fail-fast --locked --exclude fe-bench
+        run: >-
+          cargo nextest run --cargo-profile test-release --workspace --all-features --no-fail-fast --locked --exclude fe-bench
+          -E 'not (package(=fe-language-server) and test(/^mock_client_tests::/))'
       - name: Upload build timings
         if: always()
         uses: actions/upload-artifact@v4
@@ -171,11 +176,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
       - name: Install rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: stable
       - name: Install WASM targets
@@ -183,7 +188,7 @@ jobs:
           rustup target add wasm32-unknown-unknown
           rustup target add wasm32-wasip1
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: Check core crates for wasm32-unknown-unknown
@@ -232,7 +237,7 @@ jobs:
             STRIP: ""
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
       - name: Install cross-compilation toolchain (Linux ARM64)
@@ -241,12 +246,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
       - name: Install rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
       - name: Generate tree-sitter parser
@@ -260,7 +265,13 @@ jobs:
       - name: Build
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --locked --release --target ${{ matrix.target }} ${{ matrix.EXTRA_FEATURES }}
+        # `fe/cranelift` enables the native backend (`fe build --backend native`).
+        run: cargo build --locked --release --target ${{ matrix.target }} --features fe/cranelift ${{ matrix.EXTRA_FEATURES }}
+      - name: Check native backend is available
+        # Cross-compiled binaries can't run on the build host.
+        if: matrix.target != 'aarch64-unknown-linux-gnu' && matrix.target != 'x86_64-apple-darwin'
+        shell: bash
+        run: target/${{ matrix.target }}/release/fe${{ matrix.EXT }} build --help | grep -q native
       - name: Strip binary (Unix)
         if: runner.os != 'Windows'
         run: ${{ matrix.STRIP }} target/${{ matrix.target }}/release/fe
@@ -268,7 +279,7 @@ jobs:
         shell: bash
         run: mv target/${{ matrix.target }}/release/fe${{ matrix.EXT }} target/${{ matrix.target }}/release/${{ matrix.BIN_FILE }}
       - name: Upload release binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fe-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/${{ matrix.BIN_FILE }}
@@ -284,13 +295,13 @@ jobs:
       contents: write
     steps:
       - name: Download release binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: fe-*
           merge-multiple: true
           path: dist
       - name: Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: dist/*
           fail_on_unmatched_files: true
@@ -308,7 +319,7 @@ jobs:
             echo "Docs deployment requires a stable version tag" >&2
             exit 1
           fi
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
 
@@ -337,7 +348,7 @@ jobs:
           "
 
       - name: Upload generated docs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: docs
           path: |
@@ -356,7 +367,7 @@ jobs:
     environment: fe-docs-deploy
     steps:
       - name: Download generated docs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: docs
           path: /tmp/docs-out
@@ -370,7 +381,7 @@ jobs:
           done
 
       - name: Deploy to doc site
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           repository: fe-lang/fe-docs
           token: ${{ secrets.DOC_DEPLOY_TOKEN }}

@@ -1,0 +1,1 @@
+Borrows and allocations made in a loop body stay current across a nested inner loop. The borrow checker no longer reports false borrow or move conflicts for them, and checks nested-loop functions faster.

@@ -2852,9 +2852,9 @@ fn blocked_contract_body_keeps_its_declaration_layout_signature() {
 struct Rooted<const ROOT: u256 = _> {}
 
 pub contract InvalidInit {
-    values: [Rooted; 2]
+    value: Rooted
 
-    init() uses (values) {
+    init() uses (value) {
         missing
     }
 }
@@ -13475,4 +13475,480 @@ fn aliased() {{
         .unwrap();
     assert_eq!(summary.loan_requirements.clauses().len(), 1);
     assert_eq!(conflicting_functions(&source), ["aliased"]);
+}
+
+#[test]
+fn callee_separation_excludes_impossible_clobbers_of_independent_locals() {
+    let source = r#"
+use core::ptr
+struct Cell { pointer: *u256 }
+fn write(_ cell: mut Cell) {
+    *cell.pointer = 1
+    *cell.pointer = 2
+}
+fn hold(_ local: mut u256, _ cell: mut Cell) { write(cell) }
+fn forward(_ cell: mut Cell) -> u256 {
+    let mut local: u256 = 0
+    hold(mut local, cell)
+    local
+}
+fn disjoint() {
+    let data = ptr::alloc<u256>()
+    *data = 0
+    let mut cell = Cell { pointer: data }
+    let _ = forward(mut cell)
+}
+fn aliased() {
+    let cell = ptr::alloc<Cell>()
+    *cell = Cell { pointer: ptr::cast<Cell, u256>(cell) }
+    let _ = forward(mut *cell)
+}
+"#;
+    assert_eq!(conflicting_functions(source), ["aliased"]);
+}
+
+#[test]
+fn recursive_poststate_preserves_fresh_births_and_input_aliases() {
+    for (body, caller, moved) in [
+        (
+            "*slot = initialized()",
+            "store(slot, old, depth: 3)\nconsume(*(*slot))",
+            false,
+        ),
+        (
+            "*slot = initialized()",
+            "store(slot, old, depth: 3)\nconsume(*(*slot))\nconsume(*(*slot))",
+            true,
+        ),
+        (
+            "*slot = old",
+            "consume(*old)\nstore(slot, old, depth: 3)\nconsume(*(*slot))",
+            true,
+        ),
+        (
+            "*slot = initialized()",
+            "store(slot, old, depth: 3)\nlet previous = *slot\nconsume(*previous)\nstore(slot, old, depth: 2)\nconsume(*(*slot))\nconsume(*previous)",
+            true,
+        ),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Item {{ n: u256 }}
+fn consume(_ item: own Item) {{}}
+fn initialized() -> *Item {{
+    let pointer = core::ptr::alloc<Item>()
+    *pointer = Item {{ n: 1 }}
+    pointer
+}}
+fn store(_ slot: **Item, _ old: *Item, depth: u256) {{
+    if depth == 0 {{ {body} }}
+    else {{ store(slot, old, depth: depth - 1) }}
+}}
+fn inspect() {{
+    let slot = core::ptr::alloc<*Item>()
+    let old = initialized()
+    {caller}
+}}
+"#
+        ));
+        if moved {
+            assert!(
+                diagnostics.contains("move conflict in `fn inspect`"),
+                "{body}\n{caller}\n{diagnostics}"
+            );
+            assert!(!diagnostics.contains("did not converge"), "{diagnostics}");
+        } else {
+            assert!(diagnostics.is_empty(), "{diagnostics}");
+        }
+    }
+}
+
+#[test]
+fn sole_poststate_port_does_not_merge_observable_family_members() {
+    for (declaration, writes, previous, current) in [
+        (
+            "struct Pair { previous: *Item, current: *Item }",
+            "(*slot).previous = pointer\n(*slot).current = pointer",
+            "(*slot).previous",
+            "(*slot).current",
+        ),
+        (
+            "type Pair = [*Item; 2]",
+            "(*slot)[0] = pointer\n(*slot)[1] = pointer",
+            "(*slot)[0]",
+            "(*slot)[1]",
+        ),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Item {{ n: u256 }}
+{declaration}
+fn consume(_ item: own Item) {{}}
+fn fill(_ slot: *Pair, count: u256) {{
+    let mut pointer = core::ptr::alloc<Item>()
+    {writes}
+    let mut index: u256 = 0
+    while index < count {{
+        pointer = core::ptr::alloc<Item>()
+        if index + 1 < count {{ {previous} = pointer }}
+        {current} = pointer
+        index += 1
+    }}
+}}
+fn inspect() {{
+    let slot = core::ptr::alloc<Pair>()
+    fill(slot, count: 3)
+    let previous = {previous}
+    let current = {current}
+    *current = Item {{ n: 1 }}
+    consume(*previous)
+    *current = Item {{ n: 2 }}
+    consume(*previous)
+}}
+"#
+        ));
+        assert!(
+            diagnostics.contains("move conflict in `fn inspect`"),
+            "{declaration}: {diagnostics}"
+        );
+    }
+}
+
+#[test]
+fn recursive_poststate_keeps_native_contents_invalid() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+fn store(_ slot: **ref u256, depth: u256) {
+    if depth == 0 { *slot = core::ptr::alloc<ref u256>() }
+    else { store(slot, depth: depth - 1) }
+}
+fn inspect() {
+    let slot = core::ptr::alloc<*ref u256>()
+    store(slot, depth: 3)
+    let loaded: u256 = *(*slot)
+}
+"#,
+    );
+    assert!(
+        diagnostics.contains("cannot use a native borrow"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn recursive_reinitialization_requires_all_returning_paths() {
+    for (write, available) in [
+        ("*pointer = Item { n: 1 }", true),
+        ("if flag { *pointer = Item { n: 1 } }", false),
+        ("if flag { return }\n*pointer = Item { n: 1 }", false),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Item {{ n: u256 }}
+fn consume(_ item: own Item) {{}}
+fn initialize(_ pointer: *Item, flag: bool, depth: u256) {{
+    if depth == 0 {{ {write} }}
+    else {{ initialize(pointer, flag, depth: depth - 1) }}
+}}
+fn inspect(_ pointer: *Item, flag: bool, depth: u256) {{
+    consume(*pointer)
+    initialize(pointer, flag, depth)
+    consume(*pointer)
+}}
+"#
+        ));
+        if available {
+            assert!(diagnostics.is_empty(), "{write}: {diagnostics}");
+        } else {
+            assert!(
+                diagnostics.contains("move conflict in `fn inspect`"),
+                "{write}: {diagnostics}"
+            );
+            assert!(!diagnostics.contains("did not converge"), "{diagnostics}");
+        }
+    }
+}
+
+#[test]
+fn dynamic_poststate_slots_keep_distinct_allocation_members() {
+    let diagnostics = checked_borrow_diags(
+        r#"
+struct Item { n: u256 }
+fn consume(_ item: own Item) {}
+fn fill(_ slots: *[*Item; 2]) {
+    let mut index: usize = 0
+    while index < 2 {
+        (*slots)[index] = core::ptr::alloc<Item>()
+        index += 1
+    }
+}
+fn inspect() {
+    let slots = core::ptr::alloc<[*Item; 2]>()
+    fill(slots)
+    let first = (*slots)[0]
+    let second = (*slots)[1]
+    *second = Item { n: 1 }
+    consume(*first)
+    *second = Item { n: 2 }
+    consume(*first)
+}
+"#,
+    );
+    assert!(
+        diagnostics.contains("move conflict in `fn inspect`"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn discarded_scalar_call_results_keep_argument_postconditions() {
+    let source = r#"
+fn constrain(_ index: usize) -> usize {
+    if index != 1 { assert!(false) }
+    index
+}
+fn discard(_ index: usize) -> usize {
+    let unused = constrain(index)
+    index
+}
+"#;
+    assert_eq!(checked_borrow_diags(source), "");
+    with_borrow_summary(source, "discard", |_db, summary| {
+        let guard = summary
+            .scalar_result
+            .expect("argument equality survives an unused result");
+        let bound = fe_hir::analysis::semantic::capability::guard::Guard::always(guard.scope())
+            .with_equality(IndexExpr::FormalValue(0), IndexExpr::Const(1))
+            .unwrap();
+        assert!(guard.implies(&bound));
+    });
+}
+
+#[test]
+fn forwarded_scalar_call_results_keep_return_relations() {
+    let source = r#"
+fn identity(_ index: usize) -> usize { index }
+fn forward(_ index: usize) -> usize { identity(index) }
+"#;
+    with_borrow_summary(source, "forward", |_db, summary| {
+        use fe_hir::analysis::semantic::capability::guard::Guard;
+        use fe_hir::analysis::semantic::capability::index::{BinderScope, IndexNamespace};
+        let guard = summary
+            .scalar_result
+            .expect("a used result keeps its relation");
+        let (_, returned) = BinderScope::default().bind(IndexNamespace::Result);
+        let equality = Guard::always(guard.scope())
+            .with_equality(returned, IndexExpr::FormalValue(0))
+            .unwrap();
+        assert!(guard.implies(&equality));
+    });
+}
+
+#[test]
+fn nested_scalar_call_results_keep_return_relations() {
+    let source = r#"
+fn identity(_ index: usize) -> usize { index }
+fn nested(_ index: usize) -> usize { identity(identity(index)) }
+"#;
+    with_borrow_summary(source, "nested", |_db, summary| {
+        use fe_hir::analysis::semantic::capability::guard::Guard;
+        use fe_hir::analysis::semantic::capability::index::{BinderScope, IndexNamespace};
+        let guard = summary
+            .scalar_result
+            .expect("a returned call chain keeps its relation");
+        let (_, returned) = BinderScope::default().bind(IndexNamespace::Result);
+        let equality = Guard::always(guard.scope())
+            .with_equality(returned, IndexExpr::FormalValue(0))
+            .unwrap();
+        assert!(guard.implies(&equality));
+    });
+}
+
+#[test]
+fn named_scalar_call_results_keep_return_relations() {
+    // The result itself is not tracked, but another fact names it: a
+    // comparison with a tracked index, a tracked cell it is stored to, a kept
+    // call relation or argument postcondition it is passed to, or a callee
+    // that indexes with it.
+    for body in [
+        "let held = mut arr[k]\n    if same(k) != j { arr[j] = 0 }\n    held = 1",
+        "let held = mut arr[k]\n    if same(same(k)) != j { arr[j] = 0 }\n    held = 1",
+        "let held = mut arr[k]\n    if j != k {\n        let mut m: usize = same(j)\n        \
+         if flag { m = j }\n        arr[m] = 0\n    }\n    held = 1",
+        "let held = mut arr[0]\n    let unused = constrain(same(k))\n    arr[k] = 2\n    held = 1",
+        "let cells = ptr::alloc<[u64; 8]>()\n    *cells = [0; 8]\n    \
+         let held = mut (*cells)[k]\n    if j != k { write(cells, same(j)) }\n    held = 1",
+    ] {
+        let source = format!(
+            r#"
+use core::ptr
+fn same(_ x: usize) -> usize {{ x }}
+fn constrain(_ index: usize) -> usize {{
+    if index != 1 {{ assert!(false) }}
+    index
+}}
+fn write(_ cells: *[u64; 8], _ index: usize) {{ (*cells)[index] = 0 }}
+fn f(_ arr: mut [u64; 8], k: usize, j: usize, flag: bool) {{
+    {body}
+}}
+"#
+        );
+        assert_eq!(checked_borrow_diags(&source), "", "{source}");
+    }
+}
+
+#[test]
+fn summaries_observe_indexing_parameters_not_arithmetic_ones() {
+    let source = r#"
+fn pick(_ offset: usize, _ index: usize, _ arr: [u64; 4]) -> u64 {
+    let unused = offset + 1
+    arr[index]
+}
+"#;
+    with_borrow_summary(source, "pick", |_db, summary| {
+        let observed = summary.observed_params.as_ref().unwrap();
+        assert!(
+            observed.unconditional.contains(&1)
+                && !observed.unconditional.contains(&0)
+                && !observed.through_result.contains(&0),
+            "{observed:?}"
+        );
+    });
+}
+
+#[test]
+fn summaries_observe_returned_parameters_through_the_result() {
+    // A caller that forgets a dead result's relation leaves `x` unread, while a
+    // checked parameter is observed regardless.
+    let source = r#"
+fn identity(_ x: usize) -> usize { x }
+fn constrain(_ index: usize) -> usize {
+    if index != 1 { assert!(false) }
+    0
+}
+"#;
+    with_borrow_summary(source, "identity", |_db, summary| {
+        let observed = summary.observed_params.as_ref().unwrap();
+        assert!(
+            observed.through_result.contains(&0) && !observed.unconditional.contains(&0),
+            "{observed:?}"
+        );
+    });
+    with_borrow_summary(source, "constrain", |_db, summary| {
+        let observed = summary.observed_params.as_ref().unwrap();
+        assert!(observed.unconditional.contains(&0), "{observed:?}");
+    });
+}
+
+#[test]
+fn owned_values_reinitialized_in_loops_remain_available() {
+    for check in [
+        "core::assert(moved.value == 42)",
+        "require_value(moved.value)",
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Item {{ value: u64 }}
+fn require_value(_ value: u64) {{
+    if value != 42 {{ core::panic() }}
+}}
+fn inspect(mut count: own u64) {{
+    let mut item = Item {{ value: 42 }}
+    while count != 0 {{
+        let moved = item
+        {check}
+        item = Item {{ value: 42 }}
+        count -= 1
+    }}
+}}
+"#
+        ));
+        assert!(diagnostics.is_empty(), "{check}: {diagnostics}");
+    }
+    let diagnostics = checked_borrow_diags(
+        r#"
+use core::Option
+struct Item { value: u64 }
+fn inspect(mut count: own u64) {
+    let mut top = Option::Some(Item { value: 42 })
+    while count != 0 {
+        let moved = match top {
+            Option::Some(item) => item,
+            Option::None => return,
+        }
+        core::assert(moved.value == 42)
+        top = Option::Some(Item { value: 42 })
+        count -= 1
+    }
+}
+"#,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn returning_path_guards_preserve_real_move_conflicts() {
+    for replacement in ["", "if replace { item = Item { value: 42 } }"] {
+        let diagnostics = checked_borrow_diags(&format!(
+            r#"
+struct Item {{ value: u64 }}
+fn inspect(mut count: own u64, replace: bool) {{
+    let mut item = Item {{ value: 42 }}
+    while count != 0 {{
+        let moved = item
+        core::assert(moved.value == 42)
+        {replacement}
+        count -= 1
+    }}
+}}
+"#
+        ));
+        assert!(
+            diagnostics.contains("move conflict"),
+            "{replacement}: {diagnostics}"
+        );
+    }
+    let diagnostics = checked_borrow_diags(
+        r#"
+struct Item { value: u64 }
+fn consume(_ value: own Item) {}
+fn inspect() {
+    let item = Item { value: 42 }
+    consume(item)
+    consume(item)
+    core::assert(false)
+}
+"#,
+    );
+    assert!(diagnostics.contains("move conflict"), "{diagnostics}");
+}
+
+#[test]
+fn returned_reference_projections_preserve_live_loans() {
+    let prefix = r#"
+struct Inner { value: u256 }
+struct Outer { inner: Inner }
+impl Inner { fn add(mut self, _ value: u256) { self.value += value } }
+fn view(_ outer: mut Outer) -> mut Outer { outer }
+"#;
+    for (body, expected) in [
+        ("view(mut outer).inner.add(1)", ""),
+        (
+            "let held = ref outer.inner\nview(mut outer).inner.add(1)\nlet value = held.value",
+            "borrow conflict",
+        ),
+        (
+            "let held = view(mut outer)\nview(mut outer).inner.add(1)\nlet value = held.inner.value",
+            "borrow conflict",
+        ),
+    ] {
+        let diagnostics = checked_borrow_diags(&format!(
+            "{prefix}fn run() {{\nlet mut outer = Outer {{ inner: Inner {{ value: 0 }} }}\n{body}\n}}"
+        ));
+        if expected.is_empty() {
+            assert!(diagnostics.is_empty(), "{body}: {diagnostics}");
+        } else {
+            assert!(diagnostics.contains(expected), "{body}: {diagnostics}");
+        }
+    }
 }

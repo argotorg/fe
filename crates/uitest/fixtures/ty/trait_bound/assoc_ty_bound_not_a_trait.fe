@@ -1,0 +1,12 @@
+struct S {}
+
+mod m {
+    pub trait Present {}
+}
+
+trait T1 {
+    type Missing: T2
+    type NotATrait: S
+    type InModule: m::Absent
+    type Fine: m::Present
+}

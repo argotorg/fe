@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_bound/assoc_ty_bound_not_a_trait.fe
+---
+error[2-0002]: `T2` is not found
+  ┌─ assoc_ty_bound_not_a_trait.fe:8:19
+  │
+8 │     type Missing: T2
+  │                   ^^ `T2` is not found
+
+error[2-0002]: `Absent` is not found
+   ┌─ assoc_ty_bound_not_a_trait.fe:10:23
+   │
+10 │     type InModule: m::Absent
+   │                       ^^^^^^ `Absent` is not found
+
+error[2-0007]: expected trait item here
+  ┌─ assoc_ty_bound_not_a_trait.fe:9:21
+  │
+9 │     type NotATrait: S
+  │                     ^ expected trait here, but found type `S`

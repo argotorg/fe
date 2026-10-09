@@ -1,0 +1,93 @@
+// Loop feedback gives an input's loan earlier generations whose conditions
+// name previous iterations' values. They keep the input's authority.
+fn xor(_ value: mut u64, _ delta: u64) { value = value ^ delta }
+fn swap(_ left: mut u64, _ right: mut u64) {
+    let saved = left
+    left = right
+    right = saved
+}
+
+// Accepted: Keccak's theta step updates an input column in nested loops.
+fn theta(_ state: mut [u64; 25]) {
+    let mut round: usize = 0
+    while round < 2 {
+        let mut columns: [u64; 5] = [0; 5]
+        let mut x: usize = 0
+        while x < 5 {
+            columns[x] = state[x]
+            x += 1
+        }
+        x = 0
+        while x < 5 {
+            let delta = columns[(x + 4) % 5] ^ columns[(x + 1) % 5]
+            let mut y: usize = 0
+            while y < 5 {
+                state[x + 5 * y] ^= delta
+                y += 1
+            }
+            x += 1
+        }
+        round += 1
+    }
+}
+
+// Accepted: the same update through an explicit mutable reborrow.
+fn theta_reborrow(_ state: mut [u64; 25]) {
+    let mut round: usize = 0
+    while round < 2 {
+        let mut columns: [u64; 5] = [0; 5]
+        let mut x: usize = 0
+        while x < 5 {
+            columns[x] = state[x]
+            x += 1
+        }
+        x = 0
+        while x < 5 {
+            let delta = columns[(x + 4) % 5] ^ columns[(x + 1) % 5]
+            let mut y: usize = 0
+            while y < 5 {
+                xor(mut state[x + 5 * y], delta)
+                y += 1
+            }
+            x += 1
+        }
+        round += 1
+    }
+}
+
+// Rejected: the column's first lane stays mutably borrowed across its update.
+fn theta_held(_ state: mut [u64; 25]) {
+    let mut round: usize = 0
+    while round < 2 {
+        let mut x: usize = 0
+        while x < 5 {
+            let held = mut state[x]
+            let delta: u64 = x.downcast_truncate()
+            let mut y: usize = 0
+            while y < 5 {
+                state[x + 5 * y] ^= delta
+                y += 1
+            }
+            held = 1
+            x += 1
+        }
+        round += 1
+    }
+}
+
+// Rejected: both arguments name the column's first lane when `y` is zero.
+fn theta_aliased(_ state: mut [u64; 25]) {
+    let mut round: usize = 0
+    while round < 2 {
+        let mut x: usize = 0
+        while x < 5 {
+            let mut y: usize = 0
+            while y < 5 {
+                swap(mut state[x + 5 * y], mut state[x])
+                y += 1
+            }
+            x += 1
+        }
+        round += 1
+    }
+}

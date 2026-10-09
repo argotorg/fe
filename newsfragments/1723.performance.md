@@ -1,0 +1,1 @@
+Checking nested generic types, such as `W<W<W<u8>>>` or `Wrap<<Wrap<T as M>::P> as M>::P>`, no longer takes time exponential in the nesting depth: around twenty levels took seconds, and deeper nesting hung `fe check` and the language server.

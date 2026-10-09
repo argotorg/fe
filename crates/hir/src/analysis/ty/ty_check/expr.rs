@@ -34,7 +34,9 @@ use crate::analysis::ty::{
     corelib::{
         resolve_core_range_types, resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
     },
-    diagnostics::{BodyDiag, FuncBodyDiag, MustUseSubject, TraitConstraintDiag, TyDiagCollection},
+    diagnostics::{
+        BodyDiag, FuncBodyDiag, MustUseSubject, TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
+    },
     effects::{
         BarrierReason, EffectBarrier, EffectKeyKind, EffectPatternKey, EffectQuery,
         EffectRequirementDecl, EffectRequirementKey, EffectWitness, ForwardedEffectKey,
@@ -66,6 +68,7 @@ use crate::analysis::ty::{
     },
     ty_check::callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization},
     ty_def::{CapabilityKind, PrimTy, TyBase, TyData, prim_int_bits},
+    ty_error::{diag_from_invalid_cause, first_invalid_ty_cause},
     unify::UnificationTable,
 };
 use crate::analysis::{
@@ -141,7 +144,7 @@ fn layout_projections_from_callable_path(
                 projections.push(LayoutProjection::VariantField { variant, field });
             }
             LayoutBundlePathStep::Index => {
-                projections.push(LayoutProjection::Index(None));
+                projections.push(LayoutProjection::Index);
             }
             LayoutBundlePathStep::ConstParam(param) => {
                 projections.push(LayoutProjection::ConstParam(param));
@@ -336,6 +339,32 @@ impl<'db> TyChecker<'db> {
         true
     }
 
+    /// An expression's type can reach the normalization limit only once
+    /// generic arguments are filled in, as in a call to
+    /// `fn get<T: Tr>() -> T::Out`. The limit leaves an invalid type, which
+    /// matches any type, so report it at the first expression that has it;
+    /// enclosing expressions that inherit the type are not reported again,
+    /// nor is a type that came from the expected type, which is reported
+    /// where that type is written.
+    fn report_normalization_limit(&mut self, expr: ExprId, ty: TyId<'db>, expected: TyId<'db>) {
+        let is_limit =
+            |ty| first_invalid_ty_cause(self.db, ty) == Some(InvalidCause::TypeNormalizationLimit);
+        if !is_limit(ty) || is_limit(expected) {
+            return;
+        }
+        let reported = self.diags.iter().any(|diag| {
+            matches!(
+                diag,
+                FuncBodyDiag::Ty(TyDiagCollection::Ty(TyLowerDiag::TypeNormalizationLimit(_)))
+            )
+        });
+        if !reported {
+            self.push_diag(TyDiagCollection::from(TyLowerDiag::TypeNormalizationLimit(
+                expr.span(self.body()).into(),
+            )));
+        }
+    }
+
     pub(super) fn check_expr(&mut self, expr: ExprId, expected: TyId<'db>) -> ExprProp<'db> {
         self.check_expr_with_result_context(expr, expected, false)
     }
@@ -418,6 +447,7 @@ impl<'db> TyChecker<'db> {
         self.env.leave_expr();
 
         actual.ty = normalize_ty(self.db, actual.ty, self.env.scope(), self.env.assumptions());
+        self.report_normalization_limit(expr, actual.ty, expected);
         if let Some(coerced) =
             self.try_coerce_capability_for_expr_to_expected(expr, actual.ty, expected)
         {
@@ -655,11 +685,6 @@ impl<'db> TyChecker<'db> {
         inner_expr: ExprId,
         target_ty: Partial<crate::hir_def::TypeId<'db>>,
     ) -> ExprProp<'db> {
-        let inner_prop = self.check_expr_unknown(inner_expr);
-        if inner_prop.ty.has_invalid(self.db) {
-            return ExprProp::invalid(self.db);
-        }
-
         let Some(hir_target_ty) = target_ty.to_opt() else {
             return ExprProp::invalid(self.db);
         };
@@ -667,6 +692,22 @@ impl<'db> TyChecker<'db> {
         let span = expr.span(self.body()).into_cast_expr().ty();
         let target_ty = self.lower_ty(hir_target_ty, span, true);
         if target_ty.has_invalid(self.db) {
+            return ExprProp::invalid(self.db);
+        }
+
+        // A fixed String cast supplies the width of a string literal, just
+        // as an annotation does. Other casts still infer the source type
+        // independently before checking whether the conversion is allowed.
+        let inner_prop = if target_ty.is_string(self.db)
+            && matches!(
+                inner_expr.data(self.db, self.body()),
+                Partial::Present(Expr::Lit(LitKind::String(_)))
+            ) {
+            self.check_expr(inner_expr, target_ty)
+        } else {
+            self.check_expr_unknown(inner_expr)
+        };
+        if inner_prop.ty.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
         }
 
@@ -984,7 +1025,7 @@ impl<'db> TyChecker<'db> {
                     len,
                 })
             }
-            if let Some(projected) = self.contract_field_projected_index_ty(lhs_expr, rhs_expr) {
+            if let Some(projected) = self.contract_field_projected_index_ty(lhs_expr) {
                 return ExprProp::new(self.table.fold_ty(self.db, projected), lhs.is_mut);
             }
             return ExprProp::new(elem_ty, lhs.is_mut);
@@ -1422,6 +1463,7 @@ impl<'db> TyChecker<'db> {
 
         let ret_ty = callable.ret_ty(self.db);
         let normalized_ret_ty = self.normalize_ty(ret_ty);
+        self.report_instantiated_const_fault(&callable, normalized_ret_ty, expr);
         if let Some(kind) = self.const_intrinsic_kind(callable.callable_def()) {
             if !self.check_and_register_const_intrinsic(expr, callable, kind) {
                 return ExprProp::invalid(self.db);
@@ -1430,6 +1472,37 @@ impl<'db> TyChecker<'db> {
             self.env.register_semantic_call(expr, callable);
         }
         ExprProp::new(normalized_ret_ty, true)
+    }
+
+    /// A callee's return type with the call's generic arguments filled in can
+    /// hold a const that fails to evaluate only now, such as `S<{N - 5}>` at
+    /// `N = 2`. The failure leaves an invalid type, which matches any type and
+    /// so would let the call pass checking. Report it instead.
+    fn report_instantiated_const_fault(
+        &mut self,
+        callable: &Callable<'db>,
+        ret_ty: TyId<'db>,
+        expr: ExprId,
+    ) {
+        // A failure already in the declared return type is reported with the
+        // callee's signature.
+        let declared = callable
+            .callable_def()
+            .ret_ty(self.db)
+            .instantiate_identity();
+        if declared.has_invalid(self.db) {
+            return;
+        }
+        let call: DynLazySpan<'db> = expr.span(self.body()).into();
+        if let Some(cause) = first_invalid_ty_cause(self.db, ret_ty)
+            && cause.const_eval_fault().is_some()
+            && let Some(fault) = diag_from_invalid_cause(call.clone(), &cause)
+        {
+            self.push_diag(BodyDiag::CallReturnTypeConstFault {
+                call,
+                fault: Box::new(fault),
+            });
+        }
     }
 
     fn check_assert(&mut self, expr: ExprId, args: &[HirCallArg<'db>]) -> ExprProp<'db> {
@@ -3456,6 +3529,7 @@ impl<'db> TyChecker<'db> {
 
         let ret_ty = callable.ret_ty(self.db);
         let normalized_ret_ty = self.normalize_ty(ret_ty);
+        self.report_instantiated_const_fault(&callable, normalized_ret_ty, expr);
         if let Some(kind) = self.const_intrinsic_kind(callable.callable_def()) {
             if !self.check_and_register_const_intrinsic(expr, callable, kind) {
                 return ExprProp::invalid(self.db);
@@ -3826,6 +3900,7 @@ impl<'db> TyChecker<'db> {
                                 primary_goal: inst,
                                 unsat_subgoal: None,
                                 required_by: None,
+                                capability_hint: None,
                             },
                         ));
                         return ExprProp::invalid(self.db);
@@ -4166,12 +4241,9 @@ impl<'db> TyChecker<'db> {
         self.selected_contract_layout_ty(field, view, &selection)
     }
 
-    fn contract_field_projected_index_ty(&self, lhs: ExprId, index: ExprId) -> Option<TyId<'db>> {
+    fn contract_field_projected_index_ty(&self, lhs: ExprId) -> Option<TyId<'db>> {
         let (field, view, mut projections) = self.contract_field_layout_context(lhs)?;
-        projections.push(LayoutProjection::Index(
-            self.try_get_literal_int(index)
-                .and_then(|value| value.data(self.db).to_usize()),
-        ));
+        projections.push(LayoutProjection::Index);
         let selection = field
             .selection_for_projections(self.db, view, &projections)
             .ok()?;
@@ -4187,16 +4259,13 @@ impl<'db> TyChecker<'db> {
         match field.projected_concrete_ty(self.db, view, selection) {
             Ok(ty) => Some(ty),
             Err(
-                LayoutViewError::NonPhysicalRoot { .. }
-                | LayoutViewError::RootNeedsLanding { .. }
-                | LayoutViewError::RootNeedsIndex { .. },
+                LayoutViewError::NonPhysicalRoot { .. } | LayoutViewError::RootNeedsLanding { .. },
             ) => field
                 .project(self.db, view, selection)
                 .ok()
                 .map(|view| view.shape_ty()),
             Err(
                 LayoutViewError::RootNotClassified { .. }
-                | LayoutViewError::InvalidIndex { .. }
                 | LayoutViewError::MissingAllocation { .. }
                 | LayoutViewError::InvalidProjection,
             ) => None,
@@ -4248,15 +4317,7 @@ impl<'db> TyChecker<'db> {
             .filter_map(|projection| match projection {
                 PlaceProjection::Deref { .. } => None,
                 PlaceProjection::Field { index, .. } => Some(LayoutProjection::Field(*index)),
-                PlaceProjection::Index { index_expr, .. } => Some({
-                    let index = match index_expr.data(self.db, self.body()) {
-                        Partial::Present(Expr::Lit(LitKind::Int(value))) => {
-                            value.data(self.db).to_usize()
-                        }
-                        _ => None,
-                    };
-                    LayoutProjection::Index(index)
-                }),
+                PlaceProjection::Index { .. } => Some(LayoutProjection::Index),
             })
             .collect::<Vec<_>>();
         Some((field, layout_env.view, projections))

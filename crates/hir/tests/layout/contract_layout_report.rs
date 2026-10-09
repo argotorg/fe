@@ -46,7 +46,7 @@ pub contract Counter {
     mut foo: u256,
     mut baz: StorageMap<u256, u256, 0>,
     mut usize_root: UsizeSlot,
-    mut fixed: [Slot<7>; 2],
+    mut fixed: Slot<7>,
 }
 "#,
     );
@@ -65,7 +65,7 @@ pub contract Counter {
             "store.counts.SALT",
             "foo",
             "usize_root.ROOT",
-            "fixed[i0].ROOT",
+            "fixed.ROOT",
         ]
     );
 
@@ -88,7 +88,7 @@ pub contract Counter {
             ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Inferred),
         ),
         (
-            "fixed[i0].ROOT",
+            "fixed.ROOT",
             "7",
             ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Explicit),
         ),
@@ -105,28 +105,19 @@ pub contract Counter {
         };
         assert_eq!(entry.ty.pretty_print(&db).to_string(), ty, "{path}");
     }
-    assert_eq!(
-        entry(&db, &report.entries, "fixed[i0].ROOT")
-            .path
-            .index_dimensions()
-            .collect::<Vec<_>>(),
-        [(0, 2)]
-    );
 }
 
 #[test]
-fn report_preserves_array_geometry_and_enum_overlays() {
+fn report_preserves_inline_array_geometry_and_enum_overlays() {
     parse_ok!(
         db,
         top_mod,
         r#"
 struct Leaf { left: u256, right: u8 }
-struct Slot<const ROOT: u256 = _> {}
 enum Choice { Pair(Leaf), Unit }
 
 contract C {
     mut values: [Leaf; 2],
-    mut roots: [[Slot; 3]; 2],
     mut choice: Choice,
 }
 "#,
@@ -151,35 +142,16 @@ contract C {
         assert_eq!(*extent, 3);
     }
 
-    let roots = entry(&db, &report.entries, "roots[i0][i1].ROOT");
-    let ContractLayoutValue::Indexed {
-        base,
-        dimensions,
-        strides,
-        extent,
-    } = &roots.value
-    else {
-        panic!("expected indexed parameter entry: {roots:#?}");
-    };
-    assert_eq!(base.data(&db).to_string(), "4");
-    assert_eq!(dimensions, &[2, 3]);
-    assert_eq!(strides, &[3, 1]);
-    assert_eq!(*extent, 6);
-    assert_eq!(
-        roots.kind,
-        ContractLayoutEntryKind::Parameter(ContractLayoutParameterOrigin::Inferred)
-    );
-
     let tag = entry(&db, &report.entries, "choice.<tag>");
-    assert_eq!(scalar_value(&db, tag), "10");
+    assert_eq!(scalar_value(&db, tag), "4");
     assert_eq!(tag.kind, ContractLayoutEntryKind::EnumTag);
     assert_eq!(
         scalar_value(&db, entry(&db, &report.entries, "choice::Pair.0.left")),
-        "11"
+        "5"
     );
     assert_eq!(
         scalar_value(&db, entry(&db, &report.entries, "choice::Pair.0.right")),
-        "12"
+        "6"
     );
 }
 
