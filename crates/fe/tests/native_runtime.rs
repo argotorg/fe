@@ -932,6 +932,46 @@ pub fn main() -> i32 {
 }
 
 #[test]
+fn native_runtime_as_bytes_writes_generic_text() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("as_bytes.fe");
+    fs::write(
+        &source,
+        r#"
+use core::AsBytes
+use std::io::{Write, host, write, writeln}
+fn say<T: AsBytes>(_ text: T) uses (w: mut Write) { write(text) }
+fn first<T: AsBytes>(_ value: T) -> u8 {
+    let bytes = value.as_bytes()
+    bytes[0]
+}
+pub fn main() -> i32 {
+    let padded: String<4> = "ab"
+    with (Write = host()) {
+        say("xyz|")
+        say(("ab", "cd|"))
+        say((("a", "b"), ("c", ("d", "e|"))))
+        say(padded)
+        writeln(("t", "u"))
+    }
+    let word: u256 = 0x4142
+    let bytes = word.as_bytes()
+    core::assert(bytes[0] == 0 && bytes[30] == 0x41 && bytes[31] == 0x42)
+    first(("q", padded)) as i32
+}
+"#,
+    )
+    .unwrap();
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("as_bytes")).output().unwrap();
+        assert_eq!(result.status.code(), Some(113), "O{level}: {result:?}");
+        assert_eq!(result.stdout, b"xyz|abcd|abcde|\0\0abtu\n", "O{level}");
+    }
+}
+
+#[test]
 fn native_byte_buffer_preserves_contents_and_reuses_zeroed_storage() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("byte_buffer.fe");
