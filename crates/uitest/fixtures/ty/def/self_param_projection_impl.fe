@@ -1,0 +1,20 @@
+// An impl whose self type names an associated type: a method's `self` has
+// the impl's type once both are resolved.
+trait Factory {
+    type Plain
+}
+pub struct R {}
+impl Factory for R {
+    type Plain = u8
+}
+pub struct Holder<G> {
+    x: G,
+}
+impl Holder<<R as Factory>::Plain> {
+    fn show(self) -> u8 {
+        1
+    }
+}
+pub fn use_it(h: Holder<<R as Factory>::Plain>) -> u8 {
+    h.show()
+}

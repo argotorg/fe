@@ -1409,6 +1409,12 @@ impl<'db> FuncParamView<'db> {
                     return out;
                 }
             };
+            // The impl's self type is compared resolved, as the parameter's
+            // type is: `Holder<<R as Factory>::Plain>` is `Holder<u8>`. A
+            // limit in it is reported with the impl.
+            let Ok(expected) = normalize_ty(db, expected, func.scope(), assumptions) else {
+                return out;
+            };
 
             let matches_expected = |candidate: TyId<'db>| {
                 let (exp_base, exp_args) = expected.decompose_ty_app(db);
