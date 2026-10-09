@@ -1,0 +1,53 @@
+// `Type::Item` paths only consider traits in scope when several traits
+// provide the item, like method calls: `other::Sized2` is never imported
+// into `sized`, so it doesn't make these paths ambiguous.
+
+mod other {
+    pub trait Sized2 {
+        const SIZE: usize
+        type Out
+        fn make() -> usize
+    }
+
+    impl Sized2 for u8 {
+        const SIZE: usize = 1
+        type Out = u16
+        fn make() -> usize { 10 }
+    }
+
+    impl<const LEN: usize> Sized2 for String<LEN> {
+        const SIZE: usize = 0
+        type Out = u16
+        fn make() -> usize { 0 }
+    }
+}
+
+mod sized {
+    pub trait Sized1 {
+        const SIZE: usize
+        type Out
+        fn make() -> usize
+    }
+
+    impl Sized1 for u8 {
+        const SIZE: usize = 2
+        type Out = u32
+        fn make() -> usize { Self::SIZE }
+    }
+
+    pub trait Literal {
+        const SIZE: usize
+        fn bytes(self) -> [u8; Self::SIZE]
+    }
+
+    impl<const LEN: usize> Literal for String<LEN> {
+        const SIZE: usize = LEN
+        fn bytes(self) -> [u8; Self::SIZE] {
+            self.as_bytes()
+        }
+    }
+
+    pub fn konst() -> usize { u8::SIZE }
+    pub fn func() -> usize { u8::make() }
+    pub fn assoc_ty(_ x: u8::Out) -> u32 { x }
+}

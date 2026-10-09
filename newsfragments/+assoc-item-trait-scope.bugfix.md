@@ -1,0 +1,1 @@
+Paths to associated constants and types such as `u8::SIZE` or `Self::SIZE` now only consider traits in scope when several traits provide the item, like method calls do. A trait with an item of the same name elsewhere, for example in a dependency, no longer makes such paths ambiguous.

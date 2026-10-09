@@ -1,0 +1,32 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assoc_item_trait_both_in_scope.fe
+---
+error[2-0009]: ambiguous associated type `Out`
+   ┌─ assoc_item_trait_both_in_scope.fe:34:22
+   │
+ 4 │     pub trait One {
+   │               --- candidate: <u8 as One>::Out = u16
+   ·
+16 │     pub trait Two {
+   │               --- candidate: <u8 as Two>::Out = u32
+   ·
+34 │ fn assoc_ty(_ x: u8::Out) {}
+   │                      ^^^ associated type `Out` is ambiguous
+   │
+   = hint: specify the trait explicitly: `<u8 as One>::Out`
+
+error[2-0018]: multiple trait candidates found
+   ┌─ assoc_item_trait_both_in_scope.fe:31:9
+   │
+ 4 │     pub trait One {
+   │               --- candidate: `<u8 as One>::SIZE`
+   ·
+16 │     pub trait Two {
+   │               --- candidate: `<u8 as Two>::SIZE`
+   ·
+31 │     u8::SIZE
+   │         ^^^^ `SIZE` is ambiguous
+   │
+   = hint: specify the trait explicitly: `<u8 as One>::SIZE`
