@@ -25,13 +25,13 @@ pub contract NestedStorageArrayStride {
 
 #[test]
 fn test_storage_nested_array_stride() uses (evm: mut Evm) {
-    let contract_addr = evm.create2<NestedStorageArrayStride>(value: 0, args: (), salt: 0)
+    let contract_addr = evm.create2<NestedStorageArrayStride>(value: Wei::zero(), args: (), salt: 0)
     assert!(contract_addr.inner != 0)
 
     let out: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: StrideMsg::WriteAndRead { first: 11, second: 22 },
     )
     assert!(out == 33)

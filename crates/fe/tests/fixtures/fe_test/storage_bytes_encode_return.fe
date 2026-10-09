@@ -57,7 +57,7 @@ uses (evm: mut Evm)
     let outcome = evm.raw_call(
         addr: addr,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         args: ptr::MemSpan::from_raw_parts(ptr, len: 4),
         ret: mut ret,
     )
@@ -71,13 +71,13 @@ uses (evm: mut Evm)
 fn test_storage_bytes_encode_return_multi_word()
 uses (evm: mut Evm)
 {
-    let blob = evm.create2<Blob>(value: 0, args: (), salt: 0)
+    let blob = evm.create2<Blob>(value: Wei::zero(), args: (), salt: 0)
     assert!(blob.inner != 0)
 
     evm.call(
         addr: blob,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         message: BlobMsg::Set { data: multi_word_payload() },
     )
 

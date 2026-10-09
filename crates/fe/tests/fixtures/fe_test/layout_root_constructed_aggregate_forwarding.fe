@@ -90,30 +90,30 @@ pub contract C {
 
 #[test]
 fn constructed_aggregate_preserves_each_layout_source() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
     evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::Set { lane: 0, key: 7, value: 42 },
     )
     evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::Set { lane: 1, key: 7, value: 99 },
     )
     let value: u256 = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::Get { lane: 1, key: 7 },
     )
     assert!(value == 99)
     let reassigned: u256 = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::GetReassigned { lane: 1, key: 7 },
     )
     assert!(reassigned == 99)

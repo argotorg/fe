@@ -47,24 +47,24 @@ pub contract C {
 
 #[test]
 fn returned_receiver_fields_preserve_layout_sources() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
     evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::Set { lane: 1, key: 7, value: 42 },
     )
     let value: u256 = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::Get { lane: 1, key: 7 },
     )
     assert!(value == 42)
     let untouched: u256 = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::Get { lane: 0, key: 7 },
     )
     assert!(untouched == 0)

@@ -78,29 +78,29 @@ pub contract C {
 
 #[test]
 fn roots_that_coexist_in_one_variant_never_share_an_overlay() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
     evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::SetOther { key: 7, value: 11 },
     )
     evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::SetShared { key: 7, value: 22 },
     )
     let other: u256 = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::GetOther { key: 7 },
     )
     let shared: u256 = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::GetShared { key: 7 },
     )
     assert!(other == 11)

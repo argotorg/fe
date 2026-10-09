@@ -91,30 +91,30 @@ pub contract C {
 
 #[test]
 fn aggregate_effect_helpers_forward_projected_roots() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
     evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::SetPrimary { key: 7, value: 42 },
     )
     evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::SetSecondary { key: 7, value: 99 },
     )
 
     let primary: u256 = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::GetPrimary { key: 7 },
     )
     let secondary: u256 = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::GetSecondary { key: 7 },
     )
     assert!(primary == 42)

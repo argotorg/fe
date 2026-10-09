@@ -61,7 +61,7 @@ pub contract BalanceMap {
 
 #[test]
 fn test_storage_map() uses (evm: mut Evm) {
-    let contract_addr = evm.create2<BalanceMap>(value: 0, args: (), salt: 0)
+    let contract_addr = evm.create2<BalanceMap>(value: Wei::zero(), args: (), salt: 0)
     assert!(contract_addr.inner != 0)
 
     let alice: u256 = 0x1111
@@ -71,7 +71,7 @@ fn test_storage_map() uses (evm: mut Evm) {
     let bal: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: MapMsg::BalanceOf { user: alice }
     )
     assert!(bal == 0)
@@ -80,7 +80,7 @@ fn test_storage_map() uses (evm: mut Evm) {
     evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: MapMsg::SetBalance { user: alice, value: 100 }
     )
 
@@ -88,7 +88,7 @@ fn test_storage_map() uses (evm: mut Evm) {
     let bal: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: MapMsg::BalanceOf { user: alice }
     )
     assert!(bal == 100)
@@ -97,7 +97,7 @@ fn test_storage_map() uses (evm: mut Evm) {
     evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: MapMsg::SetBalance { user: bob, value: 50 }
     )
 
@@ -105,7 +105,7 @@ fn test_storage_map() uses (evm: mut Evm) {
     let res: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: MapMsg::Transfer { from: alice, to: bob, amount: 30 }
     )
     assert!(res == 0)
@@ -114,7 +114,7 @@ fn test_storage_map() uses (evm: mut Evm) {
     let bal: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: MapMsg::BalanceOf { user: alice }
     )
     assert!(bal == 70)
@@ -123,7 +123,7 @@ fn test_storage_map() uses (evm: mut Evm) {
     let bal: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: MapMsg::BalanceOf { user: bob }
     )
     assert!(bal == 80)
@@ -132,7 +132,7 @@ fn test_storage_map() uses (evm: mut Evm) {
     let res: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: MapMsg::Transfer { from: alice, to: bob, amount: 1000 }
     )
     assert!(res == 1)
@@ -141,7 +141,7 @@ fn test_storage_map() uses (evm: mut Evm) {
     let bal: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: MapMsg::BalanceOf { user: alice }
     )
     assert!(bal == 70)
@@ -150,7 +150,7 @@ fn test_storage_map() uses (evm: mut Evm) {
     evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: MapMsg::SetAllowance { user: alice, value: 999 }
     )
 
@@ -158,7 +158,7 @@ fn test_storage_map() uses (evm: mut Evm) {
     let allow: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: MapMsg::GetAllowance { user: alice }
     )
     assert!(allow == 999)
@@ -167,7 +167,7 @@ fn test_storage_map() uses (evm: mut Evm) {
     let bal: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: MapMsg::BalanceOf { user: alice }
     )
     assert!(bal == 70)
@@ -176,7 +176,7 @@ fn test_storage_map() uses (evm: mut Evm) {
     let allow: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: MapMsg::GetAllowance { user: bob }
     )
     assert!(allow == 0)

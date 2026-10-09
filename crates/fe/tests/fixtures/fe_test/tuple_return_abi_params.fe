@@ -41,7 +41,7 @@ pub contract Info {
 fn test_tuple_return_is_encoded_as_param_list()
 uses (evm: mut Evm, call: mut Call)
 {
-    let info = evm.create2<Info>(value: 0, args: (), salt: 0)
+    let info = evm.create2<Info>(value: Wei::zero(), args: (), salt: 0)
     let outcome = info.try_call(InfoMsg::Information {})
     assert!(outcome.success())
 
@@ -64,7 +64,7 @@ uses (evm: mut Evm, call: mut Call)
 fn test_tuple_return_typed_call_round_trips()
 uses (evm: mut Evm, call: mut Call)
 {
-    let info = evm.create2<Info>(value: 0, args: (), salt: 0)
+    let info = evm.create2<Info>(value: Wei::zero(), args: (), salt: 0)
     let (name, tag, owner) = info.call(InfoMsg::Information {})
     assert!(name == version())
     assert!(tag.val == 0xabcd)
@@ -78,7 +78,7 @@ uses (evm: mut Evm, call: mut Call)
 
 #[test]
 fn test_nested_tuple_return_layout() uses (evm: mut Evm, call: mut Call) {
-    let info = evm.create2<Info>(value: 0, args: (), salt: 0)
+    let info = evm.create2<Info>(value: Wei::zero(), args: (), salt: 0)
     let outcome = info.try_call(InfoMsg::Nested {})
     assert!(outcome.success())
 
@@ -97,7 +97,7 @@ fn test_nested_tuple_return_layout() uses (evm: mut Evm, call: mut Call) {
 fn test_single_dynamic_return_keeps_offset_word()
 uses (evm: mut Evm, call: mut Call)
 {
-    let info = evm.create2<Info>(value: 0, args: (), salt: 0)
+    let info = evm.create2<Info>(value: Wei::zero(), args: (), salt: 0)
     let outcome = info.try_call(InfoMsg::Name {})
     assert!(outcome.success())
 

@@ -12,8 +12,6 @@ type @layout_3 = {};
 type @layout_4 = {@layout_3};
 type @layout_5 = {i256, i256};
 
-global private const @layout_2 $const_region_0 = {0};
-
 func private %__NewtypeStorageFieldMutMethodCall_init() {
     block0:
         jump block1;
@@ -414,11 +412,8 @@ func inline(always) private %new() -> @layout_2 {
         jump block1;
 
     block1:
-        v1.constref<@layout_2> = const.ref $const_region_0;
-        v2.objref<@layout_2> = obj.alloc @layout_2;
-        obj.init.const v2 v1;
-        v3.@layout_2 = obj.load v2;
-        return v3;
+        v2.@layout_2 = insert_value undef.@layout_2 0.i256 0.i256;
+        return v2;
 }
 
 func private %payload_size(v0.i256) -> i256 {
@@ -686,6 +681,5 @@ object @NewtypeStorageFieldMutMethodCall {
     }
     section runtime {
         entry %contract_runtime_root_NewtypeStorageFieldMutMethodCall;
-        data $const_region_0;
     }
 }

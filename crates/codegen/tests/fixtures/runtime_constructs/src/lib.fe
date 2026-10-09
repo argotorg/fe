@@ -26,7 +26,7 @@ fn runtime() uses (evm: mut Evm) {
         src_offset: offset,
         len,
     )
-    let addr = evm.create2_raw(value: 0, init_code: dest.span(), salt: 0x1234)
+    let addr = evm.create2_raw(value: Wei::zero(), init_code: dest.span(), salt: 0x1234)
     let data = ptr::MemBuffer::alloc(32)
     evm.mstore(addr: data.ptr(), value: addr.inner)
     evm.return_data(data: data.span())

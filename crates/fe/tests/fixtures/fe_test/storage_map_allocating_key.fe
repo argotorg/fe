@@ -36,11 +36,11 @@ pub contract C {
 
 #[test]
 fn allocation_inside_key_encoding_keeps_keys_distinct() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 1)
-    evm.call(addr: c, gas: 200000, value: 0, message: Msg::Set { key: 7, value: 11 })
-    evm.call(addr: c, gas: 200000, value: 0, message: Msg::Set { key: 8, value: 22 })
-    let first: u256 = evm.call(addr: c, gas: 200000, value: 0, message: Msg::Get { key: 7 })
-    let second: u256 = evm.call(addr: c, gas: 200000, value: 0, message: Msg::Get { key: 8 })
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 1)
+    evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Set { key: 7, value: 11 })
+    evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Set { key: 8, value: 22 })
+    let first: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Get { key: 7 })
+    let second: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Get { key: 8 })
     assert!(first == 11)
     assert!(second == 22)
 }

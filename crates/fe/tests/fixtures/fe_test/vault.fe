@@ -97,74 +97,74 @@ msg VaultProxyMsg {
 pub contract VaultUser uses (call: mut Call) {
     recv VaultProxyMsg {
         ProxyDeposit { vault, amount } -> u256 uses (mut call) {
-            call.call(addr: vault, gas: 100000, value: 0, message: VaultMsg::Deposit { amount })
+            call.call(addr: vault, gas: 100000, value: Wei::zero(), message: VaultMsg::Deposit { amount })
         }
         ProxyWithdraw { vault, shares } -> u256 uses (mut call) {
-            call.call(addr: vault, gas: 100000, value: 0, message: VaultMsg::Withdraw { shares })
+            call.call(addr: vault, gas: 100000, value: Wei::zero(), message: VaultMsg::Withdraw { shares })
         }
         ProxyGetMyShares { vault } -> u256 uses (mut call) {
-            call.call(addr: vault, gas: 100000, value: 0, message: VaultMsg::GetMyShares {})
+            call.call(addr: vault, gas: 100000, value: Wei::zero(), message: VaultMsg::GetMyShares {})
         }
     }
 }
 
 #[test]
 fn test_vault_multiuser() uses (evm: mut Evm) {
-    let vault = evm.create2<Vault>(value: 0, args: (), salt: 0)
+    let vault = evm.create2<Vault>(value: Wei::zero(), args: (), salt: 0)
     assert!(vault.inner != 0)
 
-    let user2 = evm.create2<VaultUser>(value: 0, args: (), salt: 1)
+    let user2 = evm.create2<VaultUser>(value: Wei::zero(), args: (), salt: 1)
     assert!(user2.inner != 0)
 
     // User 1 (test runner) deposits 1000 -> 1000 shares (1:1 initial)
-    let shares: u256 = evm.call(addr: vault, gas: 100000, value: 0, message: VaultMsg::Deposit { amount: 1000 })
+    let shares: u256 = evm.call(addr: vault, gas: 100000, value: Wei::zero(), message: VaultMsg::Deposit { amount: 1000 })
     assert!(shares == 1000)
 
     // User 2 deposits 1000 -> 1000 shares (same ratio)
-    let shares: u256 = evm.call(addr: user2, gas: 200000, value: 0, message: VaultProxyMsg::ProxyDeposit { vault, amount: 1000 })
+    let shares: u256 = evm.call(addr: user2, gas: 200000, value: Wei::zero(), message: VaultProxyMsg::ProxyDeposit { vault, amount: 1000 })
     assert!(shares == 1000)
 
     // Total: 2000 assets, 2000 shares
-    let ta: u256 = evm.call(addr: vault, gas: 100000, value: 0, message: VaultMsg::GetTotalAssets {})
+    let ta: u256 = evm.call(addr: vault, gas: 100000, value: Wei::zero(), message: VaultMsg::GetTotalAssets {})
     assert!(ta == 2000)
-    let ts: u256 = evm.call(addr: vault, gas: 100000, value: 0, message: VaultMsg::GetTotalShares {})
+    let ts: u256 = evm.call(addr: vault, gas: 100000, value: Wei::zero(), message: VaultMsg::GetTotalShares {})
     assert!(ts == 2000)
 
     // Yield accrues: +1000 assets
-    evm.call(addr: vault, gas: 100000, value: 0, message: VaultMsg::AddYield { amount: 1000 })
+    evm.call(addr: vault, gas: 100000, value: Wei::zero(), message: VaultMsg::AddYield { amount: 1000 })
     // Total: 3000 assets, 2000 shares (1.5x price)
 
     // User 1 withdraws 500 shares -> 500 * 3000 / 2000 = 750 assets
-    let assets: u256 = evm.call(addr: vault, gas: 100000, value: 0, message: VaultMsg::Withdraw { shares: 500 })
+    let assets: u256 = evm.call(addr: vault, gas: 100000, value: Wei::zero(), message: VaultMsg::Withdraw { shares: 500 })
     assert!(assets == 750)
 
     // User 1 has 500 shares left
-    let my_shares: u256 = evm.call(addr: vault, gas: 100000, value: 0, message: VaultMsg::GetMyShares {})
+    let my_shares: u256 = evm.call(addr: vault, gas: 100000, value: Wei::zero(), message: VaultMsg::GetMyShares {})
     assert!(my_shares == 500)
 
     // User 2 still has 1000 shares
-    let u2_shares: u256 = evm.call(addr: user2, gas: 200000, value: 0, message: VaultProxyMsg::ProxyGetMyShares { vault })
+    let u2_shares: u256 = evm.call(addr: user2, gas: 200000, value: Wei::zero(), message: VaultProxyMsg::ProxyGetMyShares { vault })
     assert!(u2_shares == 1000)
 
     // Total: 2250 assets, 1500 shares
-    let ta: u256 = evm.call(addr: vault, gas: 100000, value: 0, message: VaultMsg::GetTotalAssets {})
+    let ta: u256 = evm.call(addr: vault, gas: 100000, value: Wei::zero(), message: VaultMsg::GetTotalAssets {})
     assert!(ta == 2250)
 
     // User 2 can't withdraw more than they have
-    let assets: u256 = evm.call(addr: user2, gas: 200000, value: 0, message: VaultProxyMsg::ProxyWithdraw { vault, shares: 9999 })
+    let assets: u256 = evm.call(addr: user2, gas: 200000, value: Wei::zero(), message: VaultProxyMsg::ProxyWithdraw { vault, shares: 9999 })
     assert!(assets == 0)
 
     // User 2 withdraws all 1000 shares -> 1000 * 2250 / 1500 = 1500
-    let assets: u256 = evm.call(addr: user2, gas: 200000, value: 0, message: VaultProxyMsg::ProxyWithdraw { vault, shares: 1000 })
+    let assets: u256 = evm.call(addr: user2, gas: 200000, value: Wei::zero(), message: VaultProxyMsg::ProxyWithdraw { vault, shares: 1000 })
     assert!(assets == 1500)
 
     // User 1 withdraws remaining 500 -> 500 * 750 / 500 = 750
-    let assets: u256 = evm.call(addr: vault, gas: 100000, value: 0, message: VaultMsg::Withdraw { shares: 500 })
+    let assets: u256 = evm.call(addr: vault, gas: 100000, value: Wei::zero(), message: VaultMsg::Withdraw { shares: 500 })
     assert!(assets == 750)
 
     // Vault empty
-    let ta: u256 = evm.call(addr: vault, gas: 100000, value: 0, message: VaultMsg::GetTotalAssets {})
+    let ta: u256 = evm.call(addr: vault, gas: 100000, value: Wei::zero(), message: VaultMsg::GetTotalAssets {})
     assert!(ta == 0)
-    let ts: u256 = evm.call(addr: vault, gas: 100000, value: 0, message: VaultMsg::GetTotalShares {})
+    let ts: u256 = evm.call(addr: vault, gas: 100000, value: Wei::zero(), message: VaultMsg::GetTotalShares {})
     assert!(ts == 0)
 }

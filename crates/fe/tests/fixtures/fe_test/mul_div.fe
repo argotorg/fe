@@ -392,7 +392,7 @@ uses (evm: mut Evm)
     evm.call(
         addr: probe,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         message: MulDivMsg::Floor { a, b, d },
     )
 }
@@ -403,14 +403,14 @@ uses (evm: mut Evm)
     evm.call(
         addr: probe,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         message: MulDivMsg::Ceil { a, b, d },
     )
 }
 
 #[test]
 fn mul_div_runtime_cases() uses (evm: mut Evm) {
-    let probe = evm.create2<MulDivProbe>(value: 0, args: (), salt: 0)
+    let probe = evm.create2<MulDivProbe>(value: Wei::zero(), args: (), salt: 0)
     for (a, b, d, floor, ceil, fits) in CASES {
         let floor_fits = fits & FLOOR_FITS != 0
         let ceil_fits = fits & CEIL_FITS != 0
@@ -425,12 +425,12 @@ fn mul_div_runtime_cases() uses (evm: mut Evm) {
 
 #[test(should_revert, panic = 0x12)]
 fn mul_div_runtime_by_zero_panics() uses (evm: mut Evm) {
-    let probe = evm.create2<MulDivProbe>(value: 0, args: (), salt: 0)
+    let probe = evm.create2<MulDivProbe>(value: Wei::zero(), args: (), salt: 0)
     let _ = runtime_floor(probe, 1, 1, 0)
 }
 
 #[test(should_revert, panic = 0x11)]
 fn mul_div_runtime_ceil_overflow_panics() uses (evm: mut Evm) {
-    let probe = evm.create2<MulDivProbe>(value: 0, args: (), salt: 0)
+    let probe = evm.create2<MulDivProbe>(value: Wei::zero(), args: (), salt: 0)
     let _ = runtime_ceil(probe, MAX - 1, MAX - 1, MAX - 2)
 }

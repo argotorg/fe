@@ -2,7 +2,7 @@
 use core::abi::Encode
 use core::message::MsgVariant
 use std::abi::{Bytes, DynArray, dyn_array_from}
-use std::evm::{Address, Call, Ctx, Evm, CallOutcome, encode_error, encode_msg_calldata, is_error}
+use std::evm::{Address, Call, Ctx, Evm, CallOutcome, encode_error, encode_msg_calldata, is_error, wei}
 use std::evm::multicall::{self, FailedCall, MulticallMsg}
 
 #[error]
@@ -20,7 +20,7 @@ msg BoxMsg {
     #[selector = sol("failEmpty()")]
     FailEmpty,
     #[selector = sol("deposit()")]
-    Deposit -> u256,
+    Deposit -> Wei,
 }
 
 pub contract Box uses (ctx: Ctx, call: mut Call) {
@@ -47,7 +47,7 @@ pub contract Box uses (ctx: Ctx, call: mut Call) {
             std::evm::revert_empty()
         }
         #[payable]
-        Deposit -> u256 uses (ctx) {
+        Deposit -> Wei uses (ctx) {
             ctx.value()
         }
     }
@@ -76,7 +76,7 @@ fn total(_ target: Address) -> u256 uses (call: mut Call) {
 
 #[test]
 fn batches_run_in_order_and_return_each_result() uses (evm: mut Evm) {
-    let target = evm.create2<Box>(value: 0, args: (), salt: 0)
+    let target = evm.create2<Box>(value: Wei::zero(), args: (), salt: 0)
     let data = dyn_array_from([
         entry(BoxMsg::Add { value: 3 }),
         entry(BoxMsg::Add { value: 4 }),
@@ -106,7 +106,7 @@ fn batches_run_in_order_and_return_each_result() uses (evm: mut Evm) {
 
 #[test]
 fn failing_entry_reverts_batch_with_its_data() uses (evm: mut Evm) {
-    let target = evm.create2<Box>(value: 0, args: (), salt: 0)
+    let target = evm.create2<Box>(value: Wei::zero(), args: (), salt: 0)
     let data = dyn_array_from([
         entry(BoxMsg::Add { value: 5 }),
         entry(BoxMsg::Add { value: 101 }),
@@ -127,7 +127,7 @@ fn failing_entry_reverts_batch_with_its_data() uses (evm: mut Evm) {
 
 #[test]
 fn empty_revert_becomes_failed_call() uses (evm: mut Evm) {
-    let target = evm.create2<Box>(value: 0, args: (), salt: 0)
+    let target = evm.create2<Box>(value: Wei::zero(), args: (), salt: 0)
     let data = dyn_array_from([entry(BoxMsg::Add { value: 1 }), entry(BoxMsg::FailEmpty {})])
     // Calldata no handler accepts reverts without data, too.
     let unknown = dyn_array_from([Bytes::from_word_prefix(word: 0x12345678 << 224, len: 4)])
@@ -144,16 +144,16 @@ fn empty_revert_becomes_failed_call() uses (evm: mut Evm) {
 
 #[test(balance = 1000)]
 fn value_reaches_every_entry() uses (evm: mut Evm) {
-    let target = evm.create2<Box>(value: 0, args: (), salt: 0)
+    let target = evm.create2<Box>(value: Wei::zero(), args: (), salt: 0)
     let data = dyn_array_from([entry(BoxMsg::Deposit {}), entry(BoxMsg::Deposit {})])
     let results: DynArray<Bytes> = evm.call(
         addr: target,
         gas: 1000000,
-        value: 7,
+        value: wei(7),
         message: MulticallMsg::Multicall { data },
     )
     // Each entry sees the full value, but it is transferred only once.
     assert!(results.len() == 2)
     assert!(results.get(0).word_at(0) == 7 && results.get(1).word_at(0) == 7)
-    assert!(evm.balance(target) == 7)
+    assert!(evm.balance(target) == wei(7))
 }

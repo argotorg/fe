@@ -201,7 +201,7 @@ pub(super) fn aggregate_const_ref_class<'db>(
         return None;
     }
     let node = lower_const_node(db, env, value)?;
-    if !const_node_supports_data_ref(db, &node) {
+    if !const_node_supports_data_ref(db, &node) || is_single_scalar_aggregate(&node) {
         return None;
     }
     Some(RuntimeClass::const_ref(layout_for_ty_in_env(db, env, ty)))
@@ -214,6 +214,13 @@ pub(super) fn aggregate_const_ref_region<'db>(
 ) -> Option<ConstRegionId<'db>> {
     aggregate_const_ref_class(db, env, value)?;
     lower_const_region(db, env, value)
+}
+
+/// A one-field wrapper such as `Wei { amount: 0 }` is as cheap to pass as the
+/// scalar itself. A const region would turn it into a pointer for every call
+/// it is passed to, and a call taking a constant would get its own instance.
+fn is_single_scalar_aggregate(node: &ConstNode<'_>) -> bool {
+    matches!(node, ConstNode::Aggregate { fields, .. } if matches!(&**fields, [ConstNode::Scalar(_)]))
 }
 
 fn const_node_supports_data_ref<'db>(db: &'db dyn MirDb, node: &ConstNode<'db>) -> bool {

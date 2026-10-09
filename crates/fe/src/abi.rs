@@ -1615,7 +1615,7 @@ pub contract Foo uses (ctx: Ctx, call: mut Call) {
         }
 
         Ping { b } uses (call) {
-            call.call(addr: b, gas: 100000, value: 0, message: BarMsg::Pong {})
+            call.call(addr: b, gas: 100000, value: Wei::zero(), message: BarMsg::Pong {})
         }
     }
 }

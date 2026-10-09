@@ -90,7 +90,7 @@ fn semantic_callee_key_uses_std_create2_default_body() {
 pub contract C {}
 
 fn run() uses (evm: mut Evm) {
-    let _ = evm.create2<C>(value: 0, args: (), salt: 0)
+    let _ = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
 }
 "#,
     );
@@ -156,7 +156,7 @@ pub contract C {}
 
 #[test]
 fn test_large_by_value_array_args() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
     let out: Address = c
     assert!(out.inner == c.inner)
 }
@@ -243,7 +243,7 @@ fn std_create2_raw_calls_the_low_level_extern_create2() {
 pub contract C {}
 
 fn run() uses (evm: mut Evm) {
-    let _ = evm.create2<C>(value: 0, args: (), salt: 0)
+    let _ = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
 }
 "#,
     );
@@ -374,11 +374,11 @@ pub contract C {
 
 #[test]
 fn test_large_by_value_array_args() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
     let out: u256 = evm.call(
         addr: c,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: BigArgsMsg::Run {},
     )
     assert!(out == 1)

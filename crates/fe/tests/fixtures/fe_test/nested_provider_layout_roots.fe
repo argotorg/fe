@@ -130,60 +130,60 @@ pub contract NestedProviderMaps {
 
 #[test]
 fn nested_provider_roots_are_distinct_and_reserve_explicit_values() uses (evm: mut Evm) {
-    let c = evm.create2<NestedProviderMaps>(value: 0, args: (), salt: 1)
+    let c = evm.create2<NestedProviderMaps>(value: Wei::zero(), args: (), salt: 1)
     let key = 7
     evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: NestedProviderMsg::SetInferred { key, value: 11 },
     )
     evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: NestedProviderMsg::SetExplicit { key, value: 22 },
     )
     evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: NestedProviderMsg::SetDirect { key, value: 33 },
     )
     evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: NestedProviderMsg::SetTagged { key, value: 44 },
     )
     let inferred = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: NestedProviderMsg::GetInferred { key },
     )
     let explicit = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: NestedProviderMsg::GetExplicit { key },
     )
     let direct = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: NestedProviderMsg::GetDirect { key },
     )
     let tagged = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: NestedProviderMsg::GetTagged { key },
     )
     let tag = evm.call(
         addr: c,
         gas: 200000,
-        value: 0,
+        value: Wei::zero(),
         message: NestedProviderMsg::GetTaggedHandleTag {},
     )
     assert!(inferred == 11)

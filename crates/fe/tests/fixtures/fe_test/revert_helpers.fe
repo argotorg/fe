@@ -94,7 +94,7 @@ pub contract Forwarder uses (call: mut Call) {
                 .raw_call(
                     addr: target,
                     gas: 1000000,
-                    value: 0,
+                    value: Wei::zero(),
                     args: data.payload_span(),
                     ret: mut ret,
                 )
@@ -179,7 +179,7 @@ fn is_hi(_ s: DynString) -> bool {
 fn test_encode_error_matches_revert_error()
 uses (evm: mut Evm, call: mut Call)
 {
-    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    let mock = evm.create2<Mock>(value: Wei::zero(), args: (), salt: 0)
     let direct = mock.try_call(MockMsg::FailInsufficient { available: 1, required: 2 })
     let pre = mock.try_call(MockMsg::FailPreEncoded { available: 1, required: 2 })
     assert!(!direct.success() && !pre.success())
@@ -209,7 +209,7 @@ uses (evm: mut Evm, call: mut Call)
 
 #[test]
 fn test_revert_empty_and_revert_bytes() uses (evm: mut Evm, call: mut Call) {
-    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    let mock = evm.create2<Mock>(value: Wei::zero(), args: (), salt: 0)
     let empty = mock.try_call(MockMsg::FailEmpty {})
     assert!(!empty.success())
     assert!(empty.returndata_len() == 0)
@@ -237,8 +237,8 @@ where M: MsgVariant<Sol> + Encode<Sol>
 
 #[test]
 fn test_bubble_revert_or() uses (evm: mut Evm, call: mut Call) {
-    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
-    let forwarder = evm.create2<Forwarder>(value: 0, args: (), salt: 1)
+    let mock = evm.create2<Mock>(value: Wei::zero(), args: (), salt: 0)
+    let forwarder = evm.create2<Forwarder>(value: Wei::zero(), args: (), salt: 1)
 
     // Non-empty revert data is bubbled unchanged.
     let out = forward(
@@ -407,7 +407,7 @@ fn test_decode_panic() {
 fn test_real_panic_and_custom_error_from_callee()
 uses (evm: mut Evm, call: mut Call)
 {
-    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    let mock = evm.create2<Mock>(value: Wei::zero(), args: (), salt: 0)
     let out = mock.try_call(MockMsg::Overflow { a: !(0 as u256) })
     assert!(!out.success())
     assert!(decode_panic(out.returndata()).unwrap() == PANIC_OVERFLOW)
@@ -431,7 +431,7 @@ where M: MsgVariant<Sol> + Encode<Sol>
     evm.raw_call(
         addr: mock,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         args: data.span(),
         ret: mut ret,
     ).success()
@@ -439,7 +439,7 @@ where M: MsgVariant<Sol> + Encode<Sol>
 
 #[test]
 fn test_returndata_decode_in_place() uses (evm: mut Evm) {
-    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    let mock = evm.create2<Mock>(value: Wei::zero(), args: (), salt: 0)
     assert!(raw_call_mock(mock, MockMsg::Pair {}))
     let rd = ReturnData::new()
     // Decoded in place with the same rules as a typed call's return value,
@@ -451,7 +451,7 @@ fn test_returndata_decode_in_place() uses (evm: mut Evm) {
 
 #[test]
 fn test_returndata_matches_errors_in_place() uses (evm: mut Evm) {
-    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    let mock = evm.create2<Mock>(value: Wei::zero(), args: (), salt: 0)
     assert!(
         !raw_call_mock(
             mock,
@@ -484,7 +484,7 @@ fn test_returndata_matches_errors_in_place() uses (evm: mut Evm) {
 
 #[test]
 fn test_returndata_bounds() uses (evm: mut Evm) {
-    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    let mock = evm.create2<Mock>(value: Wei::zero(), args: (), salt: 0)
     let buf = scratch(40)
     put(
         buf,
@@ -535,7 +535,7 @@ fn test_returndata_bounds() uses (evm: mut Evm) {
 
 #[test(should_revert)]
 fn test_returndata_copy_out_of_bounds_reverts() uses (evm: mut Evm) {
-    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    let mock = evm.create2<Mock>(value: Wei::zero(), args: (), salt: 0)
     assert!(
         !raw_call_mock(
             mock,
@@ -548,7 +548,7 @@ fn test_returndata_copy_out_of_bounds_reverts() uses (evm: mut Evm) {
 
 #[test(should_revert)]
 fn test_returndata_decode_short_reverts() uses (evm: mut Evm) {
-    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    let mock = evm.create2<Mock>(value: Wei::zero(), args: (), salt: 0)
     assert!(
         !raw_call_mock(
             mock,
@@ -560,7 +560,7 @@ fn test_returndata_decode_short_reverts() uses (evm: mut Evm) {
 
 #[test]
 fn test_returndata_to_bytes() uses (evm: mut Evm) {
-    let mock = evm.create2<Mock>(value: 0, args: (), salt: 0)
+    let mock = evm.create2<Mock>(value: Wei::zero(), args: (), salt: 0)
 
     // Unaligned data: the copy is exact and the padding is zero.
     let buf = scratch(40)

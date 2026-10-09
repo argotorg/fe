@@ -51,12 +51,12 @@ pub contract Probe uses (ctx: Ctx) {
 
 #[test]
 fn precompiles_in_mut_method() uses (evm: mut Evm) {
-    let probe = evm.create2<Probe>(value: 0, args: (), salt: 0)
-    evm.call(addr: probe, gas: 1000000, value: 0, message: ProbeMsg::Compute {})
+    let probe = evm.create2<Probe>(value: Wei::zero(), args: (), salt: 0)
+    evm.call(addr: probe, gas: 1000000, value: Wei::zero(), message: ProbeMsg::Compute {})
     let (digest, power, signer): (u256, u256, u256) = evm.call(
         addr: probe,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: ProbeMsg::Read {},
     )
     assert!(digest == 0xe3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855)

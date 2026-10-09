@@ -226,11 +226,11 @@ fn test_domain_new_matches_free_function() uses (ctx: Ctx) {
 
 #[test]
 fn test_cached_separator_in_immutable_field() uses (evm: mut Evm, ctx: Ctx) {
-    let signer = evm.create2<Signer>(value: 0, args: (), salt: 0)
+    let signer = evm.create2<Signer>(value: Wei::zero(), args: (), salt: 0)
     let separator = evm.call(
             addr: signer,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: SignerMsg::Separator {},
         )
     assert!(separator == separator_for(signer))
@@ -238,7 +238,7 @@ fn test_cached_separator_in_immutable_field() uses (evm: mut Evm, ctx: Ctx) {
         .call(
             addr: signer,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: SignerMsg::Digest { struct_hash: STRUCT_HASH },
         )
     assert!(
@@ -250,13 +250,13 @@ fn test_cached_separator_in_immutable_field() uses (evm: mut Evm, ctx: Ctx) {
 // separator (bound to `Signer`'s address) must not be used.
 #[test]
 fn test_separator_rederived_under_delegatecall() uses (evm: mut Evm, ctx: Ctx) {
-    let signer = evm.create2<Signer>(value: 0, args: (), salt: 0)
-    let proxy = evm.create2<Proxy>(value: 0, args: (), salt: 0)
+    let signer = evm.create2<Signer>(value: Wei::zero(), args: (), salt: 0)
+    let proxy = evm.create2<Proxy>(value: Wei::zero(), args: (), salt: 0)
     let separator = evm
         .call(
             addr: proxy,
             gas: 200000,
-            value: 0,
+            value: Wei::zero(),
             message: ProxyMsg::Separator { implementation: signer },
         )
     assert!(separator == separator_for(proxy))
@@ -265,7 +265,7 @@ fn test_separator_rederived_under_delegatecall() uses (evm: mut Evm, ctx: Ctx) {
         .call(
             addr: proxy,
             gas: 200000,
-            value: 0,
+            value: Wei::zero(),
             message: ProxyMsg::Digest { implementation: signer, struct_hash: STRUCT_HASH },
         )
     assert!(

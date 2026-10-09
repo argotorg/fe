@@ -36,7 +36,7 @@ pub contract Counter {
 #[test]
 fn test_deploy_and_call_counter() uses (evm: mut Evm) {
     // Deploy the counter contract using the high-level create2 API
-    let contract_addr = evm.create2<Counter>(value: 0, args: (), salt: 0)
+    let contract_addr = evm.create2<Counter>(value: Wei::zero(), args: (), salt: 0)
 
     // Verify deployment succeeded (address != 0)
     assert!(contract_addr.inner != 0)
@@ -45,7 +45,7 @@ fn test_deploy_and_call_counter() uses (evm: mut Evm) {
     let initial_value: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: CounterMsg::Get {}
     )
     assert!(initial_value == 0)
@@ -54,7 +54,7 @@ fn test_deploy_and_call_counter() uses (evm: mut Evm) {
     evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: CounterMsg::Increment {}
     )
 
@@ -62,7 +62,7 @@ fn test_deploy_and_call_counter() uses (evm: mut Evm) {
     let final_value: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: CounterMsg::Get {}
     )
     assert!(final_value == 1)

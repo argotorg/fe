@@ -1,4 +1,4 @@
-use std::evm::{clones, Create, RawMem}
+use std::evm::{clones, Create, RawMem, wei}
 
 msg ProxyMsg {
     #[selector = sol("set(uint256)")]
@@ -34,39 +34,39 @@ pub contract Implementation {
 fn deterministic_address_and_isolated_storage()
 uses (evm: mut Evm, ctx: Ctx, create: mut Create, mem: mut RawMem)
 {
-    let implementation = evm.create2<Implementation>(value: 0, args: (), salt: 0)
+    let implementation = evm.create2<Implementation>(value: Wei::zero(), args: (), salt: 0)
     let predicted = clones::predict_deterministic_address(
         implementation,
         salt: 42,
         deployer: ctx.address(),
     )
-    let proxy = clones::clone_deterministic(implementation, salt: 42, value: 0)
+    let proxy = clones::clone_deterministic(implementation, salt: 42, value: Wei::zero())
     assert!(proxy == predicted)
     assert!(ctx.extcodesize(proxy) == 45)
     let initial: u256 = evm.call(
             addr: proxy,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: ProxyMsg::Get {},
         )
     assert!(initial == 0)
     evm.call(
         addr: proxy,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: ProxyMsg::Set { next: 17 },
     )
     let stored: u256 = evm.call(
             addr: proxy,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: ProxyMsg::Get {},
         )
     let original: u256 = evm
         .call(
             addr: implementation,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: ProxyMsg::Get {},
         )
     assert!(stored == 17)
@@ -75,17 +75,17 @@ uses (evm: mut Evm, ctx: Ctx, create: mut Create, mem: mut RawMem)
         .call(
             addr: proxy,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: ProxyMsg::Context {},
         )
     assert!(context.0 == proxy)
     assert!(context.1 == ctx.address())
-    let other = clones::clone_deterministic(implementation, salt: 43, value: 0)
+    let other = clones::clone_deterministic(implementation, salt: 43, value: Wei::zero())
     assert!(other != proxy)
     let other_value: u256 = evm.call(
             addr: other,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: ProxyMsg::Get {},
         )
     assert!(other_value == 0)
@@ -95,32 +95,32 @@ uses (evm: mut Evm, ctx: Ctx, create: mut Create, mem: mut RawMem)
 fn create_and_value_forwarding()
 uses (evm: mut Evm, ctx: Ctx, create: mut Create)
 {
-    let implementation = evm.create2<Implementation>(value: 0, args: (), salt: 0)
-    let first = clones::clone(implementation, value: 11)
-    let second = clones::clone(implementation, value: 0)
+    let implementation = evm.create2<Implementation>(value: Wei::zero(), args: (), salt: 0)
+    let first = clones::clone(implementation, value: wei(11))
+    let second = clones::clone(implementation, value: Wei::zero())
     assert!(first != second)
     assert!(ctx.extcodesize(first) == 45)
-    assert!(ctx.balance(first) == 11)
-    assert!(ctx.balance(second) == 0)
+    assert!(ctx.balance(first) == wei(11))
+    assert!(ctx.balance(second) == Wei::zero())
 }
 
 #[test(should_revert, selector = 0xc2f868f4)]
 fn duplicate_salt_reverts() uses (evm: mut Evm, create: mut Create) {
-    let implementation = evm.create2<Implementation>(value: 0, args: (), salt: 0)
-    let _ = clones::clone_deterministic(implementation, salt: 1, value: 0)
-    let _ = clones::clone_deterministic(implementation, salt: 1, value: 0)
+    let implementation = evm.create2<Implementation>(value: Wei::zero(), args: (), salt: 0)
+    let _ = clones::clone_deterministic(implementation, salt: 1, value: Wei::zero())
+    let _ = clones::clone_deterministic(implementation, salt: 1, value: Wei::zero())
 }
 
 #[test(should_revert, selector = 0xdeadbeef)]
 fn implementation_revert_is_forwarded()
 uses (evm: mut Evm, create: mut Create)
 {
-    let implementation = evm.create2<Implementation>(value: 0, args: (), salt: 0)
-    let proxy = clones::clone(implementation, value: 0)
+    let implementation = evm.create2<Implementation>(value: Wei::zero(), args: (), salt: 0)
+    let proxy = clones::clone(implementation, value: Wei::zero())
     evm.call(
         addr: proxy,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: ProxyMsg::Fail {},
     )
 }
@@ -186,5 +186,5 @@ fn initcode_and_prediction_vectors() uses (mem: mut RawMem) {
 
 #[test(should_revert, selector = 0xc2f868f4)]
 fn insufficient_balance_reverts() uses (create: mut Create, ctx: Ctx) {
-    let _ = clones::clone(Address::zero(), value: ctx.selfbalance() + 1)
+    let _ = clones::clone(Address::zero(), value: ctx.selfbalance() + wei(1))
 }

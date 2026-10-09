@@ -31,7 +31,7 @@ pub contract Reverter {
 
 #[test]
 fn test_assert_macro_payload_layout() uses (evm: mut Evm) {
-    let addr = evm.create2<Reverter>(value: 0, args: (), salt: 0)
+    let addr = evm.create2<Reverter>(value: Wei::zero(), args: (), salt: 0)
 
     // Build calldata containing only the ReverterMsg::Trigger selector.
     let selector_word = (0xaabbccdd as u256) << 224
@@ -42,7 +42,7 @@ fn test_assert_macro_payload_layout() uses (evm: mut Evm) {
     let outcome = evm.raw_call(
         addr: addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         args: ptr::MemSpan::from_raw_parts(ptr, len: 4),
         ret: mut output,
     )

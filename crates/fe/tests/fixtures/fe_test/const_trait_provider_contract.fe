@@ -70,13 +70,13 @@ pub contract Reader {
 
 #[test]
 fn const_and_runtime_provider_borrows_in_contract_agree() uses (evm: mut Evm) {
-    let reader = evm.create2<Reader>(value: 0, args: (), salt: 0)
+    let reader = evm.create2<Reader>(value: Wei::zero(), args: (), salt: 0)
     assert!(reader.inner != 0)
-    let compiled: u256 = evm.call(addr: reader, gas: 100000, value: 0, message: ReaderMsg::Compiled {})
-    let runtime: u256 = evm.call(addr: reader, gas: 100000, value: 0, message: ReaderMsg::Runtime {})
-    let length: u256 = evm.call(addr: reader, gas: 100000, value: 0, message: ReaderMsg::Length {})
-    let stored: u256 = evm.call(addr: reader, gas: 100000, value: 0, message: ReaderMsg::Stored {})
-    let from_field: u256 = evm.call(addr: reader, gas: 100000, value: 0, message: ReaderMsg::FromField {})
+    let compiled: u256 = evm.call(addr: reader, gas: 100000, value: Wei::zero(), message: ReaderMsg::Compiled {})
+    let runtime: u256 = evm.call(addr: reader, gas: 100000, value: Wei::zero(), message: ReaderMsg::Runtime {})
+    let length: u256 = evm.call(addr: reader, gas: 100000, value: Wei::zero(), message: ReaderMsg::Length {})
+    let stored: u256 = evm.call(addr: reader, gas: 100000, value: Wei::zero(), message: ReaderMsg::Stored {})
+    let from_field: u256 = evm.call(addr: reader, gas: 100000, value: Wei::zero(), message: ReaderMsg::FromField {})
     assert!(compiled == 5)
     assert!(runtime == compiled)
     assert!(length == 3)

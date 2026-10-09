@@ -13,7 +13,7 @@ fn init() uses (evm: mut Evm) {
             src_offset: offset,
             len,
         )
-        evm.create2_raw(value: 0, init_code: dest.span(), salt: 0x1234)
+        evm.create2_raw(value: Wei::zero(), init_code: dest.span(), salt: 0x1234)
     }
 
     let len = evm.code_region_len(runtime)

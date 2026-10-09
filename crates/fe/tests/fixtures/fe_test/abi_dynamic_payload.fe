@@ -156,13 +156,13 @@ fn test_bytes_from_words_prefix_uses_canonical_tail_size() uses (evm: mut Evm, m
 
 #[test]
 fn test_msg_dynamic_payload_tail_encoding() uses (evm: mut Evm) {
-    let receiver = evm.create2<DynamicPayloadReceiver>(value: 0, args: (), salt: 0)
+    let receiver = evm.create2<DynamicPayloadReceiver>(value: Wei::zero(), args: (), salt: 0)
     assert!(receiver.inner != 0)
 
     let result: u256 = evm.call(
         addr: receiver,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         message: DynamicPayloadMsg::Check {
             first: two_word_bytes(),
             marker: 0xabcdef,
@@ -263,35 +263,35 @@ fn test_owned_bytes_and_views_expose_explicit_spans() {
 
 #[test]
 fn test_memory_and_calldata_bytes_views_reject_out_of_bounds_access() uses (evm: mut Evm) {
-    let bounds = evm.create2<BytesViewBounds>(value: 0, args: (), salt: 0)
+    let bounds = evm.create2<BytesViewBounds>(value: Wei::zero(), args: (), salt: 0)
     assert!(!evm.try_call(
         addr: bounds,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: BytesViewBoundsMsg::MemoryByte {},
     ).success())
     assert!(!evm.try_call(
         addr: bounds,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: BytesViewBoundsMsg::CalldataWord {},
     ).success())
     assert!(!evm.try_call(
         addr: bounds,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: BytesViewBoundsMsg::InvalidBytesMetadata {},
     ).success())
     assert!(!evm.try_call(
         addr: bounds,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: BytesViewBoundsMsg::InvalidDynArrayMetadata {},
     ).success())
     assert!(!evm.try_call(
         addr: bounds,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: BytesViewBoundsMsg::OversizedStaticDynArrayMetadata {},
     ).success())
 }

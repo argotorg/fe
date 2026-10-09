@@ -25,11 +25,11 @@ pub contract Child {
 pub contract Factory uses (create: mut Create) {
     recv FactoryMsg {
         Deploy { x, y } -> Address uses (mut create) {
-            create.create<Child>(value: 0, args: (x, y))
+            create.create<Child>(value: Wei::zero(), args: (x, y))
         }
 
         Deploy2 { x, y, salt } -> Address uses (mut create) {
-            create.create2<Child>(value: 0, args: (x, y), salt: salt)
+            create.create2<Child>(value: Wei::zero(), args: (x, y), salt: salt)
         }
     }
 }

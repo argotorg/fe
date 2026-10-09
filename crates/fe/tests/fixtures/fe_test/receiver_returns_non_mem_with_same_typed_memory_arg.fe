@@ -35,15 +35,15 @@ pub contract C {
 
 #[test]
 fn test_receiver_return_ignores_same_typed_memory_arg() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 44)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 44)
     assert!(c.inner != 0)
 
-    let a = evm.call(addr: c, gas: 100000, value: 0, message: Msg::BumpViaReceiverReturn {})
+    let a = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::BumpViaReceiverReturn {})
     assert!(a == 1100)
 
-    let b = evm.call(addr: c, gas: 100000, value: 0, message: Msg::BumpViaReceiverReturn {})
+    let b = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::BumpViaReceiverReturn {})
     assert!(b == 2100)
 
-    let value = evm.call(addr: c, gas: 100000, value: 0, message: Msg::Value {})
+    let value = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::Value {})
     assert!(value == 2)
 }

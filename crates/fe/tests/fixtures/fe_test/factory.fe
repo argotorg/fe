@@ -71,7 +71,7 @@ pub contract Factory uses (create: mut Create) {
         CreateChild -> u256 uses (mut store, mut create) {
             store.child_count += 1
             let child = create.create2<Child>(
-                value: 0,
+                value: Wei::zero(),
                 args: (store.child_count, store.creator_inner),
                 salt: store.child_count,
             )
@@ -86,16 +86,16 @@ pub contract Factory uses (create: mut Create) {
 
 #[test]
 fn test_factory() uses (evm: mut Evm) {
-    let factory = evm.create2<Factory>(value: 0, args: (0, 0), salt: 0)
+    let factory = evm.create2<Factory>(value: Wei::zero(), args: (0, 0), salt: 0)
     assert!(factory.inner != 0)
 
     // Create child 1
-    let child1_inner: u256 = evm.call(addr: factory, gas: 500000, value: 0, message: FactoryMsg::CreateChild {})
+    let child1_inner: u256 = evm.call(addr: factory, gas: 500000, value: Wei::zero(), message: FactoryMsg::CreateChild {})
     assert!(child1_inner != 0)
     let child1 = Address { inner: child1_inner }
 
     // Create child 2
-    let child2_inner: u256 = evm.call(addr: factory, gas: 500000, value: 0, message: FactoryMsg::CreateChild {})
+    let child2_inner: u256 = evm.call(addr: factory, gas: 500000, value: Wei::zero(), message: FactoryMsg::CreateChild {})
     assert!(child2_inner != 0)
     let child2 = Address { inner: child2_inner }
 
@@ -103,22 +103,22 @@ fn test_factory() uses (evm: mut Evm) {
     assert!(child1.inner != child2.inner)
 
     // Factory tracks count
-    let count: u256 = evm.call(addr: factory, gas: 100000, value: 0, message: FactoryMsg::GetChildCount {})
+    let count: u256 = evm.call(addr: factory, gas: 100000, value: Wei::zero(), message: FactoryMsg::GetChildCount {})
     assert!(count == 2)
 
     // Each child has the correct ID
-    let id1: u256 = evm.call(addr: child1, gas: 100000, value: 0, message: ChildMsg::GetId {})
+    let id1: u256 = evm.call(addr: child1, gas: 100000, value: Wei::zero(), message: ChildMsg::GetId {})
     assert!(id1 == 1)
-    let id2: u256 = evm.call(addr: child2, gas: 100000, value: 0, message: ChildMsg::GetId {})
+    let id2: u256 = evm.call(addr: child2, gas: 100000, value: Wei::zero(), message: ChildMsg::GetId {})
     assert!(id2 == 2)
 
     // Children are independent
-    evm.call(addr: child1, gas: 100000, value: 0, message: ChildMsg::Increment {})
-    evm.call(addr: child1, gas: 100000, value: 0, message: ChildMsg::Increment {})
-    evm.call(addr: child2, gas: 100000, value: 0, message: ChildMsg::Increment {})
+    evm.call(addr: child1, gas: 100000, value: Wei::zero(), message: ChildMsg::Increment {})
+    evm.call(addr: child1, gas: 100000, value: Wei::zero(), message: ChildMsg::Increment {})
+    evm.call(addr: child2, gas: 100000, value: Wei::zero(), message: ChildMsg::Increment {})
 
-    let c1: u256 = evm.call(addr: child1, gas: 100000, value: 0, message: ChildMsg::GetCount {})
+    let c1: u256 = evm.call(addr: child1, gas: 100000, value: Wei::zero(), message: ChildMsg::GetCount {})
     assert!(c1 == 2)
-    let c2: u256 = evm.call(addr: child2, gas: 100000, value: 0, message: ChildMsg::GetCount {})
+    let c2: u256 = evm.call(addr: child2, gas: 100000, value: Wei::zero(), message: ChildMsg::GetCount {})
     assert!(c2 == 1)
 }

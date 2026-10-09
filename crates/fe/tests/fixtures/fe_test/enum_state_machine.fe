@@ -99,54 +99,54 @@ pub contract Order {
 
 #[test]
 fn test_order_initial_state() uses (evm: mut Evm) {
-    let order = evm.create2<Order>(value: 0, args: (), salt: 0)
+    let order = evm.create2<Order>(value: Wei::zero(), args: (), salt: 0)
     assert!(order.inner != 0)
 
-    let s: u256 = evm.call(addr: order, gas: 100000, value: 0, message: OrderMsg::Which {})
+    let s: u256 = evm.call(addr: order, gas: 100000, value: Wei::zero(), message: OrderMsg::Which {})
     assert!(s == 0)
 
-    let r: u256 = evm.call(addr: order, gas: 100000, value: 0, message: OrderMsg::Confirm {})
+    let r: u256 = evm.call(addr: order, gas: 100000, value: Wei::zero(), message: OrderMsg::Confirm {})
     assert!(r == 0)
 }
 
 #[test]
 fn test_order_lifecycle() uses (evm: mut Evm) {
-    let order = evm.create2<Order>(value: 0, args: (), salt: 0)
+    let order = evm.create2<Order>(value: Wei::zero(), args: (), salt: 0)
     assert!(order.inner != 0)
 
-    let s: u256 = evm.call(addr: order, gas: 100000, value: 0, message: OrderMsg::Which {})
+    let s: u256 = evm.call(addr: order, gas: 100000, value: Wei::zero(), message: OrderMsg::Which {})
     assert!(s == 0)
 
     // Created -> Confirmed
-    let r: u256 = evm.call(addr: order, gas: 100000, value: 0, message: OrderMsg::Confirm {})
+    let r: u256 = evm.call(addr: order, gas: 100000, value: Wei::zero(), message: OrderMsg::Confirm {})
     assert!(r == 0)
-    let s: u256 = evm.call(addr: order, gas: 100000, value: 0, message: OrderMsg::Which {})
+    let s: u256 = evm.call(addr: order, gas: 100000, value: Wei::zero(), message: OrderMsg::Which {})
     assert!(s == 1)
 
     // Confirmed -> Shipped
-    let r: u256 = evm.call(addr: order, gas: 100000, value: 0, message: OrderMsg::Ship {})
+    let r: u256 = evm.call(addr: order, gas: 100000, value: Wei::zero(), message: OrderMsg::Ship {})
     assert!(r == 0)
-    let s: u256 = evm.call(addr: order, gas: 100000, value: 0, message: OrderMsg::Which {})
+    let s: u256 = evm.call(addr: order, gas: 100000, value: Wei::zero(), message: OrderMsg::Which {})
     assert!(s == 2)
 
     // Shipped -> Delivered
-    let r: u256 = evm.call(addr: order, gas: 100000, value: 0, message: OrderMsg::Deliver {})
+    let r: u256 = evm.call(addr: order, gas: 100000, value: Wei::zero(), message: OrderMsg::Deliver {})
     assert!(r == 0)
-    let s: u256 = evm.call(addr: order, gas: 100000, value: 0, message: OrderMsg::Which {})
+    let s: u256 = evm.call(addr: order, gas: 100000, value: Wei::zero(), message: OrderMsg::Which {})
     assert!(s == 3)
 
     // Can't go backwards
-    let r: u256 = evm.call(addr: order, gas: 100000, value: 0, message: OrderMsg::Confirm {})
+    let r: u256 = evm.call(addr: order, gas: 100000, value: Wei::zero(), message: OrderMsg::Confirm {})
     assert!(r == 1)
 }
 
 #[test]
 fn test_order_cancellation() uses (evm: mut Evm) {
-    let order = evm.create2<Order>(value: 0, args: (), salt: 1)
+    let order = evm.create2<Order>(value: Wei::zero(), args: (), salt: 1)
     assert!(order.inner != 0)
 
-    let r: u256 = evm.call(addr: order, gas: 100000, value: 0, message: OrderMsg::Cancel {})
+    let r: u256 = evm.call(addr: order, gas: 100000, value: Wei::zero(), message: OrderMsg::Cancel {})
     assert!(r == 0)
-    let s: u256 = evm.call(addr: order, gas: 100000, value: 0, message: OrderMsg::Which {})
+    let s: u256 = evm.call(addr: order, gas: 100000, value: Wei::zero(), message: OrderMsg::Which {})
     assert!(s == 4)
 }

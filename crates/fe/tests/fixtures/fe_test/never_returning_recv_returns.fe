@@ -27,13 +27,13 @@ pub contract Aborter {
 fn test_never_returning_recv_bytes()
 uses (evm: mut Evm)
 {
-    let aborter = evm.create2<Aborter>(value: 0, args: (), salt: 0)
+    let aborter = evm.create2<Aborter>(value: Wei::zero(), args: (), salt: 0)
     assert!(aborter.inner != 0)
 
     let returned: Bytes = evm.call(
         addr: aborter,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         message: AbortMsg::GetBytes {},
     )
     assert!(returned.len() == 0)
@@ -43,13 +43,13 @@ uses (evm: mut Evm)
 fn test_never_returning_recv_scalar()
 uses (evm: mut Evm)
 {
-    let aborter = evm.create2<Aborter>(value: 0, args: (), salt: 1)
+    let aborter = evm.create2<Aborter>(value: Wei::zero(), args: (), salt: 1)
     assert!(aborter.inner != 0)
 
     let returned: u256 = evm.call(
         addr: aborter,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         message: AbortMsg::GetScalar {},
     )
     assert!(returned == 0)

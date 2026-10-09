@@ -168,14 +168,14 @@ pub contract Counter {
 #[test]
 fn test_counter() uses (evm: mut Evm) {
     // Deploy the contract
-    let addr = evm.create2<Counter>(value: 0, args: (), salt: 0)
+    let addr = evm.create2<Counter>(value: Wei::zero(), args: (), salt: 0)
     assert!(addr.inner != 0)
 
     // Initially the counter is 0
     let val: u256 = evm.call(
         addr: addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: CounterMsg::Get {}
     )
     assert!(val == 0)
@@ -184,7 +184,7 @@ fn test_counter() uses (evm: mut Evm) {
     evm.call(
         addr: addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: CounterMsg::Increment {}
     )
 
@@ -192,7 +192,7 @@ fn test_counter() uses (evm: mut Evm) {
     let val: u256 = evm.call(
         addr: addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: CounterMsg::Get {}
     )
     assert!(val == 1)

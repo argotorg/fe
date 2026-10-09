@@ -173,8 +173,8 @@ fn dynamic_struct_round_trips() uses (mem: mut RawMem) {
 
 #[test]
 fn struct_messages_round_trip() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 0)
-    let out: Key = evm.call(addr: c, gas: 1000000, value: 0, message: M::RoundTrip { key: key(3000) })
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let out: Key = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: M::RoundTrip { key: key(3000) })
     assert(out.currency0.inner == 0xabc)
     assert(out.fee.val == 3000)
     assert(out.tick_spacing.val == -60)
@@ -184,7 +184,7 @@ fn struct_messages_round_trip() uses (evm: mut Evm) {
         Hop { key: key(20), data: Bytes::from_word_prefix(word: 0, len: 32) },
     ])
     assert(hops.get(1).data.len() == 32)
-    let sum: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: M::Hops { first: key(1), hops })
+    let sum: u256 = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: M::Hops { first: key(1), hops })
     assert(sum == 1 + 10 + 3 + 20 + 32)
 }
 

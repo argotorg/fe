@@ -194,7 +194,7 @@ fn call_returndata(_ addr: Address, _ args: MemBuffer) -> MemBuffer
 uses (call: mut Call, ctx: Ctx)
 {
     let mut ret = MemBuffer::empty()
-    let outcome = call.raw_call(addr, gas: ctx.gas(), value: 0, args: args.span(), ret: mut ret)
+    let outcome = call.raw_call(addr, gas: ctx.gas(), value: Wei::zero(), args: args.span(), ret: mut ret)
     assert(outcome.success())
     copy_returndata()
 }
@@ -205,7 +205,7 @@ uses (call: mut Call, ctx: Ctx)
 fn returndata_matches_solidity_encoding()
 uses (evm: mut Evm, call: mut Call, ctx: Ctx)
 {
-    let addr = evm.create2<Builder>(value: 0, args: (), salt: 0)
+    let addr = evm.create2<Builder>(value: Wei::zero(), args: (), salt: 0)
     assert_words(
         call_returndata(addr, encode_msg_calldata(Build::Parts {})).span(),
         [0x20, 3, 0x60, 0xa0, 0xc0, 1, 0xaa << 248, 0, 32, ONES],
@@ -221,8 +221,8 @@ uses (evm: mut Evm, call: mut Call, ctx: Ctx)
     assert_words(call_returndata(addr, encode_msg_calldata(Build::NoParts {})).span(), [0x20, 0])
 
     // And they decode back through the typed call path.
-    let parts: DynArray<Bytes> = evm.call(addr, gas: 1000000, value: 0, message: Build::Parts {})
+    let parts: DynArray<Bytes> = evm.call(addr, gas: 1000000, value: Wei::zero(), message: Build::Parts {})
     assert(parts.get(2).len() == 32)
-    let entries: DynArray<Entry> = evm.call(addr, gas: 1000000, value: 0, message: Build::Entries {})
+    let entries: DynArray<Entry> = evm.call(addr, gas: 1000000, value: Wei::zero(), message: Build::Entries {})
     assert(entries.get(0).data.len() == 2)
 }

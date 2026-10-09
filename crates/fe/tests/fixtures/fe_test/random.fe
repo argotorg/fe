@@ -163,12 +163,12 @@ pub contract Lottery uses (ctx: Ctx) {
 
 #[test]
 fn a_contract_draws_with_a_seeded_rng() uses (evm: mut Evm) {
-    let lottery = evm.create2<Lottery>(value: 0, args: (), salt: 0)
+    let lottery = evm.create2<Lottery>(value: Wei::zero(), args: (), salt: 0)
     let winner: Address = evm
         .call(
             addr: lottery,
             gas: 100000,
-            value: 0,
+            value: Wei::zero(),
             message: LotteryMsg::Draw {},
         )
     assert!(

@@ -35,12 +35,12 @@ pub contract C {
 
 #[test]
 fn test_method_forwards_memory_mut_borrow() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (), salt: 77)
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 77)
     assert!(c.inner != 0)
 
-    let v = evm.call(addr: c, gas: 100000, value: 0, message: Msg::ForwardLocal {})
+    let v = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::ForwardLocal {})
     assert!(v == 12)
 
-    let tag = evm.call(addr: c, gas: 100000, value: 0, message: Msg::Tag {})
+    let tag = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::Tag {})
     assert!(tag == 0)
 }

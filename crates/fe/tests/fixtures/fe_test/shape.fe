@@ -47,7 +47,7 @@ pub contract ShapeDispatcher {
 
 #[test]
 fn test_shape() uses (evm: mut Evm) {
-    let contract_addr = evm.create2<ShapeDispatcher>(value: 0, args: (), salt: 0)
+    let contract_addr = evm.create2<ShapeDispatcher>(value: Wei::zero(), args: (), salt: 0)
     assert!(contract_addr.inner != 0)
 
     // Test point(3, 4)
@@ -57,7 +57,7 @@ fn test_shape() uses (evm: mut Evm) {
     let res: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: ShapeMsg::DispatchPoint { x: 3, y: 4 }
     )
     assert!(res == 24)
@@ -68,7 +68,7 @@ fn test_shape() uses (evm: mut Evm) {
     let res: u256 = evm.call(
         addr: contract_addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: ShapeMsg::DispatchSquare { side: 5 }
     )
     assert!(res == 64)

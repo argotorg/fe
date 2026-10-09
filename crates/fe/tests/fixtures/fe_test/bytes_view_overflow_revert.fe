@@ -31,7 +31,7 @@ fn call_words<const N: usize>(_ addr: Address, words: [u256; N]) -> Outcome uses
     let outcome = evm.raw_call(
         addr: addr,
         gas: 1000000,
-        value: 0,
+        value: Wei::zero(),
         args: MemSpan::from_raw_parts(ptr: data.ptr(), len: len),
         ret: mut ret,
     )
@@ -57,7 +57,7 @@ const MAX: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
 #[test]
 fn test_overflowing_bytes_offsets_and_lengths_revert_empty() uses (evm: mut Evm) {
-    let v = evm.create2<Viewer>(value: 0, args: (), salt: 0)
+    let v = evm.create2<Viewer>(value: Wei::zero(), args: (), salt: 0)
     let ok = call_words(v, words: [0x20, 2, 0xabcd << 240])
     assert!(ok.success && ok.word0 == 2)
     // Offsets whose sum with the base wraps around.

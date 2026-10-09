@@ -1,0 +1,166 @@
+// Tests for `Duration` and `Timestamp` in `std::evm::units`. Unit values match
+// Solidity's `1 seconds`, `1 minutes`, `1 hours`, `1 days` and `1 weeks`.
+
+use std::evm::units::{DAY, HOUR, MINUTE, SECOND, WEEK, days, hours, minutes, seconds, weeks}
+
+// The helpers and operators are `const fn`s, so they work in constant initializers.
+const LOCK_PERIOD: Duration = weeks(2) + days(3)
+const GRACE_PERIOD: Duration = hours(1) + minutes(30) + seconds(15)
+const LAUNCH: Timestamp = Timestamp::from_seconds(1_700_000_000)
+const UNLOCK: Timestamp = LAUNCH + LOCK_PERIOD
+
+#[test]
+fn constants_match_solidity() {
+    assert!(SECOND.as_seconds() == 1)
+    assert!(MINUTE.as_seconds() == 60)
+    assert!(HOUR.as_seconds() == 3_600)
+    assert!(DAY.as_seconds() == 86_400)
+    assert!(WEEK.as_seconds() == 604_800)
+}
+
+#[test]
+fn constants_relate_to_each_other() {
+    assert!(MINUTE == SECOND * 60)
+    assert!(HOUR == MINUTE * 60)
+    assert!(DAY == HOUR * 24)
+    assert!(WEEK == DAY * 7)
+}
+
+#[test]
+fn helpers_scale_to_seconds() {
+    assert!(seconds(0) == Duration::zero())
+    assert!(seconds(42).as_seconds() == 42)
+    assert!(minutes(5).as_seconds() == 300)
+    assert!(hours(2).as_seconds() == 7_200)
+    assert!(days(7).as_seconds() == 604_800)
+    assert!(weeks(4).as_seconds() == 2_419_200)
+}
+
+#[test]
+fn helpers_agree_with_constants() {
+    assert!(seconds(1) == SECOND)
+    assert!(minutes(1) == MINUTE)
+    assert!(hours(1) == HOUR)
+    assert!(days(1) == DAY)
+    assert!(weeks(1) == WEEK)
+    assert!(days(7) == weeks(1))
+}
+
+#[test]
+fn helpers_in_const_context() {
+    assert!(LOCK_PERIOD.as_seconds() == 1_468_800)
+    assert!(GRACE_PERIOD.as_seconds() == 5_415)
+    assert!(UNLOCK.as_seconds() == 1_701_468_800)
+}
+
+#[test]
+fn duration_arithmetic() {
+    assert!(days(1) + hours(12) == hours(36))
+    assert!(days(1) - hours(12) == hours(12))
+    assert!(days(1) * 3 == days(3))
+    assert!(days(1) / 4 == hours(6))
+    // How many whole periods fit, and what is left over.
+    assert!(days(10) / WEEK == 1)
+    assert!(days(10) % WEEK == days(3))
+
+    let mut d = DAY
+    d += HOUR
+    d -= MINUTE
+    assert!(d == days(1) + minutes(59))
+}
+
+#[test]
+fn duration_ordering() {
+    assert!(MINUTE < HOUR)
+    assert!(HOUR <= HOUR)
+    assert!(WEEK > DAY)
+    assert!(DAY >= DAY)
+    assert!(Duration::default() == Duration::zero())
+}
+
+#[test]
+fn timestamp_arithmetic() {
+    let start = Timestamp::from_seconds(1_000_000)
+    let deadline = start + days(3)
+    assert!(deadline.as_seconds() == 1_259_200)
+    // The difference of two points in time is a duration.
+    assert!(deadline - start == days(3))
+    assert!(deadline - DAY == start + days(2))
+
+    let mut t = start
+    t += HOUR
+    t -= MINUTE
+    assert!(t - start == minutes(59))
+}
+
+#[test]
+fn timestamp_ordering() {
+    let start = Timestamp::from_seconds(1_000_000)
+    assert!(start < start + SECOND)
+    assert!(start + DAY > start)
+    assert!(start <= start && start >= start)
+    assert!(Timestamp::default() == Timestamp::from_seconds(0))
+}
+
+#[test(should_revert)]
+fn later_minus_earlier_only() {
+    let start = Timestamp::from_seconds(1_000_000)
+    let _ = start - (start + SECOND)
+}
+
+#[test(should_revert)]
+fn duration_underflow_reverts() {
+    let _ = HOUR - DAY
+}
+
+#[test]
+fn reexported_from_std_evm() {
+    assert!(std::evm::days(1) == std::evm::DAY)
+    assert!(std::evm::weeks(1) == std::evm::WEEK)
+}
+
+// Durations and timestamps work as message fields, return values and storage.
+
+msg VestingMsg {
+    #[selector = sol("start(uint256,uint256)")]
+    Start { at: Timestamp, period: Duration },
+    #[selector = sol("unlockedAt()")]
+    UnlockedAt -> Timestamp,
+    #[selector = sol("remaining()")]
+    Remaining -> Duration,
+}
+
+pub contract Vesting uses (ctx: Ctx) {
+    mut start: Timestamp,
+    mut period: Duration,
+
+    recv VestingMsg {
+        Start { at, period: p } uses (mut start, mut period) {
+            start = at
+            period = p
+        }
+
+        UnlockedAt -> Timestamp uses (start, period) {
+            start + period
+        }
+
+        Remaining -> Duration uses (start, period, ctx) {
+            let unlock = start + period
+            let now = ctx.timestamp()
+            if now >= unlock { Duration::zero() } else { unlock - now }
+        }
+    }
+}
+
+#[test]
+fn durations_and_timestamps_cross_the_abi() uses (evm: mut Evm) {
+    let vesting = evm.create2<Vesting>(value: Wei::zero(), args: (), salt: 0)
+    let now = evm.timestamp()
+    evm.call(addr: vesting, gas: 100000, value: Wei::zero(), message: VestingMsg::Start { at: now, period: weeks(1) })
+
+    let unlocked: Timestamp = evm.call(addr: vesting, gas: 100000, value: Wei::zero(), message: VestingMsg::UnlockedAt {})
+    assert!(unlocked == now + WEEK)
+
+    let remaining: Duration = evm.call(addr: vesting, gas: 100000, value: Wei::zero(), message: VestingMsg::Remaining {})
+    assert!(remaining == WEEK)
+}

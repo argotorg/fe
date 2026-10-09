@@ -121,19 +121,19 @@ pub contract C {
 
 #[test]
 fn test_contract_field_mut_borrow_matrix() uses (evm: mut Evm) {
-    let c = evm.create2<C>(value: 0, args: (10, 20, 30), salt: 3)
+    let c = evm.create2<C>(value: Wei::zero(), args: (10, 20, 30), salt: 3)
     assert!(c.inner != 0)
 
-    let a = evm.call(addr: c, gas: 100000, value: 0, message: Msg::MutateA { by: 5 })
+    let a = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::MutateA { by: 5 })
     assert!(a == 15)
 
-    let b = evm.call(addr: c, gas: 100000, value: 0, message: Msg::MutateBForward { by: 4 })
+    let b = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::MutateBForward { by: 4 })
     assert!(b == 24)
 
     let c0 = evm.call(
         addr: c,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::SelectAndMutate {
             pick_c: false,
             base: 7,
@@ -145,7 +145,7 @@ fn test_contract_field_mut_borrow_matrix() uses (evm: mut Evm) {
     let c1 = evm.call(
         addr: c,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::SelectAndMutate {
             pick_c: true,
             base: 9,
@@ -157,7 +157,7 @@ fn test_contract_field_mut_borrow_matrix() uses (evm: mut Evm) {
     let collision = evm.call(
         addr: c,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: Msg::DecodeNameCollisions {
             input: 2,
             d: 3,
@@ -166,9 +166,9 @@ fn test_contract_field_mut_borrow_matrix() uses (evm: mut Evm) {
     )
     assert!(collision == 234)
 
-    let d = evm.call(addr: c, gas: 100000, value: 0, message: Msg::DoubleMutate {})
+    let d = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::DoubleMutate {})
     assert!(d == 116)
 
-    let snap = evm.call(addr: c, gas: 100000, value: 0, message: Msg::Snapshot {})
+    let snap = evm.call(addr: c, gas: 100000, value: Wei::zero(), message: Msg::Snapshot {})
     assert!(snap == 44027045)
 }

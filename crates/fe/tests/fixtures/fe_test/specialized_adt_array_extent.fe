@@ -27,13 +27,13 @@ pub contract SpecializedExtent {
 
 #[test]
 fn test_specialized_adt_array_extent() uses (evm: mut Evm) {
-    let addr = evm.create2<SpecializedExtent>(value: 0, args: (), salt: 0)
+    let addr = evm.create2<SpecializedExtent>(value: Wei::zero(), args: (), salt: 0)
     assert!(addr.inner != 0)
 
     let first: u8 = evm.call(
         addr: addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: ExtentMsg::Read { index: 0 },
     )
     assert!(first == 11)
@@ -41,7 +41,7 @@ fn test_specialized_adt_array_extent() uses (evm: mut Evm) {
     let last: u8 = evm.call(
         addr: addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: ExtentMsg::Read { index: 4 },
     )
     assert!(last == 29)
@@ -70,11 +70,11 @@ pub contract AliasExtent {
 
 #[test]
 fn test_alias_array_extent_in_init_and_message() uses (evm: mut Evm) {
-    let addr = evm.create2<AliasExtent>(value: 0, args: ([1, 2, 3, 4, 5],), salt: 0)
+    let addr = evm.create2<AliasExtent>(value: Wei::zero(), args: ([1, 2, 3, 4, 5],), salt: 0)
     let picked: u8 = evm.call(
         addr: addr,
         gas: 100000,
-        value: 0,
+        value: Wei::zero(),
         message: AliasMsg::Pick { value: [10, 20, 30, 40, 50], index: 3 },
     )
     assert!(picked == 45)

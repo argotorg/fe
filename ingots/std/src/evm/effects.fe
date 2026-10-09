@@ -26,6 +26,7 @@ use ingot::abi::sol::{decode_input_at, decode_output}
 use super::calldata::CallData
 use super::contract_field_slot
 use super::panic::Panic
+use super::units::{Timestamp, Wei}
 use ingot::evm::ops
 
 type MemBuffer = ptr::MemBuffer
@@ -286,16 +287,16 @@ pub trait Ctx: EvmCapabilitySeal {
     fn caller(self) -> Address
     fn origin(self) -> Address
     fn coinbase(self) -> Address
-    fn balance(self, _ addr: Address) -> u256
-    fn value(self) -> u256
+    fn balance(self, _ addr: Address) -> Wei
+    fn value(self) -> Wei
     fn gasprice(self) -> u256
-    fn timestamp(self) -> u256
+    fn timestamp(self) -> Timestamp
     fn block_number(self) -> u256
     fn prevrandao(self) -> u256
     fn gaslimit(self) -> u256
     fn chainid(self) -> u256
     fn basefee(self) -> u256
-    fn selfbalance(self) -> u256
+    fn selfbalance(self) -> Wei
     fn blockhash(self, _: u256) -> u256
     fn blobhash(self, _: u256) -> u256
     fn blobbasefee(self) -> u256
@@ -415,19 +416,19 @@ pub trait Contract {
 
 pub trait Create: EvmCapabilitySeal {
     /// Low-level `CREATE` opcode.
-    fn create_raw(mut self, value: u256, init_code: MemSpan) -> Address {
-        Address { inner: ops::create(value: value, offset: init_code.ptr(), len: init_code.len()) }
+    fn create_raw(mut self, value: Wei, init_code: MemSpan) -> Address {
+        Address { inner: ops::create(value: value.as_wei(), offset: init_code.ptr(), len: init_code.len()) }
     }
 
     /// Low-level `CREATE2` opcode.
-    fn create2_raw(mut self, value: u256, init_code: MemSpan, salt: u256) -> Address {
+    fn create2_raw(mut self, value: Wei, init_code: MemSpan, salt: u256) -> Address {
         Address {
-            inner: ops::create2(value: value, offset: init_code.ptr(), len: init_code.len(), salt: salt),
+            inner: ops::create2(value: value.as_wei(), offset: init_code.ptr(), len: init_code.len(), salt: salt),
         }
     }
 
     /// Deploy a high-level contract using `CREATE`, bubbling revert data on failure.
-    fn create<C: Contract>(mut self, value: u256, args: own C::InitArgs) -> Address {
+    fn create<C: Contract>(mut self, value: Wei, args: own C::InitArgs) -> Address {
         let init_code = contract_init_code<C>(args)
         let addr = self.create_raw(value: value, init_code: init_code.span())
 
@@ -440,7 +441,7 @@ pub trait Create: EvmCapabilitySeal {
     }
 
     /// Deploy a high-level contract using `CREATE2`, bubbling revert data on failure.
-    fn create2<C: Contract>(mut self, value: u256, args: own C::InitArgs, salt: u256) -> Address {
+    fn create2<C: Contract>(mut self, value: Wei, args: own C::InitArgs, salt: u256) -> Address {
         let init_code = contract_init_code<C>(args)
         let addr = self.create2_raw(value: value, init_code: init_code.span(), salt)
 
@@ -616,14 +617,14 @@ pub trait Call: EvmCapabilitySeal {
         mut self,
         addr: Address,
         gas: u256,
-        value: u256,
+        value: Wei,
         args: MemSpan,
         ret: mut MemBuffer,
     ) -> RawCallOutcome {
         let success = ops::call(
             gas: gas,
             addr: addr.inner,
-            value: value,
+            value: value.as_wei(),
             args_offset: args.ptr(),
             args_len: args.len(),
             ret_offset: ret.ptr(),
@@ -648,7 +649,7 @@ pub trait Call: EvmCapabilitySeal {
         addr: Address,
         minimum: u256,
         reserved: u256,
-        value: u256,
+        value: Wei,
         args: MemSpan,
     ) -> Result<super::calls::InsufficientGas, RawCallOutcome> {
         let input = MemBuffer::from_span(args)
@@ -714,7 +715,7 @@ pub trait Call: EvmCapabilitySeal {
     /// `CALL` with pre-encoded calldata without bubbling failure.
     ///
     /// The returned owner contains the complete success or revert payload.
-    fn try_call_raw(mut self, addr: own Address, gas: u256, value: u256, args: MemSpan) -> CallOutcome {
+    fn try_call_raw(mut self, addr: own Address, gas: u256, value: Wei, args: MemSpan) -> CallOutcome {
         let mut ret = MemBuffer::empty()
         let raw = self.raw_call(addr, gas, value, args, ret: mut ret)
         copy_call_outcome(raw)
@@ -727,7 +728,7 @@ pub trait Call: EvmCapabilitySeal {
         mut self,
         addr: own Address,
         gas: u256,
-        value: u256,
+        value: Wei,
         message: own M,
     ) -> CallOutcome
     where M: MsgVariant<Sol> + Encode<Sol>
@@ -748,10 +749,10 @@ pub trait Call: EvmCapabilitySeal {
         copy_call_outcome(raw)
     }
 
-    /// Send `value` wei to `addr` with empty calldata (Solidity
+    /// Send `value` to `addr` with empty calldata (Solidity
     /// `addr.call{value: value}("")`), without copying returndata or
     /// bubbling failure.
-    fn send_value(mut self, addr: own Address, gas: u256, value: u256) -> RawCallOutcome {
+    fn send_value(mut self, addr: own Address, gas: u256, value: Wei) -> RawCallOutcome {
         let mut ret = MemBuffer::empty()
         self.raw_call(addr, gas, value, args: MemSpan::empty(), ret: mut ret)
     }
@@ -765,7 +766,7 @@ pub trait Call: EvmCapabilitySeal {
         mut self,
         addr: own Address,
         gas: u256,
-        value: u256,
+        value: Wei,
         message: own M,
         ret: mut MemBuffer,
     ) -> RawCallOutcome
@@ -800,7 +801,7 @@ pub trait Call: EvmCapabilitySeal {
         copy_call_outcome(raw)
     }
 
-    fn call<M>(mut self, addr: own Address, gas: u256, value: u256, message: own M) -> M::Return
+    fn call<M>(mut self, addr: own Address, gas: u256, value: Wei, message: own M) -> M::Return
     where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
     {
         self.try_call(addr, gas, value, message).decode()
@@ -818,7 +819,7 @@ pub trait Call: EvmCapabilitySeal {
         mut self,
         addr: own Address,
         gas: u256,
-        value: u256,
+        value: Wei,
         message: own M,
         default: own M::Return,
     ) -> M::Return
@@ -851,7 +852,7 @@ impl Address {
     pub fn call<M>(self, _ message: own M) -> M::Return
     uses (call: mut Call) where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
     {
-        call.call(addr: self, gas: ops::gas(), value: 0, message)
+        call.call(addr: self, gas: ops::gas(), value: Wei::zero(), message)
     }
 
     /// `STATICCALL` a contract at this address with a typed message.
@@ -868,7 +869,7 @@ impl Address {
     pub fn try_call<M>(self, _ message: own M) -> CallOutcome
     uses (call: mut Call) where M: MsgVariant<Sol> + Encode<Sol>
     {
-        call.try_call(addr: self, gas: ops::gas(), value: 0, message)
+        call.try_call(addr: self, gas: ops::gas(), value: Wei::zero(), message)
     }
 
     /// `STATICCALL` this address with a typed message and preserve success or
@@ -888,7 +889,7 @@ impl Address {
     pub fn call_with_default<M>(self, _ message: own M, default: own M::Return) -> M::Return
     uses (call: mut Call) where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
     {
-        call.call_with_default(addr: self, gas: ops::gas(), value: 0, message, default)
+        call.call_with_default(addr: self, gas: ops::gas(), value: Wei::zero(), message, default)
     }
 }
 
@@ -934,19 +935,19 @@ impl Ctx for Evm {
     fn coinbase(self) -> Address {
         Address { inner: ops::coinbase() }
     }
-    fn balance(self, _ addr: Address) -> u256 {
-        ops::balance(addr.inner)
+    fn balance(self, _ addr: Address) -> Wei {
+        super::units::wei(ops::balance(addr.inner))
     }
 
     #[inline(always)]
-    fn value(self) -> u256 {
-        ops::callvalue()
+    fn value(self) -> Wei {
+        super::units::wei(ops::callvalue())
     }
     fn gasprice(self) -> u256 {
         ops::gasprice()
     }
-    fn timestamp(self) -> u256 {
-        ops::timestamp()
+    fn timestamp(self) -> Timestamp {
+        Timestamp::from_seconds(ops::timestamp())
     }
     fn block_number(self) -> u256 {
         ops::number()
@@ -963,8 +964,8 @@ impl Ctx for Evm {
     fn basefee(self) -> u256 {
         ops::basefee()
     }
-    fn selfbalance(self) -> u256 {
-        ops::selfbalance()
+    fn selfbalance(self) -> Wei {
+        super::units::wei(ops::selfbalance())
     }
     fn blockhash(self, _ block: u256) -> u256 {
         ops::blockhash(block)

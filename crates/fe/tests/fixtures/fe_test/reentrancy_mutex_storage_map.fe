@@ -25,7 +25,7 @@ pub contract A uses (ctx: Ctx, call: mut Call) {
         Start { b, user } -> u256 uses (ctx, mut call) {
             let self_addr = ctx.address()
             let gas = 150000
-            let value = 0
+            let value = Wei::zero()
 
             // this calls B::Enter -> A::Callback -> B::Protected
             let _ = call.call(addr: b, gas, value, message: BMsg::Enter { a: self_addr, user: user })
@@ -39,7 +39,7 @@ pub contract A uses (ctx: Ctx, call: mut Call) {
             call.call(
                 addr: b,
                 gas: 150000,
-                value: 0,
+                value: Wei::zero(),
                 message: BMsg::Protected { user: user },
             )
         }
@@ -56,7 +56,7 @@ pub contract B {
             call.call(
                 addr: a,
                 gas: 150000,
-                value: 0,
+                value: Wei::zero(),
                 message: AMsg::Callback { b: ctx.address(), user: user },
             )
             let post = guarded_balances.peek().get(key: user)
@@ -100,14 +100,14 @@ pub contract B {
 
 #[test]
 fn test_reentrancy_guard_mutex_storage_map() uses (cr: mut Create, evm: mut Evm) {
-    let a = cr.create2<A>(value: 0, args: (), salt: 11)
-    let b = cr.create2<B>(value: 0, args: (), salt: 12)
+    let a = cr.create2<A>(value: Wei::zero(), args: (), salt: 11)
+    let b = cr.create2<B>(value: Wei::zero(), args: (), salt: 12)
     assert!(a.inner != 0)
     assert!(b.inner != 0)
 
     let user = Address { inner: 0x1111 }
     let gas = 200000
-    let value = 0
+    let value = Wei::zero()
 
     // lock state starts clear
     let initially_locked = evm.call(addr: b, gas, value, message: BMsg::IsLocked {})
