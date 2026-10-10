@@ -1,0 +1,95 @@
+// An associated type whose definition needs itself is a cycle, reported
+// where the type is defined and where it is used, whatever else is next to it.
+trait Tr {
+    type Out
+}
+
+struct A {}
+
+struct B {}
+
+struct W<T> {
+    t: T,
+}
+
+impl Tr for A {
+    type Out = W<<A as Tr>::Out>
+}
+
+fn itself(x: <A as Tr>::Out) {}
+
+trait Tr2 {
+    type Out
+}
+
+impl Tr2 for A {
+    type Out = W<<B as Tr2>::Out>
+}
+
+impl Tr2 for B {
+    type Out = W<<A as Tr2>::Out>
+}
+
+fn each_other(_ x: <A as Tr2>::Out) {}
+
+// The same cycle next to a large type, in both orders.
+type L0 = u8
+type L1 = (L0, L0)
+type L2 = (L1, L1)
+type L3 = (L2, L2)
+type L4 = (L3, L3)
+type L5 = (L4, L4)
+type L6 = (L5, L5)
+type L7 = (L6, L6)
+type L8 = (L7, L7)
+type L9 = (L8, L8)
+type L10 = (L9, L9)
+type L11 = (L10, L10)
+type L12 = (L11, L11)
+type L13 = (L12, L12)
+
+struct Big<T> {
+    t: T,
+}
+
+struct Small {}
+
+trait Tr3 {
+    type Out
+}
+
+impl<T> Tr3 for Big<T> {
+    type Out = W<<Small as Tr3>::Out>
+}
+
+impl Tr3 for Small {
+    type Out = W<<Big<L13> as Tr3>::Out>
+}
+
+fn take<X>() {}
+
+fn big_first() {
+    take<(<Big<L13> as Tr3>::Out, <Small as Tr3>::Out)>()
+}
+
+fn small_first() {
+    take<(<Small as Tr3>::Out, <Big<L13> as Tr3>::Out)>()
+}
+
+// An impl that defines the type as itself, through its qualified path, is
+// the same cycle as `type Out = Self::Out`.
+trait Tr4 {
+    type Out
+}
+
+impl Tr4 for A {
+    type Out = <A as Tr4>::Out
+}
+
+impl Tr4 for B {
+    type Out = Self::Out
+}
+
+fn qualified(_ x: <A as Tr4>::Out) {}
+
+fn through_self(_ x: <B as Tr4>::Out) {}

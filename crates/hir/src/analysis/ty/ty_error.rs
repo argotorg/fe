@@ -15,9 +15,9 @@ use crate::analysis::{
 
 use super::{
     const_ty::{ConstBodyLowering, ConstTyData, HoleAnchor, LoweringContext, ty_is_fully_ground},
-    diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
+    diagnostics::{TyDiagCollection, TyLowerDiag},
     normalize::normalize_ty,
-    trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf},
+    trait_resolution::{PredicateListId, TraitSolveCx, check_ty_wf},
     ty_def::{InvalidCause, TyData, TyId},
     ty_lower::{lower_hir_ty, lower_hir_ty_in_mode},
 };
@@ -92,8 +92,7 @@ fn collect_hir_ty_diags_in_mode<'db>(
 
 /// Projections in a written type are resolved only when the type is
 /// normalized. Report one that cannot be resolved within the normalization
-/// limits where it is written: elsewhere it would be an invalid type, which
-/// matches any type.
+/// limits where it is written.
 pub(crate) fn normalization_limit_diag<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
@@ -101,10 +100,11 @@ pub(crate) fn normalization_limit_diag<'db>(
     assumptions: PredicateListId<'db>,
     span: DynLazySpan<'db>,
 ) -> Option<TyDiagCollection<'db>> {
-    (ty.has_projection(db)
-        && first_invalid_ty_cause(db, normalize_ty(db, ty, scope, assumptions))
-            == Some(InvalidCause::TypeNormalizationLimit))
-    .then(|| TyLowerDiag::TypeNormalizationLimit(span).into())
+    if !ty.has_projection(db) {
+        return None;
+    }
+    let limit = normalize_ty(db, ty, scope, assumptions).err()?;
+    Some(limit.report(span).0)
 }
 
 pub fn collect_ty_lower_errors<'db>(
@@ -488,19 +488,10 @@ pub(crate) fn qualified_path_wf_diags<'db>(
             {
                 let ty = lower_hir_ty(self.db, hir_ty, ctxt.scope(), self.assumptions);
                 if !ty.has_invalid(self.db)
-                    && let WellFormedness::IllFormed { goal, subgoal } =
-                        check_ty_wf(self.db, self.solve_cx, ty)
+                    && let Some(diag) =
+                        check_ty_wf(self.db, self.solve_cx, ty).into_diag(span.into())
                 {
-                    self.diags.push(
-                        TraitConstraintDiag::TraitBoundNotSat {
-                            span: span.into(),
-                            primary_goal: goal,
-                            unsat_subgoal: subgoal,
-                            required_by: None,
-                            capability_hint: None,
-                        }
-                        .into(),
-                    );
+                    self.diags.push(diag);
                     return;
                 }
             }
@@ -634,6 +625,7 @@ pub(crate) fn is_const_eval_fault(cause: &InvalidCause<'_>) -> bool {
             | InvalidCause::ConstEvalNegativeExponent { .. }
             | InvalidCause::ConstEvalStepLimitExceeded { .. }
             | InvalidCause::ConstEvalRecursionLimitExceeded { .. }
+            | InvalidCause::ConstEvalInstanceLimit { .. }
             | InvalidCause::ConstEvalRecursiveConst { .. }
     )
 }
@@ -786,6 +778,9 @@ pub(crate) fn diag_from_invalid_cause<'db>(
         InvalidCause::ConstEvalRecursionLimitExceeded { body, expr } => {
             TyLowerDiag::ConstEvalRecursionLimitExceeded(expr.span(body).into()).into()
         }
+        InvalidCause::ConstEvalInstanceLimit { body, expr } => {
+            TyLowerDiag::ConstEvalInstanceLimit(expr.span(body).into()).into()
+        }
 
         InvalidCause::ConstEvalRecursiveConst { body, expr } => {
             TyLowerDiag::ConstEvalRecursiveConst(expr.span(body).into()).into()
@@ -793,7 +788,11 @@ pub(crate) fn diag_from_invalid_cause<'db>(
 
         InvalidCause::TypeLoweringCycle => TyLowerDiag::TypeLoweringCycle(span).into(),
 
-        InvalidCause::TypeNormalizationLimit => TyLowerDiag::TypeNormalizationLimit(span).into(),
+        InvalidCause::NormalizationLimit { limit, stand_in } => match stand_in {
+            // Reported already, where the type was used.
+            super::normalize::LimitStandIn::Reported(_) => return None,
+            super::normalize::LimitStandIn::Written(_) => limit.report(span).0,
+        },
 
         InvalidCause::NotAType(_) => return None,
 

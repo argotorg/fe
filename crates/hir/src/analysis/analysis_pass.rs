@@ -298,10 +298,17 @@ fn semantic_field_type_errors<'db>(
             resolve_core_trait(db, scope, &["abi", "Encode"]),
             resolve_lib_trait_path(db, scope, "std::abi::SolCompat"),
         );
+        // A bound that reaches a normalization limit is neither implemented
+        // nor not: the limit is reported where the field's type is written,
+        // and this hint is not given.
         let implements = |trait_, args| {
-            !matches!(
-                is_goal_satisfiable(db, solve_cx, TraitInstId::new_simple(db, trait_, args)),
-                GoalSatisfiability::UnSat(_) | GoalSatisfiability::NeedsConfirmation { .. }
+            is_goal_satisfiable(db, solve_cx, TraitInstId::new_simple(db, trait_, args)).map(
+                |result| {
+                    !matches!(
+                        result,
+                        GoalSatisfiability::UnSat(_) | GoalSatisfiability::NeedsConfirmation { .. }
+                    )
+                },
             )
         };
         for (field_idx, field) in abi_struct.hir_fields(db).data(db).iter().enumerate() {
@@ -319,9 +326,9 @@ fn semantic_field_type_errors<'db>(
                 AbiFieldDiagnosticKind::Unsupported
             } else if !resolved_ty.has_invalid(db)
                 && let (Some(sol_ty), Some(abi_size), Some(encode), Some(sol_compat)) = traits
-                && implements(abi_size, vec![resolved_ty])
-                && implements(encode, vec![resolved_ty, sol_ty])
-                && !implements(sol_compat, vec![resolved_ty])
+                && implements(abi_size, vec![resolved_ty]) == Ok(true)
+                && implements(encode, vec![resolved_ty, sol_ty]) == Ok(true)
+                && implements(sol_compat, vec![resolved_ty]) == Ok(false)
             {
                 AbiFieldDiagnosticKind::MissingSolCompat
             } else {
@@ -424,9 +431,15 @@ impl ModuleAnalysisPass for AbiStructLowerPass {
                 .iter()
                 .map(|field| {
                     Box::new(AbiStructDiagnostic {
-                        kind: AbiStructDiagnosticKind::UnsupportedFieldType {
-                            ty: field.field_ty.pretty_print(db).to_string(),
-                            missing: field.missing.clone(),
+                        kind: match field.limit {
+                            Some(limit) => AbiStructDiagnosticKind::FieldTypeLimit {
+                                ty: field.field_ty.pretty_print(db).to_string(),
+                                reason: limit.reason(),
+                            },
+                            None => AbiStructDiagnosticKind::UnsupportedFieldType {
+                                ty: field.field_ty.pretty_print(db).to_string(),
+                                missing: field.missing.clone(),
+                            },
                         },
                         file: top_mod.file(db),
                         primary_range: field_ty_range(&root, &field.ast_struct, field.field_idx),
@@ -465,6 +478,9 @@ pub struct AbiArrayElemNotCopy {
     pub error_code: GlobalErrorCode,
     pub ty: String,
     pub elem_ty: String,
+    /// Why `elem_ty` has no `Copy` answer, when deciding it reached a
+    /// normalization limit.
+    pub limit_reason: Option<String>,
     pub file: File,
     pub primary_range: parser::TextRange,
 }
@@ -483,6 +499,7 @@ fn non_copy_array_field_errors<'db>(
             error_code: error_code.clone(),
             ty: field.field_ty.pretty_print(db).to_string(),
             elem_ty: field.elem_ty.pretty_print(db).to_string(),
+            limit_reason: field.limit.map(|limit| limit.reason()),
             file: top_mod.file(db),
             primary_range: field_ty_range(&root, &field.ast_struct, field.field_idx),
         })

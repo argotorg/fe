@@ -1,0 +1,76 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/normalization_limit_cycles.fe
+---
+error[3-0038]: cycle detected while resolving this type
+   ┌─ normalization_limit_cycles.fe:16:16
+   │
+16 │     type Out = W<<A as Tr>::Out>
+   │                ^^^^^^^^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ normalization_limit_cycles.fe:19:14
+   │
+19 │ fn itself(x: <A as Tr>::Out) {}
+   │              ^^^^^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ normalization_limit_cycles.fe:26:16
+   │
+26 │     type Out = W<<B as Tr2>::Out>
+   │                ^^^^^^^^^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ normalization_limit_cycles.fe:30:16
+   │
+30 │     type Out = W<<A as Tr2>::Out>
+   │                ^^^^^^^^^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ normalization_limit_cycles.fe:33:20
+   │
+33 │ fn each_other(_ x: <A as Tr2>::Out) {}
+   │                    ^^^^^^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ normalization_limit_cycles.fe:62:16
+   │
+62 │     type Out = W<<Small as Tr3>::Out>
+   │                ^^^^^^^^^^^^^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ normalization_limit_cycles.fe:66:16
+   │
+66 │     type Out = W<<Big<L13> as Tr3>::Out>
+   │                ^^^^^^^^^^^^^^^^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ normalization_limit_cycles.fe:72:5
+   │
+72 │     take<(<Big<L13> as Tr3>::Out, <Small as Tr3>::Out)>()
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ normalization_limit_cycles.fe:76:5
+   │
+76 │     take<(<Small as Tr3>::Out, <Big<L13> as Tr3>::Out)>()
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ normalization_limit_cycles.fe:86:16
+   │
+86 │     type Out = <A as Tr4>::Out
+   │                ^^^^^^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ normalization_limit_cycles.fe:90:16
+   │
+90 │     type Out = Self::Out
+   │                ^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ normalization_limit_cycles.fe:93:19
+   │
+93 │ fn qualified(_ x: <A as Tr4>::Out) {}
+   │                   ^^^^^^^^^^^^^^^ this type's definition depends on itself

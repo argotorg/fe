@@ -53,7 +53,7 @@ use super::{
     access::ResolvedOperation,
     boundary::resolve_boundary_requirements,
     events::ConflictAnalysis,
-    inventory::{Inventory, unbounded_referents_diag},
+    inventory::{Inventory, unbounded_referents_diag, unresolved_effect_handle_diag},
     ir::{BoundaryRequirement, ExecutableBlock, ExecutableControlFlow, PendingSemanticValidation},
     loop_certificate::{FrontierCandidate, PrefixCertificate},
     scalar::{CONDITION_BUDGET, ScalarDemand},
@@ -145,10 +145,9 @@ impl<'db> Borrowck<'db> {
                 ShapeError::UnboundedReferents(head) => {
                     return unbounded_referents_diag(db, instance, body.template_owner, head);
                 }
-                ShapeError::UnresolvedCapability(ty) => format!(
-                    "unresolved capability inventory for `{}`: {ty:?}",
-                    ty.pretty_print(db)
-                ),
+                ShapeError::UnresolvedCapability(ty) => {
+                    return unresolved_effect_handle_diag(db, instance, body.template_owner, ty);
+                }
                 error => format!("invalid capability inventory: {error:?}"),
             };
             normalized_body_internal_diag(

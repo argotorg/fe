@@ -1,0 +1,106 @@
+// The limits apply to each use of an associated type on its own: a type
+// reaches a limit exactly when one of its uses does, however its parts are
+// grouped or ordered, and the limit named does not depend on their order.
+trait Tr {
+    type Out
+}
+
+pub struct W<T> {
+    t: T,
+}
+
+pub struct S1 {}
+
+pub struct S2 {}
+
+pub struct S3 {}
+
+type A0 = u8
+type A1 = (A0, A0)
+type A2 = (A1, A1)
+type A3 = (A2, A2)
+type A4 = (A3, A3)
+type A5 = (A4, A4)
+type A6 = (A5, A5)
+type A7 = (A6, A6)
+type A8 = (A7, A7)
+type A9 = (A8, A8)
+type A10 = (A9, A9)
+type A11 = (A10, A10)
+type A12 = (A11, A11)
+type A13 = (A12, A12)
+type A14 = (A13, A13)
+
+// Each result is about half of the work limit.
+impl Tr for S1 {
+    type Out = A13
+}
+
+impl Tr for S2 {
+    type Out = W<W<W<W<A13>>>>
+}
+
+// Past the work limit on its own.
+impl Tr for S3 {
+    type Out = (A14, A14)
+}
+
+type X1 = <S1 as Tr>::Out
+type X2 = <S2 as Tr>::Out
+
+fn need<X>() {}
+
+pub fn together() {
+    need<(<S1 as Tr>::Out, <S2 as Tr>::Out)>()
+}
+
+pub fn through_aliases() {
+    need<(X1, X2)>()
+}
+
+pub fn apart() {
+    need<X1>()
+    need<<S2 as Tr>::Out>()
+}
+
+pub fn one_too_large() {
+    need<(<S1 as Tr>::Out, <S3 as Tr>::Out)>()
+}
+
+trait Nest {
+    type Out
+}
+
+pub struct N<T> {
+    t: T,
+}
+
+impl<T: Nest> Nest for N<T> {
+    type Out = T::Out
+}
+
+impl Nest for u8 {
+    type Out = u8
+}
+
+trait Cyc {
+    type Out
+    type Mid
+}
+
+pub struct S {}
+
+impl Cyc for S {
+    type Out = <S as Cyc>::Mid
+    type Mid = <S as Cyc>::Out
+}
+
+// A cycle next to a use past the nesting limit: the cycle is named, in
+// either order.
+pub fn cycle_first() {
+    need<(<S as Cyc>::Out, <N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> as Nest>::Out)>()
+}
+
+pub fn cycle_last() {
+    need<(<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> as Nest>::Out, <S as Cyc>::Out)>()
+}

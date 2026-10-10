@@ -13,7 +13,7 @@ use crate::analysis::{
     },
     ty::{
         adt_def::{AdtRef, instantiate_adt_field_shape},
-        normalize::normalize_ty,
+        normalize::normalize_or_keep,
         ty_def::{PrimTy, TyBase, TyData, TyId},
     },
 };
@@ -451,7 +451,7 @@ fn projection_base_ty<'db>(
     source: &SemanticBody<'db>,
     ty: TyId<'db>,
 ) -> TyId<'db> {
-    let ty = normalize_ty(
+    let ty = normalize_or_keep(
         db,
         ty,
         source.template_owner.scope(),

@@ -317,6 +317,178 @@ fn trigger() -> u256 {
 }
 
 #[test]
+fn test_cli_check_effect_handle_target_at_the_normalization_limit_is_reported() {
+    // A handle's `Target` is needed by every value of the handle, including
+    // the receiver of its own `raw` method, so a limit in it is reported at
+    // the impl, not as an internal error of a later analysis.
+    let source = |layers: usize| {
+        format!(
+            r#"
+use core::effect_ref::{{AddressSpace, EffectHandle}}
+trait Nest {{
+    type Out
+}}
+pub struct N<T> {{
+    t: T,
+}}
+impl<T: Nest> Nest for N<T> {{
+    type Out = T::Out
+}}
+impl Nest for u8 {{
+    type Out = u8
+}}
+struct H {{
+    addr: *u8,
+}}
+impl EffectHandle for H {{
+    type Target = <{}u8{} as Nest>::Out
+    type Raw = *u8
+    const SPACE: AddressSpace = AddressSpace::Memory
+    fn raw(self) -> *u8 {{
+        self.addr
+    }}
+}}
+fn hidden<P: EffectHandle>() uses (x: P) {{}}
+fn run() uses (x: H) {{
+    hidden<H>()
+}}
+"#,
+            "N<".repeat(layers),
+            ">".repeat(layers)
+        )
+    };
+    let temp = tempdir().expect("tempdir");
+    for (layers, limit) in [(2, false), (65, true)] {
+        let file = temp.path().join(format!("handle_target_{layers}.fe"));
+        fs::write(&file, source(layers)).expect("write fixture");
+        let (output, exit_code) =
+            run_fe_command("check", file.to_str().expect("fixture path utf8"));
+        if !limit {
+            assert_eq!(exit_code, 0, "expected success:\n{output}");
+            continue;
+        }
+        assert_eq!(exit_code, 1, "expected check failure:\n{output}");
+        assert_eq!(
+            output.matches("type normalization limit exceeded").count(),
+            1,
+            "expected one limit error at the impl:\n{output}"
+        );
+        assert!(
+            !output.contains("internal borrow checking error"),
+            "unexpected internal error:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_check_generic_effect_handle_target_naming_an_associated_type_is_reported() {
+    // Inside a generic handle's own `raw` method, a `Target` or `Raw` that
+    // names an associated type of the handle's parameters is not known. Such
+    // a handle is rejected with an error that says so, not as an internal
+    // error showing internal type ids.
+    let source = |target: &str| {
+        format!(
+            r#"
+use core::effect_ref::{{AddressSpace, EffectHandle}}
+trait Nest {{
+    type Out
+}}
+impl Nest for u8 {{
+    type Out = u8
+}}
+struct H<T: Nest> {{
+    addr: *{target},
+}}
+impl<T: Nest> EffectHandle for H<T> {{
+    type Target = {target}
+    type Raw = *{target}
+    const SPACE: AddressSpace = AddressSpace::Memory
+    fn raw(self) -> *{target} {{
+        self.addr
+    }}
+}}
+fn user() uses (x: H<u8>) {{}}
+"#
+        )
+    };
+    let temp = tempdir().expect("tempdir");
+    for (name, target, rejected) in [("param", "T", false), ("projection", "T::Out", true)] {
+        let file = temp.path().join(format!("handle_target_{name}.fe"));
+        fs::write(&file, source(target)).expect("write fixture");
+        let (output, exit_code) =
+            run_fe_command("check", file.to_str().expect("fixture path utf8"));
+        if !rejected {
+            assert_eq!(exit_code, 0, "expected success:\n{output}");
+            continue;
+        }
+        assert_eq!(exit_code, 1, "expected check failure:\n{output}");
+        assert_eq!(
+            output
+                .matches("cannot resolve effect handle in `fn raw`")
+                .count(),
+            1,
+            "expected one error in the handle's `raw`:\n{output}"
+        );
+        assert!(
+            !output.contains("internal borrow checking error") && !output.contains("TyId("),
+            "unexpected internal error:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_build_msg_return_type_at_the_normalization_limit_reports_instead_of_panicking() {
+    // The written return type needs 64 nested steps, the most the limit
+    // allows. Code generation finds it through the variant's generated
+    // `Return` associated type, one step more, which reaches the limit.
+    let return_ty = format!("<{}u8{} as Nest>::Out", "N<".repeat(63), ">".repeat(63));
+    let temp = tempdir().expect("tempdir");
+    let file = temp.path().join("msg_return_limit.fe");
+    fs::write(
+        &file,
+        format!(
+            r#"
+trait Nest {{
+    type Out
+}}
+pub struct N<T> {{
+    t: T,
+}}
+impl<T: Nest> Nest for N<T> {{
+    type Out = T::Out
+}}
+impl Nest for u8 {{
+    type Out = u8
+}}
+msg M {{
+    #[selector = 1]
+    Get -> {return_ty},
+}}
+pub contract C {{
+    recv M {{
+        Get -> {return_ty} {{
+            0
+        }}
+    }}
+}}
+"#
+        ),
+    )
+    .expect("write fixture");
+
+    let (output, exit_code) = run_fe_command("build", file.to_str().expect("fixture path utf8"));
+    assert_eq!(exit_code, 1, "expected build failure:\n{output}");
+    assert!(
+        output.contains("type normalization limit exceeded"),
+        "expected the normalization limit error:\n{output}"
+    );
+    assert!(
+        !output.contains("panicked at"),
+        "unexpected panic:\n{output}"
+    );
+}
+
+#[test]
 fn test_cli_wide_enum_size_uses_widened_tag() {
     let temp = tempdir().expect("tempdir");
     let file = temp.path().join("wide_enum_size.fe");

@@ -1368,7 +1368,8 @@ impl<'db> FuncParamView<'db> {
         // Well-formedness / trait-bound satisfaction for parameter type
         let solve_cx =
             TraitSolveCx::new(db, func.scope()).with_assumptions(param_env(db, func.into()));
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, solve_cx, ty) {
+        let wf = check_ty_wf(db, solve_cx, ty);
+        if !wf.is_wf() {
             // Point at the written type inside a qualified path when that is
             // what is ill-formed.
             let precise = qualified_path_wf_diags(
@@ -1380,16 +1381,7 @@ impl<'db> FuncParamView<'db> {
                 solve_cx,
             );
             if precise.is_empty() {
-                out.push(
-                    TraitConstraintDiag::TraitBoundNotSat {
-                        span: ty_span.clone(),
-                        primary_goal: goal,
-                        unsat_subgoal: subgoal,
-                        required_by: None,
-                        capability_hint: None,
-                    }
-                    .into(),
-                );
+                out.extend(wf.into_diag(ty_span.clone()));
             } else {
                 out.extend(precise);
             }
@@ -1410,7 +1402,13 @@ impl<'db> FuncParamView<'db> {
                         substitute_layout_holes_by_placeholder(db, expected, receiver_layout_args);
                 }
             }
-            let ty_norm = normalize_ty(db, ty, func.scope(), assumptions);
+            let ty_norm = match normalize_ty(db, ty, func.scope(), assumptions) {
+                Ok(ty) => ty,
+                Err(limit) => {
+                    out.push(limit.report(ty_span).0);
+                    return out;
+                }
+            };
 
             let matches_expected = |candidate: TyId<'db>| {
                 let (exp_base, exp_args) = expected.decompose_ty_app(db);
@@ -1576,7 +1574,7 @@ impl<'db> RecvArmView<'db> {
                 selector_value: None,
                 selector_signature: None,
                 args_ty: TyId::unit(db),
-                ret_ty: None,
+                ret_ty: Ok(None),
             };
         }
 
@@ -1595,7 +1593,7 @@ impl<'db> RecvArmView<'db> {
                 selector_value: selector_info.value,
                 selector_signature: selector_info.signature,
                 args_ty: variant_ty,
-                ret_ty: None,
+                ret_ty: Ok(None),
             };
         };
         let return_ident = IdentId::new(db, "Return".to_string());
@@ -1610,11 +1608,11 @@ impl<'db> RecvArmView<'db> {
             let return_proj = TyId::assoc_ty(db, inst.trait_ref(db), return_ident);
             normalize_ty(db, return_proj, contract.scope(), assumptions)
         } else {
-            TyId::invalid(db, InvalidCause::Other)
+            Ok(TyId::invalid(db, InvalidCause::Other))
         };
 
         let args_ty = variant_ty;
-        let ret_ty = (variant_ret_ty != TyId::unit(db)).then_some(variant_ret_ty);
+        let ret_ty = variant_ret_ty.map(|ty| (ty != TyId::unit(db)).then_some(ty));
 
         RecvArmAbiInfo {
             is_fallback: false,
@@ -1928,7 +1926,11 @@ pub struct RecvArmAbiInfo<'db> {
     pub selector_value: Option<u32>,
     pub selector_signature: Option<String>,
     pub args_ty: TyId<'db>,
-    pub ret_ty: Option<TyId<'db>>,
+    /// The variant's return type, `None` for unit. The compiler finds it
+    /// through the variant's generated `Return` associated type, which can
+    /// reach a normalization limit that the written type does not; that limit
+    /// is reported with the contract's recv blocks (`check_contract_recv_blocks`).
+    pub ret_ty: Result<Option<TyId<'db>>, crate::analysis::ty::normalize::NormalizationLimit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
@@ -3383,24 +3385,14 @@ impl<'db> TypeAlias<'db> {
         };
         let assumptions = constraints_for(db, self.into());
         let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+        check_ty_wf(
             db,
             TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),
             ty,
-        ) {
-            vec![
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: self.span().ty().into(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                    capability_hint: None,
-                }
-                .into(),
-            ]
-        } else {
-            Vec::new()
-        }
+        )
+        .into_diag(self.span().ty().into())
+        .into_iter()
+        .collect()
     }
 }
 
@@ -4056,8 +4048,7 @@ pub(crate) enum InherentImplAdmissibility<'db> {
     },
     IllFormed {
         ty: TyId<'db>,
-        goal: TraitInstId<'db>,
-        subgoal: Option<TraitInstId<'db>>,
+        error: WellFormedness<'db>,
     },
 }
 
@@ -4142,9 +4133,7 @@ impl<'db> Impl<'db> {
             ty,
         ) {
             WellFormedness::WellFormed => InherentImplAdmissibility::Admissible { ty },
-            WellFormedness::IllFormed { goal, subgoal } => {
-                InherentImplAdmissibility::IllFormed { ty, goal, subgoal }
-            }
+            error => InherentImplAdmissibility::IllFormed { ty, error },
         }
     }
 
@@ -4215,6 +4204,9 @@ pub(crate) enum ImplTraitLowerError<'db> {
         expected: Kind,
         actual: TyId<'db>,
     },
+    /// Deciding whether this impl overlaps another reached a normalization
+    /// limit; reported at the impl header.
+    NormalizationLimit(crate::analysis::ty::normalize::NormalizationLimit),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4280,7 +4272,9 @@ impl<'db> ImplTrait<'db> {
             if cand_impl_trait == self {
                 continue;
             }
-            if does_impl_trait_conflict(db, cand_view, implementor)
+            let conflicts = does_impl_trait_conflict(db, cand_view, implementor)
+                .map_err(ImplTraitLowerError::NormalizationLimit)?;
+            if conflicts
                 && !Self::impl_trait_conflict_is_sealed_marker_disjoint(db, cand_impl_trait, self)
             {
                 return Err(ImplTraitLowerError::Conflict {
@@ -4687,28 +4681,30 @@ impl<'db> ImplTrait<'db> {
             return (None, Vec::new());
         }
 
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+        if let Some(diag) = check_ty_wf(
             db,
             TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),
             ty,
-        ) {
-            return (
-                None,
-                vec![
-                    TraitConstraintDiag::TraitBoundNotSat {
-                        span: self.span().ty().into(),
-                        primary_goal: goal,
-                        unsat_subgoal: subgoal,
-                        required_by: None,
-                        capability_hint: None,
-                    }
-                    .into(),
-                ],
-            );
+        )
+        .into_diag(self.span().ty().into())
+        {
+            return (None, vec![diag]);
         }
 
         match self.lowered_implementor(db) {
-            Ok(implementor) => (Some(implementor), Vec::new()),
+            Ok(implementor) => {
+                // The trait's arguments are written in the header: a limit in
+                // them is reported there.
+                let assumptions = param_env(db, self.into());
+                let limit = implementor.trait_(db).args(db).iter().find_map(|&arg| {
+                    crate::analysis::ty::normalize::normalize_ty(db, arg, self.scope(), assumptions)
+                        .err()
+                });
+                match limit {
+                    Some(limit) => (None, vec![limit.report(self.span().trait_ref().into()).0]),
+                    None => (Some(implementor), Vec::new()),
+                }
+            }
             Err(err) => {
                 let mut diags = Vec::new();
                 match err {
@@ -4765,6 +4761,9 @@ impl<'db> ImplTrait<'db> {
                                 .into(),
                             );
                         }
+                    }
+                    ImplTraitLowerError::NormalizationLimit(limit) => {
+                        diags.push(limit.report(self.span().trait_ref().into()).0);
                     }
                     ImplTraitLowerError::KindMismatch { expected, actual } => {
                         diags.push(
@@ -4888,22 +4887,28 @@ impl<'db> ImplAssocTypeView<'db> {
         if let Some(diag) = ty.emit_diag(db, ty_span.clone().into()) {
             return vec![diag];
         }
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+        // A definition is a written type, checked where it is written, with
+        // the impl's parameters kept abstract as a function signature's are:
+        // a limit found this way comes from a concrete part, which every use
+        // of the definition would reach too.
+        if let Some(diag) = crate::analysis::ty::ty_error::normalization_limit_diag(
+            db,
+            ty,
+            self.owner.scope(),
+            assumptions,
+            ty_span.clone().into(),
+        ) {
+            return vec![diag];
+        }
+        if let Some(diag) = check_ty_wf(
             db,
             TraitSolveCx::new(db, self.owner.scope())
                 .with_assumptions(param_env(db, self.owner.into())),
             ty,
-        ) {
-            return vec![
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: ty_span.into(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                    capability_hint: None,
-                }
-                .into(),
-            ];
+        )
+        .into_diag(ty_span.into())
+        {
+            return vec![diag];
         }
 
         Vec::new()
@@ -5564,7 +5569,8 @@ impl<'db> FieldView<'db> {
         let owner_item = self.owner_item();
         let solve_cx =
             TraitSolveCx::new(db, owner_item.scope()).with_assumptions(param_env(db, owner_item));
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, solve_cx, ty) {
+        let wf = check_ty_wf(db, solve_cx, ty);
+        if !wf.is_wf() {
             // Point at the written type inside a qualified path when that is
             // what is ill-formed.
             let precise = hir_ty.to_opt().map_or_else(Vec::new, |hir_ty| {
@@ -5578,16 +5584,7 @@ impl<'db> FieldView<'db> {
                 )
             });
             if precise.is_empty() {
-                out.push(
-                    TraitConstraintDiag::TraitBoundNotSat {
-                        span: span.clone(),
-                        primary_goal: goal,
-                        unsat_subgoal: subgoal,
-                        required_by: None,
-                        capability_hint: None,
-                    }
-                    .into(),
-                );
+                out.extend(wf.into_diag(span.clone()));
             } else {
                 out.extend(precise);
             }
@@ -5604,6 +5601,9 @@ impl<'db> FieldView<'db> {
                 .field_errors_for_id(field)
                 .and_then(|errors| errors.first())
         {
+            if let ContractLayoutError::ProviderLimit(limit) = error {
+                return vec![limit.report(span).0];
+            }
             if let ContractLayoutError::InvalidConcreteArrayLength { invalid } = error {
                 if let Some(diag) = invalid
                     .invalid_cause(db)
@@ -5700,6 +5700,7 @@ impl<'db> FieldView<'db> {
                         | ContractLayoutError::UnresolvedConcreteLayoutRoot { .. }
                         | ContractLayoutError::AmbiguousProviderLayout
                         | ContractLayoutError::UnresolvedProviderTarget
+                        | ContractLayoutError::ProviderLimit(_)
                         | ContractLayoutError::UnresolvedProviderSpace
                         | ContractLayoutError::InvalidProviderRaw { .. }
                         | ContractLayoutError::NonRegularProviderCycle
@@ -5711,7 +5712,8 @@ impl<'db> FieldView<'db> {
                     };
                     TyLowerDiag::ContractFieldLayoutInvariant { span, ty, issue }
                 }
-                ContractLayoutError::InvalidConcreteArrayLength { .. } => unreachable!(),
+                ContractLayoutError::InvalidConcreteArrayLength { .. }
+                | ContractLayoutError::ProviderLimit(_) => unreachable!(),
             };
             out.push(diag.into());
             return out;

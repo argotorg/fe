@@ -10,7 +10,7 @@ use crate::{
             borrowck::CallSiteRefinements,
             diagnostics::{
                 SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind,
-                SemanticDiagnosticLabel, SemanticDiagnosticSpan,
+                SemanticDiagnosticLabel, SemanticDiagnosticSpan, checker_name,
             },
             effect_param_site,
             lower::{BindingRoleMode, lower_to_smir, lower_to_smir_with_call_sites},
@@ -23,7 +23,9 @@ use crate::{
             effects::place_effect_provider_param_index_map,
             fold::TyFoldable,
             instantiate_trait_self,
-            normalize::normalize_ty,
+            normalize::{
+                NormalizationLimit, normalize_or_keep, normalize_ty_with_cost, tree_size_within,
+            },
             provider::{
                 ProviderAddressSpace, ProviderKind, ProviderLayoutEvidence, ProviderTransport,
                 RootProviderScope, provider_semantics, provider_semantics_for_specialized_call,
@@ -169,6 +171,39 @@ pub(crate) enum SemanticBodyAdmissionError<'db> {
     IncompleteLoweringPlan(Box<[crate::analysis::ty::ty_check::SmirLoweringIssue]>),
     CallSiteFinalization(crate::analysis::semantic::SemanticDiagnosticId<'db>),
     InvalidConcreteType(crate::analysis::semantic::SemanticDiagnosticId<'db>),
+    /// The body, or a callee it instantiates, reaches a limit only with
+    /// this instance's generic arguments.
+    InstantiationLimit {
+        diag: crate::analysis::semantic::SemanticDiagnosticId<'db>,
+        limit: InstantiationLimit,
+    },
+}
+
+/// A limit that instantiating a generic function reaches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub(crate) enum InstantiationLimit {
+    /// A type of an instance reaches a normalization limit.
+    Normalization(NormalizationLimit),
+    /// The instantiation makes more than [`InstantiationLimit::INSTANCES`]
+    /// distinct instances of generic functions, counting those they make in
+    /// turn.
+    Instances,
+    /// The types of the instances the instantiation makes, counting those
+    /// they make in turn, need more than [`InstantiationLimit::WORK`] type
+    /// nodes of work in total.
+    Work,
+}
+
+impl InstantiationLimit {
+    /// How many distinct instances of generic functions one instantiation
+    /// may make, counting those they make in turn.
+    pub const INSTANCES: usize = 4096;
+
+    /// How much work the types of those instances may need in total, in
+    /// type nodes: for each distinct type with associated types in each
+    /// instance, its size as a tree plus what resolving its associated types
+    /// cost. The same as what one associated-type use may cost.
+    pub const WORK: usize = 1 << 16;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
@@ -289,8 +324,8 @@ fn receiver_lowering_plan<'db>(
 ) -> Option<ReceiverLoweringPlan<'db>> {
     let receiver = call_like_receiver_expr(expr_data)?;
     let borrowed_ty = callable.arg_ty(db, 0)?;
-    let borrowed_ty = normalize_ty(db, borrowed_ty, scope, assumptions);
-    let receiver_ty = normalize_ty(db, typed_body.expr_ty(db, receiver), scope, assumptions);
+    let borrowed_ty = normalize_or_keep(db, borrowed_ty, scope, assumptions);
+    let receiver_ty = normalize_or_keep(db, typed_body.expr_ty(db, receiver), scope, assumptions);
     let (kind, _) = borrowed_ty.as_capability(db)?;
     // A `view` receiver (a parameter declared without `own`) is borrowed for
     // a `ref self` method, as an explicit `ref` would borrow it.
@@ -881,6 +916,202 @@ fn replan_call_site<'db>(
     Ok(())
 }
 
+/// The normalization limit that a type of `key`'s instantiated body reaches,
+/// if any. See [`SemanticInstance::instantiation_limit_diagnostic`].
+pub(crate) fn instance_normalization_limit<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> Option<NormalizationLimit> {
+    instance_normalization(db, key).err()
+}
+
+/// The work that normalizing the types of `key`'s instantiated body needs,
+/// counted as [`InstantiationLimit::WORK`] describes, or the first
+/// normalization limit one of them reaches.
+#[salsa::tracked]
+fn instance_normalization<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> Result<usize, NormalizationLimit> {
+    struct Types<'db> {
+        db: &'db dyn HirAnalysisDb,
+        types: Vec<TyId<'db>>,
+    }
+    impl<'db> crate::analysis::ty::visitor::TyVisitor<'db> for Types<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if ty.has_projection(self.db) {
+                self.types.push(ty);
+            }
+        }
+    }
+    let mut types = Types {
+        db,
+        types: Vec::new(),
+    };
+    // Without generic arguments the assumptions are the written where
+    // clauses, which are checked where they are written.
+    let typed_body = key.typed_body(db);
+    if key.subst(db).generic_args(db).is_empty() {
+        typed_body.visit_body_types(&mut types);
+    } else {
+        crate::analysis::ty::visitor::TyVisitable::visit_with(typed_body, &mut types);
+    }
+    let scope = key.owner(db).scope();
+    let assumptions = semantic_instance_base_assumptions_for_key(db, key);
+    let mut counted = FxHashSet::default();
+    let mut work = 0usize;
+    for ty in types.types {
+        if !counted.insert(ty) {
+            continue;
+        }
+        let (normalized, cost) = normalize_ty_with_cost(db, ty, scope, assumptions);
+        normalized?;
+        // Normalizing walks the type as a tree; resolving its associated
+        // types costs `cost` more.
+        let size = tree_size_within(db, ty, InstantiationLimit::WORK, usize::MAX)
+            .unwrap_or(InstantiationLimit::WORK + 1);
+        work = work.saturating_add(size).saturating_add(cost);
+    }
+    Ok(work)
+}
+
+/// Whether `key` instantiates a body with concrete types only: what code
+/// generation builds. An instance whose arguments still name type
+/// parameters is the generic body checked with its own parameters.
+fn is_concrete_instance<'db>(db: &'db dyn HirAnalysisDb, key: SemanticInstanceKey<'db>) -> bool {
+    key.subst(db)
+        .generic_args(db)
+        .iter()
+        .all(|arg| !arg.has_param(db))
+}
+
+/// The limit that instantiating `key` reaches: a normalization limit in its
+/// own types, or in those of the generic functions it instantiates with
+/// concrete types, and so on, or the limit on the number of instances. A function without generic arguments is not followed:
+/// the instantiations it makes are written in it, and reported there.
+///
+/// The instances are explored a call level at a time. Every instance of a
+/// level is checked before a limit is chosen, and the next level is counted
+/// only when this one meets none, so the answer does not depend on the order
+/// of the calls. The exploration makes at most
+/// [`InstantiationLimit::INSTANCES`] distinct instances; a generic function
+/// that calls itself with ever larger arguments makes them without end, and
+/// one that does so with two different arguments makes exponentially many.
+#[salsa::tracked]
+pub(crate) fn instance_transitive_limit<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> Option<InstantiationLimit> {
+    let mut seen = FxHashSet::default();
+    seen.insert(key);
+    let mut level = vec![key];
+    let mut work = 0usize;
+    while !level.is_empty() {
+        let mut found: Option<NormalizationLimit> = None;
+        for &key in &level {
+            match instance_normalization(db, key) {
+                Ok(cost) => work = work.saturating_add(cost),
+                Err(limit) => {
+                    if found.is_none_or(|found| limit.priority() < found.priority()) {
+                        found = Some(limit);
+                    }
+                }
+            }
+        }
+        if let Some(limit) = found {
+            return Some(InstantiationLimit::Normalization(limit));
+        }
+        // The level's work is added up before it is compared, so the answer
+        // does not depend on the order of the calls either.
+        if work > InstantiationLimit::WORK {
+            return Some(InstantiationLimit::Work);
+        }
+        let mut next = Vec::new();
+        for key in level {
+            for callee in SemanticInstance::new(db, key).provisional_callees(db) {
+                if callee.key.subst(db).generic_args(db).is_empty()
+                    || !is_concrete_instance(db, callee.key)
+                    || !seen.insert(callee.key)
+                {
+                    continue;
+                }
+                // The next level holds more instances than the budget
+                // allows, whatever the order it is collected in.
+                if seen.len() > InstantiationLimit::INSTANCES {
+                    return Some(InstantiationLimit::Instances);
+                }
+                next.push(callee.key);
+            }
+        }
+        level = next;
+    }
+    None
+}
+
+/// The error for `key`, instantiated at `origin` in `instance`, reaching
+/// `limit`. It names the generic arguments, if `key` has any.
+fn instantiation_limit_error<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    key: SemanticInstanceKey<'db>,
+    limit: InstantiationLimit,
+    origin: SemOrigin<'db>,
+) -> SemanticDiagnosticId<'db> {
+    let callee = checker_name(db, SemanticInstance::new(db, key));
+    let args = key
+        .subst(db)
+        .generic_args(db)
+        .iter()
+        .map(|arg| format!("`{}`", arg.pretty_print(db)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let (kind, message) = match limit {
+        InstantiationLimit::Normalization(limit) if args.is_empty() => (
+            SemanticDiagnosticKind::NormalizationLimit,
+            format!(
+                "resolving the associated types in `{callee}` {}",
+                limit.reason()
+            ),
+        ),
+        InstantiationLimit::Normalization(limit) => (
+            SemanticDiagnosticKind::NormalizationLimit,
+            format!(
+                "with {args} for its generic parameters, resolving the associated types in `{callee}`, or in what it calls, {}",
+                limit.reason()
+            ),
+        ),
+        InstantiationLimit::Work => (
+            SemanticDiagnosticKind::InstanceLimit,
+            format!(
+                "with {args} for its generic parameters, the types of the instances of generic functions that `{callee}` makes, counting those they make in turn, need more than {} type nodes of work",
+                crate::analysis::ty::normalize::grouped(InstantiationLimit::WORK)
+            ),
+        ),
+        InstantiationLimit::Instances => (
+            SemanticDiagnosticKind::InstanceLimit,
+            format!(
+                "with {args} for its generic parameters, `{callee}` makes more than {} instances of generic functions, counting those they make in turn",
+                crate::analysis::ty::normalize::grouped(InstantiationLimit::INSTANCES)
+            ),
+        ),
+    };
+    SemanticDiagnosticId::new(
+        db,
+        SemanticDiagnostic::new(
+            instance,
+            kind,
+            message,
+            SemanticDiagnosticSpan::Origin {
+                owner: instance.key(db).owner(db),
+                origin,
+            },
+        ),
+    )
+}
+
 fn invalid_size_diagnostic<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -914,6 +1145,7 @@ fn invalid_size_diagnostic<'db>(
                 | InvalidCause::ConstEvalNonConstCall { body, expr }
                 | InvalidCause::ConstEvalStepLimitExceeded { body, expr }
                 | InvalidCause::ConstEvalRecursionLimitExceeded { body, expr }
+                | InvalidCause::ConstEvalInstanceLimit { body, expr }
                 | InvalidCause::ConstEvalRecursiveConst { body, expr }
                 | InvalidCause::ConstEvalAssertionFailed { body, expr, .. } => {
                     Some(SemanticDiagnosticSpan::HirExpr {
@@ -1107,7 +1339,7 @@ impl<'db> SemanticInstance<'db> {
 
     #[salsa::tracked]
     pub fn normalized_ty(self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        normalize_ty(db, ty, self.normalization_scope(db), self.assumptions(db))
+        normalize_or_keep(db, ty, self.normalization_scope(db), self.assumptions(db))
     }
 
     #[salsa::tracked(return_ref)]
@@ -1218,6 +1450,9 @@ impl<'db> SemanticInstance<'db> {
                 causes,
             ));
         }
+        if let Some((diag, limit)) = self.instantiation_limit_diagnostic(db) {
+            return Err(SemanticBodyAdmissionError::InstantiationLimit { diag, limit });
+        }
 
         if let Some(body) = typed_body.body() {
             for (expr, _) in body.exprs(db).iter() {
@@ -1231,7 +1466,7 @@ impl<'db> SemanticInstance<'db> {
                 let Some(arg) = callable.generic_args().first().copied() else {
                     continue;
                 };
-                let arg = normalize_ty(db, arg, body.scope(), self.assumptions(db));
+                let arg = normalize_or_keep(db, arg, body.scope(), self.assumptions(db));
                 if let Err(error) = runtime_size_bytes(db, arg) {
                     return Err(SemanticBodyAdmissionError::InvalidConcreteType(
                         invalid_size_diagnostic(db, self, SemOrigin::Expr(expr), arg, error),
@@ -1240,6 +1475,59 @@ impl<'db> SemanticInstance<'db> {
             }
         }
         Ok(())
+    }
+
+    /// The error for a normalization limit that a type reaches only once
+    /// generic arguments are filled in. Each type of a body is checked where
+    /// it is written or inferred, but only with the body's own parameters; the
+    /// instantiation is the first place its types are normalized with the
+    /// actual arguments. A generic callee whose instantiation here reaches a
+    /// limit, in its own types or in a generic callee of its own, is reported
+    /// at the call; a limit in this body's own types, at the body.
+    fn instantiation_limit_diagnostic(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<(SemanticDiagnosticId<'db>, InstantiationLimit)> {
+        let key = self.key(db);
+        if let Some(body) = key.typed_body(db).body() {
+            let sites = &provisional_call_sites(db, self).sites;
+            let loop_sites = &provisional_for_loop_call_sites(db, self).sites;
+            let calls = body.exprs(db).keys().filter_map(|expr| {
+                let site = sites.get(expr.index())?.as_ref()?;
+                Some((site.callee?, SemOrigin::Expr(expr)))
+            });
+            let loops = body.stmts(db).keys().flat_map(|stmt| {
+                loop_sites
+                    .get(stmt.index())
+                    .and_then(Option::as_ref)
+                    .into_iter()
+                    .flat_map(|sites| [sites.len.callee, sites.get.callee])
+                    .flatten()
+                    .map(move |callee| (callee, SemOrigin::Stmt(stmt)))
+            });
+            // A callee without generic arguments reports its own limits. A
+            // callee whose arguments name this body's type parameters is not
+            // explored: it is built only when this body is instantiated with
+            // concrete types, and is explored from that call.
+            for (callee, origin) in calls.chain(loops) {
+                if callee.key.subst(db).generic_args(db).is_empty()
+                    || !is_concrete_instance(db, callee.key)
+                {
+                    continue;
+                }
+                if let Some(limit) = instance_transitive_limit(db, callee.key) {
+                    return Some((
+                        instantiation_limit_error(db, self, callee.key, limit, origin),
+                        limit,
+                    ));
+                }
+            }
+        }
+        let limit = InstantiationLimit::Normalization(instance_normalization_limit(db, key)?);
+        Some((
+            instantiation_limit_error(db, self, key, limit, SemOrigin::Body(key.owner(db))),
+            limit,
+        ))
     }
 
     pub(crate) fn admitted_body(
@@ -1746,9 +2034,9 @@ fn classify_binding_role<'db>(
 ) -> SemanticLocalRole<'db> {
     let owner = instance.key(db).owner(db);
     let scope = owner.scope();
-    let ty = normalize_ty(db, ty, scope, assumptions);
+    let ty = normalize_or_keep(db, ty, scope, assumptions);
     if let Some((_, value_ty)) = ty.as_capability(db) {
-        let value_ty = normalize_ty(db, value_ty, scope, assumptions);
+        let value_ty = normalize_or_keep(db, value_ty, scope, assumptions);
         return SemanticLocalRole::PlaceCarrier { provider, value_ty };
     }
     // A raw-address provider names storage of the binding type, including a
@@ -2035,13 +2323,15 @@ fn root_provider_satisfies_effect_requirement<'db>(
         }
         EffectRequirementKey::Trait(trait_inst) => {
             let goal = instantiate_trait_self(db, trait_inst, root_provider.provider_ty);
+            // Instances are built only for checked bodies, where a limit in
+            // this goal has been reported; such a goal is not taken as met.
             matches!(
                 is_goal_satisfiable(
                     db,
                     TraitSolveCx::new(db, func.scope()).with_assumptions(assumptions),
                     goal,
                 ),
-                GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation { .. }
+                Ok(GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation { .. })
             )
         }
         EffectRequirementKey::Other => false,
@@ -2224,7 +2514,7 @@ fn instantiate_normalized_ty<'db>(
     let scope = key.owner(db).scope();
     let assumptions = semantic_instance_base_assumptions_for_key(db, key);
     let ty = instantiate_checked(db, key.owner(db), ty, key.subst(db))?;
-    Ok(normalize_ty(db, ty, scope, assumptions))
+    Ok(normalize_or_keep(db, ty, scope, assumptions))
 }
 
 fn instantiate_normalized_trait_inst<'db>(
@@ -2241,12 +2531,12 @@ fn instantiate_normalized_trait_inst<'db>(
     let args = trait_inst
         .args(db)
         .iter()
-        .map(|&arg| normalize_ty(db, arg, scope, assumptions))
+        .map(|&arg| normalize_or_keep(db, arg, scope, assumptions))
         .collect::<Vec<_>>();
     let assoc_type_bindings = trait_inst
         .assoc_type_bindings(db)
         .iter()
-        .map(|(&name, &ty)| (name, normalize_ty(db, ty, scope, assumptions)))
+        .map(|(&name, &ty)| (name, normalize_or_keep(db, ty, scope, assumptions)))
         .collect::<IndexMap<_, _>>();
     Ok(crate::analysis::ty::trait_def::TraitInstId::new(
         db,
@@ -2288,7 +2578,10 @@ where
 mod tests {
     use super::*;
     use crate::{
-        analysis::semantic::{get_or_build_semantic_instance, identity_semantic_instance_key},
+        analysis::semantic::{
+            get_or_build_semantic_instance, identity_semantic_instance_key,
+            root_semantic_instance_key,
+        },
         test_db::{HirAnalysisTestDb, find_func},
     };
 
@@ -2315,6 +2608,83 @@ mod tests {
             identity_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "caller"))),
         );
         assert_plain_call_plans(&db, instance);
+    }
+
+    /// The limit admission finds for the generic body of `generic`, checked
+    /// with its own parameters, and for the call in `root`.
+    #[salsa::tracked]
+    fn admission_limits<'db>(
+        db: &'db dyn HirAnalysisDb,
+        generic: crate::hir_def::Func<'db>,
+        root: crate::hir_def::Func<'db>,
+    ) -> (Option<InstantiationLimit>, Option<InstantiationLimit>) {
+        let limit = |key| {
+            SemanticInstance::new(db, key)
+                .instantiation_limit_diagnostic(db)
+                .map(|(_, limit)| limit)
+        };
+        (
+            limit(identity_semantic_instance_key(db, BodyOwner::Func(generic))),
+            limit(root_semantic_instance_key(db, BodyOwner::Func(root)).expect("closed root")),
+        )
+    }
+
+    #[test]
+    fn instance_exploration_is_bounded_and_starts_from_concrete_calls() {
+        // A generic function that calls itself with larger arguments makes
+        // instances without end; with two arguments, exponentially many.
+        let calls = ["f<A<T>>(n - 1) + f<B<T>>(n - 1)", "f<A<T>>(n - 1)"];
+        for call in calls {
+            let mut db = HirAnalysisTestDb::default();
+            let file = db.new_stand_alone(
+                "instance_budget.fe".into(),
+                &format!(
+                    "struct A<T> {{ t: T }}\nstruct B<T> {{ t: T }}\n\
+                     fn f<T>(_ n: u8) -> u8 {{\n    if n == 0 {{ return 0 }}\n    {call}\n}}\n\
+                     fn main() -> u8 {{ f<u8>(3) }}\n"
+                ),
+            );
+            let (module, _) = db.top_mod(file);
+            let (generic, root) = admission_limits(
+                &db,
+                find_func(&db, module, "f"),
+                find_func(&db, module, "main"),
+            );
+            // The generic body, checked with its own parameters, makes no
+            // instance that code generation builds, so nothing is explored.
+            assert_eq!(generic, None, "{call}");
+            // The call with concrete types is explored up to the budget.
+            assert_eq!(root, Some(InstantiationLimit::Instances), "{call}");
+        }
+    }
+
+    /// Whether the return type of `func` evaluates a constant that stops at
+    /// the instance limit.
+    #[salsa::tracked]
+    fn return_ty_meets_instance_limit<'db>(
+        db: &'db dyn HirAnalysisDb,
+        func: crate::hir_def::Func<'db>,
+    ) -> bool {
+        let ty = func.return_ty(db);
+        let cause = crate::analysis::ty::ty_error::demanded_ground_const_cause(db, ty)
+            .or_else(|| crate::analysis::ty::ty_error::first_invalid_ty_cause(db, ty));
+        matches!(cause, Some(InvalidCause::ConstEvalInstanceLimit { .. }))
+    }
+
+    #[test]
+    fn a_constant_evaluation_stops_at_the_instance_limit() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "instance_budget_const.fe".into(),
+            "struct A<T> { t: T }\n\
+             const fn g<T>(_ n: u8) -> usize {\n    if n == 0 { return 1 }\n    g<A<T>>(n - 1)\n}\n\
+             fn x(_ a: [u8; 1]) -> [u8; g<u8>(2)] { a }\n",
+        );
+        let (module, _) = db.top_mod(file);
+        assert!(return_ty_meets_instance_limit(
+            &db,
+            find_func(&db, module, "x")
+        ));
     }
 
     #[salsa::tracked]

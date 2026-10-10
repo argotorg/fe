@@ -190,7 +190,7 @@ pub fn root(values: [bool; 5]) {
         .expect("encode should be a trait method");
     let solve_cx = TraitSolveCx::new(&db, func.scope());
 
-    match is_goal_satisfiable(&db, solve_cx, inst) {
+    match is_goal_satisfiable(&db, solve_cx, inst).unwrap() {
         GoalSatisfiability::Satisfied(_) => {}
         other => panic!(
             "expected `{}` to be satisfiable, got {other:?}",
@@ -251,7 +251,7 @@ fn solver_proves_core_abi_traits_for_u256_and_sol() {
             ),
         ),
     ] {
-        match is_goal_satisfiable(&db, solve_cx, inst) {
+        match is_goal_satisfiable(&db, solve_cx, inst).unwrap() {
             GoalSatisfiability::Satisfied(_) => {}
             other => panic!("expected `{label}` to be satisfiable, got {other:?}"),
         }

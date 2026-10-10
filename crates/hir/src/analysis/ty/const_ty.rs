@@ -1431,7 +1431,9 @@ pub fn canonicalize_ty_for_mode<'db>(
 
         if finalize_self && !matches!(mode, ConstCanonMode::Stored) {
             ty = complete_default_const_args_for_identity(db, ty);
-            ty = normalize_ty(db, ty, env.scope, env.assumptions);
+            // A type that cannot be normalized keeps its own identity; the
+            // limit is reported where the type arises.
+            ty = normalize_ty(db, ty, env.scope, env.assumptions).unwrap_or(ty);
         }
 
         ty
@@ -2332,6 +2334,12 @@ pub(crate) fn invalid_cause_from_ctfe_error<'db>(
         CtfeError::RecursiveConst { .. } => InvalidCause::ConstEvalRecursiveConst { body, expr },
         CtfeError::NonConstCall { .. } => InvalidCause::ConstEvalNonConstCall { body, expr },
         CtfeError::InvalidBody { .. } => InvalidCause::Other,
+        // Reported where the type that needed the evaluation is written.
+        CtfeError::NormalizationLimit { limit, .. } => InvalidCause::NormalizationLimit {
+            limit: *limit,
+            stand_in: super::normalize::LimitStandIn::Written(super::normalize::WrittenType::new()),
+        },
+        CtfeError::InstanceLimit { .. } => InvalidCause::ConstEvalInstanceLimit { body, expr },
         CtfeError::NotConstEvaluable { .. } => InvalidCause::ConstEvalUnsupported { body, expr },
         CtfeError::CalleeError { .. } => {
             unreachable!("root_ctfe_error must unwrap callee failures")
@@ -2387,6 +2395,8 @@ fn root_ctfe_error<'a, 'db>(
         | CtfeError::UninitializedLocal { origin }
         | CtfeError::StepLimitExceeded { origin }
         | CtfeError::RecursionLimitExceeded { origin }
+        | CtfeError::NormalizationLimit { origin, .. }
+        | CtfeError::InstanceLimit { origin }
         | CtfeError::RecursiveConst { origin } => (owner, err, *origin),
     }
 }

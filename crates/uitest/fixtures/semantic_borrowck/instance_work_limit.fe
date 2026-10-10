@@ -1,0 +1,55 @@
+// The types of the instances one call makes, counting those they make in
+// turn, may need at most 65,536 type nodes of work in total. `grow` makes
+// two new instances per level, each with a type of about 6,000 nodes, so the
+// call in `main` passes that total after about 15 instances, long before the
+// limit of 4,096 instances.
+trait Tree {
+    type Out
+}
+
+struct D<T> {
+    t: T,
+}
+
+impl<T: Tree> Tree for D<T> {
+    type Out = (T::Out, T::Out)
+}
+
+impl Tree for u8 {
+    type Out = u8
+}
+
+struct A<T> {
+    t: T,
+}
+
+struct B<T> {
+    t: T,
+}
+
+impl<T: Tree> Tree for A<T> {
+    type Out = T::Out
+}
+
+impl<T: Tree> Tree for B<T> {
+    type Out = T::Out
+}
+
+fn grow<T: Tree>() -> u8 {
+    let _y: Option<<D<D<D<D<D<D<D<D<T>>>>>>>> as Tree>::Out> = Option::None
+    grow<A<T>>() + grow<B<T>>()
+}
+
+fn once<T: Tree>() -> u8 {
+    let _y: Option<<D<D<D<D<D<D<D<D<T>>>>>>>> as Tree>::Out> = Option::None
+    0
+}
+
+pub fn main() -> u8 {
+    grow<u8>()
+}
+
+// One such instance is well within the total.
+pub fn within() -> u8 {
+    once<A<B<u8>>>()
+}

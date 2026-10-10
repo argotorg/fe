@@ -69,6 +69,10 @@ pub fn build_effect_query_for_call<'db>(
                 tc.env.assumptions(),
                 callable.trait_inst(),
             );
+            let carrier = tc.normalize_unresolved(carrier);
+            if carrier.has_invalid(tc.db) {
+                return None;
+            }
             EffectPatternKey::Type(type_pattern_key_from_carrier(tc.db, carrier, []))
         }
         EffectRequirementKey::Trait(schema) => {
@@ -85,6 +89,16 @@ pub fn build_effect_query_for_call<'db>(
                 tc.env.assumptions(),
                 callable.trait_inst(),
             );
+            let key = tc.normalize_trait_goal(key);
+            if key
+                .args(tc.db)
+                .iter()
+                .skip(1)
+                .chain(key.assoc_type_bindings(tc.db).values())
+                .any(|ty| ty.has_invalid(tc.db))
+            {
+                return None;
+            }
             EffectPatternKey::Trait(trait_pattern_key_from_inst(tc.db, key, []))
         }
     };

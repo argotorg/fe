@@ -18,7 +18,7 @@ use crate::{
             fold::{TyFoldable, TyFolder},
             layout_holes::layout_shape_value,
             method_cmp::{normalize_compare_assoc_consts, normalize_predicate_for_comparison},
-            normalize::normalize_ty,
+            normalize::normalize_or_keep,
             trait_def::{
                 ImplementorOrigin, MethodArgMapError, ResolvedImplInstance, TraitInstId,
                 assoc_const_body_template_for_trait_inst, resolve_trait_method_instance,
@@ -184,7 +184,7 @@ fn instantiated_method_signature<'db>(
     let normalize = |ty| {
         normalize_compare_assoc_consts(
             db,
-            normalize_ty(db, ty, scope, evidence),
+            normalize_or_keep(db, ty, scope, evidence),
             scope,
             evidence,
             trait_inst,
@@ -606,7 +606,7 @@ fn semantic_callee_key_with_assumptions<'db>(
                 .iter()
                 .zip(resolved.trait_inst().args(db))
                 .all(|(&nominal, &selected)| {
-                    normalize_ty(db, nominal, impl_env.normalization_scope(db), assumptions)
+                    normalize_or_keep(db, nominal, impl_env.normalization_scope(db), assumptions)
                         == selected
                 })
             && {
@@ -617,21 +617,25 @@ fn semantic_callee_key_with_assumptions<'db>(
                             .arg_ty(db, idx)
                             .expect("nominal input arity changed");
                         let body = body.instantiate(db, &subst_args);
-                        normalize_ty(db, nominal, impl_env.normalization_scope(db), assumptions)
-                            == normalize_ty(
-                                db,
-                                body,
-                                owner.scope(),
-                                PredicateListId::empty_list(db),
-                            )
+                        normalize_or_keep(
+                            db,
+                            nominal,
+                            impl_env.normalization_scope(db),
+                            assumptions,
+                        ) == normalize_or_keep(
+                            db,
+                            body,
+                            owner.scope(),
+                            PredicateListId::empty_list(db),
+                        )
                     })
             }
-            && normalize_ty(
+            && normalize_or_keep(
                 db,
                 callable.ret_ty(db),
                 impl_env.normalization_scope(db),
                 assumptions,
-            ) == normalize_ty(
+            ) == normalize_or_keep(
                 db,
                 CallableDef::Func(body_func)
                     .ret_ty(db)
@@ -660,14 +664,17 @@ fn semantic_callee_key_with_assumptions<'db>(
         let scope = nominal_func.scope();
         let caller_scope = impl_env.normalization_scope(db);
         let same_without_caller = |ty| {
-            normalize_ty(db, ty, caller_scope, assumptions) == normalize_ty(db, ty, scope, empty)
+            normalize_or_keep(db, ty, caller_scope, assumptions)
+                == normalize_or_keep(db, ty, scope, empty)
         };
         let bounds = collect_func_decl_constraints(db, CallableDef::Func(nominal_func), true)
             .instantiate(db, &subst_args);
+        // A bound that reaches a limit is not known to hold without the
+        // caller, so the value is computed per caller.
         let independent = bounds.list(db).iter().copied().all(|bound| {
             matches!(
                 is_goal_satisfiable(db, TraitSolveCx::new(db, scope), bound),
-                GoalSatisfiability::Satisfied(_)
+                Ok(GoalSatisfiability::Satisfied(_))
             )
         }) && (0..nominal_func.arg_tys(db).len()).all(|idx| {
             same_without_caller(

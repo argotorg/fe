@@ -2,6 +2,7 @@ use super::{
     adt_def::AdtCycleMember,
     provider::{ProviderAddressSpace, ProviderLayoutFailure},
     trait_def::TraitInstId,
+    trait_resolution::TraitSolveCompletion,
     ty_check::{RecordLike, TraitOps},
     ty_def::{BorrowKind, CapabilityKind, Kind, TyId},
 };
@@ -184,9 +185,17 @@ pub enum TyLowerDiag<'db> {
     ConstEvalNegativeExponent(DynLazySpan<'db>),
     ConstEvalStepLimitExceeded(DynLazySpan<'db>),
     ConstEvalRecursionLimitExceeded(DynLazySpan<'db>),
+    /// A function a constant evaluation called makes more instances of
+    /// generic functions than one instantiation may.
+    ConstEvalInstanceLimit(DynLazySpan<'db>),
     ConstEvalRecursiveConst(DynLazySpan<'db>),
     TypeLoweringCycle(DynLazySpan<'db>),
-    TypeNormalizationLimit(DynLazySpan<'db>),
+    /// A written, inferred or instantiated type that could not be normalized
+    /// within a limit.
+    TypeNormalizationLimit {
+        span: DynLazySpan<'db>,
+        limit: super::normalize::NormalizationLimit,
+    },
 
     NonTrailingDefaultGenericParam(LazyGenericParamSpan<'db>),
 
@@ -325,7 +334,8 @@ impl TyLowerDiag<'_> {
             Self::ConstEvalRecursionLimitExceeded(_) => 27,
             Self::ConstEvalRecursiveConst(_) => 37,
             Self::TypeLoweringCycle(_) => 38,
-            Self::TypeNormalizationLimit(_) => 58,
+            Self::TypeNormalizationLimit { .. } => 58,
+            Self::ConstEvalInstanceLimit(_) => 59,
             Self::MixedRefSelfPrefixWithExplicitType { .. } => 28,
             Self::MixedOwnSelfPrefixWithExplicitType { .. } => 29,
             Self::InvalidMutSelfPrefixWithExplicitType { .. } => 30,
@@ -757,6 +767,14 @@ pub enum BodyDiag<'db> {
         required_by: Option<CallConstraintDiagInfo<'db>>,
     },
 
+    /// The trait solver stopped before it could prove or refute the bound.
+    TraitBoundUndecided {
+        primary: DynLazySpan<'db>,
+        goal: TraitInstId<'db>,
+        stop: TraitSolveCompletion,
+        required_by: Option<CallConstraintDiagInfo<'db>>,
+    },
+
     InvisibleAmbiguousTrait {
         primary: DynLazySpan<'db>,
         traits: ThinVec<Trait<'db>>,
@@ -1040,6 +1058,7 @@ impl<'db> BodyDiag<'db> {
             Self::AmbiguousInherentMethodCall { .. } => 25,
             Self::AmbiguousTrait { .. } => 26,
             Self::AmbiguousTraitInst { .. } => 27,
+            Self::TraitBoundUndecided { .. } => 97,
             Self::InvisibleAmbiguousTrait { .. } => 28,
             Self::NotValue { .. } => 30,
             Self::TypeAnnotationNeeded { .. } => 31,
@@ -1130,6 +1149,14 @@ pub enum TraitConstraintDiag<'db> {
     ConcreteTypeBound(DynLazySpan<'db>, TyId<'db>),
 
     ConstTyBound(DynLazySpan<'db>, TyId<'db>),
+
+    /// A bound that a written type needs, which the trait solver could not
+    /// decide: it stopped on one of its budgets before it found a proof.
+    TraitBoundUndecided {
+        span: DynLazySpan<'db>,
+        goal: TraitInstId<'db>,
+        stop: TraitSolveCompletion,
+    },
 }
 
 impl TraitConstraintDiag<'_> {
@@ -1142,6 +1169,8 @@ impl TraitConstraintDiag<'_> {
             Self::InfiniteBoundRecursion(..) => 4,
             Self::ConcreteTypeBound(..) => 5,
             Self::ConstTyBound(..) => 6,
+            // The codes below 28 in this pass are taken by impl diagnostics.
+            Self::TraitBoundUndecided { .. } => 28,
         }
     }
 }

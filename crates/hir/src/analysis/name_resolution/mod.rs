@@ -18,7 +18,7 @@ pub use name_resolver::{
     NameResolutionError, QueryDirective,
 };
 pub(crate) use path_resolver::resolve_type_path_definition;
-pub(crate) use path_resolver::{FindAssociatedTypeError, find_associated_type};
+pub(crate) use path_resolver::{FindAssociatedTypeError, find_associated_type_for_trait};
 pub use path_resolver::{
     PathRes, PathResError, PathResErrorKind, ResolvedVariant, resolve_ident_to_bucket,
     resolve_name_res, resolve_path,

@@ -46,11 +46,10 @@ fn canonicalize_semantic_consts_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Result<SemanticBody<'db>, CtfeError<'db>> {
+    let origin = crate::analysis::semantic::SemOrigin::Body(instance.key(db).owner(db));
     let original = instance
         .admitted_body(db)
-        .map_err(|_| CtfeError::InvalidBody {
-            origin: crate::analysis::semantic::SemOrigin::Body(instance.key(db).owner(db)),
-        })?;
+        .map_err(|error| super::machine::admission_ctfe_error(error, origin))?;
     Ok(canonicalize_semantic_consts_from_body(
         db, instance, original,
     ))

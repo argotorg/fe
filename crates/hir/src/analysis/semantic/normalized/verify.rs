@@ -18,7 +18,7 @@ use crate::{
             provider::{ProviderLayoutEvidence, provider_semantics},
             ty_check::{BodyOwner, EffectPassMode},
             ty_def::{BorrowKind, CapabilityKind, PrimTy, TyBase, TyData, TyId},
-            ty_is_copy,
+            ty_is_known_copy,
         },
     },
     core::semantic::EffectEnvView,
@@ -602,7 +602,7 @@ fn verify_expr<'db>(
             if *ty != result_ty || !ty.is_array(db) || args.first().copied() != Some(element) {
                 return Err(NormalizedBodyVerifyError::ExpressionType);
             }
-            if !ty_is_copy(
+            if !ty_is_known_copy(
                 db,
                 body.template_owner.scope(),
                 element,
@@ -768,7 +768,7 @@ fn type_is_boundary_compatible<'db>(
     if let Some((kind, actual)) = actual.as_capability(db)
         && expected.as_capability(db).is_none()
         && (kind == CapabilityKind::View
-            || ty_is_copy(
+            || ty_is_known_copy(
                 db,
                 body.template_owner.scope(),
                 actual,

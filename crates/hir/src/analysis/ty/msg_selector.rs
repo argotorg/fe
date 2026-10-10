@@ -168,25 +168,39 @@ fn check_variant_field_abi_requirements<'db>(
             },
             Ok(_) => {
                 let mut traits = Vec::new();
+                let mut limit = None;
                 for (name, trait_, args) in [
                     ("AbiSize", abi_size_trait, vec![field_ty]),
                     ("Encode<Sol>", encode_trait, vec![field_ty, sol_ty]),
                     ("Decode<Sol>", decode_trait, vec![field_ty, sol_ty]),
                 ] {
                     let goal = TraitInstId::new_simple(db, trait_, args);
-                    if matches!(
-                        is_goal_satisfiable(db, solve_cx, goal),
-                        GoalSatisfiability::UnSat(_) | GoalSatisfiability::NeedsConfirmation { .. }
-                    ) {
-                        traits.push(name);
+                    match is_goal_satisfiable(db, solve_cx, goal) {
+                        Ok(
+                            GoalSatisfiability::UnSat(_)
+                            | GoalSatisfiability::NeedsConfirmation { .. },
+                        ) => traits.push(name),
+                        Err(reached) => {
+                            limit = Some(reached);
+                            break;
+                        }
+                        Ok(
+                            GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid,
+                        ) => {}
                     }
                 }
-                if traits.is_empty() {
+                if let Some(limit) = limit {
+                    MsgDiagnosticKind::AbiTraitsLimit {
+                        ty: field_ty.pretty_print(db).to_string(),
+                        reason: limit.reason(),
+                    }
+                } else if traits.is_empty() {
                     continue;
-                }
-                MsgDiagnosticKind::MissingAbiTraits {
-                    ty: field_ty.pretty_print(db).to_string(),
-                    traits,
+                } else {
+                    MsgDiagnosticKind::MissingAbiTraits {
+                        ty: field_ty.pretty_print(db).to_string(),
+                        traits,
+                    }
                 }
             }
         };

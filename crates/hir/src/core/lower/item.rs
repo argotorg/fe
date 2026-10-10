@@ -67,6 +67,9 @@ pub enum MsgDiagnosticKind {
         ty: String,
         traits: Vec<&'static str>,
     },
+    /// Deciding those traits for a field type reached a normalization limit;
+    /// `reason` names the limit.
+    AbiTraitsLimit { ty: String, reason: String },
 }
 
 /// Field modifier errors accumulated during record-field lowering.

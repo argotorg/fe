@@ -32,7 +32,7 @@ use crate::analysis::{
         },
         normalized::{NBlockId, NStatementKind, NTerminatorKind, NValueId, access::AccessPhase},
     },
-    ty::{corelib::MemoryAccessKind, ty_is_copy},
+    ty::{corelib::MemoryAccessKind, ty_is_known_copy},
 };
 
 impl<'db> AvailabilitySummary<'db> {
@@ -628,7 +628,7 @@ impl<'db> Borrowck<'db> {
                     };
                     !matches!(source.origin, ExternalOrigin::Local(_))
                         && !source.is_fresh_allocation()
-                        && (!ty_is_copy(
+                        && (!ty_is_known_copy(
                             self.db,
                             self.instance
                                 .key(self.db)

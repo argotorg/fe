@@ -115,6 +115,16 @@ pub enum CtfeError<'db> {
     RecursionLimitExceeded {
         origin: SemOrigin<'db>,
     },
+    /// A type the evaluation needed reached a normalization limit.
+    NormalizationLimit {
+        origin: SemOrigin<'db>,
+        limit: crate::analysis::ty::normalize::NormalizationLimit,
+    },
+    /// A function the evaluation called makes more instances of generic
+    /// functions than one instantiation may.
+    InstanceLimit {
+        origin: SemOrigin<'db>,
+    },
     /// Evaluating the const required its own value (directly or through a
     /// cycle of const items). Produced as the fixpoint-initial value of the
     /// eval queries below, so a recursive definition converges to this error
@@ -1050,7 +1060,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             }
             let body = instance
                 .admitted_body(self.db)
-                .map_err(|_| CtfeError::InvalidBody { origin })?;
+                .map_err(|error| admission_ctfe_error(error, origin))?;
             self.frames.push(CtfeFrame {
                 body,
                 locals: Vec::new(),
@@ -1359,7 +1369,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 }
                 instance
                     .admitted_body(self.db)
-                    .map_err(|_| CtfeError::InvalidBody { origin })
+                    .map_err(|error| admission_ctfe_error(error, origin))
             }
         }
     }
@@ -2282,7 +2292,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 .key(self.db)
                 .instantiate_typed_body(self.db)
                 .assumptions(),
-        );
+        )
+        .map_err(|limit| CtfeError::NormalizationLimit { origin, limit })?;
         let size = runtime_size_bytes(self.db, ty)
             .map_err(|error| match error {
                 RuntimeSizeError::Overflow => CtfeError::ArithmeticOverflow { origin },
@@ -3253,6 +3264,27 @@ fn array_len<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<usize> {
         return None;
     };
     const_ty.integer_value(db)?.to_usize()
+}
+
+/// The evaluation error for a body that was not admitted. A body rejected
+/// for a limit evaluates to that limit, which is reported where the type
+/// that needed the value is written.
+pub(crate) fn admission_ctfe_error<'db>(
+    error: crate::analysis::semantic::instance::SemanticBodyAdmissionError<'db>,
+    origin: SemOrigin<'db>,
+) -> CtfeError<'db> {
+    use crate::analysis::semantic::instance::{InstantiationLimit, SemanticBodyAdmissionError};
+    match error {
+        SemanticBodyAdmissionError::InstantiationLimit { limit, .. } => match limit {
+            InstantiationLimit::Normalization(limit) => {
+                CtfeError::NormalizationLimit { origin, limit }
+            }
+            InstantiationLimit::Instances | InstantiationLimit::Work => {
+                CtfeError::InstanceLimit { origin }
+            }
+        },
+        _ => CtfeError::InvalidBody { origin },
+    }
 }
 
 #[cfg(test)]

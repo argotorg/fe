@@ -655,12 +655,16 @@ fn lower_const_ty_ty<'db>(
     {
         return TyId::invalid(db, InvalidCause::InvalidConstParamTy);
     }
-    let ty = normalize_ty(
+    let ty = match normalize_ty(
         db,
         lower_path(db, scope, *path, assumptions),
         scope,
         assumptions,
-    );
+    ) {
+        Ok(ty) => ty,
+        // Reported where the type is written, as other lowering errors are.
+        Err(limit) => return limit_in_written_type(db, limit),
+    };
 
     if ty.has_invalid(db)
         || ty.is_integral(db)
@@ -3423,6 +3427,7 @@ fn lower_type_alias_from_hir_in_mode<'db>(
             alias_to: Binder::bind(alias.into(), TyId::invalid(db, InvalidCause::ParseError)),
             layout_root_uses: Vec::new(),
             param_set,
+            limit_diag: None,
         };
     };
 
@@ -3456,11 +3461,26 @@ fn lower_type_alias_from_hir_in_mode<'db>(
         // with fresh holes from their own minter.
         reanchor_template_holes(db, alias_to, HoleAnchor::AliasTemplate(alias))
     };
+    // An aliased type without parameters normalizes the same at every use:
+    // a limit in it is reported once, here.
+    let mut limit_diag = None;
+    let alias_to = if matches!(const_bodies, ConstBodyLowering::Eager)
+        && param_set.params(db).is_empty()
+        && !alias_to.has_invalid(db)
+        && let Err(limit) = normalize_ty(db, alias_to, alias.scope(), assumptions)
+    {
+        let (diag, reported) = limit.report(alias.span().ty().into());
+        limit_diag = Some(Box::new(diag));
+        reported.recovery_ty(db)
+    } else {
+        alias_to
+    };
     TyAlias {
         alias,
         alias_to: Binder::bind(alias.into(), alias_to),
         layout_root_uses,
         param_set,
+        limit_diag,
     }
 }
 
@@ -3476,6 +3496,7 @@ fn lower_type_alias_cycle_initial<'db>(
         ),
         layout_root_uses: Vec::new(),
         param_set: GenericParamTypeSet::empty(db, alias.scope()),
+        limit_diag: None,
     }
 }
 
@@ -3532,6 +3553,10 @@ pub struct TyAlias<'db> {
     pub alias_to: Binder<'db, TyId<'db>>,
     pub layout_root_uses: Vec<LayoutRootUse<'db>>,
     pub param_set: GenericParamTypeSet<'db>,
+    /// The report of a normalization limit that the aliased type, which has
+    /// no parameters, reaches. The alias then stands for the limit's
+    /// recovery value, so its uses report nothing more.
+    pub limit_diag: Option<Box<super::diagnostics::TyDiagCollection<'db>>>,
 }
 
 impl<'db> TyAlias<'db> {
@@ -4640,4 +4665,20 @@ pub(super) fn lower_kind_in_bounds<'db>(bounds: &[TypeBound<'db>]) -> Option<Kin
         }
     }
     None
+}
+
+/// The error value for a written type whose lowering reached `limit`. Like
+/// every lowering error, it is reported where the type is written (see
+/// `diag_from_invalid_cause`).
+fn limit_in_written_type(
+    db: &dyn HirAnalysisDb,
+    limit: super::normalize::NormalizationLimit,
+) -> TyId<'_> {
+    TyId::invalid(
+        db,
+        InvalidCause::NormalizationLimit {
+            limit,
+            stand_in: super::normalize::LimitStandIn::Written(super::normalize::WrittenType::new()),
+        },
+    )
 }

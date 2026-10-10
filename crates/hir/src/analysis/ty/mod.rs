@@ -32,6 +32,7 @@ pub mod abi_ty;
 pub mod adt_def;
 pub mod assoc_const;
 pub mod binder;
+pub(crate) mod candidates;
 pub mod canonical;
 pub(crate) mod const_check;
 pub mod const_expr;
@@ -101,26 +102,43 @@ pub fn ty_is_borrow<'db>(
     }
 }
 
+/// Whether `ty` is `Copy`. Normalizing it, or proving `Copy` for it, can reach
+/// a normalization limit; then there is no answer and the caller chooses what
+/// to do with the limit.
 pub fn ty_is_copy<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     ty: TyId<'db>,
     assumptions: PredicateListId<'db>,
-) -> bool {
-    let ty = normalize::normalize_ty(db, ty, scope, assumptions);
+) -> Result<bool, normalize::NormalizationLimit> {
+    let ty = normalize::normalize_ty(db, ty, scope, assumptions)?;
 
     // Borrow/view handles (`mut`/`ref`/`view`) are always copyable, even without an explicit
     // `Copy` impl.
     if ty.as_capability(db).is_some() {
-        return true;
+        return Ok(true);
     }
 
     // Built-in primitives are always `Copy`, independent of trait solving.
     if ty == TyId::unit(db) || ty.is_bool(db) || ty.is_integral(db) || ty.as_ptr(db).is_some() {
-        return true;
+        return Ok(true);
     }
 
     ty_is_copy_query(db, scope, ty, assumptions)
+}
+
+/// Whether `ty` is known to be `Copy`, for the passes after type checking,
+/// which have no place to report: a type with no answer because of a
+/// normalization limit counts as not `Copy`, so a value of it moves. Moving
+/// is always allowed where copying is, so this never accepts a program the
+/// answer would reject.
+pub fn ty_is_known_copy<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> bool {
+    ty_is_copy(db, scope, ty, assumptions).unwrap_or(false)
 }
 
 #[salsa::tracked]
@@ -129,28 +147,28 @@ fn ty_is_copy_query<'db>(
     scope: ScopeId<'db>,
     ty: TyId<'db>,
     assumptions: PredicateListId<'db>,
-) -> bool {
+) -> Result<bool, normalize::NormalizationLimit> {
     let Some(copy_trait) = corelib::resolve_core_trait(db, scope, &["marker", "Copy"]) else {
-        return false;
+        return Ok(false);
     };
     let inst = trait_def::TraitInstId::new_simple(db, copy_trait, vec![ty]);
-    let inst = inst.normalize(db, scope, assumptions);
+    let inst = inst.normalize(db, scope, assumptions)?;
     // Normalization keeps a predicate's trait, so only Copy predicates can match.
-    if assumptions
-        .list(db)
-        .iter()
-        .any(|&pred| pred.def(db) == copy_trait && pred.normalize(db, scope, assumptions) == inst)
-    {
-        return true;
+    if assumptions.list(db).iter().any(|&pred| {
+        pred.def(db) == copy_trait && pred.normalize(db, scope, assumptions) == Ok(inst)
+    }) {
+        return Ok(true);
     }
     let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
     if !copy_goal_has_possible_impl(db, solve_cx, inst) {
-        return false;
+        return Ok(false);
     }
-    matches!(
-        is_goal_satisfiable(db, solve_cx, inst),
-        GoalSatisfiability::Satisfied(_)
-    )
+    Ok(match is_goal_satisfiable(db, solve_cx, inst)? {
+        GoalSatisfiability::Satisfied(_) => true,
+        GoalSatisfiability::NeedsConfirmation { .. }
+        | GoalSatisfiability::UnSat(_)
+        | GoalSatisfiability::ContainsInvalid => false,
+    })
 }
 
 fn copy_goal_has_possible_impl<'db>(
@@ -366,6 +384,8 @@ pub(crate) struct NonCopyArrayAbiField<'db> {
     pub(crate) field_idx: usize,
     pub(crate) field_ty: TyId<'db>,
     pub(crate) elem_ty: TyId<'db>,
+    /// Set when deciding whether `elem_ty` is `Copy` reached this limit.
+    pub(crate) limit: Option<normalize::NormalizationLimit>,
 }
 
 /// Shared by the `#[abi]`, `#[event]` and `#[error]` lowering passes, which
@@ -392,7 +412,7 @@ pub(crate) fn non_copy_array_abi_fields<'db>(
                 continue;
             };
             let field_ty = lower_hir_ty(db, hir_ty, struct_.scope(), assumptions);
-            if let Some(elem_ty) =
+            if let Some((elem_ty, limit)) =
                 abi_ty::non_copy_fixed_array_elem(db, struct_.scope(), field_ty, assumptions)
             {
                 fields.push(NonCopyArrayAbiField {
@@ -401,6 +421,7 @@ pub(crate) fn non_copy_array_abi_fields<'db>(
                     field_idx,
                     field_ty,
                     elem_ty,
+                    limit,
                 });
             }
         }
@@ -416,6 +437,8 @@ pub(crate) struct UnsupportedAbiStructField<'db> {
     pub(crate) field_idx: usize,
     pub(crate) field_ty: TyId<'db>,
     pub(crate) missing: Vec<&'static str>,
+    /// Set when deciding the traits reached this limit.
+    pub(crate) limit: Option<normalize::NormalizationLimit>,
 }
 
 /// How the fields of the module's `#[abi]` structs meet the requirements of
@@ -487,14 +510,15 @@ pub(crate) fn abi_struct_field_checks<'db>(
         };
         let solve_cx = TraitSolveCx::new(db, scope);
         let unsat = |trait_, args| {
-            matches!(
-                is_goal_satisfiable(
-                    db,
-                    solve_cx,
-                    trait_def::TraitInstId::new_simple(db, trait_, args),
-                ),
-                GoalSatisfiability::UnSat(_) | GoalSatisfiability::NeedsConfirmation { .. }
+            is_goal_satisfiable(
+                db,
+                solve_cx,
+                trait_def::TraitInstId::new_simple(db, trait_, args),
             )
+            .map(|result| match result {
+                GoalSatisfiability::UnSat(_) | GoalSatisfiability::NeedsConfirmation { .. } => true,
+                GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => false,
+            })
         };
         let assumptions = crate::semantic::constraints_for(db, struct_.into());
         let mut reported_at_source = false;
@@ -513,27 +537,38 @@ pub(crate) fn abi_struct_field_checks<'db>(
                 reported_at_source = true;
                 continue;
             }
-            let missing: Vec<_> = [
+            let missing: Result<Vec<_>, _> = [
                 ("AbiSize", abi_size, vec![field_ty]),
                 ("AbiSpan<Sol>", abi_span, vec![field_ty, sol_ty]),
                 ("Encode<Sol>", encode, vec![field_ty, sol_ty]),
                 ("Decode<Sol>", decode, vec![field_ty, sol_ty]),
             ]
             .into_iter()
-            .filter(|(_, trait_, args)| unsat(*trait_, args.clone()))
-            .map(|(name, ..)| name)
+            .filter_map(|(name, trait_, args)| match unsat(trait_, args) {
+                Ok(true) => Some(Ok(name)),
+                Ok(false) => None,
+                Err(limit) => Some(Err(limit)),
+            })
             .collect();
-            if missing.is_empty() {
-                sol_compatible &= !unsat(sol_compat, vec![field_ty]);
-            } else {
-                reported_at_source = true;
-                checks.unsupported.push(UnsupportedAbiStructField {
-                    ast_struct: abi_origin.abi_struct.clone(),
-                    field_idx,
-                    field_ty,
-                    missing,
-                });
-            }
+            let missing = missing.and_then(|missing| {
+                if missing.is_empty() {
+                    sol_compatible &= !unsat(sol_compat, vec![field_ty])?;
+                }
+                Ok(missing)
+            });
+            let (missing, limit) = match missing {
+                Ok(missing) if missing.is_empty() => continue,
+                Ok(missing) => (missing, None),
+                Err(limit) => (Vec::new(), Some(limit)),
+            };
+            reported_at_source = true;
+            checks.unsupported.push(UnsupportedAbiStructField {
+                ast_struct: abi_origin.abi_struct.clone(),
+                field_idx,
+                field_ty,
+                missing,
+                limit,
+            });
         }
         if reported_at_source {
             checks.reported_at_source.push(origin.clone());
@@ -752,31 +787,51 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
 
                         let trait_req =
                             instantiate_trait_self(db, schema.into_trait_inst(db), root_effect_ty);
-                        if matches!(
-                            is_goal_satisfiable(
-                                db,
-                                TraitSolveCx::new(db, contract.scope())
-                                    .with_assumptions(assumptions),
-                                trait_req
-                            ),
-                            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+                        match is_goal_satisfiable(
+                            db,
+                            TraitSolveCx::new(db, contract.scope()).with_assumptions(assumptions),
+                            trait_req,
                         ) {
-                            diags.push(Box::new(BodyDiag::ContractRootEffectTraitNotImplemented {
-                                owner: EffectParamOwner::Contract(contract),
-
-                                idx,
-                                root_ty: root_effect_ty,
-                                trait_req,
-                            }) as _);
+                            Ok(
+                                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid,
+                            ) => {
+                                diags.push(Box::new(
+                                    BodyDiag::ContractRootEffectTraitNotImplemented {
+                                        owner: EffectParamOwner::Contract(contract),
+                                        idx,
+                                        root_ty: root_effect_ty,
+                                        trait_req,
+                                    },
+                                ) as _);
+                            }
+                            Err(limit) => {
+                                let span = EffectParamOwner::Contract(contract)
+                                    .effect_param_ty_span(db, idx);
+                                diags.push(Box::new(limit.report(span).0) as _);
+                            }
+                            Ok(
+                                GoalSatisfiability::Satisfied(_)
+                                | GoalSatisfiability::NeedsConfirmation { .. },
+                            ) => {}
                         }
                     }
                     ResolvedEffectKey::Type(schema) => {
-                        let given = normalize::normalize_ty(
+                        // The key is written here: a limit in it is reported
+                        // here.
+                        let given = match normalize::normalize_ty(
                             db,
                             schema.carrier,
                             contract.scope(),
                             assumptions,
-                        );
+                        ) {
+                            Ok(given) => given,
+                            Err(limit) => {
+                                let span = EffectParamOwner::Contract(contract)
+                                    .effect_param_ty_span(db, idx);
+                                diags.push(Box::new(limit.report(span).0) as _);
+                                continue;
+                            }
+                        };
                         if !given.is_zero_sized(db) {
                             diags.push(Box::new(BodyDiag::ContractRootEffectTypeNotZeroSized {
                                 owner: EffectParamOwner::Contract(contract),
@@ -860,12 +915,15 @@ pub fn resolve_default_root_effect_ty<'db>(
     let inst_target =
         trait_def::TraitInstId::new(db, target_trait, vec![target_ty], IndexMap::new());
     let root_ident = IdentId::new(db, "RootEffect".to_owned());
-    Some(normalize::normalize_ty(
+    // A core-library projection with no user type in it; without its
+    // normalized type there is no default root effect.
+    normalize::normalize_ty(
         db,
         TyId::assoc_ty(db, inst_target.trait_ref(db), root_ident),
         scope,
         assumptions,
-    ))
+    )
+    .ok()
 }
 
 pub(crate) fn instantiate_trait_self<'db>(
@@ -1006,6 +1064,9 @@ impl ModuleAnalysisPass for TypeAliasAnalysisPass {
                 }
                 cycle_participants.extend(cycle.iter());
             } else {
+                if let Some(diag) = &ta.limit_diag {
+                    diags.push(Box::new((**diag).clone()) as _);
+                }
                 // Delegate to semantic alias diagnostics
                 diags.extend(alias.diags(db).into_iter().map(|d| Box::new(d) as _));
             }
@@ -1067,7 +1128,10 @@ struct Plain {
         let solve_cx = TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions);
 
         assert!(!copy_goal_has_possible_impl(&db, solve_cx, copy_plain));
-        assert!(!ty_is_copy(&db, top_mod.scope(), plain, assumptions));
+        assert_eq!(
+            ty_is_copy(&db, top_mod.scope(), plain, assumptions),
+            Ok(false)
+        );
     }
 
     #[test]
@@ -1092,6 +1156,9 @@ impl Copy for Explicit {}
         let solve_cx = TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions);
 
         assert!(copy_goal_has_possible_impl(&db, solve_cx, copy_explicit));
-        assert!(ty_is_copy(&db, top_mod.scope(), explicit, assumptions));
+        assert_eq!(
+            ty_is_copy(&db, top_mod.scope(), explicit, assumptions),
+            Ok(true)
+        );
     }
 }

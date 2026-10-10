@@ -6,7 +6,7 @@ use hir::analysis::{
     ty::{
         trait_resolution::PredicateListId,
         ty_def::{BorrowKind, CapabilityKind, TyId},
-        ty_is_copy,
+        ty_is_known_copy,
     },
 };
 use hir::hir_def::scope_graph::ScopeId;
@@ -919,7 +919,8 @@ fn runtime_boundary_spec<'db>(
             return inner_boundary;
         }
         let pointee = stored_class_for_ty_in_env(db, env, inner);
-        let inner_is_copy = scope.is_some_and(|scope| ty_is_copy(db, scope, inner, assumptions));
+        let inner_is_copy =
+            scope.is_some_and(|scope| ty_is_known_copy(db, scope, inner, assumptions));
         if inner_is_copy && pointee.aggregate_layout().is_none() {
             return inner_boundary;
         }

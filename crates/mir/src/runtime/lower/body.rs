@@ -391,9 +391,12 @@ fn ensure_panic_payload_encodable<'db>(
         .ok_or_else(|| LowerError::Unsupported("missing core::abi::AbiSize".to_string()))?;
     let encode = TraitInstId::new_simple(db, encode_trait, vec![value_ty, abi_ty]);
     let abi_size = TraitInstId::new_simple(db, abi_size_trait, vec![value_ty]);
-    if trait_goal_satisfied(db, scope, assumptions, encode)
-        && trait_goal_satisfied(db, scope, assumptions, abi_size)
+    if trait_goal_satisfied(db, scope, assumptions, encode)?
+        && trait_goal_satisfied(db, scope, assumptions, abi_size)?
     {
+        // How the payload is encoded is decided here too, so a limit in
+        // that decision is an error before any code is emitted.
+        panic_payload_is_error_variant(db, scope, assumptions, value_ty)?;
         return Ok(());
     }
     Err(LowerError::Unsupported(format!(
@@ -407,29 +410,40 @@ fn panic_payload_is_error_variant<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     value_ty: TyId<'db>,
-) -> bool {
+) -> Result<bool, LowerError> {
     let Some(abi_ty) = resolve_lib_type_path(db, scope, "std::abi::Sol") else {
-        return false;
+        return Ok(false);
     };
     let Some(error_variant_trait) = resolve_core_trait(db, scope, &["error", "ErrorVariant"])
     else {
-        return false;
+        return Ok(false);
     };
     let error_variant = TraitInstId::new_simple(db, error_variant_trait, vec![value_ty, abi_ty]);
     trait_goal_satisfied(db, scope, assumptions, error_variant)
 }
 
+/// Whether `inst` is proven. A goal whose proof reaches a normalization
+/// limit has no answer, which is an error.
 fn trait_goal_satisfied<'db>(
     db: &'db dyn MirDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     inst: TraitInstId<'db>,
-) -> bool {
+) -> Result<bool, LowerError> {
     let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
-    matches!(
-        is_goal_satisfiable(db, solve_cx, inst),
-        GoalSatisfiability::Satisfied(_)
-    )
+    match is_goal_satisfiable(db, solve_cx, inst) {
+        Ok(GoalSatisfiability::Satisfied(_)) => Ok(true),
+        Err(limit) => Err(LowerError::Unsupported(format!(
+            "deciding whether `{}` holds {}",
+            inst.pretty_print(db, true),
+            limit.reason()
+        ))),
+        Ok(
+            GoalSatisfiability::NeedsConfirmation { .. }
+            | GoalSatisfiability::UnSat(_)
+            | GoalSatisfiability::ContainsInvalid,
+        ) => Ok(false),
+    }
 }
 
 fn expr_requires_runtime_eval_when_erased(expr: &NExpr<'_>) -> bool {
@@ -3777,7 +3791,10 @@ impl<'db> RmirEmitter<'db> {
         let scope = impl_env.normalization_scope(self.db);
         let assumptions = impl_env.assumptions(self.db);
         self.assert_panic_payload_encodable(scope, assumptions, value_ty);
-        let func_path = if panic_payload_is_error_variant(self.db, scope, assumptions, value_ty) {
+        let is_error_variant =
+            panic_payload_is_error_variant(self.db, scope, assumptions, value_ty)
+                .expect("panic payload support should be checked before rMIR emission");
+        let func_path = if is_error_variant {
             "std::evm::revert_error"
         } else {
             "std::evm::revert"

@@ -4,25 +4,37 @@ expression: diags
 input_file: fixtures/ty_check/growing_projection.fe
 ---
 error[3-0058]: type normalization limit exceeded
+   ┌─ growing_projection.fe:12:16
+   │
+12 │     type Out = <W<(T, T)> as Tr>::Out
+   │                ^^^^^^^^^^^^^^^^^^^^^^ resolving the associated types here needs more than 65,536 type nodes of work
+
+error[3-0058]: type normalization limit exceeded
+   ┌─ growing_projection.fe:20:16
+   │
+20 │     type Out = <L<(T,)> as Tr>::Out
+   │                ^^^^^^^^^^^^^^^^^^^^ resolving the associated types here needs more than 64 nested steps
+
+error[3-0058]: type normalization limit exceeded
    ┌─ growing_projection.fe:23:16
    │
 23 │ fn doubling(x: <W<u8> as Tr>::Out) {}
-   │                ^^^^^^^^^^^^^^^^^^ the associated types here cannot be resolved within the limit
+   │                ^^^^^^^^^^^^^^^^^^ resolving the associated types here needs more than 65,536 type nodes of work
 
 error[3-0058]: type normalization limit exceeded
    ┌─ growing_projection.fe:25:16
    │
 25 │ fn linear() -> <L<u8> as Tr>::Out {
-   │                ^^^^^^^^^^^^^^^^^^ the associated types here cannot be resolved within the limit
+   │                ^^^^^^^^^^^^^^^^^^ resolving the associated types here needs more than 64 nested steps
 
 error[3-0058]: type normalization limit exceeded
    ┌─ growing_projection.fe:30:12
    │
 30 │     let _: <W<u8> as Tr>::Out = true
-   │            ^^^^^^^^^^^^^^^^^^ the associated types here cannot be resolved within the limit
+   │            ^^^^^^^^^^^^^^^^^^ resolving the associated types here needs more than 65,536 type nodes of work
 
 error[3-0058]: type normalization limit exceeded
    ┌─ growing_projection.fe:57:5
    │
 57 │     get<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>()
-   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the associated types here cannot be resolved within the limit
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ resolving the associated types here needs more than 64 nested steps

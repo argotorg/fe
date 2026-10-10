@@ -15,7 +15,9 @@ pub use semantic::{
     root_semantic_instance_key, semantic_layout_bundle_signature,
     validate_instantiated_effect_env_key,
 };
-pub(crate) use semantic::{CallSiteProviderRefinement, SemanticBodyAdmissionError};
+pub(crate) use semantic::{
+    CallSiteProviderRefinement, InstantiationLimit, SemanticBodyAdmissionError,
+};
 pub(crate) use semantic::{
     provisional_provider_binding_for_instance_effect, provisional_provider_idx_for_requirement,
     resolved_effect_binding_ty_for_instance_effect, semantic_instance_base_assumptions_for_key,

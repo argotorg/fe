@@ -27,10 +27,10 @@ use super::{
     const_ty::{
         ConstTyData, ConstTyId, TypePrintMode, UnevaluatedConstPolicy, const_ty_from_sem_const,
     },
-    diagnostics::{TraitConstraintDiag, TyDiagCollection},
+    diagnostics::TyDiagCollection,
     effects::place_effect_provider_param_index_map,
     trait_def::{TraitInstId, TraitRefId},
-    trait_resolution::{PredicateListId, WellFormedness},
+    trait_resolution::PredicateListId,
     ty_lower::collect_generic_params,
     unify::{InferenceKey, UnificationTable},
     visitor::{TyVisitable, TyVisitor, walk_const_ty, walk_ty},
@@ -671,22 +671,7 @@ impl<'db> TyId<'db> {
         assumptions: PredicateListId<'db>,
         span: DynLazySpan<'db>,
     ) -> Option<TyDiagCollection<'db>> {
-        if let WellFormedness::IllFormed { goal, subgoal } =
-            check_ty_wf(db, solve_cx.with_assumptions(assumptions), self)
-        {
-            Some(
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span,
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                    capability_hint: None,
-                }
-                .into(),
-            )
-        } else {
-            None
-        }
+        check_ty_wf(db, solve_cx.with_assumptions(assumptions), self).into_diag(span)
     }
 
     pub(super) fn ty_var(
@@ -1208,6 +1193,13 @@ pub enum InvalidCause<'db> {
         expr: ExprId,
     },
 
+    /// A function the evaluation called makes more instances of generic
+    /// functions than one instantiation may.
+    ConstEvalInstanceLimit {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
     /// The const's definition requires its own value (directly or through a
     /// cycle of const items).
     ConstEvalRecursiveConst {
@@ -1222,9 +1214,13 @@ pub enum InvalidCause<'db> {
     /// silently invalid.
     TypeLoweringCycle,
 
-    /// Normalizing this type needed more nested projections, or larger ones,
-    /// than the normalizer allows.
-    TypeNormalizationLimit,
+    /// A type that reached a normalization limit. `stand_in` says why this
+    /// value may stand for it: a written type, whose lowering errors are
+    /// reported where it is written, or a limit already reported.
+    NormalizationLimit {
+        limit: super::normalize::NormalizationLimit,
+        stand_in: super::normalize::LimitStandIn,
+    },
 
     // TraitConstraintNotSat(PredicateId),
     ParseError,
@@ -1309,12 +1305,13 @@ impl InvalidCause<'_> {
             }
             InvalidCause::ConstEvalNegativeExponent { .. } => "ConstEvalNegativeExponent".into(),
             InvalidCause::ConstEvalStepLimitExceeded { .. } => "ConstEvalStepLimitExceeded".into(),
+            InvalidCause::ConstEvalInstanceLimit { .. } => "ConstEvalInstanceLimit".into(),
             InvalidCause::ConstEvalRecursionLimitExceeded { .. } => {
                 "ConstEvalRecursionLimitExceeded".into()
             }
             InvalidCause::ConstEvalRecursiveConst { .. } => "ConstEvalRecursiveConst".into(),
             InvalidCause::TypeLoweringCycle => "TypeLoweringCycle".into(),
-            InvalidCause::TypeNormalizationLimit => "TypeNormalizationLimit".into(),
+            InvalidCause::NormalizationLimit { .. } => "NormalizationLimit".into(),
         }
     }
 }

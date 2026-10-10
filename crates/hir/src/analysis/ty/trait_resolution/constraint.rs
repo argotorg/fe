@@ -1055,7 +1055,7 @@ fn require_decode<T>() where T: Decode<Sol> {}
                 .unwrap_or_else(|| panic!("missing {label} constraint"));
             let solve_cx = TraitSolveCx::new(&db, func.scope());
             match is_goal_satisfiable(&db, solve_cx, goal) {
-                GoalSatisfiability::Satisfied(_) => {}
+                Ok(GoalSatisfiability::Satisfied(_)) => {}
                 other => panic!(
                     "expected instantiated `{label}` goal `{}` to be satisfiable, got {other:?}",
                     goal.pretty_print(&db, true)

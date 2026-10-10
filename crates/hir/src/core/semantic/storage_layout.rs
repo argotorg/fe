@@ -1,3 +1,4 @@
+use crate::analysis::ty::normalize::NormalizationLimit;
 use common::indexmap::IndexMap;
 use num_bigint::{BigInt, BigUint};
 use num_traits::ToPrimitive;
@@ -498,6 +499,7 @@ pub enum ContractLayoutError<'db> {
     UnresolvedConcreteLayoutRoot { value: TyId<'db> },
     AmbiguousProviderLayout,
     UnresolvedProviderTarget,
+    ProviderLimit(NormalizationLimit),
     UnresolvedProviderSpace,
     InvalidProviderRaw { failure: ProviderLayoutFailure },
     NonRegularProviderCycle,
@@ -532,6 +534,7 @@ impl ContractLayoutError<'_> {
             }
             Self::AmbiguousProviderLayout => "provider layout selection is ambiguous",
             Self::UnresolvedProviderTarget => "provider target type is unresolved",
+            Self::ProviderLimit(_) => "provider target type reaches a normalization limit",
             Self::UnresolvedProviderSpace => "provider address space is unresolved",
             Self::InvalidProviderRaw { .. } => "provider raw transport is invalid",
             Self::NonRegularProviderCycle => {
@@ -1260,8 +1263,10 @@ fn instantiate_provider_target_layout<'db>(
         boundary,
         vec![LayoutOccurrenceStep::Instantiation(0)],
     );
-    let normalized_root_uses = normalize_layout_root_uses(db, target.ty, scope, assumptions);
-    let normalized = normalize_ty(db, target.ty, scope, assumptions);
+    let normalized_root_uses = normalize_layout_root_uses(db, target.ty, scope, assumptions)
+        .map_err(ContractLayoutError::ProviderLimit)?;
+    let normalized = normalize_ty(db, target.ty, scope, assumptions)
+        .map_err(ContractLayoutError::ProviderLimit)?;
     // Normalization can expose structural roots owned by another associated
     // type definition. Re-land the complete equality partition under this
     // provider occurrence so every root carries the exact provider boundary.
@@ -1281,17 +1286,18 @@ fn instantiate_provider_target_layout<'db>(
         if layout_root_id(db, value).is_some() {
             continue;
         }
+        let owner = root_use
+            .owner
+            .map(|owner| {
+                let owner = Binder::bind(schema.owner(db), owner)
+                    .instantiate(db, impl_instance.impl_args(db));
+                normalize_ty(db, owner, scope, assumptions)
+            })
+            .transpose()
+            .map_err(ContractLayoutError::ProviderLimit)?;
         let root_use = crate::analysis::ty::layout_holes::LayoutRootUse {
             value,
-            owner: root_use.owner.map(|owner| {
-                normalize_ty(
-                    db,
-                    Binder::bind(schema.owner(db), owner)
-                        .instantiate(db, impl_instance.impl_args(db)),
-                    scope,
-                    assumptions,
-                )
-            }),
+            owner,
             selector: root_use.selector,
         };
         if !target.root_uses.contains(&root_use) {
@@ -2881,6 +2887,9 @@ fn contract_layout_error_for_provider_failure<'db>(
 ) -> ContractLayoutError<'db> {
     match failure {
         ProviderLayoutFailure::Ambiguous => ContractLayoutError::AmbiguousProviderLayout,
+        ProviderLayoutFailure::NormalizationLimit(limit) => {
+            ContractLayoutError::ProviderLimit(limit)
+        }
         ProviderLayoutFailure::UnresolvedTarget => ContractLayoutError::UnresolvedProviderTarget,
         ProviderLayoutFailure::UnresolvedSpace => ContractLayoutError::UnresolvedProviderSpace,
         ProviderLayoutFailure::UnresolvedRaw
@@ -3172,12 +3181,15 @@ fn resolve_storage_place<'db>(
                     return None;
                 };
                 let target_ident = IdentId::new(db, "Target".to_string());
+                // The target was normalized, and a limit in it reported,
+                // when the provider was resolved for the field.
                 ty = normalize_ty(
                     db,
                     impl_instance.instantiated_assoc_ty(db, target_ident)?,
                     field.field.contract.scope(),
                     PredicateListId::empty_list(db),
-                );
+                )
+                .ok()?;
                 space = target_space;
             }
             PlaceStep::DeclaredWrapper => {}

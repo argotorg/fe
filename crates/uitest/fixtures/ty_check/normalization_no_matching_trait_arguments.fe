@@ -1,0 +1,10 @@
+trait Nest { type Out }
+struct N<T> { t: T }
+impl<T: Nest> Nest for N<T> { type Out = T::Out }
+impl Nest for u8 { type Out = u8 }
+trait Show {}
+impl Show for u8 {}
+struct W<T> { t: T }
+trait Tr<X> { type Out }
+impl<T: Nest> Tr<u8> for W<T> where T::Out: Show { type Out = u8 }
+fn roundtrip(x: <W<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> as Tr<bool>>::Out) -> bool { x }

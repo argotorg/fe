@@ -42,7 +42,7 @@ use crate::analysis::{
         },
         ty_check::BodyOwner,
         ty_def::{BorrowKind, TyId},
-        ty_is_copy,
+        ty_is_known_copy,
     },
 };
 
@@ -565,7 +565,7 @@ impl<'db> Borrowck<'db> {
             }
             let pointer = input.classes.contains(&CapabilityClass::Pointer);
             let consume = pointer
-                && !ty_is_copy(
+                && !ty_is_known_copy(
                     self.db,
                     self.instance
                         .key(self.db)

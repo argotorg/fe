@@ -7,7 +7,7 @@ use super::{
     binder::Binder,
     canonical::{Canonical, Canonicalized, Solution},
     fold::{TyFoldable, TyFolder},
-    normalize::normalize_ty,
+    normalize::{NormalizationLimit, normalize_ty},
     trait_resolution::PredicateListId,
     ty_def::{TyBase, TyId},
     unify::UnificationTable,
@@ -134,11 +134,15 @@ pub(crate) fn probe_method<'db>(
     query: MethodProbe<'db>,
     scope: ScopeId<'db>,
     name: IdentId<'db>,
-) -> Vec<ProbedMethod<'db>> {
-    probe_canonical_method(db, ingot, Canonical::new(db, query), scope, name)
-        .iter()
-        .map(|&(def, bound)| ProbedMethod { def, bound, query })
-        .collect()
+) -> Result<Vec<ProbedMethod<'db>>, NormalizationLimit> {
+    Ok(
+        probe_canonical_method(db, ingot, Canonical::new(db, query), scope, name)
+            .as_ref()
+            .map_err(|limit| *limit)?
+            .iter()
+            .map(|&(def, bound)| ProbedMethod { def, bound, query })
+            .collect(),
+    )
 }
 
 #[salsa::tracked(return_ref)]
@@ -148,7 +152,7 @@ fn probe_canonical_method<'db>(
     query: Canonical<MethodProbe<'db>>,
     scope: ScopeId<'db>,
     name: IdentId<'db>,
-) -> Vec<(CallableDef<'db>, Solution<BoundInherentMethod<'db>>)> {
+) -> Result<Vec<(CallableDef<'db>, Solution<BoundInherentMethod<'db>>)>, NormalizationLimit> {
     let table = collect_methods(db, ingot);
     table.probe(db, query, scope, name)
 }
@@ -165,20 +169,21 @@ impl<'db> MethodTable<'db> {
         query: Canonical<MethodProbe<'db>>,
         scope: ScopeId<'db>,
         name: IdentId<'db>,
-    ) -> Vec<(CallableDef<'db>, Solution<BoundInherentMethod<'db>>)> {
+    ) -> Result<Vec<(CallableDef<'db>, Solution<BoundInherentMethod<'db>>)>, NormalizationLimit>
+    {
         let mut table = UnificationTable::new(db);
         // The table is fresh, so the extracted receiver vars share keys with
         // the canonical query vars — the precondition for canonicalizing
         // solutions against `query` below.
         let extracted = query.extract_identity(&mut table);
         let Some(base) = Self::extract_ty_base(extracted.receiver, db) else {
-            return vec![];
+            return Ok(vec![]);
         };
 
         if let Some(bucket) = self.buckets.get(base) {
             bucket.probe(query, &mut table, extracted, scope, name)
         } else {
-            vec![]
+            Ok(vec![])
         }
     }
 
@@ -236,7 +241,8 @@ impl<'db> MethodBucket<'db> {
         query: MethodProbe<'db>,
         scope: ScopeId<'db>,
         name: IdentId<'db>,
-    ) -> Vec<(CallableDef<'db>, Solution<BoundInherentMethod<'db>>)> {
+    ) -> Result<Vec<(CallableDef<'db>, Solution<BoundInherentMethod<'db>>)>, NormalizationLimit>
+    {
         let db = table.db;
         let mut methods = vec![];
         let ty = saturate_ty_for_method_probe(table, query.receiver);
@@ -259,7 +265,7 @@ impl<'db> MethodBucket<'db> {
             let key_ty = cand_key.instantiate(db, func_ty.generic_args(db));
             let key_ty = table.instantiate_to_term(key_ty);
 
-            if match_probe_key(table, key_ty, ty, scope, query.assumptions) {
+            if match_probe_key(table, key_ty, ty, scope, query.assumptions)? {
                 let bound = canonical_query.canonicalize_solution(
                     db,
                     table,
@@ -276,21 +282,24 @@ impl<'db> MethodBucket<'db> {
             table.rollback_to(snapshot);
         }
 
-        methods
+        Ok(methods)
     }
 }
 
 /// Bind ordinary arguments before normalizing projection equalities. Argument
 /// order must not affect matching `Pair<T::Item, T>` against `Pair<u256, bool>`.
 /// Every deferred equality must succeed; unresolved projections are not holes.
+/// A limit reached normalizing one equality leaves it unknown: the others are
+/// still checked, and the match is undecided only if none of them fails.
 fn match_probe_key<'db>(
     table: &mut UnificationTable<'db>,
     key: TyId<'db>,
     receiver: TyId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-) -> bool {
+) -> Result<bool, NormalizationLimit> {
     let db = table.db;
+    let mut limit = None;
     let mut pending = vec![(key, receiver)];
     loop {
         let mut deferred = Vec::new();
@@ -305,18 +314,27 @@ fn match_probe_key<'db>(
             } else if lhs.has_projection(db) || rhs.has_projection(db) {
                 deferred.push((lhs, rhs));
             } else if table.unify(lhs, rhs).is_err() {
-                return false;
+                return Ok(false);
             }
         }
         if deferred.is_empty() {
-            return true;
+            return limit.map_or(Ok(true), Err);
         }
 
         let mut progressed = false;
         for (lhs, rhs) in deferred {
             let assumptions = assumptions.fold_with(db, table);
-            let normalized_lhs = normalize_ty(db, lhs.fold_with(db, table), scope, assumptions);
-            let normalized_rhs = normalize_ty(db, rhs.fold_with(db, table), scope, assumptions);
+            let normalize = |ty: TyId<'db>, table: &mut UnificationTable<'db>| {
+                normalize_ty(db, ty.fold_with(db, table), scope, assumptions)
+            };
+            let (normalized_lhs, normalized_rhs) =
+                match (normalize(lhs, table), normalize(rhs, table)) {
+                    (Ok(lhs), Ok(rhs)) => (lhs, rhs),
+                    (Err(err), _) | (_, Err(err)) => {
+                        limit.get_or_insert(err);
+                        continue;
+                    }
+                };
             if table.unify(normalized_lhs, normalized_rhs).is_ok() {
                 progressed = true;
             } else {
@@ -325,7 +343,13 @@ fn match_probe_key<'db>(
             }
         }
         if !progressed {
-            return false;
+            // Equalities left unresolved fail the match; only unknown ones
+            // leave it undecided.
+            return if pending.is_empty() {
+                limit.map_or(Ok(true), Err)
+            } else {
+                Ok(false)
+            };
         }
     }
 }
@@ -410,7 +434,7 @@ impl<'db> MethodCollector<'db> {
                 func.scope(),
                 func.name(self.db).expect("callable has name"),
             )
-            .is_empty()
+            .is_ok_and(|methods| methods.is_empty())
         {
             self.method_table.insert(self.db, ty, func)
         }
@@ -466,7 +490,8 @@ fn context<T: Output<Item = U>, U>(value: Pair<u256, T>) {}
             },
             func.scope(),
             IdentId::new(&db, "selected"),
-        );
+        )
+        .unwrap();
         assert_eq!(candidates.len(), 1);
         let bound = candidates[0].extract(&mut table);
         assert_eq!(bound.key_ty, receiver);

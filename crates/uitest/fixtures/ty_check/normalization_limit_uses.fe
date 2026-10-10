@@ -1,0 +1,107 @@
+// A normalization limit reached in a type that is not written, but
+// instantiated from a signature, a field, a bound or an ignored argument, is
+// reported where the type arises, once.
+use core::effect_ref::{AddressSpace, EffectHandle}
+
+trait Nest {
+    type Out
+}
+
+struct N<T> {
+    t: T,
+}
+
+impl<T: Nest> Nest for N<T> {
+    type Out = T::Out
+}
+
+impl Nest for u8 {
+    type Out = u8
+}
+
+trait Show {}
+
+impl Show for u8 {}
+
+fn take<T: Nest>(_ x: T::Out) {}
+
+fn bounded<T: Nest>()
+where
+    T::Out: Show,
+{}
+
+struct S<T: Nest> {
+    f: T::Out,
+}
+
+struct H {}
+
+impl H {
+    fn take<T: Nest>(self, _ x: T::Out) {}
+}
+
+fn parameter() {
+    take<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>(1)
+}
+
+fn where_bound() {
+    bounded<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>()
+}
+
+fn field() {
+    let _ = S<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> { f: 1 }
+}
+
+fn method() {
+    let h = H {}
+    h.take<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>(1)
+}
+
+// A limit reached in an argument that the impl ignores is still reported.
+trait Tr {
+    type Out
+}
+
+struct W<T> {
+    t: T,
+}
+
+impl<T> Tr for W<T> {
+    type Out = <W<(T, T)> as Tr>::Out
+}
+
+trait Keep<T> {
+    type Out
+}
+
+struct K {}
+
+impl<T> Keep<T> for K {
+    type Out = u8
+}
+
+fn ignored(_ x: <K as Keep<<W<u8> as Tr>::Out>>::Out) {}
+
+// A provider whose `Target` reaches the limit only for this field's type.
+struct P<T> {
+    addr: *T,
+}
+
+impl<T: Nest> EffectHandle for P<T> {
+    type Target = T::Out
+    type Raw = *T
+    const SPACE: AddressSpace = AddressSpace::Memory
+    fn raw(self) -> *T {
+        self.addr
+    }
+}
+
+contract Fields {
+    mut value: P<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>,
+}
+
+// Effect keys of a function and of a contract.
+fn keyed() uses (x: <W<u8> as Tr>::Out) {}
+
+contract Keyed uses (y: <W<u8> as Tr>::Out) {
+}

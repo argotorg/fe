@@ -7,7 +7,7 @@ use crate::{
             ImplSelfKey, collect_trait_impls, complete_impl_trait, complete_selected_impl,
             lower_impl_trait_header,
         },
-        trait_resolution::{GoalSatisfiability, PredicateListId, Selection},
+        trait_resolution::{PredicateListId, Selection},
     },
     hir_def::{
         Body, Contract, Func, GenericParamOwner, HirIngot, IdentId, ImplTrait, Trait,
@@ -23,16 +23,17 @@ use salsa::Update;
 
 use super::{
     binder::Binder,
+    candidates,
     canonical::Canonical,
     const_ty::CallableInputLayoutHoleOrigin,
     diagnostics::{ImplDiag, TyDiagCollection},
     fold::{TyFoldable, TyFolder},
     layout_holes::LayoutRootUse,
-    normalize::normalize_ty,
+    normalize::{NormalizationLimit, normalize_ty},
     subst::substitute_complete,
     trait_lower::collect_implementor_methods,
     trait_resolution::{
-        TraitSolveCx, constraint::collect_candidate_constraints, is_goal_satisfiable,
+        TraitSolveCx, constraint::collect_candidate_constraints,
         normalize_trait_inst_preserving_validity,
     },
     ty_def::{TyBase, TyData, TyId},
@@ -79,7 +80,7 @@ pub(crate) fn impls_for_trait_def<'db>(
 
 /// Different nominal heads cannot unify after freshening or saturation.
 /// Keep error types and unknown heads for the full unification check.
-fn impl_self_ty_may_match<'db>(
+pub(super) fn impl_self_ty_may_match<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_ty: TyId<'db>,
     ty: TyId<'db>,
@@ -169,7 +170,10 @@ pub(crate) fn impls_for_trait_in_ingots<'db>(
     dedup.into_iter().collect()
 }
 
-fn is_std_evm_contract_trait_def<'db>(db: &'db dyn HirAnalysisDb, trait_def: Trait<'db>) -> bool {
+pub(super) fn is_std_evm_contract_trait_def<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_def: Trait<'db>,
+) -> bool {
     let Some(name) = trait_def.name(db).to_opt() else {
         return false;
     };
@@ -183,7 +187,7 @@ fn is_std_evm_contract_trait_def<'db>(db: &'db dyn HirAnalysisDb, trait_def: Tra
 }
 
 #[salsa::tracked(return_ref)]
-fn contract_virtual_impls<'db>(
+pub(super) fn contract_virtual_impls<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
 ) -> Vec<ImplementorId<'db>> {
@@ -495,6 +499,7 @@ pub(crate) fn resolve_trait_impl_instance<'db>(
         ImplSelection::Unique(resolved) => Selection::Unique(resolved),
         ImplSelection::Ambiguous => Selection::Ambiguous(IndexSet::new()),
         ImplSelection::NotFound => Selection::NotFound,
+        ImplSelection::NormalizationLimit(limit) => Selection::NormalizationLimit(limit),
     }
 }
 
@@ -504,6 +509,7 @@ enum ImplSelection<'db> {
     Unique(ResolvedImplInstance<'db>),
     Ambiguous,
     NotFound,
+    NormalizationLimit(crate::analysis::ty::normalize::NormalizationLimit),
 }
 
 /// Call sites and method checks select the same implementations repeatedly.
@@ -515,7 +521,10 @@ fn resolve_trait_impl_instance_query<'db>(
 ) -> ImplSelection<'db> {
     let assumptions = solve_cx.assumptions();
     let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
-    let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
+    let inst = match normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions) {
+        Ok(inst) => inst,
+        Err(limit) => return ImplSelection::NormalizationLimit(limit),
+    };
     match solve_cx.select_impl(db, inst) {
         Selection::Unique(selected) => complete_selected_impl(db, selected)
             .and_then(|selected| instantiate_selected_impl(db, selected, inst))
@@ -526,6 +535,7 @@ fn resolve_trait_impl_instance_query<'db>(
         // owned by the caller through a fresh local table.
         Selection::Ambiguous(_) => ImplSelection::Ambiguous,
         Selection::NotFound => ImplSelection::NotFound,
+        Selection::NormalizationLimit(limit) => ImplSelection::NormalizationLimit(limit),
     }
 }
 
@@ -692,14 +702,16 @@ impl<'db> ResolvedMethodInstance<'db> {
                 let Some(formal_ty) = callable_input_layout_origin_ty(db, body, origin) else {
                     continue;
                 };
-                let formal_ty = normalize_ty(
-                    db,
-                    substitute_complete(db, formal_ty, &args.residualize(db))
-                        .expect("selected input template must match body schema"),
-                    self.normalization_scope,
-                    assumptions,
-                );
-                let actual_ty = normalize_ty(db, actual_ty, self.normalization_scope, assumptions);
+                let formal_ty = substitute_complete(db, formal_ty, &args.residualize(db))
+                    .expect("selected input template must match body schema");
+                // A type that cannot be normalized binds no layout argument;
+                // its limit is reported where the type arises.
+                let (Ok(formal_ty), Ok(actual_ty)) = (
+                    normalize_ty(db, formal_ty, self.normalization_scope, assumptions),
+                    normalize_ty(db, actual_ty, self.normalization_scope, assumptions),
+                ) else {
+                    continue;
+                };
                 let mut bindings = Vec::new();
                 if !collect_layout_arg_bindings(db, formal_ty, actual_ty, &mut bindings) {
                     continue;
@@ -741,6 +753,7 @@ pub fn resolve_trait_method_instance<'db>(
         Selection::Unique(resolved) => resolved,
         Selection::Ambiguous(_) => return Selection::Ambiguous(IndexSet::new()),
         Selection::NotFound => return Selection::NotFound,
+        Selection::NormalizationLimit(limit) => return Selection::NormalizationLimit(limit),
     };
     let Some(declaration) = resolved
         .selected()
@@ -797,98 +810,6 @@ pub fn resolve_trait_method_instance<'db>(
         normalization_scope,
         assumptions: solve_cx.assumptions(),
     })
-}
-
-/// Returns all implementors for the given `ty` whose constraints are fully proven.
-pub(crate) fn impls_for_ty_with_satisfied_constraints<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ingot: Ingot<'db>,
-    ty: Canonical<TyId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> Vec<ImplementorId<'db>> {
-    impls_for_ty_with_constraint_mode(db, ingot, None, ty, assumptions, false)
-}
-
-/// Returns implementors of `trait_def` whose self type can apply to `ty` and
-/// whose constraints are not known to be unsatisfied.
-pub(crate) fn impls_for_trait_and_ty_with_possible_constraints<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ingot: Ingot<'db>,
-    trait_def: Trait<'db>,
-    ty: Canonical<TyId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> Vec<ImplementorId<'db>> {
-    impls_for_ty_with_constraint_mode(db, ingot, Some(trait_def), ty, assumptions, true)
-}
-
-fn impls_for_ty_with_constraint_mode<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ingot: Ingot<'db>,
-    trait_def: Option<Trait<'db>>,
-    ty: Canonical<TyId<'db>>,
-    assumptions: PredicateListId<'db>,
-    allow_needs_confirmation: bool,
-) -> Vec<ImplementorId<'db>> {
-    let mut table = UnificationTable::new(db);
-    let ty = ty.extract_identity(&mut table);
-
-    let solve_cx = TraitSolveCx::new(db, ingot.root_mod(db).scope()).with_assumptions(assumptions);
-    if ty.has_invalid(db) || ty.base_ty(db).is_never(db) {
-        return vec![];
-    }
-    let env = ingot_trait_env(db, ingot);
-    let mut raw_impls = match trait_def {
-        Some(trait_def) => env.impls_for_trait(db, trait_def),
-        None => env.impls_for_self_key(db, ty.base_ty(db)),
-    };
-
-    if ty.as_contract(db).is_some()
-        && trait_def.is_none_or(|trait_def| is_std_evm_contract_trait_def(db, trait_def))
-    {
-        raw_impls.extend(contract_virtual_impls(db, ingot).iter().copied());
-    }
-
-    raw_impls
-        .into_iter()
-        .filter(|impl_| {
-            if !impl_self_ty_may_match(db, impl_.self_ty(db), ty) {
-                return false;
-            }
-            let snapshot = table.snapshot();
-
-            let inst = table.instantiate_with_fresh_vars(*impl_);
-            let impl_ty = table.instantiate_to_term(inst.self_ty(db));
-            let ty_term = table.instantiate_to_term(ty);
-            let unifies = table.unify(impl_ty, ty_term).is_ok();
-
-            if unifies {
-                let impl_constraints = inst.constraints(db);
-                if impl_constraints.is_empty(db) {
-                    table.rollback_to(snapshot);
-                    return true;
-                }
-
-                for &constraint in impl_constraints.list(db) {
-                    let constraint = constraint.fold_with(db, &mut table);
-                    let satisfiability = is_goal_satisfiable(db, solve_cx, constraint);
-                    let constraint_holds =
-                        matches!(satisfiability, GoalSatisfiability::Satisfied(_))
-                            || (allow_needs_confirmation
-                                && matches!(
-                                    satisfiability,
-                                    GoalSatisfiability::NeedsConfirmation { .. }
-                                ));
-                    if !constraint_holds {
-                        table.rollback_to(snapshot);
-                        return false;
-                    }
-                }
-            }
-
-            table.rollback_to(snapshot);
-            unifies
-        })
-        .collect()
 }
 
 /// Returns all implementors for the given `ty`.
@@ -953,7 +874,7 @@ pub fn assoc_const_body_template_for_trait_inst<'db>(
     let resolved = match resolve_trait_impl_instance(db, solve_cx, inst) {
         Selection::Unique(resolved) => resolved,
         Selection::Ambiguous(_ambiguous) => return None,
-        Selection::NotFound => return None,
+        Selection::NotFound | Selection::NormalizationLimit(_) => return None,
     };
     selected_assoc_const_body_template(db, resolved, const_name)
 }
@@ -1013,7 +934,7 @@ pub fn trait_inst_selects_concrete_impl<'db>(
             resolved.selected().origin(db),
             ImplementorOrigin::Assumption
         ),
-        Selection::Ambiguous(_) | Selection::NotFound => false,
+        Selection::Ambiguous(_) | Selection::NotFound | Selection::NormalizationLimit(_) => false,
     }
 }
 
@@ -1072,7 +993,7 @@ impl<'db> TraitEnv<'db> {
         }
     }
 
-    fn impls_for_self_key(
+    pub(super) fn impls_for_self_key(
         &self,
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
@@ -1091,7 +1012,7 @@ impl<'db> TraitEnv<'db> {
             .collect()
     }
 
-    fn impls_for_trait(
+    pub(super) fn impls_for_trait(
         &self,
         db: &'db dyn HirAnalysisDb,
         trait_def: Trait<'db>,
@@ -1273,42 +1194,39 @@ pub(crate) fn does_impl_trait_conflict<'db>(
     db: &'db dyn HirAnalysisDb,
     a: ImplementorId<'db>,
     b: ImplementorId<'db>,
-) -> bool {
+) -> Result<bool, NormalizationLimit> {
     let mut table = UnificationTable::new(db);
     let a = table.instantiate_with_fresh_vars(a);
     let b = table.instantiate_with_fresh_vars(b);
 
     if table.unify(a, b).is_err() {
-        return false;
+        return Ok(false);
     }
 
     let a_constraints = a.constraints(db);
     let b_constraints = b.constraints(db);
 
     if a_constraints.is_empty(db) && b_constraints.is_empty(db) {
-        return true;
+        return Ok(true);
     }
 
-    // Check if all constraints from both implementations would be satisfiable
-    // when the types are unified.
+    // The impls overlap if every constraint of both can hold for the unified
+    // types. A refuted constraint rules the overlap out even after one that
+    // reached a limit; otherwise such a limit leaves the overlap undecided.
     let merged_constraints = a_constraints.merge(db, b_constraints);
     let solve_cx = TraitSolveCx::new(db, a.trait_def(db).scope())
         .with_assumptions(PredicateListId::empty_list(db));
-
-    for &constraint in merged_constraints.list(db) {
-        let constraint = constraint.fold_with(db, &mut table);
-
-        match is_goal_satisfiable(db, solve_cx, constraint) {
-            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => {
-                return false;
-            }
-            _ => {
-                // Constraint is satisfiable or needs more information, continue checking.
-            }
-        }
+    match candidates::all_hold(
+        db,
+        solve_cx,
+        &mut table,
+        merged_constraints.list(db),
+        candidates::Counting::POSSIBLE,
+    ) {
+        candidates::Holds::Yes | candidates::Holds::Undecided => Ok(true),
+        candidates::Holds::No => Ok(false),
+        candidates::Holds::Unknown(limit) => Err(limit),
     }
-
-    true
 }
 
 /// The positional identity of a trait application. Associated equalities live
@@ -1410,24 +1328,27 @@ impl<'db> TraitInstId<'db> {
         self.trait_ref(db).project_assoc_ty(db, name)
     }
 
-    /// Normalize arguments of this trait instance.
+    /// Normalize arguments of this trait instance, for trait solving (see
+    /// [`crate::analysis::ty::normalize::normalize_ty_in_solver`]).
     pub(crate) fn normalize(
         self,
         db: &'db dyn HirAnalysisDb,
         scope: crate::core::hir_def::scope_graph::ScopeId<'db>,
         assumptions: PredicateListId<'db>,
-    ) -> Self {
-        let normalized_args: Vec<_> = self
+    ) -> Result<Self, crate::analysis::ty::normalize::NormalizationLimit> {
+        let normalized_args = self
             .args(db)
             .iter()
-            .map(|&arg| crate::analysis::ty::normalize::normalize_ty(db, arg, scope, assumptions))
-            .collect();
-        Self::new(
+            .map(|&arg| {
+                crate::analysis::ty::normalize::normalize_ty_in_solver(db, arg, scope, assumptions)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self::new(
             db,
             self.def(db),
             normalized_args,
             self.assoc_type_bindings(db).clone(),
-        )
+        ))
     }
 
     pub fn pretty_print(self, db: &dyn HirAnalysisDb, as_pred: bool) -> String {

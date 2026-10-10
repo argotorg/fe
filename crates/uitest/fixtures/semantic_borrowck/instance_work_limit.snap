@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/instance_work_limit.fe
+---
+error[16-0012]: type normalization limit exceeded
+   ┌─ instance_work_limit.fe:38:26
+   │
+38 │   fn grow<T: Tree>() -> u8 {
+   │ ╭──────────────────────────^
+39 │ │     let _y: Option<<D<D<D<D<D<D<D<D<T>>>>>>>> as Tree>::Out> = Option::None
+40 │ │     grow<A<T>>() + grow<B<T>>()
+41 │ │ }
+   │ ╰─^ with `A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<A<T>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>` for its generic parameters, resolving the associated types in `grow`, or in what it calls, needs more than 64 nested steps
+
+error[16-0013]: instance limit exceeded
+   ┌─ instance_work_limit.fe:49:5
+   │
+49 │     grow<u8>()
+   │     ^^^^^^^^^^ with `u8` for its generic parameters, the types of the instances of generic functions that `grow` makes, counting those they make in turn, need more than 65,536 type nodes of work

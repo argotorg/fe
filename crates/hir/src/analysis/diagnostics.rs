@@ -16,7 +16,9 @@ use crate::analysis::{
             FuncBodyDiag, ImplDiag, MustUseSubject, TraitConstraintDiag, TraitLowerDiag,
             TyDiagCollection, TyLowerDiag,
         },
+        normalize::grouped,
         trait_def::TraitInstId,
+        trait_resolution::TraitSolveCompletion,
         ty_check::{EffectParamOwner, RecordLike},
         ty_def::{TyData, TyId, TyVarSort},
     },
@@ -720,6 +722,13 @@ impl DiagnosticVoucher for crate::MsgDiagnostic {
                 vec![reason.clone()],
                 None,
             ),
+            MsgDiagnosticKind::AbiTraitsLimit { ty, reason } => (
+                8,
+                "type normalization limit reached".to_string(),
+                format!("deciding the ABI traits of `{ty}` {reason}"),
+                vec![],
+                None,
+            ),
             MsgDiagnosticKind::MissingAbiTraits { ty, traits } => (
                 8,
                 format!(
@@ -921,6 +930,12 @@ impl DiagnosticVoucher for crate::AbiStructDiagnostic {
                 ),
                 "`#[abi]` struct fields must implement `AbiSize`, `AbiSpan<Sol>`, `Encode<Sol>` and `Decode<Sol>`, as ABI types and other `#[abi]` structs do",
             ),
+            AbiStructDiagnosticKind::FieldTypeLimit { ty, reason } => (
+                4,
+                "type normalization limit reached",
+                format!("deciding whether `{ty}` can be ABI encoded {reason}"),
+                "`#[abi]` struct fields must implement `AbiSize`, `AbiSpan<Sol>`, `Encode<Sol>` and `Decode<Sol>`",
+            ),
         };
 
         CompleteDiagnostic::new(
@@ -939,7 +954,25 @@ impl DiagnosticVoucher for crate::AbiStructDiagnostic {
 
 impl DiagnosticVoucher for crate::analysis::analysis_pass::AbiArrayElemNotCopy {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
-        let Self { ty, elem_ty, .. } = self;
+        let Self {
+            ty,
+            elem_ty,
+            limit_reason,
+            ..
+        } = self;
+        if let Some(reason) = limit_reason {
+            return CompleteDiagnostic::new(
+                Severity::Error,
+                "type normalization limit reached".to_string(),
+                vec![SubDiagnostic::new(
+                    LabelStyle::Primary,
+                    format!("deciding whether `{elem_ty}` is `Copy` {reason}"),
+                    Some(Span::new(self.file, self.primary_range, SpanKind::Original)),
+                )],
+                vec![],
+                self.error_code.clone(),
+            );
+        }
         CompleteDiagnostic::new(
             Severity::Error,
             "fixed-array ABI fields need `Copy` elements".to_string(),
@@ -1233,6 +1266,14 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 severity,
                 "infinite trait bound recursion",
                 msg.to_string(),
+                span.resolve(db),
+                error_code,
+            ),
+
+            Self::NormalizationLimit { span, limit } => primary_diag(
+                severity,
+                "type normalization limit exceeded",
+                format!("resolving the associated types here {}", limit.reason()),
                 span.resolve(db),
                 error_code,
             ),
@@ -2284,6 +2325,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     }
                     crate::analysis::ty::provider::ProviderLayoutFailure::Ambiguous
                     | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedTarget
+                    | crate::analysis::ty::provider::ProviderLayoutFailure::NormalizationLimit(_)
                     | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedSpace => {
                         unreachable!("non-raw provider failure reached raw diagnostic")
                     }
@@ -2636,6 +2678,22 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
+            Self::ConstEvalInstanceLimit(span) => primary_diag(
+                Severity::Error,
+                "instance limit exceeded",
+                format!(
+                    "a function this evaluation calls makes more than {} instances of generic functions, or instances whose types need more than {} type nodes of work",
+                    crate::analysis::ty::normalize::grouped(
+                        crate::analysis::semantic::instance::InstantiationLimit::INSTANCES
+                    ),
+                    crate::analysis::ty::normalize::grouped(
+                        crate::analysis::semantic::instance::InstantiationLimit::WORK
+                    )
+                ),
+                span.resolve(db),
+                error_code,
+            ),
+
             Self::ConstEvalRecursiveConst(span) => primary_diag(
                 Severity::Error,
                 "recursive constant definition",
@@ -2652,13 +2710,16 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
-            Self::TypeNormalizationLimit(span) => primary_diag(
-                Severity::Error,
-                "type normalization limit exceeded",
-                "the associated types here cannot be resolved within the limit",
-                span.resolve(db),
-                error_code,
-            ),
+            Self::TypeNormalizationLimit { span, limit } => {
+                let label = format!("resolving the associated types here {}", limit.reason());
+                primary_diag(
+                    Severity::Error,
+                    "type normalization limit exceeded",
+                    label,
+                    span.resolve(db),
+                    error_code,
+                )
+            }
 
             Self::NonTrailingDefaultGenericParam(span) => primary_diag(
                 Severity::Error,
@@ -4340,6 +4401,40 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::TraitBoundUndecided {
+                primary,
+                goal,
+                stop,
+                required_by,
+            } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "cannot decide whether `{}` implements `{}`",
+                        goal.self_ty(db).pretty_print(db),
+                        goal.pretty_print(db, false)
+                    ),
+                    span: primary.resolve(db),
+                }];
+                if let Some(required_by) = required_by {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format_call_constraint_source(db, required_by),
+                        span: required_by.bound_span.resolve(db),
+                    });
+                }
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "trait bound cannot be decided".to_string(),
+                    sub_diagnostics,
+                    notes: vec![format!(
+                        "the trait solver stopped before it found a proof or a counterexample: {}",
+                        undecided_reason(*stop)
+                    )],
+                    error_code,
+                }
+            }
+
             Self::AmbiguousTraitInst {
                 primary,
                 cands,
@@ -5122,6 +5217,25 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 span.resolve(db),
                 error_code,
             ),
+
+            Self::TraitBoundUndecided { span, goal, stop } => CompleteDiagnostic {
+                severity,
+                message: "trait bound cannot be decided".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "cannot decide whether `{}` implements `{}`",
+                        goal.self_ty(db).pretty_print(db),
+                        goal.pretty_print(db, false)
+                    ),
+                    span: span.resolve(db),
+                }],
+                notes: vec![format!(
+                    "the trait solver stopped before it found a proof or a counterexample: {}",
+                    undecided_reason(*stop)
+                )],
+                error_code,
+            },
         }
     }
 }
@@ -5697,6 +5811,7 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     }
                     crate::analysis::ty::provider::ProviderLayoutFailure::Ambiguous
                     | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedTarget
+                    | crate::analysis::ty::provider::ProviderLayoutFailure::NormalizationLimit(_)
                     | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedRaw
                     | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedSpace => {
                         unreachable!("non-concrete raw failure reached impl diagnostic")
@@ -5717,6 +5832,30 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     error_code,
                 }
             }
+        }
+    }
+}
+
+/// Why the trait solver stopped without an answer, in words.
+fn undecided_reason(stop: TraitSolveCompletion) -> String {
+    match stop {
+        TraitSolveCompletion::Saturated => "it found no unique answer".to_string(),
+        TraitSolveCompletion::RootAnswerLimit { limit } => {
+            format!("it reached its limit of {} answers", grouped(limit))
+        }
+        TraitSolveCompletion::StepLimit { limit } => {
+            format!("it reached its limit of {} steps", grouped(limit))
+        }
+        TraitSolveCompletion::TableLimit { limit }
+        | TraitSolveCompletion::PendingWorkLimit { limit } => {
+            format!("it reached its limit of {} subgoals", grouped(limit))
+        }
+        TraitSolveCompletion::MaximumTypeDepth => {
+            "the types in the subgoals kept growing".to_string()
+        }
+        TraitSolveCompletion::Cycle => "the bound depends on itself".to_string(),
+        TraitSolveCompletion::NormalizationLimit(limit) => {
+            format!("resolving associated types {}", limit.reason())
         }
     }
 }

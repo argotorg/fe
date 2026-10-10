@@ -170,9 +170,86 @@ where
             + private::ScratchOps<'db>,
     {
         let value = U::unbrand(value).fold_with(self.db, &mut self.table);
+        // Unioning an impl variable with a query variable may choose either
+        // representative. Remap the live representatives, not their old keys.
+        // Concrete bindings stay concrete, so extraction cannot conceal an
+        // assignment. Recompute each time: snapshots may roll unions back.
+        let mut origins: FxHashMap<TyId<'db>, Option<TyId<'db>>> = FxHashMap::default();
+        for (&local, &canonical) in &self.local_to_canonical {
+            let representative = local.fold_with(self.db, &mut self.table);
+            let unbound = match representative.data(self.db) {
+                TyData::TyVar(_) => true,
+                TyData::ConstTy(const_ty) => {
+                    matches!(const_ty.data(self.db), ConstTyData::TyVar(..))
+                }
+                _ => false,
+            };
+            if unbound {
+                origins
+                    .entry(representative)
+                    .and_modify(|previous| {
+                        if *previous != Some(canonical) {
+                            *previous = None;
+                        }
+                    })
+                    .or_insert(Some(canonical));
+            }
+        }
+        struct AmbiguousChecker<'a, 'db> {
+            db: &'db dyn HirAnalysisDb,
+            origins: &'a FxHashMap<TyId<'db>, Option<TyId<'db>>>,
+            table: &'a mut UnificationTable<'db>,
+            found: bool,
+        }
+        impl<'db> TyVisitor<'db> for AmbiguousChecker<'_, 'db> {
+            fn db(&self) -> &'db dyn HirAnalysisDb {
+                self.db
+            }
+            fn visit_ty(&mut self, ty: TyId<'db>) {
+                let ty = match ty.data(self.db) {
+                    TyData::TyVar(_) => ty.fold_with(self.db, self.table),
+                    TyData::ConstTy(value)
+                        if matches!(value.data(self.db), ConstTyData::TyVar(..)) =>
+                    {
+                        ty.fold_with(self.db, self.table)
+                    }
+                    _ => ty,
+                };
+                if self.origins.get(&ty) == Some(&None) {
+                    self.found = true;
+                } else {
+                    walk_ty(self, ty);
+                }
+            }
+            fn visit_const_ty(&mut self, ty: &ConstTyId<'db>) {
+                if let ConstTyData::TyVar(var, kind) = ty.data(self.db)
+                    && self
+                        .origins
+                        .get(&TyId::const_ty_var(self.db, *kind, var.key))
+                        == Some(&None)
+                {
+                    self.found = true;
+                }
+                walk_const_ty(self, ty);
+            }
+        }
+        let mut checker = AmbiguousChecker {
+            db: self.db,
+            origins: &origins,
+            table: &mut self.table,
+            found: false,
+        };
+        value.visit_with(&mut checker);
+        if checker.found {
+            return None;
+        }
+        let representatives = origins
+            .into_iter()
+            .filter_map(|(local, canonical)| canonical.map(|canonical| (local, canonical)))
+            .collect();
         let mut remapper = RemapToCanonical {
             db: self.db,
-            subst: &self.local_to_canonical,
+            subst: &representatives,
         };
         let value = value.fold_with(self.db, &mut remapper);
         uses_only_query_canonical_vars(self.db, &self.canonical_to_original, &value).then(|| {
@@ -245,9 +322,23 @@ where
         db: &'db dyn HirAnalysisDb,
         f: impl for<'q> FnOnce(&mut MaterializedCx<'q, 'db, Q>) -> R,
     ) -> R {
+        self.with_materialized_view(db, |query| query, f)
+    }
+
+    fn with_materialized_view<R, V>(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        view: impl FnOnce(Q) -> V,
+        f: impl for<'q> FnOnce(&mut MaterializedCx<'q, 'db, V>) -> R,
+    ) -> R
+    where
+        V: TyFoldable<'db> + Copy + ScratchRepr<'db> + private::ScratchOps<'db>,
+    {
         let mut table = UnificationTable::new(db);
         let mut materializer = ScratchMaterializer::new(&mut table, FxHashMap::default());
-        let query_raw = self.canonical().value().fold_with(db, &mut materializer);
+        // Materialize the entire query before selecting a view. Variables in
+        // trait arguments remain extractable even when absent from Self.
+        let query_raw = view(self.canonical().value().fold_with(db, &mut materializer));
         let canonical_to_local = materializer.subst;
         let local_to_canonical = materializer.reverse_subst;
         let mut original_to_local = FxHashMap::default();
@@ -268,6 +359,16 @@ where
             _brand: PhantomData,
         };
         f(&mut cx)
+    }
+}
+
+impl<'db> Canonicalized<'db, TraitInstId<'db>> {
+    pub(crate) fn with_materialized_self_ty<R>(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        f: impl for<'q> FnOnce(&mut MaterializedCx<'q, 'db, TyId<'db>>) -> R,
+    ) -> R {
+        self.with_materialized_view(db, |inst| inst.self_ty(db), f)
     }
 }
 
@@ -466,6 +567,38 @@ mod tests {
     }
 
     #[test]
+    fn extraction_preserves_query_identity_when_a_fresh_root_wins_and_rolls_back() {
+        let db = HirAnalysisTestDb::default();
+        let mut table = super::UnificationTable::new(&db);
+        let original = table.new_var(TyVarSort::General, &Kind::Star);
+        let canonicalized = Canonicalized::new(&db, original);
+        for reverse in [false, true] {
+            canonicalized.with_materialized(&db, |cx| {
+                let snapshot = cx.snapshot();
+                let first =
+                    super::ScratchTy::new(cx.table.new_var(TyVarSort::General, &Kind::Star));
+                let second =
+                    super::ScratchTy::new(cx.table.new_var(TyVarSort::General, &Kind::Star));
+                cx.unify::<TyId<'_>>(first, second).unwrap();
+                if reverse {
+                    cx.unify::<TyId<'_>>(cx.query(), first).unwrap();
+                } else {
+                    cx.unify::<TyId<'_>>(first, cx.query()).unwrap();
+                }
+                assert_eq!(cx.try_extract::<TyId<'_>>(first), Some(original));
+                assert_eq!(cx.try_extract::<TyId<'_>>(cx.query()), Some(original));
+                cx.rollback_to(snapshot);
+                assert_eq!(cx.try_extract::<TyId<'_>>(cx.query()), Some(original));
+                // Vars created after this snapshot have ceased to exist; create a
+                // new unrelated one to check that rollback did not retain aliases.
+                let unrelated =
+                    super::ScratchTy::new(cx.table.new_var(TyVarSort::General, &Kind::Star));
+                assert_eq!(cx.try_extract::<TyId<'_>>(unrelated), None);
+            });
+        }
+    }
+
+    #[test]
     fn with_materialized_rejects_scratch_only_vars() {
         let db = HirAnalysisTestDb::default();
         let mut table = super::UnificationTable::new(&db);
@@ -520,6 +653,84 @@ mod tests {
 
         fn unbrand<'q>(value: <Self as ScratchRepr<'db>>::Branded<'q>) -> Self {
             value
+        }
+    }
+
+    #[test]
+    fn extraction_rejects_an_ambiguous_type_inside_a_const_variable() {
+        let db = HirAnalysisTestDb::default();
+        for reverse in [false, true] {
+            let mut table = super::UnificationTable::new(&db);
+            let lhs = table.new_var(TyVarSort::General, &Kind::Star);
+            let rhs = table.new_var(TyVarSort::General, &Kind::Star);
+            let const_arg =
+                TyId::const_ty_var(&db, lhs, table.new_key(&Kind::Star, TyVarSort::General));
+            let original = RepeatedAndConstVars {
+                lhs,
+                rhs,
+                const_arg,
+            };
+            Canonicalized::new(&db, original).with_materialized(&db, |cx| {
+                let query = cx.query();
+                let (lhs, rhs) = if reverse {
+                    (query.rhs, query.lhs)
+                } else {
+                    (query.lhs, query.rhs)
+                };
+                cx.unify::<TyId<'_>>(super::ScratchTy::new(lhs), super::ScratchTy::new(rhs))
+                    .unwrap();
+                assert_eq!(
+                    cx.try_extract::<TyId<'_>>(super::ScratchTy::new(query.const_arg)),
+                    None
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn extraction_rejects_only_referenced_ambiguous_query_classes() {
+        let db = HirAnalysisTestDb::default();
+        for is_const in [false, true] {
+            for reverse in [false, true] {
+                let mut table = super::UnificationTable::new(&db);
+                let mut fresh = || {
+                    if is_const {
+                        TyId::const_ty_var(
+                            &db,
+                            TyId::u256(&db),
+                            table.new_key(&Kind::Star, TyVarSort::General),
+                        )
+                    } else {
+                        table.new_var(TyVarSort::General, &Kind::Star)
+                    }
+                };
+                let original = RepeatedAndConstVars {
+                    lhs: fresh(),
+                    rhs: fresh(),
+                    const_arg: TyId::u8(&db),
+                };
+                Canonicalized::new(&db, original).with_materialized(&db, |cx| {
+                    let query = cx.query();
+                    let snapshot = cx.snapshot();
+                    let (lhs, rhs) = if reverse {
+                        (query.rhs, query.lhs)
+                    } else {
+                        (query.lhs, query.rhs)
+                    };
+                    cx.unify::<TyId<'_>>(super::ScratchTy::new(lhs), super::ScratchTy::new(rhs))
+                        .unwrap();
+                    assert_eq!(cx.try_extract::<RepeatedAndConstVars<'_>>(query), None);
+                    assert_eq!(
+                        cx.try_extract::<TyId<'_>>(super::ScratchTy::new(query.const_arg)),
+                        Some(TyId::u8(&db))
+                    );
+                    cx.rollback_to(snapshot);
+                    assert_eq!(
+                        cx.try_extract::<RepeatedAndConstVars<'_>>(query),
+                        Some(original)
+                    );
+                });
+            }
         }
     }
 

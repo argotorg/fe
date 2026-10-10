@@ -1,0 +1,31 @@
+// A limit reached only in a generic function that another generic function
+// instantiates is reported at the outermost call written with concrete
+// types, naming the arguments.
+trait Nest {
+    type Out
+}
+
+struct N<T> {
+    t: T,
+}
+
+impl<T: Nest> Nest for N<T> {
+    type Out = T::Out
+}
+
+impl Nest for u8 {
+    type Out = u8
+}
+
+fn inner<X: Nest>() -> u8 {
+    let _y: Option<X::Out> = Option::None
+    0
+}
+
+fn outer<X: Nest>() -> u8 {
+    inner<N<X>>()
+}
+
+pub fn main() -> u8 {
+    outer<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>()
+}
