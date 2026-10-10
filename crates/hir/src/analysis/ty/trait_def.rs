@@ -812,38 +812,77 @@ pub fn resolve_trait_method_instance<'db>(
 ///
 /// A constraint whose proof reaches a normalization limit is neither proven
 /// nor refuted, so the whole search has no answer and the limit is returned.
+///
+/// Only impls of traits for which `declares` holds are considered, before any
+/// where clause is proved, so an impl of an unrelated trait cannot make the
+/// search hit a limit.
 pub(crate) fn impls_for_ty_with_satisfied_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
     ty: Canonical<TyId<'db>>,
     assumptions: PredicateListId<'db>,
+    declares: &dyn Fn(Trait<'db>) -> bool,
 ) -> Result<Vec<ImplementorId<'db>>, NormalizationLimit> {
-    impls_for_ty_with_constraint_mode(db, ingot, None, ty, assumptions, false)
+    impls_for_ty_with_constraint_mode(
+        db,
+        ingot,
+        None,
+        ty,
+        assumptions,
+        ConstraintMode::Proved,
+        declares,
+    )
 }
 
-/// Returns implementors of `trait_def` whose self type can apply to `ty` and
-/// whose constraints are not known to be unsatisfied. A limit in a constraint
-/// proof is returned, as above.
-pub(crate) fn impls_for_trait_and_ty_with_possible_constraints<'db>(
+/// Returns implementors of the complete trait header `target` whose where
+/// clauses meet `mode`, so impls for other trait arguments never contribute
+/// a condition failure. A limit met while proving a matching candidate's
+/// where clauses is returned.
+pub(crate) fn impls_for_trait_header<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
-    trait_def: Trait<'db>,
-    ty: Canonical<TyId<'db>>,
+    target: Canonical<TraitInstId<'db>>,
     assumptions: PredicateListId<'db>,
+    mode: ConstraintMode,
 ) -> Result<Vec<ImplementorId<'db>>, NormalizationLimit> {
-    impls_for_ty_with_constraint_mode(db, ingot, Some(trait_def), ty, assumptions, true)
+    impls_for_ty_with_constraint_mode(
+        db,
+        ingot,
+        Some(target),
+        Canonical::new(db, target.value().self_ty(db)),
+        assumptions,
+        mode,
+        &|_| true,
+    )
+}
+
+/// Which implementors' where clauses must hold.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConstraintMode {
+    /// Proved.
+    Proved,
+    /// Not known to be unsatisfied.
+    Possible,
+    /// Not looked at.
+    HeaderOnly,
 }
 
 fn impls_for_ty_with_constraint_mode<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
-    trait_def: Option<Trait<'db>>,
+    target: Option<Canonical<TraitInstId<'db>>>,
     ty: Canonical<TyId<'db>>,
     assumptions: PredicateListId<'db>,
-    allow_needs_confirmation: bool,
+    mode: ConstraintMode,
+    declares: &dyn Fn(Trait<'db>) -> bool,
 ) -> Result<Vec<ImplementorId<'db>>, NormalizationLimit> {
     let mut table = UnificationTable::new(db);
-    let ty = ty.extract_identity(&mut table);
+    let target = target.map(|target| target.extract_identity(&mut table));
+    let trait_def = target.map(|target| target.def(db));
+    let ty = target.map_or_else(
+        || ty.extract_identity(&mut table),
+        |target| target.self_ty(db),
+    );
 
     let solve_cx = TraitSolveCx::new(db, ingot.root_mod(db).scope()).with_assumptions(assumptions);
     if ty.has_invalid(db) || ty.base_ty(db).is_never(db) {
@@ -866,21 +905,36 @@ fn impls_for_ty_with_constraint_mode<'db>(
         if !impl_self_ty_may_match(db, impl_.self_ty(db), ty) {
             continue;
         }
+        if !declares(impl_.trait_(db).def(db)) {
+            continue;
+        }
         let snapshot = table.snapshot();
 
         let inst = table.instantiate_with_fresh_vars(impl_);
-        let impl_ty = table.instantiate_to_term(inst.self_ty(db));
-        let ty_term = table.instantiate_to_term(ty);
-        if table.unify(impl_ty, ty_term).is_err() {
+        // Match all header arguments before asking anything about constraints.
+        // An incompatible trait argument cannot make this projection hit a limit.
+        let matches = if let Some(target) = target {
+            table.unify(inst.trait_(db), target)
+        } else {
+            let impl_ty = table.instantiate_to_term(inst.self_ty(db));
+            let ty_term = table.instantiate_to_term(ty);
+            table.unify(impl_ty, ty_term)
+        };
+        if matches.is_err() {
             table.rollback_to(snapshot);
             continue;
         }
 
-        for &constraint in inst.constraints(db).list(db) {
+        let constraints = if mode == ConstraintMode::HeaderOnly {
+            &[][..]
+        } else {
+            inst.constraints(db).list(db)
+        };
+        for &constraint in constraints {
             let constraint = constraint.fold_with(db, &mut table);
             let constraint_holds = match is_goal_satisfiable(db, solve_cx, constraint) {
                 GoalSatisfiability::Satisfied(_) => true,
-                GoalSatisfiability::NeedsConfirmation { .. } => allow_needs_confirmation,
+                GoalSatisfiability::NeedsConfirmation { .. } => mode == ConstraintMode::Possible,
                 GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => false,
                 GoalSatisfiability::NormalizationLimit(limit) => return Err(limit),
             };
@@ -1416,7 +1470,8 @@ impl<'db> TraitInstId<'db> {
         self.trait_ref(db).project_assoc_ty(db, name)
     }
 
-    /// Normalize arguments of this trait instance.
+    /// Normalize arguments of this trait instance, for trait solving (see
+    /// [`crate::analysis::ty::normalize::normalize_ty_in_solver`]).
     pub(crate) fn normalize(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1426,7 +1481,9 @@ impl<'db> TraitInstId<'db> {
         let normalized_args = self
             .args(db)
             .iter()
-            .map(|&arg| crate::analysis::ty::normalize::normalize_ty(db, arg, scope, assumptions))
+            .map(|&arg| {
+                crate::analysis::ty::normalize::normalize_ty_in_solver(db, arg, scope, assumptions)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self::new(
             db,

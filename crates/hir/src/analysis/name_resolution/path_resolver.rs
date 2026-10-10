@@ -35,7 +35,10 @@ use crate::analysis::{
         generic_defaults::DefaultApplication,
         method_table::{MethodProbe, probe_method},
         normalize::normalize_ty,
-        trait_def::{TraitInstId, impls_for_ty_with_satisfied_constraints},
+        trait_def::{
+            ConstraintMode, TraitInstId, impls_for_trait_header,
+            impls_for_ty_with_satisfied_constraints,
+        },
         trait_lower::{
             TraitArgError, TraitRefLowerError, complete_candidate_impl_assoc_ty,
             complete_impl_assoc_ty, lower_candidate_impl_assoc_ty, lower_checked_impl_assoc_ty,
@@ -1305,6 +1308,7 @@ where
                 ident,
                 assumptions,
                 minter.const_bodies(),
+                None,
             ) {
                 Ok(assoc_tys) => assoc_tys,
                 Err(FindAssociatedTypeError::InfiniteBoundRecursion) => {
@@ -1836,6 +1840,7 @@ fn select_assoc_const_candidate<'db>(
                 ingot,
                 receiver.canonical(),
                 assumptions,
+                &|trait_| trait_.const_(db, name).is_some(),
             ) {
                 Ok(candidates) => candidates,
                 Err(reached) => {
@@ -1877,14 +1882,25 @@ fn select_assoc_const_candidate<'db>(
     }
 }
 
-pub(crate) fn find_associated_type<'db>(
+/// Associated-type discovery for an already-known trait projection. Preserve
+/// bound discovery, but exclude incompatible impl headers before proving them.
+pub(crate) fn find_associated_type_for_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
-    ty: Canonicalized<'db, TyId<'db>>,
+    target: Canonicalized<'db, TraitInstId<'db>>,
     name: IdentId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Result<SmallVec<(TraitInstId<'db>, TyId<'db>), 4>, FindAssociatedTypeError> {
-    find_associated_type_in_mode(db, scope, ty, name, assumptions, ConstBodyLowering::Eager)
+    let receiver = Canonicalized::new(db, target.original().self_ty(db));
+    find_associated_type_in_mode(
+        db,
+        scope,
+        receiver,
+        name,
+        assumptions,
+        ConstBodyLowering::Eager,
+        Some(target),
+    )
 }
 
 /// The bounds implied by a trait's own `Self: Trait` predicate.
@@ -1938,6 +1954,7 @@ fn find_associated_type_in_mode<'db>(
     name: IdentId<'db>,
     assumptions: PredicateListId<'db>,
     const_bodies: ConstBodyLowering,
+    target: Option<Canonicalized<'db, TraitInstId<'db>>>,
 ) -> Result<SmallVec<(TraitInstId<'db>, TyId<'db>), 4>, FindAssociatedTypeError> {
     let canonical_ty = ty.canonical();
     let original_ty = ty.original();
@@ -2002,8 +2019,9 @@ fn find_associated_type_in_mode<'db>(
         original_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
     ];
 
-    ty.with_materialized(db, |cx| -> Result<(), FindAssociatedTypeError> {
+    let discover = |cx: &mut crate::analysis::ty::scratch::MaterializedCx<'_, 'db, TyId<'db>>| -> Result<(), FindAssociatedTypeError> {
         let lhs_ty = cx.query();
+        let target_inst = target.as_ref().map(|target| cx.materialize(target.original()));
 
         // Only consult explicit bounds for type-parameter receivers; concrete
         // receivers get their candidates from impl lookup to avoid spurious
@@ -2034,10 +2052,11 @@ fn find_associated_type_in_mode<'db>(
         // traits on external types and external traits on local types are both visible.
         if !matches!(original_ty.data(db), TyData::TyParam(_)) {
             for ingot in search_ingots.into_iter().flatten() {
-                for impl_ in
-                    impls_for_ty_with_satisfied_constraints(db, ingot, canonical_ty, assumptions)
-                        .map_err(FindAssociatedTypeError::NormalizationLimit)?
-                {
+                let implementors = match &target {
+                    Some(target) => impls_for_trait_header(db, ingot, target.canonical(), assumptions, ConstraintMode::Proved),
+                    None => impls_for_ty_with_satisfied_constraints(db, ingot, canonical_ty, assumptions, &|trait_| trait_.assoc_ty(db, name).is_some()),
+                }.map_err(FindAssociatedTypeError::NormalizationLimit)?;
+                for impl_ in implementors {
                     let impl_ = match const_bodies {
                         ConstBodyLowering::Eager => {
                             let Some(impl_) = complete_impl_assoc_ty(db, impl_, name) else {
@@ -2055,6 +2074,12 @@ fn find_associated_type_in_mode<'db>(
                     };
                     if let Some(Some((inst, assoc_ty))) =
                         cx.with_impl_assoc_ty(impl_, lhs_ty, name, |cx, inst, assoc_ty| {
+                            if let Some(target_inst) = target_inst {
+                                cx.unify::<TraitInstId<'db>>(inst, target_inst).ok()?;
+                                if cx.try_extract::<TraitInstId<'db>>(target_inst) != target.as_ref().map(Canonicalized::original) {
+                                    return None;
+                                }
+                            }
                             Some((
                                 cx.try_extract::<TraitInstId<'db>>(inst)?,
                                 cx.try_extract::<TyId<'db>>(assoc_ty)?,
@@ -2128,7 +2153,11 @@ fn find_associated_type_in_mode<'db>(
         }
 
         Ok(())
-    })?;
+    };
+    match &target {
+        Some(target) => target.with_materialized_self_ty(db, discover),
+        None => ty.with_materialized(db, discover),
+    }?;
 
     // Supertrait and contextual bounds can reach the same projection, e.g. a
     // method that restates a bound the enclosing trait already implies. Two
@@ -2456,4 +2485,89 @@ fn pick_type_domain_from_bucket<'db>(
             }
             err => PathResError::from_name_res_error(err, path),
         })
+}
+
+#[cfg(test)]
+mod trait_targeted_lookup_tests {
+    use super::*;
+    use crate::{
+        analysis::ty::{
+            ty_def::{Kind, TyVarSort},
+            unify::UnificationTable,
+        },
+        test_db::{HirAnalysisTestDb, find_func},
+    };
+
+    #[test]
+    fn trait_header_matching_cannot_merge_distinct_caller_arguments() {
+        for reverse in [false, true] {
+            let source = "trait Tr<X, Y> { type Out }\nstruct S {}\nimpl<T> Tr<T, T> for S { type Out = bool }\nfn subject(x: own S) {}\n";
+            let mut db = HirAnalysisTestDb::default();
+            let file = db.new_stand_alone("targeted_trait_merge.fe".into(), source);
+            let (top, _) = db.top_mod(file);
+            db.assert_no_diags(top);
+            let function = find_func(&db, top, "subject");
+            let self_ty = function.arg_tys(&db)[0].instantiate_identity();
+            assert!(self_ty.as_view(&db).is_none());
+            assert!(!self_ty.has_invalid(&db));
+            let mut table = UnificationTable::new(&db);
+            let first = table.new_var(TyVarSort::General, &Kind::Star);
+            let second = table.new_var(TyVarSort::General, &Kind::Star);
+            let args = if reverse {
+                vec![self_ty, second, first]
+            } else {
+                vec![self_ty, first, second]
+            };
+            let target = TraitInstId::new_simple(&db, top.all_traits(&db)[0], args);
+            let candidates = find_associated_type_for_trait(
+                &db,
+                function.scope(),
+                Canonicalized::new(&db, target),
+                IdentId::new(&db, "Out"),
+                PredicateListId::empty_list(&db),
+            )
+            .unwrap();
+            assert!(candidates.is_empty());
+        }
+    }
+
+    #[test]
+    fn trait_arguments_absent_from_self_keep_their_caller_identity() {
+        for generic in [true, false] {
+            let implementation = if generic {
+                "impl<T> Tr<T> for S { type Out = T }"
+            } else {
+                "impl Tr<u8> for S { type Out = bool }"
+            };
+            let source = format!(
+                "trait Tr<X> {{ type Out }}\nstruct S {{}}\n{implementation}\nfn subject(x: own S) {{}}\n"
+            );
+            let mut db = HirAnalysisTestDb::default();
+            let file = db.new_stand_alone("targeted_trait_argument.fe".into(), &source);
+            let (top, _) = db.top_mod(file);
+            db.assert_no_diags(top);
+            let function = find_func(&db, top, "subject");
+            let self_ty = function.arg_tys(&db)[0].instantiate_identity();
+            assert!(self_ty.as_view(&db).is_none());
+            assert!(!self_ty.has_invalid(&db));
+            let mut table = UnificationTable::new(&db);
+            let variable = table.new_var(TyVarSort::General, &Kind::Star);
+            let target =
+                TraitInstId::new_simple(&db, top.all_traits(&db)[0], vec![self_ty, variable]);
+            let candidates = find_associated_type_for_trait(
+                &db,
+                function.scope(),
+                Canonicalized::new(&db, target),
+                IdentId::new(&db, "Out"),
+                PredicateListId::empty_list(&db),
+            )
+            .unwrap();
+            if generic {
+                assert_eq!(candidates.as_slice(), &[(target, variable)]);
+            } else {
+                // A pure lookup cannot make the caller's unknown argument u8.
+                assert!(candidates.is_empty());
+            }
+        }
+    }
 }

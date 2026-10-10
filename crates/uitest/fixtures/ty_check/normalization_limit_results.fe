@@ -1,0 +1,41 @@
+// The results of associated types are limited like the types they come
+// from: in depth, and in total size counted as a tree.
+trait Tr {
+    type Out
+}
+
+struct Z {}
+
+struct S<T> {
+    t: T,
+}
+
+struct W<T> {
+    t: T,
+}
+
+impl Tr for Z {
+    type Out = u8
+}
+
+// Each step wraps the result 150 levels deeper.
+impl<T: Tr> Tr for S<T> {
+    type Out = W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<W<T::Out>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+}
+
+fn deep(_ x: <S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<Z>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> as Tr>::Out) {}
+
+trait Twice {
+    type Out
+}
+
+impl Twice for Z {
+    type Out = u8
+}
+
+// Each step doubles the result as a tree.
+impl<T: Twice> Twice for S<T> {
+    type Out = (T::Out, T::Out)
+}
+
+fn doubling(_ x: <S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<S<Z>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> as Twice>::Out) {}

@@ -94,7 +94,7 @@ fn normalize_assoc_binding<'db>(
     assumptions: super::PredicateListId<'db>,
 ) -> Result<TyId<'db>, NormalizationLimit> {
     let ty = ty.fold_with(db, table);
-    crate::analysis::ty::normalize::normalize_ty(db, ty, scope, assumptions)
+    crate::analysis::ty::normalize::normalize_ty_in_solver(db, ty, scope, assumptions)
 }
 
 /// Whether a candidate matches a goal, or the limit that deciding it reached.
