@@ -16,7 +16,9 @@ use crate::analysis::{
             FuncBodyDiag, ImplDiag, MustUseSubject, TraitConstraintDiag, TraitLowerDiag,
             TyDiagCollection, TyLowerDiag,
         },
+        normalize::grouped,
         trait_def::TraitInstId,
+        trait_resolution::TraitSolveCompletion,
         ty_check::{EffectParamOwner, RecordLike},
         ty_def::{TyData, TyId, TyVarSort},
     },
@@ -4396,6 +4398,40 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::TraitBoundUndecided {
+                primary,
+                goal,
+                stop,
+                required_by,
+            } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "cannot decide whether `{}` implements `{}`",
+                        goal.self_ty(db).pretty_print(db),
+                        goal.pretty_print(db, false)
+                    ),
+                    span: primary.resolve(db),
+                }];
+                if let Some(required_by) = required_by {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format_call_constraint_source(db, required_by),
+                        span: required_by.bound_span.resolve(db),
+                    });
+                }
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "trait bound cannot be decided".to_string(),
+                    sub_diagnostics,
+                    notes: vec![format!(
+                        "the trait solver stopped before it found a proof or a counterexample: {}",
+                        undecided_reason(*stop)
+                    )],
+                    error_code,
+                }
+            }
+
             Self::AmbiguousTraitInst {
                 primary,
                 cands,
@@ -5774,6 +5810,30 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     error_code,
                 }
             }
+        }
+    }
+}
+
+/// Why the trait solver stopped without an answer, in words.
+fn undecided_reason(stop: TraitSolveCompletion) -> String {
+    match stop {
+        TraitSolveCompletion::Saturated => "it found no unique answer".to_string(),
+        TraitSolveCompletion::RootAnswerLimit { limit } => {
+            format!("it reached its limit of {} answers", grouped(limit))
+        }
+        TraitSolveCompletion::StepLimit { limit } => {
+            format!("it reached its limit of {} steps", grouped(limit))
+        }
+        TraitSolveCompletion::TableLimit { limit }
+        | TraitSolveCompletion::PendingWorkLimit { limit } => {
+            format!("it reached its limit of {} subgoals", grouped(limit))
+        }
+        TraitSolveCompletion::MaximumTypeDepth => {
+            "the types in the subgoals kept growing".to_string()
+        }
+        TraitSolveCompletion::Cycle => "the bound depends on itself".to_string(),
+        TraitSolveCompletion::NormalizationLimit(limit) => {
+            format!("resolving associated types {}", limit.reason())
         }
     }
 }

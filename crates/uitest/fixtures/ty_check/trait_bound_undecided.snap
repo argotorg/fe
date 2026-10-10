@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/trait_bound_undecided.fe
+---
+error[8-0097]: trait bound cannot be decided
+   ┌─ trait_bound_undecided.fe:43:5
+   │
+43 │     w.show()
+   │     ^^^^^^^^ cannot decide whether `W<u8>` implements `Show`
+   │
+   = the trait solver stopped before it found a proof or a counterexample: the types in the subgoals kept growing
+
+error[8-0097]: trait bound cannot be decided
+   ┌─ trait_bound_undecided.fe:47:7
+   │
+35 │ impl<T: Show> Needs<T> {
+   │         ---- required by this bound on `go`
+   ·
+47 │     n.go()
+   │       ^^ cannot decide whether `W<u8>` implements `Show`
+   │
+   = the trait solver stopped before it found a proof or a counterexample: the types in the subgoals kept growing
+
+error[8-0097]: trait bound cannot be decided
+   ┌─ trait_bound_undecided.fe:56:5
+   │
+50 │ fn show_it<T: Show>(t: T) -> u8 {
+   │               ---- required by this bound on `show_it`
+   ·
+56 │     show_it(t: w)
+   │     ^^^^^^^ cannot decide whether `W<u8>` implements `Show`
+   │
+   = the trait solver stopped before it found a proof or a counterexample: the types in the subgoals kept growing

@@ -2,6 +2,7 @@ use super::{
     adt_def::AdtCycleMember,
     provider::{ProviderAddressSpace, ProviderLayoutFailure},
     trait_def::TraitInstId,
+    trait_resolution::TraitSolveCompletion,
     ty_check::{RecordLike, TraitOps},
     ty_def::{BorrowKind, CapabilityKind, Kind, TyId},
 };
@@ -766,6 +767,14 @@ pub enum BodyDiag<'db> {
         required_by: Option<CallConstraintDiagInfo<'db>>,
     },
 
+    /// The trait solver stopped before it could prove or refute the bound.
+    TraitBoundUndecided {
+        primary: DynLazySpan<'db>,
+        goal: TraitInstId<'db>,
+        stop: TraitSolveCompletion,
+        required_by: Option<CallConstraintDiagInfo<'db>>,
+    },
+
     InvisibleAmbiguousTrait {
         primary: DynLazySpan<'db>,
         traits: ThinVec<Trait<'db>>,
@@ -1049,6 +1058,7 @@ impl<'db> BodyDiag<'db> {
             Self::AmbiguousInherentMethodCall { .. } => 25,
             Self::AmbiguousTrait { .. } => 26,
             Self::AmbiguousTraitInst { .. } => 27,
+            Self::TraitBoundUndecided { .. } => 97,
             Self::InvisibleAmbiguousTrait { .. } => 28,
             Self::NotValue { .. } => 30,
             Self::TypeAnnotationNeeded { .. } => 31,

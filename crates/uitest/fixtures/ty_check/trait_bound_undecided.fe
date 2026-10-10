@@ -1,0 +1,57 @@
+// `W<T>: Show` needs `W<A<T>>: Show`, which needs `W<A<A<T>>>: Show`, and so
+// on: no finite proof exists, and the solver stops when the types keep
+// growing. The bound is undecided, not ambiguous: there is only one impl.
+trait Show {
+    fn show(self) -> u8
+}
+
+impl Show for u8 {
+    fn show(self) -> u8 {
+        self
+    }
+}
+
+struct A<T> {
+    t: T,
+}
+
+struct W<T> {
+    t: T,
+}
+
+impl<T> Show for W<T>
+where
+    W<A<T>>: Show,
+{
+    fn show(self) -> u8 {
+        7
+    }
+}
+
+struct Needs<T: Show> {
+    t: T,
+}
+
+impl<T: Show> Needs<T> {
+    fn go(self) -> u8 {
+        self.t.show()
+    }
+}
+
+fn direct() -> u8 {
+    let w: W<u8> = W { t: 1 }
+    w.show()
+}
+
+fn through_a_bound(n: Needs<W<u8>>) -> u8 {
+    n.go()
+}
+
+fn show_it<T: Show>(t: T) -> u8 {
+    t.show()
+}
+
+fn through_a_call() -> u8 {
+    let w: W<u8> = W { t: 1 }
+    show_it(t: w)
+}

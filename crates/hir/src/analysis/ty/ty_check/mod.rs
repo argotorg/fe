@@ -2373,11 +2373,24 @@ impl<'db> TyChecker<'db> {
                             } => self.call_constraint_diag_info(callable_def, constraint_idx),
                             env::TraitObligationOrigin::GenericConfirmation => None,
                         };
-                        self.push_diag(BodyDiag::AmbiguousTraitInst {
-                            primary: obligation.span.clone(),
-                            cands: candidates.into_iter().collect(),
-                            required_by,
-                        });
+                        // Two distinct answers make the bound ambiguous. Fewer
+                        // than two after an early stop means the solver could
+                        // not decide it; "multiple implementations" would be
+                        // untrue.
+                        if candidates.len() < 2 && !completion.is_saturated() {
+                            self.push_diag(BodyDiag::TraitBoundUndecided {
+                                primary: obligation.span.clone(),
+                                goal,
+                                stop: completion,
+                                required_by,
+                            });
+                        } else {
+                            self.push_diag(BodyDiag::AmbiguousTraitInst {
+                                primary: obligation.span.clone(),
+                                cands: candidates.into_iter().collect(),
+                                required_by,
+                            });
+                        }
                         return TraitObligationOutcome::Discharged;
                     }
 
