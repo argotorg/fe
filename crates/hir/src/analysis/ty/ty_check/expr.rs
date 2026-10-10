@@ -686,11 +686,6 @@ impl<'db> TyChecker<'db> {
         inner_expr: ExprId,
         target_ty: Partial<crate::hir_def::TypeId<'db>>,
     ) -> ExprProp<'db> {
-        let inner_prop = self.check_expr_unknown(inner_expr);
-        if inner_prop.ty.has_invalid(self.db) {
-            return ExprProp::invalid(self.db);
-        }
-
         let Some(hir_target_ty) = target_ty.to_opt() else {
             return ExprProp::invalid(self.db);
         };
@@ -698,6 +693,22 @@ impl<'db> TyChecker<'db> {
         let span = expr.span(self.body()).into_cast_expr().ty();
         let target_ty = self.lower_ty(hir_target_ty, span, true);
         if target_ty.has_invalid(self.db) {
+            return ExprProp::invalid(self.db);
+        }
+
+        // A fixed String cast supplies the width of a string literal, just
+        // as an annotation does. Other casts still infer the source type
+        // independently before checking whether the conversion is allowed.
+        let inner_prop = if target_ty.is_string(self.db)
+            && matches!(
+                inner_expr.data(self.db, self.body()),
+                Partial::Present(Expr::Lit(LitKind::String(_)))
+            ) {
+            self.check_expr(inner_expr, target_ty)
+        } else {
+            self.check_expr_unknown(inner_expr)
+        };
+        if inner_prop.ty.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
         }
 
