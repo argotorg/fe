@@ -68,7 +68,7 @@ use crate::analysis::ty::{
     },
     ty_check::callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization},
     ty_def::{CapabilityKind, PrimTy, TyBase, TyData, prim_int_bits},
-    ty_error::{diag_from_invalid_cause, first_invalid_ty_cause, is_const_eval_fault},
+    ty_error::{diag_from_invalid_cause, first_invalid_ty_cause},
     unify::UnificationTable,
 };
 use crate::analysis::{
@@ -1495,7 +1495,7 @@ impl<'db> TyChecker<'db> {
         }
         let call: DynLazySpan<'db> = expr.span(self.body()).into();
         if let Some(cause) = first_invalid_ty_cause(self.db, ret_ty)
-            && is_const_eval_fault(&cause)
+            && cause.const_eval_fault().is_some()
             && let Some(fault) = diag_from_invalid_cause(call.clone(), &cause)
         {
             self.push_diag(BodyDiag::CallReturnTypeConstFault {
@@ -3600,7 +3600,7 @@ impl<'db> TyChecker<'db> {
                     };
 
                     if let Some(diag) =
-                        err.into_diag(self.db, path, path_span.clone(), expected_kind)
+                        err.into_ty_diag(self.db, path, path_span.clone(), expected_kind)
                     {
                         self.push_diag(diag)
                     }

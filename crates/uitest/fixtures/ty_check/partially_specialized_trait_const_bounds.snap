@@ -10,13 +10,13 @@ error[6-0003]: trait bound is not satisfied
    │                               -------------------------- required by this bound on `need`
    ·
 22 │ fn wrong<T, U: Has<5>>() { need<T, 3, U>() }
-   │                            ^^^^^^^^^^^^^ `U` doesn't implement `Has<4>`
+   │                            ^^^^^^^^^^^^^ `U` doesn't implement `Has<Marker<T, 3>::LEN>`
 
 error[6-0003]: trait bound is not satisfied
    ┌─ partially_specialized_trait_const_bounds.fe:22:36
    │
 22 │ fn wrong<T, U: Has<5>>() { need<T, 3, U>() }
-   │                                    ^ `U` doesn't implement `Has<4>`
+   │                                    ^ `U` doesn't implement `Has<Marker<T, 3>::LEN>`
 
 error[6-0003]: trait bound is not satisfied
    ┌─ partially_specialized_trait_const_bounds.fe:24:37

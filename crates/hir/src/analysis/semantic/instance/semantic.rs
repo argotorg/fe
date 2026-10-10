@@ -46,7 +46,7 @@ use crate::{
             },
         },
     },
-    hir_def::{Body, CallableDef, Expr, ExprId, Partial, scope_graph::ScopeId},
+    hir_def::{CallableDef, Expr, ExprId, Partial, scope_graph::ScopeId},
     semantic::{
         AssignedLayoutBindingEnv, EffectEnvView, EffectRequirement, EffectRequirementKey,
         LayoutViewKind, ProviderBinding, ProviderSource, ResolvedEffectBinding,
@@ -882,99 +882,6 @@ fn replan_call_site<'db>(
     Ok(())
 }
 
-/// An evaluation fault with the expression it occurred at and its label.
-/// Type checking leaves these to concrete demand; any other invalid type has
-/// an upstream report.
-fn const_eval_fault<'db>(cause: &InvalidCause<'db>) -> Option<(Body<'db>, ExprId, String)> {
-    match cause {
-        InvalidCause::ConstEvalUnsupported { body, expr } => Some((
-            *body,
-            *expr,
-            "the expression cannot be evaluated at compile time".to_string(),
-        )),
-        InvalidCause::ConstEvalAssertionFailed { body, expr, .. } => Some((
-            *body,
-            *expr,
-            "assertion failed in const context".to_string(),
-        )),
-        InvalidCause::ConstEvalNonConstCall { body, expr } => Some((
-            *body,
-            *expr,
-            "non-const function call in const context".to_string(),
-        )),
-        InvalidCause::ConstEvalDivisionByZero { body, expr } => Some((
-            *body,
-            *expr,
-            "division by zero in const context".to_string(),
-        )),
-        InvalidCause::ConstEvalOutOfBounds { body, expr } => Some((
-            *body,
-            *expr,
-            "index out of bounds in const context".to_string(),
-        )),
-        InvalidCause::ConstEvalInvalidOperation {
-            body,
-            expr,
-            message,
-        } => Some((
-            *body,
-            *expr,
-            format!("invalid operation in const context: {message}"),
-        )),
-        InvalidCause::ConstEvalInvalidBorrow { body, expr } => {
-            Some((*body, *expr, "invalid borrow in const context".to_string()))
-        }
-        InvalidCause::ConstEvalInvalidProviderUse { body, expr } => Some((
-            *body,
-            *expr,
-            "invalid effect provider in const context".to_string(),
-        )),
-        InvalidCause::ConstEvalVariantMismatch { body, expr } => Some((
-            *body,
-            *expr,
-            "variant mismatch in const context".to_string(),
-        )),
-        InvalidCause::ConstEvalUninitializedLocal { body, expr } => Some((
-            *body,
-            *expr,
-            "uninitialized value in const context".to_string(),
-        )),
-        InvalidCause::ConstEvalInvariant {
-            body,
-            expr,
-            message,
-        } => Some((
-            *body,
-            *expr,
-            format!("compiler invariant failed during const evaluation: {message}"),
-        )),
-        InvalidCause::ConstEvalArithmeticOverflow { body, expr } => Some((
-            *body,
-            *expr,
-            "arithmetic overflow in const context".to_string(),
-        )),
-        InvalidCause::ConstEvalNegativeExponent { body, expr } => Some((
-            *body,
-            *expr,
-            "negative exponent in const context".to_string(),
-        )),
-        InvalidCause::ConstEvalStepLimitExceeded { body, expr } => Some((
-            *body,
-            *expr,
-            "const evaluation exceeded the step limit".to_string(),
-        )),
-        InvalidCause::ConstEvalRecursionLimitExceeded { body, expr } => Some((
-            *body,
-            *expr,
-            "const evaluation exceeded the recursion limit".to_string(),
-        )),
-        InvalidCause::ConstEvalRecursiveConst { body, expr } => {
-            Some((*body, *expr, "recursive constant definition".to_string()))
-        }
-        _ => None,
-    }
-}
-
 fn invalid_size_diagnostic<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -1000,7 +907,7 @@ fn invalid_size_diagnostic<'db>(
         RuntimeSizeError::UnavailableConcrete => {
             "concrete type size could not be determined".to_string()
         }
-        RuntimeSizeError::InvalidType(cause) => match const_eval_fault(&cause) {
+        RuntimeSizeError::InvalidType(cause) => match cause.const_eval_fault() {
             Some((body, expr, message)) => {
                 diagnostic.push_secondary(
                     message.clone(),
@@ -1353,7 +1260,7 @@ impl<'db> SemanticInstance<'db> {
                 .insert(ty)
                 .then(|| concrete_layout_fault(db, ty, &|ty| self.normalized_ty(db, ty)))??;
             // A blocked body's other invalid types were reported upstream.
-            if body.is_none() && const_eval_fault(&cause).is_none() {
+            if body.is_none() && cause.const_eval_fault().is_none() {
                 return None;
             }
             Some(invalid_size_diagnostic(

@@ -1,35 +1,49 @@
 ---
 source: crates/uitest/tests/ty_check.rs
-assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/const_eval/borrow_out_of_bounds.fe
 ---
-error[3-0050]: index out of bounds in const context
-  ┌─ borrow_out_of_bounds.fe:9:13
-  │
-9 │     let a = ref values[idx]
-  │             ^^^^^^^^^^^^^^^ index is outside the evaluated value
+error[3-0059]: index out of bounds in const context
+   ┌─ borrow_out_of_bounds.fe:44:22
+   │
+ 9 │     let a = ref values[idx]
+   │             --------------- index is outside the evaluated value
+   ·
+44 │ const BORROWED: u8 = borrowed(3)
+   │                      ^^^^^^^^^^^ while evaluating this
 
-error[3-0050]: index out of bounds in const context
-   ┌─ borrow_out_of_bounds.fe:15:13
+error[3-0059]: index out of bounds in const context
+   ┌─ borrow_out_of_bounds.fe:45:26
    │
 15 │     let a = mut values[idx]
-   │             ^^^^^^^^^^^^^^^ index is outside the evaluated value
+   │             --------------- index is outside the evaluated value
+   ·
+45 │ const BORROWED_MUT: u8 = borrowed_mut(3)
+   │                          ^^^^^^^^^^^^^^^ while evaluating this
 
-error[3-0050]: index out of bounds in const context
-   ┌─ borrow_out_of_bounds.fe:21:5
+error[3-0059]: index out of bounds in const context
+   ┌─ borrow_out_of_bounds.fe:46:22
    │
 21 │     values[idx].get()
-   │     ^^^^^^^^^^^^^^^^^ index is outside the evaluated value
+   │     ----------------- index is outside the evaluated value
+   ·
+46 │ const RECEIVER: u8 = receiver(3)
+   │                      ^^^^^^^^^^^ while evaluating this
 
-error[3-0050]: index out of bounds in const context
-   ┌─ borrow_out_of_bounds.fe:25:13
+error[3-0059]: index out of bounds in const context
+   ┌─ borrow_out_of_bounds.fe:47:25
    │
 25 │     let a = ref values[idx]
-   │             ^^^^^^^^^^^^^^^ index is outside the evaluated value
+   │             --------------- index is outside the evaluated value
+   ·
+47 │ const THROUGH_REF: u8 = through_ref(3)
+   │                         ^^^^^^^^^^^^^^ while evaluating this
 
-error[3-0050]: index out of bounds in const context
-   ┌─ borrow_out_of_bounds.fe:40:13
+error[3-0059]: index out of bounds in const context
+   ┌─ borrow_out_of_bounds.fe:48:24
    │
 40 │     let a = ref values[idx].x
-   │             ^^^^^^^^^^^^^^^^^ index is outside the evaluated value
+   │             ----------------- index is outside the evaluated value
+   ·
+48 │ const FROM_CONST: u8 = from_const(3)
+   │                        ^^^^^^^^^^^^^ while evaluating this

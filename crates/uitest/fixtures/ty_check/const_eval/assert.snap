@@ -3,24 +3,33 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/const_eval/assert.fe
 ---
-error[3-0036]: assertion failed in const context
-   ┌─ assert.fe:15:5
+error[3-0059]: assertion failed in const context
+   ┌─ assert.fe:19:26
    │
 15 │     assert!(false)
-   │     ^^^^^^^^^^^^^^ `assert!` evaluated to `false`
+   │     -------------- `assert!` evaluated to `false`
+   ·
+19 │ const PLAIN_BAD: usize = fail_plain()
+   │                          ^^^^^^^^^^^^ while evaluating this
 
-error[3-0036]: assertion failed in const context
-   ┌─ assert.fe:22:5
+error[3-0059]: assertion failed in const context
+   ┌─ assert.fe:26:28
    │
 22 │     assert!(false, "ctfe boom")
-   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `assert!` evaluated to `false`
+   │     --------------------------- `assert!` evaluated to `false`
+   ·
+26 │ const MESSAGE_BAD: usize = fail_message()
+   │                            ^^^^^^^^^^^^^^ while evaluating this
    │
    = assertion message: ctfe boom
 
-error[3-0036]: assertion failed in const context
-   ┌─ assert.fe:29:5
+error[3-0059]: assertion failed in const context
+   ┌─ assert.fe:37:27
    │
 29 │     assert!(false, "nested boom")
-   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `assert!` evaluated to `false`
+   │     ----------------------------- `assert!` evaluated to `false`
+   ·
+37 │ const NESTED_BAD: usize = caller()
+   │                           ^^^^^^^^ while evaluating this
    │
    = assertion message: nested boom

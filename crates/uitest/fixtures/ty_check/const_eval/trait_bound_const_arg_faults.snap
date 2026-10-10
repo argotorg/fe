@@ -1,0 +1,79 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_eval/trait_bound_const_arg_faults.fe
+---
+error[3-0024]: non-const function call in const context
+   ┌─ trait_bound_const_arg_faults.fe:14:37
+   │
+14 │ fn where_clause<T>() where T: Has<{ runtime() }> {}
+   │                                     ^^^^^^^^^ calls in const context must be `const fn`
+
+error[3-0024]: non-const function call in const context
+   ┌─ trait_bound_const_arg_faults.fe:18:12
+   │
+18 │ impl Has<{ runtime() }> for u8 {}
+   │            ^^^^^^^^^ calls in const context must be `const fn`
+
+error[3-0025]: division by zero in const context
+   ┌─ trait_bound_const_arg_faults.fe:12:26
+   │
+12 │ fn inline_bound<T: Has<{ 1 / 0 }>>() {}
+   │                          ^^^^^ cannot divide by zero
+
+error[3-0025]: division by zero in const context
+   ┌─ trait_bound_const_arg_faults.fe:20:12
+   │
+20 │ impl Has<{ 4 / 0 }> for Plain<1> {}
+   │            ^^^^^ cannot divide by zero
+
+error[3-0025]: division by zero in const context
+   ┌─ trait_bound_const_arg_faults.fe:22:36
+   │
+22 │ trait Defaulted<const N: usize = { 5 / 0 }> {}
+   │                                    ^^^^^ cannot divide by zero
+
+error[3-0025]: division by zero in const context
+   ┌─ trait_bound_const_arg_faults.fe:26:22
+   │
+26 │ const FAULT: usize = 6 / 0
+   │                      ^^^^^ cannot divide by zero
+
+error[3-0025]: division by zero in const context
+   ┌─ trait_bound_const_arg_faults.fe:56:46
+   │
+56 │ fn qualified<T: Sized<1>>() -> <T as Sized<{ 9 / 0 }>>::Item { todo() }
+   │                                              ^^^^^ cannot divide by zero
+
+error[3-0034]: arithmetic overflow in const context
+   ┌─ trait_bound_const_arg_faults.fe:16:25
+   │
+16 │ struct Bounded<T: Has<{ 2 - 3 }>> {}
+   │                         ^^^^^ checked arithmetic overflowed during const evaluation
+
+error[3-0059]: division by zero in const context
+   ┌─ trait_bound_const_arg_faults.fe:38:32
+   │
+34 │ type Inverse<const N: usize> = [u8; { 7 / N }]
+   │                                       ----- cannot divide by zero
+   ·
+38 │ fn applies_faulting_default<T: Shaped<0>>() {}
+   │                                ^^^^^^^^^ in a default this reference applies
+
+error[3-0059]: division by zero in const context
+   ┌─ trait_bound_const_arg_faults.fe:50:33
+   │
+46 │ impl<const N: usize> Type for Width<N> { type Item = [u8; { 8 / N }] }
+   │                                                             ----- cannot divide by zero
+   ·
+50 │ fn projects_faulting_default<X: Projected<Width<0>>>() {}
+   │                                 ^^^^^^^^^^^^^^^^^^^ in a default this reference applies
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_bound_const_arg_faults.fe:32:15
+   │
+30 │ fn valid<T: Has<{ 1 / 1 }>>() {}
+   │             -------------- required by this bound on `valid`
+31 │
+32 │ fn caller() { valid<bool>() }
+   │               ^^^^^^^^^^^ `bool` doesn't implement `Has<1>`

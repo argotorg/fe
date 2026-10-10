@@ -1,0 +1,40 @@
+// The types a trait reference binds to associated types, and the bounds an
+// associated type declares, are checked like any other written type or
+// trait reference, including the well-formedness of a bound's arguments.
+fn runtime() -> usize { 1 }
+
+trait Has { type Item }
+
+trait Sized<const N: usize> {}
+
+fn unknown<T: Has<Item = Missing>>() {}
+
+fn mistyped<T: Has<Item = [u8; true]>>() {}
+
+fn faulting<T>() where T: Has<Item = [u8; { 1 / 0 }]> {}
+
+trait Sub: Has<Item = [u8; { runtime() }]> {}
+
+trait UnknownBound { type Item: Missing }
+
+trait ArityBound { type Item: Sized<1, 2> }
+
+trait FaultingBound { type Item: Sized<{ 2 / 0 }> }
+
+trait ValidBound { type Item: Sized<1> }
+
+fn valid<T: Has<Item = [u8; 2]>>() {}
+
+trait Gate {}
+
+struct Guarded<T: Gate> {}
+
+trait Holds<T> {}
+
+trait IllFormedBound { type Item: Holds<Guarded<bool>> }
+
+trait Base {}
+
+trait Derived<T>: Base {}
+
+trait InheritedBound { type Item: Derived<u8> }

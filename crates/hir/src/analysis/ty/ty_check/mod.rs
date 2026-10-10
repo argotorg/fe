@@ -34,10 +34,10 @@ use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_const_ty, walk_t
 use crate::hir_def::{CallableDef, ConstGenericArgValue, ImplTrait, Trait};
 use crate::{
     hir_def::{
-        BinOp, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericParam,
-        GenericParamOwner, LitKind, ManualContractRootAttr, Partial, Pat, PatId, PathId,
-        StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId,
-        WhereClauseOwner,
+        BinOp, Body, CondId, Const, Contract, ContractRecvArm, Expr, ExprId, Func, GenericArg,
+        GenericParam, GenericParamOwner, LitKind, ManualContractRootAttr, Partial, Pat, PatId,
+        PathId, StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId, TypeId as HirTyId,
+        TypeKind, WhereClauseOwner, scope_graph::ScopeId,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, types::LazyTySpan,
@@ -72,7 +72,7 @@ use super::{
     binder::Binder,
     canonical::Canonical,
     diagnostics::{
-        BodyDiag, CallConstraintDiagInfo, FuncBodyDiag, StaticAssertComparisonValues,
+        BodyDiag, CallConstraintDiagInfo, FuncBodyDiag, RevealedBy, StaticAssertComparisonValues,
         TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
     },
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key},
@@ -98,17 +98,18 @@ use super::{
 };
 use crate::analysis::semantic::SemanticCodeRegionRef;
 use crate::analysis::semantic::{
-    BlockedInfo, ConstDependency, ConstUsePolicy, CtfeConfig, EffectProviderSubst, EvalOutcome,
-    GenericSubst, ImplEnv, RuntimeSizeError, SemConstId, SemConstScalar, SemConstValue, SemOrigin,
-    SemanticInstanceKey, const_computation_for_instance, describe_const_computation,
-    eval_body_owner_const, get_or_build_semantic_instance, reify_runtime_const_for_ty,
-    runtime_size_bytes_with_source,
+    BlockedInfo, ConstDependency, ConstUsePolicy, CtfeConfig, CtfeError, EffectProviderSubst,
+    EvalFailure, EvalOutcome, GenericSubst, ImplEnv, RuntimeSizeError, SemConstId, SemConstScalar,
+    SemConstValue, SemOrigin, SemanticInstanceKey, const_computation_for_instance,
+    describe_const_computation, eval_body_owner_const, get_or_build_semantic_instance,
+    reify_runtime_const_for_ty, runtime_size_bytes_with_source,
 };
 use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::{
     const_ty::{
         BodyHoleSite, CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleAnchor,
         LoweringContext, invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag,
+        root_ctfe_error,
     },
     normalize::{normalize_ty, normalize_with_trait_evidence},
     pattern_ir::{
@@ -118,14 +119,15 @@ use crate::analysis::ty::{
         PatternDestructureMode, apply_pattern_borrow_mode, destructure_pattern_source,
     },
     ty_error::{
-        collect_ty_lower_errors, diag_from_invalid_cause, normalization_limit_diag,
-        qualified_path_wf_diags,
+        collect_hir_ty_diags, collect_ty_lower_errors, diag_from_invalid_cause,
+        normalization_limit_diag, path_generic_args, qualified_path_wf_diags,
     },
 };
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
-        PathRes, PathResError, diagnostics::PathResDiag, resolve_path_with_observer_and_minter,
+        PathRes, PathResError, PathResErrorKind, diagnostics::PathResDiag, resolve_path,
+        resolve_path_with_observer_and_minter,
     },
     ty::{
         ty_def::{TyFlags, inference_keys},
@@ -937,6 +939,63 @@ fn predicate_names_a_type<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> b
     )
 }
 
+/// What an effect key that is neither a valid type nor trait key reports. A
+/// key whose path names a type or trait reports the error written in it, at
+/// that error; only a key naming neither is an unresolved effect.
+pub(crate) fn invalid_effect_key_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: EffectParamOwner<'db>,
+    idx: usize,
+    key: HirTyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let span = owner.effect_param_ty_span(db, idx);
+    let written = match key.data(db) {
+        TypeKind::Path(Partial::Present(path)) => {
+            let path_span = span.clone().into_path_type().path();
+            let arg_diags = || {
+                path_generic_args(db, *path, path_span.clone())
+                    .filter_map(|(arg, span)| match arg {
+                        GenericArg::Type(arg) => {
+                            Some((arg.ty.to_opt()?, span.into_type_arg().ty()))
+                        }
+                        GenericArg::AssocType(binding) => {
+                            Some((binding.ty.to_opt()?, span.into_assoc_type_arg().ty()))
+                        }
+                        GenericArg::Const(_) => None,
+                    })
+                    .flat_map(|(ty, span)| collect_hir_ty_diags(db, scope, ty, span, assumptions))
+                    .collect::<Vec<_>>()
+            };
+            match resolve_path(db, *path, scope, assumptions, false) {
+                Ok(PathRes::Ty(_) | PathRes::TyAlias(..)) => {
+                    collect_hir_ty_diags(db, scope, key, span, assumptions)
+                }
+                Ok(PathRes::Trait(_)) => arg_diags(),
+                // A fault in the reference's own arguments, such as a const
+                // argument failing evaluation, is reported where it is written.
+                Err(err)
+                    if !matches!(err.kind, PathResErrorKind::NotFound { .. })
+                        && err.is_on_path(db, *path) =>
+                {
+                    err.into_trait_ref_diag(db, *path, path_span)
+                        .into_iter()
+                        .collect()
+                }
+                Err(_) => arg_diags(),
+                Ok(_) => Vec::new(),
+            }
+        }
+        _ => collect_hir_ty_diags(db, scope, key, span, assumptions),
+    };
+    if written.is_empty() {
+        vec![BodyDiag::InvalidEffectKey { owner, key, idx }.into()]
+    } else {
+        written.into_iter().map(FuncBodyDiag::Ty).collect()
+    }
+}
+
 #[salsa::tracked(return_ref)]
 pub fn check_static_assert<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -1313,9 +1372,20 @@ fn const_body_ctfe_diags_with_context<'db>(
             EvalOutcome::Ready(_) | EvalOutcome::Blocked(_) => return diags,
         }
     };
+    // A function is evaluated only through its callers, so a fault in one is
+    // revealed by what this body evaluates. A constant's declaration reports
+    // a fault in its own body.
+    let mut revealed_at = None;
     let cause = match outcome {
         Err(cause) => cause,
-        Ok(EvalOutcome::Failed(failure)) => invalid_cause_from_eval_failure(db, owner, failure),
+        Ok(EvalOutcome::Failed(failure)) => {
+            if let EvalFailure::Ctfe(error @ CtfeError::CalleeError { origin, .. }) = &failure
+                && matches!(root_ctfe_error(db, owner, error).0, BodyOwner::Func(_))
+            {
+                revealed_at = Some(origin_expr_for_const_eval_diag(db, body, *origin));
+            }
+            invalid_cause_from_eval_failure(db, owner, failure)
+        }
         Ok(EvalOutcome::Ready(value)) => {
             if matches!(value.value(db), SemConstValue::Description(..)) {
                 let cause = InvalidCause::ConstEvalInvariant {
@@ -1427,10 +1497,16 @@ fn const_body_ctfe_diags_with_context<'db>(
             }
             .into(),
         );
-    } else {
-        if let Some(diag) = TyId::invalid(db, cause).emit_diag(db, body.span().into()) {
-            diags.push(diag.into());
-        }
+    } else if let Some(fault) = TyId::invalid(db, cause).emit_diag(db, body.span().into()) {
+        diags.push(FuncBodyDiag::Ty(match revealed_at {
+            Some(expr) => TyLowerDiag::RevealedConstFault {
+                site: expr.span(body).into(),
+                revealed_by: RevealedBy::Evaluation,
+                fault: Box::new(fault),
+            }
+            .into(),
+            None => fault,
+        }));
     }
     diags
 }
@@ -1741,11 +1817,16 @@ impl<'db> TyChecker<'db> {
                 ),
                 ResolvedEffectKey::Type(_) | ResolvedEffectKey::Trait(_)
             ) {
-                self.push_diag(BodyDiag::InvalidEffectKey {
-                    owner: EffectParamOwner::Func(func),
-                    key: key_ty,
+                for diag in invalid_effect_key_diags(
+                    self.db,
+                    EffectParamOwner::Func(func),
                     idx,
-                });
+                    key_ty,
+                    func.scope(),
+                    self.env.assumptions(),
+                ) {
+                    self.push_diag(diag);
+                }
             }
         }
     }
@@ -1836,11 +1917,16 @@ impl<'db> TyChecker<'db> {
                         }
                     }
                     ResolvedEffectKey::Invalid | ResolvedEffectKey::Other => {
-                        self.push_diag(BodyDiag::InvalidEffectKey {
+                        for diag in invalid_effect_key_diags(
+                            self.db,
                             owner,
-                            key: key_ty,
                             idx,
-                        });
+                            key_ty,
+                            contract.scope(),
+                            assumptions,
+                        ) {
+                            self.push_diag(diag);
+                        }
                     }
                 }
                 continue;
@@ -1864,7 +1950,7 @@ impl<'db> TyChecker<'db> {
                             binding.provider.source
                     {
                         self.push_diag(BodyDiag::ImmutableContractFieldMutBinding {
-                            primary: owner.effect_param_ty_span(self.db, idx),
+                            primary: owner.effect_param_ty_span(self.db, idx).into(),
                             field: binding.requirement.binding_name,
                             field_span: crate::hir_def::FieldParent::Contract(field.contract)
                                 .field_name_span(field.index as usize),

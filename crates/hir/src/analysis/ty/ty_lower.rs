@@ -380,7 +380,7 @@ fn with_enclosing_trait_self_predicate<'db>(
     assumptions
 }
 
-fn lower_opt_const_body<'db>(
+pub(crate) fn lower_opt_const_body<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Partial<Body<'db>>,
     scope: ScopeId<'db>,

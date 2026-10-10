@@ -1247,6 +1247,102 @@ pub enum InvalidCause<'db> {
     Other,
 }
 
+impl<'db> InvalidCause<'db> {
+    /// An evaluation fault with the expression it occurred at and its label.
+    /// Type checking reports faults in instantiated call return types and
+    /// leaves other specialized layouts to concrete demand; any other invalid
+    /// type has an upstream report.
+    pub(crate) fn const_eval_fault(&self) -> Option<(Body<'db>, ExprId, String)> {
+        match self {
+            InvalidCause::ConstEvalUnsupported { body, expr } => Some((
+                *body,
+                *expr,
+                "the expression cannot be evaluated at compile time".to_string(),
+            )),
+            InvalidCause::ConstEvalAssertionFailed { body, expr, .. } => Some((
+                *body,
+                *expr,
+                "assertion failed in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalNonConstCall { body, expr } => Some((
+                *body,
+                *expr,
+                "non-const function call in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalDivisionByZero { body, expr } => Some((
+                *body,
+                *expr,
+                "division by zero in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalOutOfBounds { body, expr } => Some((
+                *body,
+                *expr,
+                "index out of bounds in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalInvalidOperation {
+                body,
+                expr,
+                message,
+            } => Some((
+                *body,
+                *expr,
+                format!("invalid operation in const context: {message}"),
+            )),
+            InvalidCause::ConstEvalInvalidBorrow { body, expr } => {
+                Some((*body, *expr, "invalid borrow in const context".to_string()))
+            }
+            InvalidCause::ConstEvalInvalidProviderUse { body, expr } => Some((
+                *body,
+                *expr,
+                "invalid effect provider in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalVariantMismatch { body, expr } => Some((
+                *body,
+                *expr,
+                "variant mismatch in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalUninitializedLocal { body, expr } => Some((
+                *body,
+                *expr,
+                "uninitialized value in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalInvariant {
+                body,
+                expr,
+                message,
+            } => Some((
+                *body,
+                *expr,
+                format!("compiler invariant failed during const evaluation: {message}"),
+            )),
+            InvalidCause::ConstEvalArithmeticOverflow { body, expr } => Some((
+                *body,
+                *expr,
+                "arithmetic overflow in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalNegativeExponent { body, expr } => Some((
+                *body,
+                *expr,
+                "negative exponent in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalStepLimitExceeded { body, expr } => Some((
+                *body,
+                *expr,
+                "const evaluation exceeded the step limit".to_string(),
+            )),
+            InvalidCause::ConstEvalRecursionLimitExceeded { body, expr } => Some((
+                *body,
+                *expr,
+                "const evaluation exceeded the recursion limit".to_string(),
+            )),
+            InvalidCause::ConstEvalRecursiveConst { body, expr } => {
+                Some((*body, *expr, "recursive constant definition".to_string()))
+            }
+            _ => None,
+        }
+    }
+}
+
 impl InvalidCause<'_> {
     pub fn pretty_print(&self, db: &dyn HirAnalysisDb) -> String {
         match self {
