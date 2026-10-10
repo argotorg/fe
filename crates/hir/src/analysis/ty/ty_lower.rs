@@ -350,10 +350,8 @@ fn const_body_simple_path<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> O
 
 /// Extends `assumptions` with the enclosing trait's implicit `Self: Trait`
 /// predicate, mirroring the body-checking environment. Signature-position
-/// const bodies like `Slot<{ Self::N }>` in a trait method must resolve
-/// `Self::N` to a trait const the same way the body checker later does, or
-/// the const falls back to an unevaluated body whose CTFE cannot resolve the
-/// trait const reference.
+/// paths and const bodies like `Slot<Self::N>` and `Slot<{ Self::N }>` must
+/// resolve the trait's constants using the same implicit bound.
 fn with_enclosing_trait_self_predicate<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -533,6 +531,7 @@ pub(crate) fn lower_type_position_path<'db>(
     position: TypePosition,
     minter: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, TyId<'db>> {
+    let assumptions = with_enclosing_trait_self_predicate(db, scope, assumptions);
     let res =
         resolve_type_position_path_with_minter(db, path, scope, assumptions, position, minter)?;
     Ok(match res {
