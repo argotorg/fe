@@ -5337,10 +5337,11 @@ impl<'db> TyChecker<'db> {
                         // Like a call argument, the operand keeps its own type:
                         // the call boundary applies the coercion, so a viewed
                         // operand is borrowed in place rather than moved.
-                        checked_rhs_ty = Some(self.equate_ty(
+                        checked_rhs_ty = Some(self.equate_ty_with_expr(
                             rhs_ty,
                             expected_rhs,
                             rhs_expr.span(self.body()).into(),
+                            Some(rhs_expr),
                         ));
                     }
                     (func_ty, inst)

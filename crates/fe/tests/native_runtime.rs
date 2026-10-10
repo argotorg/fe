@@ -51,6 +51,22 @@ fn build(source: &Path, out: &Path, level: &str, extra: &[&str]) -> Output {
 }
 
 #[test]
+fn native_const_generic_packed_writer_uses_runtime_inputs() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/const_generic_packed_writer.fe");
+    let temp = tempdir().unwrap();
+    for level in ["1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let executable = out.join("const_generic_packed_writer");
+        for args in [&[][..], &["runtime"][..]] {
+            let result = Command::new(&executable).args(args).output().unwrap();
+            assert!(result.status.success(), "{result:?}");
+        }
+    }
+}
+
+#[test]
 fn native_workspace_build_selects_root_entries_and_reachable_dependencies() {
     let temp = tempdir().unwrap();
     let root = temp.path();
