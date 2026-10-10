@@ -1,5 +1,5 @@
 // An associated type whose definition needs itself is a cycle, reported
-// where the type is used, whatever else is next to it.
+// where the type is defined and where it is used, whatever else is next to it.
 trait Tr {
     type Out
 }

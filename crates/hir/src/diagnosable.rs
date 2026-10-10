@@ -718,30 +718,8 @@ impl<'db> ImplTrait<'db> {
         db: &'db dyn HirAnalysisDb,
         implementor: ImplementorId<'db>,
     ) -> Vec<TyDiagCollection<'db>> {
-        if !ty::provider::is_effect_handle_impl(db, implementor) {
-            return Vec::new();
-        }
-        // Every value of a handle needs its `Target` and `Raw`, including the
-        // receiver of the handle's own `raw` method, so a normalization limit
-        // in either is reported here, where it is written.
-        let assumptions = constraints_for(db, self.into());
-        let limits: Vec<_> = ["Target", "Raw"]
-            .into_iter()
-            .filter_map(|name| {
-                let name = IdentId::new(db, name.to_string());
-                let span = self.associated_type_span(db, name)?;
-                ty::ty_error::normalization_limit_diag(
-                    db,
-                    implementor.assoc_ty(db, name)?,
-                    self.scope(),
-                    assumptions,
-                    span.ty().into(),
-                )
-            })
-            .collect();
-        if !limits.is_empty() {
-            return limits;
-        }
+        // A limit in `Target` or `Raw` is reported where the impl defines
+        // them, as for every associated type definition.
         let Some((raw_ty, failure)) = ty::provider::effect_handle_impl_raw_failure(db, implementor)
         else {
             return Vec::new();
@@ -757,6 +735,56 @@ impl<'db> ImplTrait<'db> {
             }
             .into(),
         ]
+    }
+
+    /// Normalization limits in the impl's where clauses, reported where they
+    /// are written, with the impl's parameters kept abstract. Only limits:
+    /// an impl's where clauses are conditions for using it, so a clause that
+    /// does not hold is not an error here.
+    fn diags_where_clause_limits(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        let owner = ItemKind::from(self);
+        let scope = owner.scope();
+        let assumptions = header_constraints_for(db, owner);
+        let mut out = Vec::new();
+        for pred in WhereClauseOwner::ImplTrait(self).clause(db).predicates(db) {
+            let Some(subject) = pred.subject_ty(db) else {
+                continue;
+            };
+            if let Some(diag) = ty::ty_error::normalization_limit_diag(
+                db,
+                subject,
+                scope,
+                assumptions,
+                pred.span().ty().into(),
+            ) {
+                out.push(diag);
+                continue;
+            }
+            for bound in pred.bounds(db) {
+                let Ok(inst) = ty::trait_lower::lower_trait_ref(
+                    db,
+                    subject,
+                    bound.trait_ref(db),
+                    scope,
+                    assumptions,
+                    None,
+                ) else {
+                    continue;
+                };
+                if let Some(diag) = inst.args(db).iter().skip(1).find_map(|&arg| {
+                    ty::ty_error::normalization_limit_diag(
+                        db,
+                        arg,
+                        scope,
+                        assumptions,
+                        bound.trait_ref_span().into(),
+                    )
+                }) {
+                    out.push(diag);
+                }
+            }
+        }
+        out
     }
 
     /// Lower the implementor view and report validity diagnostics (WF, conflicts, kind mismatch).
@@ -1781,6 +1809,7 @@ impl<'db> Diagnosable<'db> for ImplTrait<'db> {
 
         let mut out = validity_diags;
         out.extend(implementor.diags_method_conformance(db));
+        out.extend(self.diags_where_clause_limits(db));
         out.extend(self.diags_effect_handle_raw(db, implementor));
         out.extend(self.diags_trait_ref_and_wf(db));
         out.extend(self.diags_assoc_types_wf(db));

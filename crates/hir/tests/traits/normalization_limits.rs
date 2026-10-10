@@ -693,8 +693,11 @@ fn instantiated_unused_effect_keys_report_normalization_limits() {
     ] {
         for depth in [2, 65] {
             let argument = format!("{}u8{}", "N<".repeat(depth), ">".repeat(depth));
+            // Only the chain: the prelude's other impls define types that
+            // reach limits, which are reported where they are defined.
+            let chain_only = PRELUDE.split("trait Tr {").next().unwrap();
             let src = format!(
-                "{PRELUDE}\n{declarations}fn hidden<T: Nest>() uses (x: {key}) {{}}\n\
+                "{chain_only}\n{declarations}fn hidden<T: Nest>() uses (x: {key}) {{}}\n\
                  fn run() uses (x: {caller_key}) {{ hidden<{argument}>() }}\n"
             );
             let mut db = HirAnalysisTestDb::default();

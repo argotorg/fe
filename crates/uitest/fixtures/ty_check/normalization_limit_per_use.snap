@@ -4,6 +4,18 @@ expression: diags
 input_file: fixtures/ty_check/normalization_limit_per_use.fe
 ---
 error[3-0038]: cycle detected while resolving this type
+   ┌─ normalization_limit_per_use.fe:94:16
+   │
+94 │     type Out = <S as Cyc>::Mid
+   │                ^^^^^^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
+   ┌─ normalization_limit_per_use.fe:95:16
+   │
+95 │     type Mid = <S as Cyc>::Out
+   │                ^^^^^^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0038]: cycle detected while resolving this type
     ┌─ normalization_limit_per_use.fe:101:5
     │
 101 │     need<(<S as Cyc>::Out, <N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> as Nest>::Out)>()

@@ -1,0 +1,50 @@
+// An impl's associated type definitions and where clauses are written types,
+// checked where they are written, with the impl's parameters kept abstract,
+// whether or not anything uses them.
+trait Nest {
+    type Out
+}
+
+struct N<T> {
+    t: T,
+}
+
+impl<T: Nest> Nest for N<T> {
+    type Out = T::Out
+}
+
+impl Nest for u8 {
+    type Out = u8
+}
+
+trait Show {}
+
+impl Show for u8 {}
+
+trait Tr {
+    type Out
+}
+
+struct S {}
+
+struct W<T> {
+    t: T,
+}
+
+// Unused, past the nesting limit: reported at the definition.
+impl Tr for S {
+    type Out = <N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> as Nest>::Out
+}
+
+// Generic, with a concrete part past the limit: reported at the definition.
+impl<T> Tr for W<T> {
+    type Out = (T, <N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> as Nest>::Out)
+}
+
+trait Marker {}
+
+// A where clause past the limit: reported at the clause.
+impl Marker for S where <N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> as Nest>::Out: Show {}
+
+// Abstract parameters reach no limit: accepted.
+impl<T: Nest> Marker for N<T> where T::Out: Show {}

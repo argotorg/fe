@@ -4887,6 +4887,19 @@ impl<'db> ImplAssocTypeView<'db> {
         if let Some(diag) = ty.emit_diag(db, ty_span.clone().into()) {
             return vec![diag];
         }
+        // A definition is a written type, checked where it is written, with
+        // the impl's parameters kept abstract as a function signature's are:
+        // a limit found this way comes from a concrete part, which every use
+        // of the definition would reach too.
+        if let Some(diag) = crate::analysis::ty::ty_error::normalization_limit_diag(
+            db,
+            ty,
+            self.owner.scope(),
+            assumptions,
+            ty_span.clone().into(),
+        ) {
+            return vec![diag];
+        }
         if let Some(diag) = check_ty_wf(
             db,
             TraitSolveCx::new(db, self.owner.scope())

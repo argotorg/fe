@@ -28,6 +28,12 @@ error[3-0058]: type normalization limit exceeded
    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ resolving the associated types here needs more than 64 nested steps
 
 error[3-0058]: type normalization limit exceeded
+   ┌─ normalization_limit_uses.fe:70:16
+   │
+70 │     type Out = <W<(T, T)> as Tr>::Out
+   │                ^^^^^^^^^^^^^^^^^^^^^^ resolving the associated types here needs more than 65,536 type nodes of work
+
+error[3-0058]: type normalization limit exceeded
    ┌─ normalization_limit_uses.fe:83:17
    │
 83 │ fn ignored(_ x: <K as Keep<<W<u8> as Tr>::Out>>::Out) {}
