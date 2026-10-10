@@ -1,0 +1,6 @@
+[ingot]
+name = "assoc_const_extent_distinct"
+version = "0.1.0"
+
+[dependencies]
+assoc_const_extent_provider = "../assoc_const_extent_provider"
