@@ -272,6 +272,22 @@ pub enum TyLowerDiag<'db> {
         ty: TyId<'db>,
         issue: ContractFieldLayoutIssue,
     },
+
+    /// A computation written elsewhere faults only for what `site` gives
+    /// it, as a valid default a trait reference applies or a function a
+    /// constant evaluates.
+    RevealedConstFault {
+        site: DynLazySpan<'db>,
+        revealed_by: RevealedBy,
+        fault: Box<TyDiagCollection<'db>>,
+    },
+}
+
+/// What reveals a fault in a computation written elsewhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum RevealedBy {
+    AppliedDefault,
+    Evaluation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -347,6 +363,7 @@ impl TyLowerDiag<'_> {
             Self::ContractFieldConcreteLayoutRootUnresolved { .. } => 47,
             Self::ContractFieldProviderCycle { .. } => 48,
             Self::ContractFieldProviderRawInvalid { .. } => 49,
+            Self::RevealedConstFault { .. } => 59,
         }
     }
 }
@@ -1080,6 +1097,12 @@ pub enum TraitLowerDiag<'db> {
     UnsafeLocalBoundBlanketImpl(ImplTrait<'db>),
     CyclicTraitRef(ImplTrait<'db>),
     CyclicSuperTraits(Vec<Trait<'db>>),
+    /// An impl defines its associated types in its body, so its header has
+    /// nothing to bind.
+    ImplHeaderAssocTypeBinding {
+        span: DynLazySpan<'db>,
+        name: IdentId<'db>,
+    },
 }
 
 impl TraitLowerDiag<'_> {
@@ -1090,6 +1113,7 @@ impl TraitLowerDiag<'_> {
             Self::CyclicSuperTraits { .. } => 2,
             Self::CyclicTraitRef(_) => 3,
             Self::UnsafeLocalBoundBlanketImpl(_) => 4,
+            Self::ImplHeaderAssocTypeBinding { .. } => 5,
         }
     }
 }

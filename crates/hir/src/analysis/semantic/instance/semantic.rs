@@ -5,9 +5,10 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            CallSiteId, PlaceProvenance, RuntimeSizeError, SemOrigin, SemanticBody,
-            SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex,
+            CallSiteId, PlaceProvenance, RuntimeSizeError, SExpr, SLocalId, SStmtKind, SemOrigin,
+            SemanticBody, SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex,
             borrowck::CallSiteRefinements,
+            concrete_layout_fault,
             diagnostics::{
                 SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind,
                 SemanticDiagnosticLabel, SemanticDiagnosticSpan,
@@ -884,18 +885,19 @@ fn replan_call_site<'db>(
 fn invalid_size_diagnostic<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    origin: SemOrigin<'db>,
+    span: SemanticDiagnosticSpan<'db>,
     ty: TyId<'db>,
     error: RuntimeSizeError<'db>,
 ) -> SemanticDiagnosticId<'db> {
+    let subject = match span {
+        SemanticDiagnosticSpan::LocalSourceOrBody { .. } => "value",
+        _ => "operation",
+    };
     let mut diagnostic = SemanticDiagnostic::new(
         instance,
         SemanticDiagnosticKind::InvalidConcreteType,
-        "this operation requires a valid concrete type size".into(),
-        SemanticDiagnosticSpan::Origin {
-            owner: instance.key(db).owner(db),
-            origin,
-        },
+        format!("this {subject} requires a valid concrete type size"),
+        span,
     );
     let message = match error {
         RuntimeSizeError::Overflow => format!(
@@ -905,38 +907,16 @@ fn invalid_size_diagnostic<'db>(
         RuntimeSizeError::UnavailableConcrete => {
             "concrete type size could not be determined".to_string()
         }
-        RuntimeSizeError::InvalidType(cause) => {
-            let source = match &cause {
-                InvalidCause::ConstEvalDivisionByZero { body, expr }
-                | InvalidCause::ConstEvalArithmeticOverflow { body, expr }
-                | InvalidCause::ConstEvalNegativeExponent { body, expr }
-                | InvalidCause::ConstEvalUnsupported { body, expr }
-                | InvalidCause::ConstEvalNonConstCall { body, expr }
-                | InvalidCause::ConstEvalStepLimitExceeded { body, expr }
-                | InvalidCause::ConstEvalRecursionLimitExceeded { body, expr }
-                | InvalidCause::ConstEvalRecursiveConst { body, expr }
-                | InvalidCause::ConstEvalAssertionFailed { body, expr, .. } => {
-                    Some(SemanticDiagnosticSpan::HirExpr {
-                        body: *body,
-                        expr: *expr,
-                    })
-                }
-                _ => None,
-            };
-            let message = match cause {
-                InvalidCause::ConstEvalDivisionByZero { .. } => {
-                    "division by zero in const context".to_string()
-                }
-                InvalidCause::ConstEvalArithmeticOverflow { .. } => {
-                    "arithmetic overflow in const context".to_string()
-                }
-                _ => format!("invalid const value: {}", cause.pretty_print(db)),
-            };
-            if let Some(source) = source {
-                diagnostic.push_secondary(message.clone(), source);
+        RuntimeSizeError::InvalidType(cause) => match cause.const_eval_fault() {
+            Some((body, expr, message)) => {
+                diagnostic.push_secondary(
+                    message.clone(),
+                    SemanticDiagnosticSpan::HirExpr { body, expr },
+                );
+                message
             }
-            message
-        }
+            None => format!("invalid const value: {}", cause.pretty_print(db)),
+        },
     };
     if diagnostic.secondaries.is_empty() {
         diagnostic.primary.message = message;
@@ -961,6 +941,15 @@ fn specialize_provider_address_space<'db>(
         provider.semantics.transport,
     );
     specialization.provider.semantics = semantics;
+}
+
+/// The body whose types a concrete instance's layout demand reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub(crate) enum LayoutDemandBody {
+    Admitted,
+    Provisional,
+    /// Lowering is blocked, so only expression types are read.
+    Expressions,
 }
 
 #[salsa::tracked]
@@ -1191,6 +1180,98 @@ impl<'db> SemanticInstance<'db> {
     pub fn callees(self, db: &'db dyn HirAnalysisDb) -> Vec<SemanticCalleeRef<'db>> {
         collect_semantic_callees(db, self)
     }
+
+    /// Borrow checking and runtime lowering consume concrete layouts, so a
+    /// concrete instance demands the layout of every type its body consumes:
+    /// each expression's and, given the semantic `body`, each local's
+    /// (parameters and bindings included) and each callee parameter's. A
+    /// deferred fault in a specialized extent, whether this body writes it or
+    /// receives it through a callee signature or a field, rejects the body
+    /// with its source, even when the value is unused or empty. Admission
+    /// demands this before canonicalization folds any value of such a type,
+    /// and from expression types alone when lowering is blocked. Compile-time
+    /// evaluation forces the same extents itself when it materializes them.
+    #[salsa::tracked]
+    pub(crate) fn concrete_layout_diagnostic(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        body: LayoutDemandBody,
+    ) -> Option<SemanticDiagnosticId<'db>> {
+        let body = match body {
+            LayoutDemandBody::Admitted => Some(self.body(db)),
+            LayoutDemandBody::Provisional => Some(self.provisional_body(db)),
+            LayoutDemandBody::Expressions => None,
+        };
+        let key = self.key(db);
+        let typed_body = key.typed_body(db);
+        let at = move |origin| SemanticDiagnosticSpan::Origin {
+            owner: key.owner(db),
+            origin,
+        };
+        let exprs = typed_body.body().into_iter().flat_map(|hir| {
+            hir.exprs(db).iter().map(move |(expr, _)| {
+                (
+                    self.normalized_ty(db, typed_body.expr_ty(db, expr)),
+                    at(SemOrigin::Expr(expr)),
+                )
+            })
+        });
+        // A place carrier's own type is a reference; its layout is the value's.
+        let locals = body
+            .into_iter()
+            .flat_map(|body| body.locals.iter().enumerate())
+            .map(|(index, local)| {
+                (
+                    self.normalized_ty(db, local.role.layout_ty(local.ty)),
+                    SemanticDiagnosticSpan::LocalSourceOrBody {
+                        instance: self,
+                        local: SLocalId::new(index),
+                    },
+                )
+            });
+        // Normalization reads each argument's target type from the callee.
+        let params = body
+            .into_iter()
+            .flat_map(|body| &body.blocks)
+            .flat_map(|block| &block.stmts)
+            .filter_map(|stmt| match &stmt.kind {
+                SStmtKind::Assign {
+                    expr: SExpr::Call { callee, args, .. },
+                    ..
+                } => Some((
+                    stmt.origin,
+                    get_or_build_semantic_instance(db, callee.key),
+                    args,
+                )),
+                _ => None,
+            })
+            .flat_map(|(origin, callee, args)| {
+                let typed_body = callee.key(db).typed_body(db);
+                args.iter().enumerate().filter_map(move |(index, _)| {
+                    Some((
+                        callee.normalized_binding_ty(db, typed_body.param_binding(index)?),
+                        at(origin),
+                    ))
+                })
+            });
+        let mut demanded = FxHashSet::default();
+        exprs.chain(locals).chain(params).find_map(|(ty, span)| {
+            let cause = demanded
+                .insert(ty)
+                .then(|| concrete_layout_fault(db, ty, &|ty| self.normalized_ty(db, ty)))??;
+            // A blocked body's other invalid types were reported upstream.
+            if body.is_none() && cause.const_eval_fault().is_none() {
+                return None;
+            }
+            Some(invalid_size_diagnostic(
+                db,
+                self,
+                span,
+                ty,
+                RuntimeSizeError::InvalidType(cause),
+            ))
+        })
+    }
 }
 
 impl<'db> SemanticInstance<'db> {
@@ -1234,7 +1315,16 @@ impl<'db> SemanticInstance<'db> {
                 let arg = normalize_ty(db, arg, body.scope(), self.assumptions(db));
                 if let Err(error) = runtime_size_bytes(db, arg) {
                     return Err(SemanticBodyAdmissionError::InvalidConcreteType(
-                        invalid_size_diagnostic(db, self, SemOrigin::Expr(expr), arg, error),
+                        invalid_size_diagnostic(
+                            db,
+                            self,
+                            SemanticDiagnosticSpan::Origin {
+                                owner: self.key(db).owner(db),
+                                origin: SemOrigin::Expr(expr),
+                            },
+                            arg,
+                            error,
+                        ),
                     ));
                 }
             }

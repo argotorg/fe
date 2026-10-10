@@ -1,0 +1,16 @@
+// An error inside a trait reference's type argument is reported where it is
+// written, in every position a trait reference can take.
+trait Has<T> {}
+trait Bound { type Item }
+struct Wrap<T> {}
+struct X {}
+
+fn inline<T: Has<Missing>>() {}
+fn nested<T: Has<Wrap<Nested>>>() {}
+fn clause<T>() where T: Has<InClause> {}
+trait Super: Has<InSuper> {}
+trait Assoc { type Item: Has<InAssocBound> }
+impl Has<InHeader> for X {}
+impl Bound<Item = InBinding> for X { type Item = u8 }
+
+fn called() { inline<u8>() }

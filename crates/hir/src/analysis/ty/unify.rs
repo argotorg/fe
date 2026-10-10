@@ -16,7 +16,7 @@ use super::{
 };
 use crate::analysis::{
     HirAnalysisDb,
-    ty::const_ty::{ConstTyData, normalize_const_tys_for_comparison},
+    ty::const_ty::{ConstCaptureEnv, ConstTyData, normalize_const_tys_for_comparison},
 };
 
 pub(crate) type UnificationTable<'db> = UnificationTableBase<'db, InPlace<InferenceKey<'db>>>;
@@ -183,20 +183,33 @@ where
 
                     (ConstTyData::Hole(..), _) | (_, ConstTyData::Hole(..)) => Ok(()),
 
-                    (ConstTyData::TyParam(..), ConstTyData::TyParam(..))
-                    | (ConstTyData::Value(..), ConstTyData::Value(..))
-                    | (ConstTyData::Description(..), ConstTyData::Description(..))
-                    | (ConstTyData::Abstract(..), ConstTyData::Abstract(..)) => {
-                        if const_ty1 == const_ty2 {
-                            Ok(())
-                        } else {
-                            match (const_ty1.data(self.db), const_ty2.data(self.db)) {
-                                (
-                                    ConstTyData::Abstract(expr1, _),
-                                    ConstTyData::Abstract(expr2, _),
-                                ) => self.unify_const_expr(*expr1, *expr2),
-                                _ => Err(UnificationError::TypeMismatch),
+                    _ if const_ty1 == const_ty2 => Ok(()),
+
+                    (ConstTyData::Abstract(expr1, _), ConstTyData::Abstract(expr2, _)) => {
+                        self.unify_const_expr(*expr1, *expr2)
+                    }
+
+                    // One deferred body is the same constant under equal
+                    // captures; an identity capture stands for its formals.
+                    (
+                        ConstTyData::UnEvaluated {
+                            body: body1,
+                            capture: capture1,
+                            ..
+                        },
+                        ConstTyData::UnEvaluated {
+                            body: body2,
+                            capture: capture2,
+                            ..
+                        },
+                    ) if body1 == body2 => {
+                        match (capture1.complete(self.db), capture2.complete(self.db)) {
+                            (Some(subst1), Some(subst2)) if subst1.domain() == subst2.domain() => {
+                                subst1.values().iter().zip(subst2.values()).try_for_each(
+                                    |(&value1, &value2)| self.unify_ty(value1, value2),
+                                )
                             }
+                            _ => Err(UnificationError::TypeMismatch),
                         }
                     }
 
@@ -282,6 +295,40 @@ where
                 }
                 self.unify_ty(*inner1, *inner2)
             }
+            (
+                Compare {
+                    op: op1,
+                    lhs: lhs1,
+                    rhs: rhs1,
+                },
+                Compare {
+                    op: op2,
+                    lhs: lhs2,
+                    rhs: rhs2,
+                },
+            ) => {
+                if op1 != op2 {
+                    return Err(UnificationError::TypeMismatch);
+                }
+                self.unify_ty(*lhs1, *lhs2)?;
+                self.unify_ty(*rhs1, *rhs2)
+            }
+            (
+                Select {
+                    cond: c1,
+                    then: t1,
+                    otherwise: o1,
+                },
+                Select {
+                    cond: c2,
+                    then: t2,
+                    otherwise: o2,
+                },
+            ) => {
+                self.unify_ty(*c1, *c2)?;
+                self.unify_ty(*t1, *t2)?;
+                self.unify_ty(*o1, *o2)
+            }
             (ArrayRepeat { value: v1, len: n1 }, ArrayRepeat { value: v2, len: n2 }) => {
                 self.unify_ty(*n1, *n2)?;
                 self.unify_ty(*v1, *v2)
@@ -321,7 +368,6 @@ where
                 if k1.owner(self.db) != k2.owner(self.db)
                     || k1.effect_providers(self.db) != k2.effect_providers(self.db)
                     || k1.impl_env(self.db) != k2.impl_env(self.db)
-                    || i1.parameter_owner != i2.parameter_owner
                     || ga1.len() != ga2.len()
                     || i1.args.len() != i2.args.len()
                 {
@@ -801,6 +847,24 @@ where
         let var = self.table.new_var_from_param(ty);
         self.params.insert(ty, var);
         var
+    }
+
+    // An identity capture names the parameters its body reads, so it binds
+    // to the variables their explicit occurrences are instantiated with.
+    fn fold_const_capture(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        capture: &ConstCaptureEnv<'db>,
+    ) -> ConstCaptureEnv<'db> {
+        if let ConstCaptureEnv::Identity(_) = capture
+            && let Some(identity) = capture.complete(db)
+        {
+            return ConstCaptureEnv::from_subst(
+                db,
+                identity.map_values(|formal| self.fold_ty(db, formal)),
+            );
+        }
+        capture.fold_ranges(db, self)
     }
 }
 

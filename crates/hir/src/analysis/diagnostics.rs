@@ -13,8 +13,8 @@ use crate::analysis::{
         ProviderAddressSpace,
         diagnostics::{
             BodyDiag, CallConstraintDiagInfo, ContractFieldLayoutIssue, DefConflictError,
-            FuncBodyDiag, ImplDiag, MustUseSubject, TraitConstraintDiag, TraitLowerDiag,
-            TyDiagCollection, TyLowerDiag,
+            FuncBodyDiag, ImplDiag, MustUseSubject, RevealedBy, TraitConstraintDiag,
+            TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
@@ -266,6 +266,29 @@ fn const_requirement_diag(
 }
 
 /// A diagnostic whose only label is a primary one on `span`.
+/// A const fault that a use reveals in a computation written elsewhere: the use
+/// is primary, and the faulting computation keeps its own label.
+fn revealed_const_fault(
+    db: &dyn SpannedHirAnalysisDb,
+    fault: &TyDiagCollection,
+    use_label: &str,
+    use_span: &crate::span::DynLazySpan,
+    error_code: GlobalErrorCode,
+) -> CompleteDiagnostic {
+    let mut diag = fault.to_complete(db);
+    for sub in &mut diag.sub_diagnostics {
+        if sub.style == LabelStyle::Primary {
+            sub.style = LabelStyle::Secondary;
+        }
+    }
+    diag.sub_diagnostics.insert(
+        0,
+        SubDiagnostic::new(LabelStyle::Primary, use_label.into(), use_span.resolve(db)),
+    );
+    diag.error_code = error_code;
+    diag
+}
+
 fn primary_diag(
     severity: Severity,
     message: impl Into<String>,
@@ -2271,6 +2294,21 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
+            Self::RevealedConstFault {
+                site,
+                revealed_by,
+                fault,
+            } => revealed_const_fault(
+                db,
+                fault,
+                match revealed_by {
+                    RevealedBy::AppliedDefault => "in a default this reference applies",
+                    RevealedBy::Evaluation => "while evaluating this",
+                },
+                site,
+                error_code,
+            ),
+
             Self::ContractFieldProviderRawInvalid { span, ty, failure } => {
                 let reason = match failure {
                     crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedRaw => {
@@ -3573,24 +3611,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 )
             }
 
-            Self::CallReturnTypeConstFault { call, fault } => {
-                let mut diag = fault.to_complete(db);
-                for sub in &mut diag.sub_diagnostics {
-                    if sub.style == LabelStyle::Primary {
-                        sub.style = LabelStyle::Secondary;
-                    }
-                }
-                diag.sub_diagnostics.insert(
-                    0,
-                    SubDiagnostic::new(
-                        LabelStyle::Primary,
-                        "in the return type of this call".into(),
-                        call.resolve(db),
-                    ),
-                );
-                diag.error_code = error_code;
-                diag
-            }
+            Self::CallReturnTypeConstFault { call, fault } => revealed_const_fault(
+                db,
+                fault,
+                "in the return type of this call",
+                call,
+                error_code,
+            ),
 
             Self::StaticAssertFailed {
                 primary,
@@ -4963,6 +4990,17 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
                 impl_trait.span().trait_ref().resolve(db),
                 error_code,
             ),
+
+            Self::ImplHeaderAssocTypeBinding { span, name } => {
+                let name = name.data(db);
+                primary_diag(
+                    Severity::Error,
+                    "associated type bindings are not allowed in an impl header",
+                    format!("define `{name}` in the impl body with `type {name} = ...`"),
+                    span.resolve(db),
+                    error_code,
+                )
+            }
         }
     }
 }

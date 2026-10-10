@@ -103,3 +103,24 @@ fn deeply_nested_parameter_types_are_checked_in_polynomial_time() {
     );
     assert_eq!(diagnostic_messages(&source), Vec::<String>::new());
 }
+
+#[test]
+fn trait_signature_const_paths_use_the_implicit_self_bound() {
+    let source = r#"
+struct Packed<const N: usize> { values: [u8; N] }
+trait Width { const N: usize }
+trait Bytes: Width {
+    fn declared(self, _ other: Packed<Self::N>) -> Packed<Self::N>
+    const fn bytes(self) -> Packed<Self::N> {
+        Packed { values: [0; Self::N] }
+    }
+    fn braced(self, _ other: Packed<{Self::N}>) -> Packed<{Self::N}> { other }
+}
+impl Width for u8 { const N: usize = 2 }
+impl Bytes for u8 {
+    fn declared(self, _ other: Packed<Self::N>) -> Packed<Self::N> { other }
+}
+fn call(_ value: u8) -> Packed<2> { value.bytes() }
+"#;
+    assert_eq!(diagnostic_messages(source), Vec::<String>::new());
+}

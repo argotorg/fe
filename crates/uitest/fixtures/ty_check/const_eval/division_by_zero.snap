@@ -1,11 +1,13 @@
 ---
 source: crates/uitest/tests/ty_check.rs
-assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/const_eval/division_by_zero.fe
 ---
-error[3-0025]: division by zero in const context
-  ┌─ division_by_zero.fe:2:5
+error[3-0059]: division by zero in const context
+  ┌─ division_by_zero.fe:5:18
   │
 2 │     1 / 0
-  │     ^^^^^ cannot divide by zero
+  │     ----- cannot divide by zero
+  ·
+5 │ const N: usize = bad()
+  │                  ^^^^^ while evaluating this

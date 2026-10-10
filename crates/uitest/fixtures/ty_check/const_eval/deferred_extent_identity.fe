@@ -1,0 +1,10 @@
+// A deferred extent is one constant only under equal captures. An impl's
+// associated type instantiated at distinct parameters, or a different body
+// at the same parameters, is a different type.
+trait Has { type Item }
+struct Marker<const N: usize> {}
+impl<const N: usize> Has for Marker<N> { type Item = [u8; { [2 as usize, 3][N] }] }
+
+fn swap<const N: usize, const M: usize>(_ x: Marker<N>::Item) -> Marker<M>::Item { x }
+
+fn distinct<const N: usize>(_ x: [u8; { [3 as usize; 2][N] }]) -> [u8; { [4 as usize; 2][N] }] { x }

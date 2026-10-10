@@ -39,12 +39,6 @@ error[2-0002]: `Missing` is not found
 20 │ type InvalidAlias<T = Missing> = T
    │                       ^^^^^^^ `Missing` is not found
 
-error[2-0013]: const generic argument expected for `Cap`
-   ┌─ generic_type_default_validation.fe:24:6
-   │
-24 │ impl Cap<ConstSlot<u256>> for bool {}
-   │      ^^^ expected const argument of type `u256`
-
 error[3-0001]: invalid type argument kind
   ┌─ generic_type_default_validation.fe:5:19
   │
@@ -68,6 +62,12 @@ error[3-0001]: invalid type argument kind
    │
 19 │ trait InvalidTrait<T = Wrap> {}
    │                        ^^^^ expected `*` kind, but `Wrap` has `(* -> *)` kind
+
+error[3-0012]: expected const type
+   ┌─ generic_type_default_validation.fe:24:10
+   │
+24 │ impl Cap<ConstSlot<u256>> for bool {}
+   │          ^^^^^^^^^^^^^^^ expected const type of `u256` here
 
 error[3-0013]: expected a normal type
   ┌─ generic_type_default_validation.fe:9:38

@@ -1436,7 +1436,8 @@ fn select<const ROOT: u256>(
     };
 
     assert_eq!(evidence.params, [*descriptor]);
-    let representations = NLayoutLocals::new(&normalized.body, &normalized.layout_plan, source);
+    let representations =
+        NLayoutLocals::new(&db, &normalized.body, &normalized.layout_plan, source);
     assert_eq!(evidence.semantic_values.len(), representations.locals.len());
     assert_eq!(evidence.output.schema.components.len(), 1);
     assert_eq!(evidence.output.runtime_descriptor_count(), 1);

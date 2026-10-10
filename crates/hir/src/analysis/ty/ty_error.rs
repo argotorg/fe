@@ -1,5 +1,5 @@
 use crate::{
-    hir_def::{GenericArg, PathId, PathKind, TypeId, TypeKind, scope_graph::ScopeId},
+    hir_def::{GenericArg, PathId, PathKind, TraitRefId, TypeId, TypeKind, scope_graph::ScopeId},
     span::{params::LazyGenericArgSpan, path::LazyPathSpan, types::LazyTySpan},
     visitor::{Visitor, VisitorCtxt, prelude::DynLazySpan, walk_generic_arg, walk_path, walk_type},
 };
@@ -22,6 +22,48 @@ use super::{
     ty_lower::{lower_hir_ty, lower_hir_ty_in_mode},
 };
 use crate::visitor::prelude::LazyTraitRefSpan;
+
+/// The generic arguments written on `path`'s last segment, with their spans.
+pub(crate) fn path_generic_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    path_span: LazyPathSpan<'db>,
+) -> impl Iterator<Item = (&'db GenericArg<'db>, LazyGenericArgSpan<'db>)> {
+    let spans = path_span.segment(path.segment_index(db)).generic_args();
+    path.generic_args(db)
+        .data(db)
+        .iter()
+        .enumerate()
+        .map(move |(idx, arg)| (arg, spans.clone().arg(idx)))
+}
+
+/// Diagnostics for the types a trait reference writes as generic arguments,
+/// each at its own span. A type argument reports what lowering it finds, as
+/// the reference's own checks cover the well-formedness of the arguments it
+/// lowers. An associated-type binding, which lowering never checks, reports
+/// any error.
+pub(crate) fn trait_ref_arg_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    tr: TraitRefId<'db>,
+    span: LazyTraitRefSpan<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    let Some(path) = tr.path(db).to_opt() else {
+        return Vec::new();
+    };
+    path_generic_args(db, path, span.path())
+        .flat_map(|(arg, span)| match arg {
+            GenericArg::Type(arg) => arg.ty.to_opt().map_or_else(Vec::new, |ty| {
+                collect_ty_lower_errors(db, scope, ty, span.into_type_arg().ty(), assumptions)
+            }),
+            GenericArg::AssocType(binding) => binding.ty.to_opt().map_or_else(Vec::new, |ty| {
+                collect_hir_ty_diags(db, scope, ty, span.into_assoc_type_arg().ty(), assumptions)
+            }),
+            GenericArg::Const(_) => Vec::new(),
+        })
+        .collect()
+}
 
 /// Collect all type-lowering diagnostics for a HIR type.
 ///
@@ -352,9 +394,9 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
 
             Err(err) => {
                 if let Some(diag) =
-                    err.into_diag(self.db, path, path_span.clone(), ExpectedPathKind::Type)
+                    err.into_ty_diag(self.db, path, path_span.clone(), ExpectedPathKind::Type)
                 {
-                    self.diags.push(diag.into());
+                    self.diags.push(diag);
                 }
                 return;
             }
@@ -613,29 +655,6 @@ pub(crate) fn demanded_ground_const_cause<'db>(
     let mut visitor = GroundConstDemand { db, cause: None };
     visitor.visit_ty(ty);
     visitor.cause
-}
-
-/// Whether `cause` is a fault of evaluating a const.
-pub(crate) fn is_const_eval_fault(cause: &InvalidCause<'_>) -> bool {
-    matches!(
-        cause,
-        InvalidCause::ConstEvalUnsupported { .. }
-            | InvalidCause::ConstEvalAssertionFailed { .. }
-            | InvalidCause::ConstEvalNonConstCall { .. }
-            | InvalidCause::ConstEvalDivisionByZero { .. }
-            | InvalidCause::ConstEvalOutOfBounds { .. }
-            | InvalidCause::ConstEvalInvalidOperation { .. }
-            | InvalidCause::ConstEvalInvalidBorrow { .. }
-            | InvalidCause::ConstEvalInvalidProviderUse { .. }
-            | InvalidCause::ConstEvalVariantMismatch { .. }
-            | InvalidCause::ConstEvalUninitializedLocal { .. }
-            | InvalidCause::ConstEvalInvariant { .. }
-            | InvalidCause::ConstEvalArithmeticOverflow { .. }
-            | InvalidCause::ConstEvalNegativeExponent { .. }
-            | InvalidCause::ConstEvalStepLimitExceeded { .. }
-            | InvalidCause::ConstEvalRecursionLimitExceeded { .. }
-            | InvalidCause::ConstEvalRecursiveConst { .. }
-    )
 }
 
 pub fn emit_invalid_ty_error<'db>(

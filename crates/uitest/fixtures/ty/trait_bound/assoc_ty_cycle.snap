@@ -4,6 +4,12 @@ expression: diags
 input_file: fixtures/ty/trait_bound/assoc_ty_cycle.fe
 ---
 error[2-0020]: infinite trait bound recursion
+   ┌─ assoc_ty_cycle.fe:14:30
+   │
+14 │     type Item: A<Self::Item::Assoc>
+   │                              ^^^^^ cyclic trait reference prevented lowering this associated type
+
+error[2-0020]: infinite trait bound recursion
    ┌─ assoc_ty_cycle.fe:17:28
    │
 17 │     fn fail(x: Self::Item::Assoc)

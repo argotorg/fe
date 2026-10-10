@@ -475,7 +475,7 @@ fn merge_local_consts<'db>(
     }
 }
 
-fn block_successors<'db>(term: &STerminatorKind<'db>) -> Vec<SBlockId> {
+pub(super) fn block_successors<'db>(term: &STerminatorKind<'db>) -> Vec<SBlockId> {
     match term {
         STerminatorKind::Goto(bb) => vec![*bb],
         STerminatorKind::Branch {

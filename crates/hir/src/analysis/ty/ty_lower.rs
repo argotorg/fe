@@ -350,10 +350,8 @@ fn const_body_simple_path<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> O
 
 /// Extends `assumptions` with the enclosing trait's implicit `Self: Trait`
 /// predicate, mirroring the body-checking environment. Signature-position
-/// const bodies like `Slot<{ Self::N }>` in a trait method must resolve
-/// `Self::N` to a trait const the same way the body checker later does, or
-/// the const falls back to an unevaluated body whose CTFE cannot resolve the
-/// trait const reference.
+/// paths and const bodies like `Slot<Self::N>` and `Slot<{ Self::N }>` must
+/// resolve the trait's constants using the same implicit bound.
 fn with_enclosing_trait_self_predicate<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -382,7 +380,7 @@ fn with_enclosing_trait_self_predicate<'db>(
     assumptions
 }
 
-fn lower_opt_const_body<'db>(
+pub(crate) fn lower_opt_const_body<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Partial<Body<'db>>,
     scope: ScopeId<'db>,
@@ -533,6 +531,7 @@ pub(crate) fn lower_type_position_path<'db>(
     position: TypePosition,
     minter: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, TyId<'db>> {
+    let assumptions = with_enclosing_trait_self_predicate(db, scope, assumptions);
     let res =
         resolve_type_position_path_with_minter(db, path, scope, assumptions, position, minter)?;
     Ok(match res {
@@ -639,25 +638,47 @@ fn lower_hir_ty_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
+/// `source_params` names the owner whose parameters the type resolves in the
+/// source basis; its const arguments then stay deferred.
 fn lower_const_ty_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     ty: HirTyId<'db>,
     assumptions: PredicateListId<'db>,
+    source_params: Option<GenericParamOwner<'db>>,
 ) -> TyId<'db> {
     let HirTyKind::Path(path) = ty.data(db) else {
         return TyId::invalid(db, InvalidCause::InvalidConstParamTy);
     };
-
-    if !path
-        .to_opt()
-        .is_none_or(|p| p.generic_args(db).is_empty(db))
-    {
+    let Some(path) = path.to_opt() else {
+        return TyId::invalid(db, InvalidCause::ParseError);
+    };
+    if !path.generic_args(db).is_empty(db) {
         return TyId::invalid(db, InvalidCause::InvalidConstParamTy);
     }
+    let minter = LoweringContext::for_const_bodies(
+        HoleAnchor::TemplatePath {
+            path,
+            scope,
+            assumptions,
+        },
+        if source_params.is_some() {
+            ConstBodyLowering::Deferred
+        } else {
+            ConstBodyLowering::Eager
+        },
+    )
+    .with_source_params(source_params);
     let ty = normalize_ty(
         db,
-        lower_path(db, scope, *path, assumptions),
+        lower_path_impl(
+            db,
+            scope,
+            Partial::Present(path),
+            assumptions,
+            TypePosition::Type,
+            &minter,
+        ),
         scope,
         assumptions,
     );
@@ -671,23 +692,6 @@ fn lower_const_ty_ty<'db>(
     } else {
         TyId::invalid(db, InvalidCause::InvalidConstParamTy)
     }
-}
-
-fn lower_path<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    path: Partial<PathId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> TyId<'db> {
-    let Some(p) = path.to_opt() else {
-        return TyId::invalid(db, InvalidCause::ParseError);
-    };
-    let minter = LoweringContext::new(HoleAnchor::TemplatePath {
-        path: p,
-        scope,
-        assumptions,
-    });
-    lower_path_impl(db, scope, path, assumptions, TypePosition::Type, &minter)
 }
 
 pub(crate) fn generic_param_owner_assumptions<'db>(
@@ -2825,7 +2829,8 @@ pub(crate) fn func_implicit_param_plan<'db>(
                 layout_hole_fallback_ty(db, *hole_ty),
             );
             let lowered_idx = prefix_len + implicit_precursors.len();
-            let implicit_arg = precursor.evaluate(db, func.scope(), lowered_idx, 0);
+            let implicit_arg =
+                precursor.evaluate(db, func.scope(), ParamBasis::Full, lowered_idx, 0);
             implicit_precursors.push(precursor);
             bindings.push((placeholder, implicit_arg));
         }
@@ -3497,7 +3502,15 @@ pub(crate) fn evaluate_params_precursor<'db>(
     set.params_precursor(db)
         .iter()
         .enumerate()
-        .map(|(i, p)| p.evaluate(db, set.scope(db), i, set.offset_to_explicit(db)))
+        .map(|(i, p)| {
+            p.evaluate(
+                db,
+                set.scope(db),
+                set.basis(db),
+                i,
+                set.offset_to_explicit(db),
+            )
+        })
         .collect()
 }
 
@@ -3953,6 +3966,19 @@ impl<'db> ParamSchemaId<'db> {
             )
         })
     }
+
+    /// The source parameter whose allowed default dependencies are the
+    /// leading `len` slots; the inverse of `allowed_default_dependencies`.
+    pub(crate) fn default_dependency_index(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        len: usize,
+    ) -> Option<SourceParamIndex> {
+        let set = self.param_set(db);
+        len.checked_sub(set.offset_to_explicit_params_position(db))
+            .filter(|&index| index < set.explicit_param_count(db))
+            .map(SourceParamIndex)
+    }
 }
 
 /// The leading `len` slots of one parameter schema: the full schema, a
@@ -4266,7 +4292,7 @@ impl<'db> GenericParamTypeSet<'db> {
         let idx = self.offset_to_explicit(db) + explicit_idx;
         let param = self.params_precursor(db).get(idx)?;
         matches!(param.default_hir_const, Some(ConstGenericArgValue::Hole))
-            .then(|| param.declared_const_ty(db, self.scope(db)))
+            .then(|| param.declared_const_ty(db, self.scope(db), self.basis(db)))
             .flatten()
     }
 
@@ -4290,7 +4316,7 @@ impl<'db> GenericParamTypeSet<'db> {
         self.params_precursor(db)
             .get(param_idx)
             .filter(|param| matches!(param.default_hir_const, Some(ConstGenericArgValue::Hole)))
-            .and_then(|param| param.declared_const_ty(db, self.scope(db)))
+            .and_then(|param| param.declared_const_ty(db, self.scope(db), self.basis(db)))
             .is_some_and(|ty| {
                 matches!(
                     ty.data(db),
@@ -4308,7 +4334,13 @@ impl<'db> GenericParamTypeSet<'db> {
         let cand = params.first()?;
 
         if cand.is_trait_self() {
-            Some(cand.evaluate(db, self.scope(db), 0, self.offset_to_explicit(db)))
+            Some(cand.evaluate(
+                db,
+                self.scope(db),
+                self.basis(db),
+                0,
+                self.offset_to_explicit(db),
+            ))
         } else {
             None
         }
@@ -4324,9 +4356,15 @@ impl<'db> GenericParamTypeSet<'db> {
         original_idx: usize,
     ) -> Option<TyId<'db>> {
         let idx = self.offset_to_explicit(db) + original_idx;
-        self.params_precursor(db)
-            .get(idx)
-            .map(|p| p.evaluate(db, self.scope(db), idx, self.offset_to_explicit(db)))
+        self.params_precursor(db).get(idx).map(|p| {
+            p.evaluate(
+                db,
+                self.scope(db),
+                self.basis(db),
+                idx,
+                self.offset_to_explicit(db),
+            )
+        })
     }
 }
 
@@ -4478,6 +4516,7 @@ impl<'db> TyParamPrecursor<'db> {
         &self,
         db: &'db dyn HirAnalysisDb,
         scope: ScopeId<'db>,
+        basis: ParamBasis,
         lowered_idx: usize,
         explicit_offset: usize,
     ) -> TyId<'db> {
@@ -4515,7 +4554,7 @@ impl<'db> TyParamPrecursor<'db> {
                     lowered_idx.checked_sub(explicit_offset),
                 );
                 let ty = self
-                    .declared_const_ty(db, scope)
+                    .declared_const_ty(db, scope, basis)
                     .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
                 let const_ty = ConstTyId::new(db, ConstTyData::TyParam(param, ty));
                 TyId::new(db, TyData::ConstTy(const_ty))
@@ -4600,16 +4639,38 @@ impl<'db> TyParamPrecursor<'db> {
         matches!(self.variant, Variant::Const(_) | Variant::ImplicitConst(_))
     }
 
+    /// Shape discovery reads the source basis, which must not depend on the
+    /// full parameter list it is discovering slots for. A source parameter's
+    /// type therefore resolves the owner's parameters in the source basis,
+    /// with const arguments deferred, under the enclosing item's bounds,
+    /// which do not depend on the owner's slots. The owner's own declared
+    /// constraints are lowered over the full list.
     fn declared_const_ty(
         &self,
         db: &'db dyn HirAnalysisDb,
         scope: ScopeId<'db>,
+        basis: ParamBasis,
     ) -> Option<TyId<'db>> {
         let Variant::Const(Some(ty)) = self.variant else {
             return None;
         };
-        let assumptions = generic_param_owner_assumptions(db, scope);
-        Some(lower_const_ty_ty(db, scope, ty, assumptions))
+        Some(match basis {
+            ParamBasis::Source => {
+                let owner = GenericParamOwner::from_item_opt(scope.item());
+                let assumptions = owner.and_then(|owner| owner.parent(db)).map_or_else(
+                    || PredicateListId::empty_list(db),
+                    |parent| collect_candidate_constraints(db, parent).instantiate_identity(),
+                );
+                lower_const_ty_ty(db, scope, ty, assumptions, owner)
+            }
+            ParamBasis::Full => lower_const_ty_ty(
+                db,
+                scope,
+                ty,
+                generic_param_owner_assumptions(db, scope),
+                None,
+            ),
+        })
     }
 }
 

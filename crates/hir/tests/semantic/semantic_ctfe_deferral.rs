@@ -238,7 +238,6 @@ fn invocation<'db>(
             ImplEnv::empty(db, owner.scope()),
         ),
         args,
-        parameter_owner: owner.scope(),
     })
 }
 
@@ -1977,7 +1976,8 @@ fn repeated_invocations_share_identity_after_scope_transfer() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "repeated_invocations.fe".into(),
-        "const fn value<const N: usize>() -> usize { if N == 0 { 1 / 0 } else { N } }\nconst fn left<const N: usize>() -> usize { value<N>() }\nconst fn right<const N: usize>() -> usize { value<N>() }\nfn outer<const X: usize, const Y: usize>() {}",
+        // `value` reads `n` twice, so extraction keeps the call as an invocation.
+        "const fn value<const N: usize>() -> usize { let n = N\n if n == 0 { 1 / 0 } else { n } }\nconst fn left<const N: usize>() -> usize { value<N>() }\nconst fn right<const N: usize>() -> usize { value<N>() }\nfn outer<const X: usize, const Y: usize>() {}",
     );
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
@@ -2005,7 +2005,6 @@ fn repeated_invocations_share_identity_after_scope_transfer() {
         let ConstExpr::Invocation(invocation) = expr.data(&db) else {
             panic!("expected a canonical invocation: {description:?}");
         };
-        assert_eq!(invocation.parameter_owner, outer_owner.scope());
         assert_eq!(
             invocation.key.owner(&db),
             BodyOwner::Func(function(&db, module, "value"))

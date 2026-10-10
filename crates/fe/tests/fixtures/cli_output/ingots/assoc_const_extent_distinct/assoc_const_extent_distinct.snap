@@ -1,0 +1,19 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDERR ===
+error[8-0000]: type mismatch
+  ┌─ src/lib.fe:6:5
+  │
+6 │     take<N>(x)
+  │     ^^^^^^^^^^ expected `[u8; Marker<const N: usize>::LEN]`, but `[u8; Marker<const N: usize>::LEN]` is given
+
+error[8-0000]: type mismatch
+  ┌─ src/lib.fe:6:13
+  │
+6 │     take<N>(x)
+  │             ^ expected `view [u8; Marker<const N: usize>::LEN]`, but `[u8; Marker<const N: usize>::LEN]` is given
+
+
+=== EXIT CODE: 1 ===

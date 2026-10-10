@@ -13,12 +13,13 @@ use crate::analysis::{
     HirAnalysisDb,
     ty::{
         binder::Binder,
-        const_ty::{ConstBodyLowering, HoleAnchor, LoweringContext},
+        const_ty::{ConstBodyLowering, HoleAnchor, LoweringContext, RebaseConstUseEnv},
         corelib::resolve_core_trait,
         effects::{
             EffectKeyCanonMode, EffectKeyKind, canonical_effect_identity_for_binding,
             place_effect_provider_param_index_map,
         },
+        fold::TyFoldable,
         layout_holes::{collect_layout_hole_tys_in_order, ty_contains_const_hole},
         trait_def::TraitInstId,
         trait_lower::{lower_impl_trait, lower_trait_ref, lower_trait_ref_with_minter},
@@ -231,17 +232,25 @@ pub(crate) fn collect_func_decl_constraints<'db>(
         }
     };
 
-    if !include_parent {
-        let func_constraints = collect_decl_constraints(db, hir_func.into());
-        return func_constraints;
-    }
-
+    // A method's own bounds resolve under its parent's, so without the parent
+    // they are the entries of the full list that the method itself declares.
     Binder::bind(
         hir_func.into(),
         PredicateListId::new(
             db,
             collect_func_decl_constraint_pairs(db, func)
                 .into_iter()
+                .filter(|(_, source)| {
+                    include_parent
+                        || match source {
+                            PredicateSource::GenericParamBound { owner, .. } => {
+                                *owner == GenericParamOwner::Func(hir_func)
+                            }
+                            PredicateSource::WherePredicateBound { owner, .. } => {
+                                *owner == WhereClauseOwner::Func(hir_func)
+                            }
+                        }
+                })
                 .map(|(inst, _)| inst)
                 .collect::<Vec<_>>(),
         ),
@@ -549,7 +558,22 @@ fn collect_decl_constraint_pairs_impl<'db>(
         }
     }
 
-    all_predicates.into_iter().collect()
+    // A const use in a bound records the constraints it was solved under,
+    // which include this very list while a cycle computes it, so recording
+    // them makes every iteration differ from the last and the cycle never
+    // settles. A use keeps the list's predicates its parameters reach, with
+    // the uses inside them in their comparison form instead: that cannot
+    // refer back to the list, and it holds the bounds, such as an enclosing
+    // item's `T: Gate<{ T::W }>`, that select the use's implementation once
+    // the list is instantiated.
+    let mut rebase = RebaseConstUseEnv::stored(db, all_predicates.keys().copied());
+    let mut rebased = IndexMap::new();
+    for (inst, source) in all_predicates {
+        rebased
+            .entry(inst.fold_with(db, &mut rebase))
+            .or_insert(source);
+    }
+    rebased.into_iter().collect()
 }
 
 fn collect_constraints_cycle_initial<'db>(

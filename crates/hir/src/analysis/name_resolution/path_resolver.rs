@@ -8,6 +8,8 @@ use crate::{
     core::semantic::trait_self_predicate,
     span::{DynLazySpan, path::LazyPathSpan},
 };
+use std::iter;
+
 use common::indexmap::{IndexMap, IndexSet};
 use either::Either;
 use rustc_hash::FxHashMap;
@@ -31,6 +33,7 @@ use crate::analysis::{
         binder::Binder,
         canonical::Canonicalized,
         const_ty::{ConstBodyLowering, HoleAnchor, LayoutHoleArgSite, LoweringContext},
+        diagnostics::{RevealedBy, TyDiagCollection, TyLowerDiag},
         fold::TyFoldable as _,
         generic_defaults::DefaultApplication,
         method_table::{MethodProbe, probe_method},
@@ -46,6 +49,7 @@ use crate::analysis::{
             is_goal_satisfiable,
         },
         ty_def::{InvalidCause, Kind, TyBase, TyData, TyId},
+        ty_error::emit_invalid_ty_error,
         ty_lower::{
             TyAlias, collect_generic_params, collect_source_generic_params, lower_generic_arg_list,
             lower_hir_ty_with_minter, lower_type_alias, lower_type_alias_deferred,
@@ -121,6 +125,13 @@ pub enum PathResErrorKind<'db> {
         arg_idx: usize,
     },
 
+    /// A trait argument failed compile-time evaluation; it is reported as
+    /// that fault, from the reference when only an applied default reveals it.
+    InvalidTraitArg {
+        arg: TyId<'db>,
+        applied_default: bool,
+    },
+
     /// Trait path generic argument expected a type; wrong domain was found.
     /// Carries the argument index and offending ident/kind for precise diagnostics.
     TraitGenericArgType {
@@ -163,6 +174,9 @@ impl<'db> PathResError<'db> {
         match &self.kind {
             PathResErrorKind::NotFound { .. } => "Not found".to_string(),
             PathResErrorKind::ParseError => "Parse error".to_string(),
+            PathResErrorKind::InvalidTraitArg { .. } => {
+                "Trait argument failed compile-time evaluation".to_string()
+            }
             PathResErrorKind::Ambiguous(v) => format!("Ambiguous; {} options.", v.len()),
             PathResErrorKind::AmbiguousAssociatedType {
                 name: _,
@@ -248,6 +262,81 @@ impl<'db> PathResError<'db> {
         }
     }
 
+    /// Whether the error is on `path` itself rather than inside one of its
+    /// generic arguments, which resolve as paths of their own.
+    pub fn is_on_path(&self, db: &'db dyn HirAnalysisDb, path: PathId<'db>) -> bool {
+        iter::successors(Some(path), |path| path.parent(db)).any(|path| path == self.failed_at)
+    }
+
+    /// The diagnostic for a trait reference: an evaluation fault in one of its
+    /// arguments as that fault, and any other error on the trait path as a path
+    /// resolution error. An error inside an argument, which resolves as a path
+    /// of its own, is reported with that argument's diagnostics.
+    pub fn into_trait_ref_diag(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        path: PathId<'db>,
+        path_span: LazyPathSpan<'db>,
+    ) -> Option<TyDiagCollection<'db>> {
+        if let PathResErrorKind::InvalidTraitArg {
+            arg,
+            applied_default,
+        } = self.kind
+        {
+            let fault = emit_invalid_ty_error(db, arg, path_span.clone().into())?;
+            Some(if applied_default {
+                TyLowerDiag::RevealedConstFault {
+                    site: path_span.into(),
+                    revealed_by: RevealedBy::AppliedDefault,
+                    fault: Box::new(fault),
+                }
+                .into()
+            } else {
+                fault
+            })
+        } else if self.is_on_path(db, path) {
+            self.into_diag(db, path, path_span, ExpectedPathKind::Trait)
+                .map(Into::into)
+        } else {
+            None
+        }
+    }
+
+    /// The diagnostic for an error in a path written where `expected` is. A
+    /// fault in the arguments of a qualified path's trait is reported as that
+    /// fault, which a path resolution diagnostic cannot describe.
+    pub fn into_ty_diag(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        path: PathId<'db>,
+        path_span: LazyPathSpan<'db>,
+        expected: ExpectedPathKind,
+    ) -> Option<TyDiagCollection<'db>> {
+        if let PathResErrorKind::QualifiedTypeTrait(result) = &self.kind
+            && let Err(inner) = result.as_ref()
+            && matches!(inner.kind, PathResErrorKind::InvalidTraitArg { .. })
+        {
+            let failed_idx = self.failed_at.segment_index(db);
+            let PathKind::QualifiedType { trait_, .. } = path
+                .segment(db, failed_idx)
+                .unwrap_or(self.failed_at)
+                .kind(db)
+            else {
+                return None;
+            };
+            let trait_span = path_span
+                .segment(failed_idx)
+                .qualified_type()
+                .trait_qualifier()
+                .path();
+            return inner
+                .clone()
+                .into_trait_ref_diag(db, trait_.path(db).to_opt()?, trait_span);
+        }
+        self.into_diag(db, path, path_span, expected)
+            .map(Into::into)
+    }
+
     pub fn into_diag(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -270,7 +359,7 @@ impl<'db> PathResError<'db> {
         };
 
         let diag = match kind {
-            PathResErrorKind::ParseError => return None,
+            PathResErrorKind::ParseError | PathResErrorKind::InvalidTraitArg { .. } => return None,
             PathResErrorKind::NotFound { parent, bucket } => {
                 if let Some(nr) = bucket.iter_ok().next() {
                     if path != self.failed_at {
@@ -2269,6 +2358,13 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                                     TraitArgError::ConstHoleNotAllowed { arg_idx } => {
                                         PathResErrorKind::TraitConstHoleArg { arg_idx }
                                     }
+                                    TraitArgError::InvalidArg {
+                                        cause,
+                                        applied_default,
+                                    } => PathResErrorKind::InvalidTraitArg {
+                                        arg: TyId::invalid(db, cause),
+                                        applied_default,
+                                    },
                                     TraitArgError::Ignored => PathResErrorKind::ParseError,
                                 };
                                 return Err(PathResError {

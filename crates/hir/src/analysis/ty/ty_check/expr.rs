@@ -68,7 +68,7 @@ use crate::analysis::ty::{
     },
     ty_check::callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization},
     ty_def::{CapabilityKind, PrimTy, TyBase, TyData, prim_int_bits},
-    ty_error::{diag_from_invalid_cause, first_invalid_ty_cause, is_const_eval_fault},
+    ty_error::{diag_from_invalid_cause, first_invalid_ty_cause},
     unify::UnificationTable,
 };
 use crate::analysis::{
@@ -86,13 +86,12 @@ use crate::analysis::{
     },
     place::resolve_place_field,
     semantic::{
-        ConstRepr, EvalOutcome, SemConstScalar, SemConstValue, SemOrigin, eval_const_ref,
-        instance::resolve_semantic_const_ref, int_const,
+        CtfeConfig, EvalOutcome, SemConstScalar, SemConstValue, SemOrigin, eval_const_ref,
+        force_const_term_value, instance::resolve_semantic_const_ref, int_const,
     },
     ty::{
         LayoutBundlePathStep,
-        const_expr::ConstExpr,
-        const_ty::{ConstTyData, ConstTyId, const_ty_from_sem_const, try_eval_const_int_expr},
+        const_ty::{ConstTyId, const_ty_from_sem_const, try_eval_const_int_expr},
         normalize::normalize_ty,
         ty_check::{RecordInitLowering, TyChecker, path::RecordInitChecker},
         ty_def::{InvalidCause, TyId},
@@ -686,11 +685,6 @@ impl<'db> TyChecker<'db> {
         inner_expr: ExprId,
         target_ty: Partial<crate::hir_def::TypeId<'db>>,
     ) -> ExprProp<'db> {
-        let inner_prop = self.check_expr_unknown(inner_expr);
-        if inner_prop.ty.has_invalid(self.db) {
-            return ExprProp::invalid(self.db);
-        }
-
         let Some(hir_target_ty) = target_ty.to_opt() else {
             return ExprProp::invalid(self.db);
         };
@@ -698,6 +692,22 @@ impl<'db> TyChecker<'db> {
         let span = expr.span(self.body()).into_cast_expr().ty();
         let target_ty = self.lower_ty(hir_target_ty, span, true);
         if target_ty.has_invalid(self.db) {
+            return ExprProp::invalid(self.db);
+        }
+
+        // A fixed String cast supplies the width of a string literal, just
+        // as an annotation does. Other casts still infer the source type
+        // independently before checking whether the conversion is allowed.
+        let inner_prop = if target_ty.is_string(self.db)
+            && matches!(
+                inner_expr.data(self.db, self.body()),
+                Partial::Present(Expr::Lit(LitKind::String(_)))
+            ) {
+            self.check_expr(inner_expr, target_ty)
+        } else {
+            self.check_expr_unknown(inner_expr)
+        };
+        if inner_prop.ty.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
         }
 
@@ -1485,7 +1495,7 @@ impl<'db> TyChecker<'db> {
         }
         let call: DynLazySpan<'db> = expr.span(self.body()).into();
         if let Some(cause) = first_invalid_ty_cause(self.db, ret_ty)
-            && is_const_eval_fault(&cause)
+            && cause.const_eval_fault().is_some()
             && let Some(fault) = diag_from_invalid_cause(call.clone(), &cause)
         {
             self.push_diag(BodyDiag::CallReturnTypeConstFault {
@@ -3590,7 +3600,7 @@ impl<'db> TyChecker<'db> {
                     };
 
                     if let Some(diag) =
-                        err.into_diag(self.db, path, path_span.clone(), expected_kind)
+                        err.into_ty_diag(self.db, path, path_span.clone(), expected_kind)
                     {
                         self.push_diag(diag)
                     }
@@ -4725,33 +4735,29 @@ impl<'db> TyChecker<'db> {
         ExprProp::new(ty, true)
     }
 
-    /// Whether `const_ty` is acceptable as an array-repeat length: a known
-    /// literal, or a symbolic const that resolves per monomorphization — a bare
-    /// const param (`N`) or a bare trait-const projection (`T::N`). The latter
-    /// two stay symbolic during checking and become concrete once the owning
-    /// type parameters are.
+    /// Whether `const_ty` is acceptable as an array-repeat length. Each
+    /// specialization materializes the repeat by forcing its length through
+    /// the common CTFE service, so the length must be forceable now or be
+    /// blocked only on facts that specialization supplies. Admission depends
+    /// on that outcome alone, not on how the length is described: the service
+    /// reports a reached fault or an unsupported operation, such as an opaque
+    /// extern call with known inputs, as a failure, and any fault behind an
+    /// unresolved parameter, selection or type when a concrete use forces it.
+    /// Holes and inference variables are never supplied, so a length that
+    /// mentions one cannot wait.
     fn array_len_const_is_acceptable(&self, const_ty: ConstTyId<'db>) -> bool {
-        if const_ty.integer_value(self.db).is_some() {
-            return true;
-        }
-        match const_ty.data(self.db) {
-            ConstTyData::TyParam(..) => true,
-            ConstTyData::Computation { description, .. } => match description.repr() {
-                ConstRepr::Term(term) => self.array_len_const_is_acceptable(*term),
-                ConstRepr::Value(value) => matches!(
-                    value.value().value(self.db),
-                    SemConstValue::Scalar {
-                        value: SemConstScalar::Int { .. },
-                        ..
-                    }
+        let len = TyId::const_ty(self.db, const_ty);
+        !len.has_var(self.db)
+            && !len.has_hole(self.db)
+            && !matches!(
+                force_const_term_value(
+                    self.db,
+                    const_ty,
+                    CtfeConfig::default(),
+                    SemOrigin::Synthetic
                 ),
-                ConstRepr::Deferred(_) => false,
-            },
-            ConstTyData::Abstract(expr, _) => {
-                matches!(expr.data(self.db), ConstExpr::TraitConst(_))
-            }
-            _ => false,
-        }
+                EvalOutcome::Failed(_)
+            )
     }
 
     fn check_if(
@@ -5331,10 +5337,11 @@ impl<'db> TyChecker<'db> {
                         // Like a call argument, the operand keeps its own type:
                         // the call boundary applies the coercion, so a viewed
                         // operand is borrowed in place rather than moved.
-                        checked_rhs_ty = Some(self.equate_ty(
+                        checked_rhs_ty = Some(self.equate_ty_with_expr(
                             rhs_ty,
                             expected_rhs,
                             rhs_expr.span(self.body()).into(),
+                            Some(rhs_expr),
                         ));
                     }
                     (func_ty, inst)
