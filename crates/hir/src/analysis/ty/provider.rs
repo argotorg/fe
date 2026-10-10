@@ -600,6 +600,19 @@ fn trusted_effect_handle_impl(db: &dyn HirAnalysisDb, impl_trait: ImplTrait<'_>)
         || is_authorized_builtin_library(db, ingot, BuiltinLibrary::Std)
 }
 
+/// Whether `implementor` implements the core `EffectHandle` trait.
+pub(crate) fn is_effect_handle_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementor: ImplementorId<'db>,
+) -> bool {
+    let trait_def = implementor.trait_def(db);
+    is_authorized_builtin_library(db, trait_def.top_mod(db).ingot(db), BuiltinLibrary::Core)
+        && trait_def
+            .name(db)
+            .to_opt()
+            .is_some_and(|name| name.data(db) == "EffectHandle")
+}
+
 pub(crate) fn effect_handle_impl_raw_failure<'db>(
     db: &'db dyn HirAnalysisDb,
     implementor: ImplementorId<'db>,
@@ -610,10 +623,7 @@ pub(crate) fn effect_handle_impl_raw_failure<'db>(
     ) {
         return None;
     }
-    let trait_def = implementor.trait_def(db);
-    if !is_authorized_builtin_library(db, trait_def.top_mod(db).ingot(db), BuiltinLibrary::Core)
-        || trait_def.name(db).to_opt()?.data(db) != "EffectHandle"
-    {
+    if !is_effect_handle_impl(db, implementor) {
         return None;
     }
     let raw_ty = implementor.assoc_ty(db, IdentId::new(db, "Raw".to_string()))?;

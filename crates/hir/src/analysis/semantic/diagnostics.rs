@@ -218,6 +218,7 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
             SemanticDiagnosticKind::UnboundedReferents => 11,
             SemanticDiagnosticKind::NormalizationLimit => 12,
             SemanticDiagnosticKind::InstanceLimit => 13,
+            SemanticDiagnosticKind::UnresolvedEffectHandle => 14,
         };
         CompleteDiagnostic::new(
             Severity::Error,
@@ -289,6 +290,10 @@ impl SemanticDiagnosticKind {
             ),
             Self::NormalizationLimit => "type normalization limit exceeded".to_string(),
             Self::InstanceLimit => "instance limit exceeded".to_string(),
+            Self::UnresolvedEffectHandle => format!(
+                "cannot resolve effect handle in `fn {}`",
+                checker_name(db, instance)
+            ),
         }
     }
 }
@@ -470,4 +475,6 @@ pub enum SemanticDiagnosticKind {
     /// Instantiating a generic function makes too many instances of generic
     /// functions.
     InstanceLimit,
+    /// A value's effect handle type has no `Target` and `Raw` known here.
+    UnresolvedEffectHandle,
 }

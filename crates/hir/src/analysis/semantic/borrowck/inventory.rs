@@ -88,6 +88,30 @@ pub(super) fn unbounded_referents_diag<'db>(
     )
 }
 
+/// A value whose type is an effect handle whose `Target` and `Raw` cannot be
+/// determined here, such as a generic handle whose `Target` names an
+/// associated type of its own parameters, inside its own methods.
+pub(super) fn unresolved_effect_handle_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    template_owner: BodyOwner<'db>,
+    ty: TyId<'db>,
+) -> SemanticDiagnostic<'db> {
+    SemanticDiagnostic::new(
+        instance,
+        SemanticDiagnosticKind::UnresolvedEffectHandle,
+        format!(
+            "the `Target` and `Raw` of effect handle `{}` cannot be resolved here, as when one of them names an associated type of the handle's own parameters inside the handle's methods",
+            ty.pretty_print(db)
+        ),
+        SemanticDiagnosticSpan::OriginWithTemplateFallback {
+            owner: instance.key(db).owner(db),
+            template_owner,
+            origin: SemOrigin::Body(template_owner),
+        },
+    )
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct InputTarget<'db> {
     pub source: ExternalSource<'db>,

@@ -714,6 +714,30 @@ impl<'db> ImplTrait<'db> {
         db: &'db dyn HirAnalysisDb,
         implementor: ImplementorId<'db>,
     ) -> Vec<TyDiagCollection<'db>> {
+        if !ty::provider::is_effect_handle_impl(db, implementor) {
+            return Vec::new();
+        }
+        // Every value of a handle needs its `Target` and `Raw`, including the
+        // receiver of the handle's own `raw` method, so a normalization limit
+        // in either is reported here, where it is written.
+        let assumptions = constraints_for(db, self.into());
+        let limits: Vec<_> = ["Target", "Raw"]
+            .into_iter()
+            .filter_map(|name| {
+                let name = IdentId::new(db, name.to_string());
+                let span = self.associated_type_span(db, name)?;
+                ty::ty_error::normalization_limit_diag(
+                    db,
+                    implementor.assoc_ty(db, name)?,
+                    self.scope(),
+                    assumptions,
+                    span.ty().into(),
+                )
+            })
+            .collect();
+        if !limits.is_empty() {
+            return limits;
+        }
         let Some((raw_ty, failure)) = ty::provider::effect_handle_impl_raw_failure(db, implementor)
         else {
             return Vec::new();
