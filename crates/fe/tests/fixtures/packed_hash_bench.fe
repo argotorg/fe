@@ -1,0 +1,22 @@
+use core::ptr::{self, MemSpan}
+use std::evm::{RawMem, keccak256}
+use std::evm::packed::keccak_packed
+
+msg HashMsg {
+    #[selector = 0x01020304]
+    Hash { a: u256, b: u256, c: u256 } -> u256,
+}
+
+fn hash(_ a: u256, _ b: u256, _ c: u256) -> u256 uses (mem: mut RawMem) {
+    // The test substitutes the same consumer's encoding implementation here.
+    core::keccak((a, b))
+}
+
+pub contract HashBench uses (mem: mut RawMem) {
+    init() {}
+    recv HashMsg {
+        Hash { a, b, c } -> u256 uses (mut mem) {
+            hash(a, b, c)
+        }
+    }
+}

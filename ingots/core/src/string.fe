@@ -1,43 +1,28 @@
 use super::ops::Eq
-use super::num::IntDowncast
+use super::bytes::{AsBytes, PackedBytes}
 
 /// Fixed-size string utilities.
 ///
 /// `String<N>` values are represented as a packed word and are left-padded with zero bytes.
 /// The "effective length" of a string is defined as the number of bytes after removing leading
 /// zero-padding from its `N`-byte representation.
-
 impl<const N: usize> String<N> {
     /// Returns the fixed-width byte representation of this string (including padding).
-    pub const fn as_bytes(self) -> [u8; N] {
-        let raw: u256 = self as u256
-        let width_bits: u256 = (N * 8) as u256
-        let mask: u256 = (1 << width_bits) - 1
-        let word: u256 = raw & mask
-        let mut out: [u8; N] = [0; N]
-        let mut i: usize = 0
-        while i < N {
-            let shift: u256 = ((N - 1 - i) * 8) as u256
-            out[i] = (word >> shift).downcast_truncate()
-            i += 1
-        }
-        out
+    #[inline(always)]
+    pub const fn as_bytes(self) -> PackedBytes<N> {
+        <Self as AsBytes>::as_bytes(self)
     }
 
-    /// Constructs a `String<N>` from its fixed-width byte representation (including padding).
-    pub const fn from_bytes(_ bytes: [u8; N]) -> Self {
-        let mut word: u256 = 0
-        let mut i: usize = 0
-        while i < N {
-            word = (word << 8) + (bytes[i] as u256)
-            i += 1
-        }
-        word as Self
+    /// Constructs a string from its packed fixed-width bytes, including left padding.
+    #[inline(always)]
+    pub const fn from_bytes(_ bytes: PackedBytes<N>) -> Self {
+        if N == 0 { return 0 as Self }
+        (bytes.word(0) >> (((32 - N) * 8) as u256)) as Self
     }
 
     /// Returns the effective (unpadded) length in bytes.
     pub const fn len(self) -> usize {
-        let bytes: [u8; N] = self.as_bytes()
+        let bytes = self.as_bytes()
         let mut i: usize = 0
         while i < N {
             if bytes[i] != 0 {
@@ -59,8 +44,6 @@ pub const fn concat<const A: usize, const B: usize, const OUT: usize>(
     _ a: String<A>,
     _ b: String<B>,
 ) -> String<OUT> {
-    let a_bytes: [u8; A] = a.as_bytes()
-    let b_bytes: [u8; B] = b.as_bytes()
     let a_len: usize = a.len()
     let b_len: usize = b.len()
     let mut a_take: usize = a_len
@@ -71,41 +54,20 @@ pub const fn concat<const A: usize, const B: usize, const OUT: usize>(
     if a_take + b_take > OUT {
         b_take = OUT - a_take
     }
-    let used: usize = a_take + b_take
+    // Each kept prefix drops the trailing bytes that do not fit.
+    let a_kept = padded_word(a) >> (((a_len - a_take) * 8) as u256)
+    let b_kept = padded_word(b) >> (((b_len - b_take) * 8) as u256)
+    ((a_kept << ((b_take * 8) as u256)) | b_kept) as String<OUT>
+}
 
-    let mut out: [u8; OUT] = [0; OUT]
-
-    let dst_base: usize = OUT - used
-    let a_src_base: usize = A - a_len
-    let b_src_base: usize = B - b_len
-
-    let mut i: usize = 0
-    while i < a_take {
-        out[dst_base + i] = a_bytes[a_src_base + i]
-        i += 1
-    }
-
-    let mut j: usize = 0
-    while j < b_take {
-        out[dst_base + a_take + j] = b_bytes[b_src_base + j]
-        j += 1
-    }
-
-    String::from_bytes(out)
+/// The string's word without the bits above its capacity.
+const fn padded_word<const N: usize>(_ s: String<N>) -> u256 {
+    (s as u256) & ((1 << ((N * 8) as u256)) - 1)
 }
 
 impl<const N: usize> Eq for String<N> {
     const fn eq(self, _ other: String<N>) -> bool {
-        let a: [u8; N] = self.as_bytes()
-        let b: [u8; N] = other.as_bytes()
-        let mut i: usize = 0
-        while i < N {
-            if a[i] != b[i] {
-                return false
-            }
-            i += 1
-        }
-        true
+        self.as_bytes() == other.as_bytes()
     }
 
     const fn ne(self, _ other: String<N>) -> bool {

@@ -560,7 +560,8 @@ impl<'db> RuntimeConversionPlanner<'db> {
                     space: raw_space,
                     pointee: raw_pointee,
                 },
-            ) if provider_space == raw_space
+            ) if *provider_space != AddressSpaceKind::Memory
+                && provider_space == raw_space
                 && raw_pointee
                     .is_none_or(|target| raw_pointee_matches_class(self.db, target, pointee)) =>
             {
@@ -748,6 +749,35 @@ mod tests {
             RuntimeConversionPlanner::plan(&db, storage_raw, memory_provider),
             Err(RuntimeConversionError::Unsupported { .. })
         ));
+    }
+
+    #[test]
+    fn memory_provider_cannot_be_reinterpreted_as_raw_memory() {
+        let db = DriverDataBase::default();
+        let layout = test_struct_layout(&db);
+        for pointee in [word_class(), RuntimeClass::AggregateValue { layout }] {
+            let provider = RuntimeClass::Ref {
+                pointee: Box::new(pointee.clone()),
+                kind: RefKind::Provider {
+                    provider_ty: TyId::unit(&db),
+                    space: AddressSpaceKind::Memory,
+                },
+                view: RefView::Whole,
+            };
+            for raw in [
+                RuntimeClass::raw_addr(&db, AddressSpaceKind::Memory, pointee),
+                RuntimeClass::opaque_raw_addr(AddressSpaceKind::Memory),
+            ] {
+                assert!(matches!(
+                    RuntimeConversionPlanner::plan(&db, provider.clone(), raw.clone()),
+                    Err(RuntimeConversionError::Unsupported { .. })
+                ));
+                assert!(matches!(
+                    RuntimeConversionPlanner::plan(&db, raw, provider.clone()),
+                    Err(RuntimeConversionError::Unsupported { .. })
+                ));
+            }
+        }
     }
 
     #[test]

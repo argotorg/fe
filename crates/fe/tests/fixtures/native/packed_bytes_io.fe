@@ -1,0 +1,61 @@
+use core::AsBytes
+use std::io::{Write, host, write, writeln}
+
+fn say<T: AsBytes>(_ value: T) uses (w: mut Write) {
+    write(value)
+}
+
+fn say_array<const N: usize>(_ seed: u256) uses (w: mut Write) {
+    let mut bytes: [u8; N] = [0; N]
+    let mut i: usize = 0
+    while i < N {
+        bytes[i] = (seed + i as u256).downcast_truncate()
+        i += 1
+    }
+    let packed = bytes.as_bytes()
+    assert!(packed.to_array() == bytes)
+    say(packed)
+}
+
+pub fn main(argc: i32, argv: **u8) -> i32 {
+    let _ = argv
+    let word: u256 = if argc == 1 {
+        0
+    } else if argc == 2 {
+        1
+    } else if argc == 3 {
+        1 << 255
+    } else {
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+    }
+    let hidden_word: u256 = if argc == 1 { 0xff41 } else { 0xff42 }
+    let hidden: String<1> = hidden_word as String<1>
+    let wide: String<31> = if argc == 1 {
+        "1234567890123456789012345678901"
+    } else {
+        "x"
+    }
+    let padded: String<4> = "ab"
+    with (Write = host()) {
+        say("xyz|")
+        say(("ab", "cd|"))
+        say((("a", "b"), ("c", ("d", "e|"))))
+        say(padded)
+        writeln(("t", "u"))
+        say(word)
+        say((hidden, ("" as String<0>, wide), [1 as u8, 2, 3]))
+        let seed: u256 = argc.downcast().unwrap()
+        say_array<0>(seed)
+        say_array<1>(seed)
+        say_array<31>(seed)
+        say_array<32>(seed)
+        say_array<33>(seed)
+        say_array<63>(seed)
+        say_array<64>(seed)
+        say_array<65>(seed)
+    }
+    let bytes = word.as_bytes()
+    assert!(bytes.word(0) == word)
+    assert!(bytes[0] == (word >> 248).downcast_truncate())
+    0
+}

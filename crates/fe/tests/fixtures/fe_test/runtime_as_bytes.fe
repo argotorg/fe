@@ -1,0 +1,66 @@
+// `AsBytes::as_bytes` on values that only exist at runtime (here: generic
+// parameters) must produce the same bytes as constant evaluation.
+use core::{AsBytes, PackedBytes}
+
+/// Folds bytes into a word so that whole byte arrays can be compared.
+const fn digest_bytes<const N: usize>(_ bytes: PackedBytes<N>) -> u256 {
+    let mut digest: u256 = N as u256
+    let mut i: usize = 0
+    while i < N {
+        digest = ((digest << 8) | (digest >> 248)) ^ (bytes[i] as u256)
+        i += 1
+    }
+    digest
+}
+
+const fn const_digest<T: AsBytes>(_ value: T) -> u256 {
+    digest_bytes(value.as_bytes())
+}
+
+fn runtime_digest<T: AsBytes>(_ value: T) -> u256 {
+    digest_bytes(value.as_bytes())
+}
+
+fn runtime_byte<T: AsBytes>(_ value: T, _ index: usize) -> u8 {
+    let bytes = value.as_bytes()
+    bytes[index]
+}
+
+const PADDED: String<6> = "ab"
+const WORD: u256 = 0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20
+
+const STRING_DIGEST: u256 = const_digest(PADDED)
+const WORD_DIGEST: u256 = const_digest(WORD)
+const PAIR_DIGEST: u256 = const_digest(("ab", "cde"))
+const NESTED_DIGEST: u256 = const_digest((("a", "bc"), (PADDED, ("d",)), WORD))
+
+#[test]
+fn string_is_left_padded() {
+    core::assert(runtime_digest(PADDED) == STRING_DIGEST)
+    core::assert(runtime_byte(PADDED, 0) == 0)
+    core::assert(runtime_byte(PADDED, 3) == 0)
+    core::assert(runtime_byte(PADDED, 4) == 97)
+    core::assert(runtime_byte(PADDED, 5) == 98)
+}
+
+#[test]
+fn word_is_big_endian() {
+    core::assert(runtime_digest(WORD) == WORD_DIGEST)
+    core::assert(runtime_byte(WORD, 0) == 0x01)
+    core::assert(runtime_byte(WORD, 31) == 0x20)
+}
+
+#[test]
+fn tuples_concatenate() {
+    core::assert(runtime_digest(("ab", "cde")) == PAIR_DIGEST)
+    core::assert(runtime_byte(("ab", "cde"), 2) == 99)
+    core::assert(
+        runtime_digest((("a", "bc"), (PADDED, ("d",)), WORD)) == NESTED_DIGEST,
+    )
+    core::assert(
+        runtime_byte((("a", "bc"), (PADDED, ("d",)), WORD), 9) == 100,
+    )
+    core::assert(
+        runtime_byte((("a", "bc"), (PADDED, ("d",)), WORD), 41) == 0x20,
+    )
+}

@@ -1,0 +1,114 @@
+use core::AsBytes
+
+const fn array_hash<const N: usize>(_ seed: u256) -> u256 {
+    let mut bytes: [u8; N] = [0; N]
+    let mut i: usize = 0
+    while i < N {
+        bytes[i] = ((seed & 0xff) + i as u256).downcast_truncate()
+        i += 1
+    }
+    core::keccak(bytes)
+}
+
+msg HashMsg {
+    #[selector = 0x01020304]
+    Hash { kind: u256, word: u256 } -> u256,
+}
+
+pub contract RuntimeHash {
+    init() {}
+    recv HashMsg {
+        Hash { kind, word } -> u256 {
+            if kind == 14 { return EMPTY }
+            if kind == 15 { return ONE }
+            if kind == 16 {
+                return THIRTY_ONE
+            }
+            if kind == 17 {
+                return THIRTY_TWO
+            }
+            if kind == 18 {
+                return THIRTY_THREE
+            }
+            if kind == 19 {
+                return SIXTY_THREE
+            }
+            if kind == 20 {
+                return SIXTY_FOUR
+            }
+            if kind == 21 {
+                return SIXTY_FIVE
+            }
+            if kind == 0 {
+                return core::keccak(word)
+            }
+            if kind == 1 {
+                return core::keccak(word as String<0>)
+            }
+            if kind == 2 {
+                return core::keccak(word as String<1>)
+            }
+            if kind == 3 {
+                return core::keccak(word as String<31>)
+            }
+            if kind == 4 {
+                return array_hash<0>(word)
+            }
+            if kind == 5 {
+                return array_hash<1>(word)
+            }
+            if kind == 6 {
+                return array_hash<31>(word)
+            }
+            if kind == 7 {
+                return array_hash<32>(word)
+            }
+            if kind == 8 {
+                return array_hash<33>(word)
+            }
+            if kind == 9 {
+                return array_hash<63>(word)
+            }
+            if kind == 10 {
+                return array_hash<64>(word)
+            }
+            if kind == 11 {
+                return array_hash<65>(word)
+            }
+            if kind == 12 {
+                return core::keccak(((word as String<1>, word), (word, "" as String<0>)))
+            }
+            core::keccak(
+                (
+                    word as String<1>,
+                    word as String<1>,
+                    word as String<1>,
+                    word as String<1>,
+                    word as String<1>,
+                    word as String<1>,
+                    word as String<1>,
+                    word as String<1>,
+                    word as String<1>,
+                    word as String<1>,
+                    word as String<1>,
+                    word as String<1>,
+                    word as String<1>,
+                    word as String<1>,
+                    word as String<1>,
+                    word as String<1>,
+                ),
+            )
+        }
+    }
+}
+
+// The same boundary cases also demand the packed hash implementation at CTFE.
+const EMPTY: u256 = array_hash<0>(17)
+const ONE: u256 = array_hash<1>(17)
+const THIRTY_ONE: u256 = array_hash<31>(17)
+const THIRTY_TWO: u256 = array_hash<32>(17)
+const THIRTY_THREE: u256 = array_hash<33>(17)
+const SIXTY_THREE: u256 = array_hash<63>(17)
+const SIXTY_FOUR: u256 = array_hash<64>(17)
+const SIXTY_FIVE: u256 = array_hash<65>(17)
+static_assert(EMPTY == 0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470)

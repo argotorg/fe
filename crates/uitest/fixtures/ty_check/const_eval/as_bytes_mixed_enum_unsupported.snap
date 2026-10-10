@@ -3,8 +3,57 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/const_eval/as_bytes_mixed_enum_unsupported.fe
 ---
-error[3-0023]: the expression cannot be evaluated at compile time
-  ┌─ as_bytes_mixed_enum_unsupported.fe:9:27
-  │
-9 │     let bytes: [u8; 32] = intrinsic::__as_bytes(Mixed::B)
-  │                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsupported in const evaluation
+error[6-0003]: trait bound is not satisfied
+    ┌─ as_bytes_mixed_enum_unsupported.fe:14:5
+    │
+ 14 │     core::keccak(Mixed::B)
+    │     ^^^^^^^^^^^^ `Mixed` doesn't implement `AsBytes`
+    │
+    ┌─ src/bytes.fe:678:24
+    │
+678 │ pub const fn keccak<T: AsBytes>(_ x: T) -> u256 {
+    │                        ------- required by this bound on `keccak`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ as_bytes_mixed_enum_unsupported.fe:17:5
+    │
+ 17 │     core::keccak(AddrSpace::Stor)
+    │     ^^^^^^^^^^^^ `AddrSpace` doesn't implement `AsBytes`
+    │
+    ┌─ src/bytes.fe:678:24
+    │
+678 │ pub const fn keccak<T: AsBytes>(_ x: T) -> u256 {
+    │                        ------- required by this bound on `keccak`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ as_bytes_mixed_enum_unsupported.fe:20:5
+    │
+ 20 │     core::keccak(26 as u16)
+    │     ^^^^^^^^^^^^ `u16` doesn't implement `AsBytes`
+    │
+    ┌─ src/bytes.fe:678:24
+    │
+678 │ pub const fn keccak<T: AsBytes>(_ x: T) -> u256 {
+    │                        ------- required by this bound on `keccak`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ as_bytes_mixed_enum_unsupported.fe:24:5
+    │
+ 24 │     core::keccak(xs)
+    │     ^^^^^^^^^^^^ `[u16; 2]` doesn't implement `AsBytes`
+    │
+    ┌─ src/bytes.fe:678:24
+    │
+678 │ pub const fn keccak<T: AsBytes>(_ x: T) -> u256 {
+    │                        ------- required by this bound on `keccak`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ as_bytes_mixed_enum_unsupported.fe:27:5
+    │
+ 27 │     core::keccak(NotBytes { value: 1 })
+    │     ^^^^^^^^^^^^ `NotBytes` doesn't implement `AsBytes`
+    │
+    ┌─ src/bytes.fe:678:24
+    │
+678 │ pub const fn keccak<T: AsBytes>(_ x: T) -> u256 {
+    │                        ------- required by this bound on `keccak`
