@@ -1,6 +1,6 @@
-// `W<T>: Show` needs `W<A<T>>: Show`, which needs `W<A<A<T>>>: Show`, and so
-// on: no finite proof exists, and the solver stops when the types keep
-// growing. The bound is undecided, not ambiguous: there is only one impl.
+// `W<T>: Show` needs `W<A<T>>: Show`, and so on: no finite proof exists, and
+// the solver stops when the types keep growing. The bound is undecided, not
+// ambiguous (one impl), in a body and in a written type alike.
 trait Show {
     fn show(self) -> u8
 }

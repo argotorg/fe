@@ -521,7 +521,7 @@ impl<'db> WfJoin<'db> {
     fn add(&mut self, wf: WellFormedness<'db>) -> Option<WellFormedness<'db>> {
         match wf {
             WellFormedness::WellFormed => None,
-            WellFormedness::IllFormed { .. } => Some(wf),
+            WellFormedness::IllFormed { .. } | WellFormedness::Undecided { .. } => Some(wf),
             WellFormedness::NormalizationLimit(limit) => {
                 let earlier = match self.limit {
                     Some(WellFormedness::NormalizationLimit(earlier)) => Some(earlier),
@@ -731,6 +731,18 @@ fn unsatisfied_goal<'db>(
             Some(WellFormedness::IllFormed { goal, subgoal })
         }
         Err(limit) => Some(WellFormedness::NormalizationLimit(limit)),
+        // The solver stopped on one of its own budgets before it found any
+        // proof: the goal is not proved, so the type is not accepted. A goal
+        // with answers, complete or not, is proved.
+        Ok(GoalSatisfiability::NeedsConfirmation {
+            solutions,
+            completion,
+        }) if solutions.is_empty() && completion.is_budget_stop() => {
+            Some(WellFormedness::Undecided {
+                goal,
+                stop: completion,
+            })
+        }
         Ok(
             GoalSatisfiability::Satisfied(_)
             | GoalSatisfiability::NeedsConfirmation { .. }
@@ -748,6 +760,12 @@ pub(crate) enum WellFormedness<'db> {
     },
     /// Deciding it reached a normalization limit.
     NormalizationLimit(NormalizationLimit),
+    /// The trait solver stopped on one of its budgets before it found a
+    /// proof of `goal`.
+    Undecided {
+        goal: TraitInstId<'db>,
+        stop: TraitSolveCompletion,
+    },
 }
 
 impl<'db> WellFormedness<'db> {
@@ -783,6 +801,10 @@ impl<'db> WellFormedness<'db> {
                 .into(),
             ),
             Self::NormalizationLimit(limit) => Some(limit.report(span).0),
+            Self::Undecided { goal, stop } => Some(
+                super::diagnostics::TraitConstraintDiag::TraitBoundUndecided { span, goal, stop }
+                    .into(),
+            ),
         }
     }
 }
@@ -846,6 +868,18 @@ impl TraitSolveCompletion {
 
     pub fn hit_root_answer_limit(self) -> bool {
         matches!(self, Self::RootAnswerLimit { .. })
+    }
+
+    /// Whether the search stopped on one of the solver's own budgets (steps,
+    /// subgoals, growing types) rather than finishing.
+    pub fn is_budget_stop(self) -> bool {
+        matches!(
+            self,
+            Self::StepLimit { .. }
+                | Self::TableLimit { .. }
+                | Self::PendingWorkLimit { .. }
+                | Self::MaximumTypeDepth
+        )
     }
 }
 

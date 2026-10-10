@@ -5217,6 +5217,25 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 span.resolve(db),
                 error_code,
             ),
+
+            Self::TraitBoundUndecided { span, goal, stop } => CompleteDiagnostic {
+                severity,
+                message: "trait bound cannot be decided".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "cannot decide whether `{}` implements `{}`",
+                        goal.self_ty(db).pretty_print(db),
+                        goal.pretty_print(db, false)
+                    ),
+                    span: span.resolve(db),
+                }],
+                notes: vec![format!(
+                    "the trait solver stopped before it found a proof or a counterexample: {}",
+                    undecided_reason(*stop)
+                )],
+                error_code,
+            },
         }
     }
 }

@@ -3,6 +3,14 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/trait_bound_undecided.fe
 ---
+error[6-0028]: trait bound cannot be decided
+   ┌─ trait_bound_undecided.fe:46:23
+   │
+46 │ fn through_a_bound(n: Needs<W<u8>>) -> u8 {
+   │                       ^^^^^^^^^^^^ cannot decide whether `W<u8>` implements `Show`
+   │
+   = the trait solver stopped before it found a proof or a counterexample: the types in the subgoals kept growing
+
 error[8-0097]: trait bound cannot be decided
    ┌─ trait_bound_undecided.fe:43:5
    │

@@ -1149,6 +1149,14 @@ pub enum TraitConstraintDiag<'db> {
     ConcreteTypeBound(DynLazySpan<'db>, TyId<'db>),
 
     ConstTyBound(DynLazySpan<'db>, TyId<'db>),
+
+    /// A bound that a written type needs, which the trait solver could not
+    /// decide: it stopped on one of its budgets before it found a proof.
+    TraitBoundUndecided {
+        span: DynLazySpan<'db>,
+        goal: TraitInstId<'db>,
+        stop: TraitSolveCompletion,
+    },
 }
 
 impl TraitConstraintDiag<'_> {
@@ -1161,6 +1169,8 @@ impl TraitConstraintDiag<'_> {
             Self::InfiniteBoundRecursion(..) => 4,
             Self::ConcreteTypeBound(..) => 5,
             Self::ConstTyBound(..) => 6,
+            // The codes below 28 in this pass are taken by impl diagnostics.
+            Self::TraitBoundUndecided { .. } => 28,
         }
     }
 }
