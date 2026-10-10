@@ -1,0 +1,28 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/dependent_repeat_return_type_faults.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/dependent_repeat_return_type_faults.fe
+
+error[8-0096]: arithmetic overflow in const context
+  ┌─ dependent_repeat_return_type_faults.fe:7:30
+  │
+3 │ fn make<const N: usize>(_ value: u8) -> [u8; { N - 1 }] { [value; { N - 1 }] }
+  │                                                ----- checked arithmetic overflowed during const evaluation
+  ·
+7 │ fn receive() { let _values = make<0>(runtime(7)) }
+  │                              ^^^^^^^^^^^^^^^^^^^ in the return type of this call
+
+error[8-0096]: arithmetic overflow in const context
+  ┌─ dependent_repeat_return_type_faults.fe:8:23
+  │
+4 │ fn produce<const N: usize>() -> [u8; { N - 1 }] { todo() }
+  │                                        ----- checked arithmetic overflowed during const evaluation
+  ·
+8 │ fn returned() -> u8 { produce<0>()[0] }
+  │                       ^^^^^^^^^^^^ in the return type of this call
+
+
+=== EXIT CODE: 1 ===

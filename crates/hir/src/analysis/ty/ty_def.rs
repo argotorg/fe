@@ -25,7 +25,8 @@ use smallvec::SmallVec;
 use super::{
     adt_def::{AdtDef, instantiate_adt_field_shape},
     const_ty::{
-        ConstTyData, ConstTyId, TypePrintMode, UnevaluatedConstPolicy, const_ty_from_sem_const,
+        ConstCaptureEnv, ConstTyData, ConstTyId, TypePrintMode, UnevaluatedConstPolicy,
+        const_ty_from_sem_const,
     },
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     effects::place_effect_provider_param_index_map,
@@ -809,6 +810,8 @@ impl<'db> TyId<'db> {
                 )?;
                 Ok(TyId::const_ty(db, const_ty.with_ty(db, ty)))
             }
+            // An argument that is already invalid keeps its own cause.
+            (Some(_), TyData::Invalid(cause)) => Err(cause.clone()),
             (Some(expected_const_ty), _) => {
                 if expected_const_ty.has_invalid(db) {
                     Err(InvalidCause::Other)
@@ -911,6 +914,9 @@ impl<'db> TyId<'db> {
                     }
                 }
             }
+
+            // An argument that is already invalid keeps its own cause.
+            (Some(_), TyData::Invalid(cause)) => Err(cause.clone()),
 
             (Some(expected_const_ty), _) => {
                 if expected_const_ty.has_invalid(db) {
@@ -2183,8 +2189,15 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
         }
 
         fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {
-            if matches!(const_ty.data(self.db), ConstTyData::Hole(..)) {
-                self.flags.insert(TyFlags::HAS_HOLE);
+            match const_ty.data(self.db) {
+                ConstTyData::Hole(..) => self.flags.insert(TyFlags::HAS_HOLE),
+                // An identity capture reads its owner's formals without
+                // spelling them, so the body still depends on parameters.
+                ConstTyData::UnEvaluated {
+                    capture: ConstCaptureEnv::Identity(_),
+                    ..
+                } => self.flags.insert(TyFlags::HAS_PARAM),
+                _ => {}
             }
             walk_const_ty(self, const_ty);
         }

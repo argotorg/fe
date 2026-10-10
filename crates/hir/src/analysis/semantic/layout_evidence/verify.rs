@@ -450,7 +450,7 @@ pub fn verify_layout_evidence_runtime_compatibility<'db>(
     source: &SemanticBody<'db>,
     body: &LayoutEvidenceBody<'db>,
 ) -> Result<(), LayoutEvidenceVerifyError> {
-    let representations = NLayoutLocals::new(runtime, layout_plan, source);
+    let representations = NLayoutLocals::new(db, runtime, layout_plan, source);
     if body.owner != runtime.owner {
         return Err(LayoutEvidenceVerifyError::OwnerMismatch);
     }
@@ -514,7 +514,7 @@ pub fn verify_layout_evidence_body<'db>(
     source: &SemanticBody<'db>,
     body: &LayoutEvidenceBody<'db>,
 ) -> Result<(), LayoutEvidenceVerifyError> {
-    let representations = NLayoutLocals::new(normalized, layout_plan, source);
+    let representations = NLayoutLocals::new(db, normalized, layout_plan, source);
     if body.constant_bindings.len() != normalized.values.len() {
         return Err(LayoutEvidenceVerifyError::ConstantBindingCount {
             expected: normalized.values.len(),

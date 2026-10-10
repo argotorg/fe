@@ -86,13 +86,12 @@ use crate::analysis::{
     },
     place::resolve_place_field,
     semantic::{
-        ConstRepr, EvalOutcome, SemConstScalar, SemConstValue, SemOrigin, eval_const_ref,
-        instance::resolve_semantic_const_ref, int_const,
+        CtfeConfig, EvalOutcome, SemConstScalar, SemConstValue, SemOrigin, eval_const_ref,
+        force_const_term_value, instance::resolve_semantic_const_ref, int_const,
     },
     ty::{
         LayoutBundlePathStep,
-        const_expr::ConstExpr,
-        const_ty::{ConstTyData, ConstTyId, const_ty_from_sem_const, try_eval_const_int_expr},
+        const_ty::{ConstTyId, const_ty_from_sem_const, try_eval_const_int_expr},
         normalize::normalize_ty,
         ty_check::{RecordInitLowering, TyChecker, path::RecordInitChecker},
         ty_def::{InvalidCause, TyId},
@@ -4736,33 +4735,29 @@ impl<'db> TyChecker<'db> {
         ExprProp::new(ty, true)
     }
 
-    /// Whether `const_ty` is acceptable as an array-repeat length: a known
-    /// literal, or a symbolic const that resolves per monomorphization — a bare
-    /// const param (`N`) or a bare trait-const projection (`T::N`). The latter
-    /// two stay symbolic during checking and become concrete once the owning
-    /// type parameters are.
+    /// Whether `const_ty` is acceptable as an array-repeat length. Each
+    /// specialization materializes the repeat by forcing its length through
+    /// the common CTFE service, so the length must be forceable now or be
+    /// blocked only on facts that specialization supplies. Admission depends
+    /// on that outcome alone, not on how the length is described: the service
+    /// reports a reached fault or an unsupported operation, such as an opaque
+    /// extern call with known inputs, as a failure, and any fault behind an
+    /// unresolved parameter, selection or type when a concrete use forces it.
+    /// Holes and inference variables are never supplied, so a length that
+    /// mentions one cannot wait.
     fn array_len_const_is_acceptable(&self, const_ty: ConstTyId<'db>) -> bool {
-        if const_ty.integer_value(self.db).is_some() {
-            return true;
-        }
-        match const_ty.data(self.db) {
-            ConstTyData::TyParam(..) => true,
-            ConstTyData::Computation { description, .. } => match description.repr() {
-                ConstRepr::Term(term) => self.array_len_const_is_acceptable(*term),
-                ConstRepr::Value(value) => matches!(
-                    value.value().value(self.db),
-                    SemConstValue::Scalar {
-                        value: SemConstScalar::Int { .. },
-                        ..
-                    }
+        let len = TyId::const_ty(self.db, const_ty);
+        !len.has_var(self.db)
+            && !len.has_hole(self.db)
+            && !matches!(
+                force_const_term_value(
+                    self.db,
+                    const_ty,
+                    CtfeConfig::default(),
+                    SemOrigin::Synthetic
                 ),
-                ConstRepr::Deferred(_) => false,
-            },
-            ConstTyData::Abstract(expr, _) => {
-                matches!(expr.data(self.db), ConstExpr::TraitConst(_))
-            }
-            _ => false,
-        }
+                EvalOutcome::Failed(_)
+            )
     }
 
     fn check_if(

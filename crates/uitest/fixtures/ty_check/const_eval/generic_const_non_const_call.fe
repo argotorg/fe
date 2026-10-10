@@ -1,0 +1,44 @@
+// Constants are held to the const language before evaluation, so a non-const
+// call is reported where it is written, even in a constant that waits on
+// generic parameters, and once when a concrete use evaluates it.
+fn ordinary(_ n: usize) -> usize { n }
+
+const fn identity<const N: usize>() -> usize { N }
+
+struct Field<const N: usize> {
+    values: [u8; ordinary(N)],
+}
+
+fn signature<const N: usize>(_ values: [u8; ordinary(N)]) {}
+
+fn generic_arg<const N: usize>() -> usize { identity<{ ordinary(N) }>() }
+
+fn defaulted<const N: usize, const M: usize = { ordinary(N) }>() {}
+
+struct Holder<const N: usize> {}
+
+impl<const N: usize> Holder<N> {
+    const LEN: usize = ordinary(N)
+}
+
+trait HasLen {
+    const LEN: usize
+}
+
+impl<const N: usize> HasLen for Holder<N> {
+    const LEN: usize = ordinary(N) + 1
+}
+
+struct Looped<const N: usize> {}
+
+impl<const N: usize> Looped<N> {
+    const LEN: usize = {
+        let mut result: usize = 0
+        for value in [N, 1] { result += value }
+        result
+    }
+}
+
+const USED: usize = Looped<3>::LEN
+
+const fn allowed<const N: usize>() -> usize { identity<N>() }

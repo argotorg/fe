@@ -56,6 +56,8 @@ impl NLayoutPlan<'_> {
 
 /// Shared runtime homes for semantic values and their layout evidence.
 /// Source provenance never gives a synthetic value permission to overwrite its source.
+/// Homes share the normalized body's type basis, which evaluates specialized
+/// extents that a source local's type still describes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NLayoutLocals<'db> {
     pub locals: Vec<SLocal<'db>>,
@@ -64,11 +66,19 @@ pub struct NLayoutLocals<'db> {
 
 impl<'db> NLayoutLocals<'db> {
     pub fn new(
+        db: &'db dyn HirAnalysisDb,
         body: &NormalizedBody<'db>,
         plan: &NLayoutPlan<'db>,
         source: &SemanticBody<'db>,
     ) -> Self {
-        let mut locals = source.locals.clone();
+        let mut locals = source
+            .locals
+            .iter()
+            .map(|local| SLocal {
+                ty: body.owner.normalized_ty(db, local.ty),
+                ..local.clone()
+            })
+            .collect::<Vec<_>>();
         let value_locals = body
             .values
             .iter()

@@ -10,7 +10,7 @@ use crate::analysis::{
             normalized_body_error_to_diag, normalized_body_verify_error_to_diag,
             normalized_layout_plan_verify_error_to_diag, smir_lowering_admission_diag,
         },
-        instance::SemanticBodyAdmissionError,
+        instance::{LayoutDemandBody, SemanticBodyAdmissionError},
         semantic_instance_base_assumptions_for_key,
     },
     ty::trait_resolution::PredicateListId,
@@ -102,6 +102,9 @@ fn admitted_semantic_body_query<'db>(
         Ok(body) => body,
         Err(error) => return admission_failure(db, instance, error),
     };
+    if let Some(diag) = instance.concrete_layout_diagnostic(db, LayoutDemandBody::Admitted) {
+        return SemanticBodyAdmission::Rejected(diag);
+    }
     let raw = canonicalize_semantic_const_refs(db, instance, raw);
     normalize_and_verify(db, instance, &raw, instance.assumptions(db))
 }
@@ -115,6 +118,10 @@ fn runtime_admitted_semantic_body_query<'db>(
         Ok(body) => body,
         Err(error) => return admission_failure(db, instance, error),
     };
+    // Folding evaluates values of the body's types, so they must be valid.
+    if let Some(diag) = instance.concrete_layout_diagnostic(db, LayoutDemandBody::Admitted) {
+        return SemanticBodyAdmission::Rejected(diag);
+    }
     let folded = canonicalize_semantic_consts_for_runtime(db, instance, raw);
     if folded == canonicalize_semantic_const_refs(db, instance, raw) {
         return admitted_semantic_body_query(db, instance);
@@ -131,6 +138,9 @@ fn provisional_admitted_semantic_body_query<'db>(
         Ok(body) => body,
         Err(error) => return admission_failure(db, instance, error),
     };
+    if let Some(diag) = instance.concrete_layout_diagnostic(db, LayoutDemandBody::Provisional) {
+        return SemanticBodyAdmission::Rejected(diag);
+    }
     let raw = canonicalize_semantic_const_refs(db, instance, raw);
     normalize_and_verify(
         db,
@@ -178,9 +188,14 @@ fn admission_failure<'db>(
     error: SemanticBodyAdmissionError<'db>,
 ) -> SemanticBodyAdmission<'db> {
     match error {
-        SemanticBodyAdmissionError::BlockedByUpstreamDiagnostics(causes) => {
-            SemanticBodyAdmission::Blocked(BlockedSemanticBody { instance, causes })
-        }
+        // Type checking leaves a faulting specialized extent to concrete
+        // demand, so an expression it invalidates has no upstream report.
+        SemanticBodyAdmissionError::BlockedByUpstreamDiagnostics(causes) => instance
+            .concrete_layout_diagnostic(db, LayoutDemandBody::Expressions)
+            .map_or_else(
+                || SemanticBodyAdmission::Blocked(BlockedSemanticBody { instance, causes }),
+                SemanticBodyAdmission::Rejected,
+            ),
         SemanticBodyAdmissionError::IncompleteLoweringPlan(causes) => {
             internal_failure(db, smir_lowering_admission_diag(db, instance, &causes))
         }

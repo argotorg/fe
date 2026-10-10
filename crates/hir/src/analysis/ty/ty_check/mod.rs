@@ -21,6 +21,7 @@ pub use self::contract::{
 pub use self::path::RecordLike;
 use crate::analysis::name_resolution::ResolvedVariant;
 pub use crate::analysis::ty::ProviderAddressSpace;
+use crate::analysis::ty::const_check::const_body_language_failure;
 use crate::analysis::ty::corelib::resolve_lib_type_path;
 use crate::analysis::ty::fold::{TyFoldable, TyFolder};
 use crate::analysis::ty::method_table::ProbedMethod;
@@ -1289,8 +1290,13 @@ fn const_body_ctfe_diags_with_context<'db>(
             unreachable!("optional folding does not produce declaration diagnostics")
         }
     };
-    let outcome = if require_value {
-        eval_body_owner_const(db, owner, GenericSubst::none(db))
+    // A dependent body waits on its parameters before reaching a call it may
+    // not make, so the const language is checked before any evaluation.
+    let language_failure = const_body_language_failure(db, body, &infer_body(db, owner).1);
+    let outcome = if let Some(cause) = language_failure {
+        Err(cause)
+    } else if require_value {
+        Ok(eval_body_owner_const(db, owner, GenericSubst::none(db)))
     } else {
         // A dependent declaration may describe opaque computations, such as
         // extern const calls, that only a value demand has to execute.
@@ -1303,12 +1309,14 @@ fn const_body_ctfe_diags_with_context<'db>(
         );
         let request = const_computation_for_instance(db, key, Vec::new());
         match describe_const_computation(db, request, CtfeConfig::default()) {
-            EvalOutcome::Failed(failure) => EvalOutcome::Failed(failure),
+            EvalOutcome::Failed(failure) => Ok(EvalOutcome::Failed(failure)),
             EvalOutcome::Ready(_) | EvalOutcome::Blocked(_) => return diags,
         }
     };
-    match outcome {
-        EvalOutcome::Ready(value) => {
+    let cause = match outcome {
+        Err(cause) => cause,
+        Ok(EvalOutcome::Failed(failure)) => invalid_cause_from_eval_failure(db, owner, failure),
+        Ok(EvalOutcome::Ready(value)) => {
             if matches!(value.value(db), SemConstValue::Description(..)) {
                 let cause = InvalidCause::ConstEvalInvariant {
                     body,
@@ -1348,8 +1356,9 @@ fn const_body_ctfe_diags_with_context<'db>(
                     );
                 }
             }
+            return diags;
         }
-        EvalOutcome::Blocked(info) => {
+        Ok(EvalOutcome::Blocked(info)) => {
             if require_value {
                 let (primary, dependency) = blocked_const_detail(db, body, &info);
                 if let Some(context) = context {
@@ -1372,65 +1381,55 @@ fn const_body_ctfe_diags_with_context<'db>(
                     );
                 }
             }
+            return diags;
         }
-        EvalOutcome::Failed(failure) => {
-            let cause = invalid_cause_from_eval_failure(db, owner, failure);
-            if let Some(context) = context {
-                let reason = match &cause {
-                    InvalidCause::ConstEvalAssertionFailed { message, .. } => {
-                        message.as_ref().map_or_else(
-                            || "failed an assertion".to_string(),
-                            |message| format!("failed an assertion: {message}"),
-                        )
-                    }
-                    InvalidCause::ConstEvalDivisionByZero { .. } => "divided by zero".into(),
-                    InvalidCause::ConstEvalOutOfBounds { .. } => "indexed out of bounds".into(),
-                    InvalidCause::ConstEvalInvalidOperation { message, .. } => message.clone(),
-                    InvalidCause::ConstEvalInvalidBorrow { .. } => "used an invalid borrow".into(),
-                    InvalidCause::ConstEvalInvalidProviderUse { .. } => {
-                        "used an invalid effect provider".into()
-                    }
-                    InvalidCause::ConstEvalVariantMismatch { .. } => {
-                        "selected the wrong enum variant".into()
-                    }
-                    InvalidCause::ConstEvalUninitializedLocal { .. } => {
-                        "read an uninitialized value".into()
-                    }
-                    InvalidCause::ConstEvalArithmeticOverflow { .. } => "overflowed".into(),
-                    InvalidCause::ConstEvalNegativeExponent { .. } => {
-                        "used a negative exponent".into()
-                    }
-                    InvalidCause::ConstEvalStepLimitExceeded { .. } => {
-                        "exceeded the CTFE step limit".into()
-                    }
-                    InvalidCause::ConstEvalRecursionLimitExceeded { .. } => {
-                        "exceeded the CTFE recursion limit".into()
-                    }
-                    InvalidCause::ConstEvalRecursiveConst { .. } => {
-                        "depends recursively on itself".into()
-                    }
-                    InvalidCause::ConstEvalNonConstCall { .. } => {
-                        "called a non-const function".into()
-                    }
-                    InvalidCause::ConstEvalInvariant { message, .. } => {
-                        format!("hit a compiler invariant: {message}")
-                    }
-                    _ => "failed during compile-time evaluation".into(),
-                };
-                diags.push(
-                    BodyDiag::ConstEvaluationFailed {
-                        primary: body.span().into(),
-                        const_name: context.const_name,
-                        origin: context.origin,
-                        reason,
-                    }
-                    .into(),
-                );
-            } else {
-                if let Some(diag) = TyId::invalid(db, cause).emit_diag(db, body.span().into()) {
-                    diags.push(diag.into());
-                }
+    };
+    if let Some(context) = context {
+        let reason = match &cause {
+            InvalidCause::ConstEvalAssertionFailed { message, .. } => message.as_ref().map_or_else(
+                || "failed an assertion".to_string(),
+                |message| format!("failed an assertion: {message}"),
+            ),
+            InvalidCause::ConstEvalDivisionByZero { .. } => "divided by zero".into(),
+            InvalidCause::ConstEvalOutOfBounds { .. } => "indexed out of bounds".into(),
+            InvalidCause::ConstEvalInvalidOperation { message, .. } => message.clone(),
+            InvalidCause::ConstEvalInvalidBorrow { .. } => "used an invalid borrow".into(),
+            InvalidCause::ConstEvalInvalidProviderUse { .. } => {
+                "used an invalid effect provider".into()
             }
+            InvalidCause::ConstEvalVariantMismatch { .. } => {
+                "selected the wrong enum variant".into()
+            }
+            InvalidCause::ConstEvalUninitializedLocal { .. } => {
+                "read an uninitialized value".into()
+            }
+            InvalidCause::ConstEvalArithmeticOverflow { .. } => "overflowed".into(),
+            InvalidCause::ConstEvalNegativeExponent { .. } => "used a negative exponent".into(),
+            InvalidCause::ConstEvalStepLimitExceeded { .. } => {
+                "exceeded the CTFE step limit".into()
+            }
+            InvalidCause::ConstEvalRecursionLimitExceeded { .. } => {
+                "exceeded the CTFE recursion limit".into()
+            }
+            InvalidCause::ConstEvalRecursiveConst { .. } => "depends recursively on itself".into(),
+            InvalidCause::ConstEvalNonConstCall { .. } => "called a non-const function".into(),
+            InvalidCause::ConstEvalInvariant { message, .. } => {
+                format!("hit a compiler invariant: {message}")
+            }
+            _ => "failed during compile-time evaluation".into(),
+        };
+        diags.push(
+            BodyDiag::ConstEvaluationFailed {
+                primary: body.span().into(),
+                const_name: context.const_name,
+                origin: context.origin,
+                reason,
+            }
+            .into(),
+        );
+    } else {
+        if let Some(diag) = TyId::invalid(db, cause).emit_diag(db, body.span().into()) {
+            diags.push(diag.into());
         }
     }
     diags

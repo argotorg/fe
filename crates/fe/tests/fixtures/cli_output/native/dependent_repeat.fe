@@ -1,0 +1,93 @@
+const fn word_len(_ n: usize) -> usize {
+    n / 32 + if n % 32 == 0 { 0 } else { 1 }
+}
+
+const fn plus(_ n: usize) -> usize { n + 1 }
+
+trait Width {
+    const N: usize = 1
+}
+struct Two {}
+impl Width for Two {
+    const N: usize = 2
+}
+struct Five {}
+impl Width for Five {
+    const N: usize = 5
+}
+
+struct Packed<const N: usize> {
+    words: [u256; word_len(N)],
+}
+
+impl<const N: usize> Packed<N> {
+    const ZERO: Packed<N> = Packed { words: [0; word_len(N)] }
+
+    const fn filled(_ word: u256) -> Self {
+        Self { words: [word; word_len(N)] }
+    }
+}
+
+const fn summed<T0: Width, T1: Width>(_ value: u8) -> [u8; { T0::N + T1::N }] {
+    [value; { T0::N + T1::N }]
+}
+
+const fn composed<const N: usize>(_ value: u8) -> [u8; word_len(plus(N))] {
+    [value; word_len(plus(N))]
+}
+
+const W33: [u256; 2] = Packed<33>::filled(7).words
+const W65: [u256; 3] = Packed<65>::filled(7).words
+const SUMMED: [u8; 7] = summed<Two, Five>(4)
+const COMPOSED: [u8; 2] = composed<32>(5)
+
+fn folded_projection<T: Width>() -> [u8; T::N] { [3; T::N] }
+
+fn folded_words<const N: usize>() -> [u256; word_len(N)] { [5; word_len(N)] }
+
+fn folded_conditional<const N: usize>() -> [u8; { if N > 1 && N < 9 { N } else { 2 } }] {
+    [7; { if N > 1 && N < 9 { N } else { 2 } }]
+}
+
+fn runtime_word(_ seed: u256) -> u256 { seed }
+
+fn runtime_byte(_ seed: u8) -> u8 { seed }
+
+fn word_count<const N: usize>(_ seed: u256) -> usize {
+    Packed<N>::filled(runtime_word(seed)).words.len()
+}
+
+pub fn main() -> i32 {
+    if word_count<0>(7) != 0 || word_count<1>(7) != 1 || word_count<31>(7) != 1 {
+        return 1
+    }
+    if word_count<32>(7) != 1 || word_count<33>(7) != 2 || word_count<63>(7) != 2 {
+        return 2
+    }
+    if word_count<64>(7) != 2 || word_count<65>(7) != 3 {
+        return 3
+    }
+    let words = Packed<65>::filled(runtime_word(7)).words
+    if words.len() != W65.len() || words[2] != W65[2] {
+        return 4
+    }
+    let pair = Packed<33>::filled(runtime_word(7)).words
+    if pair[1] != W33[1] || Packed<65>::ZERO.words[2] != 0 {
+        return 5
+    }
+    let summed = summed<Two, Five>(runtime_byte(4))
+    if summed.len() != SUMMED.len() || summed[6] != SUMMED[6] {
+        return 6
+    }
+    let composed = composed<32>(runtime_byte(5))
+    if composed.len() != COMPOSED.len() || composed[1] != COMPOSED[1] {
+        return 7
+    }
+    let projection = folded_projection<Five>()
+    let words = folded_words<65>()
+    let conditional = folded_conditional<4>()
+    if projection[4] != 3 || words[2] != 5 || conditional.len() != 4 || conditional[3] != 7 {
+        return 8
+    }
+    0
+}

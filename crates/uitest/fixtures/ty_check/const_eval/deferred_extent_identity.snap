@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_eval/deferred_extent_identity.fe
+---
+error[8-0000]: type mismatch
+  ┌─ deferred_extent_identity.fe:8:84
+  │
+8 │ fn swap<const N: usize, const M: usize>(_ x: Marker<N>::Item) -> Marker<M>::Item { x }
+  │                                                                                    ^ expected `[u8; const value]`, but `view [u8; const value]` is given
+
+error[8-0000]: type mismatch
+   ┌─ deferred_extent_identity.fe:10:98
+   │
+10 │ fn distinct<const N: usize>(_ x: [u8; { [3 as usize; 2][N] }]) -> [u8; { [4 as usize; 2][N] }] { x }
+   │                                                                                                  ^ expected `[u8; const value]`, but `view [u8; const value]` is given

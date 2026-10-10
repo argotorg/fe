@@ -287,7 +287,6 @@ where
             ConstExpr::Invocation(ConstInvocation {
                 key: invocation.key.fold_with(db, folder),
                 args: invocation.args.clone().fold_with(db, folder),
-                parameter_owner: folder.fold_scope(invocation.parameter_owner),
             }),
         ),
         ConstExpr::ArithBinOp { op, mode, lhs, rhs } => {
@@ -319,6 +318,26 @@ where
             let to = folder.fold_ty(db, *to);
             ConstExprId::new(db, ConstExpr::Cast { expr, to })
         }
+        ConstExpr::Compare { op, lhs, rhs } => ConstExprId::new(
+            db,
+            ConstExpr::Compare {
+                op: *op,
+                lhs: folder.fold_ty(db, *lhs),
+                rhs: folder.fold_ty(db, *rhs),
+            },
+        ),
+        ConstExpr::Select {
+            cond,
+            then,
+            otherwise,
+        } => ConstExprId::new(
+            db,
+            ConstExpr::Select {
+                cond: folder.fold_ty(db, *cond),
+                then: folder.fold_ty(db, *then),
+                otherwise: folder.fold_ty(db, *otherwise),
+            },
+        ),
         ConstExpr::ArrayRepeat { value, len } => ConstExprId::new(
             db,
             ConstExpr::ArrayRepeat {

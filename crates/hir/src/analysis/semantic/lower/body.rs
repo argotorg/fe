@@ -1264,11 +1264,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .expect("const intrinsic should resolve to a function")
             .key;
             let const_expr = match kind {
-                ConstIntrinsicKind::SizeOf => ConstExpr::Invocation(ConstInvocation {
-                    key,
-                    args: Vec::new(),
-                    parameter_owner: caller.owner(self.db).scope(),
-                }),
+                ConstIntrinsicKind::SizeOf => {
+                    ConstExpr::Invocation(ConstInvocation::new(self.db, key, Vec::new()))
+                }
             };
             let const_ty = ConstTyId::new(
                 self.db,
@@ -1401,8 +1399,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 int_const(self.db, usize_ty, BigInt::default()),
             )),
         });
+        // The generated `Seq` calls belong to the loop statement, which is the
+        // origin their call sites are finalized with.
+        let origin = SemOrigin::Stmt(stmt);
         let len_effect_args = self.lower_effect_arg_slice(&for_loop_call_sites.len.effect_args);
-        let len_value = self.emit_expr(
+        let len_value = self.emit_expr_with_origin(
+            origin,
             usize_ty,
             SExpr::Call {
                 call_site: CallSiteId::ForLoopLen(stmt),
@@ -1446,7 +1448,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         });
         self.switch_to(body_bb);
         let get_effect_args = self.lower_effect_arg_slice(&for_loop_call_sites.get.effect_args);
-        let elem = self.emit_expr(
+        let elem = self.emit_expr_with_origin(
+            origin,
             elem_ty,
             SExpr::Call {
                 call_site: CallSiteId::ForLoopGet(stmt),

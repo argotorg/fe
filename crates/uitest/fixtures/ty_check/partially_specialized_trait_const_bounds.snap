@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/partially_specialized_trait_const_bounds.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ partially_specialized_trait_const_bounds.fe:22:28
+   │
+14 │ fn need<T, const N: usize, U: Has<{ Marker<T, N>::LEN }>>() {}
+   │                               -------------------------- required by this bound on `need`
+   ·
+22 │ fn wrong<T, U: Has<5>>() { need<T, 3, U>() }
+   │                            ^^^^^^^^^^^^^ `U` doesn't implement `Has<4>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ partially_specialized_trait_const_bounds.fe:22:36
+   │
+22 │ fn wrong<T, U: Has<5>>() { need<T, 3, U>() }
+   │                                    ^ `U` doesn't implement `Has<4>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ partially_specialized_trait_const_bounds.fe:24:37
+   │
+16 │ fn need_inherent<T, const N: usize, U: Has<{ Marker<T, N>::WIDTH }>>() {}
+   │                                        ---------------------------- required by this bound on `need_inherent`
+   ·
+24 │ fn wrong_inherent<T, U: Has<5>>() { need_inherent<T, 3, U>() }
+   │                                     ^^^^^^^^^^^^^^^^^^^^^^ `U` doesn't implement `Has<6>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ partially_specialized_trait_const_bounds.fe:24:54
+   │
+24 │ fn wrong_inherent<T, U: Has<5>>() { need_inherent<T, 3, U>() }
+   │                                                      ^ `U` doesn't implement `Has<6>`
