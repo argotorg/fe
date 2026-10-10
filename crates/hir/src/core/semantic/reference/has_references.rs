@@ -44,8 +44,8 @@ impl<'db> HasReferences<'db> for ScopeId<'db> {
         match self {
             ScopeId::Item(item) => item.references(db),
             ScopeId::Block(body, _) => body.references(db),
-            ScopeId::GenericParam(_, _) => EMPTY_REFS,
-            ScopeId::TraitType(_, _) => EMPTY_REFS,
+            ScopeId::GenericParam(_, _) | ScopeId::AssocTypeParam(..) => EMPTY_REFS,
+            ScopeId::TraitType(_, _) | ScopeId::ImplTraitType(..) => EMPTY_REFS,
             ScopeId::TraitConst(_, _) => EMPTY_REFS,
             ScopeId::ImplConst(_, _) => EMPTY_REFS,
             ScopeId::FuncParam(_, _) => EMPTY_REFS,

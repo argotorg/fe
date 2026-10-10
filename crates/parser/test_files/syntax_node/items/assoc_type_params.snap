@@ -1,0 +1,155 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/assoc_type_params.fe
+---
+Root@0..157
+  ItemList@0..156
+    Item@0..75
+      Trait@0..75
+        TraitKw@0..5 "trait"
+        WhiteSpace@5..6 " "
+        Ident@6..13 "Factory"
+        WhiteSpace@13..14 " "
+        TraitItemList@14..75
+          LBrace@14..15 "{"
+          Newline@15..16 "\n"
+          WhiteSpace@16..20 "    "
+          TraitTypeItem@20..32
+            TypeKw@20..24 "type"
+            WhiteSpace@24..25 " "
+            Ident@25..29 "Pair"
+            GenericParamList@29..32
+              Lt@29..30 "<"
+              TypeGenericParam@30..31
+                Ident@30..31 "T"
+              Gt@31..32 ">"
+          Newline@32..33 "\n"
+          WhiteSpace@33..37 "    "
+          TraitTypeItem@37..73
+            TypeKw@37..41 "type"
+            WhiteSpace@41..42 " "
+            Ident@42..45 "Out"
+            GenericParamList@45..57
+              Lt@45..46 "<"
+              TypeGenericParam@46..53
+                Ident@46..47 "T"
+                TypeBoundList@47..53
+                  Colon@47..48 ":"
+                  WhiteSpace@48..49 " "
+                  TypeBound@49..53
+                    TraitRef@49..53
+                      Path@49..53
+                        PathSegment@49..53
+                          Ident@49..53 "Show"
+              Comma@53..54 ","
+              WhiteSpace@54..55 " "
+              TypeGenericParam@55..56
+                Ident@55..56 "U"
+              Gt@56..57 ">"
+            TypeBoundList@57..64
+              Colon@57..58 ":"
+              WhiteSpace@58..59 " "
+              TypeBound@59..64
+                TraitRef@59..64
+                  Path@59..64
+                    PathSegment@59..64
+                      Ident@59..64 "Clone"
+            WhiteSpace@64..65 " "
+            Eq@65..66 "="
+            WhiteSpace@66..67 " "
+            TupleType@67..73
+              LParen@67..68 "("
+              PathType@68..69
+                Path@68..69
+                  PathSegment@68..69
+                    Ident@68..69 "T"
+              Comma@69..70 ","
+              WhiteSpace@70..71 " "
+              PathType@71..72
+                Path@71..72
+                  PathSegment@71..72
+                    Ident@71..72 "U"
+              RParen@72..73 ")"
+          Newline@73..74 "\n"
+          RBrace@74..75 "}"
+    Newline@75..77 "\n\n"
+    Item@77..156
+      ImplTrait@77..156
+        ImplKw@77..81 "impl"
+        WhiteSpace@81..82 " "
+        TraitRef@82..89
+          Path@82..89
+            PathSegment@82..89
+              Ident@82..89 "Factory"
+        WhiteSpace@89..90 " "
+        ForKw@90..93 "for"
+        WhiteSpace@93..94 " "
+        PathType@94..95
+          Path@94..95
+            PathSegment@94..95
+              Ident@94..95 "S"
+        WhiteSpace@95..96 " "
+        TraitItemList@96..156
+          LBrace@96..97 "{"
+          Newline@97..98 "\n"
+          WhiteSpace@98..102 "    "
+          TraitTypeItem@102..126
+            TypeKw@102..106 "type"
+            WhiteSpace@106..107 " "
+            Ident@107..111 "Pair"
+            GenericParamList@111..114
+              Lt@111..112 "<"
+              TypeGenericParam@112..113
+                Ident@112..113 "T"
+              Gt@113..114 ">"
+            WhiteSpace@114..115 " "
+            Eq@115..116 "="
+            WhiteSpace@116..117 " "
+            TupleType@117..126
+              LParen@117..118 "("
+              PathType@118..119
+                Path@118..119
+                  PathSegment@118..119
+                    Ident@118..119 "T"
+              Comma@119..120 ","
+              WhiteSpace@120..121 " "
+              PathType@121..125
+                Path@121..125
+                  PathSegment@121..125
+                    Ident@121..125 "bool"
+              RParen@125..126 ")"
+          Newline@126..127 "\n"
+          WhiteSpace@127..131 "    "
+          TraitTypeItem@131..154
+            TypeKw@131..135 "type"
+            WhiteSpace@135..136 " "
+            Ident@136..139 "Out"
+            GenericParamList@139..145
+              Lt@139..140 "<"
+              TypeGenericParam@140..141
+                Ident@140..141 "T"
+              Comma@141..142 ","
+              WhiteSpace@142..143 " "
+              TypeGenericParam@143..144
+                Ident@143..144 "U"
+              Gt@144..145 ">"
+            WhiteSpace@145..146 " "
+            Eq@146..147 "="
+            WhiteSpace@147..148 " "
+            TupleType@148..154
+              LParen@148..149 "("
+              PathType@149..150
+                Path@149..150
+                  PathSegment@149..150
+                    Ident@149..150 "U"
+              Comma@150..151 ","
+              WhiteSpace@151..152 " "
+              PathType@152..153
+                Path@152..153
+                  PathSegment@152..153
+                    Ident@152..153 "T"
+              RParen@153..154 ")"
+          Newline@154..155 "\n"
+          RBrace@155..156 "}"
+  Newline@156..157 "\n"

@@ -1,0 +1,65 @@
+// Associated types with their own parameters: a default, an override, one
+// passed as a type constructor, and one whose definition uses another.
+trait Factory {
+    type Pair<T> = (T, bool)
+    fn wrap<T>(_ x: T) -> Self::Pair<T>
+}
+
+struct Forward {}
+impl Factory for Forward {
+    fn wrap<T>(_ x: T) -> Self::Pair<T> {
+        (x, true)
+    }
+}
+
+struct Reverse {}
+impl Factory for Reverse {
+    type Pair<T> = (bool, T)
+    fn wrap<T>(_ x: T) -> Self::Pair<T> {
+        (false, x)
+    }
+}
+
+fn helper<F: Factory, T>(_ x: T) -> F::Pair<T> {
+    F::wrap<T>(x)
+}
+
+fn constructor<G: * -> *>(_ x: G<u256>) -> G<u256> {
+    x
+}
+
+trait Inner<V> {
+    type Pair<U>
+}
+struct S {}
+impl<V> Inner<V> for S {
+    type Pair<U> = (V, U)
+}
+
+trait Outer {
+    type Pair<T>
+}
+struct O {}
+impl Outer for O {
+    type Pair<T> = <S as Inner<T>>::Pair<bool>
+}
+
+fn nested(_ x: u256) -> O::Pair<u256> {
+    (x, true)
+}
+
+#[test]
+fn associated_type_values() {
+    let forward = helper<Forward, u256>(41)
+    let reverse = helper<Reverse, u256>(73)
+    let captured = nested(97)
+    let higher = constructor<Forward::Pair>((101, true))
+    assert!(forward.0 == 41)
+    assert!(forward.1)
+    assert!(!reverse.0)
+    assert!(reverse.1 == 73)
+    assert!(captured.0 == 97)
+    assert!(captured.1)
+    assert!(higher.0 == 101)
+    assert!(higher.1)
+}

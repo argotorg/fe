@@ -1,0 +1,14 @@
+trait Allowed {}
+trait Needs<T: Allowed> {}
+
+trait Params<A> {
+    // Duplicate names, a name hiding the trait's parameter, and a const
+    // parameter.
+    type Twice<T, T>
+    type Hides<A>
+    type Sized<const N: usize>
+
+    // A bound whose argument is invalid, on a parameter and on the type.
+    type BadParamBound<T: Needs<Missing>>
+    type BadBound<T>: Needs<Missing>
+}

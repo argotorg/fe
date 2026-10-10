@@ -106,8 +106,8 @@ impl<'db> From<ScopeId<'db>> for SymbolKind {
     fn from(scope: ScopeId<'db>) -> Self {
         match scope {
             ScopeId::Item(item) => item.into(),
-            ScopeId::GenericParam(..) => SymbolKind::GenericParam,
-            ScopeId::TraitType(..) => SymbolKind::TraitType,
+            ScopeId::GenericParam(..) | ScopeId::AssocTypeParam(..) => SymbolKind::GenericParam,
+            ScopeId::TraitType(..) | ScopeId::ImplTraitType(..) => SymbolKind::TraitType,
             ScopeId::TraitConst(..) => SymbolKind::TraitConst,
             ScopeId::ImplConst(..) => SymbolKind::TraitConst,
             ScopeId::FuncParam(..) => SymbolKind::FuncParam,

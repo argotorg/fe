@@ -1,0 +1,13 @@
+trait Backend {
+    type Buffer<T>
+}
+
+struct Store<T> {
+    value: T,
+}
+
+struct EvmBackend {}
+
+impl Backend for EvmBackend {
+    type Buffer<T> = Store<T>
+}

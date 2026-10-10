@@ -1,0 +1,22 @@
+trait Allowed {}
+
+trait Family {
+    type Count<T>
+    type Kind<F: * -> *>
+    type Sort<T>
+    type Bound<T>
+    type Inherited<F: * -> *>
+    type Defaulted<T>
+}
+
+struct S {}
+
+impl Family for S {
+    type Count<T, U> = u8
+    type Kind<T: * -> * -> *> = u8
+    type Sort<const N: usize> = u8
+    type Bound<T: Allowed> = u8
+    // A parameter written without its kind has the declared kind.
+    type Inherited<G> = G<u8>
+    type Defaulted<T = u8> = u8
+}

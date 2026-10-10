@@ -17,7 +17,7 @@ use super::{
     const_ty::{ConstBodyLowering, ConstTyData, HoleAnchor, LoweringContext, ty_is_fully_ground},
     diagnostics::{TyDiagCollection, TyLowerDiag},
     normalize::normalize_ty,
-    trait_resolution::{PredicateListId, TraitSolveCx, check_ty_wf},
+    trait_resolution::{PredicateListId, TraitSolveCx, check_family_requirements, check_ty_wf},
     ty_def::{InvalidCause, TyData, TyId},
     ty_lower::{lower_hir_ty, lower_hir_ty_in_mode},
 };
@@ -132,15 +132,134 @@ fn collect_ty_lower_errors_in_mode<'db>(
     assumptions: PredicateListId<'db>,
     const_bodies: ConstBodyLowering,
 ) -> Vec<TyDiagCollection<'db>> {
-    let mut vis = HirTyErrVisitor {
-        db,
-        assumptions,
-        diags: Vec::new(),
-        const_bodies,
-    };
+    let mut vis = HirTyErrVisitor::new(db, assumptions, const_bodies, WrittenTypeCheck::All);
     let mut ctxt = VisitorCtxt::new(db, scope, span);
     vis.visit_ty(&mut ctxt, hir_ty);
     vis.diags
+}
+
+/// Errors for the family applications in a written type that lowers without
+/// error: a family whose parameters have bounds given fewer arguments, or
+/// arguments that do not meet those bounds. Lowering normalizes, which can
+/// remove a family application and with it those bounds, so they are checked
+/// on the type as written.
+pub(crate) fn collect_application_requirement_errors<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    hir_ty: TypeId<'db>,
+    span: LazyTySpan<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    let mut visitor = HirTyErrVisitor::new(
+        db,
+        assumptions,
+        ConstBodyLowering::Eager,
+        WrittenTypeCheck::FamilyApplications,
+    );
+    let mut ctxt = VisitorCtxt::new(db, scope, span);
+    visitor.visit_ty(&mut ctxt, hir_ty);
+    visitor.diags
+}
+
+/// As [`collect_application_requirement_errors`], for the types written as
+/// arguments of a trait reference. Trait references are lowered into trait
+/// instances, whose own checks skip subjects they cannot decide, so the
+/// written arguments are checked here on their own.
+pub(crate) fn collect_trait_ref_application_errors<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    trait_ref: crate::hir_def::TraitRefId<'db>,
+    span: LazyTraitRefSpan<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    let mut visitor = HirTyErrVisitor::new(
+        db,
+        assumptions,
+        ConstBodyLowering::Eager,
+        WrittenTypeCheck::FamilyApplications,
+    );
+    let mut ctxt = VisitorCtxt::new(db, scope, span);
+    visitor.visit_trait_ref_args(&mut ctxt, trait_ref);
+    visitor.diags
+}
+
+/// Every error in the types written as arguments of a trait reference, each
+/// at its own span, such as `Missing` in `T: Needs<Missing>`.
+pub(crate) fn collect_trait_ref_arg_errors<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    trait_ref: crate::hir_def::TraitRefId<'db>,
+    span: LazyTraitRefSpan<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    let mut visitor = HirTyErrVisitor::new(
+        db,
+        assumptions,
+        ConstBodyLowering::Eager,
+        WrittenTypeCheck::All,
+    );
+    let mut ctxt = VisitorCtxt::new(db, scope, span);
+    visitor.visit_trait_ref_args(&mut ctxt, trait_ref);
+    visitor.diags
+}
+
+/// The type a path segment resolved to, whose family applications are
+/// checked at the segment: a type, or the instantiation of an alias with
+/// parameters. An alias without parameters is checked where it is defined.
+pub(crate) fn family_application_use<'db>(
+    db: &'db dyn HirAnalysisDb,
+    reso: &PathRes<'db>,
+) -> Option<TyId<'db>> {
+    match reso {
+        PathRes::Ty(ty) => Some(*ty),
+        PathRes::TyAlias(alias, ty) if !alias.param_set.params(db).is_empty() => Some(*ty),
+        _ => None,
+    }
+}
+
+/// The requirement errors for the types a written path resolved to, one per
+/// path segment.
+pub(crate) fn application_requirement_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    path_span: &LazyPathSpan<'db>,
+    type_uses: Vec<(PathId<'db>, TyId<'db>)>,
+) -> Vec<TyDiagCollection<'db>> {
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    type_uses
+        .into_iter()
+        .filter_map(|(used_path, ty)| {
+            let span = path_span.clone().segment(used_path.segment_index(db));
+            family_application_diag(db, solve_cx, ty, span.into())
+        })
+        .collect()
+}
+
+/// The error for a family application whose requirements fail: a family
+/// whose parameters have bounds, given fewer arguments than it has
+/// parameters, or arguments that do not meet those bounds.
+fn family_application_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    ty: TyId<'db>,
+    span: DynLazySpan<'db>,
+) -> Option<TyDiagCollection<'db>> {
+    if let Some(name) = ty.lacks_args_for_parameter_bounds(db) {
+        return Some(TyLowerDiag::AssocTypeNeedsAllArgs { span, name }.into());
+    }
+    check_family_requirements(db, solve_cx, ty).into_diag(span)
+}
+
+/// What [`HirTyErrVisitor`] reports.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WrittenTypeCheck {
+    /// Every error in the written type.
+    All,
+    /// Only the requirements of the family applications written in it, for a
+    /// type that lowers without error and whose other errors are reported
+    /// elsewhere.
+    FamilyApplications,
 }
 
 struct HirTyErrVisitor<'db> {
@@ -148,9 +267,44 @@ struct HirTyErrVisitor<'db> {
     diags: Vec<TyDiagCollection<'db>>,
     assumptions: PredicateListId<'db>,
     const_bodies: ConstBodyLowering,
+    check: WrittenTypeCheck,
 }
 
 impl<'db> HirTyErrVisitor<'db> {
+    fn new(
+        db: &'db dyn HirAnalysisDb,
+        assumptions: PredicateListId<'db>,
+        const_bodies: ConstBodyLowering,
+        check: WrittenTypeCheck,
+    ) -> Self {
+        Self {
+            db,
+            diags: Vec::new(),
+            assumptions,
+            const_bodies,
+            check,
+        }
+    }
+
+    fn reports_all(&self) -> bool {
+        self.check == WrittenTypeCheck::All
+    }
+
+    /// Visits the types written as arguments of `trait_ref`, but not its path,
+    /// which names a trait rather than a type.
+    fn visit_trait_ref_args(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyTraitRefSpan<'db>>,
+        trait_ref: crate::core::hir_def::TraitRefId<'db>,
+    ) {
+        if let Some(path) = trait_ref.path(self.db).to_opt()
+            && let Some(span) = ctxt.span()
+        {
+            let mut path_ctxt = VisitorCtxt::new(self.db, ctxt.scope(), span.path());
+            walk_path(self, &mut path_ctxt, path);
+        }
+    }
+
     fn path_context(&self, path: PathId<'db>, scope: ScopeId<'db>) -> LoweringContext<'db> {
         LoweringContext::for_const_bodies(
             HoleAnchor::TemplatePath {
@@ -175,6 +329,10 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyGenericArgSpan<'db>>,
         arg: &GenericArg<'db>,
     ) {
+        if !self.reports_all() {
+            walk_generic_arg(self, ctxt, arg);
+            return;
+        }
         // Generic args are syntactically ambiguous: `String<N>` may parse `N` as a type
         // even when `String` expects a const generic arg. Avoid emitting spurious
         // type-expected diagnostics for const-like paths in generic-arg position.
@@ -276,6 +434,10 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
     }
 
     fn visit_ty(&mut self, ctxt: &mut VisitorCtxt<'db, LazyTySpan<'db>>, hir_ty: TypeId<'db>) {
+        if !self.reports_all() {
+            walk_type(self, ctxt, hir_ty);
+            return;
+        }
         let ty = lower_hir_ty_in_mode(
             self.db,
             hir_ty,
@@ -329,7 +491,11 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         let path_span = ctxt.span().unwrap();
 
         let mut invisible = None;
+        let mut type_uses = Vec::new();
         let mut check_visibility = |path: PathId<'db>, reso: &PathRes<'db>| {
+            if let Some(ty) = family_application_use(self.db, reso) {
+                type_uses.push((path, ty));
+            }
             if invisible.is_some() {
                 return;
             }
@@ -351,14 +517,29 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             Ok(res) => res,
 
             Err(err) => {
-                if let Some(diag) =
-                    err.into_diag(self.db, path, path_span.clone(), ExpectedPathKind::Type)
+                if self.reports_all()
+                    && let Some(diag) =
+                        err.into_diag(self.db, path, path_span.clone(), ExpectedPathKind::Type)
                 {
                     self.diags.push(diag.into());
                 }
                 return;
             }
         };
+
+        // The family applications in the path, checked as written, with the
+        // resolution done here.
+        self.diags.extend(application_requirement_diags(
+            self.db,
+            scope,
+            self.assumptions,
+            &path_span,
+            type_uses,
+        ));
+        if !self.reports_all() {
+            walk_path(self, ctxt, path);
+            return;
+        }
 
         if !matches!(res, PathRes::Ty(_) | PathRes::TyAlias(..)) {
             let ident = path.ident(self.db).unwrap();
@@ -381,6 +562,10 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         ctxt: &mut VisitorCtxt<'db, LazyTraitRefSpan<'db>>,
         trait_ref: crate::core::hir_def::TraitRefId<'db>,
     ) {
+        if !self.reports_all() {
+            self.visit_trait_ref_args(ctxt, trait_ref);
+            return;
+        }
         let scope = ctxt.scope();
         let span = ctxt.span().unwrap();
         let Some(path) = trait_ref.path(self.db).to_opt() else {
@@ -451,9 +636,10 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             }
         }
 
-        // Do not recurse into the trait path via visit_path to avoid emitting
-        // type-expected diagnostics for trait-qualified segments. Generic
-        // arguments under the trait path are checked elsewhere during lowering.
+        // Do not visit the trait path as a type, which would emit
+        // type-expected diagnostics for trait-qualified segments; visit the
+        // types written as its arguments.
+        self.visit_trait_ref_args(ctxt, trait_ref);
     }
 }
 

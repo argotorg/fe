@@ -449,7 +449,14 @@ pub(crate) fn check_ty_wf<'db>(
             return wf;
         }
     }
+    let family_wf = check_family_requirements(db, solve_cx, ty);
+    if !family_wf.is_wf() {
+        return family_wf;
+    }
     match base.data(db) {
+        // The body is checked with its declaration, over its own parameters,
+        // not here with the caller's types.
+        TyData::TypeFamily { .. } => {}
         TyData::AssocTy(assoc) => {
             if let Some(wf) = join.add(check_projected_trait_use_wf(
                 db,
@@ -695,6 +702,59 @@ fn check_const_expr_wf<'db>(
     }
 
     join.finish()
+}
+
+/// Whether `goal` is proved. Used for a bound promised for every argument of
+/// a family, one of its parameter bounds or declared bounds: an ambiguous or
+/// unfinished proof does not show that, so it counts as a failure. A limit is
+/// neither, and is returned.
+pub(crate) fn bound_is_proved<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    goal: TraitInstId<'db>,
+) -> Result<bool, NormalizationLimit> {
+    Ok(matches!(
+        is_goal_satisfiable(db, solve_cx, goal)?,
+        GoalSatisfiability::Satisfied(_)
+    ))
+}
+
+/// Check a family application's parameter requirements before normalization
+/// can erase the application. Source-path diagnostics also use this, since
+/// they see intermediate projections.
+pub(crate) fn check_family_requirements<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    ty: TyId<'db>,
+) -> WellFormedness<'db> {
+    match ty.family_parameter_bounds(db) {
+        None => {}
+        Some(Err(goal)) => {
+            return WellFormedness::IllFormed {
+                goal,
+                subgoal: None,
+            };
+        }
+        Some(Ok(requirements)) => {
+            // A requirement that fails decides, even after an unknown one.
+            let mut join = WfJoin::default();
+            for &goal in requirements.list(db) {
+                let wf = match bound_is_proved(db, solve_cx, goal) {
+                    Ok(true) => WellFormedness::WellFormed,
+                    Ok(false) => WellFormedness::IllFormed {
+                        goal,
+                        subgoal: None,
+                    },
+                    Err(limit) => WellFormedness::NormalizationLimit(limit),
+                };
+                if let Some(wf) = join.add(wf) {
+                    return wf;
+                }
+            }
+            return join.finish();
+        }
+    }
+    WellFormedness::WellFormed
 }
 
 fn check_projected_trait_use_wf<'db>(
@@ -944,6 +1004,13 @@ impl<'db> PredicateListId<'db> {
         extend_all_bounds_query(db, self)
     }
 
+    /// Adds `extra` and then every bound implied by the combined list.
+    pub(crate) fn extended_with(self, db: &'db dyn HirAnalysisDb, extra: Self) -> Self {
+        let mut predicates = self.list(db).to_vec();
+        predicates.extend_from_slice(extra.list(db));
+        Self::new(db, predicates).extend_all_bounds(db)
+    }
+
     fn extend_all_bounds_uncached(self, db: &'db dyn HirAnalysisDb) -> Self {
         let mut all_predicates: IndexSet<TraitInstId<'db>> =
             self.list(db).iter().copied().collect();
@@ -975,6 +1042,12 @@ impl<'db> PredicateListId<'db> {
             let formal_trait =
                 TraitInstId::new_simple(db, hir_trait, hir_trait.params(db).to_vec());
             for trait_type in hir_trait.assoc_types(db) {
+                // A family's bounds hold for its applications, under the bounds
+                // on its parameters, not for the family itself, so they are not
+                // bounds this predicate implies.
+                if !trait_type.generic_params(db).data(db).is_empty() {
+                    continue;
+                }
                 // Get the associated type name
                 let Some(assoc_ty_name) = trait_type.name(db) else {
                     continue;

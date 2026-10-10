@@ -317,6 +317,14 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
     fn assemble_trait_method_candidates(&mut self) {
         let scope_ingot = self.scope.ingot(self.db);
 
+        // Discovery does not grant these bounds. check_inst sends each
+        // candidate through the solver, including the family rule's premises.
+        if let Some((_, bounds)) = self.receiver.original().family_declared_bounds(self.db) {
+            for &bound in bounds.list(self.db) {
+                self.insert_assumption_trait_method_cand(bound);
+            }
+        }
+
         // When the receiver is a type parameter (e.g. `D` in `fn f<D: Trait>(d: D)`),
         // we don't know its concrete type yet, so probing impls would pull in many
         // unrelated candidates and frequently lead to spurious ambiguity.

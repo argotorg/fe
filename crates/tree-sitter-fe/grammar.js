@@ -417,6 +417,7 @@ module.exports = grammar({
       optional($.attribute_list),
       'type',
       field('name', $.identifier),
+      optional($.generic_param_list),
       optional(seq(':', $.type_bound_list)),
       optional(seq('=', $._type)),
     ),

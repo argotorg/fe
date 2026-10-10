@@ -1277,6 +1277,7 @@ impl ToDoc for ast::TraitTypeItem {
         attrs
             .append(alloc.text("type "))
             .append(name)
+            .append(generics_doc(self, ctx))
             .append(bounds_doc)
             .append(ty_doc)
     }

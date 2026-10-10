@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_impl/assoc_type_params_mismatch.fe
+---
+error[3-0060]: associated types cannot have const parameters
+   ┌─ assoc_type_params_mismatch.fe:17:15
+   │
+17 │     type Sort<const N: usize> = u8
+   │               ^^^^^^^^^^^^^^ const parameter
+
+error[3-0064]: type parameters of associated types cannot have defaults
+   ┌─ assoc_type_params_mismatch.fe:21:24
+   │
+21 │     type Defaulted<T = u8> = u8
+   │                        ^^ default not allowed here
+
+error[6-0025]: associated type parameter count mismatch
+   ┌─ assoc_type_params_mismatch.fe:15:10
+   │
+15 │     type Count<T, U> = u8
+   │          ^^^^^ expected 1 type parameter, but 2 given
+
+error[6-0026]: associated type parameter does not match the trait
+   ┌─ assoc_type_params_mismatch.fe:16:15
+   │
+16 │     type Kind<T: * -> * -> *> = u8
+   │               ^^^^^^^^^^^^^^ expected `(* -> *)` kind, but this parameter has `(* -> (* -> *))` kind
+
+error[6-0027]: bounds on associated type parameters must be written in the trait
+   ┌─ assoc_type_params_mismatch.fe:18:19
+   │
+18 │     type Bound<T: Allowed> = u8
+   │                   ^^^^^^^ move this bound to the trait's declaration

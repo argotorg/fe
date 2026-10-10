@@ -133,6 +133,23 @@ where
 
             (_, TyData::TyVar(var)) => self.unify_var_value(var, ty1),
 
+            (
+                TyData::TypeFamily {
+                    owner: a,
+                    args: left_args,
+                    body: left,
+                },
+                TyData::TypeFamily {
+                    owner: b,
+                    args: right_args,
+                    body: right,
+                },
+            ) if a == b && left_args.len() == right_args.len() => {
+                for (&a, &b) in left_args.iter().zip(right_args) {
+                    self.unify_ty(a, b)?;
+                }
+                self.unify_ty(*left, *right)
+            }
             (TyData::TyApp(ty1_1, ty1_2), TyData::TyApp(ty2_1, ty2_2)) => {
                 self.unify_ty(*ty1_1, *ty2_1)?;
                 self.unify_ty(*ty1_2, *ty2_2)
@@ -388,6 +405,7 @@ where
             &mut FreshVarFolder {
                 table: self,
                 params: FxHashMap::default(),
+                family_scopes: Vec::new(),
             },
         )
     }
@@ -776,6 +794,9 @@ where
     table: &'a mut UnificationTableBase<'db, U>,
     // Keyed by full parameter identity: different owners can reuse an index.
     params: FxHashMap<TyId<'db>, TyId<'db>>,
+    // Families whose bodies are being folded; their own parameters are left
+    // as they are, not replaced by inference variables.
+    family_scopes: Vec<crate::hir_def::scope_graph::ScopeId<'db>>,
 }
 
 impl<'db, U> TyFolder<'db> for FreshVarFolder<'_, 'db, U>
@@ -784,6 +805,21 @@ where
 {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         if !ty.has_param(db) {
+            return ty;
+        }
+        // A family's own parameters belong to it. Replace the enclosing
+        // impl's parameters with inference variables, and keep the family's
+        // own, which its arguments replace where it is applied.
+        if let TyData::TypeFamily { owner, .. } = ty.data(db) {
+            self.family_scopes.push(owner.scope());
+            let folded = ty.super_fold_with(db, self);
+            self.family_scopes.pop();
+            return folded;
+        }
+        if ty
+            .as_generic_param(db)
+            .is_some_and(|param| self.family_scopes.contains(&param.owner))
+        {
             return ty;
         }
 

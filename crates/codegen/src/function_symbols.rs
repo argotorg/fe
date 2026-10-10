@@ -380,6 +380,7 @@ fn readable_type_component<'db>(db: &'db DriverDataBase, ty: TyId<'db>) -> Optio
             (!component.is_empty()).then_some(component)
         }
         TyData::AssocTy(_)
+        | TyData::TypeFamily { .. }
         | TyData::ConstTy(_)
         | TyData::Never
         | TyData::TyVar(_)

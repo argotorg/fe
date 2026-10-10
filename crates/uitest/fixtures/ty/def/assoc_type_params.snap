@@ -1,0 +1,39 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/assoc_type_params.fe
+---
+error[2-0002]: `Missing` is not found
+   ┌─ assoc_type_params.fe:12:33
+   │
+12 │     type BadParamBound<T: Needs<Missing>>
+   │                                 ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+   ┌─ assoc_type_params.fe:13:29
+   │
+13 │     type BadBound<T>: Needs<Missing>
+   │                             ^^^^^^^ `Missing` is not found
+
+error[3-0007]: generic parameter is already defined in the parent item
+  ┌─ assoc_type_params.fe:8:16
+  │
+4 │ trait Params<A> {
+  │              - conflict with this generic parameter
+  ·
+8 │     type Hides<A>
+  │                ^ `A` is already defined
+
+error[3-0019]: duplicate generic parameter name in associated type `Twice`
+  ┌─ assoc_type_params.fe:7:16
+  │
+7 │     type Twice<T, T>
+  │                ^  - `T` is redefined here
+  │                │
+  │                `T` is defined here
+
+error[3-0060]: associated types cannot have const parameters
+  ┌─ assoc_type_params.fe:9:16
+  │
+9 │     type Sized<const N: usize>
+  │                ^^^^^^^^^^^^^^ const parameter

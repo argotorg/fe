@@ -1,0 +1,39 @@
+// A family application written in a bound's arguments must meet the family's
+// parameter bounds, even when the bound itself holds (here through a blanket
+// impl of `Needs<u8>`) and the application resolves to a type that hides it.
+trait Allowed {}
+impl Allowed for bool {}
+struct Other {}
+struct Wrap<T> {}
+trait Factory {
+    type F<U: Allowed>
+}
+struct Provider {}
+impl Factory for Provider {
+    type F<U> = u8
+}
+trait Needs<V> {}
+impl<T> Needs<u8> for T {}
+
+// Reported: the declared bound, a parameter bound, a nested and a projected
+// application, a plain associated type's bound, function and where-clause
+// bounds, a struct's and an impl's parameter bound, a supertrait.
+trait A1 { type Out<T>: Needs<Provider::F<Other>> }
+trait A2 { type Out<T: Needs<Provider::F<Other>>> }
+trait A3 { type Out<T>: Needs<Wrap<Provider::F<Other>>> }
+trait A4 {
+    type Item
+    type Out<T>: Needs<<Self::Item as Factory>::F<Other>>
+}
+trait A5 { type Out: Needs<Provider::F<Other>> }
+fn g1<T: Needs<Provider::F<Other>>>() {}
+fn g2<T>() where T: Needs<Provider::F<Other>> {}
+struct S1<T: Needs<Provider::F<Other>>> {}
+impl<T: Needs<Provider::F<Other>>> Wrap<T> {}
+trait Sup: Needs<Provider::F<Other>> {}
+
+// Accepted: the argument meets the bound, here through a sibling parameter's
+// bound or the family's own parameter bound.
+trait Ok1 { type Out<T: Allowed, V: Needs<Provider::F<T>>> }
+trait Ok2 { type Out<T: Allowed>: Needs<Provider::F<T>> }
+fn ok<T: Allowed, V: Needs<Provider::F<T>>>() {}

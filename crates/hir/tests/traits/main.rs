@@ -1,3 +1,4 @@
+mod associated_type_families;
 mod candidate_guard;
 mod const_param_assumptions;
 mod constraints;
@@ -6,6 +7,7 @@ mod effect_binding_resolution;
 mod effect_key_normalization;
 mod generic_default_metadata;
 mod generic_elaboration_contracts;
+mod inherent_method_cycles;
 mod limit_matrix;
 mod normalization_limits;
 mod param_env;

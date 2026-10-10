@@ -1,0 +1,6 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/self_param_projection_impl.fe
+---
+

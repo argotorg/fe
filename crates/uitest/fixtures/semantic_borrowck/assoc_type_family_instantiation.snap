@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/semantic_borrowck.rs
+expression: diags
+input_file: fixtures/semantic_borrowck/assoc_type_family_instantiation.fe
+---
+error[16-0012]: type normalization limit exceeded
+   ┌─ assoc_type_family_instantiation.fe:25:5
+   │
+25 │     hidden<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Base>>>>>>>>>>>>>>>>()
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ with `Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Base>>>>>>>>>>>>>>>` for its generic parameters, resolving the associated types in `hidden`, or in what it calls, needs more than 65,536 type nodes of work

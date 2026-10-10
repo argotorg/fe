@@ -23,6 +23,14 @@ use salsa::Update;
 use smallvec1::SmallVec;
 use thin_vec::ThinVec;
 
+/// The owner of a generic parameter list: an item, or an associated type
+/// with parameters of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update, derive_more::From)]
+pub enum GenericParamListOwner<'db> {
+    Item(GenericParamOwner<'db>),
+    AssocType(crate::hir_def::scope_graph::AssocTypeOwner<'db>),
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Clone, derive_more::From, Update)]
 pub enum FuncBodyDiag<'db> {
     Ty(TyDiagCollection<'db>),
@@ -111,7 +119,7 @@ pub enum TyLowerDiag<'db> {
     DuplicateArgName(Func<'db>, SmallVec<[u16; 4]>),
     DuplicateFieldName(FieldParent<'db>, SmallVec<[u16; 4]>),
     DuplicateVariantName(Enum<'db>, SmallVec<[u16; 4]>),
-    DuplicateGenericParamName(GenericParamOwner<'db>, SmallVec<[u16; 4]>),
+    DuplicateGenericParamName(GenericParamListOwner<'db>, SmallVec<[u16; 4]>),
 
     InvalidConstParamTy(DynLazySpan<'db>),
     RecursiveConstParamTy(DynLazySpan<'db>),
@@ -196,6 +204,26 @@ pub enum TyLowerDiag<'db> {
         span: DynLazySpan<'db>,
         limit: super::normalize::NormalizationLimit,
     },
+    /// A const parameter on an associated type.
+    AssocTypeConstParam(DynLazySpan<'db>),
+    /// A bound on an associated type parameter whose arguments are invalid.
+    InvalidAssocTypeParamBound {
+        span: DynLazySpan<'db>,
+        param: IdentId<'db>,
+    },
+    /// A bound declared on an associated type that cannot hold as written.
+    InvalidAssocTypeBound {
+        span: DynLazySpan<'db>,
+        name: IdentId<'db>,
+    },
+    /// An associated type whose parameters have bounds, used without all of
+    /// its type arguments.
+    AssocTypeNeedsAllArgs {
+        span: DynLazySpan<'db>,
+        name: IdentId<'db>,
+    },
+    /// A default on a type parameter of an associated type.
+    AssocTypeParamDefault(DynLazySpan<'db>),
 
     NonTrailingDefaultGenericParam(LazyGenericParamSpan<'db>),
 
@@ -336,6 +364,11 @@ impl TyLowerDiag<'_> {
             Self::TypeLoweringCycle(_) => 38,
             Self::TypeNormalizationLimit { .. } => 58,
             Self::ConstEvalInstanceLimit(_) => 59,
+            Self::AssocTypeConstParam(_) => 60,
+            Self::InvalidAssocTypeParamBound { .. } => 61,
+            Self::InvalidAssocTypeBound { .. } => 62,
+            Self::AssocTypeNeedsAllArgs { .. } => 63,
+            Self::AssocTypeParamDefault(_) => 64,
             Self::MixedRefSelfPrefixWithExplicitType { .. } => 28,
             Self::MixedOwnSelfPrefixWithExplicitType { .. } => 29,
             Self::InvalidMutSelfPrefixWithExplicitType { .. } => 30,
@@ -1323,6 +1356,26 @@ pub enum ImplDiag<'db> {
         raw_ty: TyId<'db>,
         failure: ProviderLayoutFailure,
     },
+
+    /// An impl's associated type has a different number of type parameters
+    /// than the trait declares.
+    AssocTypeParamNumMismatch {
+        primary: DynLazySpan<'db>,
+        expected: usize,
+        given: usize,
+    },
+
+    /// An impl's associated type parameter differs from the trait's in kind,
+    /// or is a const parameter where the trait has a type parameter.
+    AssocTypeParamKindMismatch {
+        primary: DynLazySpan<'db>,
+        expected: Kind,
+        given: Kind,
+    },
+
+    /// A bound on an impl's associated type parameter; bounds belong to the
+    /// trait's declaration.
+    AssocTypeParamBoundInImpl { primary: DynLazySpan<'db> },
 }
 
 impl ImplDiag<'_> {
@@ -1352,6 +1405,9 @@ impl ImplDiag<'_> {
             Self::InherentConstShadowsVariant { .. } => 20,
             Self::InherentConstShadowsFn { .. } => 21,
             Self::InvalidEffectHandleRaw { .. } => 22,
+            Self::AssocTypeParamNumMismatch { .. } => 25,
+            Self::AssocTypeParamKindMismatch { .. } => 26,
+            Self::AssocTypeParamBoundInImpl { .. } => 27,
             Self::TypeNotDefinedInTrait { .. } => 23,
         }
     }

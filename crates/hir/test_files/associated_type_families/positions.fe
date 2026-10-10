@@ -1,0 +1,224 @@
+// Every place a type can be written, with a family application whose
+// argument meets the parameter's bound. Nothing is reported.
+trait Allowed {}
+impl Allowed for bool {}
+trait Factory {
+    type Out<T: Allowed>
+}
+struct Provider {}
+impl Factory for Provider {
+    type Out<T> = u256
+}
+struct S {}
+impl S {
+    fn make() -> S {
+        S {}
+    }
+}
+struct Out2 {}
+impl Factory for Out2 {
+    type Out<T> = S
+}
+trait Show {}
+impl Show for u256 {}
+trait Tr2<X> {}
+trait Tr3<X> {
+    type A
+}
+trait Tr4 {
+    type A
+}
+impl<X> Tr3<X> for bool {
+    type A = u256
+}
+struct W1<T> {}
+struct W2<T> {}
+struct W3<T> {}
+struct W4<T> {}
+trait Marker {}
+fn consume<T>() {}
+struct Receiver {}
+impl Receiver {
+    fn consume<T>(self) {}
+}
+
+// Signatures, fields, aliases and constants.
+
+fn signature(_ x: Provider::Out<bool>) {}
+
+fn ret() -> Provider::Out<bool> {
+    1
+}
+
+struct Field {
+    x: Provider::Out<bool>,
+}
+
+enum Payload {
+    A(Provider::Out<bool>),
+}
+
+type Alias = Provider::Out<bool>
+
+const C: Provider::Out<bool> = 1
+
+// Types written in bodies.
+
+fn local() {
+    let _x: Provider::Out<bool> = 1
+}
+
+fn cast(x: u256) -> u256 {
+    x as Provider::Out<bool>
+}
+
+fn generic_local<B: Factory>() {
+    let _y: B::Out<bool>
+}
+
+fn call() {
+    consume<Provider::Out<bool>>()
+}
+
+fn nested_call() {
+    consume<(bool, <Provider as Factory>::Out<bool>)>()
+}
+
+fn method_call(_ r: Receiver) {
+    r.consume<Provider::Out<bool>>()
+}
+
+fn generic_call<T: Allowed>() {
+    consume<Provider::Out<T>>()
+    consume<Provider::Out<bool>>()
+}
+
+fn array() {
+    let _a: [Provider::Out<bool>; 1]
+}
+
+fn tuple() {
+    let _a: (u8, Provider::Out<bool>)
+}
+
+// Paths in expressions and patterns.
+
+fn path_call() -> S {
+    Out2::Out<bool>::make()
+}
+
+fn record() -> S {
+    Out2::Out<bool> {}
+}
+
+fn pattern(x: S) {
+    let Out2::Out<bool> {} = x
+}
+
+fn matched(x: S) {
+    match x {
+        Out2::Out<bool> {} => {}
+    }
+}
+
+// Where-clauses, generic parameters and headers.
+
+fn subject()
+where
+    Provider::Out<bool>: Show,
+{}
+
+fn generic_subject<B: Factory>()
+where
+    B::Out<bool>: Show,
+{}
+
+fn bound_argument<T>()
+where
+    T: Tr2<Provider::Out<bool>>,
+{}
+
+fn param_bound<T: Tr2<Provider::Out<bool>>>() {}
+
+fn param_default<T = Provider::Out<bool>>() {}
+
+struct Defaulted<T = Provider::Out<bool>> {}
+
+struct Guarded<T>
+where
+    T: Tr2<Provider::Out<bool>>,
+{}
+
+struct Bounded<T: Tr2<Provider::Out<bool>>> {}
+
+trait Super: Tr2<Provider::Out<bool>> {}
+
+trait Where
+where
+    Self: Tr2<Provider::Out<bool>>,
+{}
+
+// Written qualified: `impl W1<Provider::Out<..>>` next to an enum variant
+// that names the same type crashes the compiler, also for associated types
+// without parameters (a query cycle through method lookup).
+impl W1<<Provider as Factory>::Out<bool>> {}
+
+impl Tr2<Provider::Out<bool>> for bool {}
+
+impl Marker for Provider::Out<bool> {}
+
+impl<T> Marker for W2<T>
+where
+    T: Tr2<Provider::Out<bool>>,
+{}
+
+impl W1<u8> {
+    fn method(_ x: Provider::Out<bool>) {}
+}
+
+fn where_binding<T>()
+where
+    T: Tr4<A = Provider::Out<bool>>,
+{}
+
+fn param_binding<T: Tr4<A = Provider::Out<bool>>>() {}
+
+trait Super4: Tr4<A = Provider::Out<bool>> {}
+
+impl<T: Tr2<Provider::Out<bool>>> Marker for W3<T> {}
+
+impl<T> Marker for W4<T>
+where
+    T: Tr4<A = Provider::Out<bool>>,
+{}
+
+fn effect() uses (_: Provider::Out<bool>) {}
+
+// Qualified paths, associated types and constants.
+
+fn qualified(_ x: <bool as Tr3<Provider::Out<bool>>>::A) {}
+
+type Qualified = <bool as Tr3<Provider::Out<bool>>>::A
+
+trait Default1 {
+    type A = Provider::Out<bool>
+}
+
+trait Bound1 {
+    type A: Tr2<Provider::Out<bool>>
+}
+
+trait Impl1 {
+    type A
+}
+impl Impl1 for bool {
+    type A = Provider::Out<bool>
+}
+
+trait Const1 {
+    const C: Provider::Out<bool>
+}
+
+trait Bound4 {
+    type B: Tr4<A = Provider::Out<bool>>
+}

@@ -439,6 +439,7 @@ define_lazy_span_node!(
         (name, name),
     }
     @node {
+        (generic_params, generic_params, LazyGenericParamListSpan),
         (bounds, bounds, LazyTypeBoundListSpan),
         (attributes, attr_list, LazyAttrListSpan),
     }

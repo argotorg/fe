@@ -193,15 +193,15 @@ pub(crate) fn lower_checked_impl_assoc_ty<'db>(
         .assoc_types(db)
         .find(|assoc| assoc.name(db) == Some(name))
     {
-        return assoc.ty(db);
+        return assoc.ty(db).map(|ty| assoc.assoc_owner().bind_body(db, ty));
     }
 
     let trait_inst = impl_trait.trait_inst_result(db).ok()?;
-    let default = trait_inst
+    let view = trait_inst
         .def(db)
         .assoc_types(db)
-        .find(|assoc| assoc.name(db) == Some(name))?
-        .default_ty(db)?;
+        .find(|assoc| assoc.name(db) == Some(name))?;
+    let default = view.assoc_owner().bind_body(db, view.default_ty(db)?);
     Some(Binder::bind(trait_inst.def(db).into(), default).instantiate(db, trait_inst.args(db)))
 }
 
@@ -269,15 +269,19 @@ pub(crate) fn lower_candidate_impl_assoc_ty<'db>(
         .assoc_types(db)
         .find(|assoc| assoc.name(db) == Some(name))
     {
-        return assoc.candidate_ty(db);
+        return assoc
+            .candidate_ty(db)
+            .map(|ty| assoc.assoc_owner().bind_body(db, ty));
     }
 
     let trait_inst = impl_trait.candidate_trait_inst_result(db).ok()?;
-    let default = trait_inst
+    let view = trait_inst
         .def(db)
         .assoc_types(db)
-        .find(|assoc| assoc.name(db) == Some(name))?
-        .candidate_default_ty(db)?;
+        .find(|assoc| assoc.name(db) == Some(name))?;
+    let default = view
+        .assoc_owner()
+        .bind_body(db, view.candidate_default_ty(db)?);
     Some(Binder::bind(trait_inst.def(db).into(), default).instantiate(db, trait_inst.args(db)))
 }
 
@@ -599,6 +603,9 @@ pub(crate) enum TraitArgError<'db> {
     ConstHoleNotAllowed {
         arg_idx: usize,
     },
+    AssocTypeBindingWithParams {
+        name: crate::hir_def::IdentId<'db>,
+    },
     Ignored,
 }
 
@@ -660,6 +667,11 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
             },
             GenericArg::AssocType(AssocTypeGenericArg { name, ty }) => {
                 if let (Some(name), Some(ty)) = (name.to_opt(), ty.to_opt()) {
+                    if t.assoc_ty(db, name)
+                        .is_some_and(|decl| !decl.generic_params.data(db).is_empty())
+                    {
+                        return Err(TraitArgError::AssocTypeBindingWithParams { name });
+                    }
                     let ty = lower_hir_ty_with_minter(db, ty, scope, assumptions, minter);
                     assoc_bindings.insert(name, ty);
                 }

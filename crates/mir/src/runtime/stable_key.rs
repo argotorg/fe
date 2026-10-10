@@ -352,6 +352,11 @@ fn ty_mentions_effect_provider_param<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'
     }
 
     match ty.data(db) {
+        TyData::TypeFamily { args, body, .. } => {
+            args.iter()
+                .any(|arg| ty_mentions_effect_provider_param(db, *arg))
+                || ty_mentions_effect_provider_param(db, *body)
+        }
         TyData::TyParam(param) => param.is_effect_provider(),
         TyData::AssocTy(assoc) => trait_ref_mentions_effect_provider_param(db, assoc.trait_),
         TyData::QualifiedTy(trait_inst) => {
@@ -401,6 +406,21 @@ fn effect_param_site_identity<'db>(
     }
 }
 
+fn family_owner_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: hir::hir_def::scope_graph::AssocTypeOwner<'db>,
+) -> String {
+    format!(
+        "{}${}",
+        item_identity(db, owner.scope().item()),
+        owner
+            .scope()
+            .name(db)
+            .map(|name| name.data(db).as_str())
+            .unwrap_or("unnamed")
+    )
+}
+
 pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
     if matches!(ty.data(db), TyData::TyApp(..)) {
         let base = type_identity(db, ty.base_ty(db));
@@ -429,6 +449,20 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
                 ),
             },
         },
+        TyData::TypeFamily { owner, args, body } => format!(
+            "family${}${}${}",
+            family_owner_identity(db, *owner),
+            args.iter()
+                .map(|arg| type_identity(db, *arg))
+                .collect::<Vec<_>>()
+                .join("$"),
+            type_identity(db, *body)
+        ),
+        TyData::TyParam(param) if param.is_assoc_ty_param() => format!(
+            "family_param${}${}",
+            family_owner_identity(db, param.owner.assoc_type_owner().unwrap()),
+            param.idx
+        ),
         TyData::TyParam(param) => {
             format!(
                 "param${}${}",

@@ -485,7 +485,33 @@ impl<'db> Callable<'db> {
                 true
             },
         ) {
-            Ok(()) => true,
+            Ok(()) => {
+                // Lowering normalizes, which can remove a family application
+                // and with it the bounds on its parameters; check the written
+                // type arguments, as `lower_ty` does for other written types.
+                let mut valid = true;
+                for (idx, arg) in args.data(tc.db).iter().enumerate() {
+                    let crate::hir_def::GenericArg::Type(arg) = arg else {
+                        continue;
+                    };
+                    let Some(hir_ty) = arg.ty.to_opt() else {
+                        continue;
+                    };
+                    for diag in
+                        crate::analysis::ty::ty_error::collect_application_requirement_errors(
+                            tc.db,
+                            tc.env.scope(),
+                            hir_ty,
+                            span.clone().arg(idx).into_type_arg().ty(),
+                            tc.env.assumptions(),
+                        )
+                    {
+                        tc.push_diag(diag);
+                        valid = false;
+                    }
+                }
+                valid
+            }
             Err(CallGenericArgUnifyError::ArityMismatch { given, expected }) => {
                 tc.push_diag(BodyDiag::CallGenericArgNumMismatch {
                     primary: span.into(),

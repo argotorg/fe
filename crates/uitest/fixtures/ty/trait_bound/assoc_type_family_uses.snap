@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_bound/assoc_type_family_uses.fe
+---
+error[2-0021]: `Out` takes type parameters, so it cannot be set with `Out = ...`
+   ┌─ assoc_type_family_uses.fe:18:15
+   │
+18 │ fn binding<B: Factory<Out = u8>>() {}
+   │               ^^^^^^^ set here
+
+error[3-0063]: `Out` has bounds on its type parameters, so it needs all of its type arguments
+   ┌─ assoc_type_family_uses.fe:15:26
+   │
+15 │ fn partial(_ x: HCell<S::Out>) {}
+   │                          ^^^ type arguments missing
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_type_family_uses.fe:21:18
+   │
+21 │ fn unmet(_ x: S::Out<u8>) {}
+   │                  ^^^^^^^ `u8` doesn't implement `Allowed`

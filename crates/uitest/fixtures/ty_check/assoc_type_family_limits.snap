@@ -1,0 +1,40 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assoc_type_family_limits.fe
+---
+error[3-0038]: cycle detected while resolving this type
+   ┌─ assoc_type_family_limits.fe:98:15
+   │
+98 │ fn cycle(_ x: <Base as C>::Out<Base>) {}
+   │               ^^^^^^^^^^^^^^^^^^^^^^ this type's definition depends on itself
+
+error[3-0058]: type normalization limit exceeded
+   ┌─ assoc_type_family_limits.fe:44:13
+   │
+44 │     let y = out_of(w)
+   │             ^^^^^^^^^ resolving the associated types here needs more than 65,536 type nodes of work
+
+error[3-0058]: type normalization limit exceeded
+   ┌─ assoc_type_family_limits.fe:51:5
+   │
+51 │     make_out<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Base>>>>>>>>>>>>>>>>()
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ resolving the associated types here needs more than 65,536 type nodes of work
+
+error[3-0058]: type normalization limit exceeded
+   ┌─ assoc_type_family_limits.fe:57:5
+   │
+57 │     Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Base>>>>>>>>>>>>>>>::make<u8>(1)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ resolving the associated types here needs more than 65,536 type nodes of work
+
+error[3-0058]: type normalization limit exceeded
+   ┌─ assoc_type_family_limits.fe:62:17
+   │
+62 │ fn ignored() -> <Base as Tr>::Keep<<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Base>>>>>>>>>>>>>>>>>>>> as Tr>::Out<u8>> {
+   │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ resolving the associated types here needs more than 65,536 type nodes of work
+
+error[3-0058]: type normalization limit exceeded
+   ┌─ assoc_type_family_limits.fe:83:14
+   │
+83 │ fn deep(_ x: <S<S<S<S<S<S<S<S<S<S<S<S<S<Z>>>>>>>>>>>>> as Exp>::Two<Z>) {}
+   │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ resolving the associated types here gives a type nested more than 1,024 levels deep

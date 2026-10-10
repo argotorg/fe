@@ -313,6 +313,7 @@ where
 
     pub(super) fn assoc_ty(&self, name: &str, type_ref: Partial<TypeId<'db>>) -> AssocTyDef<'db> {
         AssocTyDef {
+            generic_params: self.empty_generic_params(),
             attributes: self.empty_attrs(),
             name: Partial::Present(self.ident(name)),
             type_ref,

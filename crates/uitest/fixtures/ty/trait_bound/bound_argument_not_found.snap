@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_bound/bound_argument_not_found.fe
+---
+error[2-0002]: `Missing2` is not found
+  ┌─ bound_argument_not_found.fe:4:19
+  │
+4 │ struct S<T: Needs<Missing2>> {}
+  │                   ^^^^^^^^ `Missing2` is not found
+
+error[2-0002]: `Missing3` is not found
+  ┌─ bound_argument_not_found.fe:5:15
+  │
+5 │ fn f<T: Needs<Missing3>>() {}
+  │               ^^^^^^^^ `Missing3` is not found
+
+error[2-0002]: `Missing4` is not found
+  ┌─ bound_argument_not_found.fe:6:26
+  │
+6 │ fn g<T>() where T: Needs<Missing4> {}
+  │                          ^^^^^^^^ `Missing4` is not found
+
+error[2-0002]: `Missing5` is not found
+  ┌─ bound_argument_not_found.fe:7:15
+  │
+7 │ impl<T: Needs<Missing5>> S<T> {}
+  │               ^^^^^^^^ `Missing5` is not found
+
+error[2-0002]: `Missing6` is not found
+  ┌─ bound_argument_not_found.fe:9:21
+  │
+9 │     type Out: Needs<Missing6>
+  │                     ^^^^^^^^ `Missing6` is not found

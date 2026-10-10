@@ -1,0 +1,40 @@
+// Qualified paths through an associated type with parameters, and method
+// calls that rely on its declared bound.
+trait Fn<X, Y> { fn call(self, _ value: X) -> Y }
+trait Functor<T> {
+    type Out<U>
+    fn map<Y, F: Fn<T, Y>>(self, _ f: F) -> Self::Out<Y> { todo() }
+    fn par_map<Y, F: Fn<T, Y>>(self, _ f: F) -> Self::Out<Y> { todo() }
+}
+trait Backend { type Buffer<T>: Functor<T> }
+struct StorPtr<T> {}
+struct EvmBackend {}
+impl<T> Functor<T> for StorPtr<T> { type Out<U> = StorPtr<U> }
+impl Backend for EvmBackend { type Buffer<T> = StorPtr<T> }
+
+fn qual<B: Backend, X, Y, F: Fn<X, Y>>(_ buf: B::Buffer<X>, _ f: F)
+    -> <B::Buffer<X> as Functor<X>>::Out<Y>
+{
+    todo()
+}
+
+fn chained<B: Backend, X, Y, F: Fn<X, Y>>(_ buf: B::Buffer<X>, _ f: F)
+    -> B::Buffer<X>::Out<Y>
+{
+    todo()
+}
+
+fn method_par_map<B: Backend, X, Y, F: Fn<X, Y>>(buf: B::Buffer<X>, _ f: F) {
+    let out = buf.par_map<Y, F>(f)
+}
+
+fn method_map<B: Backend, X, Y, F: Fn<X, Y>>(buf: B::Buffer<X>, _ f: F) {
+    let mapped = buf.map<Y, F>(f)
+}
+
+fn takes_storptr(_ x: StorPtr<u64>) {}
+
+fn use_concrete(_ buf: EvmBackend::Buffer<u32>) {
+    let out: <EvmBackend::Buffer<u32> as Functor<u32>>::Out<u64> = todo()
+    takes_storptr(out)
+}

@@ -145,16 +145,44 @@ pub(crate) fn probe_method<'db>(
     )
 }
 
-#[salsa::tracked(return_ref)]
+/// The inherent methods a canonical probe finds, or the limit it reaches.
+type ProbedCanonicalMethods<'db> =
+    Result<Vec<(CallableDef<'db>, Solution<BoundInherentMethod<'db>>)>, NormalizationLimit>;
+
+#[salsa::tracked(return_ref, cycle_fn=probe_canonical_method_cycle_recover, cycle_initial=probe_canonical_method_cycle_initial)]
 fn probe_canonical_method<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
     query: Canonical<MethodProbe<'db>>,
     scope: ScopeId<'db>,
     name: IdentId<'db>,
-) -> Result<Vec<(CallableDef<'db>, Solution<BoundInherentMethod<'db>>)>, NormalizationLimit> {
+) -> ProbedCanonicalMethods<'db> {
     let table = collect_methods(db, ingot);
     table.probe(db, query, scope, name)
+}
+
+fn probe_canonical_method_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _ingot: Ingot<'db>,
+    _query: Canonical<MethodProbe<'db>>,
+    _scope: ScopeId<'db>,
+    _name: IdentId<'db>,
+) -> ProbedCanonicalMethods<'db> {
+    Ok(Vec::new())
+}
+
+fn probe_canonical_method_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &ProbedCanonicalMethods<'db>,
+    _count: u32,
+    _ingot: Ingot<'db>,
+    _query: Canonical<MethodProbe<'db>>,
+    _scope: ScopeId<'db>,
+    _name: IdentId<'db>,
+) -> salsa::CycleRecoveryAction<ProbedCanonicalMethods<'db>> {
+    // Method collection can need this lookup while lowering an impl header.
+    // Iterate with collection rather than caching its initially empty answer.
+    salsa::CycleRecoveryAction::Iterate
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Update)]

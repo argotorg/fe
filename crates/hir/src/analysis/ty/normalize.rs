@@ -11,16 +11,18 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{
     binder::Binder,
-    candidates::{self, Counting, Holds, Item, Question},
+    candidates::{self, Counting, Holds, Item, Question, all_hold},
     canonical::Canonical,
     canonical::Canonicalized,
     diagnostics::{TyDiagCollection, TyLowerDiag},
     fold::{TyFoldable, TyFolder},
     layout_holes::LayoutRootUse,
+    subst::substitute_complete,
     trait_def::{ImplementorOrigin, TraitInstId, TraitRefId, resolve_trait_impl_instance},
     trait_lower::complete_impl_assoc_ty,
     trait_resolution::{PredicateListId, Selection, TraitSolveCx},
     ty_def::{AssocTy, InvalidCause, TyData, TyId, TyParam, collect_variables},
+    ty_lower::CompleteSubst,
     unify::UnificationTable,
     visitor::{TyVisitor, walk_ty},
 };
@@ -204,6 +206,31 @@ fn normalize_ty_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
+/// The type a family application written in a path stands for, as
+/// `Provider::Out<bool>` in `Provider::Out<bool>::make()` stands for the type
+/// its definition gives, so that lookups through it see that type. This holds
+/// for the shorthand and the qualified spelling `<Provider as Factory>::Out<bool>`,
+/// and for a family given more arguments than it has parameters. Any other
+/// type is returned unchanged. A limit is returned, for the path to report.
+pub(crate) fn normalize_family_application<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Result<TyId<'db>, NormalizationLimit> {
+    let (head, args) = ty.decompose_ty_app(db);
+    let applies_a_family = match head.data(db) {
+        TyData::TypeFamily { owner, .. } => args.len() >= owner.generic_params(db).data(db).len(),
+        TyData::AssocTy(_) => !args.is_empty(),
+        _ => false,
+    };
+    if applies_a_family {
+        normalize_ty(db, ty, scope, assumptions)
+    } else {
+        Ok(ty)
+    }
+}
+
 /// A limit that normalizing a type reached. Whether a type reaches a limit
 /// depends only on the type, its scope and assumptions, and the limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
@@ -218,7 +245,7 @@ pub enum NormalizationLimit {
     /// The result of one use is nested more than [`TYPE_DEPTH_LIMIT`] levels
     /// deep.
     Depth,
-    /// A projection whose resolution needs the projection itself.
+    /// A projection or family application whose resolution needs itself.
     Cycle,
 }
 
@@ -465,7 +492,7 @@ pub(crate) fn normalize_layout_root_uses<'db>(
 }
 
 // The limits apply to each use of an associated type: each projection or
-// written in a type, or met by the type checker, is
+// family application written in a type, or met by the type checker, is
 // measured on its own, by a function of the projection, the scope and the
 // assumptions. A type reaches a limit exactly when one of its uses does, so
 // how its parts are grouped or ordered never matters.
@@ -477,9 +504,9 @@ const PROJECTION_DEPTH_LIMIT: usize = 64;
 /// its result, and the cost of each projection resolved for it.
 const PROJECTION_WORK_LIMIT: usize = 65536;
 
-/// How deeply nested the result of one use may be. Later passes walk types
-/// recursively, so a type thousands of levels deep would exhaust the stack
-/// even when it is small as a tree.
+/// How deeply nested the result of one use may be. A family can build a type
+/// thousands of levels deep from a few lines while staying small as a tree;
+/// later passes walk types recursively and would run out of stack.
 const TYPE_DEPTH_LIMIT: usize = 1024;
 
 pub struct TypeNormalizer<'db> {
@@ -487,9 +514,11 @@ pub struct TypeNormalizer<'db> {
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     resolve_impls: bool,
-    /// Projections being resolved, and the results of those resolved.
+    /// Projections and family applications being resolved, and the results
+    /// of those resolved.
     cache: FxHashMap<TyId<'db>, CacheEntry<'db>>,
-    /// The projections being resolved, innermost last.
+    /// The projections and family applications being resolved, innermost
+    /// last.
     frames: Vec<Frame<'db>>,
     /// Projections currently being resolved, counted against
     /// [`PROJECTION_DEPTH_LIMIT`].
@@ -529,7 +558,7 @@ enum CacheEntry<'db> {
     },
 }
 
-/// A projection being resolved.
+/// A projection or family application being resolved.
 struct Frame<'db> {
     /// Its nesting depth, counting itself.
     depth: usize,
@@ -761,6 +790,29 @@ impl<'db> TypeNormalizer<'db> {
         }
         result
     }
+
+    /// Reduces the family application `applied`, whose head is a family
+    /// given all of its arguments, by substituting them into its definition.
+    fn reduce_family_application(&mut self, applied: TyId<'db>) -> TyId<'db> {
+        let Some((owner, body, args)) = applied.as_family_application(self.db) else {
+            return applied;
+        };
+        if let Some(cached) = self.lookup(applied) {
+            return cached;
+        }
+        let Some(reduced) = CompleteSubst::for_associated_type(self.db, owner, args.to_vec())
+            .ok()
+            .and_then(|subst| substitute_complete(self.db, body, &subst).ok())
+        else {
+            return applied;
+        };
+        if self.enter_projection(applied).is_err() {
+            return applied;
+        }
+        let result = self.fold_in_place(reduced);
+        self.projection_depth -= 1;
+        self.finish(applied, result)
+    }
 }
 
 /// The number of nodes in `ty` counted as a tree, if it is at most `limit`
@@ -817,11 +869,15 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
         abs: TyId<'db>,
         arg: TyId<'db>,
     ) -> TyId<'db> {
-        if self.resolve_impls {
+        let applied = if self.resolve_impls {
             TyId::app(db, abs, arg)
         } else {
             TyId::app_structural(db, abs, arg)
+        };
+        if self.limit.is_some() {
+            return applied;
         }
+        self.reduce_family_application(applied)
     }
 
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
@@ -833,6 +889,13 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
             && self.fold_depth.saturating_sub(frame.fold_base) > TYPE_DEPTH_LIMIT
         {
             self.reach(NormalizationLimit::Depth);
+            return ty;
+        }
+        // A shared normal subtree has nothing to rewrite. Walking it as a
+        // tree can expand exponentially before the surrounding projection's
+        // result is measured. The projection still measures the full result
+        // as a tree, including this subtree, in `finish`.
+        if is_already_normal(db, ty) {
             return ty;
         }
         self.fold_depth += 1;
@@ -883,7 +946,14 @@ impl<'db> TypeNormalizer<'db> {
         // its entire trait reference before using an assumption's binding.
         let target = assoc.trait_.fold_with(self.db, self);
         let mut matching_bounds: IndexMap<TyId<'db>, ()> = IndexMap::new();
-        for &pred in self.assumptions.list(self.db) {
+        let declared = self.declared_family_bounds(assoc.trait_.self_ty(self.db));
+        for pred in self
+            .assumptions
+            .list(self.db)
+            .iter()
+            .copied()
+            .chain(declared)
+        {
             let Some(bound) = pred.bound_assoc_ty(self.db, assoc.name) else {
                 continue;
             };
@@ -951,6 +1021,43 @@ impl<'db> TypeNormalizer<'db> {
                 if *unique != ty { Some(*unique) } else { None }
             }
             _ => None,
+        }
+    }
+
+    /// The bounds declared on the associated type that `self_ty` applies to
+    /// all of its arguments, once what they require holds: the enclosing
+    /// trait goal and the bounds on the type's parameters.
+    ///
+    /// This is the rule for a plain associated type, `T: Tr` implies the
+    /// bounds of `T::Out`, for one with parameters: the bounds of `T::F<V>`
+    /// hold once `T: Tr` and `V`'s parameter bounds do. A plain associated
+    /// type's bounds are already premises, added with `T: Tr`; a family's
+    /// depend on its arguments, so they are found here, from the application
+    /// written, with the same meaning the trait solver gives them.
+    fn declared_family_bounds(&mut self, self_ty: TyId<'db>) -> Vec<TraitInstId<'db>> {
+        if !self.resolve_impls {
+            return Vec::new();
+        }
+        let Some((requirements, bounds)) = self_ty.family_declared_bounds(self.db) else {
+            return Vec::new();
+        };
+        let solve_cx = TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions);
+        let mut table = UnificationTable::new(self.db);
+        match all_hold(
+            self.db,
+            solve_cx,
+            &mut table,
+            requirements.list(self.db),
+            Counting::PROVED,
+        ) {
+            Holds::Yes => bounds.list(self.db).to_vec(),
+            // Whether the bounds are premises is unknown, and with them the
+            // projection's answer.
+            Holds::Unknown(limit) => {
+                self.reach(limit);
+                Vec::new()
+            }
+            Holds::No | Holds::Undecided => Vec::new(),
         }
     }
 

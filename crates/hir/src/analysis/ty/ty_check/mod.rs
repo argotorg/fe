@@ -109,7 +109,10 @@ use crate::analysis::ty::{
         BodyHoleSite, CallableInputLayoutHoleOrigin, ConstTyData, ConstTyId, HoleAnchor,
         LoweringContext, invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag,
     },
-    normalize::{LimitReported, NormalizationLimit, normalize_ty, normalize_with_trait_evidence},
+    normalize::{
+        LimitReported, NormalizationLimit, normalize_family_application, normalize_ty,
+        normalize_with_trait_evidence,
+    },
     pattern_ir::{
         ConstructorKind, PatternAnalysisStatus, PatternStore, ValidatedPatId, ValidatedPatKind,
     },
@@ -1734,6 +1737,44 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    /// Reports the requirements of the type applications written in an
+    /// effect key, such as the bounds on a family's parameters. Returns
+    /// whether any were reported.
+    fn check_effect_key_applications(
+        &mut self,
+        owner: EffectParamOwner<'db>,
+        idx: usize,
+        key_ty: HirTyId<'db>,
+        scope: crate::hir_def::scope_graph::ScopeId<'db>,
+    ) -> bool {
+        let span = owner.effect_param_lazy_ty_span(self.db, idx);
+        let mut diags = super::ty_error::collect_application_requirement_errors(
+            self.db,
+            scope,
+            key_ty,
+            span.clone(),
+            self.env.assumptions(),
+        );
+        // A function's effect key is written here; a normalization limit in
+        // it is reported here. A contract's keys are checked with the
+        // contract (`ContractAnalysisPass`).
+        if diags.is_empty() && matches!(owner, EffectParamOwner::Func(_)) {
+            let ty = lower_hir_ty(self.db, key_ty, scope, self.env.assumptions());
+            diags.extend(super::ty_error::normalization_limit_diag(
+                self.db,
+                ty,
+                scope,
+                self.env.assumptions(),
+                span.into(),
+            ));
+        }
+        let reported = !diags.is_empty();
+        for diag in diags {
+            self.push_diag(diag);
+        }
+        reported
+    }
+
     fn check_free_func_effect_list(
         &mut self,
         func: Func<'db>,
@@ -1743,19 +1784,12 @@ impl<'db> TyChecker<'db> {
             let Some(key_ty) = effect.key_ty.to_opt() else {
                 continue;
             };
-            // The key is written here: a normalization limit in it is
-            // reported here. A contract's keys are checked with the contract
-            // (`ContractAnalysisPass`).
-            let owner = EffectParamOwner::Func(func);
-            let ty = lower_hir_ty(self.db, key_ty, func.scope(), self.env.assumptions());
-            if let Some(diag) = super::ty_error::normalization_limit_diag(
-                self.db,
-                ty,
+            if self.check_effect_key_applications(
+                EffectParamOwner::Func(func),
+                idx,
+                key_ty,
                 func.scope(),
-                self.env.assumptions(),
-                owner.effect_param_ty_span(self.db, idx),
             ) {
-                self.push_diag(diag);
                 continue;
             }
 
@@ -1822,6 +1856,9 @@ impl<'db> TyChecker<'db> {
             let Some(key_ty) = effect.key_ty.to_opt() else {
                 continue;
             };
+            if self.check_effect_key_applications(owner, idx, key_ty, contract.scope()) {
+                continue;
+            }
 
             // Labeled effects are always type/trait keyed: `name: Type`.
             if effect.name.is_some() {
@@ -3397,6 +3434,22 @@ impl<'db> TyChecker<'db> {
                 // Avoid cascading kind errors for already-invalid types
                 return TyId::invalid(self.db, InvalidCause::Other);
             }
+        } else {
+            // Lowering normalizes, which can remove a family application and
+            // with it the bounds on its parameters; check the written type.
+            let diags = super::ty_error::collect_application_requirement_errors(
+                self.db,
+                self.env.scope(),
+                hir_ty,
+                span.clone(),
+                self.env.assumptions(),
+            );
+            if !diags.is_empty() {
+                for d in diags {
+                    self.push_diag(d);
+                }
+                return TyId::invalid(self.db, InvalidCause::Other);
+            }
         }
 
         // A qualified path resolves to a type that no longer mentions the
@@ -3677,8 +3730,12 @@ impl<'db> TyChecker<'db> {
         let scope = self.env.scope();
         let mut invisible = None;
         let mut applications = Vec::new();
+        let mut type_uses = Vec::new();
         let mut observe_segment = |path: PathId<'db>, reso: &PathRes<'db>| {
             applications.extend(const_requirements::constrained_applications(self.db, reso));
+            if let Some(ty) = super::ty_error::family_application_use(self.db, reso) {
+                type_uses.push((path, ty));
+            }
             if invisible.is_some() {
                 return;
             }
@@ -3698,7 +3755,32 @@ impl<'db> TyChecker<'db> {
         ) {
             Ok(r) => {
                 self.env.register_path_applications(site, applications);
-                Ok(r.map_over_ty(|ty| self.instantiate_to_term(ty)))
+                // A segment such as `Provider::Out<bool>` in `Provider::Out<bool>::make()`
+                // applies a family; check the bounds on its parameters, which the
+                // lookup through it does not see.
+                for diag in super::ty_error::application_requirement_diags(
+                    self.db,
+                    scope,
+                    self.env.assumptions(),
+                    &span,
+                    type_uses,
+                ) {
+                    self.push_diag(diag);
+                }
+                Ok(r.map_over_ty(|ty| {
+                    // A family application stands for its definition, as a
+                    // plain associated type resolved through an impl does.
+                    let ty = match normalize_family_application(
+                        self.db,
+                        ty,
+                        scope,
+                        self.env.assumptions(),
+                    ) {
+                        Ok(ty) => ty,
+                        Err(limit) => self.report_limit(limit).recovery_ty(self.db),
+                    };
+                    self.instantiate_to_term(ty)
+                }))
             }
             Err(err) => Err(err),
         };

@@ -3,7 +3,7 @@
 use super::{
     const_ty::ConstCaptureEnv,
     fold::{TyFoldable, TyFolder},
-    ty_def::TyId,
+    ty_def::{TyData, TyId},
     ty_lower::{CompleteSubst, ParamSchemaId, SubstError},
 };
 use crate::{
@@ -22,7 +22,26 @@ pub(crate) fn substitute_complete<'db, T>(
 where
     T: TyFoldable<'db>,
 {
-    let mut folder = SubstFolder { subst, error: None };
+    substitute_simultaneously(db, value, &[subst])
+}
+
+/// Substitutes the parameters of several declarations in one pass: each
+/// occurrence is replaced by the substitution of the declaration that owns
+/// it, and no replacement is traversed again. Substituting one declaration
+/// after another would rewrite the first one's replacements when they
+/// mention the second one's parameters.
+pub(crate) fn substitute_simultaneously<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    substs: &[&CompleteSubst<'db>],
+) -> Result<T, SubstError<'db>>
+where
+    T: TyFoldable<'db>,
+{
+    let mut folder = SubstFolder {
+        substs,
+        error: None,
+    };
     let value = value.fold_with(db, &mut folder);
     folder.error.map_or(Ok(value), Err)
 }
@@ -36,34 +55,50 @@ pub(crate) fn is_owned_by_schema<'db>(
     schema: ParamSchemaId<'db>,
 ) -> bool {
     ty.as_generic_param(db)
-        .is_some_and(|param| param.owner == schema.owner(db).scope() && !param.is_effect())
+        .is_some_and(|param| param.owner == schema.scope(db) && !param.is_effect())
 }
 
 struct SubstFolder<'a, 'db> {
-    subst: &'a CompleteSubst<'db>,
+    substs: &'a [&'a CompleteSubst<'db>],
     error: Option<SubstError<'db>>,
 }
 
 impl<'db> TyFolder<'db> for SubstFolder<'_, 'db> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        let schema = self.subst.domain().schema(db);
-        if let Some(key) = schema.original_key(db, ty) {
-            if let Some(replacement) = self.subst.get(db, key) {
-                return replacement;
-            }
-            self.error.get_or_insert(SubstError::MissingArgument {
-                domain: self.subst.domain(),
-                key,
-            });
-            return ty;
+        if let TyData::TypeFamily { owner, args, body } = ty.data(db) {
+            // Captures are outside this local binder. Its own parameters remain
+            // bound even when a recursive family uses the same declaration.
+            let args = args.iter().map(|arg| arg.fold_with(db, self)).collect();
+            let binds_own = self
+                .substs
+                .iter()
+                .any(|subst| owner.scope() == subst.domain().schema(db).scope(db));
+            let body = if binds_own {
+                *body
+            } else {
+                body.fold_with(db, self)
+            };
+            return TyId::type_family_with_args(db, *owner, args, body);
         }
-
-        if is_owned_by_schema(db, ty, schema) {
-            self.error.get_or_insert(SubstError::WrongBasis {
-                schema,
-                occurrence: ty,
-            });
-            return ty;
+        for subst in self.substs {
+            let schema = subst.domain().schema(db);
+            if let Some(key) = schema.original_key(db, ty) {
+                if let Some(replacement) = subst.get(db, key) {
+                    return replacement;
+                }
+                self.error.get_or_insert(SubstError::MissingArgument {
+                    domain: subst.domain(),
+                    key,
+                });
+                return ty;
+            }
+            if is_owned_by_schema(db, ty, schema) {
+                self.error.get_or_insert(SubstError::WrongBasis {
+                    schema,
+                    occurrence: ty,
+                });
+                return ty;
+            }
         }
 
         ty.super_fold_with(db, self)
@@ -74,14 +109,16 @@ impl<'db> TyFolder<'db> for SubstFolder<'_, 'db> {
         db: &'db dyn HirAnalysisDb,
         capture: &ConstCaptureEnv<'db>,
     ) -> ConstCaptureEnv<'db> {
-        if let Some(bound) = capture.bind_identity_with(db, self.subst) {
-            return match bound {
-                Ok(bound) => bound,
-                Err(error) => {
-                    self.error.get_or_insert(error);
-                    capture.clone()
-                }
-            };
+        for subst in self.substs {
+            if let Some(bound) = capture.bind_identity_with(db, subst) {
+                return match bound {
+                    Ok(bound) => bound,
+                    Err(error) => {
+                        self.error.get_or_insert(error);
+                        capture.clone()
+                    }
+                };
+            }
         }
         capture.fold_ranges(db, self)
     }

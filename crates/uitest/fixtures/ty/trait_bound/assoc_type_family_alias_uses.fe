@@ -1,0 +1,49 @@
+// An alias stands for its right-hand side, so a family application in it must
+// meet the family's bounds at each use, including a use that leaves a
+// parameter to its default. A generic alias is checked like a generic struct
+// behind an alias: its own parameters have no bounds, so the definition
+// reports an argument they do not meet.
+trait Allowed {}
+impl Allowed for bool {}
+struct Other {}
+struct Wrap<T> {}
+impl<T> Allowed for Wrap<T> {}
+
+trait Factory {
+    type Out<T: Allowed>
+}
+struct Provider {}
+impl Factory for Provider {
+    type Out<T> = Wrap<T>
+}
+
+type Concrete = Provider::Out<Other>
+type Generic<T> = Provider::Out<T>
+type Nested<T> = Wrap<Generic<T>>
+type Defaulted<T = Other> = Provider::Out<T>
+type DefaultOk<T = bool> = Provider::Out<T>
+
+// Each of these uses is reported.
+struct ViaConcrete { f: Concrete }
+struct Field { f: Generic<Other> }
+struct ThroughNested { f: Nested<Other> }
+struct GenericUse<T> { f: Generic<T> }
+fn param(_ x: Generic<Other>) {}
+fn ret() -> Generic<Other> { make() }
+fn local<T>() {
+    let _a: Generic<T> = make()
+    let _b: Defaulted = make()
+}
+impl<T> Wrap<Generic<T>> {}
+trait Tr { const C: Generic<Other> }
+struct LeftToDefault { f: Defaulted }
+struct GivenDefault { f: Defaulted<Other> }
+
+// These meet the bound and are accepted.
+struct DefaultedOk { f: DefaultOk }
+struct GivenOk { f: Defaulted<bool> }
+fn bounded<T: Allowed>(_ x: Generic<T>) -> Nested<bool> { make() }
+type Always<T> = Provider::Out<Wrap<T>>
+fn always(_ x: Always<u8>) -> Always<u8> { x }
+
+fn make<T>() -> T { make() }

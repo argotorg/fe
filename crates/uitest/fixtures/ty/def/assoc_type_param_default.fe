@@ -1,0 +1,19 @@
+// A default on a type parameter of an associated type is rejected once, at
+// the declaration; uses of the type are not reported again.
+trait Tr {
+    type Out<T, U = u8>
+}
+
+struct P {}
+
+impl Tr for P {
+    type Out<T, U> = (T, U)
+}
+
+fn one(x: <P as Tr>::Out<bool>) -> (bool, u8) {
+    x
+}
+
+fn two(x: <P as Tr>::Out<bool, u16>) -> (bool, u16) {
+    x
+}

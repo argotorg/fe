@@ -1,0 +1,98 @@
+// A limit reached in a family application is reported once, where the type
+// is written, inferred or instantiated, and names the limit; never accepted.
+trait Tr {
+    type Out<T>
+    type Keep<T>
+    fn make<T: Copy>(_ x: T) -> Self::Out<T>
+}
+
+struct Base {}
+
+struct Wrap<U> {}
+
+impl Tr for Base {
+    type Out<T> = T
+    type Keep<T> = u8
+    fn make<T: Copy>(_ x: T) -> T {
+        x
+    }
+}
+
+impl<U: Tr> Tr for Wrap<U> {
+    type Out<T> = <U as Tr>::Out<(T, T)>
+    type Keep<T> = u8
+    fn make<T: Copy>(_ x: T) -> <U as Tr>::Out<(T, T)> {
+        U::make((x, x))
+    }
+}
+
+fn wrap<U>(_ u: U) -> Wrap<U> {
+    Wrap {}
+}
+
+fn make_out<X: Tr>() -> X::Out<u8> {
+    make_out<X>()
+}
+
+fn out_of<X: Tr>(_ x: X) -> X::Out<u8> {
+    make_out<X>()
+}
+
+// Built by inference: no family is written in the body.
+fn inferred() -> u8 {
+    let w = wrap(wrap(wrap(wrap(wrap(wrap(wrap(wrap(wrap(wrap(wrap(wrap(wrap(wrap(wrap(Base {})))))))))))))))
+    let y = out_of(w)
+    let z: u8 = y
+    z
+}
+
+// The call's result is discarded.
+fn discarded() -> u8 {
+    make_out<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Base>>>>>>>>>>>>>>>>()
+    0
+}
+
+// Instantiated from a trait method's signature.
+fn method() -> u8 {
+    Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Base>>>>>>>>>>>>>>>::make<u8>(1)
+    0
+}
+
+// `Keep` ignores its argument, which reaches the limit.
+fn ignored() -> <Base as Tr>::Keep<<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Base>>>>>>>>>>>>>>>>>>>> as Tr>::Out<u8>> {
+    0
+}
+
+// A result 8,192 levels deep, small as a tree.
+trait Exp {
+    type Two<X>
+}
+
+struct Z {}
+
+struct S<N> {}
+
+impl Exp for Z {
+    type Two<X> = S<X>
+}
+
+impl<N: Exp> Exp for S<N> {
+    type Two<X> = <N as Exp>::Two<<N as Exp>::Two<X>>
+}
+
+fn deep(_ x: <S<S<S<S<S<S<S<S<S<S<S<S<S<Z>>>>>>>>>>>>> as Exp>::Two<Z>) {}
+
+fn small(_ x: <S<S<S<Z>>> as Exp>::Two<Z>) -> S<S<S<S<S<S<S<S<Z>>>>>>>> {
+    x
+}
+
+// An application whose reduction needs the same application.
+trait C {
+    type Out<T: C>: C
+}
+
+impl C for Base {
+    type Out<T> = <T as C>::Out<T>
+}
+
+fn cycle(_ x: <Base as C>::Out<Base>) {}
