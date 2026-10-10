@@ -1368,7 +1368,8 @@ impl<'db> FuncParamView<'db> {
         // Well-formedness / trait-bound satisfaction for parameter type
         let solve_cx =
             TraitSolveCx::new(db, func.scope()).with_assumptions(param_env(db, func.into()));
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, solve_cx, ty) {
+        let wf = check_ty_wf(db, solve_cx, ty);
+        if !wf.is_wf() {
             // Point at the written type inside a qualified path when that is
             // what is ill-formed.
             let precise = qualified_path_wf_diags(
@@ -1380,16 +1381,7 @@ impl<'db> FuncParamView<'db> {
                 solve_cx,
             );
             if precise.is_empty() {
-                out.push(
-                    TraitConstraintDiag::TraitBoundNotSat {
-                        span: ty_span.clone(),
-                        primary_goal: goal,
-                        unsat_subgoal: subgoal,
-                        required_by: None,
-                        capability_hint: None,
-                    }
-                    .into(),
-                );
+                out.extend(wf.into_diag(ty_span.clone()));
             } else {
                 out.extend(precise);
             }
@@ -3383,24 +3375,14 @@ impl<'db> TypeAlias<'db> {
         };
         let assumptions = constraints_for(db, self.into());
         let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+        check_ty_wf(
             db,
             TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),
             ty,
-        ) {
-            vec![
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: self.span().ty().into(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                    capability_hint: None,
-                }
-                .into(),
-            ]
-        } else {
-            Vec::new()
-        }
+        )
+        .into_diag(self.span().ty().into())
+        .into_iter()
+        .collect()
     }
 }
 
@@ -4056,8 +4038,7 @@ pub(crate) enum InherentImplAdmissibility<'db> {
     },
     IllFormed {
         ty: TyId<'db>,
-        goal: TraitInstId<'db>,
-        subgoal: Option<TraitInstId<'db>>,
+        error: WellFormedness<'db>,
     },
 }
 
@@ -4142,9 +4123,7 @@ impl<'db> Impl<'db> {
             ty,
         ) {
             WellFormedness::WellFormed => InherentImplAdmissibility::Admissible { ty },
-            WellFormedness::IllFormed { goal, subgoal } => {
-                InherentImplAdmissibility::IllFormed { ty, goal, subgoal }
-            }
+            error => InherentImplAdmissibility::IllFormed { ty, error },
         }
     }
 
@@ -4687,24 +4666,14 @@ impl<'db> ImplTrait<'db> {
             return (None, Vec::new());
         }
 
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+        if let Some(diag) = check_ty_wf(
             db,
             TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),
             ty,
-        ) {
-            return (
-                None,
-                vec![
-                    TraitConstraintDiag::TraitBoundNotSat {
-                        span: self.span().ty().into(),
-                        primary_goal: goal,
-                        unsat_subgoal: subgoal,
-                        required_by: None,
-                        capability_hint: None,
-                    }
-                    .into(),
-                ],
-            );
+        )
+        .into_diag(self.span().ty().into())
+        {
+            return (None, vec![diag]);
         }
 
         match self.lowered_implementor(db) {
@@ -4888,22 +4857,15 @@ impl<'db> ImplAssocTypeView<'db> {
         if let Some(diag) = ty.emit_diag(db, ty_span.clone().into()) {
             return vec![diag];
         }
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+        if let Some(diag) = check_ty_wf(
             db,
             TraitSolveCx::new(db, self.owner.scope())
                 .with_assumptions(param_env(db, self.owner.into())),
             ty,
-        ) {
-            return vec![
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: ty_span.into(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                    capability_hint: None,
-                }
-                .into(),
-            ];
+        )
+        .into_diag(ty_span.into())
+        {
+            return vec![diag];
         }
 
         Vec::new()
@@ -5564,7 +5526,8 @@ impl<'db> FieldView<'db> {
         let owner_item = self.owner_item();
         let solve_cx =
             TraitSolveCx::new(db, owner_item.scope()).with_assumptions(param_env(db, owner_item));
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, solve_cx, ty) {
+        let wf = check_ty_wf(db, solve_cx, ty);
+        if !wf.is_wf() {
             // Point at the written type inside a qualified path when that is
             // what is ill-formed.
             let precise = hir_ty.to_opt().map_or_else(Vec::new, |hir_ty| {
@@ -5578,16 +5541,7 @@ impl<'db> FieldView<'db> {
                 )
             });
             if precise.is_empty() {
-                out.push(
-                    TraitConstraintDiag::TraitBoundNotSat {
-                        span: span.clone(),
-                        primary_goal: goal,
-                        unsat_subgoal: subgoal,
-                        required_by: None,
-                        capability_hint: None,
-                    }
-                    .into(),
-                );
+                out.extend(wf.into_diag(span.clone()));
             } else {
                 out.extend(precise);
             }

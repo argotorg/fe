@@ -15,9 +15,9 @@ use crate::analysis::{
 
 use super::{
     const_ty::{ConstBodyLowering, ConstTyData, HoleAnchor, LoweringContext, ty_is_fully_ground},
-    diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
+    diagnostics::{TyDiagCollection, TyLowerDiag},
     normalize::normalize_ty,
-    trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf},
+    trait_resolution::{PredicateListId, TraitSolveCx, check_ty_wf},
     ty_def::{InvalidCause, TyData, TyId},
     ty_lower::{lower_hir_ty, lower_hir_ty_in_mode},
 };
@@ -488,19 +488,10 @@ pub(crate) fn qualified_path_wf_diags<'db>(
             {
                 let ty = lower_hir_ty(self.db, hir_ty, ctxt.scope(), self.assumptions);
                 if !ty.has_invalid(self.db)
-                    && let WellFormedness::IllFormed { goal, subgoal } =
-                        check_ty_wf(self.db, self.solve_cx, ty)
+                    && let Some(diag) =
+                        check_ty_wf(self.db, self.solve_cx, ty).into_diag(span.into())
                 {
-                    self.diags.push(
-                        TraitConstraintDiag::TraitBoundNotSat {
-                            span: span.into(),
-                            primary_goal: goal,
-                            unsat_subgoal: subgoal,
-                            required_by: None,
-                            capability_hint: None,
-                        }
-                        .into(),
-                    );
+                    self.diags.push(diag);
                     return;
                 }
             }

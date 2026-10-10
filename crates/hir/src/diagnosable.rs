@@ -115,7 +115,7 @@ impl<'db> SuperTraitRefView<'db> {
     pub fn diags(self, db: &'db dyn HirAnalysisDb) -> Option<TyDiagCollection<'db>> {
         use name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
         use ty::trait_lower::{self, TraitRefLowerError};
-        use ty::trait_resolution::{WellFormedness, check_trait_inst_wf};
+        use ty::trait_resolution::check_trait_inst_wf;
 
         let span = self.span();
         let subject = self.subject_self(db);
@@ -153,24 +153,13 @@ impl<'db> SuperTraitRefView<'db> {
             return None;
         }
 
-        match check_trait_inst_wf(
+        check_trait_inst_wf(
             db,
             ty::trait_resolution::TraitSolveCx::new(db, scope)
                 .with_assumptions(param_env(db, self.owner.into())),
             inst,
-        ) {
-            WellFormedness::WellFormed => None,
-            WellFormedness::IllFormed { goal, subgoal } => Some(
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: span.into(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                    capability_hint: None,
-                }
-                .into(),
-            ),
-        }
+        )
+        .into_diag(span.into())
     }
 }
 
@@ -250,7 +239,7 @@ impl<'db> WherePredicateBoundView<'db> {
     ) -> Vec<TyDiagCollection<'db>> {
         use name_resolution::{ExpectedPathKind, diagnostics::PathResDiag};
         use ty::trait_lower::{self, TraitRefLowerError};
-        use ty::trait_resolution::{WellFormedness, check_trait_inst_wf};
+        use ty::trait_resolution::check_trait_inst_wf;
 
         let mut out = Vec::new();
         let owner_item = ItemKind::from(self.pred.clause.owner);
@@ -288,27 +277,17 @@ impl<'db> WherePredicateBoundView<'db> {
 
                 // For trait-level `Self: Bound` constraints, treat as preconditions;
                 // do not emit unsatisfied bound diagnostics here.
-                if !is_trait_self_subject {
-                    match check_trait_inst_wf(
+                if !is_trait_self_subject
+                    && let Some(diag) = check_trait_inst_wf(
                         db,
                         ty::trait_resolution::TraitSolveCx::new(db, scope)
                             .with_assumptions(param_env(db, owner_item)),
                         inst,
-                    ) {
-                        WellFormedness::WellFormed => {}
-                        WellFormedness::IllFormed { goal, .. } => {
-                            out.push(
-                                TraitConstraintDiag::TraitBoundNotSat {
-                                    span: span.into(),
-                                    primary_goal: goal,
-                                    unsat_subgoal: None,
-                                    required_by: None,
-                                    capability_hint: None,
-                                }
-                                .into(),
-                            );
-                        }
-                    }
+                    )
+                    .without_subgoal()
+                    .into_diag(span.into())
+                {
+                    out.push(diag);
                 }
             }
             Err(TraitRefLowerError::PathResError(err)) => {
@@ -395,23 +374,14 @@ impl<'db> Func<'db> {
                 diags.push(TyLowerDiag::NormalTypeExpected { span, given: ret }.into());
             } else if ty::ty_contains_const_hole(db, ret) {
                 diags.push(TyLowerDiag::ConstHoleInValuePosition { span, ty: ret }.into());
-            } else if let ty::trait_resolution::WellFormedness::IllFormed { goal, subgoal } =
-                ty::trait_resolution::check_ty_wf(db, solve_cx, ret)
+            } else if let wf = ty::trait_resolution::check_ty_wf(db, solve_cx, ret)
+                && !wf.is_wf()
             {
                 // Point at the written type inside a qualified path when that
                 // is what is ill-formed.
                 let precise = self.ret_ty_qualified_path_wf_diags(db, solve_cx);
                 if precise.is_empty() {
-                    diags.push(
-                        TraitConstraintDiag::TraitBoundNotSat {
-                            span,
-                            primary_goal: goal,
-                            unsat_subgoal: subgoal,
-                            required_by: None,
-                            capability_hint: None,
-                        }
-                        .into(),
-                    );
+                    diags.extend(wf.into_diag(span));
                 } else {
                     diags.extend(precise);
                 }
@@ -538,7 +508,7 @@ impl<'db> Trait<'db> {
 
     /// Diagnostics for super-traits (semantic, kind-mismatch only).
     pub fn diags_super_traits(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        use ty::trait_resolution::{WellFormedness, check_trait_inst_wf};
+        use ty::trait_resolution::check_trait_inst_wf;
 
         let mut diags = Vec::new();
         for view in self.super_trait_refs(db) {
@@ -554,27 +524,17 @@ impl<'db> Trait<'db> {
             }
 
             // Additionally, ensure that the super-trait reference is well-formed
-            if let Ok(inst) = view.trait_inst(db) {
-                match check_trait_inst_wf(
+            if let Ok(inst) = view.trait_inst(db)
+                && let Some(diag) = check_trait_inst_wf(
                     db,
                     ty::trait_resolution::TraitSolveCx::new(db, self.scope())
                         .with_assumptions(param_env(db, self.into())),
                     inst,
-                ) {
-                    WellFormedness::WellFormed => {}
-                    WellFormedness::IllFormed { goal, .. } => {
-                        diags.push(
-                            TraitConstraintDiag::TraitBoundNotSat {
-                                span: view.span().into(),
-                                primary_goal: goal,
-                                unsat_subgoal: None,
-                                required_by: None,
-                                capability_hint: None,
-                            }
-                            .into(),
-                        );
-                    }
-                }
+                )
+                .without_subgoal()
+                .into_diag(view.span().into())
+            {
+                diags.push(diag);
             }
         }
         diags
@@ -611,17 +571,8 @@ impl<'db> Impl<'db> {
                 }
                 return out;
             }
-            InherentImplAdmissibility::IllFormed { goal, subgoal, .. } => {
-                out.push(
-                    TraitConstraintDiag::TraitBoundNotSat {
-                        span: self.span().target_ty().into(),
-                        primary_goal: goal,
-                        unsat_subgoal: subgoal,
-                        required_by: None,
-                        capability_hint: None,
-                    }
-                    .into(),
-                );
+            InherentImplAdmissibility::IllFormed { error, .. } => {
+                out.extend(error.into_diag(self.span().target_ty().into()));
             }
         }
 
@@ -1107,7 +1058,7 @@ impl<'db> ImplTrait<'db> {
     /// Diagnostics for trait-ref WF and satisfiability for this impl-trait.
     pub fn diags_trait_ref_and_wf(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use ty::trait_lower::lower_impl_trait;
-        use ty::trait_resolution::{self, GoalSatisfiability, WellFormedness, check_trait_inst_wf};
+        use ty::trait_resolution::{self, GoalSatisfiability, check_trait_inst_wf};
 
         let mut diags = Vec::new();
         let Some(implementor) = lower_impl_trait(db, self) else {
@@ -1119,19 +1070,10 @@ impl<'db> ImplTrait<'db> {
         let solve_cx = trait_resolution::TraitSolveCx::new(db, self.scope())
             .with_assumptions(param_env(db, self.into()));
 
-        if let WellFormedness::IllFormed { goal, subgoal } =
-            check_trait_inst_wf(db, solve_cx, trait_inst)
+        if let Some(diag) =
+            check_trait_inst_wf(db, solve_cx, trait_inst).into_diag(self.span().trait_ref().into())
         {
-            diags.push(
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span: self.span().trait_ref().into(),
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                    capability_hint: None,
-                }
-                .into(),
-            );
+            diags.push(diag);
             return diags;
         }
 
@@ -1209,7 +1151,7 @@ impl<'db> VariantView<'db> {
     pub fn diags_tuple_elems_wf(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use crate::hir_def::types::TypeKind as HirTyKind;
         use name_resolution::{PathRes, resolve_path};
-        use ty::trait_resolution::{TraitSolveCx, WellFormedness, check_ty_wf};
+        use ty::trait_resolution::{TraitSolveCx, check_ty_wf};
         use ty::ty_lower::lower_hir_ty;
 
         let mut out = Vec::new();
@@ -1278,24 +1220,14 @@ impl<'db> VariantView<'db> {
             }
 
             // Trait-bound well-formedness for element type.
-            match check_ty_wf(
+            if let Some(diag) = check_ty_wf(
                 db,
                 TraitSolveCx::new(db, scope).with_assumptions(param_env(db, enum_.into())),
                 ty,
-            ) {
-                WellFormedness::WellFormed => {}
-                WellFormedness::IllFormed { goal, subgoal } => {
-                    out.push(
-                        TraitConstraintDiag::TraitBoundNotSat {
-                            span: span.clone().into(),
-                            primary_goal: goal,
-                            unsat_subgoal: subgoal,
-                            required_by: None,
-                            capability_hint: None,
-                        }
-                        .into(),
-                    );
-                }
+            )
+            .into_diag(span.clone().into())
+            {
+                out.push(diag);
             }
         }
 
@@ -1544,7 +1476,7 @@ impl<'db> GenericParamOwner<'db> {
 
     pub fn diags_trait_bounds(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use ty::trait_lower;
-        use ty::trait_resolution::{WellFormedness, check_trait_inst_wf};
+        use ty::trait_resolution::check_trait_inst_wf;
 
         let mut out = Vec::new();
         let param_set = ty::ty_lower::collect_generic_params(db, self);
@@ -1594,23 +1526,16 @@ impl<'db> GenericParamOwner<'db> {
                             continue;
                         }
 
-                        match check_trait_inst_wf(
+                        if let Some(diag) = check_trait_inst_wf(
                             db,
                             ty::trait_resolution::TraitSolveCx::new(db, scope)
                                 .with_assumptions(param_env(db, self.into())),
                             inst,
-                        ) {
-                            WellFormedness::WellFormed => {}
-                            WellFormedness::IllFormed { goal, .. } => out.push(
-                                TraitConstraintDiag::TraitBoundNotSat {
-                                    span: span.into(),
-                                    primary_goal: goal,
-                                    unsat_subgoal: None,
-                                    required_by: None,
-                                    capability_hint: None,
-                                }
-                                .into(),
-                            ),
+                        )
+                        .without_subgoal()
+                        .into_diag(span.into())
+                        {
+                            out.push(diag);
                         }
                     }
                     Err(error) => {

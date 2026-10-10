@@ -695,9 +695,39 @@ pub(crate) enum WellFormedness<'db> {
     },
 }
 
-impl WellFormedness<'_> {
+impl<'db> WellFormedness<'db> {
     pub(crate) fn is_wf(self) -> bool {
         matches!(self, WellFormedness::WellFormed)
+    }
+
+    /// Drops the unsatisfied subgoal, for sites that report only the goal.
+    pub(crate) fn without_subgoal(self) -> Self {
+        match self {
+            Self::IllFormed { goal, .. } => Self::IllFormed {
+                goal,
+                subgoal: None,
+            },
+            other => other,
+        }
+    }
+
+    pub(crate) fn into_diag(
+        self,
+        span: crate::span::DynLazySpan<'db>,
+    ) -> Option<super::diagnostics::TyDiagCollection<'db>> {
+        match self {
+            Self::WellFormed => None,
+            Self::IllFormed { goal, subgoal } => Some(
+                super::diagnostics::TraitConstraintDiag::TraitBoundNotSat {
+                    span,
+                    primary_goal: goal,
+                    unsat_subgoal: subgoal,
+                    required_by: None,
+                    capability_hint: None,
+                }
+                .into(),
+            ),
+        }
     }
 }
 

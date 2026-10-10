@@ -27,10 +27,10 @@ use super::{
     const_ty::{
         ConstTyData, ConstTyId, TypePrintMode, UnevaluatedConstPolicy, const_ty_from_sem_const,
     },
-    diagnostics::{TraitConstraintDiag, TyDiagCollection},
+    diagnostics::TyDiagCollection,
     effects::place_effect_provider_param_index_map,
     trait_def::{TraitInstId, TraitRefId},
-    trait_resolution::{PredicateListId, WellFormedness},
+    trait_resolution::PredicateListId,
     ty_lower::collect_generic_params,
     unify::{InferenceKey, UnificationTable},
     visitor::{TyVisitable, TyVisitor, walk_const_ty, walk_ty},
@@ -671,22 +671,7 @@ impl<'db> TyId<'db> {
         assumptions: PredicateListId<'db>,
         span: DynLazySpan<'db>,
     ) -> Option<TyDiagCollection<'db>> {
-        if let WellFormedness::IllFormed { goal, subgoal } =
-            check_ty_wf(db, solve_cx.with_assumptions(assumptions), self)
-        {
-            Some(
-                TraitConstraintDiag::TraitBoundNotSat {
-                    span,
-                    primary_goal: goal,
-                    unsat_subgoal: subgoal,
-                    required_by: None,
-                    capability_hint: None,
-                }
-                .into(),
-            )
-        } else {
-            None
-        }
+        check_ty_wf(db, solve_cx.with_assumptions(assumptions), self).into_diag(span)
     }
 
     pub(super) fn ty_var(
