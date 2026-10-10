@@ -2191,10 +2191,13 @@ fn term_extraction_bounds_expanding_recursion() {
         let file = db.new_stand_alone("expanding_alias.fe".into(), &source);
         let (module, _) = db.top_mod(file);
         let diagnostics = module.all_type_aliases(&db)[0].diags(&db);
+        // Called with concrete types, the recursion makes more instances
+        // than one instantiation may, which admission finds before the
+        // evaluation runs.
         assert!(
             diagnostics.iter().any(|diag| matches!(
                 diag,
-                TyDiagCollection::Ty(TyLowerDiag::ConstEvalRecursionLimitExceeded(..))
+                TyDiagCollection::Ty(TyLowerDiag::ConstEvalInstanceLimit(..))
             )),
             "{diagnostics:?}"
         );

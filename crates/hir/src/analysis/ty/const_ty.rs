@@ -2339,6 +2339,7 @@ pub(crate) fn invalid_cause_from_ctfe_error<'db>(
             limit: *limit,
             stand_in: super::normalize::LimitStandIn::Written(super::normalize::WrittenType::new()),
         },
+        CtfeError::InstanceLimit { .. } => InvalidCause::ConstEvalInstanceLimit { body, expr },
         CtfeError::NotConstEvaluable { .. } => InvalidCause::ConstEvalUnsupported { body, expr },
         CtfeError::CalleeError { .. } => {
             unreachable!("root_ctfe_error must unwrap callee failures")
@@ -2395,6 +2396,7 @@ fn root_ctfe_error<'a, 'db>(
         | CtfeError::StepLimitExceeded { origin }
         | CtfeError::RecursionLimitExceeded { origin }
         | CtfeError::NormalizationLimit { origin, .. }
+        | CtfeError::InstanceLimit { origin }
         | CtfeError::RecursiveConst { origin } => (owner, err, *origin),
     }
 }

@@ -1193,6 +1193,13 @@ pub enum InvalidCause<'db> {
         expr: ExprId,
     },
 
+    /// A function the evaluation called makes more instances of generic
+    /// functions than one instantiation may.
+    ConstEvalInstanceLimit {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
     /// The const's definition requires its own value (directly or through a
     /// cycle of const items).
     ConstEvalRecursiveConst {
@@ -1298,6 +1305,7 @@ impl InvalidCause<'_> {
             }
             InvalidCause::ConstEvalNegativeExponent { .. } => "ConstEvalNegativeExponent".into(),
             InvalidCause::ConstEvalStepLimitExceeded { .. } => "ConstEvalStepLimitExceeded".into(),
+            InvalidCause::ConstEvalInstanceLimit { .. } => "ConstEvalInstanceLimit".into(),
             InvalidCause::ConstEvalRecursionLimitExceeded { .. } => {
                 "ConstEvalRecursionLimitExceeded".into()
             }

@@ -1403,6 +1403,10 @@ fn const_body_ctfe_diags_with_context<'db>(
                     InvalidCause::ConstEvalRecursionLimitExceeded { .. } => {
                         "exceeded the CTFE recursion limit".into()
                     }
+                    InvalidCause::ConstEvalInstanceLimit { .. } => {
+                        "called a function that makes too many instances of generic functions"
+                            .into()
+                    }
                     InvalidCause::ConstEvalRecursiveConst { .. } => {
                         "depends recursively on itself".into()
                     }
@@ -4236,7 +4240,7 @@ impl<'db> TypedBody<'db> {
     /// Visits the types the body's expressions, patterns, bindings and
     /// resolutions carry, but not the ambient assumptions the body was
     /// checked under, which are not dependencies of the body itself.
-    pub(super) fn visit_body_types<V>(&self, visitor: &mut V)
+    pub(crate) fn visit_body_types<V>(&self, visitor: &mut V)
     where
         V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
     {

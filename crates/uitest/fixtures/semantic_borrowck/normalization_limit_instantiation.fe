@@ -1,0 +1,42 @@
+// A normalization limit reached only when a generic body is instantiated is
+// reported at the call that instantiates it, naming the callee and the limit.
+trait Nest {
+    type Out
+}
+
+struct N<T> {
+    t: T,
+}
+
+impl<T: Nest> Nest for N<T> {
+    type Out = T::Out
+}
+
+impl Nest for u8 {
+    type Out = u8
+}
+
+fn hidden<X: Nest>() -> u8 {
+    let _y: Option<X::Out> = Option::None
+    0
+}
+
+fn too_deep() -> u8 {
+    hidden<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>()
+}
+
+fn within() -> u8 {
+    hidden<N<N<N<u8>>>>()
+}
+
+// A call written with concrete types is checked where it is written, even in
+// a generic function that is never called.
+fn never<T>() -> u8 {
+    hidden<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>()
+}
+
+// A call whose type arguments name the caller's own parameters is checked
+// when the caller is instantiated; this one never is.
+fn open<T: Nest>() -> u8 {
+    hidden<N<N<T>>>()
+}

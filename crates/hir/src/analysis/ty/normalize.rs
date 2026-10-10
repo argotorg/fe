@@ -255,7 +255,7 @@ impl WrittenType {
 }
 
 /// `n` with its digits in groups of three: `65,536`.
-fn grouped(n: usize) -> String {
+pub(crate) fn grouped(n: usize) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (idx, digit) in digits.chars().enumerate() {

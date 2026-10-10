@@ -678,3 +678,28 @@ fn unrelated_impls_cannot_limit_an_associated_item_lookup() {
         }
     }
 }
+
+#[test]
+fn instantiated_unused_effect_keys_report_normalization_limits() {
+    // A type key, a trait key's argument and a trait key's binding.
+    for (declarations, key, caller_key) in [
+        ("", "T::Out", "u8"),
+        ("trait Need<X> {}\n", "Need<T::Out>", "Need<u8>"),
+        (
+            "trait Need { type Item }\n",
+            "Need<Item = T::Out>",
+            "Need<Item = u8>",
+        ),
+    ] {
+        for depth in [2, 65] {
+            let argument = format!("{}u8{}", "N<".repeat(depth), ">".repeat(depth));
+            let src = format!(
+                "{PRELUDE}\n{declarations}fn hidden<T: Nest>() uses (x: {key}) {{}}\n\
+                 fn run() uses (x: {caller_key}) {{ hidden<{argument}>() }}\n"
+            );
+            let mut db = HirAnalysisTestDb::default();
+            let expected = if depth == 2 { vec![] } else { vec!["3-0058"] };
+            assert_eq!(codes(&mut db, &src), expected, "{key}, depth {depth}");
+        }
+    }
+}

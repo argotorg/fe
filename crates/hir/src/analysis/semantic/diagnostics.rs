@@ -216,6 +216,8 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
             SemanticDiagnosticKind::UnresolvedCall => 9,
             SemanticDiagnosticKind::InvalidConcreteType => 10,
             SemanticDiagnosticKind::UnboundedReferents => 11,
+            SemanticDiagnosticKind::NormalizationLimit => 12,
+            SemanticDiagnosticKind::InstanceLimit => 13,
         };
         CompleteDiagnostic::new(
             Severity::Error,
@@ -285,6 +287,8 @@ impl SemanticDiagnosticKind {
                 "unbounded referent types in `fn {}`",
                 checker_name(db, instance)
             ),
+            Self::NormalizationLimit => "type normalization limit exceeded".to_string(),
+            Self::InstanceLimit => "instance limit exceeded".to_string(),
         }
     }
 }
@@ -460,4 +464,10 @@ pub enum SemanticDiagnosticKind {
     UnresolvedCall,
     InvalidConcreteType,
     UnboundedReferents,
+    /// A type reaches a normalization limit only once generic arguments are
+    /// filled in.
+    NormalizationLimit,
+    /// Instantiating a generic function makes too many instances of generic
+    /// functions.
+    InstanceLimit,
 }

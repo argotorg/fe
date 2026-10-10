@@ -625,6 +625,7 @@ pub(crate) fn is_const_eval_fault(cause: &InvalidCause<'_>) -> bool {
             | InvalidCause::ConstEvalNegativeExponent { .. }
             | InvalidCause::ConstEvalStepLimitExceeded { .. }
             | InvalidCause::ConstEvalRecursionLimitExceeded { .. }
+            | InvalidCause::ConstEvalInstanceLimit { .. }
             | InvalidCause::ConstEvalRecursiveConst { .. }
     )
 }
@@ -776,6 +777,9 @@ pub(crate) fn diag_from_invalid_cause<'db>(
 
         InvalidCause::ConstEvalRecursionLimitExceeded { body, expr } => {
             TyLowerDiag::ConstEvalRecursionLimitExceeded(expr.span(body).into()).into()
+        }
+        InvalidCause::ConstEvalInstanceLimit { body, expr } => {
+            TyLowerDiag::ConstEvalInstanceLimit(expr.span(body).into()).into()
         }
 
         InvalidCause::ConstEvalRecursiveConst { body, expr } => {

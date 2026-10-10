@@ -184,6 +184,9 @@ pub enum TyLowerDiag<'db> {
     ConstEvalNegativeExponent(DynLazySpan<'db>),
     ConstEvalStepLimitExceeded(DynLazySpan<'db>),
     ConstEvalRecursionLimitExceeded(DynLazySpan<'db>),
+    /// A function a constant evaluation called makes more instances of
+    /// generic functions than one instantiation may.
+    ConstEvalInstanceLimit(DynLazySpan<'db>),
     ConstEvalRecursiveConst(DynLazySpan<'db>),
     TypeLoweringCycle(DynLazySpan<'db>),
     /// A written, inferred or instantiated type that could not be normalized
@@ -331,6 +334,7 @@ impl TyLowerDiag<'_> {
             Self::ConstEvalRecursiveConst(_) => 37,
             Self::TypeLoweringCycle(_) => 38,
             Self::TypeNormalizationLimit { .. } => 58,
+            Self::ConstEvalInstanceLimit(_) => 59,
             Self::MixedRefSelfPrefixWithExplicitType { .. } => 28,
             Self::MixedOwnSelfPrefixWithExplicitType { .. } => 29,
             Self::InvalidMutSelfPrefixWithExplicitType { .. } => 30,

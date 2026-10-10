@@ -2676,6 +2676,19 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
+            Self::ConstEvalInstanceLimit(span) => primary_diag(
+                Severity::Error,
+                "instance limit exceeded",
+                format!(
+                    "a function this evaluation calls makes more than {} instances of generic functions",
+                    crate::analysis::ty::normalize::grouped(
+                        crate::analysis::semantic::instance::InstantiationLimit::INSTANCES
+                    )
+                ),
+                span.resolve(db),
+                error_code,
+            ),
+
             Self::ConstEvalRecursiveConst(span) => primary_diag(
                 Severity::Error,
                 "recursive constant definition",
