@@ -721,7 +721,7 @@ impl super::Parse for SuperTraitListScope {
     }
 }
 
-define_scope! { TraitItemListScope, TraitItemList, (RBrace, Newline, FnKw, TypeKw, ConstKw) }
+define_scope! { pub(super) TraitItemListScope, TraitItemList, (RBrace, Newline, FnKw, TypeKw, ConstKw) }
 impl super::Parse for TraitItemListScope {
     type Error = Recovery<ErrProof>;
 
@@ -949,7 +949,7 @@ impl super::Parse for ExternScope {
     }
 }
 
-define_scope! { ExternItemListScope, ExternItemList, (PubKw, UnsafeKw, ConstKw, FnKw) }
+define_scope! { pub(super) ExternItemListScope, ExternItemList, (PubKw, UnsafeKw, ConstKw, FnKw) }
 impl super::Parse for ExternItemListScope {
     type Error = Recovery<ErrProof>;
 
