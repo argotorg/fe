@@ -8,10 +8,11 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{available_traits_in_scope, is_scope_visible_from},
     ty::{
+        candidates::{self, Counting, Decided, Holds},
         canonical::{Canonical, Canonicalized, Solution},
         fold::TyFoldable as _,
         method_table::{MethodProbe, ProbedMethod, probe_method},
-        trait_def::{ImplementorId, TraitInstId, impls_for_trait_and_ty, impls_for_ty},
+        trait_def::{ImplementorId, TraitInstId},
         trait_resolution::{
             CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx,
             goal_query_has_solution, is_goal_query_satisfiable,
@@ -88,6 +89,29 @@ impl<'db> AssembledTraitMethodCand<'db> {
 pub struct AmbiguousTraitMethodCand<'db> {
     pub cand: TraitMethodCand<'db>,
     pub needs_confirmation: bool,
+    /// Whether the candidate applies is unknown: checking it reached this
+    /// limit. If a later filter (the expected type, an operand) keeps it, its
+    /// obligation decides it.
+    pub unknown: Option<NormalizationLimit>,
+}
+
+impl<'db> AmbiguousTraitMethods<'db> {
+    /// The limit to report instead of an ambiguity among `candidates`: when
+    /// at most one of them is known to apply, the ambiguity exists only if
+    /// some unknown one applies, so the answer depends on the limit.
+    pub fn limit_of(candidates: &[AmbiguousTraitMethodCand<'db>]) -> Option<NormalizationLimit> {
+        let known = candidates
+            .iter()
+            .filter(|cand| cand.unknown.is_none())
+            .count();
+        let unknown = candidates
+            .iter()
+            .filter_map(|cand| cand.unknown)
+            .fold(None, |earlier, limit| {
+                Some(NormalizationLimit::join(earlier, limit))
+            });
+        if known <= 1 { unknown } else { None }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
@@ -96,25 +120,62 @@ pub struct AmbiguousTraitMethods<'db> {
     pub diagnostic_traits: ThinVec<TraitInstId<'db>>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum TraitCandidateCheck<'db> {
     Confirmed(TraitMethodCand<'db>),
     NeedsConfirmation(TraitMethodCand<'db>),
     Unsatisfied(TraitMethodCand<'db>),
     Rejected,
-    /// Checking the candidate reached a normalization limit. The lookup
-    /// fails with it; no other candidate is chosen instead.
-    Limit(NormalizationLimit),
+    /// Checking the candidate reached a normalization limit and nothing ruled
+    /// it out: whether it applies is unknown.
+    Unknown(TraitMethodCand<'db>, NormalizationLimit),
 }
 
-/// The first limit reached checking any of `checked`.
-fn first_limit<'db>(
-    checked: &[(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)],
-) -> Option<NormalizationLimit> {
-    checked.iter().find_map(|(_, check)| match check {
-        TraitCandidateCheck::Limit(limit) => Some(*limit),
-        _ => None,
-    })
+type CheckedCands<'db> = Vec<(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)>;
+
+/// The limits of the unknown candidates in `checked`, in order.
+fn unknown_limits(checked: &CheckedCands<'_>) -> Vec<NormalizationLimit> {
+    checked
+        .iter()
+        .filter_map(|(_, check)| match check {
+            TraitCandidateCheck::Unknown(_, limit) => Some(*limit),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `checked` with each unknown candidate counted as applying or not, as
+/// `setting` gives in order.
+fn settle<'db>(checked: &CheckedCands<'db>, setting: &[bool]) -> CheckedCands<'db> {
+    let mut setting = setting.iter();
+    checked
+        .iter()
+        .map(|&(assembled, check)| match check {
+            TraitCandidateCheck::Unknown(cand, _) => {
+                let check = if *setting.next().unwrap() {
+                    TraitCandidateCheck::Confirmed(cand)
+                } else {
+                    TraitCandidateCheck::Unsatisfied(cand)
+                };
+                (assembled, check)
+            }
+            _ => (assembled, check),
+        })
+        .collect()
+}
+
+/// Marks the candidates of `ambiguous` that are unknown in `checked`.
+fn mark_unknown<'db>(ambiguous: &mut AmbiguousTraitMethods<'db>, checked: &CheckedCands<'db>) {
+    for candidate in &mut ambiguous.candidates {
+        for (_, check) in checked {
+            if let TraitCandidateCheck::Unknown(cand, limit) = *check
+                && cand == candidate.cand
+            {
+                candidate.needs_confirmation = true;
+                candidate.unknown = Some(limit);
+            }
+        }
+    }
 }
 
 pub(crate) fn select_method_candidate<'db>(
@@ -272,15 +333,14 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
                     .ingot(self.db)
                     .filter(|&ingot| ingot != scope_ingot),
             ];
-            for ingot in search_ingots.into_iter().flatten() {
-                let implementors = if let Some(trait_def) = self.trait_ {
-                    impls_for_trait_and_ty(self.db, ingot, trait_def, self.receiver.canonical())
-                } else {
-                    impls_for_ty(self.db, ingot, self.receiver.canonical())
-                };
-                for &imp in implementors {
-                    self.insert_impl_trait_method_cand(imp);
-                }
+            for imp in candidates::method_impl_candidates(
+                self.db,
+                self.receiver.canonical(),
+                self.trait_,
+                self.method_name,
+                search_ingots,
+            ) {
+                self.insert_impl_trait_method_cand(imp);
             }
         }
 
@@ -427,16 +487,56 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         // Each candidate is checked exactly once here and the result is carried
         // through pruning and selection, so the trait solver isn't re-run for
         // the same candidate.
-        let checked: Vec<(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)> = self
+        let checked: CheckedCands<'db> = self
             .candidates
             .traits
             .iter()
             .copied()
             .map(|cand| (cand, self.check_trait_cand(cand)))
             .collect();
-        if let Some(limit) = first_limit(&checked) {
-            return Err(MethodSelectionError::NormalizationLimit(limit));
+        // A candidate whose check reached a limit decides the lookup only if
+        // the choice depends on it.
+        match candidates::decide(&unknown_limits(&checked), |setting| {
+            self.select_checked_trait_methods(settle(&checked, setting))
+        }) {
+            Decided::Same(selected) => selected,
+            Decided::Differs {
+                results,
+                limit,
+                exhaustive,
+            } => {
+                // The same method in every setting: it is chosen, and its
+                // obligation decides whether it applies.
+                let chosen = |result: &Result<MethodCandidate<'db>, _>| match result {
+                    Ok(MethodCandidate::TraitMethod(cand))
+                    | Ok(MethodCandidate::NeedsConfirmation(cand)) => Some(*cand),
+                    _ => None,
+                };
+                if exhaustive
+                    && let Some(cand) = chosen(&results[0])
+                    && results.iter().all(|result| chosen(result) == Some(cand))
+                {
+                    return Ok(MethodCandidate::NeedsConfirmation(cand));
+                }
+                // An ambiguity that the expected type may settle later: kept,
+                // with the unknown candidates marked.
+                match results.into_iter().next_back() {
+                    Some(Err(MethodSelectionError::AmbiguousTraitMethod(mut ambiguous))) => {
+                        mark_unknown(&mut ambiguous, &checked);
+                        Err(MethodSelectionError::AmbiguousTraitMethod(ambiguous))
+                    }
+                    _ => Err(MethodSelectionError::NormalizationLimit(limit)),
+                }
+            }
         }
+    }
+
+    /// The trait method chosen among checked candidates, none of them
+    /// unknown.
+    fn select_checked_trait_methods(
+        &self,
+        checked: CheckedCands<'db>,
+    ) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
         let checked = self.prune_inapplicable_trait_checks(checked);
 
         if checked.len() == 1 {
@@ -487,7 +587,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                         TraitCandidateCheck::Unsatisfied(cand) => {
                             unsatisfied.insert(cand);
                         }
-                        TraitCandidateCheck::Rejected | TraitCandidateCheck::Limit(_) => {}
+                        TraitCandidateCheck::Rejected | TraitCandidateCheck::Unknown(..) => {}
                     }
                 }
 
@@ -507,6 +607,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                             .map(|cand| AmbiguousTraitMethodCand {
                                 cand,
                                 needs_confirmation: true,
+                                unknown: None,
                             })
                             .collect();
                         return Err(MethodSelectionError::AmbiguousTraitMethod(
@@ -533,26 +634,18 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     .filter_map(|(&cand, &confirmed)| confirmed.then_some(cand))
                     .collect();
                 if confirmed.len() == 1 {
+                    // An unconfirmed candidate that does not specialize keeps
+                    // the ambiguity, whatever the others turn out to be.
                     let specializes = if self.receiver.original().has_var(self.db) {
                         true
                     } else {
-                        let mut all = true;
-                        for cand in selected
-                            .iter()
-                            .filter_map(|(&cand, &confirmed)| (!confirmed).then_some(cand))
-                        {
-                            match self.candidate_specializes_to(cand, confirmed[0]) {
-                                Ok(true) => {}
-                                Ok(false) => {
-                                    all = false;
-                                    break;
-                                }
-                                Err(limit) => {
-                                    return Err(MethodSelectionError::NormalizationLimit(limit));
-                                }
-                            }
-                        }
-                        all
+                        candidates::all_of(
+                            selected
+                                .iter()
+                                .filter_map(|(&cand, &confirmed)| (!confirmed).then_some(cand))
+                                .map(|cand| self.candidate_specializes_to(cand, confirmed[0])),
+                        )
+                        .map_err(MethodSelectionError::NormalizationLimit)?
                     };
                     if specializes {
                         return Ok(MethodCandidate::TraitMethod(confirmed[0]));
@@ -568,6 +661,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     .map(|(cand, confirmed)| AmbiguousTraitMethodCand {
                         cand,
                         needs_confirmation: !confirmed,
+                        unknown: None,
                     })
                     .collect();
                 Err(MethodSelectionError::AmbiguousTraitMethod(
@@ -594,9 +688,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 Ok(MethodCandidate::NeedsConfirmation(cand))
             }
             TraitCandidateCheck::Rejected => Err(MethodSelectionError::NotFound),
-            TraitCandidateCheck::Limit(limit) => {
-                Err(MethodSelectionError::NormalizationLimit(limit))
-            }
+            TraitCandidateCheck::Unknown(cand, _) => Ok(MethodCandidate::NeedsConfirmation(cand)),
         }
     }
 
@@ -633,13 +725,33 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         &self,
         traits: impl IntoIterator<Item = AssembledTraitMethodCand<'db>>,
     ) -> Result<AmbiguousTraitMethods<'db>, MethodSelectionError<'db>> {
-        let checked: Vec<_> = traits
+        let checked: CheckedCands<'db> = traits
             .into_iter()
             .map(|cand| (cand, self.check_trait_cand(cand)))
             .collect();
-        if let Some(limit) = first_limit(&checked) {
-            return Err(MethodSelectionError::NormalizationLimit(limit));
-        }
+        // The candidates are filtered later by the operand or expected type.
+        // If the list depends on an unknown candidate, the list with every
+        // unknown candidate in it is kept, marked, so that the later filter
+        // decides whether it matters.
+        Ok(
+            match candidates::decide(&unknown_limits(&checked), |setting| {
+                self.checked_trait_method_candidates(settle(&checked, setting))
+            }) {
+                Decided::Same(list) => list,
+                Decided::Differs { results, .. } => {
+                    let mut list = results.into_iter().next_back().unwrap();
+                    mark_unknown(&mut list, &checked);
+                    list
+                }
+            },
+        )
+    }
+
+    /// The candidates left after pruning checked ones, none of them unknown.
+    fn checked_trait_method_candidates(
+        &self,
+        checked: CheckedCands<'db>,
+    ) -> AmbiguousTraitMethods<'db> {
         let checked = self.prune_inapplicable_trait_checks(checked);
         let mut selected = IndexMap::default();
         let mut diagnostic_traits = ThinVec::new();
@@ -653,7 +765,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 | TraitCandidateCheck::Unsatisfied(cand) => {
                     selected.entry(cand).or_insert(false);
                 }
-                TraitCandidateCheck::Rejected | TraitCandidateCheck::Limit(_) => {}
+                TraitCandidateCheck::Rejected | TraitCandidateCheck::Unknown(..) => {}
             }
         }
 
@@ -662,12 +774,13 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             .map(|(cand, confirmed)| AmbiguousTraitMethodCand {
                 cand,
                 needs_confirmation: !confirmed,
+                unknown: None,
             })
             .collect();
-        Ok(AmbiguousTraitMethods {
+        AmbiguousTraitMethods {
             candidates,
             diagnostic_traits,
-        })
+        }
     }
 
     fn prune_inapplicable_trait_checks(
@@ -713,27 +826,28 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         let query = CanonicalGoalQuery::new(self.db, candidate_inst, self.assumptions);
         let confirmed = Canonical::new(self.db, confirmed_inst);
         let mut table = UnificationTable::new(self.db);
-        Ok(match is_goal_query_satisfiable(self.db, solve_cx, &query) {
-            GoalSatisfiability::Satisfied(solution) => {
-                Canonical::new(self.db, query.extract_solution(&mut table, solution).inst)
-                    == confirmed
-            }
-            GoalSatisfiability::NeedsConfirmation {
-                solutions,
-                completion,
-            } => {
-                let reached_answer_cutoff = completion.hit_root_answer_limit();
-                let contains_confirmed = solutions.into_iter().any(|solution| {
+        Ok(
+            match is_goal_query_satisfiable(self.db, solve_cx, &query)? {
+                GoalSatisfiability::Satisfied(solution) => {
                     Canonical::new(self.db, query.extract_solution(&mut table, solution).inst)
                         == confirmed
-                });
-                contains_confirmed
-                    || (reached_answer_cutoff
-                        && goal_query_has_solution(self.db, solve_cx, &query, confirmed))
-            }
-            GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => false,
-            GoalSatisfiability::NormalizationLimit(limit) => return Err(limit),
-        })
+                }
+                GoalSatisfiability::NeedsConfirmation {
+                    solutions,
+                    completion,
+                } => {
+                    let reached_answer_cutoff = completion.hit_root_answer_limit();
+                    let contains_confirmed = solutions.into_iter().any(|solution| {
+                        Canonical::new(self.db, query.extract_solution(&mut table, solution).inst)
+                            == confirmed
+                    });
+                    contains_confirmed
+                        || (reached_answer_cutoff
+                            && goal_query_has_solution(self.db, solve_cx, &query, confirmed))
+                }
+                GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => false,
+            },
+        )
     }
 
     fn check_trait_cand(&self, cand: AssembledTraitMethodCand<'db>) -> TraitCandidateCheck<'db> {
@@ -744,12 +858,17 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             } => self.check_impl_cand(implementor, method),
             AssembledTraitMethodCand::Assumption { inst, method } => {
                 match self.check_inst(inst, method) {
-                    Ok(MethodCandidate::TraitMethod(cand)) => TraitCandidateCheck::Confirmed(cand),
-                    Ok(MethodCandidate::NeedsConfirmation(cand)) => {
+                    (MethodCandidate::TraitMethod(cand), None) => {
+                        TraitCandidateCheck::Confirmed(cand)
+                    }
+                    (MethodCandidate::NeedsConfirmation(cand), None) => {
                         TraitCandidateCheck::NeedsConfirmation(cand)
                     }
-                    Ok(MethodCandidate::InherentMethod(_)) => unreachable!(),
-                    Err(limit) => TraitCandidateCheck::Limit(limit),
+                    (MethodCandidate::TraitMethod(cand), Some(limit))
+                    | (MethodCandidate::NeedsConfirmation(cand), Some(limit)) => {
+                        TraitCandidateCheck::Unknown(cand, limit)
+                    }
+                    (MethodCandidate::InherentMethod(_), _) => unreachable!(),
                 }
             }
         }
@@ -770,35 +889,13 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         }
 
         let solve_cx = TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions);
-        let mut needs_confirmation = false;
-        let mut unsatisfied = false;
-        for &constraint in implementor.constraints(self.db).list(self.db) {
-            let constraint = constraint.fold_with(self.db, &mut table);
-            let query = CanonicalGoalQuery::new(self.db, constraint, self.assumptions);
-            match is_goal_query_satisfiable(self.db, solve_cx, &query) {
-                GoalSatisfiability::Satisfied(solution) => {
-                    // A unique solution can bind impl parameters that the self
-                    // type doesn't determine (e.g. a trait argument fixed only
-                    // by this bound). Unify it back into the table so the trait
-                    // instance built below reflects those bindings instead of
-                    // leaving them as unconstrained inference variables (which
-                    // would drop the bound from the inferred method signature).
-                    let solved = query.extract_solution(&mut table, solution).inst;
-                    let _ = table.unify(constraint, solved);
-                }
-                GoalSatisfiability::NeedsConfirmation { .. }
-                | GoalSatisfiability::ContainsInvalid => {
-                    needs_confirmation = true;
-                }
-                GoalSatisfiability::UnSat(_) => {
-                    unsatisfied = true;
-                    break;
-                }
-                GoalSatisfiability::NormalizationLimit(limit) => {
-                    return TraitCandidateCheck::Limit(limit);
-                }
-            }
-        }
+        let holds = candidates::all_hold(
+            self.db,
+            solve_cx,
+            &mut table,
+            implementor.constraints(self.db).list(self.db),
+            Counting::METHOD,
+        );
 
         let inst = implementor
             .trait_inst(self.db)
@@ -808,12 +905,11 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 .canonicalize_solution(self.db, &mut table, inst),
             method,
         );
-        if unsatisfied {
-            TraitCandidateCheck::Unsatisfied(cand)
-        } else if needs_confirmation {
-            TraitCandidateCheck::NeedsConfirmation(cand)
-        } else {
-            TraitCandidateCheck::Confirmed(cand)
+        match holds {
+            Holds::Yes => TraitCandidateCheck::Confirmed(cand),
+            Holds::Undecided => TraitCandidateCheck::NeedsConfirmation(cand),
+            Holds::No => TraitCandidateCheck::Unsatisfied(cand),
+            Holds::Unknown(limit) => TraitCandidateCheck::Unknown(cand, limit),
         }
     }
 
@@ -824,12 +920,13 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
     /// type, and assigns type variables to the trait parameters. It then
     /// checks if the goal is satisfiable given the current assumptions.
     /// Depending on the result, it either returns a confirmed trait method
-    /// candidate or one that needs further confirmation.
+    /// candidate or one that needs further confirmation, with the limit that
+    /// leaves it unknown, if any.
     fn check_inst(
         &self,
         inst: TraitInstId<'db>,
         method: Func<'db>,
-    ) -> Result<MethodCandidate<'db>, NormalizationLimit> {
+    ) -> (MethodCandidate<'db>, Option<NormalizationLimit>) {
         let mut table = UnificationTable::new(self.db);
         // Seed the table with receiver's canonical variables so that subsequent
         // canonicalization can safely probe them.
@@ -849,13 +946,16 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             table.instantiate_with_fresh_vars(inst)
         };
 
-        Ok(
-            match is_goal_query_satisfiable(
-                self.db,
-                TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions),
-                &query,
-            ) {
-                GoalSatisfiability::NormalizationLimit(limit) => return Err(limit),
+        let (result, limit) = match is_goal_query_satisfiable(
+            self.db,
+            TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions),
+            &query,
+        ) {
+            Ok(result) => (result, None),
+            Err(limit) => (GoalSatisfiability::ContainsInvalid, Some(limit)),
+        };
+        (
+            match result {
                 GoalSatisfiability::Satisfied(solution) => {
                     // Map back the solution to the current context.
                     let solution = query.extract_solution(&mut table, solution).inst;
@@ -885,6 +985,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     ))
                 }
             },
+            limit,
         )
     }
 

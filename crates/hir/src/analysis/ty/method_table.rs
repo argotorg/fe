@@ -289,7 +289,8 @@ impl<'db> MethodBucket<'db> {
 /// Bind ordinary arguments before normalizing projection equalities. Argument
 /// order must not affect matching `Pair<T::Item, T>` against `Pair<u256, bool>`.
 /// Every deferred equality must succeed; unresolved projections are not holes.
-/// A limit reached normalizing them leaves the match undecided.
+/// A limit reached normalizing one equality leaves it unknown: the others are
+/// still checked, and the match is undecided only if none of them fails.
 fn match_probe_key<'db>(
     table: &mut UnificationTable<'db>,
     key: TyId<'db>,
@@ -298,6 +299,7 @@ fn match_probe_key<'db>(
     assumptions: PredicateListId<'db>,
 ) -> Result<bool, NormalizationLimit> {
     let db = table.db;
+    let mut limit = None;
     let mut pending = vec![(key, receiver)];
     loop {
         let mut deferred = Vec::new();
@@ -316,14 +318,23 @@ fn match_probe_key<'db>(
             }
         }
         if deferred.is_empty() {
-            return Ok(true);
+            return limit.map_or(Ok(true), Err);
         }
 
         let mut progressed = false;
         for (lhs, rhs) in deferred {
             let assumptions = assumptions.fold_with(db, table);
-            let normalized_lhs = normalize_ty(db, lhs.fold_with(db, table), scope, assumptions)?;
-            let normalized_rhs = normalize_ty(db, rhs.fold_with(db, table), scope, assumptions)?;
+            let normalize = |ty: TyId<'db>, table: &mut UnificationTable<'db>| {
+                normalize_ty(db, ty.fold_with(db, table), scope, assumptions)
+            };
+            let (normalized_lhs, normalized_rhs) =
+                match (normalize(lhs, table), normalize(rhs, table)) {
+                    (Ok(lhs), Ok(rhs)) => (lhs, rhs),
+                    (Err(err), _) | (_, Err(err)) => {
+                        limit.get_or_insert(err);
+                        continue;
+                    }
+                };
             if table.unify(normalized_lhs, normalized_rhs).is_ok() {
                 progressed = true;
             } else {
@@ -332,7 +343,13 @@ fn match_probe_key<'db>(
             }
         }
         if !progressed {
-            return Ok(false);
+            // Equalities left unresolved fail the match; only unknown ones
+            // leave it undecided.
+            return if pending.is_empty() {
+                limit.map_or(Ok(true), Err)
+            } else {
+                Ok(false)
+            };
         }
     }
 }

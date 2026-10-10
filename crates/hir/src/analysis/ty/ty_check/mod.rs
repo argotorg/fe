@@ -643,10 +643,11 @@ fn capability_only_unsat_ty<'db>(
     let replace = |ty: TyId<'db>, from: TyId<'db>, to: TyId<'db>| {
         ty.fold_with(db, &mut ReplaceTy { from, to })
     };
+    // Only for a hint: a goal that reaches a limit gives none.
     let holds = |goal| {
         matches!(
             is_goal_satisfiable(db, solve_cx, goal),
-            GoalSatisfiability::Satisfied(_)
+            Ok(GoalSatisfiability::Satisfied(_))
         )
     };
     let self_ty = unsat.unwrap_or(primary).self_ty(db);
@@ -1596,6 +1597,10 @@ pub struct TyChecker<'db> {
 pub(crate) struct TyCheckerSnapshot<'db> {
     table: Snapshot<InPlace<InferenceKey<'db>>>,
     deferred_len: usize,
+    /// What a check made under the snapshot may not leave behind if it is
+    /// rolled back: the diagnostics it reported, and the limits among them.
+    diags_len: usize,
+    reported_limits: FxHashSet<(Option<ExprId>, NormalizationLimit)>,
 }
 
 enum TraitObligationOutcome<'db> {
@@ -1835,7 +1840,9 @@ impl<'db> TyChecker<'db> {
                             TraitSolveCx::new(self.db, contract.scope()),
                             trait_req,
                         ) {
-                            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => {
+                            Ok(
+                                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid,
+                            ) => {
                                 self.push_diag(BodyDiag::ContractRootEffectTraitNotImplemented {
                                     owner,
                                     idx,
@@ -1843,12 +1850,14 @@ impl<'db> TyChecker<'db> {
                                     trait_req,
                                 });
                             }
-                            GoalSatisfiability::NormalizationLimit(limit) => {
+                            Err(limit) => {
                                 let span = owner.effect_param_ty_span(self.db, idx);
                                 self.push_diag(limit.report(span).0);
                             }
-                            GoalSatisfiability::Satisfied(_)
-                            | GoalSatisfiability::NeedsConfirmation { .. } => {}
+                            Ok(
+                                GoalSatisfiability::Satisfied(_)
+                                | GoalSatisfiability::NeedsConfirmation { .. },
+                            ) => {}
                         }
                     }
                     ResolvedEffectKey::Type(schema) => {
@@ -1922,12 +1931,16 @@ impl<'db> TyChecker<'db> {
         TyCheckerSnapshot {
             table: self.table.snapshot(),
             deferred_len: self.env.deferred_len(),
+            diags_len: self.diags.len(),
+            reported_limits: self.reported_limits.clone(),
         }
     }
 
     pub(crate) fn rollback_state(&mut self, snapshot: TyCheckerSnapshot<'db>) {
         self.table.rollback_to(snapshot.table);
         self.env.truncate_deferred_tasks(snapshot.deferred_len);
+        self.diags.truncate(snapshot.diags_len);
+        self.reported_limits = snapshot.reported_limits;
     }
 
     fn commit_state(&mut self, snapshot: TyCheckerSnapshot<'db>) {
@@ -2288,14 +2301,23 @@ impl<'db> TyChecker<'db> {
 
         let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
         let query = CanonicalGoalQuery::new(db, goal, assumptions);
-        match is_goal_query_satisfiable(db, solve_cx, &query) {
+        let satisfiability = match is_goal_query_satisfiable(db, solve_cx, &query) {
+            Ok(satisfiability) => satisfiability,
+            // A goal whose types are still being inferred is asked again
+            // once inference knows more: its answer may not depend on the
+            // limit then.
+            Err(_) if !final_pass && collect_flags(db, goal).contains(TyFlags::HAS_VAR) => {
+                return TraitObligationOutcome::Requeue(obligation);
+            }
             // The bound cannot be decided: report the limit where the bound
             // arises, never "not satisfied".
-            GoalSatisfiability::NormalizationLimit(limit) => {
+            Err(limit) => {
                 let (diag, _) = limit.report(obligation.span.clone());
                 self.push_diag(diag);
-                TraitObligationOutcome::Discharged
+                return TraitObligationOutcome::Discharged;
             }
+        };
+        match satisfiability {
             GoalSatisfiability::Satisfied(solution) => {
                 if goal.self_ty(db).has_var(db) {
                     let outcome = if final_pass {
@@ -2377,7 +2399,12 @@ impl<'db> TyChecker<'db> {
                         // than two after an early stop means the solver could
                         // not decide it; "multiple implementations" would be
                         // untrue.
-                        if candidates.len() < 2 && !completion.is_saturated() {
+                        if let crate::analysis::ty::trait_resolution::TraitSolveCompletion::NormalizationLimit(limit) = completion
+                            && candidates.len() < 2
+                        {
+                            let (diag, _) = limit.report(obligation.span.clone());
+                            self.push_diag(diag);
+                        } else if candidates.len() < 2 && !completion.is_saturated() {
                             self.push_diag(BodyDiag::TraitBoundUndecided {
                                 primary: obligation.span.clone(),
                                 goal,
@@ -2452,7 +2479,23 @@ impl<'db> TyChecker<'db> {
             Viable,
             Incompatible,
             ReturnTypeMismatch,
+            /// No argument or return type rules the candidate out, and
+            /// checking one of them reached a limit. `strict` tells whether
+            /// the return type fits: if not, the candidate is at best a
+            /// return type mismatch.
+            Unknown {
+                limit: NormalizationLimit,
+                strict: bool,
+            },
         }
+
+        // A candidate that is unknown for a limit, as well as for any reached
+        // while selecting it.
+        let mark_unknown =
+            |candidate: env::PendingMethodCandidate<'db>, limit| env::PendingMethodCandidate {
+                unknown: Some(NormalizationLimit::join(candidate.unknown, limit)),
+                ..candidate
+            };
 
         let check_viability =
             |this: &mut Self,
@@ -2464,6 +2507,7 @@ impl<'db> TyChecker<'db> {
              candidate: env::PendingMethodCandidate<'db>| {
                 let snap = this.snapshot_state();
 
+                let mut limit: Option<NormalizationLimit> = None;
                 let viability = (|| {
                     let inst = candidate.inst;
                     let recv_ty = {
@@ -2546,9 +2590,19 @@ impl<'db> TyChecker<'db> {
                             expected = normalize_with_trait_evidence(db, expected, scope, inst);
                         }
                         let expected = expected.fold_with(db, &mut this.table);
-                        let expected = this.normalize_unresolved_in(expected, scope, assumptions);
                         let given = given.fold_with(db, &mut this.table);
-                        let given = this.normalize_unresolved_in(given, scope, assumptions);
+                        // A limit makes this argument unknown: the others
+                        // can still rule the candidate out.
+                        let (expected, given) = match (
+                            normalize_ty(db, expected, scope, assumptions),
+                            normalize_ty(db, given, scope, assumptions),
+                        ) {
+                            (Ok(expected), Ok(given)) => (expected, given),
+                            (Err(reached), _) | (_, Err(reached)) => {
+                                limit = Some(NormalizationLimit::join(limit, reached));
+                                continue;
+                            }
+                        };
                         let given = this
                             .try_coerce_capability_to_expected(given, expected)
                             .unwrap_or(given);
@@ -2566,12 +2620,24 @@ impl<'db> TyChecker<'db> {
                     callable.process_constraints(this, pending.expr, method_name_span);
 
                     let ret_ty = callable.ret_ty(db).fold_with(db, &mut this.table);
-                    let ret_ty = this.normalize_unresolved_in(ret_ty, scope, assumptions);
+                    let ret_ty = match normalize_ty(db, ret_ty, scope, assumptions) {
+                        Ok(ret_ty) => ret_ty,
+                        Err(reached) => {
+                            return Viability::Unknown {
+                                limit: NormalizationLimit::join(limit, reached),
+                                strict: true,
+                            };
+                        }
+                    };
 
-                    if this.table.unify(expr_ty, ret_ty).is_ok() {
-                        Viability::Viable
-                    } else {
-                        Viability::ReturnTypeMismatch
+                    let fits = this.table.unify(expr_ty, ret_ty).is_ok();
+                    match limit {
+                        Some(limit) => Viability::Unknown {
+                            limit,
+                            strict: fits,
+                        },
+                        None if fits => Viability::Viable,
+                        None => Viability::ReturnTypeMismatch,
                     }
                 })();
                 this.rollback_state(snap);
@@ -2629,10 +2695,19 @@ impl<'db> TyChecker<'db> {
                                     call_args,
                                     candidate,
                                 );
-                                if matches!(viability, Viability::Incompatible) {
-                                    None
-                                } else {
-                                    Some((candidate, viability))
+                                match viability {
+                                    Viability::Incompatible => None,
+                                    // The candidate applies unless its unknown
+                                    // type turns out to rule it out.
+                                    Viability::Unknown { limit, strict } => Some((
+                                        mark_unknown(candidate, limit),
+                                        if strict {
+                                            Viability::Viable
+                                        } else {
+                                            Viability::ReturnTypeMismatch
+                                        },
+                                    )),
+                                    viability => Some((candidate, viability)),
                                 }
                             })
                             .partition(|(_, viability)| matches!(viability, Viability::Viable));
@@ -2807,7 +2882,7 @@ impl<'db> TyChecker<'db> {
                         .candidates
                         .iter()
                         .copied()
-                        .filter(|&candidate| {
+                        .filter_map(|candidate| {
                             let viability = check_viability(
                                 self,
                                 &pending,
@@ -2817,11 +2892,34 @@ impl<'db> TyChecker<'db> {
                                 call_args,
                                 candidate,
                             );
-                            !matches!(viability, Viability::Incompatible)
+                            match viability {
+                                Viability::Incompatible => None,
+                                Viability::Unknown { limit, .. } => {
+                                    Some(mark_unknown(candidate, limit))
+                                }
+                                _ => Some(candidate),
+                            }
                         })
                         .collect();
                     let viable = self.dedup_equivalent_pending_method_candidates(viable);
-                    if viable.len() > 1 {
+                    let known = viable.iter().filter(|cand| cand.unknown.is_none()).count();
+                    let unknown = viable.iter().filter_map(|cand| cand.unknown).fold(
+                        None,
+                        |earlier, limit| {
+                            Some(crate::analysis::ty::normalize::NormalizationLimit::join(
+                                earlier, limit,
+                            ))
+                        },
+                    );
+                    if viable.len() > 1
+                        && known <= 1
+                        && let Some(limit) = unknown
+                    {
+                        // Ambiguous only if an unknown candidate applies: the
+                        // answer is its limit.
+                        let (diag, _) = limit.report(pending.span.clone());
+                        self.push_diag(diag);
+                    } else if viable.len() > 1 {
                         self.push_diag(BodyDiag::AmbiguousTrait {
                             primary: pending.span.clone(),
                             method_name: pending.method_name,
@@ -3785,7 +3883,7 @@ impl<'db> TyChecker<'db> {
         let solve_cx =
             TraitSolveCx::new(self.db, self.env.scope()).with_assumptions(self.env.assumptions());
         match is_goal_satisfiable(self.db, solve_cx, inst) {
-            GoalSatisfiability::UnSat(_) => {
+            Ok(GoalSatisfiability::UnSat(_)) => {
                 self.push_diag(TyDiagCollection::from(
                     TraitConstraintDiag::TraitBoundNotSat {
                         span,
@@ -3797,7 +3895,7 @@ impl<'db> TyChecker<'db> {
                 ));
                 false
             }
-            GoalSatisfiability::NormalizationLimit(limit) => {
+            Err(limit) => {
                 if self
                     .reported_limits
                     .insert((self.env.current_expr(), limit))
@@ -3806,9 +3904,11 @@ impl<'db> TyChecker<'db> {
                 }
                 false
             }
-            GoalSatisfiability::Satisfied(_)
-            | GoalSatisfiability::NeedsConfirmation { .. }
-            | GoalSatisfiability::ContainsInvalid => true,
+            Ok(
+                GoalSatisfiability::Satisfied(_)
+                | GoalSatisfiability::NeedsConfirmation { .. }
+                | GoalSatisfiability::ContainsInvalid,
+            ) => true,
         }
     }
 }
@@ -6443,7 +6543,7 @@ fn owned_bound() where P<S, S>: Foo {}
         let owned_bound = find_func(&db, top_mod, "owned_bound");
         let owned_goal = declared_call_bound(&db, owned_bound.into(), 0).expect("owned bound");
         assert!(matches!(
-            is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), owned_goal),
+            is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), owned_goal).unwrap(),
             GoalSatisfiability::NeedsConfirmation {
                 solutions,
                 completion: TraitSolveCompletion::Saturated,

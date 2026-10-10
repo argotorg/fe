@@ -182,21 +182,21 @@ impl<'db> TraitSolveCx<'db> {
             match is_goal_query_satisfiable(db, self, &query) {
                 // A bound with no provable implementation can still be supplied
                 // by the caller. Incomplete searches cannot establish this.
-                GoalSatisfiability::UnSat(_) => is_goal_satisfiable(db, self, inst),
+                Ok(GoalSatisfiability::UnSat(_)) => is_goal_satisfiable(db, self, inst),
                 result => result,
             }
         };
         match result {
-            GoalSatisfiability::Satisfied(solution) => {
+            Ok(GoalSatisfiability::Satisfied(solution)) => {
                 Selection::Unique(solution.value.implementor)
             }
-            GoalSatisfiability::NeedsConfirmation { solutions, .. } => {
+            Ok(GoalSatisfiability::NeedsConfirmation { solutions, .. }) => {
                 Selection::Ambiguous(solutions.iter().map(|s| s.value.implementor).collect())
             }
-            GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {
+            Ok(GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_)) => {
                 Selection::NotFound
             }
-            GoalSatisfiability::NormalizationLimit(limit) => Selection::NormalizationLimit(limit),
+            Err(limit) => Selection::NormalizationLimit(limit),
         }
     }
 
@@ -299,9 +299,9 @@ fn is_query_satisfiable<'db>(
     db: &'db dyn HirAnalysisDb,
     origin_ingot: Ingot<'db>,
     query: Canonical<TraitSolverQuery<'db>>,
-) -> GoalSatisfiability<'db> {
+) -> Result<GoalSatisfiability<'db>, NormalizationLimit> {
     if query.flags(db).contains(TyFlags::HAS_INVALID) {
-        return GoalSatisfiability::ContainsInvalid;
+        return Ok(GoalSatisfiability::ContainsInvalid);
     };
 
     solve(db, origin_ingot, query)
@@ -311,24 +311,24 @@ fn is_query_satisfiable_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
     _origin_ingot: Ingot<'db>,
     _query: Canonical<TraitSolverQuery<'db>>,
-) -> GoalSatisfiability<'db> {
+) -> Result<GoalSatisfiability<'db>, NormalizationLimit> {
     // A cycle can arise while collecting an impl whose constraints contain an associated-type
     // projection: resolving the projection needs the trait environment that is currently being
     // assembled for the outer goal. Treat the incomplete pass as ambiguous so callers keep the
     // candidate alive; the next fixpoint iteration can decide it once impl collection converges.
-    GoalSatisfiability::NeedsConfirmation {
+    Ok(GoalSatisfiability::NeedsConfirmation {
         solutions: IndexSet::default(),
         completion: TraitSolveCompletion::Cycle,
-    }
+    })
 }
 
 fn is_query_satisfiable_cycle_recover<'db>(
     _db: &'db dyn HirAnalysisDb,
-    _value: &GoalSatisfiability<'db>,
+    _value: &Result<GoalSatisfiability<'db>, NormalizationLimit>,
     _count: u32,
     _origin_ingot: Ingot<'db>,
     _query: Canonical<TraitSolverQuery<'db>>,
-) -> salsa::CycleRecoveryAction<GoalSatisfiability<'db>> {
+) -> salsa::CycleRecoveryAction<Result<GoalSatisfiability<'db>, NormalizationLimit>> {
     salsa::CycleRecoveryAction::Iterate
 }
 
@@ -407,19 +407,23 @@ pub(crate) fn goal_query_has_no_distinct_solution<'db>(
     )
 }
 
+/// Whether the goal holds. A goal whose answer depends on a normalization
+/// limit has no answer: the limit is returned, for the caller to report where
+/// the goal arises or to keep as unknown (law 5 of the limits design).
 pub fn is_goal_query_satisfiable<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     query: &CanonicalGoalQuery<'db>,
-) -> GoalSatisfiability<'db> {
+) -> Result<GoalSatisfiability<'db>, NormalizationLimit> {
     is_query_satisfiable(db, solve_cx.origin_ingot(), query.canonical()).clone()
 }
 
+/// [`is_goal_query_satisfiable`] for `goal` under the context's assumptions.
 pub fn is_goal_satisfiable<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     goal: TraitInstId<'db>,
-) -> GoalSatisfiability<'db> {
+) -> Result<GoalSatisfiability<'db>, NormalizationLimit> {
     let query = CanonicalGoalQuery::new(db, goal, solve_cx.assumptions());
     is_goal_query_satisfiable(db, solve_cx, &query)
 }
@@ -438,29 +442,30 @@ pub(crate) fn check_ty_wf<'db>(
     // the constraint binder with missing arguments, producing spurious
     // unsatisfied goals; the fully-applied type's constraints are checked
     // below.
+    let mut join = WfJoin::default();
     let (base, args) = ty.decompose_ty_app(db);
     for &arg in args {
-        let wf = check_ty_wf(db, solve_cx, arg);
-        if !wf.is_wf() {
+        if let Some(wf) = join.add(check_ty_wf(db, solve_cx, arg)) {
             return wf;
         }
     }
     match base.data(db) {
         TyData::AssocTy(assoc) => {
-            let wf = check_projected_trait_use_wf(db, solve_cx, assoc.trait_.as_predicate(db));
-            if !wf.is_wf() {
+            if let Some(wf) = join.add(check_projected_trait_use_wf(
+                db,
+                solve_cx,
+                assoc.trait_.as_predicate(db),
+            )) {
                 return wf;
             }
         }
         TyData::QualifiedTy(inst) => {
-            let wf = check_projected_trait_use_wf(db, solve_cx, *inst);
-            if !wf.is_wf() {
+            if let Some(wf) = join.add(check_projected_trait_use_wf(db, solve_cx, *inst)) {
                 return wf;
             }
         }
         TyData::ConstTy(const_ty) => {
-            let wf = check_const_ty_wf(db, solve_cx, *const_ty);
-            if !wf.is_wf() {
+            if let Some(wf) = join.add(check_const_ty_wf(db, solve_cx, *const_ty)) {
                 return wf;
             }
         }
@@ -473,29 +478,71 @@ pub(crate) fn check_ty_wf<'db>(
     }
 
     let constraints = ty_constraints(db, ty);
-    let assumptions = solve_cx.assumptions();
+    let scope = solve_cx.origin_scope(db);
+    if let Some(wf) = join.add(constraints_wf(db, solve_cx, scope, constraints)) {
+        return wf;
+    }
+    join.finish()
+}
 
-    // Normalize constraints to resolve associated types
-    let normalized_constraints = {
-        let scope = solve_cx.origin_scope(db);
-        let normalized_list = constraints
-            .list(db)
-            .iter()
-            .map(|&goal| goal.normalize(db, scope, assumptions))
-            .collect::<Result<Vec<_>, _>>();
-        match normalized_list {
-            Ok(list) => PredicateListId::new(db, list),
-            Err(limit) => return WellFormedness::NormalizationLimit(limit),
-        }
-    };
-
-    for &goal in normalized_constraints.list(db) {
-        if let Some(wf) = unsatisfied_goal(db, solve_cx, goal) {
+/// Whether `constraints` hold, each normalized first to resolve associated
+/// types. A constraint that does not hold decides, even after one that
+/// reached a limit.
+fn constraints_wf<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    scope: ScopeId<'db>,
+    constraints: PredicateListId<'db>,
+) -> WellFormedness<'db> {
+    let mut join = WfJoin::default();
+    for &goal in constraints.list(db) {
+        let wf = match goal.normalize(db, scope, solve_cx.assumptions()) {
+            Ok(goal) => unsatisfied_goal(db, solve_cx, goal).unwrap_or(WellFormedness::WellFormed),
+            Err(limit) => WellFormedness::NormalizationLimit(limit),
+        };
+        if let Some(wf) = join.add(wf) {
             return wf;
         }
     }
+    join.finish()
+}
 
-    WellFormedness::WellFormed
+/// Joins the well-formedness of the parts of one thing: an ill-formed part
+/// decides, even after a part that reached a limit, since the answer is then
+/// the same whatever the limited part is; otherwise a part that reached a
+/// limit leaves the whole undecided, and its limit is the answer.
+#[derive(Default)]
+struct WfJoin<'db> {
+    limit: Option<WellFormedness<'db>>,
+}
+
+impl<'db> WfJoin<'db> {
+    /// Adds a part; returns the answer once a part decides it.
+    fn add(&mut self, wf: WellFormedness<'db>) -> Option<WellFormedness<'db>> {
+        match wf {
+            WellFormedness::WellFormed => None,
+            WellFormedness::IllFormed { .. } => Some(wf),
+            WellFormedness::NormalizationLimit(limit) => {
+                let earlier = match self.limit {
+                    Some(WellFormedness::NormalizationLimit(earlier)) => Some(earlier),
+                    _ => None,
+                };
+                self.limit = Some(WellFormedness::NormalizationLimit(
+                    NormalizationLimit::join(earlier, limit),
+                ));
+                None
+            }
+        }
+    }
+
+    /// Adds the last part and returns the answer.
+    fn last(mut self, wf: WellFormedness<'db>) -> WellFormedness<'db> {
+        self.add(wf).unwrap_or_else(|| self.finish())
+    }
+
+    fn finish(self) -> WellFormedness<'db> {
+        self.limit.unwrap_or(WellFormedness::WellFormed)
+    }
 }
 
 fn check_const_ty_wf<'db>(
@@ -503,8 +550,8 @@ fn check_const_ty_wf<'db>(
     solve_cx: TraitSolveCx<'db>,
     const_ty: super::const_ty::ConstTyId<'db>,
 ) -> WellFormedness<'db> {
-    let wf = check_ty_wf(db, solve_cx, const_ty.ty(db));
-    if !wf.is_wf() {
+    let mut join = WfJoin::default();
+    if let Some(wf) = join.add(check_ty_wf(db, solve_cx, const_ty.ty(db))) {
         return wf;
     }
 
@@ -512,17 +559,20 @@ fn check_const_ty_wf<'db>(
         ConstTyData::Computation { description, .. } => {
             let evaluated = const_ty.evaluate(db, Some(description.ty()));
             if evaluated != const_ty {
-                return check_ty_wf(db, solve_cx, TyId::const_ty(db, evaluated));
+                return join.last(check_ty_wf(db, solve_cx, TyId::const_ty(db, evaluated)));
             }
             if let ConstRepr::Term(term) = description.repr() {
-                return check_ty_wf(db, solve_cx, TyId::const_ty(db, *term));
+                return join.last(check_ty_wf(db, solve_cx, TyId::const_ty(db, *term)));
             }
         }
-        ConstTyData::Value(value) => return check_sem_const_wf(db, solve_cx, value.value()),
-        ConstTyData::Description(value) => return check_sem_const_wf(db, solve_cx, *value),
+        ConstTyData::Value(value) => {
+            return join.last(check_sem_const_wf(db, solve_cx, value.value()));
+        }
+        ConstTyData::Description(value) => {
+            return join.last(check_sem_const_wf(db, solve_cx, *value));
+        }
         ConstTyData::Abstract(expr, _) => {
-            let wf = check_const_expr_wf(db, solve_cx, *expr);
-            if !wf.is_wf() {
+            if let Some(wf) = join.add(check_const_expr_wf(db, solve_cx, *expr)) {
                 return wf;
             }
         }
@@ -533,7 +583,7 @@ fn check_const_ty_wf<'db>(
         | ConstTyData::UnEvaluated { .. } => {}
     }
 
-    WellFormedness::WellFormed
+    join.finish()
 }
 
 fn check_sem_const_wf<'db>(
@@ -541,33 +591,30 @@ fn check_sem_const_wf<'db>(
     solve_cx: TraitSolveCx<'db>,
     value: SemConstId<'db>,
 ) -> WellFormedness<'db> {
+    let mut join = WfJoin::default();
     match value.value(db) {
         SemConstValue::Description(term) => check_ty_wf(db, solve_cx, TyId::const_ty(db, *term)),
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => {
             for child in elems.iter().copied() {
-                let wf = check_ty_wf(db, solve_cx, sem_const_ty(db, child));
-                if !wf.is_wf() {
+                if let Some(wf) = join.add(check_ty_wf(db, solve_cx, sem_const_ty(db, child))) {
                     return wf;
                 }
-                let wf = check_sem_const_wf(db, solve_cx, child);
-                if !wf.is_wf() {
+                if let Some(wf) = join.add(check_sem_const_wf(db, solve_cx, child)) {
                     return wf;
                 }
             }
-            WellFormedness::WellFormed
+            join.finish()
         }
         SemConstValue::Struct { fields, .. } | SemConstValue::Enum { fields, .. } => {
             for child in fields.iter().copied() {
-                let wf = check_ty_wf(db, solve_cx, sem_const_ty(db, child));
-                if !wf.is_wf() {
+                if let Some(wf) = join.add(check_ty_wf(db, solve_cx, sem_const_ty(db, child))) {
                     return wf;
                 }
-                let wf = check_sem_const_wf(db, solve_cx, child);
-                if !wf.is_wf() {
+                if let Some(wf) = join.add(check_sem_const_wf(db, solve_cx, child)) {
                     return wf;
                 }
             }
-            WellFormedness::WellFormed
+            join.finish()
         }
         SemConstValue::Unit | SemConstValue::Scalar { .. } => WellFormedness::WellFormed,
     }
@@ -593,6 +640,7 @@ fn check_const_expr_wf<'db>(
         }
     }
 
+    let mut join = WfJoin::default();
     match expr.data(db) {
         ConstExpr::Invocation(invocation) => {
             let mut collector = TyCollector {
@@ -602,8 +650,7 @@ fn check_const_expr_wf<'db>(
             invocation.key.visit_with(&mut collector);
             invocation.args.visit_with(&mut collector);
             for ty in collector.tys {
-                let wf = check_ty_wf(db, solve_cx, ty);
-                if !wf.is_wf() {
+                if let Some(wf) = join.add(check_ty_wf(db, solve_cx, ty)) {
                     return wf;
                 }
             }
@@ -618,41 +665,36 @@ fn check_const_expr_wf<'db>(
             index: rhs,
         } => {
             for ty in [*lhs, *rhs] {
-                let wf = check_ty_wf(db, solve_cx, ty);
-                if !wf.is_wf() {
+                if let Some(wf) = join.add(check_ty_wf(db, solve_cx, ty)) {
                     return wf;
                 }
             }
         }
         ConstExpr::UnOp { expr, .. } | ConstExpr::Field { value: expr, .. } => {
-            let wf = check_ty_wf(db, solve_cx, *expr);
-            if !wf.is_wf() {
+            if let Some(wf) = join.add(check_ty_wf(db, solve_cx, *expr)) {
                 return wf;
             }
         }
         ConstExpr::Cast { expr, to } => {
             for ty in [*expr, *to] {
-                let wf = check_ty_wf(db, solve_cx, ty);
-                if !wf.is_wf() {
+                if let Some(wf) = join.add(check_ty_wf(db, solve_cx, ty)) {
                     return wf;
                 }
             }
         }
         ConstExpr::TraitConst(assoc) => {
-            let wf = check_projected_trait_use_wf(db, solve_cx, assoc.inst());
-            if !wf.is_wf() {
+            if let Some(wf) = join.add(check_projected_trait_use_wf(db, solve_cx, assoc.inst())) {
                 return wf;
             }
         }
         ConstExpr::InherentConst(use_) => {
-            let wf = check_ty_wf(db, solve_cx, use_.receiver_ty());
-            if !wf.is_wf() {
+            if let Some(wf) = join.add(check_ty_wf(db, solve_cx, use_.receiver_ty())) {
                 return wf;
             }
         }
     }
 
-    WellFormedness::WellFormed
+    join.finish()
 }
 
 fn check_projected_trait_use_wf<'db>(
@@ -660,20 +702,19 @@ fn check_projected_trait_use_wf<'db>(
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
 ) -> WellFormedness<'db> {
+    let mut join = WfJoin::default();
     for &arg in inst.args(db) {
-        let wf = check_ty_wf(db, solve_cx, arg);
-        if !wf.is_wf() {
+        if let Some(wf) = join.add(check_ty_wf(db, solve_cx, arg)) {
             return wf;
         }
     }
     for &ty in inst.assoc_type_bindings(db).values() {
-        let wf = check_ty_wf(db, solve_cx, ty);
-        if !wf.is_wf() {
+        if let Some(wf) = join.add(check_ty_wf(db, solve_cx, ty)) {
             return wf;
         }
     }
 
-    unsatisfied_goal(db, solve_cx, inst).unwrap_or(WellFormedness::WellFormed)
+    join.last(unsatisfied_goal(db, solve_cx, inst).unwrap_or(WellFormedness::WellFormed))
 }
 
 fn unsatisfied_goal<'db>(
@@ -685,16 +726,16 @@ fn unsatisfied_goal<'db>(
     let mut table = UnificationTable::new(db);
     let query = CanonicalGoalQuery::new(db, goal, assumptions);
     match is_goal_query_satisfiable(db, solve_cx, &query) {
-        GoalSatisfiability::UnSat(subgoal) => {
+        Ok(GoalSatisfiability::UnSat(subgoal)) => {
             let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
             Some(WellFormedness::IllFormed { goal, subgoal })
         }
-        GoalSatisfiability::NormalizationLimit(limit) => {
-            Some(WellFormedness::NormalizationLimit(limit))
-        }
-        GoalSatisfiability::Satisfied(_)
-        | GoalSatisfiability::NeedsConfirmation { .. }
-        | GoalSatisfiability::ContainsInvalid => None,
+        Err(limit) => Some(WellFormedness::NormalizationLimit(limit)),
+        Ok(
+            GoalSatisfiability::Satisfied(_)
+            | GoalSatisfiability::NeedsConfirmation { .. }
+            | GoalSatisfiability::ContainsInvalid,
+        ) => None,
     }
 }
 
@@ -754,44 +795,22 @@ pub(crate) fn check_trait_inst_wf<'db>(
     solve_cx: TraitSolveCx<'db>,
     trait_inst: TraitInstId<'db>,
 ) -> WellFormedness<'db> {
+    let mut join = WfJoin::default();
     for &arg in trait_inst.args(db) {
-        let wf = check_ty_wf(db, solve_cx, arg);
-        if !wf.is_wf() {
+        if let Some(wf) = join.add(check_ty_wf(db, solve_cx, arg)) {
             return wf;
         }
     }
     for &ty in trait_inst.assoc_type_bindings(db).values() {
-        let wf = check_ty_wf(db, solve_cx, ty);
-        if !wf.is_wf() {
+        if let Some(wf) = join.add(check_ty_wf(db, solve_cx, ty)) {
             return wf;
         }
     }
 
     let constraints =
         collect_constraints(db, trait_inst.def(db).into()).instantiate(db, trait_inst.args(db));
-    let assumptions = solve_cx.assumptions();
-
-    // Normalize constraints after instantiation to resolve associated types
-    let normalized_constraints = {
-        let scope = solve_cx.normalization_scope_for_trait_inst(db, trait_inst);
-        let normalized_list = constraints
-            .list(db)
-            .iter()
-            .map(|&goal| goal.normalize(db, scope, assumptions))
-            .collect::<Result<Vec<_>, _>>();
-        match normalized_list {
-            Ok(list) => PredicateListId::new(db, list),
-            Err(limit) => return WellFormedness::NormalizationLimit(limit),
-        }
-    };
-
-    for &goal in normalized_constraints.list(db) {
-        if let Some(wf) = unsatisfied_goal(db, solve_cx, goal) {
-            return wf;
-        }
-    }
-
-    WellFormedness::WellFormed
+    let scope = solve_cx.normalization_scope_for_trait_inst(db, trait_inst);
+    join.last(constraints_wf(db, solve_cx, scope, constraints))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
@@ -845,23 +864,10 @@ pub enum GoalSatisfiability<'db> {
 
     /// Goal contains invalid.
     ContainsInvalid,
-    /// Deciding the goal reached a normalization limit. It is neither
-    /// satisfied nor unsatisfied; the limit is reported where the goal
-    /// arises.
-    NormalizationLimit(NormalizationLimit),
     /// The goal is not satisfied.
     /// It contains an unsatisfied subgoal if we can know the exact subgoal
     /// that makes the proof step stuck.
     UnSat(Option<Solution<TraitInstId<'db>>>),
-}
-
-impl GoalSatisfiability<'_> {
-    pub fn is_satisfied(&self) -> bool {
-        matches!(
-            self,
-            Self::Satisfied(_) | Self::NeedsConfirmation { .. } | Self::ContainsInvalid
-        )
-    }
 }
 
 #[salsa::interned]
@@ -1232,11 +1238,11 @@ fn without_a<T>() -> bool {
         );
         assert_ne!(with_query.canonical(), without_query.canonical());
         assert!(matches!(
-            is_goal_query_satisfiable(&db, with_cx, &with_query),
+            is_goal_query_satisfiable(&db, with_cx, &with_query).unwrap(),
             GoalSatisfiability::Satisfied(_)
         ));
         assert!(matches!(
-            is_goal_query_satisfiable(&db, without_cx, &without_query),
+            is_goal_query_satisfiable(&db, without_cx, &without_query).unwrap(),
             GoalSatisfiability::UnSat(_)
         ));
     }
@@ -1270,7 +1276,7 @@ impl Foo for Ambiguous {}
         let solve = |name| {
             let self_ty = named_struct_ty(&db, top_mod, name);
             let goal = TraitInstId::new(&db, foo, vec![self_ty], IndexMap::new());
-            is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), goal)
+            is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), goal).unwrap()
         };
 
         assert!(matches!(
@@ -1308,7 +1314,7 @@ impl<T> Foo for T where Wrap<T>: Foo {}
         for self_ty in [dead, deep_root] {
             let goal = TraitInstId::new(&db, foo, vec![self_ty], IndexMap::new());
             assert!(matches!(
-                is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), goal),
+                is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), goal).unwrap(),
                 GoalSatisfiability::NeedsConfirmation {
                     solutions,
                     completion: TraitSolveCompletion::MaximumTypeDepth,
@@ -1344,7 +1350,7 @@ impl Foo for Subject {}
 
         let deep_goal = TraitInstId::new(&db, foo, vec![deep], IndexMap::new());
         assert!(matches!(
-            is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), deep_goal,),
+            is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), deep_goal,).unwrap(),
             GoalSatisfiability::Satisfied(_)
         ));
 
@@ -1357,7 +1363,8 @@ impl Foo for Subject {}
                 &db,
                 TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions),
                 shallow_goal,
-            ),
+            )
+            .unwrap(),
             GoalSatisfiability::Satisfied(_)
         ));
     }
@@ -1401,7 +1408,7 @@ fn probe<T: Seed>() {}
                 &db,
                 TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions),
                 goal,
-            ),
+            ).unwrap(),
             GoalSatisfiability::NeedsConfirmation {
                 solutions,
                 completion: TraitSolveCompletion::MaximumTypeDepth,
@@ -1440,7 +1447,7 @@ impl<SelfT, T> Goal<T> for SelfT where SelfT: Accept<T>, SelfT: Choose<T> {}
         let goal = TraitInstId::new(&db, goal_trait, vec![subject, selected], IndexMap::new());
         let query = CanonicalGoalQuery::new(&db, goal, assumptions);
         let GoalSatisfiability::Satisfied(solution) =
-            is_goal_query_satisfiable(&db, solve_cx, &query)
+            is_goal_query_satisfiable(&db, solve_cx, &query).unwrap()
         else {
             panic!("the second constraint must observe the first constraint's binding");
         };
@@ -1479,7 +1486,7 @@ impl Foo for Third {}
         let GoalSatisfiability::NeedsConfirmation {
             solutions,
             completion: TraitSolveCompletion::RootAnswerLimit { limit: 2 },
-        } = is_goal_query_satisfiable(&db, solve_cx, &query)
+        } = is_goal_query_satisfiable(&db, solve_cx, &query).unwrap()
         else {
             panic!("the unconstrained goal must reach the configured answer cutoff");
         };

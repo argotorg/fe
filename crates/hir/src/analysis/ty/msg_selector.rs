@@ -176,13 +176,17 @@ fn check_variant_field_abi_requirements<'db>(
                 ] {
                     let goal = TraitInstId::new_simple(db, trait_, args);
                     match is_goal_satisfiable(db, solve_cx, goal) {
-                        GoalSatisfiability::UnSat(_)
-                        | GoalSatisfiability::NeedsConfirmation { .. } => traits.push(name),
-                        GoalSatisfiability::NormalizationLimit(reached) => {
+                        Ok(
+                            GoalSatisfiability::UnSat(_)
+                            | GoalSatisfiability::NeedsConfirmation { .. },
+                        ) => traits.push(name),
+                        Err(reached) => {
                             limit = Some(reached);
                             break;
                         }
-                        GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => {}
+                        Ok(
+                            GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid,
+                        ) => {}
                     }
                 }
                 if let Some(limit) = limit {

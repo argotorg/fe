@@ -29,6 +29,7 @@ use crate::analysis::semantic::{RuntimeSizeError, runtime_size_bytes};
 use crate::analysis::ty::{
     adt_def::AdtRef,
     assoc_const::{AssocConstUse, InherentConstUse},
+    candidates,
     canonical::{Canonicalized, Solution},
     const_ty::{BodyHoleSite, HoleAnchor, LoweringContext, instantiate_inherent_const_decl_ty},
     corelib::{
@@ -55,7 +56,7 @@ use crate::analysis::ty::{
         stored_value_contains_out_of_scope_params,
     },
     fold::{TyFoldable as _, TyFolder},
-    normalize::normalize_with_trait_evidence,
+    normalize::{NormalizationLimit, normalize_with_trait_evidence},
     provider::{
         ProviderLayoutEvidence, ProviderTransport, provider_semantics,
         provider_semantics_for_specialized_call,
@@ -75,7 +76,7 @@ use crate::analysis::{
         diagnostics::PathResDiag,
         is_scope_visible_from,
         method_selection::{
-            MethodCandidate, MethodSelectionError, select_method_candidate,
+            AmbiguousTraitMethods, MethodCandidate, MethodSelectionError, select_method_candidate,
             select_trait_method_candidates,
         },
         resolve_name_res_with_minter, resolve_query,
@@ -238,6 +239,19 @@ enum EffectResolution<'db> {
     Chosen(Box<EffectEvidence<'db>>),
     BlockedByBarrier,
     Missing,
+    Ambiguous,
+    /// Which provider supplies the effect depends on one whose check reached
+    /// a normalization limit.
+    NormalizationLimit(NormalizationLimit),
+}
+
+/// What one frame of effect providers answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrameChoice {
+    /// No provider in the frame: the next frame out is asked.
+    Continue,
+    /// This provider, by index in the frame.
+    Chosen(usize),
     Ambiguous,
 }
 
@@ -1661,7 +1675,13 @@ impl<'db> TyChecker<'db> {
                         };
 
                     let (arg, pass_mode) =
-                        self.effect_arg_for_provider(provider, arg_style, req.required_mut);
+                        match self.effect_arg_for_provider(provider, arg_style, req.required_mut) {
+                            Ok(arg) => arg,
+                            Err(limit) => {
+                                self.push_diag(limit.report(call_span.clone()).0);
+                                continue;
+                            }
+                        };
                     let provider_target_ty = self.provider_target_ty_for_effect_arg(
                         provider,
                         instantiated_key_ty,
@@ -1796,6 +1816,9 @@ impl<'db> TyChecker<'db> {
                         key: key_ty,
                     });
                 }
+                EffectResolution::NormalizationLimit(limit) => {
+                    self.push_diag(limit.report(call_span.clone()).0);
+                }
             }
         }
         let mut providers = specialized_providers.into_values().collect::<Vec<_>>();
@@ -1855,7 +1878,7 @@ impl<'db> TyChecker<'db> {
                     return self.choose_effect_evidence(req.name, viable);
                 }
                 FrameLookupResult::KeyedFamily { entries, providers } => {
-                    let mut family_viable = SmallVec::new();
+                    let mut frame = Vec::new();
                     for entry in entries.iter().cloned() {
                         let Some(matched) = self.match_family_keyed_entry(&query.key, entry) else {
                             continue;
@@ -1863,48 +1886,33 @@ impl<'db> TyChecker<'db> {
                         if let Some(evidence) =
                             self.evaluate_keyed_entry(query.required_mut, matched)
                         {
-                            family_viable.push(evidence);
+                            frame.push((evidence_provider(&evidence), Ok(Some(evidence))));
                         }
                     }
                     for provider in providers.iter().copied() {
-                        let evidence = match query.key.clone() {
-                            EffectPatternKey::Type(type_query) => self
-                                .evaluate_unkeyed_type_provider(
-                                    type_query,
-                                    provider,
-                                    query.required_mut,
-                                ),
-                            EffectPatternKey::Trait(trait_query) => {
-                                self.evaluate_unkeyed_trait_provider(trait_query, provider)
-                            }
-                        };
-                        if let Some(evidence) = evidence {
-                            family_viable.push(evidence);
-                        }
+                        let evidence = self.evaluate_unkeyed_provider(
+                            query.key.clone(),
+                            provider,
+                            query.required_mut,
+                        );
+                        frame.push((provider, evidence));
                     }
-                    if !family_viable.is_empty() {
-                        return self.choose_effect_evidence(req.name, family_viable);
+                    if let Some(resolution) = self.decide_effect_frame(req.name, frame) {
+                        return resolution;
                     }
                 }
                 FrameLookupResult::Unkeyed { providers } => {
+                    let mut frame = Vec::new();
                     for provider in providers {
-                        let evidence = match query.key.clone() {
-                            EffectPatternKey::Type(type_query) => self
-                                .evaluate_unkeyed_type_provider(
-                                    type_query,
-                                    provider,
-                                    query.required_mut,
-                                ),
-                            EffectPatternKey::Trait(trait_query) => {
-                                self.evaluate_unkeyed_trait_provider(trait_query, provider)
-                            }
-                        };
-                        if let Some(evidence) = evidence {
-                            viable.push(evidence);
-                        }
+                        let evidence = self.evaluate_unkeyed_provider(
+                            query.key.clone(),
+                            provider,
+                            query.required_mut,
+                        );
+                        frame.push((provider, evidence));
                     }
-                    if !viable.is_empty() {
-                        return self.choose_effect_evidence(req.name, viable);
+                    if let Some(resolution) = self.decide_effect_frame(req.name, frame) {
+                        return resolution;
                     }
                 }
             }
@@ -1941,33 +1949,129 @@ impl<'db> TyChecker<'db> {
         required_name: Option<IdentId<'db>>,
         viable: SmallVec<[EffectEvidence<'db>; 2]>,
     ) -> EffectResolution<'db> {
-        if let [only] = viable.as_slice() {
-            EffectResolution::Chosen(Box::new(only.clone()))
-        } else {
-            let Some(required_name) = required_name else {
-                return EffectResolution::Ambiguous;
-            };
-            let mut name_matches = viable.into_iter().filter(|evidence| {
-                let provider = evidence_provider(evidence);
-                match (provider.origin, provider.binding) {
-                    (
-                        EffectOrigin::Param {
-                            name: Some(name), ..
-                        },
-                        _,
-                    ) => name == required_name,
-                    (EffectOrigin::With { .. }, Some(binding)) => {
-                        binding.binding_name(&self.env) == required_name
-                    }
-                    _ => false,
+        let providers: Vec<_> = viable.iter().map(evidence_provider).collect();
+        match self.choose_provider(required_name, &providers) {
+            FrameChoice::Chosen(idx) => EffectResolution::Chosen(Box::new(viable[idx].clone())),
+            FrameChoice::Continue | FrameChoice::Ambiguous => EffectResolution::Ambiguous,
+        }
+    }
+
+    /// Whether `provider` is the one the requirement names.
+    fn provider_is_named(
+        &self,
+        required_name: IdentId<'db>,
+        provider: &ProvidedEffect<'db>,
+    ) -> bool {
+        match (provider.origin, provider.binding) {
+            (
+                EffectOrigin::Param {
+                    name: Some(name), ..
+                },
+                _,
+            ) => name == required_name,
+            (EffectOrigin::With { .. }, Some(binding)) => {
+                binding.binding_name(&self.env) == required_name
+            }
+            _ => false,
+        }
+    }
+
+    /// Which of the viable `providers` of one frame supplies the effect: the
+    /// only one, or the only one named as the requirement is.
+    fn choose_provider(
+        &self,
+        required_name: Option<IdentId<'db>>,
+        providers: &[ProvidedEffect<'db>],
+    ) -> FrameChoice {
+        match providers {
+            [] => FrameChoice::Continue,
+            [_] => FrameChoice::Chosen(0),
+            _ => {
+                let Some(required_name) = required_name else {
+                    return FrameChoice::Ambiguous;
+                };
+                let mut name_matches = providers
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, provider)| self.provider_is_named(required_name, provider));
+                match (name_matches.next(), name_matches.next()) {
+                    (Some((idx, _)), None) => FrameChoice::Chosen(idx),
+                    _ => FrameChoice::Ambiguous,
                 }
+            }
+        }
+    }
+
+    /// Decides one frame of providers, each viable, not, or unknown because
+    /// its check reached a limit. A provider in scope that might supply the
+    /// effect cannot be skipped: the frame's choice is made only if it is the
+    /// same whatever the unknown providers turn out to be, and otherwise the
+    /// answer is the limit. `None` asks the next frame out.
+    fn decide_effect_frame(
+        &self,
+        required_name: Option<IdentId<'db>>,
+        frame: Vec<(
+            ProvidedEffect<'db>,
+            Result<Option<EffectEvidence<'db>>, NormalizationLimit>,
+        )>,
+    ) -> Option<EffectResolution<'db>> {
+        // The choice depends on an unknown provider only through whether it
+        // is the one named, so the providers of each kind are counted together.
+        let (named, other): (Vec<usize>, Vec<usize>) = (0..frame.len())
+            .filter(|&idx| frame[idx].1.is_err())
+            .partition(|&idx| {
+                required_name.is_some_and(|name| self.provider_is_named(name, &frame[idx].0))
             });
-            if let Some(best) = name_matches.next()
-                && name_matches.next().is_none()
-            {
-                EffectResolution::Chosen(Box::new(best))
-            } else {
-                EffectResolution::Ambiguous
+        let limits = |indices: &[usize]| -> Vec<NormalizationLimit> {
+            indices
+                .iter()
+                .filter_map(|&idx| frame[idx].1.as_ref().err().copied())
+                .collect()
+        };
+        let decided = candidates::decide_grouped(&[limits(&named), limits(&other)], |counts| {
+            let held: Vec<usize> = named[..counts[0]]
+                .iter()
+                .chain(&other[..counts[1]])
+                .copied()
+                .collect();
+            let included: Vec<usize> = (0..frame.len())
+                .filter(|idx| match &frame[*idx].1 {
+                    Ok(evidence) => evidence.is_some(),
+                    Err(_) => held.contains(idx),
+                })
+                .collect();
+            let providers: Vec<_> = included.iter().map(|&idx| frame[idx].0).collect();
+            match self.choose_provider(required_name, &providers) {
+                FrameChoice::Chosen(idx) => FrameChoice::Chosen(included[idx]),
+                choice => choice,
+            }
+        });
+        match decided {
+            candidates::Decided::Same(FrameChoice::Continue) => None,
+            candidates::Decided::Same(FrameChoice::Ambiguous) => Some(EffectResolution::Ambiguous),
+            candidates::Decided::Same(FrameChoice::Chosen(idx)) => match &frame[idx].1 {
+                Ok(Some(evidence)) => Some(EffectResolution::Chosen(Box::new(evidence.clone()))),
+                // Only a viable provider is chosen in every setting.
+                Ok(None) | Err(_) => unreachable!("a provider chosen in every setting is viable"),
+            },
+            candidates::Decided::Differs { limit, .. } => {
+                Some(EffectResolution::NormalizationLimit(limit))
+            }
+        }
+    }
+
+    fn evaluate_unkeyed_provider(
+        &mut self,
+        key: EffectPatternKey<'db>,
+        provider: ProvidedEffect<'db>,
+        required_mut: bool,
+    ) -> Result<Option<EffectEvidence<'db>>, NormalizationLimit> {
+        match key {
+            EffectPatternKey::Type(type_query) => {
+                self.evaluate_unkeyed_type_provider(type_query, provider, required_mut)
+            }
+            EffectPatternKey::Trait(trait_query) => {
+                self.evaluate_unkeyed_trait_provider(trait_query, provider)
             }
         }
     }
@@ -2039,7 +2143,7 @@ impl<'db> TyChecker<'db> {
         query: TypePatternKey<'db>,
         provider: ProvidedEffect<'db>,
         required_mut: bool,
-    ) -> Option<EffectEvidence<'db>> {
+    ) -> Result<Option<EffectEvidence<'db>>, NormalizationLimit> {
         let direct_style =
             self.direct_arg_style_for_provider(provider, query.carrier, required_mut);
         if let Some(arg_style) = direct_style {
@@ -2056,7 +2160,7 @@ impl<'db> TyChecker<'db> {
             );
             self.rollback_state(snapshot);
             if ok {
-                return Some(EffectEvidence::UnkeyedType {
+                return Ok(Some(EffectEvidence::UnkeyedType {
                     provider,
                     commit: EffectCommitPlan {
                         key_match: Some(KeyMatchCommit::QueryToType {
@@ -2072,11 +2176,14 @@ impl<'db> TyChecker<'db> {
                     },
                     arg_style,
                     layout_view: EffectArgLayoutView::Direct,
-                });
+                }));
             }
         }
 
-        let resolution = self.effect_provider_target_resolution(provider.ty, required_mut)?;
+        let Some(resolution) = self.effect_provider_target_resolution(provider.ty, required_mut)?
+        else {
+            return Ok(None);
+        };
         let snapshot = self.snapshot_state();
         let ok = apply_key_match_commit(
             self,
@@ -2086,7 +2193,7 @@ impl<'db> TyChecker<'db> {
             },
         );
         self.rollback_state(snapshot);
-        ok.then_some(EffectEvidence::UnkeyedType {
+        Ok(ok.then_some(EffectEvidence::UnkeyedType {
             provider,
             commit: EffectCommitPlan {
                 key_match: Some(KeyMatchCommit::QueryToType {
@@ -2099,17 +2206,17 @@ impl<'db> TyChecker<'db> {
             },
             arg_style: EffectArgStyle::Value,
             layout_view: EffectArgLayoutView::ProviderTarget,
-        })
+        }))
     }
 
     fn evaluate_unkeyed_trait_provider(
         &mut self,
         query: TraitPatternKey<'db>,
         provider: ProvidedEffect<'db>,
-    ) -> Option<EffectEvidence<'db>> {
+    ) -> Result<Option<EffectEvidence<'db>>, NormalizationLimit> {
         let provider_ty = self.table.fold_ty(self.db, provider.ty);
         if provider_ty.has_var(self.db) {
-            return None;
+            return Ok(None);
         }
         let instantiated = instantiate_trait_pattern_in(self.db, &mut self.table, query);
         let args = std::iter::once(provider_ty)
@@ -2122,11 +2229,11 @@ impl<'db> TyChecker<'db> {
             instantiated.assoc_type_bindings(self.db).clone(),
         );
         let GoalSatisfiability::Satisfied(solution) =
-            self.trait_effect_goal_satisfiability(trait_goal)
+            self.trait_effect_goal_satisfiability(trait_goal)?
         else {
-            return None;
+            return Ok(None);
         };
-        Some(EffectEvidence::UnkeyedTrait {
+        Ok(Some(EffectEvidence::UnkeyedTrait {
             provider,
             commit: EffectCommitPlan {
                 key_match: None,
@@ -2136,7 +2243,7 @@ impl<'db> TyChecker<'db> {
             },
             arg_style: EffectArgStyle::Value,
             layout_view: EffectArgLayoutView::Direct,
-        })
+        }))
     }
 
     fn direct_arg_style_for_provider(
@@ -2178,12 +2285,12 @@ impl<'db> TyChecker<'db> {
         provider: ProvidedEffect<'db>,
         arg_style: EffectArgStyle,
         required_mut: bool,
-    ) -> (super::EffectArg<'db>, super::EffectPassMode) {
-        if required_mut && !self.provider_supports_mut(provider) {
-            return (super::EffectArg::Unknown, super::EffectPassMode::Unknown);
+    ) -> Result<(super::EffectArg<'db>, super::EffectPassMode), NormalizationLimit> {
+        if required_mut && !self.provider_supports_mut(provider)? {
+            return Ok((super::EffectArg::Unknown, super::EffectPassMode::Unknown));
         }
 
-        match arg_style {
+        Ok(match arg_style {
             EffectArgStyle::Place => {
                 let place = match provider.origin {
                     EffectOrigin::With { value_expr } => self.env.expr_place(value_expr),
@@ -2214,21 +2321,26 @@ impl<'db> TyChecker<'db> {
                 },
                 super::EffectPassMode::ByValue,
             ),
-        }
+        })
     }
 
-    fn provider_supports_mut(&mut self, provider: ProvidedEffect<'db>) -> bool {
-        if let Some((kind, _)) = provider.ty.as_capability(self.db) {
-            return matches!(kind, CapabilityKind::Mut)
-                || self
-                    .effect_provider_target_resolution(provider.ty, true)
-                    .is_some();
+    /// Whether a chosen provider can be used mutably, or the limit that
+    /// leaves it unknown. A keyed provider is chosen without being proved to
+    /// be a handle, so the limit is first met here.
+    fn provider_supports_mut(
+        &mut self,
+        provider: ProvidedEffect<'db>,
+    ) -> Result<bool, NormalizationLimit> {
+        let mutable = match provider.ty.as_capability(self.db) {
+            Some((kind, _)) => matches!(kind, CapabilityKind::Mut),
+            None => provider.is_mut,
+        };
+        if mutable {
+            return Ok(true);
         }
-
-        provider.is_mut
-            || self
-                .effect_provider_target_resolution(provider.ty, true)
-                .is_some()
+        Ok(self
+            .effect_provider_target_resolution(provider.ty, true)?
+            .is_some())
     }
 
     fn inferred_provider_ty_for_effect_arg(
@@ -2311,8 +2423,12 @@ impl<'db> TyChecker<'db> {
                 return None;
             }
         }
+        // The provider is already chosen; a limit in its handle was reported
+        // when it was.
         let provider_ty = self.table.fold_ty(self.db, provider.ty);
         self.effect_provider_target_resolution(provider_ty, required_mut)
+            .ok()
+            .flatten()
             .map(|resolution| self.table.fold_ty(self.db, resolution.target_ty))
             .or(instantiated_key_ty)
     }
@@ -2526,7 +2642,7 @@ impl<'db> TyChecker<'db> {
     fn trait_effect_goal_satisfiability(
         &self,
         trait_goal: TraitInstId<'db>,
-    ) -> GoalSatisfiability<'db> {
+    ) -> Result<GoalSatisfiability<'db>, NormalizationLimit> {
         self.trait_effect_goal_satisfiability_in_scope(
             self.env.scope(),
             self.env.assumptions(),
@@ -2539,7 +2655,7 @@ impl<'db> TyChecker<'db> {
         scope: crate::hir_def::scope_graph::ScopeId<'db>,
         assumptions: PredicateListId<'db>,
         trait_goal: TraitInstId<'db>,
-    ) -> GoalSatisfiability<'db> {
+    ) -> Result<GoalSatisfiability<'db>, NormalizationLimit> {
         let solve_cx = TraitSolveCx::new(self.db, scope).with_assumptions(assumptions);
         let query = crate::analysis::ty::trait_resolution::CanonicalGoalQuery::new(
             self.db,
@@ -2617,7 +2733,7 @@ impl<'db> TyChecker<'db> {
         &mut self,
         pattern: TypePatternKey<'db>,
         provided: ProvidedEffect<'db>,
-    ) -> Option<TypeEffectBindingMatch<'db>> {
+    ) -> Result<Option<TypeEffectBindingMatch<'db>>, NormalizationLimit> {
         self.select_type_effect_binding_match_in_scope(
             pattern,
             provided,
@@ -2632,7 +2748,7 @@ impl<'db> TyChecker<'db> {
         provided: ProvidedEffect<'db>,
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
-    ) -> Option<TypeEffectBindingMatch<'db>> {
+    ) -> Result<Option<TypeEffectBindingMatch<'db>>, NormalizationLimit> {
         let can_commit_key_relation = |this: &mut Self, given: TyId<'db>| {
             let snapshot = this.snapshot_state();
             let ok = apply_key_match_commit(
@@ -2660,21 +2776,24 @@ impl<'db> TyChecker<'db> {
         };
 
         if matches_key(self, direct_ty) {
-            return Some(TypeEffectBindingMatch::Direct { given: direct_ty });
+            return Ok(Some(TypeEffectBindingMatch::Direct { given: direct_ty }));
         }
 
-        self.effect_provider_target_resolution_in_scope(provided.ty, false, scope, assumptions)
+        Ok(self
+            .effect_provider_target_resolution_in_scope(provided.ty, false, scope, assumptions)?
             .and_then(|resolution| {
                 matches_key(self, resolution.target_ty)
                     .then_some(TypeEffectBindingMatch::Provider { resolution })
-            })
+            }))
     }
 
+    /// How a provider of type `provided_ty` reaches its target, if it is a
+    /// handle; a limit leaves that unknown.
     fn effect_provider_target_resolution(
         &mut self,
         provided_ty: TyId<'db>,
         required_mut: bool,
-    ) -> Option<ProviderTargetResolution<'db>> {
+    ) -> Result<Option<ProviderTargetResolution<'db>>, NormalizationLimit> {
         self.effect_provider_target_resolution_in_scope(
             provided_ty,
             required_mut,
@@ -2689,12 +2808,12 @@ impl<'db> TyChecker<'db> {
         required_mut: bool,
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
-    ) -> Option<ProviderTargetResolution<'db>> {
+    ) -> Result<Option<ProviderTargetResolution<'db>>, NormalizationLimit> {
         if let Some((kind, inner_ty)) = provided_ty.as_capability(self.db) {
             if required_mut && !matches!(kind, CapabilityKind::Mut) {
-                return None;
+                return Ok(None);
             }
-            return Some(ProviderTargetResolution::direct(inner_ty));
+            return Ok(Some(ProviderTargetResolution::direct(inner_ty)));
         }
 
         let effect_ref_trait = resolve_core_trait(self.db, scope, &["EffectRef"])
@@ -2711,16 +2830,19 @@ impl<'db> TyChecker<'db> {
             IndexMap::new(),
         );
         let GoalSatisfiability::Satisfied(handle_solution) =
-            self.trait_effect_goal_satisfiability_in_scope(scope, assumptions, effect_handle_inst)
+            self.trait_effect_goal_satisfiability_in_scope(scope, assumptions, effect_handle_inst)?
         else {
-            return None;
+            return Ok(None);
         };
 
         let snapshot = self.snapshot_state();
         let resolution = (|| {
             self.commit_trait_goal_solution(effect_handle_inst, handle_solution);
 
-            let target_assoc = effect_handle_inst.project_assoc_ty(self.db, target_ident)?;
+            let Some(target_assoc) = effect_handle_inst.project_assoc_ty(self.db, target_ident)
+            else {
+                return Ok(None);
+            };
             let mut target_ty = self
                 .normalize_unresolved_in(target_assoc, scope, assumptions)
                 .fold_with(self.db, &mut self.table);
@@ -2732,10 +2854,34 @@ impl<'db> TyChecker<'db> {
                 vec![provided_ty, target_ty],
                 IndexMap::new(),
             );
-            let GoalSatisfiability::Satisfied(effect_ref_solution) =
-                self.trait_effect_goal_satisfiability_in_scope(scope, assumptions, effect_ref_inst)
-            else {
-                return None;
+            let effect_ref_solution = match self.trait_effect_goal_satisfiability_in_scope(
+                scope,
+                assumptions,
+                effect_ref_inst,
+            ) {
+                Ok(GoalSatisfiability::Satisfied(solution)) => solution,
+                Ok(_) => return Ok(None),
+                Err(limit) => {
+                    // A handle that is not mutable is not one whatever the
+                    // read-only goal turns out to be.
+                    if required_mut {
+                        let effect_ref_mut_inst = TraitInstId::new(
+                            self.db,
+                            effect_ref_mut_trait,
+                            vec![provided_ty, target_ty],
+                            IndexMap::new(),
+                        );
+                        match self.trait_effect_goal_satisfiability_in_scope(
+                            scope,
+                            assumptions,
+                            effect_ref_mut_inst,
+                        ) {
+                            Ok(GoalSatisfiability::Satisfied(_)) | Err(_) => {}
+                            Ok(_) => return Ok(None),
+                        }
+                    }
+                    return Err(limit);
+                }
             };
             self.commit_trait_goal_solution(effect_ref_inst, effect_ref_solution);
             provided_ty = self.table.fold_ty(self.db, provided_ty);
@@ -2754,9 +2900,9 @@ impl<'db> TyChecker<'db> {
                         scope,
                         assumptions,
                         effect_ref_mut_inst,
-                    )
+                    )?
                 else {
-                    return None;
+                    return Ok(None);
                 };
                 self.commit_trait_goal_solution(effect_ref_mut_inst, effect_ref_mut_solution);
                 target_ty = self.renormalize_effect_provider_target_ty_in_scope(
@@ -2769,13 +2915,13 @@ impl<'db> TyChecker<'db> {
                 None
             };
 
-            Some(ProviderTargetResolution {
+            Ok(Some(ProviderTargetResolution {
                 target_ty,
                 target_seed_ty: target_assoc,
                 handle_proof: Some((effect_handle_inst, handle_solution)),
                 effect_ref_proof: Some((effect_ref_inst, effect_ref_solution)),
                 effect_ref_mut_proof,
-            })
+            }))
         })();
         self.rollback_state(snapshot);
         resolution
@@ -2929,9 +3075,25 @@ impl<'db> TyChecker<'db> {
                         },
                     }));
                 }
-                let Some(binding_match) =
-                    self.select_type_effect_binding_match(pattern.clone(), provider)
-                else {
+                let binding_match =
+                    match self.select_type_effect_binding_match(pattern.clone(), provider) {
+                        Ok(binding_match) => binding_match,
+                        // Whether the value provides the key is unknown: the
+                        // limit is the answer.
+                        Err(limit) => {
+                            if emit_diag {
+                                self.push_diag(limit.report(span.clone()).0);
+                            }
+                            return Err(Box::new(EffectBarrier {
+                                pattern: EffectPatternKey::Type(pattern),
+                                reason: BarrierReason::InvalidExplicitTypeKey {
+                                    span: span.clone(),
+                                    key_path,
+                                },
+                            }));
+                        }
+                    };
+                let Some(binding_match) = binding_match else {
                     if emit_diag {
                         self.push_diag(BodyDiag::WithEffectTypeUnsatisfied {
                             primary: span.clone(),
@@ -3087,9 +3249,23 @@ impl<'db> TyChecker<'db> {
                     args,
                     instantiated.assoc_type_bindings(self.db).clone(),
                 );
-                let GoalSatisfiability::Satisfied(solution) =
-                    self.trait_effect_goal_satisfiability_in_scope(scope, assumptions, trait_goal)
-                else {
+                let satisfiability =
+                    self.trait_effect_goal_satisfiability_in_scope(scope, assumptions, trait_goal);
+                // Whether the value implements the key is unknown: the limit
+                // is the answer.
+                if let Err(limit) = satisfiability {
+                    if emit_diag {
+                        self.push_diag(limit.report(span.clone()).0);
+                    }
+                    return Err(Box::new(EffectBarrier {
+                        pattern: EffectPatternKey::Trait(pattern),
+                        reason: BarrierReason::InvalidExplicitTraitKey {
+                            span: span.clone(),
+                            key_path,
+                        },
+                    }));
+                }
+                let Ok(GoalSatisfiability::Satisfied(solution)) = satisfiability else {
                     if emit_diag {
                         self.push_diag(BodyDiag::WithEffectTraitUnsatisfied {
                             primary: span.clone(),
@@ -3357,6 +3533,7 @@ impl<'db> TyChecker<'db> {
                                 inst,
                                 method: candidate.cand.method,
                                 needs_confirmation: candidate.needs_confirmation,
+                                unknown: candidate.unknown,
                             }
                         })
                         .collect();
@@ -5286,6 +5463,13 @@ impl<'db> TyChecker<'db> {
                     (func_ty, inst)
                 }
                 _ => {
+                    // Ambiguous only if an unknown candidate applies: the
+                    // answer is then its limit.
+                    if let Some(limit) = AmbiguousTraitMethods::limit_of(&viable) {
+                        let (diag, _) = limit.report(expr.span(self.body()).into());
+                        self.push_diag(diag);
+                        return ExprProp::invalid(self.db);
+                    }
                     let cands = viable
                         .into_iter()
                         .map(|candidate| {

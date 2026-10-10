@@ -32,6 +32,7 @@ pub mod abi_ty;
 pub mod adt_def;
 pub mod assoc_const;
 pub mod binder;
+pub(crate) mod candidates;
 pub mod canonical;
 pub(crate) mod const_check;
 pub mod const_expr;
@@ -162,13 +163,12 @@ fn ty_is_copy_query<'db>(
     if !copy_goal_has_possible_impl(db, solve_cx, inst) {
         return Ok(false);
     }
-    match is_goal_satisfiable(db, solve_cx, inst) {
-        GoalSatisfiability::Satisfied(_) => Ok(true),
-        GoalSatisfiability::NormalizationLimit(limit) => Err(limit),
+    Ok(match is_goal_satisfiable(db, solve_cx, inst)? {
+        GoalSatisfiability::Satisfied(_) => true,
         GoalSatisfiability::NeedsConfirmation { .. }
         | GoalSatisfiability::UnSat(_)
-        | GoalSatisfiability::ContainsInvalid => Ok(false),
-    }
+        | GoalSatisfiability::ContainsInvalid => false,
+    })
 }
 
 fn copy_goal_has_possible_impl<'db>(
@@ -509,14 +509,16 @@ pub(crate) fn abi_struct_field_checks<'db>(
             continue;
         };
         let solve_cx = TraitSolveCx::new(db, scope);
-        let unsat = |trait_, args| match is_goal_satisfiable(
-            db,
-            solve_cx,
-            trait_def::TraitInstId::new_simple(db, trait_, args),
-        ) {
-            GoalSatisfiability::UnSat(_) | GoalSatisfiability::NeedsConfirmation { .. } => Ok(true),
-            GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => Ok(false),
-            GoalSatisfiability::NormalizationLimit(limit) => Err(limit),
+        let unsat = |trait_, args| {
+            is_goal_satisfiable(
+                db,
+                solve_cx,
+                trait_def::TraitInstId::new_simple(db, trait_, args),
+            )
+            .map(|result| match result {
+                GoalSatisfiability::UnSat(_) | GoalSatisfiability::NeedsConfirmation { .. } => true,
+                GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => false,
+            })
         };
         let assumptions = crate::semantic::constraints_for(db, struct_.into());
         let mut reported_at_source = false;
@@ -790,7 +792,9 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                             TraitSolveCx::new(db, contract.scope()).with_assumptions(assumptions),
                             trait_req,
                         ) {
-                            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => {
+                            Ok(
+                                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid,
+                            ) => {
                                 diags.push(Box::new(
                                     BodyDiag::ContractRootEffectTraitNotImplemented {
                                         owner: EffectParamOwner::Contract(contract),
@@ -800,13 +804,15 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                                     },
                                 ) as _);
                             }
-                            GoalSatisfiability::NormalizationLimit(limit) => {
+                            Err(limit) => {
                                 let span = EffectParamOwner::Contract(contract)
                                     .effect_param_ty_span(db, idx);
                                 diags.push(Box::new(limit.report(span).0) as _);
                             }
-                            GoalSatisfiability::Satisfied(_)
-                            | GoalSatisfiability::NeedsConfirmation { .. } => {}
+                            Ok(
+                                GoalSatisfiability::Satisfied(_)
+                                | GoalSatisfiability::NeedsConfirmation { .. },
+                            ) => {}
                         }
                     }
                     ResolvedEffectKey::Type(schema) => {

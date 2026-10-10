@@ -432,15 +432,17 @@ fn trait_goal_satisfied<'db>(
 ) -> Result<bool, LowerError> {
     let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
     match is_goal_satisfiable(db, solve_cx, inst) {
-        GoalSatisfiability::Satisfied(_) => Ok(true),
-        GoalSatisfiability::NormalizationLimit(limit) => Err(LowerError::Unsupported(format!(
+        Ok(GoalSatisfiability::Satisfied(_)) => Ok(true),
+        Err(limit) => Err(LowerError::Unsupported(format!(
             "deciding whether `{}` holds {}",
             inst.pretty_print(db, true),
             limit.reason()
         ))),
-        GoalSatisfiability::NeedsConfirmation { .. }
-        | GoalSatisfiability::UnSat(_)
-        | GoalSatisfiability::ContainsInvalid => Ok(false),
+        Ok(
+            GoalSatisfiability::NeedsConfirmation { .. }
+            | GoalSatisfiability::UnSat(_)
+            | GoalSatisfiability::ContainsInvalid,
+        ) => Ok(false),
     }
 }
 

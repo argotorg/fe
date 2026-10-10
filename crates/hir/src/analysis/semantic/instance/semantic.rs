@@ -2323,13 +2323,15 @@ fn root_provider_satisfies_effect_requirement<'db>(
         }
         EffectRequirementKey::Trait(trait_inst) => {
             let goal = instantiate_trait_self(db, trait_inst, root_provider.provider_ty);
+            // Instances are built only for checked bodies, where a limit in
+            // this goal has been reported; such a goal is not taken as met.
             matches!(
                 is_goal_satisfiable(
                     db,
                     TraitSolveCx::new(db, func.scope()).with_assumptions(assumptions),
                     goal,
                 ),
-                GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation { .. }
+                Ok(GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation { .. })
             )
         }
         EffectRequirementKey::Other => false,

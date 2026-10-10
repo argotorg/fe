@@ -11,7 +11,7 @@ use crate::{
 use common::indexmap::{IndexMap, IndexSet};
 use either::Either;
 use rustc_hash::FxHashMap;
-use smallvec::{SmallVec, smallvec};
+use smallvec::SmallVec;
 use thin_vec::ThinVec;
 
 use super::{
@@ -29,25 +29,20 @@ use crate::analysis::{
     ty::{
         adt_def::AdtRef,
         binder::Binder,
+        candidates::{self, Counting, Holds, Item, Question, TraitFilter},
         canonical::Canonicalized,
         const_ty::{ConstBodyLowering, HoleAnchor, LayoutHoleArgSite, LoweringContext},
         fold::TyFoldable as _,
         generic_defaults::DefaultApplication,
         method_table::{MethodProbe, probe_method},
-        normalize::normalize_ty,
-        trait_def::{
-            ConstraintMode, TraitInstId, impls_for_trait_header,
-            impls_for_ty_with_satisfied_constraints,
-        },
+        normalize::{NormalizationLimit, normalize_ty},
+        trait_def::TraitInstId,
         trait_lower::{
             TraitArgError, TraitRefLowerError, complete_candidate_impl_assoc_ty,
             complete_impl_assoc_ty, lower_candidate_impl_assoc_ty, lower_checked_impl_assoc_ty,
             lower_trait_ref, lower_trait_ref_impl_with_minter, lower_trait_ref_with_minter,
         },
-        trait_resolution::{
-            GoalSatisfiability, PredicateListId, TraitSolveCx, constraint::collect_constraints,
-            is_goal_satisfiable,
-        },
+        trait_resolution::{PredicateListId, TraitSolveCx, constraint::collect_constraints},
         ty_def::{InvalidCause, Kind, TyBase, TyData, TyId},
         ty_lower::{
             TyAlias, collect_generic_params, collect_source_generic_params, lower_generic_arg_list,
@@ -427,10 +422,17 @@ impl<'db> PathResError<'db> {
                     }
                 }
                 MethodSelectionError::AmbiguousTraitMethod(ambiguous) => {
-                    PathResDiag::AmbiguousTrait {
-                        primary: span,
-                        method_name: ident,
-                        trait_insts: ambiguous.diagnostic_traits,
+                    // Ambiguous only if an unknown candidate applies: the
+                    // answer is then its limit.
+                    match super::method_selection::AmbiguousTraitMethods::limit_of(
+                        &ambiguous.candidates,
+                    ) {
+                        Some(limit) => PathResDiag::NormalizationLimit { span, limit },
+                        None => PathResDiag::AmbiguousTrait {
+                            primary: span,
+                            method_name: ident,
+                            trait_insts: ambiguous.diagnostic_traits,
+                        },
                     }
                 }
                 MethodSelectionError::InvisibleInherentMethod(func) => {
@@ -1161,14 +1163,22 @@ where
                 // Inherent impl consts take precedence over trait impl consts.
                 // Conflicting inherent impls are rejected at their definition,
                 // so resolve to the first applicable impl here.
-                if let Some(impl_) =
-                    select_inherent_const_candidate(db, ty, ident, scope, assumptions)
-                {
-                    *decided_by_value = true;
-                    reject_generic_args(db, path)?;
-                    let r = PathRes::InherentConst(ty, impl_, ident);
-                    observer(path, &r);
-                    return Ok(r);
+                match select_inherent_const_candidate(db, ty, ident, scope, assumptions) {
+                    Ok(Some(impl_)) => {
+                        *decided_by_value = true;
+                        reject_generic_args(db, path)?;
+                        let r = PathRes::InherentConst(ty, impl_, ident);
+                        observer(path, &r);
+                        return Ok(r);
+                    }
+                    Ok(None) => {}
+                    Err(limit) => {
+                        *decided_by_value = true;
+                        return Err(PathResError::new(
+                            PathResErrorKind::NormalizationLimit(limit),
+                            path,
+                        ));
+                    }
                 }
 
                 // Probe impls across both the call-site scope and the receiver type's ingot so
@@ -1300,8 +1310,8 @@ where
                 return Ok(result);
             }
 
-            // Find raw associated types, then dedup by normalized result here.
-            let assoc_tys = match find_associated_type_in_mode(
+            // Find the candidates, then decide among them by normalized type.
+            let found = match associated_type_candidates(
                 db,
                 scope,
                 Canonicalized::new(db, ty),
@@ -1310,7 +1320,7 @@ where
                 minter.const_bodies(),
                 None,
             ) {
-                Ok(assoc_tys) => assoc_tys,
+                Ok(found) => found,
                 Err(FindAssociatedTypeError::InfiniteBoundRecursion) => {
                     return Err(PathResError::new(
                         PathResErrorKind::InfiniteBoundRecursion {
@@ -1327,7 +1337,7 @@ where
                 }
             };
 
-            if assoc_tys.is_empty() {
+            if found.is_empty() {
                 return Err(PathResError::new(
                     PathResErrorKind::NotFound {
                         parent: parent_res,
@@ -1337,9 +1347,10 @@ where
                 ));
             }
 
-            // Deduplicate by normalized type, but preserve and return the original
-            // (unnormalized) candidate to avoid prematurely collapsing projections
-            // like `T::IntoIter::Item` into `T::Item`.
+            // Candidates are compared by their normalized type, but the
+            // original (unnormalized) type of the first one is returned to
+            // avoid prematurely collapsing projections like `T::IntoIter::Item`
+            // into `T::Item`.
             let seg_args = lower_generic_arg_list(
                 db,
                 path.generic_args(db),
@@ -1349,54 +1360,130 @@ where
                 minter,
             );
             let evidence = assoc_ty_candidate_evidence(db, ty, assumptions);
-            let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>, TyId<'db>)> =
-                IndexMap::new();
-            for (inst, ty_candidate) in assoc_tys.iter().copied() {
-                let applied = if seg_args.is_empty() {
-                    ty_candidate
-                } else {
-                    TyId::foldl(db, ty_candidate, &seg_args)
-                };
-                if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) =
-                    applied.data(db)
-                {
-                    return Err(PathResError::new(
-                        PathResErrorKind::ArgNumMismatch {
+            let evaluated: Vec<AssocTyEval<'db>> = found
+                .iter()
+                .map(|&((inst, ty_candidate), _)| {
+                    let applied = if seg_args.is_empty() {
+                        ty_candidate
+                    } else {
+                        TyId::foldl(db, ty_candidate, &seg_args)
+                    };
+                    if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) =
+                        applied.data(db)
+                    {
+                        return AssocTyEval::ArgNumMismatch {
                             expected: *expected,
                             given: *given,
-                        },
+                        };
+                    }
+                    // Interpret each candidate's own equality when comparing
+                    // it with other candidates. Normalizing the binding-free
+                    // projection under all assumptions can leave conflicting
+                    // equalities unresolved and incorrectly merge them.
+                    let candidate_ty = inst
+                        .assoc_type_bindings(db)
+                        .get(&ident)
+                        .copied()
+                        .map_or(applied, |bound| TyId::foldl(db, bound, &seg_args));
+                    AssocTyEval::Ty {
+                        applied,
+                        normalized: normalize_ty(db, candidate_ty, scope, evidence),
+                    }
+                })
+                .collect();
+
+            // The candidates whose where clauses reach a limit decide the
+            // answer only if it depends on them: a rival that gives the same
+            // type changes nothing.
+            let unknown: Vec<_> = found
+                .iter()
+                .filter_map(|(_, holds)| match holds {
+                    Holds::Unknown(limit) => Some(*limit),
+                    _ => None,
+                })
+                .collect();
+            let outcome = candidates::decide(&unknown, |setting| {
+                let mut setting = setting.iter();
+                let mut distinct = IndexSet::new();
+                let mut unnormalized = None;
+                for ((_, holds), eval) in found.iter().zip(&evaluated) {
+                    let applies = match holds {
+                        Holds::Unknown(_) => *setting.next().unwrap(),
+                        Holds::Yes | Holds::Undecided => true,
+                        Holds::No => false,
+                    };
+                    if !applies {
+                        continue;
+                    }
+                    match *eval {
+                        AssocTyEval::ArgNumMismatch { expected, given } => {
+                            return AssocTyOutcome::ArgNumMismatch { expected, given };
+                        }
+                        AssocTyEval::Ty {
+                            normalized: Ok(normalized),
+                            ..
+                        } => {
+                            distinct.insert(normalized);
+                        }
+                        // The candidate's own type is unknown: it may be the
+                        // same as the others or not.
+                        AssocTyEval::Ty {
+                            normalized: Err(limit),
+                            ..
+                        } => unnormalized = Some(NormalizationLimit::join(unnormalized, limit)),
+                    }
+                }
+                match (distinct.len(), unnormalized) {
+                    (2.., _) => AssocTyOutcome::Ambiguous,
+                    (_, Some(limit)) => AssocTyOutcome::Unnormalized(limit),
+                    (1, None) => AssocTyOutcome::One(distinct[0]),
+                    (0, None) => AssocTyOutcome::None,
+                }
+            })
+            .or_limit();
+            let report =
+                |limit| PathResError::new(PathResErrorKind::NormalizationLimit(limit), path);
+            let outcome = outcome.map_err(report)?;
+
+            // What the candidates that apply whatever the limits give.
+            let known = || {
+                found
+                    .iter()
+                    .zip(&evaluated)
+                    .filter(|((_, holds), _)| !matches!(holds, Holds::Unknown(_)))
+                    .filter_map(|(((inst, _), _), eval)| match *eval {
+                        AssocTyEval::Ty {
+                            applied,
+                            normalized: Ok(normalized),
+                        } => Some((*inst, applied, normalized)),
+                        _ => None,
+                    })
+            };
+            match outcome {
+                AssocTyOutcome::None => unreachable!("a candidate was found"),
+                AssocTyOutcome::ArgNumMismatch { expected, given } => {
+                    return Err(PathResError::new(
+                        PathResErrorKind::ArgNumMismatch { expected, given },
                         path,
                     ));
                 }
-
-                // Interpret each candidate's own equality when comparing it
-                // with other candidates. Normalizing the binding-free
-                // projection under all assumptions can leave conflicting
-                // equalities unresolved and incorrectly merge them.
-                let candidate_ty = inst
-                    .assoc_type_bindings(db)
-                    .get(&ident)
-                    .copied()
-                    .map_or(applied, |bound| TyId::foldl(db, bound, &seg_args));
-                let norm = normalize_ty(db, candidate_ty, scope, evidence).map_err(|limit| {
-                    PathResError::new(PathResErrorKind::NormalizationLimit(limit), path)
-                })?;
-                dedup.entry(norm).or_insert((inst, applied, norm));
-            }
-
-            match dedup.len() {
-                0 => unreachable!(),
-                1 => {
-                    let (_, (_, original_ty, _)) = dedup.first().unwrap();
-                    let r = PathRes::Ty(*original_ty);
+                AssocTyOutcome::Unnormalized(limit) => return Err(report(limit)),
+                AssocTyOutcome::One(normalized) => {
+                    let (_, applied, _) = known()
+                        .find(|&(_, _, candidate)| candidate == normalized)
+                        .expect("the type is that of a candidate that applies");
+                    let r = PathRes::Ty(applied);
                     observer(path, &r);
                     return Ok(r);
                 }
-                _ => {
-                    // Build candidate list from deduped set for diagnostics
-                    let candidates = dedup
+                AssocTyOutcome::Ambiguous => {
+                    let mut distinct = IndexMap::new();
+                    for (inst, _, normalized) in known() {
+                        distinct.entry(normalized).or_insert(inst);
+                    }
+                    let candidates = distinct
                         .into_iter()
-                        .map(|(_norm, (inst, _, candidate_ty))| (inst, candidate_ty))
+                        .map(|(normalized, inst)| (inst, normalized))
                         .collect();
                     return Err(PathResError::new(
                         PathResErrorKind::AmbiguousAssociatedType {
@@ -1459,6 +1546,7 @@ where
     Ok(r)
 }
 
+#[derive(PartialEq)]
 enum AssocConstSelection<'db> {
     Found(TraitInstId<'db>),
     Ambiguous(ThinVec<TraitInstId<'db>>),
@@ -1535,10 +1623,10 @@ fn select_inherent_const_candidate<'db>(
     name: IdentId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-) -> Option<Impl<'db>> {
+) -> Result<Option<Impl<'db>>, crate::analysis::ty::normalize::NormalizationLimit> {
     // Inherent impls can only be probed for concrete receiver types.
     let TyData::TyBase(receiver_base) = receiver_ty.base_ty(db).data(db) else {
-        return None;
+        return Ok(None);
     };
 
     // Search the call-site ingot, its resolved dependencies, and the receiver
@@ -1560,7 +1648,7 @@ fn select_inherent_const_candidate<'db>(
 
     // Cheap name-indexed lookup first; the canonical receiver and solve
     // context are only built when there is at least one candidate.
-    let candidates: Vec<(common::ingot::Ingot<'db>, &Vec<Impl<'db>>)> = search_ingots
+    let by_ingot: Vec<(common::ingot::Ingot<'db>, &Vec<Impl<'db>>)> = search_ingots
         .into_iter()
         .filter_map(|ingot| {
             ingot_impl_const_map(db, ingot)
@@ -1568,13 +1656,13 @@ fn select_inherent_const_candidate<'db>(
                 .map(|impls| (ingot, impls))
         })
         .collect();
-    if candidates.is_empty() {
-        return None;
+    if by_ingot.is_empty() {
+        return Ok(None);
     }
 
     let canonical_receiver = Canonicalized::new(db, receiver_ty).canonical();
 
-    for (ingot, impls) in candidates {
+    for (ingot, impls) in by_ingot {
         let solve_cx =
             TraitSolveCx::new(db, ingot.root_mod(db).scope()).with_assumptions(assumptions);
         for &impl_ in impls {
@@ -1599,23 +1687,27 @@ fn select_inherent_const_candidate<'db>(
             // Conditional inherent impls (`impl<T> Foo<T> where T: Default`)
             // only provide the const when their constraints hold for the
             // receiver. `NeedsConfirmation` is rejected: nothing downstream
-            // registers the obligation for a later recheck.
+            // registers the obligation for a later recheck. A constraint that
+            // reaches a limit leaves the impl undecided: the lookup's answer
+            // depends on it, so the limit is the answer.
             let constraints = collect_constraints(db, impl_.into())
                 .instantiate(db, &fresh_args)
                 .fold_with(db, &mut table);
-            let satisfied = constraints.list(db).iter().all(|&constraint| {
-                matches!(
-                    is_goal_satisfiable(db, solve_cx, constraint),
-                    GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid
-                )
-            });
-            if satisfied {
-                return Some(impl_);
+            match candidates::all_hold(
+                db,
+                solve_cx,
+                &mut table,
+                constraints.list(db),
+                Counting::INHERENT,
+            ) {
+                candidates::Holds::Yes => return Ok(Some(impl_)),
+                candidates::Holds::Unknown(limit) => return Err(limit),
+                candidates::Holds::No | candidates::Holds::Undecided => {}
             }
         }
     }
 
-    None
+    Ok(None)
 }
 
 /// Definition-site conflict detection for inherent associated consts: finds the
@@ -1829,41 +1921,36 @@ fn select_assoc_const_candidate<'db>(
         receiver_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
     ];
 
-    let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
-    let mut unresolved = false;
-    let mut limit = None;
+    // Each impl whose trait declares the constant, with the trait instance it
+    // gives for this receiver (or its binder, if the receiver does not fix
+    // it), and whether it applies.
+    let mut found: Vec<(TraitInstId<'db>, bool, Holds)> = Vec::new();
     receiver.with_materialized(db, |cx| {
         let receiver_ty = cx.query();
         for ingot in search_ingots.into_iter().flatten() {
-            let candidates = match impls_for_ty_with_satisfied_constraints(
-                db,
-                ingot,
-                receiver.canonical(),
-                assumptions,
-                &|trait_| trait_.const_(db, name).is_some(),
-            ) {
-                Ok(candidates) => candidates,
-                Err(reached) => {
-                    limit = Some(reached);
-                    return;
-                }
+            let question = Question {
+                self_ty: receiver.canonical(),
+                trait_: TraitFilter::Any,
+                item: Item::Const(name),
+                ingots: [Some(ingot), None],
             };
-            for candidate in candidates {
-                let declared = candidate.trait_(db);
-                if declared.def(db).const_(db, name).is_none() {
+            let solve_cx =
+                TraitSolveCx::new(db, ingot.root_mod(db).scope()).with_assumptions(assumptions);
+            for candidate in candidates::impl_candidates(db, question) {
+                let holds =
+                    candidates::impl_holds(db, solve_cx, question, candidate, Counting::PROVED);
+                if holds == Holds::No {
                     continue;
                 }
-                // Candidate discovery proves applicability but returns the impl's
-                // binder. Recover its arguments from this receiver before the
+                // Recover the impl's arguments from this receiver before the
                 // selected trait instance leaves the inference context.
+                let declared = candidate.trait_(db);
                 let snapshot = cx.snapshot();
                 let inst = cx.instantiate_with_fresh_vars(declared);
                 if cx.unify::<TyId<'db>>(receiver_ty, inst.self_ty(db)).is_ok() {
-                    if let Some(inst) = cx.try_extract::<TraitInstId<'db>>(inst) {
-                        matches.insert(inst);
-                    } else {
-                        unresolved = true;
-                        matches.insert(declared);
+                    match cx.try_extract::<TraitInstId<'db>>(inst) {
+                        Some(inst) => found.push((inst, false, holds)),
+                        None => found.push((declared, true, holds)),
                     }
                 }
                 cx.rollback_to(snapshot);
@@ -1871,15 +1958,39 @@ fn select_assoc_const_candidate<'db>(
         }
     });
 
-    if let Some(limit) = limit {
-        AssocConstSelection::NormalizationLimit(limit)
-    } else if unresolved || matches.len() > 1 {
-        AssocConstSelection::Ambiguous(matches.into_iter().collect())
-    } else if let Some(inst) = matches.into_iter().next() {
-        AssocConstSelection::Found(inst)
-    } else {
-        AssocConstSelection::NotFound
-    }
+    let unknown: Vec<_> = found
+        .iter()
+        .filter_map(|(_, _, holds)| match holds {
+            Holds::Unknown(limit) => Some(*limit),
+            _ => None,
+        })
+        .collect();
+    let decided = candidates::decide(&unknown, |setting| {
+        let mut setting = setting.iter();
+        let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
+        let mut unresolved = false;
+        for &(inst, binder, holds) in &found {
+            let applies = match holds {
+                Holds::Unknown(_) => *setting.next().unwrap(),
+                Holds::Yes | Holds::Undecided => true,
+                Holds::No => false,
+            };
+            if applies {
+                matches.insert(inst);
+                unresolved |= binder;
+            }
+        }
+        if unresolved || matches.len() > 1 {
+            AssocConstSelection::Ambiguous(matches.into_iter().collect())
+        } else if let Some(inst) = matches.into_iter().next() {
+            AssocConstSelection::Found(inst)
+        } else {
+            AssocConstSelection::NotFound
+        }
+    });
+    decided
+        .or_limit()
+        .unwrap_or_else(AssocConstSelection::NormalizationLimit)
 }
 
 /// Associated-type discovery for an already-known trait projection. Preserve
@@ -1947,6 +2058,45 @@ fn assoc_ty_candidate_evidence<'db>(
     evidence
 }
 
+/// What an associated type candidate gives once the path's generic arguments
+/// are applied.
+#[derive(Clone, Copy)]
+enum AssocTyEval<'db> {
+    Ty {
+        applied: TyId<'db>,
+        /// The type to compare candidates by.
+        normalized: Result<TyId<'db>, NormalizationLimit>,
+    },
+    ArgNumMismatch {
+        expected: usize,
+        given: usize,
+    },
+}
+
+/// The answer of a by-name associated type lookup, in one setting of the
+/// unknown candidates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AssocTyOutcome<'db> {
+    None,
+    /// Every candidate that applies gives this type.
+    One(TyId<'db>),
+    /// Two candidates that apply give different types, whatever the others
+    /// turn out to be.
+    Ambiguous,
+    /// A candidate's type is unknown, and the others give at most one type.
+    Unnormalized(NormalizationLimit),
+    ArgNumMismatch {
+        expected: usize,
+        given: usize,
+    },
+}
+
+/// An associated type candidate, and whether it applies.
+type AssocTyCandidate<'db> = ((TraitInstId<'db>, TyId<'db>), Holds);
+
+/// The associated types the lookup of `name` on `ty` may mean, with the
+/// bounds and impls that give them. An impl whose where clauses do not hold is
+/// left out; one whose where clauses reach a limit is [`Holds::Unknown`].
 fn find_associated_type_in_mode<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -1956,6 +2106,48 @@ fn find_associated_type_in_mode<'db>(
     const_bodies: ConstBodyLowering,
     target: Option<Canonicalized<'db, TraitInstId<'db>>>,
 ) -> Result<SmallVec<(TraitInstId<'db>, TyId<'db>), 4>, FindAssociatedTypeError> {
+    let candidates =
+        associated_type_candidates(db, scope, ty, name, assumptions, const_bodies, target)?;
+    // The candidates that apply. Supertrait and contextual bounds can reach
+    // the same projection, e.g. a method that restates a bound the enclosing
+    // trait already implies: two paths to one declaration are not an
+    // ambiguity. An impl whose where clauses reach a limit decides the
+    // lookup only if the list depends on it.
+    let unknown: Vec<_> = candidates
+        .iter()
+        .filter_map(|(_, holds)| match holds {
+            Holds::Unknown(limit) => Some(*limit),
+            _ => None,
+        })
+        .collect();
+    candidates::decide(&unknown, |setting| {
+        let mut setting = setting.iter();
+        let mut seen = IndexSet::new();
+        for &(candidate, holds) in &candidates {
+            let applies = match holds {
+                Holds::Unknown(_) => *setting.next().unwrap(),
+                Holds::Yes | Holds::Undecided => true,
+                Holds::No => false,
+            };
+            if applies {
+                seen.insert(candidate);
+            }
+        }
+        seen.into_iter().collect::<SmallVec<_, 4>>()
+    })
+    .or_limit()
+    .map_err(FindAssociatedTypeError::NormalizationLimit)
+}
+
+fn associated_type_candidates<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: Canonicalized<'db, TyId<'db>>,
+    name: IdentId<'db>,
+    assumptions: PredicateListId<'db>,
+    const_bodies: ConstBodyLowering,
+    target: Option<Canonicalized<'db, TraitInstId<'db>>>,
+) -> Result<Vec<AssocTyCandidate<'db>>, FindAssociatedTypeError> {
     let canonical_ty = ty.canonical();
     let original_ty = ty.original();
 
@@ -1969,13 +2161,14 @@ fn find_associated_type_in_mode<'db>(
     if let TyData::QualifiedTy(trait_inst) = original_ty.data(db) {
         return Ok(trait_inst
             .project_assoc_ty(db, name)
-            .map_or_else(SmallVec::new, |projection| {
-                smallvec![(*trait_inst, projection)]
+            .map_or_else(Vec::new, |projection| {
+                vec![((*trait_inst, projection), Holds::Yes)]
             }));
     }
 
     let scope_ingot = scope.ingot(db);
-    let mut candidates = SmallVec::new();
+    // Each candidate, and whether it applies: impls are proved, bounds hold.
+    let mut candidates: Vec<((TraitInstId<'db>, TyId<'db>), Holds)> = Vec::new();
 
     if let TyData::TyParam(param) = original_ty.data(db) {
         // Trait self, in trait or impl trait. Associated type must be in this trait
@@ -1985,7 +2178,7 @@ fn find_associated_type_in_mode<'db>(
                 let trait_inst = trait_self_predicate(db, trait_);
                 if trait_.assoc_ty(db, name).is_some() {
                     let assoc_ty = TyId::assoc_ty(db, trait_inst.trait_ref(db), name);
-                    return Ok(smallvec![(trait_inst, assoc_ty)]);
+                    return Ok(vec![((trait_inst, assoc_ty), Holds::Yes)]);
                 }
 
                 // The trait's `Self` also satisfies the trait's declared supertraits,
@@ -2002,14 +2195,14 @@ fn find_associated_type_in_mode<'db>(
                         && bound.self_ty(db) == original_ty
                         && let Some(assoc_ty) = bound.project_assoc_ty(db, name)
                     {
-                        candidates.push((bound, assoc_ty));
+                        candidates.push(((bound, assoc_ty), Holds::Yes));
                     }
                 }
             } else if let Some(impl_trait) = param.owner.resolve_to::<ImplTrait>(db)
                 && let Some(trait_inst) = impl_trait.trait_inst(db)
                 && let Some(assoc_ty) = trait_inst.project_assoc_ty(db, name)
             {
-                return Ok(smallvec![(trait_inst, assoc_ty)]);
+                return Ok(vec![((trait_inst, assoc_ty), Holds::Yes)]);
             }
         }
     }
@@ -2041,7 +2234,7 @@ fn find_associated_type_in_mode<'db>(
                             cx.try_extract::<TyId<'db>>(assoc_ty),
                         )
                     {
-                        candidates.push((inst, assoc_ty));
+                        candidates.push(((inst, assoc_ty), Holds::Yes));
                     }
                 }
                 cx.rollback_to(snapshot);
@@ -2052,11 +2245,22 @@ fn find_associated_type_in_mode<'db>(
         // traits on external types and external traits on local types are both visible.
         if !matches!(original_ty.data(db), TyData::TyParam(_)) {
             for ingot in search_ingots.into_iter().flatten() {
-                let implementors = match &target {
-                    Some(target) => impls_for_trait_header(db, ingot, target.canonical(), assumptions, ConstraintMode::Proved),
-                    None => impls_for_ty_with_satisfied_constraints(db, ingot, canonical_ty, assumptions, &|trait_| trait_.assoc_ty(db, name).is_some()),
-                }.map_err(FindAssociatedTypeError::NormalizationLimit)?;
-                for impl_ in implementors {
+                let question = Question {
+                    self_ty: canonical_ty,
+                    trait_: target
+                        .as_ref()
+                        .map_or(TraitFilter::Any, |target| TraitFilter::Header(target.canonical())),
+                    item: Item::AssocTy(name),
+                    ingots: [Some(ingot), None],
+                };
+                let solve_cx = TraitSolveCx::new(db, ingot.root_mod(db).scope())
+                    .with_assumptions(assumptions);
+                for impl_ in candidates::impl_candidates(db, question) {
+                    let holds =
+                        candidates::impl_holds(db, solve_cx, question, impl_, Counting::PROVED);
+                    if holds == Holds::No {
+                        continue;
+                    }
                     let impl_ = match const_bodies {
                         ConstBodyLowering::Eager => {
                             let Some(impl_) = complete_impl_assoc_ty(db, impl_, name) else {
@@ -2086,7 +2290,7 @@ fn find_associated_type_in_mode<'db>(
                             ))
                         })
                     {
-                        candidates.push((inst, assoc_ty));
+                        candidates.push(((inst, assoc_ty), holds));
                     }
                 }
             }
@@ -2108,7 +2312,7 @@ fn find_associated_type_in_mode<'db>(
                         cx.try_extract::<TyId<'db>>(assoc_ty),
                     )
                 {
-                    candidates.push((inst, assoc_ty));
+                    candidates.push(((inst, assoc_ty), Holds::Yes));
                 }
                 cx.rollback_to(snapshot);
             }
@@ -2146,7 +2350,7 @@ fn find_associated_type_in_mode<'db>(
                     if inst.def(db).assoc_ty(db, name).is_some()
                         && let Some(inst) = cx.try_extract::<TraitInstId<'db>>(inst)
                     {
-                        candidates.push((inst, TyId::assoc_ty(db, inst.trait_ref(db), name)));
+                        candidates.push(((inst, TyId::assoc_ty(db, inst.trait_ref(db), name)), Holds::Yes));
                     }
                 }
             }
@@ -2159,13 +2363,16 @@ fn find_associated_type_in_mode<'db>(
         None => ty.with_materialized(db, discover),
     }?;
 
-    // Supertrait and contextual bounds can reach the same projection, e.g. a
-    // method that restates a bound the enclosing trait already implies. Two
-    // paths to one declaration are not an ambiguity.
-    let mut seen = IndexSet::new();
-    candidates.retain(|candidate| seen.insert(*candidate));
-
-    Ok(candidates)
+    // The same impl can be found through both ingots, and the same bound
+    // twice; a candidate counts once, as the strongest of its answers.
+    let mut distinct: IndexMap<(TraitInstId<'db>, TyId<'db>), Holds> = IndexMap::new();
+    for (candidate, holds) in candidates {
+        let kept = distinct.entry(candidate).or_insert(holds);
+        if matches!(kept, Holds::Unknown(_)) && !matches!(holds, Holds::Unknown(_)) {
+            *kept = holds;
+        }
+    }
+    Ok(distinct.into_iter().collect())
 }
 
 pub fn resolve_name_res<'db>(

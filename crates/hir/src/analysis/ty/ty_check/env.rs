@@ -1585,6 +1585,9 @@ pub(super) struct PendingMethodCandidate<'db> {
     pub inst: TraitInstId<'db>,
     pub method: Func<'db>,
     pub needs_confirmation: bool,
+    /// Whether the candidate applies is unknown: checking it reached this
+    /// limit.
+    pub unknown: Option<crate::analysis::ty::normalize::NormalizationLimit>,
 }
 
 #[derive(Debug, Clone)]

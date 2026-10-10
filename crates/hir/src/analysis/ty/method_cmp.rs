@@ -1046,7 +1046,13 @@ enum ConstraintEntailment {
     Limit(crate::analysis::ty::normalize::NormalizationLimit),
 }
 
-fn classify_constraint_entailment(result: GoalSatisfiability<'_>) -> ConstraintEntailment {
+fn classify_constraint_entailment(
+    result: Result<GoalSatisfiability<'_>, crate::analysis::ty::normalize::NormalizationLimit>,
+) -> ConstraintEntailment {
+    let result = match result {
+        Ok(result) => result,
+        Err(limit) => return ConstraintEntailment::Limit(limit),
+    };
     match result {
         GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => {
             ConstraintEntailment::Proven
@@ -1058,7 +1064,6 @@ fn classify_constraint_entailment(result: GoalSatisfiability<'_>) -> ConstraintE
         }
         GoalSatisfiability::NeedsConfirmation { .. } => ConstraintEntailment::Incomplete,
         GoalSatisfiability::UnSat(_) => ConstraintEntailment::Disproven,
-        GoalSatisfiability::NormalizationLimit(limit) => ConstraintEntailment::Limit(limit),
     }
 }
 

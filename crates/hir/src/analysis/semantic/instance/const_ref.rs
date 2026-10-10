@@ -669,10 +669,12 @@ fn semantic_callee_key_with_assumptions<'db>(
         };
         let bounds = collect_func_decl_constraints(db, CallableDef::Func(nominal_func), true)
             .instantiate(db, &subst_args);
+        // A bound that reaches a limit is not known to hold without the
+        // caller, so the value is computed per caller.
         let independent = bounds.list(db).iter().copied().all(|bound| {
             matches!(
                 is_goal_satisfiable(db, TraitSolveCx::new(db, scope), bound),
-                GoalSatisfiability::Satisfied(_)
+                Ok(GoalSatisfiability::Satisfied(_))
             )
         }) && (0..nominal_func.arg_tys(db).len()).all(|idx| {
             same_without_caller(

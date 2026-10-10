@@ -193,7 +193,8 @@ fn test_types(_ subject: Subject) {}
     let direct_choose =
         TraitInstId::new(&db, choose_trait, vec![subject, external], IndexMap::new());
     let direct_choose_result =
-        fe_hir::analysis::ty::trait_resolution::is_goal_satisfiable(&db, solve_cx, direct_choose);
+        fe_hir::analysis::ty::trait_resolution::is_goal_satisfiable(&db, solve_cx, direct_choose)
+            .unwrap();
     assert!(
         matches!(direct_choose_result, GoalSatisfiability::Satisfied(_)),
         "the direct `Choose<External>` goal must be satisfiable: {direct_choose_result:?}; \
@@ -205,7 +206,7 @@ fn test_types(_ subject: Subject) {}
     let goal = TraitInstId::new(&db, goal_trait, vec![subject, selected], IndexMap::new());
     let query = CanonicalGoalQuery::new(&db, goal, assumptions);
 
-    let result = is_goal_query_satisfiable(&db, solve_cx, &query);
+    let result = is_goal_query_satisfiable(&db, solve_cx, &query).unwrap();
     let unresolved = match &result {
         GoalSatisfiability::UnSat(Some(subgoal)) => Some(
             query

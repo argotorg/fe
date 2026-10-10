@@ -11,15 +11,13 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{
     binder::Binder,
+    candidates::{self, Counting, Holds, Item, Question},
     canonical::Canonical,
     canonical::Canonicalized,
     diagnostics::{TyDiagCollection, TyLowerDiag},
     fold::{TyFoldable, TyFolder},
     layout_holes::LayoutRootUse,
-    trait_def::{
-        ConstraintMode, ImplementorOrigin, TraitInstId, TraitRefId, impls_for_trait_header,
-        resolve_trait_impl_instance,
-    },
+    trait_def::{ImplementorOrigin, TraitInstId, TraitRefId, resolve_trait_impl_instance},
     trait_lower::complete_impl_assoc_ty,
     trait_resolution::{PredicateListId, Selection, TraitSolveCx},
     ty_def::{AssocTy, InvalidCause, TyData, TyId, TyParam, collect_variables},
@@ -233,6 +231,16 @@ impl NormalizationLimit {
             Self::Nesting => 1,
             Self::Depth => 2,
             Self::Work => 3,
+        }
+    }
+
+    /// The limit named when two parts of an answer depend on different
+    /// limits: the one first in [`Self::priority`] order, whatever the order
+    /// the parts were met in.
+    pub(crate) fn join(earlier: Option<Self>, limit: Self) -> Self {
+        match earlier {
+            Some(earlier) if earlier.priority() <= limit.priority() => earlier,
+            _ => limit,
         }
     }
 
@@ -993,103 +1001,115 @@ impl<'db> TypeNormalizer<'db> {
         assoc: &AssocTy<'db>,
     ) -> Option<TyId<'db>> {
         let trait_inst = assoc.trait_.fold_with(self.db, self).as_predicate(self.db);
-        let canonical_header = Canonical::new(self.db, trait_inst);
-
-        let mut dedup: IndexMap<TyId<'db>, ()> = IndexMap::new();
-
         let solve_cx = TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions);
         let (primary, secondary) = solve_cx.search_ingots_for_trait_inst(self.db, trait_inst);
-        let search_ingots = [Some(primary), secondary];
+        let question = Question::header(
+            self.db,
+            Canonical::new(self.db, trait_inst),
+            Item::AssocTy(assoc.name),
+            [Some(primary), secondary],
+        );
+        let candidates = candidates::impl_candidates(self.db, question);
 
-        // Canonicalize the target trait instance so we can unify against it in a
-        // fresh table without mixing inference keys from other tables.
         // An impl is chosen by its header when only one header applies: its
         // where clauses are then checked where the impl is used (where the
         // type is written, or where `S: Tr` is needed), not here, so
         // normalizing does not depend on proving them. Only when several
         // headers apply do the where clauses choose among them.
-        let by_header: Vec<_> = search_ingots
-            .into_iter()
-            .flatten()
-            .flat_map(|ingot| {
-                impls_for_trait_header(
-                    self.db,
-                    ingot,
-                    canonical_header,
-                    self.assumptions,
-                    ConstraintMode::HeaderOnly,
-                )
-                .unwrap_or_default()
-            })
-            .collect::<IndexSet<_>>()
-            .into_iter()
-            .collect();
-        let only_header = (by_header.len() == 1).then_some(by_header);
+        let holds: Vec<Holds> = if candidates.len() == 1 {
+            vec![Holds::Yes]
+        } else {
+            candidates
+                .iter()
+                .map(|&candidate| {
+                    candidates::impl_holds(
+                        self.db,
+                        solve_cx,
+                        question,
+                        candidate,
+                        Counting::POSSIBLE,
+                    )
+                })
+                .collect()
+        };
+
+        // The type each candidate that may apply gives.
+        let mut types: Vec<Option<TyId<'db>>> = vec![None; candidates.len()];
         let canonical_target = Canonicalized::new(self.db, trait_inst);
         canonical_target.with_materialized(self.db, |cx| {
             let target_inst = cx.query();
             let original_target = cx.try_extract::<TraitInstId<'db>>(target_inst);
-            for ingot in search_ingots.into_iter().flatten() {
-                let implementors = match &only_header {
-                    Some(only) if Some(ingot) == search_ingots[0] => only.clone(),
-                    Some(_) => continue,
-                    None => match impls_for_trait_header(
-                        self.db,
-                        ingot,
-                        canonical_header,
-                        self.assumptions,
-                        ConstraintMode::Possible,
-                    ) {
-                        Ok(implementors) => implementors,
-                        Err(limit) => {
-                            self.reach(limit);
-                            return;
-                        }
-                    },
+            for (idx, &implementor) in candidates.iter().enumerate() {
+                if holds[idx] == Holds::No {
+                    continue;
+                }
+                let Some(implementor) = complete_impl_assoc_ty(self.db, implementor, assoc.name)
+                else {
+                    continue;
                 };
-                for implementor in implementors {
-                    let Some(implementor) =
-                        complete_impl_assoc_ty(self.db, implementor, assoc.name)
-                    else {
-                        continue;
-                    };
-                    let candidate = cx.with_impl_assoc_ty(
-                        implementor,
-                        target_inst.self_ty(self.db),
-                        assoc.name,
-                        |cx, inst, assoc_ty| {
-                            cx.unify::<TraitInstId<'db>>(inst, target_inst).ok()?;
-                            if cx.try_extract::<TraitInstId<'db>>(target_inst) != original_target {
-                                return None;
-                            }
-                            let assoc_ty = cx.resolve::<TyId<'db>>(assoc_ty);
-                            cx.try_extract::<TyId<'db>>(assoc_ty)
-                        },
-                    );
-
-                    // Extract into the caller's inference environment before
-                    // continuing normalization, so scratch-local vars never
-                    // leak into the cache.
-                    if let Some(Some(folded)) = candidate {
-                        // An impl that defines the projection as itself, as
-                        // `type Out = <S as Tr>::Out` in `impl Tr for S`,
-                        // needs the type it is resolving: the same cycle as
-                        // `type Out = Self::Out`.
-                        if folded == ty {
-                            self.reach(NormalizationLimit::Cycle);
-                            return;
+                let candidate = cx.with_impl_assoc_ty(
+                    implementor,
+                    target_inst.self_ty(self.db),
+                    assoc.name,
+                    |cx, inst, assoc_ty| {
+                        cx.unify::<TraitInstId<'db>>(inst, target_inst).ok()?;
+                        if cx.try_extract::<TraitInstId<'db>>(target_inst) != original_target {
+                            return None;
                         }
-                        let norm = self.fold_candidate(ty, folded);
-                        dedup.entry(norm).or_insert(());
+                        let assoc_ty = cx.resolve::<TyId<'db>>(assoc_ty);
+                        cx.try_extract::<TyId<'db>>(assoc_ty)
+                    },
+                );
+
+                // Extract into the caller's inference environment before
+                // continuing normalization, so scratch-local vars never
+                // leak into the cache.
+                if let Some(Some(folded)) = candidate {
+                    // An impl that defines the projection as itself, as
+                    // `type Out = <S as Tr>::Out` in `impl Tr for S`,
+                    // needs the type it is resolving: the same cycle as
+                    // `type Out = Self::Out`.
+                    if folded == ty {
+                        self.reach(NormalizationLimit::Cycle);
+                        return;
                     }
+                    types[idx] = Some(self.fold_candidate(ty, folded));
                 }
             }
         });
 
-        match dedup.len() {
-            0 => None,
-            1 => Some(*dedup.first().unwrap().0).filter(|&unique| unique != ty),
-            _ => None,
+        // The projection stands for the one type the applying impls give.
+        let unknown: Vec<_> = holds
+            .iter()
+            .filter_map(|holds| match holds {
+                Holds::Unknown(limit) => Some(*limit),
+                _ => None,
+            })
+            .collect();
+        let decided = candidates::decide(&unknown, |setting| {
+            let mut setting = setting.iter();
+            let mut results: IndexSet<TyId<'db>> = IndexSet::default();
+            for (holds, result) in holds.iter().zip(&types) {
+                let applies = match holds {
+                    Holds::Yes | Holds::Undecided => true,
+                    Holds::No => false,
+                    Holds::Unknown(_) => *setting.next().unwrap(),
+                };
+                if applies && let Some(result) = result {
+                    results.insert(*result);
+                }
+            }
+            match results.len() {
+                1 => results.first().copied().filter(|&unique| unique != ty),
+                _ => None,
+            }
+        });
+        match decided.or_limit() {
+            Ok(resolved) => resolved,
+            Err(limit) => {
+                self.reach(limit);
+                None
+            }
         }
     }
 }

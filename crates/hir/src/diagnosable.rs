@@ -444,8 +444,7 @@ impl<'db> Trait<'db> {
                         .with_assumptions(assumptions),
                     trait_inst,
                 ) {
-                    ty::trait_resolution::GoalSatisfiability::Satisfied(_) => {}
-                    ty::trait_resolution::GoalSatisfiability::UnSat(_) => {
+                    Ok(ty::trait_resolution::GoalSatisfiability::UnSat(_)) => {
                         diags.push(
                             TraitConstraintDiag::TraitBoundNotSat {
                                 span: self.span().into(),
@@ -457,7 +456,12 @@ impl<'db> Trait<'db> {
                             .into(),
                         );
                     }
-                    _ => {}
+                    Err(limit) => diags.push(limit.report(self.span().into()).0),
+                    Ok(
+                        ty::trait_resolution::GoalSatisfiability::Satisfied(_)
+                        | ty::trait_resolution::GoalSatisfiability::NeedsConfirmation { .. }
+                        | ty::trait_resolution::GoalSatisfiability::ContainsInvalid,
+                    ) => {}
                 }
             }
         }
@@ -1086,14 +1090,16 @@ impl<'db> ImplTrait<'db> {
                     TraitSolveCx::new(db, self.scope()).with_assumptions(assumptions),
                     bound_inst,
                 ) {
-                    GoalSatisfiability::UnSat(_) => {}
-                    GoalSatisfiability::NormalizationLimit(limit) => {
+                    Ok(GoalSatisfiability::UnSat(_)) => {}
+                    Err(limit) => {
                         diags.push(limit.report(assoc_ty_span()).0);
                         continue;
                     }
-                    GoalSatisfiability::Satisfied(_)
-                    | GoalSatisfiability::NeedsConfirmation { .. }
-                    | GoalSatisfiability::ContainsInvalid => continue,
+                    Ok(
+                        GoalSatisfiability::Satisfied(_)
+                        | GoalSatisfiability::NeedsConfirmation { .. }
+                        | GoalSatisfiability::ContainsInvalid,
+                    ) => continue,
                 }
                 {
                     let assoc_ty_span = assoc_ty_span();
@@ -1138,9 +1144,12 @@ impl<'db> ImplTrait<'db> {
 
         let is_satisfied = |goal, span: DynLazySpan<'db>, out: &mut Vec<_>| {
             match trait_resolution::is_goal_satisfiable(db, solve_cx, goal) {
-                GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => {}
-                GoalSatisfiability::NeedsConfirmation { .. } => {}
-                GoalSatisfiability::UnSat(_) => {
+                Ok(
+                    GoalSatisfiability::Satisfied(_)
+                    | GoalSatisfiability::ContainsInvalid
+                    | GoalSatisfiability::NeedsConfirmation { .. },
+                ) => {}
+                Ok(GoalSatisfiability::UnSat(_)) => {
                     out.push(
                         TraitConstraintDiag::TraitBoundNotSat {
                             span,
@@ -1152,7 +1161,7 @@ impl<'db> ImplTrait<'db> {
                         .into(),
                     );
                 }
-                GoalSatisfiability::NormalizationLimit(limit) => {
+                Err(limit) => {
                     out.push(limit.report(span).0);
                 }
             }
