@@ -1468,8 +1468,11 @@ fn choose(_ flag: bool) -> u256 {
             file_url.clone(),
             Some(
                 r#"
+fn local_bytes(value: String<8>) -> [u8; 8] {
+    value.as_bytes().to_array()
+}
 fn first(value: String<8>) -> u8 {
-    let bytes: [u8; 8] = value.as_bytes()
+    let bytes: [u8; 8] = local_bytes(value)
     bytes[0]
 }
 
@@ -1490,8 +1493,8 @@ pub fn main() -> u8 {
             .functions(&db)
             .iter()
             .copied()
-            .find(|function| function.symbol(&db).contains("as_bytes"))
-            .expect("missing String::as_bytes runtime function");
+            .find(|function| function.symbol(&db).contains("local_bytes"))
+            .expect("missing local array-returning runtime function");
 
         assert!(matches!(
             function.instance(&db).interface_signature(&db).ret,

@@ -12,7 +12,9 @@ use fe_hir::{
             identity_semantic_instance_key, reify_runtime_const_for_ty,
         },
         ty::{
-            diagnostics::{BodyDiag, FuncBodyDiag, TyDiagCollection, TyLowerDiag},
+            diagnostics::{
+                BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
+            },
             ty_check::{BodyOwner, check_func_body},
         },
     },
@@ -373,19 +375,26 @@ fn semantic_ctfe_evaluates_as_bytes_const_fns() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "semantic_ctfe.fe".into(),
-        include_str!("../../../uitest/fixtures/ty_check/const_eval/user_const_fn_ok.fe"),
+        r#"
+const fn word_tail() -> u8 { (0x0102 as u256).as_bytes()[31] }
+const fn tuple_tail() -> u8 { (1 as u256, "ab").as_bytes()[33] }
+const fn array_tail() -> u8 { [1 as u8, 2, 3].as_bytes()[2] }
+const fn packed_tail() -> u8 {
+    let bytes = [1 as u8, 2, 3].as_bytes()
+    bytes.as_bytes()[2]
+}
+"#,
     );
     let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
 
-    for name in ["bytes_tail", "stor_code"] {
-        let func = top_mod
-            .all_funcs(&db)
-            .iter()
-            .find(
-                |func| matches!(func.name(&db), Partial::Present(found) if found.data(&db) == name),
-            )
-            .copied()
-            .unwrap_or_else(|| panic!("missing const fn `{name}`"));
+    for (name, expected) in [
+        ("word_tail", 2),
+        ("tuple_tail", 98),
+        ("array_tail", 3),
+        ("packed_tail", 3),
+    ] {
+        let func = find_func(&db, top_mod, name);
 
         let value = match eval_body_owner_const(
             &db,
@@ -395,13 +404,14 @@ fn semantic_ctfe_evaluates_as_bytes_const_fns() {
             EvalOutcome::Ready(value) => value,
             outcome => panic!("semantic CTFE failed for `{name}`: {outcome:?}"),
         };
-        let ty = fe_hir::analysis::semantic::sem_const_ty(&db, value);
-        assert!(
-            !matches!(value.value(&db), SemConstValue::Description(..)),
-            "`{name}` should lower to a value const, got {:?} with ty {}",
-            value.value(&db),
-            ty.pretty_print(&db)
-        );
+        let SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } = value.value(&db)
+        else {
+            panic!("expected a byte from `{name}`, got {value:?}");
+        };
+        assert_eq!(value.to_u8(), Some(expected), "{name}");
     }
 }
 
@@ -412,18 +422,17 @@ fn semantic_ctfe_evaluates_fixed_string_primitives() {
         "semantic_ctfe_string.fe".into(),
         r#"
 use core::concat
-use core::intrinsic
 
 const fn padded_bytes() -> [u8; 8] {
     let s: String<8> = "COOL"
-    s.as_bytes()
+    s.as_bytes().to_array()
 }
 
 const fn roundtrip_bytes() -> [u8; 8] {
     let s: String<8> = "COOL"
-    let bytes: [u8; 8] = s.as_bytes()
+    let bytes: core::PackedBytes<8> = s.as_bytes()
     let t: String<8> = String::from_bytes(bytes)
-    t.as_bytes()
+    t.as_bytes().to_array()
 }
 
 const fn cool_len() -> usize {
@@ -435,14 +444,14 @@ const fn concat_bytes() -> [u8; 8] {
     let a: String<8> = "COOL"
     let b: String<8> = "COIN"
     let c: String<8> = concat(a, b)
-    c.as_bytes()
+    c.as_bytes().to_array()
 }
 
 const fn concat_uses_effective_len() -> [u8; 4] {
     let a: String<4> = "C"
     let b: String<4> = "O"
     let c: String<4> = concat(a, b)
-    c.as_bytes()
+    c.as_bytes().to_array()
 }
 
 const fn eq_true() -> bool {
@@ -459,13 +468,13 @@ const fn eq_false() -> bool {
 
 const fn eq_from_bytes_matches_literal() -> bool {
     let bytes: [u8; 8] = [0, 0, 0, 0, 67, 79, 79, 76]
-    let s: String<8> = String::from_bytes(bytes)
+    let s: String<8> = String::from_bytes(core::PackedBytes::from_array(bytes))
     s == "COOL"
 }
 
 const fn from_bytes_value() -> String<8> {
     let bytes: [u8; 8] = [0, 0, 0, 0, 67, 79, 79, 76]
-    String::from_bytes(bytes)
+    String::from_bytes(core::PackedBytes::from_array(bytes))
 }
 
 const fn literal_value_4() -> String<4> {
@@ -478,7 +487,7 @@ const fn literal_value_8() -> String<8> {
 
 const fn rhs_word_in_eq_from_bytes() -> u256 {
     let bytes: [u8; 8] = [0, 0, 0, 0, 67, 79, 79, 76]
-    let s: String<8> = String::from_bytes(bytes)
+    let s: String<8> = String::from_bytes(core::PackedBytes::from_array(bytes))
     let rhs = "COOL"
     let _ok: bool = s == rhs
     rhs as u256
@@ -486,13 +495,13 @@ const fn rhs_word_in_eq_from_bytes() -> u256 {
 
 const fn s_word_in_eq_from_bytes() -> u256 {
     let bytes: [u8; 8] = [0, 0, 0, 0, 67, 79, 79, 76]
-    let s: String<8> = String::from_bytes(bytes)
+    let s: String<8> = String::from_bytes(core::PackedBytes::from_array(bytes))
     s as u256
 }
 
 const fn rhs_value_in_eq_from_bytes() -> String<8> {
     let bytes: [u8; 8] = [0, 0, 0, 0, 67, 79, 79, 76]
-    let s: String<8> = String::from_bytes(bytes)
+    let s: String<8> = String::from_bytes(core::PackedBytes::from_array(bytes))
     let rhs = "COOL"
     let _ok: bool = s == rhs
     rhs
@@ -500,7 +509,7 @@ const fn rhs_value_in_eq_from_bytes() -> String<8> {
 
 const fn s_value_in_eq_from_bytes() -> String<8> {
     let bytes: [u8; 8] = [0, 0, 0, 0, 67, 79, 79, 76]
-    String::from_bytes(bytes)
+    String::from_bytes(core::PackedBytes::from_array(bytes))
 }
 
 const fn high_word_string_roundtrip() -> u256 {
@@ -513,7 +522,7 @@ const fn high_word_string_value() -> String<4> {
 
 const fn high_word_string_as_bytes() -> [u8; 4] {
     let s: String<4> = 0x01000000434f4f4c as String<4>
-    intrinsic::__as_bytes(s)
+    s.as_bytes().to_array()
 }
 "#,
     );
@@ -740,7 +749,7 @@ const fn truncated_concat() -> [u8; 6] {
     let a: String<4> = "ABCD"
     let b: String<4> = "EFGH"
     let c: String<6> = concat(a, b)
-    c.as_bytes()
+    c.as_bytes().to_array()
 }
 "#,
     );
@@ -901,7 +910,51 @@ const fn invalid_call_like_expr() -> u256 {
 }
 
 #[test]
-fn type_alias_len_reports_nested_const_eval_error() {
+fn semantic_ctfe_rejects_each_faulty_packed_append_and_oob_index() {
+    let fixture =
+        include_str!("../../../uitest/fixtures/ty_check/const_eval/packed_append_count.fe");
+    let (definitions, _) = fixture.split_once("\nconst SHORT:").unwrap();
+    for (result_ty, expression) in [
+        (
+            "PackedBytes<2>",
+            "(Short {}, \"x\" as String<1>).as_bytes()",
+        ),
+        ("PackedBytes<2>", "(Long {}, \"x\" as String<1>).as_bytes()"),
+        ("PackedBytes<2>", "(Short {}, Long {}).as_bytes()"),
+        (
+            "PackedBytes<1>",
+            "(ZeroLong {}, \"x\" as String<1>).as_bytes()",
+        ),
+        ("PackedBytes<0>", "ZeroLong {}.as_bytes()"),
+        ("u8", "PackedBytes::from_array([0 as u8; 0])[0]"),
+        ("u8", "PackedBytes::from_array([0 as u8; 33])[33]"),
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "packed_append_fault.fe".into(),
+            &format!("{definitions}\nconst fn answer() -> {result_ty} {{ {expression} }}\n"),
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let owner = BodyOwner::Func(find_func(&db, module, "answer"));
+        let result =
+            eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+        let EvalOutcome::Failed(EvalFailure::Ctfe(error)) = &result else {
+            panic!("{expression}: {result:?}");
+        };
+        let mut root = error;
+        while let CtfeError::CalleeError { source, .. } = root {
+            root = source;
+        }
+        assert!(
+            matches!(root, CtfeError::AssertionFailed { .. }),
+            "{expression}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn serialization_rejects_types_without_as_bytes() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "semantic_ctfe.fe".into(),
@@ -910,25 +963,26 @@ fn type_alias_len_reports_nested_const_eval_error() {
         ),
     );
     let (top_mod, _) = db.top_mod(file);
-    let alias = top_mod
-        .all_type_aliases(&db)
-        .iter()
-        .find(|alias| matches!(alias.name(&db), Partial::Present(name) if name.data(&db) == "Arr"))
-        .copied()
-        .expect("missing type alias `Arr`");
-    let diags = alias.diags(&db);
-    let [TyDiagCollection::Ty(TyLowerDiag::ConstEvalUnsupported(span))] = diags.as_slice() else {
-        panic!("expected one const-eval unsupported diagnostic, got {diags:#?}");
-    };
-    let resolved = span
-        .resolve(&db)
-        .expect("diagnostic should resolve to source");
-    let text = file.text(&db);
-
-    assert_eq!(
-        &text[resolved.range.start().into()..resolved.range.end().into()],
-        "intrinsic::__as_bytes(Mixed::B)"
-    );
+    for name in ["mixed", "unit_enum", "integer", "array", "record"] {
+        let func = find_func(&db, top_mod, name);
+        let (diags, _) = check_func_body(&db, func);
+        let [
+            FuncBodyDiag::Ty(TyDiagCollection::Satisfiability(
+                TraitConstraintDiag::TraitBoundNotSat { span, .. },
+            )),
+        ] = diags.as_slice()
+        else {
+            panic!("expected an explicit AsBytes rejection for {name}: {diags:#?}");
+        };
+        let resolved = span
+            .resolve(&db)
+            .expect("bound diagnostic resolves to source");
+        let text = file.text(&db);
+        assert_eq!(
+            &text[resolved.range.start().into()..resolved.range.end().into()],
+            "core::keccak"
+        );
+    }
 }
 
 #[test]

@@ -30,6 +30,7 @@ use crate::{
             corelib::{
                 CtfeExternIntrinsic, NumericExternIntrinsic, PrimitiveWrapperCallKind,
                 SaturatingArithmetic, core_primitive_wrapper_call_kind, ctfe_extern_intrinsic_kind,
+                keccak_packed_input_len,
             },
             normalize::normalize_ty,
             provider::ProviderAddressSpace,
@@ -37,7 +38,7 @@ use crate::{
                 BodyOwner, EffectArgLayoutView, EffectParamSite, EffectPassMode, LocalBinding,
                 ParamSite, infer_body, inference_met_lowering_cycle,
             },
-            ty_def::{InvalidCause, PrimTy, TyBase, TyData, TyId},
+            ty_def::{InvalidCause, TyData, TyId},
         },
     },
     core::hir_def::expr::LogicalBinOp,
@@ -467,15 +468,6 @@ impl<'db> CtfeConstValue<'db> {
         };
         Self {
             kind: CtfeConstKind::Int { ty, value },
-        }
-    }
-
-    fn bytes(ty: TyId<'db>, bytes: Vec<u8>) -> Self {
-        Self {
-            kind: CtfeConstKind::Bytes {
-                ty,
-                bytes: bytes.into(),
-            },
         }
     }
 
@@ -1889,11 +1881,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             Some(CtfeExternIntrinsic::SizeOf) => {
                 return self.eval_intrinsic_size_of(instance, result_ty, args, origin);
             }
-            Some(CtfeExternIntrinsic::AsBytes) => {
-                self.eval_intrinsic_as_bytes(result_ty, args, origin)
-            }
             Some(CtfeExternIntrinsic::Keccak256) => {
-                self.eval_intrinsic_keccak(result_ty, args, origin)
+                self.eval_intrinsic_keccak(instance, result_ty, args, origin)
             }
             Some(CtfeExternIntrinsic::Bitcast) => {
                 self.eval_intrinsic_bitcast(result_ty, args, origin)
@@ -2315,67 +2304,64 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         Ok(CtfeConstValue::int(self.db, result_ty, BigInt::from(size)))
     }
 
-    fn eval_intrinsic_as_bytes(
-        &self,
-        result_ty: TyId<'db>,
-        args: &[CtfeConstValue<'db>],
-        origin: SemOrigin<'db>,
-    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
-        if !is_u8_array_ty(self.db, result_ty) {
-            return Err(CtfeError::NotConstEvaluable { origin });
-        }
-        let [value] = args else {
-            return Err(CtfeError::NotConstEvaluable { origin });
-        };
-        let mut bytes = self.const_as_bytes(value, origin)?;
-        if let Some(len) = array_len(self.db, result_ty)
-            && bytes.len() != len
-        {
-            if let Some(string_bytes) = self.fixed_string_bytes_for_len(value, len) {
-                bytes = string_bytes;
-            } else {
-                return Err(CtfeError::NotConstEvaluable { origin });
-            }
-        }
-        Ok(CtfeConstValue::bytes(result_ty, bytes))
-    }
-
-    fn fixed_string_bytes_for_len(
-        &self,
-        value: &CtfeConstValue<'db>,
-        len: usize,
-    ) -> Option<Vec<u8>> {
-        let value = self.expand_interned(value.clone());
-        let CtfeConstKind::Bytes { ty, bytes } = &value.kind else {
-            return None;
-        };
-        if !ty.is_string(self.db) {
-            return None;
-        }
-
-        let mut out = vec![0u8; len];
-        let suffix = if bytes.len() > len {
-            &bytes[bytes.len() - len..]
-        } else {
-            bytes.as_ref()
-        };
-        let offset = len - suffix.len();
-        out[offset..].copy_from_slice(suffix);
-        Some(out)
-    }
-
     fn eval_intrinsic_keccak(
         &self,
+        instance: SemanticInstance<'db>,
         result_ty: TyId<'db>,
         args: &[CtfeConstValue<'db>],
         origin: SemOrigin<'db>,
     ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
-        let [value] = args else {
-            return Err(CtfeError::NotConstEvaluable { origin });
+        let invalid = || CtfeError::InvalidOperation {
+            origin,
+            message: "keccak input must be canonical PackedBytes<N> with a zero tail".into(),
         };
-        let bytes = self.const_as_bytes(value, origin)?;
+        let [value] = args else { return Err(invalid()) };
+        let key = instance.key(self.db);
+        let scope = key.owner(self.db).scope();
+        let assumptions = key.instantiate_typed_body(self.db).assumptions();
+        let width = *key
+            .subst(self.db)
+            .generic_args(self.db)
+            .first()
+            .ok_or_else(invalid)?;
+        let width = normalize_ty(self.db, width, scope, assumptions);
+        let ty = normalize_ty(self.db, value.ty(self.db), scope, assumptions);
+        let n = keccak_packed_input_len(self.db, scope, width, ty).ok_or_else(invalid)?;
+        let word_count = n.div_ceil(32);
+        let value = self.expand_interned(value.clone());
+        let CtfeConstKind::Struct { fields, .. } = &value.kind else {
+            return Err(invalid());
+        };
+        let [words] = fields.as_ref() else {
+            return Err(invalid());
+        };
+        let words = self.expand_interned(words.clone());
+        let CtfeConstKind::Array { ty, elems } = &words.kind else {
+            return Err(invalid());
+        };
+        let ty = normalize_ty(self.db, *ty, scope, assumptions);
+        if ty.array_len(self.db) != Some(word_count)
+            || ty.generic_args(self.db).first() != Some(&TyId::u256(self.db))
+            || elems.len() != word_count
+        {
+            return Err(invalid());
+        }
         let mut hasher = Keccak::v256();
-        hasher.update(&bytes);
+        for (i, word) in elems.iter().enumerate() {
+            let word = self.expand_interned(word.clone());
+            let CtfeConstKind::Int { ty, value } = &word.kind else {
+                return Err(invalid());
+            };
+            if *ty != TyId::u256(self.db) || !self.int_in_range(*ty, &value.to_bigint()) {
+                return Err(invalid());
+            }
+            let bytes = value.to_u256().to_be_bytes::<32>();
+            let width = (n - i * 32).min(32);
+            if bytes[width..].iter().any(|byte| *byte != 0) {
+                return Err(invalid());
+            }
+            hasher.update(&bytes[..width]);
+        }
         let mut out = [0u8; 32];
         hasher.finalize(&mut out);
         Ok(CtfeConstValue::int_word(
@@ -3175,65 +3161,6 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         }
         Ok(())
     }
-
-    fn const_as_bytes(
-        &self,
-        value: &CtfeConstValue<'db>,
-        origin: SemOrigin<'db>,
-    ) -> Result<Vec<u8>, CtfeError<'db>> {
-        let value = self.expand_interned(value.clone());
-        match &value.kind {
-            CtfeConstKind::Bool(flag) => Ok(vec![u8::from(*flag)]),
-            CtfeConstKind::Int { ty, value } => {
-                let Some((bits, _)) = int_ty_shape(self.db, *ty) else {
-                    return Err(CtfeError::NotConstEvaluable { origin });
-                };
-                let width = usize::from(bits / 8);
-                match value {
-                    CtfeInt::Word { word, .. } => {
-                        Ok(word.to_be_bytes::<32>()[32 - width..].to_vec())
-                    }
-                    CtfeInt::Big(value) => {
-                        let (_, bytes) =
-                            normalize_int_to_shape(value.clone(), bits, false).to_bytes_be();
-                        if bytes.len() > width {
-                            return Err(CtfeError::NotConstEvaluable { origin });
-                        }
-                        let mut out = vec![0u8; width];
-                        let offset = width - bytes.len();
-                        out[offset..].copy_from_slice(&bytes);
-                        Ok(out)
-                    }
-                }
-            }
-            CtfeConstKind::Bytes { bytes, .. } => Ok(bytes.to_vec()),
-            CtfeConstKind::Tuple { elems, .. } | CtfeConstKind::Array { elems, .. } => {
-                let mut out = Vec::new();
-                for elem in elems.iter() {
-                    out.extend(self.const_as_bytes(elem, origin)?);
-                }
-                Ok(out)
-            }
-            CtfeConstKind::Struct { fields, .. } => {
-                let mut out = Vec::new();
-                for field in fields.iter() {
-                    out.extend(self.const_as_bytes(field, origin)?);
-                }
-                Ok(out)
-            }
-            CtfeConstKind::Enum { ty, variant, .. } if ty.is_unit_variant_only_enum(self.db) => {
-                let width = 32;
-                let (_, bytes) = BigInt::from(variant.0).to_bytes_be();
-                let mut out = vec![0u8; width];
-                let offset = width - bytes.len();
-                out[offset..].copy_from_slice(&bytes);
-                Ok(out)
-            }
-            CtfeConstKind::Unit | CtfeConstKind::Interned(_) | CtfeConstKind::Enum { .. } => {
-                Err(CtfeError::NotConstEvaluable { origin })
-            }
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -3243,29 +3170,16 @@ struct ResolvedPlace {
     path: Vec<CtfePathElem>,
 }
 
-fn is_u8_array_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
-    if !ty.is_array(db) {
-        return false;
-    }
-    let (_, args) = ty.decompose_ty_app(db);
-    matches!(
-        args.first().copied().map(|ty| ty.base_ty(db).data(db)),
-        Some(TyData::TyBase(TyBase::Prim(PrimTy::U8)))
-    )
-}
-
-fn array_len<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<usize> {
-    let (_, args) = ty.decompose_ty_app(db);
-    let TyData::ConstTy(const_ty) = args.get(1)?.data(db) else {
-        return None;
-    };
-    const_ty.integer_value(db)?.to_usize()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{analysis::semantic::identity_semantic_instance_key, test_db::HirAnalysisTestDb};
+    use crate::{
+        analysis::{
+            semantic::identity_semantic_instance_key,
+            ty::ty_def::{PrimTy, TyBase},
+        },
+        test_db::HirAnalysisTestDb,
+    };
 
     #[test]
     fn unverified_semantic_value_cannot_enter_machine_storage() {

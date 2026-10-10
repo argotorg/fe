@@ -1,0 +1,59 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_eval/packed_append_count.fe
+---
+error[3-0059]: assertion failed in const context
+   ┌─ packed_append_count.fe:25:31
+   │
+25 │ const SHORT: PackedBytes<2> = (Short {}, "x" as String<1>).as_bytes()
+   │                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ while evaluating this
+   │
+   ┌─ src/bytes.fe:99:9
+   │
+99 │         assert!(self.len - start == T::N)
+   │         --------------------------------- `assert!` evaluated to `false`
+
+error[3-0059]: assertion failed in const context
+   ┌─ packed_append_count.fe:26:30
+   │
+26 │ const LONG: PackedBytes<2> = (Long {}, "x" as String<1>).as_bytes()
+   │                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ while evaluating this
+   │
+   ┌─ src/bytes.fe:99:9
+   │
+99 │         assert!(self.len - start == T::N)
+   │         --------------------------------- `assert!` evaluated to `false`
+
+error[3-0059]: assertion failed in const context
+   ┌─ packed_append_count.fe:27:38
+   │
+27 │ const COMPENSATING: PackedBytes<2> = (Short {}, Long {}).as_bytes()
+   │                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ while evaluating this
+   │
+   ┌─ src/bytes.fe:99:9
+   │
+99 │         assert!(self.len - start == T::N)
+   │         --------------------------------- `assert!` evaluated to `false`
+
+error[3-0059]: assertion failed in const context
+   ┌─ packed_append_count.fe:28:30
+   │
+28 │ const ZERO: PackedBytes<1> = (ZeroLong {}, "x" as String<1>).as_bytes()
+   │                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ while evaluating this
+   │
+   ┌─ src/bytes.fe:99:9
+   │
+99 │         assert!(self.len - start == T::N)
+   │         --------------------------------- `assert!` evaluated to `false`
+
+error[3-0059]: assertion failed in const context
+    ┌─ packed_append_count.fe:29:40
+    │
+ 29 │ const EMPTY_OVERFLOW: PackedBytes<0> = ZeroLong {}.as_bytes()
+    │                                        ^^^^^^^^^^^^^^^^^^^^^^ while evaluating this
+    │
+    ┌─ src/bytes.fe:115:9
+    │
+115 │         assert!(width <= M - self.len)
+    │         ------------------------------ `assert!` evaluated to `false`

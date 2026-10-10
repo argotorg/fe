@@ -1,4 +1,5 @@
 use common::ingot::IngotKind;
+use num_traits::ToPrimitive;
 
 use crate::{
     analysis::{
@@ -6,8 +7,9 @@ use crate::{
         name_resolution::{NameDomain, PathRes, resolve_ident_to_bucket, resolve_path},
         ty::{
             ProviderAddressSpace,
+            const_ty::demand_concrete_specialized_const_ty,
             trait_resolution::PredicateListId,
-            ty_def::{BorrowKind, TyBase, TyData, TyId},
+            ty_def::{BorrowKind, PrimTy, TyBase, TyData, TyId},
         },
     },
     hir_def::{
@@ -58,6 +60,34 @@ pub fn resolve_lib_type_path<'db>(
 ) -> Option<TyId<'db>> {
     let path_id = LibPath::new(db, path.to_string());
     resolve_lib_path(db, scope, path_id)
+}
+
+/// Checks the canonical packed hash input against the intrinsic's concrete N.
+pub fn keccak_packed_input_len<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    width: TyId<'db>,
+    ty: TyId<'db>,
+) -> Option<usize> {
+    let packed = resolve_lib_type_path(db, scope, "core::bytes::PackedBytes")?;
+    let (base, args) = ty.decompose_ty_app(db);
+    let [arg] = args else { return None };
+    let (Some(width_ty), Some(arg_ty)) = (width.const_ty_ty(db), arg.const_ty_ty(db)) else {
+        return None;
+    };
+    if base != packed.base_ty(db)
+        || !matches!(
+            width_ty.data(db),
+            TyData::TyBase(TyBase::Prim(PrimTy::Usize))
+        )
+        || arg_ty != width_ty
+    {
+        return None;
+    }
+    let width = demand_concrete_specialized_const_ty(db, width, width_ty)?;
+    let arg = demand_concrete_specialized_const_ty(db, *arg, arg_ty)?;
+    let n = width.integer_value(db)?.to_usize()?;
+    (arg.integer_value(db)?.to_usize()? == n).then_some(n)
 }
 
 /// Resolve a function by a fully-qualified `core::...` or `std::...` path string.
@@ -596,7 +626,6 @@ pub(crate) enum NumericExternIntrinsic {
 #[derive(Clone, Copy)]
 pub(crate) enum CtfeExternIntrinsic {
     SizeOf,
-    AsBytes,
     Keccak256,
     Bitcast,
     Numeric(NumericExternIntrinsic),
@@ -622,8 +651,6 @@ pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
     }
     if lib_func_matches(db, func, "core::intrinsic::size_of") {
         Some(CtfeExternIntrinsic::SizeOf)
-    } else if lib_func_matches(db, func, "core::intrinsic::__as_bytes") {
-        Some(CtfeExternIntrinsic::AsBytes)
     } else if lib_func_matches(db, func, "core::intrinsic::__keccak256") {
         Some(CtfeExternIntrinsic::Keccak256)
     } else if lib_func_matches(db, func, "core::num::__bitcast") {
@@ -786,12 +813,6 @@ pub fn intrinsic_contract<'db>(
         return Some(IntrinsicContract {
             pointer_return: None,
             memory: Some(NO_MEMORY_ACCESSES),
-        });
-    }
-    if lib_func_matches(db, func, "core::intrinsic::__as_bytes") {
-        return Some(IntrinsicContract {
-            pointer_return: None,
-            memory: Some(READ_VALUE_0),
         });
     }
     let pointer_return = if lib_func_matches(db, func, "core::ptr::array_elem") {

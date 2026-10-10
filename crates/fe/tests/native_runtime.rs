@@ -51,6 +51,53 @@ fn build(source: &Path, out: &Path, level: &str, extra: &[&str]) -> Output {
 }
 
 #[test]
+fn native_packed_bytes_write_runtime_words_strings_and_nested_tuples() {
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/packed_bytes_io.fe");
+    let temp = tempdir().unwrap();
+    for level in ["1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        for arg_count in 0..4 {
+            let output = Command::new(out.join("packed_bytes_io"))
+                .args(vec!["input"; arg_count])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "O{level}: {output:?}");
+            assert!(output.stderr.is_empty(), "{output:?}");
+            let mut expected = b"xyz|abcd|abcde|\0\0abtu\n".to_vec();
+            let word = match arg_count {
+                0 => [0; 32],
+                1 => {
+                    let mut word = [0; 32];
+                    word[31] = 1;
+                    word
+                }
+                2 => {
+                    let mut word = [0; 32];
+                    word[0] = 128;
+                    word
+                }
+                _ => [255; 32],
+            };
+            expected.extend(word);
+            if arg_count == 0 {
+                expected.extend(b"A1234567890123456789012345678901");
+            } else {
+                expected.push(b'B');
+                expected.extend([0; 30]);
+                expected.push(b'x');
+            }
+            expected.extend([1, 2, 3]);
+            for width in [0, 1, 31, 32, 33, 63, 64, 65] {
+                expected.extend((0..width).map(|i| (arg_count + 1 + i) as u8));
+            }
+            assert_eq!(output.stdout, expected, "O{level}, argc={}", arg_count + 1);
+        }
+    }
+}
+
+#[test]
 fn native_const_generic_packed_writer_uses_runtime_inputs() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/fe_test/const_generic_packed_writer.fe");

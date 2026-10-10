@@ -62,9 +62,14 @@ pub fn write_bytes<const N: usize>(_ bytes: [u8; N], _ len: usize) uses (w: mut 
     }
 }
 
+/// Writes the entire fixed-width packed encoding, including string padding.
 pub fn write<T: AsBytes>(_ text: T) uses (w: mut Write) {
     let bytes = text.as_bytes()
-    write_bytes(bytes, T::N)
+    let mut i: usize = 0
+    while i < T::N {
+        write_char(bytes[i] as i32)
+        i += 1
+    }
 }
 
 pub fn writeln<T: AsBytes>(_ text: T) uses (w: mut Write) {
