@@ -23,7 +23,9 @@ use crate::{
             effects::place_effect_provider_param_index_map,
             fold::TyFoldable,
             instantiate_trait_self,
-            normalize::{NormalizationLimit, normalize_or_keep, normalize_ty},
+            normalize::{
+                NormalizationLimit, normalize_or_keep, normalize_ty_with_cost, tree_size_within,
+            },
             provider::{
                 ProviderAddressSpace, ProviderKind, ProviderLayoutEvidence, ProviderTransport,
                 RootProviderScope, provider_semantics, provider_semantics_for_specialized_call,
@@ -186,12 +188,22 @@ pub(crate) enum InstantiationLimit {
     /// distinct instances of generic functions, counting those they make in
     /// turn.
     Instances,
+    /// The types of the instances the instantiation makes, counting those
+    /// they make in turn, need more than [`InstantiationLimit::WORK`] type
+    /// nodes of work in total.
+    Work,
 }
 
 impl InstantiationLimit {
     /// How many distinct instances of generic functions one instantiation
     /// may make, counting those they make in turn.
     pub const INSTANCES: usize = 4096;
+
+    /// How much work the types of those instances may need in total, in
+    /// type nodes: for each distinct type with associated types in each
+    /// instance, its size as a tree plus what resolving its associated types
+    /// cost. The same as what one associated-type use may cost.
+    pub const WORK: usize = 1 << 16;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Update)]
@@ -906,11 +918,21 @@ fn replan_call_site<'db>(
 
 /// The normalization limit that a type of `key`'s instantiated body reaches,
 /// if any. See [`SemanticInstance::instantiation_limit_diagnostic`].
-#[salsa::tracked]
 pub(crate) fn instance_normalization_limit<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SemanticInstanceKey<'db>,
 ) -> Option<NormalizationLimit> {
+    instance_normalization(db, key).err()
+}
+
+/// The work that normalizing the types of `key`'s instantiated body needs,
+/// counted as [`InstantiationLimit::WORK`] describes, or the first
+/// normalization limit one of them reaches.
+#[salsa::tracked]
+fn instance_normalization<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: SemanticInstanceKey<'db>,
+) -> Result<usize, NormalizationLimit> {
     struct Types<'db> {
         db: &'db dyn HirAnalysisDb,
         types: Vec<TyId<'db>>,
@@ -939,10 +961,21 @@ pub(crate) fn instance_normalization_limit<'db>(
     }
     let scope = key.owner(db).scope();
     let assumptions = semantic_instance_base_assumptions_for_key(db, key);
-    types
-        .types
-        .into_iter()
-        .find_map(|ty| normalize_ty(db, ty, scope, assumptions).err())
+    let mut counted = FxHashSet::default();
+    let mut work = 0usize;
+    for ty in types.types {
+        if !counted.insert(ty) {
+            continue;
+        }
+        let (normalized, cost) = normalize_ty_with_cost(db, ty, scope, assumptions);
+        normalized?;
+        // Normalizing walks the type as a tree; resolving its associated
+        // types costs `cost` more.
+        let size = tree_size_within(db, ty, InstantiationLimit::WORK, usize::MAX)
+            .unwrap_or(InstantiationLimit::WORK + 1);
+        work = work.saturating_add(size).saturating_add(cost);
+    }
+    Ok(work)
 }
 
 /// Whether `key` instantiates a body with concrete types only: what code
@@ -975,13 +1008,26 @@ pub(crate) fn instance_transitive_limit<'db>(
     let mut seen = FxHashSet::default();
     seen.insert(key);
     let mut level = vec![key];
+    let mut work = 0usize;
     while !level.is_empty() {
-        let found = level
-            .iter()
-            .filter_map(|&key| instance_normalization_limit(db, key))
-            .min_by_key(|limit| limit.priority());
+        let mut found: Option<NormalizationLimit> = None;
+        for &key in &level {
+            match instance_normalization(db, key) {
+                Ok(cost) => work = work.saturating_add(cost),
+                Err(limit) => {
+                    if found.is_none_or(|found| limit.priority() < found.priority()) {
+                        found = Some(limit);
+                    }
+                }
+            }
+        }
         if let Some(limit) = found {
             return Some(InstantiationLimit::Normalization(limit));
+        }
+        // The level's work is added up before it is compared, so the answer
+        // does not depend on the order of the calls either.
+        if work > InstantiationLimit::WORK {
+            return Some(InstantiationLimit::Work);
         }
         let mut next = Vec::new();
         for key in level {
@@ -1035,6 +1081,13 @@ fn instantiation_limit_error<'db>(
             format!(
                 "with {args} for its generic parameters, resolving the associated types in `{callee}`, or in what it calls, {}",
                 limit.reason()
+            ),
+        ),
+        InstantiationLimit::Work => (
+            SemanticDiagnosticKind::InstanceLimit,
+            format!(
+                "with {args} for its generic parameters, the types of the instances of generic functions that `{callee}` makes, counting those they make in turn, need more than {} type nodes of work",
+                crate::analysis::ty::normalize::grouped(InstantiationLimit::WORK)
             ),
         ),
         InstantiationLimit::Instances => (

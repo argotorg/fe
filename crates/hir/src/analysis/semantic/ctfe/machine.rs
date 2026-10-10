@@ -3279,7 +3279,9 @@ pub(crate) fn admission_ctfe_error<'db>(
             InstantiationLimit::Normalization(limit) => {
                 CtfeError::NormalizationLimit { origin, limit }
             }
-            InstantiationLimit::Instances => CtfeError::InstanceLimit { origin },
+            InstantiationLimit::Instances | InstantiationLimit::Work => {
+                CtfeError::InstanceLimit { origin }
+            }
         },
         _ => CtfeError::InvalidBody { origin },
     }

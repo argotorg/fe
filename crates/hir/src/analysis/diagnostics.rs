@@ -2682,9 +2682,12 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 Severity::Error,
                 "instance limit exceeded",
                 format!(
-                    "a function this evaluation calls makes more than {} instances of generic functions",
+                    "a function this evaluation calls makes more than {} instances of generic functions, or instances whose types need more than {} type nodes of work",
                     crate::analysis::ty::normalize::grouped(
                         crate::analysis::semantic::instance::InstantiationLimit::INSTANCES
+                    ),
+                    crate::analysis::ty::normalize::grouped(
+                        crate::analysis::semantic::instance::InstantiationLimit::WORK
                     )
                 ),
                 span.resolve(db),

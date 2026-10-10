@@ -54,7 +54,33 @@ pub fn normalize_ty<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Result<TyId<'db>, NormalizationLimit> {
-    normalize_ty_query(db, ty, scope, assumptions)
+    normalize_ty_query(db, ty, scope, assumptions).ty
+}
+
+/// Normalizes `ty` like [`normalize_ty`], and also returns what resolving
+/// its associated types cost: the sum, over the distinct projections it names
+/// outside any projection, of the type nodes each is charged against
+/// [`PROJECTION_WORK_LIMIT`] as a use of its own. A projection named again
+/// adds nothing: the copies of its result are counted by the size of the
+/// type. Each projection counts its own cost whether it was resolved first or
+/// met again after resolving inside another one, so the sum does not depend
+/// on the order of the parts.
+pub(crate) fn normalize_ty_with_cost<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> (Result<TyId<'db>, NormalizationLimit>, usize) {
+    let normalized = normalize_ty_query(db, ty, scope, assumptions);
+    (normalized.ty, normalized.cost)
+}
+
+/// A type's normal form, or the limit it reached, and what resolving its
+/// associated types cost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+struct Normalized<'db> {
+    ty: Result<TyId<'db>, NormalizationLimit>,
+    cost: usize,
 }
 
 /// Normalizing a type needs the same normalization again only through a
@@ -68,8 +94,22 @@ fn normalize_ty_query<'db>(
     ty: TyId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-) -> Result<TyId<'db>, NormalizationLimit> {
-    normalize_ty_in_solver(db, ty, scope, assumptions)
+) -> Normalized<'db> {
+    if is_already_normal(db, ty) {
+        return Normalized {
+            ty: Ok(ty),
+            cost: 0,
+        };
+    }
+    let mut normalizer = TypeNormalizer::new(db, scope, assumptions);
+    let normalized = ty.fold_with(db, &mut normalizer);
+    Normalized {
+        ty: match normalizer.outcome() {
+            Some(limit) => Err(limit),
+            None => Ok(normalized),
+        },
+        cost: normalizer.cost,
+    }
 }
 
 /// Normalizes `ty` without the shared query, for trait solving.
@@ -148,18 +188,21 @@ fn normalize_ty_cycle_initial<'db>(
     _ty: TyId<'db>,
     _scope: ScopeId<'db>,
     _assumptions: PredicateListId<'db>,
-) -> Result<TyId<'db>, NormalizationLimit> {
-    Err(NormalizationLimit::Cycle)
+) -> Normalized<'db> {
+    Normalized {
+        ty: Err(NormalizationLimit::Cycle),
+        cost: 0,
+    }
 }
 
 fn normalize_ty_cycle_recover<'db>(
     _db: &'db dyn HirAnalysisDb,
-    _value: &Result<TyId<'db>, NormalizationLimit>,
+    _value: &Normalized<'db>,
     _count: u32,
     _ty: TyId<'db>,
     _scope: ScopeId<'db>,
     _assumptions: PredicateListId<'db>,
-) -> salsa::CycleRecoveryAction<Result<TyId<'db>, NormalizationLimit>> {
+) -> salsa::CycleRecoveryAction<Normalized<'db>> {
     salsa::CycleRecoveryAction::Iterate
 }
 
@@ -457,6 +500,10 @@ pub struct TypeNormalizer<'db> {
     /// reached, the first by [`NormalizationLimit::priority`], so that it
     /// does not depend on the order of the parts.
     reached: Option<NormalizationLimit>,
+    /// What the distinct outermost uses met so far cost, summed.
+    cost: usize,
+    /// The outermost uses already summed in [`Self::cost`].
+    costed: FxHashSet<TyId<'db>>,
 }
 
 #[derive(Clone, Copy)]
@@ -513,6 +560,8 @@ impl<'db> TypeNormalizer<'db> {
             fold_depth: 0,
             limit: None,
             reached: None,
+            cost: 0,
+            costed: FxHashSet::default(),
         }
     }
 
@@ -564,6 +613,13 @@ impl<'db> TypeNormalizer<'db> {
         frame.cost = frame.cost.saturating_add(cost);
         if frame.cost > PROJECTION_WORK_LIMIT {
             self.reach(NormalizationLimit::Work);
+        }
+    }
+
+    /// Adds the cost of `ty`, an outermost use, to [`Self::cost`], once.
+    fn add_outer_cost(&mut self, ty: TyId<'db>, cost: usize) {
+        if self.frames.is_empty() && self.costed.insert(ty) {
+            self.cost = self.cost.saturating_add(cost);
         }
     }
 
@@ -633,6 +689,7 @@ impl<'db> TypeNormalizer<'db> {
                 }
                 self.record_height(height);
                 self.add_cost(ty, cost);
+                self.add_outer_cost(ty, cost);
                 Some(result)
             }
         }
@@ -685,6 +742,7 @@ impl<'db> TypeNormalizer<'db> {
                 },
             );
             self.add_cost(ty, cost);
+            self.add_outer_cost(ty, cost);
         }
         // The outermost use is done: its limit, if any, is the type's, and
         // the next part is measured afresh.
@@ -699,7 +757,7 @@ impl<'db> TypeNormalizer<'db> {
 
 /// The number of nodes in `ty` counted as a tree, if it is at most `limit`
 /// and no path from the root has more than `depth_limit` nodes.
-fn tree_size_within<'db>(
+pub(crate) fn tree_size_within<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
     limit: usize,
@@ -1038,6 +1096,35 @@ impl<'db> TypeNormalizer<'db> {
 
 #[cfg(test)]
 mod tests {
+    use crate::analysis::ty::{
+        normalize::normalize_ty_with_cost, trait_resolution::PredicateListId, ty_def::TyId,
+    };
+    use crate::test_db::{HirAnalysisTestDb, find_func};
+
+    /// A type's work counts each of its projections once, the same whether
+    /// one is resolved before or inside another (`<A as Tr>::Out` needs
+    /// `<B as Tr>::Out`).
+    #[test]
+    fn the_work_of_a_type_does_not_depend_on_the_order_of_its_parts() {
+        let src = "trait Tr { type Out }\nstruct A {}\nstruct B {}\n\
+            impl Tr for A { type Out = (<B as Tr>::Out, <B as Tr>::Out) }\n\
+            impl Tr for B { type Out = (u8, u8) }\n\
+            fn parts(_ a: own <A as Tr>::Out, _ b: own <B as Tr>::Out, _ t: own (u8, u8)) {}\n";
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("work_order.fe".into(), src);
+        let (top_mod, _) = db.top_mod(file);
+        let func = find_func(&db, top_mod, "parts");
+        let arg = |idx: usize| func.arg_tys(&db)[idx].instantiate_identity();
+        let tuple = arg(2).decompose_ty_app(&db).0;
+        let pair = |first, second| TyId::app(&db, TyId::app(&db, tuple, first), second);
+        let cost =
+            |ty| normalize_ty_with_cost(&db, ty, func.scope(), PredicateListId::empty_list(&db)).1;
+        let (a, b) = (arg(0), arg(1));
+        assert!(cost(b) > 0);
+        assert_eq!(cost(pair(a, b)), cost(pair(b, a)));
+        assert_eq!(cost(pair(a, b)), cost(a) + cost(b));
+    }
+
     /// Only type lowering and constant evaluation of an expression written in
     /// a type make a [`super::WrittenType`]: the stand-in it allows is
     /// reported where the type is written, which only those two know.
