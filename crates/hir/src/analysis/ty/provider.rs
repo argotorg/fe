@@ -218,6 +218,9 @@ fn resolve_effect_handle_query<'db>(
             Selection::Unique(_) | Selection::Ambiguous(_) => {
                 EffectHandleResolution::Invalid(ProviderLayoutFailure::Ambiguous)
             }
+            Selection::NormalizationLimit(limit) => {
+                EffectHandleResolution::Invalid(ProviderLayoutFailure::NormalizationLimit(limit))
+            }
         };
     }
     let resolved = match resolve_trait_impl_instance(db, solve_cx, inst) {
@@ -226,6 +229,11 @@ fn resolve_effect_handle_query<'db>(
             return EffectHandleResolution::Invalid(ProviderLayoutFailure::Ambiguous);
         }
         Selection::NotFound => return EffectHandleResolution::NotHandle,
+        Selection::NormalizationLimit(limit) => {
+            return EffectHandleResolution::Invalid(ProviderLayoutFailure::NormalizationLimit(
+                limit,
+            ));
+        }
     };
     let trait_bound = matches!(
         resolved.selected().origin(db),
@@ -379,7 +387,8 @@ pub fn resolve_static_slot_layout<'db>(
         {
             resolved
         }
-        Selection::Unique(_) | Selection::Ambiguous(_) => {
+        // An undecided selection is never taken as "not a static slot".
+        Selection::Unique(_) | Selection::Ambiguous(_) | Selection::NormalizationLimit(_) => {
             return StaticSlotLayoutResolution::Ambiguous;
         }
         Selection::NotFound => return StaticSlotLayoutResolution::NotStaticSlot,

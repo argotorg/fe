@@ -21,14 +21,13 @@ use crate::analysis::{
         assoc_const::{AssocConstUse, InherentConstUse},
         binder::Binder,
         const_ty::{BodyHoleSite, HoleAnchor, LoweringContext, instantiate_inherent_const_decl_ty},
-        diagnostics::{BodyDiag, TraitConstraintDiag, TyDiagCollection},
+        diagnostics::BodyDiag,
         fold::TyFoldable,
         pattern_ir::{
             BindingRef, ConstructorKind, PatternAnalysisStatus, ValidatedPat, ValidatedPatKind,
         },
         pattern_types::pattern_match_expected_ty,
         trait_def::TraitInstId,
-        trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable},
         ty_def::{InvalidCause, Kind, TyId, TyVarSort},
         ty_lower::lower_hir_ty,
     },
@@ -504,22 +503,8 @@ impl<'db> TyChecker<'db> {
 
                 let trait_ = inst.def(self.db);
                 if !super::trait_const_goal_has_foreign_params(self.db, inst, self.env.scope())
-                    && let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(
-                        self.db,
-                        TraitSolveCx::new(self.db, self.env.scope())
-                            .with_assumptions(self.env.assumptions()),
-                        inst,
-                    )
+                    && !self.check_trait_const_goal(inst, span.clone().into())
                 {
-                    self.push_diag(TyDiagCollection::from(
-                        TraitConstraintDiag::TraitBoundNotSat {
-                            span: span.clone().into(),
-                            primary_goal: inst,
-                            unsat_subgoal: None,
-                            required_by: None,
-                            capability_hint: None,
-                        },
-                    ));
                     return self.finish_pat_check(
                         pat,
                         expected,

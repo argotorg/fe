@@ -1053,14 +1053,26 @@ impl<'db> ImplTrait<'db> {
                 let bound_inst = Binder::bind(implementor.trait_def(db).into(), bound_inst)
                     .instantiate(db, trait_args);
                 use ty::trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable};
-                if let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(
+                let assoc_ty_span = || -> crate::span::DynLazySpan<'db> {
+                    self.associated_type_span(db, name)
+                        .map_or_else(|| self.span().ty().into(), |s| s.ty().into())
+                };
+                match is_goal_satisfiable(
                     db,
                     TraitSolveCx::new(db, self.scope()).with_assumptions(assumptions),
                     bound_inst,
                 ) {
-                    let assoc_ty_span = self
-                        .associated_type_span(db, name)
-                        .map_or_else(|| self.span().ty().into(), |s| s.ty().into());
+                    GoalSatisfiability::UnSat(_) => {}
+                    GoalSatisfiability::NormalizationLimit(limit) => {
+                        diags.push(limit.report(assoc_ty_span()).0);
+                        continue;
+                    }
+                    GoalSatisfiability::Satisfied(_)
+                    | GoalSatisfiability::NeedsConfirmation { .. }
+                    | GoalSatisfiability::ContainsInvalid => continue,
+                }
+                {
+                    let assoc_ty_span = assoc_ty_span();
 
                     diags.push(
                         TraitConstraintDiag::TraitBoundNotSat {
@@ -1115,6 +1127,9 @@ impl<'db> ImplTrait<'db> {
                         }
                         .into(),
                     );
+                }
+                GoalSatisfiability::NormalizationLimit(limit) => {
+                    out.push(limit.report(span).0);
                 }
             }
         };

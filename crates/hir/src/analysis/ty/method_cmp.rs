@@ -1043,6 +1043,7 @@ enum ConstraintEntailment {
     Proven,
     Disproven,
     Incomplete,
+    Limit(crate::analysis::ty::normalize::NormalizationLimit),
 }
 
 fn classify_constraint_entailment(result: GoalSatisfiability<'_>) -> ConstraintEntailment {
@@ -1057,6 +1058,7 @@ fn classify_constraint_entailment(result: GoalSatisfiability<'_>) -> ConstraintE
         }
         GoalSatisfiability::NeedsConfirmation { .. } => ConstraintEntailment::Incomplete,
         GoalSatisfiability::UnSat(_) => ConstraintEntailment::Disproven,
+        GoalSatisfiability::NormalizationLimit(limit) => ConstraintEntailment::Limit(limit),
     }
 }
 
@@ -1115,6 +1117,14 @@ fn compare_constraints<'db>(
             // instead of accepting a potentially stricter implementation.
             ConstraintEntailment::Disproven | ConstraintEntailment::Incomplete => {
                 unsatisfied_goals.push(goal);
+            }
+            // The bound cannot be decided: report the limit at the impl
+            // method, not a stricter bound.
+            ConstraintEntailment::Limit(limit) => {
+                if let Some(span) = impl_ret_span(impl_m) {
+                    sink.push(limit.report(span).0);
+                }
+                return false;
             }
         }
     }

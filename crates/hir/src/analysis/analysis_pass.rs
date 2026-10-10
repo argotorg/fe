@@ -424,9 +424,15 @@ impl ModuleAnalysisPass for AbiStructLowerPass {
                 .iter()
                 .map(|field| {
                     Box::new(AbiStructDiagnostic {
-                        kind: AbiStructDiagnosticKind::UnsupportedFieldType {
-                            ty: field.field_ty.pretty_print(db).to_string(),
-                            missing: field.missing.clone(),
+                        kind: match field.limit {
+                            Some(limit) => AbiStructDiagnosticKind::FieldTypeLimit {
+                                ty: field.field_ty.pretty_print(db).to_string(),
+                                reason: limit.reason(),
+                            },
+                            None => AbiStructDiagnosticKind::UnsupportedFieldType {
+                                ty: field.field_ty.pretty_print(db).to_string(),
+                                missing: field.missing.clone(),
+                            },
                         },
                         file: top_mod.file(db),
                         primary_range: field_ty_range(&root, &field.ast_struct, field.field_idx),

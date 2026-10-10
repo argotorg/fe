@@ -720,6 +720,13 @@ impl DiagnosticVoucher for crate::MsgDiagnostic {
                 vec![reason.clone()],
                 None,
             ),
+            MsgDiagnosticKind::AbiTraitsLimit { ty, reason } => (
+                8,
+                "type normalization limit reached".to_string(),
+                format!("deciding the ABI traits of `{ty}` {reason}"),
+                vec![],
+                None,
+            ),
             MsgDiagnosticKind::MissingAbiTraits { ty, traits } => (
                 8,
                 format!(
@@ -920,6 +927,12 @@ impl DiagnosticVoucher for crate::AbiStructDiagnostic {
                     missing.iter().format("`, `")
                 ),
                 "`#[abi]` struct fields must implement `AbiSize`, `AbiSpan<Sol>`, `Encode<Sol>` and `Decode<Sol>`, as ABI types and other `#[abi]` structs do",
+            ),
+            AbiStructDiagnosticKind::FieldTypeLimit { ty, reason } => (
+                4,
+                "type normalization limit reached",
+                format!("deciding whether `{ty}` can be ABI encoded {reason}"),
+                "`#[abi]` struct fields must implement `AbiSize`, `AbiSpan<Sol>`, `Encode<Sol>` and `Decode<Sol>`",
             ),
         };
 

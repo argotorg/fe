@@ -126,7 +126,12 @@ fn check_ty_decodable<'db>(
     }
 
     let inst = TraitInstId::new(db, decode_trait, vec![ty, sol_ty], IndexMap::new());
-    if let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(db, solve_cx, inst) {
+    let satisfiability = is_goal_satisfiable(db, solve_cx, inst);
+    if let GoalSatisfiability::NormalizationLimit(limit) = satisfiability {
+        diags.push(limit.report(span).0.into());
+        return;
+    }
+    if let GoalSatisfiability::UnSat(_) = satisfiability {
         diags.push(
             TyDiagCollection::from(TraitConstraintDiag::TraitBoundNotSat {
                 span,

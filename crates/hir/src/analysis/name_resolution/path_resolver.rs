@@ -1189,6 +1189,13 @@ where
                         ));
                     }
                     AssocConstSelection::NotFound => {}
+                    AssocConstSelection::NormalizationLimit(limit) => {
+                        *decided_by_value = true;
+                        return Err(PathResError::new(
+                            PathResErrorKind::NormalizationLimit(limit),
+                            path,
+                        ));
+                    }
                 }
             }
 
@@ -1305,6 +1312,12 @@ where
                         PathResErrorKind::InfiniteBoundRecursion {
                             context: "associated type",
                         },
+                        path,
+                    ));
+                }
+                Err(FindAssociatedTypeError::NormalizationLimit(limit)) => {
+                    return Err(PathResError::new(
+                        PathResErrorKind::NormalizationLimit(limit),
                         path,
                     ));
                 }
@@ -1446,11 +1459,16 @@ enum AssocConstSelection<'db> {
     Found(TraitInstId<'db>),
     Ambiguous(ThinVec<TraitInstId<'db>>),
     NotFound,
+    /// Proving an impl's constraints reached a normalization limit, so the
+    /// search has no answer.
+    NormalizationLimit(crate::analysis::ty::normalize::NormalizationLimit),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FindAssociatedTypeError {
     InfiniteBoundRecursion,
+    /// Proving an impl's constraints reached a normalization limit.
+    NormalizationLimit(crate::analysis::ty::normalize::NormalizationLimit),
 }
 
 /// Maps `(impl target base type, const name)` to the inherent impls of this
@@ -1809,15 +1827,23 @@ fn select_assoc_const_candidate<'db>(
 
     let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
     let mut unresolved = false;
+    let mut limit = None;
     receiver.with_materialized(db, |cx| {
         let receiver_ty = cx.query();
         for ingot in search_ingots.into_iter().flatten() {
-            for candidate in impls_for_ty_with_satisfied_constraints(
+            let candidates = match impls_for_ty_with_satisfied_constraints(
                 db,
                 ingot,
                 receiver.canonical(),
                 assumptions,
             ) {
+                Ok(candidates) => candidates,
+                Err(reached) => {
+                    limit = Some(reached);
+                    return;
+                }
+            };
+            for candidate in candidates {
                 let declared = candidate.trait_(db);
                 if declared.def(db).const_(db, name).is_none() {
                     continue;
@@ -1840,7 +1866,9 @@ fn select_assoc_const_candidate<'db>(
         }
     });
 
-    if unresolved || matches.len() > 1 {
+    if let Some(limit) = limit {
+        AssocConstSelection::NormalizationLimit(limit)
+    } else if unresolved || matches.len() > 1 {
         AssocConstSelection::Ambiguous(matches.into_iter().collect())
     } else if let Some(inst) = matches.into_iter().next() {
         AssocConstSelection::Found(inst)
@@ -2008,6 +2036,7 @@ fn find_associated_type_in_mode<'db>(
             for ingot in search_ingots.into_iter().flatten() {
                 for impl_ in
                     impls_for_ty_with_satisfied_constraints(db, ingot, canonical_ty, assumptions)
+                        .map_err(FindAssociatedTypeError::NormalizationLimit)?
                 {
                     let impl_ = match const_bodies {
                         ConstBodyLowering::Eager => {

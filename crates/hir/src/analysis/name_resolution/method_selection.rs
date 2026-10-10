@@ -102,6 +102,19 @@ enum TraitCandidateCheck<'db> {
     NeedsConfirmation(TraitMethodCand<'db>),
     Unsatisfied(TraitMethodCand<'db>),
     Rejected,
+    /// Checking the candidate reached a normalization limit. The lookup
+    /// fails with it; no other candidate is chosen instead.
+    Limit(NormalizationLimit),
+}
+
+/// The first limit reached checking any of `checked`.
+fn first_limit<'db>(
+    checked: &[(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)],
+) -> Option<NormalizationLimit> {
+    checked.iter().find_map(|(_, check)| match check {
+        TraitCandidateCheck::Limit(limit) => Some(*limit),
+        _ => None,
+    })
 }
 
 pub(crate) fn select_method_candidate<'db>(
@@ -421,6 +434,9 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             .copied()
             .map(|cand| (cand, self.check_trait_cand(cand)))
             .collect();
+        if let Some(limit) = first_limit(&checked) {
+            return Err(MethodSelectionError::NormalizationLimit(limit));
+        }
         let checked = self.prune_inapplicable_trait_checks(checked);
 
         if checked.len() == 1 {
@@ -471,7 +487,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                         TraitCandidateCheck::Unsatisfied(cand) => {
                             unsatisfied.insert(cand);
                         }
-                        TraitCandidateCheck::Rejected => {}
+                        TraitCandidateCheck::Rejected | TraitCandidateCheck::Limit(_) => {}
                     }
                 }
 
@@ -516,14 +532,31 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     .iter()
                     .filter_map(|(&cand, &confirmed)| confirmed.then_some(cand))
                     .collect();
-                if confirmed.len() == 1
-                    && (self.receiver.original().has_var(self.db)
-                        || selected
+                if confirmed.len() == 1 {
+                    let specializes = if self.receiver.original().has_var(self.db) {
+                        true
+                    } else {
+                        let mut all = true;
+                        for cand in selected
                             .iter()
                             .filter_map(|(&cand, &confirmed)| (!confirmed).then_some(cand))
-                            .all(|cand| self.candidate_specializes_to(cand, confirmed[0])))
-                {
-                    return Ok(MethodCandidate::TraitMethod(confirmed[0]));
+                        {
+                            match self.candidate_specializes_to(cand, confirmed[0]) {
+                                Ok(true) => {}
+                                Ok(false) => {
+                                    all = false;
+                                    break;
+                                }
+                                Err(limit) => {
+                                    return Err(MethodSelectionError::NormalizationLimit(limit));
+                                }
+                            }
+                        }
+                        all
+                    };
+                    if specializes {
+                        return Ok(MethodCandidate::TraitMethod(confirmed[0]));
+                    }
                 }
 
                 let diagnostic_traits = visible
@@ -561,6 +594,9 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 Ok(MethodCandidate::NeedsConfirmation(cand))
             }
             TraitCandidateCheck::Rejected => Err(MethodSelectionError::NotFound),
+            TraitCandidateCheck::Limit(limit) => {
+                Err(MethodSelectionError::NormalizationLimit(limit))
+            }
         }
     }
 
@@ -570,7 +606,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         let traits = &self.candidates.traits;
 
         if traits.len() == 1 {
-            return Ok(self.trait_method_candidates(traits.iter().copied()));
+            return self.trait_method_candidates(traits.iter().copied());
         }
 
         let available_traits = self.available_traits();
@@ -589,20 +625,22 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     Err(MethodSelectionError::InvisibleTraitMethod(traits))
                 }
             }
-            _ => Ok(self.trait_method_candidates(visible_traits)),
+            _ => self.trait_method_candidates(visible_traits),
         }
     }
 
     fn trait_method_candidates(
         &self,
         traits: impl IntoIterator<Item = AssembledTraitMethodCand<'db>>,
-    ) -> AmbiguousTraitMethods<'db> {
-        let checked = self.prune_inapplicable_trait_checks(
-            traits
-                .into_iter()
-                .map(|cand| (cand, self.check_trait_cand(cand)))
-                .collect(),
-        );
+    ) -> Result<AmbiguousTraitMethods<'db>, MethodSelectionError<'db>> {
+        let checked: Vec<_> = traits
+            .into_iter()
+            .map(|cand| (cand, self.check_trait_cand(cand)))
+            .collect();
+        if let Some(limit) = first_limit(&checked) {
+            return Err(MethodSelectionError::NormalizationLimit(limit));
+        }
+        let checked = self.prune_inapplicable_trait_checks(checked);
         let mut selected = IndexMap::default();
         let mut diagnostic_traits = ThinVec::new();
         for (cand, check) in checked {
@@ -615,7 +653,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 | TraitCandidateCheck::Unsatisfied(cand) => {
                     selected.entry(cand).or_insert(false);
                 }
-                TraitCandidateCheck::Rejected => {}
+                TraitCandidateCheck::Rejected | TraitCandidateCheck::Limit(_) => {}
             }
         }
 
@@ -626,10 +664,10 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 needs_confirmation: !confirmed,
             })
             .collect();
-        AmbiguousTraitMethods {
+        Ok(AmbiguousTraitMethods {
             candidates,
             diagnostic_traits,
-        }
+        })
     }
 
     fn prune_inapplicable_trait_checks(
@@ -661,21 +699,21 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         &self,
         candidate: TraitMethodCand<'db>,
         confirmed: TraitMethodCand<'db>,
-    ) -> bool {
+    ) -> Result<bool, NormalizationLimit> {
         let mut table = UnificationTable::new(self.db);
         let candidate_inst = self.receiver.extract_solution(&mut table, candidate.inst);
         let confirmed_inst = self.receiver.extract_solution(&mut table, confirmed.inst);
         if candidate_inst.def(self.db) != confirmed_inst.def(self.db)
             || candidate.method.name(self.db) != confirmed.method.name(self.db)
         {
-            return false;
+            return Ok(false);
         }
 
         let solve_cx = TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions);
         let query = CanonicalGoalQuery::new(self.db, candidate_inst, self.assumptions);
         let confirmed = Canonical::new(self.db, confirmed_inst);
         let mut table = UnificationTable::new(self.db);
-        match is_goal_query_satisfiable(self.db, solve_cx, &query) {
+        Ok(match is_goal_query_satisfiable(self.db, solve_cx, &query) {
             GoalSatisfiability::Satisfied(solution) => {
                 Canonical::new(self.db, query.extract_solution(&mut table, solution).inst)
                     == confirmed
@@ -694,7 +732,8 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                         && goal_query_has_solution(self.db, solve_cx, &query, confirmed))
             }
             GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => false,
-        }
+            GoalSatisfiability::NormalizationLimit(limit) => return Err(limit),
+        })
     }
 
     fn check_trait_cand(&self, cand: AssembledTraitMethodCand<'db>) -> TraitCandidateCheck<'db> {
@@ -705,11 +744,12 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             } => self.check_impl_cand(implementor, method),
             AssembledTraitMethodCand::Assumption { inst, method } => {
                 match self.check_inst(inst, method) {
-                    MethodCandidate::TraitMethod(cand) => TraitCandidateCheck::Confirmed(cand),
-                    MethodCandidate::NeedsConfirmation(cand) => {
+                    Ok(MethodCandidate::TraitMethod(cand)) => TraitCandidateCheck::Confirmed(cand),
+                    Ok(MethodCandidate::NeedsConfirmation(cand)) => {
                         TraitCandidateCheck::NeedsConfirmation(cand)
                     }
-                    MethodCandidate::InherentMethod(_) => unreachable!(),
+                    Ok(MethodCandidate::InherentMethod(_)) => unreachable!(),
+                    Err(limit) => TraitCandidateCheck::Limit(limit),
                 }
             }
         }
@@ -754,6 +794,9 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     unsatisfied = true;
                     break;
                 }
+                GoalSatisfiability::NormalizationLimit(limit) => {
+                    return TraitCandidateCheck::Limit(limit);
+                }
             }
         }
 
@@ -782,7 +825,11 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
     /// checks if the goal is satisfiable given the current assumptions.
     /// Depending on the result, it either returns a confirmed trait method
     /// candidate or one that needs further confirmation.
-    fn check_inst(&self, inst: TraitInstId<'db>, method: Func<'db>) -> MethodCandidate<'db> {
+    fn check_inst(
+        &self,
+        inst: TraitInstId<'db>,
+        method: Func<'db>,
+    ) -> Result<MethodCandidate<'db>, NormalizationLimit> {
         let mut table = UnificationTable::new(self.db);
         // Seed the table with receiver's canonical variables so that subsequent
         // canonicalization can safely probe them.
@@ -802,40 +849,43 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             table.instantiate_with_fresh_vars(inst)
         };
 
-        match is_goal_query_satisfiable(
-            self.db,
-            TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions),
-            &query,
-        ) {
-            GoalSatisfiability::Satisfied(solution) => {
-                // Map back the solution to the current context.
-                let solution = query.extract_solution(&mut table, solution).inst;
-                // Replace TyParams in the solved instance with fresh inference vars so
-                // downstream unification can bind them (e.g., T = u32). For receiver type
-                // parameters, keep the bound's args intact.
-                let solution = if receiver_is_ty_param {
-                    solution
-                } else {
-                    table.instantiate_with_fresh_vars(solution)
-                };
+        Ok(
+            match is_goal_query_satisfiable(
+                self.db,
+                TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions),
+                &query,
+            ) {
+                GoalSatisfiability::NormalizationLimit(limit) => return Err(limit),
+                GoalSatisfiability::Satisfied(solution) => {
+                    // Map back the solution to the current context.
+                    let solution = query.extract_solution(&mut table, solution).inst;
+                    // Replace TyParams in the solved instance with fresh inference vars so
+                    // downstream unification can bind them (e.g., T = u32). For receiver type
+                    // parameters, keep the bound's args intact.
+                    let solution = if receiver_is_ty_param {
+                        solution
+                    } else {
+                        table.instantiate_with_fresh_vars(solution)
+                    };
 
-                MethodCandidate::TraitMethod(TraitMethodCand::new(
-                    self.receiver
-                        .canonicalize_solution(self.db, &mut table, solution),
-                    method,
-                ))
-            }
+                    MethodCandidate::TraitMethod(TraitMethodCand::new(
+                        self.receiver
+                            .canonicalize_solution(self.db, &mut table, solution),
+                        method,
+                    ))
+                }
 
-            GoalSatisfiability::NeedsConfirmation { .. }
-            | GoalSatisfiability::ContainsInvalid
-            | GoalSatisfiability::UnSat(_) => {
-                MethodCandidate::NeedsConfirmation(TraitMethodCand::new(
-                    self.receiver
-                        .canonicalize_solution(self.db, &mut table, inst),
-                    method,
-                ))
-            }
-        }
+                GoalSatisfiability::NeedsConfirmation { .. }
+                | GoalSatisfiability::ContainsInvalid
+                | GoalSatisfiability::UnSat(_) => {
+                    MethodCandidate::NeedsConfirmation(TraitMethodCand::new(
+                        self.receiver
+                            .canonicalize_solution(self.db, &mut table, inst),
+                        method,
+                    ))
+                }
+            },
+        )
     }
 
     fn is_inherent_method_visible(&self, def: CallableDef) -> bool {
@@ -875,7 +925,7 @@ pub enum MethodSelectionError<'db> {
     InvisibleInherentMethod(CallableDef<'db>),
     InvisibleTraitMethod(ThinVec<Trait<'db>>),
     ReceiverTypeMustBeKnown,
-    /// Matching a candidate's receiver reached a normalization limit.
+    /// Checking a candidate reached a normalization limit.
     NormalizationLimit(NormalizationLimit),
 }
 

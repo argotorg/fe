@@ -41,6 +41,12 @@ pub enum AbiStructDiagnosticKind {
         ty: String,
         missing: Vec<&'static str>,
     },
+    /// A field whose type has no answer for those traits, because deciding
+    /// them reached a normalization limit; `reason` names the limit.
+    FieldTypeLimit {
+        ty: String,
+        reason: String,
+    },
 }
 
 /// Returns true for a struct annotated with `#[abi]`.

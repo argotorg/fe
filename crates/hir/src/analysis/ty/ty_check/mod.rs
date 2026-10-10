@@ -1826,20 +1826,25 @@ impl<'db> TyChecker<'db> {
                             schema.into_trait_inst(self.db),
                             root_effect_ty,
                         );
-                        if matches!(
-                            is_goal_satisfiable(
-                                self.db,
-                                TraitSolveCx::new(self.db, contract.scope()),
-                                trait_req
-                            ),
-                            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+                        match is_goal_satisfiable(
+                            self.db,
+                            TraitSolveCx::new(self.db, contract.scope()),
+                            trait_req,
                         ) {
-                            self.push_diag(BodyDiag::ContractRootEffectTraitNotImplemented {
-                                owner,
-                                idx,
-                                root_ty: root_effect_ty,
-                                trait_req,
-                            });
+                            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => {
+                                self.push_diag(BodyDiag::ContractRootEffectTraitNotImplemented {
+                                    owner,
+                                    idx,
+                                    root_ty: root_effect_ty,
+                                    trait_req,
+                                });
+                            }
+                            GoalSatisfiability::NormalizationLimit(limit) => {
+                                let span = owner.effect_param_ty_span(self.db, idx);
+                                self.push_diag(limit.report(span).0);
+                            }
+                            GoalSatisfiability::Satisfied(_)
+                            | GoalSatisfiability::NeedsConfirmation { .. } => {}
                         }
                     }
                     ResolvedEffectKey::Type(schema) => {
@@ -2280,6 +2285,13 @@ impl<'db> TyChecker<'db> {
         let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
         let query = CanonicalGoalQuery::new(db, goal, assumptions);
         match is_goal_query_satisfiable(db, solve_cx, &query) {
+            // The bound cannot be decided: report the limit where the bound
+            // arises, never "not satisfied".
+            GoalSatisfiability::NormalizationLimit(limit) => {
+                let (diag, _) = limit.report(obligation.span.clone());
+                self.push_diag(diag);
+                TraitObligationOutcome::Discharged
+            }
             GoalSatisfiability::Satisfied(solution) => {
                 if goal.self_ty(db).has_var(db) {
                     let outcome = if final_pass {
@@ -3743,6 +3755,44 @@ impl<'db> TyChecker<'db> {
             self.push_diag(diag);
         }
         reported
+    }
+
+    /// Proves the goal behind a trait const used at `span`. Returns false
+    /// after reporting when the goal fails or reaches a normalization limit;
+    /// a goal that is undecided for now is left to later checks.
+    pub(super) fn check_trait_const_goal(
+        &mut self,
+        inst: TraitInstId<'db>,
+        span: DynLazySpan<'db>,
+    ) -> bool {
+        let solve_cx =
+            TraitSolveCx::new(self.db, self.env.scope()).with_assumptions(self.env.assumptions());
+        match is_goal_satisfiable(self.db, solve_cx, inst) {
+            GoalSatisfiability::UnSat(_) => {
+                self.push_diag(TyDiagCollection::from(
+                    TraitConstraintDiag::TraitBoundNotSat {
+                        span,
+                        primary_goal: inst,
+                        unsat_subgoal: None,
+                        required_by: None,
+                        capability_hint: None,
+                    },
+                ));
+                false
+            }
+            GoalSatisfiability::NormalizationLimit(limit) => {
+                if self
+                    .reported_limits
+                    .insert((self.env.current_expr(), limit))
+                {
+                    self.push_diag(limit.report(span).0);
+                }
+                false
+            }
+            GoalSatisfiability::Satisfied(_)
+            | GoalSatisfiability::NeedsConfirmation { .. }
+            | GoalSatisfiability::ContainsInvalid => true,
+        }
     }
 }
 

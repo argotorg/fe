@@ -115,6 +115,9 @@ pub enum Selection<T> {
     Unique(T),
     Ambiguous(IndexSet<T>),
     NotFound,
+    /// Selecting reached a normalization limit: no answer, and no other
+    /// candidate is chosen instead.
+    NormalizationLimit(NormalizationLimit),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -152,10 +155,11 @@ impl<'db> TraitSolveCx<'db> {
         inst: TraitInstId<'db>,
     ) -> Selection<ImplementorId<'db>> {
         let scope = self.normalization_scope_for_trait_inst(db, inst);
-        // A goal that reaches a normalization limit stays unresolved, so it
-        // is not proved.
-        let inst = normalize_trait_inst_preserving_validity(db, inst, scope, self.assumptions)
-            .unwrap_or(inst);
+        let inst = match normalize_trait_inst_preserving_validity(db, inst, scope, self.assumptions)
+        {
+            Ok(inst) => inst,
+            Err(limit) => return Selection::NormalizationLimit(limit),
+        };
         // An assumption proves a bound; it is not a second implementation.
         // Keep inference goals on the ordinary proof query: an assumption may
         // select a different substitution from the implementations in scope.
@@ -192,6 +196,7 @@ impl<'db> TraitSolveCx<'db> {
             GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {
                 Selection::NotFound
             }
+            GoalSatisfiability::NormalizationLimit(limit) => Selection::NormalizationLimit(limit),
         }
     }
 
@@ -485,13 +490,8 @@ pub(crate) fn check_ty_wf<'db>(
     };
 
     for &goal in normalized_constraints.list(db) {
-        let mut table = UnificationTable::new(db);
-        let query = CanonicalGoalQuery::new(db, goal, assumptions);
-
-        if let GoalSatisfiability::UnSat(subgoal) = is_goal_query_satisfiable(db, solve_cx, &query)
-        {
-            let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
-            return WellFormedness::IllFormed { goal, subgoal };
+        if let Some(wf) = unsatisfied_goal(db, solve_cx, goal) {
+            return wf;
         }
     }
 
@@ -684,11 +684,17 @@ fn unsatisfied_goal<'db>(
     let assumptions = solve_cx.assumptions();
     let mut table = UnificationTable::new(db);
     let query = CanonicalGoalQuery::new(db, goal, assumptions);
-    if let GoalSatisfiability::UnSat(subgoal) = is_goal_query_satisfiable(db, solve_cx, &query) {
-        let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
-        Some(WellFormedness::IllFormed { goal, subgoal })
-    } else {
-        None
+    match is_goal_query_satisfiable(db, solve_cx, &query) {
+        GoalSatisfiability::UnSat(subgoal) => {
+            let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
+            Some(WellFormedness::IllFormed { goal, subgoal })
+        }
+        GoalSatisfiability::NormalizationLimit(limit) => {
+            Some(WellFormedness::NormalizationLimit(limit))
+        }
+        GoalSatisfiability::Satisfied(_)
+        | GoalSatisfiability::NeedsConfirmation { .. }
+        | GoalSatisfiability::ContainsInvalid => None,
     }
 }
 
@@ -780,12 +786,8 @@ pub(crate) fn check_trait_inst_wf<'db>(
     };
 
     for &goal in normalized_constraints.list(db) {
-        let mut table = UnificationTable::new(db);
-        let query = CanonicalGoalQuery::new(db, goal, assumptions);
-        if let GoalSatisfiability::UnSat(subgoal) = is_goal_query_satisfiable(db, solve_cx, &query)
-        {
-            let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
-            return WellFormedness::IllFormed { goal, subgoal };
+        if let Some(wf) = unsatisfied_goal(db, solve_cx, goal) {
+            return wf;
         }
     }
 
@@ -814,6 +816,8 @@ pub enum TraitSolveCompletion {
     MaximumTypeDepth,
     /// Salsa is iterating a recursive query to a fixpoint.
     Cycle,
+    /// Normalizing a goal or a candidate reached a limit.
+    NormalizationLimit(NormalizationLimit),
 }
 
 impl TraitSolveCompletion {
@@ -841,6 +845,10 @@ pub enum GoalSatisfiability<'db> {
 
     /// Goal contains invalid.
     ContainsInvalid,
+    /// Deciding the goal reached a normalization limit. It is neither
+    /// satisfied nor unsatisfied; the limit is reported where the goal
+    /// arises.
+    NormalizationLimit(NormalizationLimit),
     /// The goal is not satisfied.
     /// It contains an unsatisfied subgoal if we can know the exact subgoal
     /// that makes the proof step stuck.

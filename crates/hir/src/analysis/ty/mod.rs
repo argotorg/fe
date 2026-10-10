@@ -101,8 +101,9 @@ pub fn ty_is_borrow<'db>(
     }
 }
 
-/// Whether `ty` is `Copy`. Normalizing it can reach a normalization limit;
-/// then there is no answer and the caller chooses what to do with the limit.
+/// Whether `ty` is `Copy`. Normalizing it, or proving `Copy` for it, can reach
+/// a normalization limit; then there is no answer and the caller chooses what
+/// to do with the limit.
 pub fn ty_is_copy<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -161,10 +162,13 @@ fn ty_is_copy_query<'db>(
     if !copy_goal_has_possible_impl(db, solve_cx, inst) {
         return Ok(false);
     }
-    Ok(matches!(
-        is_goal_satisfiable(db, solve_cx, inst),
-        GoalSatisfiability::Satisfied(_)
-    ))
+    match is_goal_satisfiable(db, solve_cx, inst) {
+        GoalSatisfiability::Satisfied(_) => Ok(true),
+        GoalSatisfiability::NormalizationLimit(limit) => Err(limit),
+        GoalSatisfiability::NeedsConfirmation { .. }
+        | GoalSatisfiability::UnSat(_)
+        | GoalSatisfiability::ContainsInvalid => Ok(false),
+    }
 }
 
 fn copy_goal_has_possible_impl<'db>(
@@ -433,6 +437,8 @@ pub(crate) struct UnsupportedAbiStructField<'db> {
     pub(crate) field_idx: usize,
     pub(crate) field_ty: TyId<'db>,
     pub(crate) missing: Vec<&'static str>,
+    /// Set when deciding the traits reached this limit.
+    pub(crate) limit: Option<normalize::NormalizationLimit>,
 }
 
 /// How the fields of the module's `#[abi]` structs meet the requirements of
@@ -503,15 +509,14 @@ pub(crate) fn abi_struct_field_checks<'db>(
             continue;
         };
         let solve_cx = TraitSolveCx::new(db, scope);
-        let unsat = |trait_, args| {
-            matches!(
-                is_goal_satisfiable(
-                    db,
-                    solve_cx,
-                    trait_def::TraitInstId::new_simple(db, trait_, args),
-                ),
-                GoalSatisfiability::UnSat(_) | GoalSatisfiability::NeedsConfirmation { .. }
-            )
+        let unsat = |trait_, args| match is_goal_satisfiable(
+            db,
+            solve_cx,
+            trait_def::TraitInstId::new_simple(db, trait_, args),
+        ) {
+            GoalSatisfiability::UnSat(_) | GoalSatisfiability::NeedsConfirmation { .. } => Ok(true),
+            GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => Ok(false),
+            GoalSatisfiability::NormalizationLimit(limit) => Err(limit),
         };
         let assumptions = crate::semantic::constraints_for(db, struct_.into());
         let mut reported_at_source = false;
@@ -530,27 +535,38 @@ pub(crate) fn abi_struct_field_checks<'db>(
                 reported_at_source = true;
                 continue;
             }
-            let missing: Vec<_> = [
+            let missing: Result<Vec<_>, _> = [
                 ("AbiSize", abi_size, vec![field_ty]),
                 ("AbiSpan<Sol>", abi_span, vec![field_ty, sol_ty]),
                 ("Encode<Sol>", encode, vec![field_ty, sol_ty]),
                 ("Decode<Sol>", decode, vec![field_ty, sol_ty]),
             ]
             .into_iter()
-            .filter(|(_, trait_, args)| unsat(*trait_, args.clone()))
-            .map(|(name, ..)| name)
+            .filter_map(|(name, trait_, args)| match unsat(trait_, args) {
+                Ok(true) => Some(Ok(name)),
+                Ok(false) => None,
+                Err(limit) => Some(Err(limit)),
+            })
             .collect();
-            if missing.is_empty() {
-                sol_compatible &= !unsat(sol_compat, vec![field_ty]);
-            } else {
-                reported_at_source = true;
-                checks.unsupported.push(UnsupportedAbiStructField {
-                    ast_struct: abi_origin.abi_struct.clone(),
-                    field_idx,
-                    field_ty,
-                    missing,
-                });
-            }
+            let missing = missing.and_then(|missing| {
+                if missing.is_empty() {
+                    sol_compatible &= !unsat(sol_compat, vec![field_ty])?;
+                }
+                Ok(missing)
+            });
+            let (missing, limit) = match missing {
+                Ok(missing) if missing.is_empty() => continue,
+                Ok(missing) => (missing, None),
+                Err(limit) => (Vec::new(), Some(limit)),
+            };
+            reported_at_source = true;
+            checks.unsupported.push(UnsupportedAbiStructField {
+                ast_struct: abi_origin.abi_struct.clone(),
+                field_idx,
+                field_ty,
+                missing,
+                limit,
+            });
         }
         if reported_at_source {
             checks.reported_at_source.push(origin.clone());
@@ -769,22 +785,28 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
 
                         let trait_req =
                             instantiate_trait_self(db, schema.into_trait_inst(db), root_effect_ty);
-                        if matches!(
-                            is_goal_satisfiable(
-                                db,
-                                TraitSolveCx::new(db, contract.scope())
-                                    .with_assumptions(assumptions),
-                                trait_req
-                            ),
-                            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+                        match is_goal_satisfiable(
+                            db,
+                            TraitSolveCx::new(db, contract.scope()).with_assumptions(assumptions),
+                            trait_req,
                         ) {
-                            diags.push(Box::new(BodyDiag::ContractRootEffectTraitNotImplemented {
-                                owner: EffectParamOwner::Contract(contract),
-
-                                idx,
-                                root_ty: root_effect_ty,
-                                trait_req,
-                            }) as _);
+                            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => {
+                                diags.push(Box::new(
+                                    BodyDiag::ContractRootEffectTraitNotImplemented {
+                                        owner: EffectParamOwner::Contract(contract),
+                                        idx,
+                                        root_ty: root_effect_ty,
+                                        trait_req,
+                                    },
+                                ) as _);
+                            }
+                            GoalSatisfiability::NormalizationLimit(limit) => {
+                                let span = EffectParamOwner::Contract(contract)
+                                    .effect_param_ty_span(db, idx);
+                                diags.push(Box::new(limit.report(span).0) as _);
+                            }
+                            GoalSatisfiability::Satisfied(_)
+                            | GoalSatisfiability::NeedsConfirmation { .. } => {}
                         }
                     }
                     ResolvedEffectKey::Type(schema) => {

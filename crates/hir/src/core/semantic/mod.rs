@@ -4204,6 +4204,9 @@ pub(crate) enum ImplTraitLowerError<'db> {
         expected: Kind,
         actual: TyId<'db>,
     },
+    /// Deciding whether this impl overlaps another reached a normalization
+    /// limit; reported at the impl header.
+    NormalizationLimit(crate::analysis::ty::normalize::NormalizationLimit),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4269,7 +4272,9 @@ impl<'db> ImplTrait<'db> {
             if cand_impl_trait == self {
                 continue;
             }
-            if does_impl_trait_conflict(db, cand_view, implementor)
+            let conflicts = does_impl_trait_conflict(db, cand_view, implementor)
+                .map_err(ImplTraitLowerError::NormalizationLimit)?;
+            if conflicts
                 && !Self::impl_trait_conflict_is_sealed_marker_disjoint(db, cand_impl_trait, self)
             {
                 return Err(ImplTraitLowerError::Conflict {
@@ -4756,6 +4761,9 @@ impl<'db> ImplTrait<'db> {
                                 .into(),
                             );
                         }
+                    }
+                    ImplTraitLowerError::NormalizationLimit(limit) => {
+                        diags.push(limit.report(self.span().trait_ref().into()).0);
                     }
                     ImplTraitLowerError::KindMismatch { expected, actual } => {
                         diags.push(

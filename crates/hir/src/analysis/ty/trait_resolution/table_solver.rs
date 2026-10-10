@@ -9,6 +9,8 @@ use std::convert::Infallible;
 
 use common::indexmap::{IndexMap, IndexSet};
 use rustc_hash::FxHashMap;
+
+use crate::analysis::ty::normalize::NormalizationLimit;
 use tablesolve::{
     AnswerlessMode, CallbackOutcome, Canonical as TabledCanonical, CanonicalizeOutcome, Completion,
     Config, ConsumerId, ContextTransition, Event, Limits, Observer, ReportOptions,
@@ -27,7 +29,7 @@ use crate::analysis::{
         fold::TyFoldable,
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
         ty_def::{TyData, TyId},
-        unify::{PersistentUnificationTable, UnificationError, UnificationResult},
+        unify::PersistentUnificationTable,
         visitor::{TyVisitable, TyVisitor},
     },
 };
@@ -90,11 +92,16 @@ fn normalize_assoc_binding<'db>(
     ty: TyId<'db>,
     scope: ScopeId<'db>,
     assumptions: super::PredicateListId<'db>,
-) -> TyId<'db> {
+) -> Result<TyId<'db>, NormalizationLimit> {
     let ty = ty.fold_with(db, table);
-    // A binding that reaches a normalization limit stays unresolved, so it
-    // matches only itself.
-    crate::analysis::ty::normalize::normalize_ty(db, ty, scope, assumptions).unwrap_or(ty)
+    crate::analysis::ty::normalize::normalize_ty(db, ty, scope, assumptions)
+}
+
+/// Whether a candidate matches a goal, or the limit that deciding it reached.
+enum CandidateMatch {
+    Matches,
+    Mismatch,
+    Limit(NormalizationLimit),
 }
 
 fn unify_trait_inst_with_normalized_assoc_bindings<'db>(
@@ -104,16 +111,28 @@ fn unify_trait_inst_with_normalized_assoc_bindings<'db>(
     goal: TraitInstId<'db>,
     scope: ScopeId<'db>,
     assumptions: super::PredicateListId<'db>,
-) -> UnificationResult {
-    table.unify(trait_inst_head(db, candidate), trait_inst_head(db, goal))?;
+) -> CandidateMatch {
+    if table
+        .unify(trait_inst_head(db, candidate), trait_inst_head(db, goal))
+        .is_err()
+    {
+        return CandidateMatch::Mismatch;
+    }
 
     for (name, &candidate_assoc_ty) in candidate.assoc_type_bindings(db) {
         if let Some(&goal_assoc_ty) = goal.assoc_type_bindings(db).get(name) {
-            let candidate_assoc_ty =
-                normalize_assoc_binding(db, table, candidate_assoc_ty, scope, assumptions);
-            let goal_assoc_ty =
-                normalize_assoc_binding(db, table, goal_assoc_ty, scope, assumptions);
-            table.unify(candidate_assoc_ty, goal_assoc_ty)?;
+            let pair = normalize_assoc_binding(db, table, candidate_assoc_ty, scope, assumptions)
+                .and_then(|candidate| {
+                    normalize_assoc_binding(db, table, goal_assoc_ty, scope, assumptions)
+                        .map(|goal| (candidate, goal))
+                });
+            let (candidate_assoc_ty, goal_assoc_ty) = match pair {
+                Ok(pair) => pair,
+                Err(limit) => return CandidateMatch::Limit(limit),
+            };
+            if table.unify(candidate_assoc_ty, goal_assoc_ty).is_err() {
+                return CandidateMatch::Mismatch;
+            }
         }
     }
 
@@ -122,16 +141,19 @@ fn unify_trait_inst_with_normalized_assoc_bindings<'db>(
         .keys()
         .any(|name| !candidate.assoc_type_bindings(db).contains_key(name))
     {
-        return Err(UnificationError::TypeMismatch);
+        return CandidateMatch::Mismatch;
     }
 
-    Ok(())
+    CandidateMatch::Matches
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StopReason {
     MaximumTypeDepth,
     TargetFound,
+    /// Normalizing a goal or a candidate reached a limit. The proof cannot be
+    /// decided, so the whole search stops with that answer.
+    NormalizationLimit(NormalizationLimit),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, salsa::Update)]
@@ -166,7 +188,7 @@ struct PreparedQuery<'db> {
     table: PersistentUnificationTable<'db>,
     query: TraitSolverQuery<'db>,
     scope: ScopeId<'db>,
-    normalized_goal: TraitInstId<'db>,
+    normalized_goal: Result<TraitInstId<'db>, NormalizationLimit>,
 }
 
 #[derive(Clone, Copy)]
@@ -242,11 +264,8 @@ impl<'db> TraitResolutionContext<'db> {
             self.origin_ingot,
             query.goal,
         );
-        // A goal that reaches a normalization limit stays unresolved, so it is
-        // not proved.
         let normalized_goal =
-            normalize_trait_inst_preserving_validity(self.db, query.goal, scope, query.assumptions)
-                .unwrap_or(query.goal);
+            normalize_trait_inst_preserving_validity(self.db, query.goal, scope, query.assumptions);
         let prepared = PreparedQuery {
             table,
             query,
@@ -370,6 +389,12 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         key: &Self::Key,
     ) -> Result<CallbackOutcome<Vec<Self::Clause>, Self::StopReason>, Self::Error> {
         let prepared = self.prepare_query(*key);
+        let normalized_goal = match prepared.normalized_goal {
+            Ok(goal) => goal,
+            Err(limit) => {
+                return Ok(CallbackOutcome::Stop(StopReason::NormalizationLimit(limit)));
+            }
+        };
         let (primary, secondary) = TraitSolveCx::search_ingots_for_trait_inst_with_origin(
             self.db,
             self.origin_ingot,
@@ -385,7 +410,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         let mut clauses =
             Vec::with_capacity(implementors.len() + prepared.query.assumptions.list(self.db).len());
         clauses.extend(implementors.iter().copied().map(Clause::Implementor));
-        if !prepared.query.require_impl && self.goal_can_use_assumptions(prepared.normalized_goal) {
+        if !prepared.query.require_impl && self.goal_can_use_assumptions(normalized_goal) {
             clauses.extend(
                 (0..prepared.query.assumptions.list(self.db).len()).map(Clause::Assumption),
             );
@@ -404,6 +429,10 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             scope,
             normalized_goal,
         } = self.prepare_query(*key);
+        let normalized_goal = match normalized_goal {
+            Ok(goal) => goal,
+            Err(limit) => return Ok(Transition::Stop(StopReason::NormalizationLimit(limit))),
+        };
 
         let selected_impl = match clause {
             Clause::Implementor(selected_impl) => {
@@ -411,24 +440,30 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                     return Ok(Transition::Reject);
                 }
                 let candidate = table.instantiate_with_fresh_vars(selected_impl);
-                let normalized_candidate = normalize_trait_inst_preserving_validity(
+                let normalized_candidate = match normalize_trait_inst_preserving_validity(
                     self.db,
                     candidate.trait_inst(self.db),
                     scope,
                     query.assumptions,
-                )
-                .unwrap_or(candidate.trait_inst(self.db));
-                if unify_trait_inst_with_normalized_assoc_bindings(
+                ) {
+                    Ok(candidate) => candidate,
+                    Err(limit) => {
+                        return Ok(Transition::Stop(StopReason::NormalizationLimit(limit)));
+                    }
+                };
+                match unify_trait_inst_with_normalized_assoc_bindings(
                     self.db,
                     &mut table,
                     normalized_candidate,
                     normalized_goal,
                     scope,
                     query.assumptions,
-                )
-                .is_err()
-                {
-                    return Ok(Transition::Reject);
+                ) {
+                    CandidateMatch::Matches => {}
+                    CandidateMatch::Mismatch => return Ok(Transition::Reject),
+                    CandidateMatch::Limit(limit) => {
+                        return Ok(Transition::Stop(StopReason::NormalizationLimit(limit)));
+                    }
                 }
 
                 let constraints = candidate.constraints(self.db);
@@ -449,17 +484,19 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 let Some(&assumption) = query.assumptions.list(self.db).get(index) else {
                     return Ok(Transition::Reject);
                 };
-                if unify_trait_inst_with_normalized_assoc_bindings(
+                match unify_trait_inst_with_normalized_assoc_bindings(
                     self.db,
                     &mut table,
                     assumption,
                     normalized_goal,
                     scope,
                     query.assumptions,
-                )
-                .is_err()
-                {
-                    return Ok(Transition::Reject);
+                ) {
+                    CandidateMatch::Matches => {}
+                    CandidateMatch::Mismatch => return Ok(Transition::Reject),
+                    CandidateMatch::Limit(limit) => {
+                        return Ok(Transition::Stop(StopReason::NormalizationLimit(limit)));
+                    }
                 }
                 ImplementorId::assumption(self.db, query.goal.fold_with(self.db, &mut table))
             }
@@ -490,14 +527,16 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 self.origin_ingot,
                 pending_goal,
             );
-            let pending_goal = pending_goal.fold_with(self.db, &mut branch.table);
             normalize_trait_inst_preserving_validity(
                 self.db,
-                pending_goal,
+                pending_goal.fold_with(self.db, &mut branch.table),
                 scope,
                 rebase.assumptions(),
             )
-            .unwrap_or(pending_goal)
+        };
+        let normalized_pending = match normalized_pending {
+            Ok(pending) => pending,
+            Err(limit) => return Ok(Transition::Stop(StopReason::NormalizationLimit(limit))),
         };
         let normalized_solution = {
             let scope = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
@@ -505,9 +544,16 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 self.origin_ingot,
                 solution,
             );
-            let solution = solution.fold_with(self.db, &mut branch.table);
-            normalize_trait_inst_preserving_validity(self.db, solution, scope, rebase.assumptions())
-                .unwrap_or(solution)
+            normalize_trait_inst_preserving_validity(
+                self.db,
+                solution.fold_with(self.db, &mut branch.table),
+                scope,
+                rebase.assumptions(),
+            )
+        };
+        let normalized_solution = match normalized_solution {
+            Ok(solution) => solution,
+            Err(limit) => return Ok(Transition::Stop(StopReason::NormalizationLimit(limit))),
         };
         if branch
             .table
@@ -647,6 +693,9 @@ fn map_completion(completion: Completion<StopReason>) -> TraitSolveCompletion {
         Completion::TableLimit { limit } => TraitSolveCompletion::TableLimit { limit },
         Completion::PendingWorkLimit { limit } => TraitSolveCompletion::PendingWorkLimit { limit },
         Completion::Adapter(StopReason::MaximumTypeDepth) => TraitSolveCompletion::MaximumTypeDepth,
+        Completion::Adapter(StopReason::NormalizationLimit(limit)) => {
+            TraitSolveCompletion::NormalizationLimit(limit)
+        }
         Completion::Adapter(StopReason::TargetFound) => {
             unreachable!("ordinary trait solving never installs a target")
         }
@@ -685,6 +734,9 @@ pub(super) fn solve<'db>(
     let completion = map_completion(report.completion);
 
     match (completion, solutions.len()) {
+        (TraitSolveCompletion::NormalizationLimit(limit), _) => {
+            GoalSatisfiability::NormalizationLimit(limit)
+        }
         (TraitSolveCompletion::Saturated, 1) => {
             GoalSatisfiability::Satisfied(solutions.into_iter().next().unwrap())
         }
@@ -732,7 +784,10 @@ pub(super) fn has_solution<'db>(
         | Completion::StepLimit { .. }
         | Completion::TableLimit { .. }
         | Completion::PendingWorkLimit { .. }
-        | Completion::Adapter(StopReason::MaximumTypeDepth) => TargetSolutionStatus::Incomplete,
+        | Completion::Adapter(StopReason::MaximumTypeDepth)
+        | Completion::Adapter(StopReason::NormalizationLimit(_)) => {
+            TargetSolutionStatus::Incomplete
+        }
     }
 }
 

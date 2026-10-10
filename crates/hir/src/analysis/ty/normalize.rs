@@ -227,8 +227,13 @@ pub(crate) fn normalize_layout_root_uses<'db>(
         }
         if let TyData::AssocTy(assoc) = ty.data(db) {
             let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
-            if let Selection::Unique(resolved) =
-                resolve_trait_impl_instance(db, solve_cx, assoc.trait_.as_predicate(db))
+            let resolved =
+                match resolve_trait_impl_instance(db, solve_cx, assoc.trait_.as_predicate(db)) {
+                    Selection::Unique(resolved) => Some(resolved),
+                    Selection::NormalizationLimit(limit) => return Err(limit),
+                    Selection::Ambiguous(_) | Selection::NotFound => None,
+                };
+            if let Some(resolved) = resolved
                 && let ImplementorOrigin::Hir(impl_trait) = resolved.selected().origin(db)
             {
                 for root_use in resolved.assoc_ty_layout_root_uses(db, assoc.name) {
@@ -506,6 +511,10 @@ impl<'db> TypeNormalizer<'db> {
         ) {
             Ok(raw_cands) => raw_cands,
             Err(FindAssociatedTypeError::InfiniteBoundRecursion) => return None,
+            Err(FindAssociatedTypeError::NormalizationLimit(limit)) => {
+                self.reach(limit);
+                return None;
+            }
         };
 
         raw_cands.retain(|(inst, _)| self.trait_refs_match(target, inst.trait_ref(self.db)));
@@ -568,13 +577,20 @@ impl<'db> TypeNormalizer<'db> {
             let target_inst = cx.query();
             let original_target = cx.try_extract::<TraitInstId<'db>>(target_inst);
             for ingot in search_ingots.into_iter().flatten() {
-                for implementor in impls_for_trait_and_ty_with_possible_constraints(
+                let implementors = match impls_for_trait_and_ty_with_possible_constraints(
                     self.db,
                     ingot,
                     trait_def,
                     canonical_self_ty,
                     self.assumptions,
                 ) {
+                    Ok(implementors) => implementors,
+                    Err(limit) => {
+                        self.reach(limit);
+                        return;
+                    }
+                };
+                for implementor in implementors {
                     let Some(implementor) =
                         complete_impl_assoc_ty(self.db, implementor, assoc.name)
                     else {

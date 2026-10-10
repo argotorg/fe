@@ -1,0 +1,74 @@
+// A normalization limit reached while proving a trait bound is neither
+// "proven" nor "not proven": it is reported, and it never decides which
+// method or impl applies.
+trait Nest {
+    type Out
+}
+
+struct N<T> {
+    t: T,
+}
+
+impl<T: Nest> Nest for N<T> {
+    type Out = T::Out
+}
+
+impl Nest for u8 {
+    type Out = u8
+}
+
+trait Show {}
+
+impl Show for u8 {}
+
+struct W<T> {
+    t: T,
+}
+
+trait A {
+    fn go(self) -> u8
+}
+
+trait B {
+    fn go(self) -> u8
+}
+
+impl<T: Nest> A for W<T>
+where
+    T::Out: Show,
+{
+    fn go(self) -> u8 {
+        1
+    }
+}
+
+impl<T> B for W<T> {
+    fn go(self) -> u8 {
+        2
+    }
+}
+
+// At three levels both methods apply: ambiguous. Past the limit the first
+// impl's bound has no answer, which is not a reason to pick the second.
+fn method_choice_within(w: W<N<N<N<u8>>>>) -> u8 {
+    w.go()
+}
+
+fn method_choice_past(w: W<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>) -> u8 {
+    w.go()
+}
+
+trait Tr {}
+
+impl<T: Nest> Tr for W<T>
+where
+    T::Out: Show,
+{}
+
+fn need<X: Tr>() {}
+
+// The bound holds; past the limit it is unknown, not unsatisfied.
+fn bound_holds() {
+    need<W<N<N<N<u8>>>>>()
+    need<W<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<N<u8>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>()
+}
