@@ -224,7 +224,13 @@ fn recv_arm_to_abi_entry(
     let input_descs = struct_ty_to_abi_param_descs(db, variant_struct, variant_ty, |_| None)?;
     // A tuple return is a parameter list (Solidity multi-value `returns`), so
     // each element becomes its own output, matching its runtime encoding.
-    let output_tys = match abi_info.ret_ty {
+    let ret_ty = abi_info.ret_ty.map_err(|limit| {
+        format!(
+            "recv arm `{variant_name}`: resolving its return type {}",
+            limit.reason()
+        )
+    })?;
+    let output_tys = match ret_ty {
         Some(ret_ty) if ret_ty.is_tuple(db) => ret_ty.field_types(db),
         Some(ret_ty) => vec![ret_ty],
         None => Vec::new(),

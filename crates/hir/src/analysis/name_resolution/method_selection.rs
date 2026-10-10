@@ -3,6 +3,7 @@ use common::indexmap::{IndexMap, IndexSet};
 use rustc_hash::FxHashSet;
 use thin_vec::ThinVec;
 
+use crate::analysis::ty::normalize::NormalizationLimit;
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{available_traits_in_scope, is_scope_visible_from},
@@ -118,6 +119,9 @@ pub(crate) fn select_method_candidate<'db>(
 
     let candidates =
         assemble_method_candidates(db, receiver, method_name, scope, assumptions, trait_);
+    if let Some(limit) = candidates.limit {
+        return Err(MethodSelectionError::NormalizationLimit(limit));
+    }
 
     let selector = MethodSelector {
         db,
@@ -145,6 +149,9 @@ pub(crate) fn select_trait_method_candidates<'db>(
 
     let candidates =
         assemble_method_candidates(db, receiver, method_name, scope, assumptions, Some(trait_));
+    if let Some(limit) = candidates.limit {
+        return Err(MethodSelectionError::NormalizationLimit(limit));
+    }
 
     let selector = MethodSelector {
         db,
@@ -214,7 +221,7 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
             .original()
             .ingot(self.db)
             .unwrap_or_else(|| self.scope.ingot(self.db));
-        for method in probe_method(
+        match probe_method(
             self.db,
             ingot,
             MethodProbe {
@@ -224,7 +231,12 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
             self.scope,
             self.method_name,
         ) {
-            self.candidates.insert_inherent_method(method);
+            Ok(methods) => {
+                for method in methods {
+                    self.candidates.insert_inherent_method(method);
+                }
+            }
+            Err(limit) => self.candidates.limit = Some(limit),
         }
     }
 
@@ -863,12 +875,16 @@ pub enum MethodSelectionError<'db> {
     InvisibleInherentMethod(CallableDef<'db>),
     InvisibleTraitMethod(ThinVec<Trait<'db>>),
     ReceiverTypeMustBeKnown,
+    /// Matching a candidate's receiver reached a normalization limit.
+    NormalizationLimit(NormalizationLimit),
 }
 
 #[derive(Default)]
 struct AssembledCandidates<'db> {
     inherent_methods: FxHashSet<ProbedMethod<'db>>,
     traits: IndexSet<AssembledTraitMethodCand<'db>>,
+    /// A limit reached matching an inherent method's receiver.
+    limit: Option<NormalizationLimit>,
 }
 
 impl<'db> AssembledCandidates<'db> {

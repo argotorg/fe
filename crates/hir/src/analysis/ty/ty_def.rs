@@ -1207,9 +1207,13 @@ pub enum InvalidCause<'db> {
     /// silently invalid.
     TypeLoweringCycle,
 
-    /// Normalizing this type needed more nested projections, or larger ones,
-    /// than the normalizer allows.
-    TypeNormalizationLimit,
+    /// A type that reached a normalization limit. `stand_in` says why this
+    /// value may stand for it: a written type, whose lowering errors are
+    /// reported where it is written, or a limit already reported.
+    NormalizationLimit {
+        limit: super::normalize::NormalizationLimit,
+        stand_in: super::normalize::LimitStandIn,
+    },
 
     // TraitConstraintNotSat(PredicateId),
     ParseError,
@@ -1299,7 +1303,7 @@ impl InvalidCause<'_> {
             }
             InvalidCause::ConstEvalRecursiveConst { .. } => "ConstEvalRecursiveConst".into(),
             InvalidCause::TypeLoweringCycle => "TypeLoweringCycle".into(),
-            InvalidCause::TypeNormalizationLimit => "TypeNormalizationLimit".into(),
+            InvalidCause::NormalizationLimit { .. } => "NormalizationLimit".into(),
         }
     }
 }

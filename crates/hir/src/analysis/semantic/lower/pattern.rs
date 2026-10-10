@@ -14,7 +14,7 @@ use crate::{
                 Case, DecisionTree, LeafNode, Projection, ProjectionPath, SwitchNode,
                 build_decision_tree, build_pattern_branch_decision_tree,
             },
-            normalize::normalize_ty,
+            normalize::normalize_or_keep,
             pattern_ir::{ConstructorKind, PatternStore, ValidatedPatId, ValidatedPatKind},
             pattern_types::{
                 PatternProjectionStep, apply_pattern_borrow_mode, destructure_pattern_source,
@@ -316,8 +316,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         src: PatternValue<'db>,
     ) {
         let scope = self.body.scope();
-        let src_ty = normalize_ty(self.db, src.carrier_ty.0, scope, self.assumptions);
-        let dst_ty = normalize_ty(
+        let src_ty = normalize_or_keep(self.db, src.carrier_ty.0, scope, self.assumptions);
+        let dst_ty = normalize_or_keep(
             self.db,
             self.locals[dst.index()].ty,
             scope,
@@ -369,8 +369,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         == Some(PatBindingMode::ByBorrow);
                     let source_matches_dst = {
                         let scope = self.body.scope();
-                        normalize_ty(self.db, value.carrier_ty.0, scope, self.assumptions)
-                            == normalize_ty(self.db, dst_ty, scope, self.assumptions)
+                        normalize_or_keep(self.db, value.carrier_ty.0, scope, self.assumptions)
+                            == normalize_or_keep(self.db, dst_ty, scope, self.assumptions)
                     };
                     let needs_borrow_read = by_borrow && !source_matches_dst;
                     let binding_value = if needs_borrow_read {

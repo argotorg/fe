@@ -94,6 +94,9 @@ impl<'db> ProviderSemantics<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum ProviderLayoutFailure {
     Ambiguous,
+    /// The provider's `Target` or `Raw` type reaches a normalization limit.
+    /// This is the first place those types are normalized for the provider.
+    NormalizationLimit(super::normalize::NormalizationLimit),
     UnresolvedTarget,
     UnresolvedRaw,
     UnresolvedSpace,
@@ -233,7 +236,14 @@ fn resolve_effect_handle_query<'db>(
     else {
         return EffectHandleResolution::Invalid(ProviderLayoutFailure::UnresolvedTarget);
     };
-    let target_ty = normalize_ty(db, target_ty, scope, assumptions);
+    let target_ty = match normalize_ty(db, target_ty, scope, assumptions) {
+        Ok(ty) => ty,
+        Err(limit) => {
+            return EffectHandleResolution::Invalid(ProviderLayoutFailure::NormalizationLimit(
+                limit,
+            ));
+        }
+    };
     if target_ty.has_invalid(db)
         || target_ty.has_var(db)
         || !target_ty.has_star_kind(db)
@@ -245,7 +255,14 @@ fn resolve_effect_handle_query<'db>(
     else {
         return EffectHandleResolution::Invalid(ProviderLayoutFailure::UnresolvedRaw);
     };
-    let raw_ty = normalize_ty(db, raw_ty, scope, assumptions);
+    let raw_ty = match normalize_ty(db, raw_ty, scope, assumptions) {
+        Ok(ty) => ty,
+        Err(limit) => {
+            return EffectHandleResolution::Invalid(ProviderLayoutFailure::NormalizationLimit(
+                limit,
+            ));
+        }
+    };
     if raw_ty.has_invalid(db)
         || raw_ty.has_var(db)
         || !raw_ty.has_star_kind(db)

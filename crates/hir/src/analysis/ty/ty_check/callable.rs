@@ -21,7 +21,7 @@ use crate::analysis::{
         diagnostics::{BodyDiag, FuncBodyDiag},
         fold::{TyFoldable, TyFolder},
         generic_defaults::{DefaultApplication, GenericArgError},
-        normalize::{normalize_ty, normalize_with_trait_evidence},
+        normalize::normalize_with_trait_evidence,
         trait_def::TraitInstId,
         trait_resolution::{
             TraitSolveCx, check_trait_inst_wf, constraint::collect_func_decl_constraints,
@@ -855,7 +855,7 @@ impl<'db> Callable<'db> {
             .get(arg_idx)?
             .instantiate(tc.db, &self.generic_args);
         expected = self.normalize_with_trait_evidence(tc.db, expected);
-        let expected = normalize_ty(tc.db, expected, tc.env.scope(), tc.env.assumptions());
+        let expected = tc.normalize_unresolved(expected);
         if tc.string_literal_should_use_byte_array(expected)
             || self
                 .callable_def

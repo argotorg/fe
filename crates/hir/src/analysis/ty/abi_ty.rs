@@ -13,7 +13,9 @@ use crate::analysis::ty::{
     const_ty::{ConcreteArrayLengthError, demand_concrete_array_length},
     ty_def::{InvalidCause, PrimTy, TyBase, TyData, TyId},
 };
-use crate::analysis::ty::{trait_resolution::PredicateListId, ty_is_copy};
+use crate::analysis::ty::{
+    normalize::NormalizationLimit, trait_resolution::PredicateListId, ty_is_copy,
+};
 use crate::core::hir_def::scope_graph::ScopeId;
 use crate::span::{DesugaredOrigin, HirOrigin};
 
@@ -436,20 +438,26 @@ pub(crate) fn is_composite_event_ty(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> boo
 /// The first fixed-array element type in `ty`, looking through fixed arrays,
 /// tuples and `DynArray`s, that is not `Copy`. The core fixed-array ABI
 /// codecs need `Copy` elements, since an array element cannot be moved out
-/// by index.
+/// by index. An element whose `Copy` check reaches a normalization limit is
+/// returned with the limit.
 pub(crate) fn non_copy_fixed_array_elem<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     ty: TyId<'db>,
     assumptions: PredicateListId<'db>,
-) -> Option<TyId<'db>> {
+) -> Option<(TyId<'db>, Option<NormalizationLimit>)> {
     let ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
     if ty.is_array(db) {
         let (_, args) = ty.decompose_ty_app(db);
         let elem = *args.first()?;
         // Name the innermost culprit: `Key` rather than `[Key; 1]`.
-        return non_copy_fixed_array_elem(db, scope, elem, assumptions)
-            .or_else(|| (!ty_is_copy(db, scope, elem, assumptions)).then_some(elem));
+        return non_copy_fixed_array_elem(db, scope, elem, assumptions).or_else(
+            || match ty_is_copy(db, scope, elem, assumptions) {
+                Ok(true) => None,
+                Ok(false) => Some((elem, None)),
+                Err(limit) => Some((elem, Some(limit))),
+            },
+        );
     }
     if ty.is_tuple(db) {
         let (_, args) = ty.decompose_ty_app(db);

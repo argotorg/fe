@@ -115,6 +115,11 @@ pub enum CtfeError<'db> {
     RecursionLimitExceeded {
         origin: SemOrigin<'db>,
     },
+    /// A type the evaluation needed reached a normalization limit.
+    NormalizationLimit {
+        origin: SemOrigin<'db>,
+        limit: crate::analysis::ty::normalize::NormalizationLimit,
+    },
     /// Evaluating the const required its own value (directly or through a
     /// cycle of const items). Produced as the fixpoint-initial value of the
     /// eval queries below, so a recursive definition converges to this error
@@ -2282,7 +2287,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 .key(self.db)
                 .instantiate_typed_body(self.db)
                 .assumptions(),
-        );
+        )
+        .map_err(|limit| CtfeError::NormalizationLimit { origin, limit })?;
         let size = runtime_size_bytes(self.db, ty)
             .map_err(|error| match error {
                 RuntimeSizeError::Overflow => CtfeError::ArithmeticOverflow { origin },

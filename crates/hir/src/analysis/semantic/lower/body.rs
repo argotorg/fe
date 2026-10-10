@@ -25,14 +25,14 @@ use crate::{
                 ConstTyData, ConstTyId, const_ty_or_abstract_from_assoc_const_use,
                 const_ty_or_abstract_from_inherent_const_use,
             },
-            normalize::normalize_ty,
+            normalize::normalize_or_keep,
             ty_check::{
                 BodyOwner, Callable, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef,
                 LocalBinding, PathReadSemantics, RecordInitLowering, RecordLike,
                 SemanticExprLowering, TypedBody, ValuePathRef,
             },
             ty_def::{BorrowKind, TyData, TyId},
-            ty_is_copy,
+            ty_is_known_copy,
         },
     },
     hir_def::{
@@ -596,8 +596,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     .into_iter()
                     .enumerate()
                     .map(|(idx, field_ty)| {
-                        let field_ty =
-                            normalize_ty(self.db, field_ty, self.body.scope(), self.assumptions);
+                        let field_ty = normalize_or_keep(
+                            self.db,
+                            field_ty,
+                            self.body.scope(),
+                            self.assumptions,
+                        );
                         if field_ty == TyId::unit(self.db) || field_ty.is_zero_sized(self.db) {
                             unit
                         } else if idx == 0 {
@@ -917,8 +921,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         expr_ty: TyId<'db>,
     ) -> PathReadSemantics {
         let scope = self.body.scope();
-        if normalize_ty(self.db, expr_ty, scope, self.assumptions)
-            == normalize_ty(self.db, self.binding_ty(binding), scope, self.assumptions)
+        if normalize_or_keep(self.db, expr_ty, scope, self.assumptions)
+            == normalize_or_keep(self.db, self.binding_ty(binding), scope, self.assumptions)
         {
             return PathReadSemantics::ReuseLocal;
         }
@@ -930,7 +934,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             | SemanticLocalRole::PlaceBoundValue { .. }
             | SemanticLocalRole::DirectCarrier { .. } => PathReadSemantics::ForwardInterface,
             SemanticLocalRole::PlaceCarrier { .. }
-                if normalize_ty(self.db, expr_ty, scope, self.assumptions)
+                if normalize_or_keep(self.db, expr_ty, scope, self.assumptions)
                     .as_capability(self.db)
                     .is_some() =>
             {
@@ -1139,9 +1143,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         param: usize,
     ) -> SValueId {
         let ty = self.expr_ty(expr);
-        if !ty_is_copy(self.db, self.body.scope(), ty, self.assumptions)
+        if !ty_is_known_copy(self.db, self.body.scope(), ty, self.assumptions)
             && callable.arg_ty(self.db, param).is_some_and(|param_ty| {
-                normalize_ty(self.db, param_ty, self.body.scope(), self.assumptions)
+                normalize_or_keep(self.db, param_ty, self.body.scope(), self.assumptions)
                     .as_view(self.db)
                     .is_some()
             })
@@ -1224,7 +1228,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         kind: ConstIntrinsicKind,
     ) -> SValueId {
         let ty = match kind {
-            ConstIntrinsicKind::SizeOf => normalize_ty(
+            ConstIntrinsicKind::SizeOf => normalize_or_keep(
                 self.db,
                 *callable
                     .generic_args()

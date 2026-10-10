@@ -939,7 +939,25 @@ impl DiagnosticVoucher for crate::AbiStructDiagnostic {
 
 impl DiagnosticVoucher for crate::analysis::analysis_pass::AbiArrayElemNotCopy {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
-        let Self { ty, elem_ty, .. } = self;
+        let Self {
+            ty,
+            elem_ty,
+            limit_reason,
+            ..
+        } = self;
+        if let Some(reason) = limit_reason {
+            return CompleteDiagnostic::new(
+                Severity::Error,
+                "type normalization limit reached".to_string(),
+                vec![SubDiagnostic::new(
+                    LabelStyle::Primary,
+                    format!("deciding whether `{elem_ty}` is `Copy` {reason}"),
+                    Some(Span::new(self.file, self.primary_range, SpanKind::Original)),
+                )],
+                vec![],
+                self.error_code.clone(),
+            );
+        }
         CompleteDiagnostic::new(
             Severity::Error,
             "fixed-array ABI fields need `Copy` elements".to_string(),
@@ -1233,6 +1251,14 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 severity,
                 "infinite trait bound recursion",
                 msg.to_string(),
+                span.resolve(db),
+                error_code,
+            ),
+
+            Self::NormalizationLimit { span, limit } => primary_diag(
+                severity,
+                "type normalization limit exceeded",
+                format!("resolving the associated types here {}", limit.reason()),
                 span.resolve(db),
                 error_code,
             ),
@@ -2284,6 +2310,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     }
                     crate::analysis::ty::provider::ProviderLayoutFailure::Ambiguous
                     | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedTarget
+                    | crate::analysis::ty::provider::ProviderLayoutFailure::NormalizationLimit(_)
                     | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedSpace => {
                         unreachable!("non-raw provider failure reached raw diagnostic")
                     }
@@ -2652,13 +2679,16 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
-            Self::TypeNormalizationLimit(span) => primary_diag(
-                Severity::Error,
-                "type normalization limit exceeded",
-                "the associated types here cannot be resolved within the limit",
-                span.resolve(db),
-                error_code,
-            ),
+            Self::TypeNormalizationLimit { span, limit } => {
+                let label = format!("resolving the associated types here {}", limit.reason());
+                primary_diag(
+                    Severity::Error,
+                    "type normalization limit exceeded",
+                    label,
+                    span.resolve(db),
+                    error_code,
+                )
+            }
 
             Self::NonTrailingDefaultGenericParam(span) => primary_diag(
                 Severity::Error,
@@ -5697,6 +5727,7 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     }
                     crate::analysis::ty::provider::ProviderLayoutFailure::Ambiguous
                     | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedTarget
+                    | crate::analysis::ty::provider::ProviderLayoutFailure::NormalizationLimit(_)
                     | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedRaw
                     | crate::analysis::ty::provider::ProviderLayoutFailure::UnresolvedSpace => {
                         unreachable!("non-concrete raw failure reached impl diagnostic")

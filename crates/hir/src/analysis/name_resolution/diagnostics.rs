@@ -53,6 +53,12 @@ pub enum PathResDiag<'db> {
 
     InfiniteBoundRecursion(DynLazySpan<'db>, String),
 
+    /// Resolving the path needed a type that reaches a normalization limit.
+    NormalizationLimit {
+        span: DynLazySpan<'db>,
+        limit: crate::analysis::ty::normalize::NormalizationLimit,
+    },
+
     /// The name is found, but it can't be used as a middle segment of a path.
     InvalidPathSegment {
         span: DynLazySpan<'db>,
@@ -140,6 +146,7 @@ impl<'db> PathResDiag<'db> {
             Self::AmbiguousTrait { primary, .. } => primary.top_mod(db).unwrap(),
             Self::AmbiguousAssociatedConst { primary, .. } => primary.top_mod(db).unwrap(),
             Self::InfiniteBoundRecursion(span, _) => span.top_mod(db).unwrap(),
+            Self::NormalizationLimit { span, .. } => span.top_mod(db).unwrap(),
             Self::InvisibleAmbiguousTrait { primary, .. } => primary.top_mod(db).unwrap(),
         }
     }
@@ -186,6 +193,7 @@ impl<'db> PathResDiag<'db> {
             Self::AmbiguousTrait { .. } => 16,
             Self::InvisibleAmbiguousTrait { .. } => 17,
             Self::InfiniteBoundRecursion(..) => 20,
+            Self::NormalizationLimit { .. } => 22,
         }
     }
 }

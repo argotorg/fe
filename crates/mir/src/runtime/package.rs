@@ -876,9 +876,17 @@ fn contract_recv_wrapper<'db>(
 ) -> Result<(RecvArmAbiInfo<'db>, RuntimeInstance<'db>), LowerError> {
     let contract = arm.contract(db);
     let abi_info = arm.abi_info(db, abi_ty);
+    // A limit in the return type is reported with the contract's recv blocks,
+    // which run before any code is generated.
+    let ret_ty = abi_info.ret_ty.map_err(|limit| {
+        LowerError::Unsupported(format!(
+            "the recv arm's return type has no resolved type: resolving it {}",
+            limit.reason()
+        ))
+    })?;
     let type_env = RuntimeTypeEnv::new(Some(contract.scope()), PredicateListId::empty_list(db));
     validate_runtime_array_extents_in_env(db, type_env, abi_info.args_ty)?;
-    if let Some(ret_ty) = abi_info.ret_ty {
+    if let Some(ret_ty) = ret_ty {
         validate_runtime_array_extents_in_env(db, type_env, ret_ty)?;
     }
     let recv = arm.recv(db);
@@ -895,7 +903,7 @@ fn contract_recv_wrapper<'db>(
         semantic,
     )?;
     let projected_fields = visible_recv_arg_fields(db, semantic, arm);
-    let host = if abi_info.args_ty != TyId::unit(db) || abi_info.ret_ty.is_some() {
+    let host = if abi_info.args_ty != TyId::unit(db) || ret_ty.is_some() {
         Some(contract_recv_host_binding(
             db,
             contract,
@@ -922,7 +930,7 @@ fn contract_recv_wrapper<'db>(
             projected_fields,
         }
     };
-    let ret = if let Some(ret_ty) = abi_info.ret_ty {
+    let ret = if let Some(ret_ty) = ret_ty {
         let host = host.expect("value-returning recv requires a host");
         let contract_host = resolve_core_trait(
             db,

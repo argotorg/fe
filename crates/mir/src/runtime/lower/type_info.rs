@@ -4,7 +4,7 @@ use hir::{
         ty::{
             ProviderAddressSpace, ProviderKind,
             const_ty::{ConcreteArrayLengthError, demand_concrete_array_length},
-            normalize::normalize_ty,
+            normalize::normalize_or_keep,
             provider::{ProviderLayoutEvidence, provider_semantics},
             trait_def::ResolvedImplInstance,
             trait_resolution::PredicateListId,
@@ -303,7 +303,7 @@ fn runtime_interface_ty<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> TyId<'db> {
-    scope.map_or(ty, |scope| normalize_ty(db, ty, scope, assumptions))
+    scope.map_or(ty, |scope| normalize_or_keep(db, ty, scope, assumptions))
 }
 
 pub(crate) fn runtime_interface_ty_in_env<'db>(
@@ -323,7 +323,9 @@ fn runtime_storage_ty<'db>(
 ) -> TyId<'db> {
     let mut ty = runtime_interface_ty_in_env(db, RuntimeTypeEnv::new(scope, assumptions), ty);
     while let Some(inner) = ty.as_view(db) {
-        ty = scope.map_or(inner, |scope| normalize_ty(db, inner, scope, assumptions));
+        ty = scope.map_or(inner, |scope| {
+            normalize_or_keep(db, inner, scope, assumptions)
+        });
     }
     ty
 }

@@ -42,7 +42,7 @@ use crate::{
             trait_resolution::PredicateListId,
             ty_check::{BodyOwner, LocalBinding},
             ty_def::{BorrowKind, CapabilityKind, TyData, TyId},
-            ty_is_copy,
+            ty_is_known_copy,
         },
     },
     hir_def::FuncParamMode,
@@ -1279,7 +1279,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             if index + 1 == projections.len() {
                 break;
             }
-            if self.ty_is_copy(projected_ty) {
+            if self.ty_is_known_copy(projected_ty) {
                 value.mode = ReadMode::Copy;
             }
             let carrier = self.emit_define(
@@ -1321,7 +1321,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             }
             return self.load_or_borrow_place(block, origin, source_local, result_ty, place, None);
         }
-        if self.ty_is_copy(projected_ty) {
+        if self.ty_is_known_copy(projected_ty) {
             value.mode = ReadMode::Copy;
         }
         Ok(NExpr::ProjectValue {
@@ -1603,7 +1603,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     ) -> Result<NOperand, NormalizeError<'db>> {
         if let Some((kind, inner)) = self.values[value.value.index()].ty.as_capability(self.db)
             && target_ty.as_capability(self.db).is_none()
-            && (kind == CapabilityKind::View || self.ty_is_copy(inner))
+            && (kind == CapabilityKind::View || self.ty_is_known_copy(inner))
             && structural_repack_mapping(self.db, self.instance, inner, target_ty).is_some()
         {
             let place = NPlace {
@@ -2170,7 +2170,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             Some(FuncParamMode::View)
         )
         .then(|| {
-            if self.ty_is_copy(self.normalized_local_ty(local)) {
+            if self.ty_is_known_copy(self.normalized_local_ty(local)) {
                 ReadMode::Copy
             } else {
                 ReadMode::Read
@@ -2235,11 +2235,11 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             )
     }
 
-    fn ty_is_copy(&self, ty: TyId<'db>) -> bool {
+    fn ty_is_known_copy(&self, ty: TyId<'db>) -> bool {
         if let Some(result) = self.copy_cache.borrow().get(&ty) {
             return *result;
         }
-        let result = ty_is_copy(
+        let result = ty_is_known_copy(
             self.db,
             self.raw.template_owner.scope(),
             ty,
@@ -2277,12 +2277,12 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 ..
             })
         ) {
-            if self.ty_is_copy(ty) {
+            if self.ty_is_known_copy(ty) {
                 ReadMode::Copy
             } else {
                 ReadMode::Read
             }
-        } else if self.origin_is_implicit_move(origin) || !self.ty_is_copy(ty) {
+        } else if self.origin_is_implicit_move(origin) || !self.ty_is_known_copy(ty) {
             ReadMode::Move
         } else {
             ReadMode::Copy
@@ -2314,7 +2314,9 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     ReadMode::Read
                 }
             }
-            NPlaceBase::Root(_) if self.origin_is_implicit_move(origin) || !self.ty_is_copy(ty) => {
+            NPlaceBase::Root(_)
+                if self.origin_is_implicit_move(origin) || !self.ty_is_known_copy(ty) =>
+            {
                 ReadMode::Move
             }
             NPlaceBase::Root(_) => ReadMode::Copy,
@@ -2322,7 +2324,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     }
 
     fn ty_is_copy_or_direct_carrier(&self, ty: TyId<'db>) -> bool {
-        self.ty_is_copy(ty)
+        self.ty_is_known_copy(ty)
             || matches!(
                 provider_semantics(
                     self.db,

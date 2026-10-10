@@ -215,7 +215,17 @@ impl<'db> WherePredicateView<'db> {
                 }
             }
         }
-        let span = self.span().ty().into();
+        let span: DynLazySpan<'db> = self.span().ty().into();
+
+        // A limit in the written subject is reported here.
+        if let Err(limit) = crate::analysis::ty::normalize::normalize_ty(
+            db,
+            subject,
+            owner_item.scope(),
+            assumptions,
+        ) {
+            return Some(limit.report(span).0);
+        }
 
         if subject.is_const_ty(db) {
             return Some(TraitConstraintDiag::ConstTyBound(span, subject).into());
@@ -892,8 +902,21 @@ impl<'db> ImplTrait<'db> {
                 continue;
             }
 
-            let expected_ty = normalize_ty(db, expected_ty, scope, assumptions);
-            let impl_header_ty = normalize_ty(db, impl_header_ty, scope, assumptions);
+            let span: DynLazySpan<'db> = impl_const.span().ty().into();
+            let normalized =
+                normalize_ty(db, expected_ty, scope, assumptions).and_then(|expected| {
+                    normalize_ty(db, impl_header_ty, scope, assumptions)
+                        .map(|header| (expected, header))
+                });
+            let (expected_ty, impl_header_ty) = match normalized {
+                Ok(pair) => pair,
+                Err(limit) => {
+                    // The types cannot be compared: report the limit at the
+                    // impl's constant.
+                    diags.push(limit.report(span).0);
+                    continue;
+                }
+            };
             if expected_ty != impl_header_ty {
                 diags.push(
                     ImplDiag::ConstTyMismatchWithTrait {
@@ -1625,6 +1648,8 @@ impl<'db> Diagnosable<'db> for Func<'db> {
             && let Some(self_ty) = impl_.admissible_inherent_impl_ty(db)
         {
             let ingot = self.top_mod(db).ingot(db);
+            // A limit here is in the impl's self type, which is reported
+            // where it is written.
             for cand in probe_method(
                 db,
                 ingot,
@@ -1634,7 +1659,9 @@ impl<'db> Diagnosable<'db> for Func<'db> {
                 },
                 self.scope(),
                 func_def.name(db).expect("impl methods have names"),
-            ) {
+            )
+            .unwrap_or_default()
+            {
                 if cand.def != func_def {
                     out.push(
                         ty::diagnostics::ImplDiag::ConflictMethodImpl {

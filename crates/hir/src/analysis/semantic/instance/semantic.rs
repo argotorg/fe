@@ -23,7 +23,7 @@ use crate::{
             effects::place_effect_provider_param_index_map,
             fold::TyFoldable,
             instantiate_trait_self,
-            normalize::normalize_ty,
+            normalize::normalize_or_keep,
             provider::{
                 ProviderAddressSpace, ProviderKind, ProviderLayoutEvidence, ProviderTransport,
                 RootProviderScope, provider_semantics, provider_semantics_for_specialized_call,
@@ -289,8 +289,8 @@ fn receiver_lowering_plan<'db>(
 ) -> Option<ReceiverLoweringPlan<'db>> {
     let receiver = call_like_receiver_expr(expr_data)?;
     let borrowed_ty = callable.arg_ty(db, 0)?;
-    let borrowed_ty = normalize_ty(db, borrowed_ty, scope, assumptions);
-    let receiver_ty = normalize_ty(db, typed_body.expr_ty(db, receiver), scope, assumptions);
+    let borrowed_ty = normalize_or_keep(db, borrowed_ty, scope, assumptions);
+    let receiver_ty = normalize_or_keep(db, typed_body.expr_ty(db, receiver), scope, assumptions);
     let (kind, _) = borrowed_ty.as_capability(db)?;
     // A `view` receiver (a parameter declared without `own`) is borrowed for
     // a `ref self` method, as an explicit `ref` would borrow it.
@@ -1107,7 +1107,7 @@ impl<'db> SemanticInstance<'db> {
 
     #[salsa::tracked]
     pub fn normalized_ty(self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        normalize_ty(db, ty, self.normalization_scope(db), self.assumptions(db))
+        normalize_or_keep(db, ty, self.normalization_scope(db), self.assumptions(db))
     }
 
     #[salsa::tracked(return_ref)]
@@ -1218,7 +1218,6 @@ impl<'db> SemanticInstance<'db> {
                 causes,
             ));
         }
-
         if let Some(body) = typed_body.body() {
             for (expr, _) in body.exprs(db).iter() {
                 let Some(SemanticExprLowering::ConstIntrinsic {
@@ -1231,7 +1230,7 @@ impl<'db> SemanticInstance<'db> {
                 let Some(arg) = callable.generic_args().first().copied() else {
                     continue;
                 };
-                let arg = normalize_ty(db, arg, body.scope(), self.assumptions(db));
+                let arg = normalize_or_keep(db, arg, body.scope(), self.assumptions(db));
                 if let Err(error) = runtime_size_bytes(db, arg) {
                     return Err(SemanticBodyAdmissionError::InvalidConcreteType(
                         invalid_size_diagnostic(db, self, SemOrigin::Expr(expr), arg, error),
@@ -1746,9 +1745,9 @@ fn classify_binding_role<'db>(
 ) -> SemanticLocalRole<'db> {
     let owner = instance.key(db).owner(db);
     let scope = owner.scope();
-    let ty = normalize_ty(db, ty, scope, assumptions);
+    let ty = normalize_or_keep(db, ty, scope, assumptions);
     if let Some((_, value_ty)) = ty.as_capability(db) {
-        let value_ty = normalize_ty(db, value_ty, scope, assumptions);
+        let value_ty = normalize_or_keep(db, value_ty, scope, assumptions);
         return SemanticLocalRole::PlaceCarrier { provider, value_ty };
     }
     // A raw-address provider names storage of the binding type, including a
@@ -2224,7 +2223,7 @@ fn instantiate_normalized_ty<'db>(
     let scope = key.owner(db).scope();
     let assumptions = semantic_instance_base_assumptions_for_key(db, key);
     let ty = instantiate_checked(db, key.owner(db), ty, key.subst(db))?;
-    Ok(normalize_ty(db, ty, scope, assumptions))
+    Ok(normalize_or_keep(db, ty, scope, assumptions))
 }
 
 fn instantiate_normalized_trait_inst<'db>(
@@ -2241,12 +2240,12 @@ fn instantiate_normalized_trait_inst<'db>(
     let args = trait_inst
         .args(db)
         .iter()
-        .map(|&arg| normalize_ty(db, arg, scope, assumptions))
+        .map(|&arg| normalize_or_keep(db, arg, scope, assumptions))
         .collect::<Vec<_>>();
     let assoc_type_bindings = trait_inst
         .assoc_type_bindings(db)
         .iter()
-        .map(|(&name, &ty)| (name, normalize_ty(db, ty, scope, assumptions)))
+        .map(|(&name, &ty)| (name, normalize_or_keep(db, ty, scope, assumptions)))
         .collect::<IndexMap<_, _>>();
     Ok(crate::analysis::ty::trait_def::TraitInstId::new(
         db,

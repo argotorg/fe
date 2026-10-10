@@ -186,7 +186,12 @@ pub enum TyLowerDiag<'db> {
     ConstEvalRecursionLimitExceeded(DynLazySpan<'db>),
     ConstEvalRecursiveConst(DynLazySpan<'db>),
     TypeLoweringCycle(DynLazySpan<'db>),
-    TypeNormalizationLimit(DynLazySpan<'db>),
+    /// A written, inferred or instantiated type that could not be normalized
+    /// within a limit.
+    TypeNormalizationLimit {
+        span: DynLazySpan<'db>,
+        limit: super::normalize::NormalizationLimit,
+    },
 
     NonTrailingDefaultGenericParam(LazyGenericParamSpan<'db>),
 
@@ -325,7 +330,7 @@ impl TyLowerDiag<'_> {
             Self::ConstEvalRecursionLimitExceeded(_) => 27,
             Self::ConstEvalRecursiveConst(_) => 37,
             Self::TypeLoweringCycle(_) => 38,
-            Self::TypeNormalizationLimit(_) => 58,
+            Self::TypeNormalizationLimit { .. } => 58,
             Self::MixedRefSelfPrefixWithExplicitType { .. } => 28,
             Self::MixedOwnSelfPrefixWithExplicitType { .. } => 29,
             Self::InvalidMutSelfPrefixWithExplicitType { .. } => 30,

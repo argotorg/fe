@@ -32,6 +32,7 @@ use super::{
 };
 use crate::analysis::HirAnalysisDb;
 use crate::hir_def::{CallableDef, Expr, Partial, PathKind, scope_graph::ScopeId};
+use crate::span::DynLazySpan;
 use common::indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
@@ -251,9 +252,23 @@ fn compare_ty<'db>(
             normalize_from_assumptions(db, trait_m_ty, trait_scope, evidence);
 
         // 3) Normalize both types to resolve any further nested associated types.
-        let trait_m_ty_normalized =
-            normalize_ty(db, trait_m_ty_substituted, trait_scope, compare_assumptions);
-        let impl_m_ty_normalized = normalize_ty(db, impl_m_ty, trait_scope, compare_assumptions);
+        let normalized = normalize_ty(db, trait_m_ty_substituted, trait_scope, compare_assumptions)
+            .and_then(|trait_ty| {
+                normalize_ty(db, impl_m_ty, trait_scope, compare_assumptions)
+                    .map(|impl_ty| (trait_ty, impl_ty))
+            });
+        let (trait_m_ty_normalized, impl_m_ty_normalized) = match normalized {
+            Ok(pair) => pair,
+            Err(limit) => {
+                // The signatures cannot be compared: report the limit at the
+                // impl method's parameter.
+                if let Some(span) = impl_param_span(impl_m, idx) {
+                    sink.push(limit.report(span).0);
+                }
+                err = true;
+                continue;
+            }
+        };
         let trait_m_ty_normalized = normalize_compare_assoc_consts(
             db,
             trait_m_ty_normalized,
@@ -295,14 +310,25 @@ fn compare_ty<'db>(
     // Substitute and normalize the return type as well.
     let trait_m_ret_ty_substituted =
         normalize_from_assumptions(db, trait_m_ret_ty, trait_scope, evidence);
-    let trait_m_ret_ty_normalized = normalize_ty(
+    let normalized = normalize_ty(
         db,
         trait_m_ret_ty_substituted,
         trait_scope,
         compare_assumptions,
-    );
-    let impl_m_ret_ty_normalized =
-        normalize_ty(db, impl_m_ret_ty, trait_scope, compare_assumptions);
+    )
+    .and_then(|trait_ty| {
+        normalize_ty(db, impl_m_ret_ty, trait_scope, compare_assumptions)
+            .map(|impl_ty| (trait_ty, impl_ty))
+    });
+    let (trait_m_ret_ty_normalized, impl_m_ret_ty_normalized) = match normalized {
+        Ok(pair) => pair,
+        Err(limit) => {
+            if let Some(span) = impl_ret_span(impl_m) {
+                sink.push(limit.report(span).0);
+            }
+            return false;
+        }
+    };
     let trait_m_ret_ty_normalized = normalize_compare_assoc_consts(
         db,
         trait_m_ret_ty_normalized,
@@ -338,6 +364,22 @@ fn compare_ty<'db>(
     }
 
     !err
+}
+
+/// Where the impl method's parameter `idx` is written.
+fn impl_param_span<'db>(impl_m: CallableDef<'db>, idx: usize) -> Option<DynLazySpan<'db>> {
+    match impl_m {
+        CallableDef::Func(func) => Some(func.span().params().param(idx).ty().into()),
+        CallableDef::VariantCtor(_) => None,
+    }
+}
+
+/// Where the impl method's return type is written, or its name.
+fn impl_ret_span<'db>(impl_m: CallableDef<'db>) -> Option<DynLazySpan<'db>> {
+    match impl_m {
+        CallableDef::Func(func) => Some(func.span().sig().into()),
+        CallableDef::VariantCtor(_) => None,
+    }
 }
 
 fn insert_param_mapping<'db>(
@@ -598,10 +640,12 @@ fn collect_effect_provider_entries<'db>(
                 Some(trait_inst),
                 EffectKeyCanonMode::Compare,
             );
+            // A key that cannot be normalized is compared as written: it then
+            // matches only itself. Its limit is reported where it is written.
             identity.key_ty = identity.key_ty.map(|ty| {
                 normalize_compare_assoc_consts(
                     db,
-                    normalize_ty(db, ty, scope, assumptions),
+                    normalize_ty(db, ty, scope, assumptions).unwrap_or(ty),
                     scope,
                     assumptions,
                     trait_inst,
@@ -735,7 +779,10 @@ pub(crate) fn normalize_predicate_for_comparison<'db>(
         .iter()
         .copied()
         .map(|ty| {
-            let ty = normalize_ty(db, ty, scope, assumptions);
+            // A type that cannot be normalized is compared as written: it
+            // then matches only itself. Its limit is reported where the
+            // predicate is written.
+            let ty = normalize_ty(db, ty, scope, assumptions).unwrap_or(ty);
             normalize_compare_assoc_consts(
                 db,
                 ty,
@@ -750,7 +797,7 @@ pub(crate) fn normalize_predicate_for_comparison<'db>(
         .assoc_type_bindings(db)
         .iter()
         .map(|(name, &ty)| {
-            let ty = normalize_ty(db, ty, scope, assumptions);
+            let ty = normalize_ty(db, ty, scope, assumptions).unwrap_or(ty);
             (
                 *name,
                 normalize_compare_assoc_consts(

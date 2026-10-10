@@ -93,6 +93,9 @@ pub enum PathResErrorKind<'db> {
         context: &'static str,
     },
 
+    /// A candidate type reaches a normalization limit.
+    NormalizationLimit(crate::analysis::ty::normalize::NormalizationLimit),
+
     /// The name is found, but it can't be used in the middle of a use path.
     InvalidPathSegment(PathRes<'db>),
 
@@ -182,6 +185,7 @@ impl<'db> PathResError<'db> {
             PathResErrorKind::InfiniteBoundRecursion { .. } => {
                 "Infinite trait bound recursion".to_string()
             }
+            PathResErrorKind::NormalizationLimit(_) => "Type normalization limit".to_string(),
             PathResErrorKind::InvalidPathSegment(_) => "Invalid path segment".to_string(),
             PathResErrorKind::QualifiedTypeType(res) => match res.as_ref() {
                 Ok(res) => format!(
@@ -232,6 +236,9 @@ impl<'db> PathResError<'db> {
                 }
                 MethodSelectionError::ReceiverTypeMustBeKnown => {
                     "Receiver type must be known".to_string()
+                }
+                MethodSelectionError::NormalizationLimit(_) => {
+                    "Type normalization limit".to_string()
                 }
             },
         }
@@ -356,6 +363,10 @@ impl<'db> PathResError<'db> {
                 }
             }
 
+            PathResErrorKind::NormalizationLimit(limit) => {
+                PathResDiag::NormalizationLimit { span, limit }
+            }
+
             PathResErrorKind::InfiniteBoundRecursion { context } => {
                 PathResDiag::InfiniteBoundRecursion(
                     span,
@@ -402,6 +413,9 @@ impl<'db> PathResError<'db> {
 
             PathResErrorKind::MethodSelection(err) => match err {
                 MethodSelectionError::ReceiverTypeMustBeKnown => PathResDiag::TypeMustBeKnown(span),
+                MethodSelectionError::NormalizationLimit(limit) => {
+                    PathResDiag::NormalizationLimit { span, limit }
+                }
                 MethodSelectionError::AmbiguousInherentMethod(candidates) => {
                     PathResDiag::AmbiguousInherentMethod {
                         primary: span,
@@ -1347,7 +1361,9 @@ where
                     .get(&ident)
                     .copied()
                     .map_or(applied, |bound| TyId::foldl(db, bound, &seg_args));
-                let norm = normalize_ty(db, candidate_ty, scope, evidence);
+                let norm = normalize_ty(db, candidate_ty, scope, evidence).map_err(|limit| {
+                    PathResError::new(PathResErrorKind::NormalizationLimit(limit), path)
+                })?;
                 dedup.entry(norm).or_insert((inst, applied, norm));
             }
 
@@ -1639,6 +1655,8 @@ pub(crate) fn shadowed_inherent_fn_for_const<'db>(
 ) -> Option<DynLazySpan<'db>> {
     let self_ty = impl_.admissible_inherent_impl_ty(db)?;
     let ingot = impl_.top_mod(db).ingot(db);
+    // A limit here is in the impl's self type, which is reported where it is
+    // written.
     for cand in probe_method(
         db,
         ingot,
@@ -1648,7 +1666,9 @@ pub(crate) fn shadowed_inherent_fn_for_const<'db>(
         },
         impl_.scope(),
         name,
-    ) {
+    )
+    .unwrap_or_default()
+    {
         let CallableDef::Func(func) = cand.def else {
             continue;
         };

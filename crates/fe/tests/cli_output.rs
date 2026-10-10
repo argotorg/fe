@@ -317,6 +317,58 @@ fn trigger() -> u256 {
 }
 
 #[test]
+fn test_cli_build_msg_return_type_at_the_normalization_limit_reports_instead_of_panicking() {
+    // The written return type needs 64 nested steps, the most the limit
+    // allows. Code generation finds it through the variant's generated
+    // `Return` associated type, one step more, which reaches the limit.
+    let return_ty = format!("<{}u8{} as Nest>::Out", "N<".repeat(63), ">".repeat(63));
+    let temp = tempdir().expect("tempdir");
+    let file = temp.path().join("msg_return_limit.fe");
+    fs::write(
+        &file,
+        format!(
+            r#"
+trait Nest {{
+    type Out
+}}
+pub struct N<T> {{
+    t: T,
+}}
+impl<T: Nest> Nest for N<T> {{
+    type Out = T::Out
+}}
+impl Nest for u8 {{
+    type Out = u8
+}}
+msg M {{
+    #[selector = 1]
+    Get -> {return_ty},
+}}
+pub contract C {{
+    recv M {{
+        Get -> {return_ty} {{
+            0
+        }}
+    }}
+}}
+"#
+        ),
+    )
+    .expect("write fixture");
+
+    let (output, exit_code) = run_fe_command("build", file.to_str().expect("fixture path utf8"));
+    assert_eq!(exit_code, 1, "expected build failure:\n{output}");
+    assert!(
+        output.contains("type normalization limit exceeded"),
+        "expected the normalization limit error:\n{output}"
+    );
+    assert!(
+        !output.contains("panicked at"),
+        "unexpected panic:\n{output}"
+    );
+}
+
+#[test]
 fn test_cli_wide_enum_size_uses_widened_tag() {
     let temp = tempdir().expect("tempdir");
     let file = temp.path().join("wide_enum_size.fe");

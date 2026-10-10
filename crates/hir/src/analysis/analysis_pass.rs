@@ -465,6 +465,9 @@ pub struct AbiArrayElemNotCopy {
     pub error_code: GlobalErrorCode,
     pub ty: String,
     pub elem_ty: String,
+    /// Why `elem_ty` has no `Copy` answer, when deciding it reached a
+    /// normalization limit.
+    pub limit_reason: Option<String>,
     pub file: File,
     pub primary_range: parser::TextRange,
 }
@@ -483,6 +486,7 @@ fn non_copy_array_field_errors<'db>(
             error_code: error_code.clone(),
             ty: field.field_ty.pretty_print(db).to_string(),
             elem_ty: field.elem_ty.pretty_print(db).to_string(),
+            limit_reason: field.limit.map(|limit| limit.reason()),
             file: top_mod.file(db),
             primary_range: field_ty_range(&root, &field.ast_struct, field.field_idx),
         })

@@ -515,7 +515,10 @@ fn resolve_trait_impl_instance_query<'db>(
 ) -> ImplSelection<'db> {
     let assumptions = solve_cx.assumptions();
     let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
-    let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
+    // A goal that reaches a normalization limit stays unresolved, so no impl
+    // is selected for it.
+    let inst =
+        normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions).unwrap_or(inst);
     match solve_cx.select_impl(db, inst) {
         Selection::Unique(selected) => complete_selected_impl(db, selected)
             .and_then(|selected| instantiate_selected_impl(db, selected, inst))
@@ -692,14 +695,16 @@ impl<'db> ResolvedMethodInstance<'db> {
                 let Some(formal_ty) = callable_input_layout_origin_ty(db, body, origin) else {
                     continue;
                 };
-                let formal_ty = normalize_ty(
-                    db,
-                    substitute_complete(db, formal_ty, &args.residualize(db))
-                        .expect("selected input template must match body schema"),
-                    self.normalization_scope,
-                    assumptions,
-                );
-                let actual_ty = normalize_ty(db, actual_ty, self.normalization_scope, assumptions);
+                let formal_ty = substitute_complete(db, formal_ty, &args.residualize(db))
+                    .expect("selected input template must match body schema");
+                // A type that cannot be normalized binds no layout argument;
+                // its limit is reported where the type arises.
+                let (Ok(formal_ty), Ok(actual_ty)) = (
+                    normalize_ty(db, formal_ty, self.normalization_scope, assumptions),
+                    normalize_ty(db, actual_ty, self.normalization_scope, assumptions),
+                ) else {
+                    continue;
+                };
                 let mut bindings = Vec::new();
                 if !collect_layout_arg_bindings(db, formal_ty, actual_ty, &mut bindings) {
                     continue;
@@ -1416,18 +1421,18 @@ impl<'db> TraitInstId<'db> {
         db: &'db dyn HirAnalysisDb,
         scope: crate::core::hir_def::scope_graph::ScopeId<'db>,
         assumptions: PredicateListId<'db>,
-    ) -> Self {
-        let normalized_args: Vec<_> = self
+    ) -> Result<Self, crate::analysis::ty::normalize::NormalizationLimit> {
+        let normalized_args = self
             .args(db)
             .iter()
             .map(|&arg| crate::analysis::ty::normalize::normalize_ty(db, arg, scope, assumptions))
-            .collect();
-        Self::new(
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self::new(
             db,
             self.def(db),
             normalized_args,
             self.assoc_type_bindings(db).clone(),
-        )
+        ))
     }
 
     pub fn pretty_print(self, db: &dyn HirAnalysisDb, as_pred: bool) -> String {

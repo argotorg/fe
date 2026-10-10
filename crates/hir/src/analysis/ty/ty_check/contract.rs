@@ -650,6 +650,33 @@ pub fn check_contract_recv_blocks<'db>(
         }
     }
 
+    // Code generation finds an arm's return type through the variant's
+    // generated `Return` associated type, one step deeper than the type as
+    // written; a limit reached only there is reported here, at the arm.
+    if let Some(sol_ty) = resolve_sol_abi_ty(db, contract.scope(), assumptions) {
+        for (idx, _) in contract.recvs(db).data(db).iter().enumerate() {
+            let Some(recv) = contract.recv(db, idx as u32) else {
+                continue;
+            };
+            for arm in recv.arms(db) {
+                if let Err(limit) = arm.abi_info(db, sol_ty).ret_ty {
+                    let arm_span = contract
+                        .span()
+                        .recv(idx)
+                        .arms()
+                        .arm(arm.arm_idx(db) as usize);
+                    let span: DynLazySpan<'db> =
+                        if arm.arm(db).is_some_and(|hir_arm| hir_arm.ret_ty.is_some()) {
+                            arm_span.ret_ty().into()
+                        } else {
+                            arm_span.pat().into()
+                        };
+                    diags.push(limit.report(span).0.into());
+                }
+            }
+        }
+    }
+
     diags
 }
 

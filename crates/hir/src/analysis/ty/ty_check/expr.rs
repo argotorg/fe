@@ -34,9 +34,7 @@ use crate::analysis::ty::{
     corelib::{
         resolve_core_range_types, resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
     },
-    diagnostics::{
-        BodyDiag, FuncBodyDiag, MustUseSubject, TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
-    },
+    diagnostics::{BodyDiag, FuncBodyDiag, MustUseSubject, TraitConstraintDiag, TyDiagCollection},
     effects::{
         BarrierReason, EffectBarrier, EffectKeyKind, EffectPatternKey, EffectQuery,
         EffectRequirementDecl, EffectRequirementKey, EffectWitness, ForwardedEffectKey,
@@ -93,7 +91,6 @@ use crate::analysis::{
         LayoutBundlePathStep,
         const_expr::ConstExpr,
         const_ty::{ConstTyData, ConstTyId, const_ty_from_sem_const, try_eval_const_int_expr},
-        normalize::normalize_ty,
         ty_check::{RecordInitLowering, TyChecker, path::RecordInitChecker},
         ty_def::{InvalidCause, TyId},
         ty_lower::{
@@ -340,32 +337,6 @@ impl<'db> TyChecker<'db> {
         true
     }
 
-    /// An expression's type can reach the normalization limit only once
-    /// generic arguments are filled in, as in a call to
-    /// `fn get<T: Tr>() -> T::Out`. The limit leaves an invalid type, which
-    /// matches any type, so report it at the first expression that has it;
-    /// enclosing expressions that inherit the type are not reported again,
-    /// nor is a type that came from the expected type, which is reported
-    /// where that type is written.
-    fn report_normalization_limit(&mut self, expr: ExprId, ty: TyId<'db>, expected: TyId<'db>) {
-        let is_limit =
-            |ty| first_invalid_ty_cause(self.db, ty) == Some(InvalidCause::TypeNormalizationLimit);
-        if !is_limit(ty) || is_limit(expected) {
-            return;
-        }
-        let reported = self.diags.iter().any(|diag| {
-            matches!(
-                diag,
-                FuncBodyDiag::Ty(TyDiagCollection::Ty(TyLowerDiag::TypeNormalizationLimit(_)))
-            )
-        });
-        if !reported {
-            self.push_diag(TyDiagCollection::from(TyLowerDiag::TypeNormalizationLimit(
-                expr.span(self.body()).into(),
-            )));
-        }
-    }
-
     pub(super) fn check_expr(&mut self, expr: ExprId, expected: TyId<'db>) -> ExprProp<'db> {
         self.check_expr_with_result_context(expr, expected, false)
     }
@@ -399,7 +370,7 @@ impl<'db> TyChecker<'db> {
             return typed;
         };
 
-        let expected = normalize_ty(self.db, expected, self.env.scope(), self.env.assumptions());
+        let expected = self.normalize_unresolved(expected);
 
         self.env.enter_expr(expr);
         let mut actual = match expr_data {
@@ -445,10 +416,9 @@ impl<'db> TyChecker<'db> {
                 self.check_with(bindings, *body, expected, result_discarded)
             }
         };
+        // A limit in the expression's own type is reported at it.
+        actual.ty = self.normalize_unresolved(actual.ty);
         self.env.leave_expr();
-
-        actual.ty = normalize_ty(self.db, actual.ty, self.env.scope(), self.env.assumptions());
-        self.report_normalization_limit(expr, actual.ty, expected);
         if let Some(coerced) =
             self.try_coerce_capability_for_expr_to_expected(expr, actual.ty, expected)
         {
@@ -701,13 +671,8 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        let mut from = normalize_ty(
-            self.db,
-            inner_prop.ty,
-            self.env.scope(),
-            self.env.assumptions(),
-        );
-        let to = normalize_ty(self.db, target_ty, self.env.scope(), self.env.assumptions());
+        let mut from = self.normalize_unresolved(inner_prop.ty);
+        let to = self.normalize_unresolved(target_ty);
 
         // Casts operate on values, so for Copy capabilities treat the source as
         // the inner value type. This allows widening/narrowing checks such as
@@ -2177,12 +2142,12 @@ impl<'db> TyChecker<'db> {
     }
 
     fn direct_arg_style_for_provider(
-        &self,
+        &mut self,
         provider: ProvidedEffect<'db>,
         target_ty: TyId<'db>,
         _: bool,
     ) -> Option<EffectArgStyle> {
-        let target_ty = normalize_ty(self.db, target_ty, self.env.scope(), self.env.assumptions());
+        let target_ty = self.normalize_unresolved(target_ty);
         match provider_semantics(self.db, self.env.scope(), self.env.assumptions(), target_ty)
             .evidence
         {
@@ -2645,13 +2610,9 @@ impl<'db> TyChecker<'db> {
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
     ) -> TyId<'db> {
-        normalize_ty(
-            self.db,
-            self.table.fold_ty(self.db, target_ty),
-            scope,
-            assumptions,
-        )
-        .fold_with(self.db, &mut self.table)
+        let target_ty = self.table.fold_ty(self.db, target_ty);
+        self.normalize_unresolved_in(target_ty, scope, assumptions)
+            .fold_with(self.db, &mut self.table)
     }
 
     fn select_type_effect_binding_match(
@@ -2762,7 +2723,8 @@ impl<'db> TyChecker<'db> {
             self.commit_trait_goal_solution(effect_handle_inst, handle_solution);
 
             let target_assoc = effect_handle_inst.project_assoc_ty(self.db, target_ident)?;
-            let mut target_ty = normalize_ty(self.db, target_assoc, scope, assumptions)
+            let mut target_ty = self
+                .normalize_unresolved_in(target_assoc, scope, assumptions)
                 .fold_with(self.db, &mut self.table);
             let mut provided_ty = self.table.fold_ty(self.db, provided_ty);
 
@@ -5658,6 +5620,8 @@ fn body_diag_from_method_selection_err<'db>(
             traits,
         }
         .into(),
+
+        MethodSelectionError::NormalizationLimit(limit) => limit.report(method.span).0.into(),
     }
 }
 

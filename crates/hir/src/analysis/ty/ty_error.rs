@@ -92,8 +92,7 @@ fn collect_hir_ty_diags_in_mode<'db>(
 
 /// Projections in a written type are resolved only when the type is
 /// normalized. Report one that cannot be resolved within the normalization
-/// limits where it is written: elsewhere it would be an invalid type, which
-/// matches any type.
+/// limits where it is written.
 pub(crate) fn normalization_limit_diag<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
@@ -101,10 +100,11 @@ pub(crate) fn normalization_limit_diag<'db>(
     assumptions: PredicateListId<'db>,
     span: DynLazySpan<'db>,
 ) -> Option<TyDiagCollection<'db>> {
-    (ty.has_projection(db)
-        && first_invalid_ty_cause(db, normalize_ty(db, ty, scope, assumptions))
-            == Some(InvalidCause::TypeNormalizationLimit))
-    .then(|| TyLowerDiag::TypeNormalizationLimit(span).into())
+    if !ty.has_projection(db) {
+        return None;
+    }
+    let limit = normalize_ty(db, ty, scope, assumptions).err()?;
+    Some(limit.report(span).0)
 }
 
 pub fn collect_ty_lower_errors<'db>(
@@ -784,7 +784,11 @@ pub(crate) fn diag_from_invalid_cause<'db>(
 
         InvalidCause::TypeLoweringCycle => TyLowerDiag::TypeLoweringCycle(span).into(),
 
-        InvalidCause::TypeNormalizationLimit => TyLowerDiag::TypeNormalizationLimit(span).into(),
+        InvalidCause::NormalizationLimit { limit, stand_in } => match stand_in {
+            // Reported already, where the type was used.
+            super::normalize::LimitStandIn::Reported(_) => return None,
+            super::normalize::LimitStandIn::Written(_) => limit.report(span).0,
+        },
 
         InvalidCause::NotAType(_) => return None,
 

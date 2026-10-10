@@ -1402,7 +1402,13 @@ impl<'db> FuncParamView<'db> {
                         substitute_layout_holes_by_placeholder(db, expected, receiver_layout_args);
                 }
             }
-            let ty_norm = normalize_ty(db, ty, func.scope(), assumptions);
+            let ty_norm = match normalize_ty(db, ty, func.scope(), assumptions) {
+                Ok(ty) => ty,
+                Err(limit) => {
+                    out.push(limit.report(ty_span).0);
+                    return out;
+                }
+            };
 
             let matches_expected = |candidate: TyId<'db>| {
                 let (exp_base, exp_args) = expected.decompose_ty_app(db);
@@ -1568,7 +1574,7 @@ impl<'db> RecvArmView<'db> {
                 selector_value: None,
                 selector_signature: None,
                 args_ty: TyId::unit(db),
-                ret_ty: None,
+                ret_ty: Ok(None),
             };
         }
 
@@ -1587,7 +1593,7 @@ impl<'db> RecvArmView<'db> {
                 selector_value: selector_info.value,
                 selector_signature: selector_info.signature,
                 args_ty: variant_ty,
-                ret_ty: None,
+                ret_ty: Ok(None),
             };
         };
         let return_ident = IdentId::new(db, "Return".to_string());
@@ -1602,11 +1608,11 @@ impl<'db> RecvArmView<'db> {
             let return_proj = TyId::assoc_ty(db, inst.trait_ref(db), return_ident);
             normalize_ty(db, return_proj, contract.scope(), assumptions)
         } else {
-            TyId::invalid(db, InvalidCause::Other)
+            Ok(TyId::invalid(db, InvalidCause::Other))
         };
 
         let args_ty = variant_ty;
-        let ret_ty = (variant_ret_ty != TyId::unit(db)).then_some(variant_ret_ty);
+        let ret_ty = variant_ret_ty.map(|ty| (ty != TyId::unit(db)).then_some(ty));
 
         RecvArmAbiInfo {
             is_fallback: false,
@@ -1920,7 +1926,11 @@ pub struct RecvArmAbiInfo<'db> {
     pub selector_value: Option<u32>,
     pub selector_signature: Option<String>,
     pub args_ty: TyId<'db>,
-    pub ret_ty: Option<TyId<'db>>,
+    /// The variant's return type, `None` for unit. The compiler finds it
+    /// through the variant's generated `Return` associated type, which can
+    /// reach a normalization limit that the written type does not; that limit
+    /// is reported with the contract's recv blocks (`check_contract_recv_blocks`).
+    pub ret_ty: Result<Option<TyId<'db>>, crate::analysis::ty::normalize::NormalizationLimit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
@@ -4677,7 +4687,19 @@ impl<'db> ImplTrait<'db> {
         }
 
         match self.lowered_implementor(db) {
-            Ok(implementor) => (Some(implementor), Vec::new()),
+            Ok(implementor) => {
+                // The trait's arguments are written in the header: a limit in
+                // them is reported there.
+                let assumptions = param_env(db, self.into());
+                let limit = implementor.trait_(db).args(db).iter().find_map(|&arg| {
+                    crate::analysis::ty::normalize::normalize_ty(db, arg, self.scope(), assumptions)
+                        .err()
+                });
+                match limit {
+                    Some(limit) => (None, vec![limit.report(self.span().trait_ref().into()).0]),
+                    None => (Some(implementor), Vec::new()),
+                }
+            }
             Err(err) => {
                 let mut diags = Vec::new();
                 match err {
@@ -5558,6 +5580,9 @@ impl<'db> FieldView<'db> {
                 .field_errors_for_id(field)
                 .and_then(|errors| errors.first())
         {
+            if let ContractLayoutError::ProviderLimit(limit) = error {
+                return vec![limit.report(span).0];
+            }
             if let ContractLayoutError::InvalidConcreteArrayLength { invalid } = error {
                 if let Some(diag) = invalid
                     .invalid_cause(db)
@@ -5654,6 +5679,7 @@ impl<'db> FieldView<'db> {
                         | ContractLayoutError::UnresolvedConcreteLayoutRoot { .. }
                         | ContractLayoutError::AmbiguousProviderLayout
                         | ContractLayoutError::UnresolvedProviderTarget
+                        | ContractLayoutError::ProviderLimit(_)
                         | ContractLayoutError::UnresolvedProviderSpace
                         | ContractLayoutError::InvalidProviderRaw { .. }
                         | ContractLayoutError::NonRegularProviderCycle
@@ -5665,7 +5691,8 @@ impl<'db> FieldView<'db> {
                     };
                     TyLowerDiag::ContractFieldLayoutInvariant { span, ty, issue }
                 }
-                ContractLayoutError::InvalidConcreteArrayLength { .. } => unreachable!(),
+                ContractLayoutError::InvalidConcreteArrayLength { .. }
+                | ContractLayoutError::ProviderLimit(_) => unreachable!(),
             };
             out.push(diag.into());
             return out;

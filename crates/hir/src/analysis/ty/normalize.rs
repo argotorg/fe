@@ -7,6 +7,7 @@
 use std::collections::hash_map::Entry;
 
 use crate::core::hir_def::{ImplTrait, scope_graph::ScopeId};
+use crate::span::DynLazySpan;
 use common::indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
@@ -14,6 +15,7 @@ use super::{
     binder::Binder,
     canonical::Canonical,
     canonical::Canonicalized,
+    diagnostics::{TyDiagCollection, TyLowerDiag},
     fold::{TyFoldable, TyFolder},
     layout_holes::LayoutRootUse,
     trait_def::{
@@ -38,19 +40,143 @@ use crate::analysis::{
 /// - Simple associated types (e.g., `T::Output`)
 /// - Nested associated types (e.g., `T::Encoder::Output`)
 /// - Associated types with generic parameters
+///
+///
+/// Normalizing can reach a limit (see [`NormalizationLimit`]). That is an
+/// error of the program, never a type: the caller reports it where the type
+/// is used, or passes it on to code that does. The value that stands for a
+/// reported limit afterwards can only be made from the [`LimitReported`]
+/// that reporting returns.
 pub fn normalize_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-) -> TyId<'db> {
+) -> Result<TyId<'db>, NormalizationLimit> {
     let mut normalizer = TypeNormalizer::new(db, scope, assumptions);
-    ty.fold_with(db, &mut normalizer)
+    let normalized = ty.fold_with(db, &mut normalizer);
+    match normalizer.limit {
+        Some(limit) => Err(limit),
+        None => Ok(normalized),
+    }
+}
+
+/// A limit that normalizing a type reached. Whether a type reaches a limit
+/// depends only on the type, its scope and assumptions, and the limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum NormalizationLimit {
+    /// More than [`PROJECTION_DEPTH_LIMIT`] projections in the middle of
+    /// being resolved at once.
+    Nesting,
+    /// Projections larger in total than [`PROJECTION_WORK_LIMIT`] type
+    /// nodes.
+    Work,
+}
+
+impl NormalizationLimit {
+    /// How many nested steps the nesting limit allows.
+    pub const NESTING: usize = PROJECTION_DEPTH_LIMIT;
+    /// How many type nodes the work limit allows.
+    pub const WORK: usize = PROJECTION_WORK_LIMIT;
+
+    /// What resolving the associated types of a type that reached this limit
+    /// needs, as a clause: "resolving the associated types here {reason}".
+    pub fn reason(self) -> String {
+        match self {
+            Self::Nesting => format!("needs more than {} nested steps", grouped(Self::NESTING)),
+            Self::Work => format!("needs more than {} type nodes of work", grouped(Self::WORK)),
+        }
+    }
+
+    /// Reports this limit for the type at `span`: the diagnostic, and the
+    /// proof that it was reported.
+    pub(crate) fn report<'db>(
+        self,
+        span: DynLazySpan<'db>,
+    ) -> (TyDiagCollection<'db>, LimitReported) {
+        let diag = TyLowerDiag::TypeNormalizationLimit { span, limit: self }.into();
+        (diag, LimitReported(self))
+    }
+}
+
+/// Why an invalid type may stand for a type that reached a normalization
+/// limit, so that no further error is reported for its uses.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum LimitStandIn {
+    /// The type is written in the source and its lowering reached the limit.
+    /// Like every lowering error, the limit is reported where the type is
+    /// written (see `diag_from_invalid_cause`).
+    Written(WrittenType),
+    /// The limit was reported where the type was met.
+    Reported(LimitReported),
+}
+
+/// Proof that a type is being lowered from where it is written. Only type
+/// lowering, and constant evaluation of an expression written in a type,
+/// make one; the test `only_lowering_and_const_evaluation_make_a_written_type`
+/// holds the list of callers.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WrittenType(());
+
+impl WrittenType {
+    /// For type lowering and constant evaluation only (see above).
+    pub(in crate::analysis::ty) fn new() -> Self {
+        Self(())
+    }
+}
+
+/// `n` with its digits in groups of three: `65,536`.
+fn grouped(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (idx, digit) in digits.chars().enumerate() {
+        if idx > 0 && (digits.len() - idx).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
+/// Normalizes `ty`, keeping it as it is if a limit is reached. For code that
+/// works on types already normalized, and any limit in them reported, where
+/// they arise: the instances that passed admission, and the types of checked
+/// bodies and signatures. A kept type stays unresolved, so it matches only
+/// itself and is never taken for another type.
+pub fn normalize_or_keep<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> TyId<'db> {
+    normalize_ty(db, ty, scope, assumptions).unwrap_or(ty)
+}
+
+/// Proof that a normalization limit was reported to the user. Only
+/// [`NormalizationLimit::report`] makes one. It is not `Copy`: each proof
+/// stands for the one report it came with.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LimitReported(NormalizationLimit);
+
+impl LimitReported {
+    /// The value that stands for a type that reached the reported limit. It
+    /// matches any type, so no further error is reported for it.
+    pub(crate) fn recovery_ty(self, db: &dyn HirAnalysisDb) -> TyId<'_> {
+        let limit = self.0;
+        TyId::invalid(
+            db,
+            InvalidCause::NormalizationLimit {
+                limit,
+                stand_in: LimitStandIn::Reported(self),
+            },
+        )
+    }
 }
 
 /// Apply declared associated equalities without implementation selection.
 /// Structural slot planning uses declaration coordinates before the slots it
 /// is discovering exist, so implementation lookup would create a query cycle.
+/// A projection that would pass a limit is left unresolved.
 pub fn normalize_from_assumptions<'db, T>(
     db: &'db dyn HirAnalysisDb,
     value: T,
@@ -79,12 +205,15 @@ where
     normalize_from_assumptions(db, value, scope, PredicateListId::new(db, vec![evidence]))
 }
 
+/// The layout roots that `ty`'s associated types expose once resolved. A
+/// limit in resolving them, or in normalizing a root's owner, is returned:
+/// without it the roots could differ, and with them the layout.
 pub(crate) fn normalize_layout_root_uses<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-) -> Vec<LayoutRootUse<'db>> {
+) -> Result<Vec<LayoutRootUse<'db>>, NormalizationLimit> {
     fn collect<'db>(
         db: &'db dyn HirAnalysisDb,
         ty: TyId<'db>,
@@ -92,9 +221,9 @@ pub(crate) fn normalize_layout_root_uses<'db>(
         assumptions: PredicateListId<'db>,
         visiting: &mut rustc_hash::FxHashSet<TyId<'db>>,
         uses: &mut Vec<LayoutRootUse<'db>>,
-    ) {
+    ) -> Result<(), NormalizationLimit> {
         if !visiting.insert(ty) {
-            return;
+            return Ok(());
         }
         if let TyData::AssocTy(assoc) = ty.data(db) {
             let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
@@ -103,18 +232,18 @@ pub(crate) fn normalize_layout_root_uses<'db>(
                 && let ImplementorOrigin::Hir(impl_trait) = resolved.selected().origin(db)
             {
                 for root_use in resolved.assoc_ty_layout_root_uses(db, assoc.name) {
+                    let owner = root_use
+                        .owner
+                        .map(|owner| {
+                            let owner = Binder::bind(impl_trait.into(), owner)
+                                .instantiate(db, resolved.impl_args(db));
+                            normalize_ty(db, owner, scope, assumptions)
+                        })
+                        .transpose()?;
                     let root_use = LayoutRootUse {
                         value: Binder::bind(impl_trait.into(), root_use.value)
                             .instantiate(db, resolved.impl_args(db)),
-                        owner: root_use.owner.map(|owner| {
-                            normalize_ty(
-                                db,
-                                Binder::bind(impl_trait.into(), owner)
-                                    .instantiate(db, resolved.impl_args(db)),
-                                scope,
-                                assumptions,
-                            )
-                        }),
+                        owner,
                         selector: root_use.selector,
                     };
                     if !uses.contains(&root_use) {
@@ -122,19 +251,20 @@ pub(crate) fn normalize_layout_root_uses<'db>(
                     }
                 }
                 if let Some(instantiated) = resolved.instantiated_assoc_ty(db, assoc.name) {
-                    collect(db, instantiated, scope, assumptions, visiting, uses);
+                    collect(db, instantiated, scope, assumptions, visiting, uses)?;
                 }
             }
         } else {
             let (base, args) = ty.decompose_ty_app(db);
             if base != ty {
-                collect(db, base, scope, assumptions, visiting, uses);
+                collect(db, base, scope, assumptions, visiting, uses)?;
             }
             for arg in args {
-                collect(db, *arg, scope, assumptions, visiting, uses);
+                collect(db, *arg, scope, assumptions, visiting, uses)?;
             }
         }
         visiting.remove(&ty);
+        Ok(())
     }
 
     let mut uses = Vec::new();
@@ -145,8 +275,8 @@ pub(crate) fn normalize_layout_root_uses<'db>(
         assumptions,
         &mut rustc_hash::FxHashSet::default(),
         &mut uses,
-    );
-    uses
+    )?;
+    Ok(uses)
 }
 
 /// How many projections may be in the middle of being resolved at once.
@@ -169,6 +299,9 @@ pub struct TypeNormalizer<'db> {
     /// Size of the projections resolved so far, counted against
     /// [`PROJECTION_WORK_LIMIT`].
     projection_work: usize,
+    /// The first limit reached. Once one is reached nothing more is resolved
+    /// or cached, and the whole normalization fails.
+    limit: Option<NormalizationLimit>,
 }
 
 impl<'db> TypeNormalizer<'db> {
@@ -185,11 +318,12 @@ impl<'db> TypeNormalizer<'db> {
             cache: FxHashMap::default(),
             projection_depth: 0,
             projection_work: 0,
+            limit: None,
         }
     }
 
-    /// Starts resolving the projection `ty`, or returns an invalid type if
-    /// that would exceed the normalization limits.
+    /// Starts resolving the projection `ty`, or records the limit it would
+    /// exceed.
     ///
     /// The cycle guard stops a projection that comes back to itself, but not
     /// one whose impl defines it through a larger projection, such as
@@ -197,16 +331,21 @@ impl<'db> TypeNormalizer<'db> {
     /// types can also double at each step, staying small as interned values
     /// while growing exponentially as trees, which is how resolution walks
     /// them. So both the nesting and the total size are limited.
-    fn enter_projection(&mut self, ty: TyId<'db>) -> Result<(), TyId<'db>> {
-        let remaining = PROJECTION_WORK_LIMIT - self.projection_work;
-        match tree_size_within(self.db, ty, remaining) {
-            Some(size) if self.projection_depth < PROJECTION_DEPTH_LIMIT => {
-                self.projection_work += size;
-                self.projection_depth += 1;
-                Ok(())
-            }
-            _ => Err(TyId::invalid(self.db, InvalidCause::TypeNormalizationLimit)),
+    fn enter_projection(&mut self, ty: TyId<'db>) -> Result<(), NormalizationLimit> {
+        if self.projection_depth >= PROJECTION_DEPTH_LIMIT {
+            return Err(self.reach(NormalizationLimit::Nesting));
         }
+        let remaining = PROJECTION_WORK_LIMIT - self.projection_work;
+        let Some(size) = tree_size_within(self.db, ty, remaining) else {
+            return Err(self.reach(NormalizationLimit::Work));
+        };
+        self.projection_work += size;
+        self.projection_depth += 1;
+        Ok(())
+    }
+
+    fn reach(&mut self, limit: NormalizationLimit) -> NormalizationLimit {
+        *self.limit.get_or_insert(limit)
     }
 }
 
@@ -269,6 +408,10 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
     }
 
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        // The normalization has already failed; stop working on it.
+        if self.limit.is_some() {
+            return ty;
+        }
         match ty.data(self.db) {
             TyData::TyParam(p @ TyParam { owner, .. }) if p.is_trait_self() => {
                 if let Some(impl_) = owner.resolve_to::<ImplTrait>(self.db) {
@@ -289,23 +432,24 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
                     }
                 }
 
-                if let Err(limit) = self.enter_projection(ty) {
-                    self.cache.insert(*assoc_ty, Some(limit));
-                    return limit;
+                if self.enter_projection(ty).is_err() {
+                    self.cache.remove(assoc_ty);
+                    return ty;
                 }
                 let resolved = self
                     .try_resolve_assoc_ty(ty, assoc_ty)
                     .map(|replacement| self.fold_ty(db, replacement));
                 self.projection_depth -= 1;
-                if let Some(normalized) = resolved {
-                    self.cache.insert(*assoc_ty, Some(normalized));
-                    return normalized;
-                }
-
                 // Not resolved; still fold internals (e.g., normalize self type)
-                let folded = ty.super_fold_with(db, self);
-                self.cache.insert(*assoc_ty, Some(folded));
-                folded
+                let result = resolved.unwrap_or_else(|| ty.super_fold_with(db, self));
+                // A limit makes the whole normalization fail: nothing after
+                // it is kept as an answer.
+                if self.limit.is_some() {
+                    self.cache.remove(assoc_ty);
+                } else {
+                    self.cache.insert(*assoc_ty, Some(result));
+                }
+                result
             }
             _ => ty.super_fold_with(db, self),
         }
@@ -466,5 +610,36 @@ impl<'db> TypeNormalizer<'db> {
             1 => Some(*dedup.first().unwrap().0),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Only type lowering and constant evaluation of an expression written in
+    /// a type make a [`super::WrittenType`]: the stand-in it allows is
+    /// reported where the type is written, which only those two know.
+    #[test]
+    fn only_lowering_and_const_evaluation_make_a_written_type() {
+        fn visit(dir: &std::path::Path, found: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    visit(&path, found);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let calls = text.matches(concat!("WrittenType", "::new(")).count();
+                    for _ in 0..calls {
+                        found.push(path.file_name().unwrap().to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+        let mut found = Vec::new();
+        visit(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut found,
+        );
+        found.sort();
+        assert_eq!(found, ["const_ty.rs", "ty_lower.rs"]);
     }
 }

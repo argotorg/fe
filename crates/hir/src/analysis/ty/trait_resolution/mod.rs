@@ -4,7 +4,7 @@ use super::{
     const_expr::ConstExpr,
     const_ty::ConstTyData,
     fold::TyFoldable,
-    normalize::normalize_from_assumptions,
+    normalize::{NormalizationLimit, normalize_from_assumptions},
     trait_def::{ImplementorId, TraitInstId},
     ty_def::{TyData, TyFlags, TyId},
     visitor::{TyVisitable, TyVisitor},
@@ -152,7 +152,10 @@ impl<'db> TraitSolveCx<'db> {
         inst: TraitInstId<'db>,
     ) -> Selection<ImplementorId<'db>> {
         let scope = self.normalization_scope_for_trait_inst(db, inst);
-        let inst = normalize_trait_inst_preserving_validity(db, inst, scope, self.assumptions);
+        // A goal that reaches a normalization limit stays unresolved, so it
+        // is not proved.
+        let inst = normalize_trait_inst_preserving_validity(db, inst, scope, self.assumptions)
+            .unwrap_or(inst);
         // An assumption proves a bound; it is not a second implementation.
         // Keep inference goals on the ordinary proof query: an assumption may
         // select a different substitution from the implementations in scope.
@@ -257,8 +260,8 @@ pub(crate) fn normalize_trait_inst_preserving_validity<'db>(
     inst: TraitInstId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-) -> TraitInstId<'db> {
-    let normalized = inst.normalize(db, scope, assumptions);
+) -> Result<TraitInstId<'db>, NormalizationLimit> {
+    let normalized = inst.normalize(db, scope, assumptions)?;
     let original_has_invalid = inst.args(db).iter().copied().any(|ty| ty.has_invalid(db))
         || inst
             .assoc_type_bindings(db)
@@ -275,11 +278,11 @@ pub(crate) fn normalize_trait_inst_preserving_validity<'db>(
             .values()
             .copied()
             .any(|ty| ty.has_invalid(db));
-    if !original_has_invalid && normalized_has_invalid {
+    Ok(if !original_has_invalid && normalized_has_invalid {
         inst
     } else {
         normalized
-    }
+    })
 }
 
 #[salsa::tracked(
@@ -470,12 +473,15 @@ pub(crate) fn check_ty_wf<'db>(
     // Normalize constraints to resolve associated types
     let normalized_constraints = {
         let scope = solve_cx.origin_scope(db);
-        let normalized_list: Vec<_> = constraints
+        let normalized_list = constraints
             .list(db)
             .iter()
             .map(|&goal| goal.normalize(db, scope, assumptions))
-            .collect();
-        PredicateListId::new(db, normalized_list)
+            .collect::<Result<Vec<_>, _>>();
+        match normalized_list {
+            Ok(list) => PredicateListId::new(db, list),
+            Err(limit) => return WellFormedness::NormalizationLimit(limit),
+        }
     };
 
     for &goal in normalized_constraints.list(db) {
@@ -693,6 +699,8 @@ pub(crate) enum WellFormedness<'db> {
         goal: TraitInstId<'db>,
         subgoal: Option<TraitInstId<'db>>,
     },
+    /// Deciding it reached a normalization limit.
+    NormalizationLimit(NormalizationLimit),
 }
 
 impl<'db> WellFormedness<'db> {
@@ -727,6 +735,7 @@ impl<'db> WellFormedness<'db> {
                 }
                 .into(),
             ),
+            Self::NormalizationLimit(limit) => Some(limit.report(span).0),
         }
     }
 }
@@ -759,12 +768,15 @@ pub(crate) fn check_trait_inst_wf<'db>(
     // Normalize constraints after instantiation to resolve associated types
     let normalized_constraints = {
         let scope = solve_cx.normalization_scope_for_trait_inst(db, trait_inst);
-        let normalized_list: Vec<_> = constraints
+        let normalized_list = constraints
             .list(db)
             .iter()
             .map(|&goal| goal.normalize(db, scope, assumptions))
-            .collect();
-        PredicateListId::new(db, normalized_list)
+            .collect::<Result<Vec<_>, _>>();
+        match normalized_list {
+            Ok(list) => PredicateListId::new(db, list),
+            Err(limit) => return WellFormedness::NormalizationLimit(limit),
+        }
     };
 
     for &goal in normalized_constraints.list(db) {

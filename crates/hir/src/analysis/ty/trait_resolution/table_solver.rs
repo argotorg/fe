@@ -92,7 +92,9 @@ fn normalize_assoc_binding<'db>(
     assumptions: super::PredicateListId<'db>,
 ) -> TyId<'db> {
     let ty = ty.fold_with(db, table);
-    crate::analysis::ty::normalize::normalize_ty(db, ty, scope, assumptions)
+    // A binding that reaches a normalization limit stays unresolved, so it
+    // matches only itself.
+    crate::analysis::ty::normalize::normalize_ty(db, ty, scope, assumptions).unwrap_or(ty)
 }
 
 fn unify_trait_inst_with_normalized_assoc_bindings<'db>(
@@ -240,8 +242,11 @@ impl<'db> TraitResolutionContext<'db> {
             self.origin_ingot,
             query.goal,
         );
+        // A goal that reaches a normalization limit stays unresolved, so it is
+        // not proved.
         let normalized_goal =
-            normalize_trait_inst_preserving_validity(self.db, query.goal, scope, query.assumptions);
+            normalize_trait_inst_preserving_validity(self.db, query.goal, scope, query.assumptions)
+                .unwrap_or(query.goal);
         let prepared = PreparedQuery {
             table,
             query,
@@ -411,7 +416,8 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                     candidate.trait_inst(self.db),
                     scope,
                     query.assumptions,
-                );
+                )
+                .unwrap_or(candidate.trait_inst(self.db));
                 if unify_trait_inst_with_normalized_assoc_bindings(
                     self.db,
                     &mut table,
@@ -484,12 +490,14 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 self.origin_ingot,
                 pending_goal,
             );
+            let pending_goal = pending_goal.fold_with(self.db, &mut branch.table);
             normalize_trait_inst_preserving_validity(
                 self.db,
-                pending_goal.fold_with(self.db, &mut branch.table),
+                pending_goal,
                 scope,
                 rebase.assumptions(),
             )
+            .unwrap_or(pending_goal)
         };
         let normalized_solution = {
             let scope = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
@@ -497,12 +505,9 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 self.origin_ingot,
                 solution,
             );
-            normalize_trait_inst_preserving_validity(
-                self.db,
-                solution.fold_with(self.db, &mut branch.table),
-                scope,
-                rebase.assumptions(),
-            )
+            let solution = solution.fold_with(self.db, &mut branch.table);
+            normalize_trait_inst_preserving_validity(self.db, solution, scope, rebase.assumptions())
+                .unwrap_or(solution)
         };
         if branch
             .table
