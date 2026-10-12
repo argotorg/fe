@@ -42,3 +42,26 @@ fn malformed_selection_alias_reports_its_specific_cause() {
         );
     }
 }
+
+#[test]
+fn tree_sitter_preserves_the_same_selection_name() {
+    let source = "impl<T> Produce for Wrapper<T> as Alt where T: Bound {}";
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_fe::LANGUAGE.into())
+        .unwrap();
+    let tree = parser.parse(source, None).unwrap();
+    assert!(
+        !tree.root_node().has_error(),
+        "{}",
+        tree.root_node().to_sexp()
+    );
+    let mut cursor = tree.root_node().walk();
+    let item = tree
+        .root_node()
+        .named_children(&mut cursor)
+        .find(|node| node.kind() == "impl_trait")
+        .unwrap();
+    let name = item.child_by_field_name("selection_name").unwrap();
+    assert_eq!(name.utf8_text(source.as_bytes()).unwrap(), "Alt");
+}
