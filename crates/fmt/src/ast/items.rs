@@ -1376,6 +1376,10 @@ impl ToDoc for ast::ImplTrait {
         );
 
         let where_clause = where_doc(self, ctx);
+        let selection = self
+            .selection_name()
+            .map(|name| alloc.text(" as ").append(alloc.text(ctx.token(&name))))
+            .unwrap_or_else(|| alloc.nil());
 
         let items_doc = self.item_list().map_or_else(
             || alloc.text(" {}"),
@@ -1387,6 +1391,7 @@ impl ToDoc for ast::ImplTrait {
             .append(generics)
             .append(trait_doc)
             .append(ty_doc)
+            .append(selection)
             .append(where_clause)
             .append(items_doc)
     }
