@@ -196,8 +196,13 @@ fn unresolved_default_selection_blocks_until_concrete_override() {
 trait Read { const fn value() -> u256 { 9 } }
 struct Subject {}
 impl Read for Subject { const fn value() -> u256 { 42 } }
+struct DefaultSubject {}
+impl Read for DefaultSubject {}
 const fn generic<T: Read>() -> u256 { <T as Read>::value() + 1 }
 const fn answer() -> u256 { generic<Subject>() }
+const fn inherited() -> u256 { generic<DefaultSubject>() }
+const fn fault() -> u256 { let zero: u256 = 0
+    generic<DefaultSubject>() / zero }
 "#,
     );
     let (module, _) = db.top_mod(file);
@@ -219,6 +224,24 @@ const fn answer() -> u256 { generic<Subject>() }
         panic!("concrete override must execute: {outcome:?}");
     };
     assert_eq!(value.pretty_print(&db), "43");
+    let inherited = BodyOwner::Func(find_func(&db, module, "inherited"));
+    let outcome = eval_body_owner_const(
+        &db,
+        inherited,
+        GenericSubst::for_body_owner(&db, inherited, vec![]),
+    );
+    let EvalOutcome::Ready(value) = outcome else {
+        panic!("ground inherited default must execute: {outcome:?}");
+    };
+    assert_eq!(value.pretty_print(&db), "10");
+    let fault = BodyOwner::Func(find_func(&db, module, "fault"));
+    let outcome = eval_body_owner_const(
+        &db,
+        fault,
+        GenericSubst::for_body_owner(&db, fault, vec![]),
+    );
+    assert!(matches!(outcome, EvalOutcome::Failed(_)), "{outcome:?}");
+    assert!(format!("{outcome:?}").contains("DivisionByZero"));
 }
 
 #[test]
