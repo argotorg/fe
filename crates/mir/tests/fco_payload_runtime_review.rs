@@ -455,13 +455,10 @@ fn described_evidence_constants_retain_the_selected_declaration() {
     }
 }
 
-#[test]
-fn source_runtime_calls_deliver_issued_choices_to_generic_callees() {
+fn check_source_runtime_choice_delivery(name: &str, callers: &str) {
     let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "runtime_choice_delivery.fe".into(),
-        r#"
-use core::obligations::{Evidence, prove}
+    let source = [
+        r#"use core::obligations::{Evidence, prove}
 trait Pick { const fn value() -> u256 }
 struct Subject {}
 impl Pick for Subject { const fn value() -> u256 { 1 } }
@@ -471,10 +468,11 @@ type Goal = Pick<Subject>
 const fn first() -> Evidence<Goal> { with (First) { prove<Goal>() } }
 const fn second() -> Evidence<Goal> { with (Second) { prove<Goal>() } }
 fn consume<T>(_ witness: Evidence<Pick<T>>) -> u256 { with (witness) { <T as Pick>::value() } }
-fn first_result() -> u256 { consume<Subject>(first()) }
-fn second_result() -> u256 { consume<Subject>(second()) }
 "#,
-    );
+        callers,
+    ]
+    .concat();
+    let file = db.new_stand_alone(name.into(), &source);
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
     let first = issued(&db, module, "first");
@@ -517,4 +515,48 @@ fn second_result() -> u256 { consume<Subject>(second()) }
     for expected in expected {
         assert!(choices.contains(&expected));
     }
+}
+
+#[test]
+fn source_runtime_calls_deliver_issued_choices_to_generic_callees() {
+    check_source_runtime_choice_delivery(
+        "direct_choice_delivery.fe",
+        r#"fn first_result() -> u256 { consume<Subject>(first()) }
+fn second_result() -> u256 { consume<Subject>(second()) }"#,
+    );
+}
+
+#[test]
+fn tuple_projections_deliver_issued_choices_to_generic_callees() {
+    check_source_runtime_choice_delivery(
+        "tuple_choice_delivery.fe",
+        r#"fn first_result() -> u256 { let pair: (Evidence<Goal>, u256) = (first(), 7)
+consume<Subject>(pair.0) }
+fn second_result() -> u256 { let pair: (Evidence<Goal>, u256) = (second(), 7)
+consume<Subject>(pair.0) }"#,
+    );
+}
+
+#[test]
+fn destructuring_delivers_issued_choices_to_generic_callees() {
+    check_source_runtime_choice_delivery(
+        "destructure_choice_delivery.fe",
+        r#"fn first_result() -> u256 { let (witness, _tag): (Evidence<Goal>, u256) = (first(), 7)
+consume<Subject>(witness) }
+fn second_result() -> u256 { let (witness, _tag): (Evidence<Goal>, u256) = (second(), 7)
+consume<Subject>(witness) }"#,
+    );
+}
+
+#[test]
+fn aggregate_factories_deliver_issued_choices_to_generic_callees() {
+    check_source_runtime_choice_delivery(
+        "factory_choice_delivery.fe",
+        r#"const fn first_pair() -> (Evidence<Goal>, u256) { (first(), 7) }
+const fn second_pair() -> (Evidence<Goal>, u256) { (second(), 7) }
+fn first_result() -> u256 { let pair = first_pair()
+consume<Subject>(pair.0) }
+fn second_result() -> u256 { let pair = second_pair()
+consume<Subject>(pair.0) }"#,
+    );
 }

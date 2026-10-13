@@ -30,7 +30,7 @@ use crate::{
             },
             ty_check::{
                 BodyOwner, Callable, ConstRef, EffectParamSite, EffectProviderSpecialization,
-                LocalBinding, ResolvedEffectArg,
+                LocalBinding, ResolvedEffectArg, ReturnProjectionStep,
             },
             ty_def::{TyFlags, TyId},
             ty_lower::{
@@ -42,7 +42,7 @@ use crate::{
     },
     core::semantic::{EffectEnvView, EffectRequirementKey, ProviderBinding},
     hir_def::{
-        CallableDef, Const, ExprId, Func, GenericParamOwner, HirIngot, Partial, Stmt,
+        CallableDef, Const, Expr, ExprId, Func, GenericParamOwner, HirIngot, Partial,
         params::FuncParamMode, scope_graph::ScopeId,
     },
 };
@@ -455,15 +455,35 @@ pub(super) fn opened_operand_application<'db>(
 ) -> Option<ImplApplicationRecord<'db>> {
     let typed = caller.key(db).typed_body(db);
     let mut seen = Vec::new();
+    let mut projection = Vec::new();
     loop {
         if seen.contains(&operand) {
             return None;
         }
         seen.push(operand);
+        let body = typed.body()?;
+        if let Partial::Present(Expr::Field(base, _)) = operand.data(db, body) {
+            projection.insert(
+                0,
+                ReturnProjectionStep::Field(typed.resolved_field_index(operand)?),
+            );
+            operand = *base;
+            continue;
+        }
+        if let Partial::Present(Expr::Tuple(elems)) = operand.data(db, body)
+            && let Some(ReturnProjectionStep::Field(index)) = projection.first().copied()
+        {
+            operand = *elems.get(usize::from(index))?;
+            projection.remove(0);
+            continue;
+        }
         match typed.expr_prop(db, operand).binding {
             Some(LocalBinding::Param {
                 idx, is_mut: false, ..
             }) => {
+                if !projection.is_empty() {
+                    return None;
+                }
                 return caller
                     .key(db)
                     .impl_env(db)
@@ -472,22 +492,17 @@ pub(super) fn opened_operand_application<'db>(
                     .find(|(index, _)| *index == idx)
                     .map(|(_, record)| *record);
             }
-            Some(LocalBinding::Local { pat, is_mut: false }) => {
-                operand = typed
-                    .body()?
-                    .stmts(db)
-                    .values()
-                    .find_map(|stmt| match stmt {
-                        Partial::Present(Stmt::Let(bound, _, Some(value))) if *bound == pat => {
-                            Some(*value)
-                        }
-                        _ => None,
-                    })?;
+            Some(binding @ LocalBinding::Local { is_mut: false, .. }) => {
+                let source = typed.binding_source(db, binding)?;
+                let mut source_projection = source.projection;
+                source_projection.extend(projection);
+                projection = source_projection;
+                operand = source.init_expr;
             }
             _ => {
                 let callable = typed.callable_expr(operand)?;
                 if let Some(record) = callable.evidence_introduction() {
-                    return Some(record);
+                    return projection.is_empty().then_some(record);
                 }
                 if !callable.checked_input_tys()?.is_empty()
                     || !typed.call_effect_args(operand).unwrap_or(&[]).is_empty()
@@ -523,6 +538,24 @@ pub(super) fn opened_operand_application<'db>(
                 let EvalOutcome::Ready(value) = outcome else {
                     return None;
                 };
+                let mut value = value;
+                for step in &projection {
+                    value = match (step, value.value(db)) {
+                        (
+                            ReturnProjectionStep::Field(index),
+                            SemConstValue::Tuple { elems, .. },
+                        ) => *elems.get(usize::from(*index))?,
+                        (
+                            ReturnProjectionStep::Field(index),
+                            SemConstValue::Struct { fields, .. },
+                        ) => *fields.get(usize::from(*index))?,
+                        (
+                            ReturnProjectionStep::ConstantIndex(index),
+                            SemConstValue::Array { elems, .. },
+                        ) => *elems.get(*index)?,
+                        _ => return None,
+                    };
+                }
                 return match value.value(db) {
                     SemConstValue::Evidence { application, .. } => Some(*application),
                     _ => None,
