@@ -1047,6 +1047,57 @@ fn specialize_provider_address_space<'db>(
     specialization.provider.semantics = semantics;
 }
 
+fn normalize_selected_lexical_consts<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    records: &'db [crate::analysis::ty::trait_def::ImplApplicationRecord<'db>],
+    destination: TraitSolveCx<'db>,
+) -> TyId<'db> {
+    use crate::analysis::ty::{
+        const_expr::ConstExpr,
+        const_ty::{ConstTyData, const_ty_from_resolved_trait_const},
+        fold::TyFolder,
+        ty_def::{InvalidCause, TyData},
+    };
+    struct Selected<'db> {
+        records: &'db [crate::analysis::ty::trait_def::ImplApplicationRecord<'db>],
+        destination: TraitSolveCx<'db>,
+    }
+    impl<'db> TyFolder<'db> for Selected<'db> {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            let ty = ty.super_fold_with(db, self);
+            if let TyData::ConstTy(value) = ty.data(db)
+                && let ConstTyData::Abstract(expr, expected) = value.data(db)
+                && let ConstExpr::TraitConst(assoc) = expr.data(db)
+                && let Some(record) = self.records.iter().rev().copied().find(|record| {
+                    record.goal().def(db) == assoc.inst().def(db)
+                        && record.goal().args(db) == assoc.inst().args(db)
+                })
+            {
+                // Delivered choice is authority only after destination
+                // revalidation. A failed selected route cannot fall back
+                // to an ordinary implementation during type normalization.
+                return record
+                    .revalidate(db, self.destination, assoc.inst())
+                    .ok()
+                    .and_then(|application| {
+                        const_ty_from_resolved_trait_const(db, application.resolved(), assoc.name())
+                    })
+                    .map(|value| TyId::const_ty(db, value.evaluate(db, Some(*expected))))
+                    .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
+            }
+            ty
+        }
+    }
+    ty.fold_with(
+        db,
+        &mut Selected {
+            records,
+            destination,
+        },
+    )
+}
+
 #[salsa::tracked]
 impl<'db> SemanticInstance<'db> {
     #[salsa::tracked]
@@ -1191,6 +1242,14 @@ impl<'db> SemanticInstance<'db> {
 
     #[salsa::tracked]
     pub fn normalized_ty(self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        let env = self.key(db).impl_env(db);
+        let ty = normalize_selected_lexical_consts(
+            db,
+            ty,
+            env.lexical_applications(db),
+            TraitSolveCx::new(db, env.normalization_scope(db))
+                .with_assumptions(self.assumptions(db)),
+        );
         normalize_ty(db, ty, self.normalization_scope(db), self.assumptions(db))
     }
 

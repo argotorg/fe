@@ -2713,7 +2713,7 @@ pub(super) fn const_ty_from_trait_const<'db>(
     const_ty_from_resolved_trait_const(db, resolved, name)
 }
 
-pub(super) fn const_ty_from_resolved_trait_const<'db>(
+pub(crate) fn const_ty_from_resolved_trait_const<'db>(
     db: &'db dyn HirAnalysisDb,
     resolved: ResolvedImplInstance<'db>,
     name: IdentId<'db>,

@@ -362,3 +362,29 @@ fn boxed_parameter_templates_wait_for_witness_delivery() {
         "templates retain pending witness delivery while executable roots validate: {diagnostics:#?}"
     );
 }
+
+#[test]
+fn selected_array_layout_normalizes_with_delivered_lexical_record() {
+    use fe_hir::{
+        analysis::{
+            semantic::{
+                get_or_build_semantic_instance, identity_semantic_instance_key,
+                normalize_runtime_semantic_body,
+            },
+            ty::ty_check::BodyOwner,
+        },
+        test_db::find_func,
+    };
+    let source = include_str!("pr1797_review_controls/constant-layout.fe");
+    for source in [source.to_owned(), source.replace("with (W)", "with (Wide)")] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("selected-array-layout.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let owner = BodyOwner::Func(find_func(&db, module, "check"));
+        let instance =
+            get_or_build_semantic_instance(&db, identity_semantic_instance_key(&db, owner));
+        normalize_runtime_semantic_body(&db, instance)
+            .expect("selected array size must agree across the call boundary");
+    }
+}
