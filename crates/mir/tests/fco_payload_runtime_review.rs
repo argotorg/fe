@@ -615,3 +615,16 @@ fn second_result() -> u256 { forward<Subject,Subject>((second(), first())) }
 "#,
     );
 }
+
+#[test]
+fn argument_taking_factories_forward_the_original_issued_choice() {
+    check_source_runtime_choice_delivery(
+        "argument_factory_choice_delivery.fe",
+        r#"
+use core::obligations::Constraint
+const fn identity<G: Constraint>(_ witness: Evidence<G>) -> Evidence<G> { witness }
+fn first_result() -> u256 { consume<Subject>(identity<Goal>(first())) }
+fn second_result() -> u256 { consume<Subject>(identity<Goal>(second())) }
+"#,
+    );
+}

@@ -6,7 +6,7 @@ use super::{
 use crate::{
     analysis::{
         HirAnalysisDb,
-        semantic::{EvalOutcome, SemConstValue, SemOrigin, SemanticConstRef, eval_const_instance},
+        semantic::{EvalOutcome, SemConstValue, SemOrigin, SemanticConstRef},
         ty::{
             assoc_const::{AssocConstUse, InherentConstUse},
             binder::Binder,
@@ -456,6 +456,83 @@ pub(super) fn opened_operand_application<'db>(
     opened_operand_application_at(db, caller, operand, Vec::new())
 }
 
+fn compiler_known_operand_value<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    operand: ExprId,
+) -> Option<crate::analysis::semantic::SemConstId<'db>> {
+    use crate::analysis::semantic::{
+        ConstDesc, CtfeConfig, VerifiedConstValueId, const_computation_for_instance,
+        force_const_computation, issue_checked_evidence,
+    };
+    let typed = caller.key(db).typed_body(db);
+    let ty = typed.expr_ty(db, operand);
+    if typed.expr_prop(db, operand).binding.is_some() {
+        let record = opened_operand_application(db, caller, operand)?;
+        return issue_checked_evidence(db, record, ty, SemOrigin::Expr(operand))
+            .ok()
+            .map(|value| value.value());
+    }
+    let callable = typed.callable_expr(operand)?;
+    if let Some(record) = callable.evidence_introduction() {
+        return issue_checked_evidence(db, record, ty, SemOrigin::Expr(operand))
+            .ok()
+            .map(|value| value.value());
+    }
+    let CallableDef::Func(func) = callable.callable_def() else {
+        return None;
+    };
+    if !func.is_const(db)
+        || callable.checked_input_tys()?.len() != callable.argument_operands().len()
+        || !typed.call_effect_args(operand).unwrap_or(&[]).is_empty()
+        || callable.generic_args().iter().any(|arg| {
+            arg.has_param(db)
+                || arg.has_var(db)
+                || arg.has_invalid(db)
+                || arg.has_hole(db)
+                || arg.has_projection(db)
+        })
+    {
+        return None;
+    }
+    let values = callable
+        .argument_operands()
+        .iter()
+        .map(|&argument| compiler_known_operand_value(db, caller, argument))
+        .collect::<Option<Vec<_>>>()?;
+    let callee =
+        provisional_semantic_callee_key(db, caller.key(db), callable, &[], caller.assumptions(db))
+            .ok()??;
+    let parameters = values.iter().copied().enumerate().collect::<Vec<_>>();
+    let env = callee
+        .key
+        .impl_env(db)
+        .with_argument_evidence_values(db, &parameters);
+    let key = SemanticInstanceKey::new(
+        db,
+        callee.key.owner(db),
+        callee.key.subst(db),
+        callee.key.effect_providers(db),
+        env,
+    );
+    let inputs = values
+        .into_iter()
+        .map(|value| {
+            VerifiedConstValueId::from_complete_execution(db, value)
+                .ok()
+                .map(|value| ConstDesc::value(db, value, key.owner(db).scope()))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let EvalOutcome::Ready(value) = force_const_computation(
+        db,
+        const_computation_for_instance(db, key, inputs),
+        CtfeConfig::default(),
+    ) else {
+        return None;
+    };
+    Some(value.value())
+}
+
 fn opened_operand_application_at<'db>(
     db: &'db dyn HirAnalysisDb,
     caller: SemanticInstance<'db>,
@@ -518,40 +595,7 @@ fn opened_operand_application_at<'db>(
                 if let Some(record) = callable.evidence_introduction() {
                     return projection.is_empty().then_some(record);
                 }
-                if !callable.checked_input_tys()?.is_empty()
-                    || !typed.call_effect_args(operand).unwrap_or(&[]).is_empty()
-                    || callable.generic_args().iter().any(|arg| {
-                        arg.has_param(db)
-                            || arg.has_var(db)
-                            || arg.has_invalid(db)
-                            || arg.has_hole(db)
-                            || arg.has_projection(db)
-                    })
-                {
-                    return None;
-                }
-                // Evaluate only the closed factory's own instance. Evaluating
-                // the caller expression here would cycle through caller lowering.
-                let callee = provisional_semantic_callee_key(
-                    db,
-                    caller.key(db),
-                    callable,
-                    &[],
-                    caller.assumptions(db),
-                )
-                .ok()??;
-                let BodyOwner::Func(func) = callee.key.owner(db) else {
-                    return None;
-                };
-                if !func.is_const(db) {
-                    return None;
-                }
-                let outcome =
-                    eval_const_instance(db, super::get_or_build_semantic_instance(db, callee.key));
-
-                let EvalOutcome::Ready(value) = outcome else {
-                    return None;
-                };
+                let value = compiler_known_operand_value(db, caller, operand)?;
                 let mut value = value;
                 for step in &projection {
                     value = match (step, value.value(db)) {
