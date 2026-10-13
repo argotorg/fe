@@ -2056,7 +2056,7 @@ fn semantic_const_key_for_inherent_const<'db>(
     ))
 }
 
-fn semantic_const_key_for_assoc_const<'db>(
+pub(crate) fn semantic_const_key_for_assoc_const<'db>(
     db: &'db dyn HirAnalysisDb,
     assoc: AssocConstUse<'db>,
     records: Vec<ImplApplicationRecord<'db>>,

@@ -431,3 +431,24 @@ fn const_choice_definition_defers_only_until_runtime_use() {
         }
     }
 }
+
+#[test]
+fn associated_evidence_constant_uses_its_saved_selection_for_layout() {
+    let source = include_str!("pr1797_review_controls/associated-evidence-layout.fe");
+    let direct = source.replace("with (<Maker as Factory>::W)", "with (Second)");
+    assert_eq!(diagnostics(&direct), "[]", "direct selection twin");
+    assert_eq!(
+        diagnostics(source),
+        "[]",
+        "associated Evidence uses saved Factory selection"
+    );
+    evaluate_known_control(source, "3");
+    let captured = source.replace("fn check() -> u256 {", "impl Factory for Maker as Other { const W: Evidence<Goal> = with (First) { prove<Goal>() } }\nfn check() -> u256 {")
+        .replace("with (<Maker as Factory>::W) { consume<Subject>([1, 2, 3]) }", "let saved = <Maker as Factory>::W\nwith (Other) { with (saved) { consume<Subject>([1, 2, 3]) } }");
+    assert_eq!(
+        diagnostics(&captured),
+        "[]",
+        "alias keeps the initializer frame rather than the later current frame"
+    );
+    evaluate_known_control(&captured, "3");
+}

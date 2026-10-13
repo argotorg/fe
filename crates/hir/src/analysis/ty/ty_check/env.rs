@@ -1937,12 +1937,38 @@ impl<'db> crate::analysis::semantic::operand_recovery::OperandRecoveryCx<'db> fo
         };
         let ty = self.typed_expr(operand)?.ty;
         if let Some(reference) = self.expr_const_ref(operand) {
-            let reference = crate::analysis::semantic::instance::resolve_semantic_const_ref(
-                self.db,
-                reference,
-                ty,
-                SemOrigin::Expr(operand),
-            )?;
+            let reference = match reference {
+                ConstRef::TraitConst(assoc) if !self.const_openings[operand].is_empty() => {
+                    // Use the source expression's checked frame snapshot, not
+                    // the current frame or ordinary trait discovery. A pending
+                    // record stays pending and cannot authorize a fallback.
+                    let records = self.const_openings[operand]
+                        .iter()
+                        .map(|opening| match *opening {
+                            super::TraitOpening::Named(record) => Some(record),
+                            super::TraitOpening::Evidence { operand, .. } => {
+                                self.known_operand_application(operand)
+                            }
+                        })
+                        .collect::<Option<Vec<_>>>()?;
+                    let key =
+                        crate::analysis::semantic::instance::semantic_const_key_for_assoc_const(
+                            self.db, assoc, records,
+                        )?;
+                    crate::analysis::semantic::SemanticConstRef::new(
+                        self.db,
+                        key,
+                        ty,
+                        SemOrigin::Expr(operand),
+                    )
+                }
+                _ => crate::analysis::semantic::instance::resolve_semantic_const_ref(
+                    self.db,
+                    reference,
+                    ty,
+                    SemOrigin::Expr(operand),
+                )?,
+            };
             // Never force a reference back into the checker currently borrowing these tables.
             if reference.instance(self.db).owner(self.db) == self.owner {
                 return None;

@@ -8,7 +8,7 @@ pub(crate) use const_ref::{
     checked_operand_callee, declaration_reaches_trait_goal, has_unbound_evidence_calls,
     known_operand_variant, opened_assoc_const_ref, provisional_semantic_callee_key,
     recover_known_operand, resolve_semantic_const_ref, resolve_semantic_const_ref_in_instance,
-    semantic_callee_key_with_effect_providers,
+    semantic_callee_key_with_effect_providers, semantic_const_key_for_assoc_const,
 };
 pub use semantic::{
     CallSiteLowering, ForLoopCallSites, InstantiatedEffectEnv, ReceiverLoweringPlan,

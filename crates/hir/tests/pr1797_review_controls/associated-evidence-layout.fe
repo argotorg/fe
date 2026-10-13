@@ -1,0 +1,19 @@
+use core::obligations::{Evidence, prove}
+trait Width { const N: u256 }
+struct Subject {}
+impl Width for Subject { const N: u256 = 1 }
+impl Width for Subject as First { const N: u256 = 2 }
+impl Width for Subject as Second { const N: u256 = 3 }
+type Goal = Width<Subject>
+trait Factory { const W: Evidence<Goal> }
+struct Maker {}
+impl Factory for Maker { const W: Evidence<Goal> = with (First) { prove<Goal>() } }
+impl Factory for Maker as Selected { const W: Evidence<Goal> = with (Second) { prove<Goal>() } }
+fn consume<T: Width>(_ values: [u256; <T as Width>::N]) -> u256 { values[2] }
+fn check() -> u256 {
+    with (Selected) {
+        with (<Maker as Factory>::W) { consume<Subject>([1, 2, 3]) }
+    }
+}
+#[test]
+fn selected_factory_evidence() { assert(check() == 3) }
