@@ -173,3 +173,8 @@ fn prerequisite_constant_reachability_and_declaration_freezing() {
 fn direct_associated_constant_restoration() {
     values("direct-associated-constant", &["1", "42", "7", "42", "1"]);
 }
+
+#[test]
+fn rd71_parameter_and_concrete_method_reachability() {
+    values("rd71-method-reachability", &["42", "1", "1"]);
+}
