@@ -1,0 +1,26 @@
+trait Score { fn score(self) -> u256 }
+mod target { pub struct Plain { pub first: u256, pub second: bool } }
+impl Score for target::Plain {
+    fn score(self) -> u256 { self.first + 1 + (if self.second { 2 } else { 1 }) }
+}
+impl Score for target::Plain as Zero { fn score(self) -> u256 { 0 } }
+use core::obligations::{Evidence, prove}
+const fn ordinary() -> Evidence<Score<target::Plain>> { prove<Score<target::Plain>>() }
+const fn zero() -> Evidence<Score<target::Plain>> { with (Zero) { prove<Score<target::Plain>>() } }
+fn consume(_ witness: Evidence<Score<target::Plain>>, _ value: target::Plain) -> u256 {
+    with (witness) { value.score() }
+}
+fn handwritten(_ first: u256, _ second: bool) -> u256 { first + 1 + (if second { 2 } else { 1 }) }
+#[test]
+fn generated_choice_matches_independent_values() {
+    assert(consume(ordinary(), target::Plain { first: 7, second: true }) == 10)
+    assert(consume(zero(), target::Plain { first: 7, second: true }) == 0)
+    assert(consume(ordinary(), target::Plain { first: 19, second: false }) == 21)
+    assert(handwritten(7, true) == 10)
+    assert(handwritten(19, false) == 21)
+}
+#[test]
+fn ordinary_choice_restored_after_named_evidence() {
+    assert(consume(zero(), target::Plain { first: 7, second: true }) == 0)
+    assert(consume(ordinary(), target::Plain { first: 7, second: true }) == 10)
+}

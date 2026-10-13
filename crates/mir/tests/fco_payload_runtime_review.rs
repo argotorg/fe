@@ -1073,3 +1073,15 @@ fn second_result() -> u256 { relay<Subject>(([second(), first()], false)) }
 "#,
     );
 }
+
+#[test]
+fn concrete_goal_evidence_selects_runtime_receiver_methods() {
+    let mut db = HirAnalysisTestDb::default();
+    let source = include_str!("fco_payload_controls/concrete-receiver.fe");
+    let file = db.new_stand_alone("concrete-receiver.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let package = fe_mir::build_test_runtime_package(&db, module, None)
+        .expect("concrete evidence parameters select receiver implementations");
+    assert!(!package.functions(&db).is_empty());
+}

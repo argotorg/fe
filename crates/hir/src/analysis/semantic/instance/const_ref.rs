@@ -1171,6 +1171,12 @@ fn semantic_callee_key_with_assumptions<'db>(
                     None if collect_flags(db, inst).contains(TyFlags::HAS_PARAM) => {
                         resolve_trait_method_instance(db, destination, inst, name)
                     }
+                    None if operand_parameter_source(db, caller, operand).is_some() => {
+                        // A concrete goal can still have a symbolic witness parameter.
+                        // Keep the nominal call until argument delivery supplies its
+                        // issued record; do not select an ordinary implementation.
+                        Selection::NotFound
+                    }
                     None => return Err(MethodArgMapError::MissingBody),
                 }
             } else if let Some(record) = callable.selected_trait_application() {
