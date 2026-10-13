@@ -139,3 +139,23 @@ fn same_context_indexed_assignment_preserves_selected_layout() {
     );
     check("same-context-indexed-assignment.fe", &source, false);
 }
+
+#[test]
+fn issued_witness_delivers_selected_layout_inside() {
+    let original = include_str!("rd120_controls/signature_const_aggregate_inside.fe");
+    let source = format!(
+        "use core::obligations::{{Evidence,prove}}\n{}\nconst fn issued() -> Evidence<Compute<Subject>> {{ with (Other) {{ prove<Compute<Subject>>() }} }}\n",
+        original.replace("with (Other)", "with (issued())")
+    );
+    check("issued-layout-inside.fe", &source, false);
+}
+
+#[test]
+fn issued_witness_cannot_export_selected_layout() {
+    let original = include_str!("rd120_controls/signature_const_aggregate_leak.fe");
+    let source = format!(
+        "use core::obligations::{{Evidence,prove}}\n{}\nconst fn issued() -> Evidence<Compute<Subject>> {{ with (Other) {{ prove<Compute<Subject>>() }} }}\n",
+        original.replace("with (Other)", "with (issued())")
+    );
+    check("issued-layout-escape.fe", &source, true);
+}

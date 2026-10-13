@@ -694,6 +694,74 @@ impl<'db> TyCheckEnv<'db> {
             .with_lexical_premises(lexical)
     }
 
+    /// Read an already issued record from a closed compiler-known operand.
+    /// Evaluate only the factory instance, never the in-progress caller body.
+    fn known_operand_application(
+        &self,
+        mut operand: ExprId,
+    ) -> Option<crate::analysis::ty::trait_def::ImplApplicationRecord<'db>> {
+        use crate::analysis::semantic::{
+            EvalOutcome, SemConstValue, eval_const_instance, generated_callee_key,
+            get_or_build_semantic_instance,
+        };
+        let mut seen = rustc_hash::FxHashSet::default();
+        while seen.insert(operand) {
+            if let Some(LocalBinding::Local { pat, is_mut: false }) =
+                self.typed_expr(operand).and_then(|prop| prop.binding)
+            {
+                operand = self
+                    .body
+                    .stmts(self.db)
+                    .values()
+                    .find_map(|stmt| match stmt {
+                        Partial::Present(Stmt::Let(bound, _, Some(value))) if *bound == pat => {
+                            Some(*value)
+                        }
+                        _ => None,
+                    })?;
+                continue;
+            }
+            let callable = self.callable_expr(operand)?;
+            if let Some(record) = callable.evidence_introduction() {
+                return Some(record);
+            }
+            let CallableDef::Func(func) = callable.callable_def() else {
+                return None;
+            };
+            if !func.is_const(self.db)
+                || !callable.checked_input_tys()?.is_empty()
+                || callable.generic_args().iter().any(|arg| {
+                    arg.has_param(self.db)
+                        || arg.has_var(self.db)
+                        || arg.has_invalid(self.db)
+                        || arg.has_hole(self.db)
+                        || arg.has_projection(self.db)
+                })
+            {
+                return None;
+            }
+            let key = generated_callee_key(
+                self.db,
+                self.scope(),
+                self.assumptions,
+                func,
+                callable.trait_inst(),
+                callable.generic_args(),
+            )
+            .ok()?;
+            let EvalOutcome::Ready(value) =
+                eval_const_instance(self.db, get_or_build_semantic_instance(self.db, key))
+            else {
+                return None;
+            };
+            return match value.value(self.db) {
+                SemConstValue::Evidence { application, .. } => Some(*application),
+                _ => None,
+            };
+        }
+        None
+    }
+
     /// Resolve a type-level constant through the admitted lexical choice.
     pub(super) fn contextualize_const_types(&self, ty: TyId<'db>) -> TyId<'db> {
         self.contextualize_const_types_at(ty, &self.trait_openings.visible(self.db), false)
@@ -726,19 +794,30 @@ impl<'db> TyCheckEnv<'db> {
                 if let TyData::ConstTy(value) = ty.data(db)
                     && let ConstTyData::Abstract(expr, expected) = value.data(db)
                     && let ConstExpr::TraitConst(assoc) = expr.data(db)
-                    && let Some(super::TraitOpening::Named(record)) =
-                        self.1.iter().copied().find(|opening| {
-                            let goal = opening.goal();
-                            goal.def(db) == assoc.inst().def(db)
-                                && goal.args(db) == assoc.inst().args(db)
-                        })
+                    && let Some(opening) = self.1.iter().copied().find(|opening| {
+                        let goal = opening.goal();
+                        goal.def(db) == assoc.inst().def(db)
+                            && goal.args(db) == assoc.inst().args(db)
+                    })
+                    && let Some(record) = match opening {
+                        super::TraitOpening::Named(record) => Some(record),
+                        super::TraitOpening::Evidence { operand, .. } => {
+                            self.0.known_operand_application(operand)
+                        }
+                    }
                 {
                     return match record.revalidate(
                         db,
                         if self.2 {
                             record.origin_context()
                         } else {
-                            self.0.proof_context()
+                            match opening {
+                                super::TraitOpening::Evidence {
+                                    admission: Some(context),
+                                    ..
+                                } => context,
+                                _ => self.0.proof_context(),
+                            }
                         },
                         assoc.inst(),
                     ) {
