@@ -500,6 +500,59 @@ fn compiler_known_operand_value<'db>(
     }
 }
 
+/// Read the existing checked decision tree for a known scalar/variant source.
+/// Projected switches remain unknown here; ordinary lowering still owns them.
+fn known_match_arm<'db>(
+    db: &'db dyn HirAnalysisDb,
+    tree: &crate::analysis::ty::decision_tree::DecisionTree<'db>,
+    value: crate::analysis::semantic::SemConstId<'db>,
+) -> Option<usize> {
+    use crate::analysis::semantic::SemConstScalar;
+    use crate::analysis::ty::{
+        decision_tree::{Case, DecisionTree},
+        pattern_ir::ConstructorKind,
+    };
+    match tree {
+        DecisionTree::Unreachable => None,
+        DecisionTree::Leaf(leaf) => Some(leaf.arm_index),
+        DecisionTree::Switch(switch) if switch.occurrence.is_empty() => {
+            let branch = switch.arms.iter().find_map(|(case, branch)| {
+                let matches = match (case, value.value(db)) {
+                    (Case::Default | Case::Constructor(ConstructorKind::Type(_)), _) => true,
+                    (
+                        Case::Constructor(ConstructorKind::Literal(
+                            crate::hir_def::LitKind::Bool(expected),
+                            _,
+                        )),
+                        SemConstValue::Scalar {
+                            value: SemConstScalar::Bool(actual),
+                            ..
+                        },
+                    ) => expected == actual,
+                    (
+                        Case::Constructor(ConstructorKind::Literal(
+                            crate::hir_def::LitKind::Int(expected),
+                            _,
+                        )),
+                        SemConstValue::Scalar {
+                            value: SemConstScalar::Int { value: actual },
+                            ..
+                        },
+                    ) => num_bigint::BigInt::from(expected.data(db).clone()) == *actual,
+                    (
+                        Case::Constructor(ConstructorKind::Variant(expected, _)),
+                        SemConstValue::Enum { variant, .. },
+                    ) => expected.idx == variant.0,
+                    _ => false,
+                };
+                matches.then_some(branch)
+            })?;
+            known_match_arm(db, branch, value)
+        }
+        DecisionTree::Switch(_) => None,
+    }
+}
+
 fn compiler_known_operand_value_inner<'db>(
     db: &'db dyn HirAnalysisDb,
     caller: SemanticInstance<'db>,
@@ -514,6 +567,20 @@ fn compiler_known_operand_value_inner<'db>(
     let ty = typed.expr_ty(db, operand);
     let body = typed.body()?;
     match operand.data(db, body) {
+        Partial::Present(Expr::Match(scrutinee, Partial::Present(arms))) => {
+            let value = compiler_known_operand_value_inner(db, caller, *scrutinee, stop)?;
+            let roots = arms
+                .iter()
+                .map(|arm| typed.pattern_root(arm.pat))
+                .collect::<Option<Vec<_>>>()?;
+            let tree = crate::analysis::ty::decision_tree::build_decision_tree(
+                db,
+                typed.pattern_store(),
+                &roots,
+            );
+            let arm = known_match_arm(db, &tree, value)?;
+            return compiler_known_operand_value_inner(db, caller, arms.get(arm)?.body, stop);
+        }
         Partial::Present(Expr::RecordInit(_, fields)) => {
             let lowering = typed.record_init_lowering(operand)?;
             let record = match lowering {

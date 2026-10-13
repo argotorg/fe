@@ -16,9 +16,9 @@ fn full_goal_equality_forwarding_rejects_relabel_and_accepts_identical_goal() {
     let source = include_str!("pr1797_review_controls/full-goal-wrong.fe");
     let actual = diagnostics(source);
     println!("WRONG GOAL {actual}");
-    assert_ne!(
-        actual, "[]",
-        "wrong associated equality must be rejected before erasure"
+    assert!(
+        actual.contains("the opened evidence does not prove the requested associated equality"),
+        "wrong equality must preserve its specific rejection cause: {actual}"
     );
     assert_eq!(
         diagnostics(&source.replace("Output = bool", "Output = u64")),
@@ -79,4 +79,66 @@ fn nested_static_match_agrees_with_direct_match_and_runtime_match_is_rejected() 
         "[]",
         "runtime choice remains rejected"
     );
+}
+
+#[test]
+fn generic_evidence_cannot_invent_an_associated_equality() {
+    let source = "use core::obligations::{Evidence, prove}\ntrait Produce { type Output }\nfn forward<T>(_ witness: Evidence<Produce<T>>) -> Evidence<Produce<T, Output = bool>> { with (witness) { prove<Produce<T, Output = bool>>() } }\n";
+    let actual = diagnostics(source);
+    println!("GENERIC WRONG GOAL {actual}");
+    assert!(
+        actual.contains("the opened evidence does not prove the requested associated equality"),
+        "{actual}"
+    );
+    assert_eq!(
+        diagnostics(&source.replace(
+            "Evidence<Produce<T>>",
+            "Evidence<Produce<T, Output = bool>>"
+        )),
+        "[]"
+    );
+}
+
+fn evaluate_known_control(source: &str, expected: &str) {
+    use fe_hir::analysis::{
+        semantic::{EvalOutcome, GenericSubst, eval_body_owner_const},
+        ty::ty_check::BodyOwner,
+    };
+    use fe_hir::test_db::find_func;
+    let source = source
+        .replace("fn consume", "const fn consume")
+        .replace("fn check", "const fn check");
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("review1797-execution.fe".into(), &source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&db, module, "check"));
+    let result =
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+    println!("KNOWN SOURCE EXECUTION {result:?}");
+    let EvalOutcome::Ready(value) = result else {
+        panic!("actual execution required: {result:?}");
+    };
+    assert_eq!(value.pretty_print(&db), expected);
+}
+
+#[test]
+fn constant_evidence_layout_executes_selected_width() {
+    evaluate_known_control(
+        include_str!("pr1797_review_controls/constant-layout.fe"),
+        "2",
+    );
+}
+#[test]
+fn closed_factory_layout_executes_selected_width() {
+    evaluate_known_control(
+        include_str!("pr1797_review_controls/closed-factory-layout.fe"),
+        "2",
+    );
+}
+#[test]
+fn nested_known_match_executes_both_selected_alternatives() {
+    let source = include_str!("pr1797_review_controls/nested-match.fe");
+    evaluate_known_control(source, "2");
+    evaluate_known_control(&source.replace("match true", "match false"), "3");
 }

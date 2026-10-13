@@ -1674,9 +1674,8 @@ impl<'db> TyChecker<'db> {
                 };
                 let actual = self.normalize_ty(actual);
                 let expected = self.normalize_ty(expected);
-                let snapshot = self.table.snapshot();
+                // The shared unifier rolls back a failed equality atomically.
                 if self.table.unify(actual, expected).is_err() {
-                    self.table.rollback_to(snapshot);
                     self.push_diag(BodyDiag::ObligationIntroduction {
                         primary: expr.span(self.body()).into(),
                         reason: "the opened evidence does not prove the requested associated equality",
