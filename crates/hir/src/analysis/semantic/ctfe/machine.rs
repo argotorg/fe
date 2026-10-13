@@ -41,7 +41,7 @@ use crate::{
         },
     },
     core::hir_def::expr::LogicalBinOp,
-    hir_def::{ArithBinOp, BinOp, CompBinOp, UnOp, attr::ArithmeticMode},
+    hir_def::{ArithBinOp, BinOp, CompBinOp, ItemKind, UnOp, attr::ArithmeticMode},
     projection::{IndexSource, Projection},
 };
 
@@ -1244,6 +1244,40 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         origin: SemOrigin<'db>,
     ) -> EvalResult<'db, CtfeValue<'db>> {
         let body = self.const_evaluable_body(instance, origin)?;
+        if let BodyOwner::Func(func) = instance.key(self.db).owner(self.db)
+            && let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(self.db)
+        {
+            // An unresolved trait declaration is a selection dependency, not an
+            // executable implementation. Its synthetic empty body must not publish
+            // unit (or prematurely execute an inherited default) as a complete value.
+            if let Some(dependency) = instance
+                .key(self.db)
+                .subst(self.db)
+                .generic_args(self.db)
+                .iter()
+                .take(trait_.params(self.db).len())
+                .copied()
+                .find(|ty| {
+                    ty.has_param(self.db)
+                        || ty.has_var(self.db)
+                        || ty.has_projection(self.db)
+                        || ty.has_hole(self.db)
+                })
+            {
+                return Err(EvalStop::Blocked(BlockedInfo::new(
+                    ConstDemandKind::CallableSelection,
+                    ConstDependency::Type(dependency),
+                    origin,
+                )));
+            }
+            if func.body(self.db).is_none() && !func.is_extern(self.db) {
+                return Err(CtfeError::InvalidOperation {
+                    origin,
+                    message: "associated function selection has no executable body".into(),
+                }
+                .into());
+            }
+        }
         // Const-item frames are exempt from the limit: the const stack's
         // cycle check already bounds them (each const is evaluated at most
         // once per path), and a long but finite chain of const definitions
