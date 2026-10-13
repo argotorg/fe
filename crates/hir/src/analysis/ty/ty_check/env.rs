@@ -767,6 +767,10 @@ impl<'db> TyCheckEnv<'db> {
         self.contextualize_const_types_at(ty, &self.trait_openings.visible(self.db), false)
     }
 
+    pub(super) fn has_trait_openings(&self) -> bool {
+        !self.trait_openings.visible(self.db).is_empty()
+    }
+
     pub(super) fn binding_openings(
         &self,
         binding: LocalBinding<'db>,

@@ -5535,6 +5535,13 @@ impl<'db> TyChecker<'db> {
                 .env
                 .binding_openings(binding)
                 .fold_with(self.db, &mut self.table);
+            // Compare selection contexts only at a real opening boundary.
+            // Ordinary type errors retain their type/mutability diagnostics.
+            if assigned_ty.has_invalid(self.db)
+                || (openings.is_empty() && !self.env.has_trait_openings())
+            {
+                return false;
+            }
             let source_layout = self.selection_layout_types(assigned_ty);
             let mut destination_ty = self
                 .env
