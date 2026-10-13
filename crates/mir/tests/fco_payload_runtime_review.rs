@@ -683,3 +683,17 @@ fn select<T>(_ pair: [Evidence<Pick<T>>; 2], _ index: usize) -> u256 { consume<T
             })
     ));
 }
+
+#[test]
+fn record_parameter_fields_deliver_distinct_issued_choices() {
+    check_source_runtime_choice_delivery(
+        "record_parameter_choice_delivery.fe",
+        r#"
+struct Pair<T> { left: Evidence<Pick<T>>, right: Evidence<Pick<T>> }
+fn forward<T>(_ pair: Pair<T>) -> u256 { consume<T>(pair.left) + consume<T>(pair.right) }
+fn first_result() -> u256 { forward<Subject>(Pair<Subject> { right: second(), left: first() }) }
+fn second_result() -> u256 { let pair = Pair<Subject> { left: second(), right: first() }
+forward<Subject>(pair) }
+"#,
+    );
+}
