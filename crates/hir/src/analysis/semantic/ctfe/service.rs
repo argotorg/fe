@@ -556,7 +556,7 @@ fn extract_pure_body_term<'db>(
                     args,
                     effect_args,
                     ..
-                } if effect_args.is_empty() => {
+                } if callee.concrete_dispatch && effect_args.is_empty() => {
                     let BodyOwner::Func(func) = callee.key.owner(db) else {
                         return None;
                     };

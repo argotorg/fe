@@ -269,3 +269,47 @@ fn malformed_unresolved_trait_request_rejects_arity_before_blocking() {
     assert!(matches!(outcome, EvalOutcome::Failed(_)), "{outcome:?}");
     assert!(format!("{outcome:?}").contains("CTFE call arity mismatch"));
 }
+
+#[test]
+fn symbolic_arithmetic_call_waits_for_selected_method() {
+    use fe_hir::analysis::semantic::{
+        ConstRepr, CtfeConfig, const_computation_for_instance, describe_const_computation,
+        identity_semantic_instance_key,
+    };
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "symbolic-arithmetic-selection.fe".into(),
+        r#"
+trait Pick { const fn value(_ x: u256) -> u256 { x + 999 } }
+struct Subject {}
+impl Pick for Subject { const fn value(_ x: u256) -> u256 { x + 2 } }
+struct Inherited {}
+impl Pick for Inherited {}
+const fn generic<T: Pick, const N: u256>() -> u256 { <T as Pick>::value(N) }
+const fn selected() -> u256 { generic<Subject, 1>() }
+const fn inherited() -> u256 { generic<Inherited, 1>() }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&db, module, "generic"));
+    let computation =
+        const_computation_for_instance(&db, identity_semantic_instance_key(&db, owner), vec![]);
+    let description = describe_const_computation(&db, computation, CtfeConfig::default());
+    let EvalOutcome::Ready(description) = description else {
+        panic!("symbolic call must retain a description: {description:?}");
+    };
+    assert!(matches!(description.repr(), ConstRepr::Deferred(_)));
+    let outcome =
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+    assert!(matches!(outcome, EvalOutcome::Blocked(_)), "{outcome:?}");
+    for (name, expected) in [("selected", "3"), ("inherited", "1000")] {
+        let owner = BodyOwner::Func(find_func(&db, module, name));
+        let outcome =
+            eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+        let EvalOutcome::Ready(value) = outcome else {
+            panic!("concrete {name} must execute: {outcome:?}");
+        };
+        assert_eq!(value.pretty_print(&db), expected);
+    }
+}
