@@ -469,10 +469,10 @@ impl<'db> TyChecker<'db> {
         actual.ty = self.unify_ty(typeable, actual.ty, expected);
         if self.is_evidence_value(actual.ty)
             && matches!(expr_data, Expr::Call(..) | Expr::MethodCall(..))
-            && !self.evidence_choice_source_known(expr, &mut Vec::new())
+            && let Some(failure) = self.evidence_choice_source_failure(expr, &mut Vec::new())
         {
             self.push_diag(BodyDiag::EvidenceChoiceNotCompileTime {
-                primary: expr.span(self.body()).into(),
+                primary: failure.span(self.body()).into(),
             });
         }
         actual
@@ -4957,75 +4957,146 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    // Structural source classification: follow immutable initializers, never
-    // infer a runtime value by propagating constants or proving branch equality.
+    // Structural source classification follows immutable initializers without
+    // executing expressions or comparing the choices returned by two branches.
     pub(super) fn evidence_choice_source_known(
         &self,
         expr: ExprId,
         seen: &mut Vec<ExprId>,
     ) -> bool {
-        if seen.contains(&expr) {
-            return false;
-        }
-        seen.push(expr);
-        let known = match expr.data(self.db, self.body()) {
-            Partial::Present(Expr::Lit(_)) => true,
-            Partial::Present(Expr::Un(value, _) | Expr::Cast(value, _)) =>
-                self.evidence_choice_source_known(*value, seen),
-            Partial::Present(Expr::Bin(lhs, rhs, _)) =>
-                self.evidence_choice_source_known(*lhs, seen) && self.evidence_choice_source_known(*rhs, seen),
-            Partial::Present(Expr::Path(_)) => {
-                if self.env.expr_const_ref(expr).is_some() || matches!(self.env.expr_value_path_ref(expr), Some(ValuePathRef::TypeConst(_))) { true }
-                else { match self.env.typed_expr(expr).and_then(|prop| prop.binding) {
-                    Some(LocalBinding::Param { site: ParamSite::Func(func), ty, is_mut: false, .. }) => func.is_const(self.db) || self.is_evidence_value(ty),
-                    Some(LocalBinding::Local { pat, is_mut: false }) => {
-                        self.body().stmts(self.db).values().find_map(|stmt| match stmt {
-                            Partial::Present(Stmt::Let(bound, _, Some(value))) if *bound == pat => Some(*value),
-                            _ => None,
-                        }).is_some_and(|value| self.evidence_choice_source_known(value, seen))
-                    }
-                    _ => false,
-                }}
-            }
-            Partial::Present(Expr::Tuple(values) | Expr::Array(values)) => values.iter().all(|value| self.evidence_choice_source_known(*value, seen)),
-            Partial::Present(Expr::RecordInit(_, fields)) => fields.iter().all(|field| self.evidence_choice_source_known(field.expr, seen)),
-            Partial::Present(Expr::Field(value, _)) => self.evidence_choice_source_known(*value, seen),
-            Partial::Present(Expr::MethodCall(receiver, _, _, args)) => {
-                (self.env.callable_expr(expr).is_some_and(|callable| matches!(callable.callable_def(), CallableDef::Func(func) if func.is_const(self.db)))
-                    || self.env.typed_expr(*receiver).is_some_and(|prop| self.is_evidence_value(prop.ty))
-                    || args.iter().any(|arg| self.env.typed_expr(arg.expr).is_some_and(|prop| self.is_evidence_value(prop.ty))))
-                    && self.evidence_choice_source_known(*receiver, seen)
-                    && args.iter().all(|arg| self.evidence_choice_source_known(arg.expr, seen))
-            }
-            Partial::Present(Expr::If(cond, then, Some(other))) => self.evidence_condition_known(*cond)
-                && self.evidence_choice_source_known(*then, seen) && self.evidence_choice_source_known(*other, seen),
-            Partial::Present(Expr::With(_, body)) => self.evidence_choice_source_known(*body, seen),
-            Partial::Present(Expr::Block(stmts)) => stmts.iter().all(|stmt| match stmt.data(self.db, self.body()) {
-                Partial::Present(Stmt::Let(pat, _, Some(value))) =>
-                    self.env.pat_binding(*pat).is_some_and(|binding| !binding.is_mut())
-                    && self.evidence_choice_source_known(*value, seen),
-                Partial::Present(Stmt::Expr(value) | Stmt::Return(Some(value))) => self.evidence_choice_source_known(*value, seen),
-                _ => false,
-            }),
-            Partial::Present(Expr::Call(_, args)) =>
-                (self.env.callable_expr(expr).is_some_and(|callable| matches!(callable.callable_def(), CallableDef::Func(func) if func.is_const(self.db)))
-                    || args.iter().any(|arg| self.env.typed_expr(arg.expr).is_some_and(|prop| self.is_evidence_value(prop.ty))))
-                && args.iter().all(|arg| self.evidence_choice_source_known(arg.expr, seen)),
-            _ => false,
-        };
-        seen.pop();
-        known
+        self.evidence_choice_source_failure(expr, seen).is_none()
     }
 
-    fn evidence_condition_known(&self, cond: CondId) -> bool {
+    fn evidence_choice_source_failure(
+        &self,
+        expr: ExprId,
+        seen: &mut Vec<ExprId>,
+    ) -> Option<ExprId> {
+        if seen.contains(&expr) {
+            return Some(expr);
+        }
+        seen.push(expr);
+        let failure = match expr.data(self.db, self.body()) {
+            Partial::Present(Expr::Lit(_)) => None,
+            Partial::Present(Expr::Un(value, _) | Expr::Cast(value, _) | Expr::Field(value, _)) => {
+                self.evidence_choice_source_failure(*value, seen)
+            }
+            Partial::Present(Expr::Bin(lhs, rhs, _)) => self
+                .evidence_choice_source_failure(*lhs, seen)
+                .or_else(|| self.evidence_choice_source_failure(*rhs, seen)),
+            Partial::Present(Expr::Path(_)) => {
+                if self.env.expr_const_ref(expr).is_some()
+                    || matches!(
+                        self.env.expr_value_path_ref(expr),
+                        Some(ValuePathRef::TypeConst(_))
+                    )
+                {
+                    None
+                } else {
+                    match self.env.typed_expr(expr).and_then(|prop| prop.binding) {
+                        Some(LocalBinding::Param {
+                            site: ParamSite::Func(func),
+                            ty,
+                            is_mut: false,
+                            ..
+                        }) => (!(func.is_const(self.db) || self.is_evidence_value(ty)))
+                            .then_some(expr),
+                        Some(LocalBinding::Local { pat, is_mut: false }) => {
+                            match self
+                                .body()
+                                .stmts(self.db)
+                                .values()
+                                .find_map(|stmt| match stmt {
+                                    Partial::Present(Stmt::Let(bound, _, Some(value)))
+                                        if *bound == pat =>
+                                    {
+                                        Some(*value)
+                                    }
+                                    _ => None,
+                                }) {
+                                Some(value) => self.evidence_choice_source_failure(value, seen),
+                                None => Some(expr),
+                            }
+                        }
+                        _ => Some(expr),
+                    }
+                }
+            }
+            Partial::Present(Expr::Tuple(values) | Expr::Array(values)) => values
+                .iter()
+                .find_map(|value| self.evidence_choice_source_failure(*value, seen)),
+            Partial::Present(Expr::RecordInit(_, fields)) => fields
+                .iter()
+                .find_map(|field| self.evidence_choice_source_failure(field.expr, seen)),
+            Partial::Present(Expr::Call(_, args) | Expr::MethodCall(_, _, _, args)) => {
+                let receiver = match expr.data(self.db, self.body()) {
+                    Partial::Present(Expr::MethodCall(receiver, _, _, _)) => Some(*receiver),
+                    _ => None,
+                };
+                let const_function = self.env.callable_expr(expr).is_some_and(|callable|
+                    matches!(callable.callable_def(), CallableDef::Func(func) if func.is_const(self.db)));
+                let transports_evidence = receiver
+                    .into_iter()
+                    .chain(args.iter().map(|arg| arg.expr))
+                    .any(|value| {
+                        self.env
+                            .typed_expr(value)
+                            .is_some_and(|prop| self.is_evidence_value(prop.ty))
+                    });
+                if !const_function && !transports_evidence {
+                    Some(expr)
+                } else {
+                    receiver
+                        .and_then(|value| self.evidence_choice_source_failure(value, seen))
+                        .or_else(|| {
+                            args.iter()
+                                .find_map(|arg| self.evidence_choice_source_failure(arg.expr, seen))
+                        })
+                }
+            }
+            Partial::Present(Expr::If(cond, then, Some(other))) => self
+                .evidence_condition_failure(*cond)
+                .or_else(|| self.evidence_choice_source_failure(*then, seen))
+                .or_else(|| self.evidence_choice_source_failure(*other, seen)),
+            Partial::Present(Expr::With(_, body)) => {
+                self.evidence_choice_source_failure(*body, seen)
+            }
+            Partial::Present(Expr::Block(stmts)) => {
+                stmts
+                    .iter()
+                    .find_map(|stmt| match stmt.data(self.db, self.body()) {
+                        Partial::Present(Stmt::Let(pat, _, Some(value))) => {
+                            if self
+                                .env
+                                .pat_binding(*pat)
+                                .is_some_and(|binding| !binding.is_mut())
+                            {
+                                self.evidence_choice_source_failure(*value, seen)
+                            } else {
+                                Some(expr)
+                            }
+                        }
+                        Partial::Present(Stmt::Expr(value) | Stmt::Return(Some(value))) => {
+                            self.evidence_choice_source_failure(*value, seen)
+                        }
+                        _ => Some(expr),
+                    })
+            }
+            _ => Some(expr),
+        };
+        seen.pop();
+        failure
+    }
+
+    fn evidence_condition_failure(&self, cond: CondId) -> Option<ExprId> {
         match cond.data(self.db, self.body()) {
             Partial::Present(Cond::Expr(value) | Cond::Let(_, value)) => {
-                self.evidence_choice_source_known(*value, &mut Vec::new())
+                self.evidence_choice_source_failure(*value, &mut Vec::new())
             }
-            Partial::Present(Cond::Bin(lhs, rhs, _)) => {
-                self.evidence_condition_known(*lhs) && self.evidence_condition_known(*rhs)
-            }
-            _ => false,
+            Partial::Present(Cond::Bin(lhs, rhs, _)) => self
+                .evidence_condition_failure(*lhs)
+                .or_else(|| self.evidence_condition_failure(*rhs)),
+            _ => Some(self.body().expr(self.db)),
         }
     }
 
@@ -5097,9 +5168,11 @@ impl<'db> TyChecker<'db> {
             self.env.clear_pending_bindings();
             self.env.leave_scope();
             let else_prop = self.check_expr_in_new_scope(*else_, expected, result_discarded);
-            if self.is_evidence_value(else_prop.ty) && !self.evidence_condition_known(*cond) {
+            if self.is_evidence_value(else_prop.ty)
+                && let Some(failure) = self.evidence_condition_failure(*cond)
+            {
                 self.push_diag(BodyDiag::EvidenceChoiceNotCompileTime {
-                    primary: _expr.span(self.body()).into(),
+                    primary: failure.span(self.body()).into(),
                 });
             }
             let borrow_provider = self.merge_concrete_borrow_providers(
@@ -5193,10 +5266,10 @@ impl<'db> TyChecker<'db> {
         }
 
         if self.is_evidence_value(match_ty)
-            && !self.evidence_choice_source_known(*scrutinee, &mut Vec::new())
+            && let Some(failure) = self.evidence_choice_source_failure(*scrutinee, &mut Vec::new())
         {
             self.push_diag(BodyDiag::EvidenceChoiceNotCompileTime {
-                primary: scrutinee.span(self.body()).into(),
+                primary: failure.span(self.body()).into(),
             });
         }
         if !scrutinee_pat_ty.has_invalid(self.db)

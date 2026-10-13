@@ -984,7 +984,7 @@ impl<'db> BodyDiag<'db> {
     pub(crate) fn local_code(&self) -> u16 {
         match self {
             Self::EvidenceMutableStorage { .. } => 100,
-            Self::EvidenceChoiceNotCompileTime { .. } => 99,
+            Self::EvidenceChoiceNotCompileTime { .. } => 120,
             Self::ObligationOpening { .. } => 98,
             Self::ObligationIntroduction { .. } => 97,
             Self::TypeMismatch { .. } => 0,

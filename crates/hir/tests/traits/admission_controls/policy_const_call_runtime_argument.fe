@@ -1,0 +1,8 @@
+use core::obligations::{Constraint, Evidence, prove}
+trait Read {}
+struct Subject {}
+impl Read for Subject {}
+const fn choose(_ flag: bool) -> Evidence<Read<Subject>> {
+ if flag { prove<Read<Subject>>() } else { prove<Read<Subject>>() }
+}
+fn answer(_ flag: bool) -> Evidence<Read<Subject>> { choose(flag) }

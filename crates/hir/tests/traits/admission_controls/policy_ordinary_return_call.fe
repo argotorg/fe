@@ -1,0 +1,6 @@
+use core::obligations::{Constraint, Evidence, prove}
+trait Read {}
+struct Subject {}
+impl Read for Subject {}
+fn source() -> Evidence<Read<Subject>> { prove<Read<Subject>>() }
+fn answer() -> Evidence<Read<Subject>> { source() }

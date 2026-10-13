@@ -191,3 +191,50 @@ fn choose(_ flag: bool) -> Evidence<Read<Subject>> { factory(flag) }
         "evidence choice must be known at compile time",
     );
 }
+
+#[test]
+fn accepted_source_diagnostic_code_and_runtime_selector_spans_are_preserved() {
+    for (name, source, fault) in [
+        (
+            "runtime_branch.fe",
+            include_str!("admission_controls/policy_runtime_branch.fe"),
+            "flag",
+        ),
+        (
+            "ordinary_return_call.fe",
+            include_str!("admission_controls/policy_ordinary_return_call.fe"),
+            "source()",
+        ),
+        (
+            "const_call_runtime_argument.fe",
+            include_str!("admission_controls/policy_const_call_runtime_argument.fe"),
+            "flag",
+        ),
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(name.into(), source);
+        let (module, _) = db.top_mod(file);
+        let mut manager = fe_hir::test_db::initialize_test_analysis_pass();
+        let diagnostics: Vec<_> = manager
+            .run_on_module(&db, module)
+            .into_iter()
+            .map(|diag| diag.to_complete(&db))
+            .collect();
+        let expected_start = source.rfind(fault).unwrap();
+        assert!(
+            diagnostics.iter().any(|diag| diag.message
+                == "evidence choice must be known at compile time"
+                && diag.error_code.local_code == 120
+                && diag
+                    .sub_diagnostics
+                    .iter()
+                    .any(|label| label.span.as_ref().is_some_and(|span| u32::from(
+                        span.range.start()
+                    )
+                        as usize
+                        == expected_start
+                        && u32::from(span.range.end()) as usize == expected_start + fault.len()))),
+            "original source cause/code and precise offending source required for {name}: {diagnostics:#?}"
+        );
+    }
+}
