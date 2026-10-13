@@ -317,6 +317,11 @@ impl<'db> ResolvedImplInstance<'db> {
         self.selected
     }
 
+    /// The declaration retained by this checked implementation instance.
+    pub fn origin(self, db: &'db dyn HirAnalysisDb) -> ImplementorOrigin<'db> {
+        self.selected.origin(db)
+    }
+
     pub fn trait_inst(self) -> TraitInstId<'db> {
         self.trait_inst
     }

@@ -317,3 +317,111 @@ fn const_intrinsic_classification_does_not_bypass_argument_eligibility() {
         "arity-invalid checked proof calls cannot become accepted constants"
     );
 }
+
+const DISTINCT_CHOICE_SOURCE: &str = r#"
+use core::obligations::{Evidence, prove}
+trait Pick { const fn value() -> u256 }
+struct Subject {}
+impl Pick for Subject { const fn value() -> u256 { 1 } }
+impl Pick for Subject as First { const fn value() -> u256 { 2 } }
+impl Pick for Subject as Second { const fn value() -> u256 { 3 } }
+type Goal = Pick<Subject>
+const fn first() -> Evidence<Goal> { with (First) { prove<Goal>() } }
+const fn second() -> Evidence<Goal> { with (Second) { prove<Goal>() } }
+fn consume(_ witness: Evidence<Goal>) -> u256 { with (witness) { <Subject as Pick>::value() } }
+"#;
+
+#[test]
+fn runtime_parameter_choice_identity_retains_the_selected_declaration() {
+    use hir::analysis::{
+        semantic::{EffectProviderSubst, ImplEnv, SemanticInstanceKey},
+        ty::trait_resolution::PredicateListId,
+    };
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "distinct_parameter_identity.fe".into(),
+        DISTINCT_CHOICE_SOURCE,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&db, module, "consume"));
+    let mut identities = Vec::new();
+    for name in ["first", "second"] {
+        let value = issued(&db, module, name);
+        let SemConstValue::Evidence { application, .. } = value.value(&db) else {
+            panic!("issued tag required")
+        };
+        let key = SemanticInstanceKey::new(
+            &db,
+            owner,
+            GenericSubst::for_body_owner(&db, owner, vec![]),
+            EffectProviderSubst::empty(&db),
+            ImplEnv::new(
+                &db,
+                owner.scope(),
+                PredicateListId::empty_list(&db),
+                Vec::new(),
+                vec![(0, *application)],
+            ),
+        );
+        let instance = hir::analysis::semantic::get_or_build_semantic_instance(&db, key);
+        identities.push((
+            fe_mir::runtime::stable_key::semantic_instance_identity(&db, instance),
+            fe_mir::runtime::stable_key::semantic_instance_symbol_identity(&db, instance),
+        ));
+    }
+    assert_ne!(
+        identities[0].0, identities[1].0,
+        "different issued declarations must not alias in runtime ordering"
+    );
+    assert_ne!(
+        identities[0].1, identities[1].1,
+        "different issued declarations must not alias in runtime symbols"
+    );
+}
+
+#[test]
+fn named_method_body_identity_retains_the_named_declaration() {
+    use hir::{
+        analysis::{
+            semantic::{EffectProviderSubst, ImplEnv, SemanticInstanceKey},
+            ty::trait_resolution::Selection,
+        },
+        hir_def::IdentId,
+    };
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("distinct_method_identity.fe".into(), DISTINCT_CHOICE_SOURCE);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let mut identities = Vec::new();
+    for name in ["first", "second"] {
+        let value = issued(&db, module, name);
+        let SemConstValue::Evidence { application, .. } = value.value(&db) else {
+            panic!("issued tag required")
+        };
+        let checked = application
+            .revalidate(&db, application.origin_context(), application.goal())
+            .unwrap();
+        let Selection::Unique(method) = checked.method(IdentId::new(&db, "value")) else {
+            panic!("selected method required")
+        };
+        let owner = BodyOwner::Func(method.body().unwrap());
+        let key = SemanticInstanceKey::new(
+            &db,
+            owner,
+            GenericSubst::for_body_owner(&db, owner, method.body_args().to_vec()),
+            EffectProviderSubst::empty(&db),
+            ImplEnv::empty(&db, owner.scope()),
+        );
+        identities.push(
+            fe_mir::runtime::stable_key::semantic_instance_symbol_identity(
+                &db,
+                hir::analysis::semantic::get_or_build_semantic_instance(&db, key),
+            ),
+        );
+    }
+    assert_ne!(
+        identities[0], identities[1],
+        "named bodies with the same trait, Self and method name must remain distinct"
+    );
+}

@@ -5,7 +5,7 @@ use hir::{
         semantic::{EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance},
         ty::{
             RootProviderScope,
-            trait_def::{TraitInstId, TraitRefId},
+            trait_def::{ImplementorOrigin, TraitInstId, TraitRefId},
             ty_check::{BodyOwner, EffectParamSite},
             ty_def::{TyBase, TyData, TyId},
         },
@@ -101,7 +101,11 @@ pub fn semantic_owner_context_identity<'db>(
                     .map(|trait_ref| trait_ref.pretty_print(db))
                     .unwrap_or_else(|| "trait".to_string())
             });
-        let impl_identity = format!("{trait_identity}${}", type_identity(db, impl_trait.ty(db)));
+        let impl_identity = format!(
+            "{trait_identity}${}{}",
+            type_identity(db, impl_trait.ty(db)),
+            named_impl_identity_suffix(db, impl_trait)
+        );
         return Some(format!(
             "impl_trait${}",
             stable_identity_fingerprint(&impl_identity)
@@ -141,8 +145,9 @@ pub fn semantic_owner_context_trace_identity<'db>(
                     .unwrap_or_else(|| "trait".to_string())
             });
         return Some(format!(
-            "impl_trait${trait_identity}${}",
-            type_identity(db, impl_trait.ty(db))
+            "impl_trait${trait_identity}${}{}",
+            type_identity(db, impl_trait.ty(db)),
+            named_impl_identity_suffix(db, impl_trait)
         ));
     }
     func.containing_impl(db)
@@ -260,6 +265,21 @@ fn provider_semantics_identity<'db>(
     )
 }
 
+fn named_impl_identity_suffix<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementation: hir::hir_def::ImplTrait<'db>,
+) -> String {
+    implementation
+        .selection_name(db)
+        .map_or_else(String::new, |name| {
+            format!(
+                "$named${}${}",
+                item_identity(db, implementation.into()),
+                name.data(db)
+            )
+        })
+}
+
 fn impl_env_identity<'db>(
     db: &'db dyn HirAnalysisDb,
     env: ImplEnv<'db>,
@@ -267,11 +287,44 @@ fn impl_env_identity<'db>(
 ) -> String {
     let assumptions = trait_list_identity(db, env.assumptions(db).list(db).iter().copied(), mode);
     let witnesses = trait_list_identity(db, env.witnesses(db).iter().copied(), mode);
+    let choices = if env.parameter_evidence(db).is_empty() {
+        String::new()
+    } else {
+        let entries = env
+            .parameter_evidence(db)
+            .iter()
+            .map(|(index, application)| {
+                let resolved = application.resolved();
+                let declaration = match resolved.origin(db) {
+                    ImplementorOrigin::Hir(implementation) => format!(
+                        "{}${}{}",
+                        item_identity(db, implementation.into()),
+                        implementation
+                            .trait_inst(db)
+                            .map(|goal| trait_identity(db, goal))
+                            .unwrap_or_default(),
+                        named_impl_identity_suffix(db, implementation)
+                    ),
+                    ImplementorOrigin::VirtualContract(contract) => {
+                        item_identity(db, contract.into())
+                    }
+                    ImplementorOrigin::Assumption => "assumption".to_string(),
+                };
+                format!(
+                    "{index}${declaration}$goal${}$args${}",
+                    trait_identity(db, application.goal()),
+                    generic_args_identity(db, resolved.impl_args(db))
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("$");
+        format!("$parameter_evidence${entries}")
+    };
     // Callees normalize at an ingot root, and every ingot's root module has
     // the same name, so the scope must name its ingot.
     let scope = env.normalization_scope(db);
     format!(
-        "scope${}${}$assumptions${assumptions}$witnesses${witnesses}",
+        "scope${}${}$assumptions${assumptions}$witnesses${witnesses}{choices}",
         ingot_identity_for_top_mod(db, scope.top_mod(db)),
         module_path_components_for_scope(db, scope).join("$")
     )
