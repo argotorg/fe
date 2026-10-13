@@ -109,10 +109,10 @@ fn actual_payload_runtime_lowering_is_verified_and_recorded() {
             .filter(|l| !matches!(l.carrier, RuntimeCarrier::Erased))
             .count();
         let mut seal_fields = 0;
-        if let Some(RuntimeClass::AggregateValue { layout }) = &body.signature.ret {
-            if let Layout::Struct(fields) = layout.data(&db) {
-                seal_fields = fields.fields.len();
-            }
+        if let Some(RuntimeClass::AggregateValue { layout }) = &body.signature.ret
+            && let Layout::Struct(fields) = layout.data(&db)
+        {
+            seal_fields = fields.fields.len();
         }
         eprintln!(
             "RUNTIME_EVIDENCE_OBSERVATION {{\"function\":{:?},\"runtime_value_locals\":{},\"return_fields\":{},\"verified\":true}}",
@@ -170,10 +170,10 @@ fn constant_payload_runtime_lowering_is_verified_and_recorded() {
             .filter(|l| !matches!(l.carrier, RuntimeCarrier::Erased))
             .count();
         let mut seal_fields = 0;
-        if let Some(RuntimeClass::AggregateValue { layout }) = &body.signature.ret {
-            if let Layout::Struct(fields) = layout.data(&db) {
-                seal_fields = fields.fields.len();
-            }
+        if let Some(RuntimeClass::AggregateValue { layout }) = &body.signature.ret
+            && let Layout::Struct(fields) = layout.data(&db)
+        {
+            seal_fields = fields.fields.len();
         }
         eprintln!(
             "RUNTIME_EVIDENCE_OBSERVATION {{\"function\":{:?},\"runtime_value_locals\":{},\"return_fields\":{},\"verified\":true}}",
