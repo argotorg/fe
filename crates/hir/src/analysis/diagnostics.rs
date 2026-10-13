@@ -2733,6 +2733,12 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary.resolve(db),
                 error_code,
             ),
+            Self::SelectedConstantTypeEscape(primary) => primary_diag(
+                severity,
+                "value whose type depends on a selected constant cannot leave this `with` block",
+                "selected constant changes the value's layout",
+                primary.resolve(db), error_code,
+            ),
             Self::EvidenceMutableStorage { primary } => primary_diag(
                 severity, "evidence cannot be stored in a mutable binding",
                 "keep the compiler-known witness in an immutable binding",

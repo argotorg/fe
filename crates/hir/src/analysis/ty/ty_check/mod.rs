@@ -3720,7 +3720,8 @@ impl<'db> TyChecker<'db> {
     fn normalize_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
         normalize_ty(
             self.db,
-            ty.fold_with(self.db, &mut self.table),
+            self.env
+                .contextualize_const_types(ty.fold_with(self.db, &mut self.table)),
             self.env.scope(),
             self.env.assumptions(),
         )

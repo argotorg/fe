@@ -692,6 +692,39 @@ impl<'db> TyCheckEnv<'db> {
             .with_lexical_premises(lexical)
     }
 
+    /// Resolve a type-level constant through the admitted lexical choice.
+    pub(super) fn contextualize_const_types(&self, ty: TyId<'db>) -> TyId<'db> {
+        struct Selected<'a, 'db>(&'a TyCheckEnv<'db>);
+        impl<'db> TyFolder<'db> for Selected<'_, 'db> {
+            fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+                use crate::analysis::ty::{
+                    const_expr::ConstExpr,
+                    const_ty::{ConstTyData, const_ty_from_resolved_trait_const},
+                };
+                let ty = ty.super_fold_with(db, self);
+                if let TyData::ConstTy(value) = ty.data(db)
+                    && let ConstTyData::Abstract(expr, expected) = value.data(db)
+                    && let ConstExpr::TraitConst(assoc) = expr.data(db)
+                    && let Some(super::TraitOpening::Named(record)) =
+                        self.0.opening_for(assoc.inst())
+                {
+                    return match record.revalidate(db, self.0.proof_context(), assoc.inst()) {
+                        Ok(application) => const_ty_from_resolved_trait_const(
+                            db,
+                            application.resolved(),
+                            assoc.name(),
+                        )
+                        .map(|value| TyId::const_ty(db, value.evaluate(db, Some(*expected))))
+                        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other)),
+                        Err(_) => TyId::invalid(db, InvalidCause::Other),
+                    };
+                }
+                ty
+            }
+        }
+        ty.fold_with(self.db, &mut Selected(self))
+    }
+
     pub(crate) fn base_assumptions(&self) -> PredicateListId<'db> {
         self.base_assumptions
     }

@@ -1,0 +1,10 @@
+// RD120: selected constant-dependent aggregates stay inside their with block.
+trait Compute { const N: usize }
+struct Subject {}
+impl Compute for Subject { const N: usize = 1 }
+impl Compute for Subject as Other { const N: usize = 2 }
+struct Buf<T: Compute> { a: [u256; T::N] }
+fn make<T: Compute>(_ a: [u256; T::N]) -> Buf<T> { Buf { a } }
+fn pass<T: Compute>(_ b: own Buf<T>) -> Buf<T> { b }
+fn leak() -> u256 { let b = with (Other) { make<Subject>([7,8]) }
+b.a[0] }

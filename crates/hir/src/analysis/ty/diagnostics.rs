@@ -372,6 +372,7 @@ pub enum MustUseSubject<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum BodyDiag<'db> {
+    SelectedConstantTypeEscape(DynLazySpan<'db>),
     EvidenceMutableStorage {
         primary: DynLazySpan<'db>,
     },
@@ -983,6 +984,7 @@ impl<'db> BodyDiag<'db> {
 
     pub(crate) fn local_code(&self) -> u16 {
         match self {
+            Self::SelectedConstantTypeEscape(..) => 121,
             Self::EvidenceMutableStorage { .. } => 100,
             Self::EvidenceChoiceNotCompileTime { .. } => 120,
             Self::ObligationOpening { .. } => 98,

@@ -1,7 +1,7 @@
 use either::Either;
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::ToPrimitive;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
 
 use crate::core::hir_def::{
@@ -410,7 +410,7 @@ impl<'db> TyChecker<'db> {
             return typed;
         };
 
-        let expected = normalize_ty(self.db, expected, self.env.scope(), self.env.assumptions());
+        let expected = self.normalize_ty(expected);
 
         self.env.enter_expr(expr);
         let mut actual = match expr_data {
@@ -1533,7 +1533,39 @@ impl<'db> TyChecker<'db> {
         } else {
             self.check_expr(body_expr, expected)
         };
+        let inside_layout = self.selection_layout_types(result.ty);
         self.env.leave_with_frame();
+        let outside_layout = self.selection_layout_types(result.ty);
+        if inside_layout != outside_layout {
+            self.push_diag(BodyDiag::SelectedConstantTypeEscape(
+                body_expr.span(self.body()).into(),
+            ));
+            ExprProp::invalid(self.db)
+        } else {
+            result
+        }
+    }
+
+    fn selection_layout_types(&mut self, ty: TyId<'db>) -> Vec<TyId<'db>> {
+        fn collect<'db>(
+            checker: &mut TyChecker<'db>,
+            ty: TyId<'db>,
+            active: &mut FxHashSet<TyId<'db>>,
+            result: &mut Vec<TyId<'db>>,
+        ) {
+            let normalized = checker.normalize_ty(ty);
+            result.push(normalized);
+            let base = ty.decompose_ty_app(checker.db).0;
+            if !active.insert(base) {
+                return;
+            }
+            for field in ty.field_types(checker.db) {
+                collect(checker, field, active, result);
+            }
+            active.remove(&base);
+        }
+        let mut result = Vec::new();
+        collect(self, ty, &mut FxHashSet::default(), &mut result);
         result
     }
 
@@ -4427,7 +4459,7 @@ impl<'db> TyChecker<'db> {
                         {
                             return ExprProp::new(self.table.fold_ty(self.db, projected), is_mut);
                         }
-                        return ExprProp::new(field_ty, is_mut);
+                        return ExprProp::new(self.normalize_ty(field_ty), is_mut);
                     }
                 }
 
