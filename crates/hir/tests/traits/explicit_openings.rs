@@ -257,3 +257,41 @@ const fn good() -> (Evidence<Goal>, Evidence<Goal>) {
         "copying the same ground assumptions must not manufacture opened-witness authority or reuse its cached proof"
     );
 }
+
+#[test]
+fn named_receiver_calls_use_the_same_checked_choice() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "named_receiver.fe".into(),
+        r#"
+trait Pick { const fn value(self) -> u256 }
+struct Subject {}
+impl Pick for Subject { const fn value(self) -> u256 { 1 } }
+impl Pick for Subject as First { const fn value(self) -> u256 { 2 } }
+impl Pick for Subject as Second { const fn value(self) -> u256 { 3 } }
+const fn answer() -> (u256, u256, u256, u256, u256) {
+    let before = Subject {}.value()
+    let outer = with (First) { Subject {}.value() }
+    let inner = with (First) { with (Second) { Subject {}.value() } }
+    let restored = with (First) {
+        let unused = with (Second) { Subject {}.value() }
+        Subject {}.value()
+    }
+    (before, outer, inner, restored, Subject {}.value())
+}
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&db, module, "answer"));
+    let outcome =
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+    let EvalOutcome::Ready(value) = outcome else {
+        panic!("{outcome:?}")
+    };
+    let SemConstValue::Tuple { elems, .. } = value.value(&db) else {
+        panic!("tuple required")
+    };
+    let actual: Vec<_> = elems.iter().map(|value| value.pretty_print(&db)).collect();
+    assert_eq!(actual, ["1", "2", "3", "2", "1"]);
+}

@@ -1532,7 +1532,7 @@ impl<'db> TyChecker<'db> {
         result
     }
 
-    fn check_obligation_introduction(
+    fn capture_selected_trait_application(
         &mut self,
         expr: ExprId,
         callable: &mut Callable<'db>,
@@ -1551,6 +1551,17 @@ impl<'db> TyChecker<'db> {
                     }
                 }
             }
+        }
+        true
+    }
+
+    fn check_obligation_introduction(
+        &mut self,
+        expr: ExprId,
+        callable: &mut Callable<'db>,
+    ) -> bool {
+        if !self.capture_selected_trait_application(expr, callable) {
+            return false;
         }
         let CallableDef::Func(func) = callable.callable_def() else {
             return true;
@@ -3738,6 +3749,9 @@ impl<'db> TyChecker<'db> {
         self.check_callable_effects(expr, &mut callable);
 
         callable.process_constraints(self, expr, call_span.method_name().into());
+        if !self.capture_selected_trait_application(expr, &mut callable) {
+            return ExprProp::invalid(self.db);
+        }
 
         let ret_ty = callable.ret_ty(self.db);
         let normalized_ret_ty = self.normalize_ty(ret_ty);
