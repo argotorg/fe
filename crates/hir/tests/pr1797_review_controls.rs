@@ -342,3 +342,23 @@ fn boxed_evidence_relay_preserves_ordinary_and_named_records() {
         );
     }
 }
+
+#[test]
+fn boxed_parameter_templates_wait_for_witness_delivery() {
+    use fe_hir::analysis::semantic::collect_semantic_borrow_diagnostic_vouchers;
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "boxed-template.fe".into(),
+        include_str!("pr1797_review_controls/boxed-relay.fe"),
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, module)
+        .into_iter()
+        .map(|diagnostic| diagnostic.to_complete(&db))
+        .collect::<Vec<_>>();
+    assert!(
+        diagnostics.is_empty(),
+        "templates retain pending witness delivery while executable roots validate: {diagnostics:#?}"
+    );
+}

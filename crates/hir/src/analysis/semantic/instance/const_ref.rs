@@ -553,9 +553,6 @@ pub(crate) fn has_unbound_evidence_calls<'db>(
                     && opened_operand_application(db, caller, operand).is_none()
             })
             || callable.argument_operands().iter().any(|&operand| {
-                if operand_parameter_source(db, caller, operand).is_none() {
-                    return false;
-                }
                 let mut slots = Vec::new();
                 evidence_slots(
                     db,
@@ -566,9 +563,10 @@ pub(crate) fn has_unbound_evidence_calls<'db>(
                     &mut slots,
                     &mut Vec::new(),
                 );
-                slots
-                    .into_iter()
-                    .any(|path| opened_operand_application_at(db, caller, operand, path).is_none())
+                slots.into_iter().any(|path| {
+                    operand_parameter_source_at(db, caller, operand, path.clone()).is_some()
+                        && opened_operand_application_at(db, caller, operand, path).is_none()
+                })
             })
     })
 }
@@ -837,12 +835,25 @@ pub(crate) fn known_operand_variant<'db>(
 fn operand_parameter_source<'db>(
     db: &'db dyn HirAnalysisDb,
     caller: SemanticInstance<'db>,
+    operand: ExprId,
+) -> Option<(usize, Vec<ReturnProjectionStep>)> {
+    operand_parameter_source_at(db, caller, operand, Vec::new())
+}
+
+fn operand_parameter_source_at<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
     mut operand: ExprId,
+    mut projection: Vec<ReturnProjectionStep>,
 ) -> Option<(usize, Vec<ReturnProjectionStep>)> {
     let typed = caller.key(db).typed_body(db);
     let body = typed.body()?;
-    let mut projection = Vec::new();
+    let mut seen = Vec::new();
     loop {
+        if seen.contains(&operand) {
+            return None;
+        }
+        seen.push(operand);
         if let Partial::Present(Expr::Field(base, _)) = operand.data(db, body) {
             projection.insert(
                 0,
@@ -864,6 +875,36 @@ fn operand_parameter_source<'db>(
                 ReturnProjectionStep::ConstantIndex(value.data(db).to_usize()?),
             );
             operand = *base;
+            continue;
+        }
+        if let Partial::Present(Expr::Array(elems)) = operand.data(db, body)
+            && let Some(ReturnProjectionStep::ConstantIndex(index)) = projection.first().copied()
+        {
+            operand = *elems.get(index)?;
+            projection.remove(0);
+            continue;
+        }
+        if let Partial::Present(Expr::Tuple(elems)) = operand.data(db, body)
+            && let Some(ReturnProjectionStep::Field(index)) = projection.first().copied()
+        {
+            operand = *elems.get(usize::from(index))?;
+            projection.remove(0);
+            continue;
+        }
+        if let Partial::Present(Expr::RecordInit(_, fields)) = operand.data(db, body)
+            && let Some(ReturnProjectionStep::Field(index)) = projection.first().copied()
+            && matches!(
+                typed.record_init_lowering(operand),
+                Some(RecordInitLowering::Struct)
+            )
+        {
+            let record_like = RecordLike::Type(typed.expr_ty(db, operand));
+            operand = fields.iter().find_map(|field| {
+                let label = field.label_eagerly(db, body)?;
+                (record_like.record_field_idx(db, label)? == usize::from(index))
+                    .then_some(field.expr)
+            })?;
+            projection.remove(0);
             continue;
         }
         match typed.expr_prop(db, operand).binding {
