@@ -1,0 +1,5 @@
+use core::obligations::{Evidence, prove}
+trait Read { type Out }
+struct Subject {}
+impl Read for Subject { type Out = u64 }
+fn wrong() -> Evidence<Read<Subject, Out = bool>> { prove<Read<Subject, Out = u64>>() }

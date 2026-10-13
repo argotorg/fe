@@ -90,6 +90,34 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    fn reject_mutable_evidence_pattern(&mut self, pat: PatId) {
+        if let Some(binding) = self.env.pat_binding(pat)
+            && binding.is_mut()
+            && self.is_evidence_value(self.env.lookup_binding_ty(&binding))
+        {
+            self.push_diag(BodyDiag::EvidenceMutableStorage {
+                primary: pat.span(self.body()).into(),
+            });
+        }
+        match pat.data(self.db, self.body()) {
+            Partial::Present(Pat::Tuple(children) | Pat::PathTuple(_, children)) => {
+                for child in children {
+                    self.reject_mutable_evidence_pattern(*child);
+                }
+            }
+            Partial::Present(Pat::Record(_, fields)) => {
+                for field in fields {
+                    self.reject_mutable_evidence_pattern(field.pat);
+                }
+            }
+            Partial::Present(Pat::Or(lhs, rhs)) => {
+                self.reject_mutable_evidence_pattern(*lhs);
+                self.reject_mutable_evidence_pattern(*rhs);
+            }
+            _ => {}
+        }
+    }
+
     fn check_let(&mut self, stmt: StmtId, stmt_data: &Stmt<'db>) -> TyId<'db> {
         let Stmt::Let(pat, ascription, expr) = stmt_data else {
             unreachable!()
@@ -135,6 +163,7 @@ impl<'db> TyChecker<'db> {
             }
             self.check_pat(*pat, ascription);
         }
+        self.reject_mutable_evidence_pattern(*pat);
         self.check_mutable_pattern_bindings(*pat);
         self.env.flush_pending_bindings();
         TyId::unit(self.db)

@@ -13,3 +13,5 @@ mod retained_applications;
 mod trait_resolution_conformance;
 mod trait_resolution_cross_ingot;
 mod trait_sig_const_generic;
+
+mod independent_evidence_admission;

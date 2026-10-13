@@ -32,10 +32,7 @@ fn concrete_forwarding_retains_one_checked_origin_decision() {
 #[test]
 fn absence_and_output_mismatch_keep_not_proven_cause() {
     for (name, source) in [
-        (
-            "missing",
-            include_str!("fco_payload_controls/missing.fe"),
-        ),
+        ("missing", include_str!("fco_payload_controls/missing.fe")),
         (
             "output",
             include_str!("fco_payload_controls/wrong_output.fe"),

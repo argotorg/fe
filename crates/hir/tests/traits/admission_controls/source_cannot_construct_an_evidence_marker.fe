@@ -1,0 +1,6 @@
+
+use core::obligations::Evidence
+trait Pick {}
+struct Subject {}
+impl Pick for Subject {}
+fn forge() -> Evidence<Pick<Subject>> { Evidence<Pick<Subject>> { seal: false } }

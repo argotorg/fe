@@ -2733,6 +2733,16 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary.resolve(db),
                 error_code,
             ),
+            Self::EvidenceMutableStorage { primary } => primary_diag(
+                severity, "evidence cannot be stored in a mutable binding",
+                "keep the compiler-known witness in an immutable binding",
+                primary.resolve(db), error_code,
+            ),
+            Self::EvidenceChoiceNotCompileTime { primary } => primary_diag(
+                severity, "evidence choice must be known at compile time",
+                "this runtime source cannot select an evidence value",
+                primary.resolve(db), error_code,
+            ),
             Self::ObligationOpening { primary, reason } => primary_diag(
                 severity, "trait evidence opening failed", *reason,
                 primary.resolve(db), error_code,

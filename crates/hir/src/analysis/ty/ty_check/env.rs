@@ -477,6 +477,10 @@ impl<'db> TyCheckEnv<'db> {
         self.callables[expr].as_ref()
     }
 
+    pub(super) fn expr_value_path_ref(&self, expr: ExprId) -> Option<ValuePathRef<'db>> {
+        self.value_path_refs[expr]
+    }
+
     pub(super) fn expr_const_ref(&self, expr: ExprId) -> Option<ConstRef<'db>> {
         self.const_refs[expr]
     }
@@ -564,12 +568,11 @@ impl<'db> TyCheckEnv<'db> {
     pub(crate) fn assumptions(&self) -> PredicateListId<'db> {
         // Type lookup also reads the accepted output equalities of openings.
         let visible = self.trait_openings.visible(self.db);
-        if visible.is_empty() { return self.assumptions; }
+        if visible.is_empty() {
+            return self.assumptions;
+        }
         let mut premises = self.assumptions.list(self.db).to_vec();
-        premises.extend(
-            visible.into_iter()
-                .map(|opening| opening.goal()),
-        );
+        premises.extend(visible.into_iter().map(|opening| opening.goal()));
         PredicateListId::new(self.db, premises).extend_all_bounds(self.db)
     }
 
@@ -604,13 +607,10 @@ impl<'db> TyCheckEnv<'db> {
             return TraitSolveCx::new(self.db, self.scope()).with_assumptions(self.assumptions);
         }
         let mut premises = self.assumptions.list(self.db).to_vec();
-        premises.extend(
-            visible.into_iter()
-                .filter_map(|opening| match opening {
-                    super::TraitOpening::Evidence { goal, .. } => Some(goal),
-                    super::TraitOpening::Named(_) => None,
-                }),
-        );
+        premises.extend(visible.into_iter().filter_map(|opening| match opening {
+            super::TraitOpening::Evidence { goal, .. } => Some(goal),
+            super::TraitOpening::Named(_) => None,
+        }));
         TraitSolveCx::new(self.db, self.scope())
             .with_assumptions(PredicateListId::new(self.db, premises).extend_all_bounds(self.db))
     }
