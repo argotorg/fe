@@ -512,6 +512,36 @@ fn compiler_known_operand_value_inner<'db>(
     let ty = typed.expr_ty(db, operand);
     let body = typed.body()?;
     match operand.data(db, body) {
+        Partial::Present(Expr::RecordInit(_, fields)) => {
+            let lowering = typed.record_init_lowering(operand)?;
+            let record = match lowering {
+                RecordInitLowering::Struct => RecordLike::Type(ty),
+                RecordInitLowering::EnumVariant(variant) => RecordLike::EnumVariant(variant),
+            };
+            let mut values = vec![None; fields.len()];
+            for field in fields {
+                let label = field.label_eagerly(db, body)?;
+                let index = record.record_field_idx(db, label)?;
+                *values.get_mut(index)? = Some(compiler_known_operand_value_inner(
+                    db, caller, field.expr, stop,
+                )?);
+            }
+            let values = values
+                .into_iter()
+                .collect::<Option<Vec<_>>>()?
+                .into_boxed_slice();
+            return Some(match lowering {
+                RecordInitLowering::Struct => {
+                    crate::analysis::semantic::struct_const(db, ty, values)
+                }
+                RecordInitLowering::EnumVariant(variant) => crate::analysis::semantic::enum_const(
+                    db,
+                    ty,
+                    crate::analysis::semantic::VariantIndex(variant.variant.idx),
+                    values,
+                ),
+            });
+        }
         Partial::Present(Expr::Tuple(elems) | Expr::Array(elems)) => {
             let values = elems
                 .iter()
@@ -1029,41 +1059,6 @@ fn semantic_callee_key_with_assumptions<'db>(
     let CallableDef::Func(nominal_func) = callable.callable_def() else {
         return Ok(None);
     };
-    if let Some(caller) = caller {
-        let typed = caller.key(db).typed_body(db);
-        for &operand in callable.argument_operands() {
-            if crate::analysis::ty::corelib::evidence_goal(
-                db,
-                caller.key(db).owner(db).scope(),
-                typed.expr_ty(db, operand),
-            )
-            .is_none()
-            {
-                continue;
-            }
-            match recover_known_operand(db, caller, operand) {
-                KnownOperandRecovery::Failed {
-                    owner,
-                    failure: crate::analysis::semantic::EvalFailure::Ctfe(error),
-                } => {
-                    return Err(MethodArgMapError::ConstArgumentFailed(
-                        crate::analysis::ty::const_ty::invalid_cause_from_ctfe_error(
-                            db, owner, error,
-                        ),
-                    ));
-                }
-                KnownOperandRecovery::Failed { failure, .. } => {
-                    return Err(MethodArgMapError::ConstArgumentInvariant(format!(
-                        "{failure:?}"
-                    )));
-                }
-                KnownOperandRecovery::Blocked { owner, info } => {
-                    return Err(MethodArgMapError::ConstArgumentBlocked { owner, info });
-                }
-                KnownOperandRecovery::Value(_) | KnownOperandRecovery::NotKnown => {}
-            }
-        }
-    }
     let mut selected_trait_method: Option<(ResolvedImplInstance<'db>, TraitInstId<'db>)> = None;
     let mut effect_pairs = Vec::new();
     let mut provider_pairs = Vec::new();
@@ -1503,6 +1498,51 @@ fn semantic_callee_key_with_assumptions<'db>(
                 nominal_signature: nominal_signature.describe(db),
                 body_signature: body_signature.describe(db),
             });
+        }
+    }
+    // Preserve structural/signature/admission diagnostic priority. Recovery
+    // supplies a concrete evaluation cause only for a well-shaped source call.
+    if let Some(caller) = caller
+        && nominal_func.arg_tys(db).len() == callable.argument_operands().len()
+        && callable
+            .checked_input_tys()
+            .is_some_and(|inputs| inputs.len() == callable.argument_operands().len())
+    {
+        let typed = caller.key(db).typed_body(db);
+        for &operand in callable.argument_operands() {
+            let mut slots = Vec::new();
+            evidence_slots(
+                db,
+                caller.key(db).owner(db).scope(),
+                typed.expr_ty(db, operand),
+                Vec::new(),
+                &mut IndexSet::default(),
+                &mut slots,
+            );
+            if slots.is_empty() {
+                continue;
+            }
+            match recover_known_operand(db, caller, operand) {
+                KnownOperandRecovery::Failed {
+                    owner,
+                    failure: crate::analysis::semantic::EvalFailure::Ctfe(error),
+                } => {
+                    return Err(MethodArgMapError::ConstArgumentFailed(
+                        crate::analysis::ty::const_ty::invalid_cause_from_ctfe_error(
+                            db, owner, error,
+                        ),
+                    ));
+                }
+                KnownOperandRecovery::Failed { failure, .. } => {
+                    return Err(MethodArgMapError::ConstArgumentInvariant(format!(
+                        "{failure:?}"
+                    )));
+                }
+                KnownOperandRecovery::Blocked { owner, info } => {
+                    return Err(MethodArgMapError::ConstArgumentBlocked { owner, info });
+                }
+                KnownOperandRecovery::Value(_) | KnownOperandRecovery::NotKnown => {}
+            }
         }
     }
     Ok(Some(SemanticCallCallee {

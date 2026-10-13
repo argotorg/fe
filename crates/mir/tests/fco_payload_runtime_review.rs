@@ -457,13 +457,24 @@ fn described_evidence_constants_retain_the_selected_declaration() {
 
 #[test]
 fn evidence_factory_fault_keeps_original_cause_and_source() {
+    assert_factory_failure_source(include_str!("fco_payload_controls/fault-factory.fe"));
+}
+
+#[test]
+fn evidence_factory_fault_in_a_record_keeps_original_cause_and_source() {
+    let source = include_str!("fco_payload_controls/fault-factory.fe")
+        .replace("#[test]", "fn forward<T>(_ wrapped: Wrap<Evidence<Pick<T>>>) -> u256 { consume<T>(wrapped.inner) }\n#[test]")
+        .replace("consume<Subject>(broken())", "forward<Subject>(Wrap { inner: broken() })");
+    assert_factory_failure_source(&source);
+}
+
+fn assert_factory_failure_source(source: &str) {
     let mut db = HirAnalysisTestDb::default();
-    let source = include_str!("fco_payload_controls/fault-factory.fe");
     let file = db.new_stand_alone("fault-factory.fe".into(), source);
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
     assert!(
-        build_runtime_package(&db, module).is_err(),
+        fe_mir::build_test_runtime_package(&db, module, Some("never_fallback")).is_err(),
         "fault must never select the ordinary fallback"
     );
     let owner = BodyOwner::Func(find_func(&db, module, "never_fallback"));

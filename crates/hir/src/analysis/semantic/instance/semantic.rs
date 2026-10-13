@@ -778,7 +778,11 @@ fn method_arg_map_diagnostic<'db>(
         );
         return SemanticDiagnosticId::new(db, diagnostic);
     }
-    let kind = if matches!(&error, MethodArgMapError::ApplicationNotAdmitted(_)) {
+    let kind = if matches!(
+        &error,
+        MethodArgMapError::ApplicationNotAdmitted(_)
+            | MethodArgMapError::ConstArgumentBlocked { .. }
+    ) {
         SemanticDiagnosticKind::UnresolvedCall
     } else {
         SemanticDiagnosticKind::Internal
