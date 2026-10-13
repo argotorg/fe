@@ -455,6 +455,43 @@ fn described_evidence_constants_retain_the_selected_declaration() {
     }
 }
 
+#[test]
+fn evidence_factory_fault_keeps_original_cause_and_source() {
+    let mut db = HirAnalysisTestDb::default();
+    let source = include_str!("fco_payload_controls/fault-factory.fe");
+    let file = db.new_stand_alone("fault-factory.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    assert!(
+        build_runtime_package(&db, module).is_err(),
+        "fault must never select the ordinary fallback"
+    );
+    let owner = BodyOwner::Func(find_func(&db, module, "never_fallback"));
+    let key = hir::analysis::semantic::root_semantic_instance_key(&db, owner).unwrap();
+    let instance = hir::analysis::semantic::get_or_build_semantic_instance(&db, key);
+    let failure =
+        hir::analysis::semantic::borrowck::check_semantic_borrows(&db, instance).unwrap_err();
+    let diagnostic = failure
+        .diagnostic()
+        .expect("concrete fault requires a diagnostic");
+    println!("FACTORY CAUSE {diagnostic:#?}");
+    let rendered = format!("{diagnostic:?}");
+    assert!(
+        rendered.contains("division by zero in const context"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("MissingBody"), "{rendered}");
+    let start = source.find("1 / zero").unwrap();
+    assert!(
+        diagnostic.sub_diagnostics.iter().any(|label| label
+            .span
+            .as_ref()
+            .is_some_and(|span| u32::from(span.range.start()) as usize == start
+                && u32::from(span.range.end()) as usize == start + "1 / zero".len())),
+        "original factory fault span required: {rendered}"
+    );
+}
+
 fn check_source_runtime_choice_delivery(name: &str, callers: &str) {
     let mut db = HirAnalysisTestDb::default();
     let source = [

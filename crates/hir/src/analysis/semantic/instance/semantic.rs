@@ -734,12 +734,60 @@ fn method_arg_map_diagnostic<'db>(
     error: MethodArgMapError<'db>,
     origin: SemOrigin<'db>,
 ) -> SemanticDiagnosticId<'db> {
+    if let MethodArgMapError::ConstArgumentFailed(cause) = &error {
+        let source = match cause {
+            InvalidCause::ConstEvalDivisionByZero { body, expr }
+            | InvalidCause::ConstEvalArithmeticOverflow { body, expr }
+            | InvalidCause::ConstEvalNegativeExponent { body, expr }
+            | InvalidCause::ConstEvalAssertionFailed { body, expr, .. }
+            | InvalidCause::ConstEvalInvalidOperation { body, expr, .. }
+            | InvalidCause::ConstEvalStepLimitExceeded { body, expr }
+            | InvalidCause::ConstEvalRecursionLimitExceeded { body, expr } => {
+                Some(SemanticDiagnosticSpan::HirExpr {
+                    body: *body,
+                    expr: *expr,
+                })
+            }
+            _ => None,
+        };
+        let message = match cause {
+            InvalidCause::ConstEvalDivisionByZero { .. } => {
+                "division by zero in const context".to_string()
+            }
+            InvalidCause::ConstEvalArithmeticOverflow { .. } => {
+                "arithmetic overflow in const context".to_string()
+            }
+            InvalidCause::ConstEvalInvalidOperation { message, .. } => message.clone(),
+            _ => format!("constant evidence argument evaluation failed: {cause:?}"),
+        };
+        let mut diagnostic = SemanticDiagnostic::new(
+            instance,
+            SemanticDiagnosticKind::UnresolvedCall,
+            message,
+            source.unwrap_or(SemanticDiagnosticSpan::Origin {
+                owner: instance.key(db).owner(db),
+                origin,
+            }),
+        );
+        diagnostic.push_secondary(
+            "while evaluating this evidence argument".into(),
+            SemanticDiagnosticSpan::Origin {
+                owner: instance.key(db).owner(db),
+                origin,
+            },
+        );
+        return SemanticDiagnosticId::new(db, diagnostic);
+    }
     let kind = if matches!(&error, MethodArgMapError::ApplicationNotAdmitted(_)) {
         SemanticDiagnosticKind::UnresolvedCall
     } else {
         SemanticDiagnosticKind::Internal
     };
     let message = match error {
+        MethodArgMapError::ConstArgumentBlocked { owner, info } => {
+            format!("constant evidence argument remains dependent in {owner:?}: {info:?}")
+        }
+        MethodArgMapError::ConstArgumentInvariant(message) => message,
         MethodArgMapError::ApplicationNotAdmitted(error) => {
             format!("opened evidence application was not admitted at this use: {error:?}")
         }

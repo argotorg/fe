@@ -907,6 +907,12 @@ pub struct ResolvedMethodInstance<'db> {
 #[derive(Debug, Clone)]
 pub enum MethodArgMapError<'db> {
     MissingBody,
+    ConstArgumentFailed(super::ty_def::InvalidCause<'db>),
+    ConstArgumentInvariant(String),
+    ConstArgumentBlocked {
+        owner: super::ty_check::BodyOwner<'db>,
+        info: crate::analysis::semantic::BlockedInfo<'db>,
+    },
     ApplicationNotAdmitted(CheckedApplicationError),
     NominalArity {
         expected: usize,

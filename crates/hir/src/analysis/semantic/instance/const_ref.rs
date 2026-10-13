@@ -460,10 +460,49 @@ pub(super) fn opened_operand_application<'db>(
     opened_operand_application_at(db, caller, operand, Vec::new())
 }
 
+enum KnownOperandRecovery<'db> {
+    Value(crate::analysis::semantic::SemConstId<'db>),
+    NotKnown,
+    Blocked {
+        owner: BodyOwner<'db>,
+        info: crate::analysis::semantic::BlockedInfo<'db>,
+    },
+    Failed {
+        owner: BodyOwner<'db>,
+        failure: crate::analysis::semantic::EvalFailure<'db>,
+    },
+}
+
+fn recover_known_operand<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    operand: ExprId,
+) -> KnownOperandRecovery<'db> {
+    let mut stop = None;
+    let value = compiler_known_operand_value_inner(db, caller, operand, &mut stop);
+    stop.unwrap_or_else(|| {
+        value.map_or(KnownOperandRecovery::NotKnown, KnownOperandRecovery::Value)
+    })
+}
+
 fn compiler_known_operand_value<'db>(
     db: &'db dyn HirAnalysisDb,
     caller: SemanticInstance<'db>,
     operand: ExprId,
+) -> Option<crate::analysis::semantic::SemConstId<'db>> {
+    match recover_known_operand(db, caller, operand) {
+        KnownOperandRecovery::Value(value) => Some(value),
+        KnownOperandRecovery::NotKnown
+        | KnownOperandRecovery::Blocked { .. }
+        | KnownOperandRecovery::Failed { .. } => None,
+    }
+}
+
+fn compiler_known_operand_value_inner<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    operand: ExprId,
+    stop: &mut Option<KnownOperandRecovery<'db>>,
 ) -> Option<crate::analysis::semantic::SemConstId<'db>> {
     use crate::analysis::semantic::{
         ConstDesc, CtfeConfig, VerifiedConstValueId, const_computation_for_instance,
@@ -476,7 +515,7 @@ fn compiler_known_operand_value<'db>(
         Partial::Present(Expr::Tuple(elems) | Expr::Array(elems)) => {
             let values = elems
                 .iter()
-                .map(|&value| compiler_known_operand_value(db, caller, value))
+                .map(|&value| compiler_known_operand_value_inner(db, caller, value, stop))
                 .collect::<Option<Vec<_>>>()?;
             return Some(
                 if matches!(operand.data(db, body), Partial::Present(Expr::Tuple(_))) {
@@ -502,7 +541,7 @@ fn compiler_known_operand_value<'db>(
         typed.expr_prop(db, operand).binding
     {
         let source = typed.binding_source(db, binding)?;
-        let mut value = compiler_known_operand_value(db, caller, source.init_expr)?;
+        let mut value = compiler_known_operand_value_inner(db, caller, source.init_expr, stop)?;
         for step in source.projection {
             value = match (step, value.value(db)) {
                 (ReturnProjectionStep::Field(index), SemConstValue::Tuple { elems, .. }) => {
@@ -539,7 +578,7 @@ fn compiler_known_operand_value<'db>(
         let values = callable
             .argument_operands()
             .iter()
-            .map(|&operand| compiler_known_operand_value(db, caller, operand))
+            .map(|&operand| compiler_known_operand_value_inner(db, caller, operand, stop))
             .collect::<Option<Vec<_>>>()?;
         return Some(crate::analysis::semantic::enum_const(
             db,
@@ -572,7 +611,7 @@ fn compiler_known_operand_value<'db>(
     let values = callable
         .argument_operands()
         .iter()
-        .map(|&argument| compiler_known_operand_value(db, caller, argument))
+        .map(|&argument| compiler_known_operand_value_inner(db, caller, argument, stop))
         .collect::<Option<Vec<_>>>()?;
     let callee =
         provisional_semantic_callee_key(db, caller.key(db), callable, &[], caller.assumptions(db))
@@ -597,14 +636,27 @@ fn compiler_known_operand_value<'db>(
                 .map(|value| ConstDesc::value(db, value, key.owner(db).scope()))
         })
         .collect::<Option<Vec<_>>>()?;
-    let EvalOutcome::Ready(value) = force_const_computation(
+    match force_const_computation(
         db,
         const_computation_for_instance(db, key, inputs),
         CtfeConfig::default(),
-    ) else {
-        return None;
-    };
-    Some(value.value())
+    ) {
+        EvalOutcome::Ready(value) => Some(value.value()),
+        EvalOutcome::Blocked(info) => {
+            *stop = Some(KnownOperandRecovery::Blocked {
+                owner: key.owner(db),
+                info,
+            });
+            None
+        }
+        EvalOutcome::Failed(failure) => {
+            *stop = Some(KnownOperandRecovery::Failed {
+                owner: key.owner(db),
+                failure,
+            });
+            None
+        }
+    }
 }
 
 /// Positive variant identity from actual issued argument slots. Missing slots
@@ -977,6 +1029,41 @@ fn semantic_callee_key_with_assumptions<'db>(
     let CallableDef::Func(nominal_func) = callable.callable_def() else {
         return Ok(None);
     };
+    if let Some(caller) = caller {
+        let typed = caller.key(db).typed_body(db);
+        for &operand in callable.argument_operands() {
+            if crate::analysis::ty::corelib::evidence_goal(
+                db,
+                caller.key(db).owner(db).scope(),
+                typed.expr_ty(db, operand),
+            )
+            .is_none()
+            {
+                continue;
+            }
+            match recover_known_operand(db, caller, operand) {
+                KnownOperandRecovery::Failed {
+                    owner,
+                    failure: crate::analysis::semantic::EvalFailure::Ctfe(error),
+                } => {
+                    return Err(MethodArgMapError::ConstArgumentFailed(
+                        crate::analysis::ty::const_ty::invalid_cause_from_ctfe_error(
+                            db, owner, error,
+                        ),
+                    ));
+                }
+                KnownOperandRecovery::Failed { failure, .. } => {
+                    return Err(MethodArgMapError::ConstArgumentInvariant(format!(
+                        "{failure:?}"
+                    )));
+                }
+                KnownOperandRecovery::Blocked { owner, info } => {
+                    return Err(MethodArgMapError::ConstArgumentBlocked { owner, info });
+                }
+                KnownOperandRecovery::Value(_) | KnownOperandRecovery::NotKnown => {}
+            }
+        }
+    }
     let mut selected_trait_method: Option<(ResolvedImplInstance<'db>, TraitInstId<'db>)> = None;
     let mut effect_pairs = Vec::new();
     let mut provider_pairs = Vec::new();
