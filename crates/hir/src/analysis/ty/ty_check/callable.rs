@@ -267,6 +267,7 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
 pub struct Callable<'db> {
     evidence_introduction: Option<super::super::trait_def::ImplApplicationRecord<'db>>,
     evidence_opening: Option<(ExprId, TraitSolveCx<'db>)>,
+    selected_trait_application: Option<super::super::trait_def::ImplApplicationRecord<'db>>,
     pub callable_def: CallableDef<'db>,
     base_ty: TyId<'db>,
     generic_args: Vec<TyId<'db>>,
@@ -288,6 +289,9 @@ impl<'db> TyVisitable<'db> for Callable<'db> {
         }
         if let Some((_, context)) = self.evidence_opening {
             context.visit_with(visitor);
+        }
+        if let Some(record) = self.selected_trait_application {
+            record.visit_with(visitor);
         }
         self.effect_providers.visit_with(visitor);
         if let Some(inputs) = &self.checked_input_tys {
@@ -311,6 +315,9 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
             evidence_opening: self
                 .evidence_opening
                 .map(|(operand, context)| (operand, context.fold_with(db, folder))),
+            selected_trait_application: self
+                .selected_trait_application
+                .map(|record| record.fold_with(db, folder)),
             callable_def: self.callable_def,
             base_ty: self.base_ty,
             generic_args: self.generic_args.fold_with(db, folder),
@@ -324,6 +331,17 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
 }
 
 impl<'db> Callable<'db> {
+    pub fn selected_trait_application(
+        &self,
+    ) -> Option<super::super::trait_def::ImplApplicationRecord<'db>> {
+        self.selected_trait_application
+    }
+    pub(super) fn record_selected_trait_application(
+        &mut self,
+        application: &super::super::trait_def::CheckedImplApplication<'db>,
+    ) {
+        self.selected_trait_application = Some(application.record());
+    }
     pub fn evidence_opening(&self) -> Option<(ExprId, TraitSolveCx<'db>)> {
         self.evidence_opening
     }
@@ -390,6 +408,7 @@ impl<'db> Callable<'db> {
         Ok(Self {
             evidence_introduction: None,
             evidence_opening: None,
+            selected_trait_application: None,
             callable_def,
             base_ty: base,
             generic_args: args.to_vec(),
@@ -409,6 +428,7 @@ impl<'db> Callable<'db> {
         Self {
             evidence_introduction: None,
             evidence_opening: None,
+            selected_trait_application: None,
             callable_def,
             base_ty: TyId::func(db, callable_def),
             generic_args,

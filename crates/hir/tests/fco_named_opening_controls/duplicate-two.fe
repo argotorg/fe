@@ -1,0 +1,8 @@
+use core::obligations::{Evidence, prove}
+trait Pick {}
+struct Subject {}
+impl Pick for Subject {}
+impl Pick for Subject as First {}
+impl Pick for Subject as Second {}
+type Goal = Pick<Subject>
+fn duplicate() { with (First, Second) {} }

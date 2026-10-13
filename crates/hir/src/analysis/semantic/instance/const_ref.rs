@@ -473,12 +473,21 @@ fn semantic_callee_key_with_assumptions<'db>(
     let mut subst_args = callable.generic_args().to_vec();
     let body_func = if let Some(inst) = callable.trait_inst()
         && let Some(name) = nominal_func.name(db).to_opt()
-        && let Selection::Unique(method) = resolve_trait_method_instance(
-            db,
-            TraitSolveCx::new(db, impl_env.normalization_scope(db)).with_assumptions(assumptions),
-            inst,
-            name,
-        )
+        && let Selection::Unique(method) =
+            if let Some(record) = callable.selected_trait_application() {
+                record
+                    .revalidate(db, record.origin_context(), inst)
+                    .map_err(|_| MethodArgMapError::MissingBody)?
+                    .method(name)
+            } else {
+                resolve_trait_method_instance(
+                    db,
+                    TraitSolveCx::new(db, impl_env.normalization_scope(db))
+                        .with_assumptions(assumptions),
+                    inst,
+                    name,
+                )
+            }
         && let Some(impl_func) = method.body()
     {
         subst_args = method

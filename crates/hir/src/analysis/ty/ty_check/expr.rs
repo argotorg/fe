@@ -1537,6 +1537,21 @@ impl<'db> TyChecker<'db> {
         expr: ExprId,
         callable: &mut Callable<'db>,
     ) -> bool {
+        if let Some(goal) = callable.trait_inst() {
+            let goal = goal.fold_with(self.db, &mut self.table);
+            if let Some(super::TraitOpening::Named(record)) = self.env.opening_for(goal) {
+                match record.revalidate(self.db, self.env.proof_context(), goal) {
+                    Ok(application) => callable.record_selected_trait_application(&application),
+                    Err(_) => {
+                        self.push_diag(BodyDiag::ObligationOpening {
+                            primary: expr.span(self.body()).into(),
+                            reason: "the selected trait application was not admitted at this use",
+                        });
+                        return false;
+                    }
+                }
+            }
+        }
         let CallableDef::Func(func) = callable.callable_def() else {
             return true;
         };
