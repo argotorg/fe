@@ -1,3 +1,4 @@
+mod binding_source;
 mod callable;
 mod const_requirements;
 pub use const_requirements::{EvaluationStop, RequirementFailure};
@@ -114,9 +115,7 @@ use crate::analysis::ty::{
         LoweringContext, invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag,
     },
     normalize::{normalize_ty, normalize_with_trait_evidence},
-    pattern_ir::{
-        ConstructorKind, PatternAnalysisStatus, PatternStore, ValidatedPatId, ValidatedPatKind,
-    },
+    pattern_ir::{PatternAnalysisStatus, PatternStore, ValidatedPatId},
     pattern_types::{
         PatternDestructureMode, apply_pattern_borrow_mode, destructure_pattern_source,
     },
@@ -4715,84 +4714,13 @@ impl<'db> TypedBody<'db> {
         db: &'db dyn HirAnalysisDb,
         binding: LocalBinding<'db>,
     ) -> Option<BindingSource> {
-        let LocalBinding::Local { pat, .. } = binding else {
-            return None;
-        };
-        let body = self.body()?;
-
-        for (_, stmt) in body.stmts(db).iter() {
-            if let Partial::Present(crate::hir_def::Stmt::Let(stmt_pat, _, Some(init_expr))) = stmt
-                && let Some(projection) = self.binding_projection_in_pat(*stmt_pat, pat)
-            {
-                return Some(BindingSource {
-                    init_expr: *init_expr,
-                    projection,
-                });
-            }
-        }
-
-        for (_, expr) in body.exprs(db).iter() {
-            if let Partial::Present(Expr::Match(scrutinee, Partial::Present(arms))) = expr {
-                for arm in arms {
-                    if let Some(projection) = self.binding_projection_in_pat(arm.pat, pat) {
-                        return Some(BindingSource {
-                            init_expr: *scrutinee,
-                            projection,
-                        });
-                    }
-                }
-            }
-        }
-
-        None
-    }
-
-    fn binding_projection_in_pat(
-        &self,
-        pat: PatId,
-        binding_pat: PatId,
-    ) -> Option<Vec<ReturnProjectionStep>> {
-        self.binding_projection_in_validated_pat(self.pattern_root(pat)?, binding_pat)
-    }
-
-    fn binding_projection_in_validated_pat(
-        &self,
-        pat: ValidatedPatId,
-        binding_pat: PatId,
-    ) -> Option<Vec<ReturnProjectionStep>> {
-        match self.tables.pattern_store.node(pat).kind() {
-            ValidatedPatKind::Wildcard { binding } => binding
-                .filter(|binding| binding.representative_pat == binding_pat)
-                .map(|_| Vec::new()),
-            ValidatedPatKind::Constructor { ctor, fields } => {
-                fields.iter().enumerate().find_map(|(field_idx, child)| {
-                    let suffix = self.binding_projection_in_validated_pat(*child, binding_pat)?;
-                    let field = u16::try_from(field_idx).ok()?;
-                    let step = match ctor {
-                        ConstructorKind::Variant(variant, _) => {
-                            ReturnProjectionStep::VariantField {
-                                variant: variant.idx,
-                                field,
-                            }
-                        }
-                        ConstructorKind::Type(_) => ReturnProjectionStep::Field(field),
-                        ConstructorKind::Literal(_, _) => return None,
-                    };
-                    let mut path = Vec::with_capacity(suffix.len() + 1);
-                    path.push(step);
-                    path.extend(suffix);
-                    Some(path)
-                })
-            }
-            ValidatedPatKind::Or(pats) => {
-                let mut paths = pats
-                    .iter()
-                    .filter_map(|pat| self.binding_projection_in_validated_pat(*pat, binding_pat))
-                    .collect::<Vec<_>>();
-                let first = paths.pop()?;
-                paths.into_iter().all(|path| path == first).then_some(first)
-            }
-        }
+        binding_source::binding_source(
+            db,
+            self.body()?,
+            self.pattern_store(),
+            &|pat| self.pattern_root(pat),
+            binding,
+        )
     }
 
     pub fn return_provenance(&self, db: &'db dyn HirAnalysisDb) -> ReturnProvenance {

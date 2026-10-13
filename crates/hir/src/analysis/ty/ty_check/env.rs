@@ -701,133 +701,23 @@ impl<'db> TyCheckEnv<'db> {
             .with_lexical_premises(lexical)
     }
 
-    /// Read an already issued record from a closed compiler-known operand.
-    /// Evaluate only the factory instance, never the in-progress caller body.
+    /// Read a record through the shared checked-operand interpretation.
+    /// This is advisory type contextualization; unavailable values stay pending.
     fn known_operand_application(
         &self,
-        mut operand: ExprId,
+        operand: ExprId,
     ) -> Option<crate::analysis::ty::trait_def::ImplApplicationRecord<'db>> {
-        use crate::analysis::semantic::{EvalOutcome, SemConstValue, generated_callee_key};
-        let mut seen = rustc_hash::FxHashSet::default();
-        while seen.insert(operand) {
-            if let Some(LocalBinding::Local { pat, is_mut: false }) =
-                self.typed_expr(operand).and_then(|prop| prop.binding)
-            {
-                operand = self
-                    .body
-                    .stmts(self.db)
-                    .values()
-                    .find_map(|stmt| match stmt {
-                        Partial::Present(Stmt::Let(bound, _, Some(value))) if *bound == pat => {
-                            Some(*value)
-                        }
-                        _ => None,
-                    })?;
-                continue;
-            }
-            if let Some(reference) = self.expr_const_ref(operand) {
-                let ty = self.typed_expr(operand)?.ty;
-                let reference = crate::analysis::semantic::instance::resolve_semantic_const_ref(
-                    self.db,
-                    reference,
-                    ty,
-                    crate::analysis::semantic::SemOrigin::Expr(operand),
-                )?;
-                let EvalOutcome::Ready(value) =
-                    crate::analysis::semantic::eval_const_ref(self.db, reference)
-                else {
-                    return None;
-                };
-                return match value.value(self.db) {
-                    SemConstValue::Evidence { application, .. } => Some(*application),
-                    _ => None,
-                };
-            }
-            let callable = self.callable_expr(operand)?;
-            if let Some(record) = callable.evidence_introduction() {
-                return Some(record);
-            }
-            let CallableDef::Func(func) = callable.callable_def() else {
-                return None;
-            };
-            if !func.is_const(self.db)
-                || callable.checked_input_tys()?.len() != callable.argument_operands().len()
-                || callable.generic_args().iter().any(|arg| {
-                    arg.has_param(self.db)
-                        || arg.has_var(self.db)
-                        || arg.has_invalid(self.db)
-                        || arg.has_hole(self.db)
-                        || arg.has_projection(self.db)
-                })
-            {
-                return None;
-            }
-            let key = generated_callee_key(
-                self.db,
-                self.scope(),
-                self.assumptions,
-                func,
-                callable.trait_inst(),
-                callable.generic_args(),
-            )
-            .ok()?;
-            let inputs = callable
-                .argument_operands()
-                .iter()
-                .map(|&argument| {
-                    use crate::analysis::semantic::{
-                        ConstDesc, SemConstValue, VerifiedConstValueId,
-                    };
-                    let value = match argument.data(self.db, self.body) {
-                        Partial::Present(crate::hir_def::Expr::Lit(
-                            crate::hir_def::LitKind::Bool(value),
-                        )) => crate::analysis::semantic::bool_const(self.db, *value),
-                        Partial::Present(crate::hir_def::Expr::Lit(
-                            crate::hir_def::LitKind::Int(value),
-                        )) => crate::analysis::semantic::int_const(
-                            self.db,
-                            self.typed_expr(argument)?.ty,
-                            num_bigint::BigInt::from(value.data(self.db).clone()),
-                        ),
-                        _ => {
-                            let reference =
-                                crate::analysis::semantic::instance::resolve_semantic_const_ref(
-                                    self.db,
-                                    self.expr_const_ref(argument)?,
-                                    self.typed_expr(argument)?.ty,
-                                    crate::analysis::semantic::SemOrigin::Expr(argument),
-                                )?;
-                            let EvalOutcome::Ready(value) =
-                                crate::analysis::semantic::eval_const_ref(self.db, reference)
-                            else {
-                                return None;
-                            };
-                            value
-                        }
-                    };
-                    // Inputs enter the existing CTFE service only as verified closed values.
-                    // Evidence-bearing arguments require the application environment path.
-                    if matches!(value.value(self.db), SemConstValue::Evidence { .. }) {
-                        return None;
-                    }
-                    let value =
-                        VerifiedConstValueId::from_complete_execution(self.db, value).ok()?;
-                    Some(ConstDesc::value(self.db, value, key.owner(self.db).scope()))
-                })
-                .collect::<Option<Vec<_>>>()?;
-            let EvalOutcome::Ready(value) = crate::analysis::semantic::force_const_computation(
-                self.db,
-                crate::analysis::semantic::const_computation_for_instance(self.db, key, inputs),
-                crate::analysis::semantic::CtfeConfig::default(),
-            ) else {
-                return None;
-            };
-            return match value.value().value(self.db) {
-                SemConstValue::Evidence { application, .. } => Some(*application),
-                _ => None,
-            };
+        use crate::analysis::semantic::{
+            SemConstValue,
+            operand_recovery::{KnownOperandRecovery, recover_known_operand},
+        };
+        let KnownOperandRecovery::Value(value) = recover_known_operand(self, operand) else {
+            return None;
+        };
+        match value.value(self.db) {
+            SemConstValue::Evidence { application, .. } => Some(*application),
+            _ => None,
         }
-        None
     }
 
     /// Resolve a type-level constant through the admitted lexical choice.
@@ -1978,5 +1868,211 @@ mod pr1797_admission_review {
         };
         assert!(!context.assumptions().list(&db).contains(&goal));
         assert_eq!(env.with_openings[value], Some(active));
+    }
+}
+
+impl<'db> crate::analysis::semantic::operand_recovery::OperandRecoveryCx<'db> for TyCheckEnv<'db> {
+    fn db(&self) -> &'db dyn HirAnalysisDb {
+        self.db
+    }
+    fn body(&self) -> Option<Body<'db>> {
+        Some(self.body)
+    }
+    fn owner(&self) -> BodyOwner<'db> {
+        self.owner
+    }
+    fn opening(&self, operand: ExprId) -> Option<super::TraitOpening<'db>> {
+        self.with_openings[operand]
+    }
+    fn expr_ty(&self, _db: &'db dyn HirAnalysisDb, expr: ExprId) -> TyId<'db> {
+        self.typed_expr_ty(expr)
+    }
+    fn binding(&self, expr: ExprId) -> Option<LocalBinding<'db>> {
+        self.typed_expr(expr).and_then(|prop| prop.binding)
+    }
+    fn binding_source(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        binding: LocalBinding<'db>,
+    ) -> Option<super::BindingSource> {
+        super::binding_source::binding_source(
+            db,
+            self.body,
+            &self.pattern_store,
+            &|pat| self.pattern_status[pat].ready_root(),
+            binding,
+        )
+    }
+    fn record_init_lowering(&self, expr: ExprId) -> Option<super::RecordInitLowering<'db>> {
+        self.record_init_lowering[expr]
+    }
+    fn field_index(&self, expr: ExprId) -> Option<u16> {
+        self.resolved_field_index[expr]
+    }
+    fn projected_evidence(
+        &self,
+        _expr: ExprId,
+    ) -> Option<crate::analysis::ty::trait_def::ImplApplicationRecord<'db>> {
+        None
+    }
+    fn pattern_root(&self, pat: PatId) -> Option<ValidatedPatId> {
+        self.pattern_status[pat].ready_root()
+    }
+    fn pattern_store(&self) -> &PatternStore<'db> {
+        &self.pattern_store
+    }
+    fn callable(&self, expr: ExprId) -> Option<&Callable<'db>> {
+        self.callable_expr(expr)
+    }
+    fn leaf(
+        &self,
+        operand: ExprId,
+        stop: &mut Option<crate::analysis::semantic::operand_recovery::KnownOperandRecovery<'db>>,
+        active: &mut Vec<ExprId>,
+    ) -> Option<crate::analysis::semantic::SemConstId<'db>> {
+        use crate::analysis::semantic::{
+            ConstDesc, CtfeConfig, EvalOutcome, SemOrigin, SemanticInstanceKey,
+            VerifiedConstValueId, const_computation_for_instance, force_const_computation,
+            operand_recovery::{KnownOperandRecovery, recover_value},
+        };
+        let ty = self.typed_expr(operand)?.ty;
+        if let Some(reference) = self.expr_const_ref(operand) {
+            let reference = crate::analysis::semantic::instance::resolve_semantic_const_ref(
+                self.db,
+                reference,
+                ty,
+                SemOrigin::Expr(operand),
+            )?;
+            // Never force a reference back into the checker currently borrowing these tables.
+            if reference.instance(self.db).owner(self.db) == self.owner {
+                return None;
+            }
+            return match crate::analysis::semantic::eval_const_ref(self.db, reference) {
+                EvalOutcome::Ready(value) => Some(value),
+                EvalOutcome::Blocked(info) => {
+                    *stop = Some(KnownOperandRecovery::Blocked {
+                        owner: reference.instance(self.db).owner(self.db),
+                        info,
+                        result_ty: ty,
+                    });
+                    None
+                }
+                EvalOutcome::Failed(failure) => {
+                    *stop = Some(KnownOperandRecovery::Failed {
+                        owner: reference.instance(self.db).owner(self.db),
+                        failure,
+                        result_ty: ty,
+                    });
+                    None
+                }
+            };
+        }
+        let callable = self.callable_expr(operand)?;
+        let CallableDef::Func(func) = callable.callable_def() else {
+            return None;
+        };
+        if BodyOwner::Func(func) == self.owner
+            || !func.is_const(self.db)
+            || callable.checked_input_tys()?.len() != callable.argument_operands().len()
+            || !self.call_effect_args[operand]
+                .as_deref()
+                .unwrap_or(&[])
+                .is_empty()
+            || callable.generic_args().iter().any(|arg| {
+                arg.has_param(self.db)
+                    || arg.has_var(self.db)
+                    || arg.has_invalid(self.db)
+                    || arg.has_hole(self.db)
+                    || arg.has_projection(self.db)
+            })
+        {
+            return None;
+        }
+        let values = callable
+            .argument_operands()
+            .iter()
+            .map(|&operand| recover_value(self, operand, stop, active))
+            .collect::<Option<Vec<_>>>()?;
+        let opened = if let Some((opened, _)) = callable.opened_trait_application() {
+            let value = recover_value(self, opened, stop, active)?;
+            let crate::analysis::semantic::SemConstValue::Evidence { application, .. } =
+                value.value(self.db)
+            else {
+                return None;
+            };
+            Some(*application)
+        } else {
+            None
+        };
+        let callee = crate::analysis::semantic::instance::checked_operand_callee(
+            self.db,
+            self.scope(),
+            self.assumptions,
+            callable,
+            opened,
+        )
+        .ok()??;
+        if !callee.concrete_dispatch {
+            let dependency = callee
+                .key
+                .subst(self.db)
+                .generic_args(self.db)
+                .first()
+                .copied()
+                .unwrap_or(ty);
+            *stop = Some(KnownOperandRecovery::Blocked {
+                owner: callee.key.owner(self.db),
+                result_ty: ty,
+                info: crate::analysis::semantic::BlockedInfo::new(
+                    crate::analysis::semantic::ConstDemandKind::CallableSelection,
+                    crate::analysis::semantic::ConstDependency::Type(dependency),
+                    SemOrigin::Expr(operand),
+                ),
+            });
+            return None;
+        }
+        let key = callee.key;
+        let parameters = values.iter().copied().enumerate().collect::<Vec<_>>();
+        let env = key
+            .impl_env(self.db)
+            .with_argument_evidence_values(self.db, &parameters);
+        let key = SemanticInstanceKey::new(
+            self.db,
+            key.owner(self.db),
+            key.subst(self.db),
+            key.effect_providers(self.db),
+            env,
+        );
+        let inputs = values
+            .into_iter()
+            .map(|value| {
+                VerifiedConstValueId::from_complete_execution(self.db, value)
+                    .ok()
+                    .map(|value| ConstDesc::value(self.db, value, key.owner(self.db).scope()))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        match force_const_computation(
+            self.db,
+            const_computation_for_instance(self.db, key, inputs),
+            CtfeConfig::default(),
+        ) {
+            EvalOutcome::Ready(value) => Some(value.value()),
+            EvalOutcome::Blocked(info) => {
+                *stop = Some(KnownOperandRecovery::Blocked {
+                    owner: key.owner(self.db),
+                    info,
+                    result_ty: ty,
+                });
+                None
+            }
+            EvalOutcome::Failed(failure) => {
+                *stop = Some(KnownOperandRecovery::Failed {
+                    owner: key.owner(self.db),
+                    failure,
+                    result_ty: ty,
+                });
+                None
+            }
+        }
     }
 }

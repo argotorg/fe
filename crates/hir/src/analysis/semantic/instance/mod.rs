@@ -4,8 +4,8 @@ mod template;
 
 pub use const_ref::generated_callee_key;
 pub(crate) use const_ref::{
-    declaration_reaches_trait_goal, has_unbound_evidence_calls, known_operand_variant,
-    provisional_semantic_callee_key, resolve_semantic_const_ref,
+    checked_operand_callee, declaration_reaches_trait_goal, has_unbound_evidence_calls,
+    known_operand_variant, provisional_semantic_callee_key, resolve_semantic_const_ref,
     resolve_semantic_const_ref_in_instance, semantic_callee_key_with_effect_providers,
 };
 pub use semantic::{

@@ -1,0 +1,34 @@
+use core::obligations::{Evidence, prove}
+
+trait Pick {
+    const fn value() -> u256
+}
+
+struct Subject {}
+
+impl Pick for Subject {
+    const fn value() -> u256 { 1 }
+}
+
+impl Pick for Subject as First {
+    const fn value() -> u256 { 2 }
+}
+
+type Goal = Pick<Subject>
+
+const fn first() -> Evidence<Goal> {
+    with (First) { prove<Goal>() }
+}
+
+fn check() -> u256 {
+    let w = first()
+    let p: Evidence<Goal> = with (w) { prove<Goal>() }
+    with (p) {
+        <Subject as Pick>::value()
+    }
+}
+
+#[test]
+fn test_reprove() {
+    assert(check() == 2)
+}

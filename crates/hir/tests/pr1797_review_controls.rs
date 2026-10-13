@@ -142,3 +142,48 @@ fn nested_known_match_executes_both_selected_alternatives() {
     evaluate_known_control(source, "2");
     evaluate_known_control(&source.replace("match true", "match false"), "3");
 }
+
+#[test]
+fn shared_recovery_closed_if_uses_selected_method_and_both_branches() {
+    use fe_hir::{
+        analysis::{
+            semantic::{EvalOutcome, GenericSubst, eval_body_owner_const},
+            ty::ty_check::BodyOwner,
+        },
+        test_db::find_func,
+    };
+    let source = include_str!("pr1797_review_controls/closed-if-selected-method.fe");
+    for (text, expected) in [
+        (source.to_string(), "15"),
+        (source.replace("if true", "if false"), "25"),
+    ] {
+        // The production fixture retains its native test entry. This control
+        // returns its result through the explicit CTFE test API, whose roots
+        // must be const and cannot call the native assertion function.
+        let text = text
+            .replace(
+                "#[test]\nfn test_default_method_hijack()",
+                "const fn test_default_method_hijack() -> u256",
+            )
+            .replace("assert(actual == 15)", "actual");
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("closed-if-selected-method.fe".into(), &text);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let owner = BodyOwner::Func(find_func(&db, module, "test_default_method_hijack"));
+        let outcome =
+            eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+        let EvalOutcome::Ready(value) = outcome else {
+            panic!("selected {expected} must execute: {outcome:?}");
+        };
+        assert_eq!(value.pretty_print(&db), expected);
+    }
+}
+
+#[test]
+fn shared_recovery_reproves_actual_closed_evidence() {
+    evaluate_known_control(
+        include_str!("pr1797_review_controls/reprove-closed-evidence.fe"),
+        "2",
+    );
+}
