@@ -587,12 +587,32 @@ pub(crate) fn has_unbound_evidence_calls<'db>(
         return false;
     };
     body.exprs(db).iter().any(|(expr, _)| {
-        typed
-            .callable_expr(expr)
-            .and_then(|callable| callable.opened_trait_application())
+        let Some(callable) = typed.callable_expr(expr) else {
+            return false;
+        };
+        callable
+            .opened_trait_application()
             .is_some_and(|(operand, _)| {
                 operand_parameter_source(db, caller, operand).is_some()
                     && opened_operand_application(db, caller, operand).is_none()
+            })
+            || callable.argument_operands().iter().any(|&operand| {
+                if operand_parameter_source(db, caller, operand).is_none() {
+                    return false;
+                }
+                let mut slots = Vec::new();
+                evidence_slots(
+                    db,
+                    caller.key(db).owner(db).scope(),
+                    typed.expr_ty(db, operand),
+                    Vec::new(),
+                    &mut IndexSet::default(),
+                    &mut slots,
+                    &mut Vec::new(),
+                );
+                slots
+                    .into_iter()
+                    .any(|path| opened_operand_application_at(db, caller, operand, path).is_none())
             })
     })
 }
