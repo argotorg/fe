@@ -540,6 +540,64 @@ fn projection_depth_boundary_keeps_positive_and_explicit_limit_cause() {
 }
 
 #[test]
+fn stopped_projection_preserves_factory_failure_priority() {
+    let source = include_str!("fco_payload_controls/depth-65-fault.fe");
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("depth65-fault.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    assert!(fe_mir::build_test_runtime_package(&db, module, Some("preserves")).is_err());
+    let owner = BodyOwner::Func(find_func(&db, module, "preserves"));
+    let key = hir::analysis::semantic::root_semantic_instance_key(&db, owner).unwrap();
+    let instance = hir::analysis::semantic::get_or_build_semantic_instance(&db, key);
+    let failure =
+        hir::analysis::semantic::borrowck::check_semantic_borrows(&db, instance).unwrap_err();
+    let diagnostic = failure
+        .diagnostic()
+        .expect("original factory fault required");
+    let rendered = format!("{diagnostic:?}");
+    assert!(
+        rendered.contains("division by zero in const context"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("MissingBody"), "{rendered}");
+    assert!(!rendered.contains("discovery exceeds"), "{rendered}");
+    assert!(diagnostic.primary_span().is_some());
+}
+
+#[test]
+fn generic_stopped_projection_preserves_factory_failure_priority() {
+    let source = include_str!("fco_payload_controls/depth-65-fault.fe")
+        .replace(
+            "const fn broken() -> Evidence<Goal>",
+            "const fn broken<U>(_ x: U) -> U",
+        )
+        .replace("first() }", "x }")
+        .replace("inner: broken()", "inner: broken<Evidence<Goal>>(first())");
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("generic-depth65-fault.fe".into(), &source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    assert!(fe_mir::build_test_runtime_package(&db, module, Some("preserves")).is_err());
+    let owner = BodyOwner::Func(find_func(&db, module, "preserves"));
+    let key = hir::analysis::semantic::root_semantic_instance_key(&db, owner).unwrap();
+    let instance = hir::analysis::semantic::get_or_build_semantic_instance(&db, key);
+    let failure =
+        hir::analysis::semantic::borrowck::check_semantic_borrows(&db, instance).unwrap_err();
+    let diagnostic = failure
+        .diagnostic()
+        .expect("original factory fault required");
+    let rendered = format!("{diagnostic:?}");
+    assert!(
+        rendered.contains("division by zero in const context"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("MissingBody"), "{rendered}");
+    assert!(!rendered.contains("discovery exceeds"), "{rendered}");
+    assert!(diagnostic.primary_span().is_some());
+}
+
+#[test]
 fn array_projection_depth_limit_preserves_the_explicit_cause() {
     let source = include_str!("fco_payload_controls/depth-65.fe")
         .lines()
@@ -594,6 +652,61 @@ fn ordinary_deep_record_is_not_rejected_by_evidence_discovery_limit() {
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("ordinary-depth65.fe".into(), &source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let package = fe_mir::build_test_runtime_package(&db, module, Some("preserves"))
+        .expect("ordinary deep records do not carry issued evidence");
+    assert!(!package.functions(&db).is_empty());
+}
+
+#[test]
+fn ordinary_deep_factory_fault_remains_a_runtime_operation() {
+    let source = include_str!("fco_payload_controls/depth-65.fe")
+        .lines()
+        .map(|line| {
+            if line.starts_with("fn forward") {
+                line.replace("Evidence<Pick<T>>", "u256")
+                    .replace("consume<T>(", "(")
+            } else if line.starts_with("fn preserves") {
+                line.replace("inner: first()", "inner: broken()")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source =
+        format!("{source}\nconst fn broken() -> u256 {{ let zero: u256 = 0\n 1 / zero }}\n");
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("ordinary-depth65.fe".into(), &source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let package = fe_mir::build_test_runtime_package(&db, module, Some("preserves"))
+        .expect("ordinary deep records do not carry issued evidence");
+    assert!(!package.functions(&db).is_empty());
+}
+
+#[test]
+fn ordinary_generic_deep_factory_fault_remains_a_runtime_operation() {
+    let source = include_str!("fco_payload_controls/depth-65.fe")
+        .lines()
+        .map(|line| {
+            if line.starts_with("fn forward") {
+                line.replace("Evidence<Pick<T>>", "u256")
+                    .replace("consume<T>(", "(")
+            } else if line.starts_with("fn preserves") {
+                line.replace("inner: first()", "inner: broken<u256>(2)")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!(
+        "{source}\nconst fn broken<U>(_ x: U) -> U {{ let zero: u256 = 0\n let quotient: u256 = 1 / zero\n x }}\n"
+    );
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone("ordinary-depth65.fe".into(), &source);
     let (module, _) = db.top_mod(file);

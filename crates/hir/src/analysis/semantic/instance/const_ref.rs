@@ -466,10 +466,12 @@ enum KnownOperandRecovery<'db> {
     Blocked {
         owner: BodyOwner<'db>,
         info: crate::analysis::semantic::BlockedInfo<'db>,
+        result_ty: TyId<'db>,
     },
     Failed {
         owner: BodyOwner<'db>,
         failure: crate::analysis::semantic::EvalFailure<'db>,
+        result_ty: TyId<'db>,
     },
 }
 
@@ -675,6 +677,7 @@ fn compiler_known_operand_value_inner<'db>(
         EvalOutcome::Blocked(info) => {
             *stop = Some(KnownOperandRecovery::Blocked {
                 owner: key.owner(db),
+                result_ty: SemanticInstance::new(db, key).normalized_result_ty(db),
                 info,
             });
             None
@@ -682,6 +685,7 @@ fn compiler_known_operand_value_inner<'db>(
         EvalOutcome::Failed(failure) => {
             *stop = Some(KnownOperandRecovery::Failed {
                 owner: key.owner(db),
+                result_ty: SemanticInstance::new(db, key).normalized_result_ty(db),
                 failure,
             });
             None
@@ -1540,6 +1544,55 @@ fn semantic_callee_key_with_assumptions<'db>(
                 continue;
             }
             let recovery = recover_known_operand(db, caller, operand);
+            // A stopped ordinary carrier must not turn optional constant folding
+            // into admission. For a failure without discovered operand slots,
+            // retain the cause only when the failed computation itself has a
+            // discoverable evidence result, using the same bounded projection walk.
+            if slots.is_empty()
+                && let KnownOperandRecovery::Failed {
+                    owner, result_ty, ..
+                }
+                | KnownOperandRecovery::Blocked {
+                    owner, result_ty, ..
+                } = &recovery
+            {
+                let mut result_slots = Vec::new();
+                evidence_slots(
+                    db,
+                    owner.scope(),
+                    *result_ty,
+                    Vec::new(),
+                    &mut IndexSet::default(),
+                    &mut result_slots,
+                    &mut Vec::new(),
+                );
+                if result_slots.is_empty() {
+                    continue;
+                }
+            }
+            let recovered_value = match recovery {
+                KnownOperandRecovery::Failed {
+                    owner,
+                    failure: crate::analysis::semantic::EvalFailure::Ctfe(error),
+                    ..
+                } => {
+                    return Err(MethodArgMapError::ConstArgumentFailed(
+                        crate::analysis::ty::const_ty::invalid_cause_from_ctfe_error(
+                            db, owner, error,
+                        ),
+                    ));
+                }
+                KnownOperandRecovery::Failed { failure, .. } => {
+                    return Err(MethodArgMapError::ConstArgumentInvariant(format!(
+                        "{failure:?}"
+                    )));
+                }
+                KnownOperandRecovery::Blocked { owner, info, .. } => {
+                    return Err(MethodArgMapError::ConstArgumentBlocked { owner, info });
+                }
+                KnownOperandRecovery::Value(value) => Some(value),
+                KnownOperandRecovery::NotKnown => None,
+            };
             for (reason, prefix) in stopped {
                 let depth = match reason {
                     EvidenceSlotStop::DepthLimit(depth) => Some(depth),
@@ -1548,9 +1601,9 @@ fn semantic_callee_key_with_assumptions<'db>(
                 // A stopped ordinary recursive type is not evidence authority.
                 // Diagnose only issued evidence beneath this stopped projection.
                 // Evidence in an independent sibling is still fully discovered.
-                let actual = match &recovery {
-                    KnownOperandRecovery::Value(value) => ImplEnv::empty(db, owner.scope())
-                        .with_argument_evidence_values(db, &[(index, *value)]),
+                let actual = match recovered_value {
+                    Some(value) => ImplEnv::empty(db, owner.scope())
+                        .with_argument_evidence_values(db, &[(index, value)]),
                     _ => impl_env,
                 };
                 if actual
@@ -1577,30 +1630,6 @@ fn semantic_callee_key_with_assumptions<'db>(
                 {
                     return Err(MethodArgMapError::EvidenceProjectionStopped { operand, depth });
                 }
-            }
-            if slots.is_empty() {
-                continue;
-            }
-            match recovery {
-                KnownOperandRecovery::Failed {
-                    owner,
-                    failure: crate::analysis::semantic::EvalFailure::Ctfe(error),
-                } => {
-                    return Err(MethodArgMapError::ConstArgumentFailed(
-                        crate::analysis::ty::const_ty::invalid_cause_from_ctfe_error(
-                            db, owner, error,
-                        ),
-                    ));
-                }
-                KnownOperandRecovery::Failed { failure, .. } => {
-                    return Err(MethodArgMapError::ConstArgumentInvariant(format!(
-                        "{failure:?}"
-                    )));
-                }
-                KnownOperandRecovery::Blocked { owner, info } => {
-                    return Err(MethodArgMapError::ConstArgumentBlocked { owner, info });
-                }
-                KnownOperandRecovery::Value(_) | KnownOperandRecovery::NotKnown => {}
             }
         }
     }
