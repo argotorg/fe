@@ -1,0 +1,61 @@
+use core::obligations::{Evidence, prove}
+
+trait Score {
+    fn score(self) -> u256 { 999 }
+}
+
+struct Plain {
+    pub x: u256,
+}
+
+struct Boxed {
+    pub w: Evidence<Score<Plain>>,
+}
+
+impl Score for Plain {
+    fn score(self) -> u256 {
+        self.x
+    }
+}
+
+impl Score for Plain as Double {
+    fn score(self) -> u256 {
+        self.x * 2
+    }
+}
+
+fn consume(_ b: Boxed, _ value: Plain) -> u256 {
+    with (b.w) {
+        value.score()
+    }
+}
+
+fn relay(_ witness: Evidence<Score<Plain>>, _ value: Plain) -> u256 {
+    consume(Boxed { w: witness }, value)
+}
+
+fn local_repack(_ witness: Evidence<Score<Plain>>, _ value: Plain) -> u256 {
+    let b = Boxed { w: witness }
+    with (b.w) {
+        value.score()
+    }
+}
+
+#[test]
+fn boxed_relay_ordinary() {
+    assert(relay(prove<Score<Plain>>(), Plain { x: 7 }) == 7)
+}
+
+#[test]
+fn boxed_relay_named() {
+    with (Double) {
+        assert(relay(prove<Score<Plain>>(), Plain { x: 7 }) == 14)
+    }
+}
+
+#[test]
+fn local_repack_named() {
+    with (Double) {
+        assert(local_repack(prove<Score<Plain>>(), Plain { x: 7 }) == 14)
+    }
+}

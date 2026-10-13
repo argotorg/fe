@@ -315,3 +315,30 @@ fn ordinary_evidence_transport_retains_selected_choice() {
     }
     assert_eq!(returns, 1);
 }
+
+#[test]
+fn boxed_evidence_relay_preserves_ordinary_and_named_records() {
+    let source = include_str!("pr1797_review_controls/boxed-relay.fe");
+    assert_eq!(diagnostics(source), "[]");
+    let source = source.split("#[test]").next().expect("declarations");
+    let source = source
+        .replace("fn score", "const fn score")
+        .replace("fn relay", "const fn relay")
+        .replace("fn local_repack", "const fn local_repack");
+    for (call, expected) in [
+        ("relay(prove<Score<Plain>>(), Plain { x: 7 })", "7"),
+        (
+            "with (Double) { relay(prove<Score<Plain>>(), Plain { x: 7 }) }",
+            "14",
+        ),
+        (
+            "with (Double) { local_repack(prove<Score<Plain>>(), Plain { x: 7 }) }",
+            "14",
+        ),
+    ] {
+        evaluate_known_control(
+            &format!("{source}\nfn check() -> u256 {{ {call} }}"),
+            expected,
+        );
+    }
+}
