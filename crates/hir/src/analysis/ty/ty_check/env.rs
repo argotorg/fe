@@ -78,6 +78,7 @@ pub(crate) struct TyCheckEnv<'db> {
     base_assumptions: PredicateListId<'db>,
     assumptions: PredicateListId<'db>,
     var_env: Vec<BlockEnv<'db>>,
+    binding_openings: FxHashMap<LocalBinding<'db>, Vec<super::TraitOpening<'db>>>,
     pending_vars: FxHashMap<IdentId<'db>, LocalBinding<'db>>,
     loop_stack: Vec<StmtId>,
     expr_stack: Vec<ExprId>,
@@ -154,6 +155,7 @@ impl<'db> TyCheckEnv<'db> {
             base_assumptions,
             assumptions: base_assumptions,
             var_env: vec![BlockEnv::new(owner_scope, 0)],
+            binding_openings: FxHashMap::default(),
             pending_vars: FxHashMap::default(),
             loop_stack: Vec::new(),
             expr_stack: Vec::new(),
@@ -694,7 +696,26 @@ impl<'db> TyCheckEnv<'db> {
 
     /// Resolve a type-level constant through the admitted lexical choice.
     pub(super) fn contextualize_const_types(&self, ty: TyId<'db>) -> TyId<'db> {
-        struct Selected<'a, 'db>(&'a TyCheckEnv<'db>);
+        self.contextualize_const_types_at(ty, &self.trait_openings.visible(self.db), false)
+    }
+
+    pub(super) fn binding_openings(
+        &self,
+        binding: LocalBinding<'db>,
+    ) -> Vec<super::TraitOpening<'db>> {
+        self.binding_openings
+            .get(&binding)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub(super) fn contextualize_const_types_at(
+        &self,
+        ty: TyId<'db>,
+        openings: &[super::TraitOpening<'db>],
+        source: bool,
+    ) -> TyId<'db> {
+        struct Selected<'a, 'db>(&'a TyCheckEnv<'db>, &'a [super::TraitOpening<'db>], bool);
         impl<'db> TyFolder<'db> for Selected<'_, 'db> {
             fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
                 use crate::analysis::ty::{
@@ -706,9 +727,21 @@ impl<'db> TyCheckEnv<'db> {
                     && let ConstTyData::Abstract(expr, expected) = value.data(db)
                     && let ConstExpr::TraitConst(assoc) = expr.data(db)
                     && let Some(super::TraitOpening::Named(record)) =
-                        self.0.opening_for(assoc.inst())
+                        self.1.iter().copied().find(|opening| {
+                            let goal = opening.goal();
+                            goal.def(db) == assoc.inst().def(db)
+                                && goal.args(db) == assoc.inst().args(db)
+                        })
                 {
-                    return match record.revalidate(db, self.0.proof_context(), assoc.inst()) {
+                    return match record.revalidate(
+                        db,
+                        if self.2 {
+                            record.origin_context()
+                        } else {
+                            self.0.proof_context()
+                        },
+                        assoc.inst(),
+                    ) {
                         Ok(application) => const_ty_from_resolved_trait_const(
                             db,
                             application.resolved(),
@@ -722,7 +755,7 @@ impl<'db> TyCheckEnv<'db> {
                 ty
             }
         }
-        ty.fold_with(self.db, &mut Selected(self))
+        ty.fold_with(self.db, &mut Selected(self, openings, source))
     }
 
     pub(crate) fn base_assumptions(&self) -> PredicateListId<'db> {
@@ -946,6 +979,8 @@ impl<'db> TyCheckEnv<'db> {
                 self.pat_binding_modes[pat] = Some(PatBindingMode::ByValue);
             }
         }
+        self.binding_openings
+            .insert(binding, self.trait_openings.visible(self.db));
         self.pending_vars.insert(name, binding)
     }
 

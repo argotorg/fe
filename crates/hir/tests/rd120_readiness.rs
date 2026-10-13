@@ -48,3 +48,39 @@ fn equal_selected_layout_may_leave() {
         .replace("[7,8]", "[7]");
     check("equal-selected-layout.fe", &source, false);
 }
+
+#[test]
+fn explicit_return_cannot_bypass_selection_boundary() {
+    let prefix = include_str!("rd120_controls/signature_const_aggregate_leak.fe")
+        .split("fn leak()")
+        .next()
+        .unwrap();
+    let source = format!(
+        "{prefix}\nfn returned() -> Buf<Subject> {{ with (Other) {{ return make<Subject>([7,8]) }} }}\n"
+    );
+    check("explicit-return-escape.fe", &source, true);
+}
+
+#[test]
+fn assignment_cannot_export_selected_layout() {
+    let prefix = include_str!("rd120_controls/signature_const_aggregate_leak.fe")
+        .split("fn leak()")
+        .next()
+        .unwrap();
+    let source = format!(
+        "{prefix}\nfn assigned() -> u256 {{ let mut b = make<Subject>([7])\nwith (Other) {{ b = make<Subject>([7,8]) }}\nb.a[0] }}\n"
+    );
+    check("assignment-escape.fe", &source, true);
+}
+
+#[test]
+fn same_context_assignment_preserves_selected_layout() {
+    let prefix = include_str!("rd120_controls/signature_const_aggregate_leak.fe")
+        .split("fn leak()")
+        .next()
+        .unwrap();
+    let source = format!(
+        "{prefix}\nfn assigned() -> u256 {{ with (Other) {{ let mut b = make<Subject>([7,8])\nb = make<Subject>([9,10])\nb.a[1] }} }}\n"
+    );
+    check("same-context-assignment.fe", &source, false);
+}

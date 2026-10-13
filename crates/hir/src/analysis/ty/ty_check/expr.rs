@@ -1547,25 +1547,45 @@ impl<'db> TyChecker<'db> {
     }
 
     fn selection_layout_types(&mut self, ty: TyId<'db>) -> Vec<TyId<'db>> {
+        self.selection_layout_types_at(ty, None)
+    }
+
+    fn selection_layout_types_at(
+        &mut self,
+        ty: TyId<'db>,
+        openings: Option<&[super::TraitOpening<'db>]>,
+    ) -> Vec<TyId<'db>> {
         fn collect<'db>(
             checker: &mut TyChecker<'db>,
             ty: TyId<'db>,
             active: &mut FxHashSet<TyId<'db>>,
             result: &mut Vec<TyId<'db>>,
+            openings: Option<&[super::TraitOpening<'db>]>,
         ) {
-            let normalized = checker.normalize_ty(ty);
+            let normalized = if let Some(openings) = openings {
+                let ty = ty.fold_with(checker.db, &mut checker.table);
+                let ty = checker.env.contextualize_const_types_at(ty, openings, true);
+                normalize_ty(
+                    checker.db,
+                    ty,
+                    checker.env.scope(),
+                    checker.env.base_assumptions(),
+                )
+            } else {
+                checker.normalize_ty(ty)
+            };
             result.push(normalized);
             let base = ty.decompose_ty_app(checker.db).0;
             if !active.insert(base) {
                 return;
             }
             for field in ty.field_types(checker.db) {
-                collect(checker, field, active, result);
+                collect(checker, field, active, result, openings);
             }
             active.remove(&base);
         }
         let mut result = Vec::new();
-        collect(self, ty, &mut FxHashSet::default(), &mut result);
+        collect(self, ty, &mut FxHashSet::default(), &mut result, openings);
         result
     }
 
@@ -5464,6 +5484,22 @@ impl<'db> TyChecker<'db> {
             rhs_prop.ty = coerced;
         }
         rhs_prop.ty = self.unify_ty(Typeable::Expr(*rhs, rhs_prop.clone()), rhs_prop.ty, lhs_ty);
+
+        if let Some(place) = self.env.expr_place(*lhs) {
+            let PlaceBase::Binding(binding) = place.base;
+            let openings = self
+                .env
+                .binding_openings(binding)
+                .fold_with(self.db, &mut self.table);
+            let source_layout = self.selection_layout_types(rhs_prop.ty);
+            let destination_layout = self.selection_layout_types_at(rhs_prop.ty, Some(&openings));
+            if source_layout != destination_layout {
+                self.push_diag(BodyDiag::SelectedConstantTypeEscape(
+                    rhs.span(self.body()).into(),
+                ));
+                return ExprProp::invalid(self.db);
+            }
+        }
 
         let lhs_status = self.check_assign_lhs(*lhs, &typed_lhs);
         self.record_implicit_move_for_owned_expr(*rhs, rhs_prop.ty);
