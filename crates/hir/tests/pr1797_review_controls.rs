@@ -408,6 +408,11 @@ fn const_choice_definition_defers_only_until_runtime_use() {
         db.assert_no_diags(module);
         let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, module)
             .into_iter()
+            .chain(
+                fe_hir::analysis::semantic::collect_layout_evidence_diagnostic_vouchers(
+                    &db, module,
+                ),
+            )
             .map(|diagnostic| diagnostic.to_complete(&db))
             .collect::<Vec<_>>();
         if runtime {

@@ -13,7 +13,7 @@ use crate::analysis::{
             NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NLayoutLocals,
             NLayoutPlan, NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId,
             NStatementKind, NTerminatorKind, NValueId, NormalizedBody,
-            normalize_runtime_semantic_body,
+            normalize_runtime_semantic_body, normalize_semantic_body,
         },
     },
     ty::{
@@ -1999,11 +1999,16 @@ impl<'a, 'db> LayoutEvidenceBuilder<'a, 'db> {
 fn layout_evidence_body_query<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: SemanticInstance<'db>,
+    for_runtime: bool,
 ) -> Result<LayoutEvidenceBody<'db>, LayoutEvidenceError<'db>> {
     let signature = owner.key(db).layout_bundle_signature(db);
     validate_layout_bundle_signature(&signature)?;
-    let artifacts =
-        normalize_runtime_semantic_body(db, owner).map_err(layout_normalization_error)?;
+    let artifacts = if for_runtime {
+        normalize_runtime_semantic_body(db, owner)
+    } else {
+        normalize_semantic_body(db, owner)
+    }
+    .map_err(layout_normalization_error)?;
     let normalized = artifacts.body;
     let layout_plan = artifacts.layout_plan;
     let source = owner.body(db);
@@ -2014,7 +2019,7 @@ fn layout_evidence_body_query<'db>(
     let template_source = (owner.key(db) != identity_key)
         .then(|| {
             let template = get_or_build_semantic_instance(db, identity_key);
-            normalize_runtime_semantic_body(db, template)
+            normalize_semantic_body(db, template)
                 .map_err(layout_normalization_error)
                 .map(|_| template.body(db))
         })
@@ -2232,7 +2237,18 @@ pub fn layout_evidence_body<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: SemanticInstance<'db>,
 ) -> Result<&'db LayoutEvidenceBody<'db>, LayoutEvidenceError<'db>> {
-    layout_evidence_body_query(db, owner)
+    layout_evidence_body_query(db, owner, true)
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+/// Validate a const definition without demanding a runtime value for an
+/// operation whose captured choice is supplied by a closed CTFE invocation.
+pub(super) fn layout_evidence_definition_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: SemanticInstance<'db>,
+) -> Result<&'db LayoutEvidenceBody<'db>, LayoutEvidenceError<'db>> {
+    layout_evidence_body_query(db, owner, false)
         .as_ref()
         .map_err(Clone::clone)
 }
