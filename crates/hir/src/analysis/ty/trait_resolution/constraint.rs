@@ -475,6 +475,9 @@ fn collect_decl_constraint_pairs_impl<'db>(
         };
         for (bound_idx, bound) in hir_param.bounds.iter().enumerate() {
             if let TypeBound::Trait(trait_ref) = bound {
+                if super::super::ty_lower::is_core_constraint_bound(db, owner_scope, *trait_ref) {
+                    continue;
+                }
                 deferred.push(Deferred {
                     bound_ty: Either::Right(ty),
                     trait_ref: *trait_ref,
@@ -511,6 +514,10 @@ fn collect_decl_constraint_pairs_impl<'db>(
 
             for (bound_idx, bound) in pred.bounds.iter().enumerate() {
                 if let TypeBound::Trait(trait_ref) = *bound {
+                    if super::super::ty_lower::is_core_constraint_bound(db, owner_scope, trait_ref)
+                    {
+                        continue;
+                    }
                     deferred.push(Deferred {
                         bound_ty: Either::Left(hir_ty),
                         trait_ref,

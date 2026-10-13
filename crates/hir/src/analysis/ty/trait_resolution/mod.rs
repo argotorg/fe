@@ -476,6 +476,19 @@ pub(crate) fn check_ty_wf<'db>(
                 return wf;
             }
         }
+        TyData::ConstraintTerm(goal) => {
+            // A requirement term describes a goal without establishing it.
+            for &arg in goal
+                .args(db)
+                .iter()
+                .chain(goal.assoc_type_bindings(db).values())
+            {
+                let wf = check_ty_wf(db, solve_cx, arg);
+                if !wf.is_wf() {
+                    return wf;
+                }
+            }
+        }
         TyData::QualifiedTy(inst) => {
             let wf = check_projected_trait_use_wf(db, solve_cx, *inst);
             if !wf.is_wf() {

@@ -3216,6 +3216,15 @@ impl<'db> WherePredicateView<'db> {
             if let TypeBound::Kind(Partial::Present(kb)) = b {
                 return Some(lower_hir_kind_local(kb));
             }
+            if let TypeBound::Trait(reference) = b
+                && crate::analysis::ty::ty_lower::is_core_constraint_bound(
+                    db,
+                    self.owner_item().scope(),
+                    *reference,
+                )
+            {
+                return Some(Kind::Constraint);
+            }
         }
         None
     }
@@ -3227,14 +3236,25 @@ impl<'db> WherePredicateView<'db> {
     /// Iterate trait bounds as per-bound semantic views.
     pub fn bounds(
         self,
-        db: &'db dyn HirDb,
+        db: &'db dyn HirAnalysisDb,
     ) -> impl Iterator<Item = WherePredicateBoundView<'db>> + 'db {
         let idxs: Vec<usize> = self
             .hir_pred(db)
             .bounds
             .iter()
             .enumerate()
-            .filter_map(|(i, b)| matches!(b, TypeBound::Trait(_)).then_some(i))
+            .filter_map(|(i, b)| match b {
+                TypeBound::Trait(reference)
+                    if !crate::analysis::ty::ty_lower::is_core_constraint_bound(
+                        db,
+                        self.owner_item().scope(),
+                        *reference,
+                    ) =>
+                {
+                    Some(i)
+                }
+                _ => None,
+            })
             .collect();
         idxs.into_iter()
             .map(move |idx| WherePredicateBoundView { pred: self, idx })
@@ -5101,10 +5121,14 @@ pub struct AssocTypeBoundView<'db> {
 
 impl<'db> TraitAssocTypeView<'db> {
     /// Iterate trait bounds as per-bound semantic views.
-    pub fn bounds(self, db: &'db dyn HirDb) -> impl Iterator<Item = AssocTypeBoundView<'db>> + 'db {
+    pub fn bounds(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> impl Iterator<Item = AssocTypeBoundView<'db>> + 'db {
         let len = self.bounds_raw(db).len();
         let idxs: Vec<usize> = (0..len)
-            .filter(|&i| matches!(self.bounds_raw(db)[i], TypeBound::Trait(_)))
+            .filter(|&i| matches!(self.bounds_raw(db)[i], TypeBound::Trait(reference)
+                if !crate::analysis::ty::ty_lower::is_core_constraint_bound(db, self.owner.scope(), reference)))
             .collect();
         idxs.into_iter()
             .map(move |idx| AssocTypeBoundView { owner: self, idx })

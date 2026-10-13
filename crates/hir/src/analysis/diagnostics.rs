@@ -69,7 +69,7 @@ fn pretty_print_ty_for_mismatch<'db>(db: &'db dyn SpannedHirAnalysisDb, ty: TyId
                 TyBase::Prim(_) | TyBase::Func(_) => ty.pretty_print(db).to_string(),
             }
         }
-        TyData::ConstTy(_) => ty.pretty_print(db).to_string(),
+        TyData::ConstTy(_) | TyData::ConstraintTerm(_) => ty.pretty_print(db).to_string(),
         TyData::Never => "!".to_string(),
         TyData::Invalid(cause) => format!("invalid({})", cause.pretty_print(db)),
     }

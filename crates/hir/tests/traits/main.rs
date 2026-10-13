@@ -1,4 +1,5 @@
 mod const_param_assumptions;
+mod constraint_terms;
 mod constraints;
 mod default_trait_methods;
 mod effect_binding_resolution;

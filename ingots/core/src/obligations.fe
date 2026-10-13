@@ -1,0 +1,4 @@
+//! Trait requirement terms. Evidence introduction and opening are compiler operations.
+
+/// Designated kind marker for trait goals.
+pub struct Constraint { seal: bool }

@@ -294,7 +294,41 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         // structure as a normal type. Const expressions inside types are validated via
         // const-ty lowering/evaluation, and walking their HIR representation as a type
         // produces spurious "expected type" diagnostics for paths like `SALT`.
-        if !ty.is_const_ty(self.db) {
+        if let TyData::ConstraintTerm(goal) = ty.data(self.db) {
+            // A goal's first argument is its subject, unlike a trait reference.
+            // Check the resolved declaration and visit the original arguments
+            // without resolving the goal spelling as an ordinary type path.
+            if let TypeKind::Path(path) = hir_ty.data(self.db)
+                && let Some(path) = path.to_opt()
+            {
+                let idx = path.segment_index(self.db);
+                if !crate::analysis::name_resolution::is_scope_visible_from(
+                    self.db,
+                    goal.def(self.db).scope(),
+                    ctxt.scope(),
+                ) {
+                    let span = ctxt
+                        .span()
+                        .unwrap()
+                        .into_path_type()
+                        .path()
+                        .segment(idx)
+                        .ident();
+                    self.diags.push(
+                        PathResDiag::Invisible(
+                            span.into(),
+                            path.ident(self.db).unwrap(),
+                            goal.def(self.db).scope().name_span(self.db),
+                        )
+                        .into(),
+                    );
+                }
+                ctxt.with_new_ctxt(
+                    |span| span.into_path_type().path().segment(idx).generic_args(),
+                    |ctxt| self.visit_generic_arg_list(ctxt, path.generic_args(self.db)),
+                );
+            }
+        } else if !ty.is_const_ty(self.db) {
             walk_type(self, ctxt, hir_ty);
         }
         let did_fild_child_err = self.diags.len() > before;

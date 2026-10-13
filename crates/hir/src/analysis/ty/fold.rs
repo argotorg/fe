@@ -150,6 +150,10 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                 TyId::assoc_ty(db, folded_trait, assoc.name)
             }
 
+            ConstraintTerm(trait_inst) => {
+                TyId::new(db, ConstraintTerm(trait_inst.fold_with(db, folder)))
+            }
+
             QualifiedTy(trait_inst) => {
                 let folded_trait = trait_inst.fold_with(db, folder);
                 TyId::qualified_ty(db, folded_trait)

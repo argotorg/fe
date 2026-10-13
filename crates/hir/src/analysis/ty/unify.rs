@@ -133,6 +133,19 @@ where
 
             (_, TyData::TyVar(var)) => self.unify_var_value(var, ty1),
 
+            (TyData::ConstraintTerm(left), TyData::ConstraintTerm(right)) => {
+                // Equality retains associated-binding names, not just the head.
+                let a = left.assoc_type_bindings(self.db);
+                let b = right.assoc_type_bindings(self.db);
+                if left.args(self.db).len() != right.args(self.db).len()
+                    || a.len() != b.len()
+                    || a.keys().any(|name| !b.contains_key(name))
+                {
+                    return Err(UnificationError::TypeMismatch);
+                }
+                Unifiable::unify(*left, self, *right)
+            }
+
             (TyData::TyApp(ty1_1, ty1_2), TyData::TyApp(ty2_1, ty2_2)) => {
                 self.unify_ty(*ty1_1, *ty2_1)?;
                 self.unify_ty(*ty1_2, *ty2_2)

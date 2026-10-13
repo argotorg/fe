@@ -2303,7 +2303,7 @@ where
         self.scope_stack.pop();
     }
 
-    fn with_new_ctxt<F1, F2, U>(&mut self, f1: F1, f2: F2)
+    pub(crate) fn with_new_ctxt<F1, F2, U>(&mut self, f1: F1, f2: F2)
     where
         T: SpanDowncast<'db>,
         F1: FnOnce(T) -> U,
