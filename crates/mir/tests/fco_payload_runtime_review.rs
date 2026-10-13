@@ -642,6 +642,24 @@ fn second_result() -> u256 { forward<Subject>([second(), first()]) }
 }
 
 #[test]
+fn enum_parameter_payloads_deliver_issued_choices() {
+    check_source_runtime_choice_delivery(
+        "enum_parameter_choice_delivery.fe",
+        r#"
+enum Wrapped<T> { Some(Evidence<Pick<T>>), None }
+fn forward<T>(_ wrapped: Wrapped<T>) -> u256 {
+    match wrapped {
+        Wrapped::Some(witness) => consume<T>(witness),
+        Wrapped::None => 0,
+    }
+}
+fn first_result() -> u256 { forward<Subject>(Wrapped::Some(first())) }
+fn second_result() -> u256 { forward<Subject>(Wrapped::Some(second())) }
+"#,
+    );
+}
+
+#[test]
 fn immutable_array_values_deliver_distinct_issued_choices() {
     check_source_runtime_choice_delivery(
         "array_local_choice_delivery.fe",
