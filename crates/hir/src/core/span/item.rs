@@ -498,6 +498,9 @@ define_lazy_span_node!(
 define_lazy_span_node!(
     LazyImplTraitSpan,
     ast::ImplTrait,
+    @token {
+        (selection_name, selection_name),
+    }
     @node {
         (attributes, attr_list, LazyAttrListSpan),
         (generic_params, generic_params, LazyGenericParamListSpan),

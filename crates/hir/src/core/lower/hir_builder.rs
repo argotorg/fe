@@ -440,6 +440,7 @@ where
             id,
             trait_ref,
             ty,
+            None,
             attrs,
             generic_params,
             where_clause,

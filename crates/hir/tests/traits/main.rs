@@ -6,6 +6,7 @@ mod effect_binding_resolution;
 mod effect_key_normalization;
 mod generic_default_metadata;
 mod generic_elaboration_contracts;
+mod named_impls;
 mod param_env;
 mod retained_applications;
 mod trait_resolution_conformance;

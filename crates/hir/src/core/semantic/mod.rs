@@ -93,7 +93,8 @@ use crate::analysis::ty::layout_holes::{
     substitute_layout_holes_by_placeholder_in, substitute_layout_placeholders_by_placeholder,
 };
 use crate::analysis::ty::trait_def::{
-    ImplementorId, ImplementorOrigin, TraitInstId, does_impl_trait_conflict, impls_for_trait_def,
+    ImplSelectionClass, ImplementorId, ImplementorOrigin, TraitInstId, does_impl_trait_conflict,
+    impl_selection_class, impls_for_trait_def,
 };
 use crate::analysis::ty::trait_lower::{
     TraitRefLowerError, collect_trait_impls, lower_trait_ref, lower_trait_ref_deferred,
@@ -4296,18 +4297,24 @@ impl<'db> ImplTrait<'db> {
 
         // Conflict check
         let trait_ = implementor.trait_(db);
-        for &cand_view in impls_for_trait_def(db, self.top_mod(db).ingot(db), trait_.def(db)) {
-            let cand_impl_trait = cand_view.hir_impl_trait(db);
-            if cand_impl_trait == self {
-                continue;
-            }
-            if does_impl_trait_conflict(db, cand_view, implementor)
-                && !Self::impl_trait_conflict_is_sealed_marker_disjoint(db, cand_impl_trait, self)
-            {
-                return Err(ImplTraitLowerError::Conflict {
-                    primary: cand_impl_trait,
-                    conflict: self,
-                });
+        if impl_selection_class(db, self) == ImplSelectionClass::Ordinary {
+            for &cand_view in impls_for_trait_def(db, self.top_mod(db).ingot(db), trait_.def(db)) {
+                let cand_impl_trait = cand_view.hir_impl_trait(db);
+                if cand_impl_trait == self {
+                    continue;
+                }
+                if does_impl_trait_conflict(db, cand_view, implementor)
+                    && !Self::impl_trait_conflict_is_sealed_marker_disjoint(
+                        db,
+                        cand_impl_trait,
+                        self,
+                    )
+                {
+                    return Err(ImplTraitLowerError::Conflict {
+                        primary: cand_impl_trait,
+                        conflict: self,
+                    });
+                }
             }
         }
 

@@ -869,6 +869,7 @@ impl<'db> ImplTrait<'db> {
             id,
             trait_ref,
             ty,
+            IdentId::lower_token_partial(ctxt, ast.selection_name()).to_opt(),
             attributes,
             generic_params,
             where_clause,

@@ -1243,6 +1243,7 @@ pub struct ImplTrait<'db> {
 
     pub(in crate::core) trait_ref: Partial<TraitRefId<'db>>,
     pub(crate) type_ref: Partial<TypeId<'db>>,
+    pub selection_name: Option<IdentId<'db>>,
     pub(in crate::core) attributes: AttrListId<'db>,
     pub(in crate::core) generic_params: GenericParamListId<'db>,
     pub(in crate::core) where_clause: WhereClauseId<'db>,

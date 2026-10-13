@@ -46,6 +46,36 @@ use super::{
 };
 use crate::analysis::HirAnalysisDb;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImplSelectionClass<'db> {
+    Ordinary,
+    Named(IdentId<'db>),
+}
+
+/// Selection names classify authored declarations; they are not values or
+/// implementation identity. Ordinary discovery uses only unnamed declarations.
+pub fn impl_selection_class<'db>(
+    db: &'db dyn HirAnalysisDb,
+    item: ImplTrait<'db>,
+) -> ImplSelectionClass<'db> {
+    item.selection_name(db)
+        .map_or(ImplSelectionClass::Ordinary, ImplSelectionClass::Named)
+}
+
+/// The ingot-local fallback namespace for explicit selection. A candidate still
+/// requires the checked application boundary before it can supply evidence.
+pub fn named_impl_candidates<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    name: IdentId<'db>,
+) -> Vec<ImplTrait<'db>> {
+    ingot_trait_env(db, scope.top_mod(db).ingot(db))
+        .named_by_name
+        .get(&name)
+        .cloned()
+        .unwrap_or_default()
+}
+
 /// Returns [`TraitEnv`] for the given ingot.
 #[salsa::tracked(return_ref, cycle_fn=ingot_trait_env_cycle_recover, cycle_initial=ingot_trait_env_cycle_initial)]
 pub(crate) fn ingot_trait_env<'db>(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> TraitEnv<'db> {
@@ -260,6 +290,7 @@ fn ingot_trait_env_cycle_initial<'db>(
         impls: FxHashMap::default(),
         impls_by_self: FxHashMap::default(),
         unindexed_self_impls: Vec::new(),
+        named_by_name: FxHashMap::default(),
         ingot,
     }
 }
@@ -1210,6 +1241,9 @@ pub(crate) struct TraitEnv<'db> {
     /// that must be considered for every receiver type.
     unindexed_self_impls: Vec<ImplTrait<'db>>,
 
+    /// Explicit aliases remain separate from all ordinary discovery indexes.
+    named_by_name: FxHashMap<IdentId<'db>, Vec<ImplTrait<'db>>>,
+
     ingot: Ingot<'db>,
 }
 
@@ -1219,6 +1253,12 @@ impl<'db> TraitEnv<'db> {
         let mut impls_by_self: FxHashMap<ImplSelfKey<'db>, Vec<ImplTrait<'db>>> =
             FxHashMap::default();
         let mut unindexed_self_impls = Vec::new();
+        let mut named_by_name: FxHashMap<IdentId<'db>, Vec<ImplTrait<'db>>> = FxHashMap::default();
+        for &item in ingot.all_impl_traits(db).iter() {
+            if let ImplSelectionClass::Named(name) = impl_selection_class(db, item) {
+                named_by_name.entry(name).or_default().push(item);
+            }
+        }
 
         for impl_map in ingot
             .resolved_external_ingots(db)
@@ -1232,21 +1272,31 @@ impl<'db> TraitEnv<'db> {
                 impls
                     .entry(*trait_def)
                     .or_default()
-                    .extend(implementors.iter().copied());
+                    .extend(implementors.iter().copied().filter(|&item| {
+                        impl_selection_class(db, item) == ImplSelectionClass::Ordinary
+                    }));
             }
             for (self_key, implementors) in &impl_map.by_self {
-                impls_by_self
-                    .entry(*self_key)
-                    .or_default()
-                    .extend(implementors.iter().copied());
+                impls_by_self.entry(*self_key).or_default().extend(
+                    implementors.iter().copied().filter(|&item| {
+                        impl_selection_class(db, item) == ImplSelectionClass::Ordinary
+                    }),
+                );
             }
-            unindexed_self_impls.extend(impl_map.unindexed_self.iter().copied());
+            unindexed_self_impls.extend(
+                impl_map
+                    .unindexed_self
+                    .iter()
+                    .copied()
+                    .filter(|&item| impl_selection_class(db, item) == ImplSelectionClass::Ordinary),
+            );
         }
 
         Self {
             impls,
             impls_by_self,
             unindexed_self_impls,
+            named_by_name,
             ingot,
         }
     }
