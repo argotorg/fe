@@ -1461,6 +1461,7 @@ impl<'db> TyChecker<'db> {
                         super::TraitOpening::Evidence {
                             operand: binding.value,
                             goal,
+                            admission: None,
                         },
                     );
                     continue;
@@ -1521,6 +1522,10 @@ impl<'db> TyChecker<'db> {
                     self.env.effect_env_mut().insert_unkeyed(provided);
                 }
             }
+        }
+
+        for binding in bindings {
+            self.env.finalize_opening_admission(binding.value);
         }
 
         let result = if result_discarded {

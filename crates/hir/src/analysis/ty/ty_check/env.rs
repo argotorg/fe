@@ -597,6 +597,42 @@ impl<'db> TyCheckEnv<'db> {
         Ok(())
     }
 
+    /// Validate each opening against the completed frame, excluding its own
+    /// premise. Other opened witnesses must also pass their entry validation.
+    pub(super) fn finalize_opening_admission(&mut self, value: ExprId) {
+        let Some(super::TraitOpening::Evidence { operand, goal, .. }) = self.with_openings[value]
+        else {
+            return;
+        };
+        let premises: Vec<_> = self
+            .trait_openings
+            .visible(self.db)
+            .into_iter()
+            .filter_map(|opening| match opening {
+                super::TraitOpening::Evidence {
+                    operand: other,
+                    goal,
+                    ..
+                } if other != operand => Some(goal),
+                _ => None,
+            })
+            .collect();
+        let lexical = (!premises.is_empty())
+            .then(|| PredicateListId::new(self.db, premises).extend_all_bounds(self.db));
+        let mut assumptions = self.assumptions.list(self.db).to_vec();
+        if let Some(lexical) = lexical {
+            assumptions.extend(lexical.list(self.db).iter().copied());
+        }
+        let context = TraitSolveCx::new(self.db, self.scope())
+            .with_assumptions(PredicateListId::new(self.db, assumptions).extend_all_bounds(self.db))
+            .with_lexical_premises(lexical);
+        self.with_openings[value] = Some(super::TraitOpening::Evidence {
+            operand,
+            goal,
+            admission: Some(context),
+        });
+    }
+
     /// Project the context owned by the checker at its current lexical position.
     /// Root/effect premises are formed once in this environment, not by readers.
     pub(crate) fn proof_context(&self) -> TraitSolveCx<'db> {

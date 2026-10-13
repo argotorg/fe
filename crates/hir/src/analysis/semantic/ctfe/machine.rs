@@ -1680,14 +1680,21 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             }
             SExpr::Forward(value) => {
                 let context = if let SemOrigin::Expr(expr) = origin {
-                    self.frames[frame_idx]
+                    let typed = self.frames[frame_idx]
                         .body
                         .owner
                         .key(self.db)
-                        .typed_body(self.db)
-                        .callable_expr(expr)
-                        .and_then(|callable| callable.evidence_opening())
-                        .map(|(_, context)| context)
+                        .typed_body(self.db);
+                    match typed.with_opening(expr) {
+                        Some(crate::analysis::ty::ty_check::TraitOpening::Evidence {
+                            admission,
+                            ..
+                        }) => admission,
+                        _ => typed
+                            .callable_expr(expr)
+                            .and_then(|callable| callable.evidence_opening())
+                            .map(|(_, context)| context),
+                    }
                 } else {
                     None
                 };

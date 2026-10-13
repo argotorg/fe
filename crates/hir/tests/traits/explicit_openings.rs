@@ -456,3 +456,46 @@ const fn answer() -> (u256, u256, u256, u256) {
     let actual: Vec<_> = elems.iter().map(|value| value.pretty_print(&db)).collect();
     assert_eq!(actual, ["42", "7", "1", "42"]);
 }
+
+#[test]
+fn opening_entry_checks_the_actual_application_before_an_unrelated_body() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "entry_admission.fe".into(),
+        r#"
+use core::obligations::{Evidence, prove}
+trait Leaf {}
+trait Pick {}
+struct Subject {}
+impl Leaf for Subject as NamedLeaf {}
+impl Pick for Subject {}
+impl Pick for Subject as Conditional where Subject: Leaf {}
+type Goal = Pick<Subject>
+const fn leaf() -> Evidence<Leaf<Subject>> { with (NamedLeaf) { prove<Leaf<Subject>>() } }
+const fn issued() -> Evidence<Goal> { with (leaf()) { with (Conditional) { prove<Goal>() } } }
+const fn consume<T>(_ witness: Evidence<Pick<T>>) -> u256 { with (witness) { 17 } }
+const fn with_leaf<T>(_ witness: Evidence<Pick<T>>, _ leaf_witness: Evidence<Leaf<T>>) -> u256 {
+    with (witness, leaf_witness) { 17 }
+}
+const fn rejected() -> u256 { consume<Subject>(issued()) }
+const fn admitted() -> u256 { with_leaf<Subject>(issued(), leaf()) }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&db, module, "rejected"));
+    let outcome =
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+    assert!(matches!(outcome, EvalOutcome::Failed(_)), "{outcome:?}");
+    assert!(
+        format!("{outcome:?}").contains("opened evidence application was not admitted at this use"),
+        "entry admission cause required: {outcome:?}"
+    );
+    let owner = BodyOwner::Func(find_func(&db, module, "admitted"));
+    let outcome =
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+    let EvalOutcome::Ready(value) = outcome else {
+        panic!("{outcome:?}")
+    };
+    assert_eq!(value.pretty_print(&db), "17");
+}

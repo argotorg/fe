@@ -5,6 +5,7 @@ use crate::{
         ty::{
             fold::{TyFoldable, TyFolder},
             trait_def::{ImplApplicationRecord, TraitInstId},
+            trait_resolution::TraitSolveCx,
             visitor::{TyVisitable, TyVisitor},
         },
     },
@@ -18,6 +19,7 @@ pub enum TraitOpening<'db> {
     Evidence {
         operand: ExprId,
         goal: TraitInstId<'db>,
+        admission: Option<TraitSolveCx<'db>>,
     },
 }
 
@@ -34,9 +36,14 @@ impl<'db> TyFoldable<'db> for TraitOpening<'db> {
     fn super_fold_with<F: TyFolder<'db>>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self {
         match self {
             Self::Named(record) => Self::Named(record.fold_with(db, folder)),
-            Self::Evidence { operand, goal } => Self::Evidence {
+            Self::Evidence {
+                operand,
+                goal,
+                admission,
+            } => Self::Evidence {
                 operand,
                 goal: goal.fold_with(db, folder),
+                admission: admission.map(|context| context.fold_with(db, folder)),
             },
         }
     }
@@ -45,7 +52,14 @@ impl<'db> TyVisitable<'db> for TraitOpening<'db> {
     fn visit_with<V: TyVisitor<'db> + ?Sized>(&self, visitor: &mut V) {
         match self {
             Self::Named(record) => record.visit_with(visitor),
-            Self::Evidence { goal, .. } => goal.visit_with(visitor),
+            Self::Evidence {
+                goal, admission, ..
+            } => {
+                goal.visit_with(visitor);
+                if let Some(context) = admission {
+                    context.visit_with(visitor);
+                }
+            }
         }
     }
 }
