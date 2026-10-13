@@ -52,6 +52,7 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NormalizeError<'db> {
+    EvidenceChoiceNotCompileTime(SemOrigin<'db>),
     MissingValue(SLocalId),
     MissingRoot(SLocalId),
     MissingProviderAddressSpace(ProviderBinding<'db>),
@@ -606,6 +607,11 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     ) -> Result<NExpr<'db>, NormalizeError<'db>> {
         let dst_ty = self.normalized_local_ty(dst);
         let normalized = match expr {
+            SExpr::OpenedConst { evidence, .. } => {
+                return Err(NormalizeError::EvidenceChoiceNotCompileTime(
+                    evidence.sem_origin(origin),
+                ));
+            }
             SExpr::Forward(value) => NExpr::Forward {
                 src: self.read_operand(block, origin, *value, Some(ReadMode::Copy))?,
             },
@@ -2396,7 +2402,8 @@ fn for_each_address_required_local(expr: &SExpr<'_>, mut f: impl FnMut(SLocalId)
                 }
             }
         }
-        SExpr::Forward(_)
+        SExpr::OpenedConst { .. }
+        | SExpr::Forward(_)
         | SExpr::UseValue(_)
         | SExpr::ReadPlace { .. }
         | SExpr::CodeRegionRef { .. }
@@ -2967,6 +2974,14 @@ pub(super) fn normalized_source_local_value_ty<'db>(
 fn expr_used_locals(expr: &SExpr<'_>) -> Vec<SLocalId> {
     let mut locals = Vec::new();
     match expr {
+        SExpr::OpenedConst {
+            evidence,
+            context_inputs,
+            ..
+        } => {
+            locals.push(evidence.value);
+            locals.extend(context_inputs.iter().map(|value| value.value));
+        }
         SExpr::Forward(value)
         | SExpr::UseValue(value)
         | SExpr::Unary { value, .. }

@@ -187,3 +187,75 @@ fn shared_recovery_reproves_actual_closed_evidence() {
         "2",
     );
 }
+
+#[test]
+fn captured_associated_constant_executes_closed_choices() {
+    use fe_hir::{
+        analysis::{
+            semantic::{EvalOutcome, GenericSubst, eval_body_owner_const},
+            ty::ty_check::BodyOwner,
+        },
+        test_db::find_func,
+    };
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "closed-associated-constant.fe".into(),
+        include_str!("pr1797_review_controls/phase-aware-associated-constant.fe"),
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    for (name, expected) in [("known_true", "2"), ("known_false", "3")] {
+        let owner = BodyOwner::Func(find_func(&db, module, name));
+        let result =
+            eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+        let EvalOutcome::Ready(value) = result else {
+            panic!("closed choice {name} must execute: {result:?}")
+        };
+        assert_eq!(value.pretty_print(&db), expected);
+    }
+}
+
+#[test]
+fn captured_associated_constant_rejects_runtime_choice_with_source_cause() {
+    use fe_hir::{
+        analysis::{
+            diagnostics::DiagnosticVoucher,
+            semantic::{
+                get_or_build_semantic_instance, identity_semantic_instance_key,
+                normalize_runtime_semantic_body,
+            },
+            ty::ty_check::BodyOwner,
+        },
+        test_db::find_func,
+    };
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "runtime-associated-constant.fe".into(),
+        include_str!("pr1797_review_controls/phase-aware-associated-constant.fe"),
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&db, module, "choose"));
+    let instance = get_or_build_semantic_instance(&db, identity_semantic_instance_key(&db, owner));
+    let error = normalize_runtime_semantic_body(&db, instance).unwrap_err();
+    let diagnostic = error
+        .diagnostic()
+        .expect("runtime source rejection retains a diagnostic")
+        .to_complete(&db);
+    assert_eq!(diagnostic.error_code.local_code, 120);
+    assert_eq!(format!("{:?}", diagnostic.error_code.pass), "TyCheck");
+    assert_eq!(
+        diagnostic.message,
+        "evidence choice must be known at compile time"
+    );
+    let source = include_str!("pr1797_review_controls/phase-aware-associated-constant.fe");
+    let start = source.find("with (w)").expect("authored opening") + "with (".len();
+    let primary = diagnostic.sub_diagnostics.first().expect("source label");
+    assert_eq!(
+        primary.message,
+        "this runtime source cannot select an evidence value"
+    );
+    let range = primary.span.as_ref().expect("authored source span").range;
+    assert_eq!(u32::from(range.start()) as usize, start);
+    assert_eq!(u32::from(range.end()) as usize, start + 1);
+}

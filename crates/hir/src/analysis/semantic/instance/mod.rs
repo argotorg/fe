@@ -1,3 +1,4 @@
+pub(crate) use const_ref::opened_operand_application as known_opening_application;
 mod const_ref;
 mod semantic;
 mod template;
@@ -5,8 +6,9 @@ mod template;
 pub use const_ref::generated_callee_key;
 pub(crate) use const_ref::{
     checked_operand_callee, declaration_reaches_trait_goal, has_unbound_evidence_calls,
-    known_operand_variant, provisional_semantic_callee_key, resolve_semantic_const_ref,
-    resolve_semantic_const_ref_in_instance, semantic_callee_key_with_effect_providers,
+    known_operand_variant, opened_assoc_const_ref, provisional_semantic_callee_key,
+    resolve_semantic_const_ref, resolve_semantic_const_ref_in_instance,
+    semantic_callee_key_with_effect_providers,
 };
 pub use semantic::{
     CallSiteLowering, ForLoopCallSites, InstantiatedEffectEnv, ReceiverLoweringPlan,

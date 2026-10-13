@@ -256,6 +256,13 @@ fn collect_local_roots(body: &SemanticBody<'_>) -> LocalRoots {
                     let mut address = None;
                     let mut writes = Vec::new();
                     let sources = match expr {
+                        SExpr::OpenedConst {
+                            evidence,
+                            context_inputs,
+                            ..
+                        } => std::iter::once(evidence.value)
+                            .chain(context_inputs.iter().map(|input| input.value))
+                            .collect(),
                         SExpr::Borrow { place, kind, .. } => {
                             address = (*kind == BorrowKind::Mut).then_some(place.local);
                             vec![place.local]

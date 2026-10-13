@@ -1,0 +1,46 @@
+use core::obligations::{Evidence, prove}
+
+trait Width {
+    const N: u256
+}
+
+struct Subject {}
+
+impl Width for Subject {
+    const N: u256 = 1
+}
+
+impl Width for Subject as First {
+    const N: u256 = 2
+}
+
+impl Width for Subject as Second {
+    const N: u256 = 3
+}
+
+type Goal = Width<Subject>
+
+const fn first() -> Evidence<Goal> {
+    with (First) { prove<Goal>() }
+}
+
+const fn second() -> Evidence<Goal> {
+    with (Second) { prove<Goal>() }
+}
+
+const fn choose(_ flag: bool) -> u256 {
+    let w = if flag { first() } else { second() }
+    with (w) {
+        <Subject as Width>::N
+    }
+}
+
+#[test]
+fn test_runtime_call_to_const_fn() {
+    let mut flag: bool = true
+    flag = false
+    assert(choose(flag) == 1)
+}
+
+const fn known_true() -> u256 { choose(true) }
+const fn known_false() -> u256 { choose(false) }

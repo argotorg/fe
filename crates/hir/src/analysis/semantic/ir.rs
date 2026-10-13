@@ -478,6 +478,15 @@ impl SOperand {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SExpr<'db> {
+    /// A compiler-time constant selected by the issued value captured on With
+    /// entry. This recipe must never become ordinary implementation authority.
+    OpenedConst {
+        evidence: SOperand,
+        assoc: crate::analysis::ty::assoc_const::AssocConstUse<'db>,
+        admission: crate::analysis::ty::trait_resolution::TraitSolveCx<'db>,
+        context_inputs: Box<[SOperand]>,
+        named: Vec<crate::analysis::ty::trait_def::ImplApplicationRecord<'db>>,
+    },
     Forward(SOperand),
     UseValue(SOperand),
     ReadPlace {

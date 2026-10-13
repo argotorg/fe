@@ -759,6 +759,85 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     fn lower_const_ref(&mut self, expr: ExprId, const_ref: ConstRef<'db>) -> SValueId {
         let ty = self.expr_ty(expr);
+        if let ConstRef::TraitConst(assoc) = const_ref {
+            let openings = self.typed_body.expr_const_openings(expr).to_vec();
+            if let Some(crate::analysis::ty::ty_check::TraitOpening::Evidence {
+                operand,
+                goal: _,
+                admission: Some(admission),
+            }) = openings.iter().copied().find(|opening| {
+                let goal = opening.goal();
+                goal.def(self.db) == assoc.inst().def(self.db)
+                    && goal.args(self.db) == assoc.inst().args(self.db)
+            }) {
+                let known = openings
+                    .iter()
+                    .map(|opening| match *opening {
+                        crate::analysis::ty::ty_check::TraitOpening::Named(record) => Some(record),
+                        crate::analysis::ty::ty_check::TraitOpening::Evidence {
+                            operand, ..
+                        } => crate::analysis::semantic::instance::known_opening_application(
+                            self.db,
+                            self.instance,
+                            operand,
+                        ),
+                    })
+                    .collect::<Option<Vec<_>>>();
+                if let Some(records) = known
+                    && let Some(record) =
+                        crate::analysis::semantic::instance::known_opening_application(
+                            self.db,
+                            self.instance,
+                            operand,
+                        )
+                    && let Ok(reference) =
+                        crate::analysis::semantic::instance::opened_assoc_const_ref(
+                            self.db,
+                            assoc,
+                            admission,
+                            record,
+                            records,
+                            ty,
+                            SemOrigin::Expr(expr),
+                        )
+                {
+                    return self.emit_expr_with_origin(
+                        SemOrigin::Expr(expr),
+                        ty,
+                        SExpr::Const(SConst::Ref(reference)),
+                    );
+                }
+                // Load the existing captured header, never re-evaluate its source.
+                let evidence = self.captured_with_operand(operand);
+                let mut context_inputs = Vec::new();
+                let mut named = Vec::new();
+                for opening in openings {
+                    match opening {
+                        crate::analysis::ty::ty_check::TraitOpening::Named(record) => {
+                            named.push(record)
+                        }
+                        crate::analysis::ty::ty_check::TraitOpening::Evidence {
+                            operand: other,
+                            ..
+                        } if other != operand => {
+                            context_inputs.push(self.captured_with_operand(other))
+                        }
+                        _ => {}
+                    }
+                }
+                return self.emit_expr_with_origin(
+                    SemOrigin::Expr(expr),
+                    ty,
+                    SExpr::OpenedConst {
+                        evidence,
+                        assoc,
+                        admission,
+                        context_inputs: context_inputs.into_boxed_slice(),
+                        named,
+                    },
+                );
+            }
+        }
         // Inherited choices apply only to constants reached through a declaration's
         // parameters and bounds. A concrete source path keeps its declaration choice
         // even when its enclosing function is called under an opening (RD71).
@@ -1233,6 +1312,26 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.lower_callable_argument(receiver, callable, 0)
     }
 
+    fn captured_with_operand(&mut self, operand: ExprId) -> SOperand {
+        let source = self
+            .with_binding_sources
+            .get(&operand)
+            .expect("checked opening was captured on frame entry")
+            .clone();
+        match source {
+            WithBindingSource::Value(value) => value,
+            WithBindingSource::Temporary(local) => SOperand::expr(local, operand),
+            WithBindingSource::Place(place) => {
+                let value = self.emit_expr_with_origin(
+                    SemOrigin::Expr(operand),
+                    self.expr_ty(operand),
+                    SExpr::ReadPlace { place },
+                );
+                SOperand::expr(value, operand)
+            }
+        }
+    }
+
     fn lower_const_intrinsic(
         &mut self,
         expr: ExprId,
@@ -1243,23 +1342,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             let (operand, _) = callable
                 .evidence_opening()
                 .expect("admitted opening retains its operand");
-            let source = self
-                .with_binding_sources
-                .get(&operand)
-                .expect("opened evidence was captured on frame entry")
-                .clone();
-            let value = match source {
-                WithBindingSource::Value(value) => value,
-                WithBindingSource::Temporary(local) => SOperand::expr(local, operand),
-                WithBindingSource::Place(place) => {
-                    let value = self.emit_expr_with_origin(
-                        SemOrigin::Expr(operand),
-                        self.expr_ty(operand),
-                        SExpr::ReadPlace { place },
-                    );
-                    SOperand::expr(value, operand)
-                }
-            };
+            let value = self.captured_with_operand(operand);
             return self.emit_expr_with_origin(
                 SemOrigin::Expr(expr),
                 self.expr_ty(expr),

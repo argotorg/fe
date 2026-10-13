@@ -168,6 +168,12 @@ fn normalize_and_verify<'db>(
                 artifacts.layout_plan,
             ))
         }
+        Err(error @ super::NormalizeError::EvidenceChoiceNotCompileTime(_)) => {
+            SemanticBodyAdmission::Rejected(SemanticDiagnosticId::new(
+                db,
+                normalized_body_error_to_diag(db, instance, error),
+            ))
+        }
         Err(error) => internal_failure(db, normalized_body_error_to_diag(db, instance, error)),
     }
 }

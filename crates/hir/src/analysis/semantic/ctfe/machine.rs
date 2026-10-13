@@ -1721,6 +1721,60 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             SExpr::Call { .. } | SExpr::Const(SConst::Ref(..)) => {
                 unreachable!("calls are dispatched separately")
             }
+            SExpr::OpenedConst {
+                evidence,
+                assoc,
+                admission,
+                context_inputs,
+                mut named,
+            } => {
+                let value = self
+                    .load_value(frame_idx, evidence, origin)?
+                    .materialize(self.db);
+                let SemConstValue::Evidence { application, .. } = value.value(self.db) else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "opened evidence requires a compiler-issued application".into(),
+                    }
+                    .into());
+                };
+                let application = *application;
+                for input in context_inputs {
+                    let value = self
+                        .load_value(frame_idx, input, origin)?
+                        .materialize(self.db);
+                    let SemConstValue::Evidence { application, .. } = value.value(self.db) else {
+                        return Err(CtfeError::InvalidOperation {
+                            origin,
+                            message: "opened evidence requires a compiler-issued application"
+                                .into(),
+                        }
+                        .into());
+                    };
+                    named.push(*application);
+                }
+                let reference = crate::analysis::semantic::instance::opened_assoc_const_ref(
+                    self.db,
+                    assoc,
+                    admission,
+                    application,
+                    named,
+                    result_ty,
+                    origin,
+                )
+                .map_err(|error| CtfeError::InvalidOperation {
+                    origin,
+                    message: format!(
+                        "opened associated constant was not admitted at this use: {error:?}"
+                    ),
+                })?;
+                self.eval_expr(
+                    frame_idx,
+                    result_ty,
+                    SExpr::Const(SConst::Ref(reference)),
+                    origin,
+                )
+            }
             SExpr::Forward(value) => {
                 let context = if let SemOrigin::Expr(expr) = origin {
                     let typed = self.frames[frame_idx]

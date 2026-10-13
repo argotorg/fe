@@ -477,7 +477,7 @@ pub fn generated_callee_key<'db>(
 
 /// Recover the issued choice through immutable binding aliases. This reads
 /// already checked argument/intro records; admission remains at the method use.
-pub(super) fn opened_operand_application<'db>(
+pub(crate) fn opened_operand_application<'db>(
     db: &'db dyn HirAnalysisDb,
     caller: SemanticInstance<'db>,
     operand: ExprId,
@@ -1932,6 +1932,43 @@ pub(crate) fn resolve_semantic_const_ref_in_instance<'db>(
         ConstRef::InherentConst(use_) => semantic_const_key_for_inherent_const(db, use_),
     }?;
     Some(SemanticConstRef::new(db, instance, ty, origin))
+}
+
+pub(crate) fn opened_assoc_const_ref<'db>(
+    db: &'db dyn HirAnalysisDb,
+    assoc: AssocConstUse<'db>,
+    admission: TraitSolveCx<'db>,
+    record: ImplApplicationRecord<'db>,
+    mut records: Vec<ImplApplicationRecord<'db>>,
+    ty: TyId<'db>,
+    origin: SemOrigin<'db>,
+) -> Result<SemanticConstRef<'db>, MethodArgMapError<'db>> {
+    let checked = record
+        .revalidate(db, admission, assoc.inst())
+        .map_err(MethodArgMapError::ApplicationNotAdmitted)?;
+    let (body, expected, subst) =
+        selected_assoc_const_body_template(db, checked.resolved(), assoc.name())
+            .ok_or(MethodArgMapError::MissingBody)?;
+    records.retain(|existing| {
+        existing.goal().def(db) != assoc.inst().def(db)
+            || existing.goal().args(db) != assoc.inst().args(db)
+    });
+    records.push(checked.record());
+    let key = SemanticInstanceKey::new(
+        db,
+        BodyOwner::AnonConstBody { body, expected },
+        GenericSubst::complete(db, subst),
+        EffectProviderSubst::empty(db),
+        ImplEnv::new(
+            db,
+            admission.scope(),
+            admission.assumptions(),
+            vec![assoc.inst()],
+            Vec::new(),
+            records,
+        ),
+    );
+    Ok(SemanticConstRef::new(db, key, ty, origin))
 }
 
 fn semantic_const_key_for_const<'db>(
