@@ -2,10 +2,13 @@ use common::ingot::{Ingot, IngotKind};
 use hir::{
     analysis::{
         HirAnalysisDb,
-        semantic::{EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance},
+        semantic::{
+            EffectProviderSubst, GenericSubst, ImplEnv, SemConstId, SemConstValue, SemanticInstance,
+        },
         ty::{
             RootProviderScope,
-            trait_def::{ImplementorOrigin, TraitInstId, TraitRefId},
+            const_ty::ConstTyData,
+            trait_def::{ImplApplicationRecord, ImplementorOrigin, TraitInstId, TraitRefId},
             ty_check::{BodyOwner, EffectParamSite},
             ty_def::{TyBase, TyData, TyId},
         },
@@ -280,6 +283,57 @@ fn named_impl_identity_suffix<'db>(
         })
 }
 
+fn application_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    application: ImplApplicationRecord<'db>,
+) -> String {
+    let resolved = application.resolved();
+    let declaration = match resolved.origin(db) {
+        ImplementorOrigin::Hir(implementation) => format!(
+            "{}${}{}",
+            item_identity(db, implementation.into()),
+            implementation
+                .trait_inst(db)
+                .map(|goal| trait_identity(db, goal))
+                .unwrap_or_default(),
+            named_impl_identity_suffix(db, implementation)
+        ),
+        ImplementorOrigin::VirtualContract(contract) => item_identity(db, contract.into()),
+        ImplementorOrigin::Assumption => "assumption".to_string(),
+    };
+    format!(
+        "{declaration}$goal${}$args${}",
+        trait_identity(db, application.goal()),
+        generic_args_identity(db, resolved.impl_args(db))
+    )
+}
+
+fn constant_choice_identity<'db>(db: &'db dyn HirAnalysisDb, value: SemConstId<'db>) -> String {
+    let children = match value.value(db) {
+        SemConstValue::Evidence { application, .. } => {
+            return format!("$evidence${}", application_identity(db, *application));
+        }
+        SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => elems,
+        SemConstValue::Struct { fields, .. } | SemConstValue::Enum { fields, .. } => fields,
+        SemConstValue::Description(ty) => {
+            return match ty.data(db) {
+                ConstTyData::Description(value) => constant_choice_identity(db, *value),
+                _ => String::new(),
+            };
+        }
+        _ => return String::new(),
+    };
+    children
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| {
+            let choice = constant_choice_identity(db, *value);
+            (!choice.is_empty()).then(|| format!("$field${index}{choice}"))
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 fn impl_env_identity<'db>(
     db: &'db dyn HirAnalysisDb,
     env: ImplEnv<'db>,
@@ -294,27 +348,7 @@ fn impl_env_identity<'db>(
             .parameter_evidence(db)
             .iter()
             .map(|(index, application)| {
-                let resolved = application.resolved();
-                let declaration = match resolved.origin(db) {
-                    ImplementorOrigin::Hir(implementation) => format!(
-                        "{}${}{}",
-                        item_identity(db, implementation.into()),
-                        implementation
-                            .trait_inst(db)
-                            .map(|goal| trait_identity(db, goal))
-                            .unwrap_or_default(),
-                        named_impl_identity_suffix(db, implementation)
-                    ),
-                    ImplementorOrigin::VirtualContract(contract) => {
-                        item_identity(db, contract.into())
-                    }
-                    ImplementorOrigin::Assumption => "assumption".to_string(),
-                };
-                format!(
-                    "{index}${declaration}$goal${}$args${}",
-                    trait_identity(db, application.goal()),
-                    generic_args_identity(db, resolved.impl_args(db))
-                )
+                format!("{index}${}", application_identity(db, *application))
             })
             .collect::<Vec<_>>()
             .join("$");
@@ -497,9 +531,16 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
         TyData::QualifiedTy(trait_inst) => format!("qualified${}", trait_identity(db, *trait_inst)),
         TyData::ConstraintTerm(goal) => format!("constraint${}", trait_identity(db, *goal)),
         TyData::ConstTy(const_ty) => {
+            let choices = match const_ty.data(db) {
+                ConstTyData::Description(value) => constant_choice_identity(db, *value),
+                _ => String::new(),
+            };
             format!(
                 "const_ty${}",
-                stable_identity_fingerprint(&const_ty.pretty_print_concrete(db))
+                stable_identity_fingerprint(&format!(
+                    "{}{choices}",
+                    const_ty.pretty_print_concrete(db)
+                ))
             )
         }
         TyData::Never => "never".to_string(),

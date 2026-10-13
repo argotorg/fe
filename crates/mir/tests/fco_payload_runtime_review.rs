@@ -328,6 +328,8 @@ impl Pick for Subject as Second { const fn value() -> u256 { 3 } }
 type Goal = Pick<Subject>
 const fn first() -> Evidence<Goal> { with (First) { prove<Goal>() } }
 const fn second() -> Evidence<Goal> { with (Second) { prove<Goal>() } }
+const fn pair_first() -> (Evidence<Goal>, bool) { (first(), false) }
+const fn pair_second() -> (Evidence<Goal>, bool) { (second(), false) }
 fn consume(_ witness: Evidence<Goal>) -> u256 { with (witness) { <Subject as Pick>::value() } }
 "#;
 
@@ -424,4 +426,30 @@ fn named_method_body_identity_retains_the_named_declaration() {
         identities[0], identities[1],
         "named bodies with the same trait, Self and method name must remain distinct"
     );
+}
+
+#[test]
+fn described_evidence_constants_retain_the_selected_declaration() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "distinct_description_identity.fe".into(),
+        DISTINCT_CHOICE_SOURCE,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    for names in [["first", "second"], ["pair_first", "pair_second"]] {
+        let mut identities = Vec::new();
+        for name in names {
+            let value = issued(&db, module, name);
+            let ty = TyId::new(
+                &db,
+                TyData::ConstTy(ConstTyId::new(&db, ConstTyData::Description(value))),
+            );
+            identities.push(fe_mir::runtime::stable_key::type_identity(&db, ty));
+        }
+        assert_ne!(
+            identities[0], identities[1],
+            "described issued constants with different declarations must not alias"
+        );
+    }
 }
