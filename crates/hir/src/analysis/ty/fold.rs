@@ -283,6 +283,15 @@ impl<'db> TyFoldable<'db> for SemanticInstanceKey<'db> {
                     .map(|(index, record)| (*index, record.fold_with(db, folder)))
                     .collect::<Vec<_>>(),
                 env.lexical_applications(db).clone().fold_with(db, folder),
+            )
+            .with_projected_parameter_evidence(
+                db,
+                env.projected_parameter_evidence(db)
+                    .iter()
+                    .map(|(index, path, record)| {
+                        (*index, path.clone(), record.fold_with(db, folder))
+                    })
+                    .collect(),
             ),
         )
     }

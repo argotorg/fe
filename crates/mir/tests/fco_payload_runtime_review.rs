@@ -500,6 +500,37 @@ fn consume<T>(_ witness: Evidence<Pick<T>>) -> u256 { with (witness) { <T as Pic
         if func
             .name(&db)
             .to_opt()
+            .is_some_and(|name| name.data(&db) == "forward")
+        {
+            let records = semantic
+                .key(&db)
+                .impl_env(&db)
+                .projected_parameter_evidence(&db);
+            assert!(
+                !records.is_empty(),
+                "aggregate formal must own its issued slots"
+            );
+            if records.len() == 2 {
+                assert_eq!(records[0].0, records[1].0);
+                assert_ne!(
+                    records[0].1, records[1].1,
+                    "declared projection slots remain distinct"
+                );
+                assert_eq!(
+                    records[0].2.goal(),
+                    records[1].2.goal(),
+                    "goals coincide after substitution"
+                );
+                assert_ne!(
+                    records[0].2.resolved().selected(),
+                    records[1].2.resolved().selected(),
+                    "slot choices cannot collapse with their goals"
+                );
+            }
+        }
+        if func
+            .name(&db)
+            .to_opt()
             .is_some_and(|name| name.data(&db) == "consume")
         {
             let records = semantic.key(&db).impl_env(&db).parameter_evidence(&db);
@@ -558,5 +589,29 @@ fn first_result() -> u256 { let pair = first_pair()
 consume<Subject>(pair.0) }
 fn second_result() -> u256 { let pair = second_pair()
 consume<Subject>(pair.0) }"#,
+    );
+}
+
+#[test]
+fn aggregate_parameters_deliver_issued_choices_to_generic_callees() {
+    check_source_runtime_choice_delivery(
+        "aggregate_parameter_choice_delivery.fe",
+        r#"
+fn forward<T>(_ pair: (Evidence<Pick<T>>, u256)) -> u256 { consume<T>(pair.0) }
+fn first_result() -> u256 { forward<Subject>((first(), 7)) }
+fn second_result() -> u256 { forward<Subject>((second(), 7)) }
+"#,
+    );
+}
+
+#[test]
+fn aggregate_slots_keep_distinct_choices_when_goals_coincide() {
+    check_source_runtime_choice_delivery(
+        "coincident_aggregate_slots.fe",
+        r#"
+fn forward<T,U>(_ pair: (Evidence<Pick<T>>, Evidence<Pick<U>>)) -> u256 { consume<T>(pair.0) + consume<U>(pair.1) }
+fn first_result() -> u256 { forward<Subject,Subject>((first(), second())) }
+fn second_result() -> u256 { forward<Subject,Subject>((second(), first())) }
+"#,
     );
 }

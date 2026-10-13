@@ -354,6 +354,21 @@ fn impl_env_identity<'db>(
             .join("$");
         format!("$parameter_evidence${entries}")
     };
+    let projected = if env.projected_parameter_evidence(db).is_empty() {
+        String::new()
+    } else {
+        format!(
+            "$projected_parameter_evidence${}",
+            env.projected_parameter_evidence(db)
+                .iter()
+                .map(|(index, path, application)| format!(
+                    "{index}${path:?}${}",
+                    application_identity(db, *application)
+                ))
+                .collect::<Vec<_>>()
+                .join("$")
+        )
+    };
     let lexical = if env.lexical_applications(db).is_empty() {
         String::new()
     } else {
@@ -370,7 +385,7 @@ fn impl_env_identity<'db>(
     // the same name, so the scope must name its ingot.
     let scope = env.normalization_scope(db);
     format!(
-        "scope${}${}$assumptions${assumptions}$witnesses${witnesses}{choices}{lexical}",
+        "scope${}${}$assumptions${assumptions}$witnesses${witnesses}{choices}{projected}{lexical}",
         ingot_identity_for_top_mod(db, scope.top_mod(db)),
         module_path_components_for_scope(db, scope).join("$")
     )

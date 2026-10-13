@@ -451,11 +451,19 @@ pub fn generated_callee_key<'db>(
 pub(super) fn opened_operand_application<'db>(
     db: &'db dyn HirAnalysisDb,
     caller: SemanticInstance<'db>,
+    operand: ExprId,
+) -> Option<ImplApplicationRecord<'db>> {
+    opened_operand_application_at(db, caller, operand, Vec::new())
+}
+
+fn opened_operand_application_at<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
     mut operand: ExprId,
+    mut projection: Vec<ReturnProjectionStep>,
 ) -> Option<ImplApplicationRecord<'db>> {
     let typed = caller.key(db).typed_body(db);
     let mut seen = Vec::new();
-    let mut projection = Vec::new();
     loop {
         if seen.contains(&operand) {
             return None;
@@ -482,7 +490,13 @@ pub(super) fn opened_operand_application<'db>(
                 idx, is_mut: false, ..
             }) => {
                 if !projection.is_empty() {
-                    return None;
+                    return caller
+                        .key(db)
+                        .impl_env(db)
+                        .projected_parameter_evidence(db)
+                        .iter()
+                        .find(|(index, path, _)| *index == idx && *path == projection)
+                        .map(|(_, _, record)| *record);
                 }
                 return caller
                     .key(db)
@@ -563,6 +577,37 @@ pub(super) fn opened_operand_application<'db>(
             }
         }
     }
+}
+
+fn evidence_slots<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+    path: Vec<ReturnProjectionStep>,
+    active: &mut IndexSet<TyId<'db>>,
+    slots: &mut Vec<Vec<ReturnProjectionStep>>,
+) {
+    let ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
+    if crate::analysis::ty::corelib::evidence_goal(db, scope, ty).is_some() {
+        slots.push(path);
+        return;
+    }
+    let base = ty.base_ty(db);
+    if !active.insert(base) {
+        return;
+    }
+    // Tuple nesting is finite and may reuse the same tuple constructor.
+    if base.is_tuple(db) {
+        active.remove(&base);
+    }
+    for (index, field) in ty.field_types(db).into_iter().enumerate() {
+        let mut field_path = path.clone();
+        field_path.push(ReturnProjectionStep::Field(
+            u16::try_from(index).ok().expect("field index"),
+        ));
+        evidence_slots(db, scope, field, field_path, active, slots);
+    }
+    active.remove(&base);
 }
 
 pub(super) fn visible_applications<'db>(
@@ -929,6 +974,31 @@ fn semantic_callee_key_with_assumptions<'db>(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let projected_parameter_evidence = caller
+        .map(|caller| {
+            let typed = caller.key(db).typed_body(db);
+            let mut records = Vec::new();
+            for (index, &operand) in callable.argument_operands().iter().enumerate() {
+                let mut slots = Vec::new();
+                evidence_slots(
+                    db,
+                    caller.key(db).owner(db).scope(),
+                    typed.expr_ty(db, operand),
+                    Vec::new(),
+                    &mut IndexSet::default(),
+                    &mut slots,
+                );
+                for path in slots.into_iter().filter(|path| !path.is_empty()) {
+                    if let Some(record) =
+                        opened_operand_application_at(db, caller, operand, path.clone())
+                    {
+                        records.push((index, path, record));
+                    }
+                }
+            }
+            records
+        })
+        .unwrap_or_default();
     let impl_env = ImplEnv::new(
         db,
         normalization_scope,
@@ -940,7 +1010,8 @@ fn semantic_callee_key_with_assumptions<'db>(
         witnesses.into_iter().collect::<Vec<_>>(),
         parameter_evidence,
         lexical_applications,
-    );
+    )
+    .with_projected_parameter_evidence(db, projected_parameter_evidence);
 
     if matches!(provider_resolution_mode, ProviderResolutionMode::Final)
         && let Some((resolved, nominal_inst)) = selected_trait_method

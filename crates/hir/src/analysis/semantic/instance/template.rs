@@ -6,7 +6,7 @@ use crate::{
             subst::substitute_complete,
             trait_def::{ImplApplicationRecord, TraitInstId},
             trait_resolution::PredicateListId,
-            ty_check::{BodyOwner, TypedBody, infer_body},
+            ty_check::{BodyOwner, ReturnProjectionStep, TypedBody, infer_body},
             ty_def::TyId,
             ty_lower::CompleteSubst,
         },
@@ -99,7 +99,7 @@ impl<'db> GenericSubst<'db> {
     }
 }
 
-#[salsa::interned]
+#[salsa::interned(constructor = from_parts)]
 #[derive(Debug)]
 pub struct ImplEnv<'db> {
     pub normalization_scope: ScopeId<'db>,
@@ -109,12 +109,141 @@ pub struct ImplEnv<'db> {
     /// Issued argument choices, keyed by the callee parameter index.
     #[return_ref]
     pub parameter_evidence: Vec<(usize, ImplApplicationRecord<'db>)>,
+    /// Issued records nested within an aggregate parameter, keyed by source slot.
+    #[return_ref]
+    pub projected_parameter_evidence:
+        Vec<(usize, Vec<ReturnProjectionStep>, ImplApplicationRecord<'db>)>,
     /// In-force checked applications inherited by this instance.
     #[return_ref]
     pub lexical_applications: Vec<ImplApplicationRecord<'db>>,
 }
 
 impl<'db> ImplEnv<'db> {
+    pub fn new(
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+        witnesses: Vec<TraitInstId<'db>>,
+        parameters: Vec<(usize, ImplApplicationRecord<'db>)>,
+        lexical: Vec<ImplApplicationRecord<'db>>,
+    ) -> Self {
+        Self::from_parts(
+            db,
+            scope,
+            assumptions,
+            witnesses,
+            parameters,
+            Vec::new(),
+            lexical,
+        )
+    }
+
+    pub fn with_projected_parameter_evidence(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        records: Vec<(usize, Vec<ReturnProjectionStep>, ImplApplicationRecord<'db>)>,
+    ) -> Self {
+        Self::from_parts(
+            db,
+            self.normalization_scope(db),
+            self.assumptions(db),
+            self.witnesses(db).clone(),
+            self.parameter_evidence(db).clone(),
+            records,
+            self.lexical_applications(db).clone(),
+        )
+    }
+
+    /// Replace only the supplied parameter slots with records from actual issued values.
+    pub(crate) fn with_argument_evidence_values(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        values: &[(usize, crate::analysis::semantic::SemConstId<'db>)],
+    ) -> Self {
+        use crate::analysis::semantic::{SemConstId, SemConstValue};
+        fn collect<'db>(
+            db: &'db dyn HirAnalysisDb,
+            index: usize,
+            value: SemConstId<'db>,
+            path: Vec<ReturnProjectionStep>,
+            flat: &mut Vec<(usize, ImplApplicationRecord<'db>)>,
+            projected: &mut Vec<(usize, Vec<ReturnProjectionStep>, ImplApplicationRecord<'db>)>,
+        ) {
+            match value.value(db) {
+                SemConstValue::Evidence { application, .. } => {
+                    if path.is_empty() {
+                        flat.push((index, *application));
+                    } else {
+                        projected.push((index, path, *application));
+                    }
+                }
+                SemConstValue::Tuple { elems, .. } => {
+                    for (field, &value) in elems.iter().enumerate() {
+                        let mut path = path.clone();
+                        path.push(ReturnProjectionStep::Field(
+                            u16::try_from(field).expect("tuple index"),
+                        ));
+                        collect(db, index, value, path, flat, projected);
+                    }
+                }
+                SemConstValue::Array { elems, .. } => {
+                    for (field, &value) in elems.iter().enumerate() {
+                        let mut path = path.clone();
+                        path.push(ReturnProjectionStep::ConstantIndex(field));
+                        collect(db, index, value, path, flat, projected);
+                    }
+                }
+                SemConstValue::Struct { fields, .. } => {
+                    for (field, &value) in fields.iter().enumerate() {
+                        let mut path = path.clone();
+                        path.push(ReturnProjectionStep::Field(
+                            u16::try_from(field).expect("field index"),
+                        ));
+                        collect(db, index, value, path, flat, projected);
+                    }
+                }
+                SemConstValue::Enum {
+                    variant, fields, ..
+                } => {
+                    for (field, &value) in fields.iter().enumerate() {
+                        let mut path = path.clone();
+                        path.push(ReturnProjectionStep::VariantField {
+                            variant: variant.0,
+                            field: u16::try_from(field).expect("variant field index"),
+                        });
+                        collect(db, index, value, path, flat, projected);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let supplied = |index: &usize| values.iter().any(|(supplied, _)| supplied == index);
+        let mut flat = self
+            .parameter_evidence(db)
+            .iter()
+            .filter(|(index, _)| !supplied(index))
+            .copied()
+            .collect();
+        let mut projected = self
+            .projected_parameter_evidence(db)
+            .iter()
+            .filter(|(index, _, _)| !supplied(index))
+            .cloned()
+            .collect();
+        for &(index, value) in values {
+            collect(db, index, value, Vec::new(), &mut flat, &mut projected);
+        }
+        Self::from_parts(
+            db,
+            self.normalization_scope(db),
+            self.assumptions(db),
+            self.witnesses(db).clone(),
+            flat,
+            projected,
+            self.lexical_applications(db).clone(),
+        )
+    }
+
     pub fn empty(db: &'db dyn HirAnalysisDb, normalization_scope: ScopeId<'db>) -> Self {
         Self::new(
             db,
