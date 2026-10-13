@@ -300,6 +300,50 @@ fn recover_value_inner<'db>(
                 .ok()
                 .map(|value| value.value());
         }
+        // Reuse checked return provenance to transport an issued witness. This
+        // does not execute an ordinary function or infer a new proof from it.
+        if let crate::hir_def::CallableDef::Func(func) = callable.callable_def()
+            && !func.is_const(db)
+            && BodyOwner::Func(func) != cx.owner()
+            && callable.trait_inst().is_none()
+            && callable.checked_input_tys()?.len() == callable.argument_operands().len()
+            && crate::analysis::ty::corelib::evidence_goal(db, cx.owner().scope(), ty).is_some()
+        {
+            use crate::analysis::ty::{
+                const_ty::CallableInputLayoutHoleOrigin,
+                ty_check::{ReturnProvenance, infer_body},
+            };
+            let ReturnProvenance::Forwarded(sources) = infer_body(db, BodyOwner::Func(func))
+                .1
+                .return_provenance(db)
+            else {
+                return None;
+            };
+            let mut forwarded = None;
+            for source in sources {
+                // A whole Evidence result must have one unambiguous source.
+                // Aggregate results are handled by the existing projection path.
+                if !source.result_projection.is_empty() {
+                    return None;
+                }
+                let index = match source.origin {
+                    CallableInputLayoutHoleOrigin::Receiver => 0,
+                    CallableInputLayoutHoleOrigin::ValueParam(index) => index,
+                    CallableInputLayoutHoleOrigin::Effect(_) => return None,
+                };
+                let value =
+                    recover_value(cx, *callable.argument_operands().get(index)?, stop, active)?;
+                let value = project_value(db, value, &source.projection)?;
+                if !matches!(value.value(db), SemConstValue::Evidence { .. }) {
+                    return None;
+                }
+                if forwarded.is_some_and(|previous| previous != value) {
+                    return None;
+                }
+                forwarded = Some(value);
+            }
+            return forwarded;
+        }
         if let crate::hir_def::CallableDef::VariantCtor(variant) = callable.callable_def() {
             let values = callable
                 .argument_operands()

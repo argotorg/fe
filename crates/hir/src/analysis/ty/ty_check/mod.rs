@@ -4869,7 +4869,12 @@ impl<'db> TypedBody<'db> {
             )
             || {
                 let ty = self.expr_ty(db, expr);
-                ty.has_param(db) || ty.has_var(db) || ty_contains_const_hole(db, ty)
+                ty.has_param(db)
+                    || ty.has_var(db)
+                    || ty_contains_const_hole(db, ty)
+                    // Evidence has no runtime payload, but its issued choice
+                    // still has return provenance through a copied formal.
+                    || super::corelib::evidence_goal(db, body.scope(), ty).is_some()
             })
             && let Some(place) = self.expr_place(expr).cloned()
             && let Some(sources) =

@@ -1,0 +1,36 @@
+use core::obligations::{Evidence, prove}
+
+trait Pick {
+    fn value() -> u256
+}
+
+struct Subject {}
+
+impl Pick for Subject {
+    fn value() -> u256 { 1 }
+}
+
+impl Pick for Subject as First {
+    fn value() -> u256 { 2 }
+}
+
+type Goal = Pick<Subject>
+
+const fn first() -> Evidence<Goal> {
+    with (First) { prove<Goal>() }
+}
+
+fn non_const_id(_ w: Evidence<Goal>) -> Evidence<Goal> {
+    w
+}
+
+fn check() -> u256 {
+    with (non_const_id(first())) {
+        <Subject as Pick>::value()
+    }
+}
+
+#[test]
+fn test_non_const_transport() {
+    assert(check() == 2)
+}

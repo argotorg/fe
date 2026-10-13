@@ -259,3 +259,59 @@ fn captured_associated_constant_rejects_runtime_choice_with_source_cause() {
     assert_eq!(u32::from(range.start()) as usize, start);
     assert_eq!(u32::from(range.end()) as usize, start + 1);
 }
+
+#[test]
+fn ordinary_evidence_transport_retains_selected_choice() {
+    use fe_hir::{
+        analysis::{
+            semantic::{
+                SConst, get_or_build_semantic_instance, identity_semantic_instance_key,
+                normalize_runtime_semantic_body,
+                normalized::{NExpr, NTerminatorKind},
+            },
+            ty::ty_check::{BodyOwner, ReturnProvenance},
+        },
+        test_db::find_func,
+    };
+    let source = include_str!("pr1797_review_controls/nonconst-transport.fe");
+    assert_eq!(diagnostics(source), "[]");
+    // Keep the transport and caller ordinary. Const methods let existing
+    // normalization expose the actual selected result in the runtime body.
+    let source = source.replace("fn value()", "const fn value()");
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("nonconst-transport.fe".into(), &source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let transport = BodyOwner::Func(find_func(&db, module, "non_const_id"));
+    let transport_key = identity_semantic_instance_key(&db, transport);
+    assert!(
+        matches!(transport_key.typed_body(&db).return_provenance(&db), ReturnProvenance::Forwarded(sources) if sources.len() == 1)
+    );
+    let owner = BodyOwner::Func(find_func(&db, module, "check"));
+    let instance = get_or_build_semantic_instance(&db, identity_semantic_instance_key(&db, owner));
+    let normalized =
+        normalize_runtime_semantic_body(&db, instance).expect("ordinary transport normalizes");
+    let mut returns = 0;
+    for block in &normalized.body.blocks {
+        if let NTerminatorKind::Return(Some(operand)) = block.terminator.kind {
+            let mut value = operand.value;
+            loop {
+                match normalized
+                    .body
+                    .defining_expr(value)
+                    .expect("defined return value")
+                    .1
+                {
+                    NExpr::Forward { src } => value = src.value,
+                    NExpr::Const(SConst::Value(value)) => {
+                        assert_eq!(value.value().pretty_print(&db), "2");
+                        break;
+                    }
+                    other => panic!("selected method must normalize to its result: {other:?}"),
+                }
+            }
+            returns += 1;
+        }
+    }
+    assert_eq!(returns, 1);
+}
