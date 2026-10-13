@@ -1398,6 +1398,52 @@ impl<'db> TyChecker<'db> {
         result
     }
 
+    fn check_obligation_introduction(&mut self, expr: ExprId, callable: &Callable<'db>) -> bool {
+        let CallableDef::Func(func) = callable.callable_def() else {
+            return true;
+        };
+        if func.top_mod(self.db).ingot(self.db).kind(self.db) != common::ingot::IngotKind::Core
+            || !crate::analysis::ty::corelib::lib_func_matches(
+                self.db,
+                func,
+                "core::obligations::prove",
+            )
+        {
+            return true;
+        }
+        let result = match callable.generic_args() {
+            [term] => {
+                let term = self.normalize_ty(*term);
+                crate::analysis::ty::trait_def::introduce_obligation(
+                    self.db,
+                    self.env.proof_context(),
+                    term,
+                )
+                .map(|_| ())
+            }
+            _ => Err(crate::analysis::ty::trait_def::CheckedApplicationError::UnsupportedInput),
+        };
+        if let Err(error) = result {
+            use crate::analysis::ty::trait_def::CheckedApplicationError::*;
+            let reason = match error {
+                UnsupportedInput => "expected one concrete trait goal",
+                UnsupportedConditions => {
+                    "this goal requires unsupported conditional type admission"
+                }
+                ConditionsNotAdmitted => "implementation conditions were not admitted",
+                NotProven => "the requested trait goal was not proved",
+                Incomplete => "the requested trait goal has no unique complete proof",
+                UnresolvedApplication => "the selected implementation application is unresolved",
+            };
+            self.push_diag(BodyDiag::ObligationIntroduction {
+                primary: expr.span(self.body()).into(),
+                reason,
+            });
+            return false;
+        }
+        true
+    }
+
     fn check_call(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
         let Expr::Call(callee, args) = expr_data else {
             unreachable!()
@@ -1450,6 +1496,10 @@ impl<'db> TyChecker<'db> {
         self.check_callable_effects(expr, &mut callable);
 
         callable.process_constraints(self, expr, call_span.callee().into());
+
+        if !self.check_obligation_introduction(expr, &callable) {
+            return ExprProp::invalid(self.db);
+        }
 
         let ret_ty = callable.ret_ty(self.db);
         let normalized_ret_ty = self.normalize_ty(ret_ty);

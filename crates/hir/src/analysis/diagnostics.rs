@@ -2726,6 +2726,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 span.resolve(db),
                 error_code,
             ),
+            Self::ObligationIntroduction { primary, reason } => primary_diag(
+                severity,
+                "trait evidence introduction failed",
+                *reason,
+                primary.resolve(db),
+                error_code,
+            ),
             Self::InfiniteOccurrence(span) => primary_diag(
                 Severity::Error,
                 "infinite sized type found",

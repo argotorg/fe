@@ -372,6 +372,10 @@ pub enum MustUseSubject<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum BodyDiag<'db> {
+    ObligationIntroduction {
+        primary: DynLazySpan<'db>,
+        reason: &'static str,
+    },
     TypeMismatch {
         span: DynLazySpan<'db>,
         expected: TyId<'db>,
@@ -969,6 +973,7 @@ impl<'db> BodyDiag<'db> {
 
     pub(crate) fn local_code(&self) -> u16 {
         match self {
+            Self::ObligationIntroduction { .. } => 97,
             Self::TypeMismatch { .. } => 0,
             Self::InfiniteOccurrence(..) => 1,
             Self::DuplicatedRestPat(..) => 2,

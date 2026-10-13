@@ -595,6 +595,39 @@ fn checked_type<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
     !ty.has_invalid(db) && !ty.has_var(db) && !ty.has_hole(db) && !ty.has_projection(db)
 }
 
+/// Evidence introduction requires a fully concrete goal. Merely lowering a
+/// Constraint term does not prove it, and rigid generic premises are not an
+/// introduction route for a concrete language witness.
+pub fn concrete_obligation_goal<'db>(
+    db: &'db dyn HirAnalysisDb,
+    term: TyId<'db>,
+) -> Result<TraitInstId<'db>, CheckedApplicationError> {
+    let super::ty_def::TyData::ConstraintTerm(goal) = term.data(db) else {
+        return Err(CheckedApplicationError::UnsupportedInput);
+    };
+    if !checked_type(db, term) || term.has_param(db) {
+        return Err(CheckedApplicationError::UnsupportedInput);
+    }
+    Ok(*goal)
+}
+
+/// Select once through ordinary discovery, then prove that exact application
+/// through the shared restricted-root and condition-admission boundary.
+pub fn introduce_obligation<'db>(
+    db: &'db dyn HirAnalysisDb,
+    context: TraitSolveCx<'db>,
+    term: TyId<'db>,
+) -> Result<CheckedImplApplication<'db>, CheckedApplicationError> {
+    let goal = concrete_obligation_goal(db, term)?;
+    match resolve_trait_impl_instance(db, context, goal) {
+        Selection::Unique(resolved) => {
+            prove_selected_application(db, context, resolved.selected(), goal)
+        }
+        Selection::Ambiguous(_) => Err(CheckedApplicationError::Incomplete),
+        Selection::NotFound => Err(CheckedApplicationError::NotProven),
+    }
+}
+
 /// Header reconstruction alone is deliberately not a checked application.
 /// Proof conditions are checked outside solving through master's ordinary
 /// declaration admission. Unsupported generic conditions remain Unsupported.
