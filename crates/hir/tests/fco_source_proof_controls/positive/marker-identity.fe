@@ -1,0 +1,25 @@
+use core::obligations::{Constraint as GoalKind, Evidence as CheckedEvidence, prove as checked_prove}
+struct Constraint { value: u256 }
+struct Evidence<G: GoalKind> { seal: bool }
+const fn prove() -> u256 { 9 }
+trait Produce {}
+struct Subject {}
+impl Produce for Subject {}
+type Goal = Produce<Subject>
+const fn forward<G: GoalKind>(_ witness: CheckedEvidence<G>) -> CheckedEvidence<G> { witness }
+const fn consume(_ witness: CheckedEvidence<Goal>) -> u256 { 37 }
+const fn issued() -> CheckedEvidence<Goal> { forward<Goal>(checked_prove<Goal>()) }
+const fn result() -> u256 { consume(issued()) }
+const fn marker_number() -> Constraint { Constraint { value: 5 } }
+const fn marker_value() -> Evidence<Goal> { Evidence<Goal> { seal: false } }
+const CORE_RESULT: u256 = result()
+const LOCAL_RESULT: u256 = prove()
+#[test]
+fn markers_follow_source_identity_not_spelling() {
+    assert!(CORE_RESULT == 37)
+    assert!(LOCAL_RESULT == 9)
+    let plain = Constraint { value: 5 }
+    let local: Evidence<Goal> = Evidence<Goal> { seal: false }
+    assert!(plain.value == 5)
+    assert!(!local.seal)
+}

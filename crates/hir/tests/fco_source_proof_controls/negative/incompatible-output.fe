@@ -1,0 +1,14 @@
+use core::obligations::{Evidence, prove}
+trait Leaf {}
+trait Produce { type Output }
+struct Subject {}
+struct Wrap<T> { value: T }
+impl<T: Leaf> Produce for Wrap<T> { type Output = u64 }
+impl Leaf for Subject {}
+type Goal = Produce<Wrap<Subject>, Output = bool>
+const fn consume(_ witness: Evidence<Goal>) -> u256 { 37 }
+const fn issued() -> Evidence<Goal> { prove<Goal>() }
+const fn result() -> u256 { consume(issued()) }
+const RESULT: u256 = result()
+#[test]
+fn ordinary_concrete_proof_is_evaluated() { assert!(RESULT == 37) }
