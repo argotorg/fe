@@ -30,7 +30,8 @@ use crate::{
             },
             ty_check::{
                 BodyOwner, Callable, ConstRef, EffectParamSite, EffectProviderSpecialization,
-                LocalBinding, ResolvedEffectArg, ReturnProjectionStep,
+                LocalBinding, RecordInitLowering, RecordLike, ResolvedEffectArg,
+                ReturnProjectionStep,
             },
             ty_def::{TyFlags, TyId},
             ty_lower::{
@@ -631,6 +632,22 @@ fn opened_operand_application_at<'db>(
             && let Some(ReturnProjectionStep::Field(index)) = projection.first().copied()
         {
             operand = *elems.get(usize::from(index))?;
+            projection.remove(0);
+            continue;
+        }
+        if let Partial::Present(Expr::RecordInit(_, fields)) = operand.data(db, body)
+            && let Some(ReturnProjectionStep::Field(index)) = projection.first().copied()
+            && matches!(
+                typed.record_init_lowering(operand),
+                Some(RecordInitLowering::Struct)
+            )
+        {
+            let record_like = RecordLike::Type(typed.expr_ty(db, operand));
+            operand = fields.iter().find_map(|field| {
+                let label = field.label_eagerly(db, body)?;
+                (record_like.record_field_idx(db, label)? == usize::from(index))
+                    .then_some(field.expr)
+            })?;
             projection.remove(0);
             continue;
         }
