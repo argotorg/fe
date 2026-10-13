@@ -178,3 +178,11 @@ fn direct_associated_constant_restoration() {
 fn rd71_parameter_and_concrete_method_reachability() {
     values("rd71-method-reachability", &["42", "1", "1"]);
 }
+
+#[test]
+fn call_bearing_prerequisite_constant_keeps_selected_context() {
+    values(
+        "prerequisite-call-bearing-constant",
+        &["2", "43", "8", "43", "2", "1"],
+    );
+}
