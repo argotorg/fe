@@ -40,6 +40,9 @@ pub struct TraitSolverQuery<'db> {
     pub assumptions: PredicateListId<'db>,
     /// Select an implementation at this goal; obligations still use assumptions.
     pub require_impl: bool,
+    /// Restrict only this goal to a definition. Prerequisites use ordinary proof.
+    /// The definition identity participates in the canonical table key.
+    pub selected_candidate: Option<ImplementorId<'db>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +64,7 @@ impl<'db> CanonicalGoalQuery<'db> {
                 goal,
                 assumptions: assumptions.extend_all_bounds(db),
                 require_impl: false,
+                selected_candidate: None,
             },
         )
     }
@@ -119,14 +123,15 @@ pub enum Selection<T> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub struct TraitSolveCx<'db> {
-    origin_ingot: Ingot<'db>,
+    // Source position is distinct from candidate-discovery/normalization scope.
+    scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 }
 
 impl<'db> TraitSolveCx<'db> {
     pub fn new(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Self {
         Self {
-            origin_ingot: scope.ingot(db),
+            scope,
             assumptions: PredicateListId::empty_list(db),
         }
     }
@@ -142,8 +147,12 @@ impl<'db> TraitSolveCx<'db> {
         self.assumptions
     }
 
-    pub(crate) fn origin_ingot(self) -> Ingot<'db> {
-        self.origin_ingot
+    pub fn scope(self) -> ScopeId<'db> {
+        self.scope
+    }
+
+    pub(crate) fn origin_ingot(self, db: &'db dyn HirAnalysisDb) -> Ingot<'db> {
+        self.scope.ingot(db)
     }
 
     pub(crate) fn select_impl(
@@ -170,6 +179,7 @@ impl<'db> TraitSolveCx<'db> {
                     goal: inst,
                     assumptions: self.assumptions.extend_all_bounds(db),
                     require_impl: true,
+                    selected_candidate: None,
                 },
             );
             match is_goal_query_satisfiable(db, self, &query) {
@@ -192,12 +202,34 @@ impl<'db> TraitSolveCx<'db> {
         }
     }
 
+    /// Prove one candidate using the ordinary solver and its completion rules.
+    /// This does not certify const predicates or a declaration's well-formedness.
+    pub(crate) fn restricted_goal(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        goal: TraitInstId<'db>,
+        candidate: ImplementorId<'db>,
+    ) -> GoalSatisfiability<'db> {
+        let scope = self.normalization_scope_for_trait_inst(db, goal);
+        let goal = normalize_trait_inst_preserving_validity(db, goal, scope, self.assumptions);
+        let query = CanonicalGoalQuery::from_query(
+            db,
+            TraitSolverQuery {
+                goal,
+                assumptions: self.assumptions.extend_all_bounds(db),
+                require_impl: true,
+                selected_candidate: Some(candidate),
+            },
+        );
+        is_goal_query_satisfiable(db, self, &query)
+    }
+
     pub(crate) fn search_ingots_for_trait_inst(
         self,
         db: &'db dyn HirAnalysisDb,
         inst: TraitInstId<'db>,
     ) -> (Ingot<'db>, Option<Ingot<'db>>) {
-        Self::search_ingots_for_trait_inst_with_origin(db, self.origin_ingot, inst)
+        Self::search_ingots_for_trait_inst_with_origin(db, self.origin_ingot(db), inst)
     }
 
     pub(crate) fn search_ingots_for_trait_inst_with_origin(
@@ -231,7 +263,7 @@ impl<'db> TraitSolveCx<'db> {
         db: &'db dyn HirAnalysisDb,
         inst: TraitInstId<'db>,
     ) -> ScopeId<'db> {
-        Self::normalization_scope_for_trait_inst_with_origin(db, self.origin_ingot, inst)
+        Self::normalization_scope_for_trait_inst_with_origin(db, self.origin_ingot(db), inst)
     }
 
     pub(crate) fn normalization_scope_for_trait_inst_with_origin(
@@ -248,7 +280,7 @@ impl<'db> TraitSolveCx<'db> {
     }
 
     pub(crate) fn origin_scope(self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
-        self.origin_ingot.root_mod(db).scope()
+        self.origin_ingot(db).root_mod(db).scope()
     }
 }
 
@@ -372,7 +404,7 @@ pub(crate) fn goal_query_has_solution<'db>(
     matches!(
         query_has_solution(
             db,
-            solve_cx.origin_ingot(),
+            solve_cx.origin_ingot(db),
             query.canonical(),
             target,
             TargetSolutionMatch::Equal,
@@ -390,7 +422,7 @@ pub(crate) fn goal_query_has_no_distinct_solution<'db>(
     matches!(
         query_has_solution(
             db,
-            solve_cx.origin_ingot(),
+            solve_cx.origin_ingot(db),
             query.canonical(),
             target,
             TargetSolutionMatch::NotEqual,
@@ -404,7 +436,7 @@ pub fn is_goal_query_satisfiable<'db>(
     solve_cx: TraitSolveCx<'db>,
     query: &CanonicalGoalQuery<'db>,
 ) -> GoalSatisfiability<'db> {
-    is_query_satisfiable(db, solve_cx.origin_ingot(), query.canonical()).clone()
+    is_query_satisfiable(db, solve_cx.origin_ingot(db), query.canonical()).clone()
 }
 
 pub fn is_goal_satisfiable<'db>(
@@ -754,6 +786,31 @@ pub(crate) fn check_trait_inst_wf<'db>(
 pub struct TraitGoalSolution<'db> {
     pub(crate) inst: TraitInstId<'db>,
     pub(crate) implementor: ImplementorId<'db>,
+    /// Instantiated conditions from the complete structural proof.
+    /// The use-site checker discharges them after inference, never the solver.
+    pub(crate) impl_conditions: ImplConditionsId<'db>,
+}
+
+/// Type applications reached by a trait proof still need ordinary formation
+/// admission. Keep their receipt; neither proof search nor this query admits it.
+pub(crate) fn goal_has_const_type_requirements<'db>(
+    db: &'db dyn HirAnalysisDb,
+    goal: TraitInstId<'db>,
+) -> bool {
+    goal.args(db)
+        .iter()
+        .chain(goal.assoc_type_bindings(db).values())
+        .any(|&ty| super::ty_check::type_has_const_requirements(db, ty))
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub(crate) struct ImplConditionsId<'db> {
+    #[return_ref]
+    pub instances: Vec<ImplementorId<'db>>,
+    #[return_ref]
+    /// Goals with declaration predicates or conditional type applications.
+    pub trait_goals: Vec<TraitInstId<'db>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -1458,6 +1515,392 @@ impl Foo for Third {}
 
         assert!(goal_query_has_solution(&db, solve_cx, &query, target));
     }
+    #[test]
+    fn restricted_root_preserves_candidate_identity_and_ordinary_prerequisites() {
+        use crate::analysis::ty::trait_lower::lower_impl_trait;
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "restricted_root.fe".into(),
+            r#"
+trait Bound {}
+trait Picks { type Output }
+struct Wrap<T> {}
+impl<T: Bound> Picks for Wrap<T> { type Output = T }
+impl<T> Picks for Wrap<T> { type Output = bool }
+fn supported<T: Bound>() {}
+fn unsupported<T>() {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let candidates = top_mod
+            .all_impl_traits(&db)
+            .iter()
+            .map(|&item| lower_impl_trait(&db, item).unwrap())
+            .collect::<Vec<_>>();
+        for (name, supported) in [("supported", true), ("unsupported", false)] {
+            let func = find_func(&db, top_mod, name);
+            let parameter = collect_generic_params(&db, func.into()).explicit_params(&db)[0];
+            let goal = TraitInstId::new(
+                &db,
+                named_trait(&db, top_mod, "Picks"),
+                vec![TyId::app(
+                    &db,
+                    named_struct_ty(&db, top_mod, "Wrap"),
+                    parameter,
+                )],
+                IndexMap::new(),
+            );
+            let premises =
+                collect_func_def_constraints(&db, func.into(), true).instantiate_identity();
+            // A premise for the requested goal must never rescue a bad candidate.
+            let premises = PredicateListId::new(
+                &db,
+                premises
+                    .list(&db)
+                    .iter()
+                    .copied()
+                    .chain([goal])
+                    .collect::<Vec<_>>(),
+            );
+            let cx = TraitSolveCx::new(&db, func.scope()).with_assumptions(premises);
+            let result = cx.restricted_goal(&db, goal, candidates[0]);
+            if supported {
+                let GoalSatisfiability::Satisfied(answer) = result else {
+                    panic!("{result:?}")
+                };
+                assert_eq!(answer.value.implementor, candidates[0]);
+            } else {
+                assert!(matches!(result, GoalSatisfiability::UnSat(_)), "{result:?}");
+            }
+            let GoalSatisfiability::Satisfied(answer) =
+                cx.restricted_goal(&db, goal, candidates[1])
+            else {
+                panic!("alternative must prove")
+            };
+            assert_eq!(answer.value.implementor, candidates[1]);
+            // Root restriction is a different cache key from ordinary discovery.
+            assert!(matches!(cx.select_impl(&db, goal), Selection::Ambiguous(_)) || !supported);
+        }
+    }
+
+    #[test]
+    fn restricted_root_rejects_wrong_associated_output() {
+        use crate::analysis::ty::trait_lower::lower_impl_trait;
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "restricted_output.fe".into(),
+            r#"
+trait Picks { type Output }
+struct Subject {}
+impl Picks for Subject { type Output = bool }
+impl Picks for Subject { type Output = u256 }
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let items = top_mod.all_impl_traits(&db);
+        let wrong = lower_impl_trait(&db, items[0]).unwrap();
+        let right = lower_impl_trait(&db, items[1]).unwrap();
+        let mut bindings = IndexMap::new();
+        bindings.insert(IdentId::new(&db, "Output"), TyId::u256(&db));
+        let goal = TraitInstId::new(
+            &db,
+            named_trait(&db, top_mod, "Picks"),
+            vec![named_struct_ty(&db, top_mod, "Subject")],
+            bindings,
+        );
+        let cx = TraitSolveCx::new(&db, top_mod.scope());
+        assert!(matches!(
+            cx.restricted_goal(&db, goal, wrong),
+            GoalSatisfiability::UnSat(_)
+        ));
+        assert!(matches!(
+            cx.restricted_goal(&db, goal, right),
+            GoalSatisfiability::Satisfied(_)
+        ));
+    }
+
+    #[test]
+    fn restricted_root_recursive_prerequisite_uses_unrestricted_proof() {
+        use crate::analysis::ty::trait_lower::lower_impl_trait;
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "restricted_recursive.fe".into(),
+            r#"
+trait Proof {}
+struct Grounded {}
+impl Proof for Grounded where Grounded: Proof {}
+impl Proof for Grounded {}
+struct Dead {}
+impl Proof for Dead where Dead: Proof {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let items = top_mod.all_impl_traits(&db);
+        let cx = TraitSolveCx::new(&db, top_mod.scope());
+        for (name, index, succeeds) in [("Grounded", 0, true), ("Dead", 2, false)] {
+            let goal = TraitInstId::new(
+                &db,
+                named_trait(&db, top_mod, "Proof"),
+                vec![named_struct_ty(&db, top_mod, name)],
+                IndexMap::new(),
+            );
+            let candidate = lower_impl_trait(&db, items[index]).unwrap();
+            let result = cx.restricted_goal(&db, goal, candidate);
+            if succeeds {
+                assert!(
+                    matches!(result, GoalSatisfiability::Satisfied(_)),
+                    "{result:?}"
+                );
+            } else {
+                assert!(matches!(result, GoalSatisfiability::UnSat(_)), "{result:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn restricted_root_preserves_incomplete_growth() {
+        use crate::analysis::ty::trait_lower::lower_impl_trait;
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "restricted_growth.fe".into(),
+            r#"
+trait Grow {}
+struct Dead {}
+struct Wrap<T> {}
+impl<T> Grow for T where Wrap<T>: Grow {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let goal = TraitInstId::new(
+            &db,
+            named_trait(&db, top_mod, "Grow"),
+            vec![named_struct_ty(&db, top_mod, "Dead")],
+            IndexMap::new(),
+        );
+        let candidate = lower_impl_trait(&db, top_mod.all_impl_traits(&db)[0]).unwrap();
+        let result = TraitSolveCx::new(&db, top_mod.scope()).restricted_goal(&db, goal, candidate);
+        assert!(
+            matches!(result, GoalSatisfiability::NeedsConfirmation { completion, .. }
+            if !completion.is_saturated()),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn restricted_root_retains_substituted_transitive_conditions_without_evaluating() {
+        use crate::analysis::ty::trait_lower::lower_impl_trait;
+        let mut db = HirAnalysisTestDb::default();
+        // Solver-only input: source admission of generic impl conditions is a
+        // separate layer. Structural success must retain, never discharge them.
+        let file = db.new_stand_alone(
+            "restricted_condition_receipt.fe".into(),
+            r#"
+trait Marker where true {}
+struct Wrapper<const N: usize> {}
+impl<const N: usize> Marker for Wrapper<N> where N > 0 {}
+trait Lifted {}
+impl<T: Marker> Lifted for T {}
+trait Twice {}
+impl<T: Lifted> Twice for T {}
+fn probe<const N: usize>() {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let func = find_func(&db, top_mod, "probe");
+        let parameter = collect_generic_params(&db, func.into()).explicit_params(&db)[0];
+        let subject = TyId::app(&db, named_struct_ty(&db, top_mod, "Wrapper"), parameter);
+        let goal = TraitInstId::new(
+            &db,
+            named_trait(&db, top_mod, "Twice"),
+            vec![subject],
+            IndexMap::new(),
+        );
+        let items = top_mod.all_impl_traits(&db);
+        let candidate = lower_impl_trait(&db, items[2]).unwrap();
+        let cx = TraitSolveCx::new(&db, func.scope());
+        assert_eq!(cx.scope(), func.scope());
+        let result = cx.restricted_goal(&db, goal, candidate);
+        let GoalSatisfiability::Satisfied(answer) = result else {
+            panic!("{result:?}")
+        };
+        assert_eq!(answer.value.implementor, candidate);
+        let conditions = answer.value.impl_conditions;
+        let [instance] = conditions.instances(&db).as_slice() else {
+            panic!("{conditions:?}")
+        };
+        assert_eq!(instance.origin(&db), ImplementorOrigin::Hir(items[0]));
+        assert_eq!(instance.self_ty(&db), subject);
+        assert_eq!(instance.params(&db), &[parameter]);
+        let marker = TraitInstId::new(
+            &db,
+            named_trait(&db, top_mod, "Marker"),
+            vec![subject],
+            IndexMap::new(),
+        );
+        assert_eq!(conditions.trait_goals(&db), &[marker]);
+    }
+
+    #[test]
+    fn restricted_root_condition_diamond_keeps_one_instantiated_requirement() {
+        use crate::analysis::ty::trait_lower::lower_impl_trait;
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "restricted_condition_diamond.fe".into(),
+            r#"
+trait Shared {}
+struct Subject {}
+impl Shared for Subject where true {}
+trait Left {}
+impl<T: Shared> Left for T {}
+trait Right {}
+impl<T: Shared> Right for T {}
+trait Top {}
+impl<T: Left + Right> Top for T {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let subject = named_struct_ty(&db, top_mod, "Subject");
+        let goal = TraitInstId::new(
+            &db,
+            named_trait(&db, top_mod, "Top"),
+            vec![subject],
+            IndexMap::new(),
+        );
+        let items = top_mod.all_impl_traits(&db);
+        let candidate = lower_impl_trait(&db, items[3]).unwrap();
+        let cx = TraitSolveCx::new(&db, top_mod.scope());
+        for result in [
+            cx.restricted_goal(&db, goal, candidate),
+            is_goal_satisfiable(&db, cx, goal),
+        ] {
+            let GoalSatisfiability::Satisfied(answer) = result else {
+                panic!("{result:?}")
+            };
+            let conditions = answer.value.impl_conditions;
+            let [instance] = conditions.instances(&db).as_slice() else {
+                panic!("{conditions:?}")
+            };
+            assert_eq!(instance.origin(&db), ImplementorOrigin::Hir(items[0]));
+            assert_eq!(instance.self_ty(&db), subject);
+            assert!(conditions.trait_goals(&db).is_empty());
+        }
+    }
+
+    #[test]
+    fn condition_receipts_do_not_change_structural_proof_identity() {
+        use crate::analysis::ty::trait_lower::lower_impl_trait;
+        for (name, first, second) in [
+            ("true_first", "true", "false"),
+            ("false_first", "false", "true"),
+        ] {
+            let mut db = HirAnalysisTestDb::default();
+            // Overlap and a false condition are deliberately solver-only inputs.
+            // This checks structural identity, not source or const admission.
+            let source = format!(
+                "trait Leaf {{}}\ntrait Root {{}}\nstruct Subject {{}}\n\
+                 impl Leaf for Subject where {first} {{}}\n\
+                 impl Leaf for Subject where {second} {{}}\n\
+                 impl<T: Leaf> Root for T where true {{}}\n"
+            );
+            let file = db.new_stand_alone(format!("{name}.fe").into(), &source);
+            let (module, _) = db.top_mod(file);
+            let subject = named_struct_ty(&db, module, "Subject");
+            let goal =
+                TraitInstId::new_simple(&db, named_trait(&db, module, "Root"), vec![subject]);
+            let items = module.all_impl_traits(&db);
+            let candidate = lower_impl_trait(&db, items[2]).unwrap();
+            let cx = TraitSolveCx::new(&db, module.scope());
+            for result in [
+                is_goal_satisfiable(&db, cx, goal),
+                cx.restricted_goal(&db, goal, candidate),
+            ] {
+                let GoalSatisfiability::Satisfied(answer) = result else {
+                    panic!("{name}: alternate receipts changed proof identity: {result:?}")
+                };
+                assert_eq!(
+                    answer.value.implementor.origin(&db),
+                    ImplementorOrigin::Hir(items[2])
+                );
+                let receipt = answer.value.impl_conditions;
+                let origins: Vec<_> = receipt
+                    .instances(&db)
+                    .iter()
+                    .map(|i| i.origin(&db))
+                    .collect();
+                assert!(origins.contains(&ImplementorOrigin::Hir(items[2])));
+                assert_eq!(origins.len(), 2, "retain root plus one complete Leaf route");
+                assert_ne!(
+                    origins.contains(&ImplementorOrigin::Hir(items[0])),
+                    origins.contains(&ImplementorOrigin::Hir(items[1])),
+                    "alternative Leaf conditions must not become a conjunction"
+                );
+                assert!(receipt.trait_goals(&db).is_empty());
+            }
+            assert!(matches!(cx.select_impl(&db, goal), Selection::Unique(_)));
+        }
+    }
+
+    #[test]
+    fn restricted_root_retains_transitive_conditional_type_applications() {
+        use crate::analysis::ty::trait_lower::lower_impl_trait;
+        let mut db = HirAnalysisTestDb::default();
+        // Solver-only invalid header: ordinary type admission rejects Bounded<0>.
+        // A structural root answer must carry that reached use to final admission.
+        let file = db.new_stand_alone(
+            "restricted_type_condition_receipt.fe".into(),
+            r#"
+trait Marker<A> {}
+trait Lift {}
+trait Pick {}
+struct Key {}
+struct Other {}
+struct Bounded<const N: usize> where { N > 0 } {}
+impl Marker<Bounded<0>> for Other {}
+impl Lift for Other where Other: Marker<Bounded<0>> {}
+impl Pick for Key where Other: Lift {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let goal = TraitInstId::new(
+            &db,
+            named_trait(&db, top_mod, "Pick"),
+            vec![named_struct_ty(&db, top_mod, "Key")],
+            IndexMap::new(),
+        );
+        let candidate = lower_impl_trait(&db, top_mod.all_impl_traits(&db)[2]).unwrap();
+        let result = TraitSolveCx::new(&db, top_mod.scope()).restricted_goal(&db, goal, candidate);
+        let GoalSatisfiability::Satisfied(answer) = result else {
+            panic!("{result:?}")
+        };
+        let [instance] = answer.value.impl_conditions.instances(&db).as_slice() else {
+            panic!("missing conditional proving implementation")
+        };
+        assert_eq!(
+            instance.origin(&db),
+            ImplementorOrigin::Hir(top_mod.all_impl_traits(&db)[0])
+        );
+        let [reached] = answer.value.impl_conditions.trait_goals(&db).as_slice() else {
+            panic!("missing reached conditional application")
+        };
+        assert_eq!(reached.def(&db), named_trait(&db, top_mod, "Marker"));
+        assert_eq!(
+            instance.self_ty(&db),
+            named_struct_ty(&db, top_mod, "Other")
+        );
+        // The two written zero expressions have distinct source identities.
+        // Compare the complete applications through ordinary const unification.
+        UnificationTable::new(&db)
+            .unify(instance.trait_inst(&db), *reached)
+            .expect("the retained implementation proves the reached application");
+        assert!(super::goal_has_const_type_requirements(&db, *reached));
+        assert!(
+            reached.args(&db)[1]
+                .pretty_print(&db)
+                .contains("Bounded<0>")
+        );
+    }
+
     #[test]
     fn implementation_selection_uses_assumptions_for_obligations() {
         let mut db = HirAnalysisTestDb::default();

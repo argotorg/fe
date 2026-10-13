@@ -17,8 +17,9 @@ use tablesolve::{
 };
 
 use super::{
-    CanonicalGoalQuery, GoalSatisfiability, TRAIT_SOLVER_ROOT_ANSWER_LIMIT, TraitGoalSolution,
-    TraitSolveCompletion, TraitSolveCx, TraitSolverQuery, normalize_trait_inst_preserving_validity,
+    CanonicalGoalQuery, GoalSatisfiability, ImplConditionsId, TRAIT_SOLVER_ROOT_ANSWER_LIMIT,
+    TraitGoalSolution, TraitSolveCompletion, TraitSolveCx, TraitSolverQuery,
+    normalize_trait_inst_preserving_validity,
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -157,6 +158,9 @@ struct Branch<'db> {
     root_goal: TraitInstId<'db>,
     remaining_goals: Vec<TraitInstId<'db>>,
     selected_impl: ImplementorId<'db>,
+    establishes_goal: bool,
+    impl_conditions: Vec<ImplementorId<'db>>,
+    trait_conditions: Vec<TraitInstId<'db>>,
 }
 
 #[derive(Clone)]
@@ -269,12 +273,37 @@ impl<'db> TraitResolutionContext<'db> {
         branch: &mut Branch<'db>,
         goal: TraitInstId<'db>,
     ) -> GoalSolution<'db> {
+        let mut trait_conditions = branch
+            .trait_conditions
+            .clone()
+            .fold_with(self.db, &mut branch.table);
+        let goal = goal.fold_with(self.db, &mut branch.table);
+        // Assumptions do not create a fresh declaration-condition obligation.
+        if branch.establishes_goal
+            && (!crate::hir_def::WhereClauseOwner::Trait(goal.def(self.db))
+                .where_clause(self.db)
+                .const_predicates(self.db)
+                .is_empty()
+                || super::goal_has_const_type_requirements(self.db, goal))
+            && !trait_conditions.contains(&goal)
+        {
+            trait_conditions.push(goal);
+        }
+        let impl_conditions = ImplConditionsId::new(
+            self.db,
+            branch
+                .impl_conditions
+                .clone()
+                .fold_with(self.db, &mut branch.table),
+            trait_conditions,
+        );
         parent.canonicalize_solution(
             self.db,
             &mut branch.table,
             TraitGoalSolution {
                 inst: goal,
                 implementor: branch.selected_impl,
+                impl_conditions,
             },
         )
     }
@@ -322,6 +351,7 @@ impl<'db> TraitResolutionContext<'db> {
                 goal: next_goal,
                 assumptions,
                 require_impl: false,
+                selected_candidate: None,
             },
             state: branch,
         }
@@ -333,7 +363,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
     type Key = Query<'db>;
     type Clause = Clause<'db>;
     type Answer = GoalSolution<'db>;
-    type AnswerKey = GoalSolution<'db>;
+    type AnswerKey = (TraitInstId<'db>, ImplementorId<'db>);
     type Output = GoalSolution<'db>;
     type State = Branch<'db>;
     type Rebase = CanonicalGoalQuery<'db>;
@@ -370,17 +400,24 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             self.origin_ingot,
             prepared.query.goal,
         );
-        let implementors = impls_for_trait_in_ingots(
-            self.db,
-            primary,
-            secondary,
-            Canonical::new(self.db, prepared.query.goal),
-        );
-
-        let mut clauses =
-            Vec::with_capacity(implementors.len() + prepared.query.assumptions.list(self.db).len());
-        clauses.extend(implementors.iter().copied().map(Clause::Implementor));
-        if !prepared.query.require_impl && self.goal_can_use_assumptions(prepared.normalized_goal) {
+        let mut clauses = Vec::new();
+        if let Some(candidate) = prepared.query.selected_candidate {
+            // Named definitions need not be ordinary-discovery candidates. Apply
+            // the same header unification and prerequisite checks to this root.
+            clauses.push(Clause::Implementor(candidate));
+        } else {
+            let implementors = impls_for_trait_in_ingots(
+                self.db,
+                primary,
+                secondary,
+                Canonical::new(self.db, prepared.query.goal),
+            );
+            clauses.extend(implementors.iter().copied().map(Clause::Implementor));
+        }
+        if !prepared.query.require_impl
+            && prepared.query.selected_candidate.is_none()
+            && self.goal_can_use_assumptions(prepared.normalized_goal)
+        {
             clauses.extend(
                 (0..prepared.query.assumptions.list(self.db).len()).map(Clause::Assumption),
             );
@@ -436,6 +473,23 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                     root_goal: query.goal,
                     remaining_goals,
                     selected_impl,
+                    establishes_goal: true,
+                    impl_conditions: if let crate::analysis::ty::trait_def::ImplementorOrigin::Hir(
+                        item,
+                    ) = candidate.origin(self.db)
+                        && (!crate::hir_def::WhereClauseOwner::ImplTrait(item)
+                            .where_clause(self.db)
+                            .const_predicates(self.db)
+                            .is_empty()
+                            || super::goal_has_const_type_requirements(
+                                self.db,
+                                candidate.trait_inst(self.db),
+                            )) {
+                        vec![candidate]
+                    } else {
+                        Vec::new()
+                    },
+                    trait_conditions: Vec::new(),
                 };
                 return Ok(self.continue_branch(key, branch, query.assumptions));
             }
@@ -464,6 +518,9 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             root_goal: query.goal,
             remaining_goals: Vec::new(),
             selected_impl,
+            establishes_goal: false,
+            impl_conditions: Vec::new(),
+            trait_conditions: Vec::new(),
         };
         Ok(self.finish_branch(key, branch))
     }
@@ -476,7 +533,18 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         rebase: Self::Rebase,
     ) -> Result<ContextTransition<Self>, Self::Error> {
         let pending_goal = rebase.goal();
-        let solution = rebase.extract_solution(&mut branch.table, answer).inst;
+        let solution = rebase.extract_solution(&mut branch.table, answer);
+        for &instance in solution.impl_conditions.instances(self.db) {
+            if !branch.impl_conditions.contains(&instance) {
+                branch.impl_conditions.push(instance);
+            }
+        }
+        for &goal in solution.impl_conditions.trait_goals(self.db) {
+            if !branch.trait_conditions.contains(&goal) {
+                branch.trait_conditions.push(goal);
+            }
+        }
+        let solution = solution.inst;
 
         let normalized_pending = {
             let scope = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
@@ -519,6 +587,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 goal: resumed_root,
                 assumptions: resumed_assumptions,
                 require_impl: parent.value().require_impl,
+                selected_candidate: parent.value().selected_candidate,
             },
         ) {
             return Ok(Transition::Stop(StopReason::MaximumTypeDepth));
@@ -539,7 +608,11 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
     }
 
     fn answer_key(&self, _key: &Self::Key, answer: &Self::Answer) -> Self::AnswerKey {
-        *answer
+        // Conditions describe the retained proof, not a new implementation
+        // choice. Duplicate routes keep one complete representative receipt;
+        // combining their conditions would turn alternatives into conjunction.
+        // Canonicalization visits these identity fields before the receipt.
+        (answer.value.inst, answer.value.implementor)
     }
 }
 

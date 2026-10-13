@@ -28,7 +28,7 @@ use crate::analysis::{
         },
         pattern_types::pattern_match_expected_ty,
         trait_def::TraitInstId,
-        trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable},
+        trait_resolution::{GoalSatisfiability, is_goal_satisfiable},
         ty_def::{InvalidCause, Kind, TyId, TyVarSort},
         ty_lower::lower_hir_ty,
     },
@@ -504,12 +504,8 @@ impl<'db> TyChecker<'db> {
 
                 let trait_ = inst.def(self.db);
                 if !super::trait_const_goal_has_foreign_params(self.db, inst, self.env.scope())
-                    && let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(
-                        self.db,
-                        TraitSolveCx::new(self.db, self.env.scope())
-                            .with_assumptions(self.env.assumptions()),
-                        inst,
-                    )
+                    && let GoalSatisfiability::UnSat(_) =
+                        is_goal_satisfiable(self.db, self.env.proof_context(), inst)
                 {
                     self.push_diag(TyDiagCollection::from(
                         TraitConstraintDiag::TraitBoundNotSat {

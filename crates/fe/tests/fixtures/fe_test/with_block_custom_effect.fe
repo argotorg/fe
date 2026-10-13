@@ -31,3 +31,22 @@ fn test_with_temp_block_custom_effect() {
 
     assert!(out == 1)
 }
+
+#[test]
+fn test_nested_with_restores_outer_provider() {
+    let mut outer = Counter { value: 1 }
+    let mut inner = Counter { value: 100 }
+
+    with (Counter = outer) {
+        inc()
+        with (Counter = inner) {
+            inc()
+            assert!(read() == 101)
+        }
+        assert!(read() == 2)
+        inc()
+    }
+
+    assert!(outer.value == 3)
+    assert!(inner.value == 101)
+}

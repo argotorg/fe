@@ -575,6 +575,12 @@ fn first_condition<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<Bod
         })
 }
 
+/// Structural detection through the same declaration/argument walk used by
+/// ordinary const admission. This does not evaluate or discharge a predicate.
+pub(crate) fn type_has_const_requirements<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    first_condition(db, ty).is_some()
+}
+
 /// Checks the requirements of the types and callees that enter a typed body.
 ///
 /// Requirements are checked where a type enters the body: a written type

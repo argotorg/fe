@@ -1,7 +1,9 @@
 mod callable;
 mod const_requirements;
-pub(crate) use const_requirements::check_declared_type_requirements;
 pub use const_requirements::{EvaluationStop, RequirementFailure};
+pub(crate) use const_requirements::{
+    check_declared_type_requirements, type_has_const_requirements,
+};
 mod contract;
 mod effect_env;
 pub(crate) mod env;
@@ -3269,7 +3271,7 @@ impl<'db> TyChecker<'db> {
             hir_ty,
             span.clone(),
             self.env.assumptions(),
-            TraitSolveCx::new(self.db, self.env.scope()).with_assumptions(self.env.assumptions()),
+            self.env.proof_context(),
         ) {
             self.push_diag(diag);
         }

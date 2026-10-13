@@ -3877,12 +3877,8 @@ impl<'db> TyChecker<'db> {
                     );
 
                     if !super::trait_const_goal_has_foreign_params(self.db, inst, self.env.scope())
-                        && let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(
-                            self.db,
-                            TraitSolveCx::new(self.db, self.env.scope())
-                                .with_assumptions(self.env.assumptions()),
-                            inst,
-                        )
+                        && let GoalSatisfiability::UnSat(_) =
+                            is_goal_satisfiable(self.db, self.env.proof_context(), inst)
                     {
                         self.push_diag(TyDiagCollection::from(
                             TraitConstraintDiag::TraitBoundNotSat {

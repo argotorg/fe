@@ -21,6 +21,7 @@
 //!   method(s) here.
 
 pub mod index;
+pub(crate) mod lexical;
 pub mod reference;
 mod storage_layout;
 pub mod symbol;
