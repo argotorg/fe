@@ -914,7 +914,7 @@ fn evidence_slots<'db>(
     path: Vec<ReturnProjectionStep>,
     active: &mut IndexSet<TyId<'db>>,
     slots: &mut Vec<Vec<ReturnProjectionStep>>,
-    stopped: &mut Option<EvidenceSlotStop>,
+    stopped: &mut Vec<(EvidenceSlotStop, Vec<ReturnProjectionStep>)>,
 ) {
     let ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
     if crate::analysis::ty::corelib::evidence_goal(db, scope, ty).is_some() {
@@ -939,11 +939,11 @@ fn evidence_slots<'db>(
     // instantiations, while bounding expanding recursive declarations as well.
     const MAX_PROJECTION_DEPTH: usize = 64;
     if active.len() >= MAX_PROJECTION_DEPTH {
-        stopped.get_or_insert(EvidenceSlotStop::DepthLimit(MAX_PROJECTION_DEPTH));
+        stopped.push((EvidenceSlotStop::DepthLimit(MAX_PROJECTION_DEPTH), path));
         return;
     }
     if !active.insert(ty) {
-        stopped.get_or_insert(EvidenceSlotStop::Recursive);
+        stopped.push((EvidenceSlotStop::Recursive, path));
         return;
     }
     if ty.as_enum(db).is_some()
@@ -1408,7 +1408,7 @@ fn semantic_callee_key_with_assumptions<'db>(
                     Vec::new(),
                     &mut IndexSet::default(),
                     &mut slots,
-                    &mut None,
+                    &mut Vec::new(),
                 );
                 if slots
                     .iter()
@@ -1526,7 +1526,7 @@ fn semantic_callee_key_with_assumptions<'db>(
         let typed = caller.key(db).typed_body(db);
         for (index, &operand) in callable.argument_operands().iter().enumerate() {
             let mut slots = Vec::new();
-            let mut stopped = None;
+            let mut stopped = Vec::new();
             evidence_slots(
                 db,
                 caller.key(db).owner(db).scope(),
@@ -1536,17 +1536,18 @@ fn semantic_callee_key_with_assumptions<'db>(
                 &mut slots,
                 &mut stopped,
             );
-            if slots.is_empty() && stopped.is_none() {
+            if slots.is_empty() && stopped.is_empty() {
                 continue;
             }
             let recovery = recover_known_operand(db, caller, operand);
-            if let Some(reason) = stopped {
+            for (reason, prefix) in stopped {
                 let depth = match reason {
                     EvidenceSlotStop::DepthLimit(depth) => Some(depth),
                     EvidenceSlotStop::Recursive => None,
                 };
                 // A stopped ordinary recursive type is not evidence authority.
-                // Diagnose only an actual issued carrier or a retained positive slot.
+                // Diagnose only issued evidence beneath this stopped projection.
+                // Evidence in an independent sibling is still fully discovered.
                 let actual = match &recovery {
                     KnownOperandRecovery::Value(value) => ImplEnv::empty(db, owner.scope())
                         .with_argument_evidence_values(db, &[(index, *value)]),
@@ -1555,11 +1556,24 @@ fn semantic_callee_key_with_assumptions<'db>(
                 if actual
                     .parameter_evidence(db)
                     .iter()
-                    .any(|(slot, _)| *slot == index)
+                    .any(|(slot, _)| *slot == index && prefix.is_empty())
                     || actual
                         .projected_parameter_evidence(db)
                         .iter()
-                        .any(|(slot, _, _)| *slot == index)
+                        .any(|(slot, path, _)| {
+                            *slot == index
+                                && path.len() >= prefix.len()
+                                && prefix.iter().zip(path).all(|(expected, actual)| {
+                                    expected == actual
+                                        || matches!(
+                                            (expected, actual),
+                                            (
+                                                ReturnProjectionStep::AnyIndex,
+                                                ReturnProjectionStep::ConstantIndex(_)
+                                            )
+                                        )
+                                })
+                        })
                 {
                     return Err(MethodArgMapError::EvidenceProjectionStopped { operand, depth });
                 }
@@ -1897,7 +1911,7 @@ mod tests {
             assert_eq!(child == ty, field == "Growing<T>");
             let mut active = super::IndexSet::default();
             let mut slots = Vec::new();
-            let mut stopped = None;
+            let mut stopped = Vec::new();
             super::evidence_slots(
                 &db,
                 item.scope(),
@@ -1908,7 +1922,7 @@ mod tests {
                 &mut stopped,
             );
             assert_eq!(
-                stopped,
+                stopped.first().map(|(reason, _)| *reason),
                 Some(if field == "Growing<T>" {
                     super::EvidenceSlotStop::Recursive
                 } else {
