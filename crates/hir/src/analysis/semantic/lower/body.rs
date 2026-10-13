@@ -17,7 +17,7 @@ use crate::{
             SemOrigin, SemanticBody, SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex,
             bool_const, bytes_const, consts::instantiate_const_template, int_const,
             reify_runtime_const_for_ty, runtime_size_bytes, sem_const_from_ty, struct_const,
-            unit_const,
+            typed_body_template, unit_const,
         },
         ty::{
             const_expr::{ConstExpr, ConstExprId, ConstInvocation},
@@ -31,8 +31,9 @@ use crate::{
                 LocalBinding, PathReadSemantics, RecordInitLowering, RecordLike,
                 SemanticExprLowering, TypedBody, ValuePathRef,
             },
-            ty_def::{BorrowKind, TyData, TyId},
+            ty_def::{BorrowKind, TyData, TyFlags, TyId},
             ty_is_copy,
+            visitor::collect_flags,
         },
     },
     hir_def::{
@@ -758,12 +759,22 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     fn lower_const_ref(&mut self, expr: ExprId, const_ref: ConstRef<'db>) -> SValueId {
         let ty = self.expr_ty(expr);
+        // Inherited choices apply only to constants reached through a declaration's
+        // parameters and bounds. A concrete source path keeps its declaration choice
+        // even when its enclosing function is called under an opening (RD71).
+        let template = typed_body_template(self.db, self.template_owner);
+        let inherited = match template.body.expr_const_ref(expr) {
+            Some(ConstRef::TraitConst(assoc)) => {
+                collect_flags(self.db, assoc.inst()).contains(TyFlags::HAS_PARAM)
+            }
+            _ => false,
+        };
         if let Some(const_ref) = resolve_semantic_const_ref_in_instance(
             self.db,
             const_ref,
             ty,
             SemOrigin::Expr(expr),
-            Some(self.instance),
+            inherited.then_some(self.instance),
         ) {
             return self.emit_expr_with_origin(
                 SemOrigin::Expr(expr),
