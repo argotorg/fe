@@ -697,3 +697,30 @@ forward<Subject>(pair) }
 "#,
     );
 }
+
+#[test]
+fn immutable_array_parameter_aliases_reuse_projected_records() {
+    check_source_runtime_choice_delivery(
+        "array_parameter_alias_delivery.fe",
+        r#"
+fn forward<T>(_ pair: [Evidence<Pick<T>>; 2]) -> u256 { consume<T>(pair[0]) + consume<T>(pair[1]) }
+fn relay<T>(_ pair: [Evidence<Pick<T>>; 2]) -> u256 { let alias = pair
+forward<T>(alias) }
+fn first_result() -> u256 { relay<Subject>([first(), second()]) }
+fn second_result() -> u256 { relay<Subject>([second(), first()]) }
+"#,
+    );
+}
+
+#[test]
+fn array_fields_of_parameters_rebase_projected_records() {
+    check_source_runtime_choice_delivery(
+        "array_parameter_field_delivery.fe",
+        r#"
+fn forward<T>(_ pair: [Evidence<Pick<T>>; 2]) -> u256 { consume<T>(pair[0]) + consume<T>(pair[1]) }
+fn relay<T>(_ pair: ([Evidence<Pick<T>>; 2], bool)) -> u256 { forward<T>(pair.0) }
+fn first_result() -> u256 { relay<Subject>(([first(), second()], false)) }
+fn second_result() -> u256 { relay<Subject>(([second(), first()], false)) }
+"#,
+    );
+}
