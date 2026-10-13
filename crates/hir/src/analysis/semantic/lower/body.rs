@@ -5,8 +5,9 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     analysis::semantic::instance::{
-        CallSiteLowering, ForLoopCallSites, SemanticInstance, provisional_semantic_callee_key,
-        resolve_semantic_const_ref_in_instance, semantic_callee_key_with_effect_providers,
+        CallSiteLowering, ForLoopCallSites, SemanticInstance, declaration_reaches_trait_goal,
+        provisional_semantic_callee_key, resolve_semantic_const_ref_in_instance,
+        semantic_callee_key_with_effect_providers,
     },
     analysis::{
         HirAnalysisDb,
@@ -31,9 +32,8 @@ use crate::{
                 LocalBinding, PathReadSemantics, RecordInitLowering, RecordLike,
                 SemanticExprLowering, TypedBody, ValuePathRef,
             },
-            ty_def::{BorrowKind, TyData, TyFlags, TyId},
+            ty_def::{BorrowKind, TyData, TyId},
             ty_is_copy,
-            visitor::collect_flags,
         },
     },
     hir_def::{
@@ -765,7 +765,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let template = typed_body_template(self.db, self.template_owner);
         let inherited = match template.body.expr_const_ref(expr) {
             Some(ConstRef::TraitConst(assoc)) => {
-                collect_flags(self.db, assoc.inst()).contains(TyFlags::HAS_PARAM)
+                declaration_reaches_trait_goal(self.db, template.body.assumptions(), assoc.inst())
             }
             _ => false,
         };

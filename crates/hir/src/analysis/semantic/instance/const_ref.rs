@@ -2,6 +2,7 @@ use super::{
     EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance, SemanticInstanceKey,
     provisional_provider_binding_for_instance_effect, provisional_provider_idx_for_requirement,
     resolved_effect_binding_ty_for_instance_effect, resolved_provider_binding_for_instance_effect,
+    typed_body_template,
 };
 use crate::{
     analysis::{
@@ -811,7 +812,49 @@ pub(super) fn visible_applications<'db>(
     caller: SemanticInstance<'db>,
     callable: &Callable<'db>,
 ) -> Vec<ImplApplicationRecord<'db>> {
-    applications_from_openings(db, caller, callable.lexical_openings(), true)
+    applications_from_openings(
+        db,
+        caller,
+        callable.lexical_openings(),
+        call_inherits_applications(db, caller, callable),
+    )
+}
+
+pub(crate) fn declaration_reaches_trait_goal<'db>(
+    db: &'db dyn HirAnalysisDb,
+    assumptions: PredicateListId<'db>,
+    goal: TraitInstId<'db>,
+) -> bool {
+    collect_flags(db, goal).contains(TyFlags::HAS_PARAM)
+        || assumptions
+            .extend_all_bounds(db)
+            .list(db)
+            .iter()
+            .any(|bound| bound.def(db) == goal.def(db) && bound.args(db) == goal.args(db))
+}
+
+fn call_inherits_applications<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    callable: &Callable<'db>,
+) -> bool {
+    let Some(expr) = callable.source_expr() else {
+        // Compiler-generated calls retain their existing context policy.
+        return true;
+    };
+    let template = typed_body_template(db, caller.key(db).owner(db));
+    let Some(original) = template.body.callable_expr(expr) else {
+        return true;
+    };
+    if let Some(goal) = original.trait_inst() {
+        return declaration_reaches_trait_goal(db, template.body.assumptions(), goal);
+    }
+    collect_flags(db, original.generic_args()).contains(TyFlags::HAS_PARAM)
+        || collect_func_decl_constraints(db, original.callable_def, true)
+            .instantiate(db, original.generic_args())
+            .list(db)
+            .iter()
+            .any(|goal| declaration_reaches_trait_goal(db, template.body.assumptions(), *goal))
 }
 
 fn applications_from_openings<'db>(

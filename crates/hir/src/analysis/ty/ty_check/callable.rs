@@ -265,6 +265,8 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct Callable<'db> {
+    /// Original body expression, preserved through substitution for lexical reachability.
+    source_expr: Option<ExprId>,
     lexical_openings: Vec<super::TraitOpening<'db>>,
     argument_operands: Vec<ExprId>,
     evidence_introduction: Option<super::super::trait_def::ImplApplicationRecord<'db>>,
@@ -316,6 +318,7 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
         F: TyFolder<'db>,
     {
         Self {
+            source_expr: self.source_expr,
             lexical_openings: self.lexical_openings.fold_with(db, folder),
             argument_operands: self.argument_operands,
             evidence_introduction: self
@@ -343,6 +346,12 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
 }
 
 impl<'db> Callable<'db> {
+    pub(crate) fn source_expr(&self) -> Option<ExprId> {
+        self.source_expr
+    }
+    pub(super) fn record_source_expr(&mut self, expr: ExprId) {
+        self.source_expr = Some(expr);
+    }
     pub fn argument_operands(&self) -> &[ExprId] {
         &self.argument_operands
     }
@@ -440,6 +449,7 @@ impl<'db> Callable<'db> {
         });
 
         Ok(Self {
+            source_expr: None,
             lexical_openings: Vec::new(),
             argument_operands: Vec::new(),
             evidence_introduction: None,
@@ -463,6 +473,7 @@ impl<'db> Callable<'db> {
         trait_inst: Option<TraitInstId<'db>>,
     ) -> Self {
         Self {
+            source_expr: None,
             lexical_openings: Vec::new(),
             argument_operands: Vec::new(),
             evidence_introduction: None,

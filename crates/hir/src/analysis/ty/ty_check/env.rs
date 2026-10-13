@@ -525,6 +525,7 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn register_semantic_call(&mut self, expr: ExprId, mut callable: Callable<'db>) {
+        callable.record_source_expr(expr);
         callable.record_lexical_openings(self.trait_openings.visible(self.db));
         let operands = match expr.data(self.db, self.body) {
             Partial::Present(Expr::Call(_, args)) => args.iter().map(|arg| arg.expr).collect(),
