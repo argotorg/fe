@@ -104,6 +104,7 @@ pub(crate) fn const_scalar_from_value<'db>(
     let ty = sem_const_ty(db, value);
     match value.value(db) {
         SemConstValue::Unit
+        | SemConstValue::Evidence { .. }
         | SemConstValue::Tuple { .. }
         | SemConstValue::Struct { .. }
         | SemConstValue::Array { .. }
@@ -258,6 +259,10 @@ fn lower_const_node<'db>(
         });
     }
     match value.value(db) {
+        SemConstValue::Evidence { .. } => Some(ConstNode::Aggregate {
+            layout: layout_for_ty_in_env(db, env, ty),
+            fields: vec![ConstNode::Scalar(ConstScalar::Bool(false))].into_boxed_slice(),
+        }),
         SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::Description(..) => None,
         SemConstValue::Tuple { elems, .. }
         | SemConstValue::Struct { fields: elems, .. }

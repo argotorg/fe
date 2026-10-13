@@ -581,6 +581,9 @@ pub struct ImplApplicationRecord<'db> {
 }
 
 impl<'db> ImplApplicationRecord<'db> {
+    pub fn origin_context(self) -> TraitSolveCx<'db> {
+        self.origin
+    }
     pub fn goal(self) -> TraitInstId<'db> {
         self.goal
     }

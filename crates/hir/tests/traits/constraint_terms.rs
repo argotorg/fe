@@ -124,8 +124,8 @@ use core::obligations::{Constraint, Evidence, prove}
 trait Produce {}
 struct Subject {}
 impl Produce for Subject {}
-fn forward<G: Constraint>(_ witness: Evidence<G>) -> Evidence<G> { witness }
-fn concrete() -> Evidence<Produce<Subject>> {
+const fn forward<G: Constraint>(_ witness: Evidence<G>) -> Evidence<G> { witness }
+const fn concrete() -> Evidence<Produce<Subject>> {
     forward<Produce<Subject>>(prove<Produce<Subject>>())
 }
 "#,
@@ -225,5 +225,102 @@ fn mismatch(_ value: Envelope<Produce<Subject>>) { consume(value) }
     assert!(
         complete.iter().any(|diag| diag.message == "type mismatch"),
         "{complete:#?}"
+    );
+}
+
+#[test]
+fn constant_execution_issues_and_forwards_the_recorded_witness() {
+    use fe_hir::analysis::{
+        semantic::{EvalOutcome, GenericSubst, SemConstValue, eval_body_owner_const},
+        ty::ty_check::BodyOwner,
+    };
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "evidence_execution.fe".into(),
+        r#"
+use core::obligations::{Constraint, Evidence, prove}
+trait Produce { type Output }
+struct Subject {}
+impl Produce for Subject { type Output = u64 }
+const fn forward<G: Constraint>(_ witness: Evidence<G>) -> Evidence<G> { witness }
+const fn answer() -> Evidence<Produce<Subject, Output = u64>> {
+    forward<Produce<Subject, Output = u64>>(prove<Produce<Subject, Output = u64>>())
+}
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let answer = fe_hir::test_db::find_func(&db, module, "answer");
+    let owner = BodyOwner::Func(answer);
+    let outcome =
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+    let EvalOutcome::Ready(value) = outcome else {
+        panic!("{outcome:?}")
+    };
+    let SemConstValue::Evidence { application, ty } = value.value(&db) else {
+        panic!("execution must retain a witness, not a source record marker")
+    };
+    assert_eq!(
+        *ty,
+        fe_hir::analysis::ty::ty_check::check_func_body(&db, answer)
+            .1
+            .result_ty()
+    );
+    assert_eq!(application.resolved().trait_inst(), application.goal());
+    assert_eq!(application.goal().assoc_type_bindings(&db).len(), 1);
+}
+
+#[test]
+fn evidence_goal_equalities_cannot_change_during_forwarding() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "evidence_wrong_goal.fe".into(),
+        r#"
+use core::obligations::{Evidence, prove}
+trait Produce { type Output }
+struct Subject {}
+impl Produce for Subject { type Output = u64 }
+fn consume(_ witness: Evidence<Produce<Subject, Output = bool>>) {}
+fn wrong() { consume(prove<Produce<Subject, Output = u64>>()) }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    let mut manager = fe_hir::test_db::initialize_test_analysis_pass();
+    let diags: Vec<_> = manager
+        .run_on_module(&db, module)
+        .into_iter()
+        .map(|diag| diag.to_complete(&db))
+        .collect();
+    assert!(
+        diags.iter().any(|diag| diag.message == "type mismatch"),
+        "{diags:#?}"
+    );
+}
+
+#[test]
+fn source_cannot_construct_an_evidence_marker() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "evidence_forgery.fe".into(),
+        r#"
+use core::obligations::Evidence
+trait Pick {}
+struct Subject {}
+impl Pick for Subject {}
+fn forge() -> Evidence<Pick<Subject>> { Evidence<Pick<Subject>> { seal: false } }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    let mut manager = fe_hir::test_db::initialize_test_analysis_pass();
+    let diags: Vec<_> = manager
+        .run_on_module(&db, module)
+        .into_iter()
+        .map(|diag| diag.to_complete(&db))
+        .collect();
+    assert!(
+        diags
+            .iter()
+            .any(|diag| diag.message == "`seal` is not visible"),
+        "{diags:#?}"
     );
 }

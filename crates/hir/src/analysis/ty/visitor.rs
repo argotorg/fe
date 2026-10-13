@@ -180,6 +180,10 @@ where
 {
     let db = visitor.db();
     match value.value(db) {
+        SemConstValue::Evidence { ty, application } => {
+            ty.visit_with(visitor);
+            application.visit_with(visitor);
+        }
         SemConstValue::Description(term) => visitor.visit_ty(TyId::const_ty(db, *term)),
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => {
             for child in elems.iter().copied() {

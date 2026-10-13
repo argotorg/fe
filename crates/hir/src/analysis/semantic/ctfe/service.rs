@@ -952,7 +952,9 @@ fn force_immutable_description<'db>(
         }
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => elems,
         SemConstValue::Struct { fields, .. } | SemConstValue::Enum { fields, .. } => fields,
-        SemConstValue::Unit | SemConstValue::Scalar { .. } => return Ok(value),
+        SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::Evidence { .. } => {
+            return Ok(value);
+        }
     };
     let fields = fields
         .iter()

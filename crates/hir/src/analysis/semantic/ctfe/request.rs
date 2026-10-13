@@ -421,6 +421,63 @@ mod tests {
     };
 
     #[test]
+    fn verified_evidence_requires_the_issued_application_and_exact_goal() {
+        use crate::analysis::ty::{
+            trait_def::introduce_obligation, trait_resolution::TraitSolveCx,
+            ty_check::check_func_body,
+        };
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "issued_evidence.fe".into(),
+            r#"
+use core::obligations::{Evidence, prove}
+trait Pick {}
+struct Subject {}
+struct Other {}
+impl Pick for Subject {}
+type Request = Pick<Subject>
+fn witness() -> Evidence<Pick<Subject>> { prove<Pick<Subject>>() }
+fn other(_ value: Evidence<Pick<Other>>) {}
+"#,
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let witness = crate::test_db::find_func(&db, module, "witness");
+        let ty = check_func_body(&db, witness).1.result_ty();
+        let term = module.all_type_aliases(&db)[0].ty(&db);
+        let application = introduce_obligation(&db, TraitSolveCx::new(&db, witness.scope()), term)
+            .unwrap()
+            .record();
+        let issued = SemConstId::new(&db, SemConstValue::Evidence { ty, application });
+        assert!(VerifiedConstValueId::from_complete_execution(&db, issued).is_ok());
+        let counterfeit = SemConstId::new(
+            &db,
+            SemConstValue::Struct {
+                ty,
+                fields: vec![bool_const(&db, false)].into_boxed_slice(),
+            },
+        );
+        assert_eq!(
+            VerifiedConstValueId::from_complete_execution(&db, counterfeit),
+            Err("evidence requires a compiler-issued application")
+        );
+        let other = crate::test_db::find_func(&db, module, "other");
+        let other_ty = other.params(&db).next().unwrap().ty(&db);
+        let other_ty = other_ty.as_view(&db).unwrap_or(other_ty);
+        let wrong = SemConstId::new(
+            &db,
+            SemConstValue::Evidence {
+                ty: other_ty,
+                application,
+            },
+        );
+        assert_eq!(
+            VerifiedConstValueId::from_complete_execution(&db, wrong),
+            Err("evidence payload differs from its declared goal")
+        );
+    }
+
+    #[test]
     fn verified_value_rejects_wrong_scalar_and_aggregate_payloads() {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(

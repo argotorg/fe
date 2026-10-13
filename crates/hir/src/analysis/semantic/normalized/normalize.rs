@@ -1113,7 +1113,16 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         if literal_allocation(self.db, ty, &constant).is_some() {
             return Ok(NExpr::Const(constant));
         }
+        // Witness identity is compiler metadata. The private source seal has
+        // the ordinary fixed representation once a choice has been consumed.
+        let evidence_fields =
+            matches!(value.value(self.db), SemConstValue::Evidence { .. }).then(|| {
+                vec![crate::analysis::semantic::bool_const(self.db, false)].into_boxed_slice()
+            });
         let (variant, fields) = match value.value(self.db) {
+            SemConstValue::Evidence { .. } => {
+                (None, evidence_fields.as_ref().expect("evidence seal"))
+            }
             SemConstValue::Struct { fields, .. } => (None, fields),
             SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => {
                 (None, elems)

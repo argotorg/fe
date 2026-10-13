@@ -538,6 +538,7 @@ impl<'db> CtfeConstValue<'db> {
                 bytes: Rc::from(bytes.as_slice()),
             },
             SemConstValue::Tuple { .. }
+            | SemConstValue::Evidence { .. }
             | SemConstValue::Struct { .. }
             | SemConstValue::Array { .. }
             | SemConstValue::Enum { .. } => CtfeConstKind::Interned(value),
@@ -551,6 +552,7 @@ impl<'db> CtfeConstValue<'db> {
         value: VerifiedConstValueId<'db>,
     ) -> Self {
         let kind = match value.value().value(db) {
+            SemConstValue::Evidence { .. } => CtfeConstKind::Interned(value),
             SemConstValue::Unit => CtfeConstKind::Unit,
             SemConstValue::Scalar {
                 value: SemConstScalar::Bool(value),
@@ -865,7 +867,7 @@ pub(super) fn sem_const_dependency<'db>(
             .iter()
             .copied()
             .find_map(|field| sem_const_dependency(db, field)),
-        SemConstValue::Unit | SemConstValue::Scalar { .. } => None,
+        SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::Evidence { .. } => None,
     }
 }
 
@@ -1503,6 +1505,56 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     .into_iter()
                     .collect::<Vec<_>>();
                 let instance = self.instance_for_key(callee.key);
+                if let BodyOwner::Func(func) = instance.key(self.db).owner(self.db)
+                    && func.top_mod(self.db).ingot(self.db).kind(self.db)
+                        == common::ingot::IngotKind::Core
+                    && crate::analysis::ty::corelib::lib_func_matches(
+                        self.db,
+                        func,
+                        "core::obligations::prove",
+                    )
+                {
+                    if !args.is_empty() || !effect_args.is_empty() {
+                        return Err(CtfeError::NotConstEvaluable { origin }.into());
+                    }
+                    let SemOrigin::Expr(expr) = origin else {
+                        return Err(CtfeError::NotConstEvaluable { origin }.into());
+                    };
+                    let caller = self.frames[frame_idx].body.owner;
+                    let record = caller
+                        .key(self.db)
+                        .typed_body(self.db)
+                        .callable_expr(expr)
+                        .and_then(|call| call.evidence_introduction())
+                        .ok_or(CtfeError::InvalidOperation {
+                            origin,
+                            message: "evidence introduction has no recorded checked application"
+                                .into(),
+                        })?;
+                    let goal = crate::analysis::ty::corelib::evidence_goal(
+                        self.db,
+                        record.origin_context().scope(),
+                        result_ty,
+                    )
+                    .ok_or(CtfeError::NotConstEvaluable { origin })?;
+                    let checked = record
+                        .revalidate(self.db, record.origin_context(), goal)
+                        .map_err(|_| CtfeError::InvalidOperation {
+                            origin,
+                            message: "recorded evidence application no longer proves its goal"
+                                .into(),
+                        })?;
+                    let value = SemConstId::new(
+                        self.db,
+                        SemConstValue::Evidence {
+                            ty: result_ty,
+                            application: checked.record(),
+                        },
+                    );
+                    let value = VerifiedConstValueId::from_complete_execution(self.db, value)
+                        .map_err(|_| CtfeError::NotConstEvaluable { origin })?;
+                    return Ok(CtfeValue::Value(CtfeConstValue::concrete(self.db, value)));
+                }
                 if !effect_args.is_empty() {
                     let BodyOwner::Func(func) = instance.key(self.db).owner(self.db) else {
                         return Err(CtfeError::NotConstEvaluable { origin }.into());

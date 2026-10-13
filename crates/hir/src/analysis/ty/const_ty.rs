@@ -886,6 +886,9 @@ fn trait_inst_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, inst: TraitInstId
 
 fn sem_const_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, value: SemConstId<'db>) -> bool {
     match value.value(db) {
+        SemConstValue::Evidence { ty, application } => {
+            ty_is_fully_ground(db, *ty) && trait_inst_is_fully_ground(db, application.goal())
+        }
         SemConstValue::Unit => true,
         SemConstValue::Scalar { ty, .. } => ty_is_fully_ground(db, *ty),
         SemConstValue::Description(term) => const_ty_is_fully_ground(db, *term),
@@ -1339,6 +1342,25 @@ fn canonicalize_sem_const_for_mode<'db>(
     env: ConstCanonEnv<'db>,
     mode: ConstCanonMode,
 ) -> SemConstId<'db> {
+    if let SemConstValue::Evidence { ty, application } = value.value(db) {
+        struct EvidenceFolder<'db> {
+            env: ConstCanonEnv<'db>,
+            mode: ConstCanonMode,
+        }
+        impl<'db> TyFolder<'db> for EvidenceFolder<'db> {
+            fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+                canonicalize_ty_for_mode(db, ty, self.env, self.mode)
+            }
+        }
+        let mut folder = EvidenceFolder { env, mode };
+        return SemConstId::new(
+            db,
+            SemConstValue::Evidence {
+                ty: ty.fold_with(db, &mut folder),
+                application: application.fold_with(db, &mut folder),
+            },
+        );
+    }
     if let &SemConstValue::Description(term) = value.value(db) {
         let term = canonicalize_const_ty_for_mode(db, term, env, mode);
         return sem_const_from_ty(db, TyId::const_ty(db, term))
@@ -1354,6 +1376,9 @@ fn canonicalize_sem_const_for_mode<'db>(
             .into_boxed_slice()
     };
     let value = match value.value(db) {
+        SemConstValue::Evidence { .. } => {
+            unreachable!("evidence canonicalized with its application")
+        }
         SemConstValue::Unit => SemConstValue::Unit,
         SemConstValue::Scalar { ty, value } => SemConstValue::Scalar {
             ty: canonicalize(*ty),

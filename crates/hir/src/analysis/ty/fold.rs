@@ -188,6 +188,10 @@ where
             .unwrap_or_else(|| SemConstId::new(db, SemConstValue::Description(*term)));
     }
     let value = match value.value(db) {
+        SemConstValue::Evidence { ty, application } => SemConstValue::Evidence {
+            ty: ty.fold_with(db, folder),
+            application: application.fold_with(db, folder),
+        },
         SemConstValue::Unit => SemConstValue::Unit,
         SemConstValue::Scalar { ty, value } => SemConstValue::Scalar {
             ty: folder.fold_ty(db, *ty),
