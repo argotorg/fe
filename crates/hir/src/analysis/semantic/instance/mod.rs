@@ -7,7 +7,7 @@ pub use const_ref::generated_callee_key;
 pub(crate) use const_ref::{
     checked_operand_callee, declaration_reaches_trait_goal, has_unbound_evidence_calls,
     known_operand_variant, opened_assoc_const_ref, provisional_semantic_callee_key,
-    resolve_semantic_const_ref, resolve_semantic_const_ref_in_instance,
+    recover_known_operand, resolve_semantic_const_ref, resolve_semantic_const_ref_in_instance,
     semantic_callee_key_with_effect_providers,
 };
 pub use semantic::{

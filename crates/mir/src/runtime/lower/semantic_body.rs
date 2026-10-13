@@ -337,6 +337,7 @@ impl<'db> RuntimeSemanticBody<'db> {
             | NExpr::ProjectValue { .. }
             | NExpr::StructuralRepack { .. }
             | NExpr::CodeRegionRef { .. }
+            | NExpr::OpenedConst { .. }
             | NExpr::Const(_)
             | NExpr::Unary { .. }
             | NExpr::Binary { .. }

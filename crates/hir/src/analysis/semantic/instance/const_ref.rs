@@ -485,7 +485,7 @@ pub(crate) fn opened_operand_application<'db>(
     opened_operand_application_at(db, caller, operand, Vec::new())
 }
 
-fn recover_known_operand<'db>(
+pub(crate) fn recover_known_operand<'db>(
     db: &'db dyn HirAnalysisDb,
     caller: SemanticInstance<'db>,
     operand: ExprId,
@@ -543,6 +543,13 @@ pub(crate) fn has_unbound_evidence_calls<'db>(
         return false;
     };
     body.exprs(db).iter().any(|(expr, _)| {
+        if typed.expr_const_openings(expr).iter().any(|opening| {
+            matches!(opening, crate::analysis::ty::ty_check::TraitOpening::Evidence { operand, .. }
+                if operand_parameter_source(db, caller, *operand).is_some()
+                    && opened_operand_application(db, caller, *operand).is_none())
+        }) {
+            return true;
+        }
         let Some(callable) = typed.callable_expr(expr) else {
             return false;
         };

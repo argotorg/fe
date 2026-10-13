@@ -1330,6 +1330,10 @@ impl<'db> Borrowck<'db> {
                     .sum(shape, &scope, [(*variant, contents)])
             }
             NExpr::Call { .. } => self.transfer_call(state, *result, statement)?,
+            // Evidence selection carries no runtime referent from its operands.
+            // This description stays pending until runtime admission resolves
+            // the constant; it is not an ordinary implementation choice.
+            NExpr::OpenedConst { .. } => self.inventory.values.empty(shape, &scope),
             NExpr::Const(constant) => {
                 let empty = self.inventory.values.empty(shape, &scope);
                 if let Some((field, birth)) = self.literal_birth(*result, constant) {

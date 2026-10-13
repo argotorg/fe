@@ -607,11 +607,23 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     ) -> Result<NExpr<'db>, NormalizeError<'db>> {
         let dst_ty = self.normalized_local_ty(dst);
         let normalized = match expr {
-            SExpr::OpenedConst { evidence, .. } => {
-                return Err(NormalizeError::EvidenceChoiceNotCompileTime(
-                    evidence.sem_origin(origin),
-                ));
-            }
+            SExpr::OpenedConst {
+                evidence,
+                assoc,
+                admission,
+                context_inputs,
+                named,
+            } => NExpr::OpenedConst {
+                evidence: self.read_operand(block, origin, *evidence, Some(ReadMode::Copy))?,
+                assoc: *assoc,
+                admission: *admission,
+                context_inputs: context_inputs
+                    .iter()
+                    .map(|operand| self.read_operand(block, origin, *operand, Some(ReadMode::Copy)))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_boxed_slice(),
+                named: named.clone(),
+            },
             SExpr::Forward(value) => NExpr::Forward {
                 src: self.read_operand(block, origin, *value, Some(ReadMode::Copy))?,
             },

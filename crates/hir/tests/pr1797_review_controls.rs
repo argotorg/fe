@@ -388,3 +388,41 @@ fn selected_array_layout_normalizes_with_delivered_lexical_record() {
             .expect("selected array size must agree across the call boundary");
     }
 }
+
+#[test]
+fn const_choice_definition_defers_only_until_runtime_use() {
+    use fe_hir::analysis::semantic::collect_semantic_borrow_diagnostic_vouchers;
+    let original = include_str!("pr1797_review_controls/phase-aware-associated-constant.fe");
+    let closed = original.split("#[test]").next().unwrap().to_owned()
+        + "\nconst LEFT: u256 = choose(true)\nconst RIGHT: u256 = choose(false)\n#[test]\nfn closed_only() { assert(LEFT == 2)\nassert(RIGHT == 3) }\n";
+    let literal_calls = original.split("#[test]").next().unwrap().to_owned()
+        + "\nconst fn closed_helper() -> u256 { choose(true) }\n#[test]\nfn literal_calls() { assert(choose(true) == 2)\nassert(choose(false) == 3)\nassert(closed_helper() == 2) }\n";
+    for (source, runtime) in [
+        (closed.as_str(), false),
+        (literal_calls.as_str(), false),
+        (original, true),
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("choice-definition-use.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, module)
+            .into_iter()
+            .map(|diagnostic| diagnostic.to_complete(&db))
+            .collect::<Vec<_>>();
+        if runtime {
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.error_code.local_code == 120
+                        && diagnostic.message == "evidence choice must be known at compile time"),
+                "actual runtime use must retain source cause: {diagnostics:#?}"
+            );
+        } else {
+            assert!(
+                diagnostics.is_empty(),
+                "closed CTFE uses do not execute the identity definition: {diagnostics:#?}"
+            );
+        }
+    }
+}

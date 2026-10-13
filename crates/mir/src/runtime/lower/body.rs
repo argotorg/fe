@@ -456,6 +456,7 @@ fn expr_requires_runtime_eval_when_erased(expr: &NExpr<'_>) -> bool {
         | NExpr::StructuralRepack { .. }
         | NExpr::CodeRegionRef { .. }
         | NExpr::Load { .. }
+        | NExpr::OpenedConst { .. }
         | NExpr::Const(_)
         | NExpr::Unary { .. }
         | NExpr::Binary { .. }
@@ -1184,6 +1185,7 @@ impl<'db> RmirEmitter<'db> {
                 }
                 NExpr::ProjectValue { .. }
                 | NExpr::CodeRegionRef { .. }
+                | NExpr::OpenedConst { .. }
                 | NExpr::Const(_)
                 | NExpr::Unary { .. }
                 | NExpr::Binary { .. }
@@ -1410,6 +1412,9 @@ impl<'db> RmirEmitter<'db> {
             }
             NExpr::Load { place, .. } => {
                 self.lower_semantic_place_read_into(bb, dst, place, &dst_class);
+            }
+            NExpr::OpenedConst { .. } => {
+                unreachable!("runtime admission must resolve opened constants")
             }
             NExpr::Const(const_) => {
                 let bindings = self.layout_evidence.constant_bindings[result.index()].clone();
@@ -5389,6 +5394,7 @@ impl<'db> RmirEmitter<'db> {
             }
             NExpr::StructuralRepack { .. }
             | NExpr::CodeRegionRef { .. }
+            | NExpr::OpenedConst { .. }
             | NExpr::Const(_)
             | NExpr::Unary { .. }
             | NExpr::Binary { .. }

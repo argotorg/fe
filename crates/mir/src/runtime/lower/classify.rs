@@ -617,6 +617,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
     ) -> Option<RuntimeClass<'db>> {
         let expr_facts = self.expr_facts(block_idx, stmt_idx);
         Some(match expr {
+            NExpr::OpenedConst { .. } => return None,
             NExpr::Forward { src } | NExpr::StructuralRepack { value: src, .. } => {
                 let operand = self.body.runtime_operand(*src)?;
                 RuntimeArgSelector::new(self, carriers, class_cache)
@@ -1238,6 +1239,7 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
         let body = self.body;
         let type_env = self.type_env;
         Some(match expr {
+            NExpr::OpenedConst { .. } => return None,
             NExpr::Forward { .. }
             | NExpr::ProjectValue { .. }
             | NExpr::StructuralRepack { .. }
@@ -2671,6 +2673,7 @@ fn normalized_value_runtime_class<'db>(
         return fallback();
     };
     match expr {
+        NExpr::OpenedConst { .. } => None,
         NExpr::Forward { src } | NExpr::StructuralRepack { value: src, .. } => {
             let operand = env.body.runtime_operand(*src)?;
             RuntimeArgSelector::new(env, carriers, None)
