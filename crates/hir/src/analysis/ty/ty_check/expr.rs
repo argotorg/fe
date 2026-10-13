@@ -307,6 +307,9 @@ impl<'db> TyChecker<'db> {
     }
 
     fn const_intrinsic_kind(&self, callable: &Callable<'db>) -> Option<ConstIntrinsicKind> {
+        if callable.evidence_opening().is_some() {
+            return Some(ConstIntrinsicKind::EvidenceOpening);
+        }
         if callable.evidence_introduction().is_some() {
             return Some(ConstIntrinsicKind::EvidenceIntroduction);
         }
@@ -325,7 +328,7 @@ impl<'db> TyChecker<'db> {
     ) -> bool {
         let ty = match kind {
             ConstIntrinsicKind::SizeOf => callable.generic_args().first().copied(),
-            ConstIntrinsicKind::EvidenceIntroduction => None,
+            ConstIntrinsicKind::EvidenceIntroduction | ConstIntrinsicKind::EvidenceOpening => None,
         };
         if let Some(ty) = ty {
             let ty = self.normalize_ty(ty);
@@ -1540,6 +1543,18 @@ impl<'db> TyChecker<'db> {
                 "core::obligations::prove",
             )
         {
+            return true;
+        }
+        if let [term] = callable.generic_args()
+            && let TyData::ConstraintTerm(goal) = self.normalize_ty(*term).data(self.db)
+            && goal
+                .args(self.db)
+                .iter()
+                .chain(goal.assoc_type_bindings(self.db).values())
+                .all(|ty| !ty.has_invalid(self.db) && !ty.has_var(self.db) && !ty.has_hole(self.db))
+            && let Some(super::TraitOpening::Evidence { operand, .. }) = self.env.opening_for(*goal)
+        {
+            callable.record_evidence_opening(operand, self.env.proof_context());
             return true;
         }
         let result = match callable.generic_args() {

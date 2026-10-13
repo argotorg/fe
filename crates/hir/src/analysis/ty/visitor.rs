@@ -5,7 +5,9 @@ use super::{
     const_expr::ConstExpr,
     const_ty::{ConstCaptureEnv, ConstTyData, ConstTyId},
     trait_def::{ImplementorId, TraitInstId, TraitRefId},
-    trait_resolution::{ImplConditionsId, PredicateListId, TraitGoalSolution, TraitSolverQuery},
+    trait_resolution::{
+        ImplConditionsId, PredicateListId, TraitGoalSolution, TraitSolveCx, TraitSolverQuery,
+    },
     ty_check::{EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
     ty_def::{AssocTy, InvalidCause, PrimTy, TyBase, TyData, TyFlags, TyId, TyParam, TyVar},
 };
@@ -311,6 +313,18 @@ impl<'db> TyVisitable<'db> for PredicateListId<'db> {
     }
 }
 
+impl<'db> TyVisitable<'db> for TraitSolveCx<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.assumptions().visit_with(visitor);
+        if let Some(premises) = self.lexical_premises() {
+            premises.visit_with(visitor);
+        }
+    }
+}
+
 impl<'db> TyVisitable<'db> for TraitSolverQuery<'db> {
     fn visit_with<V>(&self, visitor: &mut V)
     where
@@ -318,6 +332,9 @@ impl<'db> TyVisitable<'db> for TraitSolverQuery<'db> {
     {
         self.goal.visit_with(visitor);
         self.assumptions.visit_with(visitor);
+        if let Some(premises) = self.lexical_premises {
+            premises.visit_with(visitor);
+        }
     }
 }
 

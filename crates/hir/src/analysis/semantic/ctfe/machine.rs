@@ -1651,7 +1651,50 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             SExpr::Call { .. } | SExpr::Const(SConst::Ref(..)) => {
                 unreachable!("calls are dispatched separately")
             }
-            SExpr::Forward(value) => Ok(self.read_operand(frame_idx, value, origin)?),
+            SExpr::Forward(value) => {
+                let context = if let SemOrigin::Expr(expr) = origin {
+                    self.frames[frame_idx]
+                        .body
+                        .owner
+                        .key(self.db)
+                        .typed_body(self.db)
+                        .callable_expr(expr)
+                        .and_then(|callable| callable.evidence_opening())
+                        .map(|(_, context)| context)
+                } else {
+                    None
+                };
+                let Some(context) = context else {
+                    return Ok(self.read_operand(frame_idx, value, origin)?);
+                };
+                let input = self
+                    .load_value(frame_idx, value, origin)?
+                    .materialize(self.db);
+                let SemConstValue::Evidence { application, .. } = input.value(self.db) else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "opened evidence requires a compiler-issued application".into(),
+                    }
+                    .into());
+                };
+                let goal = crate::analysis::ty::corelib::evidence_goal(
+                    self.db,
+                    context.scope(),
+                    result_ty,
+                )
+                .ok_or(CtfeError::NotConstEvaluable { origin })?;
+                let checked = application
+                    .revalidate(self.db, context, goal)
+                    .map_err(|_| CtfeError::InvalidOperation {
+                        origin,
+                        message: "opened evidence application was not admitted at this use".into(),
+                    })?;
+                if application.goal() == goal {
+                    return self.load_sem_const(input, origin);
+                }
+                let value = issue_checked_evidence(self.db, checked.record(), result_ty, origin)?;
+                Ok(CtfeValue::Value(CtfeConstValue::concrete(self.db, value)))
+            }
             SExpr::UseValue(value) => {
                 let read = self.read_operand(frame_idx, value, origin)?;
                 let body = self.frames[frame_idx].body;

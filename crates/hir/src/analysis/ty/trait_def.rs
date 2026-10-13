@@ -608,9 +608,7 @@ impl<'db> TyFoldable<'db> for ImplApplicationRecord<'db> {
         F: TyFolder<'db>,
     {
         Self {
-            origin: self
-                .origin
-                .with_assumptions(self.origin.assumptions().fold_with(db, folder)),
+            origin: self.origin.fold_with(db, folder),
             goal: self.goal.fold_with(db, folder),
             resolved: self.resolved.fold_with(db, folder),
         }
@@ -622,7 +620,7 @@ impl<'db> TyVisitable<'db> for ImplApplicationRecord<'db> {
     where
         V: TyVisitor<'db> + ?Sized,
     {
-        self.origin.assumptions().visit_with(visitor);
+        self.origin.visit_with(visitor);
         self.goal.visit_with(visitor);
         self.resolved.visit_with(visitor);
     }

@@ -336,6 +336,7 @@ impl<'db> TraitResolutionContext<'db> {
         parent: &Query<'db>,
         mut branch: Branch<'db>,
         assumptions: super::PredicateListId<'db>,
+        lexical_premises: Option<super::PredicateListId<'db>>,
     ) -> ContextTransition<Self> {
         let Some(next_goal) = branch.remaining_goals.pop() else {
             return self.finish_branch(parent, branch);
@@ -350,6 +351,8 @@ impl<'db> TraitResolutionContext<'db> {
             goal: TraitSolverQuery {
                 goal: next_goal,
                 assumptions,
+                lexical_premises: lexical_premises
+                    .map(|premises| premises.fold_with(self.db, &mut branch.table)),
                 require_impl: false,
                 selected_candidate: None,
             },
@@ -414,12 +417,23 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             );
             clauses.extend(implementors.iter().copied().map(Clause::Implementor));
         }
-        if !prepared.query.require_impl
-            && prepared.query.selected_candidate.is_none()
-            && self.goal_can_use_assumptions(prepared.normalized_goal)
-        {
+        if !prepared.query.require_impl && prepared.query.selected_candidate.is_none() {
+            let symbolic = self.goal_can_use_assumptions(prepared.normalized_goal);
             clauses.extend(
-                (0..prepared.query.assumptions.list(self.db).len()).map(Clause::Assumption),
+                prepared
+                    .query
+                    .assumptions
+                    .list(self.db)
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, premise)| {
+                        symbolic
+                            || prepared
+                                .query
+                                .lexical_premises
+                                .is_some_and(|owned| owned.list(self.db).contains(premise))
+                    })
+                    .map(|(index, _)| Clause::Assumption(index)),
             );
         }
         Ok(CallbackOutcome::Continue(clauses))
@@ -491,7 +505,12 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                     },
                     trait_conditions: Vec::new(),
                 };
-                return Ok(self.continue_branch(key, branch, query.assumptions));
+                return Ok(self.continue_branch(
+                    key,
+                    branch,
+                    query.assumptions,
+                    query.lexical_premises,
+                ));
             }
             Clause::Assumption(index) => {
                 let Some(&assumption) = query.assumptions.list(self.db).get(index) else {
@@ -586,6 +605,9 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             TraitSolverQuery {
                 goal: resumed_root,
                 assumptions: resumed_assumptions,
+                lexical_premises: rebase
+                    .lexical_premises()
+                    .map(|premises| premises.fold_with(self.db, &mut branch.table)),
                 require_impl: parent.value().require_impl,
                 selected_candidate: parent.value().selected_candidate,
             },
@@ -593,7 +615,12 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             return Ok(Transition::Stop(StopReason::MaximumTypeDepth));
         }
 
-        Ok(self.continue_branch(parent, branch, rebase.assumptions()))
+        Ok(self.continue_branch(
+            parent,
+            branch,
+            rebase.assumptions(),
+            rebase.lexical_premises(),
+        ))
     }
 
     fn rebase_answer(

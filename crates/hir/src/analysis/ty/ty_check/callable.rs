@@ -266,6 +266,7 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct Callable<'db> {
     evidence_introduction: Option<super::super::trait_def::ImplApplicationRecord<'db>>,
+    evidence_opening: Option<(ExprId, TraitSolveCx<'db>)>,
     pub callable_def: CallableDef<'db>,
     base_ty: TyId<'db>,
     generic_args: Vec<TyId<'db>>,
@@ -284,6 +285,9 @@ impl<'db> TyVisitable<'db> for Callable<'db> {
         self.generic_args.visit_with(visitor);
         if let Some(record) = self.evidence_introduction {
             record.visit_with(visitor);
+        }
+        if let Some((_, context)) = self.evidence_opening {
+            context.visit_with(visitor);
         }
         self.effect_providers.visit_with(visitor);
         if let Some(inputs) = &self.checked_input_tys {
@@ -304,6 +308,9 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
             evidence_introduction: self
                 .evidence_introduction
                 .map(|record| record.fold_with(db, folder)),
+            evidence_opening: self
+                .evidence_opening
+                .map(|(operand, context)| (operand, context.fold_with(db, folder))),
             callable_def: self.callable_def,
             base_ty: self.base_ty,
             generic_args: self.generic_args.fold_with(db, folder),
@@ -317,6 +324,13 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
 }
 
 impl<'db> Callable<'db> {
+    pub fn evidence_opening(&self) -> Option<(ExprId, TraitSolveCx<'db>)> {
+        self.evidence_opening
+    }
+    pub(super) fn record_evidence_opening(&mut self, operand: ExprId, context: TraitSolveCx<'db>) {
+        debug_assert!(self.evidence_introduction.is_none());
+        self.evidence_opening = Some((operand, context));
+    }
     pub fn evidence_introduction(
         &self,
     ) -> Option<super::super::trait_def::ImplApplicationRecord<'db>> {
@@ -326,6 +340,7 @@ impl<'db> Callable<'db> {
         &mut self,
         application: &super::super::trait_def::CheckedImplApplication<'db>,
     ) {
+        debug_assert!(self.evidence_opening.is_none());
         self.evidence_introduction = Some(application.record());
     }
     pub fn callable_def(&self) -> CallableDef<'db> {
@@ -374,6 +389,7 @@ impl<'db> Callable<'db> {
 
         Ok(Self {
             evidence_introduction: None,
+            evidence_opening: None,
             callable_def,
             base_ty: base,
             generic_args: args.to_vec(),
@@ -392,6 +408,7 @@ impl<'db> Callable<'db> {
     ) -> Self {
         Self {
             evidence_introduction: None,
+            evidence_opening: None,
             callable_def,
             base_ty: TyId::func(db, callable_def),
             generic_args,

@@ -606,13 +606,22 @@ impl<'db> TyCheckEnv<'db> {
         if visible.is_empty() {
             return TraitSolveCx::new(self.db, self.scope()).with_assumptions(self.assumptions);
         }
+        let lexical: Vec<_> = visible
+            .into_iter()
+            .filter_map(|opening| match opening {
+                super::TraitOpening::Evidence { goal, .. } => Some(goal),
+                super::TraitOpening::Named(_) => None,
+            })
+            .collect();
+        let lexical = (!lexical.is_empty())
+            .then(|| PredicateListId::new(self.db, lexical).extend_all_bounds(self.db));
         let mut premises = self.assumptions.list(self.db).to_vec();
-        premises.extend(visible.into_iter().filter_map(|opening| match opening {
-            super::TraitOpening::Evidence { goal, .. } => Some(goal),
-            super::TraitOpening::Named(_) => None,
-        }));
+        if let Some(lexical) = lexical {
+            premises.extend(lexical.list(self.db).iter().copied());
+        }
         TraitSolveCx::new(self.db, self.scope())
             .with_assumptions(PredicateListId::new(self.db, premises).extend_all_bounds(self.db))
+            .with_lexical_premises(lexical)
     }
 
     pub(crate) fn base_assumptions(&self) -> PredicateListId<'db> {

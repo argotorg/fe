@@ -6,7 +6,9 @@ use common::indexmap::{IndexMap, IndexSet};
 
 use super::{
     trait_def::{ImplementorId, TraitInstId, TraitRefId},
-    trait_resolution::{ImplConditionsId, PredicateListId, TraitGoalSolution, TraitSolverQuery},
+    trait_resolution::{
+        ImplConditionsId, PredicateListId, TraitGoalSolution, TraitSolveCx, TraitSolverQuery,
+    },
     ty_check::{EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
     ty_def::{TyData, TyId},
     visitor::TyVisitable,
@@ -463,6 +465,19 @@ impl<'db> TyFoldable<'db> for PredicateListId<'db> {
     }
 }
 
+impl<'db> TyFoldable<'db> for TraitSolveCx<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        self.with_assumptions(self.assumptions().fold_with(db, folder))
+            .with_lexical_premises(
+                self.lexical_premises()
+                    .map(|premises| premises.fold_with(db, folder)),
+            )
+    }
+}
+
 impl<'db> TyFoldable<'db> for TraitSolverQuery<'db> {
     fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
     where
@@ -471,6 +486,9 @@ impl<'db> TyFoldable<'db> for TraitSolverQuery<'db> {
         Self {
             goal: self.goal.fold_with(db, folder),
             assumptions: self.assumptions.fold_with(db, folder),
+            lexical_premises: self
+                .lexical_premises
+                .map(|premises| premises.fold_with(db, folder)),
             require_impl: self.require_impl,
             selected_candidate: self.selected_candidate,
         }

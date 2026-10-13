@@ -1223,6 +1223,33 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         callable: &Callable<'db>,
         kind: ConstIntrinsicKind,
     ) -> SValueId {
+        if kind == ConstIntrinsicKind::EvidenceOpening {
+            let (operand, _) = callable
+                .evidence_opening()
+                .expect("admitted opening retains its operand");
+            let source = self
+                .with_binding_sources
+                .get(&operand)
+                .expect("opened evidence was captured on frame entry")
+                .clone();
+            let value = match source {
+                WithBindingSource::Value(value) => value,
+                WithBindingSource::Temporary(local) => SOperand::expr(local, operand),
+                WithBindingSource::Place(place) => {
+                    let value = self.emit_expr_with_origin(
+                        SemOrigin::Expr(operand),
+                        self.expr_ty(operand),
+                        SExpr::ReadPlace { place },
+                    );
+                    SOperand::expr(value, operand)
+                }
+            };
+            return self.emit_expr_with_origin(
+                SemOrigin::Expr(expr),
+                self.expr_ty(expr),
+                SExpr::Forward(value),
+            );
+        }
         if kind == ConstIntrinsicKind::EvidenceIntroduction {
             let origin = SemOrigin::Expr(expr);
             let result_ty = self.expr_ty(expr);
@@ -1249,7 +1276,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.body.scope(),
                 self.assumptions,
             ),
-            ConstIntrinsicKind::EvidenceIntroduction => unreachable!("handled above"),
+            ConstIntrinsicKind::EvidenceIntroduction | ConstIntrinsicKind::EvidenceOpening => {
+                unreachable!("handled above")
+            }
         };
         let result_ty = self.expr_ty(expr);
         // Admission reports failed concrete demands; raw lowering preserves
@@ -1286,7 +1315,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     args: Vec::new(),
                     parameter_owner: caller.owner(self.db).scope(),
                 }),
-                ConstIntrinsicKind::EvidenceIntroduction => unreachable!("handled above"),
+                ConstIntrinsicKind::EvidenceIntroduction | ConstIntrinsicKind::EvidenceOpening => {
+                    unreachable!("handled above")
+                }
             };
             let const_ty = ConstTyId::new(
                 self.db,
