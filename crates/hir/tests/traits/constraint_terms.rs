@@ -115,6 +115,26 @@ fn witness<T: Produce>() { prove<Produce<T>>() }
 }
 
 #[test]
+fn evidence_can_be_forwarded_generically_without_introducing_a_generic_goal() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "evidence_forwarding.fe".into(),
+        r#"
+use core::obligations::{Constraint, Evidence, prove}
+trait Produce {}
+struct Subject {}
+impl Produce for Subject {}
+fn forward<G: Constraint>(_ witness: Evidence<G>) -> Evidence<G> { witness }
+fn concrete() -> Evidence<Produce<Subject>> {
+    forward<Produce<Subject>>(prove<Produce<Subject>>())
+}
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+}
+
+#[test]
 fn constraint_terms_retain_subject_arguments_and_equalities_without_proving() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
