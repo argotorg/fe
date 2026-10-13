@@ -734,7 +734,15 @@ fn method_arg_map_diagnostic<'db>(
     error: MethodArgMapError<'db>,
     origin: SemOrigin<'db>,
 ) -> SemanticDiagnosticId<'db> {
+    let kind = if matches!(&error, MethodArgMapError::ApplicationNotAdmitted(_)) {
+        SemanticDiagnosticKind::UnresolvedCall
+    } else {
+        SemanticDiagnosticKind::Internal
+    };
     let message = match error {
+        MethodArgMapError::ApplicationNotAdmitted(error) => {
+            format!("opened evidence application was not admitted at this use: {error:?}")
+        }
         MethodArgMapError::SignatureMismatch {
             nominal,
             body,
@@ -762,7 +770,7 @@ fn method_arg_map_diagnostic<'db>(
     SemanticDiagnosticId::new(
         db,
         SemanticDiagnostic {
-            kind: SemanticDiagnosticKind::Internal,
+            kind,
             instance,
             primary: SemanticDiagnosticLabel {
                 message,

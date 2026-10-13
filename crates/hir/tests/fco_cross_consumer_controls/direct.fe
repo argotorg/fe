@@ -1,0 +1,13 @@
+trait Pick { const fn value() -> u256 }
+struct Subject {}
+impl Pick for Subject { const fn value() -> u256 { 1 } }
+impl Pick for Subject as First { const fn value() -> u256 { 42 } }
+impl Pick for Subject as Second { const fn value() -> u256 { 7 } }
+const fn answer() -> (u256,u256,u256,u256,u256) {
+ let a = <Subject as Pick>::value()
+ let b = with (First) { <Subject as Pick>::value() }
+ let c = with (First) { with (Second) { <Subject as Pick>::value() } }
+ let d = with (First) { let unused = with (Second) { <Subject as Pick>::value() }
+ <Subject as Pick>::value() }
+ (a,b,c,d,<Subject as Pick>::value())
+}

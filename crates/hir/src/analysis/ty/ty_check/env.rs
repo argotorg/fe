@@ -517,7 +517,20 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
-    pub(super) fn register_semantic_call(&mut self, expr: ExprId, callable: Callable<'db>) {
+    pub(super) fn register_semantic_call(&mut self, expr: ExprId, mut callable: Callable<'db>) {
+        callable.record_lexical_openings(self.trait_openings.visible(self.db));
+        let operands = match expr.data(self.db, self.body) {
+            Partial::Present(Expr::Call(_, args)) => args.iter().map(|arg| arg.expr).collect(),
+            Partial::Present(Expr::MethodCall(receiver, _, _, args)) => std::iter::once(*receiver)
+                .chain(args.iter().map(|arg| arg.expr))
+                .collect(),
+            Partial::Present(Expr::Bin(lhs, rhs, _) | Expr::AugAssign(lhs, rhs, _)) => {
+                vec![*lhs, *rhs]
+            }
+            Partial::Present(Expr::Un(value, _)) => vec![*value],
+            _ => Vec::new(),
+        };
+        callable.record_argument_operands(operands);
         self.register_callable(expr, callable.clone());
         self.register_semantic_expr_lowering(expr, SemanticExprLowering::Call { callable });
     }

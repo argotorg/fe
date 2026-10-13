@@ -3223,6 +3223,7 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
                 PredicateListId::empty_list(&db),
                 vec![trait_inst],
                 Vec::new(),
+                Vec::new(),
             ),
         );
         let mut replaced = false;

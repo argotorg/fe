@@ -1,0 +1,8 @@
+use core::ops::Add
+struct Subject {}
+impl Add for Subject { type Output = u256
+ const fn add(own self, _ other: own Subject) -> u256 { 5 } }
+impl Add for Subject as First { type Output = bool
+ const fn add(own self, _ other: own Subject) -> bool { true } }
+impl Add for Subject as Second { type Output = u256
+ const fn add(own self, _ other: own Subject) -> u256 { 23 } }

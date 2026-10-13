@@ -6,7 +6,7 @@ use super::{
 use crate::{
     analysis::{
         HirAnalysisDb,
-        semantic::{SemOrigin, SemanticConstRef},
+        semantic::{EvalOutcome, SemConstValue, SemOrigin, SemanticConstRef, eval_const_instance},
         ty::{
             assoc_const::{AssocConstUse, InherentConstUse},
             binder::Binder,
@@ -432,7 +432,7 @@ pub fn generated_callee_key<'db>(
     let callee = semantic_callee_key_with_assumptions(
         db,
         None,
-        ImplEnv::new(db, scope, assumptions, Vec::new(), Vec::new()),
+        ImplEnv::new(db, scope, assumptions, Vec::new(), Vec::new(), Vec::new()),
         &callable,
         &[],
         &[],
@@ -448,7 +448,7 @@ pub fn generated_callee_key<'db>(
 
 /// Recover the issued choice through immutable binding aliases. This reads
 /// already checked argument/intro records; admission remains at the method use.
-fn opened_operand_application<'db>(
+pub(super) fn opened_operand_application<'db>(
     db: &'db dyn HirAnalysisDb,
     caller: SemanticInstance<'db>,
     mut operand: ExprId,
@@ -485,12 +485,79 @@ fn opened_operand_application<'db>(
                     })?;
             }
             _ => {
-                return typed
-                    .callable_expr(operand)
-                    .and_then(Callable::evidence_introduction);
+                let callable = typed.callable_expr(operand)?;
+                if let Some(record) = callable.evidence_introduction() {
+                    return Some(record);
+                }
+                if !callable.checked_input_tys()?.is_empty()
+                    || !typed.call_effect_args(operand).unwrap_or(&[]).is_empty()
+                    || callable.generic_args().iter().any(|arg| {
+                        arg.has_param(db)
+                            || arg.has_var(db)
+                            || arg.has_invalid(db)
+                            || arg.has_hole(db)
+                            || arg.has_projection(db)
+                    })
+                {
+                    return None;
+                }
+                // Evaluate only the closed factory's own instance. Evaluating
+                // the caller expression here would cycle through caller lowering.
+                let callee = provisional_semantic_callee_key(
+                    db,
+                    caller.key(db),
+                    callable,
+                    &[],
+                    caller.assumptions(db),
+                )
+                .ok()??;
+                let BodyOwner::Func(func) = callee.key.owner(db) else {
+                    return None;
+                };
+                if !func.is_const(db) {
+                    return None;
+                }
+                let outcome =
+                    eval_const_instance(db, super::get_or_build_semantic_instance(db, callee.key));
+
+                let EvalOutcome::Ready(value) = outcome else {
+                    return None;
+                };
+                return match value.value(db) {
+                    SemConstValue::Evidence { application, .. } => Some(*application),
+                    _ => None,
+                };
             }
         }
     }
+}
+
+pub(super) fn visible_applications<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    callable: &Callable<'db>,
+) -> Vec<ImplApplicationRecord<'db>> {
+    let mut records = Vec::new();
+    for opening in callable.lexical_openings() {
+        let record = match *opening {
+            crate::analysis::ty::ty_check::TraitOpening::Named(record) => Some(record),
+            crate::analysis::ty::ty_check::TraitOpening::Evidence { operand, .. } => {
+                opened_operand_application(db, caller, operand)
+            }
+        };
+        if let Some(record) = record {
+            records.push(record);
+        }
+    }
+    for record in caller.key(db).impl_env(db).lexical_applications(db) {
+        if !records.iter().any(|existing| {
+            existing.goal().def(db) == record.goal().def(db)
+                && existing.goal().args(db) == record.goal().args(db)
+        }) {
+            records.push(*record);
+        }
+    }
+    records
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -524,16 +591,49 @@ fn semantic_callee_key_with_assumptions<'db>(
         && let Selection::Unique(method) =
             if let Some((operand, destination)) = callable.opened_trait_application() {
                 let caller = caller.ok_or(MethodArgMapError::MissingBody)?;
-                let record = opened_operand_application(db, caller, operand)
-                    .ok_or(MethodArgMapError::MissingBody)?;
-                record
-                    .revalidate(db, destination, inst)
-                    .map_err(|_| MethodArgMapError::MissingBody)?
-                    .method(name)
+                match opened_operand_application(db, caller, operand) {
+                    Some(record) => record
+                        .revalidate(db, destination, inst)
+                        .map_err(MethodArgMapError::ApplicationNotAdmitted)?
+                        .method(name),
+                    // The layout template has no issued argument yet. Keep its
+                    // symbolic obligation; a concrete use still requires the record.
+                    None if collect_flags(db, inst).contains(TyFlags::HAS_PARAM) => {
+                        resolve_trait_method_instance(db, destination, inst, name)
+                    }
+                    None => return Err(MethodArgMapError::MissingBody),
+                }
             } else if let Some(record) = callable.selected_trait_application() {
                 record
                     .revalidate(db, record.origin_context(), inst)
-                    .map_err(|_| MethodArgMapError::MissingBody)?
+                    .map_err(MethodArgMapError::ApplicationNotAdmitted)?
+                    .method(name)
+            } else if let Some(caller) = caller
+                && let Some(record) =
+                    visible_applications(db, caller, callable)
+                        .into_iter()
+                        .find(|record| {
+                            record.goal().def(db) == inst.def(db)
+                                && record.goal().args(db) == inst.args(db)
+                        })
+            {
+                let records = visible_applications(db, caller, callable);
+                let premises = PredicateListId::new(
+                    db,
+                    records
+                        .iter()
+                        .map(|record| record.goal())
+                        .collect::<Vec<_>>(),
+                )
+                .extend_all_bounds(db);
+                let mut facts = assumptions.list(db).to_vec();
+                facts.extend(premises.list(db).iter().copied());
+                let destination = TraitSolveCx::new(db, caller.key(db).owner(db).scope())
+                    .with_assumptions(PredicateListId::new(db, facts).extend_all_bounds(db))
+                    .with_lexical_premises(Some(premises));
+                record
+                    .revalidate(db, destination, inst)
+                    .map_err(MethodArgMapError::ApplicationNotAdmitted)?
                     .method(name)
             } else {
                 resolve_trait_method_instance(
@@ -773,6 +873,29 @@ fn semantic_callee_key_with_assumptions<'db>(
     } else {
         impl_env.normalization_scope(db)
     };
+    let lexical_applications = caller
+        .map(|caller| visible_applications(db, caller, callable))
+        .unwrap_or_default();
+    let parameter_evidence = caller
+        .map(|caller| {
+            let typed = caller.key(db).typed_body(db);
+            callable
+                .argument_operands()
+                .iter()
+                .enumerate()
+                .filter_map(|(index, &operand)| {
+                    let ty = typed.expr_ty(db, operand);
+                    let ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
+                    crate::analysis::ty::corelib::evidence_goal(
+                        db,
+                        caller.key(db).owner(db).scope(),
+                        ty,
+                    )?;
+                    opened_operand_application(db, caller, operand).map(|record| (index, record))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let impl_env = ImplEnv::new(
         db,
         normalization_scope,
@@ -782,7 +905,8 @@ fn semantic_callee_key_with_assumptions<'db>(
             assumptions
         },
         witnesses.into_iter().collect::<Vec<_>>(),
-        Vec::new(),
+        parameter_evidence,
+        lexical_applications,
     );
 
     if matches!(provider_resolution_mode, ProviderResolutionMode::Final)
@@ -1032,6 +1156,7 @@ fn semantic_const_key_for_inherent_const<'db>(
             use_.assumptions(),
             vec![],
             Vec::new(),
+            Vec::new(),
         ),
     ))
 }
@@ -1056,6 +1181,7 @@ fn semantic_const_key_for_assoc_const<'db>(
             assoc.origin_scope(),
             assoc.assumptions(),
             vec![assoc.inst()],
+            Vec::new(),
             Vec::new(),
         ),
     ))

@@ -109,6 +109,9 @@ pub struct ImplEnv<'db> {
     /// Issued argument choices, keyed by the callee parameter index.
     #[return_ref]
     pub parameter_evidence: Vec<(usize, ImplApplicationRecord<'db>)>,
+    /// In-force checked applications inherited by this instance.
+    #[return_ref]
+    pub lexical_applications: Vec<ImplApplicationRecord<'db>>,
 }
 
 impl<'db> ImplEnv<'db> {
@@ -117,6 +120,7 @@ impl<'db> ImplEnv<'db> {
             db,
             normalization_scope,
             PredicateListId::empty_list(db),
+            Vec::new(),
             Vec::new(),
             Vec::new(),
         )

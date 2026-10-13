@@ -907,6 +907,7 @@ pub struct ResolvedMethodInstance<'db> {
 #[derive(Debug, Clone)]
 pub enum MethodArgMapError<'db> {
     MissingBody,
+    ApplicationNotAdmitted(CheckedApplicationError),
     NominalArity {
         expected: usize,
         given: usize,

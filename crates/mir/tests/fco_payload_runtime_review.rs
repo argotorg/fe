@@ -364,6 +364,7 @@ fn runtime_parameter_choice_identity_retains_the_selected_declaration() {
                 PredicateListId::empty_list(&db),
                 Vec::new(),
                 vec![(0, *application)],
+                Vec::new(),
             ),
         );
         let instance = hir::analysis::semantic::get_or_build_semantic_instance(&db, key);
@@ -451,5 +452,69 @@ fn described_evidence_constants_retain_the_selected_declaration() {
             identities[0], identities[1],
             "described issued constants with different declarations must not alias"
         );
+    }
+}
+
+#[test]
+fn source_runtime_calls_deliver_issued_choices_to_generic_callees() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "runtime_choice_delivery.fe".into(),
+        r#"
+use core::obligations::{Evidence, prove}
+trait Pick { const fn value() -> u256 }
+struct Subject {}
+impl Pick for Subject { const fn value() -> u256 { 1 } }
+impl Pick for Subject as First { const fn value() -> u256 { 2 } }
+impl Pick for Subject as Second { const fn value() -> u256 { 3 } }
+type Goal = Pick<Subject>
+const fn first() -> Evidence<Goal> { with (First) { prove<Goal>() } }
+const fn second() -> Evidence<Goal> { with (Second) { prove<Goal>() } }
+fn consume<T>(_ witness: Evidence<Pick<T>>) -> u256 { with (witness) { <T as Pick>::value() } }
+fn first_result() -> u256 { consume<Subject>(first()) }
+fn second_result() -> u256 { consume<Subject>(second()) }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let first = issued(&db, module, "first");
+    let second = issued(&db, module, "second");
+    let expected: Vec<_> = [first, second]
+        .iter()
+        .map(|value| match value.value(&db) {
+            SemConstValue::Evidence { application, .. } => application.resolved().selected(),
+            _ => panic!("issued tag required"),
+        })
+        .collect();
+    let package = build_runtime_package(&db, module)
+        .expect("compiler-known arguments must specialize the generic consumer");
+    let program: &dyn fe_mir::MirDb = &db;
+    let mut choices = Vec::new();
+    for function in package.functions(&db) {
+        let instance = function.instance(&db);
+        verify_runtime_body(&db, &program, &instance.body(&db)).unwrap();
+        let Some(semantic) = instance.key(&db).semantic(&db) else {
+            continue;
+        };
+        let BodyOwner::Func(func) = semantic.key(&db).owner(&db) else {
+            continue;
+        };
+        if func
+            .name(&db)
+            .to_opt()
+            .is_some_and(|name| name.data(&db) == "consume")
+        {
+            let records = semantic.key(&db).impl_env(&db).parameter_evidence(&db);
+            assert_eq!(records.len(), 1);
+            choices.push(records[0].1.resolved().selected());
+        }
+    }
+    assert_eq!(
+        choices.len(),
+        2,
+        "both source calls must retain a distinct consumer specialization"
+    );
+    for expected in expected {
+        assert!(choices.contains(&expected));
     }
 }

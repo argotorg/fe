@@ -1388,9 +1388,12 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 if inference_met_lowering_cycle(self.db, infer_body(self.db, owner)) {
                     return Err(CtfeError::InvalidBody { origin });
                 }
-                instance
-                    .admitted_body(self.db)
-                    .map_err(|_| CtfeError::InvalidBody { origin })
+                instance.admitted_body(self.db).map_err(|error| {
+                    if let crate::analysis::semantic::instance::SemanticBodyAdmissionError::CallSiteFinalization(diagnostic) = error
+                        && diagnostic.diag(self.db).kind == crate::analysis::semantic::diagnostics::SemanticDiagnosticKind::UnresolvedCall {
+                        CtfeError::InvalidOperation { origin, message: diagnostic.diag(self.db).primary.message.clone() }
+                    } else { CtfeError::InvalidBody { origin } }
+                })
             }
         }
     }
@@ -1557,6 +1560,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                             env.assumptions(self.db),
                             env.witnesses(self.db).clone(),
                             parameter_evidence,
+                            env.lexical_applications(self.db).clone(),
                         ),
                     )
                 };

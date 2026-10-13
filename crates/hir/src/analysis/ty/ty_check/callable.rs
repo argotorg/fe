@@ -265,6 +265,8 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct Callable<'db> {
+    lexical_openings: Vec<super::TraitOpening<'db>>,
+    argument_operands: Vec<ExprId>,
     evidence_introduction: Option<super::super::trait_def::ImplApplicationRecord<'db>>,
     evidence_opening: Option<(ExprId, TraitSolveCx<'db>)>,
     opened_trait_application: Option<(ExprId, TraitSolveCx<'db>)>,
@@ -284,6 +286,7 @@ impl<'db> TyVisitable<'db> for Callable<'db> {
     where
         V: TyVisitor<'db> + ?Sized,
     {
+        self.lexical_openings.visit_with(visitor);
         self.generic_args.visit_with(visitor);
         if let Some(record) = self.evidence_introduction {
             record.visit_with(visitor);
@@ -313,6 +316,8 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
         F: TyFolder<'db>,
     {
         Self {
+            lexical_openings: self.lexical_openings.fold_with(db, folder),
+            argument_operands: self.argument_operands,
             evidence_introduction: self
                 .evidence_introduction
                 .map(|record| record.fold_with(db, folder)),
@@ -338,6 +343,18 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
 }
 
 impl<'db> Callable<'db> {
+    pub fn argument_operands(&self) -> &[ExprId] {
+        &self.argument_operands
+    }
+    pub(super) fn record_argument_operands(&mut self, operands: Vec<ExprId>) {
+        self.argument_operands = operands;
+    }
+    pub fn lexical_openings(&self) -> &[super::TraitOpening<'db>] {
+        &self.lexical_openings
+    }
+    pub(super) fn record_lexical_openings(&mut self, openings: Vec<super::TraitOpening<'db>>) {
+        self.lexical_openings = openings;
+    }
     pub fn opened_trait_application(&self) -> Option<(ExprId, TraitSolveCx<'db>)> {
         self.opened_trait_application
     }
@@ -423,6 +440,8 @@ impl<'db> Callable<'db> {
         });
 
         Ok(Self {
+            lexical_openings: Vec::new(),
+            argument_operands: Vec::new(),
             evidence_introduction: None,
             evidence_opening: None,
             opened_trait_application: None,
@@ -444,6 +463,8 @@ impl<'db> Callable<'db> {
         trait_inst: Option<TraitInstId<'db>>,
     ) -> Self {
         Self {
+            lexical_openings: Vec::new(),
+            argument_operands: Vec::new(),
             evidence_introduction: None,
             evidence_opening: None,
             opened_trait_application: None,
