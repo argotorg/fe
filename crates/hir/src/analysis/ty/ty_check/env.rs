@@ -652,16 +652,35 @@ impl<'db> TyCheckEnv<'db> {
         // Named applications provide a choice, not an extra solver premise.
         // Their output equalities remain available to lexical type lookup.
         let visible = self.trait_openings.visible(self.db);
-        if visible.is_empty() {
+        // A named implementation body is checked under its declared prerequisites.
+        // Admission of that implementation independently establishes these at use.
+        // Keep ordinary declaration assumptions under master's existing policy.
+        let declared = match self.owner {
+            BodyOwner::Func(func) => func
+                .containing_impl_trait(self.db)
+                .filter(|implementation| implementation.selection_name(self.db).is_some())
+                .map(|implementation| {
+                    crate::analysis::ty::trait_resolution::constraint::collect_constraints(
+                        self.db,
+                        implementation.into(),
+                    )
+                    .instantiate_identity()
+                }),
+            _ => None,
+        };
+        if visible.is_empty() && declared.is_none() {
             return TraitSolveCx::new(self.db, self.scope()).with_assumptions(self.assumptions);
         }
-        let lexical: Vec<_> = visible
+        let mut lexical: Vec<_> = visible
             .into_iter()
             .filter_map(|opening| match opening {
                 super::TraitOpening::Evidence { goal, .. } => Some(goal),
                 super::TraitOpening::Named(_) => None,
             })
             .collect();
+        if let Some(declared) = declared {
+            lexical.extend(declared.list(self.db).iter().copied());
+        }
         let lexical = (!lexical.is_empty())
             .then(|| PredicateListId::new(self.db, lexical).extend_all_bounds(self.db));
         let mut premises = self.assumptions.list(self.db).to_vec();

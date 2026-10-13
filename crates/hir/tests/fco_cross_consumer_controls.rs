@@ -114,3 +114,49 @@ fn fixed_associated_output_refusal() {
     }));
     println!("CONTROL fixed-output expected cause span {start}..{end}");
 }
+
+#[test]
+fn ground_prerequisite_valid_twin() {
+    values("ground-prerequisite-call-pending", &["43"]);
+}
+#[test]
+fn ground_prerequisite_missing_destination() {
+    let mut db = HirAnalysisTestDb::default();
+    let text = source("ground-prerequisite-call-pending");
+    let file = db.new_stand_alone("ground-prerequisite.fe".into(), &text);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&db, module, "rejected"));
+    let result =
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+    println!("GROUND DESTINATION {result:?}");
+    assert!(matches!(result, EvalOutcome::Failed(_)));
+    assert!(
+        format!("{result:?}").contains("opened evidence application was not admitted at this use")
+    );
+}
+
+#[test]
+fn ordinary_ground_declaration_keeps_master_assumption_policy() {
+    let mut db = HirAnalysisTestDb::default();
+    let text = r#"
+trait Leaf { const fn leaf() -> u256 }
+trait Pick { const fn value() -> u256 }
+struct Subject {}
+impl Pick for Subject where Subject: Leaf {
+    const fn value() -> u256 { <Subject as Leaf>::leaf() }
+}
+"#;
+    let file = db.new_stand_alone("ordinary-ground.fe".into(), text);
+    let (module, _) = db.top_mod(file);
+    let diags: Vec<_> = initialize_test_analysis_pass()
+        .run_on_module(&db, module)
+        .into_iter()
+        .map(|d| d.to_complete(&db))
+        .collect();
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message == "trait bound is not satisfied")
+    );
+}
