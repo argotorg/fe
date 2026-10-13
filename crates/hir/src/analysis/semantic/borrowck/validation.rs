@@ -149,4 +149,47 @@ mod evidence_specialization_tests {
             get_or_build_semantic_instance(&db, identity_semantic_instance_key(&db, ordinary))
         ));
     }
+
+    #[test]
+    fn nominal_default_body_does_not_close_pending_evidence_dispatch() {
+        let mut db = HirAnalysisTestDb::default();
+        let source = "use core::obligations::{Evidence, prove}\ntrait Pick { fn value() -> u256 { 999 } }\nstruct Subject {}\nimpl Pick for Subject { fn value() -> u256 { 1 } }\ntype Goal = Pick<Subject>\nconst fn choice() -> Evidence<Goal> { prove<Goal>() }\nfn consume(_ witness: Evidence<Goal>) -> u256 { with (witness) { <Subject as Pick>::value() } }\n";
+        let file = db.new_stand_alone("pending-evidence-default.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let owner = BodyOwner::Func(find_func(&db, module, "consume"));
+        let key = identity_semantic_instance_key(&db, owner);
+        let symbolic = get_or_build_semantic_instance(&db, key);
+        assert!(
+            symbolic
+                .callees(&db)
+                .iter()
+                .any(|callee| !callee.concrete_dispatch)
+        );
+        assert!(matches!(
+            check_semantic_borrows(&db, symbolic),
+            Err(crate::analysis::semantic::SemanticAnalysisError::Pending(_))
+        ));
+        let factory = BodyOwner::Func(find_func(&db, module, "choice"));
+        let EvalOutcome::Ready(value) = eval_body_owner_const(
+            &db,
+            factory,
+            GenericSubst::for_body_owner(&db, factory, vec![]),
+        ) else {
+            panic!("issued value required")
+        };
+        let env = key
+            .impl_env(&db)
+            .with_argument_evidence_values(&db, &[(0, value)]);
+        let key =
+            SemanticInstanceKey::new(&db, owner, key.subst(&db), key.effect_providers(&db), env);
+        let delivered = get_or_build_semantic_instance(&db, key);
+        assert!(
+            delivered
+                .callees(&db)
+                .iter()
+                .all(|callee| callee.concrete_dispatch)
+        );
+        assert!(check_semantic_borrows(&db, delivered).is_ok());
+    }
 }

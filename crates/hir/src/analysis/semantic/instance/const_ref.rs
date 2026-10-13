@@ -998,6 +998,11 @@ fn opened_operand_application_at<'db>(
                 operand = source.init_expr;
             }
             _ => {
+                // Mutable/effect bindings do not supply a stable issued operand.
+                // Do not cycle back through known-value recovery for the same binding.
+                if typed.expr_prop(db, operand).binding.is_some() {
+                    return None;
+                }
                 if let Some(record) = typed
                     .callable_expr(operand)
                     .and_then(|callable| callable.evidence_introduction())

@@ -459,7 +459,10 @@ fn provisional_call_site<'db>(
         });
     let (callee, effect_pairs, provider_pairs) = match callee {
         Some(plan) => (
-            Some(SemanticCalleeRef { key: plan.key }),
+            Some(SemanticCalleeRef {
+                key: plan.key,
+                concrete_dispatch: plan.concrete_dispatch,
+            }),
             plan.effect_pairs,
             plan.provider_pairs,
         ),
@@ -952,7 +955,10 @@ fn replan_call_site<'db>(
             .map_err(mapping_diag)?;
         site.effect_pairs = callee.effect_pairs.into_boxed_slice();
         site.provider_pairs = callee.provider_pairs.into_boxed_slice();
-        site.callee = Some(SemanticCalleeRef { key: callee.key });
+        site.callee = Some(SemanticCalleeRef {
+            key: callee.key,
+            concrete_dispatch: callee.concrete_dispatch,
+        });
     } else {
         site.callee = None;
     }

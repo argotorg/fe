@@ -306,6 +306,8 @@ pub struct SBlock<'db> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
 pub struct SemanticCalleeRef<'db> {
     pub key: SemanticInstanceKey<'db>,
+    /// A nominal trait body is not authority to execute an unresolved call.
+    pub concrete_dispatch: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]

@@ -195,7 +195,7 @@ pub(super) fn check_runtime_body_supported<'db>(
             } = &stmt.kind
                 && let BodyOwner::Func(func) = callee.key.owner(db)
                 && func.containing_trait(db).is_some()
-                && func.body(db).is_none()
+                && (!callee.concrete_dispatch || func.body(db).is_none())
                 && contract_metadata_builtin(db, get_or_build_semantic_instance(db, callee.key))
                     .is_none()
             {

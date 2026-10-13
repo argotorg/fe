@@ -1528,6 +1528,20 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 effect_args,
                 ..
             } => {
+                if !callee.concrete_dispatch {
+                    let dependency = callee
+                        .key
+                        .subst(self.db)
+                        .generic_args(self.db)
+                        .first()
+                        .copied()
+                        .unwrap_or(result_ty);
+                    return Err(EvalStop::Blocked(BlockedInfo::new(
+                        ConstDemandKind::CallableSelection,
+                        ConstDependency::Type(dependency),
+                        origin,
+                    )));
+                }
                 let mut effects = Vec::with_capacity(effect_args.len());
                 for arg in &effect_args {
                     if arg.required_mut
