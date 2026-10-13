@@ -1536,6 +1536,7 @@ fn typed_body_for_bodyless_func<'db>(
         expr_ty: SecondaryMap::new(),
         implicit_moves: FxHashSet::default(),
         const_refs: SecondaryMap::new(),
+        const_openings: SecondaryMap::new(),
         value_path_refs: SecondaryMap::new(),
         semantic_expr_lowering: SecondaryMap::new(),
         record_init_lowering: SecondaryMap::new(),
@@ -3856,6 +3857,8 @@ mod typed_body_tables {
         pub(super) expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
         pub(super) implicit_moves: FxHashSet<ExprId>,
         pub(super) const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
+        /// Source lexical choices for a constant expression, separate from inherited choices.
+        pub(super) const_openings: SecondaryMap<ExprId, Vec<TraitOpening<'db>>>,
         pub(super) value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
         pub(super) semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
         pub(super) record_init_lowering: SecondaryMap<ExprId, Option<RecordInitLowering<'db>>>,
@@ -4185,6 +4188,9 @@ impl<'db> TypedBody<'db> {
         for prop in self.tables.expr_ty.values().flatten() {
             prop.visit_with(visitor);
         }
+        for openings in self.tables.const_openings.values() {
+            openings.visit_with(visitor);
+        }
         for cref in self.tables.const_refs.values().flatten() {
             cref.visit_with(visitor);
         }
@@ -4239,6 +4245,9 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .values_mut()
             .flatten()
             .for_each(|prop| *prop = prop.clone().fold_with(db, folder));
+        this.const_openings
+            .values_mut()
+            .for_each(|openings| *openings = openings.clone().fold_with(db, folder));
         this.const_refs
             .values_mut()
             .flatten()
@@ -4560,6 +4569,10 @@ impl<'db> TypedBody<'db> {
 
     pub fn expr_const_ref(&self, expr: ExprId) -> Option<ConstRef<'db>> {
         self.tables.const_refs[expr]
+    }
+
+    pub(crate) fn expr_const_openings(&self, expr: ExprId) -> &[TraitOpening<'db>] {
+        &self.tables.const_openings[expr]
     }
 
     pub fn value_path_ref(&self, expr: ExprId) -> Option<ValuePathRef<'db>> {
@@ -5892,6 +5905,7 @@ impl<'db> TypedBody<'db> {
             expr_ty: SecondaryMap::new(),
             implicit_moves: FxHashSet::default(),
             const_refs: SecondaryMap::new(),
+            const_openings: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),
             semantic_expr_lowering: SecondaryMap::new(),
             record_init_lowering: SecondaryMap::new(),

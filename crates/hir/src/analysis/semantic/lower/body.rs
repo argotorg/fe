@@ -774,7 +774,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             const_ref,
             ty,
             SemOrigin::Expr(expr),
-            inherited.then_some(self.instance),
+            Some(self.instance),
+            inherited,
         ) {
             return self.emit_expr_with_origin(
                 SemOrigin::Expr(expr),

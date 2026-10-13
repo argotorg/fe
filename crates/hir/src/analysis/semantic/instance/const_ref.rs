@@ -811,8 +811,17 @@ pub(super) fn visible_applications<'db>(
     caller: SemanticInstance<'db>,
     callable: &Callable<'db>,
 ) -> Vec<ImplApplicationRecord<'db>> {
+    applications_from_openings(db, caller, callable.lexical_openings(), true)
+}
+
+fn applications_from_openings<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    openings: &[crate::analysis::ty::ty_check::TraitOpening<'db>],
+    inherit: bool,
+) -> Vec<ImplApplicationRecord<'db>> {
     let mut records = Vec::new();
-    for opening in callable.lexical_openings() {
+    for opening in openings {
         let record = match *opening {
             crate::analysis::ty::ty_check::TraitOpening::Named(record) => Some(record),
             crate::analysis::ty::ty_check::TraitOpening::Evidence { operand, .. } => {
@@ -824,10 +833,12 @@ pub(super) fn visible_applications<'db>(
         }
     }
     for record in caller.key(db).impl_env(db).lexical_applications(db) {
-        if !records.iter().any(|existing| {
-            existing.goal().def(db) == record.goal().def(db)
-                && existing.goal().args(db) == record.goal().args(db)
-        }) {
+        if inherit
+            && !records.iter().any(|existing| {
+                existing.goal().def(db) == record.goal().def(db)
+                    && existing.goal().args(db) == record.goal().args(db)
+            })
+        {
             records.push(*record);
         }
     }
@@ -1443,7 +1454,7 @@ pub(crate) fn resolve_semantic_const_ref<'db>(
     ty: TyId<'db>,
     origin: SemOrigin<'db>,
 ) -> Option<SemanticConstRef<'db>> {
-    resolve_semantic_const_ref_in_instance(db, const_ref, ty, origin, None)
+    resolve_semantic_const_ref_in_instance(db, const_ref, ty, origin, None, false)
 }
 
 pub(crate) fn resolve_semantic_const_ref_in_instance<'db>(
@@ -1452,10 +1463,24 @@ pub(crate) fn resolve_semantic_const_ref_in_instance<'db>(
     ty: TyId<'db>,
     origin: SemOrigin<'db>,
     caller: Option<SemanticInstance<'db>>,
+    inherit: bool,
 ) -> Option<SemanticConstRef<'db>> {
     let instance = match const_ref {
         ConstRef::Const(const_) => semantic_const_key_for_const(db, const_),
-        ConstRef::TraitConst(assoc) => semantic_const_key_for_assoc_const(db, assoc, caller),
+        ConstRef::TraitConst(assoc) => {
+            let records = caller
+                .map(|caller| {
+                    let openings = match origin {
+                        SemOrigin::Expr(expr) => {
+                            caller.key(db).typed_body(db).expr_const_openings(expr)
+                        }
+                        _ => &[],
+                    };
+                    applications_from_openings(db, caller, openings, inherit)
+                })
+                .unwrap_or_default();
+            semantic_const_key_for_assoc_const(db, assoc, records)
+        }
         ConstRef::InherentConst(use_) => semantic_const_key_for_inherent_const(db, use_),
     }?;
     Some(SemanticConstRef::new(db, instance, ty, origin))
@@ -1501,11 +1526,8 @@ fn semantic_const_key_for_inherent_const<'db>(
 fn semantic_const_key_for_assoc_const<'db>(
     db: &'db dyn HirAnalysisDb,
     assoc: AssocConstUse<'db>,
-    caller: Option<SemanticInstance<'db>>,
+    records: Vec<ImplApplicationRecord<'db>>,
 ) -> Option<SemanticInstanceKey<'db>> {
-    let records = caller
-        .map(|caller| caller.key(db).impl_env(db).lexical_applications(db).clone())
-        .unwrap_or_default();
     let premises = PredicateListId::new(
         db,
         records

@@ -63,6 +63,7 @@ pub(crate) struct TyCheckEnv<'db> {
     /// type is `Copy` is decided in `finish`, once inference has resolved it.
     implicit_moves: FxHashMap<ExprId, TyId<'db>>,
     const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
+    const_openings: SecondaryMap<ExprId, Vec<super::TraitOpening<'db>>>,
     value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
     callables: SecondaryMap<ExprId, Option<Callable<'db>>>,
     semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
@@ -142,6 +143,7 @@ impl<'db> TyCheckEnv<'db> {
             expr_ty: SecondaryMap::new(),
             implicit_moves: FxHashMap::default(),
             const_refs: SecondaryMap::new(),
+            const_openings: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),
             callables: SecondaryMap::new(),
             semantic_expr_lowering: SecondaryMap::new(),
@@ -446,6 +448,9 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn register_const_ref(&mut self, expr: ExprId, const_ref: ConstRef<'db>) {
+        if matches!(const_ref, ConstRef::TraitConst(_)) {
+            self.const_openings[expr] = self.trait_openings.visible(self.db);
+        }
         if self.const_refs[expr].replace(const_ref).is_some() {
             panic!("const ref is already registered for the given expr")
         }
@@ -1228,6 +1233,7 @@ impl<'db> TyCheckEnv<'db> {
             expr_ty: self.expr_ty,
             implicit_moves,
             const_refs: self.const_refs,
+            const_openings: self.const_openings,
             value_path_refs: self.value_path_refs,
             semantic_expr_lowering: self.semantic_expr_lowering,
             record_init_lowering: self.record_init_lowering,
