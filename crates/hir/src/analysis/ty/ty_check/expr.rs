@@ -5008,6 +5008,25 @@ impl<'db> TyChecker<'db> {
         expr: ExprId,
         seen: &mut Vec<ExprId>,
     ) -> Option<ExprId> {
+        self.evidence_source_failure(expr, seen, true)
+    }
+
+    fn evidence_source_failure(
+        &self,
+        expr: ExprId,
+        seen: &mut Vec<ExprId>,
+        allow_method: bool,
+    ) -> Option<ExprId> {
+        // RD121 permits evidence-producing methods, but scalar selectors
+        // retain the accepted structural restriction, including nested sources.
+        if !allow_method
+            && matches!(
+                expr.data(self.db, self.body()),
+                Partial::Present(Expr::MethodCall(..))
+            )
+        {
+            return Some(expr);
+        }
         if seen.contains(&expr) {
             return Some(expr);
         }
@@ -5015,11 +5034,11 @@ impl<'db> TyChecker<'db> {
         let failure = match expr.data(self.db, self.body()) {
             Partial::Present(Expr::Lit(_)) => None,
             Partial::Present(Expr::Un(value, _) | Expr::Cast(value, _) | Expr::Field(value, _)) => {
-                self.evidence_choice_source_failure(*value, seen)
+                self.evidence_source_failure(*value, seen, allow_method)
             }
             Partial::Present(Expr::Bin(lhs, rhs, _)) => self
-                .evidence_choice_source_failure(*lhs, seen)
-                .or_else(|| self.evidence_choice_source_failure(*rhs, seen)),
+                .evidence_source_failure(*lhs, seen, allow_method)
+                .or_else(|| self.evidence_source_failure(*rhs, seen, allow_method)),
             Partial::Present(Expr::Path(_)) => {
                 if self.env.expr_const_ref(expr).is_some()
                     || matches!(
@@ -5050,7 +5069,9 @@ impl<'db> TyChecker<'db> {
                                     }
                                     _ => None,
                                 }) {
-                                Some(value) => self.evidence_choice_source_failure(value, seen),
+                                Some(value) => {
+                                    self.evidence_source_failure(value, seen, allow_method)
+                                }
                                 None => Some(expr),
                             }
                         }
@@ -5060,10 +5081,10 @@ impl<'db> TyChecker<'db> {
             }
             Partial::Present(Expr::Tuple(values) | Expr::Array(values)) => values
                 .iter()
-                .find_map(|value| self.evidence_choice_source_failure(*value, seen)),
+                .find_map(|value| self.evidence_source_failure(*value, seen, allow_method)),
             Partial::Present(Expr::RecordInit(_, fields)) => fields
                 .iter()
-                .find_map(|field| self.evidence_choice_source_failure(field.expr, seen)),
+                .find_map(|field| self.evidence_source_failure(field.expr, seen, allow_method)),
             Partial::Present(Expr::Call(_, args) | Expr::MethodCall(_, _, _, args)) => {
                 let receiver = match expr.data(self.db, self.body()) {
                     Partial::Present(Expr::MethodCall(receiver, _, _, _)) => Some(*receiver),
@@ -5083,19 +5104,20 @@ impl<'db> TyChecker<'db> {
                     Some(expr)
                 } else {
                     receiver
-                        .and_then(|value| self.evidence_choice_source_failure(value, seen))
+                        .and_then(|value| self.evidence_source_failure(value, seen, allow_method))
                         .or_else(|| {
-                            args.iter()
-                                .find_map(|arg| self.evidence_choice_source_failure(arg.expr, seen))
+                            args.iter().find_map(|arg| {
+                                self.evidence_source_failure(arg.expr, seen, allow_method)
+                            })
                         })
                 }
             }
             Partial::Present(Expr::If(cond, then, Some(other))) => self
                 .evidence_condition_failure(*cond)
-                .or_else(|| self.evidence_choice_source_failure(*then, seen))
-                .or_else(|| self.evidence_choice_source_failure(*other, seen)),
+                .or_else(|| self.evidence_source_failure(*then, seen, allow_method))
+                .or_else(|| self.evidence_source_failure(*other, seen, allow_method)),
             Partial::Present(Expr::With(_, body)) => {
-                self.evidence_choice_source_failure(*body, seen)
+                self.evidence_source_failure(*body, seen, allow_method)
             }
             Partial::Present(Expr::Block(stmts)) => {
                 stmts
@@ -5107,13 +5129,13 @@ impl<'db> TyChecker<'db> {
                                 .pat_binding(*pat)
                                 .is_some_and(|binding| !binding.is_mut())
                             {
-                                self.evidence_choice_source_failure(*value, seen)
+                                self.evidence_source_failure(*value, seen, allow_method)
                             } else {
                                 Some(expr)
                             }
                         }
                         Partial::Present(Stmt::Expr(value) | Stmt::Return(Some(value))) => {
-                            self.evidence_choice_source_failure(*value, seen)
+                            self.evidence_source_failure(*value, seen, allow_method)
                         }
                         _ => Some(expr),
                     })
@@ -5127,7 +5149,7 @@ impl<'db> TyChecker<'db> {
     fn evidence_condition_failure(&self, cond: CondId) -> Option<ExprId> {
         match cond.data(self.db, self.body()) {
             Partial::Present(Cond::Expr(value) | Cond::Let(_, value)) => {
-                self.evidence_choice_source_failure(*value, &mut Vec::new())
+                self.evidence_source_failure(*value, &mut Vec::new(), false)
             }
             Partial::Present(Cond::Bin(lhs, rhs, _)) => self
                 .evidence_condition_failure(*lhs)
@@ -5302,7 +5324,7 @@ impl<'db> TyChecker<'db> {
         }
 
         if self.is_evidence_value(match_ty)
-            && let Some(failure) = self.evidence_choice_source_failure(*scrutinee, &mut Vec::new())
+            && let Some(failure) = self.evidence_source_failure(*scrutinee, &mut Vec::new(), false)
         {
             self.push_diag(BodyDiag::EvidenceChoiceNotCompileTime {
                 primary: failure.span(self.body()).into(),
