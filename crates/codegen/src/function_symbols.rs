@@ -375,7 +375,8 @@ fn readable_type_component<'db>(db: &'db DriverDataBase, ty: TyId<'db>) -> Optio
         }
         TyData::TyBase(TyBase::Prim(_) | TyBase::Func(_))
         | TyData::TyParam(_)
-        | TyData::QualifiedTy(_) => {
+        | TyData::QualifiedTy(_)
+        | TyData::ConstraintTerm(_) => {
             let component = base.pretty_print(db).to_string();
             (!component.is_empty()).then_some(component)
         }
