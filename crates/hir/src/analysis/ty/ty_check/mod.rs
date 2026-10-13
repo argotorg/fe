@@ -4719,6 +4719,19 @@ impl<'db> TypedBody<'db> {
             }
         }
 
+        for (_, expr) in body.exprs(db).iter() {
+            if let Partial::Present(Expr::Match(scrutinee, Partial::Present(arms))) = expr {
+                for arm in arms {
+                    if let Some(projection) = self.binding_projection_in_pat(arm.pat, pat) {
+                        return Some(BindingSource {
+                            init_expr: *scrutinee,
+                            projection,
+                        });
+                    }
+                }
+            }
+        }
+
         None
     }
 

@@ -235,11 +235,8 @@ const fn fault() -> u256 { let zero: u256 = 0
     };
     assert_eq!(value.pretty_print(&db), "10");
     let fault = BodyOwner::Func(find_func(&db, module, "fault"));
-    let outcome = eval_body_owner_const(
-        &db,
-        fault,
-        GenericSubst::for_body_owner(&db, fault, vec![]),
-    );
+    let outcome =
+        eval_body_owner_const(&db, fault, GenericSubst::for_body_owner(&db, fault, vec![]));
     assert!(matches!(outcome, EvalOutcome::Failed(_)), "{outcome:?}");
     assert!(format!("{outcome:?}").contains("DivisionByZero"));
 }
@@ -254,11 +251,8 @@ fn malformed_unresolved_trait_request_rejects_arity_before_blocking() {
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
     let owner = BodyOwner::Func(module.all_traits(&db)[0].methods(&db).next().unwrap());
-    let outcome = eval_body_owner_const(
-        &db,
-        owner,
-        GenericSubst::for_body_owner(&db, owner, vec![]),
-    );
+    let outcome =
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
     assert!(matches!(outcome, EvalOutcome::Failed(_)), "{outcome:?}");
     assert!(format!("{outcome:?}").contains("CTFE call arity mismatch"));
 }

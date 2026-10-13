@@ -9,6 +9,7 @@ use crate::{
         HirAnalysisDb,
         semantic::{EvalOutcome, SemConstValue, SemOrigin, SemanticConstRef},
         ty::{
+            adt_def::instantiate_adt_field_shape,
             assoc_const::{AssocConstUse, InherentConstUse},
             binder::Binder,
             const_ty::{
@@ -526,6 +527,19 @@ fn compiler_known_operand_value<'db>(
             .map(|value| value.value());
     }
     let callable = typed.callable_expr(operand)?;
+    if let CallableDef::VariantCtor(variant) = callable.callable_def() {
+        let values = callable
+            .argument_operands()
+            .iter()
+            .map(|&operand| compiler_known_operand_value(db, caller, operand))
+            .collect::<Option<Vec<_>>>()?;
+        return Some(crate::analysis::semantic::enum_const(
+            db,
+            ty,
+            crate::analysis::semantic::VariantIndex(variant.idx),
+            values.into_boxed_slice(),
+        ));
+    }
     if let Some(record) = callable.evidence_introduction() {
         return issue_checked_evidence(db, record, ty, SemOrigin::Expr(operand))
             .ok()
@@ -751,6 +765,14 @@ fn opened_operand_application_at<'db>(
                             ReturnProjectionStep::ConstantIndex(index),
                             SemConstValue::Array { elems, .. },
                         ) => *elems.get(*index)?,
+                        (
+                            ReturnProjectionStep::VariantField { variant, field },
+                            SemConstValue::Enum {
+                                variant: actual,
+                                fields,
+                                ..
+                            },
+                        ) if *variant == actual.0 => *fields.get(usize::from(*field))?,
                         _ => return None,
                     };
                 }
@@ -796,6 +818,27 @@ fn evidence_slots<'db>(
     // Tuple nesting is finite and may reuse the same tuple constructor.
     if base.is_tuple(db) {
         active.remove(&base);
+    }
+    if ty.as_enum(db).is_some()
+        && let Some(adt) = ty.adt_def(db)
+    {
+        for (variant, fields) in adt.fields(db).iter().enumerate() {
+            for field in 0..fields.num_types() {
+                let mut field_path = path.clone();
+                field_path.push(ReturnProjectionStep::VariantField {
+                    variant: u16::try_from(variant).expect("variant index"),
+                    field: u16::try_from(field).expect("variant field index"),
+                });
+                evidence_slots(
+                    db,
+                    scope,
+                    instantiate_adt_field_shape(db, adt, variant, field, ty.generic_args(db)),
+                    field_path,
+                    active,
+                    slots,
+                );
+            }
+        }
     }
     for (index, field) in ty.field_types(db).into_iter().enumerate() {
         let mut field_path = path.clone();
