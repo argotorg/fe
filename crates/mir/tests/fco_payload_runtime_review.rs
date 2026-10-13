@@ -628,3 +628,58 @@ fn second_result() -> u256 { consume<Subject>(identity<Goal>(second())) }
 "#,
     );
 }
+
+#[test]
+fn array_parameter_slots_deliver_distinct_issued_choices() {
+    check_source_runtime_choice_delivery(
+        "array_parameter_choice_delivery.fe",
+        r#"
+fn forward<T>(_ pair: [Evidence<Pick<T>>; 2]) -> u256 { consume<T>(pair[0]) + consume<T>(pair[1]) }
+fn first_result() -> u256 { forward<Subject>([first(), second()]) }
+fn second_result() -> u256 { forward<Subject>([second(), first()]) }
+"#,
+    );
+}
+
+#[test]
+fn immutable_array_values_deliver_distinct_issued_choices() {
+    check_source_runtime_choice_delivery(
+        "array_local_choice_delivery.fe",
+        r#"
+fn forward<T>(_ pair: [Evidence<Pick<T>>; 2]) -> u256 { consume<T>(pair[0]) + consume<T>(pair[1]) }
+fn first_result() -> u256 { let pair = [first(), second()]
+forward<Subject>(pair) }
+fn second_result() -> u256 { let pair = [second(), first()]
+forward<Subject>(pair) }
+"#,
+    );
+}
+
+#[test]
+fn runtime_array_index_cannot_select_a_witness() {
+    let mut db = HirAnalysisTestDb::default();
+    let source = r#"
+use core::obligations::Evidence
+trait Pick { const fn value() -> u256 }
+fn consume<T>(_ witness: Evidence<Pick<T>>) -> u256 { with (witness) { <T as Pick>::value() } }
+fn select<T>(_ pair: [Evidence<Pick<T>>; 2], _ index: usize) -> u256 { consume<T>(pair[index]) }
+"#;
+    let file = db.new_stand_alone("runtime_array_index.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    let diags: Vec<_> = hir::test_db::initialize_test_analysis_pass()
+        .run_on_module(&db, module)
+        .into_iter()
+        .map(|d| d.to_complete(&db))
+        .collect();
+    println!("RUNTIME ARRAY INDEX {diags:#?}");
+    let start = source.rfind("index]").unwrap();
+    assert!(diags.iter().any(
+        |d| d.message == "evidence choice must be known at compile time"
+            && d.sub_diagnostics.iter().any(|label| {
+                label.span.as_ref().is_some_and(|span| {
+                    u32::from(span.range.start()) as usize == start
+                        && u32::from(span.range.end()) as usize == start + 5
+                })
+            })
+    ));
+}

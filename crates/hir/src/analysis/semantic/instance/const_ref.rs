@@ -47,6 +47,7 @@ use crate::{
     },
 };
 use common::indexmap::IndexSet;
+use num_traits::ToPrimitive;
 use rustc_hash::FxHashMap;
 
 #[derive(Clone, Copy)]
@@ -467,6 +468,55 @@ fn compiler_known_operand_value<'db>(
     };
     let typed = caller.key(db).typed_body(db);
     let ty = typed.expr_ty(db, operand);
+    let body = typed.body()?;
+    match operand.data(db, body) {
+        Partial::Present(Expr::Tuple(elems) | Expr::Array(elems)) => {
+            let values = elems
+                .iter()
+                .map(|&value| compiler_known_operand_value(db, caller, value))
+                .collect::<Option<Vec<_>>>()?;
+            return Some(
+                if matches!(operand.data(db, body), Partial::Present(Expr::Tuple(_))) {
+                    crate::analysis::semantic::tuple_const(db, ty, values.into_boxed_slice())
+                } else {
+                    crate::analysis::semantic::array_const(db, ty, values.into_boxed_slice())
+                },
+            );
+        }
+        Partial::Present(Expr::Lit(crate::hir_def::LitKind::Int(value))) => {
+            return Some(crate::analysis::semantic::int_const(
+                db,
+                ty,
+                num_bigint::BigInt::from(value.data(db).clone()),
+            ));
+        }
+        Partial::Present(Expr::Lit(crate::hir_def::LitKind::Bool(value))) => {
+            return Some(crate::analysis::semantic::bool_const(db, *value));
+        }
+        _ => {}
+    }
+    if let Some(binding @ LocalBinding::Local { is_mut: false, .. }) =
+        typed.expr_prop(db, operand).binding
+    {
+        let source = typed.binding_source(db, binding)?;
+        let mut value = compiler_known_operand_value(db, caller, source.init_expr)?;
+        for step in source.projection {
+            value = match (step, value.value(db)) {
+                (ReturnProjectionStep::Field(index), SemConstValue::Tuple { elems, .. }) => {
+                    *elems.get(usize::from(index))?
+                }
+                (ReturnProjectionStep::Field(index), SemConstValue::Struct { fields, .. }) => {
+                    *fields.get(usize::from(index))?
+                }
+                (
+                    ReturnProjectionStep::ConstantIndex(index),
+                    SemConstValue::Array { elems, .. },
+                ) => *elems.get(index)?,
+                _ => return None,
+            };
+        }
+        return Some(value);
+    }
     if typed.expr_prop(db, operand).binding.is_some() {
         let record = opened_operand_application(db, caller, operand)?;
         return issue_checked_evidence(db, record, ty, SemOrigin::Expr(operand))
@@ -555,6 +605,28 @@ fn opened_operand_application_at<'db>(
             operand = *base;
             continue;
         }
+        if let Partial::Present(Expr::Bin(base, index, crate::hir_def::BinOp::Index)) =
+            operand.data(db, body)
+        {
+            let Partial::Present(Expr::Lit(crate::hir_def::LitKind::Int(value))) =
+                index.data(db, body)
+            else {
+                return None;
+            };
+            projection.insert(
+                0,
+                ReturnProjectionStep::ConstantIndex(value.data(db).to_usize()?),
+            );
+            operand = *base;
+            continue;
+        }
+        if let Partial::Present(Expr::Array(elems)) = operand.data(db, body)
+            && let Some(ReturnProjectionStep::ConstantIndex(index)) = projection.first().copied()
+        {
+            operand = *elems.get(index)?;
+            projection.remove(0);
+            continue;
+        }
         if let Partial::Present(Expr::Tuple(elems)) = operand.data(db, body)
             && let Some(ReturnProjectionStep::Field(index)) = projection.first().copied()
         {
@@ -634,6 +706,19 @@ fn evidence_slots<'db>(
     let ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
     if crate::analysis::ty::corelib::evidence_goal(db, scope, ty).is_some() {
         slots.push(path);
+        return;
+    }
+    if ty.is_array(db) {
+        let mut element_path = path;
+        element_path.push(ReturnProjectionStep::AnyIndex);
+        evidence_slots(
+            db,
+            scope,
+            ty.generic_args(db)[0],
+            element_path,
+            active,
+            slots,
+        );
         return;
     }
     let base = ty.base_ty(db);
@@ -1032,6 +1117,30 @@ fn semantic_callee_key_with_assumptions<'db>(
                     &mut IndexSet::default(),
                     &mut slots,
                 );
+                if slots
+                    .iter()
+                    .any(|path| path.contains(&ReturnProjectionStep::AnyIndex))
+                {
+                    if let Some(LocalBinding::Param {
+                        idx, is_mut: false, ..
+                    }) = typed.expr_prop(db, operand).binding
+                    {
+                        records.extend(
+                            caller
+                                .key(db)
+                                .impl_env(db)
+                                .projected_parameter_evidence(db)
+                                .iter()
+                                .filter(|(source, _, _)| *source == idx)
+                                .map(|(_, path, record)| (index, path.clone(), *record)),
+                        );
+                    } else if let Some(value) = compiler_known_operand_value(db, caller, operand) {
+                        let env = ImplEnv::empty(db, caller.key(db).owner(db).scope())
+                            .with_argument_evidence_values(db, &[(index, value)]);
+                        records.extend(env.projected_parameter_evidence(db).iter().cloned());
+                    }
+                    continue;
+                }
                 for path in slots.into_iter().filter(|path| !path.is_empty()) {
                     if let Some(record) =
                         opened_operand_application_at(db, caller, operand, path.clone())

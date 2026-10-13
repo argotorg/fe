@@ -468,7 +468,10 @@ impl<'db> TyChecker<'db> {
         let typeable = Typeable::Expr(expr, actual.clone());
         actual.ty = self.unify_ty(typeable, actual.ty, expected);
         if self.is_evidence_value(actual.ty)
-            && matches!(expr_data, Expr::Call(..) | Expr::MethodCall(..))
+            && matches!(
+                expr_data,
+                Expr::Call(..) | Expr::MethodCall(..) | Expr::Bin(_, _, BinOp::Index)
+            )
             && let Some(failure) = self.evidence_choice_source_failure(expr, &mut Vec::new())
         {
             self.push_diag(BodyDiag::EvidenceChoiceNotCompileTime {
@@ -5093,6 +5096,9 @@ impl<'db> TyChecker<'db> {
             Partial::Present(Expr::Un(value, _) | Expr::Cast(value, _) | Expr::Field(value, _)) => {
                 self.evidence_source_failure(*value, seen, allow_method)
             }
+            Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => self
+                .evidence_source_failure(*lhs, seen, allow_method)
+                .or_else(|| self.evidence_source_failure(*rhs, seen, false)),
             Partial::Present(Expr::Bin(lhs, rhs, _)) => self
                 .evidence_source_failure(*lhs, seen, allow_method)
                 .or_else(|| self.evidence_source_failure(*rhs, seen, allow_method)),
