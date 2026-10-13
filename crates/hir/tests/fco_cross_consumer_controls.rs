@@ -313,3 +313,39 @@ const fn inherited() -> u256 { generic<Inherited, 1>() }
         assert_eq!(value.pretty_print(&db), expected);
     }
 }
+
+#[test]
+fn pending_arithmetic_type_preserves_reflexive_identity() {
+    let mut db = HirAnalysisTestDb::default();
+    let text = source("symbolic-arithmetic-type");
+    let file = db.new_stand_alone("symbolic-arithmetic-type.fe".into(), &text);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+}
+
+#[test]
+fn pending_arithmetic_type_rejects_nominal_default_result() {
+    let mut db = HirAnalysisTestDb::default();
+    let text = source("symbolic-arithmetic-type").replace("Holder<3>", "Holder<1000>");
+    let file = db.new_stand_alone("symbolic-arithmetic-wrong-type.fe".into(), &text);
+    let (module, _) = db.top_mod(file);
+    let diags: Vec<_> = initialize_test_analysis_pass()
+        .run_on_module(&db, module)
+        .into_iter()
+        .map(|diag| diag.to_complete(&db))
+        .collect();
+    assert_eq!(diags.len(), 1, "{diags:#?}");
+    let diagnostic = &diags[0];
+    assert_eq!(diagnostic.message, "type mismatch");
+    let call = "generic_holder<Subject, 1>()";
+    let start = text.find(call).unwrap();
+    assert!(
+        diagnostic.sub_diagnostics.iter().any(|sub| {
+            sub.span.as_ref().is_some_and(|span| {
+                u32::from(span.range.start()) as usize == start
+                    && u32::from(span.range.end()) as usize == start + call.len()
+            })
+        }),
+        "{diagnostic:#?}"
+    );
+}

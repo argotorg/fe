@@ -1,0 +1,20 @@
+trait Pick {
+    const fn value(_ x: u256) -> u256 { x + 999 }
+}
+
+struct Subject {}
+
+impl Pick for Subject {
+    const fn value(_ x: u256) -> u256 { x + 2 }
+}
+
+struct Holder<const M: u256> {}
+
+fn generic_holder<T: Pick, const N: u256>() -> Holder<{ <T as Pick>::value(N) }> {
+    Holder {}
+}
+
+#[test]
+fn test_term_extract_default_hijack_with_const_param() {
+    let _h: Holder<3> = generic_holder<Subject, 1>()
+}

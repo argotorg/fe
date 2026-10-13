@@ -199,7 +199,11 @@ where
                     (ConstTyData::TyParam(..), ConstTyData::TyParam(..))
                     | (ConstTyData::Value(..), ConstTyData::Value(..))
                     | (ConstTyData::Description(..), ConstTyData::Description(..))
+                    | (ConstTyData::Computation { .. }, ConstTyData::Computation { .. })
+                    | (ConstTyData::UnEvaluated { .. }, ConstTyData::UnEvaluated { .. })
                     | (ConstTyData::Abstract(..), ConstTyData::Abstract(..)) => {
+                        // Deferred constants retain identity through their full
+                        // interned body, capture and computation environment.
                         if const_ty1 == const_ty2 {
                             Ok(())
                         } else {
