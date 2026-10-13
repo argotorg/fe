@@ -515,6 +515,14 @@ fn compiler_known_operand_value<'db>(
                     ReturnProjectionStep::ConstantIndex(index),
                     SemConstValue::Array { elems, .. },
                 ) => *elems.get(index)?,
+                (
+                    ReturnProjectionStep::VariantField { variant, field },
+                    SemConstValue::Enum {
+                        variant: actual,
+                        fields,
+                        ..
+                    },
+                ) if variant == actual.0 => *fields.get(usize::from(field))?,
                 _ => return None,
             };
         }

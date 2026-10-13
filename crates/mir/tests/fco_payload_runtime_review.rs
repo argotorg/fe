@@ -653,8 +653,27 @@ fn forward<T>(_ wrapped: Wrapped<T>) -> u256 {
         Wrapped::None => 0,
     }
 }
+
 fn first_result() -> u256 { forward<Subject>(Wrapped::Some(first())) }
 fn second_result() -> u256 { forward<Subject>(Wrapped::Some(second())) }
+"#,
+    );
+}
+
+#[test]
+fn distinct_enum_variant_slots_deliver_issued_choices() {
+    check_source_runtime_choice_delivery(
+        "distinct_enum_variant_choice_delivery.fe",
+        r#"
+enum Wrapped<T> { Left(Evidence<Pick<T>>), Right(Evidence<Pick<T>>) }
+fn forward<T>(_ wrapped: Wrapped<T>) -> u256 {
+    match wrapped {
+        Wrapped::Left(witness) => consume<T>(witness),
+        Wrapped::Right(witness) => consume<T>(witness),
+    }
+}
+fn first_result() -> u256 { forward<Subject>(Wrapped::Left(first())) }
+fn second_result() -> u256 { forward<Subject>(Wrapped::Right(second())) }
 "#,
     );
 }
