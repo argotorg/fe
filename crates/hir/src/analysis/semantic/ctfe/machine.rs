@@ -1533,7 +1533,34 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     .eval_args(frame_idx, &args, origin)?
                     .into_iter()
                     .collect::<Vec<_>>();
-                let instance = self.instance_for_key(callee.key);
+                let mut parameter_evidence = Vec::new();
+                for (index, value) in args.iter().enumerate() {
+                    if let CtfeValue::Value(value) = value
+                        && let SemConstValue::Evidence { application, .. } =
+                            value.materialize(self.db).value(self.db)
+                    {
+                        parameter_evidence.push((index, *application));
+                    }
+                }
+                let key = if parameter_evidence.is_empty() {
+                    callee.key
+                } else {
+                    let env = callee.key.impl_env(self.db);
+                    SemanticInstanceKey::new(
+                        self.db,
+                        callee.key.owner(self.db),
+                        callee.key.subst(self.db),
+                        callee.key.effect_providers(self.db),
+                        ImplEnv::new(
+                            self.db,
+                            env.normalization_scope(self.db),
+                            env.assumptions(self.db),
+                            env.witnesses(self.db).clone(),
+                            parameter_evidence,
+                        ),
+                    )
+                };
+                let instance = self.instance_for_key(key);
                 if let BodyOwner::Func(func) = instance.key(self.db).owner(self.db)
                     && func.top_mod(self.db).ingot(self.db).kind(self.db)
                         == common::ingot::IngotKind::Core

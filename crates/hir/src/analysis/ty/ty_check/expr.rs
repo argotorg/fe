@@ -1539,6 +1539,10 @@ impl<'db> TyChecker<'db> {
     ) -> bool {
         if let Some(goal) = callable.trait_inst() {
             let goal = goal.fold_with(self.db, &mut self.table);
+            if let Some(super::TraitOpening::Evidence { operand, .. }) = self.env.opening_for(goal)
+            {
+                callable.record_opened_trait_application(operand, self.env.proof_context());
+            }
             if let Some(super::TraitOpening::Named(record)) = self.env.opening_for(goal) {
                 match record.revalidate(self.db, self.env.proof_context(), goal) {
                     Ok(application) => callable.record_selected_trait_application(&application),
@@ -3673,6 +3677,7 @@ impl<'db> TyChecker<'db> {
                 let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
                 let inst = self.specialize_same_trait_method_inst(method_name, inst);
                 self.env.register_trait_obligation(TraitObligation {
+                    context: self.env.proof_context(),
                     goal: inst,
                     origin: TraitObligationOrigin::GenericConfirmation,
                     span: call_span.clone().into(),
@@ -3979,6 +3984,7 @@ impl<'db> TyChecker<'db> {
                             };
                             if matches!(candidate, MethodCandidate::NeedsConfirmation(_)) {
                                 self.env.register_trait_obligation(TraitObligation {
+                                    context: self.env.proof_context(),
                                     goal: inst,
                                     origin: TraitObligationOrigin::GenericConfirmation,
                                     span: path_expr_span.clone().into(),
@@ -4076,6 +4082,7 @@ impl<'db> TyChecker<'db> {
                     };
 
                     self.env.register_trait_obligation(TraitObligation {
+                        context: self.env.proof_context(),
                         goal: inst,
                         origin: TraitObligationOrigin::GenericConfirmation,
                         span: path_expr_span.clone().into(),
@@ -5738,6 +5745,7 @@ impl<'db> TyChecker<'db> {
                     let inst = c_lhs_ty.extract_solution(&mut self.table, candidate.cand.inst);
                     if candidate.needs_confirmation {
                         self.env.register_trait_obligation(TraitObligation {
+                            context: self.env.proof_context(),
                             goal: inst,
                             origin: TraitObligationOrigin::GenericConfirmation,
                             span: expr.span(self.body()).into(),
@@ -5826,6 +5834,7 @@ impl<'db> TyChecker<'db> {
                     let inst = c_lhs_ty.extract_solution(&mut self.table, cand.inst);
                     if matches!(res, MethodCandidate::NeedsConfirmation(_)) {
                         self.env.register_trait_obligation(TraitObligation {
+                            context: self.env.proof_context(),
                             goal: inst,
                             origin: TraitObligationOrigin::GenericConfirmation,
                             span: expr.span(self.body()).into(),

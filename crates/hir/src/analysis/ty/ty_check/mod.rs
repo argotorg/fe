@@ -2035,9 +2035,22 @@ impl<'db> TyChecker<'db> {
     }
 
     pub(super) fn normalize_trait_goal(&mut self, goal: TraitInstId<'db>) -> TraitInstId<'db> {
+        self.normalize_trait_goal_in_context(
+            goal,
+            self.env
+                .proof_context()
+                .with_assumptions(self.env.assumptions()),
+        )
+    }
+
+    fn normalize_trait_goal_in_context(
+        &mut self,
+        goal: TraitInstId<'db>,
+        context: TraitSolveCx<'db>,
+    ) -> TraitInstId<'db> {
         let db = self.db;
-        let scope = self.env.scope();
-        let assumptions = self.env.assumptions();
+        let scope = context.scope();
+        let assumptions = context.assumptions();
         let goal = goal.fold_with(db, &mut self.table);
         let args: Vec<_> = goal
             .args(db)
@@ -2239,8 +2252,8 @@ impl<'db> TyChecker<'db> {
         final_pass: bool,
     ) -> TraitObligationOutcome<'db> {
         let db = self.db;
-        let scope = self.env.scope();
-        let assumptions = self.env.assumptions();
+        let solve_cx = obligation.context.fold_with(db, &mut self.table);
+        let assumptions = solve_cx.assumptions();
 
         if self.has_dead_inference_keys(&obligation.goal) {
             return TraitObligationOutcome::Discharged;
@@ -2254,19 +2267,27 @@ impl<'db> TyChecker<'db> {
             // discharged as "not concrete" below, silently suppressing the
             // diagnostic and letting the error surface as an ICE in later
             // lowering stages.
-            let mut prober = env::Prober::new(&mut self.table, scope);
+            let mut prober = env::Prober::new(&mut self.table, solve_cx.scope());
             obligation.goal = obligation.goal.fold_with(db, &mut prober);
         }
 
-        obligation.goal = self.normalize_trait_goal(obligation.goal);
+        obligation.goal = self.normalize_trait_goal_in_context(obligation.goal, solve_cx);
         let goal = obligation.goal;
         let flags = collect_flags(db, goal);
         if flags.contains(TyFlags::HAS_INVALID) || self.has_dead_inference_keys(&goal) {
             return TraitObligationOutcome::Discharged;
         }
 
-        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
-        let query = CanonicalGoalQuery::new(db, goal, assumptions);
+        let query = CanonicalGoalQuery::from_query(
+            db,
+            crate::analysis::ty::trait_resolution::TraitSolverQuery {
+                goal,
+                assumptions,
+                lexical_premises: solve_cx.lexical_premises(),
+                require_impl: false,
+                selected_candidate: None,
+            },
+        );
         match is_goal_query_satisfiable(db, solve_cx, &query) {
             GoalSatisfiability::Satisfied(solution) => {
                 if goal.self_ty(db).has_var(db) {
@@ -2283,7 +2304,7 @@ impl<'db> TyChecker<'db> {
                     return TraitObligationOutcome::Discharged;
                 }
                 self.table.unify(goal, solved).unwrap();
-                if self.normalize_trait_goal(goal) != goal {
+                if self.normalize_trait_goal_in_context(goal, solve_cx) != goal {
                     TraitObligationOutcome::Progressed
                 } else {
                     TraitObligationOutcome::Discharged
@@ -2329,7 +2350,7 @@ impl<'db> TyChecker<'db> {
                     && !goal.self_ty(db).has_var(db)
                 {
                     if self.table.unify(goal, *solution).is_ok()
-                        && self.normalize_trait_goal(goal) != goal
+                        && self.normalize_trait_goal_in_context(goal, solve_cx) != goal
                     {
                         TraitObligationOutcome::Progressed
                     } else {
@@ -2650,6 +2671,7 @@ impl<'db> TyChecker<'db> {
 
                                 if candidate.needs_confirmation {
                                     self.env.register_trait_obligation(env::TraitObligation {
+                                        context: self.env.proof_context(),
                                         goal: inst,
                                         origin: env::TraitObligationOrigin::GenericConfirmation,
                                         span: call_span.clone().into(),

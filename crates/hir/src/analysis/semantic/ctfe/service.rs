@@ -1408,6 +1408,7 @@ fn force_const_computation_in_context<'db>(
                     use_.origin_scope(),
                     use_.assumptions(),
                     vec![use_.inst()],
+                    Vec::new(),
                 ),
                 cx,
                 origin,
@@ -1436,7 +1437,13 @@ fn force_const_computation_in_context<'db>(
                 db,
                 const_ty,
                 computation.result_ty(db),
-                ImplEnv::new(db, use_.origin_scope(), use_.assumptions(), Vec::new()),
+                ImplEnv::new(
+                    db,
+                    use_.origin_scope(),
+                    use_.assumptions(),
+                    Vec::new(),
+                    Vec::new(),
+                ),
                 cx,
                 origin,
             )

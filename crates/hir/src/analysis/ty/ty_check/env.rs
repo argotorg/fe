@@ -1643,6 +1643,7 @@ pub(super) enum TraitObligationOrigin<'db> {
 
 #[derive(Debug, Clone)]
 pub(super) struct TraitObligation<'db> {
+    pub context: TraitSolveCx<'db>,
     pub goal: TraitInstId<'db>,
     pub origin: TraitObligationOrigin<'db>,
     pub span: DynLazySpan<'db>,

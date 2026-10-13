@@ -278,6 +278,10 @@ impl<'db> TyFoldable<'db> for SemanticInstanceKey<'db> {
                 folder.fold_scope(env.normalization_scope(db)),
                 env.assumptions(db).fold_with(db, folder),
                 env.witnesses(db).clone().fold_with(db, folder),
+                env.parameter_evidence(db)
+                    .iter()
+                    .map(|(index, record)| (*index, record.fold_with(db, folder)))
+                    .collect::<Vec<_>>(),
             ),
         )
     }

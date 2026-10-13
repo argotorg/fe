@@ -29,7 +29,7 @@ use crate::{
             },
             ty_check::{
                 BodyOwner, Callable, ConstRef, EffectParamSite, EffectProviderSpecialization,
-                ResolvedEffectArg,
+                LocalBinding, ResolvedEffectArg,
             },
             ty_def::{TyFlags, TyId},
             ty_lower::{
@@ -431,7 +431,7 @@ pub fn generated_callee_key<'db>(
     let callee = semantic_callee_key_with_assumptions(
         db,
         None,
-        ImplEnv::new(db, scope, assumptions, Vec::new()),
+        ImplEnv::new(db, scope, assumptions, Vec::new(), Vec::new()),
         &callable,
         &[],
         &[],
@@ -474,7 +474,27 @@ fn semantic_callee_key_with_assumptions<'db>(
     let body_func = if let Some(inst) = callable.trait_inst()
         && let Some(name) = nominal_func.name(db).to_opt()
         && let Selection::Unique(method) =
-            if let Some(record) = callable.selected_trait_application() {
+            if let Some((operand, destination)) = callable.opened_trait_application() {
+                let caller = caller.ok_or(MethodArgMapError::MissingBody)?;
+                let typed = caller.key(db).typed_body(db);
+                let record = match typed.expr_prop(db, operand).binding {
+                    Some(LocalBinding::Param { idx, .. }) => caller
+                        .key(db)
+                        .impl_env(db)
+                        .parameter_evidence(db)
+                        .iter()
+                        .find(|(index, _)| *index == idx as usize)
+                        .map(|(_, record)| *record),
+                    _ => typed
+                        .callable_expr(operand)
+                        .and_then(Callable::evidence_introduction),
+                }
+                .ok_or(MethodArgMapError::MissingBody)?;
+                record
+                    .revalidate(db, destination, inst)
+                    .map_err(|_| MethodArgMapError::MissingBody)?
+                    .method(name)
+            } else if let Some(record) = callable.selected_trait_application() {
                 record
                     .revalidate(db, record.origin_context(), inst)
                     .map_err(|_| MethodArgMapError::MissingBody)?
@@ -726,6 +746,7 @@ fn semantic_callee_key_with_assumptions<'db>(
             assumptions
         },
         witnesses.into_iter().collect::<Vec<_>>(),
+        Vec::new(),
     );
 
     if matches!(provider_resolution_mode, ProviderResolutionMode::Final)
@@ -969,7 +990,13 @@ fn semantic_const_key_for_inherent_const<'db>(
         BodyOwner::AnonConstBody { body, expected: ty },
         GenericSubst::for_owner(db, use_.impl_().into(), impl_args),
         EffectProviderSubst::empty(db),
-        ImplEnv::new(db, use_.origin_scope(), use_.assumptions(), vec![]),
+        ImplEnv::new(
+            db,
+            use_.origin_scope(),
+            use_.assumptions(),
+            vec![],
+            Vec::new(),
+        ),
     ))
 }
 
@@ -993,6 +1020,7 @@ fn semantic_const_key_for_assoc_const<'db>(
             assoc.origin_scope(),
             assoc.assumptions(),
             vec![assoc.inst()],
+            Vec::new(),
         ),
     ))
 }

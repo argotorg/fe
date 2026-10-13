@@ -4,7 +4,7 @@ use crate::{
         ty::{
             const_ty::lexical_const_body_owner,
             subst::substitute_complete,
-            trait_def::TraitInstId,
+            trait_def::{ImplApplicationRecord, TraitInstId},
             trait_resolution::PredicateListId,
             ty_check::{BodyOwner, TypedBody, infer_body},
             ty_def::TyId,
@@ -106,6 +106,9 @@ pub struct ImplEnv<'db> {
     pub assumptions: PredicateListId<'db>,
     #[return_ref]
     pub witnesses: Vec<TraitInstId<'db>>,
+    /// Issued argument choices, keyed by the callee parameter index.
+    #[return_ref]
+    pub parameter_evidence: Vec<(usize, ImplApplicationRecord<'db>)>,
 }
 
 impl<'db> ImplEnv<'db> {
@@ -114,6 +117,7 @@ impl<'db> ImplEnv<'db> {
             db,
             normalization_scope,
             PredicateListId::empty_list(db),
+            Vec::new(),
             Vec::new(),
         )
     }

@@ -267,6 +267,7 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
 pub struct Callable<'db> {
     evidence_introduction: Option<super::super::trait_def::ImplApplicationRecord<'db>>,
     evidence_opening: Option<(ExprId, TraitSolveCx<'db>)>,
+    opened_trait_application: Option<(ExprId, TraitSolveCx<'db>)>,
     selected_trait_application: Option<super::super::trait_def::ImplApplicationRecord<'db>>,
     pub callable_def: CallableDef<'db>,
     base_ty: TyId<'db>,
@@ -288,6 +289,9 @@ impl<'db> TyVisitable<'db> for Callable<'db> {
             record.visit_with(visitor);
         }
         if let Some((_, context)) = self.evidence_opening {
+            context.visit_with(visitor);
+        }
+        if let Some((_, context)) = self.opened_trait_application {
             context.visit_with(visitor);
         }
         if let Some(record) = self.selected_trait_application {
@@ -315,6 +319,9 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
             evidence_opening: self
                 .evidence_opening
                 .map(|(operand, context)| (operand, context.fold_with(db, folder))),
+            opened_trait_application: self
+                .opened_trait_application
+                .map(|(operand, context)| (operand, context.fold_with(db, folder))),
             selected_trait_application: self
                 .selected_trait_application
                 .map(|record| record.fold_with(db, folder)),
@@ -331,6 +338,16 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
 }
 
 impl<'db> Callable<'db> {
+    pub fn opened_trait_application(&self) -> Option<(ExprId, TraitSolveCx<'db>)> {
+        self.opened_trait_application
+    }
+    pub(super) fn record_opened_trait_application(
+        &mut self,
+        operand: ExprId,
+        context: TraitSolveCx<'db>,
+    ) {
+        self.opened_trait_application = Some((operand, context));
+    }
     pub fn selected_trait_application(
         &self,
     ) -> Option<super::super::trait_def::ImplApplicationRecord<'db>> {
@@ -408,6 +425,7 @@ impl<'db> Callable<'db> {
         Ok(Self {
             evidence_introduction: None,
             evidence_opening: None,
+            opened_trait_application: None,
             selected_trait_application: None,
             callable_def,
             base_ty: base,
@@ -428,6 +446,7 @@ impl<'db> Callable<'db> {
         Self {
             evidence_introduction: None,
             evidence_opening: None,
+            opened_trait_application: None,
             selected_trait_application: None,
             callable_def,
             base_ty: TyId::func(db, callable_def),
@@ -1149,6 +1168,7 @@ impl<'db> Callable<'db> {
             }
 
             let obligation = super::env::TraitObligation {
+                context: tc.env.proof_context(),
                 goal: constraint,
                 origin: super::env::TraitObligationOrigin::CallConstraint {
                     call_expr,

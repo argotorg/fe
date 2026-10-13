@@ -3222,6 +3222,7 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
                 declaration.scope(),
                 PredicateListId::empty_list(&db),
                 vec![trait_inst],
+                Vec::new(),
             ),
         );
         let mut replaced = false;

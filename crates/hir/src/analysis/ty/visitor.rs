@@ -269,6 +269,9 @@ impl<'db> TyVisitable<'db> for SemanticInstanceKey<'db> {
         let env = self.impl_env(db);
         env.assumptions(db).visit_with(visitor);
         env.witnesses(db).visit_with(visitor);
+        for (_, record) in env.parameter_evidence(db) {
+            record.visit_with(visitor);
+        }
     }
 }
 
