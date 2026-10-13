@@ -159,3 +159,34 @@ fn issued_witness_cannot_export_selected_layout() {
     );
     check("issued-layout-escape.fe", &source, true);
 }
+
+#[test]
+fn diverging_first_match_arm_preserves_ordinary_unit_arm() {
+    check(
+        "ordinary-diverging-match.fe",
+        r#"
+fn divergent() -> ! { core::panic() }
+fn ordinary(_ condition: bool) {
+    match condition { true => divergent(), false => {} }
+}
+"#,
+        false,
+    );
+}
+
+#[test]
+fn ordinary_erc20_match_arms_remain_accepted() {
+    check(
+        "erc20_try_transfer.fe",
+        include_str!("../../fe/tests/fixtures/fe_test/erc20_try_transfer.fe"),
+        false,
+    );
+}
+#[test]
+fn ordinary_erc721_erc1155_match_arms_remain_accepted() {
+    check(
+        "erc721_erc1155_try_transfer.fe",
+        include_str!("../../fe/tests/fixtures/fe_test/erc721_erc1155_try_transfer.fe"),
+        false,
+    );
+}

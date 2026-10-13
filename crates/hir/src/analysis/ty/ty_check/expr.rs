@@ -410,7 +410,15 @@ impl<'db> TyChecker<'db> {
             return typed;
         };
 
-        let expected = self.normalize_ty(expected);
+        // Keep inference variables intact until equate_ty applies master's
+        // divergence rule. Folding here can turn an inferred match result
+        // into a concrete never type before checking the next arm.
+        let expected = normalize_ty(
+            self.db,
+            self.env.contextualize_const_types(expected),
+            self.env.scope(),
+            self.env.assumptions(),
+        );
 
         self.env.enter_expr(expr);
         let mut actual = match expr_data {
