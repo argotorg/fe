@@ -186,3 +186,37 @@ fn call_bearing_prerequisite_constant_keeps_selected_context() {
         &["2", "43", "8", "43", "2", "1"],
     );
 }
+
+#[test]
+fn unresolved_default_selection_blocks_until_concrete_override() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "default-selection-staging.fe".into(),
+        r#"
+trait Read { const fn value() -> u256 { 9 } }
+struct Subject {}
+impl Read for Subject { const fn value() -> u256 { 42 } }
+const fn generic<T: Read>() -> u256 { <T as Read>::value() + 1 }
+const fn answer() -> u256 { generic<Subject>() }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let generic = BodyOwner::Func(find_func(&db, module, "generic"));
+    let outcome = eval_body_owner_const(
+        &db,
+        generic,
+        GenericSubst::for_body_owner(&db, generic, vec![]),
+    );
+    assert!(matches!(outcome, EvalOutcome::Blocked(_)), "{outcome:?}");
+    let answer = BodyOwner::Func(find_func(&db, module, "answer"));
+    let outcome = eval_body_owner_const(
+        &db,
+        answer,
+        GenericSubst::for_body_owner(&db, answer, vec![]),
+    );
+    let EvalOutcome::Ready(value) = outcome else {
+        panic!("concrete override must execute: {outcome:?}");
+    };
+    assert_eq!(value.pretty_print(&db), "43");
+}
