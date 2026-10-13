@@ -20,8 +20,9 @@ use crate::{
             method_cmp::{normalize_compare_assoc_consts, normalize_predicate_for_comparison},
             normalize::normalize_ty,
             trait_def::{
-                ImplementorOrigin, MethodArgMapError, ResolvedImplInstance, TraitInstId,
-                assoc_const_body_template_for_trait_inst, resolve_trait_method_instance,
+                ImplApplicationRecord, ImplementorOrigin, MethodArgMapError, ResolvedImplInstance,
+                TraitInstId, assoc_const_body_template_for_trait_inst,
+                resolve_trait_method_instance,
             },
             trait_resolution::{
                 GoalSatisfiability, PredicateListId, Selection, TraitSolveCx,
@@ -41,8 +42,8 @@ use crate::{
     },
     core::semantic::{EffectEnvView, EffectRequirementKey, ProviderBinding},
     hir_def::{
-        CallableDef, Const, Func, GenericParamOwner, HirIngot, params::FuncParamMode,
-        scope_graph::ScopeId,
+        CallableDef, Const, ExprId, Func, GenericParamOwner, HirIngot, Partial, Stmt,
+        params::FuncParamMode, scope_graph::ScopeId,
     },
 };
 use common::indexmap::IndexSet;
@@ -445,6 +446,53 @@ pub fn generated_callee_key<'db>(
     Ok(callee.key)
 }
 
+/// Recover the issued choice through immutable binding aliases. This reads
+/// already checked argument/intro records; admission remains at the method use.
+fn opened_operand_application<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    mut operand: ExprId,
+) -> Option<ImplApplicationRecord<'db>> {
+    let typed = caller.key(db).typed_body(db);
+    let mut seen = Vec::new();
+    loop {
+        if seen.contains(&operand) {
+            return None;
+        }
+        seen.push(operand);
+        match typed.expr_prop(db, operand).binding {
+            Some(LocalBinding::Param {
+                idx, is_mut: false, ..
+            }) => {
+                return caller
+                    .key(db)
+                    .impl_env(db)
+                    .parameter_evidence(db)
+                    .iter()
+                    .find(|(index, _)| *index == idx as usize)
+                    .map(|(_, record)| *record);
+            }
+            Some(LocalBinding::Local { pat, is_mut: false }) => {
+                operand = typed
+                    .body()?
+                    .stmts(db)
+                    .values()
+                    .find_map(|stmt| match stmt {
+                        Partial::Present(Stmt::Let(bound, _, Some(value))) if *bound == pat => {
+                            Some(*value)
+                        }
+                        _ => None,
+                    })?;
+            }
+            _ => {
+                return typed
+                    .callable_expr(operand)
+                    .and_then(Callable::evidence_introduction);
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn semantic_callee_key_with_assumptions<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -476,20 +524,8 @@ fn semantic_callee_key_with_assumptions<'db>(
         && let Selection::Unique(method) =
             if let Some((operand, destination)) = callable.opened_trait_application() {
                 let caller = caller.ok_or(MethodArgMapError::MissingBody)?;
-                let typed = caller.key(db).typed_body(db);
-                let record = match typed.expr_prop(db, operand).binding {
-                    Some(LocalBinding::Param { idx, .. }) => caller
-                        .key(db)
-                        .impl_env(db)
-                        .parameter_evidence(db)
-                        .iter()
-                        .find(|(index, _)| *index == idx as usize)
-                        .map(|(_, record)| *record),
-                    _ => typed
-                        .callable_expr(operand)
-                        .and_then(Callable::evidence_introduction),
-                }
-                .ok_or(MethodArgMapError::MissingBody)?;
+                let record = opened_operand_application(db, caller, operand)
+                    .ok_or(MethodArgMapError::MissingBody)?;
                 record
                     .revalidate(db, destination, inst)
                     .map_err(|_| MethodArgMapError::MissingBody)?

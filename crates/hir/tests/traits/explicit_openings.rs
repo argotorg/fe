@@ -413,3 +413,46 @@ const fn admitted() -> u256 { consume_with_leaf<Subject>(issued(), leaf()) }
     };
     assert_eq!(value.pretty_print(&db), "42");
 }
+
+#[test]
+fn immutable_aliases_preserve_parameter_method_choices() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "aliased_parameter_choices.fe".into(),
+        r#"
+use core::obligations::{Evidence, prove}
+trait Pick { const fn value() -> u256 }
+struct Subject {}
+impl Pick for Subject { const fn value() -> u256 { 1 } }
+impl Pick for Subject as First { const fn value() -> u256 { 42 } }
+impl Pick for Subject as Second { const fn value() -> u256 { 7 } }
+type Goal = Pick<Subject>
+const fn first() -> Evidence<Goal> { with (First) { prove<Goal>() } }
+const fn second() -> Evidence<Goal> { with (Second) { prove<Goal>() } }
+const fn ordinary() -> Evidence<Goal> { prove<Goal>() }
+const fn consume<T>(witness: Evidence<Pick<T>>) -> u256 {
+    let alias = witness
+    let second_alias = alias
+    with (second_alias) { <T as Pick>::value() }
+}
+const fn relay<T>(witness: Evidence<Pick<T>>) -> u256 { consume<T>(witness: witness) }
+const fn answer() -> (u256, u256, u256, u256) {
+    (relay<Subject>(witness: first()), relay<Subject>(witness: second()),
+     relay<Subject>(witness: ordinary()), relay<Subject>(witness: first()))
+}
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&db, module, "answer"));
+    let outcome =
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+    let EvalOutcome::Ready(value) = outcome else {
+        panic!("{outcome:?}")
+    };
+    let SemConstValue::Tuple { elems, .. } = value.value(&db) else {
+        panic!("tuple required")
+    };
+    let actual: Vec<_> = elems.iter().map(|value| value.pretty_print(&db)).collect();
+    assert_eq!(actual, ["42", "7", "1", "42"]);
+}
