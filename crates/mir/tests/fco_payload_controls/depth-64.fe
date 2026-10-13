@@ -1,0 +1,12 @@
+use core::obligations::{Evidence, prove}
+trait Pick { const fn value() -> u256 }
+struct Subject {}
+impl Pick for Subject { const fn value() -> u256 { 1 } }
+impl Pick for Subject as First { const fn value() -> u256 { 2 } }
+type Goal = Pick<Subject>
+const fn first() -> Evidence<Goal> { with (First) { prove<Goal>() } }
+struct Wrap<T> { inner: T }
+fn consume<T>(_ witness: Evidence<Pick<T>>) -> u256 { with (witness) { <T as Pick>::value() } }
+fn forward<T>(_ box: Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Wrap<Evidence<Pick<T>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>) -> u256 { consume<T>(box.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner.inner) }
+#[test]
+fn preserves() { assert(forward<Subject>(Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: Wrap { inner: first() } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }) == 2) }

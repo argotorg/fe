@@ -907,6 +907,10 @@ pub struct ResolvedMethodInstance<'db> {
 #[derive(Debug, Clone)]
 pub enum MethodArgMapError<'db> {
     MissingBody,
+    EvidenceProjectionStopped {
+        operand: crate::hir_def::ExprId,
+        depth: Option<usize>,
+    },
     ConstArgumentFailed(super::ty_def::InvalidCause<'db>),
     ConstArgumentInvariant(String),
     ConstArgumentBlocked {

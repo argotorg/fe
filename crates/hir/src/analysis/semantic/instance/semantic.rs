@@ -734,6 +734,24 @@ fn method_arg_map_diagnostic<'db>(
     error: MethodArgMapError<'db>,
     origin: SemOrigin<'db>,
 ) -> SemanticDiagnosticId<'db> {
+    if let MethodArgMapError::EvidenceProjectionStopped { operand, depth } = &error {
+        let message = depth.map_or_else(
+            || "evidence projection discovery stopped at a recursive type".to_string(),
+            |depth| format!("evidence projection discovery exceeds the depth limit of {depth}"),
+        );
+        return SemanticDiagnosticId::new(
+            db,
+            SemanticDiagnostic::new(
+                instance,
+                SemanticDiagnosticKind::UnresolvedCall,
+                message,
+                SemanticDiagnosticSpan::Origin {
+                    owner: instance.key(db).owner(db),
+                    origin: SemOrigin::Expr(*operand),
+                },
+            ),
+        );
+    }
     if let MethodArgMapError::ConstArgumentFailed(cause) = &error {
         let source = match cause {
             InvalidCause::ConstEvalDivisionByZero { body, expr }

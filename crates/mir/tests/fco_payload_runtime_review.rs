@@ -503,6 +503,67 @@ fn assert_factory_failure_source(source: &str) {
     );
 }
 
+#[test]
+fn projection_depth_boundary_keeps_positive_and_explicit_limit_cause() {
+    for (source, supported) in [
+        (include_str!("fco_payload_controls/depth-64.fe"), true),
+        (include_str!("fco_payload_controls/depth-65.fe"), false),
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("projection-depth.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let package = fe_mir::build_test_runtime_package(&db, module, Some("preserves"));
+        if supported {
+            let package = package.expect("unchanged depth64 positive must lower");
+            assert!(!package.functions(&db).is_empty());
+        } else {
+            assert!(package.is_err());
+            let owner = BodyOwner::Func(find_func(&db, module, "preserves"));
+            let key = hir::analysis::semantic::root_semantic_instance_key(&db, owner).unwrap();
+            let instance = hir::analysis::semantic::get_or_build_semantic_instance(&db, key);
+            let failure = hir::analysis::semantic::borrowck::check_semantic_borrows(&db, instance)
+                .unwrap_err();
+            let diagnostic = failure
+                .diagnostic()
+                .expect("explicit discovery limit required");
+            println!("DEPTH LIMIT {diagnostic:#?}");
+            let rendered = format!("{diagnostic:?}");
+            assert!(
+                rendered.contains("evidence projection discovery exceeds the depth limit of 64"),
+                "{rendered}"
+            );
+            assert!(!rendered.contains("MissingBody"), "{rendered}");
+            assert!(diagnostic.primary_span().is_some());
+        }
+    }
+}
+
+#[test]
+fn ordinary_deep_record_is_not_rejected_by_evidence_discovery_limit() {
+    let source = include_str!("fco_payload_controls/depth-65.fe")
+        .lines()
+        .map(|line| {
+            if line.starts_with("fn forward") {
+                line.replace("Evidence<Pick<T>>", "u256")
+                    .replace("consume<T>(", "(")
+            } else if line.starts_with("fn preserves") {
+                line.replace("inner: first()", "inner: 2")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("ordinary-depth65.fe".into(), &source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let package = fe_mir::build_test_runtime_package(&db, module, Some("preserves"))
+        .expect("ordinary deep records do not carry issued evidence");
+    assert!(!package.functions(&db).is_empty());
+}
+
 fn check_source_runtime_choice_delivery(name: &str, callers: &str) {
     let mut db = HirAnalysisTestDb::default();
     let source = [
