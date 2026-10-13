@@ -51,6 +51,35 @@ use super::{
     service::force_const_term_value_with_steps,
 };
 
+/// Consume the retained introduction through the existing checked application
+/// and constant-shape authorities. Shared by CTFE and semantic const lowering;
+/// it never discovers a replacement implementation.
+pub(crate) fn issue_checked_evidence<'db>(
+    db: &'db dyn HirAnalysisDb,
+    record: crate::analysis::ty::trait_def::ImplApplicationRecord<'db>,
+    result_ty: TyId<'db>,
+    origin: SemOrigin<'db>,
+) -> Result<VerifiedConstValueId<'db>, CtfeError<'db>> {
+    let goal =
+        crate::analysis::ty::corelib::evidence_goal(db, record.origin_context().scope(), result_ty)
+            .ok_or(CtfeError::NotConstEvaluable { origin })?;
+    let checked = record
+        .revalidate(db, record.origin_context(), goal)
+        .map_err(|_| CtfeError::InvalidOperation {
+            origin,
+            message: "recorded evidence application no longer proves its goal".into(),
+        })?;
+    let value = SemConstId::new(
+        db,
+        SemConstValue::Evidence {
+            ty: result_ty,
+            application: checked.record(),
+        },
+    );
+    VerifiedConstValueId::from_complete_execution(db, value)
+        .map_err(|_| CtfeError::NotConstEvaluable { origin })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct CtfeConfig {
     pub step_limit: usize,
@@ -1531,28 +1560,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                             message: "evidence introduction has no recorded checked application"
                                 .into(),
                         })?;
-                    let goal = crate::analysis::ty::corelib::evidence_goal(
-                        self.db,
-                        record.origin_context().scope(),
-                        result_ty,
-                    )
-                    .ok_or(CtfeError::NotConstEvaluable { origin })?;
-                    let checked = record
-                        .revalidate(self.db, record.origin_context(), goal)
-                        .map_err(|_| CtfeError::InvalidOperation {
-                            origin,
-                            message: "recorded evidence application no longer proves its goal"
-                                .into(),
-                        })?;
-                    let value = SemConstId::new(
-                        self.db,
-                        SemConstValue::Evidence {
-                            ty: result_ty,
-                            application: checked.record(),
-                        },
-                    );
-                    let value = VerifiedConstValueId::from_complete_execution(self.db, value)
-                        .map_err(|_| CtfeError::NotConstEvaluable { origin })?;
+                    let value = issue_checked_evidence(self.db, record, result_ty, origin)?;
                     return Ok(CtfeValue::Value(CtfeConstValue::concrete(self.db, value)));
                 }
                 if !effect_args.is_empty() {

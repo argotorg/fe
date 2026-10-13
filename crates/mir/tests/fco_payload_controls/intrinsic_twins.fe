@@ -1,0 +1,3 @@
+const fn prove() -> u64 { 7 }
+const fn same_spelling() -> u64 { prove() }
+const fn ordinary_size() -> u256 { core::size_of<u64>() }

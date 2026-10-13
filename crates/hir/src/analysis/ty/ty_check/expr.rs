@@ -306,8 +306,11 @@ impl<'db> TyChecker<'db> {
         })
     }
 
-    fn const_intrinsic_kind(&self, callable_def: CallableDef<'db>) -> Option<ConstIntrinsicKind> {
-        let CallableDef::Func(func) = callable_def else {
+    fn const_intrinsic_kind(&self, callable: &Callable<'db>) -> Option<ConstIntrinsicKind> {
+        if callable.evidence_introduction().is_some() {
+            return Some(ConstIntrinsicKind::EvidenceIntroduction);
+        }
+        let CallableDef::Func(func) = callable.callable_def() else {
             return None;
         };
         (resolve_lib_func_path(self.db, self.env.scope(), "core::size_of") == Some(func))
@@ -322,6 +325,7 @@ impl<'db> TyChecker<'db> {
     ) -> bool {
         let ty = match kind {
             ConstIntrinsicKind::SizeOf => callable.generic_args().first().copied(),
+            ConstIntrinsicKind::EvidenceIntroduction => None,
         };
         if let Some(ty) = ty {
             let ty = self.normalize_ty(ty);
@@ -1621,7 +1625,7 @@ impl<'db> TyChecker<'db> {
         let ret_ty = callable.ret_ty(self.db);
         let normalized_ret_ty = self.normalize_ty(ret_ty);
         self.report_instantiated_const_fault(&callable, normalized_ret_ty, expr);
-        if let Some(kind) = self.const_intrinsic_kind(callable.callable_def()) {
+        if let Some(kind) = self.const_intrinsic_kind(&callable) {
             if !self.check_and_register_const_intrinsic(expr, callable, kind) {
                 return ExprProp::invalid(self.db);
             }
@@ -3687,7 +3691,7 @@ impl<'db> TyChecker<'db> {
         let ret_ty = callable.ret_ty(self.db);
         let normalized_ret_ty = self.normalize_ty(ret_ty);
         self.report_instantiated_const_fault(&callable, normalized_ret_ty, expr);
-        if let Some(kind) = self.const_intrinsic_kind(callable.callable_def()) {
+        if let Some(kind) = self.const_intrinsic_kind(&callable) {
             if !self.check_and_register_const_intrinsic(expr, callable, kind) {
                 return ExprProp::invalid(self.db);
             }

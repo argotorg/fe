@@ -1223,6 +1223,22 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         callable: &Callable<'db>,
         kind: ConstIntrinsicKind,
     ) -> SValueId {
+        if kind == ConstIntrinsicKind::EvidenceIntroduction {
+            let origin = SemOrigin::Expr(expr);
+            let result_ty = self.expr_ty(expr);
+            let record = callable
+                .evidence_introduction()
+                .expect("admitted evidence intrinsic requires its checked application");
+            let value = crate::analysis::semantic::ctfe::issue_checked_evidence(
+                self.db, record, result_ty, origin,
+            )
+            .expect("admitted evidence intrinsic must retain its checked application");
+            return self.emit_expr_with_origin(
+                origin,
+                result_ty,
+                SExpr::Const(SConst::Value(value)),
+            );
+        }
         let ty = match kind {
             ConstIntrinsicKind::SizeOf => normalize_ty(
                 self.db,
@@ -1233,6 +1249,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.body.scope(),
                 self.assumptions,
             ),
+            ConstIntrinsicKind::EvidenceIntroduction => unreachable!("handled above"),
         };
         let result_ty = self.expr_ty(expr);
         // Admission reports failed concrete demands; raw lowering preserves
@@ -1269,6 +1286,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     args: Vec::new(),
                     parameter_owner: caller.owner(self.db).scope(),
                 }),
+                ConstIntrinsicKind::EvidenceIntroduction => unreachable!("handled above"),
             };
             let const_ty = ConstTyId::new(
                 self.db,
