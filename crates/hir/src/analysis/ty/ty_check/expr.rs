@@ -307,6 +307,10 @@ impl<'db> TyChecker<'db> {
     }
 
     fn const_intrinsic_kind(&self, callable: &Callable<'db>) -> Option<ConstIntrinsicKind> {
+        // The existing argument checker leaves this unset on arity failure.
+        // Failed source calls must retain ordinary call rejection, not erase
+        // their supplied arguments through constant-intrinsic registration.
+        callable.checked_input_tys()?;
         if callable.evidence_opening().is_some() {
             return Some(ConstIntrinsicKind::EvidenceOpening);
         }
@@ -1544,6 +1548,9 @@ impl<'db> TyChecker<'db> {
             )
         {
             return true;
+        }
+        if callable.checked_input_tys().is_none() {
+            return false;
         }
         if let [term] = callable.generic_args()
             && let TyData::ConstraintTerm(goal) = self.normalize_ty(*term).data(self.db)

@@ -1,0 +1,7 @@
+use core::obligations::{Evidence, prove}
+trait Produce {}
+struct Subject {}
+impl Produce for Subject {}
+fn invalid() -> Evidence<Produce<Subject>> { prove<Produce<Subject>>(1) }
+
+fn main() -> Evidence<Produce<Subject>> { invalid() }

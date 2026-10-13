@@ -279,3 +279,41 @@ fn ordinary_forwarding_consumes_retained_introduction_before_borrow_admission() 
         "ordinary generic forwarding must be lowered, not dropped"
     );
 }
+
+#[test]
+fn const_intrinsic_classification_does_not_bypass_argument_eligibility() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "wrong_arguments.fe".into(),
+        include_str!("fco_payload_controls/wrong_arguments.fe"),
+    );
+    let (module, _) = db.top_mod(file);
+    let mut manager = hir::test_db::initialize_test_analysis_pass();
+    let diags = manager
+        .run_on_module(&db, module)
+        .into_iter()
+        .map(|diag| diag.to_complete(&db))
+        .collect::<Vec<_>>();
+    eprintln!("ARGUMENT_ELIGIBILITY_CAUSE_SPANS {diags:#?}");
+    assert!(
+        diags.iter().any(|diag| diag.error_code.local_code == 23),
+        "existing CallArgNumMismatch diagnostic must remain: {diags:#?}"
+    );
+    let result = fe_mir::build_runtime_package(&db, module);
+    if let Ok(package) = &result {
+        eprintln!(
+            "INVALID_ARITY_ACCEPTED_PACKAGE {} functions",
+            package.functions(&db).len()
+        );
+        for function in package.functions(&db) {
+            eprintln!(
+                "{}",
+                fe_mir::format_runtime_body(&db, &function.instance(&db).body(&db))
+            );
+        }
+    }
+    assert!(
+        result.is_err(),
+        "arity-invalid checked proof calls cannot become accepted constants"
+    );
+}
