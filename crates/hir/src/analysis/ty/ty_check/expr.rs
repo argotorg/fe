@@ -5485,20 +5485,8 @@ impl<'db> TyChecker<'db> {
         }
         rhs_prop.ty = self.unify_ty(Typeable::Expr(*rhs, rhs_prop.clone()), rhs_prop.ty, lhs_ty);
 
-        if let Some(place) = self.env.expr_place(*lhs) {
-            let PlaceBase::Binding(binding) = place.base;
-            let openings = self
-                .env
-                .binding_openings(binding)
-                .fold_with(self.db, &mut self.table);
-            let source_layout = self.selection_layout_types(rhs_prop.ty);
-            let destination_layout = self.selection_layout_types_at(rhs_prop.ty, Some(&openings));
-            if source_layout != destination_layout {
-                self.push_diag(BodyDiag::SelectedConstantTypeEscape(
-                    rhs.span(self.body()).into(),
-                ));
-                return ExprProp::invalid(self.db);
-            }
+        if self.reject_assignment_selection_escape(*lhs, *rhs, rhs_prop.ty) {
+            return ExprProp::invalid(self.db);
         }
 
         let lhs_status = self.check_assign_lhs(*lhs, &typed_lhs);
@@ -5521,6 +5509,54 @@ impl<'db> TyChecker<'db> {
         ExprProp::new(TyId::unit(self.db), true)
     }
 
+    fn reject_assignment_selection_escape(
+        &mut self,
+        lhs: ExprId,
+        rhs: ExprId,
+        assigned_ty: TyId<'db>,
+    ) -> bool {
+        if let Some(place) = self.env.expr_place(lhs) {
+            let PlaceBase::Binding(binding) = place.base;
+            let openings = self
+                .env
+                .binding_openings(binding)
+                .fold_with(self.db, &mut self.table);
+            let source_layout = self.selection_layout_types(assigned_ty);
+            let mut destination_ty = self
+                .env
+                .lookup_binding_ty(&binding)
+                .fold_with(self.db, &mut self.table);
+            for projection in &place.projections {
+                destination_ty = destination_ty
+                    .as_capability(self.db)
+                    .map_or(destination_ty, |(_, inner)| inner);
+                destination_ty = match projection {
+                    PlaceProjection::Deref { .. } => destination_ty.as_ptr(self.db),
+                    PlaceProjection::Field { index, .. } => destination_ty
+                        .field_types(self.db)
+                        .get(usize::from(*index))
+                        .copied(),
+                    PlaceProjection::Index { .. } if destination_ty.is_array(self.db) => {
+                        destination_ty.decompose_ty_app(self.db).1.first().copied()
+                    }
+                    PlaceProjection::Index { .. } => None,
+                }
+                .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other));
+            }
+            let destination_ty = self.assignment_target_ty(lhs, destination_ty);
+            let destination_layout =
+                self.selection_layout_types_at(destination_ty, Some(&openings));
+            if source_layout != destination_layout {
+                self.push_diag(BodyDiag::SelectedConstantTypeEscape(
+                    rhs.span(self.body()).into(),
+                ));
+                return true;
+            }
+        }
+
+        false
+    }
+
     fn check_index_mut_assign(&mut self, lhs: ExprId, rhs: ExprId) -> Option<ExprProp<'db>> {
         let target = self.check_index_mut_target(lhs)?;
         if target.prop.ty.has_invalid(self.db) {
@@ -5538,6 +5574,10 @@ impl<'db> TyChecker<'db> {
             rhs_prop.ty,
             target.target_ty,
         );
+
+        if self.reject_assignment_selection_escape(lhs, rhs, rhs_prop.ty) {
+            return Some(ExprProp::invalid(self.db));
+        }
 
         if !target.trait_lowered {
             let lhs_status = self.check_assign_lhs(lhs, &target.prop);

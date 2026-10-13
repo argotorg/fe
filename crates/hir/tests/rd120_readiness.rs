@@ -84,3 +84,58 @@ fn same_context_assignment_preserves_selected_layout() {
     );
     check("same-context-assignment.fe", &source, false);
 }
+
+#[test]
+fn field_assignment_cannot_export_selected_layout() {
+    let prefix = include_str!("rd120_controls/signature_const_aggregate_leak.fe")
+        .split("fn leak()")
+        .next()
+        .unwrap();
+    let source = format!(
+        "{prefix}\nfn assigned() -> u256 {{ let mut b = make<Subject>([7])\nwith (Other) {{ b.a = [7,8] }}\nb.a[0] }}\n"
+    );
+    check("field-assignment-escape.fe", &source, true);
+}
+
+#[test]
+fn same_context_field_assignment_preserves_selected_layout() {
+    let prefix = include_str!("rd120_controls/signature_const_aggregate_leak.fe")
+        .split("fn leak()")
+        .next()
+        .unwrap();
+    let source = format!(
+        "{prefix}\nfn assigned() -> u256 {{ with (Other) {{ let mut b = make<Subject>([7,8])\nb.a = [9,10]\nb.a[1] }} }}\n"
+    );
+    check("same-context-field-assignment.fe", &source, false);
+}
+#[test]
+fn indexed_assignment_cannot_export_selected_layout() {
+    let prefix = include_str!("rd120_controls/signature_const_aggregate_leak.fe")
+        .split("fn leak()")
+        .next()
+        .unwrap();
+    let source = format!(
+        "{prefix}\nfn assigned() -> u256 {{ let mut bs = [make<Subject>([7])]\nwith (Other) {{ bs[0] = make<Subject>([7,8]) }}\nbs[0].a[0] }}\n"
+    );
+    check("indexed-assignment-escape.fe", &source, true);
+}
+
+#[test]
+fn ordinary_capability_assignment_keeps_master_behavior() {
+    check(
+        "ordinary-capability-assignment.fe",
+        "fn bump(_ x: mut u256) { x = 7 }",
+        false,
+    );
+}
+#[test]
+fn same_context_indexed_assignment_preserves_selected_layout() {
+    let prefix = include_str!("rd120_controls/signature_const_aggregate_leak.fe")
+        .split("fn leak()")
+        .next()
+        .unwrap();
+    let source = format!(
+        "{prefix}\nfn assigned() -> u256 {{ with (Other) {{ let mut bs = [make<Subject>([7,8])]\nbs[0] = make<Subject>([9,10])\nbs[0].a[1] }} }}\n"
+    );
+    check("same-context-indexed-assignment.fe", &source, false);
+}
