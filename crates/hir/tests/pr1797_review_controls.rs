@@ -442,6 +442,7 @@ fn associated_evidence_constant_uses_its_saved_selection_for_layout() {
         "[]",
         "associated Evidence uses saved Factory selection"
     );
+    assert_runtime_check_normalizes(source);
     evaluate_known_control(source, "3");
     let captured = source.replace("fn check() -> u256 {", "impl Factory for Maker as Other { const W: Evidence<Goal> = with (First) { prove<Goal>() } }\nfn check() -> u256 {")
         .replace("with (<Maker as Factory>::W) { consume<Subject>([1, 2, 3]) }", "let saved = <Maker as Factory>::W\nwith (Other) { with (saved) { consume<Subject>([1, 2, 3]) } }");
@@ -450,5 +451,27 @@ fn associated_evidence_constant_uses_its_saved_selection_for_layout() {
         "[]",
         "alias keeps the initializer frame rather than the later current frame"
     );
+    assert_runtime_check_normalizes(&captured);
     evaluate_known_control(&captured, "3");
+}
+
+fn assert_runtime_check_normalizes(source: &str) {
+    use fe_hir::{
+        analysis::{
+            semantic::{
+                get_or_build_semantic_instance, identity_semantic_instance_key,
+                normalize_runtime_semantic_body,
+            },
+            ty::ty_check::BodyOwner,
+        },
+        test_db::find_func,
+    };
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("associated-runtime-layout.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&db, module, "check"));
+    let instance = get_or_build_semantic_instance(&db, identity_semantic_instance_key(&db, owner));
+    normalize_runtime_semantic_body(&db, instance)
+        .expect("runtime call layout receives the same issued constant record");
 }

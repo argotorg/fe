@@ -680,9 +680,25 @@ impl<'db> crate::analysis::semantic::operand_recovery::OperandRecoveryCx<'db>
         };
         let typed = caller.key(db).typed_body(db);
         let ty = typed.expr_ty(db, operand);
-        if let Some(reference @ ConstRef::Const(_)) = typed.expr_const_ref(operand) {
-            let reference =
-                resolve_semantic_const_ref(db, reference, ty, SemOrigin::Expr(operand))?;
+        if let Some(reference) = typed.expr_const_ref(operand) {
+            let template = typed_body_template(db, caller.key(db).owner(db));
+            let inherit = match template.body.expr_const_ref(operand) {
+                Some(ConstRef::TraitConst(original)) => {
+                    declaration_reaches_trait_goal(db, template.body.assumptions(), original.inst())
+                }
+                _ => false,
+            };
+            let reference = resolve_semantic_const_ref_in_instance(
+                db,
+                reference,
+                ty,
+                SemOrigin::Expr(operand),
+                Some(caller),
+                inherit,
+            )?;
+            if reference.instance(db).owner(db) == caller.key(db).owner(db) {
+                return None;
+            }
             return match crate::analysis::semantic::eval_const_ref(db, reference) {
                 EvalOutcome::Ready(value) => Some(value),
                 EvalOutcome::Blocked(info) => {
@@ -1964,17 +1980,27 @@ pub(crate) fn resolve_semantic_const_ref_in_instance<'db>(
     let instance = match const_ref {
         ConstRef::Const(const_) => semantic_const_key_for_const(db, const_),
         ConstRef::TraitConst(assoc) => {
-            let records = caller
-                .map(|caller| {
+            let records =
+                if let Some(caller) = caller {
                     let openings = match origin {
                         SemOrigin::Expr(expr) => {
                             caller.key(db).typed_body(db).expr_const_openings(expr)
                         }
                         _ => &[],
                     };
+                    // An explicit pending choice is not absence of a choice.
+                    // Do not resolve an ordinary constant body when the matching
+                    // issued operand has not yet been delivered.
+                    if openings.iter().any(|opening| matches!(opening,
+                        crate::analysis::ty::ty_check::TraitOpening::Evidence { operand, goal, .. }
+                            if goal.def(db) == assoc.inst().def(db)
+                                && goal.args(db) == assoc.inst().args(db)
+                                && opened_operand_application(db, caller, *operand).is_none()
+                    )) { return None; }
                     applications_from_openings(db, caller, openings, inherit)
-                })
-                .unwrap_or_default();
+                } else {
+                    Vec::new()
+                };
             semantic_const_key_for_assoc_const(db, assoc, records)
         }
         ConstRef::InherentConst(use_) => semantic_const_key_for_inherent_const(db, use_),
