@@ -1,0 +1,23 @@
+use core::obligations::{Constraint, Evidence, prove}
+trait Pick { const fn value() -> u256 }
+struct Subject {}
+impl Pick for Subject { const fn value() -> u256 { 1 } }
+impl Pick for Subject as First { const fn value() -> u256 { 2 } }
+impl Pick for Subject as Second { const fn value() -> u256 { 3 } }
+type Goal = Pick<Subject>
+const fn first() -> Evidence<Goal> { with (First) { prove<Goal>() } }
+const fn second() -> Evidence<Goal> { with (Second) { prove<Goal>() } }
+const fn forward<G: Constraint>(_ witness: Evidence<G>) -> Evidence<G> { witness }
+const fn answer() -> (u256, (u256, u256, u256), u256) {
+    let outer = forward<Goal>(first())
+    let inner = forward<Goal>(second())
+    let before = <Subject as Pick>::value()
+    let nested = with (outer) {
+        let outer_before = <Subject as Pick>::value()
+        let inner_value = with (inner) { <Subject as Pick>::value() }
+        let outer_after = <Subject as Pick>::value()
+        (outer_before, inner_value, outer_after)
+    }
+    let after = <Subject as Pick>::value()
+    (before, nested, after)
+}
