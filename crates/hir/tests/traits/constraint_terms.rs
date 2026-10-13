@@ -52,6 +52,24 @@ fn witness() -> Evidence<Produce<Subject, Output = u64>> {
     );
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
+    let witness = fe_hir::test_db::find_func(&db, module, "witness");
+    let (_, typed) = fe_hir::analysis::ty::ty_check::check_func_body(&db, witness);
+    let body = witness.body(&db).unwrap();
+    let records: Vec<_> = body
+        .exprs(&db)
+        .keys()
+        .filter_map(|expr| typed.callable_expr(expr))
+        .filter_map(|call| call.evidence_introduction())
+        .collect();
+    assert_eq!(
+        records.len(),
+        1,
+        "prove retains one checked use-site decision"
+    );
+    let record = records[0];
+    let context = fe_hir::analysis::ty::trait_resolution::TraitSolveCx::new(&db, witness.scope());
+    let checked = record.revalidate(&db, context, record.goal()).unwrap();
+    assert_eq!(checked.resolved().selected(), record.resolved().selected());
 }
 
 #[test]

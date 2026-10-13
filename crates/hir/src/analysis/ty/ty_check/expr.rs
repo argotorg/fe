@@ -1398,7 +1398,11 @@ impl<'db> TyChecker<'db> {
         result
     }
 
-    fn check_obligation_introduction(&mut self, expr: ExprId, callable: &Callable<'db>) -> bool {
+    fn check_obligation_introduction(
+        &mut self,
+        expr: ExprId,
+        callable: &mut Callable<'db>,
+    ) -> bool {
         let CallableDef::Func(func) = callable.callable_def() else {
             return true;
         };
@@ -1419,10 +1423,12 @@ impl<'db> TyChecker<'db> {
                     self.env.proof_context(),
                     term,
                 )
-                .map(|_| ())
             }
             _ => Err(crate::analysis::ty::trait_def::CheckedApplicationError::UnsupportedInput),
         };
+        if let Ok(application) = &result {
+            callable.record_evidence_introduction(application);
+        }
         if let Err(error) = result {
             use crate::analysis::ty::trait_def::CheckedApplicationError::*;
             let reason = match error {
@@ -1497,7 +1503,7 @@ impl<'db> TyChecker<'db> {
 
         callable.process_constraints(self, expr, call_span.callee().into());
 
-        if !self.check_obligation_introduction(expr, &callable) {
+        if !self.check_obligation_introduction(expr, &mut callable) {
             return ExprProp::invalid(self.db);
         }
 

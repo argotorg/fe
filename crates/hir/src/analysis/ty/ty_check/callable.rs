@@ -265,6 +265,7 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct Callable<'db> {
+    evidence_introduction: Option<super::super::trait_def::ImplApplicationRecord<'db>>,
     pub callable_def: CallableDef<'db>,
     base_ty: TyId<'db>,
     generic_args: Vec<TyId<'db>>,
@@ -281,6 +282,9 @@ impl<'db> TyVisitable<'db> for Callable<'db> {
         V: TyVisitor<'db> + ?Sized,
     {
         self.generic_args.visit_with(visitor);
+        if let Some(record) = self.evidence_introduction {
+            record.visit_with(visitor);
+        }
         self.effect_providers.visit_with(visitor);
         if let Some(inputs) = &self.checked_input_tys {
             inputs.visit_with(visitor);
@@ -297,6 +301,9 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
         F: TyFolder<'db>,
     {
         Self {
+            evidence_introduction: self
+                .evidence_introduction
+                .map(|record| record.fold_with(db, folder)),
             callable_def: self.callable_def,
             base_ty: self.base_ty,
             generic_args: self.generic_args.fold_with(db, folder),
@@ -310,6 +317,17 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
 }
 
 impl<'db> Callable<'db> {
+    pub fn evidence_introduction(
+        &self,
+    ) -> Option<super::super::trait_def::ImplApplicationRecord<'db>> {
+        self.evidence_introduction
+    }
+    pub(super) fn record_evidence_introduction(
+        &mut self,
+        application: &super::super::trait_def::CheckedImplApplication<'db>,
+    ) {
+        self.evidence_introduction = Some(application.record());
+    }
     pub fn callable_def(&self) -> CallableDef<'db> {
         self.callable_def
     }
@@ -355,6 +373,7 @@ impl<'db> Callable<'db> {
         });
 
         Ok(Self {
+            evidence_introduction: None,
             callable_def,
             base_ty: base,
             generic_args: args.to_vec(),
@@ -372,6 +391,7 @@ impl<'db> Callable<'db> {
         trait_inst: Option<TraitInstId<'db>>,
     ) -> Self {
         Self {
+            evidence_introduction: None,
             callable_def,
             base_ty: TyId::func(db, callable_def),
             generic_args,

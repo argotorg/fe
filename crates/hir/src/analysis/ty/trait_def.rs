@@ -571,6 +571,60 @@ pub struct CheckedImplApplication<'db> {
     resolved: ResolvedImplInstance<'db>,
 }
 
+/// Owned use-site decision. Construction is restricted to a checked proof;
+/// substitutions preserve the original implementation declaration identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub struct ImplApplicationRecord<'db> {
+    origin: TraitSolveCx<'db>,
+    goal: TraitInstId<'db>,
+    resolved: ResolvedImplInstance<'db>,
+}
+
+impl<'db> ImplApplicationRecord<'db> {
+    pub fn goal(self) -> TraitInstId<'db> {
+        self.goal
+    }
+    pub fn resolved(self) -> ResolvedImplInstance<'db> {
+        self.resolved
+    }
+    pub fn revalidate(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        destination: TraitSolveCx<'db>,
+        goal: TraitInstId<'db>,
+    ) -> Result<CheckedImplApplication<'db>, CheckedApplicationError> {
+        let candidate = self.resolved.selected();
+        prove_selected_application(db, self.origin, candidate, self.goal)?;
+        prove_selected_application(db, destination, candidate, goal)
+    }
+}
+
+impl<'db> TyFoldable<'db> for ImplApplicationRecord<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        Self {
+            origin: self
+                .origin
+                .with_assumptions(self.origin.assumptions().fold_with(db, folder)),
+            goal: self.goal.fold_with(db, folder),
+            resolved: self.resolved.fold_with(db, folder),
+        }
+    }
+}
+
+impl<'db> TyVisitable<'db> for ImplApplicationRecord<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.origin.assumptions().visit_with(visitor);
+        self.goal.visit_with(visitor);
+        self.resolved.visit_with(visitor);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckedApplicationError {
     UnsupportedInput,
@@ -732,6 +786,13 @@ pub fn prove_selected_hir_application<'db>(
 }
 
 impl<'db> CheckedImplApplication<'db> {
+    pub fn record(&self) -> ImplApplicationRecord<'db> {
+        ImplApplicationRecord {
+            origin: self.origin,
+            goal: self.goal,
+            resolved: self.resolved,
+        }
+    }
     /// The complete requested goal, including associated equalities.
     pub fn goal(&self) -> TraitInstId<'db> {
         self.goal
