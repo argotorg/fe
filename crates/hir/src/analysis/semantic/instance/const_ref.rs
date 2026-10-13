@@ -607,6 +607,32 @@ fn compiler_known_operand_value<'db>(
     Some(value.value())
 }
 
+/// Positive variant identity from actual issued argument slots. Missing slots
+/// never identify a variant, and conflicting positive identities stay unknown.
+pub(crate) fn known_operand_variant<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    operand: ExprId,
+) -> Option<u16> {
+    let (index, prefix) = operand_parameter_source(db, caller, operand)?;
+    let mut known = None;
+    for (parameter, path, _) in caller.key(db).impl_env(db).projected_parameter_evidence(db) {
+        if *parameter != index {
+            continue;
+        }
+        let Some([ReturnProjectionStep::VariantField { variant, .. }, ..]) =
+            path.strip_prefix(prefix.as_slice())
+        else {
+            continue;
+        };
+        if known.is_some_and(|previous| previous != *variant) {
+            return None;
+        }
+        known = Some(*variant);
+    }
+    known
+}
+
 // Recover the existing parameter slot through typed immutable projections.
 // This transports records; it does not reconstruct unknown runtime values.
 fn operand_parameter_source<'db>(
@@ -819,13 +845,11 @@ fn evidence_slots<'db>(
         );
         return;
     }
-    let base = ty.base_ty(db);
-    if !active.insert(base) {
+    // Repeated constructors can describe finite nested values. Track complete
+    // instantiations, while bounding expanding recursive declarations as well.
+    const MAX_PROJECTION_DEPTH: usize = 64;
+    if active.len() >= MAX_PROJECTION_DEPTH || !active.insert(ty) {
         return;
-    }
-    // Tuple nesting is finite and may reuse the same tuple constructor.
-    if base.is_tuple(db) {
-        active.remove(&base);
     }
     if ty.as_enum(db).is_some()
         && let Some(adt) = ty.adt_def(db)
@@ -855,7 +879,7 @@ fn evidence_slots<'db>(
         ));
         evidence_slots(db, scope, field, field_path, active, slots);
     }
-    active.remove(&base);
+    active.remove(&ty);
 }
 
 pub(super) fn visible_applications<'db>(
@@ -1677,6 +1701,38 @@ mod tests {
         hir_def::params::FuncParamMode,
         test_db::HirAnalysisTestDb,
     };
+
+    #[test]
+    fn recursive_and_expanding_nominal_slot_walks_terminate() {
+        use crate::analysis::ty::{
+            adt_def::AdtRef,
+            ty_def::{TyBase, TyData},
+        };
+        for field in ["Growing<T>", "Growing<(T,T)>"] {
+            let mut db = HirAnalysisTestDb::default();
+            let text = format!("struct Growing<T> {{ next: {field} }}");
+            let file = db.new_stand_alone("recursive-evidence-slots.fe".into(), &text);
+            let (module, _) = db.top_mod(file);
+            let item = module.all_structs(&db)[0];
+            let adt = AdtRef::Struct(item).as_adt(&db);
+            let ty = TyId::app(
+                &db,
+                TyId::new(&db, TyData::TyBase(TyBase::Adt(adt))),
+                TyId::u256(&db),
+            );
+            let child = super::instantiate_adt_field_shape(&db, adt, 0, 0, ty.generic_args(&db));
+            assert!(!child.has_invalid(&db));
+            assert_eq!(child == ty, field == "Growing<T>");
+            let mut active = super::IndexSet::default();
+            let mut slots = Vec::new();
+            super::evidence_slots(&db, item.scope(), ty, Vec::new(), &mut active, &mut slots);
+            assert!(active.is_empty());
+            assert!(
+                slots.is_empty(),
+                "recursive traversal cannot invent issued slots"
+            );
+        }
+    }
 
     #[test]
     fn selected_signature_comparison_preserves_cross_input_layout_sharing() {

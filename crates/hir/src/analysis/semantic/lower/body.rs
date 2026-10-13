@@ -1723,7 +1723,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let value = self.lower_expr(scrutinee);
         let result = self.alloc_temp(self.expr_ty(expr));
         let join_bb = self.new_block();
-        self.lower_match_expr_with_decision_tree(value, result, join_bb, arms)
+        let variant = crate::analysis::semantic::instance::known_operand_variant(
+            self.db,
+            self.instance,
+            scrutinee,
+        );
+        self.lower_match_expr_with_decision_tree(value, result, join_bb, arms, variant)
     }
 
     fn lower_cond_branch(&mut self, cond: CondId, then_bb: SBlockId, else_bb: SBlockId) {

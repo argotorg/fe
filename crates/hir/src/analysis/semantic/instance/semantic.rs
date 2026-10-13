@@ -1206,10 +1206,15 @@ impl<'db> SemanticInstance<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<SemanticCalleeRef<'db>> {
-        collect_callees(
+        let mut callees = collect_callees(
             &provisional_call_sites(db, self).sites,
             &provisional_for_loop_call_sites(db, self).sites,
-        )
+        );
+        if has_variant_evidence(db, self) {
+            let emitted = self.provisional_body(db).callees();
+            callees.retain(|callee| emitted.iter().any(|actual| actual.key == callee.key));
+        }
+        callees
     }
 
     fn ensure_body_admitted(
@@ -1714,7 +1719,28 @@ fn collect_semantic_callees<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Vec<SemanticCalleeRef<'db>> {
-    collect_callees(instance.call_sites(db), instance.for_loop_call_sites(db))
+    let mut callees = collect_callees(instance.call_sites(db), instance.for_loop_call_sites(db));
+    if has_variant_evidence(db, instance) {
+        let emitted = instance.body(db).callees();
+        callees.retain(|callee| emitted.iter().any(|actual| actual.key == callee.key));
+    }
+    callees
+}
+
+fn has_variant_evidence(db: &dyn HirAnalysisDb, instance: SemanticInstance<'_>) -> bool {
+    instance
+        .key(db)
+        .impl_env(db)
+        .projected_parameter_evidence(db)
+        .iter()
+        .any(|(_, path, _)| {
+            path.iter().any(|step| {
+                matches!(
+                    step,
+                    crate::analysis::ty::ty_check::ReturnProjectionStep::VariantField { .. }
+                )
+            })
+        })
 }
 
 fn collect_callees<'db>(

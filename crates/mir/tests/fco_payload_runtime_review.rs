@@ -484,8 +484,16 @@ fn consume<T>(_ witness: Evidence<Pick<T>>) -> u256 { with (witness) { <T as Pic
             _ => panic!("issued tag required"),
         })
         .collect();
-    let package = build_runtime_package(&db, module)
-        .expect("compiler-known arguments must specialize the generic consumer");
+    let package = build_runtime_package(&db, module).unwrap_or_else(|error| {
+        let owner = BodyOwner::Func(find_func(&db, module, "second_result"));
+        let key = hir::analysis::semantic::root_semantic_instance_key(&db, owner).unwrap();
+        let instance = hir::analysis::semantic::get_or_build_semantic_instance(&db, key);
+        eprintln!(
+            "ROOT BORROW DETAILS {:#?}",
+            hir::analysis::semantic::borrowck::check_semantic_borrows(&db, instance)
+        );
+        panic!("compiler-known arguments must specialize the generic consumer: {error:?}");
+    });
     let program: &dyn fe_mir::MirDb = &db;
     let mut choices = Vec::new();
     for function in package.functions(&db) {
@@ -637,6 +645,21 @@ fn array_parameter_slots_deliver_distinct_issued_choices() {
 fn forward<T>(_ pair: [Evidence<Pick<T>>; 2]) -> u256 { consume<T>(pair[0]) + consume<T>(pair[1]) }
 fn first_result() -> u256 { forward<Subject>([first(), second()]) }
 fn second_result() -> u256 { forward<Subject>([second(), first()]) }
+"#,
+    );
+}
+
+#[test]
+fn repeated_finite_record_wrappers_preserve_issued_choices() {
+    check_source_runtime_choice_delivery(
+        "repeated_record_wrappers.fe",
+        r#"
+struct Wrap<T> { inner: T }
+fn forward<T>(_ wrapped: Wrap<Wrap<Evidence<Pick<T>>>>) -> u256 {
+    consume<T>(wrapped.inner.inner)
+}
+fn first_result() -> u256 { forward<Subject>(Wrap { inner: Wrap { inner: first() } }) }
+fn second_result() -> u256 { forward<Subject>(Wrap { inner: Wrap { inner: second() } }) }
 "#,
     );
 }
