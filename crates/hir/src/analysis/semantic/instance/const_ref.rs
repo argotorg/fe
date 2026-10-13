@@ -469,7 +469,7 @@ pub(super) fn opened_operand_application<'db>(
                     .impl_env(db)
                     .parameter_evidence(db)
                     .iter()
-                    .find(|(index, _)| *index == idx as usize)
+                    .find(|(index, _)| *index == idx)
                     .map(|(_, record)| *record);
             }
             Some(LocalBinding::Local { pat, is_mut: false }) => {
