@@ -487,6 +487,29 @@ fn recover_known_operand<'db>(
     })
 }
 
+fn known_operand_value_or_error<'db>(
+    db: &'db dyn HirAnalysisDb,
+    recovery: KnownOperandRecovery<'db>,
+) -> Result<Option<crate::analysis::semantic::SemConstId<'db>>, MethodArgMapError<'db>> {
+    match recovery {
+        KnownOperandRecovery::Failed {
+            owner,
+            failure: crate::analysis::semantic::EvalFailure::Ctfe(error),
+            ..
+        } => Err(MethodArgMapError::ConstArgumentFailed(
+            crate::analysis::ty::const_ty::invalid_cause_from_ctfe_error(db, owner, error),
+        )),
+        KnownOperandRecovery::Failed { failure, .. } => Err(
+            MethodArgMapError::ConstArgumentInvariant(format!("{failure:?}")),
+        ),
+        KnownOperandRecovery::Blocked { owner, info, .. } => {
+            Err(MethodArgMapError::ConstArgumentBlocked { owner, info })
+        }
+        KnownOperandRecovery::Value(value) => Ok(Some(value)),
+        KnownOperandRecovery::NotKnown => Ok(None),
+    }
+}
+
 fn compiler_known_operand_value<'db>(
     db: &'db dyn HirAnalysisDb,
     caller: SemanticInstance<'db>,
@@ -553,6 +576,27 @@ fn known_match_arm<'db>(
     }
 }
 
+/// An immutable witness formal supplies a specialization input even when its
+/// trait goal has no type parameters. A delivered record closes that input.
+pub(crate) fn has_unbound_evidence_calls<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+) -> bool {
+    let typed = caller.key(db).typed_body(db);
+    let Some(body) = typed.body() else {
+        return false;
+    };
+    body.exprs(db).iter().any(|(expr, _)| {
+        typed
+            .callable_expr(expr)
+            .and_then(|callable| callable.opened_trait_application())
+            .is_some_and(|(operand, _)| {
+                operand_parameter_source(db, caller, operand).is_some()
+                    && opened_operand_application(db, caller, operand).is_none()
+            })
+    })
+}
+
 fn compiler_known_operand_value_inner<'db>(
     db: &'db dyn HirAnalysisDb,
     caller: SemanticInstance<'db>,
@@ -566,6 +610,28 @@ fn compiler_known_operand_value_inner<'db>(
     let typed = caller.key(db).typed_body(db);
     let ty = typed.expr_ty(db, operand);
     let body = typed.body()?;
+    if let Some(reference @ ConstRef::Const(_)) = typed.expr_const_ref(operand) {
+        let reference = resolve_semantic_const_ref(db, reference, ty, SemOrigin::Expr(operand))?;
+        return match crate::analysis::semantic::eval_const_ref(db, reference) {
+            EvalOutcome::Ready(value) => Some(value),
+            EvalOutcome::Blocked(info) => {
+                *stop = Some(KnownOperandRecovery::Blocked {
+                    owner: reference.instance(db).owner(db),
+                    info,
+                    result_ty: ty,
+                });
+                None
+            }
+            EvalOutcome::Failed(failure) => {
+                *stop = Some(KnownOperandRecovery::Failed {
+                    owner: reference.instance(db).owner(db),
+                    failure,
+                    result_ty: ty,
+                });
+                None
+            }
+        };
+    }
     match operand.data(db, body) {
         Partial::Present(Expr::Match(scrutinee, Partial::Present(arms))) => {
             let value = compiler_known_operand_value_inner(db, caller, *scrutinee, stop)?;
@@ -932,8 +998,10 @@ fn opened_operand_application_at<'db>(
                 operand = source.init_expr;
             }
             _ => {
-                let callable = typed.callable_expr(operand)?;
-                if let Some(record) = callable.evidence_introduction() {
+                if let Some(record) = typed
+                    .callable_expr(operand)
+                    .and_then(|callable| callable.evidence_introduction())
+                {
                     return projection.is_empty().then_some(record);
                 }
                 let value = compiler_known_operand_value(db, caller, operand)?;
@@ -1158,68 +1226,72 @@ fn semantic_callee_key_with_assumptions<'db>(
     let mut subst_args = callable.generic_args().to_vec();
     let body_func = if let Some(inst) = callable.trait_inst()
         && let Some(name) = nominal_func.name(db).to_opt()
-        && let Selection::Unique(method) =
-            if let Some((operand, destination)) = callable.opened_trait_application() {
-                let caller = caller.ok_or(MethodArgMapError::MissingBody)?;
-                match opened_operand_application(db, caller, operand) {
-                    Some(record) => record
-                        .revalidate(db, destination, inst)
-                        .map_err(MethodArgMapError::ApplicationNotAdmitted)?
-                        .method(name),
-                    // The layout template has no issued argument yet. Keep its
-                    // symbolic obligation; a concrete use still requires the record.
-                    None if collect_flags(db, inst).contains(TyFlags::HAS_PARAM) => {
-                        resolve_trait_method_instance(db, destination, inst, name)
-                    }
-                    None if operand_parameter_source(db, caller, operand).is_some() => {
-                        // A concrete goal can still have a symbolic witness parameter.
-                        // Keep the nominal call until argument delivery supplies its
-                        // issued record; do not select an ordinary implementation.
-                        Selection::NotFound
-                    }
-                    None => return Err(MethodArgMapError::MissingBody),
-                }
-            } else if let Some(record) = callable.selected_trait_application() {
-                record
-                    .revalidate(db, record.origin_context(), inst)
-                    .map_err(MethodArgMapError::ApplicationNotAdmitted)?
-                    .method(name)
-            } else if let Some(caller) = caller
-                && let Some(record) =
-                    visible_applications(db, caller, callable)
-                        .into_iter()
-                        .find(|record| {
-                            record.goal().def(db) == inst.def(db)
-                                && record.goal().args(db) == inst.args(db)
-                        })
-            {
-                let records = visible_applications(db, caller, callable);
-                let premises = PredicateListId::new(
-                    db,
-                    records
-                        .iter()
-                        .map(|record| record.goal())
-                        .collect::<Vec<_>>(),
-                )
-                .extend_all_bounds(db);
-                let mut facts = assumptions.list(db).to_vec();
-                facts.extend(premises.list(db).iter().copied());
-                let destination = TraitSolveCx::new(db, caller.key(db).owner(db).scope())
-                    .with_assumptions(PredicateListId::new(db, facts).extend_all_bounds(db))
-                    .with_lexical_premises(Some(premises));
-                record
+        && let Selection::Unique(method) = if let Some((operand, destination)) =
+            callable.opened_trait_application()
+        {
+            let caller = caller.ok_or(MethodArgMapError::MissingBody)?;
+            match opened_operand_application(db, caller, operand) {
+                Some(record) => record
                     .revalidate(db, destination, inst)
                     .map_err(MethodArgMapError::ApplicationNotAdmitted)?
-                    .method(name)
-            } else {
-                resolve_trait_method_instance(
-                    db,
-                    TraitSolveCx::new(db, impl_env.normalization_scope(db))
-                        .with_assumptions(assumptions),
-                    inst,
-                    name,
-                )
+                    .method(name),
+                // The layout template has no issued argument yet. Keep its
+                // symbolic obligation; a concrete use still requires the record.
+                None if collect_flags(db, inst).contains(TyFlags::HAS_PARAM) => {
+                    resolve_trait_method_instance(db, destination, inst, name)
+                }
+                None if operand_parameter_source(db, caller, operand).is_some() => {
+                    // A concrete goal can still have a symbolic witness parameter.
+                    // Keep the nominal call until argument delivery supplies its
+                    // issued record; do not select an ordinary implementation.
+                    Selection::NotFound
+                }
+                None => {
+                    known_operand_value_or_error(db, recover_known_operand(db, caller, operand))?;
+                    return Err(MethodArgMapError::MissingBody);
+                }
             }
+        } else if let Some(record) = callable.selected_trait_application() {
+            record
+                .revalidate(db, record.origin_context(), inst)
+                .map_err(MethodArgMapError::ApplicationNotAdmitted)?
+                .method(name)
+        } else if let Some(caller) = caller
+            && let Some(record) =
+                visible_applications(db, caller, callable)
+                    .into_iter()
+                    .find(|record| {
+                        record.goal().def(db) == inst.def(db)
+                            && record.goal().args(db) == inst.args(db)
+                    })
+        {
+            let records = visible_applications(db, caller, callable);
+            let premises = PredicateListId::new(
+                db,
+                records
+                    .iter()
+                    .map(|record| record.goal())
+                    .collect::<Vec<_>>(),
+            )
+            .extend_all_bounds(db);
+            let mut facts = assumptions.list(db).to_vec();
+            facts.extend(premises.list(db).iter().copied());
+            let destination = TraitSolveCx::new(db, caller.key(db).owner(db).scope())
+                .with_assumptions(PredicateListId::new(db, facts).extend_all_bounds(db))
+                .with_lexical_premises(Some(premises));
+            record
+                .revalidate(db, destination, inst)
+                .map_err(MethodArgMapError::ApplicationNotAdmitted)?
+                .method(name)
+        } else {
+            resolve_trait_method_instance(
+                db,
+                TraitSolveCx::new(db, impl_env.normalization_scope(db))
+                    .with_assumptions(assumptions),
+                inst,
+                name,
+            )
+        }
         && let Some(impl_func) = method.body()
     {
         subst_args = method
@@ -1643,29 +1715,7 @@ fn semantic_callee_key_with_assumptions<'db>(
                     continue;
                 }
             }
-            let recovered_value = match recovery {
-                KnownOperandRecovery::Failed {
-                    owner,
-                    failure: crate::analysis::semantic::EvalFailure::Ctfe(error),
-                    ..
-                } => {
-                    return Err(MethodArgMapError::ConstArgumentFailed(
-                        crate::analysis::ty::const_ty::invalid_cause_from_ctfe_error(
-                            db, owner, error,
-                        ),
-                    ));
-                }
-                KnownOperandRecovery::Failed { failure, .. } => {
-                    return Err(MethodArgMapError::ConstArgumentInvariant(format!(
-                        "{failure:?}"
-                    )));
-                }
-                KnownOperandRecovery::Blocked { owner, info, .. } => {
-                    return Err(MethodArgMapError::ConstArgumentBlocked { owner, info });
-                }
-                KnownOperandRecovery::Value(value) => Some(value),
-                KnownOperandRecovery::NotKnown => None,
-            };
+            let recovered_value = known_operand_value_or_error(db, recovery)?;
             for (reason, prefix) in stopped {
                 let depth = match reason {
                     EvidenceSlotStop::DepthLimit(depth) => Some(depth),

@@ -1081,7 +1081,60 @@ fn concrete_goal_evidence_selects_runtime_receiver_methods() {
     let file = db.new_stand_alone("concrete-receiver.fe".into(), source);
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
+    let diagnostics =
+        hir::analysis::semantic::collect_semantic_borrow_diagnostic_vouchers(&db, module);
+    let diagnostics: Vec<_> = diagnostics
+        .iter()
+        .map(|diag| diag.to_complete(&db))
+        .collect();
+    assert!(
+        diagnostics.is_empty(),
+        "concrete witness templates must specialize: {diagnostics:#?}"
+    );
     let package = fe_mir::build_test_runtime_package(&db, module, None)
         .expect("concrete evidence parameters select receiver implementations");
     assert!(!package.functions(&db).is_empty());
+}
+
+#[test]
+fn constant_evidence_opens_its_issued_runtime_application() {
+    let mut db = HirAnalysisTestDb::default();
+    let source = include_str!("fco_payload_controls/constant-method.fe");
+    let file = db.new_stand_alone("constant-method.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let diagnostics =
+        hir::analysis::semantic::collect_semantic_borrow_diagnostic_vouchers(&db, module);
+    let diagnostics: Vec<_> = diagnostics
+        .iter()
+        .map(|diag| diag.to_complete(&db))
+        .collect();
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    let package = fe_mir::build_test_runtime_package(&db, module, None)
+        .expect("constant witness choice must reach runtime methods");
+    assert!(!package.functions(&db).is_empty());
+}
+
+#[test]
+fn failed_constant_evidence_retains_original_factory_cause() {
+    let mut db = HirAnalysisTestDb::default();
+    let source = include_str!("fco_payload_controls/constant-method.fe").replace(
+        "with (First) { prove<Goal>() }",
+        "let failure: u256 = 1 / 0\nwith (First) { prove<Goal>() }",
+    );
+    let file = db.new_stand_alone("failed-constant-method.fe".into(), &source);
+    let (module, _) = db.top_mod(file);
+    let diagnostics =
+        hir::analysis::semantic::collect_semantic_borrow_diagnostic_vouchers(&db, module);
+    let diagnostics: Vec<_> = diagnostics
+        .iter()
+        .map(|diag| diag.to_complete(&db))
+        .collect();
+    let rendered = format!("{diagnostics:#?}");
+    println!("CONSTANT FACTORY CAUSE {rendered}");
+    assert!(rendered.contains("division by zero"), "{rendered}");
+    assert!(
+        !rendered.contains("MissingBody"),
+        "original factory failure must not become missing body"
+    );
 }

@@ -18,6 +18,7 @@ pub(super) fn can_specialize(db: &dyn HirAnalysisDb, instance: SemanticInstance<
         .generic_args(db)
         .iter()
         .any(|ty| ty.has_param(db) || ty.has_var(db) || ty.contains_assoc_ty_of_param(db))
+        || crate::analysis::semantic::instance::has_unbound_evidence_calls(db, instance)
 }
 
 impl<'db> PendingSemanticValidation<'db> {
@@ -93,5 +94,59 @@ impl Borrowck<'_> {
             && matches!(self.body.blocks[block].statements[index].kind,
                 NStatementKind::Define { result, expr: NExpr::Call { .. } }
                     if self.calls.get(&result).is_some_and(|call| call.pending))
+    }
+}
+
+#[cfg(test)]
+mod evidence_specialization_tests {
+    use super::*;
+    use crate::{
+        analysis::{
+            semantic::{
+                EvalOutcome, GenericSubst, SemanticInstanceKey, check_semantic_borrows,
+                eval_body_owner_const, get_or_build_semantic_instance,
+                identity_semantic_instance_key,
+            },
+            ty::ty_check::BodyOwner,
+        },
+        test_db::{HirAnalysisTestDb, find_func},
+    };
+
+    #[test]
+    fn delivered_evidence_closes_concrete_call_validation() {
+        let mut db = HirAnalysisTestDb::default();
+        let source = "use core::obligations::{Evidence, prove}\ntrait Pick { fn value() -> u256 }\nstruct Subject {}\nimpl Pick for Subject { fn value() -> u256 { 1 } }\ntype Goal = Pick<Subject>\nconst fn choice() -> Evidence<Goal> { prove<Goal>() }\nfn consume(_ witness: Evidence<Goal>) -> u256 { with (witness) { <Subject as Pick>::value() } }\nfn ordinary() -> u256 { 1 }\n";
+        let file = db.new_stand_alone("concrete-evidence-validation.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let owner = BodyOwner::Func(find_func(&db, module, "consume"));
+        let key = identity_semantic_instance_key(&db, owner);
+        let symbolic = get_or_build_semantic_instance(&db, key);
+        assert!(can_specialize(&db, symbolic));
+        assert!(matches!(
+            check_semantic_borrows(&db, symbolic),
+            Err(crate::analysis::semantic::SemanticAnalysisError::Pending(_))
+        ));
+        let factory = BodyOwner::Func(find_func(&db, module, "choice"));
+        let EvalOutcome::Ready(value) = eval_body_owner_const(
+            &db,
+            factory,
+            GenericSubst::for_body_owner(&db, factory, vec![]),
+        ) else {
+            panic!("issued value required")
+        };
+        let env = key
+            .impl_env(&db)
+            .with_argument_evidence_values(&db, &[(0, value)]);
+        let key =
+            SemanticInstanceKey::new(&db, owner, key.subst(&db), key.effect_providers(&db), env);
+        let delivered = get_or_build_semantic_instance(&db, key);
+        assert!(!can_specialize(&db, delivered));
+        assert!(check_semantic_borrows(&db, delivered).is_ok());
+        let ordinary = BodyOwner::Func(find_func(&db, module, "ordinary"));
+        assert!(!can_specialize(
+            &db,
+            get_or_build_semantic_instance(&db, identity_semantic_instance_key(&db, ordinary))
+        ));
     }
 }
