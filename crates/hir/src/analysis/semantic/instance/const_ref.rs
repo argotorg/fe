@@ -584,6 +584,56 @@ fn compiler_known_operand_value<'db>(
     Some(value.value())
 }
 
+// Recover the existing parameter slot through typed immutable projections.
+// This transports records; it does not reconstruct unknown runtime values.
+fn operand_parameter_source<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    mut operand: ExprId,
+) -> Option<(usize, Vec<ReturnProjectionStep>)> {
+    let typed = caller.key(db).typed_body(db);
+    let body = typed.body()?;
+    let mut projection = Vec::new();
+    loop {
+        if let Partial::Present(Expr::Field(base, _)) = operand.data(db, body) {
+            projection.insert(
+                0,
+                ReturnProjectionStep::Field(typed.resolved_field_index(operand)?),
+            );
+            operand = *base;
+            continue;
+        }
+        if let Partial::Present(Expr::Bin(base, index, crate::hir_def::BinOp::Index)) =
+            operand.data(db, body)
+        {
+            let Partial::Present(Expr::Lit(crate::hir_def::LitKind::Int(value))) =
+                index.data(db, body)
+            else {
+                return None;
+            };
+            projection.insert(
+                0,
+                ReturnProjectionStep::ConstantIndex(value.data(db).to_usize()?),
+            );
+            operand = *base;
+            continue;
+        }
+        match typed.expr_prop(db, operand).binding {
+            Some(LocalBinding::Param {
+                idx, is_mut: false, ..
+            }) => return Some((idx, projection)),
+            Some(binding @ LocalBinding::Local { is_mut: false, .. }) => {
+                let source = typed.binding_source(db, binding)?;
+                let mut prefix = source.projection;
+                prefix.extend(projection);
+                projection = prefix;
+                operand = source.init_expr;
+            }
+            _ => return None,
+        }
+    }
+}
+
 fn opened_operand_application_at<'db>(
     db: &'db dyn HirAnalysisDb,
     caller: SemanticInstance<'db>,
@@ -1138,10 +1188,7 @@ fn semantic_callee_key_with_assumptions<'db>(
                     .iter()
                     .any(|path| path.contains(&ReturnProjectionStep::AnyIndex))
                 {
-                    if let Some(LocalBinding::Param {
-                        idx, is_mut: false, ..
-                    }) = typed.expr_prop(db, operand).binding
-                    {
+                    if let Some((idx, prefix)) = operand_parameter_source(db, caller, operand) {
                         records.extend(
                             caller
                                 .key(db)
@@ -1149,7 +1196,13 @@ fn semantic_callee_key_with_assumptions<'db>(
                                 .projected_parameter_evidence(db)
                                 .iter()
                                 .filter(|(source, _, _)| *source == idx)
-                                .map(|(_, path, record)| (index, path.clone(), *record)),
+                                .filter_map(|(_, path, record)| {
+                                    Some((
+                                        index,
+                                        path.strip_prefix(prefix.as_slice())?.to_vec(),
+                                        *record,
+                                    ))
+                                }),
                         );
                     } else if let Some(value) = compiler_known_operand_value(db, caller, operand) {
                         let env = ImplEnv::empty(db, caller.key(db).owner(db).scope())
