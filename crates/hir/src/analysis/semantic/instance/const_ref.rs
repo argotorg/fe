@@ -603,7 +603,7 @@ fn evidence_slots<'db>(
     for (index, field) in ty.field_types(db).into_iter().enumerate() {
         let mut field_path = path.clone();
         field_path.push(ReturnProjectionStep::Field(
-            u16::try_from(index).ok().expect("field index"),
+            u16::try_from(index).expect("field index"),
         ));
         evidence_slots(db, scope, field, field_path, active, slots);
     }
