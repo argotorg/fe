@@ -652,6 +652,7 @@ impl<'db> TyCheckEnv<'db> {
             goal,
             admission: Some(context),
         });
+        self.trait_openings.finalize_evidence(operand, context);
     }
 
     /// Project the context owned by the checker at its current lexical position.
@@ -706,10 +707,7 @@ impl<'db> TyCheckEnv<'db> {
         &self,
         mut operand: ExprId,
     ) -> Option<crate::analysis::ty::trait_def::ImplApplicationRecord<'db>> {
-        use crate::analysis::semantic::{
-            EvalOutcome, SemConstValue, eval_const_instance, generated_callee_key,
-            get_or_build_semantic_instance,
-        };
+        use crate::analysis::semantic::{EvalOutcome, SemConstValue, generated_callee_key};
         let mut seen = rustc_hash::FxHashSet::default();
         while seen.insert(operand) {
             if let Some(LocalBinding::Local { pat, is_mut: false }) =
@@ -727,6 +725,24 @@ impl<'db> TyCheckEnv<'db> {
                     })?;
                 continue;
             }
+            if let Some(reference) = self.expr_const_ref(operand) {
+                let ty = self.typed_expr(operand)?.ty;
+                let reference = crate::analysis::semantic::instance::resolve_semantic_const_ref(
+                    self.db,
+                    reference,
+                    ty,
+                    crate::analysis::semantic::SemOrigin::Expr(operand),
+                )?;
+                let EvalOutcome::Ready(value) =
+                    crate::analysis::semantic::eval_const_ref(self.db, reference)
+                else {
+                    return None;
+                };
+                return match value.value(self.db) {
+                    SemConstValue::Evidence { application, .. } => Some(*application),
+                    _ => None,
+                };
+            }
             let callable = self.callable_expr(operand)?;
             if let Some(record) = callable.evidence_introduction() {
                 return Some(record);
@@ -735,7 +751,7 @@ impl<'db> TyCheckEnv<'db> {
                 return None;
             };
             if !func.is_const(self.db)
-                || !callable.checked_input_tys()?.is_empty()
+                || callable.checked_input_tys()?.len() != callable.argument_operands().len()
                 || callable.generic_args().iter().any(|arg| {
                     arg.has_param(self.db)
                         || arg.has_var(self.db)
@@ -755,12 +771,58 @@ impl<'db> TyCheckEnv<'db> {
                 callable.generic_args(),
             )
             .ok()?;
-            let EvalOutcome::Ready(value) =
-                eval_const_instance(self.db, get_or_build_semantic_instance(self.db, key))
-            else {
+            let inputs = callable
+                .argument_operands()
+                .iter()
+                .map(|&argument| {
+                    use crate::analysis::semantic::{
+                        ConstDesc, SemConstValue, VerifiedConstValueId,
+                    };
+                    let value = match argument.data(self.db, self.body) {
+                        Partial::Present(crate::hir_def::Expr::Lit(
+                            crate::hir_def::LitKind::Bool(value),
+                        )) => crate::analysis::semantic::bool_const(self.db, *value),
+                        Partial::Present(crate::hir_def::Expr::Lit(
+                            crate::hir_def::LitKind::Int(value),
+                        )) => crate::analysis::semantic::int_const(
+                            self.db,
+                            self.typed_expr(argument)?.ty,
+                            num_bigint::BigInt::from(value.data(self.db).clone()),
+                        ),
+                        _ => {
+                            let reference =
+                                crate::analysis::semantic::instance::resolve_semantic_const_ref(
+                                    self.db,
+                                    self.expr_const_ref(argument)?,
+                                    self.typed_expr(argument)?.ty,
+                                    crate::analysis::semantic::SemOrigin::Expr(argument),
+                                )?;
+                            let EvalOutcome::Ready(value) =
+                                crate::analysis::semantic::eval_const_ref(self.db, reference)
+                            else {
+                                return None;
+                            };
+                            value
+                        }
+                    };
+                    // Inputs enter the existing CTFE service only as verified closed values.
+                    // Evidence-bearing arguments require the application environment path.
+                    if matches!(value.value(self.db), SemConstValue::Evidence { .. }) {
+                        return None;
+                    }
+                    let value =
+                        VerifiedConstValueId::from_complete_execution(self.db, value).ok()?;
+                    Some(ConstDesc::value(self.db, value, key.owner(self.db).scope()))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let EvalOutcome::Ready(value) = crate::analysis::semantic::force_const_computation(
+                self.db,
+                crate::analysis::semantic::const_computation_for_instance(self.db, key, inputs),
+                crate::analysis::semantic::CtfeConfig::default(),
+            ) else {
                 return None;
             };
-            return match value.value(self.db) {
+            return match value.value().value(self.db) {
                 SemConstValue::Evidence { application, .. } => Some(*application),
                 _ => None,
             };
@@ -1876,3 +1938,45 @@ pub(super) struct TraitObligation<'db> {
 }
 
 impl<'db> TyCheckEnv<'db> {}
+
+#[cfg(test)]
+mod pr1797_admission_review {
+    use super::*;
+    use crate::test_db::{HirAnalysisTestDb, find_func};
+
+    #[test]
+    fn active_opening_uses_finalized_self_excluding_admission() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("active-admission.fe".into(),
+            "use core::obligations::Evidence\ntrait Goal {}\nstruct Subject {}\nfn inspect(_ witness: own Evidence<Goal<Subject>>) {}\n");
+        let (module, _) = db.top_mod(file);
+        let func = find_func(&db, module, "inspect");
+        let mut env = TyCheckEnv::new(&db, BodyOwner::Func(func)).unwrap();
+        let ty = *func.arg_tys(&db)[0].skip_binder();
+        let goal = crate::analysis::ty::corelib::evidence_goal(&db, func.scope(), ty).unwrap();
+        let value = env.body.expr(&db);
+        env.enter_with_frame();
+        env.insert_opening(
+            value,
+            super::super::TraitOpening::Evidence {
+                operand: value,
+                goal,
+                admission: None,
+            },
+        )
+        .unwrap();
+        env.finalize_opening_admission(value);
+        let active = env.opening_for(goal).unwrap();
+        let super::super::TraitOpening::Evidence {
+            admission: Some(context),
+            ..
+        } = active
+        else {
+            panic!(
+                "active consumers must receive finalized admission, not own-goal fallback: {active:?}"
+            )
+        };
+        assert!(!context.assumptions().list(&db).contains(&goal));
+        assert_eq!(env.with_openings[value], Some(active));
+    }
+}

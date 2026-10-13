@@ -94,6 +94,20 @@ impl<'db> TraitOpenings<'db> {
         frame.push(opening);
         Ok(())
     }
+    pub fn finalize_evidence(&mut self, operand: ExprId, admission: TraitSolveCx<'db>) {
+        for opening in self.frames.current_mut().iter_mut() {
+            if let TraitOpening::Evidence {
+                operand: source,
+                admission: context,
+                ..
+            } = opening
+                && *source == operand
+            {
+                *context = Some(admission);
+                return;
+            }
+        }
+    }
     pub fn lookup(
         &self,
         db: &'db dyn HirAnalysisDb,

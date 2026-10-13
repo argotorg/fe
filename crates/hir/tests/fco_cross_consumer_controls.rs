@@ -87,8 +87,20 @@ fn destination_prerequisite_valid_twin() {
 }
 #[test]
 fn fixed_associated_output_refusal() {
+    fixed_associated_output_refusal_for(&source("fixed-output").replace("\r\n", "\n"));
+}
+
+#[test]
+fn fixed_associated_output_refusal_crlf() {
+    fixed_associated_output_refusal_for(
+        &source("fixed-output")
+            .replace("\r\n", "\n")
+            .replace("\n", "\r\n"),
+    );
+}
+
+fn fixed_associated_output_refusal_for(text: &str) {
     let mut db = HirAnalysisTestDb::default();
-    let text = source("fixed-output");
     let file = db.new_stand_alone("fixed-output.fe".into(), &text);
     let (module, _) = db.top_mod(file);
     let diags: Vec<_> = initialize_test_analysis_pass()
@@ -98,11 +110,12 @@ fn fixed_associated_output_refusal() {
         .collect();
     println!("CONTROL fixed-output DIAGNOSTICS {diags:#?}");
     let start = text.find("impl Add for Subject as First").unwrap();
-    let end = text[start..]
+    let next = text[start..]
         .find("impl Add for Subject as Second")
         .unwrap()
-        + start
-        - 1;
+        + start;
+    // The authored implementation ends at its closing brace, before either newline form.
+    let end = start + text[start..next].trim_end().len();
     assert!(diags.iter().any(|d| {
         d.message == "named implementation changes an ordinary associated type"
             && d.sub_diagnostics.iter().any(|sub| {

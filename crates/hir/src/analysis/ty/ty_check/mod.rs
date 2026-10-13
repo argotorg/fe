@@ -1654,7 +1654,19 @@ impl<'db> TyChecker<'db> {
 
     fn check_own_param_types(&mut self) {
         match self.env.owner() {
-            BodyOwner::Func(_) => {}
+            BodyOwner::Func(func) => {
+                let arg_tys = func.arg_tys(self.db);
+                for (idx, param) in func.params(self.db).enumerate() {
+                    if param.is_mut(self.db)
+                        && let Some(ty) = arg_tys.get(idx)
+                        && self.is_evidence_value(*ty.skip_binder())
+                    {
+                        self.push_diag(BodyDiag::EvidenceMutableStorage {
+                            primary: func.span().params().param(idx).name().into(),
+                        });
+                    }
+                }
+            }
             BodyOwner::ContractInit { contract } => {
                 let Some(init) = contract.init(self.db) else {
                     return;

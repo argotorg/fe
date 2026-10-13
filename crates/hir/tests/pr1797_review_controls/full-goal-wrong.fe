@@ -1,0 +1,9 @@
+use core::obligations::{Evidence, prove}
+trait Produce { type Output }
+struct Subject {}
+impl Produce for Subject { type Output = u64 }
+type Right = Produce<Subject, Output = u64>
+type Wrong = Produce<Subject, Output = bool>
+fn forward(_ witness: Evidence<Right>) -> Evidence<Wrong> {
+    with (witness) { prove<Wrong>() }
+}

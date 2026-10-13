@@ -1657,8 +1657,33 @@ impl<'db> TyChecker<'db> {
                 .iter()
                 .chain(goal.assoc_type_bindings(self.db).values())
                 .all(|ty| !ty.has_invalid(self.db) && !ty.has_var(self.db) && !ty.has_hole(self.db))
-            && let Some(super::TraitOpening::Evidence { operand, .. }) = self.env.opening_for(*goal)
+            && let Some(super::TraitOpening::Evidence {
+                operand,
+                goal: source_goal,
+                ..
+            }) = self.env.opening_for(*goal)
         {
+            for (&name, &expected) in goal.assoc_type_bindings(self.db) {
+                let Some(actual) = source_goal
+                    .assoc_type_bindings(self.db)
+                    .get(&name)
+                    .copied()
+                    .or_else(|| source_goal.project_assoc_ty(self.db, name))
+                else {
+                    return false;
+                };
+                let actual = self.normalize_ty(actual);
+                let expected = self.normalize_ty(expected);
+                let snapshot = self.table.snapshot();
+                if self.table.unify(actual, expected).is_err() {
+                    self.table.rollback_to(snapshot);
+                    self.push_diag(BodyDiag::ObligationIntroduction {
+                        primary: expr.span(self.body()).into(),
+                        reason: "the opened evidence does not prove the requested associated equality",
+                    });
+                    return false;
+                }
+            }
             callable.record_evidence_opening(operand, self.env.proof_context());
             return true;
         }
@@ -5187,6 +5212,12 @@ impl<'db> TyChecker<'db> {
                 .evidence_condition_failure(*cond)
                 .or_else(|| self.evidence_source_failure(*then, seen, allow_method))
                 .or_else(|| self.evidence_source_failure(*other, seen, allow_method)),
+            Partial::Present(Expr::Match(scrutinee, Partial::Present(arms))) => self
+                .evidence_source_failure(*scrutinee, seen, false)
+                .or_else(|| {
+                    arms.iter()
+                        .find_map(|arm| self.evidence_source_failure(arm.body, seen, allow_method))
+                }),
             Partial::Present(Expr::With(_, body)) => {
                 self.evidence_source_failure(*body, seen, allow_method)
             }

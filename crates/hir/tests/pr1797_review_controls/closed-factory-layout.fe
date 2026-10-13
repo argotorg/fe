@@ -1,0 +1,13 @@
+use core::obligations::{Evidence, prove}
+trait Width { const N: u256 }
+struct Subject {}
+impl Width for Subject { const N: u256 = 1 }
+impl Width for Subject as Wide { const N: u256 = 2 }
+type Goal = Width<Subject>
+const fn wide(_ token: bool) -> Evidence<Goal> { with (Wide) { prove<Goal>() } }
+fn consume<T: Width>(_ values: [u256; <T as Width>::N]) -> u256 { values[1] }
+fn check() -> u256 {
+    with (wide(true)) {
+        consume<Subject>([1, 2])
+    }
+}

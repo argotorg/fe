@@ -1,0 +1,10 @@
+use core::obligations::{Evidence, prove}
+trait Pick { const fn value() -> u256 }
+struct Subject {}
+impl Pick for Subject { const fn value() -> u256 { 1 } }
+impl Pick for Subject as Other { const fn value() -> u256 { 2 } }
+fn consume<T>(_ witness: Evidence<Pick<T>>) -> u256 { with (witness) { <T as Pick>::value() } }
+fn replace<T>(mut witness: own Evidence<Pick<T>>, _ other: Evidence<Pick<T>>) -> u256 {
+    witness = other
+    consume<T>(witness)
+}
