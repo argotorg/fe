@@ -101,7 +101,7 @@ fn fixed_associated_output_refusal_crlf() {
 
 fn fixed_associated_output_refusal_for(text: &str) {
     let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone("fixed-output.fe".into(), &text);
+    let file = db.new_stand_alone("fixed-output.fe".into(), text);
     let (module, _) = db.top_mod(file);
     let diags: Vec<_> = initialize_test_analysis_pass()
         .run_on_module(&db, module)
