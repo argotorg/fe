@@ -163,5 +163,8 @@ impl Pick for Subject where Subject: Leaf {
 
 #[test]
 fn prerequisite_constant_reachability_and_declaration_freezing() {
-    values("prerequisite-constant-reachability", &["2", "43", "8", "43", "2", "1"]);
+    values(
+        "prerequisite-constant-reachability",
+        &["2", "43", "8", "43", "2", "1"],
+    );
 }

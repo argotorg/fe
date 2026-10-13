@@ -22,7 +22,7 @@ use crate::{
             trait_def::{
                 ImplApplicationRecord, ImplementorOrigin, MethodArgMapError, ResolvedImplInstance,
                 TraitInstId, assoc_const_body_template_for_trait_inst,
-                resolve_trait_method_instance,
+                resolve_trait_method_instance, selected_assoc_const_body_template,
             },
             trait_resolution::{
                 GoalSatisfiability, PredicateListId, Selection, TraitSolveCx,
@@ -1443,9 +1443,19 @@ pub(crate) fn resolve_semantic_const_ref<'db>(
     ty: TyId<'db>,
     origin: SemOrigin<'db>,
 ) -> Option<SemanticConstRef<'db>> {
+    resolve_semantic_const_ref_in_instance(db, const_ref, ty, origin, None)
+}
+
+pub(crate) fn resolve_semantic_const_ref_in_instance<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_ref: ConstRef<'db>,
+    ty: TyId<'db>,
+    origin: SemOrigin<'db>,
+    caller: Option<SemanticInstance<'db>>,
+) -> Option<SemanticConstRef<'db>> {
     let instance = match const_ref {
         ConstRef::Const(const_) => semantic_const_key_for_const(db, const_),
-        ConstRef::TraitConst(assoc) => semantic_const_key_for_assoc_const(db, assoc),
+        ConstRef::TraitConst(assoc) => semantic_const_key_for_assoc_const(db, assoc, caller),
         ConstRef::InherentConst(use_) => semantic_const_key_for_inherent_const(db, use_),
     }?;
     Some(SemanticConstRef::new(db, instance, ty, origin))
@@ -1491,13 +1501,38 @@ fn semantic_const_key_for_inherent_const<'db>(
 fn semantic_const_key_for_assoc_const<'db>(
     db: &'db dyn HirAnalysisDb,
     assoc: AssocConstUse<'db>,
+    caller: Option<SemanticInstance<'db>>,
 ) -> Option<SemanticInstanceKey<'db>> {
-    let (body, ty, subst) = assoc_const_body_template_for_trait_inst(
+    let records = caller
+        .map(|caller| caller.key(db).impl_env(db).lexical_applications(db).clone())
+        .unwrap_or_default();
+    let premises = PredicateListId::new(
         db,
-        assoc.solve_cx(db),
-        assoc.inst(),
-        assoc.name(),
-    )?;
+        records
+            .iter()
+            .map(|record| record.goal())
+            .collect::<Vec<_>>(),
+    )
+    .extend_all_bounds(db);
+    let mut facts = assoc.assumptions().list(db).to_vec();
+    facts.extend(premises.list(db).iter().copied());
+    let destination = if records.is_empty() {
+        assoc.solve_cx(db)
+    } else {
+        assoc
+            .solve_cx(db)
+            .with_assumptions(PredicateListId::new(db, facts).extend_all_bounds(db))
+            .with_lexical_premises(Some(premises))
+    };
+    let (body, ty, subst) = if let Some(record) = records.iter().find(|record| {
+        record.goal().def(db) == assoc.inst().def(db)
+            && record.goal().args(db) == assoc.inst().args(db)
+    }) {
+        let application = record.revalidate(db, destination, assoc.inst()).ok()?;
+        selected_assoc_const_body_template(db, application.resolved(), assoc.name())?
+    } else {
+        assoc_const_body_template_for_trait_inst(db, destination, assoc.inst(), assoc.name())?
+    };
     Some(SemanticInstanceKey::new(
         db,
         BodyOwner::AnonConstBody { body, expected: ty },
@@ -1509,7 +1544,7 @@ fn semantic_const_key_for_assoc_const<'db>(
             assoc.assumptions(),
             vec![assoc.inst()],
             Vec::new(),
-            Vec::new(),
+            records,
         ),
     ))
 }
