@@ -46,6 +46,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let mut saved = Vec::with_capacity(bindings.len());
         for binding in bindings {
             let value_expr = binding.value;
+            if matches!(
+                self.typed_body.with_opening(value_expr),
+                Some(crate::analysis::ty::ty_check::TraitOpening::Named(_))
+            ) {
+                continue;
+            }
             let source = if self.is_root_provider_expr(value_expr) {
                 if let Some(place) = self.try_lower_place_expr(value_expr, true) {
                     WithBindingSource::Place(place)

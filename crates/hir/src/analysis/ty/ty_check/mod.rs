@@ -8,7 +8,9 @@ mod contract;
 mod effect_env;
 pub(crate) mod env;
 mod expr;
+mod opening;
 mod owner;
+pub use opening::TraitOpening;
 mod pat;
 mod path;
 mod stmt;
@@ -1527,6 +1529,7 @@ fn typed_body_for_bodyless_func<'db>(
         .collect();
     TypedBodyTables {
         body: None,
+        with_openings: SecondaryMap::new(),
         result_ty,
         assumptions,
         pat_ty: SecondaryMap::new(),
@@ -3822,6 +3825,7 @@ mod typed_body_tables {
     /// Shared storage behind [`TypedBody`]; its fields are private to type checking.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct TypedBodyTables<'db> {
+        pub(super) with_openings: SecondaryMap<ExprId, Option<TraitOpening<'db>>>,
         pub(super) body: Option<Body<'db>>,
         pub(super) result_ty: TyId<'db>,
         pub(super) assumptions: PredicateListId<'db>,
@@ -4147,6 +4151,9 @@ impl<'db> TypedBody<'db> {
         V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
     {
         self.tables.result_ty.visit_with(visitor);
+        for opening in self.tables.with_openings.values().flatten() {
+            opening.visit_with(visitor);
+        }
         for ty in self.tables.pat_ty.values().flatten() {
             ty.visit_with(visitor);
         }
@@ -4193,6 +4200,10 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
         // Folding writes every table, so take the tables, copying them if
         // another `TypedBody` still shares them.
         let mut this = Arc::unwrap_or_clone(self.tables);
+        this.with_openings
+            .values_mut()
+            .flatten()
+            .for_each(|opening| *opening = opening.fold_with(db, folder));
         this.result_ty = this.result_ty.fold_with(db, folder);
         this.assumptions = this.assumptions.fold_with(db, folder);
         this.pat_ty
@@ -4271,6 +4282,10 @@ impl<'db> TypedBody<'db> {
     /// them.
     fn tables_mut(&mut self) -> &mut TypedBodyTables<'db> {
         Arc::make_mut(&mut self.tables)
+    }
+
+    pub fn with_opening(&self, value: ExprId) -> Option<TraitOpening<'db>> {
+        self.tables.with_openings[value]
     }
 
     /// The constrained type applications that resolving the body's paths
@@ -5845,6 +5860,7 @@ impl<'db> TypedBody<'db> {
     fn empty(db: &'db dyn HirAnalysisDb) -> Self {
         TypedBodyTables {
             body: None,
+            with_openings: SecondaryMap::new(),
             result_ty: TyId::unit(db),
             assumptions: PredicateListId::empty_list(db),
             pat_ty: SecondaryMap::new(),

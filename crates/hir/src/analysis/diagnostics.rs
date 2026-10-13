@@ -2733,6 +2733,10 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary.resolve(db),
                 error_code,
             ),
+            Self::ObligationOpening { primary, reason } => primary_diag(
+                severity, "trait evidence opening failed", *reason,
+                primary.resolve(db), error_code,
+            ),
             Self::InfiniteOccurrence(span) => primary_diag(
                 Severity::Error,
                 "infinite sized type found",
@@ -4902,6 +4906,23 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
         let error_code =
             GlobalErrorCode::new(DiagnosticPass::ImplTraitDefinition, self.local_code());
         match self {
+            Self::NamedAssociatedTypeMismatch {
+                primary,
+                name,
+                expected,
+                given,
+            } => primary_diag(
+                Severity::Error,
+                "named implementation changes an ordinary associated type",
+                format!(
+                    "`{}` must remain `{}`, but this implementation defines `{}`",
+                    name.data(db),
+                    expected.pretty_print(db),
+                    given.pretty_print(db)
+                ),
+                primary.span().resolve(db),
+                error_code,
+            ),
             Self::ExternalTraitForExternalType(impl_trait) => primary_diag(
                 Severity::Error,
                 "external trait cannot be implemented for external type",

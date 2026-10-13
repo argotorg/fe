@@ -4,6 +4,7 @@ mod constraints;
 mod default_trait_methods;
 mod effect_binding_resolution;
 mod effect_key_normalization;
+mod explicit_openings;
 mod generic_default_metadata;
 mod generic_elaboration_contracts;
 mod named_impls;

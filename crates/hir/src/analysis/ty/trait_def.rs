@@ -789,6 +789,28 @@ pub fn prove_selected_hir_application<'db>(
 }
 
 impl<'db> CheckedImplApplication<'db> {
+    pub(crate) fn goal_with_associated_bindings(
+        &self,
+    ) -> Result<TraitInstId<'db>, CheckedApplicationError> {
+        let mut bindings = self.goal.assoc_type_bindings(self.db).clone();
+        for assoc in self.goal.def(self.db).assoc_types(self.db) {
+            if let Some(name) = assoc.name(self.db) {
+                let ty = self
+                    .associated_type(name)
+                    .ok_or(CheckedApplicationError::UnresolvedApplication)?;
+                if !checked_type(self.db, ty) || ty.has_param(self.db) {
+                    return Err(CheckedApplicationError::UnsupportedInput);
+                }
+                bindings.insert(name, ty);
+            }
+        }
+        Ok(TraitInstId::new(
+            self.db,
+            self.goal.def(self.db),
+            self.goal.args(self.db).clone(),
+            bindings,
+        ))
+    }
     pub fn record(&self) -> ImplApplicationRecord<'db> {
         ImplApplicationRecord {
             origin: self.origin,
@@ -823,6 +845,45 @@ impl<'db> CheckedImplApplication<'db> {
         prove_selected_application(self.db, self.origin, self.candidate, self.goal)?;
         prove_selected_application(self.db, destination, self.candidate, goal)
     }
+}
+
+/// A named declaration cannot redefine an output of the ordinary application.
+/// This is definition admission, independent of a particular opening or method.
+pub(crate) fn named_output_mismatch<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementation: ImplTrait<'db>,
+    candidate: ImplementorId<'db>,
+) -> Option<(IdentId<'db>, TyId<'db>, TyId<'db>)> {
+    let context = TraitSolveCx::new(db, implementation.scope())
+        .with_assumptions(crate::semantic::param_env(db, implementation.into()));
+    let header = candidate.trait_inst(db);
+    let goal = TraitInstId::new_simple(db, header.def(db), header.args(db).clone());
+    let Selection::Unique(ordinary) = resolve_trait_impl_instance(db, context, goal) else {
+        return None;
+    };
+    if !matches!(ordinary.selected().origin(db), ImplementorOrigin::Hir(_)) {
+        return None;
+    }
+    for assoc in goal.def(db).assoc_types(db) {
+        let Some(name) = assoc.name(db) else {
+            continue;
+        };
+        let (Some(expected), Some(given)) = (
+            ordinary.instantiated_assoc_ty(db, name),
+            candidate.assoc_ty(db, name),
+        ) else {
+            continue;
+        };
+        let expected = normalize_ty(db, expected, implementation.scope(), context.assumptions());
+        let given = normalize_ty(db, given, implementation.scope(), context.assumptions());
+        if expected.has_invalid(db) || given.has_invalid(db) {
+            continue;
+        }
+        if UnificationTable::new(db).unify(expected, given).is_err() {
+            return Some((name, expected, given));
+        }
+    }
+    None
 }
 
 /// A selected method retains the proof origin and the nominal trait reference.

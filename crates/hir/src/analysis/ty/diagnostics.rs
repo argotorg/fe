@@ -372,6 +372,10 @@ pub enum MustUseSubject<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum BodyDiag<'db> {
+    ObligationOpening {
+        primary: DynLazySpan<'db>,
+        reason: &'static str,
+    },
     ObligationIntroduction {
         primary: DynLazySpan<'db>,
         reason: &'static str,
@@ -973,6 +977,7 @@ impl<'db> BodyDiag<'db> {
 
     pub(crate) fn local_code(&self) -> u16 {
         match self {
+            Self::ObligationOpening { .. } => 98,
             Self::ObligationIntroduction { .. } => 97,
             Self::TypeMismatch { .. } => 0,
             Self::InfiniteOccurrence(..) => 1,
@@ -1077,6 +1082,12 @@ impl<'db> BodyDiag<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub enum TraitLowerDiag<'db> {
+    NamedAssociatedTypeMismatch {
+        primary: ImplTrait<'db>,
+        name: IdentId<'db>,
+        expected: TyId<'db>,
+        given: TyId<'db>,
+    },
     ConflictTraitImpl {
         primary: ImplTrait<'db>,
         conflict_with: ImplTrait<'db>,
@@ -1090,6 +1101,7 @@ pub enum TraitLowerDiag<'db> {
 impl TraitLowerDiag<'_> {
     pub fn local_code(&self) -> u16 {
         match self {
+            Self::NamedAssociatedTypeMismatch { .. } => 5,
             Self::ExternalTraitForExternalType(_) => 0,
             Self::ConflictTraitImpl { .. } => 1,
             Self::CyclicSuperTraits { .. } => 2,

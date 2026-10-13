@@ -4736,7 +4736,26 @@ impl<'db> ImplTrait<'db> {
         }
 
         match self.lowered_implementor(db) {
-            Ok(implementor) => (Some(implementor), Vec::new()),
+            Ok(implementor) => {
+                let mut diags = Vec::new();
+                if matches!(
+                    crate::analysis::ty::trait_def::impl_selection_class(db, self),
+                    crate::analysis::ty::trait_def::ImplSelectionClass::Named(_)
+                ) && let Some((name, expected, given)) =
+                    crate::analysis::ty::trait_def::named_output_mismatch(db, self, implementor)
+                {
+                    diags.push(
+                        TraitLowerDiag::NamedAssociatedTypeMismatch {
+                            primary: self,
+                            name,
+                            expected,
+                            given,
+                        }
+                        .into(),
+                    );
+                }
+                (Some(implementor), diags)
+            }
             Err(err) => {
                 let mut diags = Vec::new();
                 match err {

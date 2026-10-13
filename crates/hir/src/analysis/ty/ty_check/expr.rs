@@ -1321,6 +1321,82 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    fn named_opening(
+        &mut self,
+        value: ExprId,
+    ) -> Option<Result<super::TraitOpening<'db>, &'static str>> {
+        let Partial::Present(Expr::Path(Partial::Present(path))) = value.data(self.db, self.body())
+        else {
+            return None;
+        };
+        let name = path.as_ident(self.db)?;
+        let minter = LoweringContext::new(HoleAnchor::BodySyntax {
+            body: self.body(),
+            site: BodyHoleSite::Expr(value),
+        });
+        // The alias namespace is a fallback, never a replacement for a local,
+        // value/type declaration, or an ambiguity in ordinary name lookup.
+        if !matches!(
+            resolve_ident_expr(
+                self.db,
+                &self.env,
+                *path,
+                value.span(self.body()).into(),
+                &minter
+            ),
+            ResolvedPathInBody::NewBinding(_)
+        ) {
+            return None;
+        }
+        let candidates =
+            crate::analysis::ty::trait_def::named_impl_candidates(self.db, self.env.scope(), name);
+        if candidates.is_empty() {
+            return None;
+        }
+        let [implementation] = candidates.as_slice() else {
+            return Some(Err("the named implementation alias is ambiguous"));
+        };
+        let Some(candidate) =
+            crate::analysis::ty::trait_lower::lower_impl_trait(self.db, *implementation)
+        else {
+            return Some(Err("the named implementation declaration is invalid"));
+        };
+        if !candidate.params(self.db).is_empty() {
+            return Some(Err("named selection requires implementation arguments"));
+        }
+        Some(
+            crate::analysis::ty::trait_def::prove_selected_hir_application(
+                self.db,
+                self.env.proof_context(),
+                *implementation,
+                candidate.trait_inst(self.db),
+            )
+            .and_then(|application| {
+                let goal = application.goal_with_associated_bindings()?;
+                application.revalidate(self.env.proof_context(), goal)
+            })
+            .map(|application| super::TraitOpening::Named(application.record()))
+            .map_err(|error| match error {
+                crate::analysis::ty::trait_def::CheckedApplicationError::NotProven => {
+                    "named implementation prerequisites were not proved"
+                }
+                crate::analysis::ty::trait_def::CheckedApplicationError::ConditionsNotAdmitted => {
+                    "named implementation conditions were not admitted"
+                }
+                _ => "the named implementation application could not be admitted",
+            }),
+        )
+    }
+
+    fn insert_with_opening(&mut self, value: ExprId, opening: super::TraitOpening<'db>) {
+        if self.env.insert_opening(value, opening).is_err() {
+            self.push_diag(BodyDiag::ObligationOpening {
+                primary: value.span(self.body()).into(),
+                reason: "one frame cannot provide the same trait goal twice",
+            });
+        }
+    }
+
     fn check_with(
         &mut self,
         bindings: &[WithBinding<'db>],
@@ -1328,10 +1404,43 @@ impl<'db> TyChecker<'db> {
         expected: TyId<'db>,
         result_discarded: bool,
     ) -> ExprProp<'db> {
-        self.env.effect_env_mut().push_frame();
+        self.env.enter_with_frame();
 
         for binding in bindings {
+            if binding.key_path.is_none()
+                && let Some(opening) = self.named_opening(binding.value)
+            {
+                match opening {
+                    Ok(opening) => {
+                        self.insert_with_opening(binding.value, opening);
+                        self.env
+                            .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                    }
+                    Err(reason) => self.push_diag(BodyDiag::ObligationOpening {
+                        primary: binding.value.span(self.body()).into(),
+                        reason,
+                    }),
+                }
+                continue;
+            }
             let value_prop = self.check_expr_unknown(binding.value);
+
+            if binding.key_path.is_none() {
+                let ty = self.normalize_ty(value_prop.ty);
+                let ty = ty.as_capability(self.db).map_or(ty, |(_, inner)| inner);
+                if let Some(goal) =
+                    crate::analysis::ty::corelib::evidence_goal(self.db, self.env.scope(), ty)
+                {
+                    self.insert_with_opening(
+                        binding.value,
+                        super::TraitOpening::Evidence {
+                            operand: binding.value,
+                            goal,
+                        },
+                    );
+                    continue;
+                }
+            }
 
             let is_mut = value_prop.binding.map_or(value_prop.is_mut, |b| b.is_mut());
 
@@ -1394,7 +1503,7 @@ impl<'db> TyChecker<'db> {
         } else {
             self.check_expr(body_expr, expected)
         };
-        self.env.effect_env_mut().pop_frame();
+        self.env.leave_with_frame();
         result
     }
 
@@ -1418,11 +1527,13 @@ impl<'db> TyChecker<'db> {
         let result = match callable.generic_args() {
             [term] => {
                 let term = self.normalize_ty(*term);
-                crate::analysis::ty::trait_def::introduce_obligation(
-                    self.db,
-                    self.env.proof_context(),
-                    term,
-                )
+                crate::analysis::ty::trait_def::concrete_obligation_goal(self.db, term).and_then(|goal| {
+                    match self.env.opening_for(goal) {
+                        Some(super::TraitOpening::Named(record)) => record.revalidate(self.db, self.env.proof_context(), goal),
+                        Some(super::TraitOpening::Evidence { .. }) => Err(crate::analysis::ty::trait_def::CheckedApplicationError::UnsupportedConditions),
+                        None => crate::analysis::ty::trait_def::introduce_obligation(self.db, self.env.proof_context(), term),
+                    }
+                })
             }
             _ => Err(crate::analysis::ty::trait_def::CheckedApplicationError::UnsupportedInput),
         };

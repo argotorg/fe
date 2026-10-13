@@ -1235,7 +1235,9 @@ fn signed_mul_no_overflow_i8_neg_neg() {
 
 fn sem_const_has_type_level_leaf(db: &HirAnalysisTestDb, value: SemConstId<'_>) -> bool {
     match value.value(db) {
-        SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::Evidence { .. } => false,
+        SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::Evidence { .. } => {
+            false
+        }
         SemConstValue::Description(..) => true,
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => elems
             .iter()
@@ -1250,7 +1252,9 @@ fn sem_const_has_type_level_leaf(db: &HirAnalysisTestDb, value: SemConstId<'_>) 
 
 fn sem_const_has_abstract_scalar_leaf(db: &HirAnalysisTestDb, value: SemConstId<'_>) -> bool {
     match value.value(db) {
-        SemConstValue::Unit | SemConstValue::Description(..) | SemConstValue::Evidence { .. } => false,
+        SemConstValue::Unit | SemConstValue::Description(..) | SemConstValue::Evidence { .. } => {
+            false
+        }
         SemConstValue::Scalar { ty, .. } => ty.pretty_print(db) == "{integer}",
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => elems
             .iter()

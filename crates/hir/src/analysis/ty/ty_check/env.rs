@@ -72,6 +72,8 @@ pub(crate) struct TyCheckEnv<'db> {
     deferred: Vec<DeferredTask<'db>>,
 
     effect_env: keyed_effect_env::EffectEnv<'db>,
+    trait_openings: super::opening::TraitOpenings<'db>,
+    with_openings: SecondaryMap<ExprId, Option<super::TraitOpening<'db>>>,
     effect_bounds: ThinVec<TraitInstId<'db>>,
     base_assumptions: PredicateListId<'db>,
     assumptions: PredicateListId<'db>,
@@ -146,6 +148,8 @@ impl<'db> TyCheckEnv<'db> {
             resolved_field_index: SecondaryMap::new(),
             deferred: Vec::new(),
             effect_env: keyed_effect_env::EffectEnv::new(),
+            trait_openings: super::opening::TraitOpenings::new(),
+            with_openings: SecondaryMap::new(),
             effect_bounds: ThinVec::new(),
             base_assumptions,
             assumptions: base_assumptions,
@@ -558,15 +562,57 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(crate) fn assumptions(&self) -> PredicateListId<'db> {
-        // Return the assumptions we computed in new, which includes
-        // both generic bounds (if any) AND the effect parameter bounds.
-        self.assumptions
+        // Type lookup also reads the accepted output equalities of openings.
+        let visible = self.trait_openings.visible(self.db);
+        if visible.is_empty() { return self.assumptions; }
+        let mut premises = self.assumptions.list(self.db).to_vec();
+        premises.extend(
+            visible.into_iter()
+                .map(|opening| opening.goal()),
+        );
+        PredicateListId::new(self.db, premises).extend_all_bounds(self.db)
+    }
+
+    pub(super) fn enter_with_frame(&mut self) {
+        self.effect_env.push_frame();
+        self.trait_openings.enter();
+    }
+    pub(super) fn leave_with_frame(&mut self) {
+        self.trait_openings.leave();
+        self.effect_env.pop_frame();
+    }
+    pub(super) fn opening_for(&self, goal: TraitInstId<'db>) -> Option<super::TraitOpening<'db>> {
+        self.trait_openings.lookup(self.db, goal)
+    }
+    pub(super) fn insert_opening(
+        &mut self,
+        value: ExprId,
+        opening: super::TraitOpening<'db>,
+    ) -> Result<(), ()> {
+        self.trait_openings.insert(self.db, opening)?;
+        self.with_openings[value] = Some(opening);
+        Ok(())
     }
 
     /// Project the context owned by the checker at its current lexical position.
     /// Root/effect premises are formed once in this environment, not by readers.
     pub(crate) fn proof_context(&self) -> TraitSolveCx<'db> {
-        TraitSolveCx::new(self.db, self.scope()).with_assumptions(self.assumptions())
+        // Named applications provide a choice, not an extra solver premise.
+        // Their output equalities remain available to lexical type lookup.
+        let visible = self.trait_openings.visible(self.db);
+        if visible.is_empty() {
+            return TraitSolveCx::new(self.db, self.scope()).with_assumptions(self.assumptions);
+        }
+        let mut premises = self.assumptions.list(self.db).to_vec();
+        premises.extend(
+            visible.into_iter()
+                .filter_map(|opening| match opening {
+                    super::TraitOpening::Evidence { goal, .. } => Some(goal),
+                    super::TraitOpening::Named(_) => None,
+                }),
+        );
+        TraitSolveCx::new(self.db, self.scope())
+            .with_assumptions(PredicateListId::new(self.db, premises).extend_all_bounds(self.db))
     }
 
     pub(crate) fn base_assumptions(&self) -> PredicateListId<'db> {
@@ -917,6 +963,10 @@ impl<'db> TyCheckEnv<'db> {
         self.path_applications
             .iter_mut()
             .for_each(|(_, ty)| *ty = ty.fold_with(self.db, &mut prober));
+        self.with_openings
+            .values_mut()
+            .flatten()
+            .for_each(|opening| *opening = opening.fold_with(self.db, &mut prober));
         let mut expr_place = SecondaryMap::new();
         let mut expr_places: PrimaryMap<super::ExprPlaceId, Place<'db>> = PrimaryMap::new();
         for expr in self.body.exprs(self.db).keys() {
@@ -943,6 +993,7 @@ impl<'db> TyCheckEnv<'db> {
 
         TypedBodyTables {
             body: Some(self.body),
+            with_openings: self.with_openings,
             result_ty,
             assumptions,
             pat_ty: self.pat_ty,
