@@ -168,3 +168,8 @@ fn prerequisite_constant_reachability_and_declaration_freezing() {
         &["2", "43", "8", "43", "2", "1"],
     );
 }
+
+#[test]
+fn direct_associated_constant_restoration() {
+    values("direct-associated-constant", &["1", "42", "7", "42", "1"]);
+}

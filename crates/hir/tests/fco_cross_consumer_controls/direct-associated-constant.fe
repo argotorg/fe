@@ -1,0 +1,22 @@
+trait Leaf { const N: u256 }
+struct Subject {}
+impl Leaf for Subject { const N: u256 = 1 }
+impl Leaf for Subject as First { const N: u256 = 42 }
+impl Leaf for Subject as Second { const N: u256 = 7 }
+const fn answer() -> (u256,u256,u256,u256,u256) {
+ let ordinary = <Subject as Leaf>::N
+ let selected = with (First) { <Subject as Leaf>::N }
+ let nested = with (First) { with (Second) { <Subject as Leaf>::N } }
+ let restored = with (First) { let unused = with (Second) { <Subject as Leaf>::N }
+ <Subject as Leaf>::N }
+ (ordinary,selected,nested,restored,<Subject as Leaf>::N)
+}
+#[test]
+fn direct_constant_restoration() {
+ let result = answer()
+ assert!(result.0 == 1)
+ assert!(result.1 == 42)
+ assert!(result.2 == 7)
+ assert!(result.3 == 42)
+ assert!(result.4 == 1)
+}
