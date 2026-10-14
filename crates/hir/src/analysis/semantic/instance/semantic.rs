@@ -459,7 +459,10 @@ fn provisional_call_site<'db>(
         });
     let (callee, effect_pairs, provider_pairs) = match callee {
         Some(plan) => (
-            Some(SemanticCalleeRef { key: plan.key }),
+            Some(SemanticCalleeRef {
+                key: plan.key,
+                concrete_dispatch: plan.concrete_dispatch,
+            }),
             plan.effect_pairs,
             plan.provider_pairs,
         ),
@@ -734,7 +737,85 @@ fn method_arg_map_diagnostic<'db>(
     error: MethodArgMapError<'db>,
     origin: SemOrigin<'db>,
 ) -> SemanticDiagnosticId<'db> {
+    if let MethodArgMapError::EvidenceProjectionStopped { operand, depth } = &error {
+        let message = depth.map_or_else(
+            || "evidence projection discovery stopped at a recursive type".to_string(),
+            |depth| format!("evidence projection discovery exceeds the depth limit of {depth}"),
+        );
+        return SemanticDiagnosticId::new(
+            db,
+            SemanticDiagnostic::new(
+                instance,
+                SemanticDiagnosticKind::UnresolvedCall,
+                message,
+                SemanticDiagnosticSpan::Origin {
+                    owner: instance.key(db).owner(db),
+                    origin: SemOrigin::Expr(*operand),
+                },
+            ),
+        );
+    }
+    if let MethodArgMapError::ConstArgumentFailed(cause) = &error {
+        let source = match cause {
+            InvalidCause::ConstEvalDivisionByZero { body, expr }
+            | InvalidCause::ConstEvalArithmeticOverflow { body, expr }
+            | InvalidCause::ConstEvalNegativeExponent { body, expr }
+            | InvalidCause::ConstEvalAssertionFailed { body, expr, .. }
+            | InvalidCause::ConstEvalInvalidOperation { body, expr, .. }
+            | InvalidCause::ConstEvalStepLimitExceeded { body, expr }
+            | InvalidCause::ConstEvalRecursionLimitExceeded { body, expr } => {
+                Some(SemanticDiagnosticSpan::HirExpr {
+                    body: *body,
+                    expr: *expr,
+                })
+            }
+            _ => None,
+        };
+        let message = match cause {
+            InvalidCause::ConstEvalDivisionByZero { .. } => {
+                "division by zero in const context".to_string()
+            }
+            InvalidCause::ConstEvalArithmeticOverflow { .. } => {
+                "arithmetic overflow in const context".to_string()
+            }
+            InvalidCause::ConstEvalInvalidOperation { message, .. } => message.clone(),
+            _ => format!("constant evidence argument evaluation failed: {cause:?}"),
+        };
+        let mut diagnostic = SemanticDiagnostic::new(
+            instance,
+            SemanticDiagnosticKind::UnresolvedCall,
+            message,
+            source.unwrap_or(SemanticDiagnosticSpan::Origin {
+                owner: instance.key(db).owner(db),
+                origin,
+            }),
+        );
+        diagnostic.push_secondary(
+            "while evaluating this evidence argument".into(),
+            SemanticDiagnosticSpan::Origin {
+                owner: instance.key(db).owner(db),
+                origin,
+            },
+        );
+        return SemanticDiagnosticId::new(db, diagnostic);
+    }
+    let kind = if matches!(
+        &error,
+        MethodArgMapError::ApplicationNotAdmitted(_)
+            | MethodArgMapError::ConstArgumentBlocked { .. }
+    ) {
+        SemanticDiagnosticKind::UnresolvedCall
+    } else {
+        SemanticDiagnosticKind::Internal
+    };
     let message = match error {
+        MethodArgMapError::ConstArgumentBlocked { owner, info } => {
+            format!("constant evidence argument remains dependent in {owner:?}: {info:?}")
+        }
+        MethodArgMapError::ConstArgumentInvariant(message) => message,
+        MethodArgMapError::ApplicationNotAdmitted(error) => {
+            format!("opened evidence application was not admitted at this use: {error:?}")
+        }
         MethodArgMapError::SignatureMismatch {
             nominal,
             body,
@@ -762,7 +843,7 @@ fn method_arg_map_diagnostic<'db>(
     SemanticDiagnosticId::new(
         db,
         SemanticDiagnostic {
-            kind: SemanticDiagnosticKind::Internal,
+            kind,
             instance,
             primary: SemanticDiagnosticLabel {
                 message,
@@ -874,7 +955,10 @@ fn replan_call_site<'db>(
             .map_err(mapping_diag)?;
         site.effect_pairs = callee.effect_pairs.into_boxed_slice();
         site.provider_pairs = callee.provider_pairs.into_boxed_slice();
-        site.callee = Some(SemanticCalleeRef { key: callee.key });
+        site.callee = Some(SemanticCalleeRef {
+            key: callee.key,
+            concrete_dispatch: callee.concrete_dispatch,
+        });
     } else {
         site.callee = None;
     }
@@ -961,6 +1045,57 @@ fn specialize_provider_address_space<'db>(
         provider.semantics.transport,
     );
     specialization.provider.semantics = semantics;
+}
+
+fn normalize_selected_lexical_consts<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    records: &'db [crate::analysis::ty::trait_def::ImplApplicationRecord<'db>],
+    destination: TraitSolveCx<'db>,
+) -> TyId<'db> {
+    use crate::analysis::ty::{
+        const_expr::ConstExpr,
+        const_ty::{ConstTyData, const_ty_from_resolved_trait_const},
+        fold::TyFolder,
+        ty_def::{InvalidCause, TyData},
+    };
+    struct Selected<'db> {
+        records: &'db [crate::analysis::ty::trait_def::ImplApplicationRecord<'db>],
+        destination: TraitSolveCx<'db>,
+    }
+    impl<'db> TyFolder<'db> for Selected<'db> {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            let ty = ty.super_fold_with(db, self);
+            if let TyData::ConstTy(value) = ty.data(db)
+                && let ConstTyData::Abstract(expr, expected) = value.data(db)
+                && let ConstExpr::TraitConst(assoc) = expr.data(db)
+                && let Some(record) = self.records.iter().rev().copied().find(|record| {
+                    record.goal().def(db) == assoc.inst().def(db)
+                        && record.goal().args(db) == assoc.inst().args(db)
+                })
+            {
+                // Delivered choice is authority only after destination
+                // revalidation. A failed selected route cannot fall back
+                // to an ordinary implementation during type normalization.
+                return record
+                    .revalidate(db, self.destination, assoc.inst())
+                    .ok()
+                    .and_then(|application| {
+                        const_ty_from_resolved_trait_const(db, application.resolved(), assoc.name())
+                    })
+                    .map(|value| TyId::const_ty(db, value.evaluate(db, Some(*expected))))
+                    .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
+            }
+            ty
+        }
+    }
+    ty.fold_with(
+        db,
+        &mut Selected {
+            records,
+            destination,
+        },
+    )
 }
 
 #[salsa::tracked]
@@ -1107,6 +1242,14 @@ impl<'db> SemanticInstance<'db> {
 
     #[salsa::tracked]
     pub fn normalized_ty(self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        let env = self.key(db).impl_env(db);
+        let ty = normalize_selected_lexical_consts(
+            db,
+            ty,
+            env.lexical_applications(db),
+            TraitSolveCx::new(db, env.normalization_scope(db))
+                .with_assumptions(self.assumptions(db)),
+        );
         normalize_ty(db, ty, self.normalization_scope(db), self.assumptions(db))
     }
 
@@ -1198,10 +1341,15 @@ impl<'db> SemanticInstance<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<SemanticCalleeRef<'db>> {
-        collect_callees(
+        let mut callees = collect_callees(
             &provisional_call_sites(db, self).sites,
             &provisional_for_loop_call_sites(db, self).sites,
-        )
+        );
+        if has_variant_evidence(db, self) {
+            let emitted = self.provisional_body(db).callees();
+            callees.retain(|callee| emitted.iter().any(|actual| actual.key == callee.key));
+        }
+        callees
     }
 
     fn ensure_body_admitted(
@@ -1706,7 +1854,28 @@ fn collect_semantic_callees<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Vec<SemanticCalleeRef<'db>> {
-    collect_callees(instance.call_sites(db), instance.for_loop_call_sites(db))
+    let mut callees = collect_callees(instance.call_sites(db), instance.for_loop_call_sites(db));
+    if has_variant_evidence(db, instance) {
+        let emitted = instance.body(db).callees();
+        callees.retain(|callee| emitted.iter().any(|actual| actual.key == callee.key));
+    }
+    callees
+}
+
+fn has_variant_evidence(db: &dyn HirAnalysisDb, instance: SemanticInstance<'_>) -> bool {
+    instance
+        .key(db)
+        .impl_env(db)
+        .projected_parameter_evidence(db)
+        .iter()
+        .any(|(_, path, _)| {
+            path.iter().any(|step| {
+                matches!(
+                    step,
+                    crate::analysis::ty::ty_check::ReturnProjectionStep::VariantField { .. }
+                )
+            })
+        })
 }
 
 fn collect_callees<'db>(

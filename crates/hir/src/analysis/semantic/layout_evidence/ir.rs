@@ -40,7 +40,8 @@ pub(super) fn layout_const_param_uses<'db>(
                     collect(db, *field, uses);
                 }
             }
-            SemConstValue::Unit | SemConstValue::Scalar { .. } => {}
+            SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::Evidence { .. } => {
+            }
         }
     }
 

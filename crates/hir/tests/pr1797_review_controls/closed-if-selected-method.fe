@@ -1,0 +1,52 @@
+use core::obligations::{Evidence, prove}
+
+struct Plain {
+    pub x: u256
+}
+
+trait Score {
+    const fn score(self) -> u256 {
+        999
+    }
+}
+
+impl Score for Plain {
+    const fn score(self) -> u256 {
+        self.x
+    }
+}
+
+impl Score for Plain as First {
+    const fn score(self) -> u256 {
+        self.x + 10
+    }
+}
+
+impl Score for Plain as Second {
+    const fn score(self) -> u256 {
+        self.x + 20
+    }
+}
+
+type Goal = Score<Plain>
+
+const fn first() -> Evidence<Goal> {
+    with (First) { prove<Goal>() }
+}
+
+const fn second() -> Evidence<Goal> {
+    with (Second) { prove<Goal>() }
+}
+
+const fn consume(_ witness: Evidence<Goal>, _ v: Plain) -> u256 {
+    with (witness) {
+        v.score()
+    }
+}
+
+#[test]
+fn test_default_method_hijack() {
+    let w = if true { first() } else { second() }
+    let actual = consume(w, Plain { x: 5 })
+    assert(actual == 15)
+}

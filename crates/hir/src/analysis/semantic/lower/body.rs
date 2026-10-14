@@ -5,8 +5,9 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     analysis::semantic::instance::{
-        CallSiteLowering, ForLoopCallSites, SemanticInstance, provisional_semantic_callee_key,
-        resolve_semantic_const_ref, semantic_callee_key_with_effect_providers,
+        CallSiteLowering, ForLoopCallSites, SemanticInstance, declaration_reaches_trait_goal,
+        provisional_semantic_callee_key, resolve_semantic_const_ref_in_instance,
+        semantic_callee_key_with_effect_providers,
     },
     analysis::{
         HirAnalysisDb,
@@ -17,7 +18,7 @@ use crate::{
             SemOrigin, SemanticBody, SemanticCodeRegionTarget, SemanticLocalRole, VariantIndex,
             bool_const, bytes_const, consts::instantiate_const_template, int_const,
             reify_runtime_const_for_ty, runtime_size_bytes, sem_const_from_ty, struct_const,
-            unit_const,
+            typed_body_template, unit_const,
         },
         ty::{
             const_expr::{ConstExpr, ConstExprId, ConstInvocation},
@@ -758,9 +759,102 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     fn lower_const_ref(&mut self, expr: ExprId, const_ref: ConstRef<'db>) -> SValueId {
         let ty = self.expr_ty(expr);
-        if let Some(const_ref) =
-            resolve_semantic_const_ref(self.db, const_ref, ty, SemOrigin::Expr(expr))
-        {
+        if let ConstRef::TraitConst(assoc) = const_ref {
+            let openings = self.typed_body.expr_const_openings(expr).to_vec();
+            if let Some(crate::analysis::ty::ty_check::TraitOpening::Evidence {
+                operand,
+                goal: _,
+                admission: Some(admission),
+            }) = openings.iter().copied().find(|opening| {
+                let goal = opening.goal();
+                goal.def(self.db) == assoc.inst().def(self.db)
+                    && goal.args(self.db) == assoc.inst().args(self.db)
+            }) {
+                let known = crate::analysis::semantic::operand_recovery::saved_opening_applications(
+                    self.db,
+                    assoc.inst(),
+                    &openings,
+                    |operand| {
+                        crate::analysis::semantic::instance::known_opening_application(
+                            self.db,
+                            self.instance,
+                            operand,
+                        )
+                    },
+                );
+                if let Some(records) = known
+                    && let Some(record) =
+                        crate::analysis::semantic::instance::known_opening_application(
+                            self.db,
+                            self.instance,
+                            operand,
+                        )
+                    && let Ok(reference) =
+                        crate::analysis::semantic::instance::opened_assoc_const_ref(
+                            self.db,
+                            assoc,
+                            admission,
+                            record,
+                            records,
+                            ty,
+                            SemOrigin::Expr(expr),
+                        )
+                {
+                    return self.emit_expr_with_origin(
+                        SemOrigin::Expr(expr),
+                        ty,
+                        SExpr::Const(SConst::Ref(reference)),
+                    );
+                }
+                // Load the existing captured header, never re-evaluate its source.
+                let evidence = self.captured_with_operand(operand);
+                let mut context_inputs = Vec::new();
+                let mut named = Vec::new();
+                for opening in openings {
+                    match opening {
+                        crate::analysis::ty::ty_check::TraitOpening::Named(record) => {
+                            named.push(record)
+                        }
+                        crate::analysis::ty::ty_check::TraitOpening::Evidence {
+                            operand: other,
+                            ..
+                        } if other != operand => {
+                            context_inputs.push(self.captured_with_operand(other))
+                        }
+                        _ => {}
+                    }
+                }
+                return self.emit_expr_with_origin(
+                    SemOrigin::Expr(expr),
+                    ty,
+                    SExpr::OpenedConst {
+                        evidence,
+                        assoc,
+                        admission,
+                        context_inputs: context_inputs.into_boxed_slice(),
+                        named,
+                    },
+                );
+            }
+        }
+        // Inherited choices apply only to constants reached through a declaration's
+        // parameters and bounds. A concrete source path keeps its declaration choice
+        // even when its enclosing function is called under an opening (RD71).
+        let template = typed_body_template(self.db, self.template_owner);
+        let inherited = match template.body.expr_const_ref(expr) {
+            Some(ConstRef::TraitConst(assoc)) => {
+                declaration_reaches_trait_goal(self.db, template.body.assumptions(), assoc.inst())
+            }
+            _ => false,
+        };
+        if let Some(const_ref) = resolve_semantic_const_ref_in_instance(
+            self.db,
+            const_ref,
+            ty,
+            SemOrigin::Expr(expr),
+            Some(self.instance),
+            inherited,
+        ) {
             return self.emit_expr_with_origin(
                 SemOrigin::Expr(expr),
                 ty,
@@ -1217,12 +1311,59 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.lower_callable_argument(receiver, callable, 0)
     }
 
+    fn captured_with_operand(&mut self, operand: ExprId) -> SOperand {
+        let source = self
+            .with_binding_sources
+            .get(&operand)
+            .expect("checked opening was captured on frame entry")
+            .clone();
+        match source {
+            WithBindingSource::Value(value) => value,
+            WithBindingSource::Temporary(local) => SOperand::expr(local, operand),
+            WithBindingSource::Place(place) => {
+                let value = self.emit_expr_with_origin(
+                    SemOrigin::Expr(operand),
+                    self.expr_ty(operand),
+                    SExpr::ReadPlace { place },
+                );
+                SOperand::expr(value, operand)
+            }
+        }
+    }
+
     fn lower_const_intrinsic(
         &mut self,
         expr: ExprId,
         callable: &Callable<'db>,
         kind: ConstIntrinsicKind,
     ) -> SValueId {
+        if kind == ConstIntrinsicKind::EvidenceOpening {
+            let (operand, _) = callable
+                .evidence_opening()
+                .expect("admitted opening retains its operand");
+            let value = self.captured_with_operand(operand);
+            return self.emit_expr_with_origin(
+                SemOrigin::Expr(expr),
+                self.expr_ty(expr),
+                SExpr::Forward(value),
+            );
+        }
+        if kind == ConstIntrinsicKind::EvidenceIntroduction {
+            let origin = SemOrigin::Expr(expr);
+            let result_ty = self.expr_ty(expr);
+            let record = callable
+                .evidence_introduction()
+                .expect("admitted evidence intrinsic requires its checked application");
+            let value = crate::analysis::semantic::ctfe::issue_checked_evidence(
+                self.db, record, result_ty, origin,
+            )
+            .expect("admitted evidence intrinsic must retain its checked application");
+            return self.emit_expr_with_origin(
+                origin,
+                result_ty,
+                SExpr::Const(SConst::Value(value)),
+            );
+        }
         let ty = match kind {
             ConstIntrinsicKind::SizeOf => normalize_ty(
                 self.db,
@@ -1233,6 +1374,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.body.scope(),
                 self.assumptions,
             ),
+            ConstIntrinsicKind::EvidenceIntroduction | ConstIntrinsicKind::EvidenceOpening => {
+                unreachable!("handled above")
+            }
         };
         let result_ty = self.expr_ty(expr);
         // Admission reports failed concrete demands; raw lowering preserves
@@ -1269,6 +1413,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     args: Vec::new(),
                     parameter_owner: caller.owner(self.db).scope(),
                 }),
+                ConstIntrinsicKind::EvidenceIntroduction | ConstIntrinsicKind::EvidenceOpening => {
+                    unreachable!("handled above")
+                }
             };
             let const_ty = ConstTyId::new(
                 self.db,
@@ -1658,7 +1805,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let value = self.lower_expr(scrutinee);
         let result = self.alloc_temp(self.expr_ty(expr));
         let join_bb = self.new_block();
-        self.lower_match_expr_with_decision_tree(value, result, join_bb, arms)
+        let variant = crate::analysis::semantic::instance::known_operand_variant(
+            self.db,
+            self.instance,
+            scrutinee,
+        );
+        self.lower_match_expr_with_decision_tree(value, result, join_bb, arms, variant)
     }
 
     fn lower_cond_branch(&mut self, cond: CondId, then_bb: SBlockId, else_bb: SBlockId) {

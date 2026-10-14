@@ -1,0 +1,13 @@
+use core::obligations::{Constraint as GoalKind, Evidence as CheckedEvidence, prove as checked_prove}
+struct Constraint { value: u256 }
+struct Evidence<G: GoalKind> { seal: bool }
+const fn prove() -> u256 { 9 }
+trait Produce {}
+struct Subject {}
+impl Produce for Subject {}
+type Goal = Produce<Subject>
+const fn forward<G: GoalKind>(_ witness: CheckedEvidence<G>) -> CheckedEvidence<G> { witness }
+const fn consume(_ witness: CheckedEvidence<Goal>) -> u256 { 37 }
+fn counterfeit() -> CheckedEvidence<Goal> {
+    Evidence<Goal> { seal: false }
+}

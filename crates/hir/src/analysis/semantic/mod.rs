@@ -9,6 +9,7 @@ pub mod ir;
 pub mod layout_evidence;
 pub mod lower;
 pub mod normalized;
+pub(crate) mod operand_recovery;
 mod verify;
 
 pub use borrowck::*;

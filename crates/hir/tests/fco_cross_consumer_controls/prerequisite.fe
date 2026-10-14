@@ -1,0 +1,15 @@
+trait Leaf { const fn leaf() -> u256 }
+trait Pick { const fn value() -> u256 }
+struct Subject {}
+impl Leaf for Subject { const fn leaf() -> u256 { 11 } }
+impl Leaf for Subject as First { const fn leaf() -> u256 { 43 } }
+impl Leaf for Subject as Second { const fn leaf() -> u256 { 19 } }
+impl<T: Leaf> Pick for T { const fn value() -> u256 { <T as Leaf>::leaf() } }
+const fn answer() -> (u256,u256,u256,u256,u256) {
+ let a = <Subject as Pick>::value()
+ let b = with (First) { <Subject as Pick>::value() }
+ let c = with (First) { with (Second) { <Subject as Pick>::value() } }
+ let d = with (First) { let unused = with (Second) { <Subject as Pick>::value() }
+ <Subject as Pick>::value() }
+ (a,b,c,d,<Subject as Pick>::value())
+}

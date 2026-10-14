@@ -556,7 +556,7 @@ fn extract_pure_body_term<'db>(
                     args,
                     effect_args,
                     ..
-                } if effect_args.is_empty() => {
+                } if callee.concrete_dispatch && effect_args.is_empty() => {
                     let BodyOwner::Func(func) = callee.key.owner(db) else {
                         return None;
                     };
@@ -952,7 +952,9 @@ fn force_immutable_description<'db>(
         }
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => elems,
         SemConstValue::Struct { fields, .. } | SemConstValue::Enum { fields, .. } => fields,
-        SemConstValue::Unit | SemConstValue::Scalar { .. } => return Ok(value),
+        SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::Evidence { .. } => {
+            return Ok(value);
+        }
     };
     let fields = fields
         .iter()
@@ -1406,6 +1408,8 @@ fn force_const_computation_in_context<'db>(
                     use_.origin_scope(),
                     use_.assumptions(),
                     vec![use_.inst()],
+                    Vec::new(),
+                    Vec::new(),
                 ),
                 cx,
                 origin,
@@ -1434,7 +1438,14 @@ fn force_const_computation_in_context<'db>(
                 db,
                 const_ty,
                 computation.result_ty(db),
-                ImplEnv::new(db, use_.origin_scope(), use_.assumptions(), Vec::new()),
+                ImplEnv::new(
+                    db,
+                    use_.origin_scope(),
+                    use_.assumptions(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                ),
                 cx,
                 origin,
             )

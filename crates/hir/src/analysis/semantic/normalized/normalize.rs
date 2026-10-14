@@ -52,6 +52,7 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NormalizeError<'db> {
+    EvidenceChoiceNotCompileTime(SemOrigin<'db>),
     MissingValue(SLocalId),
     MissingRoot(SLocalId),
     MissingProviderAddressSpace(ProviderBinding<'db>),
@@ -606,6 +607,23 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     ) -> Result<NExpr<'db>, NormalizeError<'db>> {
         let dst_ty = self.normalized_local_ty(dst);
         let normalized = match expr {
+            SExpr::OpenedConst {
+                evidence,
+                assoc,
+                admission,
+                context_inputs,
+                named,
+            } => NExpr::OpenedConst {
+                evidence: self.read_operand(block, origin, *evidence, Some(ReadMode::Copy))?,
+                assoc: *assoc,
+                admission: *admission,
+                context_inputs: context_inputs
+                    .iter()
+                    .map(|operand| self.read_operand(block, origin, *operand, Some(ReadMode::Copy)))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_boxed_slice(),
+                named: named.clone(),
+            },
             SExpr::Forward(value) => NExpr::Forward {
                 src: self.read_operand(block, origin, *value, Some(ReadMode::Copy))?,
             },
@@ -1113,7 +1131,16 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         if literal_allocation(self.db, ty, &constant).is_some() {
             return Ok(NExpr::Const(constant));
         }
+        // Witness identity is compiler metadata. The private source seal has
+        // the ordinary fixed representation once a choice has been consumed.
+        let evidence_fields =
+            matches!(value.value(self.db), SemConstValue::Evidence { .. }).then(|| {
+                vec![crate::analysis::semantic::bool_const(self.db, false)].into_boxed_slice()
+            });
         let (variant, fields) = match value.value(self.db) {
+            SemConstValue::Evidence { .. } => {
+                (None, evidence_fields.as_ref().expect("evidence seal"))
+            }
             SemConstValue::Struct { fields, .. } => (None, fields),
             SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => {
                 (None, elems)
@@ -2387,7 +2414,8 @@ fn for_each_address_required_local(expr: &SExpr<'_>, mut f: impl FnMut(SLocalId)
                 }
             }
         }
-        SExpr::Forward(_)
+        SExpr::OpenedConst { .. }
+        | SExpr::Forward(_)
         | SExpr::UseValue(_)
         | SExpr::ReadPlace { .. }
         | SExpr::CodeRegionRef { .. }
@@ -2958,6 +2986,14 @@ pub(super) fn normalized_source_local_value_ty<'db>(
 fn expr_used_locals(expr: &SExpr<'_>) -> Vec<SLocalId> {
     let mut locals = Vec::new();
     match expr {
+        SExpr::OpenedConst {
+            evidence,
+            context_inputs,
+            ..
+        } => {
+            locals.push(evidence.value);
+            locals.extend(context_inputs.iter().map(|value| value.value));
+        }
         SExpr::Forward(value)
         | SExpr::UseValue(value)
         | SExpr::Unary { value, .. }

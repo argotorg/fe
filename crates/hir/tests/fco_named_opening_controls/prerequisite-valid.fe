@@ -1,0 +1,9 @@
+use core::obligations::{Evidence, prove}
+trait Leaf {}
+trait Pick {}
+struct Subject {}
+impl Pick for Subject {}
+impl Pick for Subject as NeedsLeaf where Subject: Leaf {}
+impl Leaf for Subject {}
+type Goal = Pick<Subject>
+const fn answer() -> Evidence<Goal> { with (NeedsLeaf) { prove<Goal>() } }

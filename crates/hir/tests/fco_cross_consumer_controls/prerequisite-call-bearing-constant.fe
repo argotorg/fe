@@ -1,0 +1,33 @@
+trait Leaf { const N: u256
+ const fn value() -> u256 }
+trait Root { const N: u256 }
+struct Subject {}
+impl Leaf for Subject { const N: u256 = 1
+ const fn value() -> u256 { 1 } }
+impl Leaf for Subject as First { const N: u256 = 42
+ const fn value() -> u256 { 42 } }
+impl Leaf for Subject as Second { const N: u256 = 7
+ const fn value() -> u256 { 7 } }
+impl<T: Leaf> Root for T { const N: u256 = <T as Leaf>::value() + 1 }
+const fn reached<T: Root>() -> u256 { <T as Root>::N }
+const fn frozen() -> u256 { <Subject as Leaf>::value() }
+const fn answer() -> (u256,u256,u256,u256,u256,u256) {
+ let ordinary = reached<Subject>()
+ let selected = with (First) { reached<Subject>() }
+ let nested = with (First) { with (Second) { reached<Subject>() } }
+ let restored = with (First) { let unused = with (Second) { reached<Subject>() }
+ reached<Subject>() }
+ let fixed = with (First) { frozen() }
+ (ordinary, selected, nested, restored, reached<Subject>(), fixed)
+}
+
+#[test]
+fn prerequisite_constants_and_declaration_freezing() {
+ let result = answer()
+ assert!(result.0 == 2)
+ assert!(result.1 == 43)
+ assert!(result.2 == 8)
+ assert!(result.3 == 43)
+ assert!(result.4 == 2)
+ assert!(result.5 == 1)
+}

@@ -256,6 +256,13 @@ fn collect_local_roots(body: &SemanticBody<'_>) -> LocalRoots {
                     let mut address = None;
                     let mut writes = Vec::new();
                     let sources = match expr {
+                        SExpr::OpenedConst {
+                            evidence,
+                            context_inputs,
+                            ..
+                        } => std::iter::once(evidence.value)
+                            .chain(context_inputs.iter().map(|input| input.value))
+                            .collect(),
                         SExpr::Borrow { place, kind, .. } => {
                             address = (*kind == BorrowKind::Mut).then_some(place.local);
                             vec![place.local]
@@ -501,7 +508,9 @@ fn canonicalize_const_value<'db>(
     value: SemConstId<'db>,
 ) -> SemConstId<'db> {
     match value.value(db) {
-        SemConstValue::Unit | SemConstValue::Scalar { .. } => value,
+        SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::Evidence { .. } => {
+            value
+        }
         SemConstValue::Description(term) => {
             let evaluated = evaluate_type_level_const_ty(db, *term, Some(term.ty(db)));
             let Some(evaluated) = sem_const_from_ty(db, TyId::const_ty(db, evaluated)) else {

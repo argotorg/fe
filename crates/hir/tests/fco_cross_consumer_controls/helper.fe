@@ -1,0 +1,14 @@
+trait Pick { const fn value() -> u256 }
+struct Subject {}
+impl Pick for Subject { const fn value() -> u256 { 1 } }
+impl Pick for Subject as First { const fn value() -> u256 { 42 } }
+impl Pick for Subject as Second { const fn value() -> u256 { 7 } }
+const fn helper<T: Pick>() -> u256 { <T as Pick>::value() }
+const fn answer() -> (u256,u256,u256,u256,u256) {
+ let a = helper<Subject>()
+ let b = with (First) { helper<Subject>() }
+ let c = with (First) { with (Second) { helper<Subject>() } }
+ let d = with (First) { let unused = with (Second) { helper<Subject>() }
+ helper<Subject>() }
+ (a,b,c,d,helper<Subject>())
+}

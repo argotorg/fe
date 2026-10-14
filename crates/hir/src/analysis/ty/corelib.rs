@@ -60,6 +60,22 @@ pub fn resolve_lib_type_path<'db>(
     resolve_lib_path(db, scope, path_id)
 }
 
+pub(crate) fn evidence_goal<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+) -> Option<super::trait_def::TraitInstId<'db>> {
+    let (base, args) = ty.decompose_ty_app(db);
+    if Some(base) != resolve_lib_type_path(db, scope, "core::obligations::Evidence") {
+        return None;
+    }
+    let [term] = args else { return None };
+    match term.data(db) {
+        super::ty_def::TyData::ConstraintTerm(goal) => Some(*goal),
+        _ => None,
+    }
+}
+
 /// Resolve a function by a fully-qualified `core::...` or `std::...` path string.
 ///
 /// Returns the `Func` HIR item for the resolved function.

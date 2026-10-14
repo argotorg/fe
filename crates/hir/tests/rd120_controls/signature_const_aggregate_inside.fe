@@ -1,0 +1,31 @@
+// RD120: selected aggregate shapes stay inside their with block.
+// Moving, forwarding and same-context nesting preserve the shape; ordinary
+// calls after the block use the ordinary implementation again.
+trait Compute { const N: usize }
+struct Subject {}
+impl Compute for Subject { const N: usize = 1 }
+impl Compute for Subject as Other { const N: usize = 2 }
+struct Buf<T: Compute> { a: [u256; T::N] }
+fn make<T: Compute>(_ a: [u256; T::N]) -> Buf<T> { Buf { a } }
+fn pass<T: Compute>(_ b: own Buf<T>) -> Buf<T> { b }
+fn inside() -> u256 {
+    with (Other) {
+        let b = make<Subject>([7,8])
+        let moved = b
+        let forwarded = pass<Subject>(moved)
+        forwarded.a[1]
+    }
+}
+fn nested() -> u256 {
+    with (Other) {
+        let b = with (Other) { make<Subject>([7,8]) }
+        b.a[1]
+    }
+}
+#[test]
+fn t() {
+    assert(inside()==8)
+    assert(make<Subject>([7]).a[0]==7)
+    assert(nested()==8)
+    assert(make<Subject>([9]).a[0]==9)
+}

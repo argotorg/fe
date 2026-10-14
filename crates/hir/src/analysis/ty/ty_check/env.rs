@@ -63,6 +63,7 @@ pub(crate) struct TyCheckEnv<'db> {
     /// type is `Copy` is decided in `finish`, once inference has resolved it.
     implicit_moves: FxHashMap<ExprId, TyId<'db>>,
     const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
+    const_openings: SecondaryMap<ExprId, Vec<super::TraitOpening<'db>>>,
     value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
     callables: SecondaryMap<ExprId, Option<Callable<'db>>>,
     semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
@@ -72,10 +73,13 @@ pub(crate) struct TyCheckEnv<'db> {
     deferred: Vec<DeferredTask<'db>>,
 
     effect_env: keyed_effect_env::EffectEnv<'db>,
+    trait_openings: super::opening::TraitOpenings<'db>,
+    with_openings: SecondaryMap<ExprId, Option<super::TraitOpening<'db>>>,
     effect_bounds: ThinVec<TraitInstId<'db>>,
     base_assumptions: PredicateListId<'db>,
     assumptions: PredicateListId<'db>,
     var_env: Vec<BlockEnv<'db>>,
+    binding_openings: FxHashMap<LocalBinding<'db>, (ScopeId<'db>, Vec<super::TraitOpening<'db>>)>,
     pending_vars: FxHashMap<IdentId<'db>, LocalBinding<'db>>,
     loop_stack: Vec<StmtId>,
     expr_stack: Vec<ExprId>,
@@ -139,6 +143,7 @@ impl<'db> TyCheckEnv<'db> {
             expr_ty: SecondaryMap::new(),
             implicit_moves: FxHashMap::default(),
             const_refs: SecondaryMap::new(),
+            const_openings: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),
             callables: SecondaryMap::new(),
             semantic_expr_lowering: SecondaryMap::new(),
@@ -146,10 +151,13 @@ impl<'db> TyCheckEnv<'db> {
             resolved_field_index: SecondaryMap::new(),
             deferred: Vec::new(),
             effect_env: keyed_effect_env::EffectEnv::new(),
+            trait_openings: super::opening::TraitOpenings::new(),
+            with_openings: SecondaryMap::new(),
             effect_bounds: ThinVec::new(),
             base_assumptions,
             assumptions: base_assumptions,
             var_env: vec![BlockEnv::new(owner_scope, 0)],
+            binding_openings: FxHashMap::default(),
             pending_vars: FxHashMap::default(),
             loop_stack: Vec::new(),
             expr_stack: Vec::new(),
@@ -440,6 +448,9 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn register_const_ref(&mut self, expr: ExprId, const_ref: ConstRef<'db>) {
+        if matches!(const_ref, ConstRef::TraitConst(_)) {
+            self.const_openings[expr] = self.trait_openings.visible(self.db);
+        }
         if self.const_refs[expr].replace(const_ref).is_some() {
             panic!("const ref is already registered for the given expr")
         }
@@ -471,6 +482,10 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn callable_expr(&self, expr: ExprId) -> Option<&Callable<'db>> {
         self.callables[expr].as_ref()
+    }
+
+    pub(super) fn expr_value_path_ref(&self, expr: ExprId) -> Option<ValuePathRef<'db>> {
+        self.value_path_refs[expr]
     }
 
     pub(super) fn expr_const_ref(&self, expr: ExprId) -> Option<ConstRef<'db>> {
@@ -509,7 +524,21 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
-    pub(super) fn register_semantic_call(&mut self, expr: ExprId, callable: Callable<'db>) {
+    pub(super) fn register_semantic_call(&mut self, expr: ExprId, mut callable: Callable<'db>) {
+        callable.record_source_expr(expr);
+        callable.record_lexical_openings(self.trait_openings.visible(self.db));
+        let operands = match expr.data(self.db, self.body) {
+            Partial::Present(Expr::Call(_, args)) => args.iter().map(|arg| arg.expr).collect(),
+            Partial::Present(Expr::MethodCall(receiver, _, _, args)) => std::iter::once(*receiver)
+                .chain(args.iter().map(|arg| arg.expr))
+                .collect(),
+            Partial::Present(Expr::Bin(lhs, rhs, _) | Expr::AugAssign(lhs, rhs, _)) => {
+                vec![*lhs, *rhs]
+            }
+            Partial::Present(Expr::Un(value, _)) => vec![*value],
+            _ => Vec::new(),
+        };
+        callable.record_argument_operands(operands);
         self.register_callable(expr, callable.clone());
         self.register_semantic_expr_lowering(expr, SemanticExprLowering::Call { callable });
     }
@@ -558,15 +587,237 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(crate) fn assumptions(&self) -> PredicateListId<'db> {
-        // Return the assumptions we computed in new, which includes
-        // both generic bounds (if any) AND the effect parameter bounds.
-        self.assumptions
+        // Type lookup also reads the accepted output equalities of openings.
+        let visible = self.trait_openings.visible(self.db);
+        if visible.is_empty() {
+            return self.assumptions;
+        }
+        let mut premises = self.assumptions.list(self.db).to_vec();
+        premises.extend(visible.into_iter().map(|opening| opening.goal()));
+        PredicateListId::new(self.db, premises).extend_all_bounds(self.db)
+    }
+
+    pub(super) fn enter_with_frame(&mut self) {
+        self.effect_env.push_frame();
+        self.trait_openings.enter();
+    }
+    pub(super) fn leave_with_frame(&mut self) {
+        self.trait_openings.leave();
+        self.effect_env.pop_frame();
+    }
+    pub(super) fn opening_for(&self, goal: TraitInstId<'db>) -> Option<super::TraitOpening<'db>> {
+        self.trait_openings.lookup(self.db, goal)
+    }
+    pub(super) fn insert_opening(
+        &mut self,
+        value: ExprId,
+        opening: super::TraitOpening<'db>,
+    ) -> Result<(), ()> {
+        self.trait_openings.insert(self.db, opening)?;
+        self.with_openings[value] = Some(opening);
+        Ok(())
+    }
+
+    /// Validate each opening against the completed frame, excluding its own
+    /// premise. Other opened witnesses must also pass their entry validation.
+    pub(super) fn finalize_opening_admission(&mut self, value: ExprId) {
+        let Some(super::TraitOpening::Evidence { operand, goal, .. }) = self.with_openings[value]
+        else {
+            return;
+        };
+        let premises: Vec<_> = self
+            .trait_openings
+            .visible(self.db)
+            .into_iter()
+            .filter_map(|opening| match opening {
+                super::TraitOpening::Evidence {
+                    operand: other,
+                    goal,
+                    ..
+                } if other != operand => Some(goal),
+                _ => None,
+            })
+            .collect();
+        let lexical = (!premises.is_empty())
+            .then(|| PredicateListId::new(self.db, premises).extend_all_bounds(self.db));
+        let mut assumptions = self.assumptions.list(self.db).to_vec();
+        if let Some(lexical) = lexical {
+            assumptions.extend(lexical.list(self.db).iter().copied());
+        }
+        let context = TraitSolveCx::new(self.db, self.scope())
+            .with_assumptions(PredicateListId::new(self.db, assumptions).extend_all_bounds(self.db))
+            .with_lexical_premises(lexical);
+        self.with_openings[value] = Some(super::TraitOpening::Evidence {
+            operand,
+            goal,
+            admission: Some(context),
+        });
+        self.trait_openings.finalize_evidence(operand, context);
     }
 
     /// Project the context owned by the checker at its current lexical position.
     /// Root/effect premises are formed once in this environment, not by readers.
     pub(crate) fn proof_context(&self) -> TraitSolveCx<'db> {
-        TraitSolveCx::new(self.db, self.scope()).with_assumptions(self.assumptions())
+        // Named applications provide a choice, not an extra solver premise.
+        // Their output equalities remain available to lexical type lookup.
+        let visible = self.trait_openings.visible(self.db);
+        // A named implementation body is checked under its declared prerequisites.
+        // Admission of that implementation independently establishes these at use.
+        // Keep ordinary declaration assumptions under master's existing policy.
+        let declared = match self.owner {
+            BodyOwner::Func(func) => func
+                .containing_impl_trait(self.db)
+                .filter(|implementation| implementation.selection_name(self.db).is_some())
+                .map(|implementation| {
+                    crate::analysis::ty::trait_resolution::constraint::collect_constraints(
+                        self.db,
+                        implementation.into(),
+                    )
+                    .instantiate_identity()
+                }),
+            _ => None,
+        };
+        if visible.is_empty() && declared.is_none() {
+            return TraitSolveCx::new(self.db, self.scope()).with_assumptions(self.assumptions);
+        }
+        let mut lexical: Vec<_> = visible
+            .into_iter()
+            .filter_map(|opening| match opening {
+                super::TraitOpening::Evidence { goal, .. } => Some(goal),
+                super::TraitOpening::Named(_) => None,
+            })
+            .collect();
+        if let Some(declared) = declared {
+            lexical.extend(declared.list(self.db).iter().copied());
+        }
+        let lexical = (!lexical.is_empty())
+            .then(|| PredicateListId::new(self.db, lexical).extend_all_bounds(self.db));
+        let mut premises = self.assumptions.list(self.db).to_vec();
+        if let Some(lexical) = lexical {
+            premises.extend(lexical.list(self.db).iter().copied());
+        }
+        TraitSolveCx::new(self.db, self.scope())
+            .with_assumptions(PredicateListId::new(self.db, premises).extend_all_bounds(self.db))
+            .with_lexical_premises(lexical)
+    }
+
+    /// Read a record through the shared checked-operand interpretation.
+    /// This is advisory type contextualization; unavailable values stay pending.
+    fn known_operand_application(
+        &self,
+        operand: ExprId,
+    ) -> Option<crate::analysis::ty::trait_def::ImplApplicationRecord<'db>> {
+        use crate::analysis::semantic::{
+            SemConstValue,
+            operand_recovery::{KnownOperandRecovery, recover_known_operand},
+        };
+        let KnownOperandRecovery::Value(value) = recover_known_operand(self, operand) else {
+            return None;
+        };
+        match value.value(self.db) {
+            SemConstValue::Evidence { application, .. } => Some(*application),
+            _ => None,
+        }
+    }
+
+    /// Resolve a type-level constant through the admitted lexical choice.
+    pub(super) fn contextualize_const_types(&self, ty: TyId<'db>) -> TyId<'db> {
+        self.contextualize_const_types_at(ty, &self.trait_openings.visible(self.db), false)
+    }
+
+    pub(super) fn has_trait_openings(&self) -> bool {
+        !self.trait_openings.visible(self.db).is_empty()
+    }
+
+    pub(super) fn binding_openings(
+        &self,
+        binding: LocalBinding<'db>,
+    ) -> Vec<super::TraitOpening<'db>> {
+        self.binding_openings
+            .get(&binding)
+            .map(|(_, openings)| openings.clone())
+            .unwrap_or_default()
+    }
+
+    pub(super) fn take_binding_type_contexts(
+        &mut self,
+        table: &mut UnificationTable<'db>,
+    ) -> FxHashMap<LocalBinding<'db>, TraitSolveCx<'db>> {
+        std::mem::take(&mut self.binding_openings)
+            .into_iter()
+            .map(|(binding, (scope, openings))| {
+                let mut prober = Prober::new(table, scope);
+                let mut premises = self.assumptions.list(self.db).to_vec();
+                premises.extend(openings.into_iter().map(|opening| opening.goal()));
+                let assumptions = PredicateListId::new(self.db, premises)
+                    .fold_with(self.db, &mut prober)
+                    .extend_all_bounds(self.db);
+                (
+                    binding,
+                    TraitSolveCx::new(self.db, scope).with_assumptions(assumptions),
+                )
+            })
+            .collect()
+    }
+
+    pub(super) fn contextualize_const_types_at(
+        &self,
+        ty: TyId<'db>,
+        openings: &[super::TraitOpening<'db>],
+        source: bool,
+    ) -> TyId<'db> {
+        struct Selected<'a, 'db>(&'a TyCheckEnv<'db>, &'a [super::TraitOpening<'db>], bool);
+        impl<'db> TyFolder<'db> for Selected<'_, 'db> {
+            fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+                use crate::analysis::ty::{
+                    const_expr::ConstExpr,
+                    const_ty::{ConstTyData, const_ty_from_resolved_trait_const},
+                };
+                let ty = ty.super_fold_with(db, self);
+                if let TyData::ConstTy(value) = ty.data(db)
+                    && let ConstTyData::Abstract(expr, expected) = value.data(db)
+                    && let ConstExpr::TraitConst(assoc) = expr.data(db)
+                    && let Some(opening) = self.1.iter().copied().find(|opening| {
+                        let goal = opening.goal();
+                        goal.def(db) == assoc.inst().def(db)
+                            && goal.args(db) == assoc.inst().args(db)
+                    })
+                    && let Some(record) = match opening {
+                        super::TraitOpening::Named(record) => Some(record),
+                        super::TraitOpening::Evidence { operand, .. } => {
+                            self.0.known_operand_application(operand)
+                        }
+                    }
+                {
+                    return match record.revalidate(
+                        db,
+                        if self.2 {
+                            record.origin_context()
+                        } else {
+                            match opening {
+                                super::TraitOpening::Evidence {
+                                    admission: Some(context),
+                                    ..
+                                } => context,
+                                _ => self.0.proof_context(),
+                            }
+                        },
+                        assoc.inst(),
+                    ) {
+                        Ok(application) => const_ty_from_resolved_trait_const(
+                            db,
+                            application.resolved(),
+                            assoc.name(),
+                        )
+                        .map(|value| TyId::const_ty(db, value.evaluate(db, Some(*expected))))
+                        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other)),
+                        Err(_) => TyId::invalid(db, InvalidCause::Other),
+                    };
+                }
+                ty
+            }
+        }
+        ty.fold_with(self.db, &mut Selected(self, openings, source))
     }
 
     pub(crate) fn base_assumptions(&self) -> PredicateListId<'db> {
@@ -790,6 +1041,10 @@ impl<'db> TyCheckEnv<'db> {
                 self.pat_binding_modes[pat] = Some(PatBindingMode::ByValue);
             }
         }
+        self.binding_openings.insert(
+            binding,
+            (self.scope(), self.trait_openings.visible(self.db)),
+        );
         self.pending_vars.insert(name, binding)
     }
 
@@ -917,6 +1172,10 @@ impl<'db> TyCheckEnv<'db> {
         self.path_applications
             .iter_mut()
             .for_each(|(_, ty)| *ty = ty.fold_with(self.db, &mut prober));
+        self.with_openings
+            .values_mut()
+            .flatten()
+            .for_each(|opening| *opening = opening.fold_with(self.db, &mut prober));
         let mut expr_place = SecondaryMap::new();
         let mut expr_places: PrimaryMap<super::ExprPlaceId, Place<'db>> = PrimaryMap::new();
         for expr in self.body.exprs(self.db).keys() {
@@ -943,12 +1202,14 @@ impl<'db> TyCheckEnv<'db> {
 
         TypedBodyTables {
             body: Some(self.body),
+            with_openings: self.with_openings,
             result_ty,
             assumptions,
             pat_ty: self.pat_ty,
             expr_ty: self.expr_ty,
             implicit_moves,
             const_refs: self.const_refs,
+            const_openings: self.const_openings,
             value_path_refs: self.value_path_refs,
             semantic_expr_lowering: self.semantic_expr_lowering,
             record_init_lowering: self.record_init_lowering,
@@ -1583,9 +1844,282 @@ pub(super) enum TraitObligationOrigin<'db> {
 
 #[derive(Debug, Clone)]
 pub(super) struct TraitObligation<'db> {
+    pub context: TraitSolveCx<'db>,
     pub goal: TraitInstId<'db>,
     pub origin: TraitObligationOrigin<'db>,
     pub span: DynLazySpan<'db>,
 }
 
 impl<'db> TyCheckEnv<'db> {}
+
+impl<'db> crate::analysis::semantic::operand_recovery::OperandRecoveryCx<'db> for TyCheckEnv<'db> {
+    fn db(&self) -> &'db dyn HirAnalysisDb {
+        self.db
+    }
+    fn body(&self) -> Option<Body<'db>> {
+        Some(self.body)
+    }
+    fn owner(&self) -> BodyOwner<'db> {
+        self.owner
+    }
+    fn opening(&self, operand: ExprId) -> Option<super::TraitOpening<'db>> {
+        self.with_openings[operand]
+    }
+    fn expr_ty(&self, _db: &'db dyn HirAnalysisDb, expr: ExprId) -> TyId<'db> {
+        self.typed_expr_ty(expr)
+    }
+    fn binding(&self, expr: ExprId) -> Option<LocalBinding<'db>> {
+        self.typed_expr(expr).and_then(|prop| prop.binding)
+    }
+    fn binding_source(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        binding: LocalBinding<'db>,
+    ) -> Option<super::BindingSource> {
+        super::binding_source::binding_source(
+            db,
+            self.body,
+            &self.pattern_store,
+            &|pat| self.pattern_status[pat].ready_root(),
+            binding,
+        )
+    }
+    fn record_init_lowering(&self, expr: ExprId) -> Option<super::RecordInitLowering<'db>> {
+        self.record_init_lowering[expr]
+    }
+    fn field_index(&self, expr: ExprId) -> Option<u16> {
+        self.resolved_field_index[expr]
+    }
+    fn projected_evidence(
+        &self,
+        _expr: ExprId,
+    ) -> Option<crate::analysis::ty::trait_def::ImplApplicationRecord<'db>> {
+        None
+    }
+    fn pattern_root(&self, pat: PatId) -> Option<ValidatedPatId> {
+        self.pattern_status[pat].ready_root()
+    }
+    fn pattern_store(&self) -> &PatternStore<'db> {
+        &self.pattern_store
+    }
+    fn callable(&self, expr: ExprId) -> Option<&Callable<'db>> {
+        self.callable_expr(expr)
+    }
+    fn leaf(
+        &self,
+        operand: ExprId,
+        stop: &mut Option<crate::analysis::semantic::operand_recovery::KnownOperandRecovery<'db>>,
+        active: &mut Vec<ExprId>,
+    ) -> Option<crate::analysis::semantic::SemConstId<'db>> {
+        use crate::analysis::semantic::{
+            ConstDesc, CtfeConfig, EvalOutcome, SemOrigin, SemanticInstanceKey,
+            VerifiedConstValueId, const_computation_for_instance, force_const_computation,
+            operand_recovery::{KnownOperandRecovery, recover_value},
+        };
+        let ty = self.typed_expr(operand)?.ty;
+        if let Some(reference) = self.expr_const_ref(operand) {
+            let reference = match reference {
+                ConstRef::TraitConst(assoc) if !self.const_openings[operand].is_empty() => {
+                    // Use the source expression's checked frame snapshot, not
+                    // the current frame or ordinary trait discovery. A pending
+                    // record stays pending and cannot authorize a fallback.
+                    let records =
+                        crate::analysis::semantic::operand_recovery::saved_opening_applications(
+                            self.db,
+                            assoc.inst(),
+                            &self.const_openings[operand],
+                            |operand| self.known_operand_application(operand),
+                        )?;
+                    let key =
+                        crate::analysis::semantic::instance::semantic_const_key_for_assoc_const(
+                            self.db, assoc, records,
+                        )?;
+                    crate::analysis::semantic::SemanticConstRef::new(
+                        self.db,
+                        key,
+                        ty,
+                        SemOrigin::Expr(operand),
+                    )
+                }
+                _ => crate::analysis::semantic::instance::resolve_semantic_const_ref(
+                    self.db,
+                    reference,
+                    ty,
+                    SemOrigin::Expr(operand),
+                )?,
+            };
+            // Never force a reference back into the checker currently borrowing these tables.
+            if reference.instance(self.db).owner(self.db) == self.owner {
+                return None;
+            }
+            return match crate::analysis::semantic::eval_const_ref(self.db, reference) {
+                EvalOutcome::Ready(value) => Some(value),
+                EvalOutcome::Blocked(info) => {
+                    *stop = Some(KnownOperandRecovery::Blocked {
+                        owner: reference.instance(self.db).owner(self.db),
+                        info,
+                        result_ty: ty,
+                    });
+                    None
+                }
+                EvalOutcome::Failed(failure) => {
+                    *stop = Some(KnownOperandRecovery::Failed {
+                        owner: reference.instance(self.db).owner(self.db),
+                        failure,
+                        result_ty: ty,
+                    });
+                    None
+                }
+            };
+        }
+        let callable = self.callable_expr(operand)?;
+        let CallableDef::Func(func) = callable.callable_def() else {
+            return None;
+        };
+        if BodyOwner::Func(func) == self.owner
+            || !func.is_const(self.db)
+            || callable.checked_input_tys()?.len() != callable.argument_operands().len()
+            || !self.call_effect_args[operand]
+                .as_deref()
+                .unwrap_or(&[])
+                .is_empty()
+            || callable.generic_args().iter().any(|arg| {
+                arg.has_param(self.db)
+                    || arg.has_var(self.db)
+                    || arg.has_invalid(self.db)
+                    || arg.has_hole(self.db)
+                    || arg.has_projection(self.db)
+            })
+        {
+            return None;
+        }
+        let values = callable
+            .argument_operands()
+            .iter()
+            .map(|&operand| recover_value(self, operand, stop, active))
+            .collect::<Option<Vec<_>>>()?;
+        let opened = if let Some((opened, _)) = callable.opened_trait_application() {
+            let value = recover_value(self, opened, stop, active)?;
+            let crate::analysis::semantic::SemConstValue::Evidence { application, .. } =
+                value.value(self.db)
+            else {
+                return None;
+            };
+            Some(*application)
+        } else {
+            None
+        };
+        let callee = crate::analysis::semantic::instance::checked_operand_callee(
+            self.db,
+            self.scope(),
+            self.assumptions,
+            callable,
+            opened,
+        )
+        .ok()??;
+        if !callee.concrete_dispatch {
+            let dependency = callee
+                .key
+                .subst(self.db)
+                .generic_args(self.db)
+                .first()
+                .copied()
+                .unwrap_or(ty);
+            *stop = Some(KnownOperandRecovery::Blocked {
+                owner: callee.key.owner(self.db),
+                result_ty: ty,
+                info: crate::analysis::semantic::BlockedInfo::new(
+                    crate::analysis::semantic::ConstDemandKind::CallableSelection,
+                    crate::analysis::semantic::ConstDependency::Type(dependency),
+                    SemOrigin::Expr(operand),
+                ),
+            });
+            return None;
+        }
+        let key = callee.key;
+        let parameters = values.iter().copied().enumerate().collect::<Vec<_>>();
+        let env = key
+            .impl_env(self.db)
+            .with_argument_evidence_values(self.db, &parameters);
+        let key = SemanticInstanceKey::new(
+            self.db,
+            key.owner(self.db),
+            key.subst(self.db),
+            key.effect_providers(self.db),
+            env,
+        );
+        let inputs = values
+            .into_iter()
+            .map(|value| {
+                VerifiedConstValueId::from_complete_execution(self.db, value)
+                    .ok()
+                    .map(|value| ConstDesc::value(self.db, value, key.owner(self.db).scope()))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        match force_const_computation(
+            self.db,
+            const_computation_for_instance(self.db, key, inputs),
+            CtfeConfig::default(),
+        ) {
+            EvalOutcome::Ready(value) => Some(value.value()),
+            EvalOutcome::Blocked(info) => {
+                *stop = Some(KnownOperandRecovery::Blocked {
+                    owner: key.owner(self.db),
+                    info,
+                    result_ty: ty,
+                });
+                None
+            }
+            EvalOutcome::Failed(failure) => {
+                *stop = Some(KnownOperandRecovery::Failed {
+                    owner: key.owner(self.db),
+                    failure,
+                    result_ty: ty,
+                });
+                None
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod pr1797_admission_review {
+    use super::*;
+    use crate::test_db::{HirAnalysisTestDb, find_func};
+
+    #[test]
+    fn active_opening_uses_finalized_self_excluding_admission() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("active-admission.fe".into(),
+            "use core::obligations::Evidence\ntrait Goal {}\nstruct Subject {}\nfn inspect(_ witness: own Evidence<Goal<Subject>>) {}\n");
+        let (module, _) = db.top_mod(file);
+        let func = find_func(&db, module, "inspect");
+        let mut env = TyCheckEnv::new(&db, BodyOwner::Func(func)).unwrap();
+        let ty = *func.arg_tys(&db)[0].skip_binder();
+        let goal = crate::analysis::ty::corelib::evidence_goal(&db, func.scope(), ty).unwrap();
+        let value = env.body.expr(&db);
+        env.enter_with_frame();
+        env.insert_opening(
+            value,
+            super::super::TraitOpening::Evidence {
+                operand: value,
+                goal,
+                admission: None,
+            },
+        )
+        .unwrap();
+        env.finalize_opening_admission(value);
+        let active = env.opening_for(goal).unwrap();
+        let super::super::TraitOpening::Evidence {
+            admission: Some(context),
+            ..
+        } = active
+        else {
+            panic!(
+                "active consumers must receive finalized admission, not own-goal fallback: {active:?}"
+            )
+        };
+        assert!(!context.assumptions().list(&db).contains(&goal));
+        assert_eq!(env.with_openings[value], Some(active));
+    }
+}

@@ -1,0 +1,4 @@
+use core::obligations::Evidence
+trait Read {}
+struct Subject {}
+fn forged() -> Evidence<Read<Subject>> { Evidence { seal: false } }

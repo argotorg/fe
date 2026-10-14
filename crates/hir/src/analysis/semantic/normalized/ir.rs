@@ -340,6 +340,15 @@ pub enum HandleOrigin<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NExpr<'db> {
+    /// Captured compiler-issued choice retained for operation-preserving
+    /// validation. Runtime admission must resolve it before lowering.
+    OpenedConst {
+        evidence: NOperand,
+        assoc: crate::analysis::ty::assoc_const::AssocConstUse<'db>,
+        admission: crate::analysis::ty::trait_resolution::TraitSolveCx<'db>,
+        context_inputs: Box<[NOperand]>,
+        named: Vec<crate::analysis::ty::trait_def::ImplApplicationRecord<'db>>,
+    },
     Forward {
         src: NOperand,
     },
@@ -430,6 +439,14 @@ pub enum NExpr<'db> {
 impl<'db> NExpr<'db> {
     pub fn for_each_value_operand(&self, mut f: impl FnMut(NOperand)) {
         match self {
+            Self::OpenedConst {
+                evidence,
+                context_inputs,
+                ..
+            } => {
+                f(*evidence);
+                context_inputs.iter().copied().for_each(f);
+            }
             Self::Forward { src }
             | Self::ProjectValue { value: src, .. }
             | Self::StructuralRepack { value: src, .. }
@@ -482,7 +499,8 @@ impl<'db> NExpr<'db> {
                     NEffectArgValue::Value(_) => None,
                 })
                 .for_each(f),
-            Self::Forward { .. }
+            Self::OpenedConst { .. }
+            | Self::Forward { .. }
             | Self::ProjectValue { .. }
             | Self::StructuralRepack { .. }
             | Self::CodeRegionRef { .. }

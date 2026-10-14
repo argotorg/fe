@@ -46,6 +46,7 @@ pub(super) struct PatternValue<'db> {
 
 #[derive(Clone)]
 struct DecisionTreeProjectionCache<'db> {
+    known_root_variant: Option<u16>,
     entries: Vec<(ProjectionPath<'db>, PatternValue<'db>)>,
     carrier_tys: Vec<(ProjectionPath<'db>, TyId<'db>)>,
 }
@@ -73,6 +74,7 @@ impl<'db> DecisionTreeProjectionCache<'db> {
         root_value: PatternValue<'db>,
     ) -> Self {
         let mut cache = Self {
+            known_root_variant: None,
             entries: vec![(ProjectionPath::default(), root_value)],
             carrier_tys: vec![(ProjectionPath::default(), root_value.carrier_ty.0)],
         };
@@ -442,6 +444,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         result: crate::analysis::semantic::SLocalId,
         join_bb: SBlockId,
         arms: &[MatchArm],
+        known_variant: Option<u16>,
     ) -> SValueId {
         let value = self.owned_pattern_value(value, self.locals[value.index()].ty);
         let roots = arms
@@ -456,6 +459,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             &roots,
             value,
         );
+        projections.known_root_variant = known_variant;
         let target = DecisionTreeTarget::MatchArms {
             result,
             join_bb,
@@ -534,17 +538,34 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         target: DecisionTreeTarget<'_>,
     ) -> bool {
         let occurrence = self.project_decision_tree_path(projections, &switch.occurrence);
+        let known_variant = switch
+            .occurrence
+            .is_empty()
+            .then_some(projections.known_root_variant)
+            .flatten();
+        let has_known_case = known_variant.is_some_and(|known| switch.arms.iter().any(|(case, _)| {
+            matches!(case, Case::Constructor(ConstructorKind::Variant(variant, _)) if variant.idx == known)
+        }));
         let case_blocks = switch
             .arms
             .iter()
-            .map(|(case, tree)| (case, tree, self.new_block()))
+            .map(|(case, tree)| {
+                let impossible = match (known_variant, case) {
+                    (Some(known), Case::Constructor(ConstructorKind::Variant(variant, _))) => {
+                        variant.idx != known
+                    }
+                    (Some(_), Case::Default) => has_known_case,
+                    _ => false,
+                };
+                (case, tree, self.new_block(), impossible)
+            })
             .collect::<Vec<_>>();
 
         let mut enum_ty = None;
         let mut enum_cases = Vec::new();
         let mut enum_default = None;
         let mut is_enum_switch = true;
-        for (case, _, case_bb) in &case_blocks {
+        for (case, _, case_bb, _) in &case_blocks {
             match case {
                 Case::Constructor(ConstructorKind::Variant(variant, case_enum_ty)) => {
                     if enum_ty.is_some_and(|ty| ty != *case_enum_ty) {
@@ -574,7 +595,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             );
         } else {
             let mut dispatch_bb = self.current;
-            for (idx, (case, _, case_bb)) in case_blocks.iter().enumerate() {
+            for (idx, (case, _, case_bb, _)) in case_blocks.iter().enumerate() {
                 if idx > 0 {
                     self.switch_to(dispatch_bb);
                 }
@@ -628,10 +649,48 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
 
         let mut join_reachable = false;
-        for (_, subtree, block) in case_blocks {
+        for (_, subtree, block, impossible) in case_blocks {
             self.switch_to(block);
+            let first_child = self.blocks.len();
             let mut subtree_projections = projections.clone();
-            join_reachable |= self.lower_decision_tree(subtree, &mut subtree_projections, target);
+            let reachable = self.lower_decision_tree(subtree, &mut subtree_projections, target);
+            if impossible {
+                // Preserve template local allocation and type/layout indexing.
+                // Only executable operations disappear from a positively excluded arm.
+                if let Some(call) = self.blocks[block.index()].stmts.iter().position(|stmt| {
+                    matches!(
+                        stmt.kind,
+                        SStmtKind::Assign {
+                            expr: SExpr::Call { .. },
+                            ..
+                        }
+                    )
+                }) {
+                    self.blocks[block.index()].stmts.truncate(call);
+                }
+                self.blocks[block.index()].terminator = None;
+                self.set_synthetic_terminator(block, STerminatorKind::Assert { message: None });
+                for index in first_child..self.blocks.len() {
+                    if let Some(call) = self.blocks[index].stmts.iter().position(|stmt| {
+                        matches!(
+                            stmt.kind,
+                            SStmtKind::Assign {
+                                expr: SExpr::Call { .. },
+                                ..
+                            }
+                        )
+                    }) {
+                        self.blocks[index].stmts.truncate(call);
+                    }
+                    self.blocks[index].terminator = None;
+                    self.set_synthetic_terminator(
+                        SBlockId::new(index),
+                        STerminatorKind::Assert { message: None },
+                    );
+                }
+            } else {
+                join_reachable |= reachable;
+            }
         }
         join_reachable
     }

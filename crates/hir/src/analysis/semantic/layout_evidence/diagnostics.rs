@@ -147,7 +147,14 @@ fn collect_instance<'db>(
     if !seen.insert(instance.key(db)) {
         return;
     }
-    if let Err(error) = layout_evidence_body(db, instance)
+    let definition_only = matches!(instance.key(db).owner(db), BodyOwner::Func(func) if func.is_const(db))
+        || crate::analysis::semantic::instance::has_unbound_evidence_calls(db, instance);
+    let result = if definition_only {
+        super::lower::layout_evidence_definition_body(db, instance)
+    } else {
+        layout_evidence_body(db, instance)
+    };
+    if let Err(error) = result
         && !matches!(error, LayoutEvidenceError::Blocked(_))
     {
         diagnostics.push(Box::new(LayoutEvidenceDiagnostic { instance, error }));

@@ -276,6 +276,37 @@ fn verify_expr<'db>(
         _ => {}
     }
     match expr {
+        NExpr::OpenedConst {
+            evidence,
+            assoc,
+            context_inputs,
+            ..
+        } => {
+            let goal = crate::analysis::ty::corelib::evidence_goal(
+                db,
+                body.template_owner.scope(),
+                operand_ty(body, *evidence)?,
+            )
+            .ok_or(NormalizedBodyVerifyError::OperandType)?;
+            if goal.def(db) != assoc.inst().def(db)
+                || goal.args(db) != assoc.inst().args(db)
+                || has_capability(db, body, result_ty)?
+            {
+                return Err(NormalizedBodyVerifyError::ExpressionType);
+            }
+            for operand in context_inputs {
+                if crate::analysis::ty::corelib::evidence_goal(
+                    db,
+                    body.template_owner.scope(),
+                    operand_ty(body, *operand)?,
+                )
+                .is_none()
+                {
+                    return Err(NormalizedBodyVerifyError::OperandType);
+                }
+            }
+            Ok(())
+        }
         NExpr::Forward { src } if operand_ty(body, *src)? != result_ty => {
             Err(NormalizedBodyVerifyError::ForwardType {
                 result,
@@ -1085,7 +1116,8 @@ fn value_has_mutable_view_origin<'db>(
                 NPlaceBase::Root(_) => None,
             }
         }
-        NExpr::CodeRegionRef { .. }
+        NExpr::OpenedConst { .. }
+        | NExpr::CodeRegionRef { .. }
         | NExpr::Const(_)
         | NExpr::Unary { .. }
         | NExpr::Binary { .. }

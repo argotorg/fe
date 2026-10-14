@@ -1,0 +1,10 @@
+use core::obligations::{Evidence, prove}
+trait Width { const N: u256 }
+struct Subject {}
+impl Width for Subject { const N: u256 = 1 }
+impl Width for Subject as Second { const N: u256 = 3 }
+type Goal = Width<Subject>
+const fn second() -> Evidence<Goal> { with (Second) { prove<Goal>() } }
+fn consume<T>(_ w: Evidence<Width<T>>) -> u256 { with (w) { <T as Width>::N } }
+#[test]
+fn ordinary_evidence_constant_helper() { assert(consume<Subject>(second()) == 3) }

@@ -1,0 +1,7 @@
+use core::obligations::{Evidence, prove}
+trait Pick { type Output }
+struct Subject {}
+impl Pick for Subject { type Output = u64 }
+impl Pick for Subject as First { type Output = u64 }
+type Goal = Pick<Subject, Output = u64>
+const fn answer() -> Evidence<Goal> { with (First) { prove<Goal>() } }

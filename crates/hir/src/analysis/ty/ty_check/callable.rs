@@ -265,6 +265,14 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct Callable<'db> {
+    /// Original body expression, preserved through substitution for lexical reachability.
+    source_expr: Option<ExprId>,
+    lexical_openings: Vec<super::TraitOpening<'db>>,
+    argument_operands: Vec<ExprId>,
+    evidence_introduction: Option<super::super::trait_def::ImplApplicationRecord<'db>>,
+    evidence_opening: Option<(ExprId, TraitSolveCx<'db>)>,
+    opened_trait_application: Option<(ExprId, TraitSolveCx<'db>)>,
+    selected_trait_application: Option<super::super::trait_def::ImplApplicationRecord<'db>>,
     pub callable_def: CallableDef<'db>,
     base_ty: TyId<'db>,
     generic_args: Vec<TyId<'db>>,
@@ -280,7 +288,20 @@ impl<'db> TyVisitable<'db> for Callable<'db> {
     where
         V: TyVisitor<'db> + ?Sized,
     {
+        self.lexical_openings.visit_with(visitor);
         self.generic_args.visit_with(visitor);
+        if let Some(record) = self.evidence_introduction {
+            record.visit_with(visitor);
+        }
+        if let Some((_, context)) = self.evidence_opening {
+            context.visit_with(visitor);
+        }
+        if let Some((_, context)) = self.opened_trait_application {
+            context.visit_with(visitor);
+        }
+        if let Some(record) = self.selected_trait_application {
+            record.visit_with(visitor);
+        }
         self.effect_providers.visit_with(visitor);
         if let Some(inputs) = &self.checked_input_tys {
             inputs.visit_with(visitor);
@@ -297,6 +318,21 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
         F: TyFolder<'db>,
     {
         Self {
+            source_expr: self.source_expr,
+            lexical_openings: self.lexical_openings.fold_with(db, folder),
+            argument_operands: self.argument_operands,
+            evidence_introduction: self
+                .evidence_introduction
+                .map(|record| record.fold_with(db, folder)),
+            evidence_opening: self
+                .evidence_opening
+                .map(|(operand, context)| (operand, context.fold_with(db, folder))),
+            opened_trait_application: self
+                .opened_trait_application
+                .map(|(operand, context)| (operand, context.fold_with(db, folder))),
+            selected_trait_application: self
+                .selected_trait_application
+                .map(|record| record.fold_with(db, folder)),
             callable_def: self.callable_def,
             base_ty: self.base_ty,
             generic_args: self.generic_args.fold_with(db, folder),
@@ -310,6 +346,64 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
 }
 
 impl<'db> Callable<'db> {
+    pub(crate) fn source_expr(&self) -> Option<ExprId> {
+        self.source_expr
+    }
+    pub(super) fn record_source_expr(&mut self, expr: ExprId) {
+        self.source_expr = Some(expr);
+    }
+    pub fn argument_operands(&self) -> &[ExprId] {
+        &self.argument_operands
+    }
+    pub(super) fn record_argument_operands(&mut self, operands: Vec<ExprId>) {
+        self.argument_operands = operands;
+    }
+    pub fn lexical_openings(&self) -> &[super::TraitOpening<'db>] {
+        &self.lexical_openings
+    }
+    pub(super) fn record_lexical_openings(&mut self, openings: Vec<super::TraitOpening<'db>>) {
+        self.lexical_openings = openings;
+    }
+    pub fn opened_trait_application(&self) -> Option<(ExprId, TraitSolveCx<'db>)> {
+        self.opened_trait_application
+    }
+    pub(super) fn record_opened_trait_application(
+        &mut self,
+        operand: ExprId,
+        context: TraitSolveCx<'db>,
+    ) {
+        self.opened_trait_application = Some((operand, context));
+    }
+    pub fn selected_trait_application(
+        &self,
+    ) -> Option<super::super::trait_def::ImplApplicationRecord<'db>> {
+        self.selected_trait_application
+    }
+    pub(super) fn record_selected_trait_application(
+        &mut self,
+        application: &super::super::trait_def::CheckedImplApplication<'db>,
+    ) {
+        self.selected_trait_application = Some(application.record());
+    }
+    pub fn evidence_opening(&self) -> Option<(ExprId, TraitSolveCx<'db>)> {
+        self.evidence_opening
+    }
+    pub(super) fn record_evidence_opening(&mut self, operand: ExprId, context: TraitSolveCx<'db>) {
+        debug_assert!(self.evidence_introduction.is_none());
+        self.evidence_opening = Some((operand, context));
+    }
+    pub fn evidence_introduction(
+        &self,
+    ) -> Option<super::super::trait_def::ImplApplicationRecord<'db>> {
+        self.evidence_introduction
+    }
+    pub(super) fn record_evidence_introduction(
+        &mut self,
+        application: &super::super::trait_def::CheckedImplApplication<'db>,
+    ) {
+        debug_assert!(self.evidence_opening.is_none());
+        self.evidence_introduction = Some(application.record());
+    }
     pub fn callable_def(&self) -> CallableDef<'db> {
         self.callable_def
     }
@@ -355,6 +449,13 @@ impl<'db> Callable<'db> {
         });
 
         Ok(Self {
+            source_expr: None,
+            lexical_openings: Vec::new(),
+            argument_operands: Vec::new(),
+            evidence_introduction: None,
+            evidence_opening: None,
+            opened_trait_application: None,
+            selected_trait_application: None,
             callable_def,
             base_ty: base,
             generic_args: args.to_vec(),
@@ -372,6 +473,13 @@ impl<'db> Callable<'db> {
         trait_inst: Option<TraitInstId<'db>>,
     ) -> Self {
         Self {
+            source_expr: None,
+            lexical_openings: Vec::new(),
+            argument_operands: Vec::new(),
+            evidence_introduction: None,
+            evidence_opening: None,
+            opened_trait_application: None,
+            selected_trait_application: None,
             callable_def,
             base_ty: TyId::func(db, callable_def),
             generic_args,
@@ -1092,6 +1200,7 @@ impl<'db> Callable<'db> {
             }
 
             let obligation = super::env::TraitObligation {
+                context: tc.env.proof_context(),
                 goal: constraint,
                 origin: super::env::TraitObligationOrigin::CallConstraint {
                     call_expr,

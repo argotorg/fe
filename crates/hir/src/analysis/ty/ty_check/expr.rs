@@ -1,7 +1,7 @@
 use either::Either;
 use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::ToPrimitive;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
 
 use crate::core::hir_def::{
@@ -260,6 +260,57 @@ pub(super) enum PendingPrimitiveOpResolution {
     Done,
 }
 
+pub(super) fn is_evidence_value<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    ty: TyId<'db>,
+) -> bool {
+    fn contains<'db>(
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+        ty: TyId<'db>,
+        seen: &mut Vec<TyId<'db>>,
+    ) -> bool {
+        // A known projection and its result have the same storage policy.
+        // Unresolved generic projections stay unresolved; they are not banned.
+        let ty = normalize_ty(db, ty, scope, assumptions);
+        let ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
+        if seen.contains(&ty) {
+            return false;
+        }
+        seen.push(ty);
+        let (base, args) = ty.decompose_ty_app(db);
+        let found = if Some(base) == resolve_lib_type_path(db, scope, "core::obligations::Evidence")
+        {
+            true
+        } else if ty.is_tuple(db) || ty.is_array(db) {
+            args.iter()
+                .any(|ty| contains(db, scope, assumptions, *ty, seen))
+        } else if let Some(adt) = ty.adt_def(db) {
+            adt.fields(db).iter().enumerate().any(|(variant, fields)| {
+                (0..fields.num_types()).any(|field| {
+                    contains(
+                        db,
+                        scope,
+                        assumptions,
+                        crate::analysis::ty::adt_def::instantiate_adt_field_shape(
+                            db, adt, variant, field, args,
+                        ),
+                        seen,
+                    )
+                })
+            })
+        } else {
+            false
+        };
+        seen.pop();
+        found
+    }
+    contains(db, scope, assumptions, ty, &mut Vec::new())
+}
+
 impl<'db> TyChecker<'db> {
     fn code_region_intrinsic_kind(
         &self,
@@ -306,8 +357,18 @@ impl<'db> TyChecker<'db> {
         })
     }
 
-    fn const_intrinsic_kind(&self, callable_def: CallableDef<'db>) -> Option<ConstIntrinsicKind> {
-        let CallableDef::Func(func) = callable_def else {
+    fn const_intrinsic_kind(&self, callable: &Callable<'db>) -> Option<ConstIntrinsicKind> {
+        // The existing argument checker leaves this unset on arity failure.
+        // Failed source calls must retain ordinary call rejection, not erase
+        // their supplied arguments through constant-intrinsic registration.
+        callable.checked_input_tys()?;
+        if callable.evidence_opening().is_some() {
+            return Some(ConstIntrinsicKind::EvidenceOpening);
+        }
+        if callable.evidence_introduction().is_some() {
+            return Some(ConstIntrinsicKind::EvidenceIntroduction);
+        }
+        let CallableDef::Func(func) = callable.callable_def() else {
             return None;
         };
         (resolve_lib_func_path(self.db, self.env.scope(), "core::size_of") == Some(func))
@@ -322,6 +383,7 @@ impl<'db> TyChecker<'db> {
     ) -> bool {
         let ty = match kind {
             ConstIntrinsicKind::SizeOf => callable.generic_args().first().copied(),
+            ConstIntrinsicKind::EvidenceIntroduction | ConstIntrinsicKind::EvidenceOpening => None,
         };
         if let Some(ty) = ty {
             let ty = self.normalize_ty(ty);
@@ -399,7 +461,15 @@ impl<'db> TyChecker<'db> {
             return typed;
         };
 
-        let expected = normalize_ty(self.db, expected, self.env.scope(), self.env.assumptions());
+        // Keep inference variables intact until equate_ty applies master's
+        // divergence rule. Folding here can turn an inferred match result
+        // into a concrete never type before checking the next arm.
+        let expected = normalize_ty(
+            self.db,
+            self.env.contextualize_const_types(expected),
+            self.env.scope(),
+            self.env.assumptions(),
+        );
 
         self.env.enter_expr(expr);
         let mut actual = match expr_data {
@@ -456,6 +526,17 @@ impl<'db> TyChecker<'db> {
         }
         let typeable = Typeable::Expr(expr, actual.clone());
         actual.ty = self.unify_ty(typeable, actual.ty, expected);
+        if self.is_evidence_value(actual.ty)
+            && matches!(
+                expr_data,
+                Expr::Call(..) | Expr::MethodCall(..) | Expr::Bin(_, _, BinOp::Index)
+            )
+            && let Some(failure) = self.evidence_choice_source_failure(expr, &mut Vec::new())
+        {
+            self.push_diag(BodyDiag::EvidenceChoiceNotCompileTime {
+                primary: failure.span(self.body()).into(),
+            });
+        }
         actual
     }
 
@@ -1321,6 +1402,82 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    fn named_opening(
+        &mut self,
+        value: ExprId,
+    ) -> Option<Result<super::TraitOpening<'db>, &'static str>> {
+        let Partial::Present(Expr::Path(Partial::Present(path))) = value.data(self.db, self.body())
+        else {
+            return None;
+        };
+        let name = path.as_ident(self.db)?;
+        let minter = LoweringContext::new(HoleAnchor::BodySyntax {
+            body: self.body(),
+            site: BodyHoleSite::Expr(value),
+        });
+        // The alias namespace is a fallback, never a replacement for a local,
+        // value/type declaration, or an ambiguity in ordinary name lookup.
+        if !matches!(
+            resolve_ident_expr(
+                self.db,
+                &self.env,
+                *path,
+                value.span(self.body()).into(),
+                &minter
+            ),
+            ResolvedPathInBody::NewBinding(_)
+        ) {
+            return None;
+        }
+        let candidates =
+            crate::analysis::ty::trait_def::named_impl_candidates(self.db, self.env.scope(), name);
+        if candidates.is_empty() {
+            return None;
+        }
+        let [implementation] = candidates.as_slice() else {
+            return Some(Err("the named implementation alias is ambiguous"));
+        };
+        let Some(candidate) =
+            crate::analysis::ty::trait_lower::lower_impl_trait(self.db, *implementation)
+        else {
+            return Some(Err("the named implementation declaration is invalid"));
+        };
+        if !candidate.params(self.db).is_empty() {
+            return Some(Err("named selection requires implementation arguments"));
+        }
+        Some(
+            crate::analysis::ty::trait_def::prove_selected_hir_application(
+                self.db,
+                self.env.proof_context(),
+                *implementation,
+                candidate.trait_inst(self.db),
+            )
+            .and_then(|application| {
+                let goal = application.goal_with_associated_bindings()?;
+                application.revalidate(self.env.proof_context(), goal)
+            })
+            .map(|application| super::TraitOpening::Named(application.record()))
+            .map_err(|error| match error {
+                crate::analysis::ty::trait_def::CheckedApplicationError::NotProven => {
+                    "named implementation prerequisites were not proved"
+                }
+                crate::analysis::ty::trait_def::CheckedApplicationError::ConditionsNotAdmitted => {
+                    "named implementation conditions were not admitted"
+                }
+                _ => "the named implementation application could not be admitted",
+            }),
+        )
+    }
+
+    fn insert_with_opening(&mut self, value: ExprId, opening: super::TraitOpening<'db>) {
+        if self.env.insert_opening(value, opening).is_err() {
+            self.push_diag(BodyDiag::ObligationOpening {
+                primary: value.span(self.body()).into(),
+                reason: "one frame cannot provide the same trait goal twice",
+            });
+        }
+    }
+
     fn check_with(
         &mut self,
         bindings: &[WithBinding<'db>],
@@ -1328,10 +1485,50 @@ impl<'db> TyChecker<'db> {
         expected: TyId<'db>,
         result_discarded: bool,
     ) -> ExprProp<'db> {
-        self.env.effect_env_mut().push_frame();
+        self.env.enter_with_frame();
 
         for binding in bindings {
+            if binding.key_path.is_none()
+                && let Some(opening) = self.named_opening(binding.value)
+            {
+                match opening {
+                    Ok(opening) => {
+                        self.insert_with_opening(binding.value, opening);
+                        self.env
+                            .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                    }
+                    Err(reason) => self.push_diag(BodyDiag::ObligationOpening {
+                        primary: binding.value.span(self.body()).into(),
+                        reason,
+                    }),
+                }
+                continue;
+            }
             let value_prop = self.check_expr_unknown(binding.value);
+
+            if binding.key_path.is_none() {
+                let ty = self.normalize_ty(value_prop.ty);
+                let ty = ty.as_capability(self.db).map_or(ty, |(_, inner)| inner);
+                if let Some(goal) =
+                    crate::analysis::ty::corelib::evidence_goal(self.db, self.env.scope(), ty)
+                {
+                    if !self.evidence_choice_source_known(binding.value, &mut Vec::new()) {
+                        self.push_diag(BodyDiag::EvidenceChoiceNotCompileTime {
+                            primary: binding.value.span(self.body()).into(),
+                        });
+                        continue;
+                    }
+                    self.insert_with_opening(
+                        binding.value,
+                        super::TraitOpening::Evidence {
+                            operand: binding.value,
+                            goal,
+                            admission: None,
+                        },
+                    );
+                    continue;
+                }
+            }
 
             let is_mut = value_prop.binding.map_or(value_prop.is_mut, |b| b.is_mut());
 
@@ -1389,13 +1586,192 @@ impl<'db> TyChecker<'db> {
             }
         }
 
+        for binding in bindings {
+            self.env.finalize_opening_admission(binding.value);
+        }
+
         let result = if result_discarded {
             self.check_expr_with_discarded_result(body_expr, expected)
         } else {
             self.check_expr(body_expr, expected)
         };
-        self.env.effect_env_mut().pop_frame();
+        let inside_layout = self.selection_layout_types(result.ty);
+        self.env.leave_with_frame();
+        let outside_layout = self.selection_layout_types(result.ty);
+        if inside_layout != outside_layout {
+            self.push_diag(BodyDiag::SelectedConstantTypeEscape(
+                body_expr.span(self.body()).into(),
+            ));
+            ExprProp::invalid(self.db)
+        } else {
+            result
+        }
+    }
+
+    fn selection_layout_types(&mut self, ty: TyId<'db>) -> Vec<TyId<'db>> {
+        self.selection_layout_types_at(ty, None)
+    }
+
+    fn selection_layout_types_at(
+        &mut self,
+        ty: TyId<'db>,
+        openings: Option<&[super::TraitOpening<'db>]>,
+    ) -> Vec<TyId<'db>> {
+        fn collect<'db>(
+            checker: &mut TyChecker<'db>,
+            ty: TyId<'db>,
+            active: &mut FxHashSet<TyId<'db>>,
+            result: &mut Vec<TyId<'db>>,
+            openings: Option<&[super::TraitOpening<'db>]>,
+        ) {
+            let normalized = if let Some(openings) = openings {
+                let ty = ty.fold_with(checker.db, &mut checker.table);
+                let ty = checker.env.contextualize_const_types_at(ty, openings, true);
+                normalize_ty(
+                    checker.db,
+                    ty,
+                    checker.env.scope(),
+                    checker.env.base_assumptions(),
+                )
+            } else {
+                checker.normalize_ty(ty)
+            };
+            result.push(normalized);
+            let base = ty.decompose_ty_app(checker.db).0;
+            if !active.insert(base) {
+                return;
+            }
+            for field in ty.field_types(checker.db) {
+                collect(checker, field, active, result, openings);
+            }
+            active.remove(&base);
+        }
+        let mut result = Vec::new();
+        collect(self, ty, &mut FxHashSet::default(), &mut result, openings);
         result
+    }
+
+    fn capture_selected_trait_application(
+        &mut self,
+        expr: ExprId,
+        callable: &mut Callable<'db>,
+    ) -> bool {
+        if let Some(goal) = callable.trait_inst() {
+            let goal = goal.fold_with(self.db, &mut self.table);
+            if let Some(super::TraitOpening::Evidence { operand, .. }) = self.env.opening_for(goal)
+            {
+                callable.record_opened_trait_application(operand, self.env.proof_context());
+            }
+            if let Some(super::TraitOpening::Named(record)) = self.env.opening_for(goal) {
+                match record.revalidate(self.db, self.env.proof_context(), goal) {
+                    Ok(application) => callable.record_selected_trait_application(&application),
+                    Err(_) => {
+                        self.push_diag(BodyDiag::ObligationOpening {
+                            primary: expr.span(self.body()).into(),
+                            reason: "the selected trait application was not admitted at this use",
+                        });
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    fn check_obligation_introduction(
+        &mut self,
+        expr: ExprId,
+        callable: &mut Callable<'db>,
+    ) -> bool {
+        if !self.capture_selected_trait_application(expr, callable) {
+            return false;
+        }
+        let CallableDef::Func(func) = callable.callable_def() else {
+            return true;
+        };
+        if func.top_mod(self.db).ingot(self.db).kind(self.db) != common::ingot::IngotKind::Core
+            || !crate::analysis::ty::corelib::lib_func_matches(
+                self.db,
+                func,
+                "core::obligations::prove",
+            )
+        {
+            return true;
+        }
+        if callable.checked_input_tys().is_none() {
+            return false;
+        }
+        if let [term] = callable.generic_args()
+            && let TyData::ConstraintTerm(goal) = self.normalize_ty(*term).data(self.db)
+            && goal
+                .args(self.db)
+                .iter()
+                .chain(goal.assoc_type_bindings(self.db).values())
+                .all(|ty| !ty.has_invalid(self.db) && !ty.has_var(self.db) && !ty.has_hole(self.db))
+            && let Some(super::TraitOpening::Evidence {
+                operand,
+                goal: source_goal,
+                ..
+            }) = self.env.opening_for(*goal)
+        {
+            for (&name, &expected) in goal.assoc_type_bindings(self.db) {
+                let Some(actual) = source_goal
+                    .assoc_type_bindings(self.db)
+                    .get(&name)
+                    .copied()
+                    .or_else(|| source_goal.project_assoc_ty(self.db, name))
+                else {
+                    return false;
+                };
+                let actual = self.normalize_ty(actual);
+                let expected = self.normalize_ty(expected);
+                // The shared unifier rolls back a failed equality atomically.
+                if self.table.unify(actual, expected).is_err() {
+                    self.push_diag(BodyDiag::ObligationIntroduction {
+                        primary: expr.span(self.body()).into(),
+                        reason: "the opened evidence does not prove the requested associated equality",
+                    });
+                    return false;
+                }
+            }
+            callable.record_evidence_opening(operand, self.env.proof_context());
+            return true;
+        }
+        let result = match callable.generic_args() {
+            [term] => {
+                let term = self.normalize_ty(*term);
+                crate::analysis::ty::trait_def::concrete_obligation_goal(self.db, term).and_then(|goal| {
+                    match self.env.opening_for(goal) {
+                        Some(super::TraitOpening::Named(record)) => record.revalidate(self.db, self.env.proof_context(), goal),
+                        Some(super::TraitOpening::Evidence { .. }) => Err(crate::analysis::ty::trait_def::CheckedApplicationError::UnsupportedConditions),
+                        None => crate::analysis::ty::trait_def::introduce_obligation(self.db, self.env.proof_context(), term),
+                    }
+                })
+            }
+            _ => Err(crate::analysis::ty::trait_def::CheckedApplicationError::UnsupportedInput),
+        };
+        if let Ok(application) = &result {
+            callable.record_evidence_introduction(application);
+        }
+        if let Err(error) = result {
+            use crate::analysis::ty::trait_def::CheckedApplicationError::*;
+            let reason = match error {
+                UnsupportedInput => "expected one concrete trait goal",
+                UnsupportedConditions => {
+                    "this goal requires unsupported conditional type admission"
+                }
+                ConditionsNotAdmitted => "implementation conditions were not admitted",
+                NotProven => "the requested trait goal was not proved",
+                Incomplete => "the requested trait goal has no unique complete proof",
+                UnresolvedApplication => "the selected implementation application is unresolved",
+            };
+            self.push_diag(BodyDiag::ObligationIntroduction {
+                primary: expr.span(self.body()).into(),
+                reason,
+            });
+            return false;
+        }
+        true
     }
 
     fn check_call(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
@@ -1451,10 +1827,14 @@ impl<'db> TyChecker<'db> {
 
         callable.process_constraints(self, expr, call_span.callee().into());
 
+        if !self.check_obligation_introduction(expr, &mut callable) {
+            return ExprProp::invalid(self.db);
+        }
+
         let ret_ty = callable.ret_ty(self.db);
         let normalized_ret_ty = self.normalize_ty(ret_ty);
         self.report_instantiated_const_fault(&callable, normalized_ret_ty, expr);
-        if let Some(kind) = self.const_intrinsic_kind(callable.callable_def()) {
+        if let Some(kind) = self.const_intrinsic_kind(&callable) {
             if !self.check_and_register_const_intrinsic(expr, callable, kind) {
                 return ExprProp::invalid(self.db);
             }
@@ -3440,6 +3820,7 @@ impl<'db> TyChecker<'db> {
                 let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
                 let inst = self.specialize_same_trait_method_inst(method_name, inst);
                 self.env.register_trait_obligation(TraitObligation {
+                    context: self.env.proof_context(),
                     goal: inst,
                     origin: TraitObligationOrigin::GenericConfirmation,
                     span: call_span.clone().into(),
@@ -3516,11 +3897,14 @@ impl<'db> TyChecker<'db> {
         self.check_callable_effects(expr, &mut callable);
 
         callable.process_constraints(self, expr, call_span.method_name().into());
+        if !self.capture_selected_trait_application(expr, &mut callable) {
+            return ExprProp::invalid(self.db);
+        }
 
         let ret_ty = callable.ret_ty(self.db);
         let normalized_ret_ty = self.normalize_ty(ret_ty);
         self.report_instantiated_const_fault(&callable, normalized_ret_ty, expr);
-        if let Some(kind) = self.const_intrinsic_kind(callable.callable_def()) {
+        if let Some(kind) = self.const_intrinsic_kind(&callable) {
             if !self.check_and_register_const_intrinsic(expr, callable, kind) {
                 return ExprProp::invalid(self.db);
             }
@@ -3743,6 +4127,7 @@ impl<'db> TyChecker<'db> {
                             };
                             if matches!(candidate, MethodCandidate::NeedsConfirmation(_)) {
                                 self.env.register_trait_obligation(TraitObligation {
+                                    context: self.env.proof_context(),
                                     goal: inst,
                                     origin: TraitObligationOrigin::GenericConfirmation,
                                     span: path_expr_span.clone().into(),
@@ -3840,6 +4225,7 @@ impl<'db> TyChecker<'db> {
                     };
 
                     self.env.register_trait_obligation(TraitObligation {
+                        context: self.env.proof_context(),
                         goal: inst,
                         origin: TraitObligationOrigin::GenericConfirmation,
                         span: path_expr_span.clone().into(),
@@ -4179,7 +4565,7 @@ impl<'db> TyChecker<'db> {
                         {
                             return ExprProp::new(self.table.fold_ty(self.db, projected), is_mut);
                         }
-                        return ExprProp::new(field_ty, is_mut);
+                        return ExprProp::new(self.normalize_ty(field_ty), is_mut);
                     }
                 }
 
@@ -4750,6 +5136,184 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    // Structural source classification follows immutable initializers without
+    // executing expressions or comparing the choices returned by two branches.
+    pub(super) fn evidence_choice_source_known(
+        &self,
+        expr: ExprId,
+        seen: &mut Vec<ExprId>,
+    ) -> bool {
+        self.evidence_choice_source_failure(expr, seen).is_none()
+    }
+
+    fn evidence_choice_source_failure(
+        &self,
+        expr: ExprId,
+        seen: &mut Vec<ExprId>,
+    ) -> Option<ExprId> {
+        self.evidence_source_failure(expr, seen, true)
+    }
+
+    fn evidence_source_failure(
+        &self,
+        expr: ExprId,
+        seen: &mut Vec<ExprId>,
+        allow_method: bool,
+    ) -> Option<ExprId> {
+        // RD121 permits evidence-producing methods, but scalar selectors
+        // retain the accepted structural restriction, including nested sources.
+        if !allow_method
+            && matches!(
+                expr.data(self.db, self.body()),
+                Partial::Present(Expr::MethodCall(..))
+            )
+        {
+            return Some(expr);
+        }
+        if seen.contains(&expr) {
+            return Some(expr);
+        }
+        seen.push(expr);
+        let failure = match expr.data(self.db, self.body()) {
+            Partial::Present(Expr::Lit(_)) => None,
+            Partial::Present(Expr::Un(value, _) | Expr::Cast(value, _) | Expr::Field(value, _)) => {
+                self.evidence_source_failure(*value, seen, allow_method)
+            }
+            Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => self
+                .evidence_source_failure(*lhs, seen, allow_method)
+                .or_else(|| self.evidence_source_failure(*rhs, seen, false)),
+            Partial::Present(Expr::Bin(lhs, rhs, _)) => self
+                .evidence_source_failure(*lhs, seen, allow_method)
+                .or_else(|| self.evidence_source_failure(*rhs, seen, allow_method)),
+            Partial::Present(Expr::Path(_)) => {
+                if self.env.expr_const_ref(expr).is_some()
+                    || matches!(
+                        self.env.expr_value_path_ref(expr),
+                        Some(ValuePathRef::TypeConst(_))
+                    )
+                {
+                    None
+                } else {
+                    match self.env.typed_expr(expr).and_then(|prop| prop.binding) {
+                        Some(LocalBinding::Param {
+                            site: ParamSite::Func(func),
+                            ty,
+                            is_mut: false,
+                            ..
+                        }) => (!(func.is_const(self.db) || self.is_evidence_value(ty)))
+                            .then_some(expr),
+                        Some(LocalBinding::Local { pat, is_mut: false }) => {
+                            match self
+                                .body()
+                                .stmts(self.db)
+                                .values()
+                                .find_map(|stmt| match stmt {
+                                    Partial::Present(Stmt::Let(bound, _, Some(value)))
+                                        if *bound == pat =>
+                                    {
+                                        Some(*value)
+                                    }
+                                    _ => None,
+                                }) {
+                                Some(value) => {
+                                    self.evidence_source_failure(value, seen, allow_method)
+                                }
+                                None => Some(expr),
+                            }
+                        }
+                        _ => Some(expr),
+                    }
+                }
+            }
+            Partial::Present(Expr::Tuple(values) | Expr::Array(values)) => values
+                .iter()
+                .find_map(|value| self.evidence_source_failure(*value, seen, allow_method)),
+            Partial::Present(Expr::RecordInit(_, fields)) => fields
+                .iter()
+                .find_map(|field| self.evidence_source_failure(field.expr, seen, allow_method)),
+            Partial::Present(Expr::Call(_, args) | Expr::MethodCall(_, _, _, args)) => {
+                let receiver = match expr.data(self.db, self.body()) {
+                    Partial::Present(Expr::MethodCall(receiver, _, _, _)) => Some(*receiver),
+                    _ => None,
+                };
+                let const_function = self.env.callable_expr(expr).is_some_and(|callable|
+                    matches!(callable.callable_def(), CallableDef::Func(func) if func.is_const(self.db)));
+                let transports_evidence = receiver
+                    .into_iter()
+                    .chain(args.iter().map(|arg| arg.expr))
+                    .any(|value| {
+                        self.env
+                            .typed_expr(value)
+                            .is_some_and(|prop| self.is_evidence_value(prop.ty))
+                    });
+                if !const_function && !transports_evidence {
+                    Some(expr)
+                } else {
+                    receiver
+                        .and_then(|value| self.evidence_source_failure(value, seen, allow_method))
+                        .or_else(|| {
+                            args.iter().find_map(|arg| {
+                                self.evidence_source_failure(arg.expr, seen, allow_method)
+                            })
+                        })
+                }
+            }
+            Partial::Present(Expr::If(cond, then, Some(other))) => self
+                .evidence_condition_failure(*cond)
+                .or_else(|| self.evidence_source_failure(*then, seen, allow_method))
+                .or_else(|| self.evidence_source_failure(*other, seen, allow_method)),
+            Partial::Present(Expr::Match(scrutinee, Partial::Present(arms))) => self
+                .evidence_source_failure(*scrutinee, seen, false)
+                .or_else(|| {
+                    arms.iter()
+                        .find_map(|arm| self.evidence_source_failure(arm.body, seen, allow_method))
+                }),
+            Partial::Present(Expr::With(_, body)) => {
+                self.evidence_source_failure(*body, seen, allow_method)
+            }
+            Partial::Present(Expr::Block(stmts)) => {
+                stmts
+                    .iter()
+                    .find_map(|stmt| match stmt.data(self.db, self.body()) {
+                        Partial::Present(Stmt::Let(pat, _, Some(value))) => {
+                            if self
+                                .env
+                                .pat_binding(*pat)
+                                .is_some_and(|binding| !binding.is_mut())
+                            {
+                                self.evidence_source_failure(*value, seen, allow_method)
+                            } else {
+                                Some(expr)
+                            }
+                        }
+                        Partial::Present(Stmt::Expr(value) | Stmt::Return(Some(value))) => {
+                            self.evidence_source_failure(*value, seen, allow_method)
+                        }
+                        _ => Some(expr),
+                    })
+            }
+            _ => Some(expr),
+        };
+        seen.pop();
+        failure
+    }
+
+    fn evidence_condition_failure(&self, cond: CondId) -> Option<ExprId> {
+        match cond.data(self.db, self.body()) {
+            Partial::Present(Cond::Expr(value) | Cond::Let(_, value)) => {
+                self.evidence_source_failure(*value, &mut Vec::new(), false)
+            }
+            Partial::Present(Cond::Bin(lhs, rhs, _)) => self
+                .evidence_condition_failure(*lhs)
+                .or_else(|| self.evidence_condition_failure(*rhs)),
+            _ => Some(self.body().expr(self.db)),
+        }
+    }
+
+    pub(super) fn is_evidence_value(&self, ty: TyId<'db>) -> bool {
+        is_evidence_value(self.db, self.env.scope(), self.env.assumptions(), ty)
+    }
+
     fn check_if(
         &mut self,
         _expr: ExprId,
@@ -4779,6 +5343,13 @@ impl<'db> TyChecker<'db> {
             self.env.clear_pending_bindings();
             self.env.leave_scope();
             let else_prop = self.check_expr_in_new_scope(*else_, expected, result_discarded);
+            if self.is_evidence_value(else_prop.ty)
+                && let Some(failure) = self.evidence_condition_failure(*cond)
+            {
+                self.push_diag(BodyDiag::EvidenceChoiceNotCompileTime {
+                    primary: failure.span(self.body()).into(),
+                });
+            }
             let borrow_provider = self.merge_concrete_borrow_providers(
                 then.span(self.body()).into(),
                 then_prop.borrow_provider,
@@ -4869,6 +5440,13 @@ impl<'db> TyChecker<'db> {
             }
         }
 
+        if self.is_evidence_value(match_ty)
+            && let Some(failure) = self.evidence_source_failure(*scrutinee, &mut Vec::new(), false)
+        {
+            self.push_diag(BodyDiag::EvidenceChoiceNotCompileTime {
+                primary: failure.span(self.body()).into(),
+            });
+        }
         if !scrutinee_pat_ty.has_invalid(self.db)
             && arm_statuses.iter().all(|status| status.is_ready())
         {
@@ -4967,6 +5545,10 @@ impl<'db> TyChecker<'db> {
         }
         rhs_prop.ty = self.unify_ty(Typeable::Expr(*rhs, rhs_prop.clone()), rhs_prop.ty, lhs_ty);
 
+        if self.reject_assignment_selection_escape(*lhs, *rhs, rhs_prop.ty) {
+            return ExprProp::invalid(self.db);
+        }
+
         let lhs_status = self.check_assign_lhs(*lhs, &typed_lhs);
         self.record_implicit_move_for_owned_expr(*rhs, rhs_prop.ty);
 
@@ -4987,6 +5569,61 @@ impl<'db> TyChecker<'db> {
         ExprProp::new(TyId::unit(self.db), true)
     }
 
+    fn reject_assignment_selection_escape(
+        &mut self,
+        lhs: ExprId,
+        rhs: ExprId,
+        assigned_ty: TyId<'db>,
+    ) -> bool {
+        if let Some(place) = self.env.expr_place(lhs) {
+            let PlaceBase::Binding(binding) = place.base;
+            let openings = self
+                .env
+                .binding_openings(binding)
+                .fold_with(self.db, &mut self.table);
+            // Compare selection contexts only at a real opening boundary.
+            // Ordinary type errors retain their type/mutability diagnostics.
+            if assigned_ty.has_invalid(self.db)
+                || (openings.is_empty() && !self.env.has_trait_openings())
+            {
+                return false;
+            }
+            let source_layout = self.selection_layout_types(assigned_ty);
+            let mut destination_ty = self
+                .env
+                .lookup_binding_ty(&binding)
+                .fold_with(self.db, &mut self.table);
+            for projection in &place.projections {
+                destination_ty = destination_ty
+                    .as_capability(self.db)
+                    .map_or(destination_ty, |(_, inner)| inner);
+                destination_ty = match projection {
+                    PlaceProjection::Deref { .. } => destination_ty.as_ptr(self.db),
+                    PlaceProjection::Field { index, .. } => destination_ty
+                        .field_types(self.db)
+                        .get(usize::from(*index))
+                        .copied(),
+                    PlaceProjection::Index { .. } if destination_ty.is_array(self.db) => {
+                        destination_ty.decompose_ty_app(self.db).1.first().copied()
+                    }
+                    PlaceProjection::Index { .. } => None,
+                }
+                .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other));
+            }
+            let destination_ty = self.assignment_target_ty(lhs, destination_ty);
+            let destination_layout =
+                self.selection_layout_types_at(destination_ty, Some(&openings));
+            if source_layout != destination_layout {
+                self.push_diag(BodyDiag::SelectedConstantTypeEscape(
+                    rhs.span(self.body()).into(),
+                ));
+                return true;
+            }
+        }
+
+        false
+    }
+
     fn check_index_mut_assign(&mut self, lhs: ExprId, rhs: ExprId) -> Option<ExprProp<'db>> {
         let target = self.check_index_mut_target(lhs)?;
         if target.prop.ty.has_invalid(self.db) {
@@ -5004,6 +5641,10 @@ impl<'db> TyChecker<'db> {
             rhs_prop.ty,
             target.target_ty,
         );
+
+        if self.reject_assignment_selection_escape(lhs, rhs, rhs_prop.ty) {
+            return Some(ExprProp::invalid(self.db));
+        }
 
         if !target.trait_lowered {
             let lhs_status = self.check_assign_lhs(lhs, &target.prop);
@@ -5306,6 +5947,7 @@ impl<'db> TyChecker<'db> {
                     let inst = c_lhs_ty.extract_solution(&mut self.table, candidate.cand.inst);
                     if candidate.needs_confirmation {
                         self.env.register_trait_obligation(TraitObligation {
+                            context: self.env.proof_context(),
                             goal: inst,
                             origin: TraitObligationOrigin::GenericConfirmation,
                             span: expr.span(self.body()).into(),
@@ -5394,6 +6036,7 @@ impl<'db> TyChecker<'db> {
                     let inst = c_lhs_ty.extract_solution(&mut self.table, cand.inst);
                     if matches!(res, MethodCandidate::NeedsConfirmation(_)) {
                         self.env.register_trait_obligation(TraitObligation {
+                            context: self.env.proof_context(),
                             goal: inst,
                             origin: TraitObligationOrigin::GenericConfirmation,
                             span: expr.span(self.body()).into(),

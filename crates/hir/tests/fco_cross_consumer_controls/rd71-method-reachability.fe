@@ -1,0 +1,19 @@
+trait Pick { const fn value() -> u256 }
+struct Subject {}
+impl Pick for Subject { const fn value() -> u256 { 1 } }
+impl Pick for Subject as First { const fn value() -> u256 { 42 } }
+const fn bounded<T: Pick>() -> (u256,u256) {
+ (<T as Pick>::value(), <Subject as Pick>::value())
+}
+const fn frozen() -> u256 { <Subject as Pick>::value() }
+const fn answer() -> (u256,u256,u256) {
+ let selected = with (First) { bounded<Subject>() }
+ let fixed = with (First) { frozen() }
+ (selected.0,selected.1,fixed)
+}
+#[test]
+fn bounded_parameter_method_is_selected() { assert!(answer().0 == 42) }
+#[test]
+fn bounded_concrete_method_stays_ordinary() { assert!(answer().1 == 1) }
+#[test]
+fn declaration_concrete_method_stays_ordinary() { assert!(answer().2 == 1) }

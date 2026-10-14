@@ -1,0 +1,4 @@
+use core::obligations::prove
+trait Produce {}
+struct Missing {}
+fn witness() { prove<Produce<Missing>>() }

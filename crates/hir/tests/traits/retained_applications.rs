@@ -93,3 +93,44 @@ fn probe(_ key: Key) {}
         }
     }
 }
+
+#[test]
+fn normalized_prerequisite_cannot_hide_conditional_nominal_admission() {
+    for output in ["u256", "Bounded<1>"] {
+        let source = format!(
+            "trait Supply {{ type Out }}\n\
+             trait Marker<A> {{}}\n\
+             trait Run {{}}\n\
+             struct Key {{}}\n\
+             struct Bounded<const N: usize> where {{ N > 0 }} {{}}\n\
+             impl Supply for Key {{ type Out = {output} }}\n\
+             impl<A> Marker<A> for Key {{}}\n\
+             impl Run for Key where Key: Marker<<Key as Supply>::Out> {{}}\n\
+             fn probe(_ key: Key) {{}}"
+        );
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("normalized-prerequisite.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        // Both declarations are valid source. The checked application API has
+        // a narrower admission boundary for conditional nominal applications.
+        db.assert_no_diags(module);
+        let probe = find_func(&db, module, "probe");
+        let ty = probe.params(&db).next().unwrap().ty(&db);
+        let ty = ty.as_view(&db).unwrap_or(ty);
+        let goal = TraitInstId::new_simple(&db, module.all_traits(&db)[2], vec![ty]);
+        let result = prove_selected_hir_application(
+            &db,
+            TraitSolveCx::new(&db, probe.scope()),
+            module.all_impl_traits(&db)[2],
+            goal,
+        );
+        if output == "u256" {
+            result.expect("plain normalized prerequisite remains admitted");
+        } else {
+            assert_eq!(
+                result.unwrap_err(),
+                CheckedApplicationError::UnsupportedConditions
+            );
+        }
+    }
+}

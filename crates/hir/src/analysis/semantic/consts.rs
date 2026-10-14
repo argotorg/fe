@@ -46,6 +46,7 @@ impl<'db> SemConstId<'db> {
                 }
             },
             SemConstValue::Description(term) => term.pretty_print_concrete(db),
+            SemConstValue::Evidence { ty, .. } => format!("<{}>", ty.pretty_print(db)),
             SemConstValue::Tuple { elems, .. } => {
                 let elems = elems
                     .iter()
@@ -100,6 +101,10 @@ impl<'db> SemConstId<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum SemConstValue<'db> {
+    Evidence {
+        ty: TyId<'db>,
+        application: crate::analysis::ty::trait_def::ImplApplicationRecord<'db>,
+    },
     Unit,
     Scalar {
         ty: TyId<'db>,
@@ -137,6 +142,7 @@ pub fn sem_const_ty<'db>(db: &'db dyn HirAnalysisDb, value: SemConstId<'db>) -> 
         SemConstValue::Unit => TyId::unit(db),
         SemConstValue::Description(term) => term.ty(db),
         SemConstValue::Scalar { ty, .. }
+        | SemConstValue::Evidence { ty, .. }
         | SemConstValue::Tuple { ty, .. }
         | SemConstValue::Struct { ty, .. }
         | SemConstValue::Array { ty, .. }
@@ -150,6 +156,11 @@ pub(crate) fn retype_sem_const_description<'db>(
     ty: TyId<'db>,
 ) -> Option<SemConstId<'db>> {
     let value = match value.value(db).clone() {
+        SemConstValue::Evidence {
+            ty: original,
+            application,
+        } if original == ty => SemConstValue::Evidence { ty, application },
+        SemConstValue::Evidence { .. } => return None,
         SemConstValue::Unit if ty == TyId::unit(db) => SemConstValue::Unit,
         SemConstValue::Unit => return None,
         SemConstValue::Scalar { value, .. } => SemConstValue::Scalar { ty, value },
@@ -257,6 +268,18 @@ fn verify_sem_const_shape_impl<'db>(
     allow_dependent: bool,
 ) -> Result<(), &'static str> {
     match value.value(db) {
+        SemConstValue::Evidence { ty, application } => {
+            if crate::analysis::ty::corelib::evidence_goal(
+                db,
+                application.origin_context().scope(),
+                *ty,
+            ) == Some(application.goal())
+            {
+                Ok(())
+            } else {
+                Err("evidence payload differs from its declared goal")
+            }
+        }
         SemConstValue::Unit => Ok(()),
         SemConstValue::Description(term) if allow_dependent && !term.ty(db).has_invalid(db) => {
             match term.data(db) {
@@ -304,6 +327,11 @@ fn verify_sem_const_shape_impl<'db>(
         }
         SemConstValue::Struct { ty, fields } => {
             let ty = ty.as_view(db).unwrap_or(*ty);
+            if let Some(adt) = ty.adt_def(db)
+                && crate::analysis::ty::corelib::evidence_goal(db, adt.scope(db), ty).is_some()
+            {
+                return Err("evidence requires a compiler-issued application");
+            }
             // A function item value is a fieldless record of its item type.
             if ty.is_func(db) && fields.is_empty() {
                 return Ok(());
@@ -656,6 +684,8 @@ fn reify_runtime_const_impl<'db>(
         instance.normalized_ty(db, expected_ty)
     });
     let reified = match value.value(db) {
+        SemConstValue::Evidence { ty, .. } if *ty == expected_ty => value,
+        SemConstValue::Evidence { .. } => return None,
         SemConstValue::Unit => unit_const(db),
         SemConstValue::Scalar { ty, value } => {
             let ty = if ty.pretty_print(db) == "{integer}" || ty.is_integral_var(db) {

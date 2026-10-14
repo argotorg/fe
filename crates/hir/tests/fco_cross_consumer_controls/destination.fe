@@ -1,0 +1,15 @@
+use core::obligations::{Evidence,prove}
+trait Leaf { const fn leaf() -> u256 }
+trait Pick { const fn value() -> u256 }
+struct Subject {}
+impl Leaf for Subject as NamedLeaf { const fn leaf() -> u256 { 43 } }
+impl Pick for Subject { const fn value() -> u256 { 1 } }
+impl Pick for Subject as Conditional where Subject: Leaf { const fn value() -> u256 { 43 } }
+const fn leaf() -> Evidence<Leaf<Subject>> { with (NamedLeaf) { prove<Leaf<Subject>>() } }
+const fn issued() -> Evidence<Pick<Subject>> { with (leaf()) { with (Conditional) { prove<Pick<Subject>>() } } }
+const fn absent<T>(_ witness: Evidence<Pick<T>>) -> u256 { with (witness) { <T as Pick>::value() } }
+const fn valid<T>(_ witness: Evidence<Pick<T>>, _ leaf_witness: Evidence<Leaf<T>>) -> u256 {
+ with (witness,leaf_witness) { <T as Pick>::value() }
+}
+const fn rejected() -> u256 { absent<Subject>(issued()) }
+const fn answer() -> u256 { valid<Subject>(issued(),leaf()) }

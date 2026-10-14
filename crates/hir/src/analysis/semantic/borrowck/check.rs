@@ -534,6 +534,16 @@ fn collect_owner<'db>(
     }
     let key = identity_semantic_instance_key(db, owner);
     let instance = get_or_build_semantic_instance(db, key);
+    if matches!(owner, BodyOwner::Func(func) if !func.is_const(db))
+        && !can_specialize(db, instance)
+        && let Some(diagnostic) =
+            crate::analysis::semantic::normalized::runtime_choice_call_diagnostic(db, instance)
+    {
+        let diagnostic = SemanticDiagnosticId::new(db, diagnostic);
+        if seen_diags.insert(diagnostic) {
+            diags.push(Box::new(diagnostic));
+        }
+    }
     match semantic_borrow_check_query(db, instance) {
         SemanticBorrowCheckResult::Ok => {}
         SemanticBorrowCheckResult::Pending(validation) => {

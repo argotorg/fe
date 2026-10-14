@@ -1,3 +1,4 @@
+mod binding_source;
 mod callable;
 mod const_requirements;
 pub use const_requirements::{EvaluationStop, RequirementFailure};
@@ -8,7 +9,9 @@ mod contract;
 mod effect_env;
 pub(crate) mod env;
 mod expr;
+mod opening;
 mod owner;
+pub use opening::TraitOpening;
 mod pat;
 mod path;
 mod stmt;
@@ -112,9 +115,7 @@ use crate::analysis::ty::{
         LoweringContext, invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag,
     },
     normalize::{normalize_ty, normalize_with_trait_evidence},
-    pattern_ir::{
-        ConstructorKind, PatternAnalysisStatus, PatternStore, ValidatedPatId, ValidatedPatKind,
-    },
+    pattern_ir::{PatternAnalysisStatus, PatternStore, ValidatedPatId},
     pattern_types::{
         PatternDestructureMode, apply_pattern_borrow_mode, destructure_pattern_source,
     },
@@ -1527,12 +1528,14 @@ fn typed_body_for_bodyless_func<'db>(
         .collect();
     TypedBodyTables {
         body: None,
+        with_openings: SecondaryMap::new(),
         result_ty,
         assumptions,
         pat_ty: SecondaryMap::new(),
         expr_ty: SecondaryMap::new(),
         implicit_moves: FxHashSet::default(),
         const_refs: SecondaryMap::new(),
+        const_openings: SecondaryMap::new(),
         value_path_refs: SecondaryMap::new(),
         semantic_expr_lowering: SecondaryMap::new(),
         record_init_lowering: SecondaryMap::new(),
@@ -1650,7 +1653,19 @@ impl<'db> TyChecker<'db> {
 
     fn check_own_param_types(&mut self) {
         match self.env.owner() {
-            BodyOwner::Func(_) => {}
+            BodyOwner::Func(func) => {
+                let arg_tys = func.arg_tys(self.db);
+                for (idx, param) in func.params(self.db).enumerate() {
+                    if param.is_mut(self.db)
+                        && let Some(ty) = arg_tys.get(idx)
+                        && self.is_evidence_value(*ty.skip_binder())
+                    {
+                        self.push_diag(BodyDiag::EvidenceMutableStorage {
+                            primary: func.span().params().param(idx).name().into(),
+                        });
+                    }
+                }
+            }
             BodyOwner::ContractInit { contract } => {
                 let Some(init) = contract.init(self.db) else {
                     return;
@@ -2032,9 +2047,22 @@ impl<'db> TyChecker<'db> {
     }
 
     pub(super) fn normalize_trait_goal(&mut self, goal: TraitInstId<'db>) -> TraitInstId<'db> {
+        self.normalize_trait_goal_in_context(
+            goal,
+            self.env
+                .proof_context()
+                .with_assumptions(self.env.assumptions()),
+        )
+    }
+
+    fn normalize_trait_goal_in_context(
+        &mut self,
+        goal: TraitInstId<'db>,
+        context: TraitSolveCx<'db>,
+    ) -> TraitInstId<'db> {
         let db = self.db;
-        let scope = self.env.scope();
-        let assumptions = self.env.assumptions();
+        let scope = context.scope();
+        let assumptions = context.assumptions();
         let goal = goal.fold_with(db, &mut self.table);
         let args: Vec<_> = goal
             .args(db)
@@ -2236,8 +2264,8 @@ impl<'db> TyChecker<'db> {
         final_pass: bool,
     ) -> TraitObligationOutcome<'db> {
         let db = self.db;
-        let scope = self.env.scope();
-        let assumptions = self.env.assumptions();
+        let solve_cx = obligation.context.fold_with(db, &mut self.table);
+        let assumptions = solve_cx.assumptions();
 
         if self.has_dead_inference_keys(&obligation.goal) {
             return TraitObligationOutcome::Discharged;
@@ -2251,19 +2279,27 @@ impl<'db> TyChecker<'db> {
             // discharged as "not concrete" below, silently suppressing the
             // diagnostic and letting the error surface as an ICE in later
             // lowering stages.
-            let mut prober = env::Prober::new(&mut self.table, scope);
+            let mut prober = env::Prober::new(&mut self.table, solve_cx.scope());
             obligation.goal = obligation.goal.fold_with(db, &mut prober);
         }
 
-        obligation.goal = self.normalize_trait_goal(obligation.goal);
+        obligation.goal = self.normalize_trait_goal_in_context(obligation.goal, solve_cx);
         let goal = obligation.goal;
         let flags = collect_flags(db, goal);
         if flags.contains(TyFlags::HAS_INVALID) || self.has_dead_inference_keys(&goal) {
             return TraitObligationOutcome::Discharged;
         }
 
-        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
-        let query = CanonicalGoalQuery::new(db, goal, assumptions);
+        let query = CanonicalGoalQuery::from_query(
+            db,
+            crate::analysis::ty::trait_resolution::TraitSolverQuery {
+                goal,
+                assumptions,
+                lexical_premises: solve_cx.lexical_premises(),
+                require_impl: false,
+                selected_candidate: None,
+            },
+        );
         match is_goal_query_satisfiable(db, solve_cx, &query) {
             GoalSatisfiability::Satisfied(solution) => {
                 if goal.self_ty(db).has_var(db) {
@@ -2280,7 +2316,7 @@ impl<'db> TyChecker<'db> {
                     return TraitObligationOutcome::Discharged;
                 }
                 self.table.unify(goal, solved).unwrap();
-                if self.normalize_trait_goal(goal) != goal {
+                if self.normalize_trait_goal_in_context(goal, solve_cx) != goal {
                     TraitObligationOutcome::Progressed
                 } else {
                     TraitObligationOutcome::Discharged
@@ -2326,7 +2362,7 @@ impl<'db> TyChecker<'db> {
                     && !goal.self_ty(db).has_var(db)
                 {
                     if self.table.unify(goal, *solution).is_ok()
-                        && self.normalize_trait_goal(goal) != goal
+                        && self.normalize_trait_goal_in_context(goal, solve_cx) != goal
                     {
                         TraitObligationOutcome::Progressed
                     } else {
@@ -2647,6 +2683,7 @@ impl<'db> TyChecker<'db> {
 
                                 if candidate.needs_confirmation {
                                     self.env.register_trait_obligation(env::TraitObligation {
+                                        context: self.env.proof_context(),
                                         goal: inst,
                                         origin: env::TraitObligationOrigin::GenericConfirmation,
                                         span: call_span.clone().into(),
@@ -3695,7 +3732,8 @@ impl<'db> TyChecker<'db> {
     fn normalize_ty(&mut self, ty: TyId<'db>) -> TyId<'db> {
         normalize_ty(
             self.db,
-            ty.fold_with(self.db, &mut self.table),
+            self.env
+                .contextualize_const_types(ty.fold_with(self.db, &mut self.table)),
             self.env.scope(),
             self.env.assumptions(),
         )
@@ -3822,6 +3860,7 @@ mod typed_body_tables {
     /// Shared storage behind [`TypedBody`]; its fields are private to type checking.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct TypedBodyTables<'db> {
+        pub(super) with_openings: SecondaryMap<ExprId, Option<TraitOpening<'db>>>,
         pub(super) body: Option<Body<'db>>,
         pub(super) result_ty: TyId<'db>,
         pub(super) assumptions: PredicateListId<'db>,
@@ -3829,6 +3868,8 @@ mod typed_body_tables {
         pub(super) expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
         pub(super) implicit_moves: FxHashSet<ExprId>,
         pub(super) const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
+        /// Source lexical choices for a constant expression, separate from inherited choices.
+        pub(super) const_openings: SecondaryMap<ExprId, Vec<TraitOpening<'db>>>,
         pub(super) value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
         pub(super) semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
         pub(super) record_init_lowering: SecondaryMap<ExprId, Option<RecordInitLowering<'db>>>,
@@ -4003,6 +4044,8 @@ pub enum CodeRegionIntrinsicKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub enum ConstIntrinsicKind {
     SizeOf,
+    EvidenceIntroduction,
+    EvidenceOpening,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
@@ -4147,11 +4190,17 @@ impl<'db> TypedBody<'db> {
         V: crate::analysis::ty::visitor::TyVisitor<'db> + ?Sized,
     {
         self.tables.result_ty.visit_with(visitor);
+        for opening in self.tables.with_openings.values().flatten() {
+            opening.visit_with(visitor);
+        }
         for ty in self.tables.pat_ty.values().flatten() {
             ty.visit_with(visitor);
         }
         for prop in self.tables.expr_ty.values().flatten() {
             prop.visit_with(visitor);
+        }
+        for openings in self.tables.const_openings.values() {
+            openings.visit_with(visitor);
         }
         for cref in self.tables.const_refs.values().flatten() {
             cref.visit_with(visitor);
@@ -4193,6 +4242,10 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
         // Folding writes every table, so take the tables, copying them if
         // another `TypedBody` still shares them.
         let mut this = Arc::unwrap_or_clone(self.tables);
+        this.with_openings
+            .values_mut()
+            .flatten()
+            .for_each(|opening| *opening = opening.fold_with(db, folder));
         this.result_ty = this.result_ty.fold_with(db, folder);
         this.assumptions = this.assumptions.fold_with(db, folder);
         this.pat_ty
@@ -4203,6 +4256,9 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .values_mut()
             .flatten()
             .for_each(|prop| *prop = prop.clone().fold_with(db, folder));
+        this.const_openings
+            .values_mut()
+            .for_each(|openings| *openings = openings.clone().fold_with(db, folder));
         this.const_refs
             .values_mut()
             .flatten()
@@ -4271,6 +4327,10 @@ impl<'db> TypedBody<'db> {
     /// them.
     fn tables_mut(&mut self) -> &mut TypedBodyTables<'db> {
         Arc::make_mut(&mut self.tables)
+    }
+
+    pub fn with_opening(&self, value: ExprId) -> Option<TraitOpening<'db>> {
+        self.tables.with_openings[value]
     }
 
     /// The constrained type applications that resolving the body's paths
@@ -4522,6 +4582,10 @@ impl<'db> TypedBody<'db> {
         self.tables.const_refs[expr]
     }
 
+    pub(crate) fn expr_const_openings(&self, expr: ExprId) -> &[TraitOpening<'db>] {
+        &self.tables.const_openings[expr]
+    }
+
     pub fn value_path_ref(&self, expr: ExprId) -> Option<ValuePathRef<'db>> {
         self.tables.value_path_refs[expr]
     }
@@ -4650,71 +4714,13 @@ impl<'db> TypedBody<'db> {
         db: &'db dyn HirAnalysisDb,
         binding: LocalBinding<'db>,
     ) -> Option<BindingSource> {
-        let LocalBinding::Local { pat, .. } = binding else {
-            return None;
-        };
-        let body = self.body()?;
-
-        for (_, stmt) in body.stmts(db).iter() {
-            if let Partial::Present(crate::hir_def::Stmt::Let(stmt_pat, _, Some(init_expr))) = stmt
-                && let Some(projection) = self.binding_projection_in_pat(*stmt_pat, pat)
-            {
-                return Some(BindingSource {
-                    init_expr: *init_expr,
-                    projection,
-                });
-            }
-        }
-
-        None
-    }
-
-    fn binding_projection_in_pat(
-        &self,
-        pat: PatId,
-        binding_pat: PatId,
-    ) -> Option<Vec<ReturnProjectionStep>> {
-        self.binding_projection_in_validated_pat(self.pattern_root(pat)?, binding_pat)
-    }
-
-    fn binding_projection_in_validated_pat(
-        &self,
-        pat: ValidatedPatId,
-        binding_pat: PatId,
-    ) -> Option<Vec<ReturnProjectionStep>> {
-        match self.tables.pattern_store.node(pat).kind() {
-            ValidatedPatKind::Wildcard { binding } => binding
-                .filter(|binding| binding.representative_pat == binding_pat)
-                .map(|_| Vec::new()),
-            ValidatedPatKind::Constructor { ctor, fields } => {
-                fields.iter().enumerate().find_map(|(field_idx, child)| {
-                    let suffix = self.binding_projection_in_validated_pat(*child, binding_pat)?;
-                    let field = u16::try_from(field_idx).ok()?;
-                    let step = match ctor {
-                        ConstructorKind::Variant(variant, _) => {
-                            ReturnProjectionStep::VariantField {
-                                variant: variant.idx,
-                                field,
-                            }
-                        }
-                        ConstructorKind::Type(_) => ReturnProjectionStep::Field(field),
-                        ConstructorKind::Literal(_, _) => return None,
-                    };
-                    let mut path = Vec::with_capacity(suffix.len() + 1);
-                    path.push(step);
-                    path.extend(suffix);
-                    Some(path)
-                })
-            }
-            ValidatedPatKind::Or(pats) => {
-                let mut paths = pats
-                    .iter()
-                    .filter_map(|pat| self.binding_projection_in_validated_pat(*pat, binding_pat))
-                    .collect::<Vec<_>>();
-                let first = paths.pop()?;
-                paths.into_iter().all(|path| path == first).then_some(first)
-            }
-        }
+        binding_source::binding_source(
+            db,
+            self.body()?,
+            self.pattern_store(),
+            &|pat| self.pattern_root(pat),
+            binding,
+        )
     }
 
     pub fn return_provenance(&self, db: &'db dyn HirAnalysisDb) -> ReturnProvenance {
@@ -4863,7 +4869,12 @@ impl<'db> TypedBody<'db> {
             )
             || {
                 let ty = self.expr_ty(db, expr);
-                ty.has_param(db) || ty.has_var(db) || ty_contains_const_hole(db, ty)
+                ty.has_param(db)
+                    || ty.has_var(db)
+                    || ty_contains_const_hole(db, ty)
+                    // Evidence has no runtime payload, but its issued choice
+                    // still has return provenance through a copied formal.
+                    || super::corelib::evidence_goal(db, body.scope(), ty).is_some()
             })
             && let Some(place) = self.expr_place(expr).cloned()
             && let Some(sources) =
@@ -5845,12 +5856,14 @@ impl<'db> TypedBody<'db> {
     fn empty(db: &'db dyn HirAnalysisDb) -> Self {
         TypedBodyTables {
             body: None,
+            with_openings: SecondaryMap::new(),
             result_ty: TyId::unit(db),
             assumptions: PredicateListId::empty_list(db),
             pat_ty: SecondaryMap::new(),
             expr_ty: SecondaryMap::new(),
             implicit_moves: FxHashSet::default(),
             const_refs: SecondaryMap::new(),
+            const_openings: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),
             semantic_expr_lowering: SecondaryMap::new(),
             record_init_lowering: SecondaryMap::new(),
@@ -6123,6 +6136,7 @@ struct TyCheckerFinalizer<'db> {
     db: &'db dyn HirAnalysisDb,
     body: TypedBody<'db>,
     assumptions: PredicateListId<'db>,
+    binding_type_contexts: FxHashMap<LocalBinding<'db>, TraitSolveCx<'db>>,
     ty_vars: FxHashSet<InferenceKey<'db>>,
     effect_provider_keys: FxHashSet<InferenceKey<'db>>,
     direct_call_callees: FxHashSet<ExprId>,
@@ -6138,6 +6152,30 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
     ) {
         let ty = self.body.pat_ty(self.db, pat);
         let span = ctxt.span().unwrap();
+        // All local binding forms share this visitor after inference is folded.
+        // Checking only `let`, or at initial registration, misses other forms
+        // and bindings whose Evidence type is inferred from an initializer.
+        if let Some(binding) = self
+            .body
+            .pat_binding(pat)
+            .filter(|binding| binding.is_mut())
+        {
+            // Use facts owned at this binding, after folding inference. The
+            // finalizer runs after its lexical opening has left the stack.
+            let (scope, assumptions) = self
+                .binding_type_contexts
+                .get(&binding)
+                .map(|cx| (cx.scope(), cx.assumptions()))
+                .unwrap_or((ctxt.body().scope(), self.assumptions));
+            if expr::is_evidence_value(self.db, scope, assumptions, ty) {
+                self.diags.push(
+                    BodyDiag::EvidenceMutableStorage {
+                        primary: span.clone().into(),
+                    }
+                    .into(),
+                );
+            }
+        }
         self.check_unknown(ty, span.clone().into());
 
         walk_pat(self, ctxt, pat)
@@ -6204,6 +6242,7 @@ impl<'db> TyCheckerFinalizer<'db> {
     fn new(mut checker: TyChecker<'db>) -> Self {
         let assumptions = checker.env.assumptions();
         checker.resolve_deferred();
+        let binding_type_contexts = checker.env.take_binding_type_contexts(&mut checker.table);
         let mut body = checker.env.finish(&mut checker.table);
         body.tables_mut().return_borrow_provider = checker
             .first_return_borrow_provider
@@ -6223,6 +6262,7 @@ impl<'db> TyCheckerFinalizer<'db> {
             db: checker.db,
             body,
             assumptions,
+            binding_type_contexts,
             ty_vars: FxHashSet::default(),
             effect_provider_keys: checker.effect_provider_keys,
             direct_call_callees,

@@ -826,6 +826,23 @@ impl super::Parse for ImplScope {
 
         parse_type(parser, None)?;
 
+        // A malformed selection name is reported without losing the impl body.
+        if parser.bump_if(SyntaxKind::AsKw) {
+            if !is_impl_trait {
+                parser.error("only trait impls can be named");
+            }
+            if parser.bump_if(SyntaxKind::Ident) {
+                if matches!(
+                    parser.current_kind(),
+                    Some(SyntaxKind::Colon2 | SyntaxKind::Lt)
+                ) {
+                    parser.error("an impl name is a single identifier");
+                }
+            } else {
+                parser.error("expected a name for the impl after `as`");
+            }
+        }
+
         parser.expect_and_pop_recovery_stack()?;
         parse_where_clause_opt(parser, ItemBlock::Required)?;
 

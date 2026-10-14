@@ -1,0 +1,18 @@
+use core::obligations::{Evidence, prove}
+trait Pick {}
+struct Subject {}
+impl Pick for Subject {}
+impl Pick for Subject as First {}
+impl Pick for Subject as Second {}
+type Goal = Pick<Subject>
+const fn answer() -> (Evidence<Goal>, (Evidence<Goal>, Evidence<Goal>, Evidence<Goal>), Evidence<Goal>) {
+    let outside_before = prove<Goal>()
+    let nested = with (First) {
+        let before = prove<Goal>()
+        let inner = with (Second) { prove<Goal>() }
+        let after = prove<Goal>()
+        (before, inner, after)
+    }
+    let outside_after = prove<Goal>()
+    (outside_before, nested, outside_after)
+}

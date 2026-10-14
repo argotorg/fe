@@ -1,0 +1,8 @@
+use core::obligations::{Constraint, Evidence, prove}
+trait Produce { type Output }
+struct Subject {}
+impl Produce for Subject { type Output = u64 }
+fn forward<G: Constraint>(_ witness: Evidence<G>) -> Evidence<G> { witness }
+fn witness() -> Evidence<Produce<Subject, Output = u64>> {
+    forward<Produce<Subject, Output = u64>>(prove<Produce<Subject, Output = u64>>())
+}

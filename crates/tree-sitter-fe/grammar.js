@@ -459,6 +459,7 @@ module.exports = grammar({
       field('trait', $.trait_ref),
       'for',
       field('type', $._type),
+      optional(seq('as', field('selection_name', $.identifier))),
       optional($.where_clause),
       field('body', $.trait_item_list),
     ),

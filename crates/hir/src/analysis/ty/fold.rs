@@ -6,7 +6,9 @@ use common::indexmap::{IndexMap, IndexSet};
 
 use super::{
     trait_def::{ImplementorId, TraitInstId, TraitRefId},
-    trait_resolution::{ImplConditionsId, PredicateListId, TraitGoalSolution, TraitSolverQuery},
+    trait_resolution::{
+        ImplConditionsId, PredicateListId, TraitGoalSolution, TraitSolveCx, TraitSolverQuery,
+    },
     ty_check::{EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
     ty_def::{TyData, TyId},
     visitor::TyVisitable,
@@ -150,6 +152,10 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                 TyId::assoc_ty(db, folded_trait, assoc.name)
             }
 
+            ConstraintTerm(trait_inst) => {
+                TyId::new(db, ConstraintTerm(trait_inst.fold_with(db, folder)))
+            }
+
             QualifiedTy(trait_inst) => {
                 let folded_trait = trait_inst.fold_with(db, folder);
                 TyId::qualified_ty(db, folded_trait)
@@ -184,6 +190,10 @@ where
             .unwrap_or_else(|| SemConstId::new(db, SemConstValue::Description(*term)));
     }
     let value = match value.value(db) {
+        SemConstValue::Evidence { ty, application } => SemConstValue::Evidence {
+            ty: ty.fold_with(db, folder),
+            application: application.fold_with(db, folder),
+        },
         SemConstValue::Unit => SemConstValue::Unit,
         SemConstValue::Scalar { ty, value } => SemConstValue::Scalar {
             ty: folder.fold_ty(db, *ty),
@@ -268,6 +278,20 @@ impl<'db> TyFoldable<'db> for SemanticInstanceKey<'db> {
                 folder.fold_scope(env.normalization_scope(db)),
                 env.assumptions(db).fold_with(db, folder),
                 env.witnesses(db).clone().fold_with(db, folder),
+                env.parameter_evidence(db)
+                    .iter()
+                    .map(|(index, record)| (*index, record.fold_with(db, folder)))
+                    .collect::<Vec<_>>(),
+                env.lexical_applications(db).clone().fold_with(db, folder),
+            )
+            .with_projected_parameter_evidence(
+                db,
+                env.projected_parameter_evidence(db)
+                    .iter()
+                    .map(|(index, path, record)| {
+                        (*index, path.clone(), record.fold_with(db, folder))
+                    })
+                    .collect(),
             ),
         )
     }
@@ -455,6 +479,19 @@ impl<'db> TyFoldable<'db> for PredicateListId<'db> {
     }
 }
 
+impl<'db> TyFoldable<'db> for TraitSolveCx<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        self.with_assumptions(self.assumptions().fold_with(db, folder))
+            .with_lexical_premises(
+                self.lexical_premises()
+                    .map(|premises| premises.fold_with(db, folder)),
+            )
+    }
+}
+
 impl<'db> TyFoldable<'db> for TraitSolverQuery<'db> {
     fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
     where
@@ -463,6 +500,9 @@ impl<'db> TyFoldable<'db> for TraitSolverQuery<'db> {
         Self {
             goal: self.goal.fold_with(db, folder),
             assumptions: self.assumptions.fold_with(db, folder),
+            lexical_premises: self
+                .lexical_premises
+                .map(|premises| premises.fold_with(db, folder)),
             require_impl: self.require_impl,
             selected_candidate: self.selected_candidate,
         }

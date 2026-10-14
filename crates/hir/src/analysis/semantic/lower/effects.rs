@@ -46,7 +46,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let mut saved = Vec::with_capacity(bindings.len());
         for binding in bindings {
             let value_expr = binding.value;
-            let source = if self.is_root_provider_expr(value_expr) {
+            if matches!(
+                self.typed_body.with_opening(value_expr),
+                Some(crate::analysis::ty::ty_check::TraitOpening::Named(_))
+            ) {
+                continue;
+            }
+            let mut source = if self.is_root_provider_expr(value_expr) {
                 if let Some(place) = self.try_lower_place_expr(value_expr, true) {
                     WithBindingSource::Place(place)
                 } else {
@@ -66,6 +72,29 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 let value = self.lower_expr(value_expr);
                 WithBindingSource::Value(SOperand::expr(value, value_expr))
             };
+            if matches!(
+                self.typed_body.with_opening(value_expr),
+                Some(crate::analysis::ty::ty_check::TraitOpening::Evidence { .. })
+            ) {
+                let value = match source {
+                    WithBindingSource::Value(value) => value,
+                    WithBindingSource::Temporary(local) => SOperand::expr(local, value_expr),
+                    WithBindingSource::Place(place) => {
+                        let value = self.emit_expr_with_origin(
+                            SemOrigin::Expr(value_expr),
+                            self.expr_ty(value_expr),
+                            SExpr::ReadPlace { place },
+                        );
+                        SOperand::expr(value, value_expr)
+                    }
+                };
+                let admitted = self.emit_expr_with_origin(
+                    SemOrigin::Expr(value_expr),
+                    self.expr_ty(value_expr),
+                    SExpr::Forward(value),
+                );
+                source = WithBindingSource::Value(SOperand::expr(admitted, value_expr));
+            }
             saved.push((
                 value_expr,
                 self.with_binding_sources.insert(value_expr, source),

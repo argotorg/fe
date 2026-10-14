@@ -1,0 +1,12 @@
+use core::obligations::{Constraint, Evidence, prove}
+trait Produce { type Output }
+struct Subject {}
+impl Produce for Subject { type Output = u64 }
+type Goal = Produce<Subject, Output = u64>
+const fn forward<G: Constraint>(_ witness: Evidence<G>) -> Evidence<G> { witness }
+const fn consume(_ witness: Evidence<Goal>) -> u256 { 37 }
+const fn issued() -> Evidence<Goal> { forward<Goal>(prove<Goal>()) }
+const fn result() -> u256 { consume(issued()) }
+const RESULT: u256 = result()
+#[test]
+fn generic_forward_preserves_a_concrete_proof() { assert!(RESULT == 37) }

@@ -2,10 +2,13 @@ use common::ingot::{Ingot, IngotKind};
 use hir::{
     analysis::{
         HirAnalysisDb,
-        semantic::{EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance},
+        semantic::{
+            EffectProviderSubst, GenericSubst, ImplEnv, SemConstId, SemConstValue, SemanticInstance,
+        },
         ty::{
             RootProviderScope,
-            trait_def::{TraitInstId, TraitRefId},
+            const_ty::ConstTyData,
+            trait_def::{ImplApplicationRecord, ImplementorOrigin, TraitInstId, TraitRefId},
             ty_check::{BodyOwner, EffectParamSite},
             ty_def::{TyBase, TyData, TyId},
         },
@@ -101,7 +104,11 @@ pub fn semantic_owner_context_identity<'db>(
                     .map(|trait_ref| trait_ref.pretty_print(db))
                     .unwrap_or_else(|| "trait".to_string())
             });
-        let impl_identity = format!("{trait_identity}${}", type_identity(db, impl_trait.ty(db)));
+        let impl_identity = format!(
+            "{trait_identity}${}{}",
+            type_identity(db, impl_trait.ty(db)),
+            named_impl_identity_suffix(db, impl_trait)
+        );
         return Some(format!(
             "impl_trait${}",
             stable_identity_fingerprint(&impl_identity)
@@ -141,8 +148,9 @@ pub fn semantic_owner_context_trace_identity<'db>(
                     .unwrap_or_else(|| "trait".to_string())
             });
         return Some(format!(
-            "impl_trait${trait_identity}${}",
-            type_identity(db, impl_trait.ty(db))
+            "impl_trait${trait_identity}${}{}",
+            type_identity(db, impl_trait.ty(db)),
+            named_impl_identity_suffix(db, impl_trait)
         ));
     }
     func.containing_impl(db)
@@ -260,6 +268,72 @@ fn provider_semantics_identity<'db>(
     )
 }
 
+fn named_impl_identity_suffix<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementation: hir::hir_def::ImplTrait<'db>,
+) -> String {
+    implementation
+        .selection_name(db)
+        .map_or_else(String::new, |name| {
+            format!(
+                "$named${}${}",
+                item_identity(db, implementation.into()),
+                name.data(db)
+            )
+        })
+}
+
+fn application_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    application: ImplApplicationRecord<'db>,
+) -> String {
+    let resolved = application.resolved();
+    let declaration = match resolved.origin(db) {
+        ImplementorOrigin::Hir(implementation) => format!(
+            "{}${}{}",
+            item_identity(db, implementation.into()),
+            implementation
+                .trait_inst(db)
+                .map(|goal| trait_identity(db, goal))
+                .unwrap_or_default(),
+            named_impl_identity_suffix(db, implementation)
+        ),
+        ImplementorOrigin::VirtualContract(contract) => item_identity(db, contract.into()),
+        ImplementorOrigin::Assumption => "assumption".to_string(),
+    };
+    format!(
+        "{declaration}$goal${}$args${}",
+        trait_identity(db, application.goal()),
+        generic_args_identity(db, resolved.impl_args(db))
+    )
+}
+
+fn constant_choice_identity<'db>(db: &'db dyn HirAnalysisDb, value: SemConstId<'db>) -> String {
+    let children = match value.value(db) {
+        SemConstValue::Evidence { application, .. } => {
+            return format!("$evidence${}", application_identity(db, *application));
+        }
+        SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => elems,
+        SemConstValue::Struct { fields, .. } | SemConstValue::Enum { fields, .. } => fields,
+        SemConstValue::Description(ty) => {
+            return match ty.data(db) {
+                ConstTyData::Description(value) => constant_choice_identity(db, *value),
+                _ => String::new(),
+            };
+        }
+        _ => return String::new(),
+    };
+    children
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| {
+            let choice = constant_choice_identity(db, *value);
+            (!choice.is_empty()).then(|| format!("$field${index}{choice}"))
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 fn impl_env_identity<'db>(
     db: &'db dyn HirAnalysisDb,
     env: ImplEnv<'db>,
@@ -267,11 +341,51 @@ fn impl_env_identity<'db>(
 ) -> String {
     let assumptions = trait_list_identity(db, env.assumptions(db).list(db).iter().copied(), mode);
     let witnesses = trait_list_identity(db, env.witnesses(db).iter().copied(), mode);
+    let choices = if env.parameter_evidence(db).is_empty() {
+        String::new()
+    } else {
+        let entries = env
+            .parameter_evidence(db)
+            .iter()
+            .map(|(index, application)| {
+                format!("{index}${}", application_identity(db, *application))
+            })
+            .collect::<Vec<_>>()
+            .join("$");
+        format!("$parameter_evidence${entries}")
+    };
+    let projected = if env.projected_parameter_evidence(db).is_empty() {
+        String::new()
+    } else {
+        format!(
+            "$projected_parameter_evidence${}",
+            env.projected_parameter_evidence(db)
+                .iter()
+                .map(|(index, path, application)| format!(
+                    "{index}${path:?}${}",
+                    application_identity(db, *application)
+                ))
+                .collect::<Vec<_>>()
+                .join("$")
+        )
+    };
+    let lexical = if env.lexical_applications(db).is_empty() {
+        String::new()
+    } else {
+        format!(
+            "$lexical_applications${}",
+            env.lexical_applications(db)
+                .iter()
+                .map(|record| application_identity(db, *record))
+                .collect::<Vec<_>>()
+                .join("$")
+        )
+    };
     // Callees normalize at an ingot root, and every ingot's root module has
     // the same name, so the scope must name its ingot.
     let scope = env.normalization_scope(db);
     format!(
-        "scope${}${}$assumptions${assumptions}$witnesses${witnesses}",
+        "scope${}${}$assumptions${assumptions}$witnesses${witnesses}{choices}{projected}{lexical}",
         ingot_identity_for_top_mod(db, scope.top_mod(db)),
         module_path_components_for_scope(db, scope).join("$")
     )
@@ -354,7 +468,7 @@ fn ty_mentions_effect_provider_param<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'
     match ty.data(db) {
         TyData::TyParam(param) => param.is_effect_provider(),
         TyData::AssocTy(assoc) => trait_ref_mentions_effect_provider_param(db, assoc.trait_),
-        TyData::QualifiedTy(trait_inst) => {
+        TyData::QualifiedTy(trait_inst) | TyData::ConstraintTerm(trait_inst) => {
             trait_inst_mentions_effect_provider_param(db, *trait_inst)
         }
         TyData::TyVar(_)
@@ -442,10 +556,18 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
             assoc.name.data(db)
         ),
         TyData::QualifiedTy(trait_inst) => format!("qualified${}", trait_identity(db, *trait_inst)),
+        TyData::ConstraintTerm(goal) => format!("constraint${}", trait_identity(db, *goal)),
         TyData::ConstTy(const_ty) => {
+            let choices = match const_ty.data(db) {
+                ConstTyData::Description(value) => constant_choice_identity(db, *value),
+                _ => String::new(),
+            };
             format!(
                 "const_ty${}",
-                stable_identity_fingerprint(&const_ty.pretty_print_concrete(db))
+                stable_identity_fingerprint(&format!(
+                    "{}{choices}",
+                    const_ty.pretty_print_concrete(db)
+                ))
             )
         }
         TyData::Never => "never".to_string(),

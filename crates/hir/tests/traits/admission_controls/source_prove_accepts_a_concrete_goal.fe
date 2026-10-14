@@ -1,0 +1,8 @@
+
+use core::obligations::{Evidence, prove}
+trait Produce { type Output }
+struct Subject {}
+impl Produce for Subject { type Output = u64 }
+fn witness() -> Evidence<Produce<Subject, Output = u64>> {
+    prove<Produce<Subject, Output = u64>>()
+}

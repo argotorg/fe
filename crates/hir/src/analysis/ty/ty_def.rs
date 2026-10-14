@@ -161,7 +161,7 @@ impl<'db> TyId<'db> {
                 .iter()
                 .copied()
                 .find_map(|arg| ingot_from_non_projection(db, arg)),
-            TyData::QualifiedTy(trait_inst) => trait_inst
+            TyData::QualifiedTy(trait_inst) | TyData::ConstraintTerm(trait_inst) => trait_inst
                 .args(db)
                 .iter()
                 .copied()
@@ -187,6 +187,7 @@ impl<'db> TyId<'db> {
             TyData::TyApp(..)
             | TyData::AssocTy(_)
             | TyData::QualifiedTy(_)
+            | TyData::ConstraintTerm(_)
             | TyData::ConstTy(_) => ty_flags(db, self),
         }
     }
@@ -214,7 +215,7 @@ impl<'db> TyId<'db> {
 
     /// Returns `true` if the type has a `*` kind.
     pub fn has_star_kind(self, db: &dyn HirAnalysisDb) -> bool {
-        !matches!(self.kind(db), Kind::Abs(..))
+        matches!(self.kind(db), Kind::Star | Kind::Any)
     }
 
     #[salsa::tracked(return_ref)]
@@ -241,6 +242,11 @@ impl<'db> TyId<'db> {
                     trait_inst.pretty_print(db, false)
                 )
             }
+            TyData::ConstraintTerm(goal) => format!(
+                "Constraint<{} as {}>",
+                goal.self_ty(db).pretty_print_with_mode(db, mode),
+                goal.pretty_print(db, false)
+            ),
             TyData::TyApp(_, _) => pretty_print_ty_app(db, self, mode),
             TyData::TyBase(base) => base.pretty_print(db),
             TyData::ConstTy(const_ty) => const_ty.pretty_print_with_mode(db, mode),
@@ -611,7 +617,9 @@ impl<'db> TyId<'db> {
         match self.base_ty(db).data(db) {
             TyData::TyParam(param) => Some(param.scope(db)),
             TyData::AssocTy(assoc_ty) => assoc_ty.scope(db),
-            TyData::QualifiedTy(trait_inst) => Some(trait_inst.def(db).scope()),
+            TyData::QualifiedTy(trait_inst) | TyData::ConstraintTerm(trait_inst) => {
+                Some(trait_inst.def(db).scope())
+            }
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.scope(db)),
             TyData::TyBase(TyBase::Contract(c)) => Some(c.scope()),
             TyData::TyBase(TyBase::Func(func)) => Some(func.scope()),
@@ -638,7 +646,9 @@ impl<'db> TyId<'db> {
             TyData::TyVar(_) => None,
             TyData::TyParam(param) => param.scope(db).name_span(db),
             TyData::AssocTy(assoc_ty) => assoc_ty.scope(db)?.name_span(db),
-            TyData::QualifiedTy(trait_inst) => trait_inst.def(db).scope().name_span(db),
+            TyData::QualifiedTy(trait_inst) | TyData::ConstraintTerm(trait_inst) => {
+                trait_inst.def(db).scope().name_span(db)
+            }
 
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.name_span(db)),
             TyData::TyBase(TyBase::Contract(c)) => c.scope().name_span(db),
@@ -946,7 +956,7 @@ impl<'db> TyId<'db> {
         }
 
         let applicable_kind = match self.kind(db) {
-            Kind::Star => return None,
+            Kind::Star | Kind::Constraint => return None,
             Kind::Abs(inner) => inner.0.clone(),
             Kind::Any => Kind::Any,
         };
@@ -1053,6 +1063,9 @@ pub enum TyData<'db> {
 
     /// Qualified type, e.g., `<T as Iterator>`.
     QualifiedTy(TraitInstId<'db>),
+
+    /// A trait requirement as a term of kind Constraint; this is not its proof.
+    ConstraintTerm(TraitInstId<'db>),
 
     // Type application,
     // e.g., `Option<i32>` is represented as `TApp(TyConst(Option), TyConst(i32))`.
@@ -1331,6 +1344,9 @@ pub enum Kind {
     /// Represents star kind, i.e., `*` kind.
     Star,
 
+    /// Trait requirement terms, distinct from runtime value types.
+    Constraint,
+
     /// Represents higher kinded types.
     /// e.g.,
     /// `* -> *`, `(* -> *) -> *` or `* -> (* -> *) -> *`
@@ -1347,7 +1363,7 @@ impl Kind {
 
     pub fn does_match(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Star, Self::Star) => true,
+            (Self::Star, Self::Star) | (Self::Constraint, Self::Constraint) => true,
             (Self::Abs(a), Self::Abs(b)) => a.0.does_match(&b.0) && a.1.does_match(&b.1),
             (Self::Any, _) => true,
             (_, Self::Any) => true,
@@ -1360,6 +1376,7 @@ impl fmt::Display for Kind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Star => write!(f, "*"),
+            Self::Constraint => write!(f, "Constraint"),
             Self::Abs(inner) => write!(f, "({} -> {})", inner.0, inner.1),
             Self::Any => write!(f, "Any"),
         }
@@ -1893,9 +1910,16 @@ impl HasKind for TyData<'_> {
                 .trait_
                 .def(db)
                 .assoc_ty(db, assoc.name)
-                .and_then(|decl| super::ty_lower::lower_kind_in_bounds(&decl.bounds))
+                .and_then(|decl| {
+                    super::ty_lower::lower_kind_in_bounds(
+                        db,
+                        assoc.trait_.def(db).scope(),
+                        &decl.bounds,
+                    )
+                })
                 .unwrap_or(Kind::Star),
             TyData::QualifiedTy(_) => Kind::Star,
+            TyData::ConstraintTerm(_) => Kind::Constraint,
             TyData::TyBase(base) => base.kind(db),
             TyData::TyApp(abs, _) => match abs.kind(db) {
                 // `TyId::app` method handles the kind mismatch, so we don't need to verify it again

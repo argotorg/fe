@@ -1,0 +1,42 @@
+use core::obligations::{Evidence, prove}
+
+trait Width {
+    const N: u256
+    fn pick() -> u256
+}
+struct Subject {}
+impl Width for Subject {
+    const N: u256 = 1
+    fn pick() -> u256 { 1 }
+}
+impl Width for Subject as First {
+    const N: u256 = 2
+    fn pick() -> u256 { 2 }
+}
+impl Width for Subject as Second {
+    const N: u256 = 3
+    fn pick() -> u256 { 3 }
+}
+
+type Goal = Width<Subject>
+trait Factory { const W: Evidence<Goal> }
+struct Maker {}
+impl Factory for Maker { const W: Evidence<Goal> = with (First) { prove<Goal>() } }
+impl Factory for Maker as Selected { const W: Evidence<Goal> = with (Second) { prove<Goal>() } }
+
+const fn make_factory() -> Evidence<Factory<Maker>> {
+    with (Selected) { prove<Factory<Maker>>() }
+}
+
+fn helper_method(_ f_ev: Evidence<Factory<Maker>>) -> u256 {
+    with (f_ev) {
+        with (<Maker as Factory>::W) {
+            <Subject as Width>::pick()
+        }
+    }
+}
+
+#[test]
+fn param_factory_evidence_method() {
+    assert(helper_method(make_factory()) == 3)
+}

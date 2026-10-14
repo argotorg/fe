@@ -1,0 +1,10 @@
+use core::obligations::{Evidence, prove}
+trait Read { const fn read() -> u256 }
+struct Subject {}
+impl Read for Subject { const fn read() -> u256 { 1 } }
+impl Subject { const fn pick(self) -> bool { true } }
+fn read() -> u256 {
+    let subject = Subject {}
+    let e = if subject.pick() { prove<Read<Subject>>() } else { prove<Read<Subject>>() }
+    with (e) { <Subject as Read>::read() }
+}

@@ -73,7 +73,16 @@ pub(crate) fn normalized_body_error_to_diag<'db>(
     error: NormalizeError<'db>,
 ) -> SemanticDiagnostic<'db> {
     let owner = instance.key(db).owner(db);
+    if let NormalizeError::EvidenceChoiceNotCompileTime(origin) = error {
+        return SemanticDiagnostic::new(
+            instance,
+            SemanticDiagnosticKind::EvidenceChoiceNotCompileTime,
+            "evidence choice must be compiler-known".to_string(),
+            SemanticDiagnosticSpan::Origin { owner, origin },
+        );
+    }
     let (message, span) = match error {
+        NormalizeError::EvidenceChoiceNotCompileTime(_) => unreachable!(),
         NormalizeError::MissingValue(local) => (
             format!(
                 "normalized body is missing a value for raw local `%{}`",
@@ -204,6 +213,20 @@ impl DiagnosticVoucher for SemanticDiagnosticId<'_> {
 
 impl DiagnosticVoucher for SemanticDiagnostic<'_> {
     fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        if self.kind == SemanticDiagnosticKind::EvidenceChoiceNotCompileTime {
+            let owner = self.instance.key(db).owner(db);
+            if let SemanticDiagnosticSpan::Origin {
+                origin: SemOrigin::Expr(expr),
+                ..
+            } = self.primary.span
+                && let Some(body) = owner.body(db)
+            {
+                return crate::analysis::ty::diagnostics::BodyDiag::EvidenceChoiceNotCompileTime {
+                    primary: expr.span(body).into(),
+                }
+                .to_complete(db);
+            }
+        }
         let local_code = match self.kind {
             SemanticDiagnosticKind::BorrowConflict => 1,
             SemanticDiagnosticKind::MoveConflict => 2,
@@ -216,6 +239,7 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
             SemanticDiagnosticKind::UnresolvedCall => 9,
             SemanticDiagnosticKind::InvalidConcreteType => 10,
             SemanticDiagnosticKind::UnboundedReferents => 11,
+            SemanticDiagnosticKind::EvidenceChoiceNotCompileTime => 120,
         };
         CompleteDiagnostic::new(
             Severity::Error,
@@ -242,6 +266,9 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
 impl SemanticDiagnosticKind {
     fn header<'db>(self, db: &'db dyn HirAnalysisDb, instance: SemanticInstance<'db>) -> String {
         match self {
+            Self::EvidenceChoiceNotCompileTime => {
+                "evidence choice must be compiler-known".to_string()
+            }
             Self::BorrowConflict => {
                 format!("borrow conflict in `fn {}`", checker_name(db, instance))
             }
@@ -460,4 +487,5 @@ pub enum SemanticDiagnosticKind {
     UnresolvedCall,
     InvalidConcreteType,
     UnboundedReferents,
+    EvidenceChoiceNotCompileTime,
 }

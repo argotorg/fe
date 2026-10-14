@@ -163,6 +163,18 @@ impl<'db> NStatementKind<'db> {
                 | NExpr::IsEnumVariant { value: src, .. } => {
                     accesses.push(OperationAccess::operand(db, body, *src));
                 }
+                NExpr::OpenedConst {
+                    evidence,
+                    context_inputs,
+                    ..
+                } => {
+                    accesses.push(OperationAccess::operand(db, body, *evidence));
+                    accesses.extend(
+                        context_inputs
+                            .iter()
+                            .map(|operand| OperationAccess::operand(db, body, *operand)),
+                    );
+                }
                 NExpr::Binary { lhs, rhs, .. } => {
                     accesses.extend([lhs, rhs].map(|arg| OperationAccess::operand(db, body, *arg)));
                 }

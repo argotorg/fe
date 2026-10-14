@@ -5,7 +5,9 @@ use super::{
     const_expr::ConstExpr,
     const_ty::{ConstCaptureEnv, ConstTyData, ConstTyId},
     trait_def::{ImplementorId, TraitInstId, TraitRefId},
-    trait_resolution::{ImplConditionsId, PredicateListId, TraitGoalSolution, TraitSolverQuery},
+    trait_resolution::{
+        ImplConditionsId, PredicateListId, TraitGoalSolution, TraitSolveCx, TraitSolverQuery,
+    },
     ty_check::{EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
     ty_def::{AssocTy, InvalidCause, PrimTy, TyBase, TyData, TyFlags, TyId, TyParam, TyVar},
 };
@@ -86,6 +88,7 @@ where
             visitor.visit_ty(trait_inst.self_ty(visitor.db()));
             trait_inst.visit_with(visitor);
         }
+        TyData::ConstraintTerm(goal) => goal.visit_with(visitor),
         TyData::TyApp(abs, arg) => visitor.visit_app(*abs, *arg),
         TyData::TyBase(ty_con) => visitor.visit_ty_base(ty_con),
         TyData::ConstTy(const_ty) => visitor.visit_const_ty(const_ty),
@@ -179,6 +182,10 @@ where
 {
     let db = visitor.db();
     match value.value(db) {
+        SemConstValue::Evidence { ty, application } => {
+            ty.visit_with(visitor);
+            application.visit_with(visitor);
+        }
         SemConstValue::Description(term) => visitor.visit_ty(TyId::const_ty(db, *term)),
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => {
             for child in elems.iter().copied() {
@@ -262,6 +269,13 @@ impl<'db> TyVisitable<'db> for SemanticInstanceKey<'db> {
         let env = self.impl_env(db);
         env.assumptions(db).visit_with(visitor);
         env.witnesses(db).visit_with(visitor);
+        env.lexical_applications(db).visit_with(visitor);
+        for (_, _, record) in env.projected_parameter_evidence(db) {
+            record.visit_with(visitor);
+        }
+        for (_, record) in env.parameter_evidence(db) {
+            record.visit_with(visitor);
+        }
     }
 }
 
@@ -306,6 +320,18 @@ impl<'db> TyVisitable<'db> for PredicateListId<'db> {
     }
 }
 
+impl<'db> TyVisitable<'db> for TraitSolveCx<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.assumptions().visit_with(visitor);
+        if let Some(premises) = self.lexical_premises() {
+            premises.visit_with(visitor);
+        }
+    }
+}
+
 impl<'db> TyVisitable<'db> for TraitSolverQuery<'db> {
     fn visit_with<V>(&self, visitor: &mut V)
     where
@@ -313,6 +339,9 @@ impl<'db> TyVisitable<'db> for TraitSolverQuery<'db> {
     {
         self.goal.visit_with(visitor);
         self.assumptions.visit_with(visitor);
+        if let Some(premises) = self.lexical_premises {
+            premises.visit_with(visitor);
+        }
     }
 }
 

@@ -432,7 +432,7 @@ impl<'db> Borrowck<'db> {
             let instance = get_or_build_semantic_instance(self.db, callee.key);
             // A default trait body is not the selected implementation of an
             // unresolved call: a concrete implementor can override that body.
-            let voucher = if can_specialize(self.db, instance)
+            let voucher = if !callee.concrete_dispatch
                 && matches!(callee.key.owner(self.db), BodyOwner::Func(func)
                     if func.containing_trait(self.db).is_some()
                         && intrinsic_contract(self.db, func).is_none())

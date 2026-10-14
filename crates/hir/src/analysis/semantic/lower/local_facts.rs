@@ -88,9 +88,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     ) -> SemanticLocalRole<'db> {
         match expr {
             SExpr::Forward(value) => self.classify_forward_role(dst_ty, value.value),
-            SExpr::UseValue(_) | SExpr::Borrow { .. } | SExpr::Call { .. } => {
-                self.fallback_local_role(dst_ty)
-            }
+            SExpr::OpenedConst { .. }
+            | SExpr::UseValue(_)
+            | SExpr::Borrow { .. }
+            | SExpr::Call { .. } => self.fallback_local_role(dst_ty),
             SExpr::ReadPlace { place } => {
                 self.classify_projection_local_role(dst_ty, place.clone())
             }
@@ -160,7 +161,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.locals[value.value.index()].ty,
                 *field,
             )),
-            SExpr::Borrow { .. }
+            SExpr::OpenedConst { .. }
+            | SExpr::Borrow { .. }
             | SExpr::Call { .. }
             | SExpr::ArrayRepeat { .. }
             | SExpr::AggregateMake { .. }
@@ -253,7 +255,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
                 dedup_layout_backing_sources(sources)
             }
-            SExpr::CodeRegionRef { .. }
+            SExpr::OpenedConst { .. }
+            | SExpr::CodeRegionRef { .. }
             | SExpr::Const(_)
             | SExpr::Unary { .. }
             | SExpr::Binary { .. }

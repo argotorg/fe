@@ -1,0 +1,16 @@
+use core::ops::Add
+struct Subject {}
+impl Add for Subject { type Output = u256
+ const fn add(own self, _ other: own Subject) -> u256 { 5 } }
+impl Add for Subject as First { type Output = u256
+ const fn add(own self, _ other: own Subject) -> u256 { 47 } }
+impl Add for Subject as Second { type Output = u256
+ const fn add(own self, _ other: own Subject) -> u256 { 23 } }
+const fn answer() -> (u256,u256,u256,u256,u256) {
+ let a = (Subject {}) + (Subject {})
+ let b = with (First) { (Subject {}) + (Subject {}) }
+ let c = with (First) { with (Second) { (Subject {}) + (Subject {}) } }
+ let d = with (First) { let unused = with (Second) { (Subject {}) + (Subject {}) }
+ (Subject {}) + (Subject {}) }
+ (a,b,c,d,(Subject {}) + (Subject {}))
+}

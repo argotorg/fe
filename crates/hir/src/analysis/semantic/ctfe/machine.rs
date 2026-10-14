@@ -41,7 +41,7 @@ use crate::{
         },
     },
     core::hir_def::expr::LogicalBinOp,
-    hir_def::{ArithBinOp, BinOp, CompBinOp, UnOp, attr::ArithmeticMode},
+    hir_def::{ArithBinOp, BinOp, CompBinOp, ItemKind, UnOp, attr::ArithmeticMode},
     projection::{IndexSource, Projection},
 };
 
@@ -50,6 +50,35 @@ use super::{
     request::VerifiedConstValueId,
     service::force_const_term_value_with_steps,
 };
+
+/// Consume the retained introduction through the existing checked application
+/// and constant-shape authorities. Shared by CTFE and semantic const lowering;
+/// it never discovers a replacement implementation.
+pub(crate) fn issue_checked_evidence<'db>(
+    db: &'db dyn HirAnalysisDb,
+    record: crate::analysis::ty::trait_def::ImplApplicationRecord<'db>,
+    result_ty: TyId<'db>,
+    origin: SemOrigin<'db>,
+) -> Result<VerifiedConstValueId<'db>, CtfeError<'db>> {
+    let goal =
+        crate::analysis::ty::corelib::evidence_goal(db, record.origin_context().scope(), result_ty)
+            .ok_or(CtfeError::NotConstEvaluable { origin })?;
+    let checked = record
+        .revalidate(db, record.origin_context(), goal)
+        .map_err(|_| CtfeError::InvalidOperation {
+            origin,
+            message: "recorded evidence application no longer proves its goal".into(),
+        })?;
+    let value = SemConstId::new(
+        db,
+        SemConstValue::Evidence {
+            ty: result_ty,
+            application: checked.record(),
+        },
+    );
+    VerifiedConstValueId::from_complete_execution(db, value)
+        .map_err(|_| CtfeError::NotConstEvaluable { origin })
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct CtfeConfig {
@@ -538,6 +567,7 @@ impl<'db> CtfeConstValue<'db> {
                 bytes: Rc::from(bytes.as_slice()),
             },
             SemConstValue::Tuple { .. }
+            | SemConstValue::Evidence { .. }
             | SemConstValue::Struct { .. }
             | SemConstValue::Array { .. }
             | SemConstValue::Enum { .. } => CtfeConstKind::Interned(value),
@@ -551,6 +581,7 @@ impl<'db> CtfeConstValue<'db> {
         value: VerifiedConstValueId<'db>,
     ) -> Self {
         let kind = match value.value().value(db) {
+            SemConstValue::Evidence { .. } => CtfeConstKind::Interned(value),
             SemConstValue::Unit => CtfeConstKind::Unit,
             SemConstValue::Scalar {
                 value: SemConstScalar::Bool(value),
@@ -865,7 +896,7 @@ pub(super) fn sem_const_dependency<'db>(
             .iter()
             .copied()
             .find_map(|field| sem_const_dependency(db, field)),
-        SemConstValue::Unit | SemConstValue::Scalar { .. } => None,
+        SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::Evidence { .. } => None,
     }
 }
 
@@ -1305,6 +1336,40 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             }
             locals[local.index()] = CtfeSlot::Init(value);
         }
+        if let BodyOwner::Func(func) = instance.key(self.db).owner(self.db)
+            && let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(self.db)
+        {
+            // An unresolved trait declaration is a selection dependency, not an
+            // executable implementation. Its synthetic empty body must not publish
+            // unit (or prematurely execute an inherited default) as a complete value.
+            if let Some(dependency) = instance
+                .key(self.db)
+                .subst(self.db)
+                .generic_args(self.db)
+                .iter()
+                .take(trait_.params(self.db).len())
+                .copied()
+                .find(|ty| {
+                    ty.has_param(self.db)
+                        || ty.has_var(self.db)
+                        || ty.has_projection(self.db)
+                        || ty.has_hole(self.db)
+                })
+            {
+                return Err(EvalStop::Blocked(BlockedInfo::new(
+                    ConstDemandKind::CallableSelection,
+                    ConstDependency::Type(dependency),
+                    origin,
+                )));
+            }
+            if func.body(self.db).is_none() && !func.is_extern(self.db) {
+                return Err(CtfeError::InvalidOperation {
+                    origin,
+                    message: "associated function selection has no executable body".into(),
+                }
+                .into());
+            }
+        }
         let frame_idx = self.frames.len();
         self.frames.push(CtfeFrame {
             body,
@@ -1357,9 +1422,12 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 if inference_met_lowering_cycle(self.db, infer_body(self.db, owner)) {
                     return Err(CtfeError::InvalidBody { origin });
                 }
-                instance
-                    .admitted_body(self.db)
-                    .map_err(|_| CtfeError::InvalidBody { origin })
+                instance.admitted_body(self.db).map_err(|error| {
+                    if let crate::analysis::semantic::instance::SemanticBodyAdmissionError::CallSiteFinalization(diagnostic) = error
+                        && diagnostic.diag(self.db).kind == crate::analysis::semantic::diagnostics::SemanticDiagnosticKind::UnresolvedCall {
+                        CtfeError::InvalidOperation { origin, message: diagnostic.diag(self.db).primary.message.clone() }
+                    } else { CtfeError::InvalidBody { origin } }
+                })
             }
         }
     }
@@ -1460,6 +1528,20 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 effect_args,
                 ..
             } => {
+                if !callee.concrete_dispatch {
+                    let dependency = callee
+                        .key
+                        .subst(self.db)
+                        .generic_args(self.db)
+                        .first()
+                        .copied()
+                        .unwrap_or(result_ty);
+                    return Err(EvalStop::Blocked(BlockedInfo::new(
+                        ConstDemandKind::CallableSelection,
+                        ConstDependency::Type(dependency),
+                        origin,
+                    )));
+                }
                 let mut effects = Vec::with_capacity(effect_args.len());
                 for arg in &effect_args {
                     if arg.required_mut
@@ -1502,7 +1584,55 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     .eval_args(frame_idx, &args, origin)?
                     .into_iter()
                     .collect::<Vec<_>>();
-                let instance = self.instance_for_key(callee.key);
+                let values = args
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, value)| match value {
+                        CtfeValue::Value(value) => Some((index, value.materialize(self.db))),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let env = callee
+                    .key
+                    .impl_env(self.db)
+                    .with_argument_evidence_values(self.db, &values);
+                let key = SemanticInstanceKey::new(
+                    self.db,
+                    callee.key.owner(self.db),
+                    callee.key.subst(self.db),
+                    callee.key.effect_providers(self.db),
+                    env,
+                );
+                let instance = self.instance_for_key(key);
+                if let BodyOwner::Func(func) = instance.key(self.db).owner(self.db)
+                    && func.top_mod(self.db).ingot(self.db).kind(self.db)
+                        == common::ingot::IngotKind::Core
+                    && crate::analysis::ty::corelib::lib_func_matches(
+                        self.db,
+                        func,
+                        "core::obligations::prove",
+                    )
+                {
+                    if !args.is_empty() || !effect_args.is_empty() {
+                        return Err(CtfeError::NotConstEvaluable { origin }.into());
+                    }
+                    let SemOrigin::Expr(expr) = origin else {
+                        return Err(CtfeError::NotConstEvaluable { origin }.into());
+                    };
+                    let caller = self.frames[frame_idx].body.owner;
+                    let record = caller
+                        .key(self.db)
+                        .typed_body(self.db)
+                        .callable_expr(expr)
+                        .and_then(|call| call.evidence_introduction())
+                        .ok_or(CtfeError::InvalidOperation {
+                            origin,
+                            message: "evidence introduction has no recorded checked application"
+                                .into(),
+                        })?;
+                    let value = issue_checked_evidence(self.db, record, result_ty, origin)?;
+                    return Ok(CtfeValue::Value(CtfeConstValue::concrete(self.db, value)));
+                }
                 if !effect_args.is_empty() {
                     let BodyOwner::Func(func) = instance.key(self.db).owner(self.db) else {
                         return Err(CtfeError::NotConstEvaluable { origin }.into());
@@ -1591,7 +1721,111 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             SExpr::Call { .. } | SExpr::Const(SConst::Ref(..)) => {
                 unreachable!("calls are dispatched separately")
             }
-            SExpr::Forward(value) => Ok(self.read_operand(frame_idx, value, origin)?),
+            SExpr::OpenedConst {
+                evidence,
+                assoc,
+                admission,
+                context_inputs,
+                mut named,
+            } => {
+                let value = self
+                    .load_value(frame_idx, evidence, origin)?
+                    .materialize(self.db);
+                let SemConstValue::Evidence { application, .. } = value.value(self.db) else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "opened evidence requires a compiler-issued application".into(),
+                    }
+                    .into());
+                };
+                let application = *application;
+                for input in context_inputs {
+                    let value = self
+                        .load_value(frame_idx, input, origin)?
+                        .materialize(self.db);
+                    let SemConstValue::Evidence { application, .. } = value.value(self.db) else {
+                        return Err(CtfeError::InvalidOperation {
+                            origin,
+                            message: "opened evidence requires a compiler-issued application"
+                                .into(),
+                        }
+                        .into());
+                    };
+                    named.push(*application);
+                }
+                let reference = crate::analysis::semantic::instance::opened_assoc_const_ref(
+                    self.db,
+                    assoc,
+                    admission,
+                    application,
+                    named,
+                    result_ty,
+                    origin,
+                )
+                .map_err(|error| CtfeError::InvalidOperation {
+                    origin,
+                    message: format!(
+                        "opened associated constant was not admitted at this use: {error:?}"
+                    ),
+                })?;
+                self.eval_expr(
+                    frame_idx,
+                    result_ty,
+                    SExpr::Const(SConst::Ref(reference)),
+                    origin,
+                )
+            }
+            SExpr::Forward(value) => {
+                let context = if let SemOrigin::Expr(expr) = origin {
+                    let typed = self.frames[frame_idx]
+                        .body
+                        .owner
+                        .key(self.db)
+                        .typed_body(self.db);
+                    match typed.with_opening(expr) {
+                        Some(crate::analysis::ty::ty_check::TraitOpening::Evidence {
+                            admission,
+                            ..
+                        }) => admission,
+                        _ => typed
+                            .callable_expr(expr)
+                            .and_then(|callable| callable.evidence_opening())
+                            .map(|(_, context)| context),
+                    }
+                } else {
+                    None
+                };
+                let Some(context) = context else {
+                    return Ok(self.read_operand(frame_idx, value, origin)?);
+                };
+                let input = self
+                    .load_value(frame_idx, value, origin)?
+                    .materialize(self.db);
+                let SemConstValue::Evidence { application, .. } = input.value(self.db) else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "opened evidence requires a compiler-issued application".into(),
+                    }
+                    .into());
+                };
+                let goal = crate::analysis::ty::corelib::evidence_goal(
+                    self.db,
+                    context.scope(),
+                    result_ty,
+                )
+                .ok_or(CtfeError::NotConstEvaluable { origin })?;
+                let checked = application
+                    .revalidate(self.db, context, goal)
+                    .map_err(|_| CtfeError::InvalidOperation {
+                        origin,
+                        message: "opened evidence application was not admitted at this use".into(),
+                    })?;
+                if application.goal() == goal {
+                    return self.load_sem_const(input, origin);
+                }
+                let value = issue_checked_evidence(self.db, checked.record(), result_ty, origin)?;
+                Ok(CtfeValue::Value(CtfeConstValue::concrete(self.db, value)))
+            }
             SExpr::UseValue(value) => {
                 let read = self.read_operand(frame_idx, value, origin)?;
                 let body = self.frames[frame_idx].body;

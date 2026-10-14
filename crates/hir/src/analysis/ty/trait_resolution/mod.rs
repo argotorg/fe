@@ -38,6 +38,8 @@ pub(crate) const TRAIT_SOLVER_ROOT_ANSWER_LIMIT: usize = 2;
 pub struct TraitSolverQuery<'db> {
     pub goal: TraitInstId<'db>,
     pub assumptions: PredicateListId<'db>,
+    /// Compiler-owned opened witness premises, including concrete goals.
+    pub lexical_premises: Option<PredicateListId<'db>>,
     /// Select an implementation at this goal; obligations still use assumptions.
     pub require_impl: bool,
     /// Restrict only this goal to a definition. Prerequisites use ordinary proof.
@@ -63,6 +65,7 @@ impl<'db> CanonicalGoalQuery<'db> {
             TraitSolverQuery {
                 goal,
                 assumptions: assumptions.extend_all_bounds(db),
+                lexical_premises: None,
                 require_impl: false,
                 selected_candidate: None,
             },
@@ -84,6 +87,10 @@ impl<'db> CanonicalGoalQuery<'db> {
 
     pub fn assumptions(&self) -> PredicateListId<'db> {
         self.raw.assumptions
+    }
+
+    pub fn lexical_premises(&self) -> Option<PredicateListId<'db>> {
+        self.raw.lexical_premises
     }
 
     pub fn canonical(&self) -> Canonical<TraitSolverQuery<'db>> {
@@ -126,6 +133,7 @@ pub struct TraitSolveCx<'db> {
     // Source position is distinct from candidate-discovery/normalization scope.
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    lexical_premises: Option<PredicateListId<'db>>,
 }
 
 impl<'db> TraitSolveCx<'db> {
@@ -133,6 +141,7 @@ impl<'db> TraitSolveCx<'db> {
         Self {
             scope,
             assumptions: PredicateListId::empty_list(db),
+            lexical_premises: None,
         }
     }
 
@@ -145,6 +154,20 @@ impl<'db> TraitSolveCx<'db> {
 
     pub fn assumptions(self) -> PredicateListId<'db> {
         self.assumptions
+    }
+
+    pub fn lexical_premises(self) -> Option<PredicateListId<'db>> {
+        self.lexical_premises
+    }
+
+    pub(crate) fn with_lexical_premises(
+        self,
+        lexical_premises: Option<PredicateListId<'db>>,
+    ) -> Self {
+        Self {
+            lexical_premises,
+            ..self
+        }
     }
 
     pub fn scope(self) -> ScopeId<'db> {
@@ -178,6 +201,7 @@ impl<'db> TraitSolveCx<'db> {
                 TraitSolverQuery {
                     goal: inst,
                     assumptions: self.assumptions.extend_all_bounds(db),
+                    lexical_premises: self.lexical_premises,
                     require_impl: true,
                     selected_candidate: None,
                 },
@@ -217,6 +241,7 @@ impl<'db> TraitSolveCx<'db> {
             TraitSolverQuery {
                 goal,
                 assumptions: self.assumptions.extend_all_bounds(db),
+                lexical_premises: self.lexical_premises,
                 require_impl: true,
                 selected_candidate: Some(candidate),
             },
@@ -444,7 +469,16 @@ pub fn is_goal_satisfiable<'db>(
     solve_cx: TraitSolveCx<'db>,
     goal: TraitInstId<'db>,
 ) -> GoalSatisfiability<'db> {
-    let query = CanonicalGoalQuery::new(db, goal, solve_cx.assumptions());
+    let query = CanonicalGoalQuery::from_query(
+        db,
+        TraitSolverQuery {
+            goal,
+            assumptions: solve_cx.assumptions().extend_all_bounds(db),
+            lexical_premises: solve_cx.lexical_premises(),
+            require_impl: false,
+            selected_candidate: None,
+        },
+    );
     is_goal_query_satisfiable(db, solve_cx, &query)
 }
 
@@ -474,6 +508,19 @@ pub(crate) fn check_ty_wf<'db>(
             let wf = check_projected_trait_use_wf(db, solve_cx, assoc.trait_.as_predicate(db));
             if !wf.is_wf() {
                 return wf;
+            }
+        }
+        TyData::ConstraintTerm(goal) => {
+            // A requirement term describes a goal without establishing it.
+            for &arg in goal
+                .args(db)
+                .iter()
+                .chain(goal.assoc_type_bindings(db).values())
+            {
+                let wf = check_ty_wf(db, solve_cx, arg);
+                if !wf.is_wf() {
+                    return wf;
+                }
             }
         }
         TyData::QualifiedTy(inst) => {
@@ -568,6 +615,7 @@ fn check_sem_const_wf<'db>(
     value: SemConstId<'db>,
 ) -> WellFormedness<'db> {
     match value.value(db) {
+        SemConstValue::Evidence { ty, .. } => check_ty_wf(db, solve_cx, *ty),
         SemConstValue::Description(term) => check_ty_wf(db, solve_cx, TyId::const_ty(db, *term)),
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => {
             for child in elems.iter().copied() {

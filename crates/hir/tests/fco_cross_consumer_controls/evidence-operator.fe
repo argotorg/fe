@@ -1,0 +1,17 @@
+use core::obligations::{Evidence,prove}
+use core::ops::Add
+struct Subject {}
+impl Add for Subject { type Output = u256
+ const fn add(own self, _ other: own Subject) -> u256 { 5 } }
+impl Add for Subject as First { type Output = u256
+ const fn add(own self, _ other: own Subject) -> u256 { 47 } }
+impl Add for Subject as Second { type Output = u256
+ const fn add(own self, _ other: own Subject) -> u256 { 23 } }
+type Goal = Add<Subject, Output = u256>
+const fn first() -> Evidence<Goal> { with (First) { prove<Goal>() } }
+const fn second() -> Evidence<Goal> { with (Second) { prove<Goal>() } }
+const fn ordinary() -> Evidence<Goal> { prove<Goal>() }
+const fn consume(_ witness: Evidence<Goal>) -> u256 { with (witness) { (Subject {}) + (Subject {}) } }
+const fn answer() -> (u256,u256,u256,u256) {
+ (consume(ordinary()), consume(first()), consume(second()), consume(first()))
+}

@@ -1,0 +1,13 @@
+//! Trait requirement terms. Evidence introduction and opening are compiler operations.
+
+/// Designated kind marker for trait goals.
+pub struct Constraint { seal: bool }
+
+/// A compiler-issued witness for a concrete trait requirement.
+pub struct Evidence<G: Constraint> { seal: bool }
+
+impl<G: Constraint> ingot::Copy for Evidence<G> {}
+
+extern {
+    pub const fn prove<G: Constraint>() -> Evidence<G>
+}

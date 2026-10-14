@@ -195,7 +195,7 @@ pub(super) fn check_runtime_body_supported<'db>(
             } = &stmt.kind
                 && let BodyOwner::Func(func) = callee.key.owner(db)
                 && func.containing_trait(db).is_some()
-                && func.body(db).is_none()
+                && (!callee.concrete_dispatch || func.body(db).is_none())
                 && contract_metadata_builtin(db, get_or_build_semantic_instance(db, callee.key))
                     .is_none()
             {
@@ -456,6 +456,7 @@ fn expr_requires_runtime_eval_when_erased(expr: &NExpr<'_>) -> bool {
         | NExpr::StructuralRepack { .. }
         | NExpr::CodeRegionRef { .. }
         | NExpr::Load { .. }
+        | NExpr::OpenedConst { .. }
         | NExpr::Const(_)
         | NExpr::Unary { .. }
         | NExpr::Binary { .. }
@@ -1184,6 +1185,7 @@ impl<'db> RmirEmitter<'db> {
                 }
                 NExpr::ProjectValue { .. }
                 | NExpr::CodeRegionRef { .. }
+                | NExpr::OpenedConst { .. }
                 | NExpr::Const(_)
                 | NExpr::Unary { .. }
                 | NExpr::Binary { .. }
@@ -1410,6 +1412,9 @@ impl<'db> RmirEmitter<'db> {
             }
             NExpr::Load { place, .. } => {
                 self.lower_semantic_place_read_into(bb, dst, place, &dst_class);
+            }
+            NExpr::OpenedConst { .. } => {
+                unreachable!("runtime admission must resolve opened constants")
             }
             NExpr::Const(const_) => {
                 let bindings = self.layout_evidence.constant_bindings[result.index()].clone();
@@ -1808,6 +1813,7 @@ impl<'db> RmirEmitter<'db> {
         }
         match value.value(self.db) {
             SemConstValue::Tuple { .. }
+            | SemConstValue::Evidence { .. }
             | SemConstValue::Struct { .. }
             | SemConstValue::Array { .. }
             | SemConstValue::Enum { .. } => self.lower_non_scalar_const_as_class(
@@ -2162,6 +2168,12 @@ impl<'db> RmirEmitter<'db> {
         );
         let ty = self.const_lowering_ty(ty, target);
         match value.value(self.db) {
+            SemConstValue::Evidence { .. } => {
+                let seal = hir::analysis::semantic::bool_const(self.db, false);
+                let (field, class) =
+                    self.lower_const_value_field(bb, seal, TyId::bool(self.db), bindings);
+                self.lower_aggregate_const_fields_as_class(bb, ty, target, &[field], &[class])
+            }
             SemConstValue::Tuple { elems, .. }
             | SemConstValue::Struct { fields: elems, .. }
             | SemConstValue::Array { elems, .. } => {
@@ -5382,6 +5394,7 @@ impl<'db> RmirEmitter<'db> {
             }
             NExpr::StructuralRepack { .. }
             | NExpr::CodeRegionRef { .. }
+            | NExpr::OpenedConst { .. }
             | NExpr::Const(_)
             | NExpr::Unary { .. }
             | NExpr::Binary { .. }

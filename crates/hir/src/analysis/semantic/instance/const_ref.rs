@@ -2,12 +2,15 @@ use super::{
     EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance, SemanticInstanceKey,
     provisional_provider_binding_for_instance_effect, provisional_provider_idx_for_requirement,
     resolved_effect_binding_ty_for_instance_effect, resolved_provider_binding_for_instance_effect,
+    typed_body_template,
 };
+use crate::analysis::semantic::operand_recovery::KnownOperandRecovery;
 use crate::{
     analysis::{
         HirAnalysisDb,
-        semantic::{SemOrigin, SemanticConstRef},
+        semantic::{EvalOutcome, SemConstValue, SemOrigin, SemanticConstRef},
         ty::{
+            adt_def::instantiate_adt_field_shape,
             assoc_const::{AssocConstUse, InherentConstUse},
             binder::Binder,
             const_ty::{
@@ -20,8 +23,9 @@ use crate::{
             method_cmp::{normalize_compare_assoc_consts, normalize_predicate_for_comparison},
             normalize::normalize_ty,
             trait_def::{
-                ImplementorOrigin, MethodArgMapError, ResolvedImplInstance, TraitInstId,
-                assoc_const_body_template_for_trait_inst, resolve_trait_method_instance,
+                ImplApplicationRecord, ImplementorOrigin, MethodArgMapError, ResolvedImplInstance,
+                TraitInstId, assoc_const_body_template_for_trait_inst,
+                resolve_trait_method_instance, selected_assoc_const_body_template,
             },
             trait_resolution::{
                 GoalSatisfiability, PredicateListId, Selection, TraitSolveCx,
@@ -29,7 +33,8 @@ use crate::{
             },
             ty_check::{
                 BodyOwner, Callable, ConstRef, EffectParamSite, EffectProviderSpecialization,
-                ResolvedEffectArg,
+                LocalBinding, RecordInitLowering, RecordLike, ResolvedEffectArg,
+                ReturnProjectionStep,
             },
             ty_def::{TyFlags, TyId},
             ty_lower::{
@@ -41,11 +46,12 @@ use crate::{
     },
     core::semantic::{EffectEnvView, EffectRequirementKey, ProviderBinding},
     hir_def::{
-        CallableDef, Const, Func, GenericParamOwner, HirIngot, params::FuncParamMode,
-        scope_graph::ScopeId,
+        CallableDef, Const, Expr, ExprId, Func, GenericParamOwner, HirIngot, Partial,
+        params::FuncParamMode, scope_graph::ScopeId,
     },
 };
 use common::indexmap::IndexSet;
+use num_traits::ToPrimitive;
 use rustc_hash::FxHashMap;
 
 #[derive(Clone, Copy)]
@@ -324,6 +330,7 @@ pub(crate) fn semantic_callee_key_with_effect_providers<'db>(
     semantic_callee_key_with_assumptions(
         db,
         Some(caller),
+        None,
         caller_key.impl_env(db),
         callable,
         effect_args,
@@ -343,6 +350,7 @@ pub(crate) fn provisional_semantic_callee_key<'db>(
     semantic_callee_key_with_assumptions(
         db,
         Some(SemanticInstance::new(db, caller_key)),
+        None,
         caller_key.impl_env(db),
         callable,
         effect_args,
@@ -380,6 +388,7 @@ pub(super) fn root_impl_env<'db>(
     semantic_callee_key_with_assumptions(
         db,
         None,
+        None,
         env,
         &callable,
         &[],
@@ -398,6 +407,26 @@ pub(super) fn root_impl_env<'db>(
 /// source calls. Inherited arguments come from `trait_inst`; `own_args` are the
 /// callee's own source generic arguments. Generated calls must dispatch to a
 /// concrete body and cannot carry hidden layout or effect-provider slots.
+pub(crate) fn checked_operand_callee<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    callable: &Callable<'db>,
+    opened: Option<ImplApplicationRecord<'db>>,
+) -> Result<Option<SemanticCallCallee<'db>>, MethodArgMapError<'db>> {
+    semantic_callee_key_with_assumptions(
+        db,
+        None,
+        opened,
+        ImplEnv::new(db, scope, assumptions, Vec::new(), Vec::new(), Vec::new()),
+        callable,
+        &[],
+        callable.effect_providers(),
+        assumptions,
+        ProviderResolutionMode::Final,
+    )
+}
+
 pub fn generated_callee_key<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -431,7 +460,8 @@ pub fn generated_callee_key<'db>(
     let callee = semantic_callee_key_with_assumptions(
         db,
         None,
-        ImplEnv::new(db, scope, assumptions, Vec::new()),
+        None,
+        ImplEnv::new(db, scope, assumptions, Vec::new(), Vec::new(), Vec::new()),
         &callable,
         &[],
         &[],
@@ -445,10 +475,834 @@ pub fn generated_callee_key<'db>(
     Ok(callee.key)
 }
 
+/// Recover the issued choice through immutable binding aliases. This reads
+/// already checked argument/intro records; admission remains at the method use.
+pub(crate) fn opened_operand_application<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    operand: ExprId,
+) -> Option<ImplApplicationRecord<'db>> {
+    opened_operand_application_at(db, caller, operand, Vec::new())
+}
+
+pub(crate) fn recover_known_operand<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    operand: ExprId,
+) -> KnownOperandRecovery<'db> {
+    crate::analysis::semantic::operand_recovery::recover_known_operand(
+        &InstanceOperandRecoveryCx { db, caller },
+        operand,
+    )
+}
+
+fn known_operand_value_or_error<'db>(
+    db: &'db dyn HirAnalysisDb,
+    recovery: KnownOperandRecovery<'db>,
+) -> Result<Option<crate::analysis::semantic::SemConstId<'db>>, MethodArgMapError<'db>> {
+    match recovery {
+        KnownOperandRecovery::Failed {
+            owner,
+            failure: crate::analysis::semantic::EvalFailure::Ctfe(error),
+            ..
+        } => Err(MethodArgMapError::ConstArgumentFailed(
+            crate::analysis::ty::const_ty::invalid_cause_from_ctfe_error(db, owner, error),
+        )),
+        KnownOperandRecovery::Failed { failure, .. } => Err(
+            MethodArgMapError::ConstArgumentInvariant(format!("{failure:?}")),
+        ),
+        KnownOperandRecovery::Blocked { owner, info, .. } => {
+            Err(MethodArgMapError::ConstArgumentBlocked { owner, info })
+        }
+        KnownOperandRecovery::Value(value) => Ok(Some(value)),
+        KnownOperandRecovery::NotKnown => Ok(None),
+    }
+}
+
+fn compiler_known_operand_value<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    operand: ExprId,
+) -> Option<crate::analysis::semantic::SemConstId<'db>> {
+    match recover_known_operand(db, caller, operand) {
+        KnownOperandRecovery::Value(value) => Some(value),
+        KnownOperandRecovery::NotKnown
+        | KnownOperandRecovery::Blocked { .. }
+        | KnownOperandRecovery::Failed { .. } => None,
+    }
+}
+
+/// An immutable witness formal supplies a specialization input even when its
+/// trait goal has no type parameters. A delivered record closes that input.
+pub(crate) fn has_unbound_evidence_calls<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+) -> bool {
+    let typed = caller.key(db).typed_body(db);
+    let Some(body) = typed.body() else {
+        return false;
+    };
+    body.exprs(db).iter().any(|(expr, _)| {
+        if typed.expr_const_openings(expr).iter().any(|opening| {
+            matches!(opening, crate::analysis::ty::ty_check::TraitOpening::Evidence { operand, .. }
+                if operand_depends_on_parameter_evidence(db, caller, *operand)
+                    && opened_operand_application(db, caller, *operand).is_none())
+        }) {
+            return true;
+        }
+        let Some(callable) = typed.callable_expr(expr) else {
+            return false;
+        };
+        callable
+            .opened_trait_application()
+            .is_some_and(|(operand, _)| {
+                operand_depends_on_parameter_evidence(db, caller, operand)
+                    && opened_operand_application(db, caller, operand).is_none()
+            })
+            || callable.argument_operands().iter().any(|&operand| {
+                let mut slots = Vec::new();
+                evidence_slots(
+                    db,
+                    caller.key(db).owner(db).scope(),
+                    typed.expr_ty(db, operand),
+                    Vec::new(),
+                    &mut IndexSet::default(),
+                    &mut slots,
+                    &mut Vec::new(),
+                );
+                slots.into_iter().any(|path| {
+                    operand_parameter_source_at(db, caller, operand, path.clone()).is_some()
+                        && opened_operand_application_at(db, caller, operand, path).is_none()
+                })
+            })
+    })
+}
+
+struct InstanceOperandRecoveryCx<'db> {
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+}
+
+impl<'db> crate::analysis::semantic::operand_recovery::OperandRecoveryCx<'db>
+    for InstanceOperandRecoveryCx<'db>
+{
+    fn db(&self) -> &'db dyn HirAnalysisDb {
+        self.db
+    }
+    fn body(&self) -> Option<crate::hir_def::Body<'db>> {
+        self.caller.key(self.db).typed_body(self.db).body()
+    }
+    fn owner(&self) -> BodyOwner<'db> {
+        self.caller.key(self.db).owner(self.db)
+    }
+    fn opening(&self, operand: ExprId) -> Option<crate::analysis::ty::ty_check::TraitOpening<'db>> {
+        self.caller
+            .key(self.db)
+            .typed_body(self.db)
+            .with_opening(operand)
+    }
+    fn expr_ty(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> TyId<'db> {
+        self.caller.key(db).typed_body(db).expr_ty(db, expr)
+    }
+    fn binding(&self, expr: ExprId) -> Option<LocalBinding<'db>> {
+        self.caller
+            .key(self.db)
+            .typed_body(self.db)
+            .expr_prop(self.db, expr)
+            .binding
+    }
+    fn binding_source(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        binding: LocalBinding<'db>,
+    ) -> Option<crate::analysis::ty::ty_check::BindingSource> {
+        self.caller
+            .key(db)
+            .typed_body(db)
+            .binding_source(db, binding)
+    }
+    fn record_init_lowering(&self, expr: ExprId) -> Option<RecordInitLowering<'db>> {
+        self.caller
+            .key(self.db)
+            .typed_body(self.db)
+            .record_init_lowering(expr)
+    }
+    fn field_index(&self, expr: ExprId) -> Option<u16> {
+        self.caller
+            .key(self.db)
+            .typed_body(self.db)
+            .resolved_field_index(expr)
+    }
+    fn projected_evidence(&self, expr: ExprId) -> Option<ImplApplicationRecord<'db>> {
+        let (index, projection) = operand_parameter_source(self.db, self.caller, expr)?;
+        let env = self.caller.key(self.db).impl_env(self.db);
+        if projection.is_empty() {
+            env.parameter_evidence(self.db)
+                .iter()
+                .find(|(slot, _)| *slot == index)
+                .map(|(_, record)| *record)
+        } else {
+            env.projected_parameter_evidence(self.db)
+                .iter()
+                .find(|(slot, path, _)| *slot == index && *path == projection)
+                .map(|(_, _, record)| *record)
+        }
+    }
+    fn pattern_root(
+        &self,
+        pat: crate::hir_def::PatId,
+    ) -> Option<crate::analysis::ty::pattern_ir::ValidatedPatId> {
+        self.caller
+            .key(self.db)
+            .typed_body(self.db)
+            .pattern_root(pat)
+    }
+    fn pattern_store(&self) -> &crate::analysis::ty::pattern_ir::PatternStore<'db> {
+        self.caller.key(self.db).typed_body(self.db).pattern_store()
+    }
+    fn callable(&self, expr: ExprId) -> Option<&Callable<'db>> {
+        self.caller
+            .key(self.db)
+            .typed_body(self.db)
+            .callable_expr(expr)
+    }
+    fn leaf(
+        &self,
+        operand: ExprId,
+        stop: &mut Option<KnownOperandRecovery<'db>>,
+        active: &mut Vec<ExprId>,
+    ) -> Option<crate::analysis::semantic::SemConstId<'db>> {
+        let db = self.db;
+        let caller = self.caller;
+        use crate::analysis::semantic::{
+            ConstDesc, CtfeConfig, VerifiedConstValueId, const_computation_for_instance,
+            force_const_computation, issue_checked_evidence,
+        };
+        let typed = caller.key(db).typed_body(db);
+        let ty = typed.expr_ty(db, operand);
+        if let Some(reference) = typed.expr_const_ref(operand) {
+            let template = typed_body_template(db, caller.key(db).owner(db));
+            let inherit = match template.body.expr_const_ref(operand) {
+                Some(ConstRef::TraitConst(original)) => {
+                    declaration_reaches_trait_goal(db, template.body.assumptions(), original.inst())
+                }
+                _ => false,
+            };
+            let reference = resolve_semantic_const_ref_in_instance(
+                db,
+                reference,
+                ty,
+                SemOrigin::Expr(operand),
+                Some(caller),
+                inherit,
+            )?;
+            if reference.instance(db).owner(db) == caller.key(db).owner(db) {
+                return None;
+            }
+            return match crate::analysis::semantic::eval_const_ref(db, reference) {
+                EvalOutcome::Ready(value) => Some(value),
+                EvalOutcome::Blocked(info) => {
+                    *stop = Some(KnownOperandRecovery::Blocked {
+                        owner: reference.instance(db).owner(db),
+                        info,
+                        result_ty: ty,
+                    });
+                    None
+                }
+                EvalOutcome::Failed(failure) => {
+                    *stop = Some(KnownOperandRecovery::Failed {
+                        owner: reference.instance(db).owner(db),
+                        failure,
+                        result_ty: ty,
+                    });
+                    None
+                }
+            };
+        }
+        if typed.expr_prop(db, operand).binding.is_some() {
+            let record = opened_operand_application(db, caller, operand)?;
+            return issue_checked_evidence(db, record, ty, SemOrigin::Expr(operand))
+                .ok()
+                .map(|value| value.value());
+        }
+        let callable = typed.callable_expr(operand)?;
+        let CallableDef::Func(func) = callable.callable_def() else {
+            return None;
+        };
+        if !func.is_const(db)
+            || callable.checked_input_tys()?.len() != callable.argument_operands().len()
+            || !typed.call_effect_args(operand).unwrap_or(&[]).is_empty()
+            || callable.generic_args().iter().any(|arg| {
+                arg.has_param(db)
+                    || arg.has_var(db)
+                    || arg.has_invalid(db)
+                    || arg.has_hole(db)
+                    || arg.has_projection(db)
+            })
+        {
+            return None;
+        }
+        let values = callable
+            .argument_operands()
+            .iter()
+            .map(|&argument| {
+                crate::analysis::semantic::operand_recovery::recover_value(
+                    &InstanceOperandRecoveryCx { db, caller },
+                    argument,
+                    stop,
+                    active,
+                )
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let callee = provisional_semantic_callee_key(
+            db,
+            caller.key(db),
+            callable,
+            &[],
+            caller.assumptions(db),
+        )
+        .ok()??;
+        if !callee.concrete_dispatch {
+            let dependency = callee
+                .key
+                .subst(db)
+                .generic_args(db)
+                .first()
+                .copied()
+                .unwrap_or(ty);
+            *stop = Some(KnownOperandRecovery::Blocked {
+                owner: callee.key.owner(db),
+                result_ty: ty,
+                info: crate::analysis::semantic::BlockedInfo::new(
+                    crate::analysis::semantic::ConstDemandKind::CallableSelection,
+                    crate::analysis::semantic::ConstDependency::Type(dependency),
+                    SemOrigin::Expr(operand),
+                ),
+            });
+            return None;
+        }
+        let parameters = values.iter().copied().enumerate().collect::<Vec<_>>();
+        let env = callee
+            .key
+            .impl_env(db)
+            .with_argument_evidence_values(db, &parameters);
+        let key = SemanticInstanceKey::new(
+            db,
+            callee.key.owner(db),
+            callee.key.subst(db),
+            callee.key.effect_providers(db),
+            env,
+        );
+        let inputs = values
+            .into_iter()
+            .map(|value| {
+                VerifiedConstValueId::from_complete_execution(db, value)
+                    .ok()
+                    .map(|value| ConstDesc::value(db, value, key.owner(db).scope()))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        match force_const_computation(
+            db,
+            const_computation_for_instance(db, key, inputs),
+            CtfeConfig::default(),
+        ) {
+            EvalOutcome::Ready(value) => Some(value.value()),
+            EvalOutcome::Blocked(info) => {
+                *stop = Some(KnownOperandRecovery::Blocked {
+                    owner: key.owner(db),
+                    result_ty: SemanticInstance::new(db, key).normalized_result_ty(db),
+                    info,
+                });
+                None
+            }
+            EvalOutcome::Failed(failure) => {
+                *stop = Some(KnownOperandRecovery::Failed {
+                    owner: key.owner(db),
+                    result_ty: SemanticInstance::new(db, key).normalized_result_ty(db),
+                    failure,
+                });
+                None
+            }
+        }
+    }
+}
+
+/// Positive variant identity from actual issued argument slots. Missing slots
+/// never identify a variant, and conflicting positive identities stay unknown.
+pub(crate) fn known_operand_variant<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    operand: ExprId,
+) -> Option<u16> {
+    let (index, prefix) = operand_parameter_source(db, caller, operand)?;
+    let mut known = None;
+    for (parameter, path, _) in caller.key(db).impl_env(db).projected_parameter_evidence(db) {
+        if *parameter != index {
+            continue;
+        }
+        let Some([ReturnProjectionStep::VariantField { variant, .. }, ..]) =
+            path.strip_prefix(prefix.as_slice())
+        else {
+            continue;
+        };
+        if known.is_some_and(|previous| previous != *variant) {
+            return None;
+        }
+        known = Some(*variant);
+    }
+    known
+}
+
+// Recover the existing parameter slot through typed immutable projections.
+// This transports records; it does not reconstruct unknown runtime values.
+fn operand_parameter_source<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    operand: ExprId,
+) -> Option<(usize, Vec<ReturnProjectionStep>)> {
+    operand_parameter_source_at(db, caller, operand, Vec::new())
+}
+
+// Dependency classification is distinct from slot identity: an associated
+// constant may depend on a witness without returning that witness itself.
+fn operand_depends_on_parameter_evidence<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    operand: ExprId,
+) -> bool {
+    fn visit<'db>(
+        db: &'db dyn HirAnalysisDb,
+        caller: SemanticInstance<'db>,
+        operand: ExprId,
+        active: &mut Vec<ExprId>,
+    ) -> bool {
+        if active.contains(&operand) {
+            return false;
+        }
+        if operand_parameter_source(db, caller, operand).is_some() {
+            return true;
+        }
+        active.push(operand);
+        let typed = caller.key(db).typed_body(db);
+        let dependent = if matches!(typed.expr_const_ref(operand), Some(ConstRef::TraitConst(_))) {
+            typed.expr_const_openings(operand).iter().any(|opening| {
+                matches!(*opening, crate::analysis::ty::ty_check::TraitOpening::Evidence { operand, .. }
+                    if opened_operand_application(db, caller, operand).is_none()
+                        && visit(db, caller, operand, active))
+            })
+        } else if let Some(binding @ LocalBinding::Local { is_mut: false, .. }) =
+            typed.expr_prop(db, operand).binding
+        {
+            typed
+                .binding_source(db, binding)
+                .is_some_and(|source| visit(db, caller, source.init_expr, active))
+        } else {
+            false
+        };
+        active.pop();
+        dependent
+    }
+    visit(db, caller, operand, &mut Vec::new())
+}
+
+fn operand_parameter_source_at<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    mut operand: ExprId,
+    mut projection: Vec<ReturnProjectionStep>,
+) -> Option<(usize, Vec<ReturnProjectionStep>)> {
+    let typed = caller.key(db).typed_body(db);
+    let body = typed.body()?;
+    let mut seen = Vec::new();
+    loop {
+        if seen.contains(&operand) {
+            return None;
+        }
+        seen.push(operand);
+        if let Partial::Present(Expr::Field(base, _)) = operand.data(db, body) {
+            projection.insert(
+                0,
+                ReturnProjectionStep::Field(typed.resolved_field_index(operand)?),
+            );
+            operand = *base;
+            continue;
+        }
+        if let Partial::Present(Expr::Bin(base, index, crate::hir_def::BinOp::Index)) =
+            operand.data(db, body)
+        {
+            let Partial::Present(Expr::Lit(crate::hir_def::LitKind::Int(value))) =
+                index.data(db, body)
+            else {
+                return None;
+            };
+            projection.insert(
+                0,
+                ReturnProjectionStep::ConstantIndex(value.data(db).to_usize()?),
+            );
+            operand = *base;
+            continue;
+        }
+        if let Partial::Present(Expr::Array(elems)) = operand.data(db, body)
+            && let Some(ReturnProjectionStep::ConstantIndex(index)) = projection.first().copied()
+        {
+            operand = *elems.get(index)?;
+            projection.remove(0);
+            continue;
+        }
+        if let Partial::Present(Expr::Tuple(elems)) = operand.data(db, body)
+            && let Some(ReturnProjectionStep::Field(index)) = projection.first().copied()
+        {
+            operand = *elems.get(usize::from(index))?;
+            projection.remove(0);
+            continue;
+        }
+        if let Partial::Present(Expr::RecordInit(_, fields)) = operand.data(db, body)
+            && let Some(ReturnProjectionStep::Field(index)) = projection.first().copied()
+            && matches!(
+                typed.record_init_lowering(operand),
+                Some(RecordInitLowering::Struct)
+            )
+        {
+            let record_like = RecordLike::Type(typed.expr_ty(db, operand));
+            operand = fields.iter().find_map(|field| {
+                let label = field.label_eagerly(db, body)?;
+                (record_like.record_field_idx(db, label)? == usize::from(index))
+                    .then_some(field.expr)
+            })?;
+            projection.remove(0);
+            continue;
+        }
+        match typed.expr_prop(db, operand).binding {
+            Some(LocalBinding::Param {
+                idx, is_mut: false, ..
+            }) => return Some((idx, projection)),
+            Some(binding @ LocalBinding::Local { is_mut: false, .. }) => {
+                let source = typed.binding_source(db, binding)?;
+                let mut prefix = source.projection;
+                prefix.extend(projection);
+                projection = prefix;
+                operand = source.init_expr;
+            }
+            _ => return None,
+        }
+    }
+}
+
+fn opened_operand_application_at<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    mut operand: ExprId,
+    mut projection: Vec<ReturnProjectionStep>,
+) -> Option<ImplApplicationRecord<'db>> {
+    let typed = caller.key(db).typed_body(db);
+    let mut seen = Vec::new();
+    loop {
+        if seen.contains(&operand) {
+            return None;
+        }
+        seen.push(operand);
+        let body = typed.body()?;
+        if let Partial::Present(Expr::Field(base, _)) = operand.data(db, body) {
+            projection.insert(
+                0,
+                ReturnProjectionStep::Field(typed.resolved_field_index(operand)?),
+            );
+            operand = *base;
+            continue;
+        }
+        if let Partial::Present(Expr::Bin(base, index, crate::hir_def::BinOp::Index)) =
+            operand.data(db, body)
+        {
+            let Partial::Present(Expr::Lit(crate::hir_def::LitKind::Int(value))) =
+                index.data(db, body)
+            else {
+                return None;
+            };
+            projection.insert(
+                0,
+                ReturnProjectionStep::ConstantIndex(value.data(db).to_usize()?),
+            );
+            operand = *base;
+            continue;
+        }
+        if let Partial::Present(Expr::Array(elems)) = operand.data(db, body)
+            && let Some(ReturnProjectionStep::ConstantIndex(index)) = projection.first().copied()
+        {
+            operand = *elems.get(index)?;
+            projection.remove(0);
+            continue;
+        }
+        if let Partial::Present(Expr::Tuple(elems)) = operand.data(db, body)
+            && let Some(ReturnProjectionStep::Field(index)) = projection.first().copied()
+        {
+            operand = *elems.get(usize::from(index))?;
+            projection.remove(0);
+            continue;
+        }
+        if let Partial::Present(Expr::RecordInit(_, fields)) = operand.data(db, body)
+            && let Some(ReturnProjectionStep::Field(index)) = projection.first().copied()
+            && matches!(
+                typed.record_init_lowering(operand),
+                Some(RecordInitLowering::Struct)
+            )
+        {
+            let record_like = RecordLike::Type(typed.expr_ty(db, operand));
+            operand = fields.iter().find_map(|field| {
+                let label = field.label_eagerly(db, body)?;
+                (record_like.record_field_idx(db, label)? == usize::from(index))
+                    .then_some(field.expr)
+            })?;
+            projection.remove(0);
+            continue;
+        }
+        match typed.expr_prop(db, operand).binding {
+            Some(LocalBinding::Param {
+                idx, is_mut: false, ..
+            }) => {
+                if !projection.is_empty() {
+                    return caller
+                        .key(db)
+                        .impl_env(db)
+                        .projected_parameter_evidence(db)
+                        .iter()
+                        .find(|(index, path, _)| *index == idx && *path == projection)
+                        .map(|(_, _, record)| *record);
+                }
+                return caller
+                    .key(db)
+                    .impl_env(db)
+                    .parameter_evidence(db)
+                    .iter()
+                    .find(|(index, _)| *index == idx)
+                    .map(|(_, record)| *record);
+            }
+            Some(binding @ LocalBinding::Local { is_mut: false, .. }) => {
+                let source = typed.binding_source(db, binding)?;
+                let mut source_projection = source.projection;
+                source_projection.extend(projection);
+                projection = source_projection;
+                operand = source.init_expr;
+            }
+            _ => {
+                // Mutable/effect bindings do not supply a stable issued operand.
+                // Do not cycle back through known-value recovery for the same binding.
+                if typed.expr_prop(db, operand).binding.is_some() {
+                    return None;
+                }
+                if let Some(record) = typed
+                    .callable_expr(operand)
+                    .and_then(|callable| callable.evidence_introduction())
+                {
+                    return projection.is_empty().then_some(record);
+                }
+                let value = compiler_known_operand_value(db, caller, operand)?;
+                let mut value = value;
+                for step in &projection {
+                    value = match (step, value.value(db)) {
+                        (
+                            ReturnProjectionStep::Field(index),
+                            SemConstValue::Tuple { elems, .. },
+                        ) => *elems.get(usize::from(*index))?,
+                        (
+                            ReturnProjectionStep::Field(index),
+                            SemConstValue::Struct { fields, .. },
+                        ) => *fields.get(usize::from(*index))?,
+                        (
+                            ReturnProjectionStep::ConstantIndex(index),
+                            SemConstValue::Array { elems, .. },
+                        ) => *elems.get(*index)?,
+                        (
+                            ReturnProjectionStep::VariantField { variant, field },
+                            SemConstValue::Enum {
+                                variant: actual,
+                                fields,
+                                ..
+                            },
+                        ) if *variant == actual.0 => *fields.get(usize::from(*field))?,
+                        _ => return None,
+                    };
+                }
+                return match value.value(db) {
+                    SemConstValue::Evidence { application, .. } => Some(*application),
+                    _ => None,
+                };
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvidenceSlotStop {
+    DepthLimit(usize),
+    Recursive,
+}
+
+fn evidence_slots<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+    path: Vec<ReturnProjectionStep>,
+    active: &mut IndexSet<TyId<'db>>,
+    slots: &mut Vec<Vec<ReturnProjectionStep>>,
+    stopped: &mut Vec<(EvidenceSlotStop, Vec<ReturnProjectionStep>)>,
+) {
+    let ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
+    if crate::analysis::ty::corelib::evidence_goal(db, scope, ty).is_some() {
+        slots.push(path);
+        return;
+    }
+    if ty.is_array(db) {
+        let mut element_path = path;
+        element_path.push(ReturnProjectionStep::AnyIndex);
+        evidence_slots(
+            db,
+            scope,
+            ty.generic_args(db)[0],
+            element_path,
+            active,
+            slots,
+            stopped,
+        );
+        return;
+    }
+    // Repeated constructors can describe finite nested values. Track complete
+    // instantiations, while bounding expanding recursive declarations as well.
+    const MAX_PROJECTION_DEPTH: usize = 64;
+    if active.len() >= MAX_PROJECTION_DEPTH {
+        stopped.push((EvidenceSlotStop::DepthLimit(MAX_PROJECTION_DEPTH), path));
+        return;
+    }
+    if !active.insert(ty) {
+        stopped.push((EvidenceSlotStop::Recursive, path));
+        return;
+    }
+    if ty.as_enum(db).is_some()
+        && let Some(adt) = ty.adt_def(db)
+    {
+        for (variant, fields) in adt.fields(db).iter().enumerate() {
+            for field in 0..fields.num_types() {
+                let mut field_path = path.clone();
+                field_path.push(ReturnProjectionStep::VariantField {
+                    variant: u16::try_from(variant).expect("variant index"),
+                    field: u16::try_from(field).expect("variant field index"),
+                });
+                evidence_slots(
+                    db,
+                    scope,
+                    instantiate_adt_field_shape(db, adt, variant, field, ty.generic_args(db)),
+                    field_path,
+                    active,
+                    slots,
+                    stopped,
+                );
+            }
+        }
+    }
+    for (index, field) in ty.field_types(db).into_iter().enumerate() {
+        let mut field_path = path.clone();
+        field_path.push(ReturnProjectionStep::Field(
+            u16::try_from(index).expect("field index"),
+        ));
+        evidence_slots(db, scope, field, field_path, active, slots, stopped);
+    }
+    active.remove(&ty);
+}
+
+pub(super) fn visible_applications<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    callable: &Callable<'db>,
+) -> Vec<ImplApplicationRecord<'db>> {
+    applications_from_openings(
+        db,
+        caller,
+        callable.lexical_openings(),
+        call_inherits_applications(db, caller, callable),
+    )
+}
+
+pub(crate) fn declaration_reaches_trait_goal<'db>(
+    db: &'db dyn HirAnalysisDb,
+    assumptions: PredicateListId<'db>,
+    goal: TraitInstId<'db>,
+) -> bool {
+    collect_flags(db, goal).contains(TyFlags::HAS_PARAM)
+        || assumptions
+            .extend_all_bounds(db)
+            .list(db)
+            .iter()
+            .any(|bound| bound.def(db) == goal.def(db) && bound.args(db) == goal.args(db))
+}
+
+fn call_inherits_applications<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    callable: &Callable<'db>,
+) -> bool {
+    let Some(expr) = callable.source_expr() else {
+        // Compiler-generated calls retain their existing context policy.
+        return true;
+    };
+    let template = typed_body_template(db, caller.key(db).owner(db));
+    let Some(original) = template.body.callable_expr(expr) else {
+        return true;
+    };
+    if let Some(goal) = original.trait_inst() {
+        return declaration_reaches_trait_goal(db, template.body.assumptions(), goal);
+    }
+    collect_flags(db, original.generic_args()).contains(TyFlags::HAS_PARAM)
+        || collect_func_decl_constraints(db, original.callable_def, true)
+            .instantiate(db, original.generic_args())
+            .list(db)
+            .iter()
+            .any(|goal| declaration_reaches_trait_goal(db, template.body.assumptions(), *goal))
+}
+
+fn applications_from_openings<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    openings: &[crate::analysis::ty::ty_check::TraitOpening<'db>],
+    inherit: bool,
+) -> Vec<ImplApplicationRecord<'db>> {
+    let mut records = Vec::new();
+    for opening in openings {
+        let record = match *opening {
+            crate::analysis::ty::ty_check::TraitOpening::Named(record) => Some(record),
+            crate::analysis::ty::ty_check::TraitOpening::Evidence { operand, .. } => {
+                opened_operand_application(db, caller, operand)
+            }
+        };
+        if let Some(record) = record {
+            records.push(record);
+        }
+    }
+    append_inherited_applications(db, caller, inherit, &mut records);
+    records
+}
+
+fn append_inherited_applications<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    inherit: bool,
+    records: &mut Vec<ImplApplicationRecord<'db>>,
+) {
+    for record in caller.key(db).impl_env(db).lexical_applications(db) {
+        if inherit
+            && !records.iter().any(|existing| {
+                existing.goal().def(db) == record.goal().def(db)
+                    && existing.goal().args(db) == record.goal().args(db)
+            })
+        {
+            records.push(*record);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn semantic_callee_key_with_assumptions<'db>(
     db: &'db dyn HirAnalysisDb,
     caller: Option<SemanticInstance<'db>>,
+    known_opened: Option<ImplApplicationRecord<'db>>,
     impl_env: ImplEnv<'db>,
     callable: &Callable<'db>,
     effect_args: &[ResolvedEffectArg<'db>],
@@ -471,14 +1325,90 @@ fn semantic_callee_key_with_assumptions<'db>(
         })
         .collect::<Vec<_>>();
     let mut subst_args = callable.generic_args().to_vec();
-    let body_func = if let Some(inst) = callable.trait_inst()
+    let method_selection = if let Some(inst) = callable.trait_inst()
         && let Some(name) = nominal_func.name(db).to_opt()
-        && let Selection::Unique(method) = resolve_trait_method_instance(
-            db,
-            TraitSolveCx::new(db, impl_env.normalization_scope(db)).with_assumptions(assumptions),
-            inst,
-            name,
-        )
+    {
+        if let Some((operand, destination)) = callable.opened_trait_application() {
+            let record = known_opened.or_else(|| {
+                caller.and_then(|caller| opened_operand_application(db, caller, operand))
+            });
+            match record {
+                Some(record) => record
+                    .revalidate(db, destination, inst)
+                    .map_err(MethodArgMapError::ApplicationNotAdmitted)?
+                    .method(name),
+                // The layout template has no issued argument yet. Keep its
+                // symbolic obligation; a concrete use still requires the record.
+                None if collect_flags(db, inst).contains(TyFlags::HAS_PARAM) => {
+                    resolve_trait_method_instance(db, destination, inst, name)
+                }
+                None if caller.is_none_or(|caller| {
+                    operand_depends_on_parameter_evidence(db, caller, operand)
+                }) =>
+                {
+                    // A concrete goal can still have a symbolic witness parameter.
+                    // Keep the nominal call until argument delivery supplies its
+                    // issued record; do not select an ordinary implementation.
+                    Selection::NotFound
+                }
+                None => {
+                    let caller = caller.ok_or(MethodArgMapError::MissingBody)?;
+                    known_operand_value_or_error(db, recover_known_operand(db, caller, operand))?;
+                    return Err(MethodArgMapError::MissingBody);
+                }
+            }
+        } else if let Some(record) = callable.selected_trait_application() {
+            record
+                .revalidate(db, record.origin_context(), inst)
+                .map_err(MethodArgMapError::ApplicationNotAdmitted)?
+                .method(name)
+        } else if let Some(caller) = caller
+            && let Some(record) =
+                visible_applications(db, caller, callable)
+                    .into_iter()
+                    .find(|record| {
+                        record.goal().def(db) == inst.def(db)
+                            && record.goal().args(db) == inst.args(db)
+                    })
+        {
+            let records = visible_applications(db, caller, callable);
+            let premises = PredicateListId::new(
+                db,
+                records
+                    .iter()
+                    .map(|record| record.goal())
+                    .collect::<Vec<_>>(),
+            )
+            .extend_all_bounds(db);
+            let mut facts = assumptions.list(db).to_vec();
+            facts.extend(premises.list(db).iter().copied());
+            let destination = TraitSolveCx::new(db, caller.key(db).owner(db).scope())
+                .with_assumptions(PredicateListId::new(db, facts).extend_all_bounds(db))
+                .with_lexical_premises(Some(premises));
+            record
+                .revalidate(db, destination, inst)
+                .map_err(MethodArgMapError::ApplicationNotAdmitted)?
+                .method(name)
+        } else {
+            resolve_trait_method_instance(
+                db,
+                TraitSolveCx::new(db, impl_env.normalization_scope(db))
+                    .with_assumptions(assumptions),
+                inst,
+                name,
+            )
+        }
+    } else {
+        Selection::NotFound
+    };
+    // A proved compiler implementation can have no source Func body. Keep
+    // choice authority separate from source-body mapping; an assumption or
+    // undelivered explicit choice remains pending.
+    let concrete_dispatch = callable.trait_inst().is_none()
+        || matches!(&method_selection, Selection::Unique(method)
+            if !matches!(method.origin(db), ImplementorOrigin::Assumption));
+    let body_func = if let Some(inst) = callable.trait_inst()
+        && let Selection::Unique(method) = method_selection
         && let Some(impl_func) = method.body()
     {
         subst_args = method
@@ -708,6 +1638,82 @@ fn semantic_callee_key_with_assumptions<'db>(
     } else {
         impl_env.normalization_scope(db)
     };
+    let lexical_applications = caller
+        .map(|caller| visible_applications(db, caller, callable))
+        .unwrap_or_default();
+    let parameter_evidence = caller
+        .map(|caller| {
+            let typed = caller.key(db).typed_body(db);
+            callable
+                .argument_operands()
+                .iter()
+                .enumerate()
+                .filter_map(|(index, &operand)| {
+                    let ty = typed.expr_ty(db, operand);
+                    let ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
+                    crate::analysis::ty::corelib::evidence_goal(
+                        db,
+                        caller.key(db).owner(db).scope(),
+                        ty,
+                    )?;
+                    opened_operand_application(db, caller, operand).map(|record| (index, record))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let projected_parameter_evidence = caller
+        .map(|caller| {
+            let typed = caller.key(db).typed_body(db);
+            let mut records = Vec::new();
+            for (index, &operand) in callable.argument_operands().iter().enumerate() {
+                let mut slots = Vec::new();
+                evidence_slots(
+                    db,
+                    caller.key(db).owner(db).scope(),
+                    typed.expr_ty(db, operand),
+                    Vec::new(),
+                    &mut IndexSet::default(),
+                    &mut slots,
+                    &mut Vec::new(),
+                );
+                if slots
+                    .iter()
+                    .any(|path| path.contains(&ReturnProjectionStep::AnyIndex))
+                {
+                    if let Some((idx, prefix)) = operand_parameter_source(db, caller, operand) {
+                        records.extend(
+                            caller
+                                .key(db)
+                                .impl_env(db)
+                                .projected_parameter_evidence(db)
+                                .iter()
+                                .filter(|(source, _, _)| *source == idx)
+                                .filter_map(|(_, path, record)| {
+                                    Some((
+                                        index,
+                                        path.strip_prefix(prefix.as_slice())?.to_vec(),
+                                        *record,
+                                    ))
+                                }),
+                        );
+                    } else if let Some(value) = compiler_known_operand_value(db, caller, operand) {
+                        let env = ImplEnv::empty(db, caller.key(db).owner(db).scope())
+                            .with_argument_evidence_values(db, &[(index, value)]);
+                        records.extend(env.projected_parameter_evidence(db).iter().cloned());
+                    }
+                    continue;
+                }
+                for path in slots.into_iter().filter(|path| !path.is_empty()) {
+                    if let Some(record) =
+                        opened_operand_application_at(db, caller, operand, path.clone())
+                    {
+                        records.push((index, path, record));
+                    }
+                }
+            }
+            records
+        })
+        .unwrap_or_default();
     let impl_env = ImplEnv::new(
         db,
         normalization_scope,
@@ -717,7 +1723,10 @@ fn semantic_callee_key_with_assumptions<'db>(
             assumptions
         },
         witnesses.into_iter().collect::<Vec<_>>(),
-    );
+        parameter_evidence,
+        lexical_applications,
+    )
+    .with_projected_parameter_evidence(db, projected_parameter_evidence);
 
     if matches!(provider_resolution_mode, ProviderResolutionMode::Final)
         && let Some((resolved, nominal_inst)) = selected_trait_method
@@ -772,8 +1781,100 @@ fn semantic_callee_key_with_assumptions<'db>(
             });
         }
     }
+    // Preserve structural/signature/admission diagnostic priority. Recovery
+    // supplies a concrete evaluation cause only for a well-shaped source call.
+    if let Some(caller) = caller
+        && nominal_func.arg_tys(db).len() == callable.argument_operands().len()
+        && callable
+            .checked_input_tys()
+            .is_some_and(|inputs| inputs.len() == callable.argument_operands().len())
+    {
+        let typed = caller.key(db).typed_body(db);
+        for (index, &operand) in callable.argument_operands().iter().enumerate() {
+            let mut slots = Vec::new();
+            let mut stopped = Vec::new();
+            evidence_slots(
+                db,
+                caller.key(db).owner(db).scope(),
+                typed.expr_ty(db, operand),
+                Vec::new(),
+                &mut IndexSet::default(),
+                &mut slots,
+                &mut stopped,
+            );
+            if slots.is_empty() && stopped.is_empty() {
+                continue;
+            }
+            let recovery = recover_known_operand(db, caller, operand);
+            // A stopped ordinary carrier must not turn optional constant folding
+            // into admission. For a failure without discovered operand slots,
+            // retain the cause only when the failed computation itself has a
+            // discoverable evidence result, using the same bounded projection walk.
+            if slots.is_empty()
+                && let KnownOperandRecovery::Failed {
+                    owner, result_ty, ..
+                }
+                | KnownOperandRecovery::Blocked {
+                    owner, result_ty, ..
+                } = &recovery
+            {
+                let mut result_slots = Vec::new();
+                evidence_slots(
+                    db,
+                    owner.scope(),
+                    *result_ty,
+                    Vec::new(),
+                    &mut IndexSet::default(),
+                    &mut result_slots,
+                    &mut Vec::new(),
+                );
+                if result_slots.is_empty() {
+                    continue;
+                }
+            }
+            let recovered_value = known_operand_value_or_error(db, recovery)?;
+            for (reason, prefix) in stopped {
+                let depth = match reason {
+                    EvidenceSlotStop::DepthLimit(depth) => Some(depth),
+                    EvidenceSlotStop::Recursive => None,
+                };
+                // A stopped ordinary recursive type is not evidence authority.
+                // Diagnose only issued evidence beneath this stopped projection.
+                // Evidence in an independent sibling is still fully discovered.
+                let actual = match recovered_value {
+                    Some(value) => ImplEnv::empty(db, owner.scope())
+                        .with_argument_evidence_values(db, &[(index, value)]),
+                    _ => impl_env,
+                };
+                if actual
+                    .parameter_evidence(db)
+                    .iter()
+                    .any(|(slot, _)| *slot == index && prefix.is_empty())
+                    || actual
+                        .projected_parameter_evidence(db)
+                        .iter()
+                        .any(|(slot, path, _)| {
+                            *slot == index
+                                && path.len() >= prefix.len()
+                                && prefix.iter().zip(path).all(|(expected, actual)| {
+                                    expected == actual
+                                        || matches!(
+                                            (expected, actual),
+                                            (
+                                                ReturnProjectionStep::AnyIndex,
+                                                ReturnProjectionStep::ConstantIndex(_)
+                                            )
+                                        )
+                                })
+                        })
+                {
+                    return Err(MethodArgMapError::EvidenceProjectionStopped { operand, depth });
+                }
+            }
+        }
+    }
     Ok(Some(SemanticCallCallee {
-        concrete_dispatch: callable.trait_inst().is_none() || selected_impl,
+        concrete_dispatch,
         key: SemanticInstanceKey::new(
             db,
             owner,
@@ -926,12 +2027,80 @@ pub(crate) fn resolve_semantic_const_ref<'db>(
     ty: TyId<'db>,
     origin: SemOrigin<'db>,
 ) -> Option<SemanticConstRef<'db>> {
+    resolve_semantic_const_ref_in_instance(db, const_ref, ty, origin, None, false)
+}
+
+pub(crate) fn resolve_semantic_const_ref_in_instance<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_ref: ConstRef<'db>,
+    ty: TyId<'db>,
+    origin: SemOrigin<'db>,
+    caller: Option<SemanticInstance<'db>>,
+    inherit: bool,
+) -> Option<SemanticConstRef<'db>> {
     let instance = match const_ref {
         ConstRef::Const(const_) => semantic_const_key_for_const(db, const_),
-        ConstRef::TraitConst(assoc) => semantic_const_key_for_assoc_const(db, assoc),
+        ConstRef::TraitConst(assoc) => {
+            let records = if let Some(caller) = caller {
+                let openings = match origin {
+                    SemOrigin::Expr(expr) => {
+                        caller.key(db).typed_body(db).expr_const_openings(expr)
+                    }
+                    _ => &[],
+                };
+                let mut records = super::super::operand_recovery::saved_opening_applications(
+                    db,
+                    assoc.inst(),
+                    openings,
+                    |operand| opened_operand_application(db, caller, operand),
+                )?;
+                append_inherited_applications(db, caller, inherit, &mut records);
+                records
+            } else {
+                Vec::new()
+            };
+            semantic_const_key_for_assoc_const(db, assoc, records)
+        }
         ConstRef::InherentConst(use_) => semantic_const_key_for_inherent_const(db, use_),
     }?;
     Some(SemanticConstRef::new(db, instance, ty, origin))
+}
+
+pub(crate) fn opened_assoc_const_ref<'db>(
+    db: &'db dyn HirAnalysisDb,
+    assoc: AssocConstUse<'db>,
+    admission: TraitSolveCx<'db>,
+    record: ImplApplicationRecord<'db>,
+    mut records: Vec<ImplApplicationRecord<'db>>,
+    ty: TyId<'db>,
+    origin: SemOrigin<'db>,
+) -> Result<SemanticConstRef<'db>, MethodArgMapError<'db>> {
+    let checked = record
+        .revalidate(db, admission, assoc.inst())
+        .map_err(MethodArgMapError::ApplicationNotAdmitted)?;
+    let (body, expected, subst) =
+        selected_assoc_const_body_template(db, checked.resolved(), assoc.name())
+            .ok_or(MethodArgMapError::MissingBody)?;
+    records.retain(|existing| {
+        existing.goal().def(db) != assoc.inst().def(db)
+            || existing.goal().args(db) != assoc.inst().args(db)
+    });
+    records.push(checked.record());
+    let key = SemanticInstanceKey::new(
+        db,
+        BodyOwner::AnonConstBody { body, expected },
+        GenericSubst::complete(db, subst),
+        EffectProviderSubst::empty(db),
+        ImplEnv::new(
+            db,
+            admission.scope(),
+            admission.assumptions(),
+            vec![assoc.inst()],
+            Vec::new(),
+            records,
+        ),
+    );
+    Ok(SemanticConstRef::new(db, key, ty, origin))
 }
 
 fn semantic_const_key_for_const<'db>(
@@ -960,20 +2129,49 @@ fn semantic_const_key_for_inherent_const<'db>(
         BodyOwner::AnonConstBody { body, expected: ty },
         GenericSubst::for_owner(db, use_.impl_().into(), impl_args),
         EffectProviderSubst::empty(db),
-        ImplEnv::new(db, use_.origin_scope(), use_.assumptions(), vec![]),
+        ImplEnv::new(
+            db,
+            use_.origin_scope(),
+            use_.assumptions(),
+            vec![],
+            Vec::new(),
+            Vec::new(),
+        ),
     ))
 }
 
-fn semantic_const_key_for_assoc_const<'db>(
+pub(crate) fn semantic_const_key_for_assoc_const<'db>(
     db: &'db dyn HirAnalysisDb,
     assoc: AssocConstUse<'db>,
+    records: Vec<ImplApplicationRecord<'db>>,
 ) -> Option<SemanticInstanceKey<'db>> {
-    let (body, ty, subst) = assoc_const_body_template_for_trait_inst(
+    let premises = PredicateListId::new(
         db,
-        assoc.solve_cx(db),
-        assoc.inst(),
-        assoc.name(),
-    )?;
+        records
+            .iter()
+            .map(|record| record.goal())
+            .collect::<Vec<_>>(),
+    )
+    .extend_all_bounds(db);
+    let mut facts = assoc.assumptions().list(db).to_vec();
+    facts.extend(premises.list(db).iter().copied());
+    let destination = if records.is_empty() {
+        assoc.solve_cx(db)
+    } else {
+        assoc
+            .solve_cx(db)
+            .with_assumptions(PredicateListId::new(db, facts).extend_all_bounds(db))
+            .with_lexical_premises(Some(premises))
+    };
+    let (body, ty, subst) = if let Some(record) = records.iter().find(|record| {
+        record.goal().def(db) == assoc.inst().def(db)
+            && record.goal().args(db) == assoc.inst().args(db)
+    }) {
+        let application = record.revalidate(db, destination, assoc.inst()).ok()?;
+        selected_assoc_const_body_template(db, application.resolved(), assoc.name())?
+    } else {
+        assoc_const_body_template_for_trait_inst(db, destination, assoc.inst(), assoc.name())?
+    };
     Some(SemanticInstanceKey::new(
         db,
         BodyOwner::AnonConstBody { body, expected: ty },
@@ -984,6 +2182,8 @@ fn semantic_const_key_for_assoc_const<'db>(
             assoc.origin_scope(),
             assoc.assumptions(),
             vec![assoc.inst()],
+            Vec::new(),
+            records,
         ),
     ))
 }
@@ -1000,6 +2200,55 @@ mod tests {
         hir_def::params::FuncParamMode,
         test_db::HirAnalysisTestDb,
     };
+
+    #[test]
+    fn recursive_and_expanding_nominal_slot_walks_terminate() {
+        use crate::analysis::ty::{
+            adt_def::AdtRef,
+            ty_def::{TyBase, TyData},
+        };
+        for field in ["Growing<T>", "Growing<(T,T)>"] {
+            let mut db = HirAnalysisTestDb::default();
+            let text = format!("struct Growing<T> {{ next: {field} }}");
+            let file = db.new_stand_alone("recursive-evidence-slots.fe".into(), &text);
+            let (module, _) = db.top_mod(file);
+            let item = module.all_structs(&db)[0];
+            let adt = AdtRef::Struct(item).as_adt(&db);
+            let ty = TyId::app(
+                &db,
+                TyId::new(&db, TyData::TyBase(TyBase::Adt(adt))),
+                TyId::u256(&db),
+            );
+            let child = super::instantiate_adt_field_shape(&db, adt, 0, 0, ty.generic_args(&db));
+            assert!(!child.has_invalid(&db));
+            assert_eq!(child == ty, field == "Growing<T>");
+            let mut active = super::IndexSet::default();
+            let mut slots = Vec::new();
+            let mut stopped = Vec::new();
+            super::evidence_slots(
+                &db,
+                item.scope(),
+                ty,
+                Vec::new(),
+                &mut active,
+                &mut slots,
+                &mut stopped,
+            );
+            assert_eq!(
+                stopped.first().map(|(reason, _)| *reason),
+                Some(if field == "Growing<T>" {
+                    super::EvidenceSlotStop::Recursive
+                } else {
+                    super::EvidenceSlotStop::DepthLimit(64)
+                })
+            );
+            assert!(active.is_empty());
+            assert!(
+                slots.is_empty(),
+                "recursive traversal cannot invent issued slots"
+            );
+        }
+    }
 
     #[test]
     fn selected_signature_comparison_preserves_cross_input_layout_sharing() {

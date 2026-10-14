@@ -1,0 +1,351 @@
+use fe_hir::{
+    analysis::{
+        semantic::{EvalOutcome, GenericSubst, SemConstId, SemConstValue, eval_body_owner_const},
+        ty::ty_check::BodyOwner,
+    },
+    test_db::{HirAnalysisTestDb, find_func, initialize_test_analysis_pass},
+};
+use std::path::PathBuf;
+fn source(name: &str) -> String {
+    std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fco_cross_consumer_controls")
+            .join(format!("{name}.fe")),
+    )
+    .unwrap()
+}
+fn flatten<'db>(db: &'db HirAnalysisTestDb, value: SemConstId<'db>, out: &mut Vec<String>) {
+    if let SemConstValue::Tuple { elems, .. } = value.value(db) {
+        for &v in elems.iter() {
+            flatten(db, v, out);
+        }
+    } else {
+        out.push(value.pretty_print(db));
+    }
+}
+fn values(name: &str, expected: &[&str]) {
+    let mut db = HirAnalysisTestDb::default();
+    let text = source(name);
+    let file = db.new_stand_alone(format!("{name}.fe").into(), &text);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&db, module, "answer"));
+    let result =
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+    println!("CONTROL {name} EXPECTED {expected:?} OUTCOME {result:?}");
+    let EvalOutcome::Ready(value) = result else {
+        panic!("actual CTFE required: {result:?}")
+    };
+    let mut actual = vec![];
+    flatten(&db, value, &mut actual);
+    println!("CONTROL {name} ACTUAL {actual:?}");
+    assert_eq!(actual, expected);
+}
+#[test]
+fn direct_restoration() {
+    values("direct", &["1", "42", "7", "42", "1"]);
+}
+#[test]
+fn ordinary_bound_helper_restoration() {
+    values("helper", &["1", "42", "7", "42", "1"]);
+}
+#[test]
+fn evidence_bound_helper() {
+    values("evidence-helper", &["1", "42", "7", "42"]);
+}
+#[test]
+fn ordinary_prerequisite_dispatch_restoration() {
+    values("prerequisite", &["11", "43", "19", "43", "11"]);
+}
+#[test]
+fn named_operator_restoration() {
+    values("operator", &["5", "47", "23", "47", "5"]);
+}
+#[test]
+fn evidence_operator() {
+    values("evidence-operator", &["5", "47", "23", "47"]);
+}
+#[test]
+fn missing_destination_prerequisite_and_valid_twin() {
+    let mut db = HirAnalysisTestDb::default();
+    let text = source("destination");
+    let file = db.new_stand_alone("destination.fe".into(), &text);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&db, module, "rejected"));
+    let result =
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+    println!("CONTROL destination rejected {result:?}");
+    assert!(matches!(result, EvalOutcome::Failed(_)));
+    assert!(
+        format!("{result:?}").contains("opened evidence application was not admitted at this use")
+    );
+}
+#[test]
+fn destination_prerequisite_valid_twin() {
+    values("destination", &["43"]);
+}
+#[test]
+fn fixed_associated_output_refusal() {
+    fixed_associated_output_refusal_for(&source("fixed-output").replace("\r\n", "\n"));
+}
+
+#[test]
+fn fixed_associated_output_refusal_crlf() {
+    fixed_associated_output_refusal_for(
+        &source("fixed-output")
+            .replace("\r\n", "\n")
+            .replace("\n", "\r\n"),
+    );
+}
+
+fn fixed_associated_output_refusal_for(text: &str) {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("fixed-output.fe".into(), text);
+    let (module, _) = db.top_mod(file);
+    let diags: Vec<_> = initialize_test_analysis_pass()
+        .run_on_module(&db, module)
+        .into_iter()
+        .map(|d| d.to_complete(&db))
+        .collect();
+    println!("CONTROL fixed-output DIAGNOSTICS {diags:#?}");
+    let start = text.find("impl Add for Subject as First").unwrap();
+    let next = text[start..]
+        .find("impl Add for Subject as Second")
+        .unwrap()
+        + start;
+    // The authored implementation ends at its closing brace, before either newline form.
+    let end = start + text[start..next].trim_end().len();
+    assert!(diags.iter().any(|d| {
+        d.message == "named implementation changes an ordinary associated type"
+            && d.sub_diagnostics.iter().any(|sub| {
+                sub.span.as_ref().is_some_and(|span| {
+                    u32::from(span.range.start()) as usize == start
+                        && u32::from(span.range.end()) as usize == end
+                })
+            })
+    }));
+    println!("CONTROL fixed-output expected cause span {start}..{end}");
+}
+
+#[test]
+fn ground_prerequisite_valid_twin() {
+    values("ground-prerequisite-call-pending", &["43"]);
+}
+#[test]
+fn ground_prerequisite_missing_destination() {
+    let mut db = HirAnalysisTestDb::default();
+    let text = source("ground-prerequisite-call-pending");
+    let file = db.new_stand_alone("ground-prerequisite.fe".into(), &text);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&db, module, "rejected"));
+    let result =
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+    println!("GROUND DESTINATION {result:?}");
+    assert!(matches!(result, EvalOutcome::Failed(_)));
+    assert!(
+        format!("{result:?}").contains("opened evidence application was not admitted at this use")
+    );
+}
+
+#[test]
+fn ordinary_ground_declaration_keeps_master_assumption_policy() {
+    let mut db = HirAnalysisTestDb::default();
+    let text = r#"
+trait Leaf { const fn leaf() -> u256 }
+trait Pick { const fn value() -> u256 }
+struct Subject {}
+impl Pick for Subject where Subject: Leaf {
+    const fn value() -> u256 { <Subject as Leaf>::leaf() }
+}
+"#;
+    let file = db.new_stand_alone("ordinary-ground.fe".into(), text);
+    let (module, _) = db.top_mod(file);
+    let diags: Vec<_> = initialize_test_analysis_pass()
+        .run_on_module(&db, module)
+        .into_iter()
+        .map(|d| d.to_complete(&db))
+        .collect();
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message == "trait bound is not satisfied")
+    );
+}
+
+#[test]
+fn prerequisite_constant_reachability_and_declaration_freezing() {
+    values(
+        "prerequisite-constant-reachability",
+        &["2", "43", "8", "43", "2", "1"],
+    );
+}
+
+#[test]
+fn direct_associated_constant_restoration() {
+    values("direct-associated-constant", &["1", "42", "7", "42", "1"]);
+}
+
+#[test]
+fn rd71_parameter_and_concrete_method_reachability() {
+    values("rd71-method-reachability", &["42", "1", "1"]);
+}
+
+#[test]
+fn call_bearing_prerequisite_constant_keeps_selected_context() {
+    values(
+        "prerequisite-call-bearing-constant",
+        &["2", "43", "8", "43", "2", "1"],
+    );
+}
+
+#[test]
+fn unresolved_default_selection_blocks_until_concrete_override() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "default-selection-staging.fe".into(),
+        r#"
+trait Read { const fn value() -> u256 { 9 } }
+struct Subject {}
+impl Read for Subject { const fn value() -> u256 { 42 } }
+struct DefaultSubject {}
+impl Read for DefaultSubject {}
+const fn generic<T: Read>() -> u256 { <T as Read>::value() + 1 }
+const fn answer() -> u256 { generic<Subject>() }
+const fn inherited() -> u256 { generic<DefaultSubject>() }
+const fn fault() -> u256 { let zero: u256 = 0
+    generic<DefaultSubject>() / zero }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let generic = BodyOwner::Func(find_func(&db, module, "generic"));
+    let outcome = eval_body_owner_const(
+        &db,
+        generic,
+        GenericSubst::for_body_owner(&db, generic, vec![]),
+    );
+    assert!(matches!(outcome, EvalOutcome::Blocked(_)), "{outcome:?}");
+    let answer = BodyOwner::Func(find_func(&db, module, "answer"));
+    let outcome = eval_body_owner_const(
+        &db,
+        answer,
+        GenericSubst::for_body_owner(&db, answer, vec![]),
+    );
+    let EvalOutcome::Ready(value) = outcome else {
+        panic!("concrete override must execute: {outcome:?}");
+    };
+    assert_eq!(value.pretty_print(&db), "43");
+    let inherited = BodyOwner::Func(find_func(&db, module, "inherited"));
+    let outcome = eval_body_owner_const(
+        &db,
+        inherited,
+        GenericSubst::for_body_owner(&db, inherited, vec![]),
+    );
+    let EvalOutcome::Ready(value) = outcome else {
+        panic!("ground inherited default must execute: {outcome:?}");
+    };
+    assert_eq!(value.pretty_print(&db), "10");
+    let fault = BodyOwner::Func(find_func(&db, module, "fault"));
+    let outcome =
+        eval_body_owner_const(&db, fault, GenericSubst::for_body_owner(&db, fault, vec![]));
+    assert!(matches!(outcome, EvalOutcome::Failed(_)), "{outcome:?}");
+    assert!(format!("{outcome:?}").contains("DivisionByZero"));
+}
+
+#[test]
+fn malformed_unresolved_trait_request_rejects_arity_before_blocking() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "trait-request-arity.fe".into(),
+        "trait Read { const fn value(_ input: u256) -> u256 { input } }",
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(module.all_traits(&db)[0].methods(&db).next().unwrap());
+    let outcome =
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+    assert!(matches!(outcome, EvalOutcome::Failed(_)), "{outcome:?}");
+    assert!(format!("{outcome:?}").contains("CTFE call arity mismatch"));
+}
+
+#[test]
+fn symbolic_arithmetic_call_waits_for_selected_method() {
+    use fe_hir::analysis::semantic::{
+        ConstRepr, CtfeConfig, const_computation_for_instance, describe_const_computation,
+        identity_semantic_instance_key,
+    };
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "symbolic-arithmetic-selection.fe".into(),
+        r#"
+trait Pick { const fn value(_ x: u256) -> u256 { x + 999 } }
+struct Subject {}
+impl Pick for Subject { const fn value(_ x: u256) -> u256 { x + 2 } }
+struct Inherited {}
+impl Pick for Inherited {}
+const fn generic<T: Pick, const N: u256>() -> u256 { <T as Pick>::value(N) }
+const fn selected() -> u256 { generic<Subject, 1>() }
+const fn inherited() -> u256 { generic<Inherited, 1>() }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&db, module, "generic"));
+    let computation =
+        const_computation_for_instance(&db, identity_semantic_instance_key(&db, owner), vec![]);
+    let description = describe_const_computation(&db, computation, CtfeConfig::default());
+    let EvalOutcome::Ready(description) = description else {
+        panic!("symbolic call must retain a description: {description:?}");
+    };
+    assert!(matches!(description.repr(), ConstRepr::Deferred(_)));
+    let outcome =
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+    assert!(matches!(outcome, EvalOutcome::Blocked(_)), "{outcome:?}");
+    for (name, expected) in [("selected", "3"), ("inherited", "1000")] {
+        let owner = BodyOwner::Func(find_func(&db, module, name));
+        let outcome =
+            eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+        let EvalOutcome::Ready(value) = outcome else {
+            panic!("concrete {name} must execute: {outcome:?}");
+        };
+        assert_eq!(value.pretty_print(&db), expected);
+    }
+}
+
+#[test]
+fn pending_arithmetic_type_preserves_reflexive_identity() {
+    let mut db = HirAnalysisTestDb::default();
+    let text = source("symbolic-arithmetic-type");
+    let file = db.new_stand_alone("symbolic-arithmetic-type.fe".into(), &text);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+}
+
+#[test]
+fn pending_arithmetic_type_rejects_nominal_default_result() {
+    let mut db = HirAnalysisTestDb::default();
+    let text = source("symbolic-arithmetic-type").replace("Holder<3>", "Holder<1000>");
+    let file = db.new_stand_alone("symbolic-arithmetic-wrong-type.fe".into(), &text);
+    let (module, _) = db.top_mod(file);
+    let diags: Vec<_> = initialize_test_analysis_pass()
+        .run_on_module(&db, module)
+        .into_iter()
+        .map(|diag| diag.to_complete(&db))
+        .collect();
+    assert_eq!(diags.len(), 1, "{diags:#?}");
+    let diagnostic = &diags[0];
+    assert_eq!(diagnostic.message, "type mismatch");
+    let call = "generic_holder<Subject, 1>()";
+    let start = text.find(call).unwrap();
+    assert!(
+        diagnostic.sub_diagnostics.iter().any(|sub| {
+            sub.span.as_ref().is_some_and(|span| {
+                u32::from(span.range.start()) as usize == start
+                    && u32::from(span.range.end()) as usize == start + call.len()
+            })
+        }),
+        "{diagnostic:#?}"
+    );
+}
