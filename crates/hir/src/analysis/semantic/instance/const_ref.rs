@@ -545,7 +545,7 @@ pub(crate) fn has_unbound_evidence_calls<'db>(
     body.exprs(db).iter().any(|(expr, _)| {
         if typed.expr_const_openings(expr).iter().any(|opening| {
             matches!(opening, crate::analysis::ty::ty_check::TraitOpening::Evidence { operand, .. }
-                if operand_parameter_source(db, caller, *operand).is_some()
+                if operand_depends_on_parameter_evidence(db, caller, *operand)
                     && opened_operand_application(db, caller, *operand).is_none())
         }) {
             return true;
@@ -556,7 +556,7 @@ pub(crate) fn has_unbound_evidence_calls<'db>(
         callable
             .opened_trait_application()
             .is_some_and(|(operand, _)| {
-                operand_parameter_source(db, caller, operand).is_some()
+                operand_depends_on_parameter_evidence(db, caller, operand)
                     && opened_operand_application(db, caller, operand).is_none()
             })
             || callable.argument_operands().iter().any(|&operand| {
@@ -861,6 +861,48 @@ fn operand_parameter_source<'db>(
     operand: ExprId,
 ) -> Option<(usize, Vec<ReturnProjectionStep>)> {
     operand_parameter_source_at(db, caller, operand, Vec::new())
+}
+
+// Dependency classification is distinct from slot identity: an associated
+// constant may depend on a witness without returning that witness itself.
+fn operand_depends_on_parameter_evidence<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    operand: ExprId,
+) -> bool {
+    fn visit<'db>(
+        db: &'db dyn HirAnalysisDb,
+        caller: SemanticInstance<'db>,
+        operand: ExprId,
+        active: &mut Vec<ExprId>,
+    ) -> bool {
+        if active.contains(&operand) {
+            return false;
+        }
+        if operand_parameter_source(db, caller, operand).is_some() {
+            return true;
+        }
+        active.push(operand);
+        let typed = caller.key(db).typed_body(db);
+        let dependent = if matches!(typed.expr_const_ref(operand), Some(ConstRef::TraitConst(_))) {
+            typed.expr_const_openings(operand).iter().any(|opening| {
+                matches!(*opening, crate::analysis::ty::ty_check::TraitOpening::Evidence { operand, .. }
+                    if opened_operand_application(db, caller, operand).is_none()
+                        && visit(db, caller, operand, active))
+            })
+        } else if let Some(binding @ LocalBinding::Local { is_mut: false, .. }) =
+            typed.expr_prop(db, operand).binding
+        {
+            typed
+                .binding_source(db, binding)
+                .is_some_and(|source| visit(db, caller, source.init_expr, active))
+        } else {
+            false
+        };
+        active.pop();
+        dependent
+    }
+    visit(db, caller, operand, &mut Vec::new())
 }
 
 fn operand_parameter_source_at<'db>(
@@ -1234,6 +1276,16 @@ fn applications_from_openings<'db>(
             records.push(record);
         }
     }
+    append_inherited_applications(db, caller, inherit, &mut records);
+    records
+}
+
+fn append_inherited_applications<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    inherit: bool,
+    records: &mut Vec<ImplApplicationRecord<'db>>,
+) {
     for record in caller.key(db).impl_env(db).lexical_applications(db) {
         if inherit
             && !records.iter().any(|existing| {
@@ -1244,7 +1296,6 @@ fn applications_from_openings<'db>(
             records.push(*record);
         }
     }
-    records
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1293,7 +1344,7 @@ fn semantic_callee_key_with_assumptions<'db>(
                     resolve_trait_method_instance(db, destination, inst, name)
                 }
                 None if caller.is_none_or(|caller| {
-                    operand_parameter_source(db, caller, operand).is_some()
+                    operand_depends_on_parameter_evidence(db, caller, operand)
                 }) =>
                 {
                     // A concrete goal can still have a symbolic witness parameter.
@@ -1980,27 +2031,24 @@ pub(crate) fn resolve_semantic_const_ref_in_instance<'db>(
     let instance = match const_ref {
         ConstRef::Const(const_) => semantic_const_key_for_const(db, const_),
         ConstRef::TraitConst(assoc) => {
-            let records =
-                if let Some(caller) = caller {
-                    let openings = match origin {
-                        SemOrigin::Expr(expr) => {
-                            caller.key(db).typed_body(db).expr_const_openings(expr)
-                        }
-                        _ => &[],
-                    };
-                    // An explicit pending choice is not absence of a choice.
-                    // Do not resolve an ordinary constant body when the matching
-                    // issued operand has not yet been delivered.
-                    if openings.iter().any(|opening| matches!(opening,
-                        crate::analysis::ty::ty_check::TraitOpening::Evidence { operand, goal, .. }
-                            if goal.def(db) == assoc.inst().def(db)
-                                && goal.args(db) == assoc.inst().args(db)
-                                && opened_operand_application(db, caller, *operand).is_none()
-                    )) { return None; }
-                    applications_from_openings(db, caller, openings, inherit)
-                } else {
-                    Vec::new()
+            let records = if let Some(caller) = caller {
+                let openings = match origin {
+                    SemOrigin::Expr(expr) => {
+                        caller.key(db).typed_body(db).expr_const_openings(expr)
+                    }
+                    _ => &[],
                 };
+                let mut records = super::super::operand_recovery::saved_opening_applications(
+                    db,
+                    assoc.inst(),
+                    openings,
+                    |operand| opened_operand_application(db, caller, operand),
+                )?;
+                append_inherited_applications(db, caller, inherit, &mut records);
+                records
+            } else {
+                Vec::new()
+            };
             semantic_const_key_for_assoc_const(db, assoc, records)
         }
         ConstRef::InherentConst(use_) => semantic_const_key_for_inherent_const(db, use_),

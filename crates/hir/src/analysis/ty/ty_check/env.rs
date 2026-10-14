@@ -1942,15 +1942,13 @@ impl<'db> crate::analysis::semantic::operand_recovery::OperandRecoveryCx<'db> fo
                     // Use the source expression's checked frame snapshot, not
                     // the current frame or ordinary trait discovery. A pending
                     // record stays pending and cannot authorize a fallback.
-                    let records = self.const_openings[operand]
-                        .iter()
-                        .map(|opening| match *opening {
-                            super::TraitOpening::Named(record) => Some(record),
-                            super::TraitOpening::Evidence { operand, .. } => {
-                                self.known_operand_application(operand)
-                            }
-                        })
-                        .collect::<Option<Vec<_>>>()?;
+                    let records =
+                        crate::analysis::semantic::operand_recovery::saved_opening_applications(
+                            self.db,
+                            assoc.inst(),
+                            &self.const_openings[operand],
+                            |operand| self.known_operand_application(operand),
+                        )?;
                     let key =
                         crate::analysis::semantic::instance::semantic_const_key_for_assoc_const(
                             self.db, assoc, records,

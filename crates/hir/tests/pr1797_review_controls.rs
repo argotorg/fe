@@ -493,3 +493,31 @@ fn ordinary_evidence_parameter_defers_choice_until_delivered() {
         .collect::<Vec<_>>();
     assert!(diagnostics.is_empty(), "{diagnostics:#?}");
 }
+
+#[test]
+fn saved_opening_recovery_ignores_unrelated_pending_evidence() {
+    use fe_hir::analysis::semantic::{
+        collect_layout_evidence_diagnostic_vouchers, collect_semantic_borrow_diagnostic_vouchers,
+    };
+    let source = include_str!("pr1797_review_controls/unrelated-pending-layout.fe");
+    assert_eq!(diagnostics(source), "[]");
+    let wrong = source.replace("consume<Subject>([1, 2, 3])", "consume<Subject>([1])");
+    let rejected = diagnostics(&wrong);
+    assert!(rejected.contains("expected `[u256; 3]`"), "{rejected}");
+    for source in [
+        source,
+        include_str!("pr1797_review_controls/parameter-factory-method.fe"),
+        include_str!("pr1797_review_controls/parameter-factory-scalar.fe"),
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("pending-factory.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, module)
+            .into_iter()
+            .chain(collect_layout_evidence_diagnostic_vouchers(&db, module))
+            .map(|diagnostic| diagnostic.to_complete(&db))
+            .collect::<Vec<_>>();
+        assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    }
+}

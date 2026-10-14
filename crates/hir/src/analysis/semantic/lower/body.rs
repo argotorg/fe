@@ -770,19 +770,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 goal.def(self.db) == assoc.inst().def(self.db)
                     && goal.args(self.db) == assoc.inst().args(self.db)
             }) {
-                let known = openings
-                    .iter()
-                    .map(|opening| match *opening {
-                        crate::analysis::ty::ty_check::TraitOpening::Named(record) => Some(record),
-                        crate::analysis::ty::ty_check::TraitOpening::Evidence {
-                            operand, ..
-                        } => crate::analysis::semantic::instance::known_opening_application(
+                let known = crate::analysis::semantic::operand_recovery::saved_opening_applications(
+                    self.db,
+                    assoc.inst(),
+                    &openings,
+                    |operand| {
+                        crate::analysis::semantic::instance::known_opening_application(
                             self.db,
                             self.instance,
                             operand,
-                        ),
-                    })
-                    .collect::<Option<Vec<_>>>();
+                        )
+                    },
+                );
                 if let Some(records) = known
                     && let Some(record) =
                         crate::analysis::semantic::instance::known_opening_application(

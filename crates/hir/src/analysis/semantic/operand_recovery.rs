@@ -32,6 +32,38 @@ pub(crate) enum KnownOperandRecovery<'db> {
     },
 }
 
+/// Recover a saved frame without letting an unrelated pending opening erase
+/// known selections. A pending choice for this exact goal still blocks fallback;
+/// admission independently checks prerequisites against the recovered records.
+pub(crate) fn saved_opening_applications<'db>(
+    db: &'db dyn HirAnalysisDb,
+    goal: crate::analysis::ty::trait_def::TraitInstId<'db>,
+    openings: &[crate::analysis::ty::ty_check::TraitOpening<'db>],
+    mut recover: impl FnMut(
+        ExprId,
+    ) -> Option<crate::analysis::ty::trait_def::ImplApplicationRecord<'db>>,
+) -> Option<Vec<crate::analysis::ty::trait_def::ImplApplicationRecord<'db>>> {
+    use crate::analysis::ty::ty_check::TraitOpening;
+    let mut records = Vec::new();
+    for opening in openings {
+        match *opening {
+            TraitOpening::Named(record) => records.push(record),
+            TraitOpening::Evidence {
+                operand,
+                goal: opened,
+                ..
+            } => match recover(operand) {
+                Some(record) => records.push(record),
+                None if opened.def(db) == goal.def(db) && opened.args(db) == goal.args(db) => {
+                    return None;
+                }
+                None => {}
+            },
+        }
+    }
+    Some(records)
+}
+
 pub(crate) trait OperandRecoveryCx<'db> {
     fn db(&self) -> &'db dyn HirAnalysisDb;
     fn body(&self) -> Option<Body<'db>>;

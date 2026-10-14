@@ -1,0 +1,39 @@
+use core::obligations::{Evidence, prove}
+
+trait Tag { const ID: u256 }
+struct Other {}
+impl Tag for Other { const ID: u256 = 10 }
+impl Tag for Other as Tagged { const ID: u256 = 20 }
+
+trait Width { const N: u256 }
+struct Subject {}
+impl Width for Subject { const N: u256 = 1 }
+impl Width for Subject as First { const N: u256 = 2 }
+impl Width for Subject as Second { const N: u256 = 3 }
+
+type Goal = Width<Subject>
+trait Factory { const W: Evidence<Goal> }
+struct Maker {}
+impl Factory for Maker { const W: Evidence<Goal> = with (First) { prove<Goal>() } }
+impl Factory for Maker as Selected { const W: Evidence<Goal> = with (Second) { prove<Goal>() } }
+
+fn consume<T: Width>(_ values: [u256; <T as Width>::N]) -> u256 { values[2] }
+
+fn helper(_ tag_ev: Evidence<Tag<Other>>) -> u256 {
+    with (tag_ev) {
+        with (Selected) {
+            with (<Maker as Factory>::W) {
+                consume<Subject>([1, 2, 3])
+            }
+        }
+    }
+}
+
+const fn make_tag() -> Evidence<Tag<Other>> {
+    with (Tagged) { prove<Tag<Other>>() }
+}
+
+#[test]
+fn unrelated_pending_opening_valid_twin() {
+    assert(helper(make_tag()) == 3)
+}
