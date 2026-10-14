@@ -6136,6 +6136,7 @@ struct TyCheckerFinalizer<'db> {
     db: &'db dyn HirAnalysisDb,
     body: TypedBody<'db>,
     assumptions: PredicateListId<'db>,
+    binding_type_contexts: FxHashMap<LocalBinding<'db>, TraitSolveCx<'db>>,
     ty_vars: FxHashSet<InferenceKey<'db>>,
     effect_provider_keys: FxHashSet<InferenceKey<'db>>,
     direct_call_callees: FxHashSet<ExprId>,
@@ -6154,18 +6155,26 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
         // All local binding forms share this visitor after inference is folded.
         // Checking only `let`, or at initial registration, misses other forms
         // and bindings whose Evidence type is inferred from an initializer.
-        if self
+        if let Some(binding) = self
             .body
             .pat_binding(pat)
-            .is_some_and(|binding| binding.is_mut())
-            && expr::is_evidence_value(self.db, ctxt.body().scope(), self.assumptions, ty)
+            .filter(|binding| binding.is_mut())
         {
-            self.diags.push(
-                BodyDiag::EvidenceMutableStorage {
-                    primary: span.clone().into(),
-                }
-                .into(),
-            );
+            // Use facts owned at this binding, after folding inference. The
+            // finalizer runs after its lexical opening has left the stack.
+            let (scope, assumptions) = self
+                .binding_type_contexts
+                .get(&binding)
+                .map(|cx| (cx.scope(), cx.assumptions()))
+                .unwrap_or((ctxt.body().scope(), self.assumptions));
+            if expr::is_evidence_value(self.db, scope, assumptions, ty) {
+                self.diags.push(
+                    BodyDiag::EvidenceMutableStorage {
+                        primary: span.clone().into(),
+                    }
+                    .into(),
+                );
+            }
         }
         self.check_unknown(ty, span.clone().into());
 
@@ -6233,6 +6242,7 @@ impl<'db> TyCheckerFinalizer<'db> {
     fn new(mut checker: TyChecker<'db>) -> Self {
         let assumptions = checker.env.assumptions();
         checker.resolve_deferred();
+        let binding_type_contexts = checker.env.take_binding_type_contexts(&mut checker.table);
         let mut body = checker.env.finish(&mut checker.table);
         body.tables_mut().return_borrow_provider = checker
             .first_return_borrow_provider
@@ -6252,6 +6262,7 @@ impl<'db> TyCheckerFinalizer<'db> {
             db: checker.db,
             body,
             assumptions,
+            binding_type_contexts,
             ty_vars: FxHashSet::default(),
             effect_provider_keys: checker.effect_provider_keys,
             direct_call_callees,

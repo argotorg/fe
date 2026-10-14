@@ -195,6 +195,64 @@ fn associated_evidence_shapes_keep_the_same_storage_rule_without_banning_generic
 }
 
 #[test]
+fn lexical_carrier_storage_uses_binding_owned_facts_after_finalization() {
+    const DECLS: &str = "use core::obligations::{Evidence, prove}\ntrait Pick {}\nstruct Subject {}\nimpl Pick for Subject {}\ntype Goal = Pick<Subject>\ntrait Maker { type Out }\nstruct Carrier<T: Maker> { value: T::Out }\n";
+    for (name, body) in [
+        ("let", "let mut w = value\nlet _ = w"),
+        ("match", "match value { mut w => { let _ = w } }"),
+        (
+            "tuple",
+            "let (mut w, _): (Carrier<T>, u256) = (value, 1)\nlet _ = w",
+        ),
+    ] {
+        let source = format!(
+            "{DECLS}fn probe<T: Maker>(witness: Evidence<Maker<T, Out = Evidence<Goal>>>, value: own Carrier<T>) {{\nwith (witness) {{ {body} }}\n}}\n"
+        );
+        assert_eq!(
+            diagnostics(&source.replace("mut w", "w")),
+            "[]",
+            "{name}: immutable evidence carrier"
+        );
+        assert_eq!(
+            diagnostics(&source.replace("Out = Evidence<Goal>", "Out = u256")),
+            "[]",
+            "{name}: ordinary mutable carrier"
+        );
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(format!("lexical-carrier-{name}.fe").into(), &source);
+        let (module, _) = db.top_mod(file);
+        let diags: Vec<_> = initialize_test_analysis_pass()
+            .run_on_module(&db, module)
+            .into_iter()
+            .map(|diag| diag.to_complete(&db))
+            .collect();
+        assert_eq!(diags.len(), 1, "{name}: {diags:#?}");
+        assert_eq!(diags[0].error_code.to_string(), "8-0100", "{name}");
+        assert_eq!(
+            diags[0].message, "evidence cannot be stored in a mutable binding",
+            "{name}"
+        );
+        let start = source.find("mut w").unwrap();
+        assert!(
+            diags[0].sub_diagnostics.iter().any(|label| {
+                label.span.as_ref().is_some_and(|span| {
+                    u32::from(span.range.start()) as usize == start
+                        && u32::from(span.range.end()) as usize == start + "mut w".len()
+                })
+            }),
+            "{name}: exact binding span required: {diags:#?}"
+        );
+    }
+    assert_eq!(
+        diagnostics(&format!(
+            "{DECLS}fn probe<T: Maker>(witness: Evidence<Maker<T, Out = Evidence<Goal>>>, value: own Carrier<T>) {{\nlet mut w = value\nwith (witness) {{ let _ = w }}\n}}\n"
+        )),
+        "[]",
+        "an opening must not supply facts to an earlier binding outside its frame"
+    );
+}
+
+#[test]
 fn constant_evidence_normalizes_layout_like_direct_factory() {
     let source = include_str!("pr1797_review_controls/constant-layout.fe");
     let twin = source.replace("with (W)", "with (wide())");

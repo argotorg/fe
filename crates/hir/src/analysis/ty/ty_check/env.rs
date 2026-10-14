@@ -79,7 +79,7 @@ pub(crate) struct TyCheckEnv<'db> {
     base_assumptions: PredicateListId<'db>,
     assumptions: PredicateListId<'db>,
     var_env: Vec<BlockEnv<'db>>,
-    binding_openings: FxHashMap<LocalBinding<'db>, Vec<super::TraitOpening<'db>>>,
+    binding_openings: FxHashMap<LocalBinding<'db>, (ScopeId<'db>, Vec<super::TraitOpening<'db>>)>,
     pending_vars: FxHashMap<IdentId<'db>, LocalBinding<'db>>,
     loop_stack: Vec<StmtId>,
     expr_stack: Vec<ExprId>,
@@ -735,8 +735,29 @@ impl<'db> TyCheckEnv<'db> {
     ) -> Vec<super::TraitOpening<'db>> {
         self.binding_openings
             .get(&binding)
-            .cloned()
+            .map(|(_, openings)| openings.clone())
             .unwrap_or_default()
+    }
+
+    pub(super) fn take_binding_type_contexts(
+        &mut self,
+        table: &mut UnificationTable<'db>,
+    ) -> FxHashMap<LocalBinding<'db>, TraitSolveCx<'db>> {
+        std::mem::take(&mut self.binding_openings)
+            .into_iter()
+            .map(|(binding, (scope, openings))| {
+                let mut prober = Prober::new(table, scope);
+                let mut premises = self.assumptions.list(self.db).to_vec();
+                premises.extend(openings.into_iter().map(|opening| opening.goal()));
+                let assumptions = PredicateListId::new(self.db, premises)
+                    .fold_with(self.db, &mut prober)
+                    .extend_all_bounds(self.db);
+                (
+                    binding,
+                    TraitSolveCx::new(self.db, scope).with_assumptions(assumptions),
+                )
+            })
+            .collect()
     }
 
     pub(super) fn contextualize_const_types_at(
@@ -1020,8 +1041,10 @@ impl<'db> TyCheckEnv<'db> {
                 self.pat_binding_modes[pat] = Some(PatBindingMode::ByValue);
             }
         }
-        self.binding_openings
-            .insert(binding, self.trait_openings.visible(self.db));
+        self.binding_openings.insert(
+            binding,
+            (self.scope(), self.trait_openings.visible(self.db)),
+        );
         self.pending_vars.insert(name, binding)
     }
 
