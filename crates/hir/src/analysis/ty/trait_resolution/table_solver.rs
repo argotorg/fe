@@ -489,7 +489,17 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                     } else {
                         Vec::new()
                     },
-                    trait_conditions: Vec::new(),
+                    // Normalization can expose a conditional nominal type that
+                    // the authored projection hides. Retain the prepared goal
+                    // in this proof's receipt; admission stays outside solving.
+                    trait_conditions: if super::goal_has_const_type_requirements(
+                        self.db,
+                        normalized_goal,
+                    ) {
+                        vec![normalized_goal]
+                    } else {
+                        Vec::new()
+                    },
                 };
                 return Ok(self.continue_branch(key, branch, query.assumptions));
             }
