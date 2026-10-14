@@ -6158,7 +6158,7 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
             .body
             .pat_binding(pat)
             .is_some_and(|binding| binding.is_mut())
-            && expr::is_evidence_value(self.db, ctxt.body().scope(), ty)
+            && expr::is_evidence_value(self.db, ctxt.body().scope(), self.assumptions, ty)
         {
             self.diags.push(
                 BodyDiag::EvidenceMutableStorage {

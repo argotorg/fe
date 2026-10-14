@@ -114,6 +114,87 @@ fn every_inferred_mutable_evidence_pattern_keeps_the_storage_cause_and_span() {
 }
 
 #[test]
+fn associated_evidence_shapes_keep_the_same_storage_rule_without_banning_generic_values() {
+    const DECLS: &str = "use core::obligations::{Evidence, prove}\ntrait Pick {}\nstruct Subject {}\nimpl Pick for Subject {}\ntype Goal = Pick<Subject>\ntrait Maker { type Out }\nimpl Maker for Subject { type Out = Evidence<Goal> }\nstruct Carrier<T: Maker> { value: T::Out }\nconst fn first() -> Evidence<Goal> { prove<Goal>() }\n";
+    let cases = [
+        (
+            "projected-formal",
+            "fn probe(mut w: own <Subject as Maker>::Out) { let _ = w }",
+            true,
+        ),
+        (
+            "carrier-formal",
+            "fn probe(mut w: own Carrier<Subject>) { let _ = w }",
+            true,
+        ),
+        (
+            "carrier-let",
+            "fn probe() { let mut w = Carrier<Subject> { value: first() }\nlet _ = w }",
+            false,
+        ),
+        (
+            "owned-equality",
+            "fn probe<T: Maker<Out = Evidence<Goal>>>(mut w: own T::Out) { let _ = w }",
+            true,
+        ),
+    ];
+    for (name, body, formal) in cases {
+        let source = format!("{DECLS}{body}\n");
+        assert_eq!(
+            diagnostics(&source.replace("mut w", "w")),
+            "[]",
+            "{name}: immutable twin"
+        );
+        let ordinary = source
+            .replace("type Out = Evidence<Goal>", "type Out = u256")
+            .replace("Maker<Out = Evidence<Goal>>", "Maker<Out = u256>")
+            .replace("value: first()", "value: 1");
+        assert_eq!(
+            diagnostics(&ordinary),
+            "[]",
+            "{name}: ordinary mutable twin"
+        );
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(format!("associated-storage-{name}.fe").into(), &source);
+        let (module, _) = db.top_mod(file);
+        let diags: Vec<_> = initialize_test_analysis_pass()
+            .run_on_module(&db, module)
+            .into_iter()
+            .map(|diag| diag.to_complete(&db))
+            .collect();
+        assert_eq!(diags.len(), 1, "{name}: {diags:#?}");
+        assert_eq!(
+            diags[0].error_code.to_string(),
+            "8-0100",
+            "{name}: {diags:#?}"
+        );
+        assert_eq!(
+            diags[0].message, "evidence cannot be stored in a mutable binding",
+            "{name}"
+        );
+        let start = source.find("mut w").unwrap() + if formal { 4 } else { 0 };
+        let len = if formal { 1 } else { "mut w".len() };
+        assert!(
+            diags[0]
+                .sub_diagnostics
+                .iter()
+                .any(|label| label.span.as_ref().is_some_and(|span| {
+                    u32::from(span.range.start()) as usize == start
+                        && u32::from(span.range.end()) as usize == start + len
+                })),
+            "{name}: original binding span required: {diags:#?}"
+        );
+    }
+    assert_eq!(
+        diagnostics(
+            "trait Maker { type Out }\nfn generic<T: Maker>(mut value: own T::Out) { let _ = value }\n"
+        ),
+        "[]",
+        "an unresolved generic value is not categorically evidence"
+    );
+}
+
+#[test]
 fn constant_evidence_normalizes_layout_like_direct_factory() {
     let source = include_str!("pr1797_review_controls/constant-layout.fe");
     let twin = source.replace("with (W)", "with (wide())");

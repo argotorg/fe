@@ -263,14 +263,19 @@ pub(super) enum PendingPrimitiveOpResolution {
 pub(super) fn is_evidence_value<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
     ty: TyId<'db>,
 ) -> bool {
     fn contains<'db>(
         db: &'db dyn HirAnalysisDb,
         scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
         ty: TyId<'db>,
         seen: &mut Vec<TyId<'db>>,
     ) -> bool {
+        // A known projection and its result have the same storage policy.
+        // Unresolved generic projections stay unresolved; they are not banned.
+        let ty = normalize_ty(db, ty, scope, assumptions);
         let ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
         if seen.contains(&ty) {
             return false;
@@ -281,13 +286,15 @@ pub(super) fn is_evidence_value<'db>(
         {
             true
         } else if ty.is_tuple(db) || ty.is_array(db) {
-            args.iter().any(|ty| contains(db, scope, *ty, seen))
+            args.iter()
+                .any(|ty| contains(db, scope, assumptions, *ty, seen))
         } else if let Some(adt) = ty.adt_def(db) {
             adt.fields(db).iter().enumerate().any(|(variant, fields)| {
                 (0..fields.num_types()).any(|field| {
                     contains(
                         db,
                         scope,
+                        assumptions,
                         crate::analysis::ty::adt_def::instantiate_adt_field_shape(
                             db, adt, variant, field, args,
                         ),
@@ -301,7 +308,7 @@ pub(super) fn is_evidence_value<'db>(
         seen.pop();
         found
     }
-    contains(db, scope, ty, &mut Vec::new())
+    contains(db, scope, assumptions, ty, &mut Vec::new())
 }
 
 impl<'db> TyChecker<'db> {
@@ -5304,7 +5311,7 @@ impl<'db> TyChecker<'db> {
     }
 
     pub(super) fn is_evidence_value(&self, ty: TyId<'db>) -> bool {
-        is_evidence_value(self.db, self.env.scope(), ty)
+        is_evidence_value(self.db, self.env.scope(), self.env.assumptions(), ty)
     }
 
     fn check_if(
