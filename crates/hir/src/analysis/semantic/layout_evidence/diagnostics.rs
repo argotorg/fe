@@ -147,8 +147,9 @@ fn collect_instance<'db>(
     if !seen.insert(instance.key(db)) {
         return;
     }
-    let result = if matches!(instance.key(db).owner(db), BodyOwner::Func(func) if func.is_const(db))
-    {
+    let definition_only = matches!(instance.key(db).owner(db), BodyOwner::Func(func) if func.is_const(db))
+        || crate::analysis::semantic::instance::has_unbound_evidence_calls(db, instance);
+    let result = if definition_only {
         super::lower::layout_evidence_definition_body(db, instance)
     } else {
         layout_evidence_body(db, instance)

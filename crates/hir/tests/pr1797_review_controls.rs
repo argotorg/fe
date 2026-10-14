@@ -475,3 +475,21 @@ fn assert_runtime_check_normalizes(source: &str) {
     normalize_runtime_semantic_body(&db, instance)
         .expect("runtime call layout receives the same issued constant record");
 }
+
+#[test]
+fn ordinary_evidence_parameter_defers_choice_until_delivered() {
+    use fe_hir::analysis::semantic::{
+        collect_layout_evidence_diagnostic_vouchers, collect_semantic_borrow_diagnostic_vouchers,
+    };
+    let source = include_str!("pr1797_review_controls/ordinary-constant-helper.fe");
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("ordinary-constant-helper.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let diagnostics = collect_semantic_borrow_diagnostic_vouchers(&db, module)
+        .into_iter()
+        .chain(collect_layout_evidence_diagnostic_vouchers(&db, module))
+        .map(|diagnostic| diagnostic.to_complete(&db))
+        .collect::<Vec<_>>();
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+}
