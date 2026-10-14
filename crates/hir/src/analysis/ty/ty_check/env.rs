@@ -1829,48 +1829,6 @@ pub(super) struct TraitObligation<'db> {
 
 impl<'db> TyCheckEnv<'db> {}
 
-#[cfg(test)]
-mod pr1797_admission_review {
-    use super::*;
-    use crate::test_db::{HirAnalysisTestDb, find_func};
-
-    #[test]
-    fn active_opening_uses_finalized_self_excluding_admission() {
-        let mut db = HirAnalysisTestDb::default();
-        let file = db.new_stand_alone("active-admission.fe".into(),
-            "use core::obligations::Evidence\ntrait Goal {}\nstruct Subject {}\nfn inspect(_ witness: own Evidence<Goal<Subject>>) {}\n");
-        let (module, _) = db.top_mod(file);
-        let func = find_func(&db, module, "inspect");
-        let mut env = TyCheckEnv::new(&db, BodyOwner::Func(func)).unwrap();
-        let ty = *func.arg_tys(&db)[0].skip_binder();
-        let goal = crate::analysis::ty::corelib::evidence_goal(&db, func.scope(), ty).unwrap();
-        let value = env.body.expr(&db);
-        env.enter_with_frame();
-        env.insert_opening(
-            value,
-            super::super::TraitOpening::Evidence {
-                operand: value,
-                goal,
-                admission: None,
-            },
-        )
-        .unwrap();
-        env.finalize_opening_admission(value);
-        let active = env.opening_for(goal).unwrap();
-        let super::super::TraitOpening::Evidence {
-            admission: Some(context),
-            ..
-        } = active
-        else {
-            panic!(
-                "active consumers must receive finalized admission, not own-goal fallback: {active:?}"
-            )
-        };
-        assert!(!context.assumptions().list(&db).contains(&goal));
-        assert_eq!(env.with_openings[value], Some(active));
-    }
-}
-
 impl<'db> crate::analysis::semantic::operand_recovery::OperandRecoveryCx<'db> for TyCheckEnv<'db> {
     fn db(&self) -> &'db dyn HirAnalysisDb {
         self.db
@@ -2098,5 +2056,47 @@ impl<'db> crate::analysis::semantic::operand_recovery::OperandRecoveryCx<'db> fo
                 None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod pr1797_admission_review {
+    use super::*;
+    use crate::test_db::{HirAnalysisTestDb, find_func};
+
+    #[test]
+    fn active_opening_uses_finalized_self_excluding_admission() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("active-admission.fe".into(),
+            "use core::obligations::Evidence\ntrait Goal {}\nstruct Subject {}\nfn inspect(_ witness: own Evidence<Goal<Subject>>) {}\n");
+        let (module, _) = db.top_mod(file);
+        let func = find_func(&db, module, "inspect");
+        let mut env = TyCheckEnv::new(&db, BodyOwner::Func(func)).unwrap();
+        let ty = *func.arg_tys(&db)[0].skip_binder();
+        let goal = crate::analysis::ty::corelib::evidence_goal(&db, func.scope(), ty).unwrap();
+        let value = env.body.expr(&db);
+        env.enter_with_frame();
+        env.insert_opening(
+            value,
+            super::super::TraitOpening::Evidence {
+                operand: value,
+                goal,
+                admission: None,
+            },
+        )
+        .unwrap();
+        env.finalize_opening_admission(value);
+        let active = env.opening_for(goal).unwrap();
+        let super::super::TraitOpening::Evidence {
+            admission: Some(context),
+            ..
+        } = active
+        else {
+            panic!(
+                "active consumers must receive finalized admission, not own-goal fallback: {active:?}"
+            )
+        };
+        assert!(!context.assumptions().list(&db).contains(&goal));
+        assert_eq!(env.with_openings[value], Some(active));
     }
 }

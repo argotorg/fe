@@ -521,3 +521,117 @@ fn saved_opening_recovery_ignores_unrelated_pending_evidence() {
         assert!(diagnostics.is_empty(), "{diagnostics:#?}");
     }
 }
+
+#[test]
+fn compiler_supplied_methods_retain_choice_without_a_source_body() {
+    use fe_hir::{
+        analysis::{
+            semantic::{
+                NExpr, NStatementKind, SemanticAnalysisError, check_semantic_borrows,
+                get_or_build_semantic_instance, identity_semantic_instance_key,
+                normalize_semantic_body,
+            },
+            ty::{
+                trait_def::{ImplementorOrigin, TraitInstId, resolve_trait_method_instance},
+                trait_resolution::{Selection, TraitSolveCx},
+                ty_check::BodyOwner,
+            },
+        },
+        test_db::find_func,
+    };
+    let source = r#"
+use std::evm::Contract
+use core::obligations::Evidence
+pub contract Target {}
+fn metadata() -> u256 {
+    <Target as Contract>::init_code_len() + <Target as Contract>::init_code_offset()
+}
+fn pending(_ witness: Evidence<Contract<Target>>) -> u256 {
+    with (witness) { <Target as Contract>::init_code_len() }
+}
+"#;
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("compiler-metadata-dispatch.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&db, module, "metadata"));
+    let instance = get_or_build_semantic_instance(&db, identity_semantic_instance_key(&db, owner));
+    let normalized = normalize_semantic_body(&db, instance).expect("metadata normalization");
+    let mut calls = 0;
+    for statement in normalized
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+    {
+        if let NStatementKind::Define {
+            expr: NExpr::Call { callee, .. },
+            ..
+        } = &statement.kind
+        {
+            let BodyOwner::Func(func) = callee.key.owner(&db) else {
+                panic!("metadata function")
+            };
+            if fe_hir::analysis::ty::corelib::contract_metadata_kind(&db, func).is_none() {
+                continue;
+            }
+            let trait_ = func.containing_trait(&db).expect("nominal Contract method");
+            let goal = TraitInstId::new_simple(
+                &db,
+                trait_,
+                callee.key.subst(&db).generic_args(&db).to_vec(),
+            );
+            let context = TraitSolveCx::new(&db, callee.key.impl_env(&db).normalization_scope(&db))
+                .with_assumptions(callee.key.impl_env(&db).assumptions(&db));
+            let Selection::Unique(method) =
+                resolve_trait_method_instance(&db, context, goal, func.name(&db).to_opt().unwrap())
+            else {
+                panic!("compiler implementation is uniquely selected")
+            };
+            assert!(matches!(
+                method.origin(&db),
+                ImplementorOrigin::VirtualContract(_)
+            ));
+            assert!(
+                method.body().is_none(),
+                "compiler supplies metadata implementation"
+            );
+            assert!(
+                callee.concrete_dispatch,
+                "known implementation is independent of source body availability"
+            );
+            calls += 1;
+        }
+    }
+    assert_eq!(calls, 2);
+    check_semantic_borrows(&db, instance).expect("precise existing metadata effects");
+
+    let owner = BodyOwner::Func(find_func(&db, module, "pending"));
+    let instance = get_or_build_semantic_instance(&db, identity_semantic_instance_key(&db, owner));
+    let normalized =
+        normalize_semantic_body(&db, instance).expect("pending definition normalization");
+    let mut calls = 0;
+    for statement in normalized
+        .body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+    {
+        if let NStatementKind::Define {
+            expr: NExpr::Call { callee, .. },
+            ..
+        } = &statement.kind
+        {
+            assert!(
+                !callee.concrete_dispatch,
+                "same nominal metadata method needs its explicit witness"
+            );
+            calls += 1;
+        }
+    }
+    assert_eq!(calls, 1);
+    assert!(matches!(
+        check_semantic_borrows(&db, instance),
+        Err(SemanticAnalysisError::Pending(_))
+    ));
+}

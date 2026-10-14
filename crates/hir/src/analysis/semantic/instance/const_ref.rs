@@ -1325,11 +1325,10 @@ fn semantic_callee_key_with_assumptions<'db>(
         })
         .collect::<Vec<_>>();
     let mut subst_args = callable.generic_args().to_vec();
-    let body_func = if let Some(inst) = callable.trait_inst()
+    let method_selection = if let Some(inst) = callable.trait_inst()
         && let Some(name) = nominal_func.name(db).to_opt()
-        && let Selection::Unique(method) = if let Some((operand, destination)) =
-            callable.opened_trait_application()
-        {
+    {
+        if let Some((operand, destination)) = callable.opened_trait_application() {
             let record = known_opened.or_else(|| {
                 caller.and_then(|caller| opened_operand_application(db, caller, operand))
             });
@@ -1399,6 +1398,17 @@ fn semantic_callee_key_with_assumptions<'db>(
                 name,
             )
         }
+    } else {
+        Selection::NotFound
+    };
+    // A proved compiler implementation can have no source Func body. Keep
+    // choice authority separate from source-body mapping; an assumption or
+    // undelivered explicit choice remains pending.
+    let concrete_dispatch = callable.trait_inst().is_none()
+        || matches!(&method_selection, Selection::Unique(method)
+            if !matches!(method.origin(db), ImplementorOrigin::Assumption));
+    let body_func = if let Some(inst) = callable.trait_inst()
+        && let Selection::Unique(method) = method_selection
         && let Some(impl_func) = method.body()
     {
         subst_args = method
@@ -1864,7 +1874,7 @@ fn semantic_callee_key_with_assumptions<'db>(
         }
     }
     Ok(Some(SemanticCallCallee {
-        concrete_dispatch: callable.trait_inst().is_none() || selected_impl,
+        concrete_dispatch,
         key: SemanticInstanceKey::new(
             db,
             owner,
