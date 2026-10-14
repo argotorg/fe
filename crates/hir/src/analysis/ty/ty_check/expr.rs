@@ -260,6 +260,50 @@ pub(super) enum PendingPrimitiveOpResolution {
     Done,
 }
 
+pub(super) fn is_evidence_value<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+) -> bool {
+    fn contains<'db>(
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+        ty: TyId<'db>,
+        seen: &mut Vec<TyId<'db>>,
+    ) -> bool {
+        let ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
+        if seen.contains(&ty) {
+            return false;
+        }
+        seen.push(ty);
+        let (base, args) = ty.decompose_ty_app(db);
+        let found = if Some(base) == resolve_lib_type_path(db, scope, "core::obligations::Evidence")
+        {
+            true
+        } else if ty.is_tuple(db) || ty.is_array(db) {
+            args.iter().any(|ty| contains(db, scope, *ty, seen))
+        } else if let Some(adt) = ty.adt_def(db) {
+            adt.fields(db).iter().enumerate().any(|(variant, fields)| {
+                (0..fields.num_types()).any(|field| {
+                    contains(
+                        db,
+                        scope,
+                        crate::analysis::ty::adt_def::instantiate_adt_field_shape(
+                            db, adt, variant, field, args,
+                        ),
+                        seen,
+                    )
+                })
+            })
+        } else {
+            false
+        };
+        seen.pop();
+        found
+    }
+    contains(db, scope, ty, &mut Vec::new())
+}
+
 impl<'db> TyChecker<'db> {
     fn code_region_intrinsic_kind(
         &self,
@@ -5260,42 +5304,7 @@ impl<'db> TyChecker<'db> {
     }
 
     pub(super) fn is_evidence_value(&self, ty: TyId<'db>) -> bool {
-        self.contains_evidence_value(ty, &mut Vec::new())
-    }
-
-    fn contains_evidence_value(&self, ty: TyId<'db>, seen: &mut Vec<TyId<'db>>) -> bool {
-        let ty = ty.as_capability(self.db).map_or(ty, |(_, inner)| inner);
-        if seen.contains(&ty) {
-            return false;
-        }
-        seen.push(ty);
-        let (base, args) = ty.decompose_ty_app(self.db);
-        let found = if Some(base)
-            == resolve_lib_type_path(self.db, self.env.scope(), "core::obligations::Evidence")
-        {
-            true
-        } else if ty.is_tuple(self.db) || ty.is_array(self.db) {
-            args.iter()
-                .any(|ty| self.contains_evidence_value(*ty, seen))
-        } else if let Some(adt) = ty.adt_def(self.db) {
-            adt.fields(self.db)
-                .iter()
-                .enumerate()
-                .any(|(variant, fields)| {
-                    (0..fields.num_types()).any(|field| {
-                        self.contains_evidence_value(
-                            crate::analysis::ty::adt_def::instantiate_adt_field_shape(
-                                self.db, adt, variant, field, args,
-                            ),
-                            seen,
-                        )
-                    })
-                })
-        } else {
-            false
-        };
-        seen.pop();
-        found
+        is_evidence_value(self.db, self.env.scope(), ty)
     }
 
     fn check_if(

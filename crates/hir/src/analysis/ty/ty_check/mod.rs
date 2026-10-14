@@ -6151,6 +6151,22 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
     ) {
         let ty = self.body.pat_ty(self.db, pat);
         let span = ctxt.span().unwrap();
+        // All local binding forms share this visitor after inference is folded.
+        // Checking only `let`, or at initial registration, misses other forms
+        // and bindings whose Evidence type is inferred from an initializer.
+        if self
+            .body
+            .pat_binding(pat)
+            .is_some_and(|binding| binding.is_mut())
+            && expr::is_evidence_value(self.db, ctxt.body().scope(), ty)
+        {
+            self.diags.push(
+                BodyDiag::EvidenceMutableStorage {
+                    primary: span.clone().into(),
+                }
+                .into(),
+            );
+        }
         self.check_unknown(ty, span.clone().into());
 
         walk_pat(self, ctxt, pat)

@@ -40,6 +40,80 @@ fn mutable_evidence_formal_is_rejected_but_ordinary_mutable_is_valid() {
 }
 
 #[test]
+fn every_inferred_mutable_evidence_pattern_keeps_the_storage_cause_and_span() {
+    const EVIDENCE: &str = "use core::obligations::{Evidence, prove}\nuse core::option::Option\ntrait Pick {}\nstruct Subject {}\nimpl Pick for Subject {}\ntype Goal = Pick<Subject>\nstruct Carrier<T> { value: T }\nconst fn first() -> Evidence<Goal> { prove<Goal>() }\n";
+    const ORDINARY: &str =
+        "use core::option::Option\nstruct Carrier<T> { value: T }\nfn first() -> u256 { 1 }\n";
+    let cases = [
+        ("let", "fn probe() { let mut w = first()\nlet _ = w }"),
+        (
+            "match",
+            "fn probe() { match first() { mut w => { let _ = w } } }",
+        ),
+        (
+            "tuple",
+            "fn probe() { let input: (Evidence<Goal>, u256) = (first(), 0)\nmatch input { (mut w, _) => { let _ = w } } }",
+        ),
+        (
+            "record",
+            "fn probe() { let input = Carrier { value: first() }\nmatch input { Carrier { value: mut w } => { let _ = w } } }",
+        ),
+        (
+            "if-let",
+            "fn probe() { if let Option::Some(mut w) = Option::Some(first()) { let _ = w } }",
+        ),
+        (
+            "while-let",
+            "fn probe() { while let Option::Some(mut w) = Option::Some(first()) { let _ = w\nbreak } }",
+        ),
+        ("for", "fn probe() { for mut w in [first()] { let _ = w } }"),
+    ];
+    for (name, body) in cases {
+        let source = format!("{EVIDENCE}{body}\n");
+        assert_eq!(
+            diagnostics(&source.replace("mut w", "w")),
+            "[]",
+            "{name}: immutable Evidence twin"
+        );
+        let ordinary = format!("{ORDINARY}{}\n", body.replace("Evidence<Goal>", "u256"));
+        assert_eq!(
+            diagnostics(&ordinary),
+            "[]",
+            "{name}: ordinary mutable twin"
+        );
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(format!("mutable-{name}.fe").into(), &source);
+        let (module, _) = db.top_mod(file);
+        let diags: Vec<_> = initialize_test_analysis_pass()
+            .run_on_module(&db, module)
+            .into_iter()
+            .map(|diag| diag.to_complete(&db))
+            .collect();
+        assert_eq!(
+            diags.len(),
+            1,
+            "{name}: one storage rejection required: {diags:#?}"
+        );
+        assert_eq!(
+            diags[0].message, "evidence cannot be stored in a mutable binding",
+            "{name}: {diags:#?}"
+        );
+        assert_eq!(diags[0].error_code.to_string(), "8-0100", "{name}");
+        let start = source.find("mut w").unwrap();
+        assert!(
+            diags[0]
+                .sub_diagnostics
+                .iter()
+                .any(|label| label.span.as_ref().is_some_and(|span| {
+                    u32::from(span.range.start()) as usize == start
+                        && u32::from(span.range.end()) as usize == start + "mut w".len()
+                })),
+            "{name}: original binding span required: {diags:#?}"
+        );
+    }
+}
+
+#[test]
 fn constant_evidence_normalizes_layout_like_direct_factory() {
     let source = include_str!("pr1797_review_controls/constant-layout.fe");
     let twin = source.replace("with (W)", "with (wide())");
