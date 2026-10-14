@@ -358,6 +358,15 @@ fn nested_known_match_executes_both_selected_alternatives() {
 
 #[test]
 fn shared_recovery_closed_if_uses_selected_method_and_both_branches() {
+    shared_recovery_closed_if_control("\n");
+}
+
+#[test]
+fn shared_recovery_closed_if_uses_selected_method_with_crlf_source() {
+    shared_recovery_closed_if_control("\r\n");
+}
+
+fn shared_recovery_closed_if_control(newline: &str) {
     use fe_hir::{
         analysis::{
             semantic::{EvalOutcome, GenericSubst, eval_body_owner_const},
@@ -365,17 +374,21 @@ fn shared_recovery_closed_if_uses_selected_method_and_both_branches() {
         },
         test_db::find_func,
     };
-    let source = include_str!("pr1797_review_controls/closed-if-selected-method.fe");
+    let source = include_str!("pr1797_review_controls/closed-if-selected-method.fe")
+        .replace("\r\n", "\n")
+        .replace('\n', newline);
     for (text, expected) in [
-        (source.to_string(), "15"),
+        (source.clone(), "15"),
         (source.replace("if true", "if false"), "25"),
     ] {
         // The production fixture retains its native test entry. This control
         // returns its result through the explicit CTFE test API, whose roots
         // must be const and cannot call the native assertion function.
+        let native_entry = format!("#[test]{newline}fn test_default_method_hijack()");
+        assert_eq!(text.matches(&native_entry).count(), 1);
         let text = text
             .replace(
-                "#[test]\nfn test_default_method_hijack()",
+                &native_entry,
                 "const fn test_default_method_hijack() -> u256",
             )
             .replace("assert(actual == 15)", "actual");
