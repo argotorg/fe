@@ -91,6 +91,67 @@ fn sonatina_function_body<'a>(ir: &'a str, symbol_segment: &str) -> Option<&'a s
     Some(&body[..end])
 }
 
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "packed_hash_words.fe")]
+fn packed_hash_exports_only_numeric_words(fixture: Fixture<&str>) {
+    with_top_mod_for_source(&fixture, |db, top_mod| {
+        for level in [OptLevel::O1, OptLevel::O2] {
+            let ir = emit_module_sonatina_ir_optimized(db, top_mod, level, None)
+                .expect("packed hash IR should emit");
+            let body = sonatina_function_body(&ir, "%contract_runtime_root_Hashes(")
+                .expect("hash runtime should emit");
+            assert!(
+                !body.contains("mstore8"),
+                "byte stores in {level:?}:\n{body}"
+            );
+            assert!(
+                !body.contains("[i8;"),
+                "expanded byte object in {level:?}:\n{body}"
+            );
+            assert!(
+                !body.contains("obj."),
+                "unscalarized hash input in {level:?}:\n{body}"
+            );
+            assert!(
+                !body.contains("phi "),
+                "conversion loop in {level:?}:\n{body}"
+            );
+            // Four ABI return stores, in addition to each preimage's numeric words.
+            assert_eq!(
+                body.matches("mstore ").count(),
+                1 + 1 + 2 + 3 + 4,
+                "stores in {level:?}:\n{body}"
+            );
+            let mut widths = Vec::new();
+            for block in body.split("\n    block") {
+                if let Some((preimage, hash)) = block.split_once("evm_keccak256 ") {
+                    let width: usize = hash
+                        .lines()
+                        .next()
+                        .unwrap()
+                        .split_whitespace()
+                        .last()
+                        .unwrap()
+                        .trim_end_matches(".i256;")
+                        .parse()
+                        .unwrap();
+                    assert_eq!(
+                        preimage.matches("mstore ").count(),
+                        width.div_ceil(32),
+                        "preimage in {level:?}:\n{block}"
+                    );
+                    assert!(
+                        !block.contains("br "),
+                        "conversion branch in {level:?}:\n{block}"
+                    );
+                    widths.push(width);
+                }
+            }
+            widths.sort_unstable();
+            assert_eq!(widths, [5, 32, 64, 69]);
+        }
+    });
+}
+
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "zero_sized_const_aggregates_do_not_emit_const_regions.fe")]
 fn zero_sized_const_aggregates_do_not_emit_const_regions(fixture: Fixture<&str>) {
     let ir = with_top_mod_for_source(&fixture, |db, top_mod| {

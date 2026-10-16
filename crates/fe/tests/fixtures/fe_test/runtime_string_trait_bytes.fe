@@ -1,0 +1,38 @@
+use core::{AsBytes, PackedBytes}
+
+const fn bytes<T: AsBytes>(_ value: T) -> PackedBytes<T::N> {
+    value.as_bytes()
+}
+const PADDED: PackedBytes<5> = bytes<String<5>>("true")
+
+fn check_runtime_bytes(_ flag: bool) {
+    let text: String<5> = if flag { "true" } else { "false" }
+    let converted = bytes(text)
+    let first: u8 = if flag { 0 } else { 102 }
+    assert!(converted[0] == first)
+    assert!(converted[1] == if flag { 116 } else { 97 })
+    assert!(converted[4] == 101)
+
+    let hidden_word: u256 = if flag { 0xff41 } else { 0xff42 }
+    let hidden: String<1> = hidden_word as String<1>
+    let truncated = bytes(hidden)
+    assert!(truncated[0] == if flag { 65 } else { 66 })
+
+    let wide: String<31> = if flag {
+        "1234567890123456789012345678901"
+    } else {
+        "x"
+    }
+    let wide_bytes = bytes(wide)
+    assert!(wide_bytes[0] == if flag { 49 } else { 0 })
+    assert!(wide_bytes[29] == if flag { 48 } else { 0 })
+    assert!(wide_bytes[30] == if flag { 49 } else { 120 })
+    assert!(bytes<String<0>>("").len() == 0)
+}
+
+#[test]
+fn trait_conversion_matches_const_padding_and_runtime_widths() {
+    assert!(PADDED[0] == 0 && PADDED[1] == 116 && PADDED[4] == 101)
+    check_runtime_bytes(true)
+    check_runtime_bytes(false)
+}

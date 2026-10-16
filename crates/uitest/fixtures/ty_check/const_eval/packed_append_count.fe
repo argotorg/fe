@@ -1,0 +1,29 @@
+use core::{AsBytes, ByteWriter, PackedBytes}
+
+struct Short {}
+impl AsBytes for Short {
+    const N: usize = 1
+    const fn append_to<const M: usize>(self, _ out: mut ByteWriter<M>) {
+        let _ = out
+    }
+}
+struct Long {}
+impl AsBytes for Long {
+    const N: usize = 1
+    const fn append_to<const M: usize>(self, _ out: mut ByteWriter<M>) {
+        out.push_word(0x4142, width: 2)
+    }
+}
+struct ZeroLong {}
+impl AsBytes for ZeroLong {
+    const N: usize = 0
+    const fn append_to<const M: usize>(self, _ out: mut ByteWriter<M>) {
+        out.push_byte(65)
+    }
+}
+
+const SHORT: PackedBytes<2> = (Short {}, "x" as String<1>).as_bytes()
+const LONG: PackedBytes<2> = (Long {}, "x" as String<1>).as_bytes()
+const COMPENSATING: PackedBytes<2> = (Short {}, Long {}).as_bytes()
+const ZERO: PackedBytes<1> = (ZeroLong {}, "x" as String<1>).as_bytes()
+const EMPTY_OVERFLOW: PackedBytes<0> = ZeroLong {}.as_bytes()

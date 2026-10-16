@@ -1,4 +1,5 @@
 use common::ingot::IngotKind;
+use num_traits::ToPrimitive;
 use rustc_hash::FxHashSet;
 
 use crate::{
@@ -6,11 +7,12 @@ use crate::{
         HirAnalysisDb,
         name_resolution::{NameDomain, PathRes, resolve_ident_to_bucket, resolve_path},
         ty::{
+            const_ty::demand_concrete_specialized_const_ty,
             trait_def::TraitInstId,
             trait_resolution::{
                 GoalSatisfiability, PredicateListId, TraitSolveCx, goal_holds, is_goal_satisfiable,
             },
-            ty_def::{BorrowKind, TyBase, TyData, TyId},
+            ty_def::{BorrowKind, PrimTy, TyBase, TyData, TyId},
             visitor::{TyVisitable, TyVisitor, walk_ty},
         },
     },
@@ -63,6 +65,34 @@ pub fn resolve_lib_type_path<'db>(
 ) -> Option<TyId<'db>> {
     let path_id = LibPath::new(db, path.to_string());
     resolve_lib_path(db, scope, path_id)
+}
+
+/// Checks the canonical packed hash input against the intrinsic's concrete N.
+pub fn keccak_packed_input_len<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    width: TyId<'db>,
+    ty: TyId<'db>,
+) -> Option<usize> {
+    let packed = resolve_lib_type_path(db, scope, "core::bytes::PackedBytes")?;
+    let (base, args) = ty.decompose_ty_app(db);
+    let [arg] = args else { return None };
+    let (Some(width_ty), Some(arg_ty)) = (width.const_ty_ty(db), arg.const_ty_ty(db)) else {
+        return None;
+    };
+    if base != packed.base_ty(db)
+        || !matches!(
+            width_ty.data(db),
+            TyData::TyBase(TyBase::Prim(PrimTy::Usize))
+        )
+        || arg_ty != width_ty
+    {
+        return None;
+    }
+    let width = demand_concrete_specialized_const_ty(db, width, width_ty)?;
+    let arg = demand_concrete_specialized_const_ty(db, *arg, arg_ty)?;
+    let n = width.integer_value(db)?.to_usize()?;
+    (arg.integer_value(db)?.to_usize()? == n).then_some(n)
 }
 
 /// Resolve a function by a fully-qualified `core::...` or `std::...` path string.
@@ -264,8 +294,8 @@ pub(crate) enum NumericExternIntrinsic {
 pub(crate) enum CtfeExternIntrinsic {
     SizeOf,
     StorageSlots,
-    AsBytes,
     Keccak256,
+    KeccakWords,
     Bitcast,
     Numeric(NumericExternIntrinsic),
     AddMod,
@@ -292,13 +322,10 @@ pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
         Some(CtfeExternIntrinsic::SizeOf)
     } else if lib_func_matches(db, func, "core::intrinsic::storage_slots") {
         Some(CtfeExternIntrinsic::StorageSlots)
-    } else if lib_func_matches(db, func, "core::intrinsic::__as_bytes") {
-        Some(CtfeExternIntrinsic::AsBytes)
-    } else if lib_func_matches(db, func, "core::intrinsic::__keccak256")
-        || lib_func_matches(db, func, "core::intrinsic::__keccak_words")
-    {
-        // A word array's bytes are its words, big-endian, in order.
+    } else if lib_func_matches(db, func, "core::intrinsic::__keccak256") {
         Some(CtfeExternIntrinsic::Keccak256)
+    } else if lib_func_matches(db, func, "core::intrinsic::__keccak_words") {
+        Some(CtfeExternIntrinsic::KeccakWords)
     } else if lib_func_matches(db, func, "core::num::__bitcast") {
         Some(CtfeExternIntrinsic::Bitcast)
     } else {
