@@ -14,6 +14,7 @@ pub struct TestMetadata {
     pub object_name: String,
     pub bytecode: Vec<u8>,
     pub sonatina_observability_json: Option<String>,
+    pub debug_info: Option<std::sync::Arc<TestDebugInfo>>,
     pub value_param_count: usize,
     pub effect_param_count: usize,
     pub init_bytecode: Vec<u8>,
@@ -245,4 +246,36 @@ fn parse_test_attr_int_arg<'db>(
     }
 
     Ok(None)
+}
+
+/// Metadata captured alongside the bytecode returned by the test emitter.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TestDebugInfo {
+    pub optimization: String,
+    pub compiler_flags: Vec<String>,
+    pub facts: Vec<trace_facts::TraceFact>,
+    pub codes: Vec<TestDebugCode>,
+    /// Source snapshots keyed by the content hashes recorded in the facts.
+    pub sources: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TestDebugCode {
+    pub owner: Option<TestDebugOwner>,
+    /// Typed error ABI entries added by the test driver, separate from public ABI output.
+    pub custom_errors: Vec<serde_json::Value>,
+    /// Compiler-declared immutable words appended to deployed runtime code.
+    pub immutable_tail_bytes: usize,
+    pub name: String,
+    pub deploy: Vec<u8>,
+    pub runtime: Vec<u8>,
+    pub create_key: common::origin::OriginExportKey,
+    pub runtime_key: common::origin::OriginExportKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TestDebugOwner {
+    pub source_uri: String,
+    pub kind: String,
+    pub name: String,
 }
