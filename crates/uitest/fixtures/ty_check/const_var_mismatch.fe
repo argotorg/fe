@@ -1,0 +1,9 @@
+// A mismatch is retained only while a projection or const computation waits
+// on inference. An inferred const argument alone cannot change the element
+// type, so the mismatch is reported at once, like any other.
+fn zeros<const N: usize>() -> [u8; N] { [0; N] }
+
+fn annotated() {
+    let x: [u16; 4] = zeros()
+    let _y: u8 = x
+}

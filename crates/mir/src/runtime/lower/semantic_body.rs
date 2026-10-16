@@ -99,7 +99,8 @@ impl<'db> RuntimeSemanticBody<'db> {
             ))
         })?;
         let source = instance.body(db).clone();
-        let representations = NLayoutLocals::new(&artifacts.body, &artifacts.layout_plan, &source);
+        let representations =
+            NLayoutLocals::new(db, &artifacts.body, &artifacts.layout_plan, &source);
 
         // Runtime code is the control flow the borrow check proved executable,
         // so representation choices and the summary's return contract agree on

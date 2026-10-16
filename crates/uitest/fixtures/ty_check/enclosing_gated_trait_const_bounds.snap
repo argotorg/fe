@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/enclosing_gated_trait_const_bounds.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ enclosing_gated_trait_const_bounds.fe:50:34
+   │
+22 │     fn need<const N: usize, U: Has<{ Marker<T, N>::LEN }>>() {}
+   │                                -------------------------- required by this bound on `need`
+   ·
+50 │ fn wrong<T: Gate, U: Has<5>>() { Foo<T>::need<3, U>() }
+   │                                  ^^^^^^^^^^^^^^^^^^ `U` doesn't implement `Has<Marker<T, 3>::LEN>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ enclosing_gated_trait_const_bounds.fe:50:47
+   │
+50 │ fn wrong<T: Gate, U: Has<5>>() { Foo<T>::need<3, U>() }
+   │                                               ^ `U` doesn't implement `Has<Marker<T, 3>::LEN>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ enclosing_gated_trait_const_bounds.fe:52:30
+   │
+21 │ impl<T: Gate> Foo<T> {
+   │         ---- required by this bound on `need`
+   ·
+52 │ fn ungated<T, U: Has<4>>() { Foo<T>::need<3, U>() }
+   │                              ^^^^^^^^^^^^^^^^^^ `T` doesn't implement `Gate`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ enclosing_gated_trait_const_bounds.fe:52:43
+   │
+52 │ fn ungated<T, U: Has<4>>() { Foo<T>::need<3, U>() }
+   │                                           ^ `T` doesn't implement `Gate`

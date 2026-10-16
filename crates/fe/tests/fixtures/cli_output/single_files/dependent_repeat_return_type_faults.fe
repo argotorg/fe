@@ -1,0 +1,13 @@
+// Return-type extent faults are diagnosed during HIR checking, before
+// concrete MIR layout demand. Keep both call forms independently covered.
+fn make<const N: usize>(_ value: u8) -> [u8; { N - 1 }] { [value; { N - 1 }] }
+fn produce<const N: usize>() -> [u8; { N - 1 }] { todo() }
+fn runtime(_ value: u8) -> u8 { value }
+
+fn receive() { let _values = make<0>(runtime(7)) }
+fn returned() -> u8 { produce<0>()[0] }
+
+pub fn main() -> i32 {
+    let values = make<2>(runtime(7))
+    values[0] as i32
+}

@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_eval/array_rep_unforceable_length.fe
+---
+error[3-0024]: non-const function call in const context
+   ┌─ array_rep_unforceable_length.fe:20:58
+   │
+20 │ fn generic_non_const<const N: usize>() -> u8 { [0 as u8; runtime_len(N)][0] }
+   │                                                          ^^^^^^^^^^^^^^ calls in const context must be `const fn`
+
+error[8-0064]: const value must be resolvable during type checking
+   ┌─ array_rep_unforceable_length.fe:18:38
+   │
+18 │ fn closed_opaque() -> u8 { [0 as u8; opaque()][0] }
+   │                                      ^^^^^^^^ requires fully-resolved const value
+
+error[8-0064]: const value must be resolvable during type checking
+   ┌─ array_rep_unforceable_length.fe:22:44
+   │
+22 │ fn runtime(_ n: usize) -> u8 { [0 as u8; { n + 1 }][0] }
+   │                                            ^ requires fully-resolved const value

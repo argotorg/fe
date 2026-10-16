@@ -26,7 +26,8 @@ use smallvec::SmallVec;
 use super::{
     adt_def::{AdtDef, Pin, instantiate_adt_field_shape},
     const_ty::{
-        ConstTyData, ConstTyId, TypePrintMode, UnevaluatedConstPolicy, const_ty_from_sem_const,
+        ConstCaptureEnv, ConstTyData, ConstTyId, TypePrintMode, UnevaluatedConstPolicy,
+        const_ty_from_sem_const,
     },
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     effects::{place_effect_provider_param_index_map, rows::RowComponent},
@@ -912,6 +913,8 @@ impl<'db> TyId<'db> {
                 )?;
                 Ok(TyId::const_ty(db, const_ty.with_ty(db, ty)))
             }
+            // An argument that is already invalid keeps its own cause.
+            (Some(_), TyData::Invalid(cause)) => Err(cause.clone()),
             (Some(expected_const_ty), _) => {
                 if expected_const_ty.has_invalid(db) {
                     Err(InvalidCause::Other)
@@ -1014,6 +1017,9 @@ impl<'db> TyId<'db> {
                     }
                 }
             }
+
+            // An argument that is already invalid keeps its own cause.
+            (Some(_), TyData::Invalid(cause)) => Err(cause.clone()),
 
             (Some(expected_const_ty), _) => {
                 if expected_const_ty.has_invalid(db) {
@@ -1417,6 +1423,102 @@ pub enum InvalidCause<'db> {
     /// `Other` indicates the cause is already reported in other analysis
     /// passes, e.g., parser or name resolution.
     Other,
+}
+
+impl<'db> InvalidCause<'db> {
+    /// An evaluation fault with the expression it occurred at and its label.
+    /// Type checking reports faults in instantiated call return types and
+    /// leaves other specialized layouts to concrete demand; any other invalid
+    /// type has an upstream report.
+    pub(crate) fn const_eval_fault(&self) -> Option<(Body<'db>, ExprId, String)> {
+        match self {
+            InvalidCause::ConstEvalUnsupported { body, expr } => Some((
+                *body,
+                *expr,
+                "the expression cannot be evaluated at compile time".to_string(),
+            )),
+            InvalidCause::ConstEvalAssertionFailed { body, expr, .. } => Some((
+                *body,
+                *expr,
+                "assertion failed in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalNonConstCall { body, expr } => Some((
+                *body,
+                *expr,
+                "non-const function call in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalDivisionByZero { body, expr } => Some((
+                *body,
+                *expr,
+                "division by zero in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalOutOfBounds { body, expr } => Some((
+                *body,
+                *expr,
+                "index out of bounds in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalInvalidOperation {
+                body,
+                expr,
+                message,
+            } => Some((
+                *body,
+                *expr,
+                format!("invalid operation in const context: {message}"),
+            )),
+            InvalidCause::ConstEvalInvalidBorrow { body, expr } => {
+                Some((*body, *expr, "invalid borrow in const context".to_string()))
+            }
+            InvalidCause::ConstEvalInvalidProviderUse { body, expr } => Some((
+                *body,
+                *expr,
+                "invalid effect provider in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalVariantMismatch { body, expr } => Some((
+                *body,
+                *expr,
+                "variant mismatch in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalUninitializedLocal { body, expr } => Some((
+                *body,
+                *expr,
+                "uninitialized value in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalInvariant {
+                body,
+                expr,
+                message,
+            } => Some((
+                *body,
+                *expr,
+                format!("compiler invariant failed during const evaluation: {message}"),
+            )),
+            InvalidCause::ConstEvalArithmeticOverflow { body, expr } => Some((
+                *body,
+                *expr,
+                "arithmetic overflow in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalNegativeExponent { body, expr } => Some((
+                *body,
+                *expr,
+                "negative exponent in const context".to_string(),
+            )),
+            InvalidCause::ConstEvalStepLimitExceeded { body, expr } => Some((
+                *body,
+                *expr,
+                "const evaluation exceeded the step limit".to_string(),
+            )),
+            InvalidCause::ConstEvalRecursionLimitExceeded { body, expr } => Some((
+                *body,
+                *expr,
+                "const evaluation exceeded the recursion limit".to_string(),
+            )),
+            InvalidCause::ConstEvalRecursiveConst { body, expr } => {
+                Some((*body, *expr, "recursive constant definition".to_string()))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl InvalidCause<'_> {
@@ -2414,6 +2516,15 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
         }
 
         fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {
+            // An identity capture reads its owner's formals without
+            // spelling them, so the body still depends on parameters.
+            if let ConstTyData::UnEvaluated {
+                capture: ConstCaptureEnv::Identity(_),
+                ..
+            } = const_ty.data(self.db)
+            {
+                self.flags.insert(TyFlags::HAS_PARAM);
+            }
             walk_const_ty(self, const_ty);
         }
     }

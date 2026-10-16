@@ -1,6 +1,7 @@
 use super::{
-    ErrProof, Parser, Recovery, define_scope,
+    ErrProof, Parser, ParsingScope, Recovery, define_scope,
     expr_atom::BlockExprScope,
+    item::{ExternItemListScope, TraitItemListScope},
     param::{ItemBlock, parse_generic_params_opt, parse_where_clause_opt},
     parse_list,
     token_stream::TokenStream,
@@ -90,6 +91,7 @@ impl super::Parse for FuncSignatureScope {
             SyntaxKind::ConstKw,
             SyntaxKind::PubKw,
             SyntaxKind::UnsafeKw,
+            SyntaxKind::Pound,
             SyntaxKind::DocComment,
             SyntaxKind::DocCommentAttr,
             SyntaxKind::Newline,
@@ -98,6 +100,18 @@ impl super::Parse for FuncSignatureScope {
         let body = self.fn_def_scope.body();
         if body != ItemBlock::Absent {
             recovery_tokens.push(SyntaxKind::LBrace);
+        }
+        // A signature whose body may be omitted ends wherever its item list
+        // continues.
+        let item_list_anchors = match self.fn_def_scope {
+            FuncDefScope::TraitDef => TraitItemListScope::default().recovery_tokens().to_vec(),
+            FuncDefScope::Extern => ExternItemListScope::default().recovery_tokens().to_vec(),
+            FuncDefScope::Normal | FuncDefScope::Impl => Vec::new(),
+        };
+        for anchor in item_list_anchors {
+            if !recovery_tokens.contains(&anchor) {
+                recovery_tokens.push(anchor);
+            }
         }
         parser.set_scope_recovery_stack(&recovery_tokens);
 

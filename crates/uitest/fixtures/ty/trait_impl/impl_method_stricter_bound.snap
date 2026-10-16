@@ -13,4 +13,4 @@ error[6-0009]: method has stricter bounds than trait
    ┌─ impl_method_stricter_bound.fe:18:8
    │
 18 │     fn foo<U>(self, t: T, u: U)
-   │        ^^^ method has stricter bounds than the declared method in the trait: `T: Bar`, `T: Baz`, `U: Bar`
+   │        ^^^ method has stricter bounds than the declared method in the trait: `T: Baz`, `U: Bar`

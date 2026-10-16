@@ -229,10 +229,8 @@ fn const_body_simple_path<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> O
 
 /// Extends `assumptions` with the enclosing trait's implicit `Self: Trait`
 /// predicate, mirroring the body-checking environment. Signature-position
-/// const bodies like `Slot<{ Self::N }>` in a trait method must resolve
-/// `Self::N` to a trait const the same way the body checker later does, or
-/// the const falls back to an unevaluated body whose CTFE cannot resolve the
-/// trait const reference.
+/// paths and const bodies like `Slot<Self::N>` and `Slot<{ Self::N }>` must
+/// resolve the trait's constants using the same implicit bound.
 fn with_enclosing_trait_self_predicate<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -261,7 +259,7 @@ fn with_enclosing_trait_self_predicate<'db>(
     assumptions
 }
 
-fn lower_opt_const_body<'db>(
+pub(crate) fn lower_opt_const_body<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Partial<Body<'db>>,
     scope: ScopeId<'db>,
@@ -406,6 +404,7 @@ pub(crate) fn lower_type_position_path<'db>(
     position: TypePosition,
     lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, TyId<'db>> {
+    let assumptions = with_enclosing_trait_self_predicate(db, scope, assumptions);
     let res = resolve_type_position_path_with_minter(
         db,
         path,
@@ -528,15 +527,22 @@ fn lower_const_ty_ty<'db>(
         return TyId::invalid(db, InvalidCause::InvalidConstParamTy);
     };
 
-    if !path
-        .to_opt()
-        .is_none_or(|p| p.generic_args(db).is_empty(db))
-    {
+    let Some(path) = path.to_opt() else {
+        return TyId::invalid(db, InvalidCause::ParseError);
+    };
+    if !path.generic_args(db).is_empty(db) {
         return TyId::invalid(db, InvalidCause::InvalidConstParamTy);
     }
     let ty = normalize_ty(
         db,
-        lower_path(db, scope, *path, assumptions),
+        lower_path_impl(
+            db,
+            scope,
+            Partial::Present(path),
+            assumptions,
+            TypePosition::Type,
+            &LoweringContext::new(),
+        ),
         scope,
         assumptions,
     );
@@ -550,26 +556,6 @@ fn lower_const_ty_ty<'db>(
     } else {
         TyId::invalid(db, InvalidCause::InvalidConstParamTy)
     }
-}
-
-fn lower_path<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    path: Partial<PathId<'db>>,
-    assumptions: PredicateListId<'db>,
-) -> TyId<'db> {
-    if !path.is_present() {
-        return TyId::invalid(db, InvalidCause::ParseError);
-    }
-    let lowering_cx = LoweringContext::new();
-    lower_path_impl(
-        db,
-        scope,
-        path,
-        assumptions,
-        TypePosition::Type,
-        &lowering_cx,
-    )
 }
 
 pub(crate) fn generic_param_owner_assumptions<'db>(
@@ -1080,6 +1066,19 @@ impl<'db> ParamSchemaId<'db> {
                 set.offset_to_explicit_params_position(db) + index.0,
             )
         })
+    }
+
+    /// The source parameter whose allowed default dependencies are the
+    /// leading `len` slots; the inverse of `allowed_default_dependencies`.
+    pub(crate) fn default_dependency_index(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        len: usize,
+    ) -> Option<SourceParamIndex> {
+        let set = self.param_set(db);
+        len.checked_sub(set.offset_to_explicit_params_position(db))
+            .filter(|&index| index < set.explicit_param_count(db))
+            .map(SourceParamIndex)
     }
 }
 
