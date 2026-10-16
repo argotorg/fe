@@ -1,0 +1,286 @@
+use core::{AsBytes, ByteWriter, PackedBytes, concat}
+use core::abi::{ByteInput, encode_alloc}
+use core::ptr
+use std::abi::Sol
+
+const fn array_roundtrip<const N: usize>(_ seed: u8) -> bool {
+    var array: [u8; N] = [0; N]
+    var i: usize = 0
+    while i < N {
+        array[i] = ((seed as u256) + i as u256).downcast_truncate()
+        i += 1
+    }
+    let packed = array.as_bytes()
+    let copied = packed.as_bytes()
+    let back = copied.to_array()
+    i = 0
+    while i < N {
+        if packed[i] != array[i] || back[i] != array[i] {
+            return false
+        }
+        i += 1
+    }
+    packed == copied && !(packed != copied)
+}
+const ARRAYS: bool = array_roundtrip<0>(17)
+    && array_roundtrip<1>(17)
+    && array_roundtrip<31>(17)
+    && array_roundtrip<32>(17)
+    && array_roundtrip<33>(17)
+    && array_roundtrip<63>(17)
+    && array_roundtrip<64>(17)
+    && array_roundtrip<65>(17)
+const MAX: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+const NESTED: PackedBytes<65> = (("x" as String<1>, MAX), (1 as u256, "" as String<0>)).as_bytes()
+const SIXTEEN: PackedBytes<16> = (
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "f",
+    "g",
+    "h",
+    "i",
+    "j",
+    "k",
+    "l",
+    "m",
+    "n",
+    "o",
+    "p",
+)
+    .as_bytes()
+
+#[test]
+fn array_boundaries_at_ctfe_and_runtime() {
+    assert!(ARRAYS)
+    let encoded = encode_alloc<Sol, u256>(17)
+    let seed = encoded.span().word_at(0).downcast_truncate()
+    assert!(array_roundtrip<0>(seed) && array_roundtrip<1>(seed))
+    assert!(
+        array_roundtrip<31>(seed) && array_roundtrip<32>(seed) && array_roundtrip<33>(seed),
+    )
+    assert!(
+        array_roundtrip<63>(seed) && array_roundtrip<64>(seed) && array_roundtrip<65>(seed),
+    )
+}
+
+#[test]
+fn words_and_tuple_boundaries() {
+    for word in [0 as u256, 1, 1 << 255, MAX] {
+        let packed = word.as_bytes()
+        assert!(packed.word(0) == word && packed.len() == 32)
+        var i: usize = 0
+        while i < 32 {
+            assert!(
+                packed[i] == (word >> (((31 - i) * 8) as u256)).downcast_truncate(),
+            )
+            i += 1
+        }
+        let bytes = (("x" as String<1>, word), (1 as u256, "" as String<0>)).as_bytes()
+        assert!(
+            bytes[0] == 120 && bytes[32] == (word & 0xff).downcast_truncate() && bytes[64] == 1,
+        )
+    }
+    assert!(NESTED[1] == 255 && NESTED[32] == 255 && NESTED[64] == 1)
+    let boundary = ([1 as u8; 31], [2 as u8; 32], [3 as u8; 2]).as_bytes()
+    assert!(
+        boundary[30] == 1
+            && boundary[31] == 2
+            && boundary[62] == 2
+            && boundary[63] == 3
+            && boundary[64] == 3,
+    )
+    var i: usize = 0
+    while i < 16 {
+        assert!(SIXTEEN[i] == (97 + i).downcast_truncate())
+        i += 1
+    }
+}
+
+#[test]
+fn string_zero_padding_dirty_bits_and_concat() {
+    let empty: String<0> = MAX as String<0>
+    assert!(
+        empty.as_bytes().len() == 0 && empty.len() == 0 && empty == "",
+    )
+    assert!(
+        String<0>::from_bytes(PackedBytes::from_array([0; 0])) as u256 == 0,
+    )
+    let dirty: String<1> = 0xff41 as String<1>
+    assert!(dirty == "A" && dirty.as_bytes()[0] == 65)
+    let padded: String<4> = "A"
+    assert!(padded.as_bytes()[0] == 0 && padded.as_bytes()[3] == 65)
+    let wide: String<31> = "1234567890123456789012345678901"
+    assert!(String<31>::from_bytes(wide.as_bytes()) == wide)
+    let all_zero: String<31> = 0 as String<31>
+    assert!(all_zero.len() == 0 && all_zero == "")
+    let interior: String<3> = 0x410042 as String<3>
+    assert!(interior.len() == 3 && interior.as_bytes()[1] == 0)
+    let truncated: String<3> = concat("AB" as String<2>, "CD" as String<2>)
+    let zero: String<0> = concat(wide, wide)
+    assert!(truncated == "ABC" && zero == "")
+}
+
+#[test]
+fn hashing_preserves_sources_and_existing_raw_allocations() {
+    let encoded = encode_alloc<Sol, u256>(17)
+    let word = encoded.span().word_at(0)
+    let source: [u8; 33] = [word.downcast_truncate(); 33]
+    let before = ptr::alloc<u256>()
+    let after = ptr::alloc<u256>()
+    unsafe {
+        *before = 0x123456
+        *after = MAX
+    }
+    let packed = (word, (source, "" as String<0>)).as_bytes()
+    let hash = core::keccak(packed)
+    assert!(hash == core::keccak((word, (source, "" as String<0>))))
+    assert!(
+        core::keccak("" as String<0>) == core::keccak([0 as u8; 0]),
+    )
+    assert!(unsafe { *before == 0x123456 && *after == MAX })
+    assert!(encoded.span().word_at(0) == word)
+    var i: usize = 0
+    while i < 33 {
+        assert!(source[i] == 17 && packed[32 + i] == source[i])
+        i += 1
+    }
+}
+
+struct Short {}
+impl AsBytes for Short {
+    const N: usize = 1
+    const fn append_to<const M: usize>(self, _ out: mut ByteWriter<M>) {
+        let _ = out
+    }
+}
+struct Long {}
+impl AsBytes for Long {
+    const N: usize = 1
+    const fn append_to<const M: usize>(self, _ out: mut ByteWriter<M>) {
+        out.push_word(0x4142, width: 2)
+    }
+}
+struct ZeroLong {}
+impl AsBytes for ZeroLong {
+    const N: usize = 0
+    const fn append_to<const M: usize>(self, _ out: mut ByteWriter<M>) {
+        out.push_byte(65)
+    }
+}
+
+#[test(should_revert)]
+fn short_component_rejected() {
+    let _ = (Short {}, "x" as String<1>).as_bytes()
+}
+#[test(should_revert)]
+fn long_component_rejected() {
+    let _ = (Long {}, "x" as String<1>).as_bytes()
+}
+#[test(should_revert)]
+fn compensating_components_rejected() {
+    let _ = (Short {}, Long {}).as_bytes()
+}
+#[test(should_revert)]
+fn zero_component_is_checked() {
+    let _ = (ZeroLong {}, "x" as String<1>).as_bytes()
+}
+#[test(should_revert)]
+fn overflowing_empty_writer_rejected() {
+    let _ = ZeroLong {}.as_bytes()
+}
+
+// Every push crosses or ends at a word boundary.
+struct Crossing {
+    fill: u8,
+}
+impl AsBytes for Crossing {
+    const N: usize = 65
+    const fn append_to<const M: usize>(self, _ out: mut ByteWriter<M>) {
+        out.push_word(0xff41, width: 1)
+        out.push_word(1, width: 32)
+        out.push_bytes(PackedBytes::from_array([self.fill; 31]))
+        out.push_byte(self.fill + 1)
+    }
+}
+const CROSSING: PackedBytes<65> = Crossing { fill: 42 }.as_bytes()
+
+struct Empty {}
+impl AsBytes for Empty {
+    const N: usize = 0
+    const fn append_to<const M: usize>(self, _ out: mut ByteWriter<M>) {
+        out.push_word(0xffff, width: 0)
+        out.push_bytes(PackedBytes::from_array([0; 0]))
+        out.push_array([0; 0])
+    }
+}
+
+struct TooWide {}
+impl AsBytes for TooWide {
+    const N: usize = 33
+    const fn append_to<const M: usize>(self, _ out: mut ByteWriter<M>) {
+        out.push_word(1, width: 33)
+    }
+}
+
+#[test]
+fn writes_cross_word_boundaries() {
+    let encoded = encode_alloc<Sol, u256>(42)
+    let runtime = Crossing { fill: encoded.span().word_at(0).downcast_truncate() }.as_bytes()
+    assert!(runtime == CROSSING)
+    assert!(runtime[0] == 65 && runtime[31] == 0 && runtime[32] == 1)
+    assert!(
+        runtime[33] == 42 && runtime[63] == 42 && runtime[64] == 43,
+    )
+    assert!(runtime.word(2) == (43 as u256) << 248)
+    assert!(runtime != PackedBytes::from_array([0; 65]))
+    assert!(Empty {}.as_bytes() == PackedBytes::from_array([0; 0]))
+}
+
+#[test(should_revert)]
+fn index_past_end_rejected() {
+    let _ = CROSSING[65]
+}
+#[test(should_revert)]
+fn empty_index_rejected() {
+    let _ = PackedBytes::from_array([0 as u8; 0])[0]
+}
+#[test(should_revert)]
+fn word_wider_than_a_word_rejected() {
+    let _ = TooWide {}.as_bytes()
+}
+
+// A computed extent keeps its identity through a generic signature, and
+// held reads of an element see the bytes it was read from.
+const fn identity<T0: AsBytes, T1: AsBytes>(
+    _ value: PackedBytes<{ T0::N + T1::N }>,
+) -> PackedBytes<{ T0::N + T1::N }> {
+    let copied: PackedBytes<{ T0::N + T1::N }> = value
+    copied
+}
+
+const fn held_reads(_ word: u256, _ text: String<2>) -> u8 {
+    let pair = (word, text).as_bytes()
+    let last = ref pair[33]
+    let before_last = ref pair[32]
+    assert!(last == pair[33] && before_last == pair[32])
+    last
+}
+const PAIR: PackedBytes<34> = (1 as u256, "ab" as String<2>).as_bytes()
+const IDENTITY: PackedBytes<34> = identity<u256, String<2>>(PAIR)
+const HELD_READS: u8 = held_reads(1, "ab")
+
+#[test]
+fn computed_extents_and_held_reads() {
+    assert!(IDENTITY == PAIR && HELD_READS == 98)
+    let encoded = encode_alloc<Sol, String<2>>("ab")
+    let input = encoded.span()
+    let a = <ptr::MemSpan as ByteInput>::byte_at(input, 32)
+    let b = <ptr::MemSpan as ByteInput>::byte_at(input, 33)
+    let text = (((a as u256) << 8) | (b as u256)) as String<2>
+    let word = (a - 96) as u256
+    assert!(held_reads(word, text) == 98)
+    assert!(identity<u256, String<2>>((word, text).as_bytes()) == PAIR)
+}

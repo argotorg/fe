@@ -17,7 +17,6 @@ use fe_hir::{
         },
     },
     hir_def::{ItemKind, Partial},
-    span::LazySpan,
 };
 use num_traits::ToPrimitive;
 
@@ -363,61 +362,23 @@ fn wrap() {
 }
 
 #[test]
-fn semantic_ctfe_evaluates_as_bytes_const_fns() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "semantic_ctfe.fe".into(),
-        include_str!("../../../uitest/fixtures/ty_check/const_eval/user_const_fn_ok.fe"),
-    );
-    let (top_mod, _) = db.top_mod(file);
-
-    for name in ["bytes_tail", "stor_code"] {
-        let func = top_mod
-            .all_funcs(&db)
-            .iter()
-            .find(
-                |func| matches!(func.name(&db), Partial::Present(found) if found.data(&db) == name),
-            )
-            .copied()
-            .unwrap_or_else(|| panic!("missing const fn `{name}`"));
-
-        let value = match eval_body_owner_const(
-            &db,
-            BodyOwner::Func(func),
-            GenericSubst::for_owner(&db, func.into(), Vec::new()),
-        ) {
-            EvalOutcome::Ready(value) => value,
-            outcome => panic!("semantic CTFE failed for `{name}`: {outcome:?}"),
-        };
-        let ty = fe_hir::analysis::semantic::sem_const_ty(&db, value);
-        assert!(
-            !matches!(value.value(&db), SemConstValue::Description(..)),
-            "`{name}` should lower to a value const, got {:?} with ty {}",
-            value.value(&db),
-            ty.pretty_print(&db)
-        );
-    }
-}
-
-#[test]
 fn semantic_ctfe_evaluates_fixed_string_primitives() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
         "semantic_ctfe_string.fe".into(),
         r#"
 use core::concat
-use core::intrinsic
 
 const fn padded_bytes() -> [u8; 8] {
     let s: String<8> = "COOL"
-    s.as_bytes()
+    s.as_bytes().to_array()
 }
 
 const fn roundtrip_bytes() -> [u8; 8] {
     let s: String<8> = "COOL"
-    let bytes: [u8; 8] = s.as_bytes()
+    let bytes: core::PackedBytes<8> = s.as_bytes()
     let t: String<8> = String::from_bytes(bytes)
-    t.as_bytes()
+    t.as_bytes().to_array()
 }
 
 const fn cool_len() -> usize {
@@ -429,14 +390,14 @@ const fn concat_bytes() -> [u8; 8] {
     let a: String<8> = "COOL"
     let b: String<8> = "COIN"
     let c: String<8> = concat(a, b)
-    c.as_bytes()
+    c.as_bytes().to_array()
 }
 
 const fn concat_uses_effective_len() -> [u8; 4] {
     let a: String<4> = "C"
     let b: String<4> = "O"
     let c: String<4> = concat(a, b)
-    c.as_bytes()
+    c.as_bytes().to_array()
 }
 
 const fn eq_true() -> bool {
@@ -453,13 +414,13 @@ const fn eq_false() -> bool {
 
 const fn eq_from_bytes_matches_literal() -> bool {
     let bytes: [u8; 8] = [0, 0, 0, 0, 67, 79, 79, 76]
-    let s: String<8> = String::from_bytes(bytes)
+    let s: String<8> = String::from_bytes(core::PackedBytes::from_array(bytes))
     s == "COOL"
 }
 
 const fn from_bytes_value() -> String<8> {
     let bytes: [u8; 8] = [0, 0, 0, 0, 67, 79, 79, 76]
-    String::from_bytes(bytes)
+    String::from_bytes(core::PackedBytes::from_array(bytes))
 }
 
 const fn literal_value_4() -> String<4> {
@@ -472,7 +433,7 @@ const fn literal_value_8() -> String<8> {
 
 const fn rhs_word_in_eq_from_bytes() -> u256 {
     let bytes: [u8; 8] = [0, 0, 0, 0, 67, 79, 79, 76]
-    let s: String<8> = String::from_bytes(bytes)
+    let s: String<8> = String::from_bytes(core::PackedBytes::from_array(bytes))
     let rhs = "COOL"
     let _ok: bool = s == rhs
     rhs as u256
@@ -480,13 +441,13 @@ const fn rhs_word_in_eq_from_bytes() -> u256 {
 
 const fn s_word_in_eq_from_bytes() -> u256 {
     let bytes: [u8; 8] = [0, 0, 0, 0, 67, 79, 79, 76]
-    let s: String<8> = String::from_bytes(bytes)
+    let s: String<8> = String::from_bytes(core::PackedBytes::from_array(bytes))
     s as u256
 }
 
 const fn rhs_value_in_eq_from_bytes() -> String<8> {
     let bytes: [u8; 8] = [0, 0, 0, 0, 67, 79, 79, 76]
-    let s: String<8> = String::from_bytes(bytes)
+    let s: String<8> = String::from_bytes(core::PackedBytes::from_array(bytes))
     let rhs = "COOL"
     let _ok: bool = s == rhs
     rhs
@@ -494,7 +455,7 @@ const fn rhs_value_in_eq_from_bytes() -> String<8> {
 
 const fn s_value_in_eq_from_bytes() -> String<8> {
     let bytes: [u8; 8] = [0, 0, 0, 0, 67, 79, 79, 76]
-    String::from_bytes(bytes)
+    String::from_bytes(core::PackedBytes::from_array(bytes))
 }
 
 const fn high_word_string_roundtrip() -> u256 {
@@ -507,7 +468,7 @@ const fn high_word_string_value() -> String<4> {
 
 const fn high_word_string_as_bytes() -> [u8; 4] {
     let s: String<4> = 0x01000000434f4f4c as String<4>
-    intrinsic::__as_bytes(s)
+    s.as_bytes().to_array()
 }
 "#,
     );
@@ -734,7 +695,7 @@ const fn truncated_concat() -> [u8; 6] {
     let a: String<4> = "ABCD"
     let b: String<4> = "EFGH"
     let c: String<6> = concat(a, b)
-    c.as_bytes()
+    c.as_bytes().to_array()
 }
 "#,
     );
@@ -891,37 +852,6 @@ const fn invalid_call_like_expr() -> u256 {
             EvalOutcome::Failed(EvalFailure::Ctfe(CtfeError::InvalidBody { .. }))
         ),
         "expected invalid body CTFE error, got {result:?}"
-    );
-}
-
-#[test]
-fn type_alias_len_reports_nested_const_eval_error() {
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone(
-        "semantic_ctfe.fe".into(),
-        include_str!(
-            "../../../uitest/fixtures/ty_check/const_eval/as_bytes_mixed_enum_unsupported.fe"
-        ),
-    );
-    let (top_mod, _) = db.top_mod(file);
-    let alias = top_mod
-        .all_type_aliases(&db)
-        .iter()
-        .find(|alias| matches!(alias.name(&db), Partial::Present(name) if name.data(&db) == "Arr"))
-        .copied()
-        .expect("missing type alias `Arr`");
-    let diags = alias.diags(&db);
-    let [TyDiagCollection::Ty(TyLowerDiag::ConstEvalUnsupported(span))] = diags.as_slice() else {
-        panic!("expected one const-eval unsupported diagnostic, got {diags:#?}");
-    };
-    let resolved = span
-        .resolve(&db)
-        .expect("diagnostic should resolve to source");
-    let text = file.text(&db);
-
-    assert_eq!(
-        &text[resolved.range.start().into()..resolved.range.end().into()],
-        "intrinsic::__as_bytes(Mixed::B)"
     );
 }
 
