@@ -1,0 +1,269 @@
+use std::evm::{DeepKey2, DeepKey3, DeepKey6, DeepMapCursor, DeepMapCursorMut, Evm, RawStorage, StorageDeepMap, StorageKey, StorageMap}
+
+// ---------------------------------------------------------------------------
+// Date newtypes. Each wraps a plain number, but the compiler treats them as
+// distinct types, so a month can never be passed where a day is expected.
+// ---------------------------------------------------------------------------
+
+pub struct Year {
+    value: u256,
+}
+
+pub struct Month {
+    value: u256,
+}
+
+pub struct Day {
+    value: u256,
+}
+
+impl Copy for Year {}
+impl Copy for Month {}
+impl Copy for Day {}
+
+impl Year {
+    pub fn new(_ value: u256) -> Self {
+        Year { value }
+    }
+}
+
+impl Month {
+    pub fn new(_ value: u256) -> Self {
+        Month { value }
+    }
+}
+
+impl Day {
+    pub fn new(_ value: u256) -> Self {
+        Day { value }
+    }
+}
+
+// Storage key encoding: same as a plain `u256` (one 32-byte word).
+impl StorageKey for Year {
+    fn encoded_len(self) -> u256 {
+        32
+    }
+
+    fn write_key(ptr: *u8, self) {
+        u256::write_key(ptr: ptr, self.value)
+    }
+}
+
+impl StorageKey for Month {
+    fn encoded_len(self) -> u256 {
+        32
+    }
+
+    fn write_key(ptr: *u8, self) {
+        u256::write_key(ptr: ptr, self.value)
+    }
+}
+
+impl StorageKey for Day {
+    fn encoded_len(self) -> u256 {
+        32
+    }
+
+    fn write_key(ptr: *u8, self) {
+        u256::write_key(ptr: ptr, self.value)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Example: a step counter that stores the number of steps walked per day.
+//
+// Solidity equivalent:
+//     mapping(uint256 year => mapping(uint256 month => mapping(uint256 day => uint256))) steps;
+// ---------------------------------------------------------------------------
+
+type DateKey = DeepKey3<Year, Month, Day>
+
+/// The step map narrowed down to a single year, writable.
+type YearStepsMut<const S: u256> = DeepMapCursorMut<DateKey, Year, u256, S>
+
+/// The step map narrowed down to a single month of a single year, read-only.
+type MonthSteps<const S: u256> = DeepMapCursor<DateKey, (Year, Month), u256, S>
+
+/// The step map narrowed down to a single month of a single year, writable.
+type MonthStepsMut<const S: u256> = DeepMapCursorMut<DateKey, (Year, Month), u256, S>
+
+// Messages carry plain numbers (ABI types); they are wrapped into newtypes on entry.
+msg StepMsg {
+    #[selector = 1]
+    AddSteps { year: u256, month: u256, day: u256, steps: u256 },
+    #[selector = 2]
+    StepsOn { year: u256, month: u256, day: u256 } -> u256,
+    #[selector = 3]
+    StepsInMonth { year: u256, month: u256 } -> u256,
+    #[selector = 4]
+    ResetDay { year: u256, month: u256, day: u256 },
+}
+
+/// Adds the steps of one walk to a given day of the month.
+/// The function only knows about this one month.
+fn add_steps<const S: u256>(_ month: MonthStepsMut<S>, day: Day, steps: u256) {
+    let mut entry = month.at(day)
+    entry.set(value: entry.get() + steps)
+}
+
+/// Sums up all days of one month.
+/// Maps cannot be iterated, but the day keys are known (1 to 31).
+fn total_for_month<const S: u256>(_ month: MonthSteps<S>) -> u256 {
+    let mut total: u256 = 0
+    let mut day: u256 = 1
+    while day <= 31 {
+        total += month.at(Day::new(day)).get()
+        day += 1
+    }
+    total
+}
+
+/// Sets one day back to zero. Receives the whole year and picks month and day itself.
+fn reset_day<const S: u256>(_ year: YearStepsMut<S>, month: Month, day: Day) {
+    year.at(month).at(day).set(value: 0)
+}
+
+pub contract StepCounter {
+    // year => month => day => steps
+    mut steps: StorageDeepMap<DateKey, u256>,
+
+    recv StepMsg {
+        AddSteps { year, month, day, steps: walked } uses (mut steps) {
+            // Pass only the requested month to the helper.
+            let month_view = steps.at_mut(Year::new(year)).at(Month::new(month))
+            add_steps(month_view, day: Day::new(day), steps: walked)
+        }
+        StepsOn { year, month, day } -> u256 uses (steps) {
+            // Equivalent to `steps[year][month][day]` in Solidity.
+            steps.at(Year::new(year)).at(Month::new(month)).at(Day::new(day)).get()
+        }
+        StepsInMonth { year, month } -> u256 uses (steps) {
+            total_for_month(steps.at(Year::new(year)).at(Month::new(month)))
+        }
+        ResetDay { year, month, day } uses (mut steps) {
+            reset_day(steps.at_mut(Year::new(year)), month: Month::new(month), day: Day::new(day))
+        }
+    }
+}
+
+#[test]
+fn test_step_counter() uses (evm: mut Evm) {
+    let counter = evm.create2<StepCounter>(value: 0, args: (), salt: 1)
+    assert(counter.inner != 0)
+
+    // Two walks on 3 May 2026, one walk on 4 May 2026, one walk on 3 June 2026.
+    evm.call(addr: counter, gas: 10000000, value: 0, message: StepMsg::AddSteps { year: 2026, month: 5, day: 3, steps: 4000 })
+    evm.call(addr: counter, gas: 10000000, value: 0, message: StepMsg::AddSteps { year: 2026, month: 5, day: 3, steps: 2500 })
+    evm.call(addr: counter, gas: 10000000, value: 0, message: StepMsg::AddSteps { year: 2026, month: 5, day: 4, steps: 8000 })
+    evm.call(addr: counter, gas: 10000000, value: 0, message: StepMsg::AddSteps { year: 2026, month: 6, day: 3, steps: 1000 })
+
+    assert(evm.call(addr: counter, gas: 10000000, value: 0, message: StepMsg::StepsOn { year: 2026, month: 5, day: 3 }) == 6500)
+    assert(evm.call(addr: counter, gas: 10000000, value: 0, message: StepMsg::StepsOn { year: 2026, month: 5, day: 4 }) == 8000)
+    assert(evm.call(addr: counter, gas: 10000000, value: 0, message: StepMsg::StepsOn { year: 2026, month: 6, day: 3 }) == 1000)
+    // Never written: the same month and day in another year.
+    assert(evm.call(addr: counter, gas: 10000000, value: 0, message: StepMsg::StepsOn { year: 2025, month: 5, day: 3 }) == 0)
+    assert(evm.call(addr: counter, gas: 10000000, value: 0, message: StepMsg::StepsInMonth { year: 2026, month: 5 }) == 14500)
+
+    evm.call(addr: counter, gas: 10000000, value: 0, message: StepMsg::ResetDay { year: 2026, month: 5, day: 3 })
+    assert(evm.call(addr: counter, gas: 10000000, value: 0, message: StepMsg::StepsOn { year: 2026, month: 5, day: 3 }) == 0)
+    assert(evm.call(addr: counter, gas: 10000000, value: 0, message: StepMsg::StepsInMonth { year: 2026, month: 5 }) == 8000)
+    assert(evm.call(addr: counter, gas: 10000000, value: 0, message: StepMsg::StepsInMonth { year: 2026, month: 6 }) == 1000)
+}
+
+// ---------------------------------------------------------------------------
+// Depth, independence and layout.
+// ---------------------------------------------------------------------------
+
+/// Nine levels, nested by hand: there is no alias for it, and none is needed.
+type Key9 = ((((((((u256, u256), u256), u256), u256), u256), u256), u256), u256)
+
+msg ShapeMsg {
+    #[selector = 1]
+    SetPair { a: u256, b: u256, value: u256 },
+    #[selector = 2]
+    GetPair { a: u256, b: u256 } -> u256,
+    #[selector = 3]
+    GetOtherPair { a: u256, b: u256 } -> u256,
+    #[selector = 4]
+    SetSix { first: u256, value: u256 },
+    #[selector = 5]
+    GetSix { first: u256 } -> u256,
+    #[selector = 6]
+    SetNine { first: u256, value: u256 },
+    #[selector = 7]
+    GetNine { first: u256 } -> u256,
+    #[selector = 8]
+    SetLayout { a: u256, b: u256, c: u256, value: u256 },
+    #[selector = 9]
+    GetLayoutFlat { a: u256, b: u256, c: u256 } -> u256,
+}
+
+pub contract Shapes {
+    mut pairs: StorageDeepMap<DeepKey2<u256, u256>, u256>,
+    mut other_pairs: StorageDeepMap<DeepKey2<u256, u256>, u256>,
+    mut six: StorageDeepMap<DeepKey6<u256, u256, u256, u256, u256, u256>, u256>,
+    mut nine: StorageDeepMap<Key9, u256>,
+    mut layout: StorageDeepMap<DeepKey3<u256, u256, u256>, u256, 0x5a17>,
+
+    recv ShapeMsg {
+        SetPair { a, b, value } uses (mut pairs) {
+            pairs.at_mut(a).at(b).set(value)
+        }
+        GetPair { a, b } -> u256 uses (pairs) {
+            pairs.at(a).at(b).get()
+        }
+        GetOtherPair { a, b } -> u256 uses (other_pairs) {
+            other_pairs.at(a).at(b).get()
+        }
+        SetSix { first, value } uses (mut six) {
+            six.at_mut(first).at(2).at(3).at(4).at(5).at(6).set(value)
+        }
+        GetSix { first } -> u256 uses (six) {
+            six.at(first).at(2).at(3).at(4).at(5).at(6).get()
+        }
+        SetNine { first, value } uses (mut nine) {
+            nine.at_mut(first).at(2).at(3).at(4).at(5).at(6).at(7).at(8).at(9).set(value)
+        }
+        GetNine { first } -> u256 uses (nine) {
+            nine.at(first).at(2).at(3).at(4).at(5).at(6).at(7).at(8).at(9).get()
+        }
+        SetLayout { a, b, c, value } uses (mut layout) {
+            layout.at_mut(a).at(b).at(c).set(value)
+        }
+        GetLayoutFlat { a, b, c } -> u256 uses (raw: mut RawStorage) {
+            // A flat tuple key with the same salt addresses the same slot.
+            let flat: StorageMap<(u256, u256, u256), u256, 0x5a17> = StorageMap::new()
+            flat.get((a, b, c))
+        }
+    }
+}
+
+#[test]
+fn test_deep_map_shapes() uses (evm: mut Evm) {
+    let shapes = evm.create2<Shapes>(value: 0, args: (), salt: 2)
+    assert(shapes.inner != 0)
+
+    // Two levels; key order matters.
+    evm.call(addr: shapes, gas: 10000000, value: 0, message: ShapeMsg::SetPair { a: 1, b: 2, value: 12 })
+    assert(evm.call(addr: shapes, gas: 10000000, value: 0, message: ShapeMsg::GetPair { a: 1, b: 2 }) == 12)
+    assert(evm.call(addr: shapes, gas: 10000000, value: 0, message: ShapeMsg::GetPair { a: 2, b: 1 }) == 0)
+
+    // Two fields of the same type get distinct salts and do not share entries.
+    assert(evm.call(addr: shapes, gas: 10000000, value: 0, message: ShapeMsg::GetOtherPair { a: 1, b: 2 }) == 0)
+
+    // Six levels through the largest alias.
+    evm.call(addr: shapes, gas: 10000000, value: 0, message: ShapeMsg::SetSix { first: 1, value: 66 })
+    assert(evm.call(addr: shapes, gas: 10000000, value: 0, message: ShapeMsg::GetSix { first: 1 }) == 66)
+    assert(evm.call(addr: shapes, gas: 10000000, value: 0, message: ShapeMsg::GetSix { first: 7 }) == 0)
+
+    // Nine levels through a hand-nested key.
+    evm.call(addr: shapes, gas: 10000000, value: 0, message: ShapeMsg::SetNine { first: 1, value: 99 })
+    assert(evm.call(addr: shapes, gas: 10000000, value: 0, message: ShapeMsg::GetNine { first: 1 }) == 99)
+    assert(evm.call(addr: shapes, gas: 10000000, value: 0, message: ShapeMsg::GetNine { first: 7 }) == 0)
+
+    // The nested key uses the same slot as a flat tuple key with the same salt.
+    evm.call(addr: shapes, gas: 10000000, value: 0, message: ShapeMsg::SetLayout { a: 4, b: 5, c: 6, value: 456 })
+    assert(evm.call(addr: shapes, gas: 10000000, value: 0, message: ShapeMsg::GetLayoutFlat { a: 4, b: 5, c: 6 }) == 456)
+    assert(evm.call(addr: shapes, gas: 10000000, value: 0, message: ShapeMsg::GetLayoutFlat { a: 6, b: 5, c: 4 }) == 0)
+}
