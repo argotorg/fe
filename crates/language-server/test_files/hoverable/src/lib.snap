@@ -565,7 +565,7 @@ note:
    ┌─ lib.fe:92:5
    │
 92 │ msg TokenMsg {
-   │     ^^^^^^^^ def: defined here @ 92:4 (8 refs)
+   │     ^^^^^^^^ def: defined here @ 92:4 (2 refs)
 
 note: 
    ┌─ lib.fe:94:3

@@ -1,0 +1,8 @@
+// Each side of a static assertion's comparison is lowered a second time, to
+// evaluate it for the failure message, so the condition's body alone records
+// their references.
+const A: u256 = 1
+const B: u256 = 1
+
+static_assert(A == B)
+static_assert((A + 1) > B)

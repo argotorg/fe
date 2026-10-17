@@ -1,0 +1,19 @@
+---
+source: crates/hir/tests/frontend/module_references.rs
+expression: output
+input_file: test_files/module_references/local_bindings.fe
+---
+9: `S` -> local_bindings::m::S
+10: `self` -> local_bindings::m::S
+11: `self` -> value
+11: `g` -> fn
+13: `self` -> local_bindings::m::S
+34: `self` -> local_bindings::Ctx
+38: `n` -> local_bindings::param::n
+42: `xs` -> local_bindings::closure_param::xs
+45: `Ctx` -> local_bindings::Ctx
+46: `caller` -> local_bindings::Ctx::caller
+55: `State` -> local_bindings::State
+57: `state` -> local_bindings::C::state
+58: `state` -> local_bindings::C::state
+58: `value` -> local_bindings::State::value

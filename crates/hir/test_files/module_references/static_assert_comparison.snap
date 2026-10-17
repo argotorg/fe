@@ -1,0 +1,9 @@
+---
+source: crates/hir/tests/frontend/module_references.rs
+expression: output
+input_file: test_files/module_references/static_assert_comparison.fe
+---
+7: `A` -> static_assert_comparison::A
+7: `B` -> static_assert_comparison::B
+8: `A` -> static_assert_comparison::A
+8: `B` -> static_assert_comparison::B

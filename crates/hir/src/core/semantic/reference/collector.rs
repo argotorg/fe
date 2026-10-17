@@ -5,22 +5,25 @@
 
 use crate::{
     HirDb,
+    analysis::ty::ty_check::EffectParamSite,
     hir_def::{
-        Body, Const, Contract, Enum, Expr, ExprId, Func, Impl, ImplTrait, ItemKind, Pat, PatId,
-        StaticAssert, Struct, Trait, TraitRefId, TypeAlias, Use, UsePathId,
+        Body, Const, Contract, ContractInit, ContractRecvArm, EffectParam, EffectParamListId, Enum,
+        Expr, ExprId, Func, Impl, ImplTrait, ItemKind, Pat, PatId, StaticAssert, Struct, Trait,
+        TraitRefId, TypeAlias, Use, UsePathId,
     },
     span::lazy_spans::{
-        LazyBodySpan, LazyExprSpan, LazyItemSpan, LazyPatSpan, LazyPathSpan, LazyTraitRefSpan,
-        LazyUsePathSpan,
+        LazyBodySpan, LazyContractInitSpan, LazyExprSpan, LazyItemSpan, LazyPatSpan, LazyPathSpan,
+        LazyRecvArmSpan, LazyTraitRefSpan, LazyUsePathSpan, LazyUsesParamSpan,
     },
     visitor::{
-        Visitor, VisitorCtxt, walk_body, walk_expr, walk_pat, walk_path, walk_trait_ref,
-        walk_use_path,
+        Visitor, VisitorCtxt, walk_body, walk_contract_init, walk_contract_recv_arm,
+        walk_effect_param, walk_expr, walk_pat, walk_path, walk_trait_ref, walk_use_path,
     },
 };
 
 use super::{
     BodyPathContext, FieldAccessView, MethodCallView, PathId, PathView, ReferenceView, UsePathView,
+    UsesEntry,
 };
 
 /// Tracks context for path references during body traversal.
@@ -54,6 +57,12 @@ pub(super) struct ReferenceCollector<'db> {
     /// Set while visiting a trait reference, until its own path is visited.
     /// Paths in that path's generic arguments are not trait references.
     trait_ref: bool,
+    /// The `uses` list of the contract `init` or recv arm being visited, whose
+    /// unlabeled entries name the contract's fields and effects.
+    uses_list: Option<(EffectParamSite<'db>, EffectParamListId<'db>)>,
+    /// Set while visiting such an entry, with its key, until the key is
+    /// visited.
+    uses_entry: Option<(PathId<'db>, UsesEntry<'db>)>,
 }
 
 impl<'db> ReferenceCollector<'db> {
@@ -65,6 +74,8 @@ impl<'db> ReferenceCollector<'db> {
             current_use: None,
             path_context: PathContext::None,
             trait_ref: false,
+            uses_list: None,
+            uses_entry: None,
         }
     }
 
@@ -79,8 +90,13 @@ impl<'db> ReferenceCollector<'db> {
 impl<'db> Visitor<'db> for ReferenceCollector<'db> {
     fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
         let trait_ref = std::mem::take(&mut self.trait_ref);
+        let uses_entry = self
+            .uses_entry
+            .take_if(|(key, _)| *key == path)
+            .map(|(_, entry)| entry);
         if let Some(span) = ctxt.span() {
             let mut path_view = PathView::new(path, ctxt.scope(), span, trait_ref);
+            path_view.uses_entry = uses_entry;
 
             // Attach body context if we're inside a body expression/pattern
             match self.path_context {
@@ -108,6 +124,69 @@ impl<'db> Visitor<'db> for ReferenceCollector<'db> {
         self.trait_ref = true;
         walk_trait_ref(self, ctxt, trait_ref);
         self.trait_ref = false;
+    }
+
+    fn visit_contract_init(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyContractInitSpan<'db>>,
+        init: ContractInit<'db>,
+    ) {
+        if let ItemKind::Contract(contract) = ctxt.scope().item() {
+            let site = EffectParamSite::ContractInit { contract };
+            self.uses_list = Some((site, init.effects(self.db)));
+        }
+        walk_contract_init(self, ctxt, init);
+        self.uses_list = None;
+    }
+
+    fn visit_contract_recv_arm(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyRecvArmSpan<'db>>,
+        arm: &ContractRecvArm<'db>,
+    ) {
+        if let ItemKind::Contract(contract) = ctxt.scope().item() {
+            self.uses_list = contract
+                .recvs(self.db)
+                .data(self.db)
+                .iter()
+                .enumerate()
+                .find_map(|(recv_idx, recv)| {
+                    let arm_idx = recv
+                        .arms
+                        .data(self.db)
+                        .iter()
+                        .position(|other| other.body == arm.body)?;
+                    let site = EffectParamSite::ContractRecvArm {
+                        contract,
+                        recv_idx: recv_idx as u32,
+                        arm_idx: arm_idx as u32,
+                    };
+                    Some((site, arm.effects))
+                });
+        }
+        walk_contract_recv_arm(self, ctxt, arm);
+        self.uses_list = None;
+    }
+
+    fn visit_effect_param(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyUsesParamSpan<'db>>,
+        effect: &EffectParam<'db>,
+    ) {
+        // Identical entries name the same thing, so the first one stands for
+        // each of them.
+        if let Some((site, effects)) = self.uses_list
+            && effect.name.is_none()
+            && let Some(key) = effect.key_ty.to_opt().and_then(|key| key.as_path(self.db))
+            && let Some(idx) = effects
+                .data(self.db)
+                .iter()
+                .position(|other| other == effect)
+        {
+            self.uses_entry = Some((key, UsesEntry { site, idx }));
+        }
+        walk_effect_param(self, ctxt, effect);
+        self.uses_entry = None;
     }
 
     fn visit_item(&mut self, _: &mut VisitorCtxt<'db, LazyItemSpan<'db>>, _: ItemKind<'db>) {}
@@ -206,6 +285,10 @@ impl<'db> Visitor<'db> for ReferenceCollector<'db> {
 
 #[salsa::tracked(return_ref)]
 pub fn body_references<'db>(db: &'db dyn HirDb, body: Body<'db>) -> Vec<ReferenceView<'db>> {
+    // The condition's body records the references of a comparison's sides.
+    if body.is_static_assert_comparison_side(db) {
+        return Vec::new();
+    }
     let mut collector = ReferenceCollector::for_body(db, body);
     let mut ctxt = VisitorCtxt::with_body(db, body);
     collector.visit_body(&mut ctxt, body);

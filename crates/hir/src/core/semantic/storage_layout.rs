@@ -9,6 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
 
 use crate::{
+    HirDb,
     analysis::{
         HirAnalysisDb,
         semantic::{RuntimeSizeError, runtime_size_bytes_with_source},
@@ -36,6 +37,24 @@ use crate::{
 pub struct ContractFieldId<'db> {
     pub contract: Contract<'db>,
     pub index: u32,
+}
+
+impl<'db> ContractFieldId<'db> {
+    /// The field's scope. The id's index counts only the named fields.
+    pub fn scope(self, db: &'db dyn HirDb) -> Option<ScopeId<'db>> {
+        let (idx, _) = self
+            .contract
+            .hir_fields(db)
+            .data(db)
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| field.name.is_present())
+            .nth(self.index as usize)?;
+        Some(ScopeId::Field(
+            FieldParent::Contract(self.contract),
+            idx as u16,
+        ))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]

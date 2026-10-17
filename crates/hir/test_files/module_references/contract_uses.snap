@@ -1,0 +1,17 @@
+---
+source: crates/hir/tests/frontend/module_references.rs
+expression: output
+input_file: test_files/module_references/contract_uses.fe
+---
+18: `Get` -> contract_uses::M::Get (11 times)
+18: `Get` -> type (3 times)
+22: `State` -> contract_uses::State
+24: `state` -> contract_uses::C::state
+25: `state` -> contract_uses::C::state
+25: `value` -> contract_uses::State::value
+28: `M` -> contract_uses::M
+29: `Get` -> contract_uses::M::Get
+29: `state` -> contract_uses::C::state
+30: `state` -> contract_uses::C::state
+30: `value` -> contract_uses::State::value
+unresolved span -> contract_uses

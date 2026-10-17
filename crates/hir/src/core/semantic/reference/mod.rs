@@ -25,11 +25,12 @@ use crate::{
         const_ty::LoweringContext,
         trait_resolution::{PredicateListId, constraint::collect_constraints},
         ty_check::{
-            LocalBinding, RecordLike, TypedBody, check_contract_init_body,
-            check_contract_recv_arm_body, check_func_body,
+            EffectParamSite, LocalBinding, ParamSite, RecordLike, TypedBody,
+            check_contract_init_body, check_contract_recv_arm_body, check_func_body,
         },
         ty_def::TyId,
     },
+    core::semantic::EffectEnvView,
     hir_def::scope_graph::ScopeId,
     hir_def::{
         Body, Contract, Expr, ExprId, FieldIndex, ItemKind, Partial, PathId, Use, UsePathSegment,
@@ -291,6 +292,15 @@ pub enum BodyPathContext {
     PatReference(crate::hir_def::PatId),
 }
 
+/// An unlabeled entry of a contract `init`'s or recv arm's `uses`. Its key
+/// names what the compiler resolves the entry to: a field of the contract, or
+/// an effect of the contract's own `uses`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct UsesEntry<'db> {
+    pub site: EffectParamSite<'db>,
+    pub idx: usize,
+}
+
 /// A view of a path reference in the HIR.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct PathView<'db> {
@@ -303,6 +313,9 @@ pub struct PathView<'db> {
     /// Whether the path is written where a trait is expected: a bound, a
     /// super-trait, an implemented trait, or a qualified path's trait.
     pub trait_ref: bool,
+    /// The entry whose key the path is, for an unlabeled `uses` entry of a
+    /// contract `init` or recv arm.
+    pub uses_entry: Option<UsesEntry<'db>>,
 }
 
 impl<'db> PathView<'db> {
@@ -318,6 +331,7 @@ impl<'db> PathView<'db> {
             span,
             body_ctx: None,
             trait_ref,
+            uses_entry: None,
         }
     }
 
@@ -331,19 +345,71 @@ impl<'db> PathView<'db> {
     where
         DB: HirAnalysisDb + SpannedHirDb,
     {
-        if let Some(local) = self.local_target(db) {
-            return TargetResolution::Single(local);
-        }
-        TargetResolution::from_scopes(self.segment_targets(db, self.path.segment_index(db)))
+        self.segment_target(db, self.path.segment_index(db))
     }
 
-    /// Resolve the path up to segment `idx` to all its possible scopes. The
-    /// last segment of a trait reference is resolved as a trait, under the
+    /// Resolve the path up to segment `idx` to its target definition(s): the
+    /// local binding a path names, or the scopes of `segment_targets`.
+    pub fn segment_target<DB>(&self, db: &'db DB, idx: usize) -> TargetResolution<'db>
+    where
+        DB: HirAnalysisDb + SpannedHirDb,
+    {
+        if idx == self.path.segment_index(db)
+            && let Some(local) = self.local_target(db)
+        {
+            return TargetResolution::Single(local);
+        }
+        TargetResolution::from_scopes(self.segment_targets(db, idx))
+    }
+
+    /// Resolve the path up to segment `idx` to all its possible scopes.
+    ///
+    /// A path the type checker bound to a local binding names that binding,
+    /// so it resolves to the binding's scope if it has one: a function's
+    /// parameter, or the contract field a contract's `uses` entry provides.
+    /// Resolving it as an item path could find an item of the same name, or
+    /// the module for `self`. Likewise, an unlabeled `uses` entry of a
+    /// contract `init` or recv arm resolves to the field that provides it, or
+    /// to nothing for an effect of the contract's own `uses`, if the compiler
+    /// resolves it.
+    ///
+    /// The last segment of a trait reference is resolved as a trait, under the
     /// enclosing bounds, which its arguments can need (`Sink<T::Item>`).
     pub fn segment_targets(&self, db: &'db dyn HirAnalysisDb, idx: usize) -> Vec<ScopeId<'db>> {
         let Some(seg_path) = self.path.segment(db, idx) else {
             return Vec::new();
         };
+        if seg_path == self.path
+            && let Some(UsesEntry { site, idx: entry }) = self.uses_entry
+            && let Some(binding) = EffectEnvView::new(site).resolved_binding(db, entry)
+        {
+            return binding
+                .provider
+                .source
+                .contract_field()
+                .and_then(|field| field.scope(db))
+                .into_iter()
+                .collect();
+        }
+        if seg_path == self.path
+            && let Some(binding) = self.binding(db)
+        {
+            let scope = match binding {
+                LocalBinding::Param {
+                    site: ParamSite::Func(func),
+                    idx: param,
+                    ..
+                } => Some(ScopeId::FuncParam(func.into(), param as u16)),
+                LocalBinding::EffectParam {
+                    site, idx: entry, ..
+                } => EffectEnvView::new(site)
+                    .resolved_binding(db, entry)
+                    .and_then(|binding| binding.provider.source.contract_field())
+                    .and_then(|field| field.scope(db)),
+                LocalBinding::Local { .. } | LocalBinding::Param { .. } => None,
+            };
+            return scope.into_iter().collect();
+        }
         if self.trait_ref && seg_path == self.path {
             let res = resolve_trait_path_with_observer_and_minter(
                 db,
@@ -371,17 +437,22 @@ impl<'db> PathView<'db> {
             };
 
             if seg_span.range.contains(cursor) {
-                if idx == last_idx
-                    && let Some(local) = self.local_target(db)
-                {
-                    return TargetResolution::Single(local);
-                }
-
-                return TargetResolution::from_scopes(self.segment_targets(db, idx));
+                return self.segment_target(db, idx);
             }
         }
 
         self.target(db)
+    }
+
+    /// The local binding the type checker bound this path to: a `let` or
+    /// pattern binding, a parameter, or an effect.
+    fn binding(&self, db: &'db dyn HirAnalysisDb) -> Option<LocalBinding<'db>> {
+        let typed_body = typed_body_for_body(db, self.scope.body()?)?;
+        match self.body_ctx? {
+            BodyPathContext::Expr(expr) => typed_body.expr_binding(expr),
+            BodyPathContext::PatBinding(pat) => typed_body.pat_binding(pat),
+            BodyPathContext::PatReference(_) => None,
+        }
     }
 
     fn local_target<DB>(&self, db: &'db DB) -> Option<Target<'db>>

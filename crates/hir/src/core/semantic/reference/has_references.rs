@@ -339,7 +339,8 @@ impl<'db> TopLevelMod<'db> {
         None
     }
 
-    /// Find items with the smallest span enclosing the cursor.
+    /// Find items with the smallest span enclosing the cursor. A static
+    /// assertion's comparison side isn't one: its source is the condition's.
     pub fn find_enclosing_items(
         self,
         db: &'db dyn SpannedHirDb,
@@ -351,6 +352,11 @@ impl<'db> TopLevelMod<'db> {
         let mut smallest_range_size = None;
 
         for item in items {
+            if let ItemKind::Body(body) = item
+                && body.is_static_assert_comparison_side(db)
+            {
+                continue;
+            }
             let lazy_item_span = DynLazySpan::from(item.span());
             let Some(item_span) = lazy_item_span.resolve(db) else {
                 continue;

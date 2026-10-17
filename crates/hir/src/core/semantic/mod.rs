@@ -1641,6 +1641,16 @@ pub enum ProviderSource<'db> {
     },
 }
 
+impl<'db> ProviderSource<'db> {
+    /// The contract field this provider is, if it is one.
+    pub fn contract_field(&self) -> Option<ContractFieldId<'db>> {
+        match self {
+            Self::ContractField { field } => Some(*field),
+            Self::UsesParam { .. } | Self::RootProvider { .. } => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct ProviderBinding<'db> {
     pub provider_idx: u32,

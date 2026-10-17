@@ -70,6 +70,20 @@ impl<'db> Body<'db> {
         }
     }
 
+    /// Whether this body is a side of a static assertion's comparison: an
+    /// operand of the condition lowered a second time, so that it can be
+    /// evaluated on its own for the failure message. Its source is part of
+    /// the condition's.
+    pub fn is_static_assert_comparison_side(self, db: &'db dyn HirDb) -> bool {
+        matches!(
+            self.scope().parent(db),
+            Some(ScopeId::Item(ItemKind::StaticAssert(assert_)))
+                if assert_
+                    .comparison(db)
+                    .is_some_and(|comparison| comparison.lhs == self || comparison.rhs == self)
+        )
+    }
+
     #[doc(hidden)]
     /// Returns the order of the blocks in the body in lexical order.
     /// e.g.,
