@@ -829,14 +829,26 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                             }) as _);
                         }
                     }
-                    ResolvedEffectKey::Row(_)
-                    | ResolvedEffectKey::Invalid
-                    | ResolvedEffectKey::Other => {
+                    ResolvedEffectKey::Row(_) => {
                         diags.push(Box::new(BodyDiag::InvalidEffectKey {
                             owner: EffectParamOwner::Contract(contract),
                             key: key_ty,
                             idx,
                         }) as _);
+                    }
+                    ResolvedEffectKey::Invalid | ResolvedEffectKey::Other => {
+                        diags.extend(
+                            ty_check::invalid_effect_key_diags(
+                                db,
+                                EffectParamOwner::Contract(contract),
+                                idx,
+                                key_ty,
+                                contract.scope(),
+                                assumptions,
+                            )
+                            .iter()
+                            .map(|diag| diag.to_voucher()),
+                        );
                     }
                 }
             }

@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/supertrait_lowering_errors.fe
+---
+error[2-0002]: `Missing` is not found
+  ┌─ supertrait_lowering_errors.fe:7:16
+  │
+7 │ trait Unknown: Missing {}
+  │                ^^^^^^^ `Missing` is not found
+
+error[2-0011]: incorrect number of generic arguments for `Has`; expected 1, given 2
+  ┌─ supertrait_lowering_errors.fe:9:14
+  │
+9 │ trait Arity: Has<1, 2> {}
+  │              ^^^ expected 1 arguments, but 2 were given
+
+error[2-0013]: const type mismatch for `Has`
+   ┌─ supertrait_lowering_errors.fe:11:17
+   │
+11 │ trait Mistyped: Has<true> {}
+   │                 ^^^ expected `usize`, given `bool`
+
+error[3-0024]: non-const function call in const context
+   ┌─ supertrait_lowering_errors.fe:15:23
+   │
+15 │ trait NonConst: Has<{ runtime() }> {}
+   │                       ^^^^^^^^^ calls in const context must be `const fn`
+
+error[3-0025]: division by zero in const context
+   ┌─ supertrait_lowering_errors.fe:13:23
+   │
+13 │ trait Faulting: Has<{ 1 / 0 }> {}
+   │                       ^^^^^ cannot divide by zero
