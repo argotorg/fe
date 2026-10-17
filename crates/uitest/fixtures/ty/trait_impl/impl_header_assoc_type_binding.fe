@@ -1,0 +1,22 @@
+// An impl defines its associated types in its body, so a binding in its
+// header is rejected, whether it names a missing type, contradicts the
+// body's definition, or agrees with it.
+trait Has { type Item }
+
+trait Pair {
+    type First
+    type Second
+}
+
+impl Has<Item = Missing> for bool { type Item = u8 }
+
+impl Has<Item = u16> for u8 { type Item = u8 }
+
+impl Has<Item = u32> for u32 { type Item = u32 }
+
+impl Pair<First = u8, Second = u16> for bool {
+    type First = u8
+    type Second = u16
+}
+
+impl Has for u16 { type Item = u16 }

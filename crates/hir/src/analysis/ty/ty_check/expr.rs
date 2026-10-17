@@ -3828,7 +3828,7 @@ impl<'db> TyChecker<'db> {
                     };
 
                     if let Some(diag) =
-                        err.into_diag(self.db, path, path_span.clone(), expected_kind)
+                        err.into_ty_diag(self.db, path, path_span.clone(), expected_kind)
                     {
                         self.push_diag(diag)
                     }

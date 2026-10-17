@@ -1,0 +1,28 @@
+// An effect key whose path names a type or trait reports the error written
+// in its arguments, where it is written; only a key that names neither is
+// an unresolved effect.
+trait Has { type Item }
+
+trait HasT<T> {}
+
+trait HasC<const N: usize> {}
+
+struct Foo<T> {}
+
+struct FooC<const N: usize> {}
+
+fn binding() uses (p: Has<Item = Missing>) {}
+
+fn trait_arg() uses (p: HasT<Missing>) {}
+
+fn trait_const() uses (p: HasC<{ 1 / 0 }>) {}
+
+fn type_arg() uses (p: Foo<Missing>) {}
+
+fn type_const() uses (p: FooC<{ 2 / 0 }>) {}
+
+fn unresolved() uses (p: Missing) {}
+
+fn valid() uses (p: Has<Item = u8>, q: HasT<u8>, r: Foo<u8>) {}
+
+contract C uses (p: Has<Item = Missing>) {}
