@@ -1,0 +1,15 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/dyn_array_from_slice_not_copy.fe
+---
+error[6-0003]: trait bound is not satisfied
+    ┌─ dyn_array_from_slice_not_copy.fe:25:5
+    │
+ 25 │     DynArray::from_slice(values)
+    │     ^^^^^^^^^^^^^^^^^^^^ `WithBytes` doesn't implement `Copy`
+    │
+    ┌─ src/abi/dyn_array.fe:153:42
+    │
+153 │         where T: Encode<Sol> + AbiSize + Copy
+    │                                          ---- required by this bound on `from_slice`

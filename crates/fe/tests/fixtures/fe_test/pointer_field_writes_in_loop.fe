@@ -14,7 +14,7 @@ impl<T> Copy for Arr<T> {}
 
 impl<T> Arr<T> {
     fn new(_ len: u256) -> Self {
-        unsafe { Arr { ptr: MemArray<T>::new_uninit(len).ptr_at(0), len } }
+        unsafe { Arr { ptr: MemArray<T>::new_uninit(len as usize).ptr_at(0), len } }
     }
 
     fn at(self, _ i: u256) -> *T {

@@ -195,7 +195,7 @@ impl<K: StorageKey + Copy> StorageBytes<K> {
     pub fn to_memory(self, key: K) -> ptr::MemBuffer {
         let len = self.lengths[key]
         let word_count = ceil_words(len)
-        var buffer = unsafe { ptr::MemBuffer::alloc_uninit(word_count * 32) }
+        var buffer = unsafe { ptr::MemBuffer::alloc_uninit((word_count * 32) as usize) }
 
         var i: u256 = 0
         while i < word_count {
@@ -208,7 +208,7 @@ impl<K: StorageKey + Copy> StorageBytes<K> {
             i += 1
         }
 
-        unsafe { buffer.set_len(len) }
+        unsafe { buffer.set_len(len as usize) }
         buffer
     }
 

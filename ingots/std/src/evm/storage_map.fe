@@ -222,7 +222,7 @@ unsafe impl<K: StorageKey + Copy, V> StateIndex for StorageMap<K, V> {
         let slot = unsafe {
             K::write_key(ptr: scratch, key)
             mstore(addr: ptr::offset_bytes(scratch, key_len), value: root)
-            keccak256(ptr::MemSpan::from_raw_parts(ptr: scratch, len: key_len + 32))
+            keccak256(ptr::MemSpan::from_raw_parts(ptr: scratch, len: (key_len + 32) as usize))
         }
         Location { slot, offset: 0 }
     }

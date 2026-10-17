@@ -119,7 +119,7 @@ fn transfer_from_bob(amount: u256) -> TransferResult
 fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
-    var dest = ptr::MemBuffer::alloc(len)
+    var dest = ptr::MemBuffer::alloc(len as usize)
     evm.codecopy(
         dest: mut dest,
         dest_offset: 0,

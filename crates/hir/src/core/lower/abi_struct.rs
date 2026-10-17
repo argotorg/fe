@@ -129,7 +129,6 @@ pub(super) fn lower_abi_struct<'db>(
     lower_abi_span_impl(&mut builder, self_ty, &field_specs);
     lower_encode_impl(&mut builder, self_ty, &field_specs);
     lower_decode_impl(&mut builder, self_ty, &field_specs);
-    lower_static_abi_impl(&mut builder, self_ty, &field_specs);
     lower_sol_compat_impl(&mut builder, self_ty, &field_specs);
 
     struct_
@@ -328,39 +327,6 @@ fn lower_abi_span_impl<'db>(
                 body.emit_return(Some(end));
             },
         );
-    });
-}
-
-/// `impl StaticAbi for S where F0: StaticAbi, ...`: the struct is static
-/// exactly when all of its fields are.
-fn lower_static_abi_impl<'db>(
-    builder: &mut HirBuilder<'_, 'db, AbiStructDesugared>,
-    self_ty: TypeId<'db>,
-    field_specs: &FieldSpecs<'db>,
-) {
-    let db = builder.db();
-    let static_abi = TraitRefId::new(
-        db,
-        Partial::Present(builder.path_from_root(builder.roots().std, &["abi", "StaticAbi"])),
-    );
-    let where_clause = field_bounds(db, field_specs, static_abi);
-    let idx = builder.ctxt().next_impl_trait_idx();
-    builder.with_item_scope(TrackedItemVariant::ImplTrait(idx), |builder, id| {
-        ImplTrait::new(
-            db,
-            id,
-            Partial::Present(static_abi),
-            Partial::Present(self_ty),
-            builder.empty_attrs(),
-            builder.empty_generic_params(),
-            where_clause,
-            vec![],
-            vec![],
-            AccessItems::default(),
-            false,
-            builder.top_mod(),
-            builder.origin(),
-        )
     });
 }
 

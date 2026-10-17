@@ -10,7 +10,7 @@ fn raw_emit(evm: mut Evm) {
     unsafe {
         evm.log0(data: ptr::MemSpan::from_raw_parts(
             ptr: ptr::byte_ptr(data),
-            len: core::size_of<Data>(),
+            len: core::size_of<Data>() as usize,
         ))
     }
 }

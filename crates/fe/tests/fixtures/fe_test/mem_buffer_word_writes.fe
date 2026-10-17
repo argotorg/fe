@@ -22,10 +22,8 @@ fn gap_and_truncated_bytes_are_zeroed() {
     buffer.write_word(offset: 64, value: 2)
     assert!(buffer.len() == 96)
     assert!(buffer.span().byte_at(31) == 1)
-    var i: u256 = 32
-    while i < 95 {
+    for i in 32..95 {
         assert!(buffer.span().byte_at(i) == 0)
-        i += 1
     }
     assert!(buffer.span().byte_at(95) == 2)
 }
@@ -62,4 +60,37 @@ fn rejects_wrapping_offset() {
             offset: 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
             value: 1,
         )
+}
+
+#[test]
+fn unaligned_word_reads() {
+    var buffer = MemBuffer::with_capacity(64)
+    buffer.write_word(offset: 0, value: 0x0102 << 240)
+    buffer.write_word(offset: 32, value: 0x0304)
+    assert!(buffer.read_word(0) == 0x0102 << 240)
+    assert!(buffer.read_word(1) == 0x02 << 248)
+    assert!(buffer.read_word(31) == 0x03)
+    assert!(buffer.span().read_word(32) == 0x0304)
+}
+
+#[test]
+fn span_word_writes_stay_in_the_span() {
+    var buffer = MemBuffer::alloc(66)
+    buffer.slice_mut(offset: 1, len: 64).write_word(offset: 30, value: u256::max())
+    assert!(buffer.read_word(0) == 0xff)
+    assert!(buffer.read_word(32) == u256::max() << 8)
+    assert!(buffer.span().byte_at(63) == 0)
+}
+
+#[test(should_revert, panic = 0x32)]
+fn rejects_read_past_the_extent() {
+    var buffer = MemBuffer::with_capacity(64)
+    buffer.write_word(offset: 0, value: 1)
+    let _ = buffer.read_word(1)
+}
+
+#[test(should_revert, panic = 0x32)]
+fn rejects_span_write_past_its_end() {
+    var buffer = MemBuffer::alloc(64)
+    buffer.slice_mut(offset: 0, len: 40).write_word(offset: 9, value: 1)
 }

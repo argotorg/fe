@@ -15,7 +15,8 @@
 //! if operators.add(operator) { /* newly added */ }
 //! let n = operators.len()
 //! ```
-use core::abi::{AbiFrame, AbiSize, DynArray, Encode, store_word}
+use core::abi::{AbiFrame, AbiSize, Encode, store_word}
+use ingot::abi::DynArray
 use core::iter::{Bidirectional, Collection}
 use core::option::Option
 use core::ptr
@@ -113,7 +114,7 @@ impl<T: SolPacked> SolEnumerableSet<T> {
             value.encode(unsafe { AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(data, 32 + i * 32), len: 32) })
             i += 1
         }
-        unsafe { DynArray::from_abi_tail(data, len, size) }
+        unsafe { DynArray::from_abi_tail(data, len: len as usize, size) }
     }
 
     /// Adds `value`; returns false if it was already present.

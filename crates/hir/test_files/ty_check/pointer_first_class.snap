@@ -619,7 +619,7 @@ note:
    ┌─ pointer_first_class.fe:38:55
    │
 38 │     var array = unsafe { core::ptr::alloc_array<u256>(2) }
-   │                                                       ^ u256
+   │                                                       ^ usize
 
 note:
    ┌─ pointer_first_class.fe:39:5
@@ -703,7 +703,7 @@ note:
    ┌─ pointer_first_class.fe:42:56
    │
 42 │     let zeroed = core::ptr::MemArray<u256>::new_zeroed(1)
-   │                                                        ^ u256
+   │                                                        ^ usize
 
 note:
    ┌─ pointer_first_class.fe:43:5

@@ -226,9 +226,9 @@ func inline(always) private %mem_array_elem(v0.objref<@layout_0>, v1.i256) -> i2
         jump block1;
 
     block1:
-        v5.objref<i256> = obj.proj v0 1.i256;
-        v6.i256 = obj.load v5;
-        v7.i1 = lt v1 v6;
+        v4.objref<i256> = obj.proj v0 1.i256;
+        v5.i256 = obj.load v4;
+        v7.i1 = lt v1 v5;
         v8.i1 = is_zero v7;
         br v8 block2 block3;
 

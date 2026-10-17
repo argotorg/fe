@@ -1546,14 +1546,14 @@ fn runtime() uses (evm: mut Evm) {
     if sel == BYTES_LEN_SELECTOR {
         let view = decode_bytes_view(CallData::with_base(4))
         let out = ptr::MemBuffer::alloc(32)
-        unsafe { store_word(ptr: out.ptr(), value: view.len()) }
+        unsafe { store_word(ptr: out.ptr(), value: view.len() as u256) }
         evm.return_data(data: out.span())
     }
 
     if sel == SECOND_BYTES_LEN_SELECTOR {
         let view = decode_bytes_view_at(CallData::with_base(4), base: 0, head_pos: 32)
         let out = ptr::MemBuffer::alloc(32)
-        unsafe { store_word(ptr: out.ptr(), value: view.len()) }
+        unsafe { store_word(ptr: out.ptr(), value: view.len() as u256) }
         evm.return_data(data: out.span())
     }
 
@@ -1568,7 +1568,7 @@ fn runtime() uses (evm: mut Evm) {
     if sel == STRING_LEN_SELECTOR {
         let view = decode_string_view(CallData::with_base(4))
         let out = ptr::MemBuffer::alloc(32)
-        unsafe { store_word(ptr: out.ptr(), value: view.len()) }
+        unsafe { store_word(ptr: out.ptr(), value: view.len() as u256) }
         evm.return_data(data: out.span())
     }
 
@@ -2046,7 +2046,7 @@ pub contract NestedTupleInit {
     mut store: PairStore
 
     init(text: Text, count: u64) uses (mut store) {
-        store.text_len = text.len()
+        store.text_len = text.len() as u256
         store.first_byte = if text.is_empty() { 0 } else { text.as_bytes().byte_at(0) }
         store.count = count
     }
@@ -2080,7 +2080,7 @@ msg TupleHeadGuardMsg {
 pub contract TupleHeadGuard {
     recv TupleHeadGuardMsg {
         Read { pair } -> u256 {
-            (pair.0 as u256) + pair.1.len()
+            (pair.0 as u256) + pair.1.len() as u256
         }
     }
 }
@@ -2247,7 +2247,7 @@ pub contract DynamicChild {
     mut store: DynamicStore
 
     init(text: Text, count: u64) uses (mut store) {
-        store.text_len = text.len()
+        store.text_len = text.len() as u256
         store.first_byte = if text.is_empty() { 0 } else { text.as_bytes().byte_at(0) }
         store.count = count
     }

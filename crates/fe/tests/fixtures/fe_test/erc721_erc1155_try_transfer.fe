@@ -3,7 +3,7 @@
 
 use core::ptr
 use core::abi::store_word
-use std::abi::Bytes4
+use std::abi::{Bytes4, dyn_array_from}
 use std::evm::{RawOps, ReceiverCheck, TokenCall, bubble_last_revert, erc721, erc1155}
 
 msg Erc721Msg {
@@ -75,16 +75,16 @@ pub contract MultiToken {
 
     recv Erc1155Msg {
         SafeTransferFrom { from, to, id, value, data } uses (mut last) {
-            last.value = from.inner * 0x10000 + to.inner * 0x100 + id * value + data.len()
+            last.value = from.inner * 0x10000 + to.inner * 0x100 + id * value + data.len() as u256
         }
         SafeBatchTransferFrom { from, to, ids, values, data } uses (mut last) {
             var sum: u256 = 0
-            var i: u256 = 0
+            var i: usize = 0
             while i < ids.len() {
                 sum += ids.get(i) * values.get(i)
                 i += 1
             }
-            last.value = from.inner * 0x10000 + to.inner * 0x100 + sum + ids.len() * 0x1000000 + values.len() * 0x100000000 + data.len()
+            last.value = from.inner * 0x10000 + to.inner * 0x100 + sum + ids.len() as u256 * 0x1000000 + values.len() as u256 * 0x100000000 + data.len() as u256
         }
     }
 
@@ -130,14 +130,14 @@ pub contract Receiver {
         OnErc721Received { operator, from, tokenId, data } -> Bytes4 uses (reply, raw: mut RawOps) {
             let expected = operator.inner == 7 && from.inner == 2 && tokenId == 42 && data.len() == 0
             let alloc = if reply.len < 32 || reply.len == REVERT { 32 } else { reply.len }
-            var out = ptr::MemBuffer::alloc(alloc)
+            var out = ptr::MemBuffer::alloc(alloc as usize)
             if reply.len == REVERT {
                 unsafe { store_word(ptr: out.ptr(), value: 0xdeadbeefcafebabe << 192) }
                 unsafe { out.set_len(32) }
                 raw.revert(data: out.span())
             }
             unsafe { store_word(ptr: out.ptr(), value: if expected { reply.word } else { 0 }) }
-            unsafe { out.set_len(reply.len) }
+            unsafe { out.set_len(reply.len as usize) }
             raw.return_data(data: out.span())
         }
     }
@@ -179,11 +179,7 @@ fn receiver_code(_ outcome: ReceiverCheck) -> u256 {
 }
 
 fn u256_vec(_ a: u256, _ b: u256, _ c: u256) -> Vec<u256> {
-    var v = MemVec<u256>::zeroed(3)
-    v.set(index: 0, value: a)
-    v.set(index: 1, value: b)
-    v.set(index: 2, value: c)
-    v.to_dyn_array()
+    dyn_array_from([a, b, c])
 }
 
 // ---------------------------------------------------------------------------

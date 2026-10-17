@@ -292,7 +292,7 @@ pub fn decode_bytes_view_at<I>(_ input: own I, base: u256, head_pos: u256) -> By
         revert_empty()
     }
 
-    BytesView::new(input, start: data_start, len: data_len)
+    BytesView::new(input, start: data_start, len: data_len as usize)
 }
 
 /// Decode a Solidity ABI `string` payload view from `input` at byte 0.

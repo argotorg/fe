@@ -346,14 +346,14 @@ pub trait Contract {
 pub trait Create: EvmCapabilitySeal {
     /// Low-level `CREATE` opcode.
     fn create_raw(mut self, value: u256, init_code: MemSpan) -> Address {
-        unsafe { Address { inner: ops::create(value: value, offset: init_code.ptr(), len: init_code.len()) } }
+        unsafe { Address { inner: ops::create(value: value, offset: init_code.ptr(), len: init_code.len() as u256) } }
     }
 
     /// Low-level `CREATE2` opcode.
     fn create2_raw(mut self, value: u256, init_code: MemSpan, salt: u256) -> Address {
         unsafe {
             Address {
-                inner: ops::create2(value: value, offset: init_code.ptr(), len: init_code.len(), salt: salt),
+                inner: ops::create2(value: value, offset: init_code.ptr(), len: init_code.len() as u256, salt: salt),
             }
         }
     }
@@ -400,12 +400,12 @@ fn contract_init_code<C: Contract>(_ args: own C::InitArgs) -> MemBuffer {
     let init_len = C::init_code_len()
     let init_off = C::init_code_offset()
     if !C::InitArgs::IS_DYNAMIC && C::InitArgs::HEAD_SIZE == 0 {
-        let init_code = unsafe { MemBuffer::alloc_uninit(init_len) }
+        let init_code = unsafe { MemBuffer::alloc_uninit(init_len as usize) }
         unsafe { ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_len) }
         init_code
     } else {
         let encoded = encode_abi_payload<C::InitArgs>(args)
-        let init_code = unsafe { MemBuffer::alloc_uninit(init_len + encoded.len()) }
+        let init_code = unsafe { MemBuffer::alloc_uninit(init_len as usize + encoded.len()) }
         unsafe {
             ops::codecopy(dest: init_code.ptr(), offset: init_off, len: init_len)
             ptr::copy(
@@ -429,7 +429,7 @@ fn contract_init_code<C: Contract>(_ args: own C::InitArgs) -> MemBuffer {
 /// compute the hash once, e.g. in `init`, and store it.
 pub fn init_code_hash<C: Contract>(_ args: own C::InitArgs) -> u256 {
     let init_code = contract_init_code<C>(args)
-    unsafe { ops::keccak256(offset: init_code.ptr(), len: init_code.len()) }
+    unsafe { ops::keccak256(offset: init_code.ptr(), len: init_code.len() as u256) }
 }
 
 /// Address at which `create2<C>(value, args, salt)` executed by `deployer`
@@ -480,7 +480,7 @@ impl CallOutcome {
         self.returndata.span()
     }
 
-    pub fn returndata_len(self) -> u256 {
+    pub fn returndata_len(self) -> usize {
         self.returndata.len()
     }
 
@@ -496,7 +496,7 @@ impl CallOutcome {
         let success = self.success
         let returndata = self.returndata
         if !success {
-            unsafe { ops::revert(offset: returndata.ptr(), len: returndata.len()) }
+            unsafe { ops::revert(offset: returndata.ptr(), len: returndata.len() as u256) }
         }
         decode_returndata(returndata.span())
     }
@@ -504,8 +504,8 @@ impl CallOutcome {
 
 fn finish_raw_call(_ success: bool, _ ret: mut MemBuffer) -> RawCallOutcome {
     let returndata_len = ops::returndatasize()
-    let written = if returndata_len < ret.capacity() {
-        returndata_len
+    let written = if returndata_len < ret.capacity() as u256 {
+        returndata_len as usize
     } else {
         ret.capacity()
     }
@@ -528,14 +528,14 @@ fn prepare_copy_destination(
     dest_offset: u256,
     len: u256,
 ) -> *u8 {
-    if dest_offset > dest.capacity() || len > dest.capacity() - dest_offset {
+    if dest_offset > dest.capacity() as u256 || len > dest.capacity() as u256 - dest_offset {
         core::panic()
     }
-    if len != 0 && dest_offset > dest.len() {
+    if len != 0 && dest_offset > dest.len() as u256 {
         unsafe {
             ptr::zero_bytes(
-                ptr: ptr::offset_bytes(dest.ptr(), dest.len()),
-                len: dest_offset - dest.len(),
+                ptr: ptr::offset_bytes(dest.ptr(), dest.len() as u256),
+                len: dest_offset - dest.len() as u256,
             )
         }
     }
@@ -562,9 +562,9 @@ pub trait Call: EvmCapabilitySeal {
                 addr: addr.inner,
                 value: value,
                 args_offset: args.ptr(),
-                args_len: args.len(),
+                args_len: args.len() as u256,
                 ret_offset: ret.ptr(),
-                ret_len: ret.capacity(),
+                ret_len: ret.capacity() as u256,
             ) != 0
         }
         finish_raw_call(success, mut ret)
@@ -621,9 +621,9 @@ pub trait Call: EvmCapabilitySeal {
                 gas: gas,
                 addr: addr.inner,
                 args_offset: args.ptr(),
-                args_len: args.len(),
+                args_len: args.len() as u256,
                 ret_offset: ret.ptr(),
-                ret_len: ret.capacity(),
+                ret_len: ret.capacity() as u256,
             ) != 0
         }
         finish_raw_call(success, mut ret)
@@ -645,9 +645,9 @@ pub trait Call: EvmCapabilitySeal {
                 gas: gas,
                 addr: addr.inner,
                 args_offset: args.ptr(),
-                args_len: args.len(),
+                args_len: args.len() as u256,
                 ret_offset: ret.ptr(),
-                ret_len: ret.capacity(),
+                ret_len: ret.capacity() as u256,
             ) != 0
         }
         finish_raw_call(success, mut ret)
@@ -948,7 +948,7 @@ impl Ctx for Evm {
                 len,
             )
         }
-        let end = dest_offset + len
+        let end = (dest_offset + len) as usize
         if end > dest.len() {
             unsafe { dest.set_len(end) }
         }
@@ -999,7 +999,7 @@ impl RawOps for Evm {
                 len,
             )
         }
-        let end = dest_offset + len
+        let end = (dest_offset + len) as usize
         if end > dest.len() {
             unsafe { dest.set_len(end) }
         }
@@ -1030,7 +1030,7 @@ impl RawOps for Evm {
                 len,
             )
         }
-        let end = dest_offset + len
+        let end = (dest_offset + len) as usize
         if end > dest.len() {
             unsafe { dest.set_len(end) }
         }
@@ -1058,7 +1058,7 @@ impl RawOps for Evm {
                 len,
             )
         }
-        let end = dest_offset + len
+        let end = (dest_offset + len) as usize
         if end > dest.len() {
             unsafe { dest.set_len(end) }
         }
@@ -1069,15 +1069,15 @@ impl RawOps for Evm {
     }
 
     fn keccak256(self, data: MemSpan) -> u256 {
-        unsafe { ops::keccak256(offset: data.ptr(), len: data.len()) }
+        unsafe { ops::keccak256(offset: data.ptr(), len: data.len() as u256) }
     }
 
     fn revert(self, data: MemSpan) -> ! {
-        unsafe { ops::revert(offset: data.ptr(), len: data.len()) }
+        unsafe { ops::revert(offset: data.ptr(), len: data.len() as u256) }
     }
 
     fn return_data(self, data: MemSpan) -> ! {
-        unsafe { ops::return_data(offset: data.ptr(), len: data.len()) }
+        unsafe { ops::return_data(offset: data.ptr(), len: data.len() as u256) }
     }
 
     fn code_region_offset<F>(self, _ f: F) -> u256 {
@@ -1091,22 +1091,22 @@ impl RawOps for Evm {
 impl Log for Evm {
     // Logging opcodes.
     fn log0(mut self, data: MemSpan) {
-        unsafe { ops::log0(offset: data.ptr(), len: data.len()) }
+        unsafe { ops::log0(offset: data.ptr(), len: data.len() as u256) }
     }
 
     fn log1(mut self, data: MemSpan, topic0: u256) {
-        unsafe { ops::log1(offset: data.ptr(), len: data.len(), topic0: topic0) }
+        unsafe { ops::log1(offset: data.ptr(), len: data.len() as u256, topic0: topic0) }
     }
 
     fn log2(mut self, data: MemSpan, topic0: u256, topic1: u256) {
-        unsafe { ops::log2(offset: data.ptr(), len: data.len(), topic0: topic0, topic1: topic1) }
+        unsafe { ops::log2(offset: data.ptr(), len: data.len() as u256, topic0: topic0, topic1: topic1) }
     }
 
     fn log3(mut self, data: MemSpan, topic0: u256, topic1: u256, topic2: u256) {
         unsafe {
             ops::log3(
                 offset: data.ptr(),
-                len: data.len(),
+                len: data.len() as u256,
                 topic0: topic0,
                 topic1: topic1,
                 topic2: topic2,
@@ -1118,7 +1118,7 @@ impl Log for Evm {
         unsafe {
             ops::log4(
                 offset: data.ptr(),
-                len: data.len(),
+                len: data.len() as u256,
                 topic0: topic0,
                 topic1: topic1,
                 topic2: topic2,
@@ -1138,7 +1138,7 @@ where M: Encode<Sol>
     let selector_size = size_of<Sol::Selector>()
     let selector_word = (selector as u256) << 224
     let encoded = encode_abi_payload(message)
-    let buffer = unsafe { MemBuffer::alloc_uninit(selector_size + encoded.len()) }
+    let buffer = unsafe { MemBuffer::alloc_uninit(selector_size as usize + encoded.len()) }
     unsafe {
         ops::mstore(addr: buffer.ptr(), value: selector_word)
         ptr::copy(
@@ -1160,7 +1160,7 @@ where M: MsgVariant<Sol> + Encode<Sol>
 /// Copy the complete current returndata into a fresh owner.
 pub fn copy_returndata() -> MemBuffer {
     let ret_len = ops::returndatasize()
-    let buffer = unsafe { MemBuffer::alloc_uninit(ret_len) }
+    let buffer = unsafe { MemBuffer::alloc_uninit(ret_len as usize) }
     unsafe { ops::returndatacopy(dest: buffer.ptr(), offset: 0, len: ret_len) }
     buffer
 }
@@ -1168,7 +1168,7 @@ pub fn copy_returndata() -> MemBuffer {
 /// Revert, bubbling the current returndata payload unchanged.
 pub fn bubble_last_revert() -> ! {
     let ret = copy_returndata()
-    unsafe { ops::revert(offset: ret.ptr(), len: ret.len()) }
+    unsafe { ops::revert(offset: ret.ptr(), len: ret.len() as u256) }
 }
 
 /// Revert with the current returndata if there is any, otherwise with the
@@ -1229,7 +1229,7 @@ pub fn revert<T>(_ value: own T) -> !
     where T: Encode<Sol> + AbiSize
 {
     let result = encode_single_root_alloc<Sol, T>(value)
-    unsafe { ops::revert(offset: result.ptr(), len: result.len()) }
+    unsafe { ops::revert(offset: result.ptr(), len: result.len() as u256) }
 }
 
 /// Revert with a Solidity-compatible custom error.
@@ -1240,7 +1240,7 @@ pub fn revert_error<T>(_ error: own T) -> !
     where T: ErrorVariant<Sol> + Encode<Sol>
 {
     let buffer = encode_error(error)
-    unsafe { ops::revert(offset: buffer.ptr(), len: buffer.len()) }
+    unsafe { ops::revert(offset: buffer.ptr(), len: buffer.len() as u256) }
 }
 
 /// Encode a custom error (4-byte selector + ABI-encoded fields) into freshly
@@ -1261,7 +1261,7 @@ pub fn encode_error<T>(_ error: own T) -> MemBuffer
 /// Use it to rethrow preserved revert data (for example
 /// `CallOutcome::returndata()`) or bytes pre-encoded with `encode_error`.
 pub fn revert_bytes(_ data: MemSpan) -> ! {
-    unsafe { ops::revert(offset: data.ptr(), len: data.len()) }
+    unsafe { ops::revert(offset: data.ptr(), len: data.len() as u256) }
 }
 
 /// Revert without revert data, like Solidity's `revert()`.
@@ -1288,7 +1288,7 @@ impl ContractHost for Evm {
             self.abort()
         }
         let args_len = code_size - args_offset
-        var args = MemBuffer::alloc(args_len)
+        var args = MemBuffer::alloc(args_len as usize)
         self.codecopy(
             dest: mut args,
             dest_offset: 0,
@@ -1301,7 +1301,7 @@ impl ContractHost for Evm {
     fn create_contract<F>(mut self, _ runtime: F) -> ! {
         let len = self.code_region_len(runtime)
         let offset = self.code_region_offset(runtime)
-        var buffer = MemBuffer::alloc(len)
+        var buffer = MemBuffer::alloc(len as usize)
         self.codecopy(
             dest: mut buffer,
             dest_offset: 0,
@@ -1329,7 +1329,7 @@ impl ContractHost for Evm {
                 unsafe {
                     value.encode(AbiFrame::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE))
                     self.return_data(
-                        data: MemSpan::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE),
+                        data: MemSpan::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE as usize),
                     )
                 }
             } else if T::HEAD_SIZE <= 64 {
@@ -1337,11 +1337,11 @@ impl ContractHost for Evm {
                 unsafe {
                     value.encode(AbiFrame::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE))
                     self.return_data(
-                        data: MemSpan::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE),
+                        data: MemSpan::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE as usize),
                     )
                 }
             } else {
-                let out = MemBuffer::alloc(T::HEAD_SIZE)
+                let out = MemBuffer::alloc(T::HEAD_SIZE as usize)
                 value.encode(unsafe { AbiFrame::from_raw_parts(ptr: out.ptr(), len: T::HEAD_SIZE) })
                 self.return_data(data: out.span())
             }

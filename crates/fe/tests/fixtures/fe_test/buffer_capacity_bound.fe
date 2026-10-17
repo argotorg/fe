@@ -11,13 +11,13 @@ fn huge(_ x: u256) -> u256 {
 
 #[test(should_revert, selector = 0x4e487b71)]
 fn huge_capacity_reverts() {
-    let _ = MemBuffer::with_capacity(huge(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff))
+    let _ = MemBuffer::with_capacity(huge(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) as usize)
 }
 
 #[test(should_revert, selector = 0x4e487b71)]
 fn huge_reserve_reverts() {
     var buf = MemBuffer::with_capacity(32)
-    buf.reserve(huge(0x10000000000000000))
+    buf.reserve(huge(0x10000000000000000) as usize)
 }
 
 #[test(should_revert, selector = 0x4e487b71)]
@@ -27,17 +27,17 @@ fn huge_alloc_bytes_reverts() {
 
 #[test(should_revert, selector = 0x4e487b71)]
 fn huge_buffer_reverts() {
-    let _ = MemBuffer::alloc(huge(0x10000000000000000))
+    let _ = MemBuffer::alloc(huge(0x10000000000000000) as usize)
 }
 
 #[test(should_revert, selector = 0x4e487b71)]
 fn huge_array_reverts() {
-    let _ = MemArray<u256>::new_zeroed(huge(0x800000000000001))
+    let _ = MemArray<u256>::new_zeroed(huge(0x800000000000001) as usize)
 }
 
 #[test(should_revert, selector = 0x4e487b71)]
 fn huge_string_reverts() {
-    let _ = DynString::zeroed(huge(0x10000000000000000))
+    let _ = DynString::zeroed(huge(0x10000000000000000) as usize)
 }
 
 // A safe `packed_width` that over-reports cannot size a wrapping allocation.
@@ -62,7 +62,7 @@ fn huge_packed_width_reverts() {
 
 #[test]
 fn bounded_capacity_allocates() {
-    var buf = MemBuffer::with_capacity(huge(64))
+    var buf = MemBuffer::with_capacity(huge(64) as usize)
     buf.reserve(100)
     let other = MemBuffer::alloc(32)
     assert(buf.capacity() >= 100 && other[0] == 0)

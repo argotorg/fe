@@ -103,7 +103,7 @@ fn no_arg_contract_address_matches_create2() uses (evm: mut Evm) {
 #[test]
 fn no_arg_init_code_hash_is_hash_of_embedded_code() uses (evm: mut Evm) {
     let len = <Plain as Contract>::init_code_len()
-    var code = MemBuffer::alloc(len)
+    var code = MemBuffer::alloc(len as usize)
     evm.codecopy(dest: mut code, dest_offset: 0, src_offset: <Plain as Contract>::init_code_offset(), len)
     assert(init_code_hash<Plain>(()) == keccak256(code.span()))
 }
@@ -112,7 +112,7 @@ fn no_arg_init_code_hash_is_hash_of_embedded_code() uses (evm: mut Evm) {
 fn static_args_are_abi_encoded_after_the_code() uses (evm: mut Evm) {
     let owner = Address { inner: 0xabc }
     let len = <WithArgs as Contract>::init_code_len()
-    var code = MemBuffer::alloc(len + 64)
+    var code = MemBuffer::alloc((len + 64) as usize)
     evm.codecopy(dest: mut code, dest_offset: 0, src_offset: <WithArgs as Contract>::init_code_offset(), len)
     unsafe { store_word(ptr: core::ptr::offset_bytes(code.ptr(), len), value: 42) }
     unsafe { store_word(ptr: core::ptr::offset_bytes(code.ptr(), len + 32), value: 0xabc) }

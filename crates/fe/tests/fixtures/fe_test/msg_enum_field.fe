@@ -85,7 +85,7 @@ pub contract Paymaster {
                 PostOpMode::PostOpReverted => 300,
             }
             last = code / 100
-            code + context.len() + actualGasCost + actualUserOpFeePerGas
+            code + context.len() as u256 + actualGasCost + actualUserOpFeePerGas
         }
 
         LastMode {} -> PostOpMode uses (last) {

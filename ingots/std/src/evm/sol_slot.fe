@@ -156,13 +156,13 @@ impl SolSlot {
     /// Reads the Solidity `bytes` stored in this slot.
     pub fn read_bytes(self) -> Bytes {
         let (data, len, size) = self.load_payload()
-        unsafe { Bytes::from_abi_tail(data, len, size) }
+        unsafe { Bytes::from_abi_tail(data, len: len as usize, size) }
     }
 
     /// Reads the Solidity `string` stored in this slot.
     pub fn read_string(self) -> DynString {
         let (data, len, size) = self.load_payload()
-        unsafe { DynString::from_abi_tail(data, len, size) }
+        unsafe { DynString::from_abi_tail(data, len: len as usize, size) }
     }
 
     /// Assigns Solidity `bytes` to this slot, clearing words a previous,
@@ -204,7 +204,7 @@ impl SolSlot {
         let old = self.payload.head
         let old_len = stored_len(old)
         let old_words = if old & 1 == 0 { 0 } else { word_count(old_len) }
-        let len = payload.len()
+        let len = payload.len() as u256
         var words: u256 = 0
         if len < 32 {
             self.payload.head = payload_word(payload, 0) | (len * 2)
@@ -248,10 +248,11 @@ fn word_count(_ len: u256) -> u256 {
 
 // The payload word at `offset`, with bytes past the end of `payload` zeroed.
 fn payload_word(_ payload: MemSpan, _ offset: u256) -> u256 {
-    if offset >= payload.len() {
+    let len = payload.len() as u256
+    if offset >= len {
         return 0
     }
-    leading_bytes(payload.word_at(offset), count: payload.len() - offset)
+    leading_bytes(payload.word_at(offset), count: len - offset)
 }
 
 // The first `count` bytes of `word`, with the rest zeroed.

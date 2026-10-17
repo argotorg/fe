@@ -28,7 +28,7 @@ fn abi_encode(value: u256) -> ! uses (ops: mut RawOps) {
 fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(dispatch)
     let offset = evm.code_region_offset(dispatch)
-    var dest = ptr::MemBuffer::alloc(len)
+    var dest = ptr::MemBuffer::alloc(len as usize)
     evm.codecopy(
         dest: mut dest,
         dest_offset: 0,

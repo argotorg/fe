@@ -7,11 +7,11 @@ fn checked_slice_reverts_before_accessing_an_invalid_complete_range() {
 use core::ptr::FixedMemBuffer
 msg RangeMsg {
     #[selector = 1]
-    Check { len: u256 } -> u256,
+    Check { len: usize } -> usize,
 }
 pub contract RangeContract {
     recv RangeMsg {
-        Check { len } -> u256 {
+        Check { len } -> usize {
             let buffer = FixedMemBuffer<32>::alloc()
             buffer.span().slice(offset: 16, len).len()
         }

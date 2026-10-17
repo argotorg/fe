@@ -1,4 +1,4 @@
-use super::abi::{Bytes, DynArray, DynString}
+use super::abi::{Bytes, DynString}
 
 // Marker traits for language-level behavior.
 //
@@ -43,12 +43,10 @@ impl Copy for () {}
 impl<const N: usize> Copy for String<N> {}
 impl Copy for Bytes {}
 impl Copy for DynString {}
-impl<T> Copy for DynArray<T> {}
 
 // A memory buffer handle is a snapshot of where its contents lie.
 impl Snapshot for Bytes {}
 impl Snapshot for DynString {}
-impl<T> Snapshot for DynArray<T> {}
 impl<T, const N: usize> Copy for [T; N]
     where T: Copy
 {}
@@ -93,4 +91,44 @@ impl<T0, T1, T2, T3, T4> Copy for (T0, T1, T2, T3, T4)
 
 impl<T0, T1, T2, T3, T4, T5> Copy for (T0, T1, T2, T3, T4, T5)
     where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6> Copy for (T0, T1, T2, T3, T4, T5, T6)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7> Copy for (T0, T1, T2, T3, T4, T5, T6, T7)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8> Copy for (T0, T1, T2, T3, T4, T5, T6, T7, T8)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy, T8: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Copy for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy, T8: Copy, T9: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Copy for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy, T8: Copy, T9: Copy, T10: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Copy for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy, T8: Copy, T9: Copy, T10: Copy, T11: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> Copy for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy, T8: Copy, T9: Copy, T10: Copy, T11: Copy, T12: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13> Copy for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy, T8: Copy, T9: Copy, T10: Copy, T11: Copy, T12: Copy, T13: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14> Copy for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy, T8: Copy, T9: Copy, T10: Copy, T11: Copy, T12: Copy, T13: Copy, T14: Copy
+{}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15> Copy for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)
+    where T0: Copy, T1: Copy, T2: Copy, T3: Copy, T4: Copy, T5: Copy, T6: Copy, T7: Copy, T8: Copy, T9: Copy, T10: Copy, T11: Copy, T12: Copy, T13: Copy, T14: Copy, T15: Copy
 {}

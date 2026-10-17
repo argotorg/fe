@@ -87,7 +87,7 @@ pub contract SpellingC {
 #[test]
 fn fields_spelled_like_generated_names() uses (evm: mut Evm) {
     let encoded = encode_abi_payload(Spelled { d: __fe_D { x: 1 }, i: 2, values: [3, 4] })
-    let decoded = <Spelled as Decode<Sol>>::decode_from_bounded(encoded.span(), 0, encoded.len())
+    let decoded = <Spelled as Decode<Sol>>::decode_from_bounded(encoded.span(), 0, encoded.len() as u256)
     assert(decoded.d.x == 1)
     assert(decoded.i == 2)
     assert(decoded.values[1] == 4)
@@ -99,7 +99,7 @@ fn fields_spelled_like_generated_names() uses (evm: mut Evm) {
 #[test]
 fn abi_struct_fields_named_like_generated_params() {
     let encoded = encode_abi_payload(Both { d: D { x: 1 }, i: I { y: 2 }, l: 3 })
-    let decoded = <Both as Decode<Sol>>::decode_from_bounded(encoded.span(), 0, encoded.len())
+    let decoded = <Both as Decode<Sol>>::decode_from_bounded(encoded.span(), 0, encoded.len() as u256)
     assert(decoded.d.x == 1)
     assert(decoded.i.y == 2)
     assert(decoded.l == 3)

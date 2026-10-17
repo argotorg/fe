@@ -81,7 +81,7 @@ const MAX_U48: u256 = 0xffffffffffff
 const MAX_U128: u256 = 0xffffffffffffffffffffffffffffffff
 const ADDRESS_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffff
 // Paymaster address (20 bytes), verification and postOp gas limits (16 each).
-const PAYMASTER_DATA_OFFSET: u256 = 52
+const PAYMASTER_DATA_OFFSET: usize = 52
 
 /// The validator of an account was called by an address other than the
 /// EntryPoint. Selector `0x7cf8632b`, as OpenZeppelin's `Account`.

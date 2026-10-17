@@ -54,7 +54,7 @@ use super::ops
 use super::panic::{PANIC_ASSERT, Panic}
 
 /// Default initial capacity (in bytes) for `Packed::new`.
-const DEFAULT_CAPACITY: u256 = 128
+const DEFAULT_CAPACITY: usize = 128
 
 /// A value with a tightly packed byte encoding (Solidity
 /// `abi.encodePacked` semantics).
@@ -86,9 +86,9 @@ pub trait EncodePacked {
     unsafe fn write_packed(own self, _ dest: *u8, room: u256) -> u256 {
         let packed = self.pack_into(Packed::with_capacity(bytes: 0))
         let source = packed.buffer.span()
-        check_room(width: source.len(), room)
+        check_room(width: source.len() as u256, room)
         ptr::copy(dest, source)
-        source.len()
+        source.len() as u256
     }
 }
 
@@ -119,9 +119,9 @@ pub(ingot) unsafe fn write_word_prefix(_ dest: *u8, _ value: u256, _ width: u256
 #[inline(always)]
 pub fn encode_packed<T: EncodePacked>(_ value: own T) -> Packed {
     let width = value.packed_width()
-    var buffer = ptr::MemBuffer::with_capacity(width + 32)
+    var buffer = ptr::MemBuffer::with_capacity((width + 32) as usize)
     let written = unsafe { value.write_packed(buffer.ptr(), room: width) }
-    unsafe { buffer.set_len(written) }
+    unsafe { buffer.set_len(written as usize) }
     Packed { buffer }
 }
 
@@ -131,7 +131,7 @@ pub fn keccak_packed<T: EncodePacked>(_ value: own T) -> u256 {
     let width = value.packed_width()
     let buffer = ptr::alloc_bytes(width + 32)
     let written = unsafe { value.write_packed(buffer, room: width) }
-    unsafe { crypto::keccak256(MemSpan::from_raw_parts(ptr: buffer, len: written)) }
+    unsafe { crypto::keccak256(MemSpan::from_raw_parts(ptr: buffer, len: written as usize)) }
 }
 
 /// Imperative builder for packed byte payloads.
@@ -155,7 +155,7 @@ impl Packed {
     /// Growable buffer with a chosen initial capacity. The capacity is
     /// a copy-avoidance hint, never a contract — writes past it grow
     /// the buffer.
-    pub fn with_capacity(bytes: u256) -> Self {
+    pub fn with_capacity(bytes: usize) -> Self {
         Packed {
             buffer: ptr::MemBuffer::with_capacity(bytes),
         }
@@ -245,19 +245,19 @@ impl Packed {
         let len = self.buffer.len()
         var i: usize = 0
         while i < N {
-            unsafe { *ptr::offset_bytes(self.buffer.ptr(), len + (i as u256)) = value[i] }
+            unsafe { *ptr::offset_bytes(self.buffer.ptr(), (len + i) as u256) = value[i] }
             i += 1
         }
-        unsafe { self.buffer.set_len(len + (N as u256)) }
+        unsafe { self.buffer.set_len(len + N) }
     }
 
     /// Append a read-only memory span.
     pub fn append_span(mut self, _ source: MemSpan) {
-        self.append_raw(source: source.ptr(), len: source.len())
+        self.append_raw(source: source.ptr(), len: source.len() as u256)
     }
 
     /// Bytes written so far.
-    pub fn len(self) -> u256 {
+    pub fn len(self) -> usize {
         self.buffer.len()
     }
 
@@ -290,9 +290,9 @@ impl Packed {
     /// allocation: length word + zero-padded payload words).
     pub fn as_bytes(self) -> Bytes {
         let len = self.len()
-        let padded = (len + 31) / 32 * 32
+        let padded = ((len + 31) / 32 * 32) as u256
         let data = ptr::alloc_bytes(32 + padded)
-        unsafe { store_word(ptr: data, value: len) }
+        unsafe { store_word(ptr: data, value: len as u256) }
         if padded != 0 {
             // Zero the last payload word so the padding bytes are
             // canonical regardless of what the copy leaves behind.
@@ -318,9 +318,9 @@ impl Packed {
             return
         }
         self.reserve(width)
-        let len = self.buffer.len()
+        let len = self.buffer.len() as u256
         let cursor = ptr::offset_bytes(self.buffer.ptr(), len)
-        if len + 32 <= self.buffer.capacity() {
+        if len + 32 <= self.buffer.capacity() as u256 {
             unsafe { store_word(ptr: cursor, value: value << ((32 - width) * 8)) }
         } else {
             var i: u256 = 0
@@ -330,25 +330,25 @@ impl Packed {
                 i += 1
             }
         }
-        unsafe { self.buffer.set_len(len + width) }
+        unsafe { self.buffer.set_len((len + width) as usize) }
     }
 
     /// Ensure `additional` bytes fit below `limit`, growing
     /// (copy-on-grow, doubling until it fits) if they don't.
     fn reserve(mut self, _ additional: u256) {
-        self.buffer.reserve(additional)
+        self.buffer.reserve(additional as usize)
     }
 
     fn append_raw(mut self, source: *u8, len: u256) {
         self.reserve(len)
-        let old_len = self.buffer.len()
+        let old_len = self.buffer.len() as u256
         unsafe {
             ptr::copy_raw(
                 dest: ptr::offset_bytes(self.buffer.ptr(), old_len),
                 source,
                 len,
             )
-            self.buffer.set_len(old_len + len)
+            self.buffer.set_len((old_len + len) as usize)
         }
     }
 }
@@ -616,18 +616,18 @@ impl<const N: usize> EncodePacked for FixedBytes<N> {
 // `len()` raw payload bytes, no length word.
 impl EncodePacked for Bytes {
     #[inline(always)]
-    fn packed_width(self) -> u256 { self.len() }
+    fn packed_width(self) -> u256 { self.len() as u256 }
     fn pack_into(own self, var _ p: own Packed) -> Packed {
         let source = self.payload_span()
-        p.append_raw(source: source.ptr(), len: source.len())
+        p.append_raw(source: source.ptr(), len: source.len() as u256)
         p
     }
     #[inline(always)]
     unsafe fn write_packed(own self, _ dest: *u8, room: u256) -> u256 {
         let source = self.payload_span()
-        check_room(width: source.len(), room)
+        check_room(width: source.len() as u256, room)
         ptr::copy(dest, source)
-        source.len()
+        source.len() as u256
     }
 }
 

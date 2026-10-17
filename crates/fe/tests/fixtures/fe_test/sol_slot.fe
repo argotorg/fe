@@ -56,7 +56,7 @@ fn bytes_and_strings_use_solidity_layout() uses (evm: mut Evm) {
         let long: DynString = "a string that is longer than thirty-two bytes"
         slot.write_string(long)
         let head: u256 = slot.read(offset: 0)
-        assert(head == long.len() * 2 + 1)
+        assert(head == (long.len() * 2 + 1) as u256)
         let read_back = slot.read_string()
         assert(read_back.len() == long.len())
         assert(read_back.byte_at(0) == 0x61)
@@ -156,7 +156,7 @@ fn hash_words(_ a: u256, _ b: u256, _ n: u256) -> u256 {
     let buffer = ptr::alloc_bytes(64)
     unsafe { store_word(ptr: buffer, value: a) }
     unsafe { store_word(ptr: ptr::offset_bytes(buffer, 32), value: b) }
-    unsafe { keccak256(MemSpan::from_raw_parts(ptr: buffer, len: n * 32)) }
+    unsafe { keccak256(MemSpan::from_raw_parts(ptr: buffer, len: (n * 32) as usize)) }
 }
 
 #[test]

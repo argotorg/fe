@@ -112,7 +112,7 @@ fn embedded_child_matches_standalone_artifact() {
 use std::evm::{{Contract, Evm, RawOps}}
 #[test]
 fn embedded_child_matches_build() uses (evm: mut Evm) {{
-    var buffer = core::ptr::MemBuffer::alloc(child::Child::init_code_len())
+    var buffer = core::ptr::MemBuffer::alloc(child::Child::init_code_len() as usize)
     evm.codecopy(dest: mut buffer, dest_offset: 0, src_offset: child::Child::init_code_offset(), len: child::Child::init_code_len())
     assert(std::evm::keccak256(buffer.span()) == 0x{})
     assert(shared::mix(7, 0) == 7)

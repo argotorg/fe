@@ -25,7 +25,7 @@ pub contract MerkleVerifier {
         Verify { proof, root, leaf } -> bool {
             var computed = leaf.val
             for i in 0..proof.len() as usize {
-                let sibling = proof.get(i as u256).val
+                let sibling = proof.get((i as u256) as usize).val
                 computed = if computed < sibling {
                     hash_pair(a: computed, b: sibling)
                 } else {

@@ -2,7 +2,7 @@
 // `MemVec`) and element types (unsigned, signed, `Address`, a user type).
 
 use core::ops::{Eq, Ord}
-use core::ptr::MemArray
+use core::ptr::{MemArray, MemVec}
 use core::sort::{
     binary_search,
     dedup_sorted,
@@ -14,7 +14,7 @@ use core::sort::{
     reverse,
     sort,
 }
-use std::abi::{DynArray, MemVec}
+use std::abi::DynArray
 use std::abi::dyn_array::dyn_array_from
 use std::evm::Address
 
@@ -121,13 +121,23 @@ fn sorts_a_copy_of_an_abi_array() {
     let input: DynArray<Address> = dyn_array_from(
         [Address { inner: 3 }, Address { inner: 1 }, Address { inner: 2 }],
     )
-    var copy = MemVec::from_dyn_array(input)
+    var copy = input.to_mem_array()
     sort(mut copy)
     assert!(
-        copy.get(0).inner == 1 && copy.get(1).inner == 2 && copy.get(2).inner == 3,
+        copy[0].inner == 1 && copy[1].inner == 2 && copy[2].inner == 3,
     )
-    let sorted: DynArray<Address> = copy.to_dyn_array()
-    assert!(sorted.len() == 3)
+    let sorted = DynArray::from_slice(copy.as_slice())
+    assert!(sorted.len() == 3 && sorted.get(0).inner == 1)
+}
+
+#[test]
+fn sorts_a_mem_vec() {
+    var v = MemVec<i256>::new()
+    for x in [5, -1, 4] {
+        v.push(x)
+    }
+    sort(mut v)
+    assert!(v[0] == -1 && v[1] == 4 && v[2] == 5)
 }
 
 #[test]

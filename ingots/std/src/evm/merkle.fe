@@ -27,7 +27,7 @@
 ///     merkle::verify(proof, root: store.root, leaf)
 /// }
 /// ```
-use core::abi::DynArray
+use ingot::abi::DynArray
 use core::ptr::{self, MemSlice}
 use ingot::abi::Bytes32
 use super::ops
@@ -62,7 +62,7 @@ impl ProofNodes for DynArray<Bytes32> {
 // Static-element DynArray tails are the length word followed by `len`
 // element words, validated when the array is constructed or decoded.
 #[inline(always)]
-unsafe fn dyn_array_words(_ data: *u8, len: u256) -> ref MemSlice<u256> {
+unsafe fn dyn_array_words(_ data: *u8, len: usize) -> ref MemSlice<u256> {
     MemSlice::from_raw_parts(ptr: ptr::cast<u8, u256>(ptr::offset_bytes(data, 32)), len)
 }
 
@@ -82,7 +82,7 @@ pub fn hash_pair_sorted(_ a: u256, _ b: u256) -> u256 {
 #[arithmetic(unchecked)]
 pub fn process_proof<P: ProofNodes>(proof: P, leaf: u256) -> u256 {
     let nodes = proof.nodes()
-    let len = nodes.len()
+    let len = nodes.len() as u256
     let base = ptr::cast<u256, u8>(nodes.ptr())
     let scratch = ptr::alloc_bytes(64)
     var node = leaf
@@ -118,7 +118,7 @@ pub fn verify<P: ProofNodes>(proof: P, root: u256, leaf: u256) -> bool {
 #[arithmetic(unchecked)]
 pub fn process_indexed_proof<P: ProofNodes>(proof: P, leaf: u256, index: u256) -> u256 {
     let nodes = proof.nodes()
-    let len = nodes.len()
+    let len = nodes.len() as u256
     let base = ptr::cast<u256, u8>(nodes.ptr())
     let scratch = ptr::alloc_bytes(64)
     let right_at = ptr::offset_bytes(scratch, 32)

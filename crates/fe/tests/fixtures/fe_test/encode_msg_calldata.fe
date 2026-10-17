@@ -20,7 +20,7 @@ msg EchoMsg {
 
 fn hash_calldata() -> u256 uses (raw: mut RawOps) {
     let len = raw.calldatasize()
-    var data = ptr::MemBuffer::alloc(len)
+    var data = ptr::MemBuffer::alloc(len as usize)
     raw.calldatacopy(dest: mut data, dest_offset: 0, src_offset: 0, len)
     raw.keccak256(data: data.span())
 }
@@ -58,7 +58,7 @@ pub contract Echo uses (raw: mut RawOps) {
             assert!(shifted.span().byte_at(0) == 0)
             assert!(shifted.span().byte_at(1) == 0)
             assert!(direct.span().byte_at(0) == shifted.span().byte_at(2))
-            direct.len() + shifted.len()
+            (direct.len() + shifted.len()) as u256
         }
     }
 }

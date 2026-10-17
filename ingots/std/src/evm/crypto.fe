@@ -39,18 +39,18 @@ pub const BLS12_MAP_FP_TO_G1_ADDRESS: u256 = 0x10
 pub const BLS12_MAP_FP2_TO_G2_ADDRESS: u256 = 0x11
 pub const P256VERIFY_ADDRESS: u256 = 0x100
 
-pub const BLAKE2F_INPUT_LEN: u256 = 213
-pub const KZG_POINT_EVALUATION_INPUT_LEN: u256 = 192
-pub const BLS12_G1_LEN: u256 = 128
-pub const BLS12_G2_LEN: u256 = 256
-pub const BLS12_G1_ADD_INPUT_LEN: u256 = 256
-pub const BLS12_G1_MSM_PAIR_LEN: u256 = 160
-pub const BLS12_G2_ADD_INPUT_LEN: u256 = 512
-pub const BLS12_G2_MSM_PAIR_LEN: u256 = 288
-pub const BLS12_PAIRING_PAIR_LEN: u256 = 384
-pub const BLS12_FP_LEN: u256 = 64
-pub const BLS12_FP2_LEN: u256 = 128
-pub const P256VERIFY_INPUT_LEN: u256 = 160
+pub const BLAKE2F_INPUT_LEN: usize = 213
+pub const KZG_POINT_EVALUATION_INPUT_LEN: usize = 192
+pub const BLS12_G1_LEN: usize = 128
+pub const BLS12_G2_LEN: usize = 256
+pub const BLS12_G1_ADD_INPUT_LEN: usize = 256
+pub const BLS12_G1_MSM_PAIR_LEN: usize = 160
+pub const BLS12_G2_ADD_INPUT_LEN: usize = 512
+pub const BLS12_G2_MSM_PAIR_LEN: usize = 288
+pub const BLS12_PAIRING_PAIR_LEN: usize = 384
+pub const BLS12_FP_LEN: usize = 64
+pub const BLS12_FP2_LEN: usize = 128
+pub const P256VERIFY_INPUT_LEN: usize = 160
 
 const SECP256K1_ORDER: u256 = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
 const SECP256K1_HALF_ORDER: u256 = 0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0
@@ -62,18 +62,18 @@ pub enum PrecompileError {
 
 impl Copy for PrecompileError {}
 
-fn valid_exact_len(data: MemSpan, expected: u256) -> bool {
+fn valid_exact_len(data: MemSpan, expected: usize) -> bool {
     data.len() == expected
 }
 
-fn valid_chunks(data: MemSpan, chunk_len: u256, allow_empty: bool) -> bool {
+fn valid_chunks(data: MemSpan, chunk_len: usize, allow_empty: bool) -> bool {
     (allow_empty || !data.is_empty()) && data.len() % chunk_len == 0
 }
 
 fn staticcall_memory(
     addr: u256,
     args: MemSpan,
-    ret_len: u256,
+    ret_len: usize,
 ) -> Result<PrecompileError, MemBuffer> {
     var out = MemBuffer::with_capacity(ret_len)
     let ok: u256 = unsafe {
@@ -81,9 +81,9 @@ fn staticcall_memory(
             gas: ops::gas(),
             addr: addr,
             args_offset: args.ptr(),
-            args_len: args.len(),
+            args_len: args.len() as u256,
             ret_offset: out.ptr(),
-            ret_len,
+            ret_len: ret_len as u256,
         )
     }
 
@@ -92,7 +92,7 @@ fn staticcall_memory(
     }
 
     let returned = ops::returndatasize()
-    unsafe { out.set_len(if returned < ret_len { returned } else { ret_len }) }
+    unsafe { out.set_len(if returned < ret_len as u256 { returned as usize } else { ret_len }) }
     Result::Ok(out)
 }
 
@@ -110,9 +110,9 @@ fn staticcall_fixed<const N: usize>(
             gas: ops::gas(),
             addr,
             args_offset: args.ptr(),
-            args_len: args.len(),
+            args_len: args.len() as u256,
             ret_offset: out.ptr(),
-            ret_len: out.len(),
+            ret_len: out.len() as u256,
         )
     }
 
@@ -200,7 +200,7 @@ pub const fn mulmod(_ a: u256, _ b: u256, _ m: u256) -> u256 {
 
 /// Keccak256 hash of a memory region.
 pub fn keccak256(_ data: MemSpan) -> u256 {
-    unsafe { ops::keccak256(offset: data.ptr(), len: data.len()) }
+    unsafe { ops::keccak256(offset: data.ptr(), len: data.len() as u256) }
 }
 
 /// Keccak256 of the concatenated 32-byte words, e.g. `keccak_words([a, b])`
@@ -307,7 +307,7 @@ pub fn ecrecover_raw(
             gas: ops::gas(),
             addr: ECRECOVER_ADDRESS,
             args_offset: buffer.ptr(),
-            args_len: buffer.len(),
+            args_len: buffer.len() as u256,
             ret_offset: buffer.ptr(),
             ret_len: 32,
         )
@@ -414,7 +414,7 @@ pub fn modexp(base: u256, exp: u256, modulus: u256) -> Result<PrecompileError, u
 }
 
 /// Raw modular exponentiation with caller-provided input and return size.
-pub fn modexp_raw(_ data: MemSpan, ret_len: u256) -> Result<PrecompileError, MemBuffer> {
+pub fn modexp_raw(_ data: MemSpan, ret_len: usize) -> Result<PrecompileError, MemBuffer> {
     staticcall_memory(addr: MODEXP_ADDRESS, args: data, ret_len)
 }
 

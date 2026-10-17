@@ -17,14 +17,14 @@ pub contract OffsetProbe {
             unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 96), value: 0) }
             unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 128), value: 0) }
             if mode == 0 {
-                return <Bytes as Decode<Sol>>::decode_from_bounded(data.span(), offset, 160).len()
+                return <Bytes as Decode<Sol>>::decode_from_bounded(data.span(), offset, 160).len() as u256
             } else if mode == 1 {
-                return decode_field_from<Sol, Bytes, MemSpan>(data.span(), base: 32, head_pos: 0).len()
+                return decode_field_from<Sol, Bytes, MemSpan>(data.span(), base: 32, head_pos: 0).len() as u256
             } else if mode == 2 {
                 return abi_field_end<Sol, Bytes, MemSpan>(data.span(), base: 32, pos: 0)
             } else {
                 var decoder = Sol::decoder_with_base(32)
-                return decode_field<Sol, Bytes, SolDecoder, MemSpan>(mut decoder, data.span()).len()
+                return decode_field<Sol, Bytes, SolDecoder, MemSpan>(mut decoder, data.span()).len() as u256
             }
         }
     }

@@ -38,9 +38,9 @@ error[6-0003]: trait bound is not satisfied
     │                     `Book` doesn't implement `Clearable`
     │                     trait bound `StorageMap<u256, u256>: Clearable` is not satisfied
     │
-    ┌─ src/evm/sol_array.fe:151:18
+    ┌─ src/evm/sol_array.fe:152:18
     │
-151 │         where T: Clearable
+152 │         where T: Clearable
     │                  --------- required by this bound on `clear_at`
 
 error[6-0003]: trait bound is not satisfied

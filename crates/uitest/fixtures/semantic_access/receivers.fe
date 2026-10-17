@@ -6,7 +6,7 @@ use core::ptr::MemArray
 struct Holder { value: u256, items: MemArray<u256> }
 
 impl Holder {
-    fn len(self) -> u256 { self.items.len() }
+    fn len(self) -> u256 { self.items.len() as u256 }
     fn set(mut self, _ value: u256) { self.value = value }
     fn take(own self) -> u256 { self.value }
     fn value_mut(mut self) -> mut u256 { mut self.value }

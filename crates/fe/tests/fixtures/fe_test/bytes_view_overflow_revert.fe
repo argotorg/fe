@@ -12,7 +12,7 @@ msg ViewMsg {
 pub contract Viewer {
     recv ViewMsg {
         Len {} -> u256 {
-            decode_bytes_view_at(CallData::with_base(4), base: 0, head_pos: 0).len()
+            decode_bytes_view_at(CallData::with_base(4), base: 0, head_pos: 0).len() as u256
         }
     }
 }
@@ -21,7 +21,7 @@ struct Outcome { success: bool, ret_len: u256, word0: u256 }
 
 fn call_words<const N: usize>(_ addr: Address, words: [u256; N]) -> Outcome uses (evm: mut Evm) {
     let len = 4 + (N as u256) * 32
-    let data = MemBuffer::alloc(len + 32)
+    let data = MemBuffer::alloc((len + 32) as usize)
     unsafe { store_word(ptr: data.ptr(), value: 1 << 224) }
     var i: usize = 0
     while i < N {
@@ -34,7 +34,7 @@ fn call_words<const N: usize>(_ addr: Address, words: [u256; N]) -> Outcome uses
             addr: addr,
             gas: 1000000,
             value: 0,
-            args: MemSpan::from_raw_parts(ptr: data.ptr(), len: len),
+            args: MemSpan::from_raw_parts(ptr: data.ptr(), len: len as usize),
             ret: mut ret,
         )
     }
@@ -96,7 +96,7 @@ impl ByteInput for SparseInput {
 #[test]
 fn test_offsets_and_lengths_below_two_64_accepted_on_long_input() {
     assert!(decode_bytes_view(SparseInput { w0: TWO_64 - 32, w1: 0 }).len() == 0)
-    assert!(decode_bytes_view(SparseInput { w0: 0x20, w1: TWO_64 - 1 }).len() == TWO_64 - 1)
+    assert!(decode_bytes_view(SparseInput { w0: 0x20, w1: TWO_64 - 1 }).len() as u256 == TWO_64 - 1)
 }
 
 #[test(should_revert)]

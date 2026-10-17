@@ -28,7 +28,7 @@ impl SolMapping {
     /// Storage slot of `mapping[key]`: `keccak256(abi.encode(key, slot))`.
     pub fn slot_of<K: StorageKey>(self, _ key: K) -> u256 {
         let key_len = K::encoded_len(key)
-        let preimage = unsafe { MemBuffer::alloc_uninit(key_len + 32) }
+        let preimage = unsafe { MemBuffer::alloc_uninit((key_len + 32) as usize) }
         unsafe {
             K::write_key(ptr: preimage.ptr(), key)
             mstore(addr: ptr::offset_bytes(preimage.ptr(), key_len), value: self.slot)

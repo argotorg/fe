@@ -9,7 +9,7 @@ fn input(_ size: u256) -> ref MemSpan {
     unsafe { store_word(ptr: p, value: 33) }
     unsafe { store_word(ptr: ptr::offset_bytes(p, 32), value: 0x1111111111111111111111111111111111111111111111111111111111111111) }
     unsafe { store_word(ptr: ptr::offset_bytes(p, 64), value: 0x22ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) }
-    unsafe { MemSpan::from_raw_parts(ptr: p, len: size) }
+    unsafe { MemSpan::from_raw_parts(ptr: p, len: size as usize) }
 }
 fn check(_ bytes: Bytes) {
     assert!(bytes.len() == 33)
@@ -48,7 +48,7 @@ fn array_input(_ size: u256) -> ref MemSpan {
     unsafe { store_word(ptr: ptr::offset_bytes(p, 32), value: 32) }
     unsafe { store_word(ptr: ptr::offset_bytes(p, 64), value: 1) }
     unsafe { store_word(ptr: ptr::offset_bytes(p, 96), value: 0xaaffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff) }
-    unsafe { MemSpan::from_raw_parts(ptr: p, len: size) }
+    unsafe { MemSpan::from_raw_parts(ptr: p, len: size as usize) }
 }
 #[test]
 fn unpadded_nested_bytes() {
@@ -130,7 +130,7 @@ struct BoundedInput { ptr: *u8, len: u256 }
 impl Copy for BoundedInput {}
 impl BoundedInput {
     fn span(self) -> ref MemSpan {
-        unsafe { MemSpan::from_raw_parts(ptr: self.ptr, len: self.len) }
+        unsafe { MemSpan::from_raw_parts(ptr: self.ptr, len: self.len as usize) }
     }
 }
 impl ByteInput for BoundedInput {
@@ -183,15 +183,15 @@ fn deeply_nested_array_clears_partial_padding() {
 }
 
 fn check_boundary_bytes(_ bytes: Bytes, len: u256) {
-    assert!(bytes.len() == len)
+    assert!(bytes.len() == len as usize)
     assert!(bytes.encoded_span().word_at(0) == len)
     let words = len / 32 + (len % 32 != 0) as u256
     assert!(bytes.encoded_size() == 32 + words * 32)
     for offset in 0..len as usize {
-        assert!(bytes.byte_at(offset as u256) == 0xaa)
+        assert!(bytes.byte_at(offset) == 0xaa)
     }
     for offset in len as usize..(words * 32) as usize {
-        assert!(bytes.encoded_span().byte_at(32 + offset as u256) == 0)
+        assert!(bytes.encoded_span().byte_at(32 + offset) == 0)
     }
 }
 
@@ -216,7 +216,7 @@ fn every_byte_boundary_preserves_data_and_clears_padding() {
             check_boundary_bytes(<Bytes as Decode<Sol>>::decode_payload(mut d, data), len)
             assert!(backing.word_at(pos) == len)
             for offset in 0..128 {
-                assert!(backing.byte_at(pos + 32 + offset as u256) == 0xaa)
+                assert!(backing.byte_at((pos + 32 + offset as u256) as usize) == 0xaa)
             }
         }
     }
@@ -291,20 +291,20 @@ fn calldata_roundtrips_with_any_trailing_padding() uses (evm: mut Evm) {
                 let outcome = unsafe {
                     evm.raw_call(
                         addr: echo, gas: 1000000, value: 0,
-                        args: MemSpan::from_raw_parts(ptr: data, len: 68 + len + padding as u256),
+                        args: MemSpan::from_raw_parts(ptr: data, len: (68 + len + padding as u256) as usize),
                         ret: mut ret,
                     )
                 }
                 assert!(outcome.success())
                 assert!(outcome.returndata_len() == 64 + padded_len)
-                assert!(ret.len() == 64 + padded_len)
+                assert!(ret.len() == (64 + padded_len) as usize)
                 assert!(ret.span().word_at(0) == 32)
                 assert!(ret.span().word_at(32) == len)
                 for index in 0..len as usize {
-                    assert!(ret.span().byte_at(64 + index as u256) == (index * 37 % 128).downcast_unchecked())
+                    assert!(ret.span().byte_at(64 + index) == (index * 37 % 128).downcast_unchecked())
                 }
                 for index in len as usize..padded_len as usize {
-                    assert!(ret.span().byte_at(64 + index as u256) == 0)
+                    assert!(ret.span().byte_at(64 + index) == 0)
                 }
             }
             // A missing actual byte, including an empty value's length word,
@@ -312,7 +312,7 @@ fn calldata_roundtrips_with_any_trailing_padding() uses (evm: mut Evm) {
             let outcome = unsafe {
                 evm.raw_call(
                     addr: echo, gas: 1000000, value: 0,
-                    args: MemSpan::from_raw_parts(ptr: data, len: 67 + len), ret: mut ret,
+                    args: MemSpan::from_raw_parts(ptr: data, len: (67 + len) as usize), ret: mut ret,
                 )
             }
             assert!(!outcome.success())

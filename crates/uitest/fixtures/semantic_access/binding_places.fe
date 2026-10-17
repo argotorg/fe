@@ -63,7 +63,7 @@ fn view_reborrow(_ buf: mut MemBuffer) -> u256 {
     let s = buf.span()
     let t = s
     buf.truncate(0)
-    t.len()
+    t.len() as u256
 }
 
 // S-65. Rejected: `a` holds `p.a` for reading.
@@ -111,7 +111,7 @@ fn component_ref(_ words: mut MemArray<u256>) -> u256 {
 }
 
 fn consume(_ buf: own MemBuffer) -> u256 {
-    buf.len()
+    buf.len() as u256
 }
 
 // S-67. Accepted: a partial move out of an owned place.

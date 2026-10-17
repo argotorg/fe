@@ -3,14 +3,14 @@
 use core::ptr::MemBuffer
 
 enum Status { A, B }
-struct Store { status: Status, buf: Option<MemBuffer>, n: u256 }
+struct Store { status: Status, buf: Option<MemBuffer>, n: usize }
 
 fn keep(_ b: own MemBuffer) -> MemBuffer {
     b
 }
 
 // Accepted: matches that bind nothing move nothing.
-fn twice(_ s: own Store) -> u256 {
+fn twice(_ s: own Store) -> usize {
     let x = match s.status {
         Status::A => 0
         Status::B => 1
@@ -21,7 +21,7 @@ fn twice(_ s: own Store) -> u256 {
 }
 
 // Accepted: a plain name moves only its component.
-fn partial(_ s: own Store) -> u256 {
+fn partial(_ s: own Store) -> usize {
     let n = match s.buf {
         Option::Some(b) => b.len()
         Option::None => 0
@@ -33,7 +33,7 @@ fn partial(_ s: own Store) -> u256 {
 }
 
 // Rejected: the payload was moved by the first match.
-fn payload_twice(_ s: own Store) -> u256 {
+fn payload_twice(_ s: own Store) -> usize {
     let a = match s.buf {
         Option::Some(b) => b.len()
         Option::None => 0
@@ -59,7 +59,7 @@ fn from_view_let(_ s: Store) -> Option<MemBuffer> {
 }
 
 // Accepted: a `ref` binding reads the payload in place.
-fn from_view_ref(_ s: Store) -> u256 {
+fn from_view_ref(_ s: Store) -> usize {
     match s.buf {
         Option::Some(ref b) => b.len()
         Option::None => 0

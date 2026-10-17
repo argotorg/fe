@@ -22,13 +22,11 @@ pub fn checksum_address(_ address: Address) -> DynString {
         *ptr::offset_bytes(data, 1) = 120
     }
     let digits = ptr::offset_bytes(data, 2)
-    var i: u256 = 0
-    while i < 40 {
+    for i in 0..40 {
         let digit = lower.byte_at(i)
-        let uppercase = digit >= 97 && ((hash >> ((63 - i) * 4)) & 15) >= 8
+        let uppercase = digit >= 97 && ((hash >> ((63 - i as u256) * 4)) & 15) >= 8
         let cased = if uppercase { digit - 32 } else { digit }
-        unsafe { *ptr::offset_bytes(digits, i) = cased }
-        i += 1
+        unsafe { *ptr::offset_bytes(digits, i as u256) = cased }
     }
     unsafe { DynString::from_payload(source: ptr::MemSpan::from_raw_parts(ptr: data, len: 42)) }
 }

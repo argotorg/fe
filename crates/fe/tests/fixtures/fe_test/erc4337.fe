@@ -50,7 +50,7 @@ const OTHER_S: u256 = 0x6ec5957418998d3d1a1fc033b0d176d460cc0c818e93efebff444c18
 fn bytes<const N: usize>(_ words: [u256; N], len: u256) -> Bytes {
     let buf = ptr::alloc<[u256; N]>()
     unsafe { *buf = words }
-    unsafe { Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: ptr::byte_ptr(buf), len)) }
+    unsafe { Bytes::from_payload(source: MemSpan::from_raw_parts(ptr: ptr::byte_ptr(buf), len: len as usize)) }
 }
 
 fn sig(r: u256, s: u256, v: u256) -> Bytes {

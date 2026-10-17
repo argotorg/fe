@@ -2,7 +2,7 @@ use core::ptr
 use std::evm::RawOps
 
 pub fn hash(data: *u8, len: u256) -> u256 uses (ops: RawOps) {
-    unsafe { ops.keccak256(data: ptr::MemSpan::from_raw_parts(ptr: data, len)) }
+    unsafe { ops.keccak256(data: ptr::MemSpan::from_raw_parts(ptr: data, len: len as usize)) }
 }
 
 pub fn main() -> u256 uses (ops: RawOps) {
