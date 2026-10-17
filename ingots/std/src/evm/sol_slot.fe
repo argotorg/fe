@@ -7,7 +7,7 @@
 //!
 //! ```fe
 //! // `address owner; bool paused;` share slot 0: owner at byte 0, paused at 20.
-//! let slot = unsafe { SolSlot::at(0) }
+//! let slot = unsafe { SolSlot::at_mut(0) }
 //! let owner: Address = slot.read(offset: 0)
 //! slot.write(offset: 20, value: true)
 //! ```
@@ -17,7 +17,7 @@
 //! the slot into a `SolWord` and `store` it back:
 //!
 //! ```fe
-//! let slot = unsafe { SolSlot::at(0) }
+//! let slot = unsafe { SolSlot::at_mut(0) }
 //! var word = slot.load()
 //! let owner: Address = word.get(offset: 0)
 //! word.set(offset: 20, value: false)
@@ -34,8 +34,8 @@ use core::num::IntDowncast
 use core::marker::Pinned
 use core::ops::{Location, StateIndex, WrappingAdd}
 use core::ptr::{self, MemSpan}
-use super::crypto::keccak_words
-use super::effects::{Address, RawStorage, revert_error, storage_at_mut}
+use super::effects::{Address, RawStorage, revert_error, storage_at, storage_at_mut}
+use super::layout::array_data_slot
 use super::ops::{revert_empty, signextend}
 use super::panic::{PANIC_STORAGE_ENCODING, Panic}
 
@@ -68,17 +68,25 @@ unsafe impl StateIndex for Payload {
     type Entry = u256
 
     fn locate(self, _ root: u256, _ word: u256) -> Location {
-        Location { slot: data_slot(root).wrapping_add(word), offset: 0 }
+        Location { slot: array_data_slot(root).wrapping_add(word), offset: 0 }
     }
 }
 
 impl SolSlot {
-    /// The storage slot `slot`.
+    /// The storage slot `slot`, to read.
     ///
     /// The caller must ensure that nothing the compiler allocates, such as a
     /// contract field, uses `slot` or the slots its payload derives.
     #[raw_place]
-    pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
+    pub unsafe fn at(_ slot: u256) -> ref Self uses (storage: RawStorage) {
+        unsafe { storage_at(slot) }
+    }
+
+    /// The storage slot `slot`, to read and write.
+    ///
+    /// The caller must ensure what `at` requires.
+    #[raw_place]
+    pub unsafe fn at_mut(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
         unsafe { storage_at_mut(slot) }
     }
 
@@ -156,13 +164,13 @@ impl SolSlot {
     /// Reads the Solidity `bytes` stored in this slot.
     pub fn read_bytes(self) -> Bytes {
         let (data, len, size) = self.load_payload()
-        unsafe { Bytes::from_abi_tail(data, len, size) }
+        unsafe { Bytes::from_abi_tail(data, len: len as usize, size) }
     }
 
     /// Reads the Solidity `string` stored in this slot.
     pub fn read_string(self) -> DynString {
         let (data, len, size) = self.load_payload()
-        unsafe { DynString::from_abi_tail(data, len, size) }
+        unsafe { DynString::from_abi_tail(data, len: len as usize, size) }
     }
 
     /// Assigns Solidity `bytes` to this slot, clearing words a previous,
@@ -204,7 +212,7 @@ impl SolSlot {
         let old = self.payload.head
         let old_len = stored_len(old)
         let old_words = if old & 1 == 0 { 0 } else { word_count(old_len) }
-        let len = payload.len()
+        let len = payload.len() as u256
         var words: u256 = 0
         if len < 32 {
             self.payload.head = payload_word(payload, 0) | (len * 2)
@@ -225,12 +233,6 @@ impl SolSlot {
     }
 }
 
-// First data slot of a long value (or of a dynamic array):
-// `keccak256(abi.encode(slot))`.
-pub(ingot) fn data_slot(_ slot: u256) -> u256 {
-    keccak_words([slot])
-}
-
 // Panics like Solidity (0x22) on a head whose length contradicts its
 // short/long discriminator.
 fn stored_len(_ head: u256) -> u256 {
@@ -248,10 +250,11 @@ fn word_count(_ len: u256) -> u256 {
 
 // The payload word at `offset`, with bytes past the end of `payload` zeroed.
 fn payload_word(_ payload: MemSpan, _ offset: u256) -> u256 {
-    if offset >= payload.len() {
+    let len = payload.len() as u256
+    if offset >= len {
         return 0
     }
-    leading_bytes(payload.word_at(offset), count: payload.len() - offset)
+    leading_bytes(payload.word_at(offset), count: len - offset)
 }
 
 // The first `count` bytes of `word`, with the rest zeroed.

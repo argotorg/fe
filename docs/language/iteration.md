@@ -24,8 +24,9 @@ way: `for (i, mut x) in xs.enumerate()`.
 `Collection` (`core::iter`) is the protocol: `start` and `next` move a
 cursor, `at` projects the element at it. `CollectionMut` adds `at_mut` with
 `mut` access for loops whose item is `mut`, and `Bidirectional` traverses in
-reverse. Arrays, `MemArray`, `MemSlice`, ranges, `SolArray` and
-`SolEnumerableSet` are collections; a collection declares the effects its
+reverse. Arrays, `MemArray`, `MemVec`, `MemSlice`, ranges, `SolArray` and
+`SolEnumerableSet` are collections, and so is `DynArray`, whose loop decodes
+each element as it reaches it; a collection declares the effects its
 methods need (`uses E`) and the space of the places it yields (`space S`).
 
 A loop that copies each item (a `Copy` element bound by a plain name or
@@ -64,5 +65,6 @@ let totals = accounts.fold(Totals { sum: 0 }, |acc, account| {
 })
 ```
 
-`MemArray::collect(xs, map(f))` collects a producer's values into an array.
+`MemArray::collect(xs, map(f))` collects a producer's values into an array,
+and `MemVec::collect` into a growable one.
 See [closures](closures.md) for the callables these take.

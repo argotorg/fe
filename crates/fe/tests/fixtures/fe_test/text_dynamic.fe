@@ -48,7 +48,7 @@ fn growth_and_arbitrary_bytes() {
     assert!(output.len() == 65)
     i = 0
     while i < 65 {
-        assert!(output.byte_at(i) == input.span().byte_at(i))
+        assert!(output.byte_at(i as usize) == input.span().byte_at(i as usize))
         i += 1
     }
 }

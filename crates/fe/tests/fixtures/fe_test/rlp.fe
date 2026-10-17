@@ -12,21 +12,17 @@ const LOREM_HEX: DynString = "4c6f72656d20697073756d20646f6c6f722073697420616d65
 fn from_hex(_ hex: DynString) -> Bytes {
     let len = hex.len() / 2
     let buffer = MemBuffer::alloc(len)
-    var i: u256 = 0
-    while i < len {
+    for i in 0..len {
         let byte = text::parse_hex_uint(hex.slice(start: 2 * i, len: 2)).unwrap()
-        unsafe { *ptr::offset_bytes(buffer.ptr(), i) = byte.downcast_truncate() }
-        i += 1
+        unsafe { *ptr::offset_bytes(buffer.ptr(), i as u256) = byte.downcast_truncate() }
     }
     Bytes::from_payload(source: buffer.span())
 }
 
 fn to_hex(_ bytes: Bytes) -> DynString {
     var builder = TextBuilder::new()
-    var i: u256 = 0
-    while i < bytes.len() {
+    for i in 0..bytes.len() {
         builder = builder.push(text::hex(bytes.byte_at(i) as u256, 1))
-        i += 1
     }
     builder.finish()
 }
@@ -66,7 +62,7 @@ fn hex_bool(_ hex: DynString) -> Option<bool> {
     rlp::decode(input.payload_span())?.as_bool(input.payload_span())
 }
 
-fn hex_items(_ hex: DynString) -> Option<u256> {
+fn hex_items(_ hex: DynString) -> Option<usize> {
     let input = from_hex(hex)
     Option::Some(rlp::decode(input.payload_span())?.items(input.payload_span())?.len())
 }

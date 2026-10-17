@@ -286,7 +286,7 @@ impl AbiFrame {
     /// Copies `source` to byte `at`.
     #[inline(always)]
     pub fn copy_from(self, at: u256, _ source: ptr::MemSpan) {
-        let dest = self.slice(offset: at, len: source.len())
+        let dest = self.slice(offset: at, len: source.len() as u256)
         unsafe { ptr::copy(dest: dest.ptr, source) }
     }
 }
@@ -484,7 +484,7 @@ pub fn encode_alloc<A: Abi, T>(_ value: own T) -> ptr::MemBuffer
     where T: Encode<A> + AbiSize
 {
     let total = abi_payload_size(value)
-    let buffer = ptr::MemBuffer::alloc(total)
+    let buffer = ptr::MemBuffer::alloc(total as usize)
     // The fresh buffer is zeroed, and only the encoding writes it.
     value.encode(unsafe { AbiFrame::from_raw_parts(ptr: buffer.ptr(), len: total) })
     buffer
@@ -495,7 +495,7 @@ pub fn encode_single_root_alloc<A: Abi, T>(_ value: own T) -> ptr::MemBuffer
     where T: Encode<A> + AbiSize
 {
     let total = abi_single_root_size(value)
-    let buffer = ptr::MemBuffer::alloc(total)
+    let buffer = ptr::MemBuffer::alloc(total as usize)
     // The fresh buffer is zeroed, and only the encoding writes it.
     let out = unsafe { AbiFrame::from_raw_parts(ptr: buffer.ptr(), len: total) }
     encode_field<A, T>(value, out, head_pos: 0, tails: out.tail(abi_single_root_head_size<T>()))
@@ -627,6 +627,39 @@ unsafe fn copy_padded_payload<I: ByteInput>(_ input: I, _ pos: u256, _ dest: *u8
     input.copy_to_memory_unchecked(dest: dest, src_offset: pos, len: actual_size)
 }
 
+// An array payload lies within its input, so with the input at most
+// `MAX_PAYLOAD_LEN` bytes the payload fits it, rounded up to a word or not.
+// Owned tails of dynamic elements must remain word-aligned when embedded
+// before another field.
+#[arithmetic(unchecked)]
+#[inline(always)]
+fn checked_payload_size<A: Abi>(_ actual_size: u256, _ input_len: u256, padded: bool) -> u256 {
+    if input_len > MAX_PAYLOAD_LEN {
+        A::decode_error()
+    }
+    if padded { (actual_size + 31) & 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe0 } else { actual_size }
+}
+
+/// A fresh tail holding the `actual_size` payload bytes at `pos` of
+/// `input`, and its size: `actual_size`, rounded up to whole words when
+/// `padded`, as owned tails of dynamic elements are. Reverts unless
+/// `input_len` fits `MAX_PAYLOAD_LEN`.
+///
+/// The caller must ensure that the payload lies within the first
+/// `input_len` bytes of `input`.
+#[inline(always)]
+pub unsafe fn copy_payload<A: Abi, I: ByteInput>(_ input: I, _ pos: u256, actual_size: u256, input_len: u256, padded: bool) -> (*u8, u256) {
+    let size = checked_payload_size<A>(actual_size, input_len, padded)
+    // A checked payload fits `MAX_PAYLOAD_LEN`.
+    let data = ptr::alloc_bytes_unchecked(size)
+    if padded {
+        copy_padded_payload(input, pos, data, actual_size, size)
+    } else {
+        input.copy_to_memory_unchecked(dest: data, src_offset: pos, len: size)
+    }
+    (data, size)
+}
+
 fn copy_dynamic_payload_from_with_input_len<A: Abi, I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> (*u8, u256, u256) {
     let payload: (u256, u256) = checked_dynamic_payload_with_input_len<A, I>(input, pos, input_len)
     let data_len = payload.0
@@ -687,7 +720,7 @@ fn decode_string_payload_after_head<A: Abi, I: ByteInput, const N: usize>(_ inpu
 pub struct BytesView<I> {
     input: I,
     start: u256,
-    len: u256,
+    len: usize,
 }
 
 impl<I> Copy for BytesView<I>
@@ -697,15 +730,15 @@ impl<I> Copy for BytesView<I>
 impl<I> BytesView<I>
     where I: ByteInput + Copy
 {
-    pub fn try_new(input: I, start: u256, len: u256) -> Option<Self> {
+    pub fn try_new(input: I, start: u256, len: usize) -> Option<Self> {
         let input_len = input.len()
-        if start > input_len || len > input_len - start {
+        if start > input_len || len as u256 > input_len - start {
             return Option::None
         }
         Option::Some(Self { input, start, len })
     }
 
-    pub fn new(input: I, start: u256, len: u256) -> Self {
+    pub fn new(input: I, start: u256, len: usize) -> Self {
         match Self::try_new(input, start, len) {
             Option::Some(view) => view
             Option::None => super::panic()
@@ -720,7 +753,7 @@ impl<I> BytesView<I>
         self.start
     }
 
-    pub fn len(self) -> u256 {
+    pub fn len(self) -> usize {
         self.len
     }
 
@@ -728,25 +761,25 @@ impl<I> BytesView<I>
         self.len == 0
     }
 
-    pub fn try_slice(self, offset: u256, len: u256) -> Option<Self> {
+    pub fn try_slice(self, offset: usize, len: usize) -> Option<Self> {
         if offset > self.len || len > self.len - offset {
             return Option::None
         }
         Option::Some(Self {
             input: self.input,
-            start: self.start + offset,
+            start: self.start + offset as u256,
             len,
         })
     }
 
-    pub fn slice(self, offset: u256, len: u256) -> Self {
+    pub fn slice(self, offset: usize, len: usize) -> Self {
         match self.try_slice(offset, len) {
             Option::Some(view) => view
             Option::None => super::panic()
         }
     }
 
-    pub fn split_at(self, offset: u256) -> (Self, Self) {
+    pub fn split_at(self, offset: usize) -> (Self, Self) {
         if offset > self.len {
             super::panic()
         }
@@ -756,32 +789,32 @@ impl<I> BytesView<I>
         )
     }
 
-    pub fn truncate(self, len: u256) -> Self {
+    pub fn truncate(self, len: usize) -> Self {
         self.slice(offset: 0, len)
     }
 
-    pub fn get_byte(self, _ offset: u256) -> Option<u8> {
+    pub fn get_byte(self, _ offset: usize) -> Option<u8> {
         if offset >= self.len {
             return Option::None
         }
-        Option::Some(self.input.byte_at(self.start + offset))
+        Option::Some(self.input.byte_at(self.start + offset as u256))
     }
 
     /// Read one byte, panicking when `offset` is outside this view.
-    pub fn byte_at(self, _ offset: u256) -> u8 {
+    pub fn byte_at(self, _ offset: usize) -> u8 {
         match self.get_byte(offset) {
             Option::Some(value) => value
             Option::None => super::panic()
         }
     }
 
-    pub fn get_word(self, _ offset: u256) -> Option<u256> {
+    pub fn get_word(self, _ offset: usize) -> Option<u256> {
         if offset >= self.len {
             return Option::None
         }
 
-        let word = self.input.word_at(self.start + offset)
-        let remaining = self.len - offset
+        let word = self.input.word_at(self.start + offset as u256)
+        let remaining = (self.len - offset) as u256
         if remaining < 32 {
             let shift = (32 - remaining) * 8
             return Option::Some(word >> shift << shift)
@@ -793,7 +826,7 @@ impl<I> BytesView<I>
     ///
     /// Panics when the first byte is outside the view.
     #[inline(always)]
-    pub fn word_at(self, _ offset: u256) -> u256 {
+    pub fn word_at(self, _ offset: usize) -> u256 {
         match self.get_word(offset) {
             Option::Some(value) => value
             Option::None => super::panic()
@@ -805,19 +838,20 @@ impl<I> ByteInput for BytesView<I>
     where I: ByteInput + Copy
 {
     fn len(self) -> u256 {
-        self.len
+        self.len as u256
     }
 
     fn word_at(self, _ byte_offset: u256) -> u256 {
-        self.word_at(byte_offset)
+        self.word_at(byte_offset as usize)
     }
 
     fn byte_at(self, _ byte_offset: u256) -> u8 {
-        self.byte_at(byte_offset)
+        self.byte_at(byte_offset as usize)
     }
 
     unsafe fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
-        if src_offset > self.len || len > self.len - src_offset {
+        let view_len = self.len as u256
+        if src_offset > view_len || len > view_len - src_offset {
             super::panic()
         }
         self.input.copy_to_memory_unchecked(dest, src_offset: self.start + src_offset, len)
@@ -835,7 +869,7 @@ impl<I> Copy for StringView<I>
 impl<I> StringView<I>
     where I: ByteInput + Copy
 {
-    pub fn len(self) -> u256 {
+    pub fn len(self) -> usize {
         self.bytes.len()
     }
 
@@ -843,11 +877,11 @@ impl<I> StringView<I>
         self.bytes.is_empty()
     }
 
-    pub fn byte_at(self, _ offset: u256) -> u8 {
+    pub fn byte_at(self, _ offset: usize) -> u8 {
         self.bytes.byte_at(offset)
     }
 
-    pub fn word_at(self, _ offset: u256) -> u256 {
+    pub fn word_at(self, _ offset: usize) -> u256 {
         self.bytes.word_at(offset)
     }
 }
@@ -858,7 +892,7 @@ impl<I> StringView<I>
 /// UTF-8 bytes padded to a whole word count.
 pub struct DynString {
     unsafe data: *u8,
-    unsafe len: u256,
+    unsafe len: usize,
     unsafe size: u256,
 }
 
@@ -874,27 +908,27 @@ impl DynString {
 
     /// `data` must point to a validated ABI tail of `size` initialized
     /// bytes in a live allocation, holding `len` elements.
-    unsafe fn from_validated_abi_tail(data: *u8, len: u256, size: u256) -> Self {
+    unsafe fn from_validated_abi_tail(data: *u8, len: usize, size: u256) -> Self {
         DynString { data, len, size }
     }
 
     /// Wraps a complete ABI tail. `data` must point to `size` valid,
     /// initialized bytes in a live allocation.
-    pub unsafe fn from_abi_tail(data: *u8, len: u256, size: u256) -> Self {
-        let expected_size = 32 + round_up_words(len)
-        if size != expected_size || mem_word_at(base: data, offset: 0) != len {
+    pub unsafe fn from_abi_tail(data: *u8, len: usize, size: u256) -> Self {
+        let expected_size = 32 + round_up_words(len as u256)
+        if size != expected_size || mem_word_at(base: data, offset: 0) != len as u256 {
             super::panic()
         }
         Self::from_validated_abi_tail(data, len, size)
     }
 
     /// Allocates a string of `len` zero bytes, to be filled through `payload_span`.
-    pub fn zeroed(_ len: u256) -> Self {
-        let size = 32 + round_up_words(len)
+    pub fn zeroed(_ len: usize) -> Self {
+        let size = 32 + round_up_words(len as u256)
         let data = ptr::alloc_bytes(size)
         unsafe {
             ptr::zero_bytes(data, size)
-            store_word(ptr: data, value: len)
+            store_word(ptr: data, value: len as u256)
         }
         // The tail was allocated and written above.
         unsafe {
@@ -904,7 +938,7 @@ impl DynString {
 
     /// Returns the string made of the first `len` bytes of `word` (at most 32),
     /// e.g. a `bytes32` label.
-    pub fn from_word_prefix(word: u256, len: u256) -> Self {
+    pub fn from_word_prefix(word: u256, len: usize) -> Self {
         let bytes = Bytes::from_word_prefix(word, len)
         // `bytes` holds a valid tail of the same layout.
         unsafe {
@@ -915,17 +949,17 @@ impl DynString {
     /// Returns a copy of the `len` bytes starting at `start`.
     ///
     /// Fails with an index-out-of-bounds panic if the range exceeds the string.
-    pub fn slice(self, start: u256, len: u256) -> Self {
+    pub fn slice(self, start: usize, len: usize) -> Self {
         Self::from_payload(source: self.payload_span().slice(offset: start, len))
     }
 
     pub fn from_payload(source: ptr::MemSpan) -> Self {
         let len = source.len()
-        let size = 32 + round_up_words(len)
+        let size = 32 + round_up_words(len as u256)
         let data = ptr::alloc_bytes(size)
         unsafe {
             ptr::zero_bytes(data, size)
-            store_word(ptr: data, value: len)
+            store_word(ptr: data, value: len as u256)
             ptr::copy(dest: ptr::offset_bytes(data, 32), source)
         }
         // The tail was allocated and written above.
@@ -934,7 +968,7 @@ impl DynString {
         }
     }
 
-    pub fn len(self) -> u256 {
+    pub fn len(self) -> usize {
         self.len
     }
 
@@ -956,7 +990,7 @@ impl DynString {
     }
 
     pub fn encoded_span(self) -> ref ptr::MemSpan {
-        unsafe { ptr::MemSpan::from_raw_parts(ptr: self.data, len: self.size) }
+        unsafe { ptr::MemSpan::from_raw_parts(ptr: self.data, len: self.size as usize) }
     }
 
     pub fn as_bytes(self) -> Bytes {
@@ -970,7 +1004,7 @@ impl DynString {
         }
     }
 
-    pub fn byte_at(self, _ index: u256) -> u8 {
+    pub fn byte_at(self, _ index: usize) -> u8 {
         self.payload_span().byte_at(index)
     }
 }
@@ -981,7 +1015,7 @@ impl DynString {
 /// bytes data padded to a whole word count.
 pub struct Bytes {
     unsafe data: *u8,
-    unsafe len: u256,
+    unsafe len: usize,
     unsafe size: u256,
 }
 
@@ -997,15 +1031,15 @@ impl Bytes {
 
     /// `data` must point to a validated ABI tail of `size` initialized
     /// bytes in a live allocation, holding `len` elements.
-    unsafe fn from_validated_abi_tail(data: *u8, len: u256, size: u256) -> Self {
+    unsafe fn from_validated_abi_tail(data: *u8, len: usize, size: u256) -> Self {
         Bytes { data, len, size }
     }
 
     /// Wraps a complete ABI tail. `data` must point to `size` valid,
     /// initialized bytes in a live allocation.
-    pub unsafe fn from_abi_tail(data: *u8, len: u256, size: u256) -> Self {
-        let expected_size = 32 + round_up_words(len)
-        if size != expected_size || mem_word_at(base: data, offset: 0) != len {
+    pub unsafe fn from_abi_tail(data: *u8, len: usize, size: u256) -> Self {
+        let expected_size = 32 + round_up_words(len as u256)
+        if size != expected_size || mem_word_at(base: data, offset: 0) != len as u256 {
             super::panic()
         }
         Self::from_validated_abi_tail(data, len, size)
@@ -1013,11 +1047,11 @@ impl Bytes {
 
     pub fn from_payload(source: ptr::MemSpan) -> Self {
         let len = source.len()
-        let size = 32 + round_up_words(len)
+        let size = 32 + round_up_words(len as u256)
         let data = ptr::alloc_bytes(size)
         unsafe {
             ptr::zero_bytes(data, size)
-            store_word(ptr: data, value: len)
+            store_word(ptr: data, value: len as u256)
             ptr::copy(dest: ptr::offset_bytes(data, 32), source)
         }
         // The tail was allocated and written above.
@@ -1028,7 +1062,7 @@ impl Bytes {
 
     /// Build up to 32 bytes from the most-significant bytes of one word.
     #[inline(always)]
-    pub fn from_word_prefix(word: u256, len: u256) -> Self {
+    pub fn from_word_prefix(word: u256, len: usize) -> Self {
         if len > 32 {
             super::panic()
         }
@@ -1037,9 +1071,9 @@ impl Bytes {
         }
 
         let data = ptr::alloc_bytes(64)
-        let shift = (32 - len) * 8
+        let shift = (32 - len as u256) * 8
         unsafe {
-            store_word(ptr: data, value: len)
+            store_word(ptr: data, value: len as u256)
             store_word(
                 ptr: ptr::offset_bytes(data, 32),
                 value: word >> shift << shift,
@@ -1051,7 +1085,7 @@ impl Bytes {
         }
     }
 
-    pub fn len(self) -> u256 {
+    pub fn len(self) -> usize {
         self.len
     }
 
@@ -1075,21 +1109,21 @@ impl Bytes {
 
     #[inline(always)]
     pub fn encoded_span(self) -> ref ptr::MemSpan {
-        unsafe { ptr::MemSpan::from_raw_parts(ptr: self.data, len: self.size) }
+        unsafe { ptr::MemSpan::from_raw_parts(ptr: self.data, len: self.size as usize) }
     }
 
     /// Read a word beginning at `offset`, zeroing bytes beyond the payload.
     ///
     /// Panics when the first byte is outside the payload.
     #[inline(always)]
-    pub fn word_at(self, _ offset: u256) -> u256 {
+    pub fn word_at(self, _ offset: usize) -> u256 {
         if offset >= self.len {
             super::panic()
         }
         // The word starts in the payload; see `mem_word_at` for the bytes
         // past the padded payload that an unaligned word reaches.
-        let word = unsafe { mem_word_at(base: self.payload_ptr(), offset) }
-        let remaining = self.len - offset
+        let word = unsafe { mem_word_at(base: self.payload_ptr(), offset: offset as u256) }
+        let remaining = (self.len - offset) as u256
         if remaining < 32 {
             let shift = (32 - remaining) * 8
             return word >> shift << shift
@@ -1097,7 +1131,7 @@ impl Bytes {
         word
     }
 
-    pub fn byte_at(self, _ index: u256) -> u8 {
+    pub fn byte_at(self, _ index: usize) -> u8 {
         self.payload_span().byte_at(index)
     }
 }
@@ -1105,8 +1139,8 @@ impl Bytes {
 // Compares byte payloads a word at a time. Payloads of `Bytes` and `DynString`
 // are padded to whole words, so the final word read stays inside the value.
 fn payload_eq(_ a: ptr::MemSpan, _ b: ptr::MemSpan) -> bool {
-    let len = a.len()
-    if len != b.len() {
+    let len = a.len() as u256
+    if len != b.len() as u256 {
         return false
     }
     unsafe {
@@ -1151,13 +1185,13 @@ unsafe fn mem_word_at(base: *u8, offset: u256) -> u256 {
 /// A span's bytes read past its end as zeros, like calldata's.
 impl ByteInput for ptr::MemSpan {
     fn len(self) -> u256 {
-        self.len()
+        self.len() as u256
     }
 
     #[arithmetic(unchecked)]
     #[inline(always)]
     fn word_at(self, _ byte_offset: u256) -> u256 {
-        let len = self.len()
+        let len = self.len() as u256
         if byte_offset >= len {
             return 0
         }
@@ -1172,7 +1206,7 @@ impl ByteInput for ptr::MemSpan {
 
     #[arithmetic(unchecked)]
     fn byte_at(self, _ byte_offset: u256) -> u8 {
-        if byte_offset >= self.len() {
+        if byte_offset >= self.len() as u256 {
             return 0
         }
         let word_offset = byte_offset - (byte_offset % 32)
@@ -1183,81 +1217,12 @@ impl ByteInput for ptr::MemSpan {
     }
 
     unsafe fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
-        if src_offset > self.len() || len > self.len() - src_offset {
+        let span_len = self.len() as u256
+        if src_offset > span_len || len > span_len - src_offset {
             super::panic()
         }
 
-        ptr::copy(
-            dest,
-            source: ptr::MemSpan::from_raw_parts(
-                ptr: ptr::offset_bytes(self.ptr(), src_offset),
-                len,
-            ),
-        )
-    }
-}
-
-/// Owned handle to a Solidity-style dynamic array (`T[]`) stored in linear memory.
-///
-/// `data` points at the ABI payload for the array: the length word followed by the
-/// tuple-encoded element heads/tails.
-pub struct DynArray<T> {
-    unsafe data: *u8,
-    unsafe len: u256,
-    unsafe size: u256,
-}
-
-impl<T> DynArray<T> {
-    pub fn empty() -> Self {
-        let data = ptr::alloc_bytes(32)
-        unsafe { store_word(ptr: data, value: 0) }
-        // A 32-byte tail holding length zero.
-        unsafe {
-            Self::from_validated_abi_tail(data: data, len: 0, size: 32)
-        }
-    }
-
-    /// `data` must point to a validated ABI tail of `size` initialized
-    /// bytes in a live allocation, holding `len` elements.
-    unsafe fn from_validated_abi_tail(data: *u8, len: u256, size: u256) -> Self {
-        DynArray { data, len, size }
-    }
-
-    /// Construct an array handle over a complete ABI tail.
-    ///
-    /// `data` must point to `size` valid bytes. Static-element arrays are
-    /// validated exactly; callers constructing dynamic-element arrays must
-    /// ensure their nested tails are valid and end at `size`.
-    pub unsafe fn from_abi_tail(data: *u8, len: u256, size: u256) -> Self
-        where T: AbiSize
-    {
-        let minimum_size = 32 + (len * abi_field_head_size<T>())
-        if size < 32
-            || size % 32 != 0
-            || size < minimum_size
-            || (!T::IS_DYNAMIC && size != minimum_size)
-            || (len == 0 && size != 32)
-            || mem_word_at(base: data, offset: 0) != len
-        {
-            super::panic()
-        }
-        Self::from_validated_abi_tail(data, len, size)
-    }
-
-    pub fn len(self) -> u256 {
-        self.len
-    }
-
-    pub fn is_empty(self) -> bool {
-        self.len == 0
-    }
-
-    pub fn encoded_size(self) -> u256 {
-        self.size
-    }
-
-    pub fn encoded_span(self) -> ref ptr::MemSpan {
-        unsafe { ptr::MemSpan::from_raw_parts(ptr: self.data, len: self.size) }
+        ptr::copy_raw(dest, source: ptr::offset_bytes(self.ptr(), src_offset), len)
     }
 }
 
@@ -1868,17 +1833,6 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15> AbiSi
     }
 }
 
-impl<T> AbiSize for DynArray<T>
-    where T: AbiSize
-{
-    const HEAD_SIZE: u256 = 32
-    const IS_DYNAMIC: bool = true
-
-    fn payload_size(self) -> u256 {
-        self.encoded_size()
-    }
-}
-
 impl AbiSize for Bytes {
     const HEAD_SIZE: u256 = 32
     const IS_DYNAMIC: bool = true
@@ -2102,7 +2056,7 @@ impl<A: Abi> Decode<A> for DynString {
         unsafe {
             DynString::from_validated_abi_tail(
                 data: data_ptr,
-                len: payload.0,
+                len: payload.0 as usize,
                 size: payload.1,
             )
         }
@@ -2116,7 +2070,7 @@ impl<A: Abi> Decode<A> for DynString {
         unsafe {
             DynString::from_validated_abi_tail(
                 data: payload.0,
-                len: payload.1,
+                len: payload.1 as usize,
                 size: payload.2,
             )
         }
@@ -2134,7 +2088,7 @@ impl<A: Abi> Decode<A> for DynString {
         unsafe {
             DynString::from_validated_abi_tail(
                 data: data_ptr,
-                len: payload.0,
+                len: payload.0 as usize,
                 size: payload.1,
             )
         }
@@ -2148,7 +2102,7 @@ impl<A: Abi> Decode<A> for DynString {
         unsafe {
             DynString::from_validated_abi_tail(
                 data: payload.0,
-                len: payload.1,
+                len: payload.1 as usize,
                 size: payload.2,
             )
         }
@@ -2434,7 +2388,7 @@ impl<A: Abi> Decode<A> for Bytes {
         unsafe {
             Bytes::from_validated_abi_tail(
                 data: data_ptr,
-                len: payload.0,
+                len: payload.0 as usize,
                 size: payload.1,
             )
         }
@@ -2448,7 +2402,7 @@ impl<A: Abi> Decode<A> for Bytes {
         unsafe {
             Bytes::from_validated_abi_tail(
                 data: payload.0,
-                len: payload.1,
+                len: payload.1 as usize,
                 size: payload.2,
             )
         }
@@ -2466,7 +2420,7 @@ impl<A: Abi> Decode<A> for Bytes {
         unsafe {
             Bytes::from_validated_abi_tail(
                 data: data_ptr,
-                len: payload.0,
+                len: payload.0 as usize,
                 size: payload.1,
             )
         }
@@ -2480,7 +2434,7 @@ impl<A: Abi> Decode<A> for Bytes {
         unsafe {
             Bytes::from_validated_abi_tail(
                 data: payload.0,
-                len: payload.1,
+                len: payload.1 as usize,
                 size: payload.2,
             )
         }
@@ -2491,173 +2445,6 @@ impl<A: Abi> Encode<A> for Bytes {
     #[inline(always)]
     fn encode(own self, _ out: AbiFrame) {
         out.copy_from(at: 0, self.encoded_span())
-    }
-}
-
-fn dyn_array_payload_end_scan_with_input_len<A: Abi, T, I>(_ input: I, elems_base: u256, head_end: u256, elem_count: u256, input_len: u256) -> u256
-    where T: AbiSpan<A> + AbiSize,
-          I: ByteInput
-{
-    var head_pos = elems_base
-    var end = head_end
-    var i: u256 = 0
-    while i < elem_count {
-        end = max_u256(a: end, b: abi_field_end_with_input_len<A, T, I>(input, base: elems_base, pos: head_pos, input_len: input_len))
-        head_pos += abi_field_head_size<T>()
-        i += 1
-    }
-    end
-}
-
-// The head bounds prove the products and positions fit; tail offset wrapping
-// is checked explicitly before falling back to the checked field scan.
-#[arithmetic(unchecked)]
-fn dyn_array_payload_end_with_input_len<A: Abi, T, I>(_ input: I, tail_at: u256, elem_count: u256, input_len: u256) -> u256
-    where T: AbiSpan<A> + AbiSize,
-          I: ByteInput
-{
-    let elems_base = checked_frame_end<A>(tail_at, 32, input_len)
-    let element_head_size = abi_field_head_size<T>()
-    if element_head_size != 0 && elem_count > (input_len - elems_base) / element_head_size {
-        A::decode_error()
-    }
-    let head_size = elem_count * element_head_size
-    let head_end = elems_base + head_size
-
-    if elem_count == 0 || !T::IS_DYNAMIC {
-        return head_end
-    }
-
-    var prev_offset = head_size
-    var prev_end = head_end
-    var i: u256 = 0
-    while i < elem_count {
-        let head_pos = elems_base + (i * abi_field_head_size<T>())
-        let offset = input.word_at(head_pos)
-        if offset < prev_offset || offset % 32 != 0 {
-            return dyn_array_payload_end_scan_with_input_len<A, T, I>(input, elems_base: elems_base, head_end: head_end, elem_count: elem_count, input_len: input_len)
-        }
-
-        let tail_at = elems_base + offset
-        if tail_at < elems_base || prev_end > tail_at {
-            return dyn_array_payload_end_scan_with_input_len<A, T, I>(input, elems_base: elems_base, head_end: head_end, elem_count: elem_count, input_len: input_len)
-        }
-
-        prev_offset = offset
-        prev_end = abi_field_end_with_input_len<A, T, I>(input, base: elems_base, pos: head_pos, input_len: input_len)
-        i += 1
-    }
-
-    max_u256(a: head_end, b: prev_end)
-}
-
-// An array payload lies within its input, so with the input at most
-// `MAX_PAYLOAD_LEN` bytes the payload fits it, rounded up to a word or not.
-// Owned tails of dynamic elements must remain word-aligned when embedded
-// before another field.
-#[arithmetic(unchecked)]
-#[inline(always)]
-fn checked_payload_size<A: Abi>(_ actual_size: u256, _ input_len: u256, padded: bool) -> u256 {
-    if input_len > MAX_PAYLOAD_LEN {
-        A::decode_error()
-    }
-    if padded { (actual_size + 31) & 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe0 } else { actual_size }
-}
-
-impl<A: Abi, T> Decode<A> for DynArray<T>
-    where T: AbiSpan<A> + AbiSize
-{
-    fn decode_payload<D: AbiDecoder<A>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
-        let payload_at = d.pos()
-        let input_len = input.len()
-        checked_frame_end<A>(payload_at, Self::HEAD_SIZE, input_len)
-        let elem_count = input.word_at(payload_at)
-        let payload_end = dyn_array_payload_end_with_input_len<A, T, I>(input, tail_at: payload_at, elem_count: elem_count, input_len: input_len)
-        let actual_size = payload_end - payload_at
-        let payload_size = checked_payload_size<A>(actual_size, input_len, padded: T::IS_DYNAMIC)
-        // A checked payload fits `MAX_PAYLOAD_LEN`.
-        let data_ptr = unsafe { ptr::alloc_bytes_unchecked(payload_size) }
-
-        unsafe {
-            if T::IS_DYNAMIC {
-                copy_padded_payload(input, payload_at, data_ptr, actual_size, payload_size)
-            } else {
-                input.copy_to_memory_unchecked(dest: data_ptr, src_offset: payload_at, len: payload_size)
-            }
-        }
-
-        // The payload was checked and copied into this tail above.
-        unsafe {
-            DynArray::from_validated_abi_tail(
-                data: data_ptr,
-                len: elem_count,
-                size: payload_size,
-            )
-        }
-    }
-
-    #[inline(always)]
-    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
-        let input_len = input.len()
-        decode_frame_from<A, Self, I>(input, pos, input_len)
-    }
-
-    #[inline(always)]
-    fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
-        let elem_count = input.word_at(pos)
-        let payload_end = dyn_array_payload_end_with_input_len<A, T, I>(input, tail_at: pos, elem_count: elem_count, input_len: input_len)
-
-        let actual_size = payload_end - pos
-        let payload_size = checked_payload_size<A>(actual_size, input_len, padded: T::IS_DYNAMIC)
-        // A checked payload fits `MAX_PAYLOAD_LEN`.
-        let data_ptr = unsafe { ptr::alloc_bytes_unchecked(payload_size) }
-
-        unsafe {
-            if T::IS_DYNAMIC {
-                copy_padded_payload(input, pos, data_ptr, actual_size, payload_size)
-            } else {
-                input.copy_to_memory_unchecked(dest: data_ptr, src_offset: pos, len: payload_size)
-            }
-        }
-
-        // The payload was checked and copied into this tail above.
-        unsafe {
-            DynArray::from_validated_abi_tail(
-                data: data_ptr,
-                len: elem_count,
-                size: payload_size,
-            )
-        }
-    }
-
-    #[inline(always)]
-    fn decode_from_bounded<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
-        decode_frame_from<A, Self, I>(input, pos, input_len)
-    }
-}
-
-impl<A: Abi, T> Encode<A> for DynArray<T>
-    where T: AbiSize
-{
-    #[inline(always)]
-    fn encode(own self, _ out: AbiFrame) {
-        out.copy_from(at: 0, self.encoded_span())
-    }
-}
-
-impl<A: Abi, T> AbiSpan<A> for DynArray<T>
-    where T: AbiSpan<A> + AbiSize
-{
-    fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
-        let input_len = input.len()
-        Self::payload_end_with_input_len(input, base: base, pos: pos, input_len: input_len)
-    }
-
-    fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
-        let _ = base
-        checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
-        let elem_count = input.word_at(pos)
-        dyn_array_payload_end_with_input_len<A, T, I>(input, tail_at: pos, elem_count: elem_count, input_len: input_len)
     }
 }
 

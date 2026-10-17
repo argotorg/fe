@@ -10,7 +10,7 @@ use std::evm::{Address, Evm, RawStorage, SolMapping, SolSlot, keccak256}
 fn packed_fields_round_trip() uses (evm: mut Evm) {
     with (RawStorage = evm) {
         // address currency; uint24 fee; int24 tickSpacing; bool flag; int8 small
-        let slot = unsafe { SolSlot::at(7) }
+        let slot = unsafe { SolSlot::at_mut(7) }
         slot.write(offset: 0, value: Address { inner: 0xabc })
         slot.write(offset: 20, value: Uint24 { val: 3000 })
         slot.write(offset: 23, value: Int24 { val: -60 })
@@ -35,7 +35,7 @@ fn packed_fields_round_trip() uses (evm: mut Evm) {
         slot.write(offset: 0, value: Address { inner: 0 })
         let fee_again: Uint24 = slot.read(offset: 20)
         assert(fee_again.val == 3000)
-        let word: u256 = unsafe { SolSlot::at(7).read(offset: 0) }
+        let word: u256 = unsafe { SolSlot::at_mut(7).read(offset: 0) }
         assert(word == 0x11223344fe01ffffc4000bb8 << 160)
     }
 }
@@ -43,7 +43,7 @@ fn packed_fields_round_trip() uses (evm: mut Evm) {
 #[test]
 fn bytes_and_strings_use_solidity_layout() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let slot = unsafe { SolSlot::at(3) }
+        let slot = unsafe { SolSlot::at_mut(3) }
         slot.write_string("short")
         // Short strings live in the slot: data in the high bytes, 2 * len low.
         let head: u256 = slot.read(offset: 0)
@@ -56,7 +56,7 @@ fn bytes_and_strings_use_solidity_layout() uses (evm: mut Evm) {
         let long: DynString = "a string that is longer than thirty-two bytes"
         slot.write_string(long)
         let head: u256 = slot.read(offset: 0)
-        assert(head == long.len() * 2 + 1)
+        assert(head == (long.len() * 2 + 1) as u256)
         let read_back = slot.read_string()
         assert(read_back.len() == long.len())
         assert(read_back.byte_at(0) == 0x61)
@@ -65,9 +65,9 @@ fn bytes_and_strings_use_solidity_layout() uses (evm: mut Evm) {
 
         // Shrinking clears the words the long value left behind.
         slot.write_bytes(Bytes::from_word_prefix(word: 0xabcd << 240, len: 2))
-        let second_word: u256 = unsafe { SolSlot::at(hash_words(3, 0, 1) + 1).read(offset: 0) }
+        let second_word: u256 = unsafe { SolSlot::at_mut(hash_words(3, 0, 1) + 1).read(offset: 0) }
         assert(second_word == 0)
-        let slot = unsafe { SolSlot::at(3) }
+        let slot = unsafe { SolSlot::at_mut(3) }
         assert(slot.read_bytes().len() == 2)
         assert(slot.read_bytes().byte_at(1) == 0xcd)
     }
@@ -76,35 +76,35 @@ fn bytes_and_strings_use_solidity_layout() uses (evm: mut Evm) {
 #[test(should_revert)]
 fn write_past_slot_end_reverts() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        unsafe { SolSlot::at(1).write(offset: 31, value: 0x1234 as u16) }
+        unsafe { SolSlot::at_mut(1).write(offset: 31, value: 0x1234 as u16) }
     }
 }
 
 #[test(should_revert)]
 fn read_past_slot_end_reverts() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let _: Address = unsafe { SolSlot::at(1).read(offset: 13) }
+        let _: Address = unsafe { SolSlot::at_mut(1).read(offset: 13) }
     }
 }
 
 #[test(should_revert)]
 fn noncanonical_fixed_bytes_write_reverts() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        unsafe { SolSlot::at(1).write(offset: 0, value: Bytes4 { val: 0x1122334455 }) }
+        unsafe { SolSlot::at_mut(1).write(offset: 0, value: Bytes4 { val: 0x1122334455 }) }
     }
 }
 
 #[test(should_revert)]
 fn zero_width_fixed_bytes_write_reverts() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        unsafe { SolSlot::at(1).write(offset: 0, value: FixedBytes<0> { val: 0 }) }
+        unsafe { SolSlot::at_mut(1).write(offset: 0, value: FixedBytes<0> { val: 0 }) }
     }
 }
 
 #[test(should_revert)]
 fn noncanonical_address_write_reverts() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        unsafe { SolSlot::at(1).write(offset: 0, value: Address { inner: 1 << 160 }) }
+        unsafe { SolSlot::at_mut(1).write(offset: 0, value: Address { inner: 1 << 160 }) }
     }
 }
 
@@ -113,8 +113,8 @@ fn short_read_zeroes_bytes_past_len() uses (evm: mut Evm) {
     with (RawStorage = evm) {
         // "a" (len 1) with stray bytes behind it in the slot.
         let head: u256 = (0x61 << 248) | (0x99 << 200) | 2
-        unsafe { SolSlot::at(5).write(offset: 0, value: head) }
-        let value = unsafe { SolSlot::at(5).read_bytes() }
+        unsafe { SolSlot::at_mut(5).write(offset: 0, value: head) }
+        let value = unsafe { SolSlot::at_mut(5).read_bytes() }
         assert(value.len() == 1)
         assert(value.payload_span().word_at(0) == 0x61 << 248)
     }
@@ -124,10 +124,10 @@ fn short_read_zeroes_bytes_past_len() uses (evm: mut Evm) {
 fn long_read_zeroes_bytes_past_len() uses (evm: mut Evm) {
     with (RawStorage = evm) {
         // 33 bytes: a full first word, then "b" with stray bytes behind it.
-        unsafe { SolSlot::at(6).write(offset: 0, value: 33 * 2 + 1 as u256) }
+        unsafe { SolSlot::at_mut(6).write(offset: 0, value: 33 * 2 + 1 as u256) }
         let tail: u256 = (0x62 << 248) | (0x99 << 200)
-        unsafe { SolSlot::at(hash_words(6, 0, 1) + 1).write(offset: 0, value: tail) }
-        let value = unsafe { SolSlot::at(6).read_bytes() }
+        unsafe { SolSlot::at_mut(hash_words(6, 0, 1) + 1).write(offset: 0, value: tail) }
+        let value = unsafe { SolSlot::at_mut(6).read_bytes() }
         assert(value.len() == 33)
         assert(value.payload_span().word_at(32) == 0x62 << 248)
     }
@@ -137,8 +137,8 @@ fn long_read_zeroes_bytes_past_len() uses (evm: mut Evm) {
 #[test(should_revert, panic = 0x22)]
 fn long_head_with_short_length_panics() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        unsafe { SolSlot::at(5).write(offset: 0, value: 3 as u256) }
-        let _ = unsafe { SolSlot::at(5).read_bytes() }
+        unsafe { SolSlot::at_mut(5).write(offset: 0, value: 3 as u256) }
+        let _ = unsafe { SolSlot::at_mut(5).read_bytes() }
     }
 }
 
@@ -146,8 +146,8 @@ fn long_head_with_short_length_panics() uses (evm: mut Evm) {
 #[test(should_revert, panic = 0x22)]
 fn short_head_with_long_length_panics() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        unsafe { SolSlot::at(5).write(offset: 0, value: 64 as u256) }
-        unsafe { SolSlot::at(5).write_string("x") }
+        unsafe { SolSlot::at_mut(5).write(offset: 0, value: 64 as u256) }
+        unsafe { SolSlot::at_mut(5).write_string("x") }
     }
 }
 
@@ -156,7 +156,7 @@ fn hash_words(_ a: u256, _ b: u256, _ n: u256) -> u256 {
     let buffer = ptr::alloc_bytes(64)
     unsafe { store_word(ptr: buffer, value: a) }
     unsafe { store_word(ptr: ptr::offset_bytes(buffer, 32), value: b) }
-    unsafe { keccak256(MemSpan::from_raw_parts(ptr: buffer, len: n * 32)) }
+    unsafe { keccak256(MemSpan::from_raw_parts(ptr: buffer, len: (n * 32) as usize)) }
 }
 
 #[test]

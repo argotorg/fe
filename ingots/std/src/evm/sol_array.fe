@@ -14,21 +14,22 @@
 //!
 //! ```fe
 //! // `address[] owners;` at slot 2, which no contract field uses
-//! let owners = unsafe { SolArray<Address>::at(2) }
+//! let owners = unsafe { SolArray<Address>::at_mut(2) }
 //! owners.push(owner)
 //! let first = owners[0]
 //! ```
-use core::abi::{AbiFrame, AbiSize, DynArray, Encode, store_word}
+use core::abi::{AbiFrame, AbiSize, Encode, store_word}
+use ingot::abi::DynArray
 use core::iter::{Bidirectional, Collection, CollectionMut}
 use core::marker::{Clearable, Pinned}
 use core::ops::{LaneCodec, Location, StateIndex, clear_storage}
 use core::option::Option
-use core::intrinsic::storage_slots
 use core::ptr
 use ingot::abi::{Sol, StaticAbiElement}
-use super::effects::{RawStorage, revert_error, storage_at_mut}
+use super::effects::{RawStorage, revert_error, storage_at, storage_at_mut}
 use super::panic::{PANIC_INDEX_OUT_OF_BOUNDS, PANIC_OUT_OF_MEMORY, PANIC_POP_EMPTY, Panic}
-use super::sol_slot::{SolPacked, data_slot, field_mask}
+use super::layout::{array_data_slot, element_location}
+use super::sol_slot::{SolPacked, field_mask}
 
 // Solidity refuses to `push` onto a storage array of 2**64 - 1 elements.
 const MAX_LEN: u256 = 0xffffffffffffffff
@@ -70,36 +71,25 @@ unsafe impl<T> StateIndex for SolArray<T> {
         if index >= self.len {
             revert_error(Panic::from(PANIC_INDEX_OUT_OF_BOUNDS))
         }
-        element_location(
-            first: data_slot(root),
-            index,
-            bits: <Self::Lanes as LaneCodec<T>>::BITS,
-            slots: storage_slots<T>(),
-        )
-    }
-}
-
-/// The location of element `index` laid out from slot `first` on: `256 /
-/// bits` to a slot when the elements are lanes of `bits` (at most 128), else
-/// `slots` each, the slots their storage layout takes. Wraps modulo
-/// `2**256`, like Solidity's storage slot arithmetic.
-#[arithmetic(unchecked)]
-fn element_location(first: u256, index: u256, bits: u256, slots: u256) -> Location {
-    if bits > 0 && bits <= 128 {
-        let per_slot = 256 / bits
-        Location { slot: first + index / per_slot, offset: (index % per_slot) * bits }
-    } else {
-        Location { slot: first + index * slots, offset: 0 }
+        element_location<T>(array_data_slot(root), index, bits: <Self::Lanes as LaneCodec<T>>::BITS)
     }
 }
 
 impl<T> SolArray<T> {
-    /// The array whose length is stored at `slot`.
+    /// The array whose length is stored at `slot`, to read.
     ///
     /// The caller must ensure that nothing the compiler allocates, such as a
     /// contract field, uses `slot` or the elements' slots.
     #[raw_place]
-    pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
+    pub unsafe fn at(_ slot: u256) -> ref Self uses (storage: RawStorage) {
+        unsafe { storage_at(slot) }
+    }
+
+    /// The array whose length is stored at `slot`, to read and write.
+    ///
+    /// The caller must ensure what `at` requires.
+    #[raw_place]
+    pub unsafe fn at_mut(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
         unsafe { storage_at_mut(slot) }
     }
 
@@ -192,7 +182,7 @@ impl<T> SolArray<T> {
             value.encode(unsafe { AbiFrame::from_raw_parts(ptr: ptr::offset_bytes(data, 32 + i * 32), len: 32) })
             i += 1
         }
-        unsafe { DynArray::from_abi_tail(data, len, size) }
+        unsafe { DynArray::from_abi_tail(data, len: len as usize, size) }
     }
 }
 

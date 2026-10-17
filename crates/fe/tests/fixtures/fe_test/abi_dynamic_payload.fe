@@ -25,7 +25,7 @@ pub contract DynamicPayloadReceiver {
             assert!(first.byte_at(32) == 0x22)
             assert!(second.len() == 1)
             assert!(second.byte_at(0) == 0x33)
-            first.len() + second.len()
+            (first.len() + second.len()) as u256
         }
     }
 }
@@ -96,7 +96,7 @@ uses (evm: mut Evm)
         )
     }
 
-    unsafe { Bytes::from_abi_tail(data: data_ptr, len: payload_len, size: payload_size) }
+    unsafe { Bytes::from_abi_tail(data: data_ptr, len: payload_len as usize, size: payload_size) }
 }
 
 fn one_byte_bytes() -> Bytes
@@ -114,7 +114,7 @@ uses (evm: mut Evm)
         )
     }
 
-    unsafe { Bytes::from_abi_tail(data: data_ptr, len: payload_len, size: payload_size) }
+    unsafe { Bytes::from_abi_tail(data: data_ptr, len: payload_len as usize, size: payload_size) }
 }
 
 fn oversized_one_word_bytes() -> Bytes {

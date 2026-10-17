@@ -325,52 +325,13 @@ func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_e4f2(v0.objref<@lay
 
 func inline(always) private %locate(v0.i256, v1.i256, v2.i256) -> @layout_1 {
     block0:
-        v3.objref<@layout_1> = obj.alloc @layout_1;
         jump block1;
 
     block1:
-        v5.i256 = call %encoded_len v2;
-        (v7.i256, v8.i1) = uaddo v5 32.i256;
-        br v8 block6 block7;
-
-    block2:
-        v25.i256 = call %keccak256 v3;
-        jump block5;
-
-    block3:
-        v28.@layout_1 = insert_value undef.@layout_1 0.i256 v14;
-        v31.@layout_1 = insert_value v28 1.i256 v21;
-        v32.objref<i256> = obj.proj v3 0.i256;
-        v33.i256 = extract_value v31 0.i256;
-        obj.store v32 v33;
-        v34.objref<i256> = obj.proj v3 1.i256;
-        v35.i256 = extract_value v31 1.i256;
-        obj.store v34 v35;
-        jump block2;
-
-    block4:
-        v38.@layout_1 = insert_value undef.@layout_1 0.i256 v25;
-        v39.@layout_1 = insert_value v38 1.i256 0.i256;
-        return v39;
-
-    block5:
-        jump block4;
-
-    block6:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block7:
-        v14.i256 = call %core__lib__ptr__alloc_bytes_8b3e v7;
-        call %write_key v14 v2;
-        v18.i256 = add v14 v5;
-        mstore v18 v1 i256;
-        (v21.i256, v22.i1) = uaddo v5 32.i256;
-        br v22 block6 block8;
-
-    block8:
-        jump block3;
+        v5.i256 = call %mapping_slot v1 v2;
+        v8.@layout_1 = insert_value undef.@layout_1 0.i256 v5;
+        v10.@layout_1 = insert_value v8 1.i256 0.i256;
+        return v10;
 }
 
 func private %manual_contract_init_root_BalanceMap() {
@@ -389,6 +350,54 @@ func private %manual_contract_runtime_root_BalanceMap() {
     block1:
         call %runtime;
         evm_stop;
+}
+
+func inline(always) private %mapping_slot(v0.i256, v1.i256) -> i256 {
+    block0:
+        v2.objref<@layout_1> = obj.alloc @layout_1;
+        jump block1;
+
+    block1:
+        v4.i256 = call %encoded_len v1;
+        (v6.i256, v7.i1) = uaddo v4 32.i256;
+        br v7 block6 block7;
+
+    block2:
+        v24.i256 = call %keccak256 v2;
+        jump block5;
+
+    block3:
+        v27.@layout_1 = insert_value undef.@layout_1 0.i256 v13;
+        v30.@layout_1 = insert_value v27 1.i256 v20;
+        v31.objref<i256> = obj.proj v2 0.i256;
+        v32.i256 = extract_value v30 0.i256;
+        obj.store v31 v32;
+        v33.objref<i256> = obj.proj v2 1.i256;
+        v34.i256 = extract_value v30 1.i256;
+        obj.store v33 v34;
+        jump block2;
+
+    block4:
+        return v24;
+
+    block5:
+        jump block4;
+
+    block6:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block7:
+        v13.i256 = call %core__lib__ptr__alloc_bytes_8b3e v6;
+        call %write_key v13 v1;
+        v17.i256 = add v13 v4;
+        mstore v17 v0 i256;
+        (v20.i256, v21.i1) = uaddo v4 32.i256;
+        br v21 block6 block8;
+
+    block8:
+        jump block3;
 }
 
 func private %prepare_copy_destination(v0.objref<@layout_0>, v1.i256, v2.i256) -> i256 {

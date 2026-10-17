@@ -9,12 +9,12 @@
 // against a re-implementation of Seaport's `_computeBulkOrderProof` walk.
 // The fixture is not its own oracle.
 
-use core::ptr::{self, MemSlice}
-use std::abi::{Bytes32, DynArray, FixedBytes, MemVec}
+use core::ptr::{self, MemSlice, MemVec}
+use std::abi::{Bytes32, DynArray, FixedBytes}
 use std::evm::{Evm, merkle}
 
 fn words<const N: usize>(_ values: [u256; N]) -> ref MemSlice<u256> {
-    var array = unsafe { ptr::alloc_array<u256>(N as u256) }
+    var array = unsafe { ptr::alloc_array<u256>(N) }
     var i: usize = 0
     for value in values {
         array[i] = value
@@ -267,23 +267,15 @@ pub contract MerkleVerifier {
 }
 
 fn bytes32_array(_ words: MemSlice<u256>) -> DynArray<Bytes32> {
-    var v: MemVec<Bytes32> = MemVec::zeroed(words.len())
-    var i: u256 = 0
-    while i < words.len() {
-        v.set(index: i, value: FixedBytes<32> { val: words[i as usize] })
-        i += 1
+    var v = MemVec::with_capacity(words.len())
+    for word in words {
+        v.push(FixedBytes<32> { val: word })
     }
-    v.to_dyn_array()
+    DynArray::from_slice(v.as_slice())
 }
 
 fn u256_array(_ words: MemSlice<u256>) -> DynArray<u256> {
-    var v: MemVec<u256> = MemVec::zeroed(words.len())
-    var i: u256 = 0
-    while i < words.len() {
-        v.set(index: i, value: words[i as usize])
-        i += 1
-    }
-    v.to_dyn_array()
+    DynArray::from_slice(words)
 }
 
 #[test]

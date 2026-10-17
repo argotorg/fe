@@ -56,7 +56,7 @@ fn clear_zeroes_memory_places() {
 #[test]
 fn clear_zeroes_storage_places() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let pairs = unsafe { SolArray<Pair>::at(0) }
+        let pairs = unsafe { SolArray<Pair>::at_mut(0) }
         pairs.push(Pair { small: 1, other: 2, big: 3 })
         pairs.push(Pair { small: 4, other: 5, big: 6 })
         // A packed field clears only its bytes of the word it shares.
@@ -111,13 +111,13 @@ fn clear_zeroes_transient_places() uses (evm: mut Evm) {
 #[test]
 fn collections_clear_their_elements() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let balances = unsafe { StorageMap<u256, u256>::at(7) }
+        let balances = unsafe { StorageMap<u256, u256>::at_mut(7) }
         balances[1] = 10
         balances[2] = 20
         balances.remove(1)
         assert(balances[1] == 0 && balances[2] == 20)
 
-        let pairs = unsafe { SolArray<Pair>::at(8) }
+        let pairs = unsafe { SolArray<Pair>::at_mut(8) }
         pairs.push(Pair { small: 1, other: 2, big: 3 })
         pairs.push(Pair { small: 4, other: 5, big: 6 })
         // `clear_at` zeroes one element and leaves the length.
@@ -131,7 +131,7 @@ fn collections_clear_their_elements() uses (evm: mut Evm) {
         assert(load(data) == 0 && load(data + 1) == 0)
         assert(load(data + 2) == 0 && load(data + 3) == 0)
 
-        let owners = unsafe { SolEnumerableSet<Address>::at(9) }
+        let owners = unsafe { SolEnumerableSet<Address>::at_mut(9) }
         assert(owners.add(Address { inner: 10 }))
         assert(owners.add(Address { inner: 11 }))
         owners.clear()

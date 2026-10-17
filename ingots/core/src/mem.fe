@@ -1,0 +1,29 @@
+//! Moving a value out of a place that stays in use.
+//!
+//! A value moved out of a `mut` place leaves a hole that must be filled
+//! before the access ends. `replace` and `take` move the old value out and
+//! the new one in at once:
+//!
+//! ```fe
+//! use core::mem::{replace, take}
+//!
+//! let old = replace(mut pending.buffer, MemBuffer::empty())
+//! let queued = take(mut pending.next) // `pending.next` is now `None`
+//! ```
+//!
+//! Storage and transient places never hold a hole, so a non-`Copy` value
+//! cannot be moved out of one.
+
+use ingot::Default
+
+/// Moves `value` into `dest` and returns the value `dest` held.
+pub fn replace<T>(_ dest: mut T, _ value: own T) -> T {
+    let old = dest
+    dest = value
+    old
+}
+
+/// Moves the value out of `dest`, leaving `T::default()` in its place.
+pub fn take<T: Default>(_ dest: mut T) -> T {
+    replace(mut dest, T::default())
+}

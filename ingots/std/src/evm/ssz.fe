@@ -159,7 +159,7 @@ impl HashTreeRoot for ByteVector<48> {
     #[inline(always)]
     fn hash_tree_root(_ input: MemSpan, start: u256, len: u256) -> u256 {
         assert!(len == 48)
-        let base = input.slice(offset: start, len).ptr()
+        let base = input.slice(offset: start as usize, len: len as usize).ptr()
         let tail = unsafe { ops::mload(ptr::offset_bytes(base, 32)) }
         let scratch = unsafe { alloc_pair(ops::mload(base), (tail >> 128) << 128) }
         hash_pair_buffer(scratch)
@@ -189,7 +189,7 @@ impl HashTreeRoot for ByteVector<96> {
     #[inline(always)]
     fn hash_tree_root(_ input: MemSpan, start: u256, len: u256) -> u256 {
         assert!(len == 96)
-        let base = input.slice(offset: start, len).ptr()
+        let base = input.slice(offset: start as usize, len: len as usize).ptr()
         let scratch = alloc_pair(0, 0)
         let offset = pair_offset(scratch)
         let left = sha256_64_to(base, offset)

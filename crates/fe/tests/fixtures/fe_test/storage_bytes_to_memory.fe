@@ -32,7 +32,7 @@ pub contract Blob uses (create: mut Create) {
             let data = blobs.to_memory(key: 0)
             let len = data.len()
             let hash = unsafe { keccak256(data.capacity_span()) }
-            marker = len + 1
+            marker = (len + 1) as u256
             hash
         }
 
@@ -45,7 +45,7 @@ pub contract Blob uses (create: mut Create) {
             let data = blobs.to_memory(key: 0)
             let len = data.len()
             let deployed = create.create2_raw(value: 0, init_code: data.span(), salt)
-            marker = len + 1
+            marker = (len + 1) as u256
             deployed.inner
         }
 
@@ -117,7 +117,7 @@ uses (evm: mut Evm)
     unsafe {
         set_bytes(
             addr: blob,
-            data: Bytes::from_abi_tail(data: data_ptr, len: payload_len, size: payload_len + 32),
+            data: Bytes::from_abi_tail(data: data_ptr, len: payload_len as usize, size: payload_len + 32),
         )
     }
 
@@ -163,7 +163,7 @@ uses (evm: mut Evm)
     unsafe {
         set_bytes(
             addr: blob,
-            data: Bytes::from_abi_tail(data: data_ptr, len: payload_len, size: 128),
+            data: Bytes::from_abi_tail(data: data_ptr, len: payload_len as usize, size: 128),
         )
     }
 
@@ -208,7 +208,7 @@ uses (evm: mut Evm)
     unsafe {
         set_bytes(
             addr: blob,
-            data: Bytes::from_abi_tail(data: data_ptr, len: payload_len, size: 64),
+            data: Bytes::from_abi_tail(data: data_ptr, len: payload_len as usize, size: 64),
         )
     }
 

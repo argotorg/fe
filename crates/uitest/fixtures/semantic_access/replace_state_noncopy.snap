@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/replace_state_noncopy.fe
+---
+error[16-0002]: move conflict in `fn replace`
+   ┌─ src/mem.fe:21:15
+   │
+21 │     let old = dest
+   │               ^^^^ cannot move out of storage, which never holds a hole

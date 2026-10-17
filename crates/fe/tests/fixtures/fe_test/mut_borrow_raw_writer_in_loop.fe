@@ -49,11 +49,11 @@ impl Writer {
         Writer { buffer: MemBuffer::empty() }
     }
 
-    fn append(mut self, _ size: u256) -> *u8 {
+    fn append(mut self, _ size: usize) -> *u8 {
         self.buffer.reserve(size)
         let len = self.buffer.len()
         unsafe { self.buffer.set_len(len + size) }
-        ptr::offset_bytes(self.buffer.ptr(), len)
+        ptr::offset_bytes(self.buffer.ptr(), len as u256)
     }
 
     fn word(mut self, _ value: u256) {
@@ -62,7 +62,7 @@ impl Writer {
     }
 
     fn bytes(mut self, _ data: MemSpan) {
-        self.word(data.len())
+        self.word(data.len() as u256)
         let at = self.append(data.len())
         unsafe { ptr::copy(dest: at, source: data) }
     }
@@ -87,9 +87,9 @@ fn write_items(_ book: Book, w: mut Writer) {
 }
 
 fn sum_into(_ data: MemSpan, ret: mut u256) {
-    var offset: u256 = 0
+    var offset: usize = 0
     while offset < data.len() {
-        ret += load_word(ptr::offset_bytes(data.ptr(), offset))
+        ret += load_word(ptr::offset_bytes(data.ptr(), offset as u256))
         offset += 32
     }
 }

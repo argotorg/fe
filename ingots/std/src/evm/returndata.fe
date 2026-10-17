@@ -71,7 +71,7 @@ impl ReturnData {
                 )
             }
         }
-        unsafe { Bytes::from_abi_tail(data: data, len: len, size: 32 + padded) }
+        unsafe { Bytes::from_abi_tail(data: data, len: len as usize, size: 32 + padded) }
     }
 }
 
@@ -198,7 +198,7 @@ pub fn is_error<E>(_ data: MemSpan) -> bool where E: ErrorVariant<Sol> {
     if !has_selector<E>(data) {
         return false
     }
-    let payload_len = data.len() - 4
+    let payload_len = data.len() as u256 - 4
     if E::IS_DYNAMIC {
         payload_len >= E::HEAD_SIZE
     } else {
@@ -245,7 +245,7 @@ pub fn decode_error_string<I: ByteInput>(_ data: I) -> Option<DynString> {
             len: length,
         )
         Option::Some(
-            DynString::from_abi_tail(data: tail, len: length, size: 32 + padded),
+            DynString::from_abi_tail(data: tail, len: length as usize, size: 32 + padded),
         )
     }
 }

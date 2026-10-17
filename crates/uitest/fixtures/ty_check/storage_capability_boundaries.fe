@@ -41,3 +41,13 @@ pub fn raw_write_through_read_form() uses (storage: mut RawStorage) {
 pub fn raw_mut_form_with_read_authority() -> u256 uses (storage: RawStorage) {
     unsafe { storage_at_mut<u256>(0) }
 }
+
+// A collection's raw-slot constructors split the same way: `at` to read,
+// `at_mut` to write.
+pub fn raw_map_write_through_read_form() uses (storage: mut RawStorage) {
+    unsafe { StorageMap<u256, u256>::at(0) }.set(key: 1, value: 2)
+}
+
+pub fn raw_map_mut_form_with_read_authority() -> u256 uses (storage: RawStorage) {
+    unsafe { StorageMap<u256, u256>::at_mut(0).get(1) }
+}

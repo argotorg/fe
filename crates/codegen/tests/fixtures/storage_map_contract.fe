@@ -50,7 +50,7 @@ fn transfer(from: u256, to: u256, amount: u256) -> u256
 fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
-    var dest = ptr::MemBuffer::alloc(len)
+    var dest = ptr::MemBuffer::alloc(len as usize)
     evm.codecopy(
         dest: mut dest,
         dest_offset: 0,
@@ -70,7 +70,7 @@ fn runtime() uses (evm: mut Evm) {
             0x9cc7f708 => {
                 // balanceOf(uint256)
                 let addr = evm.calldataload(4)
-                let balances = unsafe { StorageMap<u256, u256>::at(0) }
+                let balances = unsafe { StorageMap<u256, u256>::at_mut(0) }
                 let balance = with (balances) {
                     get_balance(addr: addr)
                 }
@@ -80,7 +80,7 @@ fn runtime() uses (evm: mut Evm) {
                 // setBalance(uint256,uint256)
                 let addr = evm.calldataload(4)
                 let value = evm.calldataload(36)
-                let balances = unsafe { StorageMap<u256, u256>::at(0) }
+                let balances = unsafe { StorageMap<u256, u256>::at_mut(0) }
                 with (mut balances) {
                     set_balance(addr: addr, value: value)
                 }
@@ -91,7 +91,7 @@ fn runtime() uses (evm: mut Evm) {
                 let from = evm.calldataload(4)
                 let to = evm.calldataload(36)
                 let amount = evm.calldataload(68)
-                let balances = unsafe { StorageMap<u256, u256>::at(0) }
+                let balances = unsafe { StorageMap<u256, u256>::at_mut(0) }
                 let result = with (mut balances) {
                     transfer(from: from, to: to, amount: amount)
                 }
@@ -100,7 +100,7 @@ fn runtime() uses (evm: mut Evm) {
             0xc960174e => {
                 // getAllowance(uint256)
                 let addr = evm.calldataload(4)
-                let allowances = unsafe { StorageMap<u256, u256>::at(1) }
+                let allowances = unsafe { StorageMap<u256, u256>::at_mut(1) }
                 let allowance = with (allowances) { get_allowance(addr: addr) }
                 abi_encode(value: allowance)
             }
@@ -108,7 +108,7 @@ fn runtime() uses (evm: mut Evm) {
                 // setAllowance(uint256,uint256)
                 let addr = evm.calldataload(4)
                 let value = evm.calldataload(36)
-                let allowances = unsafe { StorageMap<u256, u256>::at(1) }
+                let allowances = unsafe { StorageMap<u256, u256>::at_mut(1) }
                 with (mut allowances) {
                     set_allowance(addr: addr, value: value)
                 }

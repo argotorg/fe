@@ -4,6 +4,7 @@ use ingot::Functor
 use ingot::Applicative
 use ingot::Monad
 use ingot::Result
+use ingot::mem::replace
 use ingot::panic
 
 pub enum Option<T> {
@@ -74,6 +75,10 @@ impl<T> Option<T> {
             Self::Some(value) => value
             Self::None => default_func(())
         }
+    }
+
+    pub fn take(mut self) -> Option<T> {
+        replace(mut self, Option::None)
     }
 }
 

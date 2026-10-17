@@ -133,7 +133,7 @@ fn blob(len: u256) -> ref MemSpan {
         store_word(ptr: data.ptr(), value: R_1)
         store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: S_1)
         store_word(ptr: ptr::offset_bytes(data.ptr(), 64), value: 0x1c1c << 240)
-        MemSpan::from_raw_parts(ptr: data.ptr(), len)
+        MemSpan::from_raw_parts(ptr: data.ptr(), len: len as usize)
     }
 }
 

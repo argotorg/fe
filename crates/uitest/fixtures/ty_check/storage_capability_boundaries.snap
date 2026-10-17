@@ -43,7 +43,7 @@ error[8-0036]: missing effect `RawStorage` required by `at`
 18 │     unsafe { StorageMap<u256, u256>::at(0).get(1) }
    │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `at` requires effect `RawStorage` to be in scope
    │
-   = require it in this function's signature with `uses (storage: mut RawStorage)`, so that its callers provide it
+   = require it in this function's signature with `uses (storage: RawStorage)`, so that its callers provide it
    = or provide it to a block of this function with `with (RawStorage = value) { .. }`
 
 error[8-0037]: effect `RawStorage` must be mutable when calling `storage_at_mut`
@@ -53,6 +53,16 @@ error[8-0037]: effect `RawStorage` must be mutable when calling `storage_at_mut`
    │                                                         ------------------- effect `RawStorage` is provided here
 42 │     unsafe { storage_at_mut<u256>(0) }
    │              ^^^^^^^^^^^^^^^^^^^^^^^ `storage_at_mut` requires `mut RawStorage`
+   │
+   = use a mutable binding or pass a mutable reference in the `with` block
+
+error[8-0037]: effect `RawStorage` must be mutable when calling `at_mut`
+   ┌─ storage_capability_boundaries.fe:52:14
+   │
+51 │ pub fn raw_map_mut_form_with_read_authority() -> u256 uses (storage: RawStorage) {
+   │                                                             ------------------- effect `RawStorage` is provided here
+52 │     unsafe { StorageMap<u256, u256>::at_mut(0).get(1) }
+   │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `at_mut` requires `mut RawStorage`
    │
    = use a mutable binding or pass a mutable reference in the `with` block
 
@@ -73,13 +83,19 @@ error[8-0066]: mutable borrow requires a mutable place
 32 │     store.balances.set(key: 1, value: 2)
    │     ^^^^^^^^^^^^^^ cannot borrow as `mut`
 
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ storage_capability_boundaries.fe:48:5
+   │
+48 │     unsafe { StorageMap<u256, u256>::at(0) }.set(key: 1, value: 2)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot borrow as `mut`
+
 error[8-0097]: call to unsafe function `at` requires an `unsafe` block or function
     ┌─ storage_capability_boundaries.fe:14:5
     │
  14 │     StorageMap<u256, u256>::at(0).get(1)
     │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
     │
-    ┌─ src/evm/storage_map.fe:238:19
+    ┌─ src/evm/storage_map.fe:229:19
     │
-238 │     pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
+229 │     pub unsafe fn at(_ slot: u256) -> ref Self uses (storage: RawStorage) {
     │                   -- callee defined here

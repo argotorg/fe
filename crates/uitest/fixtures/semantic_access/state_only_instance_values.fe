@@ -16,7 +16,7 @@ impl Pinned for SCell {
 fn zeroed_one<T>() -> u256 {
     // Nothing reads the uninitialized element.
     let arr = unsafe { MemArray<T>::new_uninit(1) }
-    arr.len()
+    arr.len() as u256
 }
 
 // Rejected: `zeroed_one<SCell>` holds `MemArray<SCell>` in memory.

@@ -2,7 +2,8 @@
 // payload that would not fit it is a decode error (an empty revert), not an
 // allocation: byte data longer than `2**64 - 64` bytes, or an array in an
 // input longer than `2**64 - 32` bytes.
-use core::abi::{Bytes, Decode, DynArray, DynString}
+use core::abi::{Bytes, Decode, DynString}
+use std::abi::DynArray
 use core::ptr::MemBuffer
 use std::abi::Sol
 use std::evm::Evm
@@ -31,15 +32,15 @@ pub contract Decoder {
     recv Probe {
         LongBytes {} -> u256 {
             let b: Bytes = <Bytes as Decode<Sol>>::decode_from_prechecked_head(input(LONG - 32).span(), 0, LONG)
-            b.len()
+            b.len() as u256
         }
         LongString {} -> u256 {
             let s: DynString = <DynString as Decode<Sol>>::decode_from_prechecked_head(input(LONG - 32).span(), 0, LONG)
-            s.len()
+            s.len() as u256
         }
         LongArray {} -> u256 {
             let a: DynArray<u256> = <DynArray<u256> as Decode<Sol>>::decode_from_prechecked_head(input(1 << 58).span(), 0, LONG)
-            a.len()
+            a.len() as u256
         }
     }
 }

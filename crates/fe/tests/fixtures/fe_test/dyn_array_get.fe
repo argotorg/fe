@@ -1,11 +1,13 @@
-/// `DynArrayAccess::get`: element reads from decoded `DynArray` parameters,
-/// out-of-bounds panics, Solidity-style canonicalization of element words
-/// (dirty `Address` upper bits revert on read, matching parameter decoding),
-/// and dirty-word canonicalization for `Address` elements.
+/// `DynArray::get` and indexing: element reads from decoded `DynArray`
+/// parameters, generic searches through `Index` and `Len`, out-of-bounds
+/// panics, Solidity-style canonicalization of element words (dirty `Address`
+/// upper bits revert on read, matching parameter decoding), and dirty-word
+/// canonicalization for `Address` elements.
 
-use std::abi::{DynArray, MemVec}
+use std::abi::{DynArray, dyn_array_from}
 use core::abi::store_word
 use core::ptr::{self, MemBuffer}
+use core::sort::{binary_search, is_sorted, lower_bound}
 use std::evm::{Evm, decode_returndata, encode_msg_calldata, copy_returndata}
 
 msg ArrMsg {
@@ -22,26 +24,22 @@ pub contract Arr {
 
     recv ArrMsg {
         GetAt { values, index } -> u256 {
-            values.get(index)
+            values.get(index as usize)
         }
 
         AddrAt { addrs, index } -> u256 {
-            addrs.get(index).inner
+            addrs.get(index as usize).inner
         }
 
         AddrLen { addrs } -> u256 {
-            addrs.len()
+            addrs.len() as u256
         }
     }
 }
 
 fn make_arr(a: u256, b: u256, c: u256) -> DynArray<u256>
 {
-    var v: MemVec<u256> = MemVec::zeroed(3)
-    v.set(index: 0, value: a)
-    v.set(index: 1, value: b)
-    v.set(index: 2, value: c)
-    v.to_dyn_array()
+    dyn_array_from([a, b, c])
 }
 
 #[test]
@@ -57,6 +55,20 @@ uses (evm: mut Evm)
     assert!(v0 == 11)
     assert!(v1 == 22)
     assert!(v2 == 33)
+}
+
+#[test]
+fn test_index_and_generic_search() {
+    let values = make_arr(a: 10, b: 20, c: 30)
+    assert!(values[0] == 10 && values[2] == 30)
+    assert!(is_sorted(values) && lower_bound(values, 25) == 2)
+    assert!(binary_search(values, 20).unwrap() == 1 && binary_search(values, 15).is_none())
+}
+
+#[test(should_revert, panic = 0x32)]
+fn test_index_out_of_bounds_panics() {
+    let values = make_arr(a: 1, b: 2, c: 3)
+    let _ = values[3]
 }
 
 #[test(should_revert, panic = 0x32)]
@@ -85,7 +97,7 @@ fn test_array_constructor_rejects_overflowing_element_frame() {
     // a DynArray that can bypass get's validated-frame invariant.
     let len: u256 = 1 << 251
     unsafe { store_word(ptr: data, value: len) }
-    let values: DynArray<u256> = unsafe { DynArray::from_abi_tail(data, len, size: 32) }
+    let values: DynArray<u256> = unsafe { DynArray::from_abi_tail(data, len: len as usize, size: 32) }
     let _ = values.get(0)
 }
 
@@ -95,7 +107,7 @@ fn test_array_constructor_rejects_overflowing_length_header() {
     // The element bytes fit, but adding the array's length word overflows.
     let len: u256 = (1 << 251) - 1
     unsafe { store_word(ptr: data, value: len) }
-    let values: DynArray<u256> = unsafe { DynArray::from_abi_tail(data, len, size: 32) }
+    let values: DynArray<u256> = unsafe { DynArray::from_abi_tail(data, len: len as usize, size: 32) }
     let _ = values.get(0)
 }
 
@@ -110,25 +122,24 @@ uses (evm: mut Evm, call: mut Call, ctx: Ctx)
     let arr = evm.create2<Arr>(value: 0, args: (), salt: 0)
     assert!(arr.inner != 0)
 
-    var v: MemVec<Address> = MemVec::zeroed(1)
-    v.set(index: 0, value: Address { inner: 0xabc })
+    let addrs = dyn_array_from([Address { inner: 0xabc }])
 
     // Canonical element decodes fine.
-    let got: u256 = evm.call(addr: arr, gas: 1000000, value: 0, message: ArrMsg::AddrAt { addrs: v.to_dyn_array(), index: 0 })
+    let got: u256 = evm.call(addr: arr, gas: 1000000, value: 0, message: ArrMsg::AddrAt { addrs, index: 0 })
     assert!(got == 0xabc)
 
     let one: u256 = 1
     let dirty = (one << 160) + 0xabc
 
     // AddrAt calldata: selector | offset(0x40) | index | len | element.
-    let args = encode_msg_calldata(ArrMsg::AddrAt { addrs: v.to_dyn_array(), index: 0 })
+    let args = encode_msg_calldata(ArrMsg::AddrAt { addrs, index: 0 })
     unsafe { store_word(ptr: ptr::offset_bytes(args.ptr(), 100), value: dirty) }
     var ret = MemBuffer::empty()
     let outcome = call.raw_call(addr: arr, gas: ctx.gas(), value: 0, args: args.span(), ret: mut ret)
     assert!(!outcome.success())
 
     // AddrLen calldata: selector | offset(0x20) | len | element.
-    let args2 = encode_msg_calldata(ArrMsg::AddrLen { addrs: v.to_dyn_array() })
+    let args2 = encode_msg_calldata(ArrMsg::AddrLen { addrs })
     unsafe { store_word(ptr: ptr::offset_bytes(args2.ptr(), 68), value: dirty) }
     let outcome2 = call.raw_call(addr: arr, gas: ctx.gas(), value: 0, args: args2.span(), ret: mut ret)
     assert!(outcome2.success())

@@ -40,7 +40,7 @@ uses (evm: mut Evm)
         )
     }
 
-    unsafe { Bytes::from_abi_tail(data: data_ptr, len: payload_len, size: payload_size) }
+    unsafe { Bytes::from_abi_tail(data: data_ptr, len: payload_len as usize, size: payload_size) }
 }
 
 fn two_word_payload() -> Bytes
@@ -64,7 +64,7 @@ uses (evm: mut Evm)
         )
     }
 
-    unsafe { Bytes::from_abi_tail(data: data_ptr, len: payload_len, size: payload_size) }
+    unsafe { Bytes::from_abi_tail(data: data_ptr, len: payload_len as usize, size: payload_size) }
 }
 
 #[test]

@@ -1,0 +1,27 @@
+// `core::mem::replace` moves the old value out of its `mut` place, which a
+// storage place cannot give up for a non-`Copy` value.
+use core::mem::replace
+
+struct Pair { a: u256, b: u256 }
+
+struct Store {
+    pair: Pair,
+}
+
+msg M {
+    #[selector = 1]
+    Go -> u256,
+}
+
+pub contract C {
+    mut store: Store,
+
+    init() {}
+
+    recv M {
+        Go -> u256 uses (mut store) {
+            let old = replace(mut store.pair, Pair { a: 1, b: 2 })
+            old.a
+        }
+    }
+}

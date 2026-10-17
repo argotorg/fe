@@ -2,8 +2,8 @@ use core::marker::Pinned
 use core::ops::{Location, StateIndex}
 use core::option::Option
 
-use super::effects::{RawStorage, storage_at_mut}
-use super::sol_slot::data_slot
+use super::effects::{RawStorage, storage_at, storage_at_mut}
+use super::layout::array_data_slot
 
 const U256_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
@@ -62,7 +62,7 @@ unsafe impl StateIndex for PackedWords {
     #[arithmetic(unchecked)]
     #[inline(always)]
     fn locate(self, _ root: u256, _ word: u256) -> Location {
-        Location { slot: data_slot(root) + word, offset: 0 }
+        Location { slot: array_data_slot(root) + word, offset: 0 }
     }
 }
 
@@ -97,12 +97,20 @@ impl<const BITS: u256> StoragePackedArray<BITS>
     /// Mask covering the low `BITS` bits of a lane.
     const LANE_MASK: u256 = (1 << BITS) - 1
 
-    /// The array whose slot is `slot`.
+    /// The array whose slot is `slot`, to read.
     ///
     /// The caller must ensure that nothing the compiler allocates, such as a
     /// contract field, uses `slot` or the words' slots.
     #[raw_place]
-    pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
+    pub unsafe fn at(_ slot: u256) -> ref Self uses (storage: RawStorage) {
+        unsafe { storage_at(slot) }
+    }
+
+    /// The array whose slot is `slot`, to read and write.
+    ///
+    /// The caller must ensure what `at` requires.
+    #[raw_place]
+    pub unsafe fn at_mut(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
         unsafe { storage_at_mut(slot) }
     }
 

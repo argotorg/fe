@@ -28,7 +28,7 @@ msg M {
     Run -> (bool, u256, u256, u256),
 }
 
-fn read_slot(_ slot: u256) -> u256 uses (storage: mut RawStorage) {
+fn read_slot(_ slot: u256) -> u256 uses (storage: RawStorage) {
     unsafe { SolSlot::at(slot) }.read<u256>(offset: 0)
 }
 

@@ -40,7 +40,7 @@ uses (evm: mut Evm)
             addr: addr,
             gas: gas,
             value: value,
-            args: ptr::MemSpan::from_raw_parts(ptr: args_offset, len: args_len),
+            args: ptr::MemSpan::from_raw_parts(ptr: args_offset, len: args_len as usize),
             ret: mut ret,
         ).success()
     }

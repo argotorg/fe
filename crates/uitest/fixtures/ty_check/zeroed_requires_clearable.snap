@@ -10,9 +10,9 @@ error[6-0003]: trait bound is not satisfied
  17 │     let _ = MemArray<Evm>::new_zeroed(1)
     │             ^^^^^^^^^^^^^^^^^^^^^^^^^ `Evm` doesn't implement `Clearable`
     │
-    ┌─ src/ptr.fe:113:18
+    ┌─ src/ptr.fe:125:18
     │
-113 │         where T: Clearable
+125 │         where T: Clearable
     │                  --------- required by this bound on `new_zeroed`
 
 error[6-0003]: trait bound is not satisfied
@@ -21,9 +21,9 @@ error[6-0003]: trait bound is not satisfied
  22 │     let _ = MemArray<FixedMemBuffer<32>>::new_zeroed(1)
     │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `FixedMemBuffer<32>` doesn't implement `Clearable`
     │
-    ┌─ src/ptr.fe:113:18
+    ┌─ src/ptr.fe:125:18
     │
-113 │         where T: Clearable
+125 │         where T: Clearable
     │                  --------- required by this bound on `new_zeroed`
 
 error[6-0003]: trait bound is not satisfied
@@ -32,9 +32,9 @@ error[6-0003]: trait bound is not satisfied
  27 │     let _ = MemArray<DynString>::new_zeroed(1)
     │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `DynString` doesn't implement `Clearable`
     │
-    ┌─ src/ptr.fe:113:18
+    ┌─ src/ptr.fe:125:18
     │
-113 │         where T: Clearable
+125 │         where T: Clearable
     │                  --------- required by this bound on `new_zeroed`
 
 error[6-0003]: trait bound is not satisfied
@@ -46,9 +46,9 @@ error[6-0003]: trait bound is not satisfied
     │             `Option<Evm>` doesn't implement `Clearable`
     │             trait bound `Evm: Clearable` is not satisfied
     │
-    ┌─ src/ptr.fe:113:18
+    ┌─ src/ptr.fe:125:18
     │
-113 │         where T: Clearable
+125 │         where T: Clearable
     │                  --------- required by this bound on `new_zeroed`
 
 error[6-0003]: trait bound is not satisfied
@@ -57,9 +57,9 @@ error[6-0003]: trait bound is not satisfied
  37 │     let _ = MemArray<T>::new_zeroed(1)
     │             ^^^^^^^^^^^^^^^^^^^^^^^ `T` doesn't implement `Clearable`
     │
-    ┌─ src/ptr.fe:113:18
+    ┌─ src/ptr.fe:125:18
     │
-113 │         where T: Clearable
+125 │         where T: Clearable
     │                  --------- required by this bound on `new_zeroed`
 
 error[6-0003]: trait bound is not satisfied
@@ -68,7 +68,7 @@ error[6-0003]: trait bound is not satisfied
  42 │     strings.zero()
     │             ^^^^ `DynString` doesn't implement `Clearable`
     │
-    ┌─ src/ptr.fe:218:18
+    ┌─ src/ptr.fe:235:18
     │
-218 │         where T: Clearable
+235 │         where T: Clearable
     │                  --------- required by this bound on `zero`

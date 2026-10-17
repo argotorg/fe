@@ -9,7 +9,7 @@ use std::evm::{Evm, RawStorage, SolArray}
 #[test]
 fn raw_arrays_through_one_split() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let (mut a, mut b) = unsafe { (SolArray<u256>::at(0), SolArray<u256>::at(1)) }
+        let (mut a, mut b) = unsafe { (SolArray<u256>::at_mut(0), SolArray<u256>::at_mut(1)) }
         a.push(1)
         b.push(2)
         a.push(3)

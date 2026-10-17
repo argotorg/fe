@@ -421,7 +421,7 @@ fn load(_ slot: u256) -> u256 uses (storage: RawStorage) {
 #[test]
 fn pop_zeroes_the_vacated_slot() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let heap = unsafe { StorageHeap<u256>::at(20) }
+        let heap = unsafe { StorageHeap<u256>::at_mut(20) }
         heap.push(5)
         heap.push(3)
         heap.push(9)

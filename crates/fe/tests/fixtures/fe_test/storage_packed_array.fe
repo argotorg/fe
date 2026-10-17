@@ -350,7 +350,7 @@ fn load(_ slot: u256) -> u256 uses (storage: RawStorage) {
 #[test]
 fn test_words_follow_the_hashed_slot() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let lanes = unsafe { StoragePackedArray<8>::at(3) }
+        let lanes = unsafe { StoragePackedArray<8>::at_mut(3) }
         // Index 33 is lane 1 of word 1; the last index is lane 31 of the
         // last word, which wraps around the slot space.
         lanes.set(i: 33, value: 7)

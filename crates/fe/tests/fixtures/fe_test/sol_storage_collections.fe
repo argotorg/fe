@@ -43,14 +43,14 @@ fn addr(_ inner: u256) -> Address {
 #[test]
 fn solidity_layout_parity() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let a = unsafe { SolArray<u256>::at(0) }
+        let a = unsafe { SolArray<u256>::at_mut(0) }
         a.push(11)
         a.push(22)
         a.push(33)
         a.pop()
         a.set(index: 0, value: 44)
 
-        let b = unsafe { SolArray<Uint24>::at(1) }
+        let b = unsafe { SolArray<Uint24>::at_mut(1) }
         var i: u32 = 1
         while i <= 12 {
             b.push(Uint24 { val: i })
@@ -60,7 +60,7 @@ fn solidity_layout_parity() uses (evm: mut Evm) {
         b.pop()
         b.set(index: 3, value: Uint24 { val: 0xabcdef })
 
-        let c = unsafe { SolArray<i16>::at(2) }
+        let c = unsafe { SolArray<i16>::at_mut(2) }
         c.push(-1)
         c.push(-300)
         c.push(7)
@@ -68,7 +68,7 @@ fn solidity_layout_parity() uses (evm: mut Evm) {
         assert(c.get(0) == -1)
         assert(c.get(1) == -300)
 
-        let s = unsafe { SolEnumerableSet<Address>::at(3) }
+        let s = unsafe { SolEnumerableSet<Address>::at_mut(3) }
         assert(s.add(addr(0xa)))
         assert(s.add(addr(0xb)))
         assert(s.add(addr(0xc)))
@@ -77,16 +77,16 @@ fn solidity_layout_parity() uses (evm: mut Evm) {
         assert(s.add(addr(0xb)))
         assert(s.remove(addr(0xa)))
 
-        var st = unsafe { SolSlot::at(5).load() }
+        var st = unsafe { SolSlot::at_mut(5).load() }
         st.set(offset: 0, value: true)
         st.set(offset: 1, value: false)
         st.set(offset: 2, value: Uint120 { val: 3 })
         st.set(offset: 17, value: Uint120 { val: 7 })
-        unsafe { SolSlot::at(5).store(st) }
-        var st = unsafe { SolSlot::at(5).load() }
+        unsafe { SolSlot::at_mut(5).store(st) }
+        var st = unsafe { SolSlot::at_mut(5).load() }
         st.set(offset: 1, value: true)
         st.set(offset: 0, value: false)
-        unsafe { SolSlot::at(5).store(st) }
+        unsafe { SolSlot::at_mut(5).store(st) }
 
         // Lengths.
         assert(load(0) == 2)
@@ -145,7 +145,7 @@ fn solidity_layout_parity() uses (evm: mut Evm) {
 #[test]
 fn array_reads_and_writes() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let owners = unsafe { SolArray<Address>::at(9) }
+        let owners = unsafe { SolArray<Address>::at_mut(9) }
         assert(owners.len() == 0)
         owners.push(addr(0x11))
         owners.push(addr(0x22))
@@ -161,7 +161,7 @@ fn array_reads_and_writes() uses (evm: mut Evm) {
         assert(owners.get(0).inner == 0x44)
 
         // bool[]: 32 per slot; setting one keeps its neighbours.
-        let flags = unsafe { SolArray<bool>::at(10) }
+        let flags = unsafe { SolArray<bool>::at_mut(10) }
         var i: u256 = 0
         while i < 33 {
             flags.push(i % 2 == 0)
@@ -174,7 +174,7 @@ fn array_reads_and_writes() uses (evm: mut Evm) {
         assert(flags.get(4))
         assert(flags.get(32))
 
-        let tags = unsafe { SolArray<Bytes32>::at(11) }
+        let tags = unsafe { SolArray<Bytes32>::at_mut(11) }
         tags.push(Bytes32 { val: u256::max() })
         assert(tags.get(0).val == u256::max())
     }
@@ -191,7 +191,7 @@ struct Order {
 #[test]
 fn array_element_places() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let small = unsafe { SolArray<i16>::at(12) }
+        let small = unsafe { SolArray<i16>::at_mut(12) }
         small.push(-1)
         small.push(5)
         small[1] = -300
@@ -202,7 +202,7 @@ fn array_element_places() uses (evm: mut Evm) {
         lane -= 1
         assert(small[1] == -301)
 
-        let orders = unsafe { SolArray<Order>::at(13) }
+        let orders = unsafe { SolArray<Order>::at_mut(13) }
         orders.push(Order { amount: 10, open: true, filled: 0 })
         orders.push(Order { amount: 20, open: true, filled: 0 })
         orders[1].filled += 7
@@ -218,7 +218,7 @@ fn array_element_places() uses (evm: mut Evm) {
             total += order.amount
         }
         assert(total == 10)
-        let flags = unsafe { SolArray<bool>::at(14) }
+        let flags = unsafe { SolArray<bool>::at_mut(14) }
         flags.push(true)
         flags.push(false)
         for mut flag in flags {
@@ -235,7 +235,7 @@ fn array_element_places() uses (evm: mut Evm) {
 #[test]
 fn array_lanes_in_loops() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let counts = unsafe { SolArray<u8>::at(15) }
+        let counts = unsafe { SolArray<u8>::at_mut(15) }
         var i: u8 = 0
         while i < 40 {
             counts.push(i)
@@ -256,7 +256,7 @@ fn array_lanes_in_loops() uses (evm: mut Evm) {
 #[test(should_revert, panic = 0x32)]
 fn index_out_of_bounds_panics() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let a = unsafe { SolArray<u8>::at(0) }
+        let a = unsafe { SolArray<u8>::at_mut(0) }
         a.push(1)
         a[1] = 2
     }
@@ -265,14 +265,14 @@ fn index_out_of_bounds_panics() uses (evm: mut Evm) {
 #[test(should_revert, panic = 0x31)]
 fn pop_empty_panics() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        unsafe { SolArray<u256>::at(0).pop() }
+        unsafe { SolArray<u256>::at_mut(0).pop() }
     }
 }
 
 #[test(should_revert, panic = 0x32)]
 fn get_out_of_bounds_panics() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let a = unsafe { SolArray<u8>::at(0) }
+        let a = unsafe { SolArray<u8>::at_mut(0) }
         a.push(1)
         let _ = a.get(1)
     }
@@ -281,22 +281,22 @@ fn get_out_of_bounds_panics() uses (evm: mut Evm) {
 #[test(should_revert, panic = 0x32)]
 fn set_out_of_bounds_panics() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        unsafe { SolArray<Address>::at(0).set(index: 0, value: addr(1)) }
+        unsafe { SolArray<Address>::at_mut(0).set(index: 0, value: addr(1)) }
     }
 }
 
 #[test(should_revert, panic = 0x41)]
 fn push_past_max_length_panics() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        unsafe { SolSlot::at(0).write(offset: 0, value: 0xffffffffffffffff as u256) }
-        unsafe { SolArray<u256>::at(0).push(1) }
+        unsafe { SolSlot::at_mut(0).write(offset: 0, value: 0xffffffffffffffff as u256) }
+        unsafe { SolArray<u256>::at_mut(0).push(1) }
     }
 }
 
 #[test]
 fn set_edge_cases() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let s = unsafe { SolEnumerableSet<u256>::at(20) }
+        let s = unsafe { SolEnumerableSet<u256>::at_mut(20) }
         assert(s.len() == 0)
         assert(!s.contains(7))
         assert(!s.remove(7))
@@ -311,7 +311,7 @@ fn set_edge_cases() uses (evm: mut Evm) {
         // The raw read reaches every slot, so the set is taken again after it.
         assert(load(DATA_OF_20) == 0)
 
-        let s = unsafe { SolEnumerableSet<u256>::at(20) }
+        let s = unsafe { SolEnumerableSet<u256>::at_mut(20) }
         assert(s.add(1))
         assert(s.add(2))
         assert(s.add(3))
@@ -327,7 +327,7 @@ fn set_edge_cases() uses (evm: mut Evm) {
         assert(s.get(1) == 1)
         assert(s.contains(2) && s.contains(1) && !s.contains(3))
 
-        let b = unsafe { SolEnumerableSet<Bytes32>::at(30) }
+        let b = unsafe { SolEnumerableSet<Bytes32>::at_mut(30) }
         assert(b.add(Bytes32 { val: 0xff << 248 }))
         assert(b.contains(Bytes32 { val: 0xff << 248 }))
         assert(b.get(0).val == 0xff << 248)
@@ -340,7 +340,7 @@ const DATA_OF_20: u256 = 0xce6d7b5282bd9a3661ae061feed1dbda4e52ab073b1f9285be6e1
 #[test(should_revert, panic = 0x32)]
 fn set_get_out_of_bounds_panics() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let s = unsafe { SolEnumerableSet<Address>::at(0) }
+        let s = unsafe { SolEnumerableSet<Address>::at_mut(0) }
         s.add(addr(1))
         let _ = s.get(1)
     }
@@ -351,14 +351,14 @@ fn set_get_out_of_bounds_panics() uses (evm: mut Evm) {
 #[test]
 fn set_at_last_slot_wraps() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let s = unsafe { SolEnumerableSet<u256>::at(u256::max()) }
+        let s = unsafe { SolEnumerableSet<u256>::at_mut(u256::max()) }
         assert(s.add(5))
         assert(s.add(6))
         assert(s.contains(5))
         assert(load(u256::max()) == 2)
         unsafe { assert(load(std::evm::SolMapping::at(0).slot_of(5 as u256)) == 1) }
         unsafe { assert(load(std::evm::SolMapping::at(0).slot_of(6 as u256)) == 2) }
-        let s = unsafe { SolEnumerableSet<u256>::at(u256::max()) }
+        let s = unsafe { SolEnumerableSet<u256>::at_mut(u256::max()) }
         assert(s.remove(5))
         assert(!s.contains(5))
         assert(s.get(0) == 6)
@@ -371,8 +371,8 @@ fn set_at_last_slot_wraps() uses (evm: mut Evm) {
 #[test]
 fn array_element_slot_wraps() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        unsafe { SolSlot::at(0).write(offset: 0, value: u256::max()) }
-        let a = unsafe { SolArray<u256>::at(0) }
+        unsafe { SolSlot::at_mut(0).write(offset: 0, value: u256::max()) }
+        let a = unsafe { SolArray<u256>::at_mut(0) }
         assert(a[u256::max() - DATA_0 + 1] == u256::max())
     }
 }
@@ -381,26 +381,26 @@ fn array_element_slot_wraps() uses (evm: mut Evm) {
 fn word_reads_and_writes_many_fields() uses (evm: mut Evm) {
     with (RawStorage = evm) {
         // address operator; bool paused;
-        unsafe { SolSlot::at(0).write(offset: 0, value: addr(0xabc)) }
-        unsafe { SolSlot::at(0).write(offset: 20, value: true) }
-        unsafe { SolSlot::at(0).write(offset: 21, value: 0x77 as u8) }
+        unsafe { SolSlot::at_mut(0).write(offset: 0, value: addr(0xabc)) }
+        unsafe { SolSlot::at_mut(0).write(offset: 20, value: true) }
+        unsafe { SolSlot::at_mut(0).write(offset: 21, value: 0x77 as u8) }
 
-        let word = unsafe { SolSlot::at(0).load() }
+        let word = unsafe { SolSlot::at_mut(0).load() }
         let operator: Address = word.get(offset: 0)
         let paused: bool = word.get(offset: 20)
         assert(operator.inner == 0xabc)
         assert(paused)
 
-        var word = unsafe { SolSlot::at(0).load() }
+        var word = unsafe { SolSlot::at_mut(0).load() }
         word.set(offset: 0, value: addr(0xdef))
         word.set(offset: 20, value: false)
         // Nothing is written until `store`.
-        let still: Address = unsafe { SolSlot::at(0).read(offset: 0) }
+        let still: Address = unsafe { SolSlot::at_mut(0).read(offset: 0) }
         assert(still.inner == 0xabc)
-        unsafe { SolSlot::at(0).store(word) }
-        let operator: Address = unsafe { SolSlot::at(0).read(offset: 0) }
-        let paused: bool = unsafe { SolSlot::at(0).read(offset: 20) }
-        let untouched: u8 = unsafe { SolSlot::at(0).read(offset: 21) }
+        unsafe { SolSlot::at_mut(0).store(word) }
+        let operator: Address = unsafe { SolSlot::at_mut(0).read(offset: 0) }
+        let paused: bool = unsafe { SolSlot::at_mut(0).read(offset: 20) }
+        let untouched: u8 = unsafe { SolSlot::at_mut(0).read(offset: 21) }
         assert(operator.inner == 0xdef)
         assert(!paused)
         assert(untouched == 0x77)
@@ -411,7 +411,7 @@ fn word_reads_and_writes_many_fields() uses (evm: mut Evm) {
 #[test(should_revert)]
 fn word_field_past_end_reverts() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        var word = unsafe { SolSlot::at(0).load() }
+        var word = unsafe { SolSlot::at_mut(0).load() }
         word.set(offset: 17, value: addr(1))
     }
 }
@@ -424,13 +424,13 @@ fn abi_word<T>(_ array: DynArray<T>, _ index: u256) -> u256 {
 #[test]
 fn array_to_dyn_array() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let empty = unsafe { SolArray<u256>::at(40).to_dyn_array() }
+        let empty = unsafe { SolArray<u256>::at_mut(40).to_dyn_array() }
         assert(empty.len() == 0)
         assert(empty.encoded_size() == 32)
         assert(abi_word(empty, 0) == 0)
 
         // uint24[]: ten per slot, so the eleventh element starts a new slot.
-        let small = unsafe { SolArray<Uint24>::at(41) }
+        let small = unsafe { SolArray<Uint24>::at_mut(41) }
         var i: u32 = 1
         while i <= 11 {
             small.push(Uint24 { val: i * 0x10101 })
@@ -443,12 +443,12 @@ fn array_to_dyn_array() uses (evm: mut Evm) {
         var i: u256 = 0
         while i < 11 {
             assert(abi_word(values, i + 1) == (i + 1) * 0x10101)
-            assert(values.get(i).val as u256 == (i + 1) * 0x10101)
+            assert(values.get(i as usize).val as u256 == (i + 1) * 0x10101)
             i += 1
         }
 
         // int16[]: negative elements are sign-extended to a full ABI word.
-        let signed = unsafe { SolArray<i16>::at(42) }
+        let signed = unsafe { SolArray<i16>::at_mut(42) }
         signed.push(-1)
         signed.push(-300)
         signed.push(7)
@@ -459,7 +459,7 @@ fn array_to_dyn_array() uses (evm: mut Evm) {
         assert(values.get(1) == -300)
 
         // bool[] and address[].
-        let flags = unsafe { SolArray<bool>::at(43) }
+        let flags = unsafe { SolArray<bool>::at_mut(43) }
         var i: u256 = 0
         while i < 33 {
             flags.push(i % 3 == 0)
@@ -472,7 +472,7 @@ fn array_to_dyn_array() uses (evm: mut Evm) {
             assert(abi_word(values, i + 1) == if i % 3 == 0 { 1 } else { 0 })
             i += 1
         }
-        let owners = unsafe { SolArray<Address>::at(44) }
+        let owners = unsafe { SolArray<Address>::at_mut(44) }
         owners.push(addr(0xaa))
         owners.push(addr(0xbb))
         let values = owners.to_dyn_array()
@@ -483,7 +483,7 @@ fn array_to_dyn_array() uses (evm: mut Evm) {
 #[test]
 fn set_values() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let s = unsafe { SolEnumerableSet<Address>::at(50) }
+        let s = unsafe { SolEnumerableSet<Address>::at_mut(50) }
         assert(s.values().len() == 0)
 
         // The order of `get`, as in `solidity_layout_parity`: [b, d, c].
@@ -503,11 +503,11 @@ fn set_values() uses (evm: mut Evm) {
         assert(abi_word(values, 3) == 0xc)
         var i: u256 = 0
         while i < 3 {
-            assert(values.get(i).inner == s.get(i).inner)
+            assert(values.get(i as usize).inner == s.get(i).inner)
             i += 1
         }
 
-        let tags = unsafe { SolEnumerableSet<Bytes32>::at(52) }
+        let tags = unsafe { SolEnumerableSet<Bytes32>::at_mut(52) }
         assert(tags.add(Bytes32 { val: 0xff << 248 }))
         assert(tags.add(Bytes32 { val: 1 }))
         let values = tags.values()
@@ -539,8 +539,8 @@ fn word_without_slot() {
 #[test]
 fn push_to_max_length_succeeds() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        unsafe { SolSlot::at(0).write(offset: 0, value: 0xfffffffffffffffe as u256) }
-        let array = unsafe { SolArray<u256>::at(0) }
+        unsafe { SolSlot::at_mut(0).write(offset: 0, value: 0xfffffffffffffffe as u256) }
+        let array = unsafe { SolArray<u256>::at_mut(0) }
         array.push(42)
         assert(array.len() == 0xffffffffffffffff)
         assert(array.get(0xfffffffffffffffe) == 42)

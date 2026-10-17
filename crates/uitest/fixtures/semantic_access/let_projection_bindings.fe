@@ -42,7 +42,7 @@ fn explicit_ref(cell: mut Cell) -> u256 {
 fn non_copy(buffers: mut MemArray<MemBuffer>) -> u256 {
     let buffer = ref buffers[0]
     buffers.set(0, MemBuffer::empty())
-    buffer.len()
+    buffer.len() as u256
 }
 
 // Rejected: `let word = mut …` holds the `mut` access.

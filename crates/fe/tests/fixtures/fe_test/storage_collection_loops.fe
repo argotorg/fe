@@ -10,7 +10,7 @@ fn sol_array_loops() uses (evm: mut Evm) {
     with (RawStorage = evm) {
         // Two arrays at runtime slots at once: an unsafe split, whose grants
         // are disjoint, so a loop over one may push onto the other.
-        let (mut a, mut doubled) = unsafe { (SolArray<u256>::at(0), SolArray<u256>::at(1)) }
+        let (mut a, mut doubled) = unsafe { (SolArray<u256>::at_mut(0), SolArray<u256>::at_mut(1)) }
         a.push(1)
         a.push(2)
         a.push(3)
@@ -43,7 +43,7 @@ fn sol_array_loops() uses (evm: mut Evm) {
         }
         assert(digits == 302010)
 
-        let empty = unsafe { SolArray<u256>::at(2) }
+        let empty = unsafe { SolArray<u256>::at_mut(2) }
         for _ in empty {
             assert(false)
         }
@@ -53,7 +53,7 @@ fn sol_array_loops() uses (evm: mut Evm) {
 #[test]
 fn sol_set_loops() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let s = unsafe { SolEnumerableSet<u256>::at(3) }
+        let s = unsafe { SolEnumerableSet<u256>::at_mut(3) }
         assert(s.add(5))
         assert(s.add(7))
         assert(s.add(9))

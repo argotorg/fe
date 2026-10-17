@@ -6,7 +6,7 @@ enum Status { A, B }
 struct Store { status: Status, buf: Option<MemBuffer>, n: u256 }
 
 fn store(_ status: own Status, _ len: u256) -> Store {
-    Store { status, buf: Option::Some(MemBuffer::alloc(len)), n: 7 }
+    Store { status, buf: Option::Some(MemBuffer::alloc(len as usize)), n: 7 }
 }
 
 fn rank(_ s: own Store) -> u256 {
@@ -16,7 +16,7 @@ fn rank(_ s: own Store) -> u256 {
     }
     let y = if let Status::B = s.status { 10 } else { 20 }
     let len = match s.buf {
-        Option::Some(b) => b.len()
+        Option::Some(b) => b.len() as u256
         Option::None => 0
     }
     x + y + len + s.n
@@ -26,7 +26,7 @@ fn take_buf(_ s: mut Store) -> u256 {
     match s.buf {
         Option::Some(b) => {
             s.buf = Option::None
-            b.len()
+            b.len() as u256
         }
         Option::None => 0
     }

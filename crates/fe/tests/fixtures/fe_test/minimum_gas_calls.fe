@@ -42,7 +42,7 @@ uses (create: mut Create)
         create
             .create2_raw(
                 value: 0,
-                init_code: ptr::MemSpan::from_raw_parts(ptr: p, len: 12 + length),
+                init_code: ptr::MemSpan::from_raw_parts(ptr: p, len: (12 + length) as usize),
                 salt,
             )
     }

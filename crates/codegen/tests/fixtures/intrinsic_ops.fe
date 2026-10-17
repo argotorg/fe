@@ -27,7 +27,7 @@ pub fn load_calldata(offset: u256) -> u256 uses (ops: RawOps) {
 }
 
 pub fn finish(data: *u8, len: u256) uses (ops: RawOps) {
-    unsafe { ops.return_data(data: ptr::MemSpan::from_raw_parts(ptr: data, len)) }
+    unsafe { ops.return_data(data: ptr::MemSpan::from_raw_parts(ptr: data, len: len as usize)) }
 }
 
 pub fn main() -> u256

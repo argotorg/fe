@@ -1,11 +1,13 @@
-/// `MemVec`: zero-initialized construction, `set`/`get`, copy-on-read
-/// `from_dyn_array`, and `to_dyn_array` producing payloads that byte-match
-/// Solidity `abi.encode(uint256[])` both as msg returndata and through
+/// `MemVec`: a growable array of Fe values. Growth, element access and loops,
+/// and conversion to and from `DynArray`, whose payloads byte-match Solidity
+/// `abi.encode(uint256[])` both as msg returndata and through
 /// `encode_abi_payload` (the raw-log event payload path).
 
-use std::abi::{DynArray, MemVec}
+use std::abi::DynArray
 use core::abi::store_word
-use core::ptr::{self, MemBuffer}
+use core::iter::FromProducer
+use core::option::Option
+use core::ptr::{self, MemArray, MemBuffer, MemVec}
 use std::evm::{
     Evm,
     Log,
@@ -17,7 +19,7 @@ use std::evm::{
 
 msg VecMsg {
     #[selector = 0x01]
-    BuildRange { n: u256 } -> DynArray<u256>,
+    BuildRange { n: usize } -> DynArray<u256>,
     #[selector = 0x02]
     CopyProbe { values: DynArray<u256> } -> u256,
     #[selector = 0x03]
@@ -29,27 +31,25 @@ pub contract VecContract uses (log: mut Log) {
 
     recv VecMsg {
         BuildRange { n } -> DynArray<u256> {
-            var v: MemVec<u256> = MemVec::zeroed(n)
-            var i: u256 = 0
-            while i < n {
-                v.set(index: i, value: (i + 1) * 100)
-                i += 1
+            var v = MemVec<u256>::new()
+            for i in 0..n {
+                v.push((i as u256 + 1) * 100)
             }
-            v.to_dyn_array()
+            DynArray::from_slice(v.as_slice())
         }
 
         CopyProbe { values } -> u256 {
-            var copy = MemVec::from_dyn_array(values)
-            copy.set(index: 0, value: 999)
+            var copy = values.to_mem_array()
+            copy[0] = 999
             // If the copy aliased the source payload, this would read 999.
             values.get(0)
         }
 
         PayloadHash { a, b } -> u256 uses (mut log) {
-            var v: MemVec<u256> = MemVec::zeroed(2)
-            v.set(index: 0, value: a)
-            v.set(index: 1, value: b)
-            let payload = encode_abi_payload((v.to_dyn_array(),))
+            var v = MemVec::with_capacity(2)
+            v.push(a)
+            v.push(b)
+            let payload = encode_abi_payload((DynArray::from_slice(v.as_slice()),))
             log.log1(data: payload.span(), topic0: 1)
             keccak256(payload.span())
         }
@@ -57,75 +57,125 @@ pub contract VecContract uses (log: mut Log) {
 }
 
 #[test]
-fn test_zeroed_set_get()
-{
-    var v: MemVec<u256> = MemVec::zeroed(3)
+fn push_grows_and_keeps_elements() {
+    var v = MemVec<u256>::new()
+    assert!(v.is_empty() && v.capacity() == 0)
+    for i in 0..9 {
+        v.push(i as u256 * 3)
+    }
+    assert!(v.len() == 9 && v.capacity() == 16)
+    var sum = 0
+    for x in v {
+        sum += x
+    }
+    assert!(sum == 108)
+    assert!(v[8] == 24)
+
+    var w = MemVec<u256>::with_capacity(2)
+    w.push(1)
+    w.push(2)
+    assert!(w.capacity() == 2)
+    w.reserve(3)
+    assert!(w.capacity() == 8 && w.len() == 2 && w[1] == 2)
+}
+
+#[test]
+fn pop_truncate_and_access() {
+    var v = MemVec<u256>::new()
+    v.extend_from_slice(MemArray::from_fn(4, |i| i as u256 + 1).as_slice())
+    match v.pop() {
+        Option::Some(x) => assert!(x == 4)
+        Option::None => assert!(false)
+    }
     assert!(v.len() == 3)
-    assert!(!v.is_empty())
-    assert!(v.get(0) == 0)
-    assert!(v.get(2) == 0)
+    v.set(0, 10)
+    assert!(v.replace(1, 20) == 2)
+    v.swap(0, 2)
+    assert!(v[0] == 3 && v[1] == 20 && v[2] == 10)
+    match v.get_mut(1) {
+        Option::Some(mut x) => x += 1
+        Option::None => assert!(false)
+    }
+    assert!(v.get(1).unwrap() == 21 && v.get(3).is_none())
+    for mut x in v {
+        x *= 2
+    }
+    assert!(v[0] == 6 && v[2] == 20)
+    v.truncate(1)
+    assert!(v.len() == 1 && v.pop().unwrap() == 6 && v.pop().is_none())
+}
 
-    v.set(index: 1, value: 42)
-    assert!(v.get(1) == 42)
-    assert!(v.get(0) == 0)
-    assert!(v.get(2) == 0)
+#[test]
+fn non_copy_elements_move_in_and_out() {
+    var v = MemVec<MemBuffer>::new()
+    for n in 1..6 {
+        v.push(MemBuffer::alloc(n))
+    }
+    assert!(v[4].len() == 5)
+    let last = v.pop().unwrap()
+    assert!(last.len() == 5 && v.len() == 4)
+    var total = 0
+    for ref buffer in v.reversed() {
+        total = total * 10 + buffer.len()
+    }
+    assert!(total == 4321)
+    let array = v.into_array()
+    assert!(array.len() == 4 && array[0].len() == 1)
+}
 
-    let empty: MemVec<u256> = MemVec::zeroed(0)
-    assert!(empty.is_empty())
+#[test]
+fn collects_a_producer() {
+    let xs: [u256; 4] = [1, 2, 3, 4]
+    let v = MemVec::collect(xs, xs.map(|x| x * x))
+    assert!(v.len() == 4 && v[3] == 16)
+}
+
+#[test(should_revert, panic = 0x32)]
+fn index_past_the_end_reverts() {
+    var v = MemVec<u256>::with_capacity(4)
+    v.push(1)
+    let _ = v[1]
+}
+
+#[test(should_revert, panic = 0x32)]
+fn truncate_past_the_end_reverts() {
+    var v = MemVec<u256>::new()
+    v.push(1)
+    v.truncate(2)
 }
 
 #[test]
 fn test_address_elements()
 {
-    var v: MemVec<Address> = MemVec::zeroed(2)
-    v.set(index: 1, value: Address { inner: 0xbeef })
-    assert!(v.get(0).inner == 0)
-    assert!(v.get(1).inner == 0xbeef)
-
-    let arr = v.to_dyn_array()
+    var v = MemVec<Address>::new()
+    v.push(Address { inner: 0 })
+    v.push(Address { inner: 0xbeef })
+    let arr = DynArray::from_slice(v.as_slice())
     assert!(arr.len() == 2)
     assert!(arr.get(1).inner == 0xbeef)
-}
-
-#[test(should_revert, panic = 0x32)]
-fn test_get_out_of_bounds_panics()
-{
-    let v: MemVec<u256> = MemVec::zeroed(2)
-    let _ = v.get(2)
-}
-
-#[test(should_revert, panic = 0x32)]
-fn test_set_out_of_bounds_panics()
-{
-    var v: MemVec<u256> = MemVec::zeroed(2)
-    v.set(index: 2, value: 1)
+    let back = arr.to_mem_array()
+    assert!(back[0].inner == 0 && back[1].inner == 0xbeef)
 }
 
 #[test]
-fn test_from_dyn_array_copies_locally()
+fn test_to_mem_array_copies_locally()
 {
-    var v: MemVec<u256> = MemVec::zeroed(1)
-    v.set(index: 0, value: 5)
-    let arr = v.to_dyn_array()
-
-    var copy = MemVec::from_dyn_array(arr)
-    copy.set(index: 0, value: 6)
-    assert!(copy.get(0) == 6)
+    let arr = DynArray::from_slice(MemArray::from_fn(1, |_| 5 as u256).as_slice())
+    var copy = arr.to_mem_array()
+    copy[0] = 6
+    assert!(copy[0] == 6)
     assert!(arr.get(0) == 5)
-    assert!(v.get(0) == 5)
 }
 
 #[test]
-fn test_from_dyn_array_copies_across_call()
+fn test_to_mem_array_copies_across_call()
 uses (evm: mut Evm)
 {
     let c = evm.create2<VecContract>(value: 0, args: (), salt: 0)
     assert!(c.inner != 0)
 
-    var v: MemVec<u256> = MemVec::zeroed(2)
-    v.set(index: 0, value: 7)
-    v.set(index: 1, value: 8)
-    let original: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: VecMsg::CopyProbe { values: v.to_dyn_array() })
+    let values = DynArray::from_slice(MemArray::from_fn(2, |i| i as u256 + 7).as_slice())
+    let original: u256 = evm.call(addr: c, gas: 1000000, value: 0, message: VecMsg::CopyProbe { values })
     assert!(original == 7)
 }
 

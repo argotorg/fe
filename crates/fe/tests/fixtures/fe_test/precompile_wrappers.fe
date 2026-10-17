@@ -36,7 +36,7 @@ type MemBuffer = ptr::MemBuffer
 type MemSpan = ptr::MemSpan
 
 fn buffer(_ ptr: *u8, _ len: u256) -> ref MemSpan {
-    unsafe { MemSpan::from_raw_parts(ptr, len) }
+    unsafe { MemSpan::from_raw_parts(ptr, len: len as usize) }
 }
 
 fn expect_word(_ result: Result<PrecompileError, u256>) -> u256 {

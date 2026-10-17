@@ -9,10 +9,10 @@ use core::abi::{
     Bytes,
     Decode,
     DynString,
-    DynArray,
     Encode,
 }
 use core::num::IntDowncast
+use ingot::abi::DynArray
 use ingot::evm::Address
 use ingot::evm::TopicValue
 use ingot::evm::ops::revert_empty
@@ -41,38 +41,6 @@ pub trait SolCompat {
 pub(ingot) trait StaticAbiElementSeal {}
 
 pub trait StaticAbiElement: StaticAbiElementSeal {}
-
-/// Marker for Solidity ABI types with a static encoding: one-word values, and
-/// tuples, fixed-size arrays and `#[abi]` structs built only from static
-/// types. Fixed arrays also need `Copy` elements, like their ABI codecs.
-/// `MemVec` stores elements at their fixed ABI head size, so it requires
-/// this.
-///
-/// Unlike `StaticAbiElement` this cannot be sealed: `#[abi]` structs in any
-/// ingot implement it. `MemVec` therefore also rejects a type whose
-/// `AbiSize::IS_DYNAMIC` is set.
-pub trait StaticAbi {}
-
-impl<T: StaticAbiElement> StaticAbi for T {}
-impl StaticAbi for () {}
-impl<T0: StaticAbi> StaticAbi for (T0,) {}
-impl<T0: StaticAbi, T1: StaticAbi> StaticAbi for (T0, T1) {}
-impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi> StaticAbi for (T0, T1, T2) {}
-impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi> StaticAbi for (T0, T1, T2, T3) {}
-impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi, T4: StaticAbi> StaticAbi for (T0, T1, T2, T3, T4) {}
-impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi, T4: StaticAbi, T5: StaticAbi> StaticAbi for (T0, T1, T2, T3, T4, T5) {}
-impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi, T4: StaticAbi, T5: StaticAbi, T6: StaticAbi> StaticAbi for (T0, T1, T2, T3, T4, T5, T6) {}
-impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi, T4: StaticAbi, T5: StaticAbi, T6: StaticAbi, T7: StaticAbi> StaticAbi for (T0, T1, T2, T3, T4, T5, T6, T7) {}
-impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi, T4: StaticAbi, T5: StaticAbi, T6: StaticAbi, T7: StaticAbi, T8: StaticAbi> StaticAbi for (T0, T1, T2, T3, T4, T5, T6, T7, T8) {}
-impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi, T4: StaticAbi, T5: StaticAbi, T6: StaticAbi, T7: StaticAbi, T8: StaticAbi, T9: StaticAbi> StaticAbi for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9) {}
-impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi, T4: StaticAbi, T5: StaticAbi, T6: StaticAbi, T7: StaticAbi, T8: StaticAbi, T9: StaticAbi, T10: StaticAbi> StaticAbi for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10) {}
-impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi, T4: StaticAbi, T5: StaticAbi, T6: StaticAbi, T7: StaticAbi, T8: StaticAbi, T9: StaticAbi, T10: StaticAbi, T11: StaticAbi> StaticAbi for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11) {}
-impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi, T4: StaticAbi, T5: StaticAbi, T6: StaticAbi, T7: StaticAbi, T8: StaticAbi, T9: StaticAbi, T10: StaticAbi, T11: StaticAbi, T12: StaticAbi> StaticAbi for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12) {}
-impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi, T4: StaticAbi, T5: StaticAbi, T6: StaticAbi, T7: StaticAbi, T8: StaticAbi, T9: StaticAbi, T10: StaticAbi, T11: StaticAbi, T12: StaticAbi, T13: StaticAbi> StaticAbi for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13) {}
-impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi, T4: StaticAbi, T5: StaticAbi, T6: StaticAbi, T7: StaticAbi, T8: StaticAbi, T9: StaticAbi, T10: StaticAbi, T11: StaticAbi, T12: StaticAbi, T13: StaticAbi, T14: StaticAbi> StaticAbi for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14) {}
-impl<T0: StaticAbi, T1: StaticAbi, T2: StaticAbi, T3: StaticAbi, T4: StaticAbi, T5: StaticAbi, T6: StaticAbi, T7: StaticAbi, T8: StaticAbi, T9: StaticAbi, T10: StaticAbi, T11: StaticAbi, T12: StaticAbi, T13: StaticAbi, T14: StaticAbi, T15: StaticAbi> StaticAbi for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15) {}
-// The fixed-array ABI codecs need `Copy` elements.
-impl<T: StaticAbi + Copy, const N: usize> StaticAbi for [T; N] {}
 
 const fn decimal_digits(value: usize) -> usize {
     var remaining = value

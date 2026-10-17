@@ -2,7 +2,7 @@ use core::abi::ByteInput
 use core::ptr
 
 use super::ops
-use super::effects::{RawStorage, storage_at_mut}
+use super::effects::{RawStorage, storage_at, storage_at_mut}
 use super::storage_map::{StorageKey, StorageMap}
 
 fn offset(_ base: *u8, _ bytes: u256) -> *u8 {
@@ -129,12 +129,21 @@ pub struct StorageBytes<K> {
 }
 
 impl<K: StorageKey + Copy> StorageBytes<K> {
-    /// The bytes whose maps take slots `slot` and `slot + 1`.
+    /// The bytes whose maps take slots `slot` and `slot + 1`, to read.
     ///
     /// The caller must ensure that nothing the compiler allocates, such as a
     /// contract field, uses those slots or the entries' slots.
     #[raw_place]
-    pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
+    pub unsafe fn at(_ slot: u256) -> ref Self uses (storage: RawStorage) {
+        unsafe { storage_at(slot) }
+    }
+
+    /// The bytes whose maps take slots `slot` and `slot + 1`, to read and
+    /// write.
+    ///
+    /// The caller must ensure what `at` requires.
+    #[raw_place]
+    pub unsafe fn at_mut(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
         unsafe { storage_at_mut(slot) }
     }
 
@@ -195,7 +204,7 @@ impl<K: StorageKey + Copy> StorageBytes<K> {
     pub fn to_memory(self, key: K) -> ptr::MemBuffer {
         let len = self.lengths[key]
         let word_count = ceil_words(len)
-        var buffer = unsafe { ptr::MemBuffer::alloc_uninit(word_count * 32) }
+        var buffer = unsafe { ptr::MemBuffer::alloc_uninit((word_count * 32) as usize) }
 
         var i: u256 = 0
         while i < word_count {
@@ -208,7 +217,7 @@ impl<K: StorageKey + Copy> StorageBytes<K> {
             i += 1
         }
 
-        unsafe { buffer.set_len(len) }
+        unsafe { buffer.set_len(len as usize) }
         buffer
     }
 

@@ -11,10 +11,10 @@ msg ArrayMsg {
 pub contract ArrayReceiver {
     recv ArrayMsg {
         Read { values } -> u256 {
-            values.len()
+            values.len() as u256
         }
         ReadDynamic { values } -> u256 {
-            values.len()
+            values.len() as u256
         }
     }
 }

@@ -1,0 +1,121 @@
+/// Converting between `DynArray` and memory arrays: element types, copying,
+/// canonical decoding and allocation bounds.
+use std::abi::{DynArray, FixedBytes, Uint24, Int24}
+use core::abi::store_word
+use core::ptr::{self, MemArray, MemBuffer, MemVec}
+
+#[test]
+fn test_empty_roundtrip() {
+    let array = DynArray::from_slice(MemVec<u256>::new().as_slice())
+    assert!(array.is_empty())
+    assert!(array.encoded_size() == 32)
+    let copy = DynArray<u256>::empty().to_mem_array()
+    assert!(copy.is_empty())
+}
+
+#[test]
+fn test_from_slice_snapshot_isolation() {
+    var values = MemArray<u256>::new_zeroed(2)
+    values[0] = 11
+    let first = DynArray::from_slice(values.as_slice())
+    values[0] = 99
+    assert!(first.get(0) == 11)
+    let second = DynArray::from_slice(values.as_slice())
+    assert!(second.get(0) == 99)
+    assert!(first.get(1) == 0)
+}
+
+#[test]
+fn test_primitive_elements() {
+    let bools = DynArray::from_slice(MemArray::from_fn(2, |i| i == 1).as_slice())
+    assert!(!bools.get(0) && bools.get(1))
+    assert!(bools.encoded_size() == 96)
+
+    let unsigned: DynArray<u8> = DynArray::from_slice(MemArray::from_fn(2, |i| if i == 0 { 255 } else { 42 }).as_slice())
+    assert!(unsigned.get(0) == 255)
+    assert!(unsigned.to_mem_array()[1] == 42)
+
+    let signed: DynArray<i8> = DynArray::from_slice(MemArray::from_fn(2, |i| if i == 0 { -128 } else { 127 }).as_slice())
+    let back = signed.to_mem_array()
+    assert!(back[0] == -128 && back[1] == 127)
+}
+
+#[test]
+fn test_custom_int_elements() {
+    var unsigned = MemArray<Uint24>::new_zeroed(2)
+    unsigned[0] = Uint24 { val: 0xffffff }
+    let array = DynArray::from_slice(unsigned.as_slice())
+    assert!(array.get(0).val == 0xffffff)
+    assert!(array.get(1).val == 0)
+
+    var signed = MemArray<Int24>::new_zeroed(2)
+    signed[1] = Int24 { val: -8388608 }
+    assert!(DynArray::from_slice(signed.as_slice()).to_mem_array()[1].val == -8388608)
+}
+
+#[test]
+fn test_fixed_bytes_elements() {
+    var values = MemArray<FixedBytes<4>>::new_zeroed(2)
+    values[0] = FixedBytes { val: 0x12345678 }
+    values[1] = FixedBytes { val: 0xaabbccdd }
+    let array = DynArray::from_slice(values.as_slice())
+    assert!(array.get(0).val == 0x12345678)
+    assert!(array.to_mem_array()[1].val == 0xaabbccdd)
+}
+
+fn dirty_bool() -> DynArray<bool> {
+    let data = MemBuffer::alloc(64)
+    unsafe { store_word(ptr: data.ptr(), value: 1) }
+    // The array shape is valid, but 2 is not a canonical ABI bool.
+    unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: 2) }
+    unsafe { DynArray::from_abi_tail(data: data.ptr(), len: 1, size: 64) }
+}
+
+#[test(should_revert)]
+fn test_dirty_bool_get_reverts() {
+    let _ = dirty_bool().get(0)
+}
+
+#[test(should_revert)]
+fn test_dirty_bool_copy_reverts() {
+    let _ = dirty_bool().to_mem_array()
+}
+
+#[test]
+fn test_tuple_elements_of_every_arity() {
+    var single = MemArray<(u256,)>::new_zeroed(2)
+    single[1] = (7,)
+    assert!(DynArray::from_slice(single.as_slice()).get(1).0 == 7)
+
+    var nine = MemArray<(u8, u8, u8, u8, u8, u8, u8, u8, u256)>::new_zeroed(2)
+    nine[1] = (1, 2, 3, 4, 5, 6, 7, 8, 9)
+    let array = DynArray::from_slice(nine.as_slice())
+    assert!(array.encoded_size() == 32 + 2 * 9 * 32)
+    assert!(array.get(1).8 == 9)
+    assert!(array.get(0).8 == 0)
+
+    // 16 is the largest tuple arity.
+    var sixteen = MemArray<(u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u256)>::new_zeroed(1)
+    sixteen[0] = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
+    let back = DynArray::from_slice(sixteen.as_slice()).to_mem_array()
+    assert!(back[0].0 == 1 && back[0].15 == 16)
+}
+
+#[test(should_revert, panic = 0x32)]
+fn test_empty_get_panics() {
+    let _ = DynArray<u256>::empty().get(0)
+}
+
+#[test(should_revert, panic = 0x11)]
+fn test_allocation_size_overflow_panics() {
+    let one: usize = 1
+    // Multiplying the element count by 32 must fail before allocation.
+    let _values = MemVec<u256>::with_capacity(one << 251)
+}
+
+#[test(should_revert, panic = 0x32)]
+fn test_huge_index_panics_before_offset_calculation() {
+    let values = DynArray::from_slice(MemArray<u256>::new_zeroed(1).as_slice())
+    let one: usize = 1
+    let _ = values.get(one << 251)
+}

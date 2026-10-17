@@ -162,6 +162,16 @@ func inline(always) private %alloc_uninit__g03ed() -> @layout_0 {
         return v4;
 }
 
+func private %array_data_slot(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.[i256; 1] = insert_value undef.[i256; 1] 0.i256 v0;
+        v5.i256 = call %keccak_words v4;
+        return v5;
+}
+
 func private %cast(v0.i256) -> i256 {
     block0:
         jump block1;
@@ -241,16 +251,6 @@ func private %contract_runtime_root_C() {
     block4:
         call %contract_recv_abi_C_0;
         unreachable;
-}
-
-func private %data_slot(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.[i256; 1] = insert_value undef.[i256; 1] 0.i256 v0;
-        v5.i256 = call %keccak_words v4;
-        return v5;
 }
 
 func inline(always) private %decode_from(v0.@layout_0, v1.i256) {
@@ -491,7 +491,7 @@ func inline(always) private %locate(v0.i256, v1.i256, v2.i256) -> @layout_4 {
         jump block1;
 
     block1:
-        v4.i256 = call %data_slot v1;
+        v4.i256 = call %array_data_slot v1;
         v6.i256 = add v4 v2;
         v9.@layout_4 = insert_value undef.@layout_4 0.i256 v6;
         v11.@layout_4 = insert_value v9 1.i256 0.i256;

@@ -260,8 +260,8 @@ func inline(always) private %contract_init_code(v0.@layout_0) -> @layout_1 {
 
     block3:
         v12.@layout_1 = call %encode_abi_payload v0;
-        v13.i256 = call %impl_MemBuffer__len v12;
-        (v15.i256, v16.i1) = uaddo v2 v13;
+        v14.i256 = call %impl_MemBuffer__len v12;
+        (v15.i256, v16.i1) = uaddo v2 v14;
         br v16 block14 block15;
 
     block4:

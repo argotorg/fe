@@ -1,0 +1,82 @@
+// `std::evm::layout`: Solidity's slot derivations for mappings and dynamic
+// arrays, checked against `keccak256(abi.encode(..))` and against the slots
+// the std collections use, and a library collection whose `locate` is one
+// helper call.
+use core::marker::Pinned
+use core::ops::{Location, StateIndex}
+use std::evm::{
+    Address,
+    Evm,
+    RawStorage,
+    SolArray,
+    StorageMap,
+    array_data_slot,
+    element_location,
+    keccak_words,
+    mapping_slot,
+    read_storage_word,
+    storage_at,
+    storage_at_mut,
+}
+
+struct Balances {}
+
+impl Pinned for Balances {
+    space S = storage
+}
+
+unsafe impl StateIndex for Balances {
+    type Key = Address
+    type Entry = u256
+
+    fn locate(self, _ root: u256, _ owner: Address) -> Location {
+        Location { slot: mapping_slot(root, owner), offset: 0 }
+    }
+}
+
+struct Triple { a: u256, b: u256, c: u256 }
+
+#[test]
+fn mapping_slot_matches_solidity() {
+    let word: u256 = 5
+    assert(mapping_slot(2, word) == keccak_words([5, 2]))
+    assert(mapping_slot(2, Address { inner: 0xbeef }) == keccak_words([0xbeef, 2]))
+    assert(mapping_slot(0, true) == keccak_words([1, 0]))
+    // Signed keys sign-extend, as Solidity's `mapping(int8 => ..)` does.
+    let signed: i8 = -1
+    assert(mapping_slot(0, signed) == keccak_words([u256::max(), 0]))
+    // `m[7][8]` of a `mapping(uint256 => mapping(uint256 => ..))` at slot 1.
+    let (outer, inner): (u256, u256) = (7, 8)
+    assert(mapping_slot(mapping_slot(1, outer), inner) == keccak_words([8, keccak_words([7, 1])]))
+}
+
+#[test]
+fn array_slots_match_solidity() {
+    assert(array_data_slot(3) == keccak_words([3]))
+    // `uint8[]`: 32 elements to a slot.
+    let byte = element_location<u8>(100, 33, bits: 8)
+    assert(byte.slot == 101 && byte.offset == 8)
+    // An element that packs nothing takes the slots its layout spans.
+    let triple = element_location<Triple>(100, 2, bits: 256)
+    assert(triple.slot == 106 && triple.offset == 0)
+}
+
+#[test]
+fn helpers_find_the_collections_slots() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let map = unsafe { StorageMap<u256, u256>::at_mut(7) }
+        map[3] = 42
+        let key: u256 = 3
+        assert(read_storage_word(mapping_slot(7, key)) == 42)
+
+        let values = unsafe { SolArray<u256>::at_mut(4) }
+        values.push(10)
+        values.push(20)
+        assert(read_storage_word(array_data_slot(4) + 1) == 20)
+
+        let balances = unsafe { storage_at_mut<Balances>(9) }
+        balances[Address { inner: 1 }] = 5
+        assert(read_storage_word(mapping_slot(9, Address { inner: 1 })) == 5)
+        assert(unsafe { storage_at<Balances>(9) }[Address { inner: 1 }] == 5)
+    }
+}

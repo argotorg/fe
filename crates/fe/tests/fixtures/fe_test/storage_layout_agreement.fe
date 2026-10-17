@@ -33,7 +33,7 @@ msg M {
 }
 
 fn read_slot(_ slot: u256) -> u256 uses (storage: mut RawStorage) {
-    unsafe { SolSlot::at(slot) }.read<u256>(offset: 0)
+    unsafe { SolSlot::at_mut(slot) }.read<u256>(offset: 0)
 }
 
 pub contract C uses (storage: mut RawStorage) {
@@ -65,7 +65,7 @@ fn layouts_agree() uses (evm: mut Evm) {
 #[test]
 fn sol_array_assoc_stride() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let arr = unsafe { SolArray<S<K>>::at(0x100) }
+        let arr = unsafe { SolArray<S<K>>::at_mut(0x100) }
         arr.push(S<K> { a: (1, 2, 3) })
         arr.push(S<K> { a: (4, 5, 6) })
         arr.push(S<K> { a: (7, 8, 9) })
@@ -97,7 +97,7 @@ impl SolPacked for Big {
 #[test]
 fn sol_array_wide_packed_stride() uses (evm: mut Evm) {
     with (RawStorage = evm) {
-        let arr = unsafe { SolArray<Big>::at(0x200) }
+        let arr = unsafe { SolArray<Big>::at_mut(0x200) }
         arr.push(Big { a: 1, b: 2 })
         arr.push(Big { a: 3, b: 4 })
         assert(arr.get(0).b == 2 && arr.get(1).a == 3 && arr.get(1).b == 4)

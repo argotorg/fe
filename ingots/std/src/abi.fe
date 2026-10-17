@@ -1,5 +1,5 @@
 /// Common Solidity ABI dynamic types and memory-backed byte views.
-pub use core::abi::{Bytes, BytesView, DynArray, DynString}
+pub use core::abi::{Bytes, BytesView, DynString}
 pub use core::ptr::MemSpan
 
 /// UTF-8 text stored as Solidity ABI `string`.
@@ -8,7 +8,7 @@ pub type Text = DynString
 /// Solidity ABI dynamic array.
 pub type Vec<T> = DynArray<T>
 pub use sol::{self, *}
-pub use dyn_array::{DynArrayAccess, DynVec, MemVec, canonical_dyn_array, dyn_array_from}
+pub use dyn_array::{DynArray, canonical_dyn_array, dyn_array_from}
 
 use core::ptr
 use core::abi::store_word
@@ -44,7 +44,7 @@ pub fn bytes_from_words<const N: usize>(_ words: [u256; N]) -> Bytes {
         unsafe { store_word(ptr: ptr::offset_bytes(data, 32 + (i as u256) * 32), value: words[i]) }
         i += 1
     }
-    unsafe { Bytes::from_abi_tail(data: data, len: len, size: size) }
+    unsafe { Bytes::from_abi_tail(data: data, len: len as usize, size: size) }
 }
 
 /// Allocate a `Bytes` of byte length `LEN` from `N` u256 words.
@@ -73,5 +73,5 @@ pub fn bytes_from_words_prefix<const LEN: usize, const N: usize>(_ words: [u256;
         unsafe { store_word(ptr: ptr::offset_bytes(data, 32 + (i as u256) * 32), value: words[i]) }
         i += 1
     }
-    unsafe { Bytes::from_abi_tail(data: data, len: len, size: size) }
+    unsafe { Bytes::from_abi_tail(data: data, len: len as usize, size: size) }
 }

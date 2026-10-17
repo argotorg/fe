@@ -7,7 +7,7 @@ fn a_valid_complete_raw_range_preserves_the_next_allocation() {
     let second = ptr::alloc<u256>()
     unsafe { *second = 19 }
     let span = unsafe { MemSpan::from_raw_parts(ptr: ptr::byte_ptr(first), len: 32) }
-    unsafe { ptr::zero_bytes(span.ptr(), span.len()) }
+    unsafe { ptr::zero_bytes(span.ptr(), span.len() as u256) }
     unsafe { assert!((*first)[31] == 0) }
     unsafe { assert!(*second == 19) }
 }
@@ -21,5 +21,5 @@ fn checked_subranges_validate_the_whole_extent() {
     assert!(span.try_slice(start: 32, len: 0).is_some())
     assert!(span.try_slice(start: 33, len: 0).is_none())
     let maximum: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
-    assert!(span.try_slice(start: 1, len: maximum).is_none())
+    assert!(span.try_slice(start: 1, len: maximum as usize).is_none())
 }

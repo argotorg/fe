@@ -13,7 +13,7 @@ pub contract C {
 
     recv Msg {
         Run -> u256 uses (mut total, storage: mut RawStorage) {
-            let (mut a, mut b) = unsafe { (SolArray<u256>::at(10), SolArray<u256>::at(11)) }
+            let (mut a, mut b) = unsafe { (SolArray<u256>::at_mut(10), SolArray<u256>::at_mut(11)) }
             a.push(1)
             total = 5
             b.push(2)
@@ -24,7 +24,7 @@ pub contract C {
 
 // Rejected: nor may an external call run.
 fn external_call() uses (call: mut Call, storage: mut RawStorage) {
-    let (mut a, mut b) = unsafe { (SolArray<u256>::at(0), SolArray<u256>::at(1)) }
+    let (mut a, mut b) = unsafe { (SolArray<u256>::at_mut(0), SolArray<u256>::at_mut(1)) }
     a.push(1)
     var output = MemBuffer::empty()
     let _ = call.raw_call(addr: Address { inner: 1 }, gas: 0, value: 0, args: MemSpan::empty(), ret: mut output)
@@ -33,8 +33,8 @@ fn external_call() uses (call: mut Call, storage: mut RawStorage) {
 
 // Rejected: raw roots from two `unsafe` blocks are two all-storage sessions.
 fn two_blocks() uses (storage: mut RawStorage) {
-    let a = unsafe { SolArray<u256>::at(0) }
-    let b = unsafe { SolArray<u256>::at(1) }
+    let a = unsafe { SolArray<u256>::at_mut(0) }
+    let b = unsafe { SolArray<u256>::at_mut(1) }
     a.push(1)
     b.push(2)
 }

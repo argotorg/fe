@@ -1,7 +1,7 @@
 // A raw-slot constructor's result is the place at the slot it is given:
-// `storage_at` to read it, with read-only authority, `storage_at_mut` and
-// the collections' `at` to write it too.
-use std::evm::{Evm, RawStorage, StorageMap, storage_at, storage_at_mut}
+// `storage_at` and the collections' `at` to read it, with read-only
+// authority, `storage_at_mut` and the collections' `at_mut` to write it too.
+use std::evm::{Evm, RawStorage, SolArray, StorageMap, storage_at, storage_at_mut}
 
 fn bump(_ slot: u256) uses (storage: mut RawStorage) {
     let m = unsafe { storage_at_mut<StorageMap<u256, u256>>(slot) }
@@ -13,8 +13,19 @@ fn get(_ slot: u256, key: u256) -> u256 uses (storage: RawStorage) {
 }
 
 fn bump_at(_ slot: u256) uses (storage: mut RawStorage) {
-    let m = unsafe { StorageMap<u256, u256>::at(slot) }
+    let m = unsafe { StorageMap<u256, u256>::at_mut(slot) }
     m[1] += 1
+}
+
+fn get_at(_ slot: u256, key: u256) -> u256 uses (storage: RawStorage) {
+    unsafe { StorageMap<u256, u256>::at(slot) }[key]
+}
+
+// Two read places from separate `unsafe` blocks are open together.
+fn total_len(_ first: u256, _ second: u256) -> u256 uses (storage: RawStorage) {
+    let a = unsafe { SolArray<u256>::at(first) }
+    let b = unsafe { SolArray<u256>::at(second) }
+    a.len() + b.len()
 }
 
 #[test]
@@ -27,6 +38,16 @@ fn constructors_take_a_slot_argument() uses (evm: mut Evm) {
         assert(unsafe { StorageMap<u256, u256>::at(3) }[1] == 3)
         assert(unsafe { StorageMap<u256, u256>::at(4) }[1] == 1)
         assert(unsafe { storage_at<StorageMap<u256, u256>>(4) }[1] == 1)
-        assert(get(3, key: 1) == 3)
+        assert(get(3, key: 1) == 3 && get_at(4, key: 1) == 1)
+    }
+}
+
+#[test]
+fn read_forms_open_together() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        unsafe { SolArray<u256>::at_mut(10) }.push(1)
+        unsafe { SolArray<u256>::at_mut(11) }.push(2)
+        unsafe { SolArray<u256>::at_mut(11) }.push(3)
+        assert(total_len(10, 11) == 3)
     }
 }

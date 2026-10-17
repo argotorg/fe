@@ -23,12 +23,12 @@
 //! payment several times.
 //!
 //! OpenZeppelin's ERC-2771 context suffix handling is not included.
-use core::abi::{Bytes, DynArray}
-use core::ptr::MemBuffer
+use core::abi::Bytes
+use core::ptr::{MemBuffer, MemVec}
 use super::effects::{Call, Ctx, bubble_revert_or}
 use super::returndata::ReturnData
 use super::ops
-use ingot::abi::{DynArrayAccess, DynVec, sol::sol}
+use ingot::abi::{DynArray, sol::sol}
 
 /// A batched call failed without revert data. Selector `0xd6bda275`, as
 /// OpenZeppelin's `Errors.FailedCall`.
@@ -49,22 +49,19 @@ pub fn multicall(_ data: DynArray<Bytes>) -> DynArray<Bytes>
 uses (ctx: Ctx, call: mut Call)
 {
     let this = ctx.address()
-    let count = data.len()
-    var results = DynVec<Bytes>::new()
-    var i: u256 = 0
-    while i < count {
+    var results = MemVec<Bytes>::with_capacity(data.len())
+    for entry in data {
         var ret = MemBuffer::empty()
         let outcome = call.raw_delegatecall(
             addr: this,
             gas: ops::gas(),
-            args: data.get(i).payload_span(),
+            args: entry.payload_span(),
             ret: mut ret,
         )
         if !outcome.success() {
             bubble_revert_or(FailedCall {})
         }
         results.push(ReturnData::new().to_bytes())
-        i += 1
     }
-    results.to_dyn_array()
+    DynArray::from_slice(results.as_slice())
 }

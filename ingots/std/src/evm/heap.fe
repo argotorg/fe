@@ -28,7 +28,7 @@
 //! in full, so storage accesses also scale with its native storage footprint.
 use core::marker::Clearable
 use core::ops::{Eq, Ord}
-use super::effects::{RawStorage, revert_error, storage_at_mut}
+use super::effects::{RawStorage, revert_error, storage_at, storage_at_mut}
 use super::storage_map::StorageMap
 
 /// `pop` or `replace` on an empty heap. Selector `0xa6ca772e`, as in
@@ -79,12 +79,20 @@ impl<T: Ord> Ord for Reverse<T> {
 pub struct StorageHeap<T> { len: u256, items: StorageMap<u256, T> }
 
 impl<T> StorageHeap<T> {
-    /// The heap whose length is stored at `slot`.
+    /// The heap whose length is stored at `slot`, to read.
     ///
     /// The caller must ensure that nothing the compiler allocates, such as a
     /// contract field, uses `slot` or the items' slots.
     #[raw_place]
-    pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
+    pub unsafe fn at(_ slot: u256) -> ref Self uses (storage: RawStorage) {
+        unsafe { storage_at(slot) }
+    }
+
+    /// The heap whose length is stored at `slot`, to read and write.
+    ///
+    /// The caller must ensure what `at` requires.
+    #[raw_place]
+    pub unsafe fn at_mut(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
         unsafe { storage_at_mut(slot) }
     }
 }

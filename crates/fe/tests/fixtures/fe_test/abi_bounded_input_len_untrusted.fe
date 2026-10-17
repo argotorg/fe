@@ -1,7 +1,8 @@
 // The public decode entry points take the input's length from their caller.
 // A length larger than the memory input must not let a decode copy bytes from
 // past the input: each of these fails instead of reading another allocation.
-use core::abi::{Bytes, Decode, DynArray, DynString, decode_field_from_prechecked_head, decode_frame_from, decode_msg_field_from}
+use core::abi::{Bytes, Decode, DynString, decode_field_from_prechecked_head, decode_frame_from, decode_msg_field_from}
+use std::abi::DynArray
 use core::ptr::{MemArray, MemBuffer, MemSpan}
 use std::abi::Sol
 use std::evm::{Call, Create, Evm}
@@ -52,27 +53,27 @@ pub contract Decoder {
         PrecheckedHeadBytes {} -> u256 {
             let (input, _) = tail_input()
             let b: Bytes = <Bytes as Decode<Sol>>::decode_from_prechecked_head(input.span(), 0, 0x100000)
-            b.len()
+            b.len() as u256
         }
         PrecheckedHeadString {} -> u256 {
             let (input, _) = tail_input()
             let s: DynString = <DynString as Decode<Sol>>::decode_from_prechecked_head(input.span(), 0, 0x100000)
-            s.len()
+            s.len() as u256
         }
         FrameBytes {} -> u256 {
             let (input, _) = tail_input()
             let b: Bytes = decode_frame_from<Sol, Bytes, MemSpan>(input.span(), 0, 0x100000)
-            b.len()
+            b.len() as u256
         }
         FieldFromPrecheckedHead {} -> u256 {
             let (input, _) = head_input()
             let b: Bytes = decode_field_from_prechecked_head<Sol, Bytes, MemSpan>(input.span(), base: 0, head_pos: 0, input_len: 0x100000)
-            b.len()
+            b.len() as u256
         }
         MsgField {} -> u256 {
             let (input, _) = head_input()
             let b: Bytes = decode_msg_field_from<Sol, Bytes, MemSpan>(input.span(), base: 0, head_pos: 0, input_len: 0x100000)
-            b.len()
+            b.len() as u256
         }
         BoundedDynArray {} -> u256 {
             var input = MemBuffer::alloc(32)
@@ -81,7 +82,7 @@ pub contract Decoder {
             let rel = (secret.ptr() as u256) - (input.ptr() as u256) - 32
             input.write_word(offset: 0, value: rel / 32 + 1)
             let a: DynArray<u256> = <DynArray<u256> as Decode<Sol>>::decode_from_bounded(input.span(), 0, 0x100000)
-            a.len()
+            a.len() as u256
         }
         // An honest length still decodes a memory input.
         Honest {} -> u256 {
@@ -90,9 +91,9 @@ pub contract Decoder {
             input.write_word(offset: 32, value: 3)
             input.write_word(offset: 64, value: 0x616263 << 232)
             let span = input.span()
-            let b: Bytes = decode_field_from_prechecked_head<Sol, Bytes, MemSpan>(span, base: 0, head_pos: 0, input_len: span.len())
+            let b: Bytes = decode_field_from_prechecked_head<Sol, Bytes, MemSpan>(span, base: 0, head_pos: 0, input_len: span.len() as u256)
             assert(b.byte_at(0) == 0x61 && b.byte_at(2) == 0x63)
-            b.len()
+            b.len() as u256
         }
     }
 }

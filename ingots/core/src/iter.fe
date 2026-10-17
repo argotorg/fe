@@ -1,7 +1,7 @@
 use ingot::option::Option
 use ingot::marker::Copy
 use ingot::ops::{WrappingAdd, WrappingSub}
-use ingot::ptr::{MemArray, MemSlice}
+use ingot::ptr::{MemArray, MemSlice, MemVec}
 use ingot::{assert, panic_code}
 use ingot::panics::PANIC_ASSERT
 use ingot::functional::FnMut_v
@@ -129,26 +129,26 @@ pub trait Bidirectional: Collection {
 
 /// The first index of a collection of `len` elements.
 #[inline(always)]
-fn first_index(_ len: u256) -> Option<usize> {
+pub fn first_index(_ len: usize) -> Option<usize> {
     if len == 0 { Option::None } else { Option::Some(0) }
 }
 
 /// The index after `i` in a collection of `len` elements.
 #[inline(always)]
-fn next_index(_ i: usize, _ len: u256) -> Option<usize> {
+pub fn next_index(_ i: usize, _ len: usize) -> Option<usize> {
     let next = i.wrapping_add(1)
-    if (next as u256) < len { Option::Some(next) } else { Option::None }
+    if next < len { Option::Some(next) } else { Option::None }
 }
 
 /// The last index of a collection of `len` elements.
 #[inline(always)]
-fn last_index(_ len: u256) -> Option<usize> {
-    if len == 0 { Option::None } else { Option::Some((len as usize).wrapping_sub(1)) }
+pub fn last_index(_ len: usize) -> Option<usize> {
+    if len == 0 { Option::None } else { Option::Some(len.wrapping_sub(1)) }
 }
 
 /// The index before `i`.
 #[inline(always)]
-fn prev_index(_ i: usize) -> Option<usize> {
+pub fn prev_index(_ i: usize) -> Option<usize> {
     if i == 0 { Option::None } else { Option::Some(i.wrapping_sub(1)) }
 }
 
@@ -167,12 +167,12 @@ impl<T, const N: usize> Collection for [T; N] {
 
     #[inline(always)]
     fn start(self) -> Option<usize> {
-        first_index(N as u256)
+        first_index(N)
     }
 
     #[inline(always)]
     fn next(self, _ c: usize) -> Option<usize> {
-        next_index(c, N as u256)
+        next_index(c, N)
     }
 
     #[inline(always)]
@@ -191,7 +191,7 @@ impl<T, const N: usize> CollectionMut for [T; N] {
 impl<T, const N: usize> Bidirectional for [T; N] {
     #[inline(always)]
     fn last(self) -> Option<usize> {
-        last_index(N as u256)
+        last_index(N)
     }
 
     #[inline(always)]
@@ -229,6 +229,46 @@ impl<T> CollectionMut for MemArray<T> {
 }
 
 impl<T> Bidirectional for MemArray<T> {
+    #[inline(always)]
+    fn last(self) -> Option<usize> {
+        last_index(self.len())
+    }
+
+    #[inline(always)]
+    fn prev(self, _ c: usize) -> Option<usize> {
+        prev_index(c)
+    }
+}
+
+impl<T> Collection for MemVec<T> {
+    space S = memory
+    type Cursor = usize
+    type Item = T
+
+    #[inline(always)]
+    fn start(self) -> Option<usize> {
+        first_index(self.len())
+    }
+
+    #[inline(always)]
+    fn next(self, _ c: usize) -> Option<usize> {
+        next_index(c, self.len())
+    }
+
+    #[inline(always)]
+    fn at(self, _ c: usize) -> ref T {
+        ref self[c]
+    }
+}
+
+impl<T> CollectionMut for MemVec<T> {
+    #[inline(always)]
+    fn at_mut(mut self, _ c: usize) -> mut T {
+        mut self[c]
+    }
+}
+
+impl<T> Bidirectional for MemVec<T> {
     #[inline(always)]
     fn last(self) -> Option<usize> {
         last_index(self.len())
@@ -829,7 +869,7 @@ impl FromProducer for MemArray {
         uses (B::E, P::E)
     {
         var p = p
-        var len: u256 = 0
+        var len: usize = 0
         var state = p.start(base)
         while let Option::Some(s) = state {
             len += 1
@@ -847,8 +887,23 @@ impl FromProducer for MemArray {
             i += 1
             state = p.next(base, s)
         }
-        if i as u256 != len {
+        if i != len {
             panic_code(PANIC_ASSERT)
+        }
+        out
+    }
+}
+
+impl FromProducer for MemVec {
+    fn collect<B: Collection, P: Producer<B, Out = T>, T>(_ base: B, _ p: own P) -> MemVec<T>
+        uses (B::E, P::E)
+    {
+        var p = p
+        var out = MemVec<T>::new()
+        var state = p.start(base)
+        while let Option::Some(s) = state {
+            out.push(p.produce(base, s))
+            state = p.next(base, s)
         }
         out
     }

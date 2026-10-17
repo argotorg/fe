@@ -7,8 +7,8 @@ input_file: fixtures/semantic_access/unsafe_splits.fe
 error[16-0001]: access conflict in `fn C::recv[0][0]`
    ┌─ unsafe_splits.fe:18:13
    │
-16 │             let (mut a, mut b) = unsafe { (SolArray<u256>::at(10), SolArray<u256>::at(11)) }
-   │                                            ---------------------- projection opened here
+16 │             let (mut a, mut b) = unsafe { (SolArray<u256>::at_mut(10), SolArray<u256>::at_mut(11)) }
+   │                                            -------------------------- projection opened here
 17 │             a.push(1)
 18 │             total = 5
    │             ^^^^^^^^^ cannot write to this place while a `mut` projection of it is open
@@ -16,8 +16,8 @@ error[16-0001]: access conflict in `fn C::recv[0][0]`
 error[16-0001]: access conflict in `fn external_call`
    ┌─ unsafe_splits.fe:30:13
    │
-27 │     let (mut a, mut b) = unsafe { (SolArray<u256>::at(0), SolArray<u256>::at(1)) }
-   │                                    --------------------- projection opened here
+27 │     let (mut a, mut b) = unsafe { (SolArray<u256>::at_mut(0), SolArray<u256>::at_mut(1)) }
+   │                                    ------------------------- projection opened here
    ·
 30 │     let _ = call.raw_call(addr: Address { inner: 1 }, gas: 0, value: 0, args: MemSpan::empty(), ret: mut output)
    │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this call may write storage while a `mut` projection of it is open
@@ -25,10 +25,10 @@ error[16-0001]: access conflict in `fn external_call`
 error[16-0001]: access conflict in `fn two_blocks`
    ┌─ unsafe_splits.fe:37:22
    │
-36 │     let a = unsafe { SolArray<u256>::at(0) }
-   │                      --------------------- projection opened here
-37 │     let b = unsafe { SolArray<u256>::at(1) }
-   │                      ^^^^^^^^^^^^^^^^^^^^^ this call may write storage while a `mut` projection of it is open
+36 │     let a = unsafe { SolArray<u256>::at_mut(0) }
+   │                      ------------------------- projection opened here
+37 │     let b = unsafe { SolArray<u256>::at_mut(1) }
+   │                      ^^^^^^^^^^^^^^^^^^^^^^^^^ this call may write storage while a `mut` projection of it is open
 
 error[16-0001]: access conflict in `fn duplicated`
    ┌─ unsafe_splits.fe:45:5

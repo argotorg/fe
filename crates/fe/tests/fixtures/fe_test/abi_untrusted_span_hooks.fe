@@ -1,7 +1,8 @@
 // A user type's `AbiSpan`/`AbiSize` are safe traits, so the decoder bounds
 // what they report by the input: a payload end past the input is a decode
 // error, not a copy from past the input.
-use core::abi::{AbiSize, AbiSpan, ByteInput, Decode, DynArray}
+use core::abi::{AbiSize, AbiSpan, ByteInput, Decode}
+use std::abi::DynArray
 use core::ptr::{MemArray, MemBuffer}
 use std::abi::Sol
 
@@ -41,7 +42,7 @@ impl AbiSpan<Sol> for NoHead {
 /// An array tail of one element whose tail is at `offset` after the heads,
 /// in an input of `len` bytes.
 fn one_element(len: u256, offset: u256) -> MemBuffer {
-    var input = MemBuffer::alloc(len)
+    var input = MemBuffer::alloc(len as usize)
     var words = MemArray<u256>::new_zeroed(2)
     words[0] = 1
     words[1] = offset

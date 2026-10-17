@@ -5,7 +5,7 @@
 //! `address[]`, `int256[]` through casts and sign-bit flips). Here every
 //! function is generic over both the container and the element: the same
 //! `sort` orders a fixed array, a `MemSlice`, a `MemArray` or a `MemVec`
-//! (in `std`) of integers, signed integers, addresses or any type that
+//! of integers, signed integers, addresses or any type that
 //! implements `Ord`. A container takes part through `Index<usize>` (and
 //! `IndexMut<usize>` to reorder) and `Len`.
 //!

@@ -1,0 +1,58 @@
+//! Solidity storage layout: the slots of a `mapping`'s entries and of a
+//! dynamic array's elements, for a `StateIndex` implementation's `locate`,
+//! or to find a Solidity contract's state at known slots.
+//!
+//! ```fe
+//! unsafe impl StateIndex for Balances {
+//!     type Key = Address
+//!     type Entry = u256
+//!
+//!     fn locate(self, _ root: u256, _ owner: Address) -> Location {
+//!         Location { slot: mapping_slot(root, owner), offset: 0 }
+//!     }
+//! }
+//! ```
+use core::intrinsic::storage_slots
+use core::ops::Location
+use core::ptr
+use super::crypto::{keccak256, keccak_words}
+use super::ops::mstore
+use super::storage_map::StorageKey
+
+/// The slot of `mapping[key]` for a Solidity `mapping` at slot `root`:
+/// `keccak256(abi.encode(key, root))`, with `key` encoded as its
+/// `StorageKey` implementation defines. A mapping held in the entry is
+/// rooted at that slot.
+#[inline(always)]
+pub fn mapping_slot<K: StorageKey>(_ root: u256, _ key: K) -> u256 {
+    // Reserve the entire preimage before encoding: key encoders may allocate.
+    let key_len = K::encoded_len(key)
+    let scratch = ptr::alloc_bytes(key_len + 32)
+    unsafe {
+        K::write_key(ptr: scratch, key)
+        mstore(addr: ptr::offset_bytes(scratch, key_len), value: root)
+        keccak256(ptr::MemSpan::from_raw_parts(ptr: scratch, len: (key_len + 32) as usize))
+    }
+}
+
+/// The first slot of the elements of a Solidity dynamic array at slot
+/// `root`, and of the data of a long `bytes` or `string` there:
+/// `keccak256(abi.encode(root))`.
+pub fn array_data_slot(_ root: u256) -> u256 {
+    keccak_words([root])
+}
+
+/// The location of element `index` of elements laid out from slot `first`
+/// like a Solidity array's: lanes of `bits` bits, `256 / bits` to a slot,
+/// when `bits` is at most 128 (a `LaneCodec`'s `BITS`), and otherwise
+/// `storage_slots<T>()` slots each, as its storage layout places it. Wraps
+/// modulo `2**256`, like Solidity's storage slot arithmetic.
+#[arithmetic(unchecked)]
+pub fn element_location<T>(_ first: u256, _ index: u256, bits: u256) -> Location {
+    if bits > 0 && bits <= 128 {
+        let per_slot = 256 / bits
+        Location { slot: first + index / per_slot, offset: (index % per_slot) * bits }
+    } else {
+        Location { slot: first + index * storage_slots<T>(), offset: 0 }
+    }
+}

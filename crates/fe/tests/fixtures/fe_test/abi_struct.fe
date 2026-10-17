@@ -1,7 +1,7 @@
 // `#[abi]` structs encode and decode like the Solidity tuple of their fields.
 use core::abi::{AbiDecoder, AbiFrame, AbiSize, AbiSpan, ByteInput, Decode, Encode, store_word}
-use core::ptr::{self, MemBuffer}
-use std::abi::{Bytes, DynArray, MemVec, Sol, StaticAbi, canonical_dyn_array, dyn_array_from, sol}
+use core::ptr::{self, MemArray, MemBuffer, MemVec}
+use std::abi::{Bytes, DynArray, Sol, canonical_dyn_array, dyn_array_from, sol}
 use std::abi::sol::{Int24, Uint24}
 use std::evm::{Address, Evm, encode_abi_payload}
 
@@ -40,7 +40,7 @@ pub struct Blob {
     pub data: Bytes,
 }
 
-// `Key` is `Copy`, so fixed arrays of it are ABI fields and `MemVec` elements.
+// `Key` is `Copy`, so fixed arrays of it are ABI fields.
 #[abi]
 pub struct Route {
     pub keys: [Key; 2],
@@ -57,30 +57,6 @@ pub struct WideTuples {
     pub five: (u8, u16, u32, u64, Bytes),
     pub sixteen: (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u256),
 }
-
-// Claims `StaticAbi` although its encoding is dynamic.
-pub struct FakeStatic {
-    pub value: u256,
-}
-
-impl AbiSize for FakeStatic {
-    const HEAD_SIZE: u256 = 32
-    const IS_DYNAMIC: bool = true
-}
-
-impl Decode<Sol> for FakeStatic {
-    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
-        FakeStatic { value: d.read_word(input) }
-    }
-}
-
-impl Encode<Sol> for FakeStatic {
-    fn encode(own self, _ out: AbiFrame) {
-        out.store_word(at: 0, value: self.value)
-    }
-}
-
-impl StaticAbi for FakeStatic {}
 
 // ABI-encodable, but without a Solidity type name.
 pub struct Word {
@@ -131,10 +107,10 @@ pub contract C {
         }
         Hops { first, hops } -> u256 {
             var sum = first.fee.val as u256
-            var i: u256 = 0
+            var i: usize = 0
             while i < hops.len() {
                 let hop = hops.get(i)
-                sum += hop.key.fee.val as u256 + hop.data.len()
+                sum += hop.key.fee.val as u256 + hop.data.len() as u256
                 i += 1
             }
             sum
@@ -189,16 +165,16 @@ fn struct_messages_round_trip() uses (evm: mut Evm) {
 }
 
 #[test]
-fn mem_vec_holds_static_structs() {
-    var keys = MemVec<Key>::zeroed(3)
-    keys.set(index: 1, value: key(500))
-    keys.set(index: 2, value: key(3000))
-    assert(keys.get(0).fee.val == 0)
-    assert(keys.get(1).fee.val == 500)
-    let frozen = keys.to_dyn_array()
+fn from_slice_encodes_static_structs() {
+    var keys = MemVec<Key>::new()
+    keys.push(key(0))
+    keys.push(key(500))
+    keys.push(key(3000))
+    let frozen = DynArray::from_slice(keys.as_slice())
     assert(frozen.encoded_size() == 32 + 3 * 96)
-    assert(frozen.get(2).fee.val == 3000)
+    assert(frozen.get(1).fee.val == 500)
     assert(frozen.get(2).tick_spacing.val == -60)
+    assert(frozen.to_mem_array()[2].fee.val == 3000)
 }
 
 #[test]
@@ -275,7 +251,7 @@ fn canonical_dyn_array_takes_non_copy_elements() {
         (8, Bytes::from_word_prefix(word: 0, len: 32)),
     ])
     let span = hops.encoded_span()
-    let named = unsafe { canonical_dyn_array(DynArray<Named>::from_abi_tail(data: span.ptr(), len: 2, size: span.len())) }
+    let named = unsafe { canonical_dyn_array(DynArray<Named>::from_abi_tail(data: span.ptr(), len: 2, size: span.len() as u256)) }
     assert(named.get(0).item.value == 7)
     assert(named.get(0).name.byte_at(0) == 0xaa)
     assert(named.get(1).item.value == 8)
@@ -284,7 +260,8 @@ fn canonical_dyn_array_takes_non_copy_elements() {
 
 #[test]
 fn zero_length_array_decoding_does_not_read_elements() {
-    let values = MemVec<[Address; 0]>::zeroed(1)
+    let values = DynArray::from_slice(MemArray<[Address; 0]>::new_zeroed(1).as_slice())
+    assert(values.encoded_size() == 32)
     let empty = values.get(0)
     let encoded = encode_abi_payload(empty)
     assert(encoded.len() == 0)
@@ -295,7 +272,7 @@ fn zero_length_array_decoding_does_not_read_elements() {
     var decoder = sol::SolDecoder::with_base(0)
     let decoded3 = <[Address; 0] as Decode<Sol>>::decode_payload(mut decoder, encoded.span())
     assert(encode_abi_payload(decoded3).len() == 0)
-    let units = MemVec<()>::zeroed(1)
+    let units = DynArray::from_slice(MemArray<()>::new_zeroed(1).as_slice())
     let _ = units.get(0)
 }
 
@@ -330,20 +307,6 @@ fn abi_struct_prechecked_decode_rejects_tail_past_bound() {
     let _ = <Blob as Decode<Sol>>::decode_from_prechecked_head(blob_input().span(), 0, 32)
 }
 
-#[test(should_revert)]
-fn mem_vec_rejects_dynamic_static_abi_impl() {
-    let _ = MemVec<FakeStatic>::zeroed(1)
-}
-
-#[test(should_revert)]
-fn mem_vec_from_dyn_array_rejects_dynamic_static_abi_impl() {
-    // Empty, so without the check nothing would be read or written.
-    let data = MemBuffer::alloc(32)
-    unsafe { store_word(ptr: data.ptr(), value: 0) }
-    let source: DynArray<FakeStatic> = unsafe { DynArray::from_abi_tail(data: data.ptr(), len: 0, size: 32) }
-    let _ = MemVec::from_dyn_array(source)
-}
-
 #[test]
 fn abi_struct_tuple_field_round_trips() {
     let value = WithTuple { values: (7, Bytes::from_word_prefix(word: 0xaa << 248, len: 1)) }
@@ -362,9 +325,9 @@ fn abi_struct_copy_array_field_round_trips() {
     assert(encoded.len() == 2 * 96)
     let decoded = <Route as Decode<Sol>>::decode_from(encoded.span(), 0)
     assert(decoded.keys[1].fee.val == 2)
-    var routes = MemVec<[Key; 2]>::zeroed(1)
-    routes.set(index: 0, value: [key(3), key(4)])
-    assert(routes.get(0)[1].fee.val == 4)
+    var routes = MemVec<[Key; 2]>::new()
+    routes.push([key(3), key(4)])
+    assert(DynArray::from_slice(routes.as_slice()).get(0)[1].fee.val == 4)
 }
 
 #[test]
@@ -373,11 +336,11 @@ fn canonical_dyn_array_of_zero_size_elements_is_constant_time() {
     let count: u256 = 1 << 200
     let data = MemBuffer::alloc(32)
     unsafe { store_word(ptr: data.ptr(), value: count) }
-    let units = unsafe { canonical_dyn_array(DynArray<()>::from_abi_tail(data: data.ptr(), len: count, size: 32)) }
-    assert(units.len() == count)
+    let units = unsafe { canonical_dyn_array(DynArray<()>::from_abi_tail(data: data.ptr(), len: count as usize, size: 32)) }
+    assert(units.len() == count as usize)
     assert(units.encoded_size() == 32)
-    let empties = unsafe { canonical_dyn_array(DynArray<Empty>::from_abi_tail(data: data.ptr(), len: count, size: 32)) }
-    assert(empties.len() == count)
+    let empties = unsafe { canonical_dyn_array(DynArray<Empty>::from_abi_tail(data: data.ptr(), len: count as usize, size: 32)) }
+    assert(empties.len() == count as usize)
     assert(empties.encoded_size() == 32)
 }
 
@@ -388,7 +351,7 @@ fn abi_struct_wide_tuple_fields_round_trip() {
         sixteen: (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
     }
     let encoded = encode_abi_payload(value)
-    let decoded = <WideTuples as Decode<Sol>>::decode_from_bounded(encoded.span(), 0, encoded.len())
+    let decoded = <WideTuples as Decode<Sol>>::decode_from_bounded(encoded.span(), 0, encoded.len() as u256)
     assert(decoded.five.3 == 4)
     assert(decoded.five.4.byte_at(0) == 0xaa)
     assert(decoded.sixteen.0 == 1)

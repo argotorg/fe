@@ -1,5 +1,5 @@
-use super::effects::{Address, RawStorage, storage_at_mut}
-use super::crypto::keccak256
+use super::effects::{Address, RawStorage, storage_at, storage_at_mut}
+use super::layout::mapping_slot
 use ingot::evm::ops::mstore
 use core::num::IntWord
 use core::ptr
@@ -215,27 +215,27 @@ unsafe impl<K: StorageKey + Copy, V> StateIndex for StorageMap<K, V> {
 
     #[inline(always)]
     fn locate(self, _ root: u256, _ key: K) -> Location {
-        // keccak256(key ++ slot) - standard Solidity mapping layout
-        // Reserve the entire preimage before encoding: key encoders may allocate.
-        let key_len = K::encoded_len(key)
-        let scratch = ptr::alloc_bytes(key_len + 32)
-        let slot = unsafe {
-            K::write_key(ptr: scratch, key)
-            mstore(addr: ptr::offset_bytes(scratch, key_len), value: root)
-            keccak256(ptr::MemSpan::from_raw_parts(ptr: scratch, len: key_len + 32))
-        }
-        Location { slot, offset: 0 }
+        Location { slot: mapping_slot(root, key), offset: 0 }
     }
 }
 
 impl<K: StorageKey + Copy, V> StorageMap<K, V> {
     /// The map whose slot is `slot`, such as a Solidity `mapping` at a known
-    /// slot.
+    /// slot, to read.
     ///
     /// The caller must ensure that nothing the compiler allocates, such as a
     /// contract field, uses `slot` or the entries' slots.
     #[raw_place]
-    pub unsafe fn at(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
+    pub unsafe fn at(_ slot: u256) -> ref Self uses (storage: RawStorage) {
+        unsafe { storage_at(slot) }
+    }
+
+    /// The map whose slot is `slot`, such as a Solidity `mapping` at a known
+    /// slot, to read and write.
+    ///
+    /// The caller must ensure what `at` requires.
+    #[raw_place]
+    pub unsafe fn at_mut(_ slot: u256) -> mut Self uses (storage: mut RawStorage) {
         unsafe { storage_at_mut(slot) }
     }
 

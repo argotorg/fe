@@ -1,0 +1,26 @@
+use core::ptr::MemSlice
+use std::abi::{Bytes, DynArray, DynString}
+
+// `DynArray::get` decodes any element type; `from_slice` copies the
+// elements it encodes, so they must be `Copy`.
+fn dyn_array_dynamic_get(values: DynArray<DynString>) {
+    let _ = values.get(0)
+}
+
+fn dyn_array_nested_get(values: DynArray<DynArray<u256>>) {
+    let _ = values.get(0)
+}
+
+#[abi]
+struct WithBytes {
+    a: u256,
+    data: Bytes,
+}
+
+fn from_copy_elements(values: MemSlice<DynString>) -> DynArray<DynString> {
+    DynArray::from_slice(values)
+}
+
+fn from_non_copy_elements(values: MemSlice<WithBytes>) -> DynArray<WithBytes> {
+    DynArray::from_slice(values)
+}

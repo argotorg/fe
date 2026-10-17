@@ -122,7 +122,7 @@ fn put(_ buf: *u8, _ at: u256, _ value: u256) {
 }
 
 fn span(_ buf: *u8, _ len: u256) -> ref ptr::MemSpan {
-    unsafe { ptr::MemSpan::from_raw_parts(ptr: buf, len) }
+    unsafe { ptr::MemSpan::from_raw_parts(ptr: buf, len: len as usize) }
 }
 
 /// `Error(string)` revert data with explicit offset, length and total size;
