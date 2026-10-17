@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/shape_discovery_const_param_bounds.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ shape_discovery_const_param_bounds.fe:29:14
+   │
+17 │ fn arith<T: Width<N> + Has<{ N + 1 }>, const N: usize>() {}
+   │             -------- required by this bound on `arith`
+   ·
+29 │ fn wrong() { arith<X, 4>() }
+   │              ^^^^^^^^^^^ `X` doesn't implement `Width<4>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ shape_discovery_const_param_bounds.fe:29:14
+   │
+17 │ fn arith<T: Width<N> + Has<{ N + 1 }>, const N: usize>() {}
+   │                        -------------- required by this bound on `arith`
+   ·
+29 │ fn wrong() { arith<X, 4>() }
+   │              ^^^^^^^^^^^ `X` doesn't implement `Has<5>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ shape_discovery_const_param_bounds.fe:29:23
+   │
+29 │ fn wrong() { arith<X, 4>() }
+   │                       ^ `X` doesn't implement `Width<4>`

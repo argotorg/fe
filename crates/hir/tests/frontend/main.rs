@@ -8,6 +8,7 @@ mod desugar;
 mod early_path_resolution;
 mod import;
 mod invalid_string_constants;
+mod literal_return_projection;
 mod module_references;
 mod nested_type_paths;
 mod origin_export;

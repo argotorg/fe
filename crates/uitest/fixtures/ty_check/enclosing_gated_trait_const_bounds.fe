@@ -1,0 +1,84 @@
+// A bound naming a constant whose implementation needs an enclosing item's
+// bound lowers to the same constant use with or without that item's
+// constraints, and keeps the bounds that select it, including one that
+// itself names a constant.
+trait Gate {}
+
+trait Size { const LEN: usize }
+
+trait Has<const N: usize> {}
+
+trait Holds { type Item }
+
+struct Marker<T, const N: usize> {}
+
+impl<T: Gate, const N: usize> Size for Marker<T, N> { const LEN: usize = N + 1 }
+
+impl<T: Gate, const N: usize> Marker<T, N> { const WIDTH: usize = N * 2 }
+
+struct Foo<T> {}
+
+impl<T: Gate> Foo<T> {
+    fn need<const N: usize, U: Has<{ Marker<T, N>::LEN }>>() {}
+
+    fn need_inherent<const N: usize, U: Has<{ Marker<T, N>::WIDTH }>>() {}
+
+    fn assumes<U: Has<{ Marker<T, 3>::LEN }>>() { takes_four<U>() }
+}
+
+fn takes_four<U: Has<4>>() {}
+
+trait Outer<T: Gate> {
+    fn need<const N: usize, U: Has<{ Marker<T, N>::LEN }>>()
+}
+
+struct X {}
+
+impl<T: Gate> Outer<T> for X {
+    fn need<const N: usize, U: Has<{ Marker<T, N>::LEN }>>() {}
+}
+
+fn binds<T: Gate, const N: usize, U: Holds<Item = [u8; Marker<T, N>::LEN]>>() {}
+
+fn valid<T: Gate, U: Has<4> + Has<6>, V: Holds<Item = [u8; 4]>>() {
+    Foo<T>::need<3, U>()
+    Foo<T>::need_inherent<3, U>()
+    <X as Outer<T>>::need<3, U>()
+    binds<T, 3, V>()
+}
+
+fn wrong<T: Gate, U: Has<5>>() { Foo<T>::need<3, U>() }
+
+fn ungated<T, U: Has<4>>() { Foo<T>::need<3, U>() }
+
+trait Width { const W: usize }
+
+trait Keyed<const K: usize> {}
+
+struct Nested<T, const N: usize> {}
+
+impl<T: Width + Keyed<{ T::W }>, const N: usize> Size for Nested<T, N> { const LEN: usize = N + 1 }
+
+struct Bar<T> {}
+
+impl<T: Width + Keyed<{ T::W }>> Bar<T> {
+    fn need<const N: usize, U: Has<{ Nested<T, N>::LEN }>>() {}
+}
+
+fn nested<T: Width + Keyed<{ T::W }>, U: Has<4>>() { Bar<T>::need<3, U>() }
+
+trait Witness { type Item: Gate }
+
+struct Implied<T, W> {}
+
+impl<T, W: Witness<Item = T>> Implied<T, W> {
+    fn need<const N: usize, U: Has<{ Marker<T, N>::LEN }>>() {}
+}
+
+fn implied<T, W: Witness<Item = T>, U: Has<4>>() { Implied<T, W>::need<3, U>() }
+
+trait Factory<W: Witness<Item = Self>> {
+    fn need<const N: usize, U: Has<{ Marker<Self, N>::LEN }>>() {}
+}
+
+fn implied_self<T: Factory<W>, W: Witness<Item = T>, U: Has<4>>() { <T as Factory<W>>::need<3, U>() }

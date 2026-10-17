@@ -126,6 +126,13 @@ fn valid_generic_type_default_fixtures_pass_check() {
 }
 
 #[test]
+fn selected_const_invocation_extents_reduce_before_structural_repacking() {
+    let run = run_fe_check(&fixtures_dir().join("selected_const_invocation_extent.fe"));
+    assert!(!run.timed_out, "timed out: {}", run.combined);
+    assert_eq!(run.code, 0, "{}", run.combined);
+}
+
+#[test]
 fn crash_regressions_do_not_panic() {
     let dir = fixtures_dir();
     let mut fixtures: Vec<PathBuf> = fs::read_dir(&dir)

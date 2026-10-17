@@ -14,16 +14,14 @@ use salsa::Update;
 
 use super::{
     binder::Binder,
-    const_ty::{
-        ConstBodyLowering, ConstCaptureEnv, ConstTyId, LoweringContext, UnevaluatedConstPolicy,
-    },
+    const_ty::{ConstBodyLowering, LoweringContext},
     fold::{TyFoldable, TyFolder},
     generic_defaults::DefaultApplication,
     provider::AddressSpace,
     trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
     trait_resolution::PredicateListId,
     ty_def::{InvalidCause, PrimTy, TyBase, TyId},
-    ty_lower::{lower_hir_ty_with_minter, lower_opt_hir_ty_with_minter},
+    ty_lower::{lower_hir_ty_with_minter, lower_opt_const_body, lower_opt_hir_ty_with_minter},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -591,20 +589,8 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
                 provided_explicit.push(ty);
             }
             GenericArg::Const(const_arg) => {
-                let body = const_arg.value;
-                let const_ty = match lowering_cx.const_bodies() {
-                    ConstBodyLowering::Eager => ConstTyId::from_opt_body(db, body),
-                    ConstBodyLowering::Deferred => ConstTyId::unevaluated(
-                        db,
-                        body,
-                        None,
-                        None,
-                        body.to_opt().map_or(ConstCaptureEnv::Empty, |body| {
-                            ConstCaptureEnv::identity_for_body(db, body, Some(lowering_cx))
-                        }),
-                        UnevaluatedConstPolicy::DeferValidation,
-                    ),
-                };
+                let const_ty =
+                    lower_opt_const_body(db, const_arg.value, scope, assumptions, lowering_cx);
                 provided_explicit.push(TyId::const_ty(db, const_ty));
             }
             GenericArg::AssocType(AssocTypeGenericArg { name, ty }) => {

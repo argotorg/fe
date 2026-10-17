@@ -1,8 +1,11 @@
 use crate::analysis::ty::assoc_const::{AssocConstUse, InherentConstUse};
 use crate::analysis::ty::ty_def::TyId;
 use crate::analysis::ty::{corelib::ctfe_extern_intrinsic_kind, ty_check::BodyOwner};
-use crate::analysis::{HirAnalysisDb, semantic::SemanticInstanceKey};
-use crate::hir_def::{ArithBinOp, UnOp, attr::ArithmeticMode, scope_graph::ScopeId};
+use crate::analysis::{
+    HirAnalysisDb,
+    semantic::{ImplEnv, SemanticInstanceKey},
+};
+use crate::hir_def::{ArithBinOp, CompBinOp, HirIngot, UnOp, attr::ArithmeticMode};
 use salsa::Update;
 
 #[salsa::interned]
@@ -30,6 +33,18 @@ pub enum ConstExpr<'db> {
         expr: TyId<'db>,
         to: TyId<'db>,
     },
+    Compare {
+        op: CompBinOp,
+        lhs: TyId<'db>,
+        rhs: TyId<'db>,
+    },
+    /// A conditional whose arms are forced only when the condition selects
+    /// them, as execution evaluates only the arm it takes.
+    Select {
+        cond: TyId<'db>,
+        then: TyId<'db>,
+        otherwise: TyId<'db>,
+    },
     ArrayRepeat {
         value: TyId<'db>,
         len: TyId<'db>,
@@ -47,12 +62,46 @@ pub enum ConstExpr<'db> {
 }
 
 /// A call's final selected instance and original owned arguments. The result
-/// type belongs to the enclosing `ConstTyData::Abstract`.
+/// type belongs to the enclosing `ConstTyData::Abstract`. The call is its
+/// identity: every occurrence of the same call shares one term, wherever it
+/// is written, because parameters in the key and arguments name their owners.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct ConstInvocation<'db> {
     pub key: SemanticInstanceKey<'db>,
     pub args: Vec<TyId<'db>>,
-    pub parameter_owner: ScopeId<'db>,
+}
+
+impl<'db> ConstInvocation<'db> {
+    /// The term for a call of `key` with `args`. A callee that sheds its
+    /// caller's context normalizes at its caller's ingot root, whose library
+    /// paths a runtime body can need. Evaluating the term selects impls from
+    /// the ingots of the types involved, not the caller's, so the term
+    /// normalizes at its callee's own ingot root and calls written in
+    /// different ingots share one term.
+    pub(crate) fn new(
+        db: &'db dyn HirAnalysisDb,
+        key: SemanticInstanceKey<'db>,
+        args: Vec<TyId<'db>>,
+    ) -> Self {
+        let env = key.impl_env(db);
+        let scope = env.normalization_scope(db);
+        let key = if env.assumptions(db).is_empty(db)
+            && env.witnesses(db).is_empty()
+            && scope == scope.ingot(db).root_mod(db).scope()
+        {
+            let owner = key.owner(db);
+            SemanticInstanceKey::new(
+                db,
+                owner,
+                key.subst(db),
+                key.effect_providers(db),
+                ImplEnv::empty(db, owner.scope().ingot(db).root_mod(db).scope()),
+            )
+        } else {
+            key
+        };
+        Self { key, args }
+    }
 }
 
 impl<'db> ConstExprId<'db> {
@@ -82,6 +131,22 @@ impl<'db> ConstExprId<'db> {
             ConstExpr::Cast { expr, to } => {
                 format!("({} as {})", expr.pretty_print(db), to.pretty_print(db))
             }
+            ConstExpr::Compare { op, lhs, rhs } => format!(
+                "({} {} {})",
+                lhs.pretty_print(db),
+                op.symbol(),
+                rhs.pretty_print(db)
+            ),
+            ConstExpr::Select {
+                cond,
+                then,
+                otherwise,
+            } => format!(
+                "(if {} {{ {} }} else {{ {} }})",
+                cond.pretty_print(db),
+                then.pretty_print(db),
+                otherwise.pretty_print(db)
+            ),
             ConstExpr::ArrayRepeat { value, len } => {
                 format!("[{}; {}]", value.pretty_print(db), len.pretty_print(db))
             }

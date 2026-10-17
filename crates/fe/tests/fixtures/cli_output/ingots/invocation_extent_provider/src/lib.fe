@@ -1,0 +1,7 @@
+pub const fn word_len(_ n: usize) -> usize {
+    n / 32 + if n % 32 == 0 { 0 } else { 1 }
+}
+
+pub fn take<const N: usize>(_ x: [u8; word_len(N)]) -> [u8; word_len(N)] {
+    x
+}

@@ -3,6 +3,7 @@ use crate::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag};
 use crate::analysis::ty::trait_def::resolve_trait_method_instance;
 use crate::analysis::ty::trait_resolution::{Selection, TraitSolveCx};
 use crate::analysis::ty::ty_check::{Callable, EffectParamSite, EffectPassMode, TypedBody};
+use crate::analysis::ty::ty_def::InvalidCause;
 use crate::hir_def::{
     Body, CallableDef, Cond, CondId, Expr, ExprId, Func, Partial, Pat, Stmt, StmtId,
 };
@@ -49,14 +50,19 @@ pub(crate) fn check_const_body_expressions<'db>(
     body: Body<'db>,
     typed_body: &TypedBody<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
-    let mut checker = ConstFnChecker {
-        db,
-        body,
-        typed_body,
-        diags: Vec::new(),
-    };
-    checker.check_expr(body.expr(db));
-    checker.diags
+    ConstFnChecker::run(db, body, typed_body).diags
+}
+
+/// The first call that a constant may not make, as the failure evaluation
+/// reports at that call. A generic constant waits on its parameters before
+/// reaching such a call, so constants are held to the const language before
+/// they are evaluated, as `const fn` bodies are.
+pub(crate) fn const_body_language_failure<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    typed_body: &TypedBody<'db>,
+) -> Option<InvalidCause<'db>> {
+    ConstFnChecker::run(db, body, typed_body).failure
 }
 
 struct ConstFnChecker<'db, 'a> {
@@ -64,34 +70,60 @@ struct ConstFnChecker<'db, 'a> {
     body: Body<'db>,
     typed_body: &'a TypedBody<'db>,
     diags: Vec<FuncBodyDiag<'db>>,
+    failure: Option<InvalidCause<'db>>,
 }
 
-impl<'db> ConstFnChecker<'db, '_> {
-    fn push(&mut self, diag: BodyDiag<'db>) {
-        self.diags.push(diag.into());
+impl<'db, 'a> ConstFnChecker<'db, 'a> {
+    fn run(db: &'db dyn HirAnalysisDb, body: Body<'db>, typed_body: &'a TypedBody<'db>) -> Self {
+        let mut checker = Self {
+            db,
+            body,
+            typed_body,
+            diags: Vec::new(),
+            failure: None,
+        };
+        checker.check_expr(body.expr(db));
+        checker
     }
 
-    /// Reports a callee that a `const fn` cannot call, and returns whether it
-    /// reported one.
-    fn check_callable(&mut self, primary: DynLazySpan<'db>, callable: &Callable<'db>) -> bool {
+    fn push(&mut self, diag: BodyDiag<'db>, failure: InvalidCause<'db>) {
+        self.diags.push(diag.into());
+        self.failure.get_or_insert(failure);
+    }
+
+    /// Reports a callee that a `const fn` cannot call at `site`, and returns
+    /// whether it reported one.
+    fn check_callable(
+        &mut self,
+        primary: DynLazySpan<'db>,
+        site: ExprId,
+        callable: &Callable<'db>,
+    ) -> bool {
         let Some(callee) = self.callable_func(callable) else {
             return false;
         };
 
-        let diag = if !callee.is_const(self.db) {
-            BodyDiag::ConstFnNonConstCall {
-                primary,
-                callee: callable.callable_def(),
-            }
+        let (body, expr) = (self.body, site);
+        let (diag, failure) = if !callee.is_const(self.db) {
+            (
+                BodyDiag::ConstFnNonConstCall {
+                    primary,
+                    callee: callable.callable_def(),
+                },
+                InvalidCause::ConstEvalNonConstCall { body, expr },
+            )
         } else if !const_effects_supported(self.db, callee) {
-            BodyDiag::ConstFnEffectfulCall {
-                primary,
-                callee: callable.callable_def(),
-            }
+            (
+                BodyDiag::ConstFnEffectfulCall {
+                    primary,
+                    callee: callable.callable_def(),
+                },
+                InvalidCause::ConstEvalUnsupported { body, expr },
+            )
         } else {
             return false;
         };
-        self.push(diag);
+        self.push(diag, failure);
         true
     }
 
@@ -121,7 +153,7 @@ impl<'db> ConstFnChecker<'db, '_> {
         };
         // One diagnostic per call: the providers a call passes are checked
         // only when the callee itself may be called.
-        if self.check_callable(expr.span(self.body).into(), callable) {
+        if self.check_callable(expr.span(self.body).into(), expr, callable) {
             return;
         }
         if self.typed_body.call_effect_args(expr).is_some_and(|args| {
@@ -135,10 +167,16 @@ impl<'db> ConstFnChecker<'db, '_> {
                     || arg.provider_target_ty.is_some()
             })
         }) {
-            self.push(BodyDiag::ConstFnEffectfulCall {
-                primary: expr.span(self.body).into(),
-                callee: callable.callable_def(),
-            });
+            self.push(
+                BodyDiag::ConstFnEffectfulCall {
+                    primary: expr.span(self.body).into(),
+                    callee: callable.callable_def(),
+                },
+                InvalidCause::ConstEvalUnsupported {
+                    body: self.body,
+                    expr,
+                },
+            );
         }
     }
 
@@ -163,7 +201,7 @@ impl<'db> ConstFnChecker<'db, '_> {
                 if let Some(plan) = self.typed_body.for_loop_plan(stmt) {
                     let span: DynLazySpan<'db> = stmt.span(self.body).into();
                     for call in &plan.calls {
-                        self.check_callable(span.clone(), &call.callable);
+                        self.check_callable(span.clone(), *iter, &call.callable);
                     }
                 }
                 self.check_expr(*body);
@@ -218,9 +256,15 @@ impl<'db> ConstFnChecker<'db, '_> {
 
             Expr::Block(stmts, _) => stmts.iter().for_each(|stmt| self.check_stmt(*stmt)),
 
-            Expr::Closure { .. } => self.push(BodyDiag::ClosureInConstContext {
-                primary: expr.span(self.body).into(),
-            }),
+            Expr::Closure { .. } => self.push(
+                BodyDiag::ClosureInConstContext {
+                    primary: expr.span(self.body).into(),
+                },
+                InvalidCause::ConstEvalUnsupported {
+                    body: self.body,
+                    expr,
+                },
+            ),
 
             Expr::Bin(lhs, rhs, _) => {
                 self.check_expr(*lhs);

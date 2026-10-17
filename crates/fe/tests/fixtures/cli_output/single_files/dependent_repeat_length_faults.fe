@@ -1,0 +1,51 @@
+// Concrete layout demand reports specialized faults in repeats, passed
+// arrays, indexing, selected branches and fields of unused or read parameters.
+// Each error retains the source of its checked length computation.
+// Return-type errors live in dependent_repeat_return_type_faults.fe: those
+// are diagnosed during HIR checking and would suppress this file's later
+// MIR layout diagnostics at the normal compilation phase boundary.
+const fn minus(_ n: usize) -> usize { n - 1 }
+
+const fn lengths(_ n: usize) -> usize {
+    let values: [usize; 2] = [1, 2]
+    values[n]
+}
+
+fn first<const N: usize>() -> u8 { [7 as u8; minus(N)][0] }
+
+fn unused<const N: usize>() { let _values = [7 as u8; { 10 / N }] }
+
+fn make<const N: usize>(_ value: u8) -> [u8; { N - 1 }] { [value; { N - 1 }] }
+
+fn indexed<const N: usize>() -> u8 { [7 as u8; lengths(N)][0] }
+
+fn selected<const N: usize>() -> u8 { [7 as u8; { if N == 0 { 1 } else { 10 / (N - 1) } }][0] }
+
+struct Words<const N: usize> { values: [u8; minus(N)] }
+
+fn take<const N: usize>(_ values: [u8; { N - 1 }]) -> u8 { values[0] }
+
+fn runtime(_ value: u8) -> u8 { value }
+
+fn underflow() -> u8 { first<0>() }
+
+fn divide() { unused<0>() }
+
+fn bounds() -> u8 { indexed<2>() }
+
+fn condition() -> u8 { selected<1>() }
+
+fn passed() -> u8 {
+    let values: [u8; 0] = []
+    take<0>(values)
+}
+
+fn ignored(_ words: Words<0>) {}
+
+fn measured(_ words: Words<0>) -> usize { words.values.len() }
+
+pub fn main() -> i32 {
+    unused<2>()
+    let _values = make<2>(runtime(7))
+    (first<2>() + indexed<1>() + selected<0>() + selected<2>() + take<2>([runtime(1)])) as i32
+}

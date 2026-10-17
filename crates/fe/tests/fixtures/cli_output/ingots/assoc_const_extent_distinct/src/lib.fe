@@ -1,0 +1,7 @@
+// Another trait's constant of the same name is a different extent, across
+// the ingot boundary as within one ingot.
+use assoc_const_extent_provider::{Other, Marker, take}
+
+pub fn forward<const N: usize>(_ x: [u8; <Marker<N> as Other>::LEN]) -> [u8; <Marker<N> as Other>::LEN] {
+    take<N>(x)
+}

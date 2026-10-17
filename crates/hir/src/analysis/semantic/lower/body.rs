@@ -2013,11 +2013,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .flatten()
             .expect("const intrinsic should resolve to a function")
             .key;
-            let const_expr = ConstExpr::Invocation(ConstInvocation {
-                key,
-                args: Vec::new(),
-                parameter_owner: caller.owner(self.db).scope(),
-            });
+            let const_expr = ConstExpr::Invocation(ConstInvocation::new(self.db, key, Vec::new()));
             let const_ty = ConstTyId::new(
                 self.db,
                 ConstTyData::Abstract(ConstExprId::new(self.db, const_expr), result_ty),
@@ -2268,7 +2264,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let call = |this: &mut Self, step, args: Vec<SOperand>, ty| {
             let site = sites.site(step);
             let effect_args = this.lower_effect_arg_slice(&site.effect_args);
-            this.emit_expr(
+            // Protocol calls belong to the loop, including when CTFE reports
+            // a failure in a generated call rather than a written expression.
+            this.emit_expr_with_origin(
+                SemOrigin::Stmt(stmt),
                 ty,
                 SExpr::Call {
                     call_site: CallSiteId::ForLoop(stmt, step),
