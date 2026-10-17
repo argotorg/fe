@@ -1,0 +1,579 @@
+// Tests for `std::evm::auth`: owner and role capabilities, ownership
+// transfer and handover, and role management. The test runner deploys the
+// vault and is its owner; `Actor` calls it from a second address.
+
+use std::abi::{Sol, sol}
+use std::evm::{Address, Call, Ctx, Evm, Log}
+use core::error::ErrorVariant
+use std::evm::auth::{
+    NewOwnerIsZeroAddress,
+    NoHandoverRequest,
+    OnlyOwner,
+    Ownable,
+    Role,
+    Roles,
+    Unauthorized,
+}
+use std::evm::returndata::is_error
+
+const MINTER: u256 = 1 << 0
+const BURNER: u256 = 1 << 1
+const MINTER_OR_BURNER: u256 = MINTER | BURNER
+
+msg VaultMsg {
+    #[selector = 0x01]
+    Owner -> Address,
+    #[selector = 0x02]
+    TransferOwnership { new_owner: Address },
+    #[selector = 0x03]
+    RenounceOwnership,
+    #[selector = 0x04]
+    RequestHandover,
+    #[selector = 0x05]
+    CancelHandover,
+    #[selector = 0x06]
+    CompleteHandover { pending_owner: Address },
+    #[selector = 0x07]
+    HandoverExpiry { pending_owner: Address } -> u256,
+    #[selector = 0x08]
+    GrantRoles { user: Address, roles: u256 },
+    #[selector = 0x09]
+    RevokeRoles { user: Address, roles: u256 },
+    #[selector = 0x0a]
+    RenounceRoles { roles: u256 },
+    #[selector = 0x0b]
+    RolesOf { user: Address } -> u256,
+    #[selector = 0x0c]
+    Mint { amount: u256 } -> Address,
+    #[selector = 0x0d]
+    Burn { amount: u256 },
+    #[selector = 0x0e]
+    Supply -> u256,
+    #[selector = 0x0f]
+    HasAllRoles { user: Address, roles: u256 } -> bool,
+}
+
+struct Supply { total: u256 }
+
+// Reachable only with a `Role<MINTER>` capability in scope.
+fn mint(_ amount: u256) -> Address
+uses (minter: Role<MINTER>, supply: mut Supply)
+{
+    supply.total += amount
+    minter.account()
+}
+
+// Either role may burn.
+fn burn(_ amount: u256)
+uses (operator: Role<MINTER_OR_BURNER>, supply: mut Supply)
+{
+    supply.total -= amount
+}
+
+pub contract Vault uses (ctx: Ctx, log: mut Log) {
+    mut ownable: Ownable,
+    mut roles: Roles,
+    mut supply: Supply,
+
+    init() uses (mut ownable, ctx, mut log) { ownable.init_owner(ctx.caller()) }
+
+    recv VaultMsg {
+        Owner -> Address uses (ownable) {
+            ownable.owner()
+        }
+
+        TransferOwnership { new_owner } uses (mut ownable, ctx, mut log) {
+            with (OnlyOwner = ownable.authorize()) {
+                ownable.transfer_ownership(new_owner)
+            }
+        }
+
+        RenounceOwnership uses (mut ownable, ctx, mut log) {
+            with (OnlyOwner = ownable.authorize()) {
+                ownable.renounce_ownership()
+            }
+        }
+
+        RequestHandover uses (mut ownable, ctx, mut log) {
+            ownable.request_handover()
+        }
+
+        CancelHandover uses (mut ownable, ctx, mut log) {
+            ownable.cancel_handover()
+        }
+
+        CompleteHandover { pending_owner } uses (mut ownable, ctx, mut log) {
+            with (OnlyOwner = ownable.authorize()) {
+                ownable.complete_handover(pending_owner)
+            }
+        }
+
+        HandoverExpiry { pending_owner } -> u256 uses (ownable) {
+            ownable.handover_expiry(pending_owner)
+        }
+
+        GrantRoles { user, roles: granted } uses (ownable, mut roles, ctx, mut log) {
+            with (OnlyOwner = ownable.authorize()) {
+                roles.grant_roles(user, granted)
+            }
+        }
+
+        RevokeRoles { user, roles: revoked } uses (ownable, mut roles, ctx, mut log) {
+            with (OnlyOwner = ownable.authorize()) {
+                roles.revoke_roles(user, revoked)
+            }
+        }
+
+        RenounceRoles { roles: renounced } uses (mut roles, ctx, mut log) {
+            roles.renounce_roles(renounced)
+        }
+
+        RolesOf { user } -> u256 uses (roles) {
+            roles.roles_of(user)
+        }
+
+        HasAllRoles { user, roles: wanted } -> bool
+        uses (roles)
+        {
+            roles.has_all_roles(user, wanted)
+        }
+
+        Mint { amount } -> Address uses (roles, mut supply, ctx) {
+            with (Role<MINTER> = roles.authorize<MINTER>()) {
+                mint(amount)
+            }
+        }
+
+        Burn { amount } uses (roles, mut supply, ctx) {
+            with (Role<MINTER_OR_BURNER> = roles.authorize<MINTER_OR_BURNER>()) {
+                burn(amount)
+            }
+        }
+
+        Supply -> u256 uses (supply) {
+            supply.total
+        }
+    }
+}
+
+msg ActorMsg {
+    #[selector = 0x10]
+    Mint { vault: Address, amount: u256 } -> bool,
+    #[selector = 0x11]
+    Burn { vault: Address, amount: u256 } -> bool,
+    #[selector = 0x12]
+    RequestHandover { vault: Address } -> bool,
+    #[selector = 0x13]
+    TransferOwnership { vault: Address, new_owner: Address } -> bool,
+    #[selector = 0x14]
+    GrantRoles { vault: Address, user: Address, roles: u256 } -> bool,
+    #[selector = 0x15]
+    RenounceRoles { vault: Address, roles: u256 } -> bool,
+}
+
+// A second account: reports whether each forwarded call succeeded.
+pub contract Actor uses (call: mut Call) {
+    recv ActorMsg {
+        Mint { vault, amount } -> bool uses (mut call) {
+            call.try_call(
+                addr: vault,
+                gas: 200000,
+                value: 0,
+                message: VaultMsg::Mint { amount },
+            )
+                .success()
+        }
+        Burn { vault, amount } -> bool uses (mut call) {
+            call.try_call(
+                addr: vault,
+                gas: 200000,
+                value: 0,
+                message: VaultMsg::Burn { amount },
+            )
+                .success()
+        }
+        RequestHandover { vault } -> bool uses (mut call) {
+            call.try_call(
+                addr: vault,
+                gas: 200000,
+                value: 0,
+                message: VaultMsg::RequestHandover {},
+            )
+                .success()
+        }
+        TransferOwnership { vault, new_owner } -> bool
+        uses (mut call)
+        {
+            call.try_call(
+                addr: vault,
+                gas: 200000,
+                value: 0,
+                message: VaultMsg::TransferOwnership { new_owner },
+            )
+                .success()
+        }
+        GrantRoles { vault, user, roles } -> bool
+        uses (mut call)
+        {
+            call.try_call(
+                addr: vault,
+                gas: 200000,
+                value: 0,
+                message: VaultMsg::GrantRoles { user, roles },
+            )
+                .success()
+        }
+        RenounceRoles { vault, roles } -> bool uses (mut call) {
+            call.try_call(
+                addr: vault,
+                gas: 200000,
+                value: 0,
+                message: VaultMsg::RenounceRoles { roles },
+            )
+                .success()
+        }
+    }
+}
+
+fn deploy() -> (Address, Address) uses (evm: mut Evm) {
+    let vault = evm.create2<Vault>(value: 0, args: (), salt: 0)
+    let actor = evm.create2<Actor>(value: 0, args: (), salt: 1)
+    (vault, actor)
+}
+
+fn owner_of(_ vault: Address) -> Address uses (evm: mut Evm) {
+    evm.call(
+        addr: vault,
+        gas: 100000,
+        value: 0,
+        message: VaultMsg::Owner {},
+    )
+}
+
+fn roles_of(_ vault: Address, _ user: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: vault,
+        gas: 100000,
+        value: 0,
+        message: VaultMsg::RolesOf { user },
+    )
+}
+
+fn supply_of(_ vault: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(
+        addr: vault,
+        gas: 100000,
+        value: 0,
+        message: VaultMsg::Supply {},
+    )
+}
+
+#[test]
+fn error_selectors_match_solady() {
+    assert!(
+        <Unauthorized as ErrorVariant<Sol>>::SELECTOR == 0x82b42900,
+    )
+    assert!(
+        <NewOwnerIsZeroAddress as ErrorVariant<Sol>>::SELECTOR == sol("NewOwnerIsZeroAddress()"),
+    )
+    assert!(
+        <NoHandoverRequest as ErrorVariant<Sol>>::SELECTOR == sol("NoHandoverRequest()"),
+    )
+}
+
+#[test]
+fn deployer_is_owner_and_only_owner_transfers() uses (evm: mut Evm) {
+    let (vault, actor) = deploy()
+    let me = owner_of(vault)
+    assert!(me != Address::zero())
+
+    // A non-owner cannot transfer ownership.
+    let ok: bool = evm
+        .call(
+            addr: actor,
+            gas: 500000,
+            value: 0,
+            message: ActorMsg::TransferOwnership { vault, new_owner: actor },
+        )
+    assert!(!ok)
+    assert!(owner_of(vault) == me)
+
+    // The owner can; afterwards the old owner is rejected with Unauthorized().
+    evm.call(
+        addr: vault,
+        gas: 100000,
+        value: 0,
+        message: VaultMsg::TransferOwnership { new_owner: actor },
+    )
+    assert!(owner_of(vault) == actor)
+    let outcome = evm
+        .try_call(
+            addr: vault,
+            gas: 100000,
+            value: 0,
+            message: VaultMsg::TransferOwnership { new_owner: me },
+        )
+    assert!(!outcome.success())
+    assert!(is_error<Unauthorized>(outcome.returndata()))
+
+    // The new owner can hand it back.
+    let ok: bool = evm
+        .call(
+            addr: actor,
+            gas: 500000,
+            value: 0,
+            message: ActorMsg::TransferOwnership { vault, new_owner: me },
+        )
+    assert!(ok)
+    assert!(owner_of(vault) == me)
+}
+
+#[test]
+fn transfer_to_zero_is_rejected() uses (evm: mut Evm) {
+    let (vault, _) = deploy()
+    let outcome = evm
+        .try_call(
+            addr: vault,
+            gas: 100000,
+            value: 0,
+            message: VaultMsg::TransferOwnership { new_owner: Address::zero() },
+        )
+    assert!(!outcome.success())
+    assert!(is_error<NewOwnerIsZeroAddress>(outcome.returndata()))
+}
+
+#[test]
+fn renounced_ownership_locks_owner_functions() uses (evm: mut Evm) {
+    let (vault, actor) = deploy()
+    let me = owner_of(vault)
+    evm.call(
+        addr: vault,
+        gas: 100000,
+        value: 0,
+        message: VaultMsg::RenounceOwnership {},
+    )
+    assert!(owner_of(vault) == Address::zero())
+    let outcome = evm
+        .try_call(
+            addr: vault,
+            gas: 100000,
+            value: 0,
+            message: VaultMsg::GrantRoles { user: me, roles: MINTER },
+        )
+    assert!(!outcome.success())
+    assert!(is_error<Unauthorized>(outcome.returndata()))
+    assert!(roles_of(vault, actor) == 0)
+}
+
+#[test]
+fn handover_requires_a_request() uses (evm: mut Evm) {
+    let (vault, actor) = deploy()
+
+    // Without a request the owner cannot complete a handover.
+    let outcome = evm
+        .try_call(
+            addr: vault,
+            gas: 100000,
+            value: 0,
+            message: VaultMsg::CompleteHandover { pending_owner: actor },
+        )
+    assert!(!outcome.success())
+    assert!(is_error<NoHandoverRequest>(outcome.returndata()))
+
+    let ok: bool = evm
+        .call(
+            addr: actor,
+            gas: 500000,
+            value: 0,
+            message: ActorMsg::RequestHandover { vault },
+        )
+    assert!(ok)
+    let expiry: u256 = evm
+        .call(
+            addr: vault,
+            gas: 100000,
+            value: 0,
+            message: VaultMsg::HandoverExpiry { pending_owner: actor },
+        )
+    assert!(expiry == evm.timestamp() + 172800)
+
+    evm.call(
+        addr: vault,
+        gas: 100000,
+        value: 0,
+        message: VaultMsg::CompleteHandover { pending_owner: actor },
+    )
+    assert!(owner_of(vault) == actor)
+
+    // The request is consumed.
+    let expiry: u256 = evm
+        .call(
+            addr: vault,
+            gas: 100000,
+            value: 0,
+            message: VaultMsg::HandoverExpiry { pending_owner: actor },
+        )
+    assert!(expiry == 0)
+}
+
+#[test]
+fn canceled_handover_cannot_complete() uses (evm: mut Evm) {
+    let (vault, _) = deploy()
+    let me = owner_of(vault)
+    evm.call(
+        addr: vault,
+        gas: 100000,
+        value: 0,
+        message: VaultMsg::RequestHandover {},
+    )
+    evm.call(
+        addr: vault,
+        gas: 100000,
+        value: 0,
+        message: VaultMsg::CancelHandover {},
+    )
+    let outcome = evm
+        .try_call(
+            addr: vault,
+            gas: 100000,
+            value: 0,
+            message: VaultMsg::CompleteHandover { pending_owner: me },
+        )
+    assert!(!outcome.success())
+    assert!(is_error<NoHandoverRequest>(outcome.returndata()))
+}
+
+#[test]
+fn roles_gate_capabilities() uses (evm: mut Evm) {
+    let (vault, actor) = deploy()
+
+    // No role yet: minting is rejected.
+    let ok: bool = evm
+        .call(
+            addr: actor,
+            gas: 500000,
+            value: 0,
+            message: ActorMsg::Mint { vault, amount: 10 },
+        )
+    assert!(!ok)
+
+    // Only the owner can grant roles.
+    let ok: bool = evm
+        .call(
+            addr: actor,
+            gas: 500000,
+            value: 0,
+            message: ActorMsg::GrantRoles { vault, user: actor, roles: MINTER },
+        )
+    assert!(!ok)
+    evm.call(
+        addr: vault,
+        gas: 100000,
+        value: 0,
+        message: VaultMsg::GrantRoles { user: actor, roles: MINTER },
+    )
+    assert!(roles_of(vault, actor) == MINTER)
+
+    let ok: bool = evm
+        .call(
+            addr: actor,
+            gas: 500000,
+            value: 0,
+            message: ActorMsg::Mint { vault, amount: 10 },
+        )
+    assert!(ok)
+    assert!(supply_of(vault) == 10)
+
+    // `Role<MINTER_OR_BURNER>` accepts either bit.
+    let ok: bool = evm
+        .call(
+            addr: actor,
+            gas: 500000,
+            value: 0,
+            message: ActorMsg::Burn { vault, amount: 4 },
+        )
+    assert!(ok)
+    assert!(supply_of(vault) == 6)
+
+    // The owner has no role, so ownership alone does not grant `Role<MINTER>`.
+    let outcome = evm
+        .try_call(
+            addr: vault,
+            gas: 100000,
+            value: 0,
+            message: VaultMsg::Mint { amount: 1 },
+        )
+    assert!(!outcome.success())
+    assert!(is_error<Unauthorized>(outcome.returndata()))
+
+    // Swap MINTER for BURNER: burning still works, minting no longer does.
+    evm.call(
+        addr: vault,
+        gas: 100000,
+        value: 0,
+        message: VaultMsg::GrantRoles { user: actor, roles: BURNER },
+    )
+    let all: bool = evm
+        .call(
+            addr: vault,
+            gas: 100000,
+            value: 0,
+            message: VaultMsg::HasAllRoles { user: actor, roles: MINTER_OR_BURNER },
+        )
+    assert!(all)
+    evm.call(
+        addr: vault,
+        gas: 100000,
+        value: 0,
+        message: VaultMsg::RevokeRoles { user: actor, roles: MINTER },
+    )
+    assert!(roles_of(vault, actor) == BURNER)
+    let ok: bool = evm
+        .call(
+            addr: actor,
+            gas: 500000,
+            value: 0,
+            message: ActorMsg::Mint { vault, amount: 1 },
+        )
+    assert!(!ok)
+    let ok: bool = evm
+        .call(
+            addr: actor,
+            gas: 500000,
+            value: 0,
+            message: ActorMsg::Burn { vault, amount: 1 },
+        )
+    assert!(ok)
+    assert!(supply_of(vault) == 5)
+
+    // Accounts can drop their own roles.
+    let ok: bool = evm
+        .call(
+            addr: actor,
+            gas: 500000,
+            value: 0,
+            message: ActorMsg::RenounceRoles { vault, roles: BURNER },
+        )
+    assert!(ok)
+    assert!(roles_of(vault, actor) == 0)
+}
+
+#[test]
+fn mint_reports_the_authorized_account() uses (evm: mut Evm) {
+    let (vault, _) = deploy()
+    let me = owner_of(vault)
+    evm.call(
+        addr: vault,
+        gas: 100000,
+        value: 0,
+        message: VaultMsg::GrantRoles { user: me, roles: MINTER },
+    )
+    let minter: Address = evm
+        .call(
+            addr: vault,
+            gas: 100000,
+            value: 0,
+            message: VaultMsg::Mint { amount: 1 },
+        )
+    assert!(minter == me)
+}

@@ -1,4 +1,5 @@
 pub use address::{self, checksum_address, parse_address}
+pub use auth::{self}
 pub use clones::{self}
 pub use calldata::{self, *}
 pub use crypto::{self, *}
