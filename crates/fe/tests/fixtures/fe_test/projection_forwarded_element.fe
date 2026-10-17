@@ -1,0 +1,81 @@
+// A projection forwards the element grant of a `for mut` loop whose
+// `at_mut` has a slide, or yields its own fallback. Only the element path
+// opens the inner session, so the shared caller continuation merges the
+// inner receiver with an inactive placeholder; the inner slide runs once,
+// after the caller's write, and only on the element path.
+use core::iter::{Collection, CollectionMut}
+use core::option::Option
+
+struct Cells {
+    items: [u256; 3],
+    log: u256,
+    len: usize,
+}
+
+impl Collection for Cells {
+    space S = memory
+    type Cursor = usize
+    type Item = u256
+
+    fn start(self) -> Option<usize> {
+        if self.len > 0 { Option::Some(0) } else { Option::None }
+    }
+
+    fn next(self, _ c: usize) -> Option<usize> {
+        if c + 1 < self.len { Option::Some(c + 1) } else { Option::None }
+    }
+
+    fn at(self, _ c: usize) -> ref u256 {
+        let item = self.items[c]
+        yield ref item
+    }
+}
+
+impl CollectionMut for Cells {
+    // The slide reads the element back, so the log shows the caller's write
+    // landed before it ran.
+    fn at_mut(mut self, _ c: usize) -> mut u256 {
+        yield mut self.items[c]
+        self.log = self.log * 1000 + self.items[c]
+    }
+}
+
+struct Holder {
+    cells: Cells,
+    fallback: u256,
+}
+
+impl Holder {
+    fn first(mut self) -> mut u256 {
+        for mut x in self.cells {
+            return mut x
+        }
+        mut self.fallback
+    }
+}
+
+#[test]
+fn forwarded_element_runs_its_slide_once() {
+    var h = Holder { cells: Cells { items: [1, 4, 6], log: 0, len: 3 }, fallback: 7 }
+    let e = mut h.first()
+    e += 100
+    assert!(h.cells.items[0] == 101 && h.cells.log == 101 && h.fallback == 7)
+}
+
+#[test]
+fn fallback_runs_no_element_slide() {
+    var h = Holder { cells: Cells { items: [1, 4, 6], log: 0, len: 0 }, fallback: 7 }
+    let e = mut h.first()
+    e += 100
+    assert!(h.fallback == 107 && h.cells.items[0] == 1 && h.cells.log == 0)
+}
+
+#[test]
+fn repeated_sessions_run_each_slide_once() {
+    var h = Holder { cells: Cells { items: [1, 4, 6], log: 0, len: 3 }, fallback: 7 }
+    let a = mut h.first()
+    a += 100
+    let b = mut h.first()
+    b += 100
+    assert!(h.cells.items[0] == 201 && h.cells.log == 101201)
+}
