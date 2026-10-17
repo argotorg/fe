@@ -4776,15 +4776,6 @@ impl<'db> TypedBody<'db> {
         self.tables.for_loop_plans[stmt].as_ref()
     }
 
-    /// Whether `expr` is a base a `for` loop holds.
-    pub fn is_loop_base(&self, expr: ExprId) -> bool {
-        self.tables
-            .for_loop_plans
-            .values()
-            .flatten()
-            .any(|plan| plan.bases.contains(&expr))
-    }
-
     pub fn binding_source(
         &self,
         db: &'db dyn HirAnalysisDb,
@@ -6317,14 +6308,12 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
                 }
             }
             // A tuple of accesses is a projection's yield, an unsafe split or
-            // reported as an access used as a value, and a two-base loop
-            // holds the bases it names.
+            // reported as an access used as a value.
             Expr::Tuple(elems) | Expr::Array(elems)
                 if !self.body.yield_shape(expr).is_some_and(Shape::has_access)
-                    && !elems.iter().any(|&elem| {
-                        self.body.is_loop_base(elem)
-                            || self.body.expr_prop(self.db, elem).shape.is_some()
-                    }) =>
+                    && !elems
+                        .iter()
+                        .any(|&elem| self.body.expr_prop(self.db, elem).shape.is_some()) =>
             {
                 let ty = self.body.expr_prop(self.db, expr).ty;
                 self.check_state_only_value(

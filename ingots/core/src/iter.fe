@@ -303,27 +303,6 @@ pub trait DriverMut<B: CollectionMut>: Driver<B> {
     fn at_mut(self, _ base: mut B, _ s: Self::State) -> (Self::Extra, mut Self::Item) @B::S uses (B::E, E)
 }
 
-/// A traversal of two bases a loop holds, in step: `for (x, y) in (a, b) by d`.
-/// Each component is projected from its own base, in that base's space.
-pub trait Driver2<A: Collection, B: Collection> {
-    uses E
-    type State: Copy
-
-    fn start(self, _ a: A, _ b: B) -> Option<Self::State> uses (A::E, B::E, E)
-
-    fn next(self, _ a: A, _ b: B, _ s: Self::State) -> Option<Self::State> uses (A::E, B::E, E)
-
-    fn at(self, _ a: A, _ b: B, _ s: Self::State) -> (ref A::Item @A::S, ref B::Item @B::S)
-        uses (A::E, B::E, E)
-}
-
-/// A two-base driver whose elements a loop can mutate in place, which needs
-/// disjoint bases: `for (mut x, mut y) in (a, b) by d`.
-pub trait DriverMut2<A: CollectionMut, B: CollectionMut>: Driver2<A, B> {
-    fn at_mut(self, _ a: mut A, _ b: mut B, _ s: Self::State) -> (mut A::Item @A::S, mut B::Item @B::S)
-        uses (A::E, B::E, E)
-}
-
 /// A traversal that produces an owned value at each position, so non-`Copy`
 /// results can be collected.
 pub trait Producer<B: Collection> {
@@ -367,55 +346,6 @@ impl<B: CollectionMut> DriverMut<B> for Identity {
     #[inline(always)]
     fn at_mut(self, _ base: mut B, _ s: B::Cursor) -> ((), mut B::Item) uses B::E {
         ((), CollectionMut::at_mut(mut base, s))
-    }
-}
-
-/// The elements of two bases in step, until either ends.
-pub struct Zip {}
-
-impl Copy for Zip {}
-
-impl<A: Collection, B: Collection> Driver2<A, B> for Zip {
-    type State = (A::Cursor, B::Cursor)
-
-    #[inline(always)]
-    fn start(self, _ a: A, _ b: B) -> Option<(A::Cursor, B::Cursor)> uses (A::E, B::E) {
-        let Option::Some(i) = a.start() else {
-            return Option::None
-        }
-        let Option::Some(j) = b.start() else {
-            return Option::None
-        }
-        Option::Some((i, j))
-    }
-
-    #[inline(always)]
-    fn next(self, _ a: A, _ b: B, _ s: (A::Cursor, B::Cursor)) -> Option<(A::Cursor, B::Cursor)>
-        uses (A::E, B::E)
-    {
-        let Option::Some(i) = a.next(s.0) else {
-            return Option::None
-        }
-        let Option::Some(j) = b.next(s.1) else {
-            return Option::None
-        }
-        Option::Some((i, j))
-    }
-
-    #[inline(always)]
-    fn at(self, _ a: A, _ b: B, _ s: (A::Cursor, B::Cursor)) -> (ref A::Item, ref B::Item)
-        uses (A::E, B::E)
-    {
-        (Collection::at(a, s.0), Collection::at(b, s.1))
-    }
-}
-
-impl<A: CollectionMut, B: CollectionMut> DriverMut2<A, B> for Zip {
-    #[inline(always)]
-    fn at_mut(self, _ a: mut A, _ b: mut B, _ s: (A::Cursor, B::Cursor)) -> (mut A::Item, mut B::Item)
-        uses (A::E, B::E)
-    {
-        (CollectionMut::at_mut(mut a, s.0), CollectionMut::at_mut(mut b, s.1))
     }
 }
 
@@ -782,10 +712,6 @@ impl<D> Adapt for Take<D> {}
 impl<D> Adapt for Skip<D> {}
 impl<D> Adapt for StepBy<D> {}
 impl<D, P> Adapt for Filter<D, P> {}
-
-pub fn zip() -> Zip {
-    Zip {}
-}
 
 pub fn reversed() -> Reversed {
     Reversed {}

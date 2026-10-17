@@ -5182,14 +5182,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
-            BodyDiag::MixedLoopBases { primary } => primary_diag(
-                severity,
-                "a two-base loop binds both items `mut` or neither",
-                "one item is `mut` and the other is not",
-                primary.resolve(db),
-                error_code,
-            ),
-
 
             BodyDiag::UnsafeCallRequiresUnsafe { primary, callee } => {
                 let name = callee

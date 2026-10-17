@@ -264,8 +264,7 @@ impl<'db> TyChecker<'db> {
             });
         }
         // A tuple holds accesses only as a projection's yield or an unsafe
-        // split; elsewhere its projection-call elements would be copies. The
-        // bases of a two-base loop are opened by its items, not held.
+        // split; elsewhere its projection-call elements would be copies.
         let tuples = self
             .body()
             .exprs(self.db)
@@ -280,11 +279,10 @@ impl<'db> TyChecker<'db> {
                         !matches!(
                             elem.data(self.db, self.body()),
                             Partial::Present(Expr::Un(_, UnOp::Ref | UnOp::Mut))
-                        ) && !self.env.is_loop_base(*elem)
-                            && self
-                                .env
-                                .typed_expr(*elem)
-                                .is_some_and(|prop| matches!(prop.shape, Some(Shape::Access(..))))
+                        ) && self
+                            .env
+                            .typed_expr(*elem)
+                            .is_some_and(|prop| matches!(prop.shape, Some(Shape::Access(..))))
                     })
             })
             .collect::<Vec<_>>();

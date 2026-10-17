@@ -2214,16 +2214,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .typed_body
             .for_loop_plan(stmt)
             .unwrap_or_else(|| panic!("missing loop protocol for for-loop {stmt:?}"));
-        let bases: Vec<_> = plan
-            .bases
-            .iter()
-            .map(|&base| (base, self.lower_loop_base(base)))
-            .collect();
-        // A method chain rooted at a base views it for its own calls.
-        for (expr, base) in &bases {
-            let value = self.loop_base_operand(*expr, base).value;
-            self.loop_bases.insert(*expr, value);
-        }
+        let base_expr = plan.base;
+        let base = self.lower_loop_base(base_expr);
+        // A method chain rooted at the base views it for its own calls.
+        let value = self.loop_base_operand(base_expr, &base).value;
+        self.loop_bases.insert(base_expr, value);
         // The driver is evaluated once, so the body cannot retarget it. A
         // producer advances its own copy, which the loop takes; any other
         // driver the loop holds as it does a base, by a view of its place for
@@ -2249,15 +2244,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             });
             SOperand::synthetic(temp)
         });
-        // The calls take the driver first, then the bases, then the state.
+        // The calls take the driver first, then the base, then the state.
         let inputs = |this: &mut Self| -> Vec<SOperand> {
             driver
                 .into_iter()
-                .chain(
-                    bases
-                        .iter()
-                        .map(|(expr, base)| this.loop_base_operand(*expr, base)),
-                )
+                .chain([this.loop_base_operand(base_expr, &base)])
                 .collect()
         };
         let with_state = |this: &mut Self, state| {
