@@ -1,0 +1,1 @@
+`AsBytes::as_bytes` now works on values that are only known at runtime, such as a `String`, `u256` or tuple passed to a generic helper like `fn say<T: AsBytes>(text: T) { write(text) }`. Building such code used to fail with "extern function `__as_bytes` requires a native target", on the EVM and native backends alike.
