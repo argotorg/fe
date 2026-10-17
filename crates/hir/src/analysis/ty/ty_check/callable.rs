@@ -594,7 +594,7 @@ impl<'db> Callable<'db> {
             let given_string_source_ty = given.expr_prop.binding.map_or(given_ty, |binding| {
                 tc.normalize_ty(tc.env.lookup_binding_ty(&binding))
             });
-            let actual = if matches!(self.callable_def, CallableDef::Func(func) if func.is_const(db))
+            let mut actual = if matches!(self.callable_def, CallableDef::Func(func) if func.is_const(db))
                 && expected.is_ty_var(db)
                 && let TyData::TyVar(var) = given_string_source_ty.base_ty(db).data(db)
                 && let crate::analysis::ty::ty_def::TyVarSort::String { min_len, .. } = var.sort
@@ -704,7 +704,7 @@ impl<'db> Callable<'db> {
             }
 
             if !diagnosed {
-                tc.equate_ty(actual, expected, given.expr_span.clone());
+                actual = tc.equate_ty(actual, expected, given.expr_span.clone());
             }
             checked_inputs.push(tc.normalize_ty(actual));
         }

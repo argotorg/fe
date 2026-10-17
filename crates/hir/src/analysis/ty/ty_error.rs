@@ -607,29 +607,6 @@ pub(crate) fn demanded_ground_const_cause<'db>(
     visitor.cause
 }
 
-/// Whether `cause` is a fault of evaluating a const.
-pub(crate) fn is_const_eval_fault(cause: &InvalidCause<'_>) -> bool {
-    matches!(
-        cause,
-        InvalidCause::ConstEvalUnsupported { .. }
-            | InvalidCause::ConstEvalAssertionFailed { .. }
-            | InvalidCause::ConstEvalNonConstCall { .. }
-            | InvalidCause::ConstEvalDivisionByZero { .. }
-            | InvalidCause::ConstEvalOutOfBounds { .. }
-            | InvalidCause::ConstEvalInvalidOperation { .. }
-            | InvalidCause::ConstEvalInvalidBorrow { .. }
-            | InvalidCause::ConstEvalInvalidProviderUse { .. }
-            | InvalidCause::ConstEvalVariantMismatch { .. }
-            | InvalidCause::ConstEvalUninitializedLocal { .. }
-            | InvalidCause::ConstEvalInvariant { .. }
-            | InvalidCause::ConstEvalArithmeticOverflow { .. }
-            | InvalidCause::ConstEvalNegativeExponent { .. }
-            | InvalidCause::ConstEvalStepLimitExceeded { .. }
-            | InvalidCause::ConstEvalRecursionLimitExceeded { .. }
-            | InvalidCause::ConstEvalRecursiveConst { .. }
-    )
-}
-
 pub fn emit_invalid_ty_error<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,

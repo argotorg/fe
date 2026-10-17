@@ -45,6 +45,17 @@ pub trait TyFolder<'db> {
         scope
     }
 
+    fn fold_const_context_key(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        key: SemanticInstanceKey<'db>,
+    ) -> SemanticInstanceKey<'db>
+    where
+        Self: Sized,
+    {
+        key.fold_with(db, self)
+    }
+
     fn fold_const_capture(
         &mut self,
         db: &'db dyn HirAnalysisDb,
@@ -107,7 +118,7 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                         source,
                     } => Computation {
                         description: Box::new(description.as_ref().clone().fold_with(db, folder)),
-                        source: source.fold_with(db, folder),
+                        source: folder.fold_const_context_key(db, *source),
                     },
                     Invalid(ty) => Invalid(folder.fold_ty(db, *ty)),
                     Abstract(expr, ty) => {
@@ -311,7 +322,6 @@ where
             ConstExpr::Invocation(ConstInvocation {
                 key: invocation.key.fold_with(db, folder),
                 args: invocation.args.clone().fold_with(db, folder),
-                parameter_owner: folder.fold_scope(invocation.parameter_owner),
             }),
         ),
         ConstExpr::ArithBinOp { op, mode, lhs, rhs } => {
@@ -343,6 +353,26 @@ where
             let to = folder.fold_ty(db, *to);
             ConstExprId::new(db, ConstExpr::Cast { expr, to })
         }
+        ConstExpr::Compare { op, lhs, rhs } => ConstExprId::new(
+            db,
+            ConstExpr::Compare {
+                op: *op,
+                lhs: folder.fold_ty(db, *lhs),
+                rhs: folder.fold_ty(db, *rhs),
+            },
+        ),
+        ConstExpr::Select {
+            cond,
+            then,
+            otherwise,
+        } => ConstExprId::new(
+            db,
+            ConstExpr::Select {
+                cond: folder.fold_ty(db, *cond),
+                then: folder.fold_ty(db, *then),
+                otherwise: folder.fold_ty(db, *otherwise),
+            },
+        ),
         ConstExpr::ArrayRepeat { value, len } => ConstExprId::new(
             db,
             ConstExpr::ArrayRepeat {

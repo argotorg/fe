@@ -1,0 +1,173 @@
+const fn word_len(_ n: usize) -> usize {
+    n / 32 + if n % 32 == 0 { 0 } else { 1 }
+}
+
+const fn plus(_ n: usize) -> usize { n + 1 }
+
+trait Width {
+    const N: usize = 1
+}
+struct Two {}
+impl Width for Two {
+    const N: usize = 2
+}
+struct Five {}
+impl Width for Five {
+    const N: usize = 5
+}
+
+struct Packed<const N: usize> {
+    words: [u256; word_len(N)],
+}
+
+impl<const N: usize> Packed<N> {
+    const ZERO: Packed<N> = Packed { words: [0; word_len(N)] }
+
+    const fn filled(_ word: u256) -> Self {
+        Self { words: [word; word_len(N)] }
+    }
+}
+
+const fn computed<const N: usize>(_ value: u8) -> [u8; { N + 1 }] { [value; { N + 1 }] }
+const fn called<const N: usize>(_ value: u8) -> [u8; plus(N)] { [value; plus(N)] }
+const fn cast<const N: u8>(_ value: u8) -> [u8; { N as usize }] { [value; { N as usize }] }
+const fn summed<T0: Width, T1: Width>(_ value: u8) -> [u8; { T0::N + T1::N }] {
+    [value; { T0::N + T1::N }]
+}
+const fn composed<const N: usize>(_ value: u8) -> [u8; word_len(plus(N))] {
+    [value; word_len(plus(N))]
+}
+const fn branch<const N: usize>(_ value: u8) -> u8 { [value; { if N == 0 { 1 } else { N } }][0] }
+
+// Annotations check each compile-time extent against its concrete length.
+const EMPTY: [u256; 0] = Packed<0>::ZERO.words
+const W1: [u256; 1] = Packed<1>::filled(7).words
+const W31: [u256; 1] = Packed<31>::filled(7).words
+const W32: [u256; 1] = Packed<32>::filled(7).words
+const W33: [u256; 2] = Packed<33>::filled(7).words
+const W63: [u256; 2] = Packed<63>::filled(7).words
+const W64: [u256; 2] = Packed<64>::filled(7).words
+const W65: [u256; 3] = Packed<65>::filled(7).words
+const ZERO65: [u256; 3] = Packed<65>::ZERO.words
+const COMPUTED: [u8; 4] = computed<3>(1)
+const CALLED: [u8; 4] = called<3>(2)
+const CAST: [u8; 6] = cast<6>(3)
+const SUMMED: [u8; 7] = summed<Two, Five>(4)
+const COMPOSED: [u8; 2] = composed<32>(5)
+const BRANCH: u8 = branch<0>(6)
+
+const fn conditional<const N: usize>(_ value: u8) -> [u8; { if N > 1 && N < 9 { N } else if N == 0 { 1 } else { 2 } }] {
+    [value; { if N > 1 && N < 9 { N } else if N == 0 { 1 } else { 2 } }]
+}
+const fn sized<T>(_ value: u8) -> [u8; { core::size_of<T>() as usize }] {
+    [value; { core::size_of<T>() as usize }]
+}
+
+const CONDITIONAL_0: [u8; 1] = conditional<0>(6)
+const CONDITIONAL_5: [u8; 5] = conditional<5>(6)
+const CONDITIONAL_9: [u8; 2] = conditional<9>(6)
+const SIZED: [u8; 32] = sized<u256>(7)
+
+struct Holder<const N: usize> {}
+impl<const N: usize> Holder<N> {
+    const LEN: usize = N + 1
+}
+
+// Folded constants returned in a specialized extent must land in the
+// function's own result.
+fn folded_projection<T: Width>() -> [u8; T::N] { [3; T::N] }
+fn folded_computed<const N: usize>() -> [u8; { N + 1 }] {
+    let values: [u8; { N + 1 }] = [4; { N + 1 }]
+    values
+}
+fn folded_words<const N: usize>() -> [u256; word_len(N)] { [5; word_len(N)] }
+fn folded_inherent<const N: usize>() -> [u8; Holder<N>::LEN] { [6; Holder<N>::LEN] }
+fn folded_conditional<const N: usize>() -> [u8; { if N == 0 { 1 } else { N } }] {
+    [7; { if N == 0 { 1 } else { N } }]
+}
+
+fn runtime_word(_ seed: u256) -> u256 { seed }
+
+fn runtime_byte(_ seed: u8) -> u8 { seed }
+
+fn runtime_words<const N: usize>(_ seed: u256) -> [u256; word_len(N)] {
+    Packed<N>::filled(runtime_word(seed)).words
+}
+
+fn word_count<const N: usize>() -> usize {
+    runtime_words<N>(7).len()
+}
+
+#[test]
+fn test_word_counts_match_compile_time_extents() {
+    assert!(word_count<0>() == EMPTY.len())
+    assert!(word_count<1>() == W1.len())
+    assert!(word_count<31>() == W31.len())
+    assert!(word_count<32>() == W32.len())
+    assert!(word_count<33>() == W33.len())
+    assert!(word_count<63>() == W63.len())
+    assert!(word_count<64>() == W64.len())
+    assert!(word_count<65>() == W65.len())
+    assert!(Packed<65>::ZERO.words.len() == ZERO65.len())
+}
+
+#[test]
+fn test_runtime_words_match_compile_time_values() {
+    let words: [u256; 3] = runtime_words<65>(7)
+    assert!(words[0] == W65[0])
+    assert!(words[2] == W65[2])
+    let pair: [u256; 2] = runtime_words<33>(7)
+    assert!(pair[1] == W33[1])
+    let zero = Packed<65>::ZERO
+    assert!(zero.words[2] == ZERO65[2])
+}
+
+#[test]
+fn test_computed_lengths_match_compile_time_values() {
+    let computed = computed<3>(runtime_byte(1))
+    assert!(computed.len() == COMPUTED.len())
+    assert!(computed[3] == COMPUTED[3])
+    let called = called<3>(runtime_byte(2))
+    assert!(called.len() == CALLED.len())
+    assert!(called[3] == CALLED[3])
+    let cast = cast<6>(runtime_byte(3))
+    assert!(cast.len() == CAST.len())
+    assert!(cast[5] == CAST[5])
+    let summed = summed<Two, Five>(runtime_byte(4))
+    assert!(summed.len() == SUMMED.len())
+    assert!(summed[6] == SUMMED[6])
+    let composed = composed<32>(runtime_byte(5))
+    assert!(composed.len() == COMPOSED.len())
+    assert!(composed[1] == COMPOSED[1])
+    assert!(branch<0>(runtime_byte(6)) == BRANCH)
+}
+
+#[test]
+fn test_returned_folded_extents() {
+    let projection = folded_projection<Five>()
+    assert!(projection.len() == 5 && projection[4] == 3)
+    let computed = folded_computed<2>()
+    assert!(computed.len() == 3 && computed[2] == 4)
+    let words = folded_words<65>()
+    assert!(words.len() == 3 && words[2] == 5)
+    let inherent = folded_inherent<3>()
+    assert!(inherent.len() == 4 && inherent[3] == 6)
+    let conditional = folded_conditional<0>()
+    assert!(conditional.len() == 1 && conditional[0] == 7)
+}
+
+#[test]
+fn test_layout_lengths_match_compile_time_values() {
+    let sized = sized<u256>(runtime_byte(7))
+    assert!(sized.len() == SIZED.len() && sized[31] == SIZED[31])
+}
+
+#[test]
+fn test_conditional_lengths_match_compile_time_values() {
+    let zero = conditional<0>(runtime_byte(6))
+    assert!(zero.len() == CONDITIONAL_0.len() && zero[0] == CONDITIONAL_0[0])
+    let five = conditional<5>(runtime_byte(6))
+    assert!(five.len() == CONDITIONAL_5.len() && five[4] == CONDITIONAL_5[4])
+    let nine = conditional<9>(runtime_byte(6))
+    assert!(nine.len() == CONDITIONAL_9.len() && nine[1] == CONDITIONAL_9[1])
+}

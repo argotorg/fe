@@ -1321,6 +1321,10 @@ impl<'db> TyCheckEnv<'db> {
         self.deferred.push(DeferredTask::PrimitiveOp(pending))
     }
 
+    pub(super) fn register_type_equality(&mut self, equality: TypeEquality<'db>) {
+        self.deferred.push(DeferredTask::TypeEquality(equality))
+    }
+
     /// Completes the type checking environment by finalizing pending trait
     /// obligations and folding types with the unification table.
     ///
@@ -2194,6 +2198,14 @@ pub(super) enum DeferredTask<'db> {
     Obligation(TraitObligation<'db>),
     Method(PendingMethod<'db>),
     PrimitiveOp(PendingPrimitiveOp),
+    TypeEquality(TypeEquality<'db>),
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct TypeEquality<'db> {
+    pub actual: TyId<'db>,
+    pub expected: TyId<'db>,
+    pub span: DynLazySpan<'db>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

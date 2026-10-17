@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_eval/selected_const_invocation_extent_mismatch.fe
+---
+error[8-0000]: type mismatch
+  ┌─ selected_const_invocation_extent_mismatch.fe:9:28
+  │
+9 │ ) -> [u256; word_len(B)] { value }
+  │                            ^^^^^ expected `[u256; word_len(const B: usize)]`, but `[u256; word_len(const A: usize)]` is given
+
+error[8-0000]: type mismatch
+   ┌─ selected_const_invocation_extent_mismatch.fe:12:37
+   │
+12 │ ) -> [u256; word_len({ N + 32 })] { value }
+   │                                     ^^^^^ expected `[u256; word_len((const N: usize + 32))]`, but `[u256; word_len(const N: usize)]` is given

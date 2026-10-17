@@ -330,7 +330,7 @@ impl<'db> TyFoldable<'db> for TermProvenance<'db> {
                 .into_iter()
                 .map(|frame| TermCallFrame {
                     origin: frame.origin,
-                    callee: frame.callee.fold_with(db, folder),
+                    callee: folder.fold_const_context_key(db, frame.callee),
                 })
                 .collect(),
             ..self

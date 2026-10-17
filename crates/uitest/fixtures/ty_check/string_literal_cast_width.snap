@@ -1,0 +1,26 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/string_literal_cast_width.fe
+---
+error[3-0033]: string type exceeds inline capacity
+  ┌─ string_literal_cast_width.fe:2:17
+  │
+2 │ const TOO_WIDE: String<32> = "short" as String<32>
+  │                 ^^^^^^^^^^ `String<32>` exceeds the current inline limit of `String<31>`
+  │
+  = strings currently use one word of storage: 1 length byte and 31 payload bytes
+
+error[3-0033]: string type exceeds inline capacity
+  ┌─ string_literal_cast_width.fe:2:41
+  │
+2 │ const TOO_WIDE: String<32> = "short" as String<32>
+  │                                         ^^^^^^^^^^ `String<32>` exceeds the current inline limit of `String<31>`
+  │
+  = strings currently use one word of storage: 1 length byte and 31 payload bytes
+
+error[8-0000]: type mismatch
+  ┌─ string_literal_cast_width.fe:1:31
+  │
+1 │ const TOO_NARROW: String<1> = "ab" as String<1>
+  │                               ^^^^ expected `String<1>`, but `String<2>` is given

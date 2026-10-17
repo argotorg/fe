@@ -7,15 +7,12 @@ input_file: fixtures/semantic_access/loop_sessions.fe
 error[16-0001]: access conflict in `fn projected`
    ┌─ loop_sessions.fe:10:9
    │
- 8 │   fn projected(_ items: mut [Item; 2]) {
-   │ ╭──────────────────────────────────────'
- 9 │ │     for ref item in items {
+ 9 │ ╭     for ref item in items {
 10 │ │         items[0] = Item { n: 0 }
    │ │         ^^^^^^^^^^^^^^^^^^^^^^^^ cannot write to this place while a `ref` projection of it is open
 11 │ │         assert(item.n > 0)
 12 │ │     }
-13 │ │ }
-   │ ╰─' projection opened here
+   │ ╰─────' projection opened here
 
 error[16-0001]: access conflict in `fn mutable`
    ┌─ loop_sessions.fe:18:9

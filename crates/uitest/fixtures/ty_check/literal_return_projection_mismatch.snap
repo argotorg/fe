@@ -1,0 +1,48 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/literal_return_projection_mismatch.fe
+---
+error[8-0000]: type mismatch
+   ┌─ literal_return_projection_mismatch.fe:11:28
+   │
+11 │ const WRONG_LEN: [u8; 2] = ("a",).bytes()
+   │                            ^^^^^^^^^^^^^^ expected `[u8; 2]`, but `[u8; 1]` is given
+
+error[8-0000]: type mismatch
+   ┌─ literal_return_projection_mismatch.fe:12:33
+   │
+12 │ const WRONG_PACKED: Packed<2> = packed(("a", "bc"))
+   │                                 ^^^^^^^^^^^^^^^^^^^ expected `Packed<2>`, but `Packed<3>` is given
+
+error[8-0000]: type mismatch
+   ┌─ literal_return_projection_mismatch.fe:13:31
+   │
+13 │ const WRONG_ELEM: [u256; 1] = ("a",).bytes()
+   │                               ^^^^^^^^^^^^^^ expected `[u256; 1]`, but `[u8; 1]` is given
+
+error[8-0000]: type mismatch
+   ┌─ literal_return_projection_mismatch.fe:14:36
+   │
+14 │ const fn wrong_result() -> [u8; 2] { ("a",).bytes() }
+   │                                    ^^^^^^^^^^^^^^^^^^ expected `[u8; 2]`, but `[u8; 1]` is given
+
+error[8-0000]: type mismatch
+   ┌─ literal_return_projection_mismatch.fe:14:38
+   │
+14 │ const fn wrong_result() -> [u8; 2] { ("a",).bytes() }
+   │                                      ^^^^^^^^^^^^^^ expected `[u8; 2]`, but `[u8; 1]` is given
+
+error[8-0000]: type mismatch
+   ┌─ literal_return_projection_mismatch.fe:22:16
+   │
+22 │     borrow_two(mut value)
+   │                ^^^^^^^^^ expected `[u8; 2]`, but `[u8; 1]` is given
+
+error[8-0068]: `mut` argument must be a place
+   ┌─ literal_return_projection_mismatch.fe:17:31
+   │
+17 │ fn not_a_place() { borrow_one(("a",).bytes()) }
+   │                               ^^^^^^^^^^^^^^ temporaries and literal values cannot be used where `mut` is expected
+   │
+   = help: bind the value to a named local first, then pass `mut <place>`

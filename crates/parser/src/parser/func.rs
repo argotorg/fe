@@ -90,6 +90,7 @@ impl super::Parse for FuncSignatureScope {
             SyntaxKind::ConstKw,
             SyntaxKind::PubKw,
             SyntaxKind::UnsafeKw,
+            SyntaxKind::Pound,
             SyntaxKind::DocComment,
             SyntaxKind::DocCommentAttr,
             SyntaxKind::Newline,
@@ -98,6 +99,10 @@ impl super::Parse for FuncSignatureScope {
         let body = self.fn_def_scope.body();
         if body != ItemBlock::Absent {
             recovery_tokens.push(SyntaxKind::LBrace);
+        }
+        // A bodyless trait method also ends where an associated type begins.
+        if self.fn_def_scope == FuncDefScope::TraitDef {
+            recovery_tokens.push(SyntaxKind::TypeKw);
         }
         parser.set_scope_recovery_stack(&recovery_tokens);
 

@@ -1,0 +1,19 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/self_referential_const_bounds.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ self_referential_const_bounds.fe:15:14
+   │
+15 │ impl Sub for B {}
+   │              ^ `B` doesn't implement `Has<4>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ self_referential_const_bounds.fe:18:12
+   │
+16 │ fn f<T: Size + Has<{T::LEN}>>() {}
+   │                ------------- required by this bound on `f`
+17 │ fn ok() { f<A>() }
+18 │ fn bad() { f<B>() }
+   │            ^^^^ `B` doesn't implement `Has<4>`

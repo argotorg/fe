@@ -6500,10 +6500,10 @@ mod tests {
     use crate::{build_test_runtime_package, runtime::package::runtime_instance_for_semantic};
 
     #[test]
-    fn mixed_compile_time_and_runtime_layout_components_lower_through_calls() {
+    fn const_generic_zero_sized_fields_lower_through_calls() {
         let mut db = DriverDataBase::default();
         let file_url = Url::from_file_path(
-            std::env::temp_dir().join("mixed_layout_component_runtime_lowering.fe"),
+            std::env::temp_dir().join("const_generic_zero_sized_fields_runtime_lowering.fe"),
         )
         .expect("fixture path should be absolute");
         db.workspace().touch(
@@ -6511,11 +6511,12 @@ mod tests {
             file_url.clone(),
             Some(
                 r#"
-use std::evm::StorageMap
+struct Marker<const ROOT: u256> {}
 
 struct Mixed<const ROOT: u256> {
-    fixed: StorageMap<u256, u256, 7>,
-    dynamic: StorageMap<u256, u256, ROOT>,
+    fixed: Marker<7>,
+    generic: Marker<ROOT>,
+    value: u256,
 }
 
 fn pass<const ROOT: u256>(value: own Mixed<ROOT>) -> Mixed<ROOT> {
@@ -6534,6 +6535,8 @@ fn forward<const ROOT: u256>(value: own Mixed<ROOT>) -> Mixed<ROOT> {
             .get(&db, &file_url)
             .expect("file should be loaded");
         let top_mod = db.top_mod(file);
+        let diags = db.run_on_top_mod(top_mod);
+        assert!(diags.is_empty(), "{}", diags.format_diags(&db));
         for name in ["pass", "forward"] {
             let func = top_mod
                 .all_funcs(&db)
@@ -6549,7 +6552,12 @@ fn forward<const ROOT: u256>(value: own Mixed<ROOT>) -> Mixed<ROOT> {
                 &db,
                 identity_semantic_instance_key(&db, BodyOwner::Func(func)),
             );
-            let _ = runtime_instance_for_semantic(&db, semantic).body(&db);
+            let body = runtime_instance_for_semantic(&db, semantic).body(&db);
+            assert_eq!(body.signature.params.len(), 1);
+            assert_eq!(
+                body.signature.ret.as_ref(),
+                Some(&body.signature.params[0].class)
+            );
         }
     }
 

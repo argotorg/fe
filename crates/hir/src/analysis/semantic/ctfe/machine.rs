@@ -1078,7 +1078,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 .admitted_body(self.db)
                 .map_err(|_| CtfeError::InvalidBody { origin })?;
             self.frames.push(CtfeFrame::new(body, Vec::new()));
-            let result = (|| {
+            let result = (|| -> EvalResult<'db, _> {
                 let args = self.value_args(args, origin)?;
                 self.eval_extern_const_fn(
                     instance,
@@ -1593,8 +1593,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     let value_args = self.value_args(args, origin)?;
                     return self
                         .eval_extern_const_fn(instance, func, result_ty, &value_args, origin)
-                        .map(CtfeValue::Value)
-                        .map_err(Into::into);
+                        .map(CtfeValue::Value);
                 }
                 if let BodyOwner::Func(func) = instance.key(self.db).owner(self.db)
                     && !func.is_const(self.db)
@@ -1944,8 +1943,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         result_ty: TyId<'db>,
         args: &[CtfeConstValue<'db>],
         origin: SemOrigin<'db>,
-    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
-        match ctfe_extern_intrinsic_kind(self.db, func) {
+    ) -> EvalResult<'db, CtfeConstValue<'db>> {
+        let value = match ctfe_extern_intrinsic_kind(self.db, func) {
             Some(CtfeExternIntrinsic::AddMod) => {
                 self.eval_evm_modular_arithmetic(result_ty, args, EvmModularArithmetic::Add, origin)
             }
@@ -1956,7 +1955,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 self.eval_leading_zeros(result_ty, args, origin)
             }
             Some(CtfeExternIntrinsic::SizeOf) => {
-                self.eval_intrinsic_size_of(instance, result_ty, args, origin)
+                return self.eval_intrinsic_size_of(instance, result_ty, args, origin);
             }
             Some(CtfeExternIntrinsic::StorageSlots) => {
                 self.eval_intrinsic_storage_slots(instance, result_ty, args, origin)
@@ -1974,7 +1973,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 self.eval_numeric_extern_intrinsic(kind, result_ty, args, origin)
             }
             None => Err(CtfeError::NotConstEvaluable { origin }),
-        }
+        };
+        Ok(value?)
     }
 
     fn eval_numeric_extern_intrinsic(
@@ -2335,9 +2335,9 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         result_ty: TyId<'db>,
         args: &[CtfeConstValue<'db>],
         origin: SemOrigin<'db>,
-    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
+    ) -> EvalResult<'db, CtfeConstValue<'db>> {
         if !args.is_empty() {
-            return Err(CtfeError::NotConstEvaluable { origin });
+            return Err(CtfeError::NotConstEvaluable { origin }.into());
         }
         let ty = *instance
             .key(self.db)
@@ -2375,7 +2375,14 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     message: cause.pretty_print(self.db),
                 },
             })?
-            .ok_or(CtfeError::NotConstEvaluable { origin })?;
+            // Only a type that still names a parameter has no size yet.
+            .ok_or_else(|| {
+                EvalStop::Blocked(BlockedInfo::new(
+                    ConstDemandKind::Layout,
+                    ConstDependency::Type(ty),
+                    origin,
+                ))
+            })?;
         Ok(CtfeConstValue::int(self.db, result_ty, BigInt::from(size)))
     }
 

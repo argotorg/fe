@@ -1,0 +1,23 @@
+trait Width {
+    const N: usize
+    const fn bytes(self) -> [u8; Self::N] { [0; Self::N] }
+}
+impl<const N: usize> Width for String<N> { const N: usize = N }
+impl<T: Width> Width for (T,) { const N: usize = T::N }
+impl<A: Width, B: Width> Width for (A, B) { const N: usize = A::N + B::N }
+struct Packed<const N: usize> { bytes: [u8; N] }
+const fn packed<T: Width>(_ value: T) -> Packed<T::N> { Packed { bytes: value.bytes() } }
+
+const WRONG_LEN: [u8; 2] = ("a",).bytes()
+const WRONG_PACKED: Packed<2> = packed(("a", "bc"))
+const WRONG_ELEM: [u256; 1] = ("a",).bytes()
+const fn wrong_result() -> [u8; 2] { ("a",).bytes() }
+
+fn borrow_one(_ value: mut [u8; 1]) {}
+fn not_a_place() { borrow_one(("a",).bytes()) }
+
+fn borrow_two(_ value: mut [u8; 2]) {}
+fn wrong_place() {
+    var value = ("a",).bytes()
+    borrow_two(mut value)
+}
