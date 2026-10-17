@@ -596,6 +596,13 @@ pub(crate) enum TraitArgError<'db> {
         expected: Option<TyId<'db>>,
         given: Option<TyId<'db>>,
     },
+    /// An argument failed compile-time evaluation, which no other pass
+    /// reports for a trait argument. `applied_default` marks a fault that only
+    /// applying a valid default at this reference reveals.
+    InvalidArg {
+        cause: InvalidCause<'db>,
+        applied_default: bool,
+    },
     Ignored,
 }
 
@@ -634,39 +641,52 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
     }
 
     // Fill trailing defaults using the trait's param set. Bind Self (idx 0).
-    let non_self_completed = t
-        .param_set(db)
-        .complete_args(
-            db,
-            &[t.self_param(db)],
-            &provided_explicit,
-            match lowering_cx.const_bodies() {
-                ConstBodyLowering::Eager => DefaultApplication::Evaluate(lowering_cx),
-                ConstBodyLowering::Deferred => DefaultApplication::StructuralMetadata(lowering_cx),
-            },
-        )
-        .map_err(|error| match error.cause {
-            InvalidCause::TooManyGenericArgs { expected, given } => {
-                TraitArgError::ArgNumMismatch { expected, given }
-            }
-            InvalidCause::KindMismatch {
-                expected: Some(expected),
-                given,
-            } => TraitArgError::ArgKindMisMatch { expected, given },
-            InvalidCause::ConstTyMismatch { expected, given } => TraitArgError::ArgTypeMismatch {
-                expected: Some(expected),
-                given: Some(given),
-            },
-            InvalidCause::ConstTyExpected { expected } => TraitArgError::ArgTypeMismatch {
-                expected: Some(expected),
-                given: None,
-            },
-            InvalidCause::NormalTypeExpected { given } => TraitArgError::ArgTypeMismatch {
-                expected: None,
-                given: Some(given),
-            },
-            _ => TraitArgError::Ignored,
-        })?;
+    let application = || match lowering_cx.const_bodies() {
+        ConstBodyLowering::Eager => DefaultApplication::Evaluate(lowering_cx),
+        ConstBodyLowering::Deferred => DefaultApplication::StructuralMetadata(lowering_cx),
+    };
+    let complete = |provided: &[TyId<'db>]| {
+        t.param_set(db)
+            .complete_args(db, &[t.self_param(db)], provided, application())
+    };
+    let non_self_completed = complete(&provided_explicit).map_err(|error| match error.cause {
+        // A type argument whose own lowering failed is reported where it is
+        // written, with the reference's argument diagnostics.
+        _ if provided_explicit
+            .get(error.index)
+            .is_some_and(|arg| !arg.is_const_ty(db) && arg.has_invalid(db)) =>
+        {
+            TraitArgError::Ignored
+        }
+        // A default that faults for the trait's own parameters faults at
+        // its declaration, which reports it; otherwise only applying it
+        // to this reference's arguments reveals the fault.
+        cause if cause.const_eval_fault().is_some() => TraitArgError::InvalidArg {
+            cause,
+            applied_default: error.from_default
+                && complete(&trait_params[1..=provided_explicit.len()]).is_ok(),
+        },
+        InvalidCause::TooManyGenericArgs { expected, given } => {
+            TraitArgError::ArgNumMismatch { expected, given }
+        }
+        InvalidCause::KindMismatch {
+            expected: Some(expected),
+            given,
+        } => TraitArgError::ArgKindMisMatch { expected, given },
+        InvalidCause::ConstTyMismatch { expected, given } => TraitArgError::ArgTypeMismatch {
+            expected: Some(expected),
+            given: Some(given),
+        },
+        InvalidCause::ConstTyExpected { expected } => TraitArgError::ArgTypeMismatch {
+            expected: Some(expected),
+            given: None,
+        },
+        InvalidCause::NormalTypeExpected { given } => TraitArgError::ArgTypeMismatch {
+            expected: None,
+            given: Some(given),
+        },
+        _ => TraitArgError::Ignored,
+    })?;
 
     if non_self_completed.len() != trait_params.len() - 1 {
         return Err(TraitArgError::ArgNumMismatch {

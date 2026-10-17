@@ -2,7 +2,7 @@ use crate::analysis::ty::ty_def::{ClosureTy, TyId};
 use crate::hir_def::{
     ClosureDef, Expr, ExprId, ItemKind, Partial, attr::ArithmeticMode, params::FuncParamMode,
 };
-use crate::span::DynLazySpan;
+use crate::span::{DynLazySpan, types::LazyTySpan};
 use crate::{
     analysis::HirAnalysisDb,
     hir_def::{Body, Const, Contract, EffectParamListId, Func, PathId, scope_graph::ScopeId},
@@ -71,24 +71,17 @@ impl<'db> EffectParamOwner<'db> {
         }
     }
 
-    pub fn effect_param_ty_span(self, db: &'db dyn HirAnalysisDb, idx: usize) -> DynLazySpan<'db> {
+    pub fn effect_param_ty_span(self, db: &'db dyn HirAnalysisDb, idx: usize) -> LazyTySpan<'db> {
         match self {
             EffectParamOwner::Func(func) => func
                 .span()
                 .effects()
                 .param_idx(func.effect_origin(db, idx))
-                .ty()
-                .into(),
-            EffectParamOwner::Contract(contract) => {
-                contract.span().effects().param_idx(idx).ty().into()
+                .ty(),
+            EffectParamOwner::Contract(contract) => contract.span().effects().param_idx(idx).ty(),
+            EffectParamOwner::ContractInit { contract } => {
+                contract.span().init_block().effects().param_idx(idx).ty()
             }
-            EffectParamOwner::ContractInit { contract } => contract
-                .span()
-                .init_block()
-                .effects()
-                .param_idx(idx)
-                .ty()
-                .into(),
             EffectParamOwner::ContractRecvArm {
                 contract,
                 recv_idx,
@@ -100,8 +93,7 @@ impl<'db> EffectParamOwner<'db> {
                 .arm(arm_idx as usize)
                 .effects()
                 .param_idx(idx)
-                .ty()
-                .into(),
+                .ty(),
         }
     }
 }
