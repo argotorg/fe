@@ -69,92 +69,92 @@ error[16-0001]: access conflict in `fn Case17FrameGrant::__init__`
     │         ^^^^^^^^^^^^^^^^^^^^ this call may write storage while a `mut` access of it is open
 
 error[16-0001]: access conflict in `fn with_loan`
-    ┌─ acceptance.fe:329:5
+    ┌─ acceptance.fe:333:5
     │
-328 │     let held = mut vault.value
+332 │     let held = mut vault.value
     │                --------------- access opened here
-329 │     ping()
+333 │     ping()
     │     ^^^^^^ this call may write storage while a `mut` access of it is open
 
 error[16-0001]: access conflict in `fn case27_provider_aliases_view`
-    ┌─ acceptance.fe:409:9
+    ┌─ acceptance.fe:413:9
     │
-407 │     let r = ref p
+411 │     let r = ref p
     │             ----- access opened here
-408 │     with (State = p) {
-409 │         update_state()
+412 │     with (State = p) {
+413 │         update_state()
     │         ^^^^^^^^^^^^^^ cannot mutably access this place while a `ref` access of it is open
 
 error[16-0001]: access conflict in `fn Case33CopyArraySpace::__init__`
-    ┌─ acceptance.fe:432:9
+    ┌─ acceptance.fe:436:9
     │
-431 │         let x = ref cells.at(0)
+435 │         let x = ref cells.at(0)
     │                     ----- access opened here
-432 │         ping()
+436 │         ping()
     │         ^^^^^^ this call may write storage while a `ref` access of it is open
 
 error[16-0001]: access conflict in `fn Case33CopyArrayMutSpace::__init__`
-    ┌─ acceptance.fe:442:9
+    ┌─ acceptance.fe:446:9
     │
-441 │         let x = mut cells.at_mut(0)
+445 │         let x = mut cells.at_mut(0)
     │                     ----- access opened here
-442 │         ping()
+446 │         ping()
     │         ^^^^^^ this call may write storage while a `mut` access of it is open
 
 error[16-0001]: access conflict in `fn case36_copy_array_view`
-    ┌─ acceptance.fe:456:5
+    ┌─ acceptance.fe:460:5
     │
-455 │     let x = ref first(xs)
+459 │     let x = ref first(xs)
     │                       -- access opened here
-456 │     xs[1] = 5
+460 │     xs[1] = 5
     │     ^^^^^^^^^ cannot write to this place while a `ref` access of it is open
 
 error[16-0001]: access conflict in `fn case30_write_under_read`
-    ┌─ acceptance.fe:490:5
+    ┌─ acceptance.fe:494:5
     │
-489 │     let r = ref p.a
+493 │     let r = ref p.a
     │             ------- access opened here
-490 │     p.a = 2
+494 │     p.a = 2
     │     ^^^^^^^ cannot write to this place while a `ref` access of it is open
 
 error[16-0001]: access conflict in `fn case34_duplicated`
-    ┌─ acceptance.fe:516:13
+    ┌─ acceptance.fe:520:13
     │
-516 │     (mut a, mut a)
+520 │     (mut a, mut a)
     │      -----  ^^^^^ cannot mutably access this place while a `mut` access of it is open
     │      │
     │      access opened here
 
 error[16-0001]: access conflict in `fn case38_owner_access`
-    ┌─ acceptance.fe:551:5
+    ┌─ acceptance.fe:555:5
     │
-550 │     let x = mut first_of(mut p)
+554 │     let x = mut first_of(mut p)
     │                          ----- access opened here
-551 │     p.b = 1
+555 │     p.b = 1
     │     ^^^^^^^ cannot write to this place while a `mut` access of it is open
 
 error[16-0001]: access conflict in `fn Case32StoragePlacement::__init__`
-    ┌─ acceptance.fe:600:9
+    ┌─ acceptance.fe:604:9
     │
-599 │         let x = ref first_item(items)
+603 │         let x = ref first_item(items)
     │                                ----- access opened here
-600 │         ping()
+604 │         ping()
     │         ^^^^^^ this call may write storage while a `ref` access of it is open
 
 error[16-0001]: access conflict in `fn Case44WriteDuringCall::__init__`
-    ┌─ acceptance.fe:665:13
+    ┌─ acceptance.fe:669:13
     │
-664 │         credit(mut ledger.balances, who, {
+668 │         credit(mut ledger.balances, who, {
     │                ------------------- access opened here
-665 │             ledger.balances[who] = 0
+669 │             ledger.balances[who] = 0
     │             ^^^^^^^^^^^^^^^^^^^^^^^^ cannot write to this place while a `mut` access of it is open
 
 error[16-0001]: access conflict in `fn Case44EffectDuringCall::__init__`
-    ┌─ acceptance.fe:675:30
+    ┌─ acceptance.fe:679:30
     │
-674 │         with (mut ledger) {
+678 │         with (mut ledger) {
     │               ---------- access opened here
-675 │             credit_and_reset(mut ledger.balances, Address { inner: 1 })
+679 │             credit_and_reset(mut ledger.balances, Address { inner: 1 })
     │                              ^^^^^^^^^^^^^^^^^^^ cannot mutably access this place while a `mut` access of it is open
 
 error[16-0002]: move conflict in `fn case13_uninitialized`
@@ -164,18 +164,18 @@ error[16-0002]: move conflict in `fn case13_uninitialized`
     │           ^^^^^ cannot use a value before it is initialized
 
 error[16-0002]: move conflict in `fn case25_dynamic_moves`
-    ┌─ acceptance.fe:382:13
+    ┌─ acceptance.fe:386:13
     │
-382 │     consume(items[i])
+386 │     consume(items[i])
     │             ^^^^^^^^ cannot move out of an element at a dynamic index
 
 error[16-0002]: move conflict in `fn case39_one_branch`
-    ┌─ acceptance.fe:561:13
+    ┌─ acceptance.fe:565:13
     │
-561 │     let h = mut halves
+565 │     let h = mut halves
     │             ^^^^^^^^^^ this access ends while its referent is moved out
-562 │     if flag {
-563 │         consume(h.left)
+566 │     if flag {
+567 │         consume(h.left)
     │                 ------ value is moved here
 
 warning[16-0012]: discarded writes in `fn counter`

@@ -8,12 +8,16 @@ impl Collection for Grid {
     type Cursor = (usize, usize)
     type Item = u256
 
-    fn start(self) -> Option<(usize, usize)> {
-        Option::Some((0, 0))
+    fn start(self) -> (usize, usize) {
+        (0, 0)
     }
 
-    fn next(self, _ c: (usize, usize)) -> Option<(usize, usize)> {
-        if c.1 == 0 { Option::Some((c.0, 1)) } else { Option::None }
+    fn has(self, _ c: (usize, usize)) -> bool {
+        c.1 < 2
+    }
+
+    fn next(self, _ c: (usize, usize)) -> (usize, usize) {
+        (c.0, c.1 + 1)
     }
 
     fn at(self, _ c: (usize, usize)) -> ref u256 {

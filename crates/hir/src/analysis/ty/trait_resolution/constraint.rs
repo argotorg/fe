@@ -554,7 +554,8 @@ struct Deferred<'db> {
 /// The trait instance and item a path names, among the items `item` finds
 /// in a trait by name: `I` or `Self::I` in a trait or an implementation of
 /// one (or one of its supertraits), and `X::I` for a type `X` the scope
-/// bounds by a trait with item `I`.
+/// bounds by a trait with item `I`, else the scope's own `I` when `X` is its
+/// self type.
 pub(crate) fn resolve_assoc_item_path<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
@@ -576,10 +577,21 @@ pub(crate) fn resolve_assoc_item_path<'db>(
             _ => return None,
         },
     };
-    own.filter(|inst| inst.self_ty(db) == self_ty)
-        .map(|inst| PredicateListId::new(db, vec![inst]).extend_all_bounds(db))
+    let own = own
+        .filter(|inst| inst.self_ty(db) == self_ty)
+        .map(|inst| PredicateListId::new(db, vec![inst]).extend_all_bounds(db));
+    let bounds = Some(assumptions.extend_all_bounds(db));
+    // `I` and `Self::I` name the scope's own items first, and `X::I` those of
+    // the bounds on `X`, as an associated type's path does: in a blanket
+    // `impl Tr for F`, `F::E` is the row of a bound on `F`.
+    let lists = if path.parent(db).is_none_or(|parent| parent.is_self_ty(db)) {
+        [own, bounds]
+    } else {
+        [bounds, own]
+    };
+    lists
         .into_iter()
-        .chain([assumptions.extend_all_bounds(db)])
+        .flatten()
         .flat_map(|list| list.list(db).iter().copied())
         .filter(|inst| inst.self_ty(db) == self_ty)
         .find_map(|inst| Some((inst, item(inst.def(db), name)?)))

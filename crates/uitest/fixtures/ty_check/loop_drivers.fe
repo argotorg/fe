@@ -1,5 +1,4 @@
 use core::iter::{Collection, Driver, enumerate, reversed}
-use core::option::Option
 
 struct Account { balance: u256 }
 
@@ -16,12 +15,16 @@ impl<B: Collection<Cursor = usize>> Driver<B> for Firsts {
     type State = usize
     type Item = B::Item
 
-    fn start(self, _ base: B) -> Option<usize> uses B::E {
+    fn start(self, _ base: B) -> usize uses B::E {
         base.start()
     }
 
-    fn next(self, _ base: B, _ s: usize) -> Option<usize> uses B::E {
-        Option::None
+    fn has(self, _ base: B, _ s: usize) -> bool uses B::E {
+        s == base.start() && base.has(s)
+    }
+
+    fn next(self, _ base: B, _ s: usize) -> usize uses B::E {
+        s + 1
     }
 
     fn at(self, _ base: B, _ s: usize) -> ((), ref B::Item) uses B::E {

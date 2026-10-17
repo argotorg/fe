@@ -5,23 +5,17 @@ expression: diags
 input_file: fixtures/ty_check/loop_items.fe
 ---
 error[8-0066]: mutable borrow requires a mutable place
-   ┌─ loop_items.fe:19:9
+   ┌─ loop_items.fe:18:9
    │
-18 │ fn view_base(_ xs: [u256; 2]) {
+17 │ fn view_base(_ xs: [u256; 2]) {
    │                -- `xs` does not provide mutable access
-19 │     for mut x in xs {
+18 │     for mut x in xs {
    │         ^^^^^ cannot borrow as `mut`
 
-error[8-0114]: a two-base loop binds both items `mut` or neither
-   ┌─ loop_items.fe:36:9
-   │
-36 │     for (mut x, y) in (a, b) by zip() {
-   │         ^^^^^^^^^^ one item is `mut` and the other is not
-
 error[8-0120]: a `mut` binding needs a place or an access
-   ┌─ loop_items.fe:26:10
+   ┌─ loop_items.fe:25:10
    │
-26 │     for (mut i, x) in xs.enumerate() {
+25 │     for (mut i, x) in xs.enumerate() {
    │          ^^^^^ this binds an owned value
    │
    = write `var` for a mutable value

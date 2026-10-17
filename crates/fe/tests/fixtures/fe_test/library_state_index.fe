@@ -5,7 +5,6 @@
 use core::marker::Pinned
 use core::iter::{Collection, CollectionMut}
 use core::ops::{LaneCodec, Location, StateIndex}
-use core::option::Option
 use std::evm::{Address, Evm, RawStorage, SolSlot, keccak_words}
 
 /// A `u32` in 32 bits of a word.
@@ -56,12 +55,16 @@ impl Collection for Counters {
     type Cursor = u256
     type Item = u32
 
-    fn start(self) -> Option<u256> {
-        Option::Some(0)
+    fn start(self) -> u256 {
+        0
     }
 
-    fn next(self, _ c: u256) -> Option<u256> {
-        if c < 9 { Option::Some(c + 1) } else { Option::None }
+    fn has(self, _ c: u256) -> bool {
+        c < 10
+    }
+
+    fn next(self, _ c: u256) -> u256 {
+        c + 1
     }
 
     fn at(self, _ c: u256) -> ref u32 {

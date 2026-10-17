@@ -9,7 +9,9 @@ use ingot::functional::FnMut_v
 /// A collection a loop traverses by cursor, projecting each element in turn.
 ///
 /// The loop holds the collection while it runs; the cursor is a plain value
-/// that names a position and holds no reference to the collection.
+/// that names a position and holds no reference to the collection. A
+/// position may name no element, as the one after the last does; the loop
+/// tests each with `has` before it steps from it or projects its element.
 pub trait Collection {
     /// The effects of reaching an element, retained while an element is open.
     uses E
@@ -18,13 +20,16 @@ pub trait Collection {
     type Cursor: Copy
     type Item
 
-    /// The first position, if any.
-    fn start(self) -> Option<Self::Cursor> uses E
+    /// The first position; one that names no element if there are none.
+    fn start(self) -> Self::Cursor uses E
 
-    /// The position after `c`, if any.
-    fn next(self, _ c: Self::Cursor) -> Option<Self::Cursor> uses E
+    /// Whether `c` names an element.
+    fn has(self, _ c: Self::Cursor) -> bool uses E
 
-    /// The element at `c`.
+    /// The position after `c`; `has(c)` must hold.
+    fn next(self, _ c: Self::Cursor) -> Self::Cursor uses E
+
+    /// The element at `c`; `has(c)` must hold.
     fn at(self, _ c: Self::Cursor) -> ref Self::Item @S uses E
 
     /// Each element with its index: `for (i, x) in xs.enumerate()`.
@@ -93,12 +98,12 @@ pub trait Collection {
 
     /// The position of the first element `p` holds for.
     fn find<P: Fn(Self::Item) -> bool>(self, _ p: P) -> Option<Self::Cursor> uses (E, P::E) {
-        var cursor = self.start()
-        while let Option::Some(c) = cursor {
+        var c = self.start()
+        while self.has(c) {
             if p(Collection::at(self, c)) {
                 return Option::Some(c)
             }
-            cursor = self.next(c)
+            c = self.next(c)
         }
         Option::None
     }
@@ -112,11 +117,12 @@ pub trait CollectionMut: Collection {
 
 /// A collection that can also be traversed from its end.
 pub trait Bidirectional: Collection {
-    /// The last position, if any.
-    fn last(self) -> Option<Self::Cursor> uses E
+    /// The last position; one that names no element if there are none.
+    fn last(self) -> Self::Cursor uses E
 
-    /// The position before `c`, if any.
-    fn prev(self, _ c: Self::Cursor) -> Option<Self::Cursor> uses E
+    /// The position before `c`; `has(c)` must hold. The position before the
+    /// first element names none, as the one after the last does.
+    fn prev(self, _ c: Self::Cursor) -> Self::Cursor uses E
 
     /// Each element from the last to the first.
     fn reversed(self) -> Reversed {
@@ -124,33 +130,10 @@ pub trait Bidirectional: Collection {
     }
 }
 
-// A valid cursor is below the collection's length, so stepping from it
-// cannot overflow.
-
-/// The first index of a collection of `len` elements.
-#[inline(always)]
-fn first_index(_ len: u256) -> Option<usize> {
-    if len == 0 { Option::None } else { Option::Some(0) }
-}
-
-/// The index after `i` in a collection of `len` elements.
-#[inline(always)]
-fn next_index(_ i: usize, _ len: u256) -> Option<usize> {
-    let next = i.wrapping_add(1)
-    if (next as u256) < len { Option::Some(next) } else { Option::None }
-}
-
-/// The last index of a collection of `len` elements.
-#[inline(always)]
-fn last_index(_ len: u256) -> Option<usize> {
-    if len == 0 { Option::None } else { Option::Some((len as usize).wrapping_sub(1)) }
-}
-
-/// The index before `i`.
-#[inline(always)]
-fn prev_index(_ i: usize) -> Option<usize> {
-    if i == 0 { Option::None } else { Option::Some(i.wrapping_sub(1)) }
-}
+// Index cursors wrap: the position before index 0 and the last position of
+// an empty collection are both the largest index, so `c < len` tests a
+// position in either direction. A position `has` holds for is below the
+// length, so stepping from it cannot overflow.
 
 impl<T, const N: usize> [T; N] {
     pub fn len(self) -> usize {
@@ -166,13 +149,18 @@ impl<T, const N: usize> Collection for [T; N] {
     type Item = T
 
     #[inline(always)]
-    fn start(self) -> Option<usize> {
-        first_index(N as u256)
+    fn start(self) -> usize {
+        0
     }
 
     #[inline(always)]
-    fn next(self, _ c: usize) -> Option<usize> {
-        next_index(c, N as u256)
+    fn has(self, _ c: usize) -> bool {
+        c < N
+    }
+
+    #[inline(always)]
+    fn next(self, _ c: usize) -> usize {
+        c.wrapping_add(1)
     }
 
     #[inline(always)]
@@ -190,13 +178,13 @@ impl<T, const N: usize> CollectionMut for [T; N] {
 
 impl<T, const N: usize> Bidirectional for [T; N] {
     #[inline(always)]
-    fn last(self) -> Option<usize> {
-        last_index(N as u256)
+    fn last(self) -> usize {
+        N.wrapping_sub(1)
     }
 
     #[inline(always)]
-    fn prev(self, _ c: usize) -> Option<usize> {
-        prev_index(c)
+    fn prev(self, _ c: usize) -> usize {
+        c.wrapping_sub(1)
     }
 }
 
@@ -206,13 +194,18 @@ impl<T> Collection for MemArray<T> {
     type Item = T
 
     #[inline(always)]
-    fn start(self) -> Option<usize> {
-        first_index(self.len())
+    fn start(self) -> usize {
+        0
     }
 
     #[inline(always)]
-    fn next(self, _ c: usize) -> Option<usize> {
-        next_index(c, self.len())
+    fn has(self, _ c: usize) -> bool {
+        (c as u256) < self.len()
+    }
+
+    #[inline(always)]
+    fn next(self, _ c: usize) -> usize {
+        c.wrapping_add(1)
     }
 
     #[inline(always)]
@@ -230,13 +223,13 @@ impl<T> CollectionMut for MemArray<T> {
 
 impl<T> Bidirectional for MemArray<T> {
     #[inline(always)]
-    fn last(self) -> Option<usize> {
-        last_index(self.len())
+    fn last(self) -> usize {
+        (self.len() as usize).wrapping_sub(1)
     }
 
     #[inline(always)]
-    fn prev(self, _ c: usize) -> Option<usize> {
-        prev_index(c)
+    fn prev(self, _ c: usize) -> usize {
+        c.wrapping_sub(1)
     }
 }
 
@@ -246,13 +239,18 @@ impl<T> Collection for MemSlice<T> {
     type Item = T
 
     #[inline(always)]
-    fn start(self) -> Option<usize> {
-        first_index(self.len())
+    fn start(self) -> usize {
+        0
     }
 
     #[inline(always)]
-    fn next(self, _ c: usize) -> Option<usize> {
-        next_index(c, self.len())
+    fn has(self, _ c: usize) -> bool {
+        (c as u256) < self.len()
+    }
+
+    #[inline(always)]
+    fn next(self, _ c: usize) -> usize {
+        c.wrapping_add(1)
     }
 
     #[inline(always)]
@@ -270,13 +268,13 @@ impl<T> CollectionMut for MemSlice<T> {
 
 impl<T> Bidirectional for MemSlice<T> {
     #[inline(always)]
-    fn last(self) -> Option<usize> {
-        last_index(self.len())
+    fn last(self) -> usize {
+        (self.len() as usize).wrapping_sub(1)
     }
 
     #[inline(always)]
-    fn prev(self, _ c: usize) -> Option<usize> {
-        prev_index(c)
+    fn prev(self, _ c: usize) -> usize {
+        c.wrapping_sub(1)
     }
 }
 
@@ -291,37 +289,22 @@ pub trait Driver<B: Collection> {
     /// What the driver yields beside each element, such as its index.
     type Extra = ()
 
-    fn start(self, _ base: B) -> Option<Self::State> uses (B::E, E)
+    /// The first state; one that names no element if there are none.
+    fn start(self, _ base: B) -> Self::State uses (B::E, E)
 
-    fn next(self, _ base: B, _ s: Self::State) -> Option<Self::State> uses (B::E, E)
+    /// Whether `s` names an element.
+    fn has(self, _ base: B, _ s: Self::State) -> bool uses (B::E, E)
 
+    /// The state after `s`; `has(s)` must hold.
+    fn next(self, _ base: B, _ s: Self::State) -> Self::State uses (B::E, E)
+
+    /// The element at `s`; `has(s)` must hold.
     fn at(self, _ base: B, _ s: Self::State) -> (Self::Extra, ref Self::Item) @B::S uses (B::E, E)
 }
 
 /// A driver whose elements a loop can mutate in place.
 pub trait DriverMut<B: CollectionMut>: Driver<B> {
     fn at_mut(self, _ base: mut B, _ s: Self::State) -> (Self::Extra, mut Self::Item) @B::S uses (B::E, E)
-}
-
-/// A traversal of two bases a loop holds, in step: `for (x, y) in (a, b) by d`.
-/// Each component is projected from its own base, in that base's space.
-pub trait Driver2<A: Collection, B: Collection> {
-    uses E
-    type State: Copy
-
-    fn start(self, _ a: A, _ b: B) -> Option<Self::State> uses (A::E, B::E, E)
-
-    fn next(self, _ a: A, _ b: B, _ s: Self::State) -> Option<Self::State> uses (A::E, B::E, E)
-
-    fn at(self, _ a: A, _ b: B, _ s: Self::State) -> (ref A::Item @A::S, ref B::Item @B::S)
-        uses (A::E, B::E, E)
-}
-
-/// A two-base driver whose elements a loop can mutate in place, which needs
-/// disjoint bases: `for (mut x, mut y) in (a, b) by d`.
-pub trait DriverMut2<A: CollectionMut, B: CollectionMut>: Driver2<A, B> {
-    fn at_mut(self, _ a: mut A, _ b: mut B, _ s: Self::State) -> (mut A::Item @A::S, mut B::Item @B::S)
-        uses (A::E, B::E, E)
 }
 
 /// A traversal that produces an owned value at each position, so non-`Copy`
@@ -331,10 +314,16 @@ pub trait Producer<B: Collection> {
     type State: Copy
     type Out
 
-    fn start(self, _ base: B) -> Option<Self::State> uses (B::E, E)
+    /// The first state; one that names no element if there are none.
+    fn start(self, _ base: B) -> Self::State uses (B::E, E)
 
-    fn next(self, _ base: B, _ s: Self::State) -> Option<Self::State> uses (B::E, E)
+    /// Whether `s` names an element.
+    fn has(self, _ base: B, _ s: Self::State) -> bool uses (B::E, E)
 
+    /// The state after `s`; `has(s)` must hold.
+    fn next(self, _ base: B, _ s: Self::State) -> Self::State uses (B::E, E)
+
+    /// The value made at `s`; `has(s)` must hold.
     fn produce(mut self, _ base: B, _ s: Self::State) -> Self::Out uses (B::E, E)
 }
 
@@ -348,12 +337,17 @@ impl<B: Collection> Driver<B> for Identity {
     type Item = B::Item
 
     #[inline(always)]
-    fn start(self, _ base: B) -> Option<B::Cursor> uses B::E {
+    fn start(self, _ base: B) -> B::Cursor uses B::E {
         base.start()
     }
 
     #[inline(always)]
-    fn next(self, _ base: B, _ s: B::Cursor) -> Option<B::Cursor> uses B::E {
+    fn has(self, _ base: B, _ s: B::Cursor) -> bool uses B::E {
+        base.has(s)
+    }
+
+    #[inline(always)]
+    fn next(self, _ base: B, _ s: B::Cursor) -> B::Cursor uses B::E {
         base.next(s)
     }
 
@@ -370,55 +364,6 @@ impl<B: CollectionMut> DriverMut<B> for Identity {
     }
 }
 
-/// The elements of two bases in step, until either ends.
-pub struct Zip {}
-
-impl Copy for Zip {}
-
-impl<A: Collection, B: Collection> Driver2<A, B> for Zip {
-    type State = (A::Cursor, B::Cursor)
-
-    #[inline(always)]
-    fn start(self, _ a: A, _ b: B) -> Option<(A::Cursor, B::Cursor)> uses (A::E, B::E) {
-        let Option::Some(i) = a.start() else {
-            return Option::None
-        }
-        let Option::Some(j) = b.start() else {
-            return Option::None
-        }
-        Option::Some((i, j))
-    }
-
-    #[inline(always)]
-    fn next(self, _ a: A, _ b: B, _ s: (A::Cursor, B::Cursor)) -> Option<(A::Cursor, B::Cursor)>
-        uses (A::E, B::E)
-    {
-        let Option::Some(i) = a.next(s.0) else {
-            return Option::None
-        }
-        let Option::Some(j) = b.next(s.1) else {
-            return Option::None
-        }
-        Option::Some((i, j))
-    }
-
-    #[inline(always)]
-    fn at(self, _ a: A, _ b: B, _ s: (A::Cursor, B::Cursor)) -> (ref A::Item, ref B::Item)
-        uses (A::E, B::E)
-    {
-        (Collection::at(a, s.0), Collection::at(b, s.1))
-    }
-}
-
-impl<A: CollectionMut, B: CollectionMut> DriverMut2<A, B> for Zip {
-    #[inline(always)]
-    fn at_mut(self, _ a: mut A, _ b: mut B, _ s: (A::Cursor, B::Cursor)) -> (mut A::Item, mut B::Item)
-        uses (A::E, B::E)
-    {
-        (CollectionMut::at_mut(mut a, s.0), CollectionMut::at_mut(mut b, s.1))
-    }
-}
-
 /// Each element from the last to the first.
 pub struct Reversed {}
 
@@ -429,12 +374,17 @@ impl<B: Bidirectional> Driver<B> for Reversed {
     type Item = B::Item
 
     #[inline(always)]
-    fn start(self, _ base: B) -> Option<B::Cursor> uses B::E {
+    fn start(self, _ base: B) -> B::Cursor uses B::E {
         base.last()
     }
 
     #[inline(always)]
-    fn next(self, _ base: B, _ s: B::Cursor) -> Option<B::Cursor> uses B::E {
+    fn has(self, _ base: B, _ s: B::Cursor) -> bool uses B::E {
+        base.has(s)
+    }
+
+    #[inline(always)]
+    fn next(self, _ base: B, _ s: B::Cursor) -> B::Cursor uses B::E {
         base.prev(s)
     }
 
@@ -465,19 +415,18 @@ impl<B: Collection, D: Driver<B>> Driver<B> for Enumerate<D> {
     type Extra = usize
 
     #[inline(always)]
-    fn start(self, _ base: B) -> Option<(usize, D::State)> uses (B::E, E) {
-        match self.inner.start(base) {
-            Option::Some(s) => Option::Some((0, s))
-            Option::None => Option::None
-        }
+    fn start(self, _ base: B) -> (usize, D::State) uses (B::E, E) {
+        (0, self.inner.start(base))
     }
 
     #[inline(always)]
-    fn next(self, _ base: B, _ s: (usize, D::State)) -> Option<(usize, D::State)> uses (B::E, E) {
-        match self.inner.next(base, s.1) {
-            Option::Some(next) => Option::Some((s.0 + 1, next))
-            Option::None => Option::None
-        }
+    fn has(self, _ base: B, _ s: (usize, D::State)) -> bool uses (B::E, E) {
+        self.inner.has(base, s.1)
+    }
+
+    #[inline(always)]
+    fn next(self, _ base: B, _ s: (usize, D::State)) -> (usize, D::State) uses (B::E, E) {
+        (s.0 + 1, self.inner.next(base, s.1))
     }
 
     #[inline(always)]
@@ -509,26 +458,21 @@ impl<B: Collection, D: Driver<B>> Driver<B> for Take<D> {
     type Item = D::Item
     type Extra = D::Extra
 
+    // The state counts the elements before its own, and stops advancing the
+    // inner traversal at the limit, where a filter would scan on.
     #[inline(always)]
-    fn start(self, _ base: B) -> Option<(usize, D::State)> uses (B::E, E) {
-        if self.n == 0 {
-            return Option::None
-        }
-        match self.inner.start(base) {
-            Option::Some(s) => Option::Some((1, s))
-            Option::None => Option::None
-        }
+    fn start(self, _ base: B) -> (usize, D::State) uses (B::E, E) {
+        (0, self.inner.start(base))
     }
 
     #[inline(always)]
-    fn next(self, _ base: B, _ s: (usize, D::State)) -> Option<(usize, D::State)> uses (B::E, E) {
-        if s.0 >= self.n {
-            return Option::None
-        }
-        match self.inner.next(base, s.1) {
-            Option::Some(next) => Option::Some((s.0 + 1, next))
-            Option::None => Option::None
-        }
+    fn has(self, _ base: B, _ s: (usize, D::State)) -> bool uses (B::E, E) {
+        s.0 < self.n && self.inner.has(base, s.1)
+    }
+
+    #[inline(always)]
+    fn next(self, _ base: B, _ s: (usize, D::State)) -> (usize, D::State) uses (B::E, E) {
+        if s.0 + 1 < self.n { (s.0 + 1, self.inner.next(base, s.1)) } else { (self.n, s.1) }
     }
 
     #[inline(always)]
@@ -559,21 +503,23 @@ impl<B: Collection, D: Driver<B>> Driver<B> for Skip<D> {
     type Extra = D::Extra
 
     #[inline(always)]
-    fn start(self, _ base: B) -> Option<D::State> uses (B::E, E) {
-        var state = self.inner.start(base)
+    fn start(self, _ base: B) -> D::State uses (B::E, E) {
+        var s = self.inner.start(base)
         var skipped = 0
-        while skipped < self.n {
-            state = match state {
-                Option::Some(s) => self.inner.next(base, s)
-                Option::None => return Option::None
-            }
+        while skipped < self.n && self.inner.has(base, s) {
+            s = self.inner.next(base, s)
             skipped += 1
         }
-        state
+        s
     }
 
     #[inline(always)]
-    fn next(self, _ base: B, _ s: D::State) -> Option<D::State> uses (B::E, E) {
+    fn has(self, _ base: B, _ s: D::State) -> bool uses (B::E, E) {
+        self.inner.has(base, s)
+    }
+
+    #[inline(always)]
+    fn next(self, _ base: B, _ s: D::State) -> D::State uses (B::E, E) {
         self.inner.next(base, s)
     }
 
@@ -605,22 +551,25 @@ impl<B: Collection, D: Driver<B>> Driver<B> for StepBy<D> {
     type Extra = D::Extra
 
     #[inline(always)]
-    fn start(self, _ base: B) -> Option<D::State> uses (B::E, E) {
+    fn start(self, _ base: B) -> D::State uses (B::E, E) {
         self.inner.start(base)
     }
 
     #[inline(always)]
-    fn next(self, _ base: B, _ s: D::State) -> Option<D::State> uses (B::E, E) {
-        var state = Option::Some(s)
-        var stepped = 0
-        while stepped < self.k {
-            state = match state {
-                Option::Some(s) => self.inner.next(base, s)
-                Option::None => return Option::None
-            }
+    fn has(self, _ base: B, _ s: D::State) -> bool uses (B::E, E) {
+        self.inner.has(base, s)
+    }
+
+    // Stops at the end of the inner traversal rather than stepping past it.
+    #[inline(always)]
+    fn next(self, _ base: B, _ s: D::State) -> D::State uses (B::E, E) {
+        var s = self.inner.next(base, s)
+        var stepped = 1
+        while stepped < self.k && self.inner.has(base, s) {
+            s = self.inner.next(base, s)
             stepped += 1
         }
-        state
+        s
     }
 
     #[inline(always)]
@@ -652,12 +601,17 @@ impl<B: Collection, D: Driver<B>> Producer<B> for Copied<D>
     type Out = (D::Extra, D::Item)
 
     #[inline(always)]
-    fn start(self, _ base: B) -> Option<D::State> uses (B::E, E) {
+    fn start(self, _ base: B) -> D::State uses (B::E, E) {
         self.inner.start(base)
     }
 
     #[inline(always)]
-    fn next(self, _ base: B, _ s: D::State) -> Option<D::State> uses (B::E, E) {
+    fn has(self, _ base: B, _ s: D::State) -> bool uses (B::E, E) {
+        self.inner.has(base, s)
+    }
+
+    #[inline(always)]
+    fn next(self, _ base: B, _ s: D::State) -> D::State uses (B::E, E) {
         self.inner.next(base, s)
     }
 
@@ -676,21 +630,22 @@ pub struct Filter<D, P> {
 
 impl<D: Copy, P: Copy> Copy for Filter<D, P> {}
 
-/// The first state from `state` on whose element `d`'s predicate holds.
+/// The first state from `s` on whose element `d`'s predicate holds, or the
+/// inner traversal's end.
 fn filtered<B: Collection, D: Driver<B>, P: Fn(D::Item) -> bool>(
     _ d: Filter<D, P>,
     _ base: B,
-    _ state: own Option<D::State>,
-) -> Option<D::State> uses (B::E, D::E, P::E) {
-    var state = state
-    while let Option::Some(s) = state {
+    _ s: D::State,
+) -> D::State uses (B::E, D::E, P::E) {
+    var s = s
+    while d.inner.has(base, s) {
         let (_, ref item) = Driver<B>::at(d.inner, base, s)
         if (d.p)(item) {
-            return Option::Some(s)
+            return s
         }
-        state = d.inner.next(base, s)
+        s = d.inner.next(base, s)
     }
-    Option::None
+    s
 }
 
 impl<B: Collection, D: Driver<B>, P: Fn(D::Item) -> bool> Driver<B> for Filter<D, P> {
@@ -699,11 +654,15 @@ impl<B: Collection, D: Driver<B>, P: Fn(D::Item) -> bool> Driver<B> for Filter<D
     type Item = D::Item
     type Extra = D::Extra
 
-    fn start(self, _ base: B) -> Option<D::State> uses (B::E, E) {
+    fn start(self, _ base: B) -> D::State uses (B::E, E) {
         filtered(self, base, self.inner.start(base))
     }
 
-    fn next(self, _ base: B, _ s: D::State) -> Option<D::State> uses (B::E, E) {
+    fn has(self, _ base: B, _ s: D::State) -> bool uses (B::E, E) {
+        self.inner.has(base, s)
+    }
+
+    fn next(self, _ base: B, _ s: D::State) -> D::State uses (B::E, E) {
         filtered(self, base, self.inner.next(base, s))
     }
 
@@ -729,11 +688,15 @@ impl<B: Collection, D: Driver<B>, F: FnMut_v<D::Item>> Producer<B> for Map<D, F>
     type State = D::State
     type Out = F::Out
 
-    fn start(self, _ base: B) -> Option<D::State> uses (B::E, E) {
+    fn start(self, _ base: B) -> D::State uses (B::E, E) {
         self.inner.start(base)
     }
 
-    fn next(self, _ base: B, _ s: D::State) -> Option<D::State> uses (B::E, E) {
+    fn has(self, _ base: B, _ s: D::State) -> bool uses (B::E, E) {
+        self.inner.has(base, s)
+    }
+
+    fn next(self, _ base: B, _ s: D::State) -> D::State uses (B::E, E) {
         self.inner.next(base, s)
     }
 
@@ -783,10 +746,6 @@ impl<D> Adapt for Skip<D> {}
 impl<D> Adapt for StepBy<D> {}
 impl<D, P> Adapt for Filter<D, P> {}
 
-pub fn zip() -> Zip {
-    Zip {}
-}
-
 pub fn reversed() -> Reversed {
     Reversed {}
 }
@@ -830,10 +789,10 @@ impl FromProducer for MemArray {
     {
         var p = p
         var len: u256 = 0
-        var state = p.start(base)
-        while let Option::Some(s) = state {
+        var s = p.start(base)
+        while p.has(base, s) {
             len += 1
-            state = p.next(base, s)
+            s = p.next(base, s)
         }
         // Each element is initialized below before anything reads it: a
         // second pass that yields more elements reverts at the bounds check,
@@ -841,11 +800,11 @@ impl FromProducer for MemArray {
         // traversal, reverts before the uninitialized rest can be read.
         var out = unsafe { MemArray<T>::new_uninit(len) }
         var i: usize = 0
-        state = p.start(base)
-        while let Option::Some(s) = state {
+        s = p.start(base)
+        while p.has(base, s) {
             out[i] = p.produce(base, s)
             i += 1
-            state = p.next(base, s)
+            s = p.next(base, s)
         }
         if i as u256 != len {
             panic_code(PANIC_ASSERT)

@@ -1,16 +1,12 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 388
+assertion_line: 462
 expression: output
 input_file: crates/codegen/tests/fixtures/for_range.fe
 ---
 target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256, i256};
-type @layout_1 = enum {
-    #variant_0,
-    #variant_1(i256),
-};
 
 global private const @layout_0 $const_region_0 = {0, 10};
 
@@ -21,54 +17,60 @@ func private %for_range_sum() -> i256 {
 
     block1:
         v3.constref<@layout_0> = const.ref $const_region_0;
-        v4.@layout_1 = call %start v3;
-        v5.i1 = enum.is_variant v4 #variant_1;
-        br v5 block5 block4;
+        v4.i256 = call %start v3;
+        jump block2;
 
     block2:
-        v33.i256 = phi (0.i256 block5) (v21 block6);
-        v7.i256 = phi (v14 block5) (v16 block6);
-        obj.store v0 v7;
-        jump block8;
+        v26.i256 = phi (0.i256 block1) (v18 block4);
+        v6.i256 = phi (v4 block1) (v12 block4);
+        v7.i1 = call %has v3 v6;
+        br v7 block3 block5;
 
     block3:
-        v10.@layout_1 = call %next v3 v7;
-        v11.i1 = enum.is_variant v10 #variant_1;
-        br v11 block6 block4;
-
-    block4:
-        v12.i256 = phi (0.i256 block1) (v21 block3);
-        return v12;
-
-    block5:
-        v14.i256 = enum.extract v4 #variant_1 0.i256;
-        jump block2;
-
-    block6:
-        v16.i256 = enum.extract v10 #variant_1 0.i256;
-        jump block2;
-
-    block7:
-        v18.i256 = obj.load v0;
-        jump block10;
-
-    block8:
+        obj.store v0 v6;
         jump block7;
 
-    block9:
-        (v21.i256, v22.i1) = uaddo v33 v18;
-        br v22 block11 block12;
+    block4:
+        v12.i256 = call %next v3 v6;
+        jump block2;
 
-    block10:
+    block5:
+        return v26;
+
+    block6:
+        v15.i256 = obj.load v0;
         jump block9;
 
-    block11:
+    block7:
+        jump block6;
+
+    block8:
+        (v18.i256, v19.i1) = uaddo v26 v15;
+        br v19 block10 block11;
+
+    block9:
+        jump block8;
+
+    block10:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
 
-    block12:
-        jump block3;
+    block11:
+        jump block4;
+}
+
+func inline(always) private %has(v0.constref<@layout_0>, v1.i256) -> i1 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.constref<i256> = const.proj v0 0.i256;
+        v5.i256 = const.load v4;
+        v7.constref<i256> = const.proj v0 1.i256;
+        v8.i256 = const.load v7;
+        v10.i1 = call %range_has v1 v5 v8;
+        return v10;
 }
 
 func private %main_root() {
@@ -80,73 +82,47 @@ func private %main_root() {
         evm_stop;
 }
 
-func inline(always) private %next(v0.constref<@layout_0>, v1.i256) -> @layout_1 {
+func inline(always) private %next(v0.constref<@layout_0>, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v4.constref<i256> = const.proj v0 1.i256;
-        v5.i256 = const.load v4;
-        v7.@layout_1 = call %range_next v1 v5;
-        return v7;
+        v4.i256 = call %wrapping_add v1 1.i256;
+        return v4;
 }
 
-func inline(always) private %range_next(v0.i256, v1.i256) -> @layout_1 {
+func inline(always) private %range_has(v0.i256, v1.i256, v2.i256) -> i1 {
     block0:
         jump block1;
 
     block1:
-        v4.i256 = call %wrapping_add v0 1.i256;
-        v6.i1 = lt v4 v1;
-        br v6 block2 block3;
+        v5.i1 = gt v1 v0;
+        v6.i1 = is_zero v5;
+        br v6 block5 block3;
 
     block2:
-        v8.@layout_1 = enum.make @layout_1 #variant_1 v4;
         jump block4;
 
     block3:
-        v9.@layout_1 = enum.make @layout_1 #variant_0;
-        v10.@layout_1 = enum.make @layout_1 #variant_0;
         jump block4;
 
     block4:
-        v11.@layout_1 = phi (v8 block2) (v10 block3);
-        return v11;
-}
-
-func inline(always) private %range_start(v0.i256, v1.i256) -> @layout_1 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i1 = lt v0 v1;
-        br v4 block2 block3;
-
-    block2:
-        v6.@layout_1 = enum.make @layout_1 #variant_1 v0;
-        jump block4;
-
-    block3:
-        v7.@layout_1 = enum.make @layout_1 #variant_0;
-        v8.@layout_1 = enum.make @layout_1 #variant_0;
-        jump block4;
-
-    block4:
-        v9.@layout_1 = phi (v6 block2) (v8 block3);
+        v9.i1 = phi (1.i1 block2) (0.i1 block3);
         return v9;
+
+    block5:
+        v12.i1 = lt v0 v2;
+        br v12 block2 block3;
 }
 
-func inline(always) private %start(v0.constref<@layout_0>) -> @layout_1 {
+func inline(always) private %start(v0.constref<@layout_0>) -> i256 {
     block0:
         jump block1;
 
     block1:
         v3.constref<i256> = const.proj v0 0.i256;
         v4.i256 = const.load v3;
-        v6.constref<i256> = const.proj v0 1.i256;
-        v7.i256 = const.load v6;
-        v8.@layout_1 = call %range_start v4 v7;
-        return v8;
+        return v4;
 }
 
 func private %wrapping_add(v0.i256, v1.i256) -> i256 {

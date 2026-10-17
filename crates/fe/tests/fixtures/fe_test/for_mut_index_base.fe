@@ -1,6 +1,5 @@
 // A loop base or a binding that ends in a built-in array index names that
 // element's place, as one that ends in a field does.
-use core::iter::zip
 use std::evm::{Evm, StorageMap}
 
 #[test]
@@ -28,16 +27,6 @@ fn index_base_through_a_mut_parameter() {
     var g = Rows { r: [[1, 2], [3, 4]] }
     bump(mut g)
     assert(g.r[1][0] == 4 && g.r[0][0] == 1)
-}
-
-#[test]
-fn two_index_bases() {
-    var g: [[u256; 2]; 2] = [[1, 2], [3, 4]]
-    var h: [[u256; 2]; 2] = [[5, 6], [7, 8]]
-    for (mut x, mut y) in (g[1], h[0]) by zip() {
-        x += y
-    }
-    assert(g[1][0] == 8 && g[1][1] == 10)
 }
 
 fn next_row(_ count: mut u256) -> usize {

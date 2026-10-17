@@ -61,6 +61,22 @@ fn bump_and_read<C: Counter>(_ c: mut C) -> u256 uses (C::E, store: Store) {
     store.total
 }
 
+// A blanket implementation over `C` names its bound's row `C::E`; its own
+// row is `E`, or `Self::E`.
+trait Doubled {
+    uses E
+    fn bump_two(mut self) uses E
+}
+
+impl<C: Counter> Doubled for C {
+    uses E = C::E
+
+    fn bump_two(mut self) uses E {
+        self.bump()
+        self.bump()
+    }
+}
+
 // A row expanded only in part: the inner `C::E` is forwarded, `Log`
 // resolved here.
 fn bump_logged<C: Counter>(_ x: mut Logged<C>) uses (C::E, log: mut Log) {
@@ -102,4 +118,16 @@ fn nested_rows() {
     assert!(store.total == 5)
     assert!(log.entries == 6)
     assert!(plain.inner.n == 1)
+}
+
+#[test]
+fn blanket_rows_name_their_bounds() {
+    var store = Store { total: 0 }
+    var sc = StoreCounter {}
+    with (Store = store) {
+        sc.bump_two()
+    }
+    var mc = MemCounter { n: 0 }
+    mc.bump_two()
+    assert!(store.total == 2 && mc.n == 2)
 }

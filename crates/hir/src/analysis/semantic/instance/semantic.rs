@@ -162,7 +162,7 @@ pub struct CallSiteLowering<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Update)]
 pub struct ForLoopCallSites<'db> {
     /// The protocol's calls, in `ForLoopStep` order.
-    pub sites: [CallSiteLowering<'db>; 3],
+    pub sites: [CallSiteLowering<'db>; 4],
 }
 
 impl<'db> ForLoopCallSites<'db> {

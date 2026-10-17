@@ -2,7 +2,6 @@
 // and `at`. The body sees a copy of a `Copy` element, the element's `ref`
 // access otherwise, and its `mut` access in `for mut x in xs`.
 use core::iter::Collection
-use core::option::Option
 use core::ptr::MemArray
 
 struct Account { balance: u256, owner: u256 }
@@ -15,12 +14,16 @@ impl Collection for Squares {
     type Cursor = usize
     type Item = usize
 
-    fn start(self) -> Option<usize> {
-        if self.n == 0 { Option::None } else { Option::Some(0) }
+    fn start(self) -> usize {
+        0
     }
 
-    fn next(self, _ c: usize) -> Option<usize> {
-        if c + 1 < self.n { Option::Some(c + 1) } else { Option::None }
+    fn has(self, _ c: usize) -> bool {
+        c < self.n
+    }
+
+    fn next(self, _ c: usize) -> usize {
+        c + 1
     }
 
     fn at(self, _ c: usize) -> ref usize {

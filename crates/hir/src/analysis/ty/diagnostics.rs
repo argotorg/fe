@@ -1098,11 +1098,6 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         name: IdentId<'db>,
     },
-
-    /// A two-base loop binding one item `mut` and the other not.
-    MixedLoopBases {
-        primary: DynLazySpan<'db>,
-    },
 }
 
 impl<'db> BodyDiag<'db> {
@@ -1247,7 +1242,6 @@ impl<'db> BodyDiag<'db> {
             Self::ClosureArityMismatch { .. } => 109,
             Self::WriteToCapture { .. } => 110,
             Self::AccessCapture { .. } => 111,
-            Self::MixedLoopBases { .. } => 114,
             Self::TupleOfAccesses { .. } => 115,
             Self::UnsafeSplitOperand { .. } => 118,
             Self::RefBindingRequired { .. } => 119,

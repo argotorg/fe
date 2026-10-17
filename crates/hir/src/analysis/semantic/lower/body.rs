@@ -2199,11 +2199,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     /// Lowers `for pat in base by d { body }` to the protocol its plan
-    /// selects: the collection's own, or the driver's. Each state is tested
-    /// where it is produced, so only the state itself is carried around the
-    /// loop. The next state is taken at the latch, after the body and its
-    /// element's cleanup, which is where `continue` goes; `break` leaves
-    /// without advancing.
+    /// selects: the collection's own, or the driver's. The header tests the
+    /// state the body then projects from with `has`, so only the state is
+    /// carried around the loop. The next state is taken at the latch, after
+    /// the body and its element's cleanup, which is where `continue` goes;
+    /// `break` leaves without advancing.
     fn lower_for(&mut self, stmt: StmtId, pat: PatId, body_expr: ExprId) {
         let sites = self
             .for_loop_call_sites
@@ -2214,16 +2214,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .typed_body
             .for_loop_plan(stmt)
             .unwrap_or_else(|| panic!("missing loop protocol for for-loop {stmt:?}"));
-        let bases: Vec<_> = plan
-            .bases
-            .iter()
-            .map(|&base| (base, self.lower_loop_base(base)))
-            .collect();
-        // A method chain rooted at a base views it for its own calls.
-        for (expr, base) in &bases {
-            let value = self.loop_base_operand(*expr, base).value;
-            self.loop_bases.insert(*expr, value);
-        }
+        let base_expr = plan.base;
+        let base = self.lower_loop_base(base_expr);
+        // A method chain rooted at the base views it for its own calls.
+        let value = self.loop_base_operand(base_expr, &base).value;
+        self.loop_bases.insert(base_expr, value);
         // The driver is evaluated once, so the body cannot retarget it. A
         // producer advances its own copy, which the loop takes; any other
         // driver the loop holds as it does a base, by a view of its place for
@@ -2249,15 +2244,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             });
             SOperand::synthetic(temp)
         });
-        // The calls take the driver first, then the bases, then the state.
+        // The calls take the driver first, then the base, then the state.
         let inputs = |this: &mut Self| -> Vec<SOperand> {
             driver
                 .into_iter()
-                .chain(
-                    bases
-                        .iter()
-                        .map(|(expr, base)| this.loop_base_operand(*expr, base)),
-                )
+                .chain([this.loop_base_operand(base_expr, &base)])
                 .collect()
         };
         let with_state = |this: &mut Self, state| {
@@ -2280,49 +2271,35 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 },
             )
         };
-        let option_ty = plan.call(ForLoopStep::Start).callable.ret_ty(self.db);
         let shape = &plan.shape;
-        let some = VariantIndex(
-            sum_kind(self.db, self.body.scope(), option_ty)
-                .expect("a loop state is an `Option`")
-                .payload_variant(),
-        );
         let state = self.alloc_temp(plan.state_ty);
+        let header_bb = self.new_block();
         let body_bb = self.new_block();
         let latch_bb = self.new_block();
         let exit_bb = self.new_block();
-        // Enters the body with the state `next` holds, or leaves the loop.
-        let test = |this: &mut Self, next| {
-            let is_some = this.emit_expr(
-                TyId::bool(this.db),
-                SExpr::IsEnumVariant {
-                    value: SOperand::synthetic(next),
-                    variant: some,
-                },
-            );
-            let load_bb = this.new_block();
-            this.set_synthetic_terminator(
-                this.current,
-                STerminatorKind::Branch {
-                    cond: SOperand::synthetic(is_some),
-                    then_bb: load_bb,
-                    else_bb: exit_bb,
-                },
-            );
-            this.switch_to(load_bb);
+        // Holds the state `start` or `next` makes, and goes to the header.
+        let advance = |this: &mut Self, value| {
             this.push_synthetic_stmt(SStmtKind::Assign {
                 dst: state,
-                expr: SExpr::ExtractEnumField {
-                    value: SOperand::synthetic(next),
-                    variant: some,
-                    field: FieldIndex(0),
-                },
+                expr: SExpr::Forward(SOperand::synthetic(value)),
             });
-            this.set_synthetic_terminator(this.current, STerminatorKind::Goto(body_bb));
+            this.set_synthetic_terminator(this.current, STerminatorKind::Goto(header_bb));
         };
         let args = inputs(self);
-        let first = call(self, ForLoopStep::Start, args, option_ty);
-        test(self, first);
+        let first = call(self, ForLoopStep::Start, args, plan.state_ty);
+        advance(self, first);
+
+        self.switch_to(header_bb);
+        let args = with_state(self, state);
+        let has = call(self, ForLoopStep::Has, args, TyId::bool(self.db));
+        self.set_synthetic_terminator(
+            self.current,
+            STerminatorKind::Branch {
+                cond: SOperand::synthetic(has),
+                then_bb: body_bb,
+                else_bb: exit_bb,
+            },
+        );
 
         self.loop_stack.push(LoopScope {
             continue_bb: latch_bb,
@@ -2401,8 +2378,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         if falls_through || scope.has_reachable_continue {
             self.switch_to(latch_bb);
             let args = with_state(self, state);
-            let next = call(self, ForLoopStep::Next, args, option_ty);
-            test(self, next);
+            let next = call(self, ForLoopStep::Next, args, plan.state_ty);
+            advance(self, next);
         } else {
             // Every body path leaves the loop, so nothing reaches the latch.
             // Close it like a dead `if`/`match` join.

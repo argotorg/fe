@@ -650,14 +650,6 @@ impl<'db> TyCheckEnv<'db> {
         );
     }
 
-    /// Whether `expr` is a base a `for` loop holds.
-    pub(super) fn is_loop_base(&self, expr: ExprId) -> bool {
-        self.for_loop_plans
-            .values()
-            .flatten()
-            .any(|plan| plan.bases.contains(&expr))
-    }
-
     pub(super) fn register_for_loop_plan(&mut self, stmt: StmtId, plan: ForLoopPlan<'db>) {
         if self.for_loop_plans[stmt].replace(plan).is_some() {
             panic!("for loop seq is already registered for the given stmt")
