@@ -1,0 +1,13 @@
+use core::AsBytes
+
+const TOO_LONG: [u8; 4] = ("a", "bc").as_bytes()
+
+fn too_short() -> u8 {
+    let bytes: [u8; 1] = ("a", "b").as_bytes()
+    bytes[0]
+}
+
+fn wrong_element() -> u16 {
+    let words: [u16; 2] = ("a", "b").as_bytes()
+    words[0]
+}

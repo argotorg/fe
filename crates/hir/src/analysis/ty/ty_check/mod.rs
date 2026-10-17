@@ -24,7 +24,7 @@ use crate::analysis::name_resolution::{ResolvedVariant, is_scope_visible_from};
 pub use crate::analysis::ty::AddressSpace;
 use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::corelib::resolve_lib_type_path;
-use crate::analysis::ty::fold::TyFoldable;
+use crate::analysis::ty::fold::{TyFoldable, TyFolder};
 use crate::analysis::ty::method_table::ProbedMethod;
 use crate::analysis::ty::provider::{ProviderKind, provider_semantics};
 use crate::analysis::ty::shape::{Shape, view_param_misuse};
@@ -2482,6 +2482,13 @@ impl<'db> TyChecker<'db> {
                             self.env.register_pending_method(pending);
                         }
                     }
+                    env::DeferredTask::Equation(pending) => {
+                        if self.recheck_pending_equation(&pending, false) {
+                            progressed = true;
+                        } else {
+                            self.env.register_pending_equation(pending);
+                        }
+                    }
                     env::DeferredTask::PrimitiveOp(pending) => {
                         match self.resolve_pending_primitive_op(&pending) {
                             expr::PendingPrimitiveOpResolution::Pending => {
@@ -2549,6 +2556,9 @@ impl<'db> TyChecker<'db> {
                 }
                 env::DeferredTask::PrimitiveOp(pending) => {
                     let _ = self.resolve_pending_primitive_op(&pending);
+                }
+                env::DeferredTask::Equation(pending) => {
+                    self.recheck_pending_equation(&pending, true);
                 }
             }
         }
@@ -3499,6 +3509,9 @@ impl<'db> TyChecker<'db> {
             }
 
             Err(UnificationError::TypeMismatch) => {
+                if let Some(ty) = self.defer_pending_equation(actual, expected, &span) {
+                    return ty;
+                }
                 let actual = actual.fold_with(self.db, &mut self.table);
                 let expected = expected.fold_with(self.db, &mut self.table);
                 if !actual.has_invalid(self.db) && !expected.has_invalid(self.db) {
@@ -3517,6 +3530,82 @@ impl<'db> TyChecker<'db> {
                 TyId::invalid(self.db, InvalidCause::Other)
             }
         }
+    }
+
+    /// Handles a failed equation whose const arguments include projections
+    /// over unresolved inference variables, which can't be evaluated yet. The
+    /// rest of the types is unified now, with fresh variables in place of those
+    /// consts, and the full equation is checked once inference has settled.
+    /// Returns `None` if the types differ regardless of those consts.
+    fn defer_pending_equation(
+        &mut self,
+        actual: TyId<'db>,
+        expected: TyId<'db>,
+        span: &DynLazySpan<'db>,
+    ) -> Option<TyId<'db>> {
+        let actual = actual.fold_with(self.db, &mut self.table);
+        let expected = expected.fold_with(self.db, &mut self.table);
+        let mut folder = PendingConstFolder {
+            table: &mut self.table,
+            found: false,
+        };
+        let actual_shape = actual.fold_with(self.db, &mut folder);
+        let actual_pending = folder.found;
+        folder.found = false;
+        let expected_shape = expected.fold_with(self.db, &mut folder);
+        let expected_pending = folder.found;
+        if !(actual_pending || expected_pending)
+            || self.table.unify(actual_shape, expected_shape).is_err()
+        {
+            return None;
+        }
+        self.env.register_pending_equation(env::PendingEquation {
+            actual,
+            expected,
+            span: span.clone(),
+        });
+        let ty = if expected_pending { actual } else { expected };
+        Some(ty.fold_with(self.db, &mut self.table))
+    }
+
+    /// Checks a deferred equation once its consts can be evaluated. Returns
+    /// `false` if they still can't. With `finalize`, string literals take
+    /// their fallback types first and a remaining mismatch is reported.
+    fn recheck_pending_equation(
+        &mut self,
+        pending: &env::PendingEquation<'db>,
+        finalize: bool,
+    ) -> bool {
+        let db = self.db;
+        let (actual, expected) = if finalize {
+            let scope = self.env.scope();
+            let mut prober = env::Prober::new(&mut self.table, scope);
+            (
+                pending.actual.fold_with(db, &mut prober),
+                pending.expected.fold_with(db, &mut prober),
+            )
+        } else {
+            (
+                pending.actual.fold_with(db, &mut self.table),
+                pending.expected.fold_with(db, &mut self.table),
+            )
+        };
+        let actual = self.normalize_ty(actual);
+        let expected = self.normalize_ty(expected);
+        if !finalize && (has_pending_const(db, actual) || has_pending_const(db, expected)) {
+            return false;
+        }
+        if self.table.unify(actual, expected).is_err()
+            && !actual.has_invalid(db)
+            && !expected.has_invalid(db)
+        {
+            self.push_diag(BodyDiag::TypeMismatch {
+                span: pending.span.clone(),
+                expected,
+                given: actual,
+            });
+        }
+        true
     }
 
     fn resolve_path(
@@ -6639,6 +6728,57 @@ pub(super) fn merged_borrow_provider(
     previous
         .zip(current)
         .and_then(|(previous, current)| (previous == current).then_some(previous))
+}
+
+/// Replaces const arguments that are projections over unresolved inference
+/// variables with fresh const variables.
+struct PendingConstFolder<'db, 'a> {
+    table: &'a mut UnificationTable<'db>,
+    found: bool,
+}
+
+impl<'db> TyFolder<'db> for PendingConstFolder<'db, '_> {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        if is_pending_const(db, ty) {
+            let TyData::ConstTy(const_ty) = ty.data(db) else {
+                unreachable!()
+            };
+            self.found = true;
+            let key = self.table.new_key(ty.kind(db), TyVarSort::General);
+            return TyId::const_ty_var(db, const_ty.ty(db), key);
+        }
+        ty.super_fold_with(db, self)
+    }
+}
+
+fn is_pending_const<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    matches!(
+        ty.data(db),
+        TyData::ConstTy(const_ty) if matches!(const_ty.data(db), ConstTyData::Abstract(..))
+    ) && ty.has_var(db)
+}
+
+/// Whether `ty` contains a const that `PendingConstFolder` would replace,
+/// found by the same traversal, so closures, associated types and qualified
+/// types are searched too.
+fn has_pending_const<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    struct Finder {
+        found: bool,
+    }
+
+    impl<'db> TyFolder<'db> for Finder {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            if self.found || is_pending_const(db, ty) {
+                self.found = true;
+                return ty;
+            }
+            ty.super_fold_with(db, self)
+        }
+    }
+
+    let mut finder = Finder { found: false };
+    ty.fold_with(db, &mut finder);
+    finder.found
 }
 
 #[cfg(test)]

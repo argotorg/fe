@@ -1,0 +1,35 @@
+// An associated const that depends on a string literal's type can only be
+// evaluated once the literal falls back to its `String<N>` type.
+use core::AsBytes
+
+const PAIR: [u8; 3] = ("a", "bc").as_bytes()
+const SINGLE: [u8; 1] = ("a",).as_bytes()
+const NESTED: [u8; 4] = (("a",), ("b", "cd")).as_bytes()
+
+pub trait Width {
+    const WIDTH: usize
+    fn zeros(self) -> [u8; Self::WIDTH]
+}
+
+impl<const L: usize> Width for String<L> {
+    const WIDTH: usize = L
+    fn zeros(self) -> [u8; Self::WIDTH] {
+        [0; L]
+    }
+}
+
+impl<T0: Width, T1: Width> Width for (T0, T1) {
+    const WIDTH: usize = T0::WIDTH + T1::WIDTH
+    fn zeros(self) -> [u8; Self::WIDTH] {
+        [0; Self::WIDTH]
+    }
+}
+
+fn local() -> u8 {
+    let bytes: [u8; 3] = ("a", "bc").as_bytes()
+    bytes[2]
+}
+
+fn returned() -> [u8; 5] {
+    ("ab", "cde").zeros()
+}

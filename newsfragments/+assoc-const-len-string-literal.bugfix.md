@@ -1,0 +1,1 @@
+An array length given by an associated constant that depends on a string literal, such as `const X: [u8; 3] = ("a", "bc").as_bytes()`, is now accepted. The length is evaluated once the literal has its type, so a wrong length is reported with both lengths, for example `expected [u8; 4], but [u8; 3] is given`.

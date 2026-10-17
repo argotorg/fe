@@ -1,0 +1,12 @@
+use core::AsBytes
+
+const PAIR: [u8; 3] = ("a", "bc").as_bytes()
+const NESTED: [u8; 4] = (("a",), ("b", "cd")).as_bytes()
+
+#[test]
+fn tuple_bytes_in_typed_consts() {
+    core::assert(PAIR[0] == 97 && PAIR[1] == 98 && PAIR[2] == 99)
+    core::assert(NESTED[0] == 97 && NESTED[1] == 98 && NESTED[3] == 100)
+    let local: [u8; 2] = ("x", "y").as_bytes()
+    core::assert(local[0] == 120 && local[1] == 121)
+}
