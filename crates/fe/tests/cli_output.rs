@@ -261,6 +261,51 @@ fn test_cli_check_ingot_nested_in_its_dependency() {
 }
 
 #[test]
+fn test_cli_check_assoc_item_ignores_traits_of_dependencies_not_in_scope() {
+    // A dependency implements its own trait with an associated const of the
+    // same name for `String<N>`. Without importing it, `Self::SIZE` in the
+    // root ingot's impl must not become ambiguous.
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    fs::create_dir_all(root.join("app/src")).unwrap();
+    fs::create_dir_all(root.join("dep/src")).unwrap();
+    fs::write(
+        root.join("fe.toml"),
+        "[workspace]\nname = \"scope\"\nversion = \"0.1.0\"\nmembers = [{ path = \"app\", name = \"app\" }, { path = \"dep\", name = \"dep\" }]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("app/fe.toml"),
+        "[ingot]\nname = \"app\"\nversion = \"0.1.0\"\n[dependencies]\ndep = true\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("dep/fe.toml"),
+        "[ingot]\nname = \"dep\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let trait_src = |name: &str| {
+        format!(
+            "pub trait {name} {{\n    const SIZE: usize\n    fn bytes(self) -> [u8; Self::SIZE]\n}}\n\
+             impl<const LEN: usize> {name} for String<LEN> {{\n    const SIZE: usize = LEN\n    \
+             fn bytes(self) -> [u8; Self::SIZE] {{ self.as_bytes() }}\n}}\n"
+        )
+    };
+    fs::write(root.join("dep/src/lib.fe"), trait_src("Key")).unwrap();
+    fs::write(
+        root.join("app/src/lib.fe"),
+        format!(
+            "{}pub fn first() -> u8 {{ dep::Key::bytes(\"ab\")[0] }}\n",
+            trait_src("Literal")
+        ),
+    )
+    .unwrap();
+
+    let (output, exit_code) = run_fe_check(root.to_str().expect("utf8 path"));
+    assert_eq!(exit_code, 0, "expected a clean check:\n{output}");
+}
+
+#[test]
 fn test_cli_check_unresolved_record_init_path_reports_error_instead_of_panicking() {
     let temp = tempdir().expect("tempdir");
     let file = temp.path().join("unresolved_record_init_path.fe");

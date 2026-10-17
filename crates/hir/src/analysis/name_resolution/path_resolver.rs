@@ -16,7 +16,7 @@ use smallvec::{SmallVec, smallvec};
 use thin_vec::ThinVec;
 
 use super::{
-    EarlyNameQueryId, ExpectedPathKind, NameDomain,
+    EarlyNameQueryId, ExpectedPathKind, NameDomain, available_traits_in_scope,
     diagnostics::PathResDiag,
     is_scope_visible_from,
     method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate},
@@ -1825,7 +1825,8 @@ fn select_assoc_const_candidate<'db>(
     ];
 
     let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
-    let mut unresolved = false;
+    // Candidates whose trait arguments this receiver doesn't determine.
+    let mut unresolved: IndexSet<TraitInstId<'db>> = IndexSet::default();
     receiver.with_materialized(db, |cx| {
         let receiver_ty = cx.query();
         for ingot in search_ingots.into_iter().flatten() {
@@ -1848,7 +1849,7 @@ fn select_assoc_const_candidate<'db>(
                     if let Some(inst) = cx.try_extract::<TraitInstId<'db>>(inst) {
                         matches.insert(inst);
                     } else {
-                        unresolved = true;
+                        unresolved.insert(declared);
                         matches.insert(declared);
                     }
                 }
@@ -1857,13 +1858,68 @@ fn select_assoc_const_candidate<'db>(
         }
     });
 
-    if unresolved || matches.len() > 1 {
-        AssocConstSelection::Ambiguous(matches.into_iter().collect())
-    } else if let Some(inst) = matches.into_iter().next() {
-        AssocConstSelection::Found(inst)
+    // Like method selection: a sole applicable candidate is used, but among
+    // several only traits in scope count, so an unrelated trait elsewhere
+    // (even in another ingot) can't make the path ambiguous.
+    let candidates = if matches.len() > 1 {
+        let available = traits_available_for_selection(db, scope, assumptions);
+        let visible: IndexSet<TraitInstId<'db>> = matches
+            .iter()
+            .copied()
+            .filter(|inst| available.contains(&inst.def(db)))
+            .collect();
+        if visible.is_empty() { matches } else { visible }
     } else {
-        AssocConstSelection::NotFound
+        matches
+    };
+    // A candidate whose trait arguments are unknown can't be selected.
+    match candidates.first() {
+        None => AssocConstSelection::NotFound,
+        Some(&inst) if candidates.len() == 1 && !unresolved.contains(&inst) => {
+            AssocConstSelection::Found(inst)
+        }
+        Some(_) => AssocConstSelection::Ambiguous(candidates.into_iter().collect()),
     }
+}
+
+/// The traits whose items a path or method call in `scope` may select: those
+/// in scope, the traits of `assumptions`, the trait of an enclosing trait
+/// impl, and all their super-traits.
+fn traits_available_for_selection<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> IndexSet<Trait<'db>> {
+    let mut pending: Vec<Trait<'db>> = available_traits_in_scope(db, scope)
+        .iter()
+        .copied()
+        .collect();
+    pending.extend(assumptions.list(db).iter().map(|pred| pred.def(db)));
+    // An impl of a trait named by a qualified path, such as
+    // `impl api::Local for u8`, doesn't bring the trait into scope.
+    let enclosing_impl = std::iter::successors(Some(scope), |scope| scope.parent(db)).find_map(
+        |scope| match scope {
+            ScopeId::Item(ItemKind::ImplTrait(impl_trait)) => Some(impl_trait),
+            _ => None,
+        },
+    );
+    if let Some(trait_inst) =
+        enclosing_impl.and_then(|impl_trait| impl_trait.trait_inst_result(db).ok())
+    {
+        pending.push(trait_inst.def(db));
+    }
+    let mut traits = IndexSet::default();
+    while let Some(trait_def) = pending.pop() {
+        if traits.insert(trait_def) {
+            pending.extend(
+                trait_def
+                    .super_traits(db)
+                    .iter()
+                    .map(|super_trait| super_trait.skip_binder().def(db)),
+            );
+        }
+    }
+    traits
 }
 
 pub(crate) fn find_associated_type<'db>(
@@ -2123,6 +2179,24 @@ fn find_associated_type_in_mode<'db>(
     // paths to one declaration are not an ambiguity.
     let mut seen = IndexSet::new();
     candidates.retain(|candidate| seen.insert(*candidate));
+
+    // Implementations of a concrete type: like method selection and associated
+    // consts, only traits in scope count among several candidates, so an
+    // unrelated trait elsewhere can't make the path ambiguous.
+    if candidates.len() > 1
+        && !matches!(
+            original_ty.data(db),
+            TyData::TyParam(_) | TyData::AssocTy(_)
+        )
+    {
+        let available = traits_available_for_selection(db, scope, assumptions);
+        if candidates
+            .iter()
+            .any(|(inst, _)| available.contains(&inst.def(db)))
+        {
+            candidates.retain(|(inst, _)| available.contains(&inst.def(db)));
+        }
+    }
 
     Ok(candidates)
 }
