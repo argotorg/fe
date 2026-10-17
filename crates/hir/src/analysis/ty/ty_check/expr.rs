@@ -4614,9 +4614,17 @@ impl<'db> TyChecker<'db> {
             let else_prop = self.check_expr_in_new_scope(*else_, expected, result_discarded);
             let borrow_provider =
                 merged_borrow_provider(then_prop.borrow_provider, else_prop.borrow_provider);
+            // The conditional only diverges if both branches do.
+            let else_ty = else_prop.ty.fold_with(self.db, &mut self.table);
+            let then_ty = then_prop.ty.fold_with(self.db, &mut self.table);
+            let ty = if else_ty.is_never(self.db) && !then_ty.is_never(self.db) {
+                then_prop.ty
+            } else {
+                else_prop.ty
+            };
             ExprProp {
                 borrow_provider,
-                ..ExprProp::new(else_prop.ty, true)
+                ..ExprProp::new(ty, true)
             }
         } else {
             let if_ty = self.fresh_ty();
@@ -4654,6 +4662,7 @@ impl<'db> TyChecker<'db> {
         let scrutinee_prop = self.open_matched_place(*scrutinee, scrutinee_prop, arm_pats);
 
         let mut match_ty = expected;
+        let mut diverging_arms = 0;
         let mut first_provider: Option<AddressSpace> = None;
         let mut provider_unknown = false;
         let mut provider_conflict = false;
@@ -4671,7 +4680,17 @@ impl<'db> TyChecker<'db> {
             } else {
                 self.check_expr(arm.body, match_ty)
             };
-            match_ty = arm_prop.ty;
+            // A diverging arm doesn't determine the type of the match, which
+            // only diverges if every arm does.
+            if arm_prop
+                .ty
+                .fold_with(self.db, &mut self.table)
+                .is_never(self.db)
+            {
+                diverging_arms += 1;
+            } else {
+                match_ty = arm_prop.ty;
+            }
             self.env.leave_scope();
 
             if arm_prop.shape.is_some() {
@@ -4738,6 +4757,10 @@ impl<'db> TyChecker<'db> {
                     self.push_diag(diag);
                 }
             }
+        }
+
+        if !arms.is_empty() && diverging_arms == arms.len() {
+            match_ty = TyId::never(self.db);
         }
 
         ExprProp {
