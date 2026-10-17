@@ -197,11 +197,15 @@ impl<B: Collection> Driver<B> for Tagged {
     type Item = B::Item
     type Extra = Tag
 
-    fn start(self, _ base: B) -> Option<B::Cursor> uses (B::E, E) {
+    fn start(self, _ base: B) -> B::Cursor uses (B::E, E) {
         base.start()
     }
 
-    fn next(self, _ base: B, _ s: B::Cursor) -> Option<B::Cursor> uses (B::E, E) {
+    fn has(self, _ base: B, _ s: B::Cursor) -> bool uses (B::E, E) {
+        base.has(s)
+    }
+
+    fn next(self, _ base: B, _ s: B::Cursor) -> B::Cursor uses (B::E, E) {
         base.next(s)
     }
 

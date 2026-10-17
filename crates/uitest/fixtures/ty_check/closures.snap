@@ -10,9 +10,9 @@ error[6-0003]: trait bound is not satisfied
 57 │     xs.fold(0, |acc: mut, x| acc)
    │        ^^^^ `|mut u256, u256| -> u256` doesn't implement `FnMut(own u256, u256) -> u256`
    │
-   ┌─ src/iter.fe:63:19
+   ┌─ src/iter.fe:68:19
    │
-63 │     fn fold<A, F: FnMut(own A, Self::Item) -> A>(self, _ init: own A, _ f: mut F) -> A
+68 │     fn fold<A, F: FnMut(own A, Self::Item) -> A>(self, _ init: own A, _ f: mut F) -> A
    │                   ----------------------------- required by this bound on `fold`
 
 error[8-0019]: `break` is not allowed outside of a loop

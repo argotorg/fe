@@ -21,8 +21,7 @@
 use core::abi::{AbiFrame, AbiSize, DynArray, Encode, store_word}
 use core::iter::{Bidirectional, Collection, CollectionMut}
 use core::marker::{Clearable, Pinned}
-use core::ops::{LaneCodec, Location, StateIndex, clear_storage}
-use core::option::Option
+use core::ops::{LaneCodec, Location, StateIndex, WrappingAdd, WrappingSub, clear_storage}
 use core::intrinsic::storage_slots
 use core::ptr
 use ingot::abi::{Sol, StaticAbiElement}
@@ -201,12 +200,19 @@ impl<T> Collection for SolArray<T> {
     type Cursor = u256
     type Item = T
 
-    fn start(self) -> Option<u256> {
-        first_index(self.len)
+    // Index cursors wrap, as core's do: the position before index 0 and the
+    // last position of an empty array are both `u256::MAX`, so `c < len`
+    // tests a position in either direction.
+    fn start(self) -> u256 {
+        0
     }
 
-    fn next(self, _ c: u256) -> Option<u256> {
-        next_index(c, self.len)
+    fn has(self, _ c: u256) -> bool {
+        c < self.len
+    }
+
+    fn next(self, _ c: u256) -> u256 {
+        c.wrapping_add(1)
     }
 
     fn at(self, _ c: u256) -> ref T @S {
@@ -221,31 +227,11 @@ impl<T> CollectionMut for SolArray<T> {
 }
 
 impl<T> Bidirectional for SolArray<T> {
-    fn last(self) -> Option<u256> {
-        last_index(self.len)
+    fn last(self) -> u256 {
+        self.len.wrapping_sub(1)
     }
 
-    fn prev(self, _ c: u256) -> Option<u256> {
-        prev_index(c)
+    fn prev(self, _ c: u256) -> u256 {
+        c.wrapping_sub(1)
     }
-}
-
-/// The first index of a collection of `len` elements.
-pub(ingot) fn first_index(_ len: u256) -> Option<u256> {
-    if len == 0 { Option::None } else { Option::Some(0) }
-}
-
-/// The index after `i` in a collection of `len` elements.
-pub(ingot) fn next_index(_ i: u256, _ len: u256) -> Option<u256> {
-    if i + 1 < len { Option::Some(i + 1) } else { Option::None }
-}
-
-/// The last index of a collection of `len` elements.
-pub(ingot) fn last_index(_ len: u256) -> Option<u256> {
-    if len == 0 { Option::None } else { Option::Some(len - 1) }
-}
-
-/// The index before `i`.
-pub(ingot) fn prev_index(_ i: u256) -> Option<u256> {
-    if i == 0 { Option::None } else { Option::Some(i - 1) }
 }

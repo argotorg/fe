@@ -6,7 +6,6 @@
 use core::marker::Pinned
 use core::iter::Collection
 use core::ops::{LaneCodec, Location, StateIndex}
-use core::option::Option
 use std::evm::{TSlot, keccak_words}
 
 struct ByteLanes {}
@@ -46,12 +45,16 @@ impl Collection for Bytes {
     type Cursor = u256
     type Item = u8
 
-    fn start(self) -> Option<u256> {
-        Option::Some(0)
+    fn start(self) -> u256 {
+        0
     }
 
-    fn next(self, _ c: u256) -> Option<u256> {
-        if c < 31 { Option::Some(c + 1) } else { Option::None }
+    fn has(self, _ c: u256) -> bool {
+        c < 32
+    }
+
+    fn next(self, _ c: u256) -> u256 {
+        c + 1
     }
 
     fn at(self, _ c: u256) -> ref u8 {
@@ -82,12 +85,16 @@ impl Collection for PromisedBytes {
     type Cursor = u256
     type Item = u8
 
-    fn start(self) -> Option<u256> {
-        Option::Some(0)
+    fn start(self) -> u256 {
+        0
     }
 
-    fn next(self, _ c: u256) -> Option<u256> {
-        if c < 31 { Option::Some(c + 1) } else { Option::None }
+    fn has(self, _ c: u256) -> bool {
+        c < 32
+    }
+
+    fn next(self, _ c: u256) -> u256 {
+        c + 1
     }
 
     fn at(self, _ c: u256) -> ref u8 {

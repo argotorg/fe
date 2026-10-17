@@ -1,22 +1,23 @@
 ---
 source: crates/uitest/tests/semantic_access.rs
+assertion_line: 32
 expression: diags
 input_file: fixtures/semantic_access/path_space_contracts.fe
 ---
 error[16-0007]: transport violation in `fn at`
-   ┌─ path_space_contracts.fe:94:9
-   │
-94 │         ref self[c]
-   │         ^^^^^^^^^^^ this yield names memory, but the signature declares storage
+    ┌─ path_space_contracts.fe:101:9
+    │
+101 │         ref self[c]
+    │         ^^^^^^^^^^^ this yield names memory, but the signature declares storage
 
 error[16-0007]: transport violation in `fn plain`
-    ┌─ path_space_contracts.fe:120:9
+    ┌─ path_space_contracts.fe:127:9
     │
-120 │         mut self.locked.value
+127 │         mut self.locked.value
     │         ^^^^^^^^^^^^^^^^^^^^^ this yield names transient storage, but the signature declares storage
 
 error[16-0007]: transport violation in `fn mislabeled`
-    ┌─ path_space_contracts.fe:131:5
+    ┌─ path_space_contracts.fe:138:5
     │
-131 │     mut g.locked.value
+138 │     mut g.locked.value
     │     ^^^^^^^^^^^^^^^^^^ this yield names transient storage, but the signature declares storage

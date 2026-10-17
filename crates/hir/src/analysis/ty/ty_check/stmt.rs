@@ -30,6 +30,8 @@ use crate::analysis::ty::{
 pub enum ForLoopStep {
     /// `start`: the first cursor or driver state.
     Start,
+    /// `has`: whether a state names an element.
+    Has,
     /// `next`: the state after one.
     Next,
     /// `at`, or a producer's `produce`: the step's element.
@@ -37,7 +39,7 @@ pub enum ForLoopStep {
 }
 
 impl ForLoopStep {
-    pub const ALL: [Self; 3] = [Self::Start, Self::Next, Self::At];
+    pub const ALL: [Self; 4] = [Self::Start, Self::Has, Self::Next, Self::At];
 }
 
 /// What a loop's body receives from each step.
@@ -77,7 +79,7 @@ pub struct ForLoopPlan<'db> {
     /// The pattern binds the element alone: a driver yields nothing beside it.
     pub binds_element: bool,
     /// The calls, in `ForLoopStep` order.
-    pub calls: [ForLoopCall<'db>; 3],
+    pub calls: [ForLoopCall<'db>; 4],
 }
 
 impl<'db> ForLoopPlan<'db> {
@@ -519,11 +521,9 @@ impl<'db> TyChecker<'db> {
             })
         };
         let start = call(self, protocol, inst, "start", inputs.clone())?;
-        let state_ty = *self
-            .normalize_ty(start.callable.ret_ty(self.db))
-            .generic_args(self.db)
-            .first()?;
+        let state_ty = self.normalize_ty(start.callable.ret_ty(self.db));
         let with_state = || inputs.iter().copied().chain([state_ty]).collect::<Vec<_>>();
+        let has = call(self, protocol, inst, "has", with_state())?;
         let next = call(self, protocol, inst, "next", with_state())?;
         let at = call(self, at_trait, at_inst, at_name, with_state())?;
         let shape = match at.callable.ret_shape(self.db) {
@@ -554,7 +554,7 @@ impl<'db> TyChecker<'db> {
             shape,
             item,
             binds_element,
-            calls: [start, next, at],
+            calls: [start, has, next, at],
         })
     }
 

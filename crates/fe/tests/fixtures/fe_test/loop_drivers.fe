@@ -5,7 +5,6 @@
 // producer yields owned values.
 use core::iter::{Collection, Driver, Identity, Producer, Skip, Take}
 use core::iter::{enumerate, reversed, skip, step_by, take}
-use core::option::Option
 
 struct Account { balance: u256, owner: u256 }
 
@@ -41,11 +40,15 @@ impl<B: Collection<Item = u256, Cursor = usize>> Producer<B> for Open {
     type State = usize
     type Out = Account
 
-    fn start(self, _ base: B) -> Option<usize> uses B::E {
+    fn start(self, _ base: B) -> usize uses B::E {
         base.start()
     }
 
-    fn next(self, _ base: B, _ s: usize) -> Option<usize> uses B::E {
+    fn has(self, _ base: B, _ s: usize) -> bool uses B::E {
+        base.has(s)
+    }
+
+    fn next(self, _ base: B, _ s: usize) -> usize uses B::E {
         base.next(s)
     }
 

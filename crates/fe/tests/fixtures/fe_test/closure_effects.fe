@@ -3,7 +3,6 @@
 // and the provider in scope where that function is called is the one the
 // body uses.
 use core::iter::Collection
-use core::option::Option
 use std::evm::Evm
 
 struct Store { n: u256 }
@@ -125,7 +124,7 @@ fn trait_keyed_effects() {
 }
 
 fn has_start<C: Collection>(_ c: C) -> bool uses C::E {
-    c.start().is_some()
+    c.has(c.start())
 }
 
 // An enclosing row the body needs is a component of the closure's row, which
@@ -145,12 +144,16 @@ impl Collection for BelowStore {
     type Cursor = u256
     type Item = u256
 
-    fn start(self) -> Option<u256> uses E {
-        if store.n == 0 { Option::None } else { Option::Some(0) }
+    fn start(self) -> u256 uses E {
+        0
     }
 
-    fn next(self, _ c: u256) -> Option<u256> uses E {
-        if c + 1 < store.n { Option::Some(c + 1) } else { Option::None }
+    fn has(self, _ c: u256) -> bool uses E {
+        c < store.n
+    }
+
+    fn next(self, _ c: u256) -> u256 uses E {
+        c + 1
     }
 
     fn at(self, _ c: u256) -> ref u256 uses E {

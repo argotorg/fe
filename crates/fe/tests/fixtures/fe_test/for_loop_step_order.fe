@@ -2,7 +2,6 @@
 // `at`'s slide, then `next`. `break` leaves without advancing, and
 // `continue` advances.
 use core::iter::{Collection, CollectionMut}
-use core::option::Option
 
 // `next` reverts when it advances past `stop`, or, when `check_written`,
 // before the write-back of the element it advances past has landed.
@@ -18,14 +17,18 @@ impl Collection for Tracked {
     type Cursor = usize
     type Item = u256
 
-    fn start(self) -> Option<usize> {
-        Option::Some(0)
+    fn start(self) -> usize {
+        0
     }
 
-    fn next(self, _ c: usize) -> Option<usize> {
+    fn has(self, _ c: usize) -> bool {
+        c < 3
+    }
+
+    fn next(self, _ c: usize) -> usize {
         assert!(c < self.stop)
         assert!(!self.check_written || self.written == c + 1)
-        if c + 1 < 3 { Option::Some(c + 1) } else { Option::None }
+        c + 1
     }
 
     fn at(self, _ c: usize) -> ref u256 {

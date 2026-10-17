@@ -22,9 +22,12 @@ the traversal: a `mut` item calls `at_mut` and opens the base mutably, as a
 way: `for (i, mut x) in xs.enumerate()`.
 
 `Collection` (`core::iter`) is the protocol: `start` and `next` move a
-cursor, `at` projects the element at it. `CollectionMut` adds `at_mut` with
-`mut` access for loops whose item is `mut`, and `Bidirectional` traverses in
-reverse. Arrays, `MemArray`, `MemSlice`, ranges, `SolArray` and
+cursor, `has` tests whether it names an element, and `at` projects the
+element at it. A loop tests each cursor with `has` before its body runs, and
+calls `next` and `at` only on a cursor `has` holds for; the position after
+the last element (or, in reverse, before the first) is a cursor that names
+none. `CollectionMut` adds `at_mut` with `mut` access for loops whose item
+is `mut`, and `Bidirectional` (`last`, `prev`) traverses in reverse. Arrays, `MemArray`, `MemSlice`, ranges, `SolArray` and
 `SolEnumerableSet` are collections; a collection declares the effects its
 methods need (`uses E`) and the space of the places it yields (`space S`).
 

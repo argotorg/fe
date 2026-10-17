@@ -37,14 +37,9 @@ fn reads_and_writes_by_method() {
 // Generic code names the method its bound declares.
 fn bump_all<C: Collection<Item = u256> + CollectionMut>(_ xs: mut C) uses C::E {
     var c = xs.start()
-    while true {
-        match c {
-            Option::Some(cursor) => {
-                xs.at_mut(cursor) += 1
-                c = xs.next(cursor)
-            }
-            Option::None => break
-        }
+    while xs.has(c) {
+        xs.at_mut(c) += 1
+        c = xs.next(c)
     }
 }
 

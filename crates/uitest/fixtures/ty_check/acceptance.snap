@@ -5,60 +5,69 @@ expression: diags
 input_file: fixtures/ty_check/acceptance.fe
 ---
 error[3-0059]: `Span` is a `#[view]` type
-   ┌─ acceptance.fe:98:17
-   │
-98 │ fn case21_alias(_ s: own Alias) {}
-   │                 ^^^^^^^^^^^^^^ a `#[view]` type cannot be an `own` parameter
+    ┌─ acceptance.fe:102:17
+    │
+102 │ fn case21_alias(_ s: own Alias) {}
+    │                 ^^^^^^^^^^^^^^ a `#[view]` type cannot be an `own` parameter
 
 error[3-0059]: `Span` is a `#[view]` type
-    ┌─ acceptance.fe:109:11
+    ┌─ acceptance.fe:113:11
     │
-109 │     span: Span,
+113 │     span: Span,
     │           ^^^^ a `#[view]` type cannot be a field
 
 error[3-0059]: `Span` is a `#[view]` type
-    ┌─ acceptance.fe:112:14
+    ┌─ acceptance.fe:116:14
     │
-112 │ type Spans = [Alias; 2]
+116 │ type Spans = [Alias; 2]
     │              ^^^^^^^^^^ a `#[view]` type cannot be part of another type
 
 error[8-0036]: missing effect `Key` required by `start`
-   ┌─ acceptance.fe:60:14
+   ┌─ acceptance.fe:64:14
    │
-60 │     for x in xs by d {
+64 │     for x in xs by d {
    │              ^^ `start` requires effect `Key` to be in scope
    │
    = require it in this function's signature with `uses Key`, so that its callers provide it
    = or provide it to a block of this function with `with (Key = value) { .. }`
 
-error[8-0036]: missing effect `Key` required by `next`
-   ┌─ acceptance.fe:60:14
+error[8-0036]: missing effect `Key` required by `has`
+   ┌─ acceptance.fe:64:14
    │
-60 │     for x in xs by d {
+64 │     for x in xs by d {
+   │              ^^ `has` requires effect `Key` to be in scope
+   │
+   = require it in this function's signature with `uses Key`, so that its callers provide it
+   = or provide it to a block of this function with `with (Key = value) { .. }`
+
+error[8-0036]: missing effect `Key` required by `next`
+   ┌─ acceptance.fe:64:14
+   │
+64 │     for x in xs by d {
    │              ^^ `next` requires effect `Key` to be in scope
    │
    = require it in this function's signature with `uses Key`, so that its callers provide it
    = or provide it to a block of this function with `with (Key = value) { .. }`
 
 error[8-0036]: missing effect `Key` required by `at`
-   ┌─ acceptance.fe:60:14
+   ┌─ acceptance.fe:64:14
    │
-60 │     for x in xs by d {
+64 │     for x in xs by d {
    │              ^^ `at` requires effect `Key` to be in scope
    │
    = require it in this function's signature with `uses Key`, so that its callers provide it
    = or provide it to a block of this function with `with (Key = value) { .. }`
 
 error[8-0105]: this call instantiates its callee at the `#[view]` type `Span`
-    ┌─ acceptance.fe:103:5
+    ┌─ acceptance.fe:107:5
     │
-103 │     take_assoc<Owner>(owner.span())
+107 │     take_assoc<Owner>(owner.span())
     │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ a `#[view]` type cannot be an `own` parameter
 
 error[8-0105]: this call instantiates its callee at the `#[view]` type `Span`
-    ┌─ acceptance.fe:119:5
+    ┌─ acceptance.fe:123:5
     │
-119 │     take(owner.span())
+123 │     take(owner.span())
     │     ^^^^^^^^^^^^^^^^^^ a `#[view]` type cannot be an `own` parameter
 
 error[8-0107]: an access through a state pointer needs the function's own authority

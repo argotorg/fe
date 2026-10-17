@@ -5,49 +5,49 @@ expression: diags
 input_file: fixtures/ty_check/loop_drivers.fe
 ---
 error[8-0000]: type mismatch
-   ┌─ loop_drivers.fe:56:9
+   ┌─ loop_drivers.fe:59:9
    │
-56 │     for (i, x) in xs by reversed() {
+59 │     for (i, x) in xs by reversed() {
    │         ^^^^^^ expected `u256`, but `(_, _)` is given
 
 error[8-0018]: left-hand side of assignment is immutable
-   ┌─ loop_drivers.fe:43:9
+   ┌─ loop_drivers.fe:46:9
    │
-42 │     for x in xs by reversed() {
+45 │     for x in xs by reversed() {
    │         - write `var x` for a mutable value
-43 │         x += 1
+46 │         x += 1
    │         ^ immutable assignment
 
 error[8-0018]: left-hand side of assignment is immutable
-   ┌─ loop_drivers.fe:50:9
+   ┌─ loop_drivers.fe:53:9
    │
-49 │     for (_, ref account) in accounts.enumerate() {
+52 │     for (_, ref account) in accounts.enumerate() {
    │             ----------- `account` is a read access; bind it with `mut` to write through it
-50 │         account.balance = 0
+53 │         account.balance = 0
    │         ^^^^^^^^^^^^^^^ immutable assignment
 
 error[8-0020]: `Driver` needs to be implemented for bool
-  ┌─ loop_drivers.fe:8:20
+  ┌─ loop_drivers.fe:7:20
   │
-8 │     for x in xs by true {
+7 │     for x in xs by true {
   │                    ^^^^
   │                    │
   │                    `Driver` needs to be implemented for `bool`
   │                    consider implementing `Driver` for `bool`
 
 error[8-0020]: `DriverMut` needs to be implemented for Firsts
-   ┌─ loop_drivers.fe:35:24
+   ┌─ loop_drivers.fe:38:24
    │
-35 │     for mut x in xs by d {
+38 │     for mut x in xs by d {
    │                        ^
    │                        │
    │                        `DriverMut` needs to be implemented for `Firsts`
    │                        consider implementing `DriverMut` for `Firsts`
 
 error[8-0020]: `Collection` needs to be implemented for Take<Reversed>
-   ┌─ loop_drivers.fe:62:14
+   ┌─ loop_drivers.fe:65:14
    │
-62 │     for x in reversed().take(2) {
+65 │     for x in reversed().take(2) {
    │              ^^^^^^^^^^^^^^^^^^
    │              │
    │              `Collection` needs to be implemented for `Take<Reversed>`

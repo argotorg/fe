@@ -2,6 +2,7 @@
 // naming `Collection`'s row `E`, uses the row's components as its own
 // effects.
 use core::iter::{Bidirectional, Collection}
+use core::ops::WrappingSub
 
 /// Values held by an effect, and how many of them are in use.
 struct Counts {
@@ -26,12 +27,16 @@ impl Collection for InUse {
     type Cursor = u256
     type Item = u256
 
-    fn start(self) -> Option<u256> uses E {
-        if count() == 0 { Option::None } else { Option::Some(0) }
+    fn start(self) -> u256 uses E {
+        0
     }
 
-    fn next(self, _ c: u256) -> Option<u256> uses E {
-        if c + 1 < count() { Option::Some(c + 1) } else { Option::None }
+    fn has(self, _ c: u256) -> bool uses E {
+        c < count()
+    }
+
+    fn next(self, _ c: u256) -> u256 uses E {
+        c + 1
     }
 
     fn at(self, _ c: u256) -> ref u256 uses E {
@@ -41,12 +46,12 @@ impl Collection for InUse {
 }
 
 impl Bidirectional for InUse {
-    fn last(self) -> Option<u256> uses E {
-        if count() == 0 { Option::None } else { Option::Some(count() - 1) }
+    fn last(self) -> u256 uses E {
+        count().wrapping_sub(1)
     }
 
-    fn prev(self, _ c: u256) -> Option<u256> uses E {
-        if c == 0 { Option::None } else { Option::Some(c - 1) }
+    fn prev(self, _ c: u256) -> u256 uses E {
+        c.wrapping_sub(1)
     }
 }
 

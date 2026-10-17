@@ -17,11 +17,11 @@
 //! ```
 use core::abi::{AbiFrame, AbiSize, DynArray, Encode, store_word}
 use core::iter::{Bidirectional, Collection}
-use core::option::Option
+use core::ops::{WrappingAdd, WrappingSub}
 use core::ptr
 use ingot::abi::{Sol, StaticAbiElement}
 use super::effects::{RawStorage, storage_at_mut}
-use super::sol_array::{SolArray, first_index, last_index, next_index, prev_index}
+use super::sol_array::SolArray
 use super::sol_slot::{SolPacked, field_mask}
 use super::storage_map::StorageMap
 
@@ -38,12 +38,17 @@ impl<T: SolPacked> Collection for SolEnumerableSet<T> {
     type Cursor = u256
     type Item = T
 
-    fn start(self) -> Option<u256> {
-        first_index(self.len())
+    // An index cursor that wraps, as `SolArray`'s does.
+    fn start(self) -> u256 {
+        0
     }
 
-    fn next(self, _ c: u256) -> Option<u256> {
-        next_index(c, self.len())
+    fn has(self, _ c: u256) -> bool {
+        c < self.len()
+    }
+
+    fn next(self, _ c: u256) -> u256 {
+        c.wrapping_add(1)
     }
 
     fn at(self, _ c: u256) -> ref T {
@@ -53,12 +58,12 @@ impl<T: SolPacked> Collection for SolEnumerableSet<T> {
 }
 
 impl<T: SolPacked> Bidirectional for SolEnumerableSet<T> {
-    fn last(self) -> Option<u256> {
-        last_index(self.len())
+    fn last(self) -> u256 {
+        self.len().wrapping_sub(1)
     }
 
-    fn prev(self, _ c: u256) -> Option<u256> {
-        prev_index(c)
+    fn prev(self, _ c: u256) -> u256 {
+        c.wrapping_sub(1)
     }
 }
 

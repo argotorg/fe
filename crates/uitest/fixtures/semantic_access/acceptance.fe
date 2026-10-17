@@ -281,12 +281,16 @@ impl Collection for Keyed {
     type Cursor = u256
     type Item = u256
 
-    fn start(self) -> Option<u256> uses E {
-        if self.len == 0 { Option::None } else { Option::Some(0) }
+    fn start(self) -> u256 uses E {
+        0
     }
 
-    fn next(self, _ c: u256) -> Option<u256> uses E {
-        if c + 1 < self.len { Option::Some(c + 1) } else { Option::None }
+    fn has(self, _ c: u256) -> bool uses E {
+        c < self.len
+    }
+
+    fn next(self, _ c: u256) -> u256 uses E {
+        c + 1
     }
 
     fn at(self, _ c: u256) -> ref u256 uses E {

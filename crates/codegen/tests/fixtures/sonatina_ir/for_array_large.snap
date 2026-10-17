@@ -1,40 +1,12 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 388
+assertion_line: 462
 expression: output
 input_file: crates/codegen/tests/fixtures/for_array_large.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = enum {
-    #variant_0,
-    #variant_1(i256),
-};
-
 global private const [i64; 10] $const_region_0 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-
-func inline(always) private %first_index(v0.i256) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i1 = eq v0 0.i256;
-        br v3 block2 block3;
-
-    block2:
-        v4.@layout_0 = enum.make @layout_0 #variant_0;
-        v5.@layout_0 = enum.make @layout_0 #variant_0;
-        jump block4;
-
-    block3:
-        v6.@layout_0 = enum.make @layout_0 #variant_1 0.i256;
-        v7.@layout_0 = enum.make @layout_0 #variant_1 0.i256;
-        jump block4;
-
-    block4:
-        v8.@layout_0 = phi (v5 block2) (v7 block3);
-        return v8;
-}
 
 func private %for_array_large_sum() -> i64 {
     block0:
@@ -43,62 +15,64 @@ func private %for_array_large_sum() -> i64 {
     block1:
         v10.constref<[i64; 10]> = const.ref $const_region_0;
         v11.constref<[i64; 10]> = const.ref $const_region_0;
-        v13.@layout_0 = call %start v11;
-        v14.i1 = enum.is_variant v13 #variant_1;
-        br v14 block5 block4;
+        v13.i256 = call %start v11;
+        jump block2;
 
     block2:
-        v50.i64 = phi (0.i64 block5) (v37 block6);
-        v16.i256 = phi (v24 block5) (v26 block6);
-        jump block8;
+        v42.i64 = phi (0.i64 block1) (v34 block4);
+        v15.i256 = phi (v13 block1) (v21 block4);
+        v16.i1 = call %has v11 v15;
+        br v16 block3 block5;
 
     block3:
-        v19.@layout_0 = call %next v11 v16;
-        v20.i1 = enum.is_variant v19 #variant_1;
-        br v20 block6 block4;
-
-    block4:
-        v21.i64 = phi (0.i64 block1) (v37 block3);
-        return v21;
-
-    block5:
-        v24.i256 = enum.extract v13 #variant_1 0.i256;
-        jump block2;
-
-    block6:
-        v26.i256 = enum.extract v19 #variant_1 0.i256;
-        jump block2;
-
-    block7:
-        v28.i64 = const.load v34;
-        jump block10;
-
-    block8:
-        v31.i1 = lt v16 10.i256;
-        v32.i1 = is_zero v31;
-        br v32 block11 block12;
-
-    block9:
-        (v37.i64, v38.i1) = uaddo v50 v28;
-        br v38 block13 block14;
-
-    block10:
-        jump block9;
-
-    block11:
-        evm_revert 0.i256 0.i256;
-
-    block12:
-        v34.constref<i64> = const.index v11 v16;
         jump block7;
 
-    block13:
+    block4:
+        v21.i256 = call %next v11 v15;
+        jump block2;
+
+    block5:
+        return v42;
+
+    block6:
+        v24.i64 = const.load v31;
+        jump block9;
+
+    block7:
+        v27.i1 = lt v15 10.i256;
+        v28.i1 = is_zero v27;
+        br v28 block10 block11;
+
+    block8:
+        (v34.i64, v35.i1) = uaddo v42 v24;
+        br v35 block12 block13;
+
+    block9:
+        jump block8;
+
+    block10:
+        evm_revert 0.i256 0.i256;
+
+    block11:
+        v31.constref<i64> = const.index v11 v15;
+        jump block6;
+
+    block12:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
 
-    block14:
-        jump block3;
+    block13:
+        jump block4;
+}
+
+func inline(always) private %has(v0.constref<[i64; 10]>, v1.i256) -> i1 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i1 = lt v1 10.i256;
+        return v4;
 }
 
 func private %main_root() {
@@ -110,45 +84,21 @@ func private %main_root() {
         evm_stop;
 }
 
-func inline(always) private %next(v0.constref<[i64; 10]>, v1.i256) -> @layout_0 {
+func inline(always) private %next(v0.constref<[i64; 10]>, v1.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v4.@layout_0 = call %next_index v1 10.i256;
+        v4.i256 = call %wrapping_add v1 1.i256;
         return v4;
 }
 
-func inline(always) private %next_index(v0.i256, v1.i256) -> @layout_0 {
+func inline(always) private %start(v0.constref<[i64; 10]>) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v4.i256 = call %wrapping_add v0 1.i256;
-        v6.i1 = lt v4 v1;
-        br v6 block2 block3;
-
-    block2:
-        v8.@layout_0 = enum.make @layout_0 #variant_1 v4;
-        jump block4;
-
-    block3:
-        v9.@layout_0 = enum.make @layout_0 #variant_0;
-        v10.@layout_0 = enum.make @layout_0 #variant_0;
-        jump block4;
-
-    block4:
-        v11.@layout_0 = phi (v8 block2) (v10 block3);
-        return v11;
-}
-
-func inline(always) private %start(v0.constref<[i64; 10]>) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.@layout_0 = call %first_index 10.i256;
-        return v2;
+        return 0.i256;
 }
 
 func private %wrapping_add(v0.i256, v1.i256) -> i256 {

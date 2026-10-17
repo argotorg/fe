@@ -1,5 +1,4 @@
 use ingot::iter::{Bidirectional, Collection}
-use ingot::option::Option
 use ingot::ops::{WrappingAdd, WrappingSub}
 
 /// Trait for range bounds - either compile-time known or runtime.
@@ -35,27 +34,14 @@ pub struct Range<S: Bound, E: Bound> {
     pub end: <E as Bound>::Repr,
 }
 
-// A range's cursor is its value, which it yields as a temporary. A valid
-// cursor lies in the range, so stepping from it cannot overflow.
+// A range's cursor is its value, which it yields as a temporary. The cursor
+// wraps like an index: the position before `lo` and the last position of an
+// empty range both lie outside `lo..hi`, so membership tests a position in
+// either direction. A position in the range is below `hi`, so stepping from
+// it cannot overflow.
 #[inline(always)]
-fn range_start(_ lo: usize, _ hi: usize) -> Option<usize> {
-    if lo < hi { Option::Some(lo) } else { Option::None }
-}
-
-#[inline(always)]
-fn range_next(_ c: usize, _ hi: usize) -> Option<usize> {
-    let next = c.wrapping_add(1)
-    if next < hi { Option::Some(next) } else { Option::None }
-}
-
-#[inline(always)]
-fn range_last(_ lo: usize, _ hi: usize) -> Option<usize> {
-    if lo < hi { Option::Some(hi.wrapping_sub(1)) } else { Option::None }
-}
-
-#[inline(always)]
-fn range_prev(_ c: usize, _ lo: usize) -> Option<usize> {
-    if c > lo { Option::Some(c.wrapping_sub(1)) } else { Option::None }
+fn range_has(_ c: usize, _ lo: usize, _ hi: usize) -> bool {
+    lo <= c && c < hi
 }
 
 /// Fully const range: `Known<LO>..Known<HI>`
@@ -65,13 +51,18 @@ impl<const LO: usize, const HI: usize> Collection for Range<Known<LO>, Known<HI>
     type Item = usize
 
     #[inline(always)]
-    fn start(self) -> Option<usize> {
-        range_start(LO, HI)
+    fn start(self) -> usize {
+        LO
     }
 
     #[inline(always)]
-    fn next(self, _ c: usize) -> Option<usize> {
-        range_next(c, HI)
+    fn has(self, _ c: usize) -> bool {
+        range_has(c, LO, HI)
+    }
+
+    #[inline(always)]
+    fn next(self, _ c: usize) -> usize {
+        c.wrapping_add(1)
     }
 
     #[inline(always)]
@@ -82,13 +73,13 @@ impl<const LO: usize, const HI: usize> Collection for Range<Known<LO>, Known<HI>
 
 impl<const LO: usize, const HI: usize> Bidirectional for Range<Known<LO>, Known<HI>> {
     #[inline(always)]
-    fn last(self) -> Option<usize> {
-        range_last(LO, HI)
+    fn last(self) -> usize {
+        HI.wrapping_sub(1)
     }
 
     #[inline(always)]
-    fn prev(self, _ c: usize) -> Option<usize> {
-        range_prev(c, LO)
+    fn prev(self, _ c: usize) -> usize {
+        c.wrapping_sub(1)
     }
 }
 
@@ -99,13 +90,18 @@ impl<const LO: usize> Collection for Range<Known<LO>, Unknown> {
     type Item = usize
 
     #[inline(always)]
-    fn start(self) -> Option<usize> {
-        range_start(LO, self.end)
+    fn start(self) -> usize {
+        LO
     }
 
     #[inline(always)]
-    fn next(self, _ c: usize) -> Option<usize> {
-        range_next(c, self.end)
+    fn has(self, _ c: usize) -> bool {
+        range_has(c, LO, self.end)
+    }
+
+    #[inline(always)]
+    fn next(self, _ c: usize) -> usize {
+        c.wrapping_add(1)
     }
 
     #[inline(always)]
@@ -116,13 +112,13 @@ impl<const LO: usize> Collection for Range<Known<LO>, Unknown> {
 
 impl<const LO: usize> Bidirectional for Range<Known<LO>, Unknown> {
     #[inline(always)]
-    fn last(self) -> Option<usize> {
-        range_last(LO, self.end)
+    fn last(self) -> usize {
+        self.end.wrapping_sub(1)
     }
 
     #[inline(always)]
-    fn prev(self, _ c: usize) -> Option<usize> {
-        range_prev(c, LO)
+    fn prev(self, _ c: usize) -> usize {
+        c.wrapping_sub(1)
     }
 }
 
@@ -133,13 +129,18 @@ impl<const HI: usize> Collection for Range<Unknown, Known<HI>> {
     type Item = usize
 
     #[inline(always)]
-    fn start(self) -> Option<usize> {
-        range_start(self.start, HI)
+    fn start(self) -> usize {
+        self.start
     }
 
     #[inline(always)]
-    fn next(self, _ c: usize) -> Option<usize> {
-        range_next(c, HI)
+    fn has(self, _ c: usize) -> bool {
+        range_has(c, self.start, HI)
+    }
+
+    #[inline(always)]
+    fn next(self, _ c: usize) -> usize {
+        c.wrapping_add(1)
     }
 
     #[inline(always)]
@@ -150,13 +151,13 @@ impl<const HI: usize> Collection for Range<Unknown, Known<HI>> {
 
 impl<const HI: usize> Bidirectional for Range<Unknown, Known<HI>> {
     #[inline(always)]
-    fn last(self) -> Option<usize> {
-        range_last(self.start, HI)
+    fn last(self) -> usize {
+        HI.wrapping_sub(1)
     }
 
     #[inline(always)]
-    fn prev(self, _ c: usize) -> Option<usize> {
-        range_prev(c, self.start)
+    fn prev(self, _ c: usize) -> usize {
+        c.wrapping_sub(1)
     }
 }
 
@@ -167,13 +168,18 @@ impl Collection for Range<Unknown, Unknown> {
     type Item = usize
 
     #[inline(always)]
-    fn start(self) -> Option<usize> {
-        range_start(self.start, self.end)
+    fn start(self) -> usize {
+        self.start
     }
 
     #[inline(always)]
-    fn next(self, _ c: usize) -> Option<usize> {
-        range_next(c, self.end)
+    fn has(self, _ c: usize) -> bool {
+        range_has(c, self.start, self.end)
+    }
+
+    #[inline(always)]
+    fn next(self, _ c: usize) -> usize {
+        c.wrapping_add(1)
     }
 
     #[inline(always)]
@@ -184,12 +190,12 @@ impl Collection for Range<Unknown, Unknown> {
 
 impl Bidirectional for Range<Unknown, Unknown> {
     #[inline(always)]
-    fn last(self) -> Option<usize> {
-        range_last(self.start, self.end)
+    fn last(self) -> usize {
+        self.end.wrapping_sub(1)
     }
 
     #[inline(always)]
-    fn prev(self, _ c: usize) -> Option<usize> {
-        range_prev(c, self.start)
+    fn prev(self, _ c: usize) -> usize {
+        c.wrapping_sub(1)
     }
 }
