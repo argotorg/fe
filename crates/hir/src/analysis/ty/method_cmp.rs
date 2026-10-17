@@ -465,7 +465,7 @@ fn map_effect_provider_params_by_identity<'db>(
     // known to be empty needs no entry at all.
     let impl_func = match impl_m {
         CallableDef::Func(func) => Some(func),
-        CallableDef::VariantCtor(_) => None,
+        CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => None,
     };
     let trait_entries: Vec<_> = collect_effect_provider_entries(
         db,
@@ -1053,7 +1053,7 @@ fn compare_constraints<'db>(
             .filter(|(effect, _)| func.effect_from_row(db, *effect))
             .filter_map(|(_, param)| impl_m.params(db).get((*param)?).copied())
             .collect(),
-        CallableDef::VariantCtor(_) => Vec::new(),
+        CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => Vec::new(),
     };
     let mut unsatisfied_goals = ThinVec::new();
     for &goal in impl_m_constraints.list(db) {

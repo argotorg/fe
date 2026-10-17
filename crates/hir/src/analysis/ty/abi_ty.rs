@@ -289,9 +289,13 @@ pub(crate) fn semantic_ty_to_abi_desc_with_source<'db>(
                                 ty.generic_args(db),
                                 source.generic_args(db),
                             );
+                            // Tuple struct fields are named by position only
+                            // for `.0` lookups; in the ABI they are unnamed,
+                            // like tuple components.
                             let name = field
                                 .name
                                 .to_opt()
+                                .filter(|_| !struct_.is_tuple(db))
                                 .map(|ident| ident.data(db).to_string())
                                 .unwrap_or_default();
                             Ok((name, semantic_ty_to_abi_desc_with_source(db, field_ty)?))

@@ -1,0 +1,152 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/tuple_struct_errors.fe
+---
+error[12-0001]: unsupported `#[event]` attribute on tuple struct `Logged`
+   ┌─ tuple_struct_errors.fe:25:1
+   │
+25 │ #[event]
+   │ ^^^^^^^^ `#[event]` is only supported on record structs
+
+error[2-0003]: `0` is not visible
+   ┌─ tuple_struct_errors.fe:62:13
+   │
+ 5 │     pub struct Secret(u8)
+   │                       -- `0` is defined here
+   ·
+62 │     let _ = Secret(1)
+   │             ^^^^^^ `0` is not visible
+
+error[2-0003]: `1` is not visible
+   ┌─ tuple_struct_errors.fe:63:13
+   │
+ 6 │     pub struct Mixed(pub u8, u8)
+   │                              -- `1` is defined here
+   ·
+63 │     let _ = Mixed(1, 2)
+   │             ^^^^^ `1` is not visible
+
+error[2-0003]: `0` is not visible
+   ┌─ tuple_struct_errors.fe:64:9
+   │
+ 5 │     pub struct Secret(u8)
+   │                       -- `0` is defined here
+   ·
+64 │     let Secret(raw) = s
+   │         ^^^^^^^^^^^ `0` is not visible
+
+error[2-0003]: `0` is not visible
+   ┌─ tuple_struct_errors.fe:65:7
+   │
+ 5 │     pub struct Secret(u8)
+   │                       -- `0` is defined here
+   ·
+65 │     s.0 + x.1 + raw
+   │       ^ `0` is not visible
+
+error[3-0059]: `Span` is a `#[view]` type
+   ┌─ tuple_struct_errors.fe:81:13
+   │
+81 │     let _ = Span(1)
+   │             ^^^^^^^ a `#[view]` type cannot be constructed outside its defining module
+
+error[3-0061]: `Slots` is state-only
+   ┌─ tuple_struct_errors.fe:91:13
+   │
+91 │     let _ = Slots(0)
+   │             ^^^^^^^^ a state-only type cannot be constructed as a value
+   │
+   = `Slots` is pinned to storage by its `Pinned` implementation
+   = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
+
+error[8-0000]: type mismatch
+   ┌─ tuple_struct_errors.fe:34:19
+   │
+34 │     let _ = Month(true)
+   │                   ^^^^ expected `u8`, but `bool` is given
+
+error[8-0004]: expected unit variant
+   ┌─ tuple_struct_errors.fe:50:13
+   │
+50 │     let _ = Point(1)
+   │             ^^^^^
+   │             │
+   │             expected unit variant here, but found struct
+   │             Consider using `Point { x }` instead
+
+error[8-0004]: expected unit variant
+   ┌─ tuple_struct_errors.fe:54:13
+   │
+54 │     let _ = MonthAlias(1)
+   │             ^^^^^^^^^^
+   │             │
+   │             expected unit variant here, but found tuple struct
+   │             Consider using `Month(_)` instead
+
+error[8-0004]: expected unit variant
+   ┌─ tuple_struct_errors.fe:77:9
+   │
+77 │     let Month = m
+   │         ^^^^^
+   │         │
+   │         expected unit variant here, but found tuple struct
+   │         Consider using `Month(_)` instead
+
+error[8-0006]: expected record variant or struct
+   ┌─ tuple_struct_errors.fe:38:13
+   │
+38 │     let _ = Month {}
+   │             ^^^^^
+   │             │
+   │             expected record variant or struct here, but found tuple struct
+   │             Consider using `Month(_)` instead
+
+error[8-0006]: expected record variant or struct
+   ┌─ tuple_struct_errors.fe:42:9
+   │
+42 │     let Month { .. } = m
+   │         ^^^^^^^^^^^^
+   │         │
+   │         expected record variant or struct here, but found tuple struct
+   │         Consider using `Month(_)` instead
+
+error[8-0007]: field count mismatch
+   ┌─ tuple_struct_errors.fe:46:9
+   │
+46 │     let Month(a, b) = m
+   │         ^^^^^^^^^^^ expected 1 fields here, but 2 given
+
+error[8-0015]: invalid field index
+   ┌─ tuple_struct_errors.fe:58:5
+   │
+58 │     m.1
+   │     ^^^ field `1` is not found in `Month`
+
+error[8-0023]: argument number mismatch
+   ┌─ tuple_struct_errors.fe:29:18
+   │
+ 4 │     pub struct Month(pub u8)
+   │                ----- function defined here
+   ·
+29 │     let _ = Month(1, 2)
+   │                  ^^^^^^ expected 1 arguments, but 2 given
+
+error[8-0023]: argument number mismatch
+   ┌─ tuple_struct_errors.fe:30:18
+   │
+ 4 │     pub struct Month(pub u8)
+   │                ----- function defined here
+   ·
+30 │     let _ = Month()
+   │                  ^^ expected 1 arguments, but 0 given
+
+error[8-0034]: non-exhaustive patterns: type `BoolWrap` is not covered
+   ┌─ tuple_struct_errors.fe:71:5
+   │
+71 │ ╭     match b {
+72 │ │         BoolWrap(true) => 1
+73 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │
+   = Not covered: `BoolWrap(false)`

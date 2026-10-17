@@ -1,0 +1,8 @@
+pub struct Month(pub u8)
+struct Pair<T>(pub(ingot) T, pub (u8, u16),) where T: Copy
+struct Empty()
+struct Multi(
+    /// doc
+    pub u8,
+    u16,
+)

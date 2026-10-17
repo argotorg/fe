@@ -161,7 +161,7 @@ impl<'db> RecordLike<'db> {
         match self {
             RecordLike::Type(ty) => ty
                 .adt_ref(db)
-                .is_some_and(|adt_ref| matches!(adt_ref, AdtRef::Struct(_))),
+                .is_some_and(|adt_ref| matches!(adt_ref, AdtRef::Struct(s) if !s.is_tuple(db))),
             RecordLike::EnumVariant(variant) => {
                 matches!(variant.kind(db), HirVariantKind::Record(..))
             }
@@ -315,7 +315,9 @@ impl<'db> RecordLike<'db> {
     pub fn kind_name(&self, db: &'db dyn HirAnalysisDb) -> String {
         match self {
             RecordLike::Type(ty) => {
-                if let Some(adt_ref) = ty.adt_ref(db) {
+                if ty.as_tuple_struct(db).is_some() {
+                    "tuple struct".to_string()
+                } else if let Some(adt_ref) = ty.adt_ref(db) {
                     adt_ref.kind_name().to_string()
                 } else if ty.is_func(db) {
                     "fn".to_string()

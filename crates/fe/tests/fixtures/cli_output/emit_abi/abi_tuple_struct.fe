@@ -1,0 +1,38 @@
+// A tuple struct with hand-written codec impls; `#[abi]` is not supported
+// on tuple structs.
+use core::abi::{AbiDecoder, AbiFrame, AbiSize, AbiSpan, ByteInput, Decode, Encode}
+use std::abi::{Sol, sol}
+
+pub struct Pair(pub u256, pub u256)
+impl Copy for Pair {}
+
+impl AbiSize for Pair {
+    const HEAD_SIZE: u256 = 64
+    const IS_DYNAMIC: bool = false
+}
+impl AbiSpan<Sol> for Pair {
+    fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 { pos + 64 }
+}
+impl Decode<Sol> for Pair {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        let a = d.read_word(input)
+        Pair(a, d.read_word(input))
+    }
+}
+impl Encode<Sol> for Pair {
+    fn encode(own self, _ out: AbiFrame) {
+        out.store_word(at: 0, value: self.0)
+        out.store_word(at: 32, value: self.1)
+    }
+}
+
+msg M {
+    #[selector = sol("f((uint256,uint256))")]
+    F { p: Pair } -> u256,
+}
+
+pub contract Foo {
+    recv M {
+        F { p } -> u256 { p.0 }
+    }
+}

@@ -102,7 +102,7 @@ impl<'db> TyChecker<'db> {
                     _ => self.env.callable_expr(expr).and_then(|callable| {
                         match callable.callable_def() {
                             CallableDef::VariantCtor(ctor) => Some(ctor.idx),
-                            CallableDef::Func(_) => None,
+                            CallableDef::Func(_) | CallableDef::StructCtor(_) => None,
                         }
                     }),
                 };

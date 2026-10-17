@@ -4962,7 +4962,14 @@ impl<'db> TypedBody<'db> {
 
         if let Some(SemanticExprLowering::Call { callable }) = self.semantic_expr_lowering(expr) {
             let args = call_like_expr_args(expr_data, self.tables.value_calls.contains(&expr))?;
-            if let CallableDef::VariantCtor(variant) = callable.callable_def() {
+            // Constructors build an aggregate: `Some(variant)` for tuple
+            // variants, `None` for tuple structs.
+            let ctor_variant = match callable.callable_def() {
+                CallableDef::VariantCtor(variant) => Some(Some(variant.idx)),
+                CallableDef::StructCtor(_) => Some(None),
+                _ => None,
+            };
+            if let Some(variant) = ctor_variant {
                 let mut sources = Vec::new();
                 for (field, arg) in args.into_iter().enumerate() {
                     let Some(mut field_sources) = self.forwarded_return_param_sources_from_expr(
@@ -4974,13 +4981,12 @@ impl<'db> TypedBody<'db> {
                     ) else {
                         continue;
                     };
-                    prefix_return_sources(
-                        &mut field_sources,
-                        &[ReturnProjectionStep::VariantField {
-                            variant: variant.idx,
-                            field: u16::try_from(field).ok()?,
-                        }],
-                    );
+                    let field = u16::try_from(field).ok()?;
+                    let projection = variant
+                        .map_or(ReturnProjectionStep::Field(field), |variant| {
+                            ReturnProjectionStep::VariantField { variant, field }
+                        });
+                    prefix_return_sources(&mut field_sources, &[projection]);
                     sources.extend(field_sources);
                 }
                 return (!sources.is_empty()).then_some(sources);
@@ -6504,7 +6510,7 @@ impl<'db> TyCheckerFinalizer<'db> {
     /// a `#[view]` type in a position a view type cannot take.
     fn check_view_call(&mut self, callable: &Callable<'db>, expr: ExprId, span: DynLazySpan<'db>) {
         let db = self.db;
-        if let CallableDef::VariantCtor(_) = callable.callable_def {
+        if let CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) = callable.callable_def {
             let ty = self.body.expr_prop(db, expr).ty;
             return self.check_view_construction(ty, span);
         }
@@ -6576,6 +6582,10 @@ impl<'db> TyCheckerFinalizer<'db> {
             if matches!(self.body.yield_shape(expr), Some(Shape::Sum { .. })) {
                 return;
             }
+            let ty = self.body.expr_prop(db, expr).ty;
+            return self.check_state_only_value(ty, span, "constructed as a value");
+        }
+        if let CallableDef::StructCtor(_) = callable.callable_def {
             let ty = self.body.expr_prop(db, expr).ty;
             return self.check_state_only_value(ty, span, "constructed as a value");
         }

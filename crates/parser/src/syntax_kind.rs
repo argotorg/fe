@@ -507,6 +507,10 @@ pub enum SyntaxKind {
     RecordFieldDef,
     /// `{x: i32, y: u32}`
     RecordFieldDefList,
+    /// `pub u8` in `struct Month(pub u8)`
+    TupleFieldDef,
+    /// `(pub u8, u16)` in `struct Pair(pub u8, u16)`
+    TupleFieldDefList,
 
     VariantDef,
     VariantDefList,
@@ -716,6 +720,7 @@ impl SyntaxKind {
 
             SyntaxKind::ArrayExpr => "array definition",
             SyntaxKind::RecordFieldDef => "field",
+            SyntaxKind::TupleFieldDef => "tuple field",
             SyntaxKind::IndexExpr => "index expression",
             SyntaxKind::BlockExpr => "block",
             SyntaxKind::ClosureExpr => "closure expression",
@@ -831,6 +836,7 @@ impl SyntaxKind {
             SyntaxKind::AttrList => "attribute list",
             SyntaxKind::Visibility => "visibility modifier",
             SyntaxKind::RecordFieldDefList => "record field list",
+            SyntaxKind::TupleFieldDefList => "tuple field list",
             SyntaxKind::VariantDef => "`enum` variant definition",
             SyntaxKind::VariantDefList => "`enum` variant list",
             SyntaxKind::TypeGenericParam => "generic type parameter",

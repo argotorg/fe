@@ -1,0 +1,88 @@
+---
+source: crates/hir/tests/frontend/body_references.rs
+expression: res
+input_file: test_files/body_references/tuple_struct_field.fe
+---
+note:
+  ┌─ tuple_struct_field.fe:4:9
+  │
+4 │     let p = Pair(3, 4)
+  │         ^ p -> local
+
+note:
+  ┌─ tuple_struct_field.fe:4:13
+  │
+4 │     let p = Pair(3, 4)
+  │             ^^^^ Pair -> struct
+
+note:
+  ┌─ tuple_struct_field.fe:5:9
+  │
+5 │     let a = p.0
+  │         ^ a -> local
+
+note:
+  ┌─ tuple_struct_field.fe:5:13
+  │
+5 │     let a = p.0
+  │             ^ p -> local
+
+note:
+  ┌─ tuple_struct_field.fe:5:15
+  │
+5 │     let a = p.0
+  │               ^ field -> field
+
+note:
+  ┌─ tuple_struct_field.fe:6:9
+  │
+6 │     let b = p.1
+  │         ^ b -> local
+
+note:
+  ┌─ tuple_struct_field.fe:6:13
+  │
+6 │     let b = p.1
+  │             ^ p -> local
+
+note:
+  ┌─ tuple_struct_field.fe:6:15
+  │
+6 │     let b = p.1
+  │               ^ field -> field
+
+note:
+  ┌─ tuple_struct_field.fe:7:9
+  │
+7 │     let t = (a, b)
+  │         ^ t -> local
+
+note:
+  ┌─ tuple_struct_field.fe:7:14
+  │
+7 │     let t = (a, b)
+  │              ^ a -> local
+
+note:
+  ┌─ tuple_struct_field.fe:7:17
+  │
+7 │     let t = (a, b)
+  │                 ^ b -> local
+
+note:
+  ┌─ tuple_struct_field.fe:8:9
+  │
+8 │     let c = t.0
+  │         ^ c -> local
+
+note:
+  ┌─ tuple_struct_field.fe:8:13
+  │
+8 │     let c = t.0
+  │             ^ t -> local
+
+note:
+  ┌─ tuple_struct_field.fe:8:15
+  │
+8 │     let c = t.0
+  │               ^ field access

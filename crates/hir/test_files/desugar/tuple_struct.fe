@@ -1,0 +1,15 @@
+struct Month(pub u8)
+
+struct Pair<T>(T, pub T)
+
+struct Documented(
+    /// The raw value.
+    pub u256,
+    u8,
+)
+
+fn make() -> Documented {
+    let month = Month(1)
+    let pair = Pair(month.0, 2)
+    Documented(1, pair.1)
+}
