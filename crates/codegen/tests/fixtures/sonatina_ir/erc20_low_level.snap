@@ -777,10 +777,11 @@ func private %impl_Erc20__mint(v0.i256, v1.@layout_0, v2.@layout_0, v3.i256) {
 
     block1:
         v6.i256 = add v0 3.i256;
-        v8.i256 = evm_sload v6;
-        v10.@layout_0 = insert_value undef.@layout_0 0.i256 v8;
-        v12.i1 = call %ne v1 v10;
-        br v12 block2 block3;
+        v7.i256 = evm_sload v6;
+        v9.i256 = and v7 1461501637330902918203684832716283019655932542975.i256;
+        v12.@layout_0 = insert_value undef.@layout_0 0.i256 v9;
+        v14.i1 = call %ne v1 v12;
+        br v14 block2 block3;
 
     block2:
         call %revert_empty;
@@ -790,9 +791,9 @@ func private %impl_Erc20__mint(v0.i256, v1.@layout_0, v2.@layout_0, v3.i256) {
         jump block4;
 
     block4:
-        v15.i256 = call %impl_Erc20__balance_of v0 v2;
-        (v17.i256, v18.i1) = uaddo v15 v3;
-        br v18 block5 block6;
+        v17.i256 = call %impl_Erc20__balance_of v0 v2;
+        (v19.i256, v20.i1) = uaddo v17 v3;
+        br v20 block5 block6;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -800,7 +801,7 @@ func private %impl_Erc20__mint(v0.i256, v1.@layout_0, v2.@layout_0, v3.i256) {
         evm_revert 0.i256 36.i256;
 
     block6:
-        call %set__g5cd5 v0 v2 v17;
+        call %set__g5cd5 v0 v2 v19;
         return;
 }
 
@@ -1191,11 +1192,12 @@ func private %set_owner_once(v0.i256, v1.@layout_0) -> i1 {
 
     block1:
         v4.i256 = add v0 3.i256;
-        v6.i256 = evm_sload v4;
-        v8.@layout_0 = insert_value undef.@layout_0 0.i256 v6;
-        v9.@layout_0 = call %zero;
-        v10.i1 = call %ne v8 v9;
-        br v10 block2 block3;
+        v5.i256 = evm_sload v4;
+        v7.i256 = and v5 1461501637330902918203684832716283019655932542975.i256;
+        v10.@layout_0 = insert_value undef.@layout_0 0.i256 v7;
+        v11.@layout_0 = call %zero;
+        v12.i1 = call %ne v10 v11;
+        br v12 block2 block3;
 
     block2:
         return 0.i1;
@@ -1204,9 +1206,17 @@ func private %set_owner_once(v0.i256, v1.@layout_0) -> i1 {
         jump block4;
 
     block4:
-        v14.i256 = add v0 3.i256;
-        v15.i256 = extract_value v1 0.i256;
-        evm_sstore v14 v15;
+        v16.i256 = add v0 3.i256;
+        v17.i256 = extract_value v1 0.i256;
+        v18.i256 = and v17 1461501637330902918203684832716283019655932542975.i256;
+        v19.i1 = ne v18 v17;
+        br v19 block5 block6;
+
+    block5:
+        evm_revert 0.i256 0.i256;
+
+    block6:
+        evm_sstore v16 v18;
         return 1.i1;
 }
 

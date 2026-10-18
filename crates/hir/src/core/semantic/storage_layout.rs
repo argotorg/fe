@@ -18,11 +18,16 @@ use crate::{
             adt_def::{
                 AdtDef, AdtRef, ConcreteTypeView, instantiate_adt_field_for_concrete_demand,
             },
-            const_ty::{ConcreteArrayLengthError, demand_concrete_array_length},
+            const_ty::{
+                ConcreteArrayLengthError, ConstTyData, const_ty_from_resolved_trait_const,
+                demand_concrete_array_length, demand_concrete_specialized_const_ty,
+            },
+            corelib::resolve_lib_trait_path,
             normalize::normalize_ty,
             provider::pinned_space,
             state_index_tys,
-            trait_resolution::PredicateListId,
+            trait_def::{TraitInstId, resolve_trait_impl_instance},
+            trait_resolution::{PredicateListId, Selection, TraitSolveCx},
             ty_check::contract_field_slot,
             ty_def::{PrimTy, TyBase, TyData, TyId},
             ty_lower::lower_opt_hir_ty,
@@ -353,22 +358,116 @@ impl<'db> ContractStorageLayoutResult<'db> {
     }
 }
 
-/// The bytes a scalar struct or tuple field takes in a packed storage slot:
-/// booleans and integers narrower than a word, like Solidity's value types.
-/// Everything else takes whole slots. Runtime lowering classifies scalars
-/// the same way (`mir::runtime::storage_scalar_bytes`).
-fn storage_packable_bytes(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<u32> {
-    let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) else {
-        return None;
+/// The bytes a value of `ty` takes in a storage slot it shares with its
+/// neighbours as a struct, tuple or contract field, like a Solidity value
+/// type: a boolean or an integer narrower than a word, or a newtype of one,
+/// a struct with a single field, which lies in its field's bytes. A newtype
+/// with a `std::evm::SolPacked` encoding narrower than its field takes the
+/// encoding's `BITS` instead and holds its field's value in them: `Address`
+/// takes 20 bytes and `Uint24` 3. Everything else takes whole slots. Runtime
+/// layouts carry the same widths (`mir::runtime::storage_scalar_bytes` and a
+/// struct layout's `lane_bytes`).
+#[salsa::tracked(returns(copy))]
+pub fn storage_lane_bytes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<u32> {
+    if let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) {
+        return prim_bytes(*prim).filter(|bytes| *bytes < 32);
+    }
+    let ty = concrete_const_args(db, ty);
+    let field = newtype_field(db, ty)?;
+    let Some(bits) = sol_packed_bits(db, ty) else {
+        return storage_lane_bytes(db, field);
     };
+    let bytes = u32::try_from(bits / 8).ok()?;
+    (bits % 8 == 0 && (1..32).contains(&bytes) && bytes <= newtype_scalar_bytes(db, field)?)
+        .then_some(bytes)
+}
+
+/// The bytes a value of `ty` takes in a code field it shares with its
+/// neighbours. Code holds each value at its memory width, so a newtype packs
+/// at its field's width rather than its `SolPacked` width.
+fn code_lane_bytes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<u32> {
+    newtype_scalar_bytes(db, ty).filter(|bytes| *bytes < 32)
+}
+
+/// `ty` with its const arguments evaluated, as a layout demands them: a type
+/// alias's `FixedBytes<4>` and `FixedBytes<4>` itself pack alike.
+fn concrete_const_args<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+    let (base, args) = ty.decompose_ty_app(db);
+    let args: Vec<_> = args
+        .iter()
+        .map(|arg| match arg.data(db) {
+            TyData::ConstTy(const_ty)
+                if !matches!(
+                    const_ty.data(db),
+                    ConstTyData::TyParam(..) | ConstTyData::TyVar(..)
+                ) =>
+            {
+                demand_concrete_specialized_const_ty(db, *arg, const_ty.ty(db))
+                    .map_or(*arg, |concrete| TyId::const_ty(db, concrete))
+            }
+            _ => *arg,
+        })
+        .collect();
+    TyId::foldl(db, base, &args)
+}
+
+/// The bytes of a boolean's or an integer's value.
+fn prim_bytes(prim: PrimTy) -> Option<u32> {
     match prim {
         PrimTy::Bool | PrimTy::U8 | PrimTy::I8 => Some(1),
         PrimTy::U16 | PrimTy::I16 => Some(2),
         PrimTy::U32 | PrimTy::I32 => Some(4),
         PrimTy::U64 | PrimTy::I64 => Some(8),
         PrimTy::U128 | PrimTy::I128 => Some(16),
+        PrimTy::U256 | PrimTy::I256 => Some(32),
         _ => None,
     }
+}
+
+/// The field of a newtype, an unpinned struct with exactly one field.
+fn newtype_field<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<TyId<'db>> {
+    let adt = ty.adt_def(db)?;
+    if !adt.is_struct(db) || ty.pin(db).is_some() || adt.recursive_cycle(db).is_some() {
+        return None;
+    }
+    let [field] = ty.field_types(db)[..] else {
+        return None;
+    };
+    Some(normalize_ty(
+        db,
+        field,
+        adt.scope(db),
+        PredicateListId::empty_list(db),
+    ))
+}
+
+/// The bytes of the boolean or integer a chain of newtypes ends at: 32 for
+/// `Address`, whose field is a `u256`.
+fn newtype_scalar_bytes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<u32> {
+    match ty.base_ty(db).data(db) {
+        TyData::TyBase(TyBase::Prim(prim)) => prim_bytes(*prim),
+        _ => newtype_scalar_bytes(db, newtype_field(db, ty)?),
+    }
+}
+
+/// `std::evm::SolPacked::BITS` of `ty`, when `ty` has that encoding.
+fn sol_packed_bits<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<u64> {
+    if ty.has_param(db) || ty.has_var(db) {
+        return None;
+    }
+    let scope = ty.adt_def(db)?.scope(db);
+    let sol_packed = resolve_lib_trait_path(db, scope, "std::evm::SolPacked")?;
+    let Selection::Unique(resolved) = resolve_trait_impl_instance(
+        db,
+        TraitSolveCx::new(db, scope),
+        TraitInstId::new_simple(db, sol_packed, vec![ty]),
+    ) else {
+        return None;
+    };
+    const_ty_from_resolved_trait_const(db, resolved, IdentId::new(db, "BITS".to_string()))?
+        .evaluate(db, Some(TyId::u256(db)))
+        .integer_value(db)?
+        .to_u64()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
@@ -430,7 +529,7 @@ impl<'db> WalkOutput<'db> {
                 kind,
             }],
             packable_bytes: match kind {
-                InlineLayoutLeafKind::Field => storage_packable_bytes(db, ty),
+                InlineLayoutLeafKind::Field => storage_lane_bytes(db, ty),
                 InlineLayoutLeafKind::Collection | InlineLayoutLeafKind::EnumTag => None,
             },
         }
@@ -442,6 +541,10 @@ impl<'db> WalkOutput<'db> {
 struct FieldWalker<'db> {
     db: &'db dyn HirAnalysisDb,
     errors: Vec<ContractLayoutError<'db>>,
+    /// Whether the value lies in a state space, where a newtype packs at its
+    /// `SolPacked` width (`storage_lane_bytes`), rather than in code
+    /// (`code_lane_bytes`).
+    state: bool,
 }
 
 impl<'db> FieldWalker<'db> {
@@ -558,7 +661,15 @@ impl<'db> FieldWalker<'db> {
                     )
                 }
             } else {
-                output
+                // A newtype packs like the value it holds.
+                WalkOutput {
+                    packable_bytes: if self.state {
+                        storage_lane_bytes(self.db, ty)
+                    } else {
+                        code_lane_bytes(self.db, ty)
+                    },
+                    ..output
+                }
             }
         // A contract value is its address, a word, as MIR lays it out.
         } else if ty.is_never(self.db)
@@ -928,6 +1039,7 @@ fn collect_field_plan<'db>(
     let mut walker = FieldWalker {
         db,
         errors: Vec::new(),
+        state: address_space != AddressSpace::Code,
     };
     let output = walker.walk_ty(ConcreteTypeView::identity(declared), &[], &[]);
     // Every contract field outlives the call: code-backed ones too.
@@ -1005,6 +1117,7 @@ pub(crate) fn storage_slot_span<'db>(
     let mut walker = FieldWalker {
         db,
         errors: Vec::new(),
+        state: true,
     };
     let output = walker.walk_ty(ConcreteTypeView::identity(ty), &[], &[]);
     match walker.errors.into_iter().next() {
@@ -1025,6 +1138,7 @@ pub(crate) fn storage_field_lanes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>
     let mut walker = FieldWalker {
         db,
         errors: Vec::new(),
+        state: true,
     };
     let shapes: Vec<_> = ty
         .field_types(db)

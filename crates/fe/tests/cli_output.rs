@@ -4043,6 +4043,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "storage_packed_array",
     "storage_packed_projections",
     "storage_packing",
+    "storage_packing_value_types",
     "storage_slots_closures",
     "time_units",
     "tslot_values",

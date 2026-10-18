@@ -786,6 +786,7 @@ mod tests {
             LayoutKey::Struct(StructLayout {
                 fields: Vec::new().into(),
                 pinned: false,
+                lane_bytes: None,
             }),
         );
         let aggregate = RuntimeClass::AggregateValue { layout };

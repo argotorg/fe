@@ -7,6 +7,16 @@ consecutive slots as its type needs. Struct fields narrower than a word are
 packed into shared slots the way Solidity packs struct members. Immutable
 fields live in the contract's code.
 
+A field packs when its value is narrower than a word, like a Solidity value
+type: a `bool`, an integer narrower than `u256`, or a newtype of one (a
+struct with a single field, which takes its field's bytes). A newtype with a
+`std::evm::SolPacked` encoding narrower than its field takes its `BITS`
+instead, so `Address` takes 20 bytes, `FixedBytes<N>` takes `N` and the
+odd-width integers such as `Uint24` take their width. Its field's value lies
+in those bytes, and writing a value they cannot hold reverts, as its
+`SolPacked` encoding does. Any other struct, tuple, array or enum takes whole
+slots of its own, and the field after it starts a new slot, as in Solidity.
+
 A field that mixes spaces, such as a `Mutex<T>` (a transient lock beside a
 storage value), has one root slot that both spaces read: it takes its whole
 range in each, and is placed among the storage fields. Fields that lie only in

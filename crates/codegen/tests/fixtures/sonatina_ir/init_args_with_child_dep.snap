@@ -9,6 +9,7 @@ type @layout_0 = {i256, i256};
 type @layout_1 = {i256};
 type @layout_2 = {i256, i256, i256};
 type @layout_3 = {i256, i256};
+type @layout_4 = {i256};
 
 func private %__Child_init(v0.i256, v1.i256) {
     block0:
@@ -26,7 +27,7 @@ func private %__Parent_init(v0.i256) {
         v3.@layout_1 = insert_value undef.@layout_1 0.i256 0.i256;
         v6.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
         v8.@layout_0 = insert_value v6 1.i256 v0;
-        v9.@layout_1 = call %create v3 v8;
+        v9.@layout_4 = call %create v3 v8;
         return;
 }
 
@@ -410,7 +411,7 @@ func private %copy_returndata() -> @layout_2 {
         return v2;
 }
 
-func private %create(v0.@layout_1, v1.@layout_0) -> @layout_1 {
+func private %create(v0.@layout_1, v1.@layout_0) -> @layout_4 {
     block0:
         v2.objref<@layout_3> = obj.alloc @layout_3;
         jump block1;
@@ -430,7 +431,7 @@ func private %create(v0.@layout_1, v1.@layout_0) -> @layout_1 {
         return v8;
 
     block5:
-        v8.@layout_1 = call %create_raw v0 v2;
+        v8.@layout_4 = call %create_raw v0 v2;
         jump block10;
 
     block6:
@@ -462,7 +463,7 @@ func private %create(v0.@layout_1, v1.@layout_0) -> @layout_1 {
         jump block11;
 }
 
-func private %create_raw(v0.@layout_1, noalias nocapture v1.objref<@layout_3>) -> @layout_1 {
+func private %create_raw(v0.@layout_1, noalias nocapture v1.objref<@layout_3>) -> @layout_4 {
     block0:
         jump block1;
 
@@ -471,7 +472,7 @@ func private %create_raw(v0.@layout_1, noalias nocapture v1.objref<@layout_3>) -
         v5.i256 = call %ptr__g79ff v1;
         v6.i256 = call %len__g79ff v1;
         v7.i256 = evm_create v3 v5 v6;
-        v10.@layout_1 = insert_value undef.@layout_1 0.i256 v7;
+        v10.@layout_4 = insert_value undef.@layout_4 0.i256 v7;
         return v10;
 }
 

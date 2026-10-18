@@ -193,8 +193,16 @@ impl<'db> RuntimeMemoryLayout<'db> {
             RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
                 StorageFieldShape::Scalar { bytes: 32 }
             }
-            RuntimeClass::AggregateValue { layout } => StorageFieldShape::Aggregate {
-                slots: self.layout_size_inner(*layout, visiting)?,
+            RuntimeClass::AggregateValue { layout } => match layout.data(self.db) {
+                Layout::Struct(StructLayout {
+                    lane_bytes: Some(bytes),
+                    ..
+                }) => StorageFieldShape::Scalar {
+                    bytes: u32::from(bytes),
+                },
+                _ => StorageFieldShape::Aggregate {
+                    slots: self.layout_size_inner(*layout, visiting)?,
+                },
             },
         })
     }
@@ -856,6 +864,7 @@ mod tests {
         let struct_layout = StructLayout {
             fields: vec![scalar(8), scalar(256)].into_boxed_slice(),
             pinned: false,
+            lane_bytes: None,
         };
         let array_layout = ArrayLayout {
             elem: scalar(16),
@@ -880,6 +889,7 @@ mod tests {
         let struct_layout = StructLayout {
             fields: vec![scalar(8), scalar(256), scalar(24)].into_boxed_slice(),
             pinned: false,
+            lane_bytes: None,
         };
         let pair = LayoutId::new(&db, LayoutKey::Struct(struct_layout.clone()));
         let bytes = RuntimeMemoryLayout::raw(&db);

@@ -239,7 +239,7 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
                 let word = self
                     .fb
                     .insert_inst(Shr::new(self.module.inst_set(), shift, word), Type::I256);
-                self.extract_packed_scalar(word, lane, scalar)
+                self.extract_packed_scalar(word, lane, scalar)?
             } else {
                 load(
                     self,

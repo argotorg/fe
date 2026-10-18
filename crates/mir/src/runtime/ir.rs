@@ -357,7 +357,8 @@ fn layouts_share_runtime_rep<'db>(
 ) -> bool {
     match (actual.data(db), desired.data(db)) {
         (Layout::Struct(actual), Layout::Struct(desired)) => {
-            actual.fields.len() == desired.fields.len()
+            actual.lane_bytes == desired.lane_bytes
+                && actual.fields.len() == desired.fields.len()
                 && actual
                     .fields
                     .iter()
@@ -501,6 +502,10 @@ pub struct StructLayout<'db> {
     /// its root number identifies its region, so it takes at least
     /// one storage slot and is never zero-sized, even without fields.
     pub pinned: bool,
+    /// For a newtype that packs into part of a storage slot, the bytes it
+    /// takes there, which its single field shares
+    /// (`hir::semantic::storage_lane_bytes`).
+    pub lane_bytes: Option<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]

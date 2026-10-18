@@ -18,7 +18,8 @@ use crate::{
         ConstScalar, Layout, LayoutId, PlaceElem, PlaceRoot, RLocalId, RefKind, RefView,
         ResolvedPlaceElem, ResolvedPlaceRootKind, ResolvedRuntimePlace, RuntimeBody, RuntimeClass,
         RuntimeLocalRoot, RuntimeMemoryLayout, RuntimeProgramView, RuntimeProviderBinding,
-        RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, StorageLaneView, VariantId,
+        RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole, StorageLaneView,
+        StructLayout, VariantId,
     },
     verify::VerifyError,
 };
@@ -228,7 +229,7 @@ fn runtime_place_address_root<'db>(
 }
 
 /// The lane `place` ends at: a field packed into a storage word, which no
-/// reference can point at (see `storage_field_lane`).
+/// reference can point at (see `field_path_lane`).
 pub(crate) fn runtime_place_lane<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
@@ -236,18 +237,62 @@ pub(crate) fn runtime_place_lane<'db>(
     place: &crate::runtime::RuntimePlace<'db>,
 ) -> Result<Option<StorageLaneView>, VerifyError<'db>> {
     let resolved = resolve_runtime_place(db, program, body, place)?;
-    let (Some((PlaceElem::Field(field), parent_path)), Some(ResolvedPlaceElem::Field { .. })) =
-        (place.path.split_last(), resolved.path.last())
-    else {
-        return Ok(None);
-    };
     let (_, root_space, _) = runtime_place_address_root(db, body, &resolved, place)?;
-    let parent = crate::runtime::RuntimePlace {
-        root: place.root.clone(),
-        path: parent_path.to_vec().into(),
+    let mut parent = match &resolved.root_kind {
+        ResolvedPlaceRootKind::Slot { class, .. }
+        | ResolvedPlaceRootKind::Ref { class, .. }
+        | ResolvedPlaceRootKind::Provider { class, .. }
+        | ResolvedPlaceRootKind::Ptr { class, .. } => class.clone(),
     };
-    let parent_class = resolve_runtime_place(db, program, body, &parent)?.result_class;
-    Ok(storage_field_lane(db, &parent_class, *field, root_space))
+    // The fields the path ends with, each with the class it projects from.
+    let mut fields = Vec::new();
+    for elem in resolved.path.iter() {
+        match elem {
+            ResolvedPlaceElem::Field { field, class } => {
+                fields.push((std::mem::replace(&mut parent, class.clone()), *field));
+            }
+            ResolvedPlaceElem::Index { class, .. }
+            | ResolvedPlaceElem::VariantField { class, .. }
+            | ResolvedPlaceElem::Deref { class, .. } => {
+                fields.clear();
+                parent = class.clone();
+            }
+        }
+    }
+    Ok(field_path_lane(db, &fields, root_space))
+}
+
+/// The lane the place a path of fields reaches lies in, in a value of
+/// `space`: the lane of the last field packed into a storage word, which the
+/// field of a packed newtype shares with its newtype. `fields` holds each
+/// field with the class it projects from.
+pub(crate) fn field_path_lane<'db>(
+    db: &'db dyn MirDb,
+    fields: &[(RuntimeClass<'db>, FieldIndex)],
+    space: AddressSpace,
+) -> Option<StorageLaneView> {
+    for (parent, field) in fields.iter().rev() {
+        if let Some(lane) = storage_field_lane(db, parent, *field, space) {
+            return Some(lane);
+        }
+        if !is_packed_newtype(db, parent) {
+            return None;
+        }
+    }
+    None
+}
+
+/// Whether `class` is a newtype that packs into part of a storage word.
+pub fn is_packed_newtype<'db>(db: &'db dyn MirDb, class: &RuntimeClass<'db>) -> bool {
+    class.aggregate_layout().is_some_and(|layout| {
+        matches!(
+            layout.data(db),
+            Layout::Struct(StructLayout {
+                lane_bytes: Some(_),
+                ..
+            })
+        )
+    })
 }
 
 /// The lane field `field` of a value of class `parent` in `space` occupies:
@@ -782,6 +827,7 @@ mod tests {
             LayoutKey::Struct(StructLayout {
                 fields: Box::new([]),
                 pinned: false,
+                lane_bytes: None,
             }),
         );
         for stored in [

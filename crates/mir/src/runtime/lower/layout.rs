@@ -1,6 +1,7 @@
 use hir::{
     analysis::{semantic::FieldIndex, ty::ty_def::TyId},
     projection::IndexSource,
+    semantic::storage_lane_bytes,
 };
 
 use crate::{
@@ -52,6 +53,7 @@ pub(crate) fn layout_for_ty_in_env<'db>(
                 .map(|field| stored_class_for_ty_in_env(db, env, field))
                 .collect(),
             pinned: is_pinned(db, ty),
+            lane_bytes: lane_bytes(db, ty),
         }),
     )
 }
@@ -59,6 +61,12 @@ pub(crate) fn layout_for_ty_in_env<'db>(
 /// Whether `ty` is a pinned type, whose layout takes a slot of its own.
 fn is_pinned<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> bool {
     ty.pin(db).is_some()
+}
+
+/// The bytes `ty` takes in a storage slot it shares, when it is a newtype
+/// that packs.
+fn lane_bytes<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> Option<u8> {
+    storage_lane_bytes(db, ty).map(|bytes| bytes as u8)
 }
 
 pub(crate) fn layout_for_aggregate_instance_in_env<'db>(
@@ -111,6 +119,7 @@ pub(crate) fn layout_for_aggregate_instance_in_env<'db>(
         LayoutKey::Struct(StructLayout {
             fields: field_classes.to_vec().into_boxed_slice(),
             pinned: is_pinned(db, ty),
+            lane_bytes: lane_bytes(db, ty),
         }),
     )
 }

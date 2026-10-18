@@ -32,7 +32,7 @@ use crate::{
     db::MirDb,
     instance::{RuntimeInstanceKey, RuntimeInstanceSource},
     runtime::place::{
-        place_reference_class, project_field_class, project_index_class, storage_field_lane,
+        field_path_lane, place_reference_class, project_field_class, project_index_class,
     },
     runtime::{
         BorrowAccess, Layout, LayoutId, RefKind, RuntimeBoundarySpec, RuntimeCarrier, RuntimeClass,
@@ -1053,16 +1053,29 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         root_space: AddressSpace,
     ) -> Option<bool> {
         let projections: Vec<_> = path.iter().cloned().collect();
-        let Some((NDataProjection::Field(field), parent_path)) = projections.split_last() else {
+        let start = projections
+            .iter()
+            .rposition(|projection| !matches!(projection, NDataProjection::Field(_)))
+            .map_or(0, |index| index + 1);
+        if start == projections.len() {
             return Some(false);
-        };
-        let mut parent = self.walk_data_path_class(root()?, &NDataPath::new(parent_path));
-        if !parent_path.is_empty()
-            && let Some(target) = parent.deref_target(self.db)
-        {
-            parent = target;
         }
-        Some(storage_field_lane(self.db, &parent, *field, root_space).is_some())
+        // The fields the path ends with, each with the class it projects from.
+        let mut parent = self.walk_data_path_class(root()?, &NDataPath::new(&projections[..start]));
+        let mut fields = Vec::new();
+        for (index, projection) in projections.iter().enumerate().skip(start) {
+            let NDataProjection::Field(field) = projection else {
+                unreachable!("the path ends with fields")
+            };
+            if index > 0
+                && let Some(target) = parent.deref_target(self.db)
+            {
+                parent = target;
+            }
+            let class = project_field_class(self.db, parent.clone(), *field);
+            fields.push((std::mem::replace(&mut parent, class), *field));
+        }
+        Some(field_path_lane(self.db, &fields, root_space).is_some())
     }
 
     pub(crate) fn actual_aggregate_class_for_source(
