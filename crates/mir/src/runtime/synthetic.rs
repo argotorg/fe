@@ -125,7 +125,7 @@ pub(crate) fn lower_synthetic_runtime_body<'db>(
             builder.build_export_root(callee, &entry_args)?
         }
         RuntimeSyntheticSpec::ContractInitAbi { plan } => builder.build_contract_init_abi(plan)?,
-        RuntimeSyntheticSpec::ContractRecvAbi { plan } => builder.build_contract_recv_abi(plan)?,
+        RuntimeSyntheticSpec::ContractRecvAbi { plan } => builder.build_contract_recv_abi(*plan)?,
         RuntimeSyntheticSpec::ContractInitRoot {
             contract,
             init_abi,

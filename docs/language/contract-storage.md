@@ -3,9 +3,11 @@
 The layout gives each `mut` contract field a root slot, in declaration order.
 Storage, transient storage and code each number their own fields, so a
 transient field never moves a persistent one. A field takes as many
-consecutive slots as its type needs. Struct fields narrower than a word are
-packed into shared slots the way Solidity packs struct members. Immutable
-fields live in the contract's code.
+consecutive slots as its type needs. Fields narrower than a word are packed
+into shared slots the way Solidity packs state variables and struct members:
+consecutive narrow contract fields share a slot, and so do the narrow fields
+of a struct, a tuple or a map entry. Immutable fields live in the contract's
+code.
 
 A field packs when its value is narrower than a word, like a Solidity value
 type: a `bool`, an integer narrower than `u256`, or a newtype of one (a
@@ -14,8 +16,28 @@ struct with a single field, which takes its field's bytes). A newtype with a
 instead, so `Address` takes 20 bytes, `FixedBytes<N>` takes `N` and the
 odd-width integers such as `Uint24` take their width. Its field's value lies
 in those bytes, and writing a value they cannot hold reverts, as its
-`SolPacked` encoding does. Any other struct, tuple, array or enum takes whole
+`SolPacked` encoding does. Narrow fields fill a slot from its low-order end
+in declaration order, and a field that does not fit the rest of the slot
+starts the next one. Any other struct, tuple, array or enum takes whole
 slots of its own, and the field after it starts a new slot, as in Solidity.
+
+```fe
+use std::evm::Address
+
+pub contract Token {
+    mut owner: Address,     // slot 0, bytes 0..20
+    mut paused: bool,       // slot 0, byte 20
+    mut decimals: u8,       // slot 0, byte 21
+    mut supply: u256,       // slot 1
+}
+```
+
+A packed field is a lane of its slot: reading it extracts its bytes and
+writing it keeps the rest of the slot. Like a packed struct field, it is read
+and written in place, but a `mut` binding, argument or provided effect of it
+works on a memory copy that is stored back when the access ends. A field
+placed with `#[slot(e)]` takes its slot alone, and fields numbered around it
+pack as if it were not there.
 
 A field that mixes spaces, such as a `Mutex<T>` (a transient lock beside a
 storage value), has one root slot that both spaces read: it takes its whole

@@ -205,10 +205,11 @@ impl<'db> BoundaryShapeMatcher<'db> {
                     kind: RefShapeKind::Const,
                     view: RefView::Whole,
                 } => *allow_const && **actual_pointee == *pointee,
+                // A packed contract field's reference views its lane.
                 RuntimeClassShape::Ref {
                     pointee: actual_pointee,
                     kind: RefShapeKind::Provider(space),
-                    view: RefView::Whole,
+                    view: RefView::Whole | RefView::Lane(_),
                 } => provider_spaces.contains(space) && **actual_pointee == *pointee,
                 RuntimeClassShape::RawAddr {
                     pointee: Some(actual_pointee),
@@ -218,7 +219,7 @@ impl<'db> BoundaryShapeMatcher<'db> {
                 RuntimeClassShape::Scalar(_)
                 | RuntimeClassShape::AggregateValue { .. }
                 | RuntimeClassShape::Ref {
-                    view: RefView::EnumVariant(_),
+                    view: RefView::EnumVariant(_) | RefView::Lane(_),
                     ..
                 } => false,
             },
@@ -641,13 +642,14 @@ impl BoundaryMatcher {
                     kind: RefKind::Const,
                     view: RefView::Whole,
                 } => allow.allow_const && **actual_pointee == *pointee,
+                // A packed contract field's reference views its lane.
                 RuntimeClass::Ref {
                     pointee: actual_pointee,
                     kind: RefKind::Provider { space, .. },
-                    view: RefView::Whole,
+                    view: RefView::Whole | RefView::Lane(_),
                 } => allow.provider_spaces.contains(space) && **actual_pointee == *pointee,
                 RuntimeClass::Ref {
-                    view: RefView::EnumVariant(_),
+                    view: RefView::EnumVariant(_) | RefView::Lane(_),
                     ..
                 } => false,
                 RuntimeClass::RawAddr {

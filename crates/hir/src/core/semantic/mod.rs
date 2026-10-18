@@ -51,7 +51,7 @@ pub use storage_layout::{
     AllocatedContractStorageLayout, ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind,
     ContractLayoutError, ContractLayoutLane, ContractLayoutPath, ContractLayoutPathSegment,
     ContractLayoutReport, ContractLayoutValue, ContractStorageLayoutResult, FieldStorageLayout,
-    ValidatedFieldLayoutPlan, storage_lane_bytes,
+    ValidatedFieldLayoutPlan, contract_field_lane, storage_lane_bytes,
 };
 pub(crate) use storage_layout::{storage_field_lanes, storage_slot_span};
 pub use symbol::{

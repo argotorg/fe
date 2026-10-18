@@ -1,0 +1,1 @@
+Consecutive contract fields narrower than a slot now share storage slots, as Solidity packs state variables: `mut owner: Address, mut paused: bool, mut decimals: u8` take one slot instead of three. A packed field is read and written in place, keeping the rest of its slot. Fields placed with `#[slot(e)]`, structs and other aggregates still take whole slots.

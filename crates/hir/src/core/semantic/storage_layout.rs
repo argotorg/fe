@@ -1,6 +1,6 @@
 use common::{
     indexmap::IndexMap,
-    layout::{StorageFieldShape, StorageLane, storage_fields_layout},
+    layout::{StorageFieldPlacement, StorageFieldShape, storage_fields_layout},
 };
 use num_bigint::BigUint;
 use num_traits::ToPrimitive;
@@ -96,14 +96,24 @@ pub struct ContractLayoutEntry<'db> {
 pub struct ContractLayoutLane {
     pub byte_offset: u8,
     pub byte_width: u8,
+    /// Whether other fields share the slot.
+    pub shared: bool,
 }
 
-impl From<StorageLane> for ContractLayoutLane {
-    fn from(lane: StorageLane) -> Self {
-        Self {
+impl ContractLayoutLane {
+    fn from_placement(placement: StorageFieldPlacement) -> Option<Self> {
+        placement.lane.map(|lane| Self {
             byte_offset: lane.byte_offset as u8,
             byte_width: lane.byte_width as u8,
-        }
+            shared: placement.shared,
+        })
+    }
+
+    /// Whether the lane is part of its slot: shared with other fields or
+    /// placed above the slot's low end. A packed value alone at the low end
+    /// of its slot takes the whole slot.
+    pub fn is_partial(self) -> bool {
+        self.shared || self.byte_offset != 0
     }
 }
 
@@ -263,6 +273,9 @@ pub struct ValidatedFieldLayoutPlan<'db> {
     /// The slot `#[slot(e)]` places the field at.
     explicit_slot: Option<U256>,
     slot_count: usize,
+    /// The bytes of a storage field narrower than a slot, which packs with
+    /// the narrow fields declared beside it (`storage_lane_bytes`).
+    lane_bytes: Option<u32>,
     /// The spaces the field's slot numbers are taken in: its own, when a
     /// part of it lies outside a pinned type, and those its pinned types are
     /// pinned to, which keep their contents at their own slot numbers there
@@ -282,6 +295,9 @@ pub struct FieldStorageLayout<'db> {
     /// The field's first slot, or for a code field its first word.
     pub slot_offset: U256,
     pub slot_count: usize,
+    /// For a field packed into its slot, its bytes there; other fields may
+    /// share the slot.
+    pub lane: Option<ContractLayoutLane>,
     inline_leaves: Vec<InlineLayoutLeaf<'db>>,
 }
 
@@ -730,7 +746,7 @@ impl<'db> FieldWalker<'db> {
                         self.push_error(ContractLayoutError::LayoutExtentOverflow);
                         continue;
                     };
-                    (slot, placement.lane.map(ContractLayoutLane::from))
+                    (slot, ContractLayoutLane::from_placement(placement))
                 }
                 None => (span, None),
             };
@@ -1101,10 +1117,29 @@ fn collect_field_plan<'db>(
             declared,
             explicit_slot,
             slot_count: output.span,
+            lane_bytes: output
+                .packable_bytes
+                .filter(|_| address_space == AddressSpace::Storage),
             spaces,
             inline_leaves: output.leaves,
         }),
     ))
+}
+
+/// Where `field` lies in a storage slot it packs into with other fields, or
+/// does not start: such a field is a lane of its slot, which no reference
+/// can point at.
+pub fn contract_field_lane<'db>(
+    db: &'db dyn HirAnalysisDb,
+    field: ContractFieldId<'db>,
+) -> Option<ContractLayoutLane> {
+    field
+        .contract
+        .storage_layout(db)
+        .values()
+        .find(|layout| layout.field == field)?
+        .lane
+        .filter(|lane| lane.is_partial())
 }
 
 /// The slots a value of `ty` takes in storage, as the layout places a
@@ -1371,7 +1406,9 @@ fn entry_layout_error<'db>(
 /// placed before the fields that lie only in transient storage, which fit
 /// around them: a transient field never moves a persistent one. A field
 /// that mixes spaces takes its whole range in each, since one number roots
-/// all of it.
+/// all of it. The counted storage fields pack like a struct's fields, as
+/// Solidity packs state variables: a field narrower than a slot shares it
+/// with the narrow fields declared next to it.
 fn allocate_contract<'db>(
     field_results: &[ContractFieldLayoutResult<'db>],
 ) -> Result<AllocatedContractStorageLayout<'db>, (ContractFieldId<'db>, ContractLayoutError<'db>)> {
@@ -1411,9 +1448,38 @@ fn allocate_contract<'db>(
     }
     let transient_only =
         |plan: &ValidatedFieldLayoutPlan<'db>| plan.spaces.as_slice() == [AddressSpace::Transient];
+    // The counted storage fields laid out as a struct's fields are. A
+    // placement's slot counts from the first of these fields' slots; the
+    // first field placed in a slot gives it its number, and the fields
+    // packed beside it take the same number.
+    let counted: Vec<_> = plans
+        .iter()
+        .enumerate()
+        .filter(|(_, plan)| {
+            plan.explicit_slot.is_none()
+                && !transient_only(plan)
+                && plan.address_space == AddressSpace::Storage
+        })
+        .map(|(idx, _)| idx)
+        .collect();
+    let packed = storage_fields_layout(counted.iter().map(|idx| match plans[*idx].lane_bytes {
+        Some(bytes) => StorageFieldShape::Scalar { bytes },
+        None => StorageFieldShape::Aggregate {
+            slots: plans[*idx].slot_count as u64,
+        },
+    }))
+    .map_err(|_| {
+        (
+            plans[counted[0]].field,
+            ContractLayoutError::LayoutExtentOverflow,
+        )
+    })?;
+    let placements: FxHashMap<_, _> = counted.into_iter().zip(packed.placements).collect();
+    let mut packed_numbers: FxHashMap<u64, U256> = FxHashMap::default();
     let mut counters: FxHashMap<AddressSpace, U256> = FxHashMap::default();
     let mut code_slot_count = 0;
     let mut offsets = vec![U256::ZERO; plans.len()];
+    let mut lanes = vec![None; plans.len()];
     for transient_pass in [false, true] {
         for (idx, plan) in plans.iter().enumerate() {
             if transient_only(plan) != transient_pass {
@@ -1422,6 +1488,14 @@ fn allocate_contract<'db>(
             if let Some(slot) = plan.explicit_slot {
                 offsets[idx] = slot;
                 continue;
+            }
+            let placement = placements.get(&idx);
+            if let Some(placement) = placement {
+                lanes[idx] = ContractLayoutLane::from_placement(*placement);
+                if let Some(number) = packed_numbers.get(&placement.slot) {
+                    offsets[idx] = *number;
+                    continue;
+                }
             }
             let count = U256::from(plan.slot_count);
             let space = if transient_pass {
@@ -1453,6 +1527,11 @@ fn allocate_contract<'db>(
                         .or_default()
                         .push((start, end, plan.name));
                 }
+                if let Some(placement) = placement {
+                    for (slot, number) in (placement.slot..).zip(0..plan.slot_count) {
+                        packed_numbers.insert(slot, start.wrapping_add(U256::from(number)));
+                    }
+                }
             }
             if space == AddressSpace::Code {
                 code_slot_count = usize::try_from(end)
@@ -1466,7 +1545,8 @@ fn allocate_contract<'db>(
     let fields = plans
         .iter()
         .zip(offsets)
-        .map(|(plan, slot_offset)| {
+        .zip(lanes)
+        .map(|((plan, slot_offset), lane)| {
             (
                 plan.name,
                 FieldStorageLayout {
@@ -1477,6 +1557,7 @@ fn allocate_contract<'db>(
                     declared: plan.declared,
                     slot_offset,
                     slot_count: plan.slot_count,
+                    lane,
                     inline_leaves: plan.inline_leaves.clone(),
                 },
             )
@@ -1526,7 +1607,8 @@ fn allocated_contract_layout_report<'db>(
                 }
                 .unwrap_or(field.address_space),
                 value,
-                lane: leaf.lane,
+                // A packed field's parts lie in its lane.
+                lane: field.lane.or(leaf.lane),
                 kind: match leaf.kind {
                     InlineLayoutLeafKind::Field => ContractLayoutEntryKind::InlineField,
                     InlineLayoutLeafKind::Collection => ContractLayoutEntryKind::Collection,

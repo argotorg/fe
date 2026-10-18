@@ -229,7 +229,8 @@ fn runtime_place_address_root<'db>(
 }
 
 /// The lane `place` ends at: a field packed into a storage word, which no
-/// reference can point at (see `field_path_lane`).
+/// reference can point at (see `field_path_lane`), or the place a reference
+/// to a packed contract field roots (`RefView::Lane`).
 pub(crate) fn runtime_place_lane<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
@@ -238,11 +239,20 @@ pub(crate) fn runtime_place_lane<'db>(
 ) -> Result<Option<StorageLaneView>, VerifyError<'db>> {
     let resolved = resolve_runtime_place(db, program, body, place)?;
     let (_, root_space, _) = runtime_place_address_root(db, body, &resolved, place)?;
-    let mut parent = match &resolved.root_kind {
-        ResolvedPlaceRootKind::Slot { class, .. }
-        | ResolvedPlaceRootKind::Ref { class, .. }
-        | ResolvedPlaceRootKind::Provider { class, .. }
-        | ResolvedPlaceRootKind::Ptr { class, .. } => class.clone(),
+    let (mut parent, mut root_lane) = match &resolved.root_kind {
+        ResolvedPlaceRootKind::Slot { class, .. } => (class.clone(), None),
+        ResolvedPlaceRootKind::Ref { value, class }
+        | ResolvedPlaceRootKind::Ptr {
+            addr: value, class, ..
+        } => (
+            class.clone(),
+            body.place_value_class(*value).and_then(ref_lane),
+        ),
+        ResolvedPlaceRootKind::Provider {
+            provider_class,
+            class,
+            ..
+        } => (class.clone(), ref_lane(provider_class)),
     };
     // The fields the path ends with, each with the class it projects from.
     let mut fields = Vec::new();
@@ -251,23 +261,44 @@ pub(crate) fn runtime_place_lane<'db>(
             ResolvedPlaceElem::Field { field, class } => {
                 fields.push((std::mem::replace(&mut parent, class.clone()), *field));
             }
-            ResolvedPlaceElem::Index { class, .. }
-            | ResolvedPlaceElem::VariantField { class, .. }
-            | ResolvedPlaceElem::Deref { class, .. } => {
+            ResolvedPlaceElem::Deref {
+                carrier_class,
+                class,
+            } => {
                 fields.clear();
+                root_lane = ref_lane(carrier_class);
+                parent = class.clone();
+            }
+            ResolvedPlaceElem::Index { class, .. }
+            | ResolvedPlaceElem::VariantField { class, .. } => {
+                fields.clear();
+                root_lane = None;
                 parent = class.clone();
             }
         }
     }
-    Ok(field_path_lane(db, &fields, root_space))
+    Ok(field_path_lane(db, root_lane, &fields, root_space))
+}
+
+/// The lane a reference of class `class` views: a packed contract field's.
+pub fn ref_lane(class: &RuntimeClass<'_>) -> Option<StorageLaneView> {
+    match class {
+        RuntimeClass::Ref {
+            view: RefView::Lane(lane),
+            ..
+        } => Some(*lane),
+        _ => None,
+    }
 }
 
 /// The lane the place a path of fields reaches lies in, in a value of
 /// `space`: the lane of the last field packed into a storage word, which the
-/// field of a packed newtype shares with its newtype. `fields` holds each
-/// field with the class it projects from.
+/// field of a packed newtype shares with its newtype, or `root`, the lane
+/// the path starts in. `fields` holds each field with the class it projects
+/// from.
 pub(crate) fn field_path_lane<'db>(
     db: &'db dyn MirDb,
+    root: Option<StorageLaneView>,
     fields: &[(RuntimeClass<'db>, FieldIndex)],
     space: AddressSpace,
 ) -> Option<StorageLaneView> {
@@ -279,7 +310,7 @@ pub(crate) fn field_path_lane<'db>(
             return None;
         }
     }
-    None
+    root
 }
 
 /// Whether `class` is a newtype that packs into part of a storage word.

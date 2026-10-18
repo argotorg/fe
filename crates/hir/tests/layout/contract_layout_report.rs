@@ -412,3 +412,55 @@ contract C {
         );
     }
 }
+
+#[test]
+fn report_packs_consecutive_narrow_contract_fields() {
+    parse_ok!(
+        db,
+        top_mod,
+        r#"
+use std::evm::{Address, TSlot}
+
+struct Pair { left: u256, right: u8 }
+
+contract C {
+    mut owner: Address,
+    mut paused: bool,
+    mut big: u128,
+    mut stamp: u64,
+    mut pair: Pair,
+    mut lone: u8,
+    #[slot(9)]
+    mut placed: u8,
+    mut cell: TSlot<u256>,
+    limit: u8,
+    mut total: u256,
+}
+"#,
+    );
+    let contract = find_contract(&db, top_mod, "C");
+    let report = contract.layout_report(&db).unwrap();
+    // `big` does not fit beside `owner` and `paused`, a struct ends a run,
+    // and an explicit slot, a transient cell and an immutable leave the
+    // counted storage fields alone.
+    for (path, slot, lane) in [
+        ("owner.inner", "0", Some((0, 20, true))),
+        ("paused", "0", Some((20, 1, true))),
+        ("big", "1", Some((0, 16, true))),
+        ("stamp", "1", Some((16, 8, true))),
+        ("pair.left", "2", None),
+        ("lone", "4", Some((0, 1, false))),
+        ("placed", "9", None),
+        ("total", "5", None),
+    ] {
+        let entry = entry(&db, &report.entries, path);
+        assert_eq!(scalar_value(&db, entry), slot, "{path}");
+        assert_eq!(
+            entry
+                .lane
+                .map(|lane| (lane.byte_offset, lane.byte_width, lane.shared)),
+            lane,
+            "{path}"
+        );
+    }
+}

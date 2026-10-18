@@ -1403,7 +1403,7 @@ fn contract_recv_wrapper<'db>(
     let wrapper = synthetic_instance(
         db,
         RuntimeSyntheticSpec::ContractRecvAbi {
-            plan: ContractRecvAbiPlan {
+            plan: Box::new(ContractRecvAbiPlan {
                 contract,
                 selector: abi_info.selector_value,
                 payable: match arm.arm(db) {
@@ -1414,7 +1414,7 @@ fn contract_recv_wrapper<'db>(
                 entry_args,
                 input,
                 ret,
-            },
+            }),
         },
         Vec::new(),
     );
@@ -2740,6 +2740,10 @@ fn ref_view_sort_key<'db>(db: &'db dyn MirDb, view: &RefView<'db>) -> String {
             layout_sort_key(db, variant.enum_layout),
             variant.index
         ),
+        RefView::Lane(lane) => format!(
+            "lane:{}:{}:{}",
+            lane.byte_offset, lane.byte_width, lane.shared
+        ),
     }
 }
 
@@ -3066,7 +3070,7 @@ pub fn main() -> i32 {
             panic!("recv wrapper should be synthetic");
         };
         match synthetic.spec(db) {
-            RuntimeSyntheticSpec::ContractRecvAbi { plan } => plan.clone(),
+            RuntimeSyntheticSpec::ContractRecvAbi { plan } => (**plan).clone(),
             other => panic!("expected recv wrapper synthetic spec, got {other:?}"),
         }
     }

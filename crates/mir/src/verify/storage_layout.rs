@@ -19,7 +19,7 @@ use crate::{
     runtime::{
         ContractFieldBinding, ContractFieldSlot, EntryEffectArgPlan, RefKind, RefView,
         RuntimeClass, RuntimeFunctionOwner, RuntimeMemoryLayout, RuntimeSyntheticSpec,
-        lower::classify::runtime_effect_binding_plan,
+        lower::classify::{contract_field_view, runtime_effect_binding_plan},
     },
     verify::VerifyError,
 };
@@ -179,6 +179,11 @@ fn verify_contract_field_binding<'db>(
     if binding.kind != expected_kind {
         return Err(VerifyError::ContractFieldKindMismatch(binding.field));
     }
+    if let RuntimeClass::Ref { view, .. } = &binding.class
+        && *view != contract_field_view(db, binding.field)
+    {
+        return Err(VerifyError::ContractFieldViewMismatch(binding.field));
+    }
     let pointee =
         binding
             .class
@@ -237,7 +242,7 @@ fn contract_field_ref_kind<'db>(
     match &binding.class {
         RuntimeClass::Ref {
             kind,
-            view: RefView::Whole,
+            view: RefView::Whole | RefView::Lane(_),
             ..
         } => Some(kind.clone()),
         RuntimeClass::RawAddr { space, .. } => Some(RefKind::Provider {

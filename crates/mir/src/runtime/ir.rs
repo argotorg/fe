@@ -328,6 +328,9 @@ pub enum RefKind<'db> {
 pub enum RefView<'db> {
     Whole,
     EnumVariant(VariantId<'db>),
+    /// A contract field packed into its storage slot with other fields: the
+    /// reference holds the slot, and its referent is this lane of it.
+    Lane(StorageLaneView),
 }
 
 /// The bytes of a storage word that hold a packed scalar struct field, a
@@ -866,8 +869,10 @@ pub enum RuntimeSyntheticSpec<'db> {
     ContractInitAbi {
         plan: ContractInitAbiPlan<'db>,
     },
+    /// Boxed: a receive plan holds many runtime classes, and is far larger
+    /// than any other spec.
     ContractRecvAbi {
-        plan: ContractRecvAbiPlan<'db>,
+        plan: Box<ContractRecvAbiPlan<'db>>,
     },
     ContractInitRoot {
         contract: Contract<'db>,

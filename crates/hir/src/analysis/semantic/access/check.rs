@@ -60,7 +60,9 @@ use crate::{
         },
     },
     hir_def::{Partial, Stmt, scope_graph::ScopeId},
-    semantic::{EffectRequirementKey, ProviderSource, effect_requirements_for_site},
+    semantic::{
+        EffectRequirementKey, ProviderSource, contract_field_lane, effect_requirements_for_site,
+    },
 };
 
 type Diag<'db> = SemanticDiagnostic<'db>;
@@ -504,7 +506,18 @@ impl<'a, 'db> Analysis<'a, 'db> {
         let (regions, direct) = match place.base {
             NPlaceBase::Root(root) => {
                 let base = self.root_domain[root.index()].map_or(Base::Root(root), Base::Domain);
-                (vec![rooted(self, base, path)], TokenSet::new())
+                let mut region = rooted(self, base, path);
+                // A contract field packed into a slot with others is a lane.
+                region.lane |= matches!(
+                    &self.body.roots[root.index()].kind,
+                    NRootKind::Provider { binding }
+                        if matches!(
+                            binding.source,
+                            ProviderSource::ContractField { field }
+                                if contract_field_lane(self.db, field).is_some()
+                        )
+                );
+                (vec![region], TokenSet::new())
             }
             // A carrier with no access names no known place: none until the
             // flow gives it one (`check_places_known`).
