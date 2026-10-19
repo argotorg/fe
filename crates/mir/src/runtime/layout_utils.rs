@@ -45,6 +45,10 @@ pub struct FieldPlacement {
     /// Whether the word at `offset` also holds other fields, so a write must
     /// preserve the rest of it.
     pub shared: bool,
+    /// Whether `lane` is read and written apart from the rest of its word
+    /// (`StorageFieldPlacement::partial_lane`), so no reference can point at
+    /// it.
+    pub partial: bool,
 }
 
 impl From<RuntimeMemoryLayoutError> for LowerError {
@@ -153,6 +157,7 @@ impl<'db> RuntimeMemoryLayout<'db> {
                     .offsets[field],
                 lane: None,
                 shared: false,
+                partial: false,
             }),
             RuntimeMemoryUnit::Word => {
                 let placement = self
@@ -162,6 +167,7 @@ impl<'db> RuntimeMemoryLayout<'db> {
                     offset: placement.slot,
                     lane: placement.lane,
                     shared: placement.shared,
+                    partial: placement.partial_lane().is_some(),
                 })
             }
         }
@@ -189,17 +195,30 @@ impl<'db> RuntimeMemoryLayout<'db> {
         Ok(match class {
             RuntimeClass::Scalar(scalar) => StorageFieldShape::Scalar {
                 bytes: storage_scalar_bytes(scalar),
+                narrowed: false,
             },
-            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => {
-                StorageFieldShape::Scalar { bytes: 32 }
-            }
+            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => StorageFieldShape::Scalar {
+                bytes: 32,
+                narrowed: false,
+            },
             RuntimeClass::AggregateValue { layout } => match layout.data(self.db) {
+                // A newtype holds its field's value, which can be wider than
+                // the newtype's lane.
                 Layout::Struct(StructLayout {
+                    fields,
                     lane_bytes: Some(bytes),
                     ..
-                }) => StorageFieldShape::Scalar {
-                    bytes: u32::from(bytes),
-                },
+                }) => {
+                    let bytes = u32::from(bytes);
+                    let narrowed = match self.storage_field_shape(&fields[0], visiting)? {
+                        StorageFieldShape::Scalar {
+                            bytes: field_bytes,
+                            narrowed,
+                        } => narrowed || bytes < field_bytes,
+                        StorageFieldShape::Aggregate { .. } => true,
+                    };
+                    StorageFieldShape::Scalar { bytes, narrowed }
+                }
                 _ => StorageFieldShape::Aggregate {
                     slots: self.layout_size_inner(*layout, visiting)?,
                 },

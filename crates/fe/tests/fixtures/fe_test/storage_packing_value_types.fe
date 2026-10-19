@@ -204,3 +204,104 @@ fn test_out_of_range_custom_width_reverts() uses (evm: mut Evm) {
     let c = evm.create2<ValueTypes>(value: Wei::zero(), args: (), salt: 4)
     evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::DirtyTime {})
 }
+
+// ---------------------------------------------------------------------------
+// A newtype narrower than its value stays a lane when it has its slot to
+// itself: a write still checks the value fits and a read still masks.
+// ---------------------------------------------------------------------------
+
+struct Tagged {
+    tag: Bytes4,
+    big: u256,
+}
+
+impl Copy for Tagged {}
+
+fn set_tag(_ tag: mut Bytes4, _ to: Bytes4) {
+    tag = to
+}
+
+fn pick_mut<T>(_ value: mut T) -> Option<mut T> {
+    Option::Some(value)
+}
+
+msg LoneMsg {
+    #[selector = 1]
+    FieldDirty {},
+    #[selector = 2]
+    WideDirty {},
+    #[selector = 3]
+    HeldDirty {},
+    #[selector = 4]
+    StoredRefHeldDirty {},
+    #[selector = 5]
+    ReadDirtySlots -> u256,
+}
+
+// Slots: tag 0, big 1, wide 2, after 3, tagged 4..6.
+pub contract Lone {
+    mut tag: Bytes4,
+    mut big: u256,
+    mut wide: Uint24,
+    mut after: u256,
+    mut tagged: Tagged,
+
+    recv LoneMsg {
+        FieldDirty {} uses (mut tag) {
+            tag = Bytes4 { val: 0x100000000 }
+        }
+        WideDirty {} uses (mut wide) {
+            wide = Uint24 { val: 0x1000000 }
+        }
+        HeldDirty {} uses (mut tagged) {
+            set_tag(mut tagged.tag, Bytes4 { val: 0x100000000 })
+        }
+        StoredRefHeldDirty {} uses (mut tagged) {
+            match pick_mut(mut tagged) {
+                Option::Some(mut held) => set_tag(mut held.tag, Bytes4 { val: 0x100000000 }),
+                Option::None => {}
+            }
+        }
+        // Bits a raw write leaves above a lone lane are not part of its value.
+        ReadDirtySlots -> u256 uses (tag, wide, tagged, raw: mut RawStorage) {
+            unsafe {
+                raw.sstore(slot: 0, value: (1 << 200) | 0x01ffc9a7)
+                raw.sstore(slot: 2, value: (1 << 200) | 0xabcdef)
+                raw.sstore(slot: 4, value: (1 << 200) | 0x11223344)
+            }
+            assert(tag.val == 0x01ffc9a7)
+            assert(wide.val == 0xabcdef)
+            tagged.tag.val
+        }
+    }
+}
+
+#[test]
+fn test_lone_narrowed_lanes_mask_reads() uses (evm: mut Evm) {
+    let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 1)
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::ReadDirtySlots {}) == 0x11223344)
+}
+
+#[test(should_revert)]
+fn test_lone_narrowed_field_write_checks() uses (evm: mut Evm) {
+    let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 2)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::FieldDirty {})
+}
+
+#[test(should_revert)]
+fn test_lone_narrowed_int_write_checks() uses (evm: mut Evm) {
+    let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 3)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::WideDirty {})
+}
+
+#[test(should_revert)]
+fn test_lone_narrowed_held_write_checks() uses (evm: mut Evm) {
+    let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 4)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::HeldDirty {})
+}
+
+#[test(should_revert)]
+fn test_lone_narrowed_held_through_stored_ref_write_checks() uses (evm: mut Evm) {
+    let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 5)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::StoredRefHeldDirty {})
+}

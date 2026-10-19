@@ -1414,15 +1414,19 @@ struct PackedLane {
     lane: StorageLane,
     /// Whether other fields share the word, so a write must preserve it.
     shared: bool,
+    /// Whether the lane is read and written apart from the rest of its word
+    /// (`FieldPlacement::partial`), so no reference can point at it.
+    partial: bool,
 }
 
 impl PackedLane {
     /// The lane a reference of class `class` views: a packed contract
-    /// field's.
+    /// field's, which MIR views as a lane only when it is partial.
     fn of_ref(class: &RuntimeClass<'_>) -> Option<Self> {
         ref_lane(class).map(|lane| Self {
             lane: lane.lane(),
             shared: lane.shared,
+            partial: true,
         })
     }
 
@@ -1430,13 +1434,8 @@ impl PackedLane {
         placement.lane.map(|lane| Self {
             lane,
             shared: placement.shared,
+            partial: placement.partial,
         })
-    }
-
-    /// Whether a reference to the whole word reaches the same scalar: a
-    /// scalar alone at the start of its word.
-    fn is_whole_word(self) -> bool {
-        !self.shared && self.lane.byte_offset == 0
     }
 }
 
@@ -4863,8 +4862,8 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             }
             PlaceTerminal::Ptr {
                 lane: Some(lane), ..
-            } if !lane.is_whole_word() => Err(LowerError::Internal(
-                "a storage field packed into a word with other fields has no address".to_string(),
+            } if lane.partial => Err(LowerError::Internal(
+                "a storage field read and written as a lane has no address".to_string(),
             )),
             PlaceTerminal::StackPtr { addr, .. } | PlaceTerminal::Ptr { addr, .. } => {
                 if let Some(dst) = dst

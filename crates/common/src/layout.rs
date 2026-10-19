@@ -32,11 +32,13 @@ pub const fn enum_tag_bits(variant_count: usize) -> u16 {
 pub const STORAGE_SLOT_BYTES: u32 = 32;
 
 /// The storage footprint of one field, as the field planner sees it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum StorageFieldShape {
     /// A scalar of `bytes` bytes (1..=32). Scalars narrower than a slot share
-    /// slots with their neighbours.
-    Scalar { bytes: u32 },
+    /// slots with their neighbours. A `narrowed` scalar holds a value that
+    /// can be wider than its bytes, as a newtype stored at its `SolPacked`
+    /// width does.
+    Scalar { bytes: u32, narrowed: bool },
     /// An aggregate spanning `slots` whole slots. It starts a new slot, and so
     /// does the field after it. A zero-slot aggregate occupies no storage and
     /// does not interrupt packing.
@@ -71,6 +73,21 @@ pub struct StorageFieldPlacement {
     /// Whether another field shares the slot, so a write must preserve the
     /// rest of the slot (read-modify-write).
     pub shared: bool,
+    /// Whether the field's value can be wider than its lane
+    /// (`StorageFieldShape::Scalar`'s `narrowed`).
+    pub narrowed: bool,
+}
+
+impl StorageFieldPlacement {
+    /// The lane the field is read and written through apart from the rest
+    /// of its slot: one that shares its slot, lies above the slot's low end,
+    /// or holds a value wider than its bytes, which a write checks and a read
+    /// masks. A lane alone at the low end of its slot whose value always fits
+    /// is as good as the whole slot, which a reference can point at.
+    pub fn partial_lane(self) -> Option<StorageLane> {
+        self.lane
+            .filter(|lane| self.shared || lane.byte_offset != 0 || self.narrowed)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,10 +129,10 @@ pub fn storage_fields_layout(
     let next = |slot: u64, by: u64| slot.checked_add(by).ok_or(StorageLayoutError::Overflow);
     for field in fields {
         match field {
-            StorageFieldShape::Scalar { bytes } if bytes == 0 || bytes > STORAGE_SLOT_BYTES => {
+            StorageFieldShape::Scalar { bytes, .. } if bytes == 0 || bytes > STORAGE_SLOT_BYTES => {
                 return Err(StorageLayoutError::InvalidScalarWidth(bytes));
             }
-            StorageFieldShape::Scalar { bytes } if bytes < STORAGE_SLOT_BYTES => {
+            StorageFieldShape::Scalar { bytes, narrowed } if bytes < STORAGE_SLOT_BYTES => {
                 if used + bytes > STORAGE_SLOT_BYTES {
                     close_group(&mut placements, group_start);
                     slot = next(slot, 1)?;
@@ -131,6 +148,7 @@ pub fn storage_fields_layout(
                         byte_width: bytes,
                     }),
                     shared: false,
+                    narrowed,
                 });
                 used += bytes;
             }
@@ -139,6 +157,7 @@ pub fn storage_fields_layout(
                     slot,
                     lane: None,
                     shared: false,
+                    narrowed: false,
                 });
             }
             StorageFieldShape::Scalar { .. } | StorageFieldShape::Aggregate { .. } => {
@@ -155,6 +174,7 @@ pub fn storage_fields_layout(
                     slot,
                     lane: None,
                     shared: false,
+                    narrowed: false,
                 });
                 slot = next(slot, slots)?;
             }
@@ -254,7 +274,10 @@ mod tests {
     // Expected placements are `solc --storage-layout` output for the same
     // Solidity structs (slot, offset in bytes).
     fn scalar(bytes: u32) -> StorageFieldShape {
-        StorageFieldShape::Scalar { bytes }
+        StorageFieldShape::Scalar {
+            bytes,
+            narrowed: false,
+        }
     }
 
     fn lane(slot: u64, byte_offset: u32, byte_width: u32, shared: bool) -> StorageFieldPlacement {
@@ -265,6 +288,7 @@ mod tests {
                 byte_width,
             }),
             shared,
+            narrowed: false,
         }
     }
 
@@ -273,6 +297,7 @@ mod tests {
             slot,
             lane: None,
             shared: false,
+            narrowed: false,
         }
     }
 
@@ -353,6 +378,36 @@ mod tests {
         );
         assert_eq!(layout.slots, 1);
         assert_eq!(storage_fields_layout([]).unwrap().slots, 0);
+    }
+
+    #[test]
+    fn a_lone_lane_is_partial_only_when_narrowed() {
+        // struct S { uint8 a; uint256 b; } and the same with a 4-byte lane
+        // holding a word (a `FixedBytes<4>`).
+        let plain = storage_fields_layout([scalar(1), scalar(32)]).unwrap();
+        assert_eq!(plain.placements[0].partial_lane(), None);
+        let narrowed = storage_fields_layout([
+            StorageFieldShape::Scalar {
+                bytes: 4,
+                narrowed: true,
+            },
+            scalar(32),
+        ])
+        .unwrap();
+        assert_eq!(
+            narrowed.placements[0].partial_lane(),
+            Some(StorageLane {
+                byte_offset: 0,
+                byte_width: 4,
+            })
+        );
+        let shared = storage_fields_layout([scalar(1), scalar(1)]).unwrap();
+        assert!(
+            shared
+                .placements
+                .iter()
+                .all(|placement| placement.partial_lane().is_some())
+        );
     }
 
     #[test]

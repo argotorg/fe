@@ -326,10 +326,11 @@ pub fn is_packed_newtype<'db>(db: &'db dyn MirDb, class: &RuntimeClass<'db>) -> 
     })
 }
 
-/// The lane field `field` of a value of class `parent` in `space` occupies:
-/// a scalar packed into a storage word with other fields, or placed anywhere
-/// but at its word's start. A packed scalar alone at the start of its word is
-/// the whole word.
+/// The lane field `field` of a value of class `parent` in `space` occupies,
+/// when it is read and written apart from the rest of its storage word
+/// (`StorageFieldPlacement::partial_lane`): a packed scalar that shares its
+/// word, lies above the word's start, or holds a value wider than its bytes.
+/// Any other packed scalar alone at the start of its word is the whole word.
 pub(crate) fn storage_field_lane<'db>(
     db: &'db dyn MirDb,
     parent: &RuntimeClass<'db>,
@@ -342,8 +343,8 @@ pub(crate) fn storage_field_lane<'db>(
     let placement = RuntimeMemoryLayout::for_space(db, space)
         .field_placement(parent, field)
         .ok()?;
-    let lane = placement.lane?;
-    (placement.shared || lane.byte_offset != 0).then_some(StorageLaneView {
+    let lane = placement.lane.filter(|_| placement.partial)?;
+    Some(StorageLaneView {
         byte_offset: lane.byte_offset as u8,
         byte_width: lane.byte_width as u8,
         shared: placement.shared,

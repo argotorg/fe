@@ -98,6 +98,10 @@ pub struct ContractLayoutLane {
     pub byte_width: u8,
     /// Whether other fields share the slot.
     pub shared: bool,
+    /// Whether the lane is read and written apart from the rest of its slot
+    /// (`StorageFieldPlacement::partial_lane`), so no reference can point at
+    /// it.
+    pub partial: bool,
 }
 
 impl ContractLayoutLane {
@@ -106,14 +110,8 @@ impl ContractLayoutLane {
             byte_offset: lane.byte_offset as u8,
             byte_width: lane.byte_width as u8,
             shared: placement.shared,
+            partial: placement.partial_lane().is_some(),
         })
-    }
-
-    /// Whether the lane is part of its slot: shared with other fields or
-    /// placed above the slot's low end. A packed value alone at the low end
-    /// of its slot takes the whole slot.
-    pub fn is_partial(self) -> bool {
-        self.shared || self.byte_offset != 0
     }
 }
 
@@ -273,9 +271,10 @@ pub struct ValidatedFieldLayoutPlan<'db> {
     /// The slot `#[slot(e)]` places the field at.
     explicit_slot: Option<U256>,
     slot_count: usize,
-    /// The bytes of a storage field narrower than a slot, which packs with
-    /// the narrow fields declared beside it (`storage_lane_bytes`).
-    lane_bytes: Option<u32>,
+    /// How a storage field takes storage beside the fields declared around
+    /// it: a field narrower than a slot packs with its narrow neighbours
+    /// (`storage_lane_bytes`).
+    shape: StorageFieldShape,
     /// The spaces the field's slot numbers are taken in: its own, when a
     /// part of it lies outside a pinned type, and those its pinned types are
     /// pinned to, which keep their contents at their own slot numbers there
@@ -398,6 +397,17 @@ pub fn storage_lane_bytes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Opt
         .then_some(bytes)
 }
 
+/// Whether a value of `ty` can be wider than the bytes it takes in a storage
+/// slot (`storage_lane_bytes`): a newtype held at a narrower `SolPacked`
+/// width, such as `Address` in 20 bytes of its word. Its lane is read and
+/// written as a lane even when it has its slot to itself, so a write checks
+/// the value fits and a read masks it.
+fn storage_lane_narrows<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    storage_lane_bytes(db, ty)
+        .zip(newtype_scalar_bytes(db, ty))
+        .is_some_and(|(lane, value)| lane < value)
+}
+
 /// The bytes a value of `ty` takes in a code field it shares with its
 /// neighbours. Code holds each value at its memory width, so a newtype packs
 /// at its field's width rather than its `SolPacked` width.
@@ -515,6 +525,9 @@ struct WalkOutput<'db> {
     /// The bytes of a scalar that packs with its neighbours in a struct or
     /// tuple; `None` for values that take whole slots.
     packable_bytes: Option<u32>,
+    /// Whether the packable scalar's value can be wider than its bytes
+    /// (`storage_lane_narrows`).
+    narrowed: bool,
 }
 
 impl<'db> WalkOutput<'db> {
@@ -523,6 +536,20 @@ impl<'db> WalkOutput<'db> {
             span: 0,
             leaves: Vec::new(),
             packable_bytes: None,
+            narrowed: false,
+        }
+    }
+
+    /// How the value takes storage beside its neighbours.
+    fn shape(&self) -> StorageFieldShape {
+        match self.packable_bytes {
+            Some(bytes) => StorageFieldShape::Scalar {
+                bytes,
+                narrowed: self.narrowed,
+            },
+            None => StorageFieldShape::Aggregate {
+                slots: self.span as u64,
+            },
         }
     }
 
@@ -548,6 +575,7 @@ impl<'db> WalkOutput<'db> {
                 InlineLayoutLeafKind::Field => storage_lane_bytes(db, ty),
                 InlineLayoutLeafKind::Collection | InlineLayoutLeafKind::EnumTag => None,
             },
+            narrowed: false,
         }
     }
 }
@@ -684,6 +712,7 @@ impl<'db> FieldWalker<'db> {
                     } else {
                         code_lane_bytes(self.db, ty)
                     },
+                    narrowed: self.state && storage_lane_narrows(self.db, ty),
                     ..output
                 }
             }
@@ -720,13 +749,7 @@ impl<'db> FieldWalker<'db> {
             })
             .collect();
         let placements = if packed {
-            let shapes = outputs.iter().map(|output| match output.packable_bytes {
-                Some(bytes) => StorageFieldShape::Scalar { bytes },
-                None => StorageFieldShape::Aggregate {
-                    slots: output.span as u64,
-                },
-            });
-            match storage_fields_layout(shapes) {
+            match storage_fields_layout(outputs.iter().map(WalkOutput::shape)) {
                 Ok(layout) => Some(layout),
                 Err(_) => {
                     self.push_error(ContractLayoutError::LayoutExtentOverflow);
@@ -778,6 +801,7 @@ impl<'db> FieldWalker<'db> {
             span,
             leaves,
             packable_bytes: None,
+            narrowed: false,
         }
     }
 
@@ -854,6 +878,7 @@ impl<'db> FieldWalker<'db> {
             span,
             leaves: output.leaves,
             packable_bytes: None,
+            narrowed: false,
         }
     }
 
@@ -977,6 +1002,7 @@ impl<'db> FieldWalker<'db> {
                     span,
                     leaves,
                     packable_bytes: None,
+                    narrowed: false,
                 }
             }
         }
@@ -1117,9 +1143,7 @@ fn collect_field_plan<'db>(
             declared,
             explicit_slot,
             slot_count: output.span,
-            lane_bytes: output
-                .packable_bytes
-                .filter(|_| address_space == AddressSpace::Storage),
+            shape: output.shape(),
             spaces,
             inline_leaves: output.leaves,
         }),
@@ -1139,7 +1163,7 @@ pub fn contract_field_lane<'db>(
         .values()
         .find(|layout| layout.field == field)?
         .lane
-        .filter(|lane| lane.is_partial())
+        .filter(|lane| lane.partial)
 }
 
 /// The slots a value of `ty` takes in storage, as the layout places a
@@ -1179,13 +1203,9 @@ pub(crate) fn storage_field_lanes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>
         .field_types(db)
         .into_iter()
         .map(|field| {
-            let output = walker.walk_ty(ConcreteTypeView::identity(field), &[], &[]);
-            match output.packable_bytes {
-                Some(bytes) => StorageFieldShape::Scalar { bytes },
-                None => StorageFieldShape::Aggregate {
-                    slots: output.span as u64,
-                },
-            }
+            walker
+                .walk_ty(ConcreteTypeView::identity(field), &[], &[])
+                .shape()
         })
         .collect();
     let Ok(layout) = storage_fields_layout(shapes) else {
@@ -1194,11 +1214,7 @@ pub(crate) fn storage_field_lanes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>
     layout
         .placements
         .iter()
-        .map(|placement| {
-            placement
-                .lane
-                .is_some_and(|lane| placement.shared || lane.byte_offset != 0)
-        })
+        .map(|placement| placement.partial_lane().is_some())
         .collect()
 }
 
@@ -1462,18 +1478,13 @@ fn allocate_contract<'db>(
         })
         .map(|(idx, _)| idx)
         .collect();
-    let packed = storage_fields_layout(counted.iter().map(|idx| match plans[*idx].lane_bytes {
-        Some(bytes) => StorageFieldShape::Scalar { bytes },
-        None => StorageFieldShape::Aggregate {
-            slots: plans[*idx].slot_count as u64,
-        },
-    }))
-    .map_err(|_| {
-        (
-            plans[counted[0]].field,
-            ContractLayoutError::LayoutExtentOverflow,
-        )
-    })?;
+    let packed =
+        storage_fields_layout(counted.iter().map(|idx| plans[*idx].shape)).map_err(|_| {
+            (
+                plans[counted[0]].field,
+                ContractLayoutError::LayoutExtentOverflow,
+            )
+        })?;
     let placements: FxHashMap<_, _> = counted.into_iter().zip(packed.placements).collect();
     let mut packed_numbers: FxHashMap<u64, U256> = FxHashMap::default();
     let mut counters: FxHashMap<AddressSpace, U256> = FxHashMap::default();
