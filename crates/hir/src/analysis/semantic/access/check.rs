@@ -2694,6 +2694,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 // An aggregate passed by value is still viewed in place: the
                 // call reads the place it came from.
                 let ty = self.body.values[arg.value.index()].ty;
+                let ty = ty.as_capability(self.db).map_or(ty, |(_, target)| target);
                 if access == Some(BindingAccess::View)
                     && !ty_is_snapshot(self.db, self.scope, ty, self.assumptions)
                 {

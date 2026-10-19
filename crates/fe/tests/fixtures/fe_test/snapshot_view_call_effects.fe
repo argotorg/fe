@@ -1,0 +1,47 @@
+use std::abi::sol
+use std::evm::{Address, Call, Evm, Wei}
+
+pub msg CounterMsg {
+    #[selector = sol("ping()")]
+    Ping,
+    #[selector = sol("count()")]
+    Count -> u256,
+}
+
+pub contract Counter {
+    mut count: u256,
+    recv CounterMsg {
+        Ping uses (mut count) { count += 1 }
+        Count -> u256 uses (count) { count }
+    }
+}
+
+fn invoke() uses (target: Address, call: mut Call) {
+    target.call(CounterMsg::Ping {})
+}
+
+pub msg ProbeMsg {
+    #[selector = sol("indirect()")]
+    Indirect,
+    #[selector = sol("direct()")]
+    Direct,
+}
+
+pub contract Probe {
+    mut target: Address,
+    init(address: Address) uses (mut target) { target = address }
+    recv ProbeMsg {
+        Indirect uses (target, call: mut Call) { invoke() }
+        Direct uses (target, call: mut Call) { target.call(CounterMsg::Ping {}) }
+    }
+}
+
+#[test]
+fn storage_address_snapshots_before_external_calls() uses (evm: mut Evm) {
+    let counter = evm.create2<Counter>(value: Wei::zero(), args: (), salt: 0)
+    let probe = evm.create2<Probe>(value: Wei::zero(), args: (counter,), salt: 0)
+    evm.call(addr: probe, gas: 1000000, value: Wei::zero(), message: ProbeMsg::Indirect {})
+    evm.call(addr: probe, gas: 1000000, value: Wei::zero(), message: ProbeMsg::Direct {})
+    let count = evm.call(addr: counter, gas: 1000000, value: Wei::zero(), message: CounterMsg::Count {})
+    assert!(count == 2)
+}

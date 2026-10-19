@@ -4013,6 +4013,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "signature",
     "simple_amm",
     "snapshot_effects",
+    "snapshot_view_call_effects",
     "sol_array_lanes",
     "sol_compat_int_abi_roundtrip",
     "sol_slot",
