@@ -15,7 +15,8 @@ use crate::analysis::ty::pattern_ir::{
 };
 use crate::analysis::ty::pattern_types::pattern_match_expected_ty;
 use crate::analysis::ty::ty_def::TyId;
-use crate::core::hir_def::LitKind;
+use crate::core::hir_def::{FieldParent, LitKind, VariantKind};
+use itertools::Itertools;
 
 pub(crate) struct FeConstructorOracle<'db> {
     db: &'db dyn HirAnalysisDb,
@@ -207,72 +208,58 @@ fn display_inconclusive_reason(reason: InconclusiveReason<Infallible>) -> String
     }
 }
 
+/// Renders `pat`, a witness of the values no arm matches. A record shows the
+/// fields that make it a witness; one with none shows as `{ .. }`.
 fn display_missing_pattern<'db>(
     db: &'db dyn HirAnalysisDb,
     pat: &Witness<ConstructorKind<'db>>,
 ) -> String {
-    match pat {
-        Witness::Wildcard | Witness::OtherThan { .. } => "_".to_string(),
-        Witness::Constructor {
-            head: kind,
-            arguments: fields,
-        } => match kind {
-            ConstructorKind::Variant(variant, _) => {
-                let variant_name = variant
-                    .name(db)
-                    .map_or_else(|| "UnknownVariant".to_string(), |name| name.to_string());
-                let enum_name = match variant.enum_.name(db) {
-                    crate::core::hir_def::Partial::Present(name) => name.data(db).to_string(),
-                    crate::core::hir_def::Partial::Absent => "UnknownEnum".to_string(),
-                };
-                let full_name = format!("{enum_name}::{variant_name}");
-
-                match variant.kind(db) {
-                    crate::core::hir_def::VariantKind::Unit => full_name,
-                    crate::core::hir_def::VariantKind::Tuple(_) => {
-                        if fields.is_empty() {
-                            format!("{full_name}(..)")
-                        } else {
-                            let field_patterns: Vec<String> = fields
-                                .iter()
-                                .map(|f| display_missing_pattern(db, f))
-                                .collect();
-                            format!("{}({})", full_name, field_patterns.join(", "))
-                        }
-                    }
-                    crate::core::hir_def::VariantKind::Record(_) => format!("{full_name} {{ .. }}"),
-                }
+    let Witness::Constructor { head, arguments } = pat else {
+        return "_".to_string();
+    };
+    let args = || arguments.iter().map(|arg| display_missing_pattern(db, arg));
+    let tuple = |name: &str| {
+        if arguments.is_empty() && !name.is_empty() {
+            format!("{name}(..)")
+        } else {
+            format!("{name}({})", args().join(", "))
+        }
+    };
+    let record = |name: &str| {
+        let fields: Vec<_> = (head.field_names(db).into_iter().flatten())
+            .zip(args())
+            .filter(|(_, arg)| arg != "_")
+            .filter_map(|(field, arg)| Some(format!("{}: {arg}", field?.data(db))))
+            .collect();
+        match (fields.is_empty(), fields.len() == arguments.len()) {
+            (true, _) => format!("{name} {{ .. }}"),
+            (false, true) => format!("{name} {{ {} }}", fields.join(", ")),
+            (false, false) => format!("{name} {{ {}, .. }}", fields.join(", ")),
+        }
+    };
+    match head {
+        ConstructorKind::Variant(variant, _) => {
+            let name = FieldParent::Variant(*variant)
+                .name(db)
+                .unwrap_or("UnknownEnum::UnknownVariant".into());
+            match variant.kind(db) {
+                VariantKind::Unit => name.into_owned(),
+                VariantKind::Tuple(_) => tuple(&name),
+                VariantKind::Record(_) => record(&name),
             }
-            ConstructorKind::Type(ty) => {
-                if ty.is_tuple(db) {
-                    if fields.is_empty() {
-                        "()".to_string()
-                    } else {
-                        let parts: Vec<String> = fields
-                            .iter()
-                            .map(|f| display_missing_pattern(db, f))
-                            .collect();
-                        format!("({})", parts.join(", "))
-                    }
-                } else if let Some(struct_) = ty.as_tuple_struct(db) {
-                    let struct_name = match struct_.name(db) {
-                        crate::core::hir_def::Partial::Present(name) => name.data(db).to_string(),
-                        crate::core::hir_def::Partial::Absent => "UnknownStruct".to_string(),
-                    };
-                    if fields.is_empty() {
-                        format!("{struct_name}(..)")
-                    } else {
-                        let parts: Vec<String> = fields
-                            .iter()
-                            .map(|f| display_missing_pattern(db, f))
-                            .collect();
-                        format!("{struct_name}({})", parts.join(", "))
-                    }
-                } else {
-                    format!("{} {{ .. }}", ty.pretty_print(db))
-                }
+        }
+        ConstructorKind::Type(ty) if ty.is_tuple(db) => tuple(""),
+        ConstructorKind::Type(ty) => {
+            let name = match ty.adt_def(db).and_then(|adt| adt.adt_ref(db).name(db)) {
+                Some(name) => name.data(db),
+                None => ty.pretty_print(db),
+            };
+            if ty.as_tuple_struct(db).is_some() {
+                tuple(name)
+            } else {
+                record(name)
             }
-            ConstructorKind::Literal(lit, _) => lit.pretty_print(db),
-        },
+        }
+        ConstructorKind::Literal(lit, _) => lit.pretty_print(db),
     }
 }

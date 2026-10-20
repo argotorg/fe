@@ -1,0 +1,49 @@
+---
+source: crates/hir/tests/frontend/pattern_matching.rs
+expression: diagnostic_output
+input_file: test_files/pattern_matching/non_exhaustive/record_fields.fe
+---
+Non-exhaustive test file record_fields.fe has 4 diagnostic(s):
+
+error[8-0034]: non-exhaustive patterns: type `Shape` is not covered
+   ┌─ record_fields.fe:12:5
+   │
+12 │ ╭     match s {
+13 │ │         Shape::Point => 0
+14 │ │         Shape::Rect { wide: true, .. } => 1
+15 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │
+   = Not covered: `Shape::Rect { wide: false, .. }`
+
+error[8-0034]: non-exhaustive patterns: type `Flags` is not covered
+   ┌─ record_fields.fe:19:5
+   │
+19 │ ╭     match f {
+20 │ │         Flags { on: true, big: true } => 0
+21 │ │         Flags { on: false, .. } => 1
+22 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │
+   = Not covered: `Flags { on: true, big: false }`
+
+error[8-0034]: non-exhaustive patterns: type `Shape` is not covered
+   ┌─ record_fields.fe:26:5
+   │
+26 │ ╭     match s {
+27 │ │         Shape::Point => 0
+28 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │
+   = Not covered: `Shape::Rect { .. }`
+
+error[8-0034]: non-exhaustive patterns: type `Pair<bool>` is not covered
+   ┌─ record_fields.fe:37:5
+   │
+37 │ ╭     match p {
+38 │ │         Pair { a: true, .. } => 0
+39 │ │         Pair { b: true, .. } => 1
+40 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │
+   = Not covered: `Pair { a: false, b: false }`

@@ -178,7 +178,12 @@ impl<'db> ConstructorKind<'db> {
         }
     }
 
-    pub fn field_names(&self, db: &'db dyn HirAnalysisDb) -> Option<SmallVec<[IdentId<'db>; 4]>> {
+    /// The names of a record constructor's fields, in order; `None` for a
+    /// field whose name doesn't parse.
+    pub fn field_names(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<SmallVec<[Option<IdentId<'db>>; 4]>> {
         let field_parent = match self {
             Self::Variant(variant, _) if matches!(variant.kind(db), VariantKind::Record(..)) => {
                 Some(FieldParent::Variant(*variant))
@@ -192,7 +197,7 @@ impl<'db> ConstructorKind<'db> {
         Some(
             field_parent
                 .fields(db)
-                .filter_map(|field| field.name(db))
+                .map(|field| field.name(db))
                 .collect(),
         )
     }
