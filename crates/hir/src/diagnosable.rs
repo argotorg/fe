@@ -186,7 +186,13 @@ impl<'db> WherePredicateView<'db> {
             return Some(TraitConstraintDiag::ConstTyBound(span, subject).into());
         }
 
-        if !subject.has_invalid(db) && !subject.has_param(db) && !subject.has_projection(db) {
+        // An impl's where clause may bound a concrete type: it decides where
+        // the impl applies.
+        if !subject.has_invalid(db)
+            && !subject.has_param(db)
+            && !subject.has_projection(db)
+            && !matches!(owner_item, ItemKind::Impl(_) | ItemKind::ImplTrait(_))
+        {
             return Some(TraitConstraintDiag::ConcreteTypeBound(span, subject).into());
         }
 
@@ -203,7 +209,7 @@ impl<'db> WherePredicateBoundView<'db> {
         subject: ty::ty_def::TyId<'db>,
     ) -> Vec<TyDiagCollection<'db>> {
         use ty::trait_lower;
-        use ty::trait_resolution::{WellFormedness, check_trait_inst_wf};
+        use ty::trait_resolution::{WellFormedness, check_trait_inst_wf, check_ty_wf};
 
         let mut out = Vec::new();
         let owner_item = ItemKind::from(self.pred.clause.owner);
@@ -247,19 +253,33 @@ impl<'db> WherePredicateBoundView<'db> {
                     );
                 }
 
+                let solve_cx = ty::trait_resolution::TraitSolveCx::new(db, scope)
+                    .with_assumptions(param_env(db, owner_item));
+                // A bound on an associated type of a parameter is the caller's
+                // to prove. The trait reference of each projection in its
+                // subject must still hold here, as for any written type:
+                // normalization resolves a projection without proving it.
                 if inst.self_ty(db).contains_assoc_ty_of_param(db) {
+                    if let WellFormedness::IllFormed { goal, subgoal } =
+                        check_ty_wf(db, solve_cx, inst.self_ty(db))
+                    {
+                        out.push(
+                            TraitConstraintDiag::TraitBoundNotSat {
+                                span: span.into(),
+                                primary_goal: goal,
+                                unsat_subgoal: subgoal,
+                                required_by: None,
+                            }
+                            .into(),
+                        );
+                    }
                     return out;
                 }
 
                 // For trait-level `Self: Bound` constraints, treat as preconditions;
                 // do not emit unsatisfied bound diagnostics here.
                 if !is_trait_self_subject {
-                    match check_trait_inst_wf(
-                        db,
-                        ty::trait_resolution::TraitSolveCx::new(db, scope)
-                            .with_assumptions(param_env(db, owner_item)),
-                        inst,
-                    ) {
+                    match check_trait_inst_wf(db, solve_cx, inst) {
                         WellFormedness::WellFormed => {}
                         WellFormedness::IllFormed { goal, .. } => {
                             out.push(
@@ -2455,6 +2475,9 @@ impl<'db> Diagnosable<'db> for Impl<'db> {
     fn diags(self, db: &'db dyn HirAnalysisDb) -> Vec<Self::Diagnostic> {
         let mut out = self.diags_preconditions(db);
         out.extend(self.diags_assoc_consts(db));
+        for pred in WhereClauseOwner::Impl(self).clause(db).predicates(db) {
+            out.extend(pred.diags(db));
+        }
         out.extend(GenericParamOwner::Impl(self).diags(db));
         out
     }
@@ -2501,6 +2524,9 @@ impl<'db> Diagnosable<'db> for ImplTrait<'db> {
         out.extend(self.diags_missing_assoc_consts(db));
         out.extend(self.diags_assoc_consts(db));
         out.extend(self.diags_assoc_const_evaluability(db));
+        for pred in WhereClauseOwner::ImplTrait(self).clause(db).predicates(db) {
+            out.extend(pred.diags(db));
+        }
         out.extend(GenericParamOwner::ImplTrait(self).diags(db));
         out
     }

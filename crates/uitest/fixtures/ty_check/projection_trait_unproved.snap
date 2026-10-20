@@ -1,0 +1,76 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/projection_trait_unproved.fe
+---
+error[2-0002]: `Nonexistent` is not found
+   ┌─ projection_trait_unproved.fe:64:27
+   │
+64 │ impl Needs for S where S: Nonexistent {}
+   │                           ^^^^^^^^^^^ `Nonexistent` is not found
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ projection_trait_unproved.fe:19:10
+   │
+19 │ const C: <W<u16> as Ty>::A = 1
+   │          ^^^^^^^^^^^^^^^^^
+   │          │
+   │          `W<u16>` doesn't implement `Ty`
+   │          trait bound `u16: Foo` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ projection_trait_unproved.fe:26:12
+   │
+26 │     let a: <W<u16> as Ty>::A = x
+   │            ^^^^^^^^^^^^^^^^^
+   │            │
+   │            `W<u16>` doesn't implement `Ty`
+   │            trait bound `u16: Foo` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ projection_trait_unproved.fe:31:10
+   │
+31 │     x as <W<u16> as Ty>::A
+   │          ^^^^^^^^^^^^^^^^^
+   │          │
+   │          `W<u16>` doesn't implement `Ty`
+   │          trait bound `u16: Foo` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ projection_trait_unproved.fe:35:8
+   │
+35 │     id<<W<u16> as Ty>::A>(x)
+   │        ^^^^^^^^^^^^^^^^^
+   │        │
+   │        `W<u16>` doesn't implement `Ty`
+   │        trait bound `u16: Foo` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ projection_trait_unproved.fe:54:13
+   │
+54 │     let p = <V<u16> as Ty>::A { x: 1 }
+   │             ^^^^^^^^^^^^^^^^^
+   │             │
+   │             `V<u16>` doesn't implement `Ty`
+   │             trait bound `u16: Foo` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ projection_trait_unproved.fe:60:41
+   │
+60 │ impl<X> Needs for X where <X as Ty>::A: Show {}
+   │                                         ^^^^ `X` doesn't implement `Ty`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ projection_trait_unproved.fe:72:47
+   │
+72 │ impl Tr for Direct where <Direct as Tr>::Out: Show {
+   │                                               ^^^^ `Direct` doesn't implement `Tr`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ projection_trait_unproved.fe:77:12
+   │
+77 │     let a: <Direct as Tr>::Out = x
+   │            ^^^^^^^^^^^^^^^^^^^
+   │            │
+   │            `Direct` doesn't implement `Tr`
+   │            trait bound `Direct::Out: Show` is not satisfied
