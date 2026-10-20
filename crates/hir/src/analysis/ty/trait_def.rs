@@ -107,34 +107,17 @@ pub(crate) fn impls_for_trait_and_ty<'db>(
 ) -> Vec<ImplementorId<'db>> {
     let mut table = UnificationTable::new(db);
     let ty = ty.extract_identity(&mut table);
-
-    if ty.has_invalid(db) || ty.base_ty(db).is_never(db) {
-        return vec![];
-    }
-
-    let env = ingot_trait_env(db, ingot);
-    let mut implementors = env.impls_for_trait(db, trait_def);
-
-    if is_std_evm_contract_trait_def(db, trait_def) && ty.as_contract(db).is_some() {
-        implementors.extend(contract_virtual_impls(db, ingot).iter().copied());
-    }
-
-    implementors
-        .into_iter()
-        .filter(|implementor| {
-            if !impl_self_ty_may_match(db, implementor.self_ty(db), ty) {
-                return false;
-            }
-            let snapshot = table.snapshot();
-            let instantiated = table.instantiate_with_fresh_vars(*implementor);
-            let impl_ty = table.instantiate_to_term(instantiated.self_ty(db));
-            let ty = table.instantiate_to_term(ty);
-            let unifies = table.unify(impl_ty, ty).is_ok();
-            table.rollback_to(snapshot);
-            unifies
-        })
-        .map(|implementor| complete_impl_trait(db, implementor))
-        .collect()
+    impls_matching(
+        db,
+        ingot,
+        &mut table,
+        ty,
+        ImplHeader::Trait(trait_def),
+        |_, _| true,
+    )
+    .into_iter()
+    .map(|implementor| complete_impl_trait(db, implementor))
+    .collect()
 }
 
 /// Returns all implementors for the given trait inst, searching across a
@@ -644,14 +627,21 @@ pub(crate) fn impls_for_ty_with_satisfied_constraints<'db>(
     let mut table = UnificationTable::new(db);
     let ty = ty.extract_identity(&mut table);
     let solve_cx = TraitSolveCx::new(db, ingot.root_mod(db).scope()).with_assumptions(assumptions);
-    impls_matching(db, ingot, &mut table, ty, None, |table, inst| {
-        inst.constraints(db).list(db).iter().all(|&constraint| {
-            matches!(
-                is_goal_satisfiable(db, solve_cx, constraint.fold_with(db, table)),
-                GoalSatisfiability::Satisfied(_)
-            )
-        })
-    })
+    impls_matching(
+        db,
+        ingot,
+        &mut table,
+        ty,
+        ImplHeader::SelfTy,
+        |table, inst| {
+            inst.constraints(db).list(db).iter().all(|&constraint| {
+                matches!(
+                    is_goal_satisfiable(db, solve_cx, constraint.fold_with(db, table)),
+                    GoalSatisfiability::Satisfied(_)
+                )
+            })
+        },
+    )
 }
 
 /// Returns the implementors of `inst`'s trait whose header, the self type and
@@ -674,7 +664,7 @@ pub(crate) fn impls_for_trait_inst<'db>(
         ingot,
         &mut table,
         inst.self_ty(db),
-        Some(inst),
+        ImplHeader::TraitInst(inst),
         |_, _| true,
     )
 }
@@ -694,34 +684,54 @@ pub(crate) fn impl_where_clause_refuted<'db>(
     let mut table = UnificationTable::new(db);
     let inst = inst.extract_identity(&mut table);
     let instantiated = table.instantiate_with_fresh_vars(implementor);
-    !header_unifies(db, &mut table, instantiated, inst.self_ty(db), Some(inst))
-        || instantiated
-            .constraints(db)
-            .list(db)
-            .iter()
-            .any(|&constraint| {
-                matches!(
-                    is_goal_satisfiable(db, solve_cx, constraint.fold_with(db, &mut table)),
-                    GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
-                )
-            })
+    !header_unifies(
+        db,
+        &mut table,
+        instantiated,
+        inst.self_ty(db),
+        ImplHeader::TraitInst(inst),
+    ) || instantiated
+        .constraints(db)
+        .list(db)
+        .iter()
+        .any(|&constraint| {
+            matches!(
+                is_goal_satisfiable(db, solve_cx, constraint.fold_with(db, &mut table)),
+                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+            )
+        })
 }
 
-/// The implementors in `ingot` whose self type unifies with `ty` and, with a
-/// `trait_inst`, whose trait arguments unify with its arguments, and that
-/// `applies` accepts, given each instantiated in `table`.
+/// What the header of an impl must match besides its self type.
+#[derive(Clone, Copy)]
+enum ImplHeader<'db> {
+    /// Any trait.
+    SelfTy,
+    /// This trait, with any arguments.
+    Trait(Trait<'db>),
+    /// This trait reference: the trait and every argument.
+    TraitInst(TraitInstId<'db>),
+}
+
+/// The implementors in `ingot` whose header matches `ty` and `header`, and
+/// that `applies` accepts, given each instantiated in `table`. Every impl
+/// lookup by header is this one: nothing is proved unless `applies` proves it.
 fn impls_matching<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
     table: &mut UnificationTable<'db>,
     ty: TyId<'db>,
-    trait_inst: Option<TraitInstId<'db>>,
+    header: ImplHeader<'db>,
     mut applies: impl FnMut(&mut UnificationTable<'db>, ImplementorId<'db>) -> bool,
 ) -> Vec<ImplementorId<'db>> {
     if ty.has_invalid(db) || ty.base_ty(db).is_never(db) {
         return vec![];
     }
-    let trait_def = trait_inst.map(|inst| inst.def(db));
+    let trait_def = match header {
+        ImplHeader::SelfTy => None,
+        ImplHeader::Trait(trait_def) => Some(trait_def),
+        ImplHeader::TraitInst(inst) => Some(inst.def(db)),
+    };
     let env = ingot_trait_env(db, ingot);
     let mut raw_impls = match trait_def {
         Some(trait_def) => env.impls_for_trait(db, trait_def),
@@ -742,7 +752,7 @@ fn impls_matching<'db>(
             }
             let snapshot = table.snapshot();
             let inst = table.instantiate_with_fresh_vars(*impl_);
-            let matches = header_unifies(db, table, inst, ty, trait_inst) && applies(table, inst);
+            let matches = header_unifies(db, table, inst, ty, header) && applies(table, inst);
             table.rollback_to(snapshot);
             matches
         })
@@ -750,7 +760,7 @@ fn impls_matching<'db>(
 }
 
 /// Unifies the header of `inst`, an instantiated implementor, with `ty` and,
-/// with a `trait_inst`, with its trait arguments: the constraints are checked
+/// for a trait reference, with its arguments: the constraints are checked
 /// under the target's arguments too, as `impl<T, R: Read<T>> Read<T> for
 /// Buf<R>` needs its `T`.
 fn header_unifies<'db>(
@@ -758,21 +768,23 @@ fn header_unifies<'db>(
     table: &mut UnificationTable<'db>,
     inst: ImplementorId<'db>,
     ty: TyId<'db>,
-    trait_inst: Option<TraitInstId<'db>>,
+    header: ImplHeader<'db>,
 ) -> bool {
     let impl_ty = table.instantiate_to_term(inst.self_ty(db));
     let ty = table.instantiate_to_term(ty);
     table.unify(impl_ty, ty).is_ok()
-        && trait_inst.is_none_or(|target| {
-            inst.trait_(db)
+        && match header {
+            ImplHeader::SelfTy | ImplHeader::Trait(_) => true,
+            ImplHeader::TraitInst(target) => inst
+                .trait_(db)
                 .args(db)
                 .iter()
                 .zip(target.args(db))
                 .all(|(&impl_arg, &arg)| {
                     let arg = table.instantiate_to_term(arg);
                     table.unify(impl_arg, arg).is_ok()
-                })
-        })
+                }),
+        }
 }
 
 /// Returns all implementors for the given `ty`.
@@ -784,31 +796,8 @@ pub(crate) fn impls_for_ty<'db>(
 ) -> Vec<ImplementorId<'db>> {
     let mut table = UnificationTable::new(db);
     let ty = ty.extract_identity(&mut table);
-
-    if ty.has_invalid(db) || ty.base_ty(db).is_never(db) {
-        return vec![];
-    }
-    let env = ingot_trait_env(db, ingot);
-    let mut raw_impls = env.impls_for_self_key(db, ty.base_ty(db));
-
-    if ty.as_contract(db).is_some() {
-        raw_impls.extend(contract_virtual_impls(db, ingot).iter().copied());
-    }
-
-    raw_impls
+    impls_matching(db, ingot, &mut table, ty, ImplHeader::SelfTy, |_, _| true)
         .into_iter()
-        .filter(|impl_| {
-            let snapshot = table.snapshot();
-
-            let inst = table.instantiate_with_fresh_vars(*impl_);
-            let impl_ty = table.instantiate_to_term(inst.self_ty(db));
-            let ty_term = table.instantiate_to_term(ty);
-            let is_ok = table.unify(impl_ty, ty_term).is_ok();
-
-            table.rollback_to(snapshot);
-
-            is_ok
-        })
         .map(|implementor| complete_impl_trait(db, implementor))
         .collect()
 }
