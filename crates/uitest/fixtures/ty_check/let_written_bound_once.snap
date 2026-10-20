@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/let_written_bound_once.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ let_written_bound_once.fe:11:13
+   │
+11 │     let _a: Foo<NotMarked> = mk()
+   │             ^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ let_written_bound_once.fe:12:14
+   │
+12 │     let _b = Foo { t: NotMarked {} }
+   │              ^^^^^^^^^^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ let_written_bound_once.fe:13:13
+   │
+13 │     let _c: Foo<NotMarked> = if c { mk() } else { { mk() } }
+   │             ^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
