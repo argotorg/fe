@@ -1,5 +1,5 @@
 use core::keccak
-use std::evm::{RawStorage, StoragePackedArray}
+use std::evm::{RawStorage, StorageMap, StoragePackedArray}
 
 const U256_MAX: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
@@ -239,10 +239,10 @@ fn test_inferred_salts_do_not_collide_across_slots() uses (evm: mut Evm) {
     // PackedStore declares `s8` and `s32` as adjacent fields. With raw
     // arithmetic addressing (slot = SALT + i / lanes_per_slot), writing
     // to s8 at index 32 would spill into the next storage slot — which
-    // is exactly where the next field starts under inferred salts. The
-    // hashed base (keccak(SALT)) puts each array's data ≈2^256 slots away
-    // from any other, so adjacent fields remain disjoint regardless of
-    // how far the array grows.
+    // is exactly where the next field starts under inferred salts. Each
+    // word lies at a hash of its index and the array's slot
+    // (keccak256(w ++ slot)), so adjacent fields remain disjoint
+    // regardless of the index.
     //
     // Pre-populate s32 so we can detect any clobber. Then write into s8
     // at indices that cross multiple slot boundaries (32, 64, 96).
@@ -345,19 +345,61 @@ fn load(_ slot: u256) -> u256 uses (storage: RawStorage) {
     unsafe { storage.sload(slot) }
 }
 
-// Word `w` of the array at slot `s` lies at `keccak256(s) + w`, from the
-// array's slot on, like a Solidity dynamic array's data.
+// Word `w` of the array at slot `s` is entry `w` of a `StorageMap<u256,
+// u256>` at `s`, at `keccak256(w ++ s)`, so no index reaches storage outside
+// the array's words.
 #[test]
-fn test_words_follow_the_hashed_slot() uses (evm: mut Evm) {
+fn test_words_are_map_entries() uses (evm: mut Evm) {
     with (RawStorage = evm) {
         let lanes = unsafe { mut StoragePackedArray<8>::at(3) }
         // Index 33 is lane 1 of word 1; the last index is lane 31 of the
-        // last word, which wraps around the slot space.
+        // last word.
         lanes.set(i: 33, value: 7)
         lanes.set(i: U256_MAX, value: 0xff)
         assert(lanes.get(33) == 7 && lanes.get(U256_MAX) == 0xff)
+        assert(load(keccak((1 as u256, 3 as u256))) == 0x0700)
+        assert(load(keccak((U256_MAX / 32, 3 as u256))) == 0xff << 248)
+        // Nothing lies at the contiguous words from `keccak256(s)`.
         let data = keccak(3 as u256)
-        assert(load(data + 1) == 0x0700)
-        assert(load(data.wrapping_add(U256_MAX / 32)) == 0xff << 248)
+        assert(load(data + 1) == 0)
+        assert(load(data.wrapping_add(U256_MAX / 32)) == 0)
+
+        let words = unsafe { StorageMap<u256, u256>::at(3) }
+        assert(words[1] == 0x0700)
+        assert(words[U256_MAX / 32] == 0xff << 248)
     }
+}
+
+msg GuardMsg {
+    #[selector = 1]
+    Run { i: u256 } -> (u256, u256),
+}
+
+pub contract Guarded {
+    mut owner: u256,
+    mut lanes: StoragePackedArray<128>,
+
+    init() uses (mut owner) {
+        owner = 7
+    }
+
+    recv GuardMsg {
+        Run { i } -> (u256, u256) uses (mut lanes, owner, storage: RawStorage) {
+            lanes.set(i, value: 0x55)
+            (load(0), owner)
+        }
+    }
+}
+
+// An index chosen so that `keccak256(1) + i / 2` wraps to slot 0, where
+// `owner` lies, writes the array's own word `i / 2` instead.
+#[test]
+fn test_untrusted_index_stays_in_the_array() uses (evm: mut Evm) {
+    let guarded = evm.create2<Guarded>(value: Wei::zero(), args: (), salt: 0)
+    let word = (0 as u256).wrapping_sub(keccak(1 as u256))
+    let i = word.wrapping_mul(2)
+    let (slot_zero, owner) = evm.call(
+        addr: guarded, gas: 300000, value: Wei::zero(), message: GuardMsg::Run { i }
+    )
+    assert(slot_zero == 7 && owner == 7)
 }
