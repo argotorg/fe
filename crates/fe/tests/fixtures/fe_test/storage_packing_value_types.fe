@@ -1,5 +1,6 @@
 use std::abi::sol::{Bytes4, Int24, Uint24}
 use std::evm::{Address, Evm, RawStorage, SolPacked, StorageMap}
+use std::evm::layout::mapping_slot
 
 // Solidity value types pack into shared storage slots like booleans and
 // narrow integers: `Address` takes 20 bytes, `bytesN` N, and the odd-width
@@ -206,8 +207,9 @@ fn test_out_of_range_custom_width_reverts() uses (evm: mut Evm) {
 }
 
 // ---------------------------------------------------------------------------
-// A newtype narrower than its value stays a lane when it has its slot to
-// itself: a write still checks the value fits and a read still masks.
+// A newtype narrower than its value holds it in its lane wherever it lies:
+// alone in a slot, at an explicit slot or as a map value, a write still
+// checks the value fits and a read still masks.
 // ---------------------------------------------------------------------------
 
 struct Tagged {
@@ -236,15 +238,24 @@ msg LoneMsg {
     StoredRefHeldDirty {},
     #[selector = 5]
     ReadDirtySlots -> u256,
+    #[selector = 6]
+    PlacedDirty {},
+    #[selector = 7]
+    PlacedHeldDirty {},
+    #[selector = 8]
+    EntryDirty {},
 }
 
-// Slots: tag 0, big 1, wide 2, after 3, tagged 4..6.
+// Slots: tag 0, big 1, wide 2, after 3, tagged 4..6, tags 6, placed 9.
 pub contract Lone {
     mut tag: Bytes4,
     mut big: u256,
     mut wide: Uint24,
     mut after: u256,
     mut tagged: Tagged,
+    mut tags: StorageMap<u256, Bytes4>,
+    #[slot(9)]
+    mut placed: Bytes4,
 
     recv LoneMsg {
         FieldDirty {} uses (mut tag) {
@@ -262,15 +273,28 @@ pub contract Lone {
                 Option::None => {}
             }
         }
+        PlacedDirty {} uses (mut placed) {
+            placed = Bytes4 { val: 0x100000000 }
+        }
+        PlacedHeldDirty {} uses (mut placed) {
+            set_tag(mut placed, Bytes4 { val: 0x100000000 })
+        }
+        EntryDirty {} uses (mut tags) {
+            tags[1] = Bytes4 { val: 0x100000000 }
+        }
         // Bits a raw write leaves above a lone lane are not part of its value.
-        ReadDirtySlots -> u256 uses (tag, wide, tagged, raw: mut RawStorage) {
+        ReadDirtySlots -> u256 uses (tag, wide, tagged, tags, placed, raw: mut RawStorage) {
             unsafe {
                 raw.sstore(slot: 0, value: (1 << 200) | 0x01ffc9a7)
                 raw.sstore(slot: 2, value: (1 << 200) | 0xabcdef)
                 raw.sstore(slot: 4, value: (1 << 200) | 0x11223344)
+                raw.sstore(slot: mapping_slot(6, 1 as u256), value: (1 << 200) | 0x55667788)
+                raw.sstore(slot: 9, value: (1 << 200) | 0x99aabbcc)
             }
             assert(tag.val == 0x01ffc9a7)
             assert(wide.val == 0xabcdef)
+            assert(tags[1].val == 0x55667788)
+            assert(placed.val == 0x99aabbcc)
             tagged.tag.val
         }
     }
@@ -304,4 +328,22 @@ fn test_lone_narrowed_held_write_checks() uses (evm: mut Evm) {
 fn test_lone_narrowed_held_through_stored_ref_write_checks() uses (evm: mut Evm) {
     let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 5)
     evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::StoredRefHeldDirty {})
+}
+
+#[test(should_revert)]
+fn test_placed_narrowed_field_write_checks() uses (evm: mut Evm) {
+    let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 6)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::PlacedDirty {})
+}
+
+#[test(should_revert)]
+fn test_placed_narrowed_held_write_checks() uses (evm: mut Evm) {
+    let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 7)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::PlacedHeldDirty {})
+}
+
+#[test(should_revert)]
+fn test_narrowed_map_value_write_checks() uses (evm: mut Evm) {
+    let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 8)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::EntryDirty {})
 }

@@ -292,25 +292,25 @@ pub fn ref_lane(class: &RuntimeClass<'_>) -> Option<StorageLaneView> {
 }
 
 /// The lane the place a path of fields reaches lies in, in a value of
-/// `space`: the lane of the last field packed into a storage word, which the
-/// field of a packed newtype shares with its newtype, or `root`, the lane
-/// the path starts in. `fields` holds each field with the class it projects
-/// from.
+/// `space`: the lane of the last field packed into a storage word, or
+/// `root`, the lane the path starts in. The field of a packed newtype lies
+/// in its newtype's lane, so a lane holding the newtype comes before the
+/// field's own. `fields` holds each field with the class it projects from.
 pub(crate) fn field_path_lane<'db>(
     db: &'db dyn MirDb,
     root: Option<StorageLaneView>,
     fields: &[(RuntimeClass<'db>, FieldIndex)],
     space: AddressSpace,
 ) -> Option<StorageLaneView> {
+    let mut inner = None;
     for (parent, field) in fields.iter().rev() {
-        if let Some(lane) = storage_field_lane(db, parent, *field, space) {
-            return Some(lane);
-        }
+        let lane = storage_field_lane(db, parent, *field, space).or(inner);
         if !is_packed_newtype(db, parent) {
-            return None;
+            return lane;
         }
+        inner = lane;
     }
-    root
+    root.or(inner)
 }
 
 /// Whether `class` is a newtype that packs into part of a storage word.
@@ -329,8 +329,9 @@ pub fn is_packed_newtype<'db>(db: &'db dyn MirDb, class: &RuntimeClass<'db>) -> 
 /// The lane field `field` of a value of class `parent` in `space` occupies,
 /// when it is read and written apart from the rest of its storage word
 /// (`StorageFieldPlacement::partial_lane`): a packed scalar that shares its
-/// word, lies above the word's start, or holds a value wider than its bytes.
-/// Any other packed scalar alone at the start of its word is the whole word.
+/// word or lies above the word's start, or the field of a newtype narrower
+/// than its value. Any other packed scalar alone at the start of its word is
+/// the whole word.
 pub(crate) fn storage_field_lane<'db>(
     db: &'db dyn MirDb,
     parent: &RuntimeClass<'db>,

@@ -36,8 +36,8 @@ pub const STORAGE_SLOT_BYTES: u32 = 32;
 pub enum StorageFieldShape {
     /// A scalar of `bytes` bytes (1..=32). Scalars narrower than a slot share
     /// slots with their neighbours. A `narrowed` scalar holds a value that
-    /// can be wider than its bytes, as a newtype stored at its `SolPacked`
-    /// width does.
+    /// can be wider than its bytes, as the field of a newtype stored at its
+    /// `SolPacked` width does.
     Scalar { bytes: u32, narrowed: bool },
     /// An aggregate spanning `slots` whole slots. It starts a new slot, and so
     /// does the field after it. A zero-slot aggregate occupies no storage and
@@ -383,7 +383,7 @@ mod tests {
     #[test]
     fn a_lone_lane_is_partial_only_when_narrowed() {
         // struct S { uint8 a; uint256 b; } and the same with a 4-byte lane
-        // holding a word (a `FixedBytes<4>`).
+        // holding a word (the `val` of a `FixedBytes<4>`).
         let plain = storage_fields_layout([scalar(1), scalar(32)]).unwrap();
         assert_eq!(plain.placements[0].partial_lane(), None);
         let narrowed = storage_fields_layout([

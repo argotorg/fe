@@ -4115,7 +4115,8 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         lane: PackedLane::from_placement(placement),
                     }
                 }
-                // A packed newtype's field lies in its newtype's lane.
+                // A packed newtype's field lies in its newtype's lane, which
+                // has no address when the field is narrowed to it.
                 (
                     PlaceTerminal::Ptr {
                         addr,
@@ -4123,13 +4124,20 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         class: base_class,
                         lane: Some(lane),
                     },
-                    ResolvedPlaceElem::Field { class, .. },
-                ) if is_packed_newtype(self.module.db, &base_class) => PlaceTerminal::Ptr {
-                    addr,
-                    space,
-                    class: class.clone(),
-                    lane: Some(lane),
-                },
+                    ResolvedPlaceElem::Field { field, class },
+                ) if is_packed_newtype(self.module.db, &base_class) => {
+                    let placement = RuntimeMemoryLayout::for_space(self.module.db, space)
+                        .field_placement(&base_class, *field)?;
+                    PlaceTerminal::Ptr {
+                        addr,
+                        space,
+                        class: class.clone(),
+                        lane: Some(PackedLane {
+                            partial: lane.partial || placement.partial,
+                            ..lane
+                        }),
+                    }
+                }
                 (
                     PlaceTerminal::Ptr {
                         addr,

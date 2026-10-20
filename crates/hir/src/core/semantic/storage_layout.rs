@@ -1,6 +1,6 @@
 use common::{
     indexmap::IndexMap,
-    layout::{StorageFieldPlacement, StorageFieldShape, storage_fields_layout},
+    layout::{STORAGE_SLOT_BYTES, StorageFieldPlacement, StorageFieldShape, storage_fields_layout},
 };
 use num_bigint::BigUint;
 use num_traits::ToPrimitive;
@@ -112,6 +112,16 @@ impl ContractLayoutLane {
             shared: placement.shared,
             partial: placement.partial_lane().is_some(),
         })
+    }
+
+    /// This lane holding a newtype whose field lies in `inner` when the
+    /// newtype has its slot to itself: the same bytes, read and written
+    /// apart from the rest of the slot when either lane is.
+    fn holding(self, inner: Option<Self>) -> Self {
+        Self {
+            partial: self.partial || inner.is_some_and(|inner| inner.partial),
+            ..self
+        }
     }
 }
 
@@ -397,15 +407,19 @@ pub fn storage_lane_bytes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Opt
         .then_some(bytes)
 }
 
-/// Whether a value of `ty` can be wider than the bytes it takes in a storage
-/// slot (`storage_lane_bytes`): a newtype held at a narrower `SolPacked`
-/// width, such as `Address` in 20 bytes of its word. Its lane is read and
-/// written as a lane even when it has its slot to itself, so a write checks
-/// the value fits and a read masks it.
-fn storage_lane_narrows<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+/// Whether newtype `ty` takes fewer bytes in a storage slot than its field
+/// (`storage_lane_bytes`), as `Address` holds a `u256` in 20 bytes. Its
+/// field's value lies in those bytes wherever the newtype lies, even in a
+/// slot of its own, so the field is a lane of the newtype's slot: a write
+/// checks that the value fits and a read masks it, as MIR's layout of the
+/// newtype does.
+fn newtype_narrows<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    let ty = concrete_const_args(db, ty);
     storage_lane_bytes(db, ty)
-        .zip(newtype_scalar_bytes(db, ty))
-        .is_some_and(|(lane, value)| lane < value)
+        .zip(newtype_field(db, ty))
+        .is_some_and(|(lane, field)| {
+            lane < storage_lane_bytes(db, field).unwrap_or(STORAGE_SLOT_BYTES)
+        })
 }
 
 /// The bytes a value of `ty` takes in a code field it shares with its
@@ -525,9 +539,6 @@ struct WalkOutput<'db> {
     /// The bytes of a scalar that packs with its neighbours in a struct or
     /// tuple; `None` for values that take whole slots.
     packable_bytes: Option<u32>,
-    /// Whether the packable scalar's value can be wider than its bytes
-    /// (`storage_lane_narrows`).
-    narrowed: bool,
 }
 
 impl<'db> WalkOutput<'db> {
@@ -536,7 +547,6 @@ impl<'db> WalkOutput<'db> {
             span: 0,
             leaves: Vec::new(),
             packable_bytes: None,
-            narrowed: false,
         }
     }
 
@@ -545,7 +555,7 @@ impl<'db> WalkOutput<'db> {
         match self.packable_bytes {
             Some(bytes) => StorageFieldShape::Scalar {
                 bytes,
-                narrowed: self.narrowed,
+                narrowed: false,
             },
             None => StorageFieldShape::Aggregate {
                 slots: self.span as u64,
@@ -575,7 +585,6 @@ impl<'db> WalkOutput<'db> {
                 InlineLayoutLeafKind::Field => storage_lane_bytes(db, ty),
                 InlineLayoutLeafKind::Collection | InlineLayoutLeafKind::EnumTag => None,
             },
-            narrowed: false,
         }
     }
 }
@@ -688,7 +697,7 @@ impl<'db> FieldWalker<'db> {
         } else if ty.is_array(self.db) {
             self.walk_array(views, path, dimensions)
         } else if let Some(adt) = ty.adt_def(self.db) {
-            let output = self.walk_adt(views, adt, path, dimensions);
+            let mut output = self.walk_adt(views, adt, path, dimensions);
             // A pinned type is reported at its place, which is its identity,
             // rather than by the slots its private fields take. It takes whole
             // slots, at least one even without fields: its root number derives
@@ -706,13 +715,28 @@ impl<'db> FieldWalker<'db> {
                 }
             } else {
                 // A newtype packs like the value it holds.
+                let packable_bytes = if self.state {
+                    storage_lane_bytes(self.db, ty)
+                } else {
+                    code_lane_bytes(self.db, ty)
+                };
+                // One narrower than its field holds the field's value in its
+                // lane even in a slot of its own (`newtype_narrows`).
+                if self.state
+                    && newtype_narrows(self.db, ty)
+                    && let Some(bytes) = packable_bytes
+                {
+                    for leaf in &mut output.leaves {
+                        leaf.lane = Some(ContractLayoutLane {
+                            byte_offset: 0,
+                            byte_width: bytes as u8,
+                            shared: false,
+                            partial: true,
+                        });
+                    }
+                }
                 WalkOutput {
-                    packable_bytes: if self.state {
-                        storage_lane_bytes(self.db, ty)
-                    } else {
-                        code_lane_bytes(self.db, ty)
-                    },
-                    narrowed: self.state && storage_lane_narrows(self.db, ty),
+                    packable_bytes,
                     ..output
                 }
             }
@@ -783,8 +807,8 @@ impl<'db> FieldWalker<'db> {
                     continue;
                 };
                 leaf.offset = offset;
-                if lane.is_some() {
-                    leaf.lane = lane;
+                if let Some(lane) = lane {
+                    leaf.lane = Some(lane.holding(leaf.lane));
                 }
             }
             span = span.max(end);
@@ -801,7 +825,6 @@ impl<'db> FieldWalker<'db> {
             span,
             leaves,
             packable_bytes: None,
-            narrowed: false,
         }
     }
 
@@ -878,7 +901,6 @@ impl<'db> FieldWalker<'db> {
             span,
             leaves: output.leaves,
             packable_bytes: None,
-            narrowed: false,
         }
     }
 
@@ -1002,7 +1024,6 @@ impl<'db> FieldWalker<'db> {
                     span,
                     leaves,
                     packable_bytes: None,
-                    narrowed: false,
                 }
             }
         }
@@ -1187,12 +1208,16 @@ pub(crate) fn storage_slot_span<'db>(
 
 /// Which fields of struct or tuple `ty` are lanes where a value of `ty` lies
 /// in storage or transient storage: packed scalars that share their word or
-/// lie above its low byte, as MIR's `storage_field_lane` decides. A retained
+/// lie above its low byte, and the field of a newtype narrower than its
+/// field (`newtype_narrows`), as MIR's `storage_field_lane` decides. A retained
 /// grant to a lane is a memory copy.
 #[salsa::tracked]
 pub(crate) fn storage_field_lanes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<bool> {
     if !ty.is_tuple(db) && !ty.adt_def(db).is_some_and(|adt| adt.is_struct(db)) {
         return Vec::new();
+    }
+    if newtype_narrows(db, ty) {
+        return vec![true];
     }
     let mut walker = FieldWalker {
         db,
@@ -1619,7 +1644,7 @@ fn allocated_contract_layout_report<'db>(
                 .unwrap_or(field.address_space),
                 value,
                 // A packed field's parts lie in its lane.
-                lane: field.lane.or(leaf.lane),
+                lane: field.lane.map(|lane| lane.holding(leaf.lane)).or(leaf.lane),
                 kind: match leaf.kind {
                     InlineLayoutLeafKind::Field => ContractLayoutEntryKind::InlineField,
                     InlineLayoutLeafKind::Collection => ContractLayoutEntryKind::Collection,

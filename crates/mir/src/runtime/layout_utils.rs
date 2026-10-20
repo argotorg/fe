@@ -173,17 +173,28 @@ impl<'db> RuntimeMemoryLayout<'db> {
         }
     }
 
-    /// The packed storage layout of a struct's fields, like Solidity's.
+    /// The packed storage layout of a struct's fields, like Solidity's. A
+    /// newtype whose lane is narrower than its field holds the field's value
+    /// in that lane wherever the newtype lies, even in a slot of its own: a
+    /// read masks the value and a write checks that it fits.
     fn storage_struct_layout(
         self,
         layout: &StructLayout<'db>,
         visiting: &mut FxHashSet<LayoutId<'db>>,
     ) -> Result<StorageFieldsLayout, RuntimeMemoryLayoutError> {
-        let shapes = layout
+        let mut shapes = layout
             .fields
             .iter()
             .map(|field| self.storage_field_shape(field, visiting))
             .collect::<Result<Vec<_>, _>>()?;
+        if let Some(bytes) = layout.lane_bytes.map(u32::from)
+            && !matches!(shapes[..], [StorageFieldShape::Scalar { bytes: field, .. }] if field <= bytes)
+        {
+            shapes = vec![StorageFieldShape::Scalar {
+                bytes,
+                narrowed: true,
+            }];
+        }
         Ok(storage_fields_layout(shapes)?)
     }
 
@@ -202,23 +213,15 @@ impl<'db> RuntimeMemoryLayout<'db> {
                 narrowed: false,
             },
             RuntimeClass::AggregateValue { layout } => match layout.data(self.db) {
-                // A newtype holds its field's value, which can be wider than
-                // the newtype's lane.
+                // A newtype packs at its lane's width; its own layout keeps
+                // its field's value to the lane (`storage_struct_layout`).
                 Layout::Struct(StructLayout {
-                    fields,
                     lane_bytes: Some(bytes),
                     ..
-                }) => {
-                    let bytes = u32::from(bytes);
-                    let narrowed = match self.storage_field_shape(&fields[0], visiting)? {
-                        StorageFieldShape::Scalar {
-                            bytes: field_bytes,
-                            narrowed,
-                        } => narrowed || bytes < field_bytes,
-                        StorageFieldShape::Aggregate { .. } => true,
-                    };
-                    StorageFieldShape::Scalar { bytes, narrowed }
-                }
+                }) => StorageFieldShape::Scalar {
+                    bytes: u32::from(bytes),
+                    narrowed: false,
+                },
                 _ => StorageFieldShape::Aggregate {
                     slots: self.layout_size_inner(*layout, visiting)?,
                 },
