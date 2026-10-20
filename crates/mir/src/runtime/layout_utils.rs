@@ -188,7 +188,7 @@ impl<'db> RuntimeMemoryLayout<'db> {
             .map(|field| self.storage_field_shape(field, visiting))
             .collect::<Result<Vec<_>, _>>()?;
         if let Some(bytes) = layout.lane_bytes.map(u32::from)
-            && !matches!(shapes[..], [StorageFieldShape::Scalar { bytes: field, .. }] if field <= bytes)
+            && !matches!(shapes[..], [StorageFieldShape::Scalar { bytes: field, .. }] if field == bytes)
         {
             shapes = vec![StorageFieldShape::Scalar {
                 bytes,

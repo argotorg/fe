@@ -387,11 +387,13 @@ impl<'db> ContractStorageLayoutResult<'db> {
 /// neighbours as a struct, tuple or contract field, like a Solidity value
 /// type: a boolean or an integer narrower than a word, or a newtype of one,
 /// a struct with a single field, which lies in its field's bytes. A newtype
-/// with a `std::evm::SolPacked` encoding narrower than its field takes the
-/// encoding's `BITS` instead and holds its field's value in them: `Address`
-/// takes 20 bytes and `Uint24` 3. Everything else takes whole slots. Runtime
-/// layouts carry the same widths (`mir::runtime::storage_scalar_bytes` and a
-/// struct layout's `lane_bytes`).
+/// with a `std::evm::SolPacked` encoding a whole number of bytes narrower
+/// than its field takes the encoding's `BITS` instead and holds its field's
+/// value in them: `Address` takes 20 bytes and `Uint24` 3. Any other
+/// encoding leaves it in its field's bytes. Everything else takes whole
+/// slots. Runtime layouts carry the same widths
+/// (`mir::runtime::storage_scalar_bytes` and a struct layout's
+/// `lane_bytes`).
 #[salsa::tracked(returns(copy))]
 pub fn storage_lane_bytes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<u32> {
     if let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) {
@@ -399,12 +401,13 @@ pub fn storage_lane_bytes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Opt
     }
     let ty = concrete_const_args(db, ty);
     let field = newtype_field(db, ty)?;
-    let Some(bits) = sol_packed_bits(db, ty) else {
-        return storage_lane_bytes(db, field);
-    };
-    let bytes = u32::try_from(bits / 8).ok()?;
-    (bits % 8 == 0 && (1..32).contains(&bytes) && bytes <= newtype_scalar_bytes(db, field)?)
-        .then_some(bytes)
+    let field_bytes = storage_lane_bytes(db, field);
+    let field_width = field_bytes.or_else(|| newtype_scalar_bytes(db, field))?;
+    sol_packed_bits(db, ty)
+        .filter(|bits| bits % 8 == 0)
+        .and_then(|bits| u32::try_from(bits / 8).ok())
+        .filter(|bytes| (1..field_width).contains(bytes))
+        .or(field_bytes)
 }
 
 /// Whether newtype `ty` takes fewer bytes in a storage slot than its field

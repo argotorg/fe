@@ -5,9 +5,9 @@ use std::evm::layout::mapping_slot
 // Solidity value types pack into shared storage slots like booleans and
 // narrow integers: `Address` takes 20 bytes, `bytesN` N, and the odd-width
 // integers their width. A newtype, a struct with one field, packs like its
-// field, or at its `SolPacked` width. The expected raw slots are what
-// `solc --storage-layout` reports for the same Solidity structs, with
-// `type Stamp is uint64`:
+// field, or at its `SolPacked` width when that is narrower. The expected raw
+// slots are what `solc --storage-layout` reports for the same Solidity
+// structs, with `type Stamp is uint64`:
 //
 //   struct Rec { address owner; bool flag; Stamp stamp; }   owner: 0/0, flag: 0/20, stamp: 0/21
 //   struct Odd { bytes4 tag; uint24 wide; int24 neg;        tag: 0/0, wide: 0/4, neg: 0/7,
@@ -346,4 +346,96 @@ fn test_placed_narrowed_held_write_checks() uses (evm: mut Evm) {
 fn test_narrowed_map_value_write_checks() uses (evm: mut Evm) {
     let c = evm.create2<Lone>(value: Wei::zero(), args: (), salt: 8)
     evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: LoneMsg::EntryDirty {})
+}
+
+// ---------------------------------------------------------------------------
+// A `SolPacked` width only narrows a newtype's field: `Wider` declares 40
+// bits but holds a `Narrow` stored in 32, so it takes `Narrow`'s four bytes
+// wherever it lies, packed beside a field or alone as a map value.
+// ---------------------------------------------------------------------------
+
+struct Narrow {
+    val: u64,
+}
+
+impl Copy for Narrow {}
+
+impl SolPacked for Narrow {
+    const BITS: u256 = 32
+    fn to_packed(own self) -> u256 {
+        self.val as u256
+    }
+    fn from_packed(_ bits: u256) -> Self {
+        Narrow { val: bits.downcast_truncate() }
+    }
+}
+
+struct Wider {
+    inner: Narrow,
+}
+
+impl Copy for Wider {}
+
+impl SolPacked for Wider {
+    const BITS: u256 = 40
+    fn to_packed(own self) -> u256 {
+        self.inner.val as u256
+    }
+    fn from_packed(_ bits: u256) -> Self {
+        Wider { inner: Narrow { val: bits.downcast_truncate() } }
+    }
+}
+
+msg NestedMsg {
+    #[selector = 1]
+    Fill {},
+    #[selector = 2]
+    Slot { slot: u256 } -> u256,
+    #[selector = 3]
+    PackedWide {},
+    #[selector = 4]
+    EntryWide {},
+}
+
+// Slots: wider and flag 0, entries 1.
+pub contract Nested {
+    mut wider: Wider,
+    mut flag: u8,
+    mut entries: StorageMap<u256, Wider>,
+
+    recv NestedMsg {
+        Fill {} uses (mut wider, mut flag) {
+            wider = Wider { inner: Narrow { val: 0x11223344 } }
+            flag = 0x55
+        }
+        Slot { slot } -> u256 uses (raw: RawStorage) {
+            unsafe { raw.sload(slot) }
+        }
+        // Within `Wider`'s 40 bits but not `Narrow`'s 32.
+        PackedWide {} uses (mut wider) {
+            wider = Wider { inner: Narrow { val: 0x100000000 } }
+        }
+        EntryWide {} uses (mut entries) {
+            entries[1] = Wider { inner: Narrow { val: 0x100000000 } }
+        }
+    }
+}
+
+#[test]
+fn test_nested_newtype_takes_narrower_width() uses (evm: mut Evm) {
+    let c = evm.create2<Nested>(value: Wei::zero(), args: (), salt: 1)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: NestedMsg::Fill {})
+    assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: NestedMsg::Slot { slot: 0 }) == (0x55 << 32) | 0x11223344)
+}
+
+#[test(should_revert)]
+fn test_nested_packed_newtype_write_checks() uses (evm: mut Evm) {
+    let c = evm.create2<Nested>(value: Wei::zero(), args: (), salt: 2)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: NestedMsg::PackedWide {})
+}
+
+#[test(should_revert)]
+fn test_nested_map_value_newtype_write_checks() uses (evm: mut Evm) {
+    let c = evm.create2<Nested>(value: Wei::zero(), args: (), salt: 3)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: NestedMsg::EntryWide {})
 }
