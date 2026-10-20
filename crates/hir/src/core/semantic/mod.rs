@@ -31,7 +31,9 @@ use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_func_path};
 use crate::analysis::ty::diagnostics::{ContractFieldLayoutIssue, ImplDiag, TyLowerDiag};
 use crate::analysis::ty::effects::rows::RowKey;
 use crate::analysis::ty::fold::TyFoldable;
-use crate::analysis::ty::normalize::{normalize_from_assumptions, normalize_ty};
+use crate::analysis::ty::normalize::{
+    impl_assoc_ty_diverges, normalize_from_assumptions, normalize_ty,
+};
 use crate::analysis::ty::shape::{
     Shape, assoc_tys, check_param_product, check_return_shape, check_shape_value, is_param_product,
     lower_opaque_param, lower_param_product, lower_return_shape, lower_shape_value, may_name_shape,
@@ -5232,6 +5234,13 @@ impl<'db> ImplAssocTypeView<'db> {
         };
         if !checked.errors.is_empty() {
             return checked.errors;
+        }
+        // A definition that can't be normalized is reported here, and not
+        // where a projection resolves through it.
+        if let Some(name) = def.name.to_opt()
+            && impl_assoc_ty_diverges(db, self.owner, name)
+        {
+            return vec![TyLowerDiag::TypeNormalizationLimit(ty_span.into()).into()];
         }
 
         let Some(ty) = self.ty(db) else {

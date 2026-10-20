@@ -1,0 +1,51 @@
+// The normalization limits apply to each projection on its own: two
+// projections that each fit are accepted together, wherever they are met.
+trait Tr {
+    type Out
+}
+
+struct W<T> {
+    t: T,
+}
+
+struct V<T> {
+    t: T,
+}
+
+impl<T> Tr for W<T> {
+    type Out = u8
+}
+
+impl<T> Tr for V<T> {
+    type Out = u8
+}
+
+type A0 = u8
+type A1 = (A0, A0)
+type A2 = (A1, A1)
+type A3 = (A2, A2)
+type A4 = (A3, A3)
+type A5 = (A4, A4)
+type A6 = (A5, A5)
+type A7 = (A6, A6)
+type A8 = (A7, A7)
+type A9 = (A8, A8)
+type A10 = (A9, A9)
+type A11 = (A10, A10)
+type A12 = (A11, A11)
+type A13 = (A12, A12)
+type A14 = (A13, A13)
+type A15 = (A14, A14)
+
+fn each(x: <W<A14> as Tr>::Out) -> <V<A14> as Tr>::Out {
+    x
+}
+
+fn both(x: (<W<A14> as Tr>::Out, <V<A14> as Tr>::Out)) -> u8 {
+    x.0 + x.1
+}
+
+// Twice as large as a tree: past the limit.
+fn too_large(x: <W<A15> as Tr>::Out) -> u8 {
+    x
+}

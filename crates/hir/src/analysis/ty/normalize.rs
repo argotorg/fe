@@ -4,11 +4,11 @@
 //! to concrete types when possible. This happens before type unification to ensure
 //! that types are in their most resolved form.
 
-use std::collections::hash_map::Entry;
-
-use crate::core::hir_def::{ImplTrait, scope_graph::ScopeId};
+use crate::core::hir_def::{IdentId, ImplTrait, scope_graph::ScopeId};
+use crate::core::semantic::param_env;
 use common::indexmap::{IndexMap, IndexSet};
 use rustc_hash::FxHashMap;
+use salsa::SalsaValue;
 
 use super::{
     canonical::Canonical,
@@ -17,8 +17,8 @@ use super::{
     fold::{TyFoldable, TyFolder},
     shape::Shape,
     trait_def::{
-        AssocBinding, ImplementorId, TraitInstId, TraitRefId, impl_where_clause_refuted,
-        impls_for_trait_inst,
+        AssocBinding, ImplementorId, ImplementorOrigin, TraitInstId, TraitRefId,
+        impl_where_clause_refuted, impls_for_trait_inst,
     },
     trait_lower::complete_impl_assoc_ty,
     trait_resolution::{PredicateListId, TraitSolveCx},
@@ -26,6 +26,7 @@ use super::{
         AssocTy, InvalidCause, ShapeCon, ShapeMode, TyBase, TyData, TyId, TyParam,
         collect_variables,
     },
+    ty_error::first_invalid_ty_cause,
     unify::UnificationTable,
     visitor::{TyVisitor, walk_ty},
 };
@@ -47,8 +48,7 @@ pub fn normalize_ty<'db, T>(
 where
     T: TyFoldable<'db>,
 {
-    let mut normalizer = TypeNormalizer::new(db, scope, assumptions);
-    ty.fold_with(db, &mut normalizer)
+    ty.fold_with(db, &mut TypeNormalizer::new(db, scope, assumptions, true))
 }
 
 /// Apply declared associated equalities without implementation selection.
@@ -63,9 +63,7 @@ pub fn normalize_from_assumptions<'db, T>(
 where
     T: TyFoldable<'db>,
 {
-    let mut normalizer = TypeNormalizer::new(db, scope, assumptions);
-    normalizer.resolve_impls = false;
-    value.fold_with(db, &mut normalizer)
+    value.fold_with(db, &mut TypeNormalizer::new(db, scope, assumptions, false))
 }
 
 /// Apply the associated equalities carried by a single trait predicate, as
@@ -82,67 +80,227 @@ where
     normalize_from_assumptions(db, value, scope, PredicateListId::new(db, vec![evidence]))
 }
 
-/// How many projections may be in the middle of being resolved at once, and
-/// how deeply the generic arguments of one instance may nest.
+/// How many projections may be resolved inside each other, and how deeply the
+/// generic arguments of one instance may nest.
 pub(crate) const PROJECTION_DEPTH_LIMIT: usize = 64;
 
-/// How many type nodes, counted as a tree, the projections resolved by one
-/// normalization may have in total, as may the generic arguments of one
-/// instance.
+/// How many type nodes, counted as a tree, the projections resolved for one
+/// projection may have in total, each counted once and itself included, as
+/// may the generic arguments of one instance.
 pub(crate) const PROJECTION_WORK_LIMIT: usize = 65536;
 
-pub struct TypeNormalizer<'db> {
+/// Folds a value, normalizing each projection in it with
+/// [`normalize_projection`].
+struct TypeNormalizer<'db> {
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    /// Whether impls, and not only the assumptions, resolve projections.
     resolve_impls: bool,
-    // Projection cache: None = in progress (cycle guard), Some(ty) = normalized result
-    cache: FxHashMap<AssocTy<'db>, Option<TyId<'db>>>,
-    /// Projections currently being resolved, counted against
-    /// [`PROJECTION_DEPTH_LIMIT`].
-    projection_depth: usize,
-    /// Size of the projections resolved so far, counted against
-    /// [`PROJECTION_WORK_LIMIT`].
-    projection_work: usize,
+    /// Whether a projection resolved through an impl whose definition
+    /// diverges is marked so (see [`impl_assoc_ty_diverges`]).
+    mark_divergent: bool,
+    /// How many projections may still be resolved inside each other.
+    budget: usize,
+    /// While resolving a projection, the projections resolved for it so far.
+    /// A value's projections are normalized each on its own, so the work of
+    /// one doesn't count against another.
+    resolved: Option<Resolved<'db>>,
+}
+
+/// The projections resolved for one projection, itself included, each with
+/// its tree size, and their total, the work, which may not exceed
+/// [`PROJECTION_WORK_LIMIT`].
+struct Resolved<'db> {
+    sizes: IndexMap<TyId<'db>, usize>,
+    work: usize,
+}
+
+impl<'db> Resolved<'db> {
+    fn add(&mut self, projection: TyId<'db>, size: usize) {
+        if self.sizes.insert(projection, size).is_none() {
+            self.work = self.work.saturating_add(size);
+        }
+    }
+
+    fn exceeded(&self) -> bool {
+        self.work > PROJECTION_WORK_LIMIT
+    }
 }
 
 impl<'db> TypeNormalizer<'db> {
-    pub fn new(
+    fn new(
         db: &'db dyn HirAnalysisDb,
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
+        resolve_impls: bool,
     ) -> Self {
         Self {
             db,
             scope,
             assumptions,
-            resolve_impls: true,
-            cache: FxHashMap::default(),
-            projection_depth: 0,
-            projection_work: 0,
+            resolve_impls,
+            mark_divergent: true,
+            budget: PROJECTION_DEPTH_LIMIT,
+            resolved: None,
         }
     }
+}
 
-    /// Starts resolving the projection `ty`, or returns an invalid type if
-    /// that would exceed the normalization limits.
-    ///
-    /// The cycle guard stops a projection that comes back to itself, but not
-    /// one whose impl defines it through a larger projection, such as
-    /// `type Out = <W<(T, T)> as Tr>::Out`: that chain never repeats. Its
-    /// types can also double at each step, staying small as interned values
-    /// while growing exponentially as trees, which is how resolution walks
-    /// them. So both the nesting and the total size are limited.
-    fn enter_projection(&mut self, ty: TyId<'db>) -> Result<(), TyId<'db>> {
-        let remaining = PROJECTION_WORK_LIMIT - self.projection_work;
-        match tree_size_within(self.db, ty, remaining) {
-            Some(size) if self.projection_depth < PROJECTION_DEPTH_LIMIT => {
-                self.projection_work += size;
-                self.projection_depth += 1;
-                Ok(())
-            }
-            _ => Err(TyId::invalid(self.db, InvalidCause::TypeNormalizationLimit)),
+/// What normalizing a projection gives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+enum NormalizedProjection<'db> {
+    /// The normalized type, and the projections resolved for it.
+    Ty {
+        ty: TyId<'db>,
+        resolved: ResolvedProjections<'db>,
+    },
+    /// A limit was reached, here or in a projection resolved for this one.
+    Limit,
+}
+
+/// The projections resolved for a projection, itself included, each with its
+/// tree size.
+#[salsa::interned]
+#[derive(Debug)]
+struct ResolvedProjections<'db> {
+    sizes: Vec<(TyId<'db>, usize)>,
+}
+
+/// A projection to normalize, with what normalizing it depends on.
+#[salsa::interned]
+#[derive(Debug)]
+struct ProjectionQuery<'db> {
+    #[returns(copy)]
+    ty: TyId<'db>,
+    #[returns(copy)]
+    scope: ScopeId<'db>,
+    #[returns(copy)]
+    assumptions: PredicateListId<'db>,
+    #[returns(copy)]
+    resolve_impls: bool,
+    #[returns(copy)]
+    mark_divergent: bool,
+    /// How many projections may be resolved inside each other, this one
+    /// included.
+    #[returns(copy)]
+    budget: usize,
+}
+
+/// The normalized form of a projection.
+///
+/// A projection that an impl defines through itself, directly or through
+/// other impls, repeats until it reaches the nesting limit. One whose impl
+/// defines it through a larger one, such as `type Out = <W<(T, T)> as
+/// Tr>::Out`, never repeats, and its types can double at each step, staying
+/// small as interned values while growing exponentially as trees, which is
+/// how resolution walks them; one that resolves into several such projections
+/// multiplies them at each step. So the nesting and the total size of the
+/// projections resolved for a projection are limited, and the first limit
+/// reached stops its resolution. The limits depend only on the query, so a
+/// projection normalizes the same way wherever and in whichever order it is
+/// met.
+#[salsa::tracked(returns(copy), cycle_initial = normalize_projection_cycle_initial)]
+fn normalize_projection<'db>(
+    db: &'db dyn HirAnalysisDb,
+    query: ProjectionQuery<'db>,
+) -> NormalizedProjection<'db> {
+    let (ty, budget) = (query.ty(db), query.budget(db));
+    let TyData::AssocTy(assoc) = ty.data(db) else {
+        unreachable!("only projections are normalized one at a time")
+    };
+    let Some(size) = tree_size_within(db, ty, PROJECTION_WORK_LIMIT).filter(|_| budget > 0) else {
+        return NormalizedProjection::Limit;
+    };
+    let mut normalizer = TypeNormalizer {
+        db,
+        scope: query.scope(db),
+        assumptions: query.assumptions(db),
+        resolve_impls: query.resolve_impls(db),
+        mark_divergent: query.mark_divergent(db),
+        budget: budget - 1,
+        resolved: Some(Resolved {
+            sizes: IndexMap::from_iter([(ty, size)]),
+            work: size,
+        }),
+    };
+    // An associated shape resolves to its impl's value at the mode it is
+    // named at; until it has one, it stays.
+    let resolved = match assoc.mode {
+        None if assoc.is_shape(db) => None,
+        mode => normalizer
+            .try_resolve_assoc_ty(ty, assoc)
+            .map(|replacement| {
+                mode.map_or(replacement, |mode| replacement.at_shape_mode(db, mode))
+            }),
+    };
+    let normalized = match resolved {
+        // An impl that defines the projection as itself.
+        Some(replacement) if replacement == ty => return NormalizedProjection::Limit,
+        Some(replacement) => normalizer.fold_ty(db, replacement),
+        // Not resolved; still fold internals (e.g., normalize self type)
+        None => ty.super_fold_with(db, &mut normalizer),
+    };
+    let resolved = normalizer
+        .resolved
+        .expect("resolving a projection counts its work");
+    if resolved.exceeded() {
+        NormalizedProjection::Limit
+    } else {
+        NormalizedProjection::Ty {
+            ty: normalized,
+            resolved: ResolvedProjections::new(db, resolved.sizes.into_iter().collect::<Vec<_>>()),
         }
     }
+}
+
+/// Resolving a projection can lower an impl's associated type, which can ask
+/// for the projection again through trait solving; within that cycle it is
+/// unresolved.
+fn normalize_projection_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    query: ProjectionQuery<'db>,
+) -> NormalizedProjection<'db> {
+    NormalizedProjection::Ty {
+        ty: query.ty(db),
+        resolved: ResolvedProjections::new(db, Vec::new()),
+    }
+}
+
+/// Whether the definition of `name` in `impl_` can't be normalized within the
+/// limits in the impl's own context, as `type Out = <S as Tr>::Out` or `type
+/// Out = <W<(T, T)> as Tr>::Out` can't, or resolves through such a
+/// definition. That is an error at the definition; a projection resolved
+/// through it is an invalid type that isn't reported again.
+#[salsa::tracked(returns(copy), cycle_initial = impl_assoc_ty_diverges_cycle_initial)]
+pub(crate) fn impl_assoc_ty_diverges<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_: ImplTrait<'db>,
+    name: IdentId<'db>,
+) -> bool {
+    let Some(ty) = impl_
+        .assoc_types(db)
+        .find(|view| view.name(db) == Some(name))
+        .and_then(|view| view.ty(db))
+    else {
+        return false;
+    };
+    // Normalized without marking divergent definitions, so that whether one
+    // diverges doesn't depend on whether another does.
+    let mut normalizer = TypeNormalizer::new(db, impl_.scope(), param_env(db, impl_.into()), true);
+    normalizer.mark_divergent = false;
+    let normalized = ty.fold_with(db, &mut normalizer);
+    first_invalid_ty_cause(db, normalized) == Some(InvalidCause::TypeNormalizationLimit)
+}
+
+fn impl_assoc_ty_diverges_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _impl_: ImplTrait<'db>,
+    _name: IdentId<'db>,
+) -> bool {
+    false
 }
 
 /// The types `ty` is made of, one level down.
@@ -254,41 +412,42 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
                 }
                 ty
             }
-            TyData::AssocTy(assoc_ty) => {
-                match self.cache.entry(*assoc_ty) {
-                    Entry::Occupied(entry) => match entry.get() {
-                        Some(cached) => return *cached,
-                        None => return ty, // cycle: leave unresolved
-                    },
-                    Entry::Vacant(entry) => {
-                        entry.insert(None);
+            // A limit reached while resolving a projection is the limit for
+            // all of it, so the rest is not resolved.
+            TyData::AssocTy(_) if self.resolved.as_ref().is_some_and(Resolved::exceeded) => {
+                TyId::invalid(db, InvalidCause::TypeNormalizationLimit)
+            }
+            TyData::AssocTy(_) => {
+                let query = ProjectionQuery::new(
+                    db,
+                    ty,
+                    self.scope,
+                    self.assumptions,
+                    self.resolve_impls,
+                    self.mark_divergent,
+                    self.budget,
+                );
+                match normalize_projection(db, query) {
+                    NormalizedProjection::Ty { ty, resolved } => {
+                        let Some(own) = &mut self.resolved else {
+                            return ty;
+                        };
+                        for &(projection, size) in resolved.sizes(db) {
+                            own.add(projection, size);
+                        }
+                        if own.exceeded() {
+                            TyId::invalid(db, InvalidCause::TypeNormalizationLimit)
+                        } else {
+                            ty
+                        }
+                    }
+                    NormalizedProjection::Limit => {
+                        if let Some(own) = &mut self.resolved {
+                            own.work = usize::MAX;
+                        }
+                        TyId::invalid(db, InvalidCause::TypeNormalizationLimit)
                     }
                 }
-
-                if let Err(limit) = self.enter_projection(ty) {
-                    self.cache.insert(*assoc_ty, Some(limit));
-                    return limit;
-                }
-                // An associated shape resolves to its impl's value at the
-                // mode it is named at; until it has one, it stays.
-                let resolved = match assoc_ty.mode {
-                    None if assoc_ty.is_shape(db) => None,
-                    mode => self.try_resolve_assoc_ty(ty, assoc_ty).map(|replacement| {
-                        let replacement =
-                            mode.map_or(replacement, |mode| replacement.at_shape_mode(db, mode));
-                        self.fold_ty(db, replacement)
-                    }),
-                };
-                self.projection_depth -= 1;
-                if let Some(normalized) = resolved {
-                    self.cache.insert(*assoc_ty, Some(normalized));
-                    return normalized;
-                }
-
-                // Not resolved; still fold internals (e.g., normalize self type)
-                let folded = ty.super_fold_with(db, self);
-                self.cache.insert(*assoc_ty, Some(folded));
-                folded
             }
             // The value or carrier type of a shape reduces once the shape is
             // known.
@@ -404,7 +563,8 @@ impl<'db> TypeNormalizer<'db> {
             });
         }
 
-        let mut dedup: IndexSet<TyId<'db>> = IndexSet::default();
+        // The definitions the candidates give, each with the impl giving it.
+        let mut definitions: IndexMap<TyId<'db>, ImplementorId<'db>> = IndexMap::default();
         // Canonicalize the target trait instance so we can unify against it in a
         // fresh table without mixing inference keys from other tables.
         let canonical_target = Canonicalized::new(self.db, trait_inst);
@@ -412,12 +572,14 @@ impl<'db> TypeNormalizer<'db> {
             let target_inst = cx.query();
             let original_target = cx.try_extract::<TraitInstId<'db>>(target_inst);
             for implementor in candidates {
-                let Some(implementor) = complete_impl_assoc_ty(self.db, implementor, assoc.name)
+                let Some(completed) = complete_impl_assoc_ty(self.db, implementor, assoc.name)
                 else {
                     continue;
                 };
+                // Extracted into the caller's inference environment, so
+                // scratch-local vars never leak into the cache.
                 let candidate = cx.with_impl_assoc_ty(
-                    implementor,
+                    completed,
                     target_inst.self_ty(self.db),
                     assoc.name,
                     |cx, inst, assoc_ty| {
@@ -429,20 +591,24 @@ impl<'db> TypeNormalizer<'db> {
                         cx.try_extract::<TyId<'db>>(assoc_ty)
                     },
                 );
-
-                // Extract into the caller's inference environment before
-                // continuing normalization, so scratch-local vars never
-                // leak into the cache.
-                if let Some(Some(folded)) = candidate {
-                    dedup.insert(self.fold_ty(self.db, folded));
+                if let Some(Some(definition)) = candidate {
+                    definitions.entry(definition).or_insert(implementor);
                 }
             }
         });
 
-        match dedup.len() {
-            1 => dedup.first().copied(),
-            _ => None,
-        }
+        let (&definition, implementor) = match definitions.len() {
+            1 => definitions.first()?,
+            _ => return None,
+        };
+        Some(match implementor.origin(self.db) {
+            ImplementorOrigin::Hir(impl_)
+                if self.mark_divergent && impl_assoc_ty_diverges(self.db, impl_, assoc.name) =>
+            {
+                TyId::invalid(self.db, InvalidCause::DivergentAssocTy)
+            }
+            _ => definition,
+        })
     }
 }
 
