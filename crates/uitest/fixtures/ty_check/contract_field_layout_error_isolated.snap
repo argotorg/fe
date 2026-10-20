@@ -10,6 +10,12 @@ error[2-0002]: `Missing` is not found
 12 │     mut bad: Missing,
    │              ^^^^^^^ `Missing` is not found
 
+error[2-0002]: `Missing` is not found
+   ┌─ contract_field_layout_error_isolated.fe:45:14
+   │
+45 │     mut bad: Missing,
+   │              ^^^^^^^ `Missing` is not found
+
 error[3-0064]: `b` overlaps the slots of `a`
    ┌─ contract_field_layout_error_isolated.fe:28:11
    │

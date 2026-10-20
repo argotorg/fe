@@ -38,3 +38,19 @@ pub contract Overlapping {
         }
     }
 }
+
+// Naming the failed field in `uses` or a body reports nothing more.
+pub contract NamesFailed {
+    mut first: u256,
+    mut bad: Missing,
+
+    recv M {
+        Get {} -> u256 uses (first, bad) {
+            first
+        }
+        Set { v } uses (mut first, mut bad) {
+            first = v
+            bad = v
+        }
+    }
+}
