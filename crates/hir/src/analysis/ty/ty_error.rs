@@ -1103,6 +1103,9 @@ pub(crate) fn diag_from_invalid_cause<'db>(
 
         InvalidCause::NotAType(_) => return None,
 
+        // Reported where the impl defines it.
+        InvalidCause::DivergentAssocTy => return None,
+
         // These errors should be caught and reported elsewhere
         InvalidCause::PathResolutionFailed { .. }
         | InvalidCause::ParseError

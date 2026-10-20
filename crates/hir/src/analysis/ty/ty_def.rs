@@ -1556,6 +1556,10 @@ pub enum InvalidCause<'db> {
     /// than the normalizer allows.
     TypeNormalizationLimit,
 
+    /// A projection resolved through an impl whose definition of it can't be
+    /// normalized within the limits; reported at the impl.
+    DivergentAssocTy,
+
     // TraitConstraintNotSat(PredicateId),
     ParseError,
 
@@ -1755,6 +1759,7 @@ impl InvalidCause<'_> {
             InvalidCause::ConstEvalRecursiveConst { .. } => "ConstEvalRecursiveConst".into(),
             InvalidCause::TypeLoweringCycle => "TypeLoweringCycle".into(),
             InvalidCause::TypeNormalizationLimit => "TypeNormalizationLimit".into(),
+            InvalidCause::DivergentAssocTy => "DivergentAssocTy".into(),
         }
     }
 }
