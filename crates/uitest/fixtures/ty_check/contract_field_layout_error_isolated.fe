@@ -1,0 +1,40 @@
+msg M {
+    #[selector = 1]
+    Get {} -> u256,
+    #[selector = 2]
+    Set { v: u256 },
+}
+
+// Only the unresolved type is reported: the other field still resolves as
+// an effect and as a field.
+pub contract Unresolved {
+    mut first: u256,
+    mut bad: Missing,
+
+    recv M {
+        Get {} -> u256 uses (first) {
+            first
+        }
+        Set { v } uses (mut first) {
+            first = v
+        }
+    }
+}
+
+// Only the overlap is reported.
+pub contract Overlapping {
+    #[slot(4)]
+    mut a: u256,
+    #[slot(4)]
+    mut b: u256,
+    mut c: u256,
+
+    recv M {
+        Get {} -> u256 uses (c) {
+            c
+        }
+        Set { v } uses (mut c) {
+            c = v
+        }
+    }
+}
