@@ -7,7 +7,7 @@
 use std::collections::hash_map::Entry;
 
 use crate::core::hir_def::{ImplTrait, scope_graph::ScopeId};
-use common::indexmap::IndexMap;
+use common::indexmap::{IndexMap, IndexSet};
 use rustc_hash::FxHashMap;
 
 use super::{
@@ -17,7 +17,8 @@ use super::{
     fold::{TyFoldable, TyFolder},
     shape::Shape,
     trait_def::{
-        AssocBinding, TraitInstId, TraitRefId, impls_for_trait_inst_with_possible_constraints,
+        AssocBinding, ImplementorId, TraitInstId, TraitRefId, impl_where_clause_refuted,
+        impls_for_trait_inst,
     },
     trait_lower::complete_impl_assoc_ty,
     trait_resolution::{PredicateListId, TraitSolveCx},
@@ -28,10 +29,7 @@ use super::{
     unify::UnificationTable,
     visitor::{TyVisitor, walk_ty},
 };
-use crate::analysis::{
-    HirAnalysisDb,
-    name_resolution::{FindAssociatedTypeError, find_associated_type},
-};
+use crate::analysis::HirAnalysisDb;
 
 /// Normalizes a type by resolving all associated types to concrete types when possible.
 ///
@@ -360,53 +358,7 @@ impl<'db> TypeNormalizer<'db> {
             return Some(out);
         }
 
-        // 3) Fall back to the general associated type search used by path resolution,
-        //    but restrict results to the same trait as `assoc` and deduplicate by
-        //    the resulting type. If all viable candidates agree on a single type,
-        //    normalize to that type.
-        //
-        // First attempt an impl-based lookup across relevant ingots (Self's + trait's),
-        // mirroring trait-method resolution. This allows normalization to succeed even
-        // when the calling scope is in a different ingot (e.g., core code instantiated
-        // with std types).
-        if let Some(resolved) = self.try_resolve_assoc_ty_from_impls(assoc) {
-            return Some(resolved);
-        }
-
-        //    Search by the trait's self type: `SelfTy::assoc.name`.
-        // Normalize the trait's self type before candidate search.
-        let self_ty = self.fold_ty(self.db, assoc.trait_.self_ty(self.db));
-        let mut raw_cands = match find_associated_type(
-            self.db,
-            self.scope,
-            Canonicalized::new(self.db, self_ty),
-            assoc.name,
-            self.assumptions,
-        ) {
-            Ok(raw_cands) => raw_cands,
-            Err(FindAssociatedTypeError::InfiniteBoundRecursion) => return None,
-        };
-
-        raw_cands.retain(|(inst, _)| self.trait_refs_match(target, inst.trait_ref(self.db)));
-
-        // Deduplicate by normalized result type (to handle cases where multiple
-        // impls yield the same associated type, e.g., Output = Self for all impls).
-        let mut dedup: IndexMap<TyId<'db>, ()> = IndexMap::new();
-        for (_, t) in raw_cands.into_iter() {
-            // Continue folding so nested associated types are also normalized
-            let norm_t = self.fold_ty(self.db, t);
-            dedup.entry(norm_t).or_insert(());
-        }
-
-        match dedup.len() {
-            0 => None,
-            1 => {
-                let (unique, _) = dedup.first().unwrap();
-                // Only replace if we're actually making progress
-                if *unique != ty { Some(*unique) } else { None }
-            }
-            _ => None,
-        }
+        self.try_resolve_assoc_ty_from_impls(assoc)
     }
 
     /// A pure normalization query may observe established equality, but may
@@ -429,62 +381,66 @@ impl<'db> TypeNormalizer<'db> {
             .is_ok()
     }
 
+    /// Resolves `assoc` through the impls whose header, every trait argument
+    /// included, matches its trait reference. Nothing is proved: where clauses
+    /// only choose between impls whose headers both match, and the trait
+    /// reference itself is checked where the projection is written. So an
+    /// impl whose where clause names the projection it defines, as
+    /// `impl Tr for S where <S as Tr>::Out: Show`, needs nothing special.
     fn try_resolve_assoc_ty_from_impls(&mut self, assoc: &AssocTy<'db>) -> Option<TyId<'db>> {
         let trait_inst = assoc.trait_.fold_with(self.db, self).as_predicate(self.db);
         let canonical_inst = Canonical::new(self.db, trait_inst);
 
-        let mut dedup: IndexMap<TyId<'db>, ()> = IndexMap::new();
-
         let solve_cx = TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions);
         let (primary, secondary) = solve_cx.search_ingots_for_trait_inst(self.db, trait_inst);
-        let search_ingots = [Some(primary), secondary];
+        let mut candidates: IndexSet<ImplementorId<'db>> = [Some(primary), secondary]
+            .into_iter()
+            .flatten()
+            .flat_map(|ingot| impls_for_trait_inst(self.db, ingot, canonical_inst))
+            .collect();
+        if candidates.len() > 1 {
+            candidates.retain(|&implementor| {
+                !impl_where_clause_refuted(self.db, solve_cx, implementor, canonical_inst)
+            });
+        }
 
+        let mut dedup: IndexSet<TyId<'db>> = IndexSet::default();
         // Canonicalize the target trait instance so we can unify against it in a
         // fresh table without mixing inference keys from other tables.
         let canonical_target = Canonicalized::new(self.db, trait_inst);
         canonical_target.with_materialized(self.db, |cx| {
             let target_inst = cx.query();
             let original_target = cx.try_extract::<TraitInstId<'db>>(target_inst);
-            for ingot in search_ingots.into_iter().flatten() {
-                for implementor in impls_for_trait_inst_with_possible_constraints(
-                    self.db,
-                    ingot,
-                    canonical_inst,
-                    self.assumptions,
-                ) {
-                    let Some(implementor) =
-                        complete_impl_assoc_ty(self.db, implementor, assoc.name)
-                    else {
-                        continue;
-                    };
-                    let candidate = cx.with_impl_assoc_ty(
-                        implementor,
-                        target_inst.self_ty(self.db),
-                        assoc.name,
-                        |cx, inst, assoc_ty| {
-                            cx.unify::<TraitInstId<'db>>(inst, target_inst).ok()?;
-                            if cx.try_extract::<TraitInstId<'db>>(target_inst) != original_target {
-                                return None;
-                            }
-                            let assoc_ty = cx.resolve::<TyId<'db>>(assoc_ty);
-                            cx.try_extract::<TyId<'db>>(assoc_ty)
-                        },
-                    );
+            for implementor in candidates {
+                let Some(implementor) = complete_impl_assoc_ty(self.db, implementor, assoc.name)
+                else {
+                    continue;
+                };
+                let candidate = cx.with_impl_assoc_ty(
+                    implementor,
+                    target_inst.self_ty(self.db),
+                    assoc.name,
+                    |cx, inst, assoc_ty| {
+                        cx.unify::<TraitInstId<'db>>(inst, target_inst).ok()?;
+                        if cx.try_extract::<TraitInstId<'db>>(target_inst) != original_target {
+                            return None;
+                        }
+                        let assoc_ty = cx.resolve::<TyId<'db>>(assoc_ty);
+                        cx.try_extract::<TyId<'db>>(assoc_ty)
+                    },
+                );
 
-                    // Extract into the caller's inference environment before
-                    // continuing normalization, so scratch-local vars never
-                    // leak into the cache.
-                    if let Some(Some(folded)) = candidate {
-                        let norm = self.fold_ty(self.db, folded);
-                        dedup.entry(norm).or_insert(());
-                    }
+                // Extract into the caller's inference environment before
+                // continuing normalization, so scratch-local vars never
+                // leak into the cache.
+                if let Some(Some(folded)) = candidate {
+                    dedup.insert(self.fold_ty(self.db, folded));
                 }
             }
         });
 
         match dedup.len() {
-            0 => None,
-            1 => Some(*dedup.first().unwrap().0),
+            1 => dedup.first().copied(),
             _ => None,
         }
     }

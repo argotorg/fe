@@ -45,14 +45,14 @@ use crate::{
     hir_def::{
         ArithBinOp, BinOp, BindingMarker, Body, CondId, Const, Contract, ContractRecvArm, Expr,
         ExprId, Func, GenericParam, GenericParamOwner, IntegerId, LitKind, ManualContractRootAttr,
-        Partial, Pat, PatId, PathId, StaticAssert, StaticAssertComparison, Stmt, StmtId, StringId,
-        TypeId as HirTyId, TypeKind, UnOp, WhereClauseOwner,
+        Partial, Pat, PatId, PathId, PathKind, StaticAssert, StaticAssertComparison, Stmt, StmtId,
+        StringId, TypeId as HirTyId, TypeKind, UnOp, WhereClauseOwner,
     },
     span::{
         DynLazySpan, expr::LazyExprSpan, pat::LazyPatSpan, path::LazyPathSpan, stmt::LazyStmtSpan,
         types::LazyTySpan,
     },
-    visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat, walk_stmt},
+    visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat, walk_path, walk_stmt},
 };
 use callable::{CallGenericArgPhase, CallGenericArgUnifyError, unify_explicit_call_generic_args};
 pub use callable::{CallParam, Callable, EffectProviderProvenance, EffectProviderSpecialization};
@@ -7689,7 +7689,11 @@ impl<'db> TyCheckerFinalizer<'db> {
     /// written; its errors were reported when it was lowered.
     fn check_written_tys(&mut self) {
         struct WrittenTys<'db> {
+            db: &'db dyn HirAnalysisDb,
             tys: Vec<(HirTyId<'db>, ScopeId<'db>, LazyTySpan<'db>, Option<StmtId>)>,
+            /// The projections that qualified paths in expressions and
+            /// patterns name, as `<V<T> as Ty>::A` in `<V<T> as Ty>::A { x }`.
+            projections: Vec<(PathId<'db>, ScopeId<'db>, DynLazySpan<'db>, Option<StmtId>)>,
             stmt: Option<StmtId>,
         }
         impl<'db> Visitor<'db> for WrittenTys<'db> {
@@ -7713,13 +7717,39 @@ impl<'db> TyCheckerFinalizer<'db> {
                     self.tys.push((hir_ty, ctxt.scope(), span, self.stmt));
                 }
             }
+
+            fn visit_path(
+                &mut self,
+                ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>,
+                path: PathId<'db>,
+            ) {
+                if let Some(span) = ctxt.span() {
+                    for segment in std::iter::successors(Some(path), |path| path.parent(self.db))
+                        .filter(|segment| {
+                            segment.parent(self.db).is_some_and(|parent| {
+                                matches!(parent.kind(self.db), PathKind::QualifiedType { .. })
+                            })
+                        })
+                    {
+                        self.projections.push((
+                            segment,
+                            ctxt.scope(),
+                            span.clone().into(),
+                            self.stmt,
+                        ));
+                    }
+                }
+                walk_path(self, ctxt, path);
+            }
         }
 
         let Some(body) = self.body.body() else {
             return;
         };
         let mut written = WrittenTys {
+            db: self.db,
             tys: Vec::new(),
+            projections: Vec::new(),
             stmt: None,
         };
         written.visit_body(&mut VisitorCtxt::with_body(self.db, body), body);
@@ -7744,6 +7774,36 @@ impl<'db> TyCheckerFinalizer<'db> {
                     self.written_goals.insert((stmt, *primary_goal));
                 }
                 self.diags.push(diag.into());
+            }
+        }
+        // Normalization resolves a projection without proving its trait
+        // reference, so an associated type a path names is checked where it
+        // is written, as a written type is, unless the statement's written
+        // types reported the bound.
+        for (path, scope, span, stmt) in written.projections {
+            let projection = HirTyId::new(self.db, TypeKind::Path(Partial::Present(path)));
+            let ty = lower_hir_ty(self.db, projection, scope, self.assumptions);
+            if let TyData::AssocTy(assoc) = ty.data(self.db)
+                && assoc
+                    .trait_
+                    .def(self.db)
+                    .assoc_ty(self.db, assoc.name)
+                    .is_some()
+                && !ty.has_invalid(self.db)
+                && let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+                    self.db,
+                    TraitSolveCx::new(self.db, scope).with_assumptions(self.assumptions),
+                    ty,
+                )
+                && self.written_goals.insert((stmt, goal))
+            {
+                let diag = TraitConstraintDiag::TraitBoundNotSat {
+                    span,
+                    primary_goal: goal,
+                    unsat_subgoal: subgoal,
+                    required_by: None,
+                };
+                self.diags.push(TyDiagCollection::from(diag).into());
             }
         }
     }
@@ -7959,7 +8019,9 @@ impl<'db> TyCheckerFinalizer<'db> {
             .with_assumptions(self.assumptions);
         // A bound reported where a type is written in a statement
         // (`check_written_tys`), as in `let x: Foo<Bad> = make()`, is not
-        // reported again for the statement's expressions whose types have it.
+        // reported again for the statement's expressions whose types have it,
+        // nor is the trait of a projection, checked wherever the projection is
+        // written.
         let reported_where_written = |goal| {
             if self.stmts.is_empty() {
                 self.written_goals.contains(&(None, goal))
@@ -7971,6 +8033,7 @@ impl<'db> TyCheckerFinalizer<'db> {
         };
         if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(self.db, solve_cx, ty)
             && !reported_where_written(goal)
+            && !projection_trait_insts(self.db, ty).contains(&goal)
         {
             let diag = TraitConstraintDiag::TraitBoundNotSat {
                 span,
@@ -7981,6 +8044,33 @@ impl<'db> TyCheckerFinalizer<'db> {
             self.diags.push(TyDiagCollection::from(diag).into());
         }
     }
+}
+
+/// The trait references of the projections in `ty`.
+fn projection_trait_insts<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<TraitInstId<'db>> {
+    struct Projections<'db> {
+        db: &'db dyn HirAnalysisDb,
+        insts: Vec<TraitInstId<'db>>,
+    }
+    impl<'db> TyVisitor<'db> for Projections<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            match ty.data(self.db) {
+                TyData::AssocTy(assoc) => self.insts.push(assoc.trait_.as_predicate(self.db)),
+                TyData::QualifiedTy(inst) => self.insts.push(*inst),
+                _ => {}
+            }
+            walk_ty(self, ty);
+        }
+    }
+    let mut projections = Projections {
+        db,
+        insts: Vec::new(),
+    };
+    ty.visit_with(&mut projections);
+    projections.insts
 }
 
 /// The provider two joined accesses share, if any. Accesses backed by

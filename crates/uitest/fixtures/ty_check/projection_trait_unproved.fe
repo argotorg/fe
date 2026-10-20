@@ -1,0 +1,79 @@
+// A projection resolves through the impl whose header matches. Where that
+// impl does not apply, the projection is rejected where it is written.
+trait Foo {}
+trait Show {}
+impl Show for u16 {}
+
+trait Ty {
+    type A
+}
+
+struct W<T> {
+    t: T,
+}
+
+impl<T: Foo> Ty for W<T> {
+    type A = T
+}
+
+const C: <W<u16> as Ty>::A = 1
+
+fn id<T>(x: own T) -> T {
+    x
+}
+
+fn let_init(x: u16) -> u16 {
+    let a: <W<u16> as Ty>::A = x
+    a
+}
+
+fn cast(x: u8) -> u16 {
+    x as <W<u16> as Ty>::A
+}
+
+fn turbofish(x: u16) -> u16 {
+    id<<W<u16> as Ty>::A>(x)
+}
+
+fn constant() -> u16 {
+    C
+}
+
+// A path that names a projection, as a record literal's does.
+struct Pt {
+    x: u16,
+}
+struct V<T> {
+    t: T,
+}
+impl<T: Foo> Ty for V<T> {
+    type A = Pt
+}
+
+fn record() -> u16 {
+    let p = <V<u16> as Ty>::A { x: 1 }
+    p.x
+}
+
+// The bound's subject is a projection whose trait reference must hold.
+trait Needs {}
+impl<X> Needs for X where <X as Ty>::A: Show {}
+
+// An impl's where clause may not name an unknown trait.
+struct S {}
+impl Needs for S where S: Nonexistent {}
+
+// The where clause names the projection the impl defines, and does not hold
+// for that definition: the impl never applies.
+trait Tr {
+    type Out
+}
+struct Direct {}
+impl Tr for Direct where <Direct as Tr>::Out: Show {
+    type Out = u8
+}
+
+fn direct(x: u8) -> u8 {
+    let a: <Direct as Tr>::Out = x
+    a
+}

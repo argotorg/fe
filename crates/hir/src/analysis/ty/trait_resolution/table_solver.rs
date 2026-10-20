@@ -27,11 +27,12 @@ use crate::analysis::{
         clearable::clearable_implementor,
         closure::callable_implementor,
         fold::TyFoldable,
+        normalize::{normalize_from_assumptions, normalize_ty},
         sol_codec::sol_codec_implementor,
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
         trait_lower::complete_candidate_impl_assoc_ty,
         ty_def::{BorrowKind, TyData, TyId},
-        unify::{PersistentUnificationTable, UnificationError, UnificationResult},
+        unify::{PersistentUnificationTable, Unifiable},
         visitor::{TyVisitable, TyVisitor},
     },
 };
@@ -96,9 +97,64 @@ fn normalize_assoc_binding<'db>(
     ty: TyId<'db>,
     scope: ScopeId<'db>,
     assumptions: super::PredicateListId<'db>,
+    resolve_impls: bool,
 ) -> TyId<'db> {
     let ty = ty.fold_with(db, table);
-    crate::analysis::ty::normalize::normalize_ty(db, ty, scope, assumptions)
+    if resolve_impls {
+        normalize_ty(db, ty, scope, assumptions)
+    } else {
+        normalize_from_assumptions(db, ty, scope, assumptions)
+    }
+}
+
+/// Why a candidate does not answer a goal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mismatch {
+    /// It does not.
+    Rejected,
+    /// A projection that only an impl could resolve is in the way, in a search
+    /// that doesn't resolve projections through impls.
+    Undecided,
+}
+
+/// Whether `value` names a projection.
+fn names_projection<'db>(db: &'db dyn HirAnalysisDb, value: impl TyVisitable<'db>) -> bool {
+    struct Finder<'db> {
+        db: &'db dyn HirAnalysisDb,
+        found: bool,
+    }
+    impl<'db> TyVisitor<'db> for Finder<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            self.found |= ty.has_projection(self.db);
+        }
+    }
+    let mut finder = Finder { db, found: false };
+    value.visit_with(&mut finder);
+    finder.found
+}
+
+/// Unifies `a` with `b`, which is undecided rather than a mismatch when
+/// impls weren't asked to resolve a projection in either.
+fn unify_or_undecided<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut PersistentUnificationTable<'db>,
+    a: T,
+    b: T,
+    resolve_impls: bool,
+) -> Result<(), Mismatch>
+where
+    T: Copy + TyVisitable<'db> + Unifiable<'db>,
+{
+    if table.unify(a, b).is_ok() {
+        Ok(())
+    } else if !resolve_impls && (names_projection(db, a) || names_projection(db, b)) {
+        Err(Mismatch::Undecided)
+    } else {
+        Err(Mismatch::Rejected)
+    }
 }
 
 fn unify_trait_inst_with_normalized_assoc_bindings<'db>(
@@ -108,19 +164,33 @@ fn unify_trait_inst_with_normalized_assoc_bindings<'db>(
     goal: TraitInstId<'db>,
     scope: ScopeId<'db>,
     assumptions: super::PredicateListId<'db>,
-) -> UnificationResult {
-    table.unify(trait_inst_head(db, candidate), trait_inst_head(db, goal))?;
+    resolve_impls: bool,
+) -> Result<(), Mismatch> {
+    unify_or_undecided(
+        db,
+        table,
+        trait_inst_head(db, candidate),
+        trait_inst_head(db, goal),
+        resolve_impls,
+    )?;
 
     // Each of the goal's equalities holds by the candidate's, which may bind
     // an associated shape at every mode where the goal names one.
     for (&binding, &goal_assoc_ty) in goal.assoc_type_bindings(db) {
         let candidate_assoc_ty = candidate
             .bound_assoc_ty(db, binding)
-            .ok_or(UnificationError::TypeMismatch)?;
-        let candidate_assoc_ty =
-            normalize_assoc_binding(db, table, candidate_assoc_ty, scope, assumptions);
-        let goal_assoc_ty = normalize_assoc_binding(db, table, goal_assoc_ty, scope, assumptions);
-        table.unify(candidate_assoc_ty, goal_assoc_ty)?;
+            .ok_or(Mismatch::Rejected)?;
+        let candidate_assoc_ty = normalize_assoc_binding(
+            db,
+            table,
+            candidate_assoc_ty,
+            scope,
+            assumptions,
+            resolve_impls,
+        );
+        let goal_assoc_ty =
+            normalize_assoc_binding(db, table, goal_assoc_ty, scope, assumptions, resolve_impls);
+        unify_or_undecided(db, table, candidate_assoc_ty, goal_assoc_ty, resolve_impls)?;
     }
 
     Ok(())
@@ -135,17 +205,20 @@ fn assumption_answers<'db>(
     goal: TraitInstId<'db>,
     scope: ScopeId<'db>,
     assumptions: super::PredicateListId<'db>,
-) -> bool {
-    (!goal.is_mut(db) || assumption.is_mut(db))
-        && unify_trait_inst_with_normalized_assoc_bindings(
-            db,
-            table,
-            assumption,
-            goal,
-            scope,
-            assumptions,
-        )
-        .is_ok()
+    resolve_impls: bool,
+) -> Result<(), Mismatch> {
+    if goal.is_mut(db) && !assumption.is_mut(db) {
+        return Err(Mismatch::Rejected);
+    }
+    unify_trait_inst_with_normalized_assoc_bindings(
+        db,
+        table,
+        assumption,
+        goal,
+        scope,
+        assumptions,
+        resolve_impls,
+    )
 }
 
 /// The position, in `solve_cx`'s extended assumption list, of the first
@@ -157,7 +230,9 @@ pub(crate) fn answering_assumption<'db>(
 ) -> Option<usize> {
     let scope = solve_cx.normalization_scope_for_trait_inst(db, goal);
     let assumptions = solve_cx.assumptions().extend_all_bounds(db);
-    let goal = normalize_trait_inst_preserving_validity(db, goal, scope, assumptions);
+    let resolve_impls = solve_cx.resolve_impls();
+    let goal =
+        normalize_trait_inst_preserving_validity(db, goal, scope, assumptions, resolve_impls);
     assumptions.list(db).iter().position(|&assumption| {
         assumption_answers(
             db,
@@ -166,7 +241,9 @@ pub(crate) fn answering_assumption<'db>(
             goal,
             scope,
             assumptions,
+            resolve_impls,
         )
+        .is_ok()
     })
 }
 
@@ -174,6 +251,7 @@ pub(crate) fn answering_assumption<'db>(
 enum StopReason {
     MaximumTypeDepth,
     TargetFound,
+    UnresolvedProjection,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, salsa::SalsaValue)]
@@ -261,6 +339,9 @@ fn type_depth_growth_exceeded(initial_depth: usize, current_depth: usize) -> boo
 struct TraitResolutionContext<'db> {
     db: &'db dyn HirAnalysisDb,
     origin_ingot: crate::Ingot<'db>,
+    /// Whether goals normalize their projections through impls (see
+    /// [`TraitSolveCx::without_impl_normalization`]).
+    resolve_impls: bool,
     prepared_queries: FxHashMap<Query<'db>, PreparedQuery<'db>>,
     target: Option<TargetAnswer<'db>>,
     type_depth_budget: TypeDepthBudget,
@@ -270,15 +351,25 @@ impl<'db> TraitResolutionContext<'db> {
     fn new(
         db: &'db dyn HirAnalysisDb,
         origin_ingot: crate::Ingot<'db>,
+        resolve_impls: bool,
         root: TraitSolverQuery<'db>,
         target: Option<TargetAnswer<'db>>,
     ) -> Self {
         Self {
             db,
             origin_ingot,
+            resolve_impls,
             prepared_queries: FxHashMap::default(),
             target,
             type_depth_budget: TypeDepthBudget::new(db, root, target),
+        }
+    }
+
+    /// How the search goes on after a candidate does not answer a goal.
+    fn mismatch_transition(mismatch: Mismatch) -> ContextTransition<Self> {
+        match mismatch {
+            Mismatch::Rejected => Transition::Reject,
+            Mismatch::Undecided => Transition::Stop(StopReason::UnresolvedProjection),
         }
     }
 
@@ -294,8 +385,13 @@ impl<'db> TraitResolutionContext<'db> {
             self.origin_ingot,
             query.goal,
         );
-        let normalized_goal =
-            normalize_trait_inst_preserving_validity(self.db, query.goal, scope, query.assumptions);
+        let normalized_goal = normalize_trait_inst_preserving_validity(
+            self.db,
+            query.goal,
+            scope,
+            query.assumptions,
+            self.resolve_impls,
+        );
         let prepared = PreparedQuery {
             table,
             query,
@@ -419,6 +515,21 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         key: &Self::Key,
     ) -> Result<CallbackOutcome<Vec<Self::Clause>, Self::StopReason>, Self::Error> {
         let prepared = self.prepare_query(*key);
+        // Without impl normalization, a goal that still names a projection is
+        // undecided: an impl could resolve the projection.
+        let goal = prepared.normalized_goal;
+        if !self.resolve_impls
+            && (goal
+                .args(self.db)
+                .iter()
+                .any(|ty| ty.has_projection(self.db))
+                || goal
+                    .assoc_type_bindings(self.db)
+                    .values()
+                    .any(|ty| ty.has_projection(self.db)))
+        {
+            return Ok(CallbackOutcome::Stop(StopReason::UnresolvedProjection));
+        }
         // An impl lives in its normalized self type's ingot or its trait's
         // (`trait_impl_admissibility`): `<Option<P> as Unwrap>::Out: Copy` is
         // `P: Copy`, whose impl is in `P`'s ingot, not `Option`'s.
@@ -504,18 +615,18 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                     candidate.trait_inst(self.db),
                     scope,
                     query.assumptions,
+                    self.resolve_impls,
                 );
-                if unify_trait_inst_with_normalized_assoc_bindings(
+                if let Err(mismatch) = unify_trait_inst_with_normalized_assoc_bindings(
                     self.db,
                     &mut table,
                     normalized_candidate,
                     normalized_goal,
                     scope,
                     query.assumptions,
-                )
-                .is_err()
-                {
-                    return Ok(Transition::Reject);
+                    self.resolve_impls,
+                ) {
+                    return Ok(Self::mismatch_transition(mismatch));
                 }
 
                 let constraints = candidate.constraints(self.db);
@@ -540,15 +651,16 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 let Some(&assumption) = query.assumptions.list(self.db).get(index) else {
                     return Ok(Transition::Reject);
                 };
-                if !assumption_answers(
+                if let Err(mismatch) = assumption_answers(
                     self.db,
                     &mut table,
                     assumption,
                     normalized_goal,
                     scope,
                     query.assumptions,
+                    self.resolve_impls,
                 ) {
-                    return Ok(Transition::Reject);
+                    return Ok(Self::mismatch_transition(mismatch));
                 }
                 ImplementorId::assumption(self.db, query.goal.fold_with(self.db, &mut table))
             }
@@ -578,17 +690,16 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 let Some(implementor) = callable_implementor(self.db, normalized_goal) else {
                     return Ok(Transition::Reject);
                 };
-                if unify_trait_inst_with_normalized_assoc_bindings(
+                if let Err(mismatch) = unify_trait_inst_with_normalized_assoc_bindings(
                     self.db,
                     &mut table,
                     implementor.trait_inst(self.db),
                     normalized_goal,
                     scope,
                     query.assumptions,
-                )
-                .is_err()
-                {
-                    return Ok(Transition::Reject);
+                    self.resolve_impls,
+                ) {
+                    return Ok(Self::mismatch_transition(mismatch));
                 }
                 implementor
             }
@@ -624,6 +735,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 pending_goal.fold_with(self.db, &mut branch.table),
                 scope,
                 rebase.assumptions(),
+                self.resolve_impls,
             )
         };
         let normalized_solution = {
@@ -637,14 +749,17 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 solution.fold_with(self.db, &mut branch.table),
                 scope,
                 rebase.assumptions(),
+                self.resolve_impls,
             )
         };
-        if branch
-            .table
-            .unify(normalized_pending, normalized_solution)
-            .is_err()
-        {
-            return Ok(Transition::Reject);
+        if let Err(mismatch) = unify_or_undecided(
+            self.db,
+            &mut branch.table,
+            normalized_pending,
+            normalized_solution,
+            self.resolve_impls,
+        ) {
+            return Ok(Self::mismatch_transition(mismatch));
         }
         let resumed_root = branch.root_goal.fold_with(self.db, &mut branch.table);
         let resumed_assumptions = rebase.assumptions().fold_with(self.db, &mut branch.table);
@@ -777,6 +892,9 @@ fn map_completion(completion: Completion<StopReason>) -> TraitSolveCompletion {
         Completion::TableLimit { limit } => TraitSolveCompletion::TableLimit { limit },
         Completion::PendingWorkLimit { limit } => TraitSolveCompletion::PendingWorkLimit { limit },
         Completion::Adapter(StopReason::MaximumTypeDepth) => TraitSolveCompletion::MaximumTypeDepth,
+        Completion::Adapter(StopReason::UnresolvedProjection) => {
+            TraitSolveCompletion::UnresolvedProjection
+        }
         Completion::Adapter(StopReason::TargetFound) => {
             unreachable!("ordinary trait solving never installs a target")
         }
@@ -787,10 +905,11 @@ pub(super) fn solve<'db>(
     db: &'db dyn HirAnalysisDb,
     origin_ingot: crate::Ingot<'db>,
     query: Query<'db>,
+    resolve_impls: bool,
 ) -> GoalSatisfiability<'db> {
     let mut root_table = PersistentUnificationTable::new(db);
     let root_goal = query.extract_identity(&mut root_table);
-    let mut context = TraitResolutionContext::new(db, origin_ingot, root_goal, None);
+    let mut context = TraitResolutionContext::new(db, origin_ingot, resolve_impls, root_goal, None);
     let mut observer = UnresolvedGoalObserver::default();
     let config = Config {
         limits: Limits {
@@ -842,7 +961,7 @@ pub(super) fn has_solution<'db>(
         inst: target,
         relation,
     };
-    let mut context = TraitResolutionContext::new(db, origin_ingot, root_goal, Some(target));
+    let mut context = TraitResolutionContext::new(db, origin_ingot, true, root_goal, Some(target));
     let options = ReportOptions::default().with_answerless(AnswerlessMode::Omit);
     // A target can occur after a non-regular recursive clause. Fair scheduling
     // keeps that branch from starving later root clauses before the type-depth
@@ -862,7 +981,9 @@ pub(super) fn has_solution<'db>(
         | Completion::StepLimit { .. }
         | Completion::TableLimit { .. }
         | Completion::PendingWorkLimit { .. }
-        | Completion::Adapter(StopReason::MaximumTypeDepth) => TargetSolutionStatus::Incomplete,
+        | Completion::Adapter(StopReason::MaximumTypeDepth | StopReason::UnresolvedProjection) => {
+            TargetSolutionStatus::Incomplete
+        }
     }
 }
 
