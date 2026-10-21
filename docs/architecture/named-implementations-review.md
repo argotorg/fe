@@ -43,8 +43,10 @@ expression interpreter or check-time execution mechanism is introduced.
 
 ## Verification and review scope
 
-The verified implementation is `b67674801d39f4a7cd52c7e728357ed7a281cc0b`;
-this brief and the final semantic clarification change documentation only.
+The original verification below covers
+`b67674801d39f4a7cd52c7e728357ed7a281cc0b`. The post-review identity repair is
+`040bb0cd4116c1acf6eca065ab898d5cda6a2fea`; its additional checks are recorded
+separately below.
 
 - 191 HIR trait tests and the focused 27-test named-evidence suite passed,
   including failed/cyclic chosen prerequisites, inference ordering, captured
@@ -65,7 +67,29 @@ are explicit semantic equivalents, not claimed literal reruns. Review can
 start with `crates/hir/tests/traits/named_evidence.rs` and the executable
 `crates/fe/tests/fixtures/fe_test/named_implementations.fe`.
 
+Independent review found that stable evidence identities omitted selected
+implementation arguments absent from the trait header. The repair includes
+every instantiated implementation argument through the existing stable type
+and constant renderer. A paired-call regression fails before the repair and
+passes afterward for explicit type arguments, constant arguments and captured
+generic arguments. All four stable-key tests pass, preserving ordinary sharing
+and allocation-order independence. The expanded 7/9 runtime fixture passes
+native execution at O0/O1 both before and after the repair, so this establishes
+an identity collision, not a demonstrated runtime miscompile. Strict workspace
+Clippy and formatting pass after the repair.
+
+A bounded follow-up found a remaining limit around transitive supertrait
+projection and constant-default signatures. A direct literal constant access
+can be accepted where the corresponding generic-bound call is rejected, but a
+coherent transitive-diamond control also fails in the callable path. Adding
+only the callable's missing-evidence diagnostic to constants is therefore not
+a complete repair. This remains a separate investigation; no constant-reference
+change or claim of correct behavior for arbitrary transitive diamonds is included
+in the identity repair.
+
 The recommendation is to replace the previous named-implementation stack
 with this evidence-based candidate after independent review. The three
 rulings above are concrete recommendations, not unresolved implementation
-branches. Prior branches and repair checkpoints remain preserved.
+branches. The remaining projection limit needs follow-up before claiming those
+rules are implemented for every composition. Prior branches and repair
+checkpoints remain preserved.
