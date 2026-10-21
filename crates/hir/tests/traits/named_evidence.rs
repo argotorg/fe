@@ -328,6 +328,15 @@ const fn chosen() -> u256 {{ with (Discount) {{ diamond<Box<Item>>() }} }}
 "#
     ));
     assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+    let codes = diagnostics(&format!(
+        r#"{PICKS}
+trait Sub: Pick {{}}
+impl Sub for Item {{}}
+const fn both<T: Sub + Pick>() -> u256 {{ T::value() }}
+const fn chosen() -> u256 {{ with (Discount) {{ both<Item>() }} }}
+"#
+    ));
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
 }
 
 #[test]
@@ -555,5 +564,29 @@ const fn chosen() -> u256 { generic<Arg>() }
 const fn other() -> u256 { generic<Other>() }
 "#,
         &[("chosen", 77), ("other", 97)],
+    );
+}
+
+#[test]
+fn choice_priority_preserves_joint_ordinary_argument_inference() {
+    values(
+        r#"struct Item {}
+struct One {}
+struct Two {}
+struct Three {}
+trait A<X> { const fn value() -> u256 }
+trait B<X> {}
+impl A<One> for Item { const fn value() -> u256 { 1 } }
+impl A<Two> for Item { const fn value() -> u256 { 2 } }
+impl B<Two> for Item {}
+impl B<Three> for Item {}
+impl A<One> for Item as ChosenA { const fn value() -> u256 { 7 } }
+impl B<Three> for Item as ChosenB {}
+trait Total<X> { const fn total() -> u256 }
+impl<X> Total<X> for Item where Item: A<X> + B<X> { const fn total() -> u256 { <Item as A<X>>::value() } }
+const fn infer<T: Total<X>, X>(_ item: T) -> u256 { T::total() }
+const fn chosen() -> u256 { with (ChosenA, ChosenB) { infer(Item {}) } }
+"#,
+        &[("chosen", 2)],
     );
 }

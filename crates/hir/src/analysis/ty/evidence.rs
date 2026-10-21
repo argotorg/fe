@@ -349,23 +349,27 @@ pub(crate) fn declared_bound_evidence<'db>(
                     return None;
                 }
                 let goal = substitute_complete(db, bound, subst).ok()?;
-                if declared.list(db).contains(&bound) {
-                    if is_closed_goal(db, goal)
-                        && solve_cx.choices().is_none()
-                        && !assumptions.list(db).contains(&goal)
-                    {
-                        return None;
-                    }
-                    return declared_proof(goal);
+                let directly_declared = declared.list(db).contains(&bound);
+                if directly_declared
+                    && is_closed_goal(db, goal)
+                    && solve_cx.choices().is_none()
+                    && !assumptions.list(db).contains(&goal)
+                {
+                    return None;
                 }
-                // An implied slot belongs to a declared proof. Re-solving the slot
-                // under ambient choices would allow an unrelated override to split it.
-                let mut answer = None;
+                let mut answer = if directly_declared {
+                    Some(declared_proof(goal)?)
+                } else {
+                    None
+                };
+                // A slot must agree with every declared dictionary that implies it,
+                // including when the same bound is also written explicitly.
                 for &root in declared.list(db) {
-                    if !PredicateListId::new(db, vec![root])
-                        .extend_all_bounds(db)
-                        .list(db)
-                        .contains(&bound)
+                    if root == bound
+                        || !PredicateListId::new(db, vec![root])
+                            .extend_all_bounds(db)
+                            .list(db)
+                            .contains(&bound)
                     {
                         continue;
                     }
