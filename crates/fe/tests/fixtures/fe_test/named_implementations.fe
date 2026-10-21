@@ -21,12 +21,35 @@ impl Sub for Item {}
 fn via_sub<T: Sub>() -> (u256, u256) { (T::value(), T::extra()) }
 
 struct Other {}
+struct Arg {}
+trait Value { fn amount() -> u256 }
+impl Value for Arg { fn amount() -> u256 { 7 } }
+impl Value for Other { fn amount() -> u256 { 9 } }
+impl<T: Value> Pick for Item as Chosen {
+    fn value() -> u256 { T::amount() }
+}
+impl<const N: u256> Pick for Item as Number {
+    fn value() -> u256 { N }
+}
+fn captured<T: Value>() -> u256 {
+    impl Pick for Item as Local where T: Value {
+        fn value() -> u256 { T::amount() }
+    }
+    with (Local) { read<Item>() }
+}
+
 fn local<T: Pick>() -> u256 {
     impl Pick for Other as Local where T: Pick { fn value() -> u256 { T::value() } }
     with (Local) { Other::value() }
 }
 
 fn exercise() {
+    with (Chosen<Arg>) { assert!(read<Item>() == 7) }
+    with (Chosen<Other>) { assert!(read<Item>() == 9) }
+    with (Number<7>) { assert!(read<Item>() == 7) }
+    with (Number<9>) { assert!(read<Item>() == 9) }
+    assert!(captured<Arg>() == 7)
+    assert!(captured<Other>() == 9)
     assert!(relay<Item>() == 100)
     assert!(local<Item>() == 100)
     with (Discount) {

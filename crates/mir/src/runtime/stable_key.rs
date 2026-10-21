@@ -418,8 +418,20 @@ fn evidence_id_identity<'db>(db: &'db dyn HirAnalysisDb, ev: EvidenceId<'db>) ->
                 ImplementorOrigin::Callable => "callable".to_string(),
                 ImplementorOrigin::Structural => "structural".to_string(),
             };
+            // An implementation can capture or explicitly accept arguments
+            // absent from its trait header. Ordinary condition proofs are
+            // intentionally shared below, so they cannot recover these args.
+            let instance = ev
+                .answering(db, instantiated.trait_inst(db))
+                .expect("implementation evidence has an instantiated implementation");
+            let params = instance
+                .impl_args(db)
+                .iter()
+                .map(|arg| type_identity(db, *arg))
+                .collect::<Vec<_>>()
+                .join("$");
             let base = format!(
-                "{origin}${}",
+                "{origin}${}$params$[{params}]",
                 trait_identity(db, instantiated.trait_inst(db))
             );
             if conds.is_empty() {
@@ -1074,6 +1086,107 @@ const fn call_after() -> u256 {
             body_owner_trace_identity(&db, inner_after.key(&db).owner(&db))
         );
         assert_pairwise_distinct_instances(&db, &[inner_before, inner_alt20, inner_alt30]);
+    }
+
+    #[test]
+    fn stable_keys_preserve_impl_arguments_absent_from_trait_headers() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "applied_choice_identity.fe".into(),
+            r#"
+struct Item {}
+struct Arg {}
+struct Other {}
+trait Value { fn value() -> u256 }
+impl Value for Arg { fn value() -> u256 { 7 } }
+impl Value for Other { fn value() -> u256 { 9 } }
+trait Pick { fn pick() -> u256 }
+impl<T: Value> Pick for Item as Chosen {
+    fn pick() -> u256 { T::value() }
+}
+impl<const N: u256> Pick for Item as Number {
+    fn pick() -> u256 { N }
+}
+fn helper<T: Pick>() -> u256 { T::pick() }
+fn explicit() -> u256 {
+    let first = with (Chosen<Arg>) { helper<Item>() }
+    let second = with (Chosen<Other>) { helper<Item>() }
+    first + second
+}
+fn constants() -> u256 {
+    let first = with (Number<7>) { helper<Item>() }
+    let second = with (Number<9>) { helper<Item>() }
+    first + second
+}
+fn captured<T: Value>() -> u256 {
+    impl Pick for Item as Local where T: Value {
+        fn pick() -> u256 { T::value() }
+    }
+    with (Local) { helper<Item>() }
+}
+fn captures() -> u256 { captured<Arg>() + captured<Other>() }
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let function = |name: &str| {
+            top_mod
+                .children_non_nested(&db)
+                .find_map(|item| match item {
+                    ItemKind::Func(func)
+                        if func.name(&db).to_opt().is_some_and(|n| n.data(&db) == name) =>
+                    {
+                        Some(func)
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let root = |name: &str| {
+            SemanticInstance::new(
+                &db,
+                root_semantic_instance_key(&db, BodyOwner::Func(function(name), None)).unwrap(),
+            )
+        };
+        fn helper_instances<'db>(
+            db: &'db HirAnalysisTestDb,
+            instance: SemanticInstance<'db>,
+            helper: BodyOwner<'db>,
+        ) -> Vec<SemanticInstance<'db>> {
+            instance
+                .callees(db)
+                .iter()
+                .filter(|callee| callee.key.owner(db) == helper)
+                .map(|callee| SemanticInstance::new(db, callee.key))
+                .collect::<Vec<_>>()
+        }
+        let helper = BodyOwner::Func(function("helper"), None);
+        let helpers = |instance| helper_instances(&db, instance, helper);
+        let captures = root("captures")
+            .callees(&db)
+            .iter()
+            .flat_map(|callee| helpers(SemanticInstance::new(&db, callee.key)))
+            .collect::<Vec<_>>();
+        for (kind, instances) in [
+            ("explicit type arguments", helpers(root("explicit"))),
+            ("explicit constant arguments", helpers(root("constants"))),
+            ("captured type arguments", captures),
+        ] {
+            assert_eq!(instances.len(), 2, "{kind}");
+            let [first, second] = [instances[0], instances[1]];
+            assert_eq!(first.key(&db).owner(&db), second.key(&db).owner(&db));
+            assert_ne!(first.key(&db), second.key(&db), "distinct proofs: {kind}");
+            assert_ne!(
+                semantic_instance_identity(&db, first),
+                semantic_instance_identity(&db, second),
+                "sort identity must retain {kind}"
+            );
+            assert_ne!(
+                semantic_instance_symbol_identity(&db, first),
+                semantic_instance_symbol_identity(&db, second),
+                "symbol identity must retain {kind}"
+            );
+        }
     }
 
     #[test]
