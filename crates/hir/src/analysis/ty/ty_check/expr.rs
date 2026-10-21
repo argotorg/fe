@@ -1810,11 +1810,19 @@ impl<'db> TyChecker<'db> {
                         &LoweringContext::new(),
                     );
                     let owner = implementation.hir_impl_trait(self.db);
+                    let inherited = crate::hir_def::GenericParamOwner::from(owner)
+                        .parent(self.db)
+                        .map(|parent| {
+                            super::super::ty_lower::collect_generic_params(self.db, parent)
+                                .params(self.db)
+                                .to_vec()
+                        })
+                        .unwrap_or_default();
                     let args =
                         match super::super::ty_lower::collect_generic_params(self.db, owner.into())
                             .complete_args(
                             self.db,
-                            &[],
+                            &inherited,
                             &args,
                             super::super::generic_defaults::DefaultApplication::StructuralMetadata(
                                 &LoweringContext::new(),
@@ -1837,7 +1845,7 @@ impl<'db> TyChecker<'db> {
                                 continue;
                             }
                         };
-                    let expected = implementation.params(self.db).len();
+                    let expected = implementation.params(self.db).len() - inherited.len();
                     if args.len() != expected {
                         self.push_diag(BodyDiag::CallGenericArgNumMismatch {
                             primary: binding.value.span(self.body()).into(),
@@ -1850,6 +1858,7 @@ impl<'db> TyChecker<'db> {
                             .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
                         continue;
                     }
+                    let args = inherited.into_iter().chain(args).collect::<Vec<_>>();
                     let applied = super::super::binder::Binder::bind(owner.into(), implementation)
                         .instantiate(self.db, &args);
                     super::super::trait_resolution::ChosenImpls::push_applied(

@@ -20,10 +20,18 @@ trait Sub: Pick { fn extra() -> u256 { Self::value() + 1 } }
 impl Sub for Item {}
 fn via_sub<T: Sub>() -> (u256, u256) { (T::value(), T::extra()) }
 
+struct Other {}
+fn local<T: Pick>() -> u256 {
+    impl Pick for Other as Local where T: Pick { fn value() -> u256 { T::value() } }
+    with (Local) { Other::value() }
+}
+
 fn exercise() {
     assert!(relay<Item>() == 100)
+    assert!(local<Item>() == 100)
     with (Discount) {
         assert!(relay<Item>() == 70)
+        assert!(local<Item>() == 70)
         assert!(concrete() == 100)
         let split = both<Item>()
         assert!(split.0 == 70 && split.1 == 100)

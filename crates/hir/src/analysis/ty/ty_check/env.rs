@@ -311,10 +311,24 @@ impl<'db> TyCheckEnv<'db> {
                 {
                     super::super::trait_lower::lower_impl_trait(db, implementation).map(
                         |implementation| {
-                            super::super::trait_resolution::ChosenImpls::push(
+                            let owner = implementation.hir_impl_trait(db);
+                            let mut args = implementation.params(db).clone();
+                            if let Some(parent) =
+                                crate::hir_def::GenericParamOwner::from(owner).parent(db)
+                            {
+                                let inherited =
+                                    super::super::ty_lower::collect_generic_params(db, parent)
+                                        .params(db);
+                                args[..inherited.len()].copy_from_slice(inherited);
+                            }
+                            let applied =
+                                super::super::binder::Binder::bind(owner.into(), implementation)
+                                    .instantiate(db, &args);
+                            super::super::trait_resolution::ChosenImpls::push_applied(
                                 db,
                                 None,
                                 implementation,
+                                applied,
                             )
                         },
                     )
@@ -1686,6 +1700,11 @@ impl<'db> TyCheckEnv<'db> {
             for call in &mut plan.calls {
                 call.callable.record_evidence(self.db, solve_cx);
                 call.callable.record_bound_evidence(self.db, solve_cx);
+                if solve_cx.choices().is_some() {
+                    for goal in call.callable.missing_bound_evidence(self.db) {
+                        diags.push(failed_proof(goal, stmt.span(self.body).into()));
+                    }
+                }
                 if solve_cx.choices().is_some()
                     && call.callable.evidence().is_none()
                     && let Some(goal) = call.callable.trait_inst()

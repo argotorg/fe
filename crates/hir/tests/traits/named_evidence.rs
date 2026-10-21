@@ -511,3 +511,49 @@ const fn chosen() -> u256 { with (Discount) { infer(Item {}) } }
         &[("chosen", 70)],
     );
 }
+
+#[test]
+fn applied_named_conditions_keep_arguments_absent_from_the_header() {
+    values(
+        r#"
+struct Item {}
+struct Arg {}
+trait Value { const fn value() -> u256 }
+impl Value for Arg { const fn value() -> u256 { 7 } }
+trait Pick {
+    const fn pick() -> u256
+    const fn base() -> u256
+}
+impl<T: Value> Pick for Item as Chosen {
+    const fn base() -> u256 { T::value() }
+    const fn pick() -> u256 { Self::base() }
+}
+const fn chosen() -> u256 { with (Chosen<Arg>) { Item::pick() } }
+"#,
+        &[("chosen", 7)],
+    );
+}
+
+#[test]
+fn local_named_conditions_keep_captured_arguments_absent_from_the_header() {
+    values(
+        r#"
+struct Item {}
+struct Arg {}
+struct Other {}
+trait Value { const fn value() -> u256 }
+impl Value for Arg { const fn value() -> u256 { 7 } }
+impl Value for Other { const fn value() -> u256 { 9 } }
+trait Pick { const fn pick() -> u256 }
+const fn generic<T: Value>() -> u256 {
+    impl<U: Value> Pick for Item as Local where T: Value {
+        const fn pick() -> u256 { T::value() * 10 + U::value() }
+    }
+    with (Local<Arg>) { Item::pick() }
+}
+const fn chosen() -> u256 { generic<Arg>() }
+const fn other() -> u256 { generic<Other>() }
+"#,
+        &[("chosen", 77), ("other", 97)],
+    );
+}

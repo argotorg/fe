@@ -54,7 +54,19 @@ impl<'db> ChosenImpl<'db> {
         self.applied.unwrap_or_else(|| {
             let db = table.db;
             if let super::trait_def::ImplementorOrigin::Hir(owner) = self.template.origin(db) {
-                let params = table.instantiate_with_fresh_vars(self.template.params(db).clone());
+                let inherited = crate::hir_def::GenericParamOwner::from(owner)
+                    .parent(db)
+                    .filter(|_| owner.selection_name(db).is_some())
+                    .map(|parent| {
+                        super::ty_lower::collect_generic_params(db, parent)
+                            .params(db)
+                            .to_vec()
+                    })
+                    .unwrap_or_default();
+                let mut params = inherited;
+                params.extend(table.instantiate_with_fresh_vars(
+                    self.template.params(db)[params.len()..].to_vec(),
+                ));
                 super::binder::Binder::bind(owner.into(), self.template).instantiate(db, &params)
             } else {
                 table.instantiate_with_fresh_vars(self.template)

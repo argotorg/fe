@@ -487,9 +487,42 @@ fn resolve_trait_impl_instance_query<'db>(
     let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
     let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
     match solve_cx.select_impl(db, inst) {
-        Selection::Unique(selected) => complete_selected_impl(db, selected)
-            .and_then(|selected| instantiate_selected_impl(db, selected, inst))
-            .map_or(ImplSelection::NotFound, ImplSelection::Unique),
+        Selection::Unique(selected) => {
+            let Some(selected) = complete_selected_impl(db, selected) else {
+                return ImplSelection::NotFound;
+            };
+            // A selected name can supply arguments absent from the trait head.
+            // Keep its application (and captured outer parameters) instead of
+            // attempting to reconstruct all implementation arguments from `inst`.
+            if let Some(choices) = solve_cx.choices() {
+                for &choice in choices.items(db).iter().rev() {
+                    if choice.template.origin(db) != selected.origin(db) {
+                        continue;
+                    }
+                    let mut table = UnificationTable::new(db);
+                    let instantiated = super::trait_resolution::ChosenImpl {
+                        template: selected,
+                        ..choice
+                    }
+                    .instantiate(&mut table);
+                    if instantiated
+                        .trait_inst(db)
+                        .args(db)
+                        .iter()
+                        .zip(inst.args(db))
+                        .all(|(&candidate, &goal)| table.unify(candidate, goal).is_ok())
+                    {
+                        return ImplSelection::Unique(ResolvedImplInstance {
+                            selected,
+                            instantiated: instantiated.fold_with(db, &mut table),
+                            trait_inst: inst.fold_with(db, &mut table),
+                        });
+                    }
+                }
+            }
+            instantiate_selected_impl(db, selected, inst)
+                .map_or(ImplSelection::NotFound, ImplSelection::Unique)
+        }
         // There is deliberately no resolved instance for a non-unique
         // selection. Re-unifying each candidate would both fabricate evidence
         // the caller must not consume and attempt to fold inference variables

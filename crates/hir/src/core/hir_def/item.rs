@@ -317,7 +317,14 @@ impl<'db> GenericParamOwner<'db> {
     }
 
     pub fn parent(self, db: &'db dyn HirDb) -> Option<Self> {
-        let ScopeId::Item(item) = self.scope().parent(db)? else {
+        let mut scope = self.scope().parent(db)?;
+        if matches!(self, Self::ImplTrait(implementation) if implementation.selection_name(db).is_some())
+        {
+            while !matches!(scope, ScopeId::Item(item) if Self::from_item_opt(item).is_some()) {
+                scope = scope.parent(db)?;
+            }
+        }
+        let ScopeId::Item(item) = scope else {
             return None;
         };
 

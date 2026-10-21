@@ -16,6 +16,8 @@ const fn chosen() -> u256 { with (Wholesale) { price<Item>() } }
 `chosen()` returns 70. A named implementation is unavailable to ordinary
 implicit selection. Its name is private unless declared with `pub impl`;
 normal lexical scopes, imports and module visibility apply to the name.
+A local named implementation inherits its enclosing generic parameters; its
+explicit parameters follow them and can be supplied as `Name<Args>`.
 
 A `with` operand adds a candidate for every matching trait goal, including
 conditions of other implementations. The nearest matching operand wins.

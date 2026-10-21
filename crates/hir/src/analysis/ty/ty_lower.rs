@@ -1001,6 +1001,11 @@ impl<'db> ParamSchemaId<'db> {
             GenericParamOwner::Func(func) if func.is_associated_func(db) => {
                 Some(Self::full(db, self.owner(db).parent(db)?))
             }
+            GenericParamOwner::ImplTrait(implementation)
+                if implementation.selection_name(db).is_some() =>
+            {
+                Some(Self::full(db, self.owner(db).parent(db)?))
+            }
             _ => None,
         }
     }
@@ -1281,13 +1286,14 @@ pub fn param_schema<'db>(
     };
     debug_assert_eq!(set.basis(db), basis);
     let mut keys = vec![None; set.params_precursor(db).len()];
-    if let GenericParamOwner::Func(func) = owner
-        && func.is_associated_func(db)
-        && let Some(parent) = owner.parent(db)
+    if matches!(owner, GenericParamOwner::Func(func) if func.is_associated_func(db))
+        || matches!(owner, GenericParamOwner::ImplTrait(implementation) if implementation.selection_name(db).is_some())
     {
-        let parent_schema = param_schema(db, parent, ParamBasis::Full);
-        for (slot, key) in parent_schema.keys(db).iter().copied().enumerate() {
-            keys[slot] = Some(key);
+        if let Some(parent) = owner.parent(db) {
+            let parent_schema = param_schema(db, parent, ParamBasis::Full);
+            for (slot, key) in parent_schema.keys(db).iter().copied().enumerate() {
+                keys[slot] = Some(key);
+            }
         }
     } else if let GenericParamOwner::Trait(trait_) = owner
         && let Some(first) = keys.first_mut()
@@ -1396,6 +1402,15 @@ impl<'db> GenericParamCollector<'db> {
 
             GenericParamOwner::Func(func) if func.is_associated_func(db) => {
                 func_inherited_param_precursors(db, func)
+            }
+            GenericParamOwner::ImplTrait(implementation)
+                if implementation.selection_name(db).is_some() =>
+            {
+                owner.parent(db).map_or_else(Vec::new, |parent| {
+                    collect_generic_params(db, parent)
+                        .params_precursor(db)
+                        .to_vec()
+                })
             }
 
             _ => vec![],
