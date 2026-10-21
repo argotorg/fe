@@ -7,8 +7,8 @@ use crate::{
     span::DynLazySpan,
 };
 
-use crate::hir_def::CallableDef;
 use crate::hir_def::params::{FuncParam, FuncParamMode};
+use crate::hir_def::{CallableDef, ItemKind};
 use common::indexmap::IndexMap;
 use cranelift_entity::{PrimaryMap, SecondaryMap};
 use num_bigint::BigInt;
@@ -134,6 +134,9 @@ pub(crate) struct TyCheckEnv<'db> {
     resolved_field_index: SecondaryMap<ExprId, Option<u16>>,
 
     deferred: Vec<DeferredTask<'db>>,
+    pub(super) choices: Option<super::super::trait_resolution::ChosenImpls<'db>>,
+    expr_choices: SecondaryMap<ExprId, Option<super::super::trait_resolution::ChosenImpls<'db>>>,
+    stmt_choices: SecondaryMap<StmtId, Option<super::super::trait_resolution::ChosenImpls<'db>>>,
 
     effect_env: keyed_effect_env::EffectEnv<'db>,
     effect_bounds: ThinVec<TraitInstId<'db>>,
@@ -208,6 +211,7 @@ pub(crate) struct TyCheckEnv<'db> {
     /// The calls `f(..)` of callable values, whose callee is the receiver.
     value_calls: FxHashSet<ExprId>,
     covered_providers: FxHashSet<ExprId>,
+    pub(super) named_impl_operands: FxHashSet<ExprId>,
     /// The part of a projection's return shape each yield site grants.
     yield_shapes: SecondaryMap<ExprId, Option<Shape<'db>>>,
 
@@ -301,6 +305,24 @@ impl<'db> TyCheckEnv<'db> {
             closure_infos: SecondaryMap::new(),
             resolved_field_index: SecondaryMap::new(),
             deferred: Vec::new(),
+            choices: match owner_scope.parent_item(db) {
+                Some(ItemKind::ImplTrait(implementation))
+                    if implementation.selection_name(db).is_some() =>
+                {
+                    super::super::trait_lower::lower_impl_trait(db, implementation).map(
+                        |implementation| {
+                            super::super::trait_resolution::ChosenImpls::push(
+                                db,
+                                None,
+                                implementation,
+                            )
+                        },
+                    )
+                }
+                _ => None,
+            },
+            expr_choices: SecondaryMap::new(),
+            stmt_choices: SecondaryMap::new(),
             effect_env: keyed_effect_env::EffectEnv::new(),
             effect_bounds: ThinVec::new(),
             base_assumptions,
@@ -336,6 +358,7 @@ impl<'db> TyCheckEnv<'db> {
             product_args: FxHashSet::default(),
             value_calls: FxHashSet::default(),
             covered_providers: FxHashSet::default(),
+            named_impl_operands: FxHashSet::default(),
             yield_shapes: SecondaryMap::new(),
             for_loop_plans: SecondaryMap::new(),
             path_applications: Vec::new(),
@@ -730,6 +753,7 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn register_for_loop_plan(&mut self, stmt: StmtId, plan: ForLoopPlan<'db>) {
+        self.stmt_choices[stmt] = self.choices;
         if self.for_loop_plans[stmt].replace(plan).is_some() {
             panic!("for loop seq is already registered for the given stmt")
         }
@@ -824,9 +848,23 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(crate) fn assumptions(&self) -> PredicateListId<'db> {
-        // Return the assumptions we computed in new, which includes
-        // both generic bounds (if any) AND the effect parameter bounds.
-        self.assumptions
+        let Some(choices) = self.choices else {
+            return self.assumptions;
+        };
+        let mut assumptions = self.assumptions.list(self.db).clone();
+        assumptions.extend(
+            choices
+                .items(self.db)
+                .iter()
+                .map(|choice| choice.implementation().trait_inst(self.db)),
+        );
+        PredicateListId::new(self.db, assumptions).extend_all_bounds(self.db)
+    }
+
+    pub(super) fn solve_cx(&self) -> TraitSolveCx<'db> {
+        TraitSolveCx::new(self.db, self.scope())
+            .with_assumptions(self.assumptions())
+            .with_choices(self.choices)
     }
 
     pub(crate) fn base_assumptions(&self) -> PredicateListId<'db> {
@@ -1394,6 +1432,9 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn enter_expr(&mut self, expr: ExprId) {
+        if self.choices.is_some() {
+            self.expr_choices[expr] = self.choices;
+        }
         self.expr_stack.push(expr);
     }
 
@@ -1491,7 +1532,8 @@ impl<'db> TyCheckEnv<'db> {
         self.pending_vars.clear();
     }
 
-    pub(super) fn register_trait_obligation(&mut self, obligation: TraitObligation<'db>) {
+    pub(super) fn register_trait_obligation(&mut self, mut obligation: TraitObligation<'db>) {
+        obligation.choices = self.choices;
         self.deferred.push(DeferredTask::Obligation(obligation))
     }
 
@@ -1538,7 +1580,11 @@ impl<'db> TyCheckEnv<'db> {
     /// expression types, and callables, all of which have been folded with
     /// the unification table.
     ///
-    pub(super) fn finish(mut self, table: &mut UnificationTable<'db>) -> TypedBody<'db> {
+    pub(super) fn finish(
+        mut self,
+        table: &mut UnificationTable<'db>,
+        diags: &mut Vec<super::super::diagnostics::FuncBodyDiag<'db>>,
+    ) -> TypedBody<'db> {
         let mut prober = Prober {
             table,
             scope: self.scope(),
@@ -1593,25 +1639,77 @@ impl<'db> TyCheckEnv<'db> {
             .values_mut()
             .flatten()
             .for_each(|plan| *plan = plan.clone().fold_with(self.db, &mut prober));
+        let failed_proof = |goal: TraitInstId<'db>, span: DynLazySpan<'db>| {
+            super::super::diagnostics::FuncBodyDiag::from(
+                super::super::diagnostics::TyDiagCollection::from(
+                    super::super::diagnostics::TraitConstraintDiag::TraitBoundNotSat {
+                        span,
+                        primary_goal: goal,
+                        unsat_subgoal: None,
+                        required_by: None,
+                    },
+                ),
+            )
+        };
         // Each trait goal a call or constant uses is now final: prove it once,
         // here, for every later stage.
         let solve_cx = TraitSolveCx::new(self.db, prober.scope).with_assumptions(assumptions);
-        for lowering in self.semantic_expr_lowering.values_mut().flatten() {
+        for (expr, lowering) in self.semantic_expr_lowering.iter_mut() {
+            let Some(lowering) = lowering else {
+                continue;
+            };
+            let solve_cx = solve_cx.with_choices(self.expr_choices[expr]);
             let callable = lowering.callable_mut();
             callable.record_evidence(self.db, solve_cx);
             callable.record_bound_evidence(self.db, solve_cx);
+            if solve_cx.choices().is_some() {
+                for goal in callable.missing_bound_evidence(self.db) {
+                    diags.push(failed_proof(goal, expr.span(self.body).into()));
+                }
+            }
+            if solve_cx.choices().is_some()
+                && callable.evidence().is_none()
+                && let Some(goal) = callable.trait_inst()
+                && !super::super::visitor::collect_flags(self.db, goal).intersects(
+                    super::super::ty_def::TyFlags::HAS_VAR
+                        | super::super::ty_def::TyFlags::HAS_INVALID,
+                )
+            {
+                diags.push(failed_proof(goal, expr.span(self.body).into()));
+            }
         }
-        for plan in self.for_loop_plans.values_mut().flatten() {
+        for (stmt, plan) in self.for_loop_plans.iter_mut() {
+            let Some(plan) = plan else {
+                continue;
+            };
+            let solve_cx = solve_cx.with_choices(self.stmt_choices[stmt]);
             for call in &mut plan.calls {
                 call.callable.record_evidence(self.db, solve_cx);
                 call.callable.record_bound_evidence(self.db, solve_cx);
+                if solve_cx.choices().is_some()
+                    && call.callable.evidence().is_none()
+                    && let Some(goal) = call.callable.trait_inst()
+                {
+                    diags.push(failed_proof(goal, stmt.span(self.body).into()));
+                }
             }
         }
-        for const_ref in self.const_refs.values_mut().flatten() {
+        for (expr, const_ref) in self.const_refs.iter_mut() {
+            let Some(const_ref) = const_ref else {
+                continue;
+            };
+            let choices = self.expr_choices[expr];
             if let ConstRef::TraitConst { use_, evidence, .. } = const_ref {
-                *evidence = prove(self.db, use_.solve_cx(self.db), use_.inst());
+                *evidence = prove(
+                    self.db,
+                    use_.solve_cx(self.db).with_choices(choices),
+                    use_.inst(),
+                );
+                if choices.is_some() && evidence.is_none() {
+                    diags.push(failed_proof(use_.inst(), expr.span(self.body).into()));
+                }
             }
-            const_ref.record_bound_evidence(self.db);
+            const_ref.record_bound_evidence(self.db, choices);
         }
         self.closure_infos
             .values_mut()
@@ -1660,6 +1758,8 @@ impl<'db> TyCheckEnv<'db> {
             matched_places: self.matched_places,
             inspected_places: self.inspected_places,
             covered_providers: self.covered_providers,
+            named_impl_operands: self.named_impl_operands,
+            expr_choices: self.expr_choices,
             const_refs: self.const_refs,
             value_path_refs: self.value_path_refs,
             semantic_expr_lowering: self.semantic_expr_lowering,
@@ -2638,6 +2738,7 @@ pub(super) struct TraitObligation<'db> {
     pub goal: TraitInstId<'db>,
     pub origin: TraitObligationOrigin<'db>,
     pub span: DynLazySpan<'db>,
+    pub choices: Option<super::super::trait_resolution::ChosenImpls<'db>>,
 }
 
 impl<'db> TyCheckEnv<'db> {}

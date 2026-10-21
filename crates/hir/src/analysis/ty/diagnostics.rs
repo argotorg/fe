@@ -517,6 +517,10 @@ pub enum MarkerPosition {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum BodyDiag<'db> {
+    ChosenTypeRead {
+        primary: DynLazySpan<'db>,
+        goal: TraitInstId<'db>,
+    },
     TypeMismatch {
         span: DynLazySpan<'db>,
         expected: TyId<'db>,
@@ -1555,12 +1559,45 @@ impl<'db> BodyDiag<'db> {
             Self::ConstFnEffectfulCall { .. } => 63,
             Self::UnsafeDerefRequiresUnsafe { .. } => 96,
             Self::UnsafeCallRequiresUnsafe { .. } => 97,
+            Self::ChosenTypeRead { .. } => 130,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum TraitLowerDiag<'db> {
+    NamedOutputsNeedOrdinary {
+        primary: ImplTrait<'db>,
+    },
+    NamedAssociatedConstMismatch {
+        primary: ImplTrait<'db>,
+        with: ImplTrait<'db>,
+        name: IdentId<'db>,
+    },
+    NamedAssociatedTypeMismatch {
+        primary: ImplTrait<'db>,
+        name: IdentId<'db>,
+        expected: TyId<'db>,
+        given: TyId<'db>,
+    },
+    /// Named implementations of a slot with no ordinary implementation
+    /// agree on its associated types.
+    NamedAssociatedTypeDisagreement {
+        primary: ImplTrait<'db>,
+        with: ImplTrait<'db>,
+        name: IdentId<'db>,
+        expected: TyId<'db>,
+        given: TyId<'db>,
+    },
+    /// A named implementation gives a slot's associated effect row as
+    /// the slot's ordinary implementation does, or, with none, as each
+    /// other named implementation does.
+    NamedAssociatedRowMismatch {
+        primary: ImplTrait<'db>,
+        with: ImplTrait<'db>,
+        ordinary: bool,
+        name: IdentId<'db>,
+    },
     ConflictTraitImpl {
         primary: ImplTrait<'db>,
         conflict_with: ImplTrait<'db>,
@@ -1591,7 +1628,12 @@ impl TraitLowerDiag<'_> {
             Self::CyclicSuperTraits { .. } => 2,
             Self::CyclicTraitRef(_) => 3,
             Self::UnsafeLocalBoundBlanketImpl(_) => 4,
-            Self::AccessItemDefault { .. } => 5,
+            Self::AccessItemDefault { .. }
+            | Self::NamedAssociatedTypeMismatch { .. }
+            | Self::NamedAssociatedTypeDisagreement { .. }
+            | Self::NamedAssociatedRowMismatch { .. }
+            | Self::NamedAssociatedConstMismatch { .. }
+            | Self::NamedOutputsNeedOrdinary { .. } => 5,
             Self::ImplHeaderAssocTypeBinding { .. } => 6,
         }
     }

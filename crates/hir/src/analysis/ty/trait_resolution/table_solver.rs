@@ -23,7 +23,7 @@ use super::{
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        canonical::{Canonical, Solution},
+        canonical::{Canonical, Canonicalized, Solution},
         clearable::clearable_implementor,
         closure::callable_implementor,
         fold::TyFoldable,
@@ -88,6 +88,38 @@ fn impl_header_may_match<'db>(
             .iter()
             .zip(goal.args(db))
             .all(|(&header, &goal)| may_unify(db, header, goal))
+}
+
+/// Select a lexical header before checking its conditions. A failing explicit
+/// candidate does not silently fall back to an ordinary implementation.
+pub(super) fn matching_choice<'db>(
+    db: &'db dyn HirAnalysisDb,
+    choices: Option<super::ChosenImpls<'db>>,
+    goal: TraitInstId<'db>,
+) -> Option<ImplementorId<'db>> {
+    let choices = choices?;
+    choices
+        .items(db)
+        .iter()
+        .rev()
+        .copied()
+        .find(|&choice| {
+            let implementation = choice.implementation();
+            if implementation.trait_inst(db).def(db) != goal.def(db)
+                || !impl_header_may_match(db, implementation, goal)
+            {
+                return false;
+            }
+            let mut table = PersistentUnificationTable::new(db);
+            let candidate = choice.instantiate(&mut table);
+            table
+                .unify(
+                    trait_inst_head(db, candidate.trait_inst(db)),
+                    trait_inst_head(db, goal),
+                )
+                .is_ok()
+        })
+        .map(|choice| choice.template)
 }
 
 fn normalize_assoc_binding<'db>(
@@ -172,6 +204,7 @@ pub(crate) fn answering_assumption<'db>(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StopReason {
+    UnresolvedChoice,
     MaximumTypeDepth,
     TargetFound,
 }
@@ -192,6 +225,7 @@ pub(crate) enum TargetSolutionMatch {
 #[derive(Clone, Copy)]
 enum Clause<'db> {
     Implementor(ImplementorId<'db>),
+    Chosen(super::ChosenImpl<'db>),
     Assumption(usize),
     /// The builtin implementation of the callable value, a closure or a
     /// function item, that is the goal's self type (`ty::closure`), built
@@ -362,20 +396,49 @@ impl<'db> TraitResolutionContext<'db> {
         mut branch: Branch<'db>,
         assumptions: super::PredicateListId<'db>,
     ) -> ContextTransition<Self> {
-        let Some(next_goal) = branch.remaining_goals.pop() else {
+        if branch.remaining_goals.is_empty() {
             return self.finish_branch(parent, branch);
-        };
+        }
+        let next_index = parent
+            .value()
+            .choices
+            .and_then(|choices| {
+                branch.remaining_goals.iter().rposition(|goal| {
+                    let goal = goal.fold_with(self.db, &mut branch.table);
+                    !goal.args(self.db).iter().any(|ty| ty.has_var(self.db))
+                        || !choices.items(self.db).iter().any(|choice| {
+                            let implementation = choice
+                                .implementation()
+                                .fold_with(self.db, &mut branch.table);
+                            implementation.trait_inst(self.db).def(self.db) == goal.def(self.db)
+                                && impl_header_may_match(self.db, implementation, goal)
+                        })
+                })
+            })
+            .unwrap_or(branch.remaining_goals.len() - 1);
+        let next_goal = branch.remaining_goals.remove(next_index);
 
         // `tablesolve` keys a suspension before retaining its branch state. Fold
         // through every substitution accumulated so far so table sharing never
         // sees a stale, pre-unification subgoal.
         let next_goal = next_goal.fold_with(self.db, &mut branch.table);
         let assumptions = assumptions.fold_with(self.db, &mut branch.table);
+        let choices = parent.value().choices.map(|choices| {
+            super::ChosenImpls::new(
+                self.db,
+                choices
+                    .items(self.db)
+                    .iter()
+                    .map(|item| item.fold_with(self.db, &mut branch.table))
+                    .collect::<Vec<_>>(),
+            )
+        });
         Transition::Suspend {
             goal: TraitSolverQuery {
                 goal: next_goal,
                 assumptions,
                 require_impl: false,
+                choices,
             },
             state: branch,
         }
@@ -419,6 +482,33 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         key: &Self::Key,
     ) -> Result<CallbackOutcome<Vec<Self::Clause>, Self::StopReason>, Self::Error> {
         let prepared = self.prepare_query(*key);
+        if let Some(choices) = prepared.query.choices {
+            for &choice in choices.items(self.db).iter().rev() {
+                let implementation = choice.implementation();
+                if !impl_header_may_match(self.db, implementation, prepared.normalized_goal) {
+                    continue;
+                }
+                let mut table = prepared.table.clone();
+                let candidate = choice.instantiate(&mut table);
+                if table
+                    .unify(
+                        trait_inst_head(self.db, candidate.trait_inst(self.db)),
+                        trait_inst_head(self.db, prepared.normalized_goal),
+                    )
+                    .is_ok()
+                {
+                    let matched_goal = prepared.normalized_goal.fold_with(self.db, &mut table);
+                    if Canonicalized::new(self.db, prepared.normalized_goal).canonical()
+                        != Canonicalized::new(self.db, matched_goal).canonical()
+                    {
+                        // Header priority is selection at known arguments, not
+                        // permission to pick those arguments before other bounds.
+                        return Ok(CallbackOutcome::Stop(StopReason::UnresolvedChoice));
+                    }
+                    return Ok(CallbackOutcome::Continue(vec![Clause::Chosen(choice)]));
+                }
+            }
+        }
         // An impl lives in its normalized self type's ingot or its trait's
         // (`trait_impl_admissibility`): `<Option<P> as Unwrap>::Out: Copy` is
         // `P: Copy`, whose impl is in `P`'s ingot, not `Option`'s.
@@ -480,7 +570,14 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         } else {
             BorrowKind::Ref
         });
+        let chosen = if let Clause::Chosen(choice) = clause {
+            Some(choice)
+        } else {
+            None
+        };
+        let clause = chosen.map_or(clause, |choice| Clause::Implementor(choice.template));
         let selected_impl = match clause {
+            Clause::Chosen(_) => unreachable!(),
             Clause::Implementor(selected_impl) => {
                 if !impl_header_may_match(self.db, selected_impl, normalized_goal)
                     || normalized_goal.is_mut(self.db) && !selected_impl.gives_mut(self.db)
@@ -498,7 +595,15 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 else {
                     return Ok(Transition::Reject);
                 };
-                let candidate = table.instantiate_with_fresh_vars(candidate);
+                let candidate = if let Some(choice) = chosen {
+                    super::ChosenImpl {
+                        template: candidate,
+                        ..choice
+                    }
+                    .instantiate(&mut table)
+                } else {
+                    table.instantiate_with_fresh_vars(candidate)
+                };
                 let normalized_candidate = normalize_trait_inst_preserving_validity(
                     self.db,
                     candidate.trait_inst(self.db),
@@ -654,6 +759,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 goal: resumed_root,
                 assumptions: resumed_assumptions,
                 require_impl: parent.value().require_impl,
+                choices: parent.value().choices,
             },
         ) {
             return Ok(Transition::Stop(StopReason::MaximumTypeDepth));
@@ -776,6 +882,7 @@ fn map_completion(completion: Completion<StopReason>) -> TraitSolveCompletion {
         Completion::StepLimit { limit } => TraitSolveCompletion::StepLimit { limit },
         Completion::TableLimit { limit } => TraitSolveCompletion::TableLimit { limit },
         Completion::PendingWorkLimit { limit } => TraitSolveCompletion::PendingWorkLimit { limit },
+        Completion::Adapter(StopReason::UnresolvedChoice) => TraitSolveCompletion::UnresolvedChoice,
         Completion::Adapter(StopReason::MaximumTypeDepth) => TraitSolveCompletion::MaximumTypeDepth,
         Completion::Adapter(StopReason::TargetFound) => {
             unreachable!("ordinary trait solving never installs a target")
@@ -862,7 +969,8 @@ pub(super) fn has_solution<'db>(
         | Completion::StepLimit { .. }
         | Completion::TableLimit { .. }
         | Completion::PendingWorkLimit { .. }
-        | Completion::Adapter(StopReason::MaximumTypeDepth) => TargetSolutionStatus::Incomplete,
+        | Completion::Adapter(StopReason::MaximumTypeDepth)
+        | Completion::Adapter(StopReason::UnresolvedChoice) => TargetSolutionStatus::Incomplete,
     }
 }
 

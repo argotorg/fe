@@ -654,6 +654,7 @@ impl<'db> TyChecker<'db> {
                 |(driver, _)| driver.span(self.body()).into(),
             );
             self.env.register_trait_obligation(TraitObligation {
+                choices: self.env.choices,
                 goal: inst.mut_goal(self.db),
                 origin: TraitObligationOrigin::GenericConfirmation,
                 span,
@@ -747,6 +748,7 @@ impl<'db> TyChecker<'db> {
         }
         if confirm || base_ty.is_some() {
             self.env.register_trait_obligation(TraitObligation {
+                choices: self.env.choices,
                 goal: goal.fold_with(self.db, &mut self.table),
                 origin: TraitObligationOrigin::GenericConfirmation,
                 span,

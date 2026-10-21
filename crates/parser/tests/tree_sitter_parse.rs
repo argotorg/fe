@@ -654,3 +654,18 @@ fn tree_sitter_agrees_on_where_clauses_and_function_bodies() {
         ["enum", "function", "impl", "impl trait", "struct", "trait"],
     );
 }
+
+#[test]
+fn tree_sitter_parses_named_and_ordinary_impl_operands() {
+    let source =
+        "impl<T> Pick for T as Named {}\nfn f<T>() { with (Named<T>) { with (<T as Pick>) {} } }";
+    let (_, errors) = parse_source_file(source, RecoveryMode::Recover);
+    assert!(errors.is_empty(), "{errors:?}");
+    let mut parser = new_parser();
+    let tree = parser.parse(source, None).unwrap();
+    assert!(
+        !tree.root_node().has_error(),
+        "{}",
+        tree.root_node().to_sexp()
+    );
+}

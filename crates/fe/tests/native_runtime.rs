@@ -2896,3 +2896,18 @@ fn keep_beta() {
         "no selected tests must not create a native object"
     );
 }
+
+#[test]
+fn native_named_implementations_transport_bound_evidence() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/named_implementations.fe");
+    let temp = tempdir().unwrap();
+    for level in ["0", "1"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("named_implementations"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+    }
+}

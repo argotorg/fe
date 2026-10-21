@@ -1,0 +1,46 @@
+struct Item {}
+trait Pick { fn value() -> u256 }
+impl Pick for Item { fn value() -> u256 { 100 } }
+impl Pick for Item as Discount { fn value() -> u256 { 70 } }
+impl Pick for Item as Tiny { fn value() -> u256 { 3 } }
+impl Pick for Item as Markup {
+    fn value() -> u256 { with (<Item as Pick>) { Item::value() + 1 } }
+}
+
+fn read<T: Pick>() -> u256 { T::value() }
+fn relay<T: Pick>() -> u256 { read<T>() }
+fn concrete() -> u256 { Item::value() }
+fn both<T: Pick>() -> (u256, u256) { (T::value(), Item::value()) }
+
+struct Box<T> { value: T }
+trait Total { fn total() -> u256 }
+impl<T: Pick> Total for Box<T> { fn total() -> u256 { T::value() } }
+
+trait Sub: Pick { fn extra() -> u256 { Self::value() + 1 } }
+impl Sub for Item {}
+fn via_sub<T: Sub>() -> (u256, u256) { (T::value(), T::extra()) }
+
+fn exercise() {
+    assert!(relay<Item>() == 100)
+    with (Discount) {
+        assert!(relay<Item>() == 70)
+        assert!(concrete() == 100)
+        let split = both<Item>()
+        assert!(split.0 == 70 && split.1 == 100)
+        assert!(Box<Item>::total() == 70)
+        let implied = via_sub<Item>()
+        assert!(implied.0 == 100 && implied.1 == 101)
+        with (Tiny) { assert!(relay<Item>() == 3) }
+        assert!(relay<Item>() == 70)
+    }
+    with (Markup) { assert!(relay<Item>() == 101) }
+    assert!(relay<Item>() == 100)
+}
+
+#[test]
+fn lexical_named_evidence() { exercise() }
+
+pub fn main() -> i32 {
+    exercise()
+    0
+}

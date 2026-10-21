@@ -828,6 +828,220 @@ pub(crate) fn selected_assoc_const_body_template<'db>(
     })
 }
 
+/// What a named implementation's declaration gives differently from another
+/// implementation of its slot.
+pub(crate) enum NamedOutputMismatch<'db> {
+    NoOrdinaryOutputs,
+    /// An associated type; `with` is the implementation compared with.
+    AssocType {
+        with: ImplTrait<'db>,
+        ordinary: bool,
+        name: IdentId<'db>,
+        expected: TyId<'db>,
+        given: TyId<'db>,
+    },
+    AssocConst {
+        with: ImplTrait<'db>,
+        name: IdentId<'db>,
+    },
+    /// An associated effect row.
+    Row {
+        with: ImplTrait<'db>,
+        ordinary: bool,
+        name: IdentId<'db>,
+    },
+}
+
+/// A slot's associated types and effect rows do not depend on which implementation answers it. A named
+/// declaration is compared with every other implementation of the trait,
+/// ordinary or named, whose header overlaps its own, at their overlap and
+/// whatever their conditions: a condition that does not hold here can hold
+/// where a `with` adds a premise, and two named implementations that both
+/// answer a slot would otherwise give it outputs that depend on which is
+/// found first. This is definition admission, independent of any opening.
+pub(crate) fn named_output_mismatch<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementation: ImplTrait<'db>,
+    candidate: ImplementorId<'db>,
+) -> Option<NamedOutputMismatch<'db>> {
+    let context = TraitSolveCx::new(db, implementation.scope())
+        .with_assumptions(crate::semantic::param_env(db, implementation.into()));
+    let header = candidate.trait_inst(db);
+    let goal = TraitInstId::new_simple(db, header.def(db), header.args(db).clone());
+    if goal.def(db).has_assoc_outputs(db) || goal.def(db).assoc_consts(db).next().is_some() {
+        // Types still normalize ordinarily. Equality at overlaps is insufficient
+        // when some named applications have no ordinary output representative.
+        let ordinary = context
+            .with_assumptions(candidate.constraints(db))
+            .select_impl(db, goal);
+        if !matches!(ordinary, Selection::Unique(implementation) if matches!(implementation.origin(db), ImplementorOrigin::Hir(source) if source.selection_name(db).is_none()))
+        {
+            return Some(NamedOutputMismatch::NoOrdinaryOutputs);
+        }
+    }
+    let (primary, secondary) = context.search_ingots_for_trait_inst(db, goal);
+    let ingots = [Some(primary), secondary]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let ordinary = ingots
+        .iter()
+        .flat_map(|ingot| impls_for_trait_def(db, *ingot, goal.def(db)).to_vec())
+        .filter(|other| matches!(other.origin(db), ImplementorOrigin::Hir(_)))
+        .map(|other| (other, true));
+    let named = ingots
+        .iter()
+        .flat_map(|ingot| {
+            ingot_trait_env(db, *ingot)
+                .impls
+                .get(&goal.def(db))
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|implementation| implementation.selection_name(db).is_some())
+                .collect::<Vec<_>>()
+        })
+        .filter(|other| *other != implementation)
+        .filter_map(|other| super::trait_lower::lower_impl_trait(db, other))
+        .map(|other| (other, false));
+    let others = ordinary.chain(named).collect::<Vec<_>>();
+    for (other, ordinary) in others {
+        let ImplementorOrigin::Hir(with) = other.origin(db) else {
+            continue;
+        };
+        let Some(other) = complete_selected_impl(db, other) else {
+            continue;
+        };
+        let Some((own, other)) = at_overlap(db, candidate, other) else {
+            continue;
+        };
+        for assoc in goal.def(db).assoc_types(db) {
+            let Some(name) = assoc.name(db) else {
+                continue;
+            };
+            let (Some(expected), Some(given)) = (
+                other.instantiated_assoc_ty(db, name),
+                own.instantiated_assoc_ty(db, name),
+            ) else {
+                continue;
+            };
+            let expected = consts_evaluated(
+                db,
+                super::normalize::normalize_ty(
+                    db,
+                    expected,
+                    implementation.scope(),
+                    context.assumptions(),
+                ),
+            );
+            let given = consts_evaluated(
+                db,
+                super::normalize::normalize_ty(
+                    db,
+                    given,
+                    implementation.scope(),
+                    context.assumptions(),
+                ),
+            );
+            if expected.has_invalid(db) || given.has_invalid(db) {
+                continue;
+            }
+            // Equal at the overlap, for every value of what the overlap
+            // leaves open: the two are compared as they are, not unified.
+            if expected != given {
+                return Some(NamedOutputMismatch::AssocType {
+                    with,
+                    ordinary,
+                    name,
+                    expected,
+                    given,
+                });
+            }
+        }
+        for constant in goal.def(db).assoc_consts(db) {
+            let Some(name) = constant.name(db) else {
+                continue;
+            };
+            let value = |resolved| {
+                super::const_ty::const_ty_from_resolved_trait_const(db, resolved, name)
+                    .map(|value| consts_evaluated(db, TyId::const_ty(db, value)))
+            };
+            if value(own) != value(other) {
+                return Some(NamedOutputMismatch::AssocConst { with, name });
+            }
+        }
+        for row in goal.def(db).rows(db) {
+            let Some(name) = row.name.to_opt() else {
+                continue;
+            };
+            let components = |resolved| {
+                super::effects::rows::implementation_row_components(db, resolved, name).map(
+                    |components| {
+                        components
+                            .into_iter()
+                            .map(|component| (component.name, component.key, component.is_mut))
+                            .collect::<Vec<_>>()
+                    },
+                )
+            };
+            if components(other) != components(own) {
+                return Some(NamedOutputMismatch::Row {
+                    with,
+                    ordinary,
+                    name,
+                });
+            }
+        }
+    }
+    None
+}
+
+/// `ty` with each constant in it evaluated, so two written forms of one type
+/// (`Arr<{ 100 }>` and `Arr<100>`, or one braced constant written twice)
+/// compare equal.
+fn consts_evaluated<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+    struct Evaluate;
+    impl<'db> TyFolder<'db> for Evaluate {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            let ty = ty.super_fold_with(db, self);
+            super::const_ty::normalize_const_tys_for_comparison(db, ty)
+        }
+    }
+    ty.fold_with(db, &mut Evaluate)
+}
+
+/// Two implementations instantiated at their overlap: each header with fresh
+/// variables, unified with the other. `None` when the headers cannot both
+/// match one goal.
+fn at_overlap<'db>(
+    db: &'db dyn HirAnalysisDb,
+    own: ImplementorId<'db>,
+    other: ImplementorId<'db>,
+) -> Option<(ResolvedImplInstance<'db>, ResolvedImplInstance<'db>)> {
+    let mut table = UnificationTable::new(db);
+    let own_fresh = table.instantiate_with_fresh_vars(own);
+    let other_fresh = table.instantiate_with_fresh_vars(other);
+    for (&a, &b) in own_fresh
+        .trait_inst(db)
+        .args(db)
+        .iter()
+        .zip(other_fresh.trait_inst(db).args(db))
+    {
+        table.unify(a, b).ok()?;
+    }
+    let resolved = |selected, fresh: ImplementorId<'db>, table: &mut UnificationTable<'db>| {
+        let instantiated = fresh.fold_with(db, table);
+        ResolvedImplInstance {
+            selected,
+            instantiated,
+            trait_inst: instantiated.trait_inst(db),
+        }
+    };
+    let own = resolved(own, own_fresh, &mut table);
+    let other = resolved(other, other_fresh, &mut table);
+    Some((own, other))
+}
+
 /// Represents the trait environment of an ingot, which maintain all trait
 /// implementors which can be used in the ingot.
 #[derive(Debug, PartialEq, Eq, Clone, SalsaValue)]
@@ -898,6 +1112,7 @@ impl<'db> TraitEnv<'db> {
             .into_iter()
             .flatten()
             .chain(&self.unindexed_self_impls)
+            .filter(|impl_trait| impl_trait.selection_name(db).is_none())
             .filter_map(|impl_trait| lower_impl_trait_header(db, *impl_trait))
             .collect()
     }
@@ -911,6 +1126,7 @@ impl<'db> TraitEnv<'db> {
             .get(&trait_def)
             .into_iter()
             .flatten()
+            .filter(|impl_trait| impl_trait.selection_name(db).is_none())
             .filter_map(|impl_trait| lower_impl_trait_header(db, *impl_trait))
             .collect()
     }
@@ -931,7 +1147,7 @@ pub struct ImplementorId<'db> {
     pub(crate) types: IndexMap<IdentId<'db>, TyId<'db>>,
 
     #[returns(copy)]
-    pub(crate) origin: ImplementorOrigin<'db>,
+    pub origin: ImplementorOrigin<'db>,
 }
 
 impl<'db> ImplementorId<'db> {
@@ -987,7 +1203,7 @@ impl<'db> ImplementorId<'db> {
     }
 
     /// Trait instance realized by this impl, including its associated type definitions.
-    pub(crate) fn trait_inst(self, db: &'db dyn HirAnalysisDb) -> TraitInstId<'db> {
+    pub fn trait_inst(self, db: &'db dyn HirAnalysisDb) -> TraitInstId<'db> {
         let trait_inst = self.trait_(db);
         if self.types(db).is_empty() {
             return trait_inst;

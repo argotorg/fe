@@ -464,6 +464,42 @@ impl<'db> Callable<'db> {
         ));
     }
 
+    /// Missing dictionaries cannot be reconstructed ordinarily after a lexical
+    /// choice has committed the call, including conflicting supertrait projections.
+    pub(crate) fn missing_bound_evidence(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<TraitInstId<'db>> {
+        let CallableDef::Func(func) = self.callable_def else {
+            return Vec::new();
+        };
+        let Some(evidence) = self.bound_evidence else {
+            return Vec::new();
+        };
+        let Ok(subst) = CompleteSubst::for_owner(db, func.into(), self.generic_args.clone()) else {
+            return Vec::new();
+        };
+        let mode = BodyOwner::func_at(db, func, self.mode).mode();
+        func_signature(db, func, mode)
+            .list(db)
+            .iter()
+            .enumerate()
+            .filter_map(|(index, &bound)| {
+                if evidence.get(db, index).is_some()
+                    || super::super::visitor::mentions_effect_provider(db, bound)
+                {
+                    return None;
+                }
+                let goal = super::super::subst::substitute_complete(db, bound, &subst).ok()?;
+                (!super::super::visitor::collect_flags(db, goal).intersects(
+                    super::super::ty_def::TyFlags::HAS_VAR
+                        | super::super::ty_def::TyFlags::HAS_INVALID,
+                ))
+                .then_some(goal)
+            })
+            .collect()
+    }
+
     /// Proofs of the assumptions the callee's body is checked under, as the
     /// caller's checked body gives them.
     pub fn bound_evidence(&self) -> Option<EvidenceList<'db>> {
@@ -1315,6 +1351,7 @@ impl<'db> Callable<'db> {
             }
 
             let obligation = super::env::TraitObligation {
+                choices: tc.env.choices,
                 goal: constraint,
                 origin: super::env::TraitObligationOrigin::CallConstraint {
                     call_expr,

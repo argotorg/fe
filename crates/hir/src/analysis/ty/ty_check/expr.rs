@@ -1778,8 +1778,132 @@ impl<'db> TyChecker<'db> {
         result_discarded: bool,
     ) -> ExprProp<'db> {
         self.env.effect_env_mut().push_frame();
+        let outer_choices = self.env.choices;
 
         for binding in bindings {
+            if binding.key_path.is_none()
+                && let Partial::Present(Expr::Path(path)) = binding.value.data(self.db, self.body())
+                && let Some(path) = path.to_opt()
+                && let crate::analysis::name_resolution::path_resolver::ImplNameRes::Found(
+                    implementation,
+                ) = crate::analysis::name_resolution::path_resolver::resolve_impl_name(
+                    self.db,
+                    path,
+                    self.env.scope(),
+                )
+                && let Some(implementation) =
+                    super::super::trait_lower::lower_impl_trait(self.db, implementation)
+            {
+                let written_args = path.generic_args(self.db);
+                let choice = if written_args.is_empty(self.db) {
+                    super::super::trait_resolution::ChosenImpls::push(
+                        self.db,
+                        self.env.choices,
+                        implementation,
+                    )
+                } else {
+                    let args = super::super::ty_lower::lower_generic_arg_list(
+                        self.db,
+                        written_args,
+                        self.env.scope(),
+                        self.env.assumptions(),
+                        &LoweringContext::new(),
+                    );
+                    let owner = implementation.hir_impl_trait(self.db);
+                    let args =
+                        match super::super::ty_lower::collect_generic_params(self.db, owner.into())
+                            .complete_args(
+                            self.db,
+                            &[],
+                            &args,
+                            super::super::generic_defaults::DefaultApplication::StructuralMetadata(
+                                &LoweringContext::new(),
+                            ),
+                        ) {
+                            Ok(args) => args,
+                            Err(error) => {
+                                if let Some(diag) = super::super::ty_error::emit_invalid_ty_error(
+                                    self.db,
+                                    TyId::invalid(self.db, error.cause),
+                                    binding.value.span(self.body()).into(),
+                                ) {
+                                    self.push_diag(diag);
+                                }
+                                self.env.named_impl_operands.insert(binding.value);
+                                self.env.type_expr(
+                                    binding.value,
+                                    ExprProp::new(TyId::unit(self.db), false),
+                                );
+                                continue;
+                            }
+                        };
+                    let expected = implementation.params(self.db).len();
+                    if args.len() != expected {
+                        self.push_diag(BodyDiag::CallGenericArgNumMismatch {
+                            primary: binding.value.span(self.body()).into(),
+                            def_span: owner.span().into(),
+                            given: args.len(),
+                            expected,
+                        });
+                        self.env.named_impl_operands.insert(binding.value);
+                        self.env
+                            .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                        continue;
+                    }
+                    let applied = super::super::binder::Binder::bind(owner.into(), implementation)
+                        .instantiate(self.db, &args);
+                    super::super::trait_resolution::ChosenImpls::push_applied(
+                        self.db,
+                        self.env.choices,
+                        implementation,
+                        applied,
+                    )
+                };
+                self.env.choices = Some(choice);
+                self.env.named_impl_operands.insert(binding.value);
+                // A named impl is a compile-time operand, with no runtime value.
+                self.env
+                    .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                continue;
+            }
+            if binding.key_path.is_none()
+                && let Partial::Present(Expr::Path(Partial::Present(path))) =
+                    binding.value.data(self.db, self.body())
+                && path.len(self.db) == 1
+                && matches!(
+                    path.kind(self.db),
+                    crate::hir_def::PathKind::QualifiedType { .. }
+                )
+                && let Ok(crate::analysis::name_resolution::PathRes::Ty(ty)) =
+                    crate::analysis::name_resolution::resolve_path(
+                        self.db,
+                        *path,
+                        self.env.scope(),
+                        self.env.assumptions(),
+                        false,
+                    )
+                && let TyData::QualifiedTy(goal) = ty.data(self.db)
+                && let super::super::trait_resolution::Selection::Unique(resolved) =
+                    super::super::trait_def::resolve_trait_impl_instance(
+                        self.db,
+                        self.env
+                            .solve_cx()
+                            .with_choices(None)
+                            .with_assumptions(PredicateListId::empty_list(self.db)),
+                        *goal,
+                    )
+            {
+                self.env.choices = Some(super::super::trait_resolution::ChosenImpls::push_applied(
+                    self.db,
+                    self.env.choices,
+                    resolved.selected(),
+                    resolved.instantiated(),
+                ));
+                self.env.named_impl_operands.insert(binding.value);
+                self.env
+                    .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                continue;
+            }
             let value_prop = self.check_expr_unknown(binding.value);
             // A provider confers authority over its place for the body; it
             // opens no access.
@@ -1856,6 +1980,7 @@ impl<'db> TyChecker<'db> {
             self.check_expr(body_expr, expected)
         };
         self.env.effect_env_mut().pop_frame();
+        self.env.choices = outer_choices;
         result
     }
 
@@ -2054,6 +2179,7 @@ impl<'db> TyChecker<'db> {
                 let inst = canonical.extract_solution(&mut self.table, cand.inst);
                 let inst = self.specialize_same_trait_method_inst(method_name, inst);
                 self.env.register_trait_obligation(TraitObligation {
+                    choices: self.env.choices,
                     goal: inst,
                     origin: TraitObligationOrigin::GenericConfirmation,
                     span,
@@ -4283,6 +4409,7 @@ impl<'db> TyChecker<'db> {
                             };
                             if matches!(candidate, MethodCandidate::NeedsConfirmation(_)) {
                                 self.env.register_trait_obligation(TraitObligation {
+                                    choices: self.env.choices,
                                     goal: inst,
                                     origin: TraitObligationOrigin::GenericConfirmation,
                                     span: path_expr_span.clone().into(),
@@ -4384,6 +4511,7 @@ impl<'db> TyChecker<'db> {
                     };
 
                     self.env.register_trait_obligation(TraitObligation {
+                        choices: self.env.choices,
                         goal: inst,
                         origin: TraitObligationOrigin::GenericConfirmation,
                         span: path_expr_span.clone().into(),
@@ -5275,6 +5403,7 @@ impl<'db> TyChecker<'db> {
                     let inst = c_lhs_ty.extract_solution(&mut self.table, candidate.cand.inst);
                     if candidate.needs_confirmation {
                         self.env.register_trait_obligation(TraitObligation {
+                            choices: self.env.choices,
                             goal: inst,
                             origin: TraitObligationOrigin::GenericConfirmation,
                             span: expr.span(self.body()).into(),
@@ -5353,6 +5482,7 @@ impl<'db> TyChecker<'db> {
                     let inst = c_lhs_ty.extract_solution(&mut self.table, cand.inst);
                     if matches!(res, MethodCandidate::NeedsConfirmation(_)) {
                         self.env.register_trait_obligation(TraitObligation {
+                            choices: self.env.choices,
                             goal: inst,
                             origin: TraitObligationOrigin::GenericConfirmation,
                             span: expr.span(self.body()).into(),

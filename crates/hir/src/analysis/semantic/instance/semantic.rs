@@ -98,10 +98,9 @@ pub struct SemanticInstanceKey<'db> {
 impl<'db> SemanticInstanceKey<'db> {
     /// The key for `owner`'s instance with `subst`, given the proofs a use
     /// supplies of the assumptions its body is checked under. One with
-    /// closed arguments carries none: its instance proves every assumption
-    /// itself (`instance_evidence`), so the keys for one body and
-    /// substitution are the same however they are made, and a key never
-    /// holds a proof whose types can hold the key.
+    /// closed arguments retains only non-ordinary proof trees. Ordinary
+    /// assumptions can be reconstructed by `instance_evidence`; chosen
+    /// dictionaries must survive specialization to concrete types.
     pub fn of(
         db: &'db dyn HirAnalysisDb,
         owner: BodyOwner<'db>,
@@ -111,7 +110,14 @@ impl<'db> SemanticInstanceKey<'db> {
         supplied: EvidenceList<'db>,
     ) -> Self {
         let evidence = if is_ground(collect_flags(db, subst.generic_args(db))) {
-            EvidenceList::none(db)
+            EvidenceList::of(
+                db,
+                supplied
+                    .entries(db)
+                    .iter()
+                    .map(|entry| entry.filter(|proof| proof.has_named_impl(db)))
+                    .collect(),
+            )
         } else {
             supplied
         };

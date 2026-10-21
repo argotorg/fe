@@ -545,6 +545,7 @@ module.exports = grammar({
       field('trait', $.trait_ref),
       'for',
       field('type', $._type),
+      optional(seq('as', field('selection_name', $.identifier))),
       optional($.where_clause),
       field('body', $.trait_item_list),
     ),
@@ -787,14 +788,14 @@ module.exports = grammar({
       field('value', $._expression),
     )),
 
-    // Qualified path in expression context: <T as Trait>::method(args)
+    // Qualified path, including the ordinary impl operand <T as Trait>.
     qualified_path_expression: $ => prec.right(seq(
       $._generic_open,
       field('type', $._type),
       'as',
       field('trait', $.trait_ref),
       '>',
-      repeat1(seq('::', field('name', $.identifier))),
+      repeat(seq('::', field('name', $.identifier))),
     )),
 
     binary_expression: $ => {

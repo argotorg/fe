@@ -84,7 +84,10 @@ impl<'db> ItemKind<'db> {
             TypeAlias(alias) => alias.name(db).to_opt(),
             Trait(trait_) => trait_.name(db).to_opt(),
             Const(const_) => const_.name(db).to_opt(),
-            Use(_) | StaticAssert(_) | Body(_) | Impl(_) | ImplTrait(_) => None,
+            // A named implementation's name is an item name, in its own
+            // domain (`NameDomain::IMPL`).
+            ImplTrait(impl_trait) => impl_trait.selection_name(db),
+            Use(_) | StaticAssert(_) | Body(_) | Impl(_) => None,
         }
     }
 
@@ -157,7 +160,8 @@ impl<'db> ItemKind<'db> {
             Trait(trait_) => trait_.vis(db),
             Const(const_) => const_.vis(db),
             Use(use_) => use_.vis(db),
-            StaticAssert(_) | Impl(_) | ImplTrait(_) | Body(_) => Visibility::Private,
+            ImplTrait(impl_trait) => impl_trait.vis(db),
+            StaticAssert(_) | Impl(_) | Body(_) => Visibility::Private,
         }
     }
 
@@ -1381,6 +1385,12 @@ impl<'db> Trait<'db> {
     pub fn assoc_ty_by_index(self, db: &'db dyn HirDb, idx: usize) -> &'db AssocTyDecl<'db> {
         &self.types(db)[idx]
     }
+
+    /// Whether an implementation of this trait gives outputs a proof alone
+    /// does not: associated types or effect rows.
+    pub fn has_assoc_outputs(self, db: &'db dyn HirDb) -> bool {
+        !self.types(db).is_empty() || !self.rows(db).is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
@@ -1439,16 +1449,41 @@ pub struct ImplTrait<'db> {
     /// The effect rows: `uses E` in a trait, `uses E = ..` in an
     /// implementation.
     pub rows: Vec<AssocRow<'db>>,
-    /// `unsafe impl`, of an `unsafe trait`.
     #[returns(copy)]
-    pub is_unsafe: bool,
+    pub(in crate::core) modifiers: ImplTraitModifiers<'db>,
     #[returns(copy)]
     pub top_mod: TopLevelMod<'db>,
 
     pub(crate) origin: HirOrigin<ast::ImplTrait>,
 }
 
+/// What an implementation's header adds to its trait and type.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct ImplTraitModifiers<'db> {
+    /// `unsafe impl`, of an `unsafe trait`.
+    pub is_unsafe: bool,
+    /// `impl T for S as N`: a named implementation, out of ordinary lookup.
+    pub selection_name: Option<IdentId<'db>>,
+    /// `pub impl T for S as N`: the name's visibility, private by default.
+    pub vis: Visibility,
+}
+
 impl<'db> ImplTrait<'db> {
+    /// `unsafe impl`, of an `unsafe trait`.
+    pub fn is_unsafe(self, db: &'db dyn HirDb) -> bool {
+        self.modifiers(db).is_unsafe
+    }
+
+    /// The name of a named implementation, `N` in `impl T for S as N`.
+    pub fn selection_name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        self.modifiers(db).selection_name
+    }
+
+    /// The visibility of a named implementation's name.
+    pub fn vis(self, db: &'db dyn HirDb) -> Visibility {
+        self.modifiers(db).vis
+    }
+
     pub fn span(self) -> LazyImplTraitSpan<'db> {
         LazyImplTraitSpan::new(self)
     }
@@ -1884,11 +1919,12 @@ pub enum VariantKind<'db> {
     Record(FieldDefListId<'db>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Visibility {
     /// Unrestricted public visibility.
     Public,
     /// Private to the defining scope.
+    #[default]
     Private,
     /// `pub(ingot)` — visible within the same ingot (like Rust's `pub(crate)`).
     PubIngot,

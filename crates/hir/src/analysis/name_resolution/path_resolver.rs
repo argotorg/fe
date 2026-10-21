@@ -571,6 +571,74 @@ pub(crate) fn resolve_type_path_definition<'db>(
     None
 }
 
+/// What a path names in the implementation-name domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ImplNameRes<'db> {
+    Found(crate::hir_def::ImplTrait<'db>),
+    /// Found, but neither it nor a module on its path is visible from the
+    /// use: a name is private by default (`pub impl` publishes it).
+    NotVisible,
+    Ambiguous,
+    NotFound,
+}
+
+/// The named implementation a `with` operand's path names: its last segment
+/// in the implementation-name domain, found as any item is, through the
+/// lexical scope and imports for a bare name and through module paths
+/// otherwise, and visible from `scope`. A segment with generic arguments
+/// names nothing yet.
+pub(crate) fn resolve_impl_name<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+) -> ImplNameRes<'db> {
+    let mut parent_scope = None;
+    for segment_idx in 0..path.len(db) {
+        let Some(segment) = path.segment(db, segment_idx) else {
+            return ImplNameRes::NotFound;
+        };
+        if !matches!(segment.kind(db), PathKind::Ident { .. })
+            || segment_idx + 1 != path.len(db) && !segment.generic_args(db).is_empty(db)
+        {
+            return ImplNameRes::NotFound;
+        }
+        let query = make_query(db, segment, parent_scope.unwrap_or(scope));
+        let bucket = resolve_query(db, query);
+        if segment_idx + 1 == path.len(db) {
+            return match bucket.pick(NameDomain::IMPL) {
+                Ok(res) => match res.kind {
+                    NameResKind::Scope(ScopeId::Item(ItemKind::ImplTrait(implementation))) => {
+                        if res.is_visible(db, scope) {
+                            ImplNameRes::Found(implementation)
+                        } else {
+                            ImplNameRes::NotVisible
+                        }
+                    }
+                    _ => ImplNameRes::NotFound,
+                },
+                Err(NameResolutionError::Ambiguous(_) | NameResolutionError::Conflict(..)) => {
+                    ImplNameRes::Ambiguous
+                }
+                Err(NameResolutionError::Invisible(_)) => ImplNameRes::NotVisible,
+                Err(_) => ImplNameRes::NotFound,
+            };
+        }
+        let res = match bucket.pick(NameDomain::TYPE) {
+            Ok(res) => res,
+            Err(NameResolutionError::Invisible(_)) => return ImplNameRes::NotVisible,
+            Err(_) => return ImplNameRes::NotFound,
+        };
+        if !res.is_visible(db, scope) {
+            return ImplNameRes::NotVisible;
+        }
+        let Some(next) = res.scope() else {
+            return ImplNameRes::NotFound;
+        };
+        parent_scope = Some(next);
+    }
+    ImplNameRes::NotFound
+}
+
 /// Makes the query for the last segment of `path` in `scope`. Only a path's
 /// first segment is looked up in lexical parents and external ingots.
 fn make_query<'db>(

@@ -36,12 +36,99 @@ pub(crate) use table_solver::answering_assumption;
 
 pub(crate) const TRAIT_SOLVER_ROOT_ANSWER_LIMIT: usize = 2;
 
+/// A template, optionally applied to explicit lexical arguments. Applied
+/// arguments belong to the caller and must never be freshened as impl binders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub struct ChosenImpl<'db> {
+    pub template: ImplementorId<'db>,
+    pub applied: Option<ImplementorId<'db>>,
+}
+impl<'db> ChosenImpl<'db> {
+    pub fn implementation(self) -> ImplementorId<'db> {
+        self.applied.unwrap_or(self.template)
+    }
+    pub(crate) fn instantiate<S: super::unify::UnificationStore<'db>>(
+        self,
+        table: &mut super::unify::UnificationTableBase<'db, S>,
+    ) -> ImplementorId<'db> {
+        self.applied.unwrap_or_else(|| {
+            let db = table.db;
+            if let super::trait_def::ImplementorOrigin::Hir(owner) = self.template.origin(db) {
+                let params = table.instantiate_with_fresh_vars(self.template.params(db).clone());
+                super::binder::Binder::bind(owner.into(), self.template).instantiate(db, &params)
+            } else {
+                table.instantiate_with_fresh_vars(self.template)
+            }
+        })
+    }
+}
+impl<'db> TyFoldable<'db> for ChosenImpl<'db> {
+    fn super_fold_with<F: super::fold::TyFolder<'db>>(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        folder: &mut F,
+    ) -> Self {
+        Self {
+            template: self.template,
+            applied: self.applied.map(|applied| applied.fold_with(db, folder)),
+        }
+    }
+}
+impl<'db> TyVisitable<'db> for ChosenImpl<'db> {
+    fn visit_with<V: TyVisitor<'db> + ?Sized>(&self, visitor: &mut V) {
+        if let Some(applied) = self.applied {
+            applied.visit_with(visitor);
+        }
+    }
+}
+
+/// Explicit implementations in lexical order, outermost first. This is input
+/// to proof construction, never an ambient environment attached to a callee.
+#[salsa::interned]
+#[derive(Debug)]
+pub struct ChosenImpls<'db> {
+    pub items: Vec<ChosenImpl<'db>>,
+}
+
+impl<'db> ChosenImpls<'db> {
+    pub fn push(
+        db: &'db dyn HirAnalysisDb,
+        outer: Option<Self>,
+        implementation: ImplementorId<'db>,
+    ) -> Self {
+        let mut items = outer
+            .map(|outer| outer.items(db).clone())
+            .unwrap_or_default();
+        items.push(ChosenImpl {
+            template: implementation,
+            applied: None,
+        });
+        Self::new(db, items)
+    }
+    pub fn push_applied(
+        db: &'db dyn HirAnalysisDb,
+        outer: Option<Self>,
+        template: ImplementorId<'db>,
+        applied: ImplementorId<'db>,
+    ) -> Self {
+        let mut items = outer
+            .map(|outer| outer.items(db).clone())
+            .unwrap_or_default();
+        items.push(ChosenImpl {
+            template,
+            applied: Some(applied),
+        });
+        Self::new(db, items)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct TraitSolverQuery<'db> {
     pub goal: TraitInstId<'db>,
     pub assumptions: PredicateListId<'db>,
     /// Select an implementation at this goal; obligations still use assumptions.
     pub require_impl: bool,
+    pub choices: Option<ChosenImpls<'db>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +150,7 @@ impl<'db> CanonicalGoalQuery<'db> {
                 goal,
                 assumptions: assumptions.extend_all_bounds(db),
                 require_impl: false,
+                choices: None,
             },
         )
     }
@@ -123,6 +211,7 @@ pub enum Selection<T> {
 pub struct TraitSolveCx<'db> {
     origin_ingot: Ingot<'db>,
     assumptions: PredicateListId<'db>,
+    choices: Option<ChosenImpls<'db>>,
 }
 
 impl<'db> TraitSolveCx<'db> {
@@ -130,6 +219,7 @@ impl<'db> TraitSolveCx<'db> {
         Self {
             origin_ingot: scope.ingot(db),
             assumptions: PredicateListId::empty_list(db),
+            choices: None,
         }
     }
 
@@ -138,6 +228,40 @@ impl<'db> TraitSolveCx<'db> {
             assumptions,
             ..self
         }
+    }
+
+    pub fn with_choices(self, choices: Option<ChosenImpls<'db>>) -> Self {
+        Self { choices, ..self }
+    }
+
+    pub(crate) fn has_matching_choice(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        goal: TraitInstId<'db>,
+    ) -> bool {
+        let scope = self.normalization_scope_for_trait_inst(db, goal);
+        let goal = normalize_trait_inst_preserving_validity(db, goal, scope, self.assumptions);
+        table_solver::matching_choice(db, self.choices, goal).is_some()
+    }
+
+    pub fn choices(self) -> Option<ChosenImpls<'db>> {
+        self.choices
+    }
+
+    pub fn query(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        goal: TraitInstId<'db>,
+    ) -> CanonicalGoalQuery<'db> {
+        CanonicalGoalQuery::from_query(
+            db,
+            TraitSolverQuery {
+                goal,
+                assumptions: self.assumptions.extend_all_bounds(db),
+                require_impl: false,
+                choices: self.choices,
+            },
+        )
     }
 
     pub fn assumptions(self) -> PredicateListId<'db> {
@@ -172,6 +296,7 @@ impl<'db> TraitSolveCx<'db> {
                     goal: inst,
                     assumptions: self.assumptions.extend_all_bounds(db),
                     require_impl: true,
+                    choices: self.choices,
                 },
             );
             match is_goal_query_satisfiable(db, self, &query) {
@@ -387,7 +512,7 @@ pub fn is_goal_satisfiable<'db>(
     solve_cx: TraitSolveCx<'db>,
     goal: TraitInstId<'db>,
 ) -> GoalSatisfiability<'db> {
-    let query = CanonicalGoalQuery::new(db, goal, solve_cx.assumptions());
+    let query = solve_cx.query(db, goal);
     is_goal_query_satisfiable(db, solve_cx, &query)
 }
 
@@ -829,6 +954,8 @@ pub enum TraitSolveCompletion {
     PendingWorkLimit { limit: usize },
     /// Fe's bounded-type-growth guard stopped the search.
     MaximumTypeDepth,
+    /// A preferred header would decide an inference argument prematurely.
+    UnresolvedChoice,
     /// Salsa is iterating a recursive query to a fixpoint.
     Cycle,
 }
