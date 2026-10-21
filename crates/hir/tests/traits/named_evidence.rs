@@ -588,7 +588,20 @@ const fn chosen() -> u256 { with (Imported) { Item::value() } }
     let source = format!(
         "{source}\nconst fn hidden() -> u256 {{ with (choices::Private) {{ Item::value() }} }}"
     );
-    assert!(!diagnostics(&source).is_empty());
+    assert_eq!(diagnostics(&source), vec!["2-0003"]);
+}
+
+#[test]
+fn associated_output_errors_blame_only_the_nonconforming_declaration() {
+    for declarations in [
+        "impl Output for Item as Good { type Out = u256 }\nimpl Output for Item as Bad { type Out = bool }",
+        "impl Output for Item as Bad { type Out = bool }\nimpl Output for Item as Good { type Out = u256 }",
+    ] {
+        let source = format!(
+            "struct Item {{}}\ntrait Output {{ type Out }}\nimpl Output for Item {{ type Out = u256 }}\n{declarations}"
+        );
+        assert_eq!(diagnostics(&source), vec!["5-0005"]);
+    }
 }
 
 #[test]

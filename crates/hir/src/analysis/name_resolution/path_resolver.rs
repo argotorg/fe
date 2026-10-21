@@ -572,12 +572,15 @@ pub(crate) fn resolve_type_path_definition<'db>(
 }
 
 /// What a path names in the implementation-name domain.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ImplNameRes<'db> {
     Found(crate::hir_def::ImplTrait<'db>),
     /// Found, but neither it nor a module on its path is visible from the
     /// use: a name is private by default (`pub impl` publishes it).
-    NotVisible,
+    NotVisible {
+        name: IdentId<'db>,
+        definition: Option<DynLazySpan<'db>>,
+    },
     Ambiguous,
     NotFound,
 }
@@ -602,6 +605,9 @@ pub(crate) fn resolve_impl_name<'db>(
         {
             return ImplNameRes::NotFound;
         }
+        let Some(name) = segment.ident(db).to_opt() else {
+            return ImplNameRes::NotFound;
+        };
         let query = make_query(db, segment, parent_scope.unwrap_or(scope));
         let bucket = resolve_query(db, query);
         if segment_idx + 1 == path.len(db) {
@@ -611,7 +617,10 @@ pub(crate) fn resolve_impl_name<'db>(
                         if res.is_visible(db, scope) {
                             ImplNameRes::Found(implementation)
                         } else {
-                            ImplNameRes::NotVisible
+                            ImplNameRes::NotVisible {
+                                name,
+                                definition: res.kind.name_span(db),
+                            }
                         }
                     }
                     _ => ImplNameRes::NotFound,
@@ -619,17 +628,28 @@ pub(crate) fn resolve_impl_name<'db>(
                 Err(NameResolutionError::Ambiguous(_) | NameResolutionError::Conflict(..)) => {
                     ImplNameRes::Ambiguous
                 }
-                Err(NameResolutionError::Invisible(_)) => ImplNameRes::NotVisible,
+                Err(NameResolutionError::Invisible(definition)) => ImplNameRes::NotVisible {
+                    name,
+                    definition: definition.clone(),
+                },
                 Err(_) => ImplNameRes::NotFound,
             };
         }
         let res = match bucket.pick(NameDomain::TYPE) {
             Ok(res) => res,
-            Err(NameResolutionError::Invisible(_)) => return ImplNameRes::NotVisible,
+            Err(NameResolutionError::Invisible(definition)) => {
+                return ImplNameRes::NotVisible {
+                    name,
+                    definition: definition.clone(),
+                };
+            }
             Err(_) => return ImplNameRes::NotFound,
         };
         if !res.is_visible(db, scope) {
-            return ImplNameRes::NotVisible;
+            return ImplNameRes::NotVisible {
+                name,
+                definition: res.kind.name_span(db),
+            };
         }
         let Some(next) = res.scope() else {
             return ImplNameRes::NotFound;

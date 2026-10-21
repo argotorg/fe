@@ -1777,20 +1777,35 @@ impl<'db> TyChecker<'db> {
         expected: TyId<'db>,
         result_discarded: bool,
     ) -> ExprProp<'db> {
+        use crate::analysis::name_resolution::path_resolver::{ImplNameRes, resolve_impl_name};
+
         self.env.effect_env_mut().push_frame();
         let outer_choices = self.env.choices;
 
         for binding in bindings {
-            if binding.key_path.is_none()
+            let named = if binding.key_path.is_none()
                 && let Partial::Present(Expr::Path(path)) = binding.value.data(self.db, self.body())
                 && let Some(path) = path.to_opt()
-                && let crate::analysis::name_resolution::path_resolver::ImplNameRes::Found(
-                    implementation,
-                ) = crate::analysis::name_resolution::path_resolver::resolve_impl_name(
-                    self.db,
-                    path,
-                    self.env.scope(),
-                )
+            {
+                match resolve_impl_name(self.db, path, self.env.scope()) {
+                    ImplNameRes::Found(implementation) => Some((path, implementation)),
+                    ImplNameRes::NotVisible { name, definition } => {
+                        self.push_diag(PathResDiag::Invisible(
+                            binding.value.span(self.body()).into(),
+                            name,
+                            definition,
+                        ));
+                        self.env.named_impl_operands.insert(binding.value);
+                        self.env
+                            .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                        continue;
+                    }
+                    ImplNameRes::Ambiguous | ImplNameRes::NotFound => None,
+                }
+            } else {
+                None
+            };
+            if let Some((path, implementation)) = named
                 && let Some(implementation) =
                     super::super::trait_lower::lower_impl_trait(self.db, implementation)
             {

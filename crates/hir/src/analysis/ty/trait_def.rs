@@ -922,23 +922,11 @@ pub(crate) fn named_output_mismatch<'db>(
         .flat_map(|ingot| impls_for_trait_def(db, *ingot, goal.def(db)).to_vec())
         .filter(|other| matches!(other.origin(db), ImplementorOrigin::Hir(_)))
         .map(|other| (other, true));
-    let named = ingots
-        .iter()
-        .flat_map(|ingot| {
-            ingot_trait_env(db, *ingot)
-                .impls
-                .get(&goal.def(db))
-                .into_iter()
-                .flatten()
-                .copied()
-                .filter(|implementation| implementation.selection_name(db).is_some())
-                .collect::<Vec<_>>()
-        })
-        .filter(|other| *other != implementation)
-        .filter_map(|other| super::trait_lower::lower_impl_trait(db, other))
-        .map(|other| (other, false));
-    let others = ordinary.chain(named).collect::<Vec<_>>();
-    for (other, ordinary) in others {
+    // Every admitted named header has an ordinary output representative.
+    // Agreement with all overlapping ordinary headers therefore also implies
+    // named-to-named agreement. Comparing named pairs again would blame a
+    // conforming declaration for another declaration's ordinary-output error.
+    for (other, ordinary) in ordinary {
         let ImplementorOrigin::Hir(with) = other.origin(db) else {
             continue;
         };
