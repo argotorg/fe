@@ -34,10 +34,36 @@ Moving an operation into a helper with different bounds can change which
 implementation it uses. Collection operations such as hashing and comparison
 follow the same rule: only the declared dictionaries cross a call boundary.
 
+## Supertraits: one dictionary per bound
+
 An implied supertrait dictionary comes from its subtrait's proof. An unrelated
 lexical override does not replace it. Conditions used to construct that proof
-retain their own chosen dictionaries. If two declared subtrait proofs project
-incompatible dictionaries for one supertrait, the call is diagnosed.
+retain their own chosen dictionaries. For example, extending the declarations
+above:
+
+```fe
+trait Sub: Price {
+    const fn extra() -> u256 { Self::price() + 1 }
+}
+impl Sub for Item {}
+const fn via_sub<T: Sub>() -> u256 { T::price() * 1000 + T::extra() }
+```
+
+`with (Wholesale) { via_sub<Item>() }` returns 100101: its two operations
+observe 100 and 101. The ordinary `Sub` proof carries its ordinary `Price`
+dictionary. A conditional subtrait implementation instead projects through
+the actual dictionaries used to satisfy its conditions.
+
+Every occurrence of the same bound in a callee's signature must receive the
+same dictionary. Consistent duplicates are accepted. If two subtrait proofs
+project incompatible dictionaries for one supertrait, the call is rejected.
+This also applies when the supertrait is explicitly repeated: a call under
+`Wholesale` to `fn repeated<T: Sub + Price>()` is rejected for `Item`, because
+`Sub` implies the ordinary `Price` proof while the explicit `Price` bound
+selects `Wholesale`. Choosing either silently would make dispatch depend on
+bound order. Distinct, explicitly qualified evidence paths are deferred.
+
+## Opening the ordinary implementation
 
 A named implementation's methods see their own implementation. A wrapper can
 explicitly open the ordinary implementation using a qualified trait path:
@@ -50,18 +76,48 @@ impl Price for Item as Markup {
 }
 ```
 
-The qualified ordinary reference requires an ordinary implementation of that
-goal; it does not refer to the enclosing named implementation.
+`with (<Type as Trait>)` is the first-version spelling for opening an ordinary
+implementation. `with (Markup) { Item::price() }` therefore returns 101 without
+recursing into `Markup`. The qualified operand must resolve uniquely to an
+ordinary implementation without lexical choices or bound assumptions. Once
+opened, that implementation is a candidate in the surrounding solve context:
+its conditions still use applicable choices. This operand does not clear the
+whole choice scope or change which dictionaries cross a call boundary.
 
-A named implementation that supplies associated outputs also requires an ordinary
-implementation covering its header under its declared conditions. This gives
-type normalization an ordinary output representative until it consumes evidence.
-Named implementations must agree on associated types, associated effect rows
-and associated constants wherever their headers overlap. Constants compare
-using the compiler's existing constant normalization. A written type whose
-formation reads a chosen implementation is rejected until type normalization
-consumes evidence. Types formed before the block can still be used there, and
-an unbounded concrete helper retains its ordinary behavior in a type constant.
+## Associated outputs and types
+
+A named implementation of a trait with associated types, associated effect
+rows or associated constants requires a unique, source-declared ordinary
+implementation covering its header under its declared conditions. Named
+implementations must agree with other source-declared implementations, ordinary
+and named, on these outputs wherever their headers overlap. Output agreement
+does not depend on which implementation conditions happen to hold at an
+opening. Constants compare using the compiler's existing constant normalization;
+for example, `10` agrees with `5 + 5`, but not with `11`.
+
+```fe
+trait Size { const N: usize }
+impl Size for Item { const N: usize = 3 }
+impl Size for Item as Sized { const N: usize = 3 }
+```
+
+These declarations are accepted. Changing the named `N` to `4` is rejected;
+removing the ordinary implementation is also rejected. A named implementation
+of a trait containing only methods needs no ordinary counterpart.
+
+The ordinary implementation supplies the output representative used by type
+normalization. Agreement only at overlapping headers would leave named-only
+applications without that representative: a bound such as `T: Size` could be
+proved while `[u256; T::N]` could not normalize. Compiler-generated ordinary
+implementations do not yet qualify as output representatives or participate
+in this comparison. Extending this boundary requires corresponding output
+comparison support or normalization through evidence.
+
+A written type whose formation reads a chosen implementation is rejected until
+type normalization consumes evidence. Types formed before the block can still
+be used there, and an unbounded concrete helper retains its ordinary behavior
+in a type constant. This restriction also covers const methods used to form
+types, even though their return values may differ between implementations.
 
 Implementation names are compile-time operands of `with`. This feature does
 not add public evidence values, a `prove` expression, or a `Constraint` kind.
