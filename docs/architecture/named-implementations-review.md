@@ -1,116 +1,103 @@
 # Named implementations through trait evidence: review brief
 
-This candidate realizes Sean's proposed direction on trait-evidence base
-`2c6673819a0ed2a718593a0053f50786ba72a22b`. Lexical choices prioritize
-implementation candidates, recursive prerequisites inherit those choices,
-and calls carry only the evidence required by declared bounds. A generic
-`T::price()` can therefore observe 70 while an unbounded concrete helper
+This replacement follows Sean's proposed architecture on his standalone
+trait-evidence PR #1848, at `af26cd9fb9cdb97adfc58d757dea176dff62a658`.
+Lexical choices prioritize implementation candidates, recursive prerequisites
+inherit those choices, and calls carry only their declared bound dictionaries.
+A bounded generic call can observe 70 while an unbounded concrete helper
 observes 100 in the same calling scope.
 
 The core does not port the previous choice checker. The retained surface is
 named-implementation syntax, formatting, name visibility, associated-output
-agreement and stable identities. Selected proofs remain meaningful after
-types become concrete, retain implementation arguments absent from the trait
-header, and preserve local implementations' captured generic arguments.
-Supertrait projections use the subtrait's proof and its prerequisite evidence.
+agreement and stable identities. Proofs retain selected implementation arguments
+and local captures even when those arguments do not occur in the trait header.
+Supertrait projections follow the subtrait's actual prerequisite dictionaries.
 
-## Recommended first-version rulings
+## First-version rulings
 
-The [language specification](../language/named-implementations.md) gives the
-behavior and examples. These three rulings complete this candidate's design:
+The [language specification](../language/named-implementations.md) gives examples.
 
 - **Ordinary escape:** `with (<Type as Trait>)` opens a uniquely resolvable
-  ordinary implementation. A named wrapper can call the ordinary method and
-  add one without recursive self-dispatch. Resolving the operand requires an
-  ordinary candidate independently of lexical choices and bound assumptions;
+  ordinary implementation, letting a named wrapper call the ordinary method.
+  Resolving this operand is independent of lexical choices and bound assumptions;
   its subsequently proved conditions still use the surrounding solve context.
-- **Supertrait agreement:** a subtrait proof owns its implied supertrait
-  dictionary. Repeated paths to the same bound, including an explicitly
-  repeated supertrait, must agree. Conflicts are rejected instead of selecting
-  according to bound order. This preserves both dictionary semantics and a
-  single unambiguous dictionary per callee bound.
-- **Ordinary output representative:** a named implementation of a trait with
-  associated outputs requires a source-declared ordinary implementation
-  covering its header under its conditions, with equal outputs at all header
-  overlaps. This prevents evidence from proving a bound whose outputs ordinary
-  type normalization cannot obtain. Method-only traits need no ordinary
-  counterpart. Compiler-generated output representatives remain outside this
-  first version's comparison support.
+- **Supertrait agreement:** a subtrait proof owns its implied dictionaries.
+  Repeated paths to a bound, including an explicitly repeated supertrait, must
+  agree. Conflicts are rejected rather than resolved by bound order.
+- **Ordinary output representative:** a named implementation with associated
+  outputs requires a source-declared ordinary implementation covering its header
+  under its conditions, with equal outputs at all header overlaps. Ordinary
+  type normalization can then obtain the outputs of every admitted named proof.
+  Method-only traits need no ordinary counterpart. Compiler-generated output
+  representatives remain outside the first version's comparison support.
 
-Choice-dependent type formation remains rejected. Public `Evidence`, `prove`
-and `Constraint`, and normalization through evidence, are deferred. No new
-expression interpreter or check-time execution mechanism is introduced.
+Choice-dependent type formation remains rejected. Normalization through
+evidence, public `Evidence` values, `prove` and `Constraint` are deferred.
+No expression interpreter or check-time execution mechanism is introduced.
 
-## Verification and review scope
+## Repairs and integration
 
-The original verification below covers
-`b67674801d39f4a7cd52c7e728357ed7a281cc0b`. The post-review identity repair is
-`040bb0cd4116c1acf6eca065ab898d5cda6a2fea`; its additional checks are recorded
-separately below.
+The review repairs prevent unresolved inference variables from entering fresh
+choice-matching tables, preserve trait-keyed effect-provider proofs, and include
+all instantiated implementation arguments in stable evidence identities.
+Transitive supertrait projection extends actual prerequisite dictionaries and
+checks agreement along repeated paths. Methods and constants consume those
+slots; constant defaults share calls' missing-proof validation. Selected private
+prerequisites are checked at their producer. These repairs add neither a second
+resolver nor a new evidence kind.
 
-- 191 HIR trait tests and the focused 27-test named-evidence suite passed,
-  including failed/cyclic chosen prerequisites, inference ordering, captured
-  arguments, closed proofs, supertrait conflicts and associated-output rules.
-- Three MIR identity tests passed. The runtime fixture passed native and
-  Sonatina/EVM execution at both O0 and O1. Parser, formatter and MIR package
-  tests also passed earlier in the candidate's development.
-- Strict workspace Clippy passed with all targets and all features. Formatting
-  and release-fragment validation passed. This is not a full workspace test
-  suite or CI claim.
-- Seven alternating process pairs on the ordinary `growing_recursion` stress
-  case measured median CPU time of 38.84 seconds at the base and 37.73 seconds
-  at the candidate, with identical diagnostics. This supports no observed
-  regression on that unoptimized case, not a general speedup claim.
+The integration retains upstream projected-goal lookup, effect-key `Self`
+handling, tuple-struct identities and diagnostics. Sean's proof representation
+and instance transport match the earlier prototype base. The combined parser
+WASM is freshly generated with the pinned toolchain and checked against its
+input stamp. Private names now report the visibility diagnostic. Associated
+output errors blame the nonconforming named declaration; agreement through the
+ordinary representatives avoids duplicate blame on an agreeing declaration.
 
-The original numbered review probes were unavailable; the committed tests
-are explicit semantic equivalents, not claimed literal reruns. Review can
-start with `crates/hir/tests/traits/named_evidence.rs` and the executable
-`crates/fe/tests/fixtures/fe_test/named_implementations.fe`.
+## Verification
 
-Independent review found that stable evidence identities omitted selected
-implementation arguments absent from the trait header. The repair includes
-every instantiated implementation argument through the existing stable type
-and constant renderer. A paired-call regression fails before the repair and
-passes afterward for explicit type arguments, constant arguments and captured
-generic arguments. All four stable-key tests pass, preserving ordinary sharing
-and allocation-order independence. The expanded 7/9 runtime fixture passes
-native execution at O0/O1 both before and after the repair, so this establishes
-an identity collision, not a demonstrated runtime miscompile. Strict workspace
-Clippy and formatting pass after the repair.
+On the integrated Linux source checkpoint `682039dea`, all 4,100 workspace tests
+pass, including 198 HIR trait tests, 34 focused named-evidence cases and four
+stable-identity tests. Native and Sonatina/EVM regressions pass at O0/O1.
+One pre-existing diagnostics fuzz test remains ignored. Strict workspace Clippy
+with all targets and features, formatting, diff checks and parser freshness pass.
+The doctest command passes with two ignored examples and no executable examples.
 
-Sean's subsequent review exposed two additional blockers: unresolved inference
-variables could enter fresh-table choice matching, and trait-keyed effect
-providers discarded their chosen bound proofs. The repairs retain ordinary
-inference diagnostics and transport resolved provider proofs through the same
-bound-evidence slots used by generic calls. All three provider/choice nesting
-forms, forwarding and failed selected prerequisites have discriminating tests.
+The first unfiltered run preserved one native arithmetic timeout: the host's
+core-dump pipe delayed exit after the expected trap. The same test binary passed
+with a process-local constructor disabling core dumps, and the complete workspace
+rerun under that control passed. No compiler behavior, assertion, deadline or
+test filter changed. These are local workspace results, not a claim that every
+platform or external CI job has run.
 
-The transitive projection repair extends an implementation's actual prerequisite
-dictionaries with their implied dictionaries. Projection follows the existing
-proof DAG, checks agreement along repeated paths, and supplies the resulting
-slots to implementation methods and constants. Selected private prerequisites
-are checked at their producer too. Constant defaults use the same missing-proof
-validation as calls. This corrects both the coherent diamond rejection and the
-conflicting constant acceptance; it adds no second resolver or evidence kind.
+Seven alternating measured process pairs on the optimized `growing_recursion`
+stress case give median CPU times of 1.823 seconds upstream and 1.842 seconds
+for the candidate, with identical diagnostics. The paired median change is
++0.31%; its bootstrap interval spans -2.30% to +4.21%. This detects no regression
+beyond run-to-run variation on that case, not a general throughput guarantee.
 
-After these repairs, all 197 HIR trait tests pass, including 33 focused
-named-evidence tests. All four stable-identity tests pass. The expanded runtime
-fixture passes native and Sonatina/EVM execution at O0 and O1; strict workspace
-Clippy with all targets and features, formatting and diff checks pass. These
-are scoped checks on the repair, before integration onto PR #1848. The earlier
-CPU comparison has not been repeated on this repair.
+## Remaining boundaries
 
-The bounded probes also retain two separate limitations for review. A generic
-associated constant whose initializer calls a bound const method can trigger
-3-0051 in both the earlier candidate and the original trait-evidence baseline,
-with every named declaration removed; that existing CTFE issue is outside these
-repairs. Generic named-only method lookup
-can require explicit `<Type as Trait>::method()` qualification where abbreviated
-`Type::method()` fails to discover the implementation. Normalization through
-evidence remains deferred. These checks do not establish arbitrary compiler-wide
-proof preservation or a full workspace CI result.
+Indexed storage is an open correctness finding. Generated `StateIndex::locate`
+calls reconstruct proofs instead of consuming the dictionary selected for the
+indexed operation. A StorageMap probe with ordinary and shifted StorageKey
+implementations observes `(6, 6)` after two writes where honoring the selected
+dictionaries requires `(5, 6)`. This also loses a dictionary supplied through an
+inherent method's declared bound; fixed contract field layout does not explain
+it. The next bounded repair must preserve the indexing proof through the
+normalized place and make access analysis and lowering consume the same result,
+including its consequences for place identity. Silent fallback is not an
+approved storage rule.
 
-The recommendation is to replace the previous named-implementation stack
-with this evidence-based candidate after independent review and integration
-onto Sean's standalone evidence PR #1848. The three rulings above are concrete
-recommendations. Prior branches and repair checkpoints remain preserved.
+Two separate limitations remain documented. A generic associated constant whose
+initializer calls a bound const method triggers 3-0051 even without named
+implementations; this also reproduces on the exact PR #1848 base, without named implementations.
+Generic named-only method lookup can require explicit
+`<Type as Trait>::method()` qualification where `Type::method()` does not discover
+the implementation. Normalization through evidence remains deferred.
+
+The recommendation is to replace the previous named-implementation stack after
+independent review and resolution of the indexed-place transport finding.
+The original `b67674801d39f4a7cd52c7e728357ed7a281cc0b` review candidate and clean
+`121a340eda824410cc496dda284ddf00db9b701c` repair remain preserved. No PR closure,
+base-branch rewrite or publication is part of this integration checkpoint.
