@@ -42,6 +42,26 @@ impl Pick for Item as Tiny { const fn value() -> u256 { 3 } }
 "#;
 
 #[test]
+fn unresolved_calls_inside_choices_keep_the_annotation_diagnostic() {
+    for call in ["read()", "forward()"] {
+        let source = format!(
+            r#"{PICKS}
+fn read<T: Pick>() -> u256 {{ T::value() }}
+fn forward<T: Pick>() -> u256 {{ read<T>() }}
+fn bad() {{ let result = {call} }}
+"#
+        );
+        let ordinary = diagnostics(&source);
+        assert!(ordinary.contains(&"8-0031".to_string()), "{ordinary:?}");
+        let chosen = diagnostics(&source.replace(
+            &format!("let result = {call}"),
+            &format!("with (Discount) {{ let result = {call} }}"),
+        ));
+        assert_eq!(chosen, ordinary, "{call}");
+    }
+}
+
+#[test]
 fn lexical_override_restores_and_concrete_calls_mask_choices() {
     values(
         &format!(

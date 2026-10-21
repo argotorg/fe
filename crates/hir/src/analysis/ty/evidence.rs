@@ -294,6 +294,18 @@ pub fn prove<'db>(
     solve_cx: TraitSolveCx<'db>,
     goal: TraitInstId<'db>,
 ) -> Option<EvidenceId<'db>> {
+    // Inference variables belong to the checker's unification table. Header
+    // matching uses its own table and must only receive settled proof inputs.
+    // Unresolved calls retain their ordinary inference diagnostics; evidence
+    // is recorded after their inputs have been instantiated.
+    let unsettled = TyFlags::HAS_VAR | TyFlags::HAS_INVALID;
+    if collect_flags(db, goal).intersects(unsettled)
+        || solve_cx.choices().is_some_and(|choices| {
+            collect_flags(db, choices.items(db).as_slice()).intersects(unsettled)
+        })
+    {
+        return None;
+    }
     // A body's declared dictionary remains authoritative even when its type
     // is concrete. A lexical override explicitly replaces that dictionary.
     if !solve_cx.has_matching_choice(db, goal)
@@ -330,15 +342,7 @@ pub(crate) fn declared_bound_evidence<'db>(
     solve_cx: TraitSolveCx<'db>,
 ) -> EvidenceList<'db> {
     let assumptions = solve_cx.assumptions().extend_all_bounds(db);
-    let declared_proof = |goal| {
-        if !solve_cx.has_matching_choice(db, goal)
-            && let Some(index) = assumptions.list(db).iter().position(|&bound| bound == goal)
-        {
-            Some(EvidenceId::new(db, Evidence::Assumption(index as u32)))
-        } else {
-            prove(db, solve_cx, goal)
-        }
-    };
+    let declared_proof = |goal| prove(db, solve_cx, goal);
     EvidenceList::of(
         db,
         signature
