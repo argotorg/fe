@@ -43,7 +43,22 @@ fn local<T: Pick>() -> u256 {
     with (Local) { Other::value() }
 }
 
+trait Price { fn amount(self) -> u256 }
+impl Price for Item { fn amount(self) -> u256 { 100 } }
+impl Price for Item as Wholesale { fn amount(self) -> u256 { 70 } }
+fn charge() -> u256 uses (p: Price) { p.amount() }
+fn relay_charge() -> u256 uses (p: Price) { charge() }
+fn ordinary_charge() -> u256 { with (Price = Item {}) { charge() } }
+
 fn exercise() {
+    assert!(ordinary_charge() == 100)
+    with (Wholesale, Price = Item {}) {
+        assert!(charge() == 70)
+        assert!(relay_charge() == 70)
+        assert!(ordinary_charge() == 100)
+    }
+    with (Wholesale) { with (Price = Item {}) { assert!(charge() == 70) } }
+    with (Price = Item {}) { with (Wholesale) { assert!(charge() == 70) } }
     with (Chosen<Arg>) { assert!(read<Item>() == 7) }
     with (Chosen<Other>) { assert!(read<Item>() == 9) }
     with (Number<7>) { assert!(read<Item>() == 7) }

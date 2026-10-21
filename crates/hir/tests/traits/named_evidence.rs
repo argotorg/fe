@@ -2,7 +2,10 @@
 //! not claimed reproductions of Sean's original p01-p22 packet.
 use fe_hir::{
     analysis::{
-        semantic::{GenericSubst, SemConstScalar, SemConstValue, eval_body_owner_const},
+        semantic::{
+            GenericSubst, SemConstScalar, SemConstValue, SemanticInstance, eval_body_owner_const,
+            root_semantic_instance_key,
+        },
         ty::ty_check::BodyOwner,
     },
     test_db::{HirAnalysisTestDb, find_func},
@@ -59,6 +62,68 @@ fn bad() {{ let result = {call} }}
         ));
         assert_eq!(chosen, ordinary, "{call}");
     }
+}
+
+#[test]
+fn trait_keyed_effects_transport_chosen_evidence() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "chosen_effect_provider.fe".into(),
+        r#"
+struct Item {}
+trait Price { fn amount(self) -> u256 }
+impl Price for Item { fn amount(self) -> u256 { 100 } }
+impl Price for Item as Wholesale { fn amount(self) -> u256 { 70 } }
+fn charge() -> u256 uses (p: Price) { p.amount() }
+fn relay() -> u256 uses (p: Price) { charge() }
+fn ordinary() -> u256 { with (Price = Item {}) { charge() } }
+fn simultaneous() -> u256 { with (Wholesale, Price = Item {}) { charge() } }
+fn choice_outer() -> u256 { with (Wholesale) { with (Price = Item {}) { charge() } } }
+fn provider_outer() -> u256 { with (Price = Item {}) { with (Wholesale) { charge() } } }
+fn forwarded() -> u256 { with (Wholesale, Price = Item {}) { relay() } }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    for name in [
+        "simultaneous",
+        "choice_outer",
+        "provider_outer",
+        "forwarded",
+    ] {
+        let owner = BodyOwner::Func(find_func(&db, module, name), None);
+        let root = SemanticInstance::new(&db, root_semantic_instance_key(&db, owner).unwrap());
+        let mut call = root.callees(&db)[0].key;
+        if name == "forwarded" {
+            let relay = SemanticInstance::new(&db, call);
+            call = relay.callees(&db)[0].key;
+        }
+        assert!(
+            call.evidence(&db)
+                .entries(&db)
+                .iter()
+                .flatten()
+                .any(|proof| proof.has_named_impl(&db)),
+            "{name} lost its selected provider dictionary"
+        );
+    }
+}
+
+#[test]
+fn failed_chosen_effect_provider_conditions_do_not_fall_back() {
+    let source = r#"
+struct Item {}
+struct Box<T> { value: T }
+trait Gate {}
+trait Price { fn amount(self) -> u256 }
+impl<T> Price for Box<T> { fn amount(self) -> u256 { 100 } }
+impl<T: Gate> Price for Box<T> as RequireGate { fn amount(self) -> u256 { 70 } }
+fn charge() -> u256 uses (p: Price) { p.amount() }
+fn chosen() -> u256 { with (RequireGate, Price = Box { value: Item {} }) { charge() } }
+"#;
+    let codes = diagnostics(source);
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+    assert!(diagnostics(&source.replace("RequireGate, ", "")).is_empty());
 }
 
 #[test]

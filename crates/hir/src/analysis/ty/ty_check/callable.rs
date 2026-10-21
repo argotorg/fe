@@ -485,12 +485,16 @@ impl<'db> Callable<'db> {
             .iter()
             .enumerate()
             .filter_map(|(index, &bound)| {
-                if evidence.get(db, index).is_some()
-                    || super::super::visitor::mentions_effect_provider(db, bound)
-                {
+                if evidence.get(db, index).is_some() {
                     return None;
                 }
                 let goal = super::super::subst::substitute_complete(db, bound, &subst).ok()?;
+                // A provider that is still schematic is resolved when the
+                // caller is instantiated. Concrete provider goals must obey
+                // the same selected-dictionary requirements as other bounds.
+                if super::super::visitor::mentions_effect_provider(db, goal) {
+                    return None;
+                }
                 (!super::super::visitor::collect_flags(db, goal).intersects(
                     super::super::ty_def::TyFlags::HAS_VAR
                         | super::super::ty_def::TyFlags::HAS_INVALID,

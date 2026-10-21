@@ -31,7 +31,7 @@ use super::{
     ty_check::{BodyOwner, func_declared_bounds, func_signature},
     ty_def::{BorrowKind, TyFlags},
     ty_lower::CompleteSubst,
-    visitor::{TyVisitable, TyVisitor, collect_flags, mentions_effect_provider},
+    visitor::{TyVisitable, TyVisitor, collect_flags},
 };
 use crate::{
     analysis::{HirAnalysisDb, semantic::GenericSubst},
@@ -331,8 +331,8 @@ pub fn prove<'db>(
 /// reaches declares (`declared`), instantiated by `subst`, by their places
 /// among the assumptions that body is checked under (`signature`). A bound
 /// whose goal is closed can be reconstructed ordinarily only when no
-/// lexical choice or supplied dictionary affects it. Effect-provider bounds
-/// wait until providers resolve. Implied bounds project from their declared
+/// lexical choice or supplied dictionary affects it. Resolved effect-provider
+/// arguments supply proofs through these same slots. Implied bounds project from their declared
 /// root dictionaries rather than selecting independently in the caller.
 pub(crate) fn declared_bound_evidence<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -349,9 +349,6 @@ pub(crate) fn declared_bound_evidence<'db>(
             .list(db)
             .iter()
             .map(|&bound| {
-                if mentions_effect_provider(db, bound) {
-                    return None;
-                }
                 let goal = substitute_complete(db, bound, subst).ok()?;
                 let directly_declared = declared.list(db).contains(&bound);
                 if directly_declared
