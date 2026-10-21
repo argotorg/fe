@@ -4282,6 +4282,7 @@ impl<'db> ConstRef<'db> {
                     body,
                     selection,
                     GenericSubst::complete(db, subst.clone()),
+                    use_.solve_cx(db).assumptions(),
                 )
             }
             _ => EvidenceList::none(db),
@@ -4291,19 +4292,20 @@ impl<'db> ConstRef<'db> {
 
     /// Proves, in the use's context, the bounds the trait's default value
     /// body declares, instantiated for the use, as `declared_bound_evidence`
-    /// records them.
+    /// records them. Return missing dictionaries when lexical selection requires
+    /// complete evidence, using the same validation as callable signatures.
     pub(super) fn record_bound_evidence(
         &mut self,
         db: &'db dyn HirAnalysisDb,
         choices: Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>,
-    ) {
+    ) -> Vec<TraitInstId<'db>> {
         let ConstRef::TraitConst {
             use_,
             bound_evidence,
             ..
         } = self
         else {
-            return;
+            return Vec::new();
         };
         let trait_ = use_.inst().def(db);
         let (Some(body), Ok(subst)) = (
@@ -4312,16 +4314,23 @@ impl<'db> ConstRef<'db> {
                 .and_then(|constant| constant.default_body(db)),
             CompleteSubst::for_owner(db, trait_.into(), use_.inst().args(db).to_vec()),
         ) else {
-            return;
+            return Vec::new();
         };
         let declared = const_body_assumptions(db, body.scope());
-        *bound_evidence = Some(declared_bound_evidence(
+        let signature = declared.extend_all_bounds(db);
+        let recorded = declared_bound_evidence(
             db,
             declared,
-            declared.extend_all_bounds(db),
+            signature,
             &subst,
             use_.solve_cx(db).with_choices(choices),
-        ));
+        );
+        *bound_evidence = Some(recorded);
+        if choices.is_some() {
+            recorded.missing_bound_goals(db, signature, &subst)
+        } else {
+            Vec::new()
+        }
     }
 }
 

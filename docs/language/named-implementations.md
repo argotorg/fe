@@ -34,6 +34,13 @@ Moving an operation into a helper with different bounds can change which
 implementation it uses. Collection operations such as hashing and comparison
 follow the same rule: only the declared dictionaries cross a call boundary.
 
+Trait-keyed effect providers carry their declared dictionaries too. A provider
+supplied under a named implementation uses that implementation for operations
+through its declared trait bound. This holds whether the provider and
+implementation appear in one `with` or either enclosing block, and when
+another function forwards the same effect. An unbounded helper that supplies
+its own provider still uses its ordinary dictionary.
+
 ## Supertraits: one dictionary per bound
 
 An implied supertrait dictionary comes from its subtrait's proof. An unrelated
@@ -62,6 +69,12 @@ This also applies when the supertrait is explicitly repeated: a call under
 `Sub` implies the ordinary `Price` proof while the explicit `Price` bound
 selects `Wholesale`. Choosing either silently would make dispatch depend on
 bound order. Distinct, explicitly qualified evidence paths are deferred.
+
+The same agreement applies transitively through implementation conditions,
+including private prerequisites of an implementation whose public trait has
+no supertraits. Calls, implementation methods and associated-constant bodies
+receive projections of those actual prerequisite dictionaries. A constant
+default cannot bypass a disagreement that would reject the equivalent call.
 
 ## Opening the ordinary implementation
 

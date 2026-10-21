@@ -50,7 +50,27 @@ fn charge() -> u256 uses (p: Price) { p.amount() }
 fn relay_charge() -> u256 uses (p: Price) { charge() }
 fn ordinary_charge() -> u256 { with (Price = Item {}) { charge() } }
 
+impl<T: Pick> Pick for Box<T> { fn value() -> u256 { T::value() } }
+trait Left: Pick {}
+trait Right: Pick {}
+impl<T: Pick> Left for Box<T> {}
+impl<T: Pick> Right for Box<T> {}
+trait Diamond: Left + Right { const N: u256 = 1 }
+impl<T: Left + Right> Diamond for T {}
+fn via_diamond<T: Diamond>() -> u256 { T::value() }
+fn forward_diamond<T: Diamond>() -> u256 { via_diamond<T>() }
+struct Wrap<T> { value: T }
+impl<T: Diamond> Total for Wrap<T> as Through {
+    fn total() -> u256 { T::value() }
+}
+
 fn exercise() {
+    assert!(forward_diamond<Box<Item>>() == 100)
+    with (Discount, Through) {
+        assert!(forward_diamond<Box<Item>>() == 70)
+        assert!(<Wrap<Box<Item>> as Total>::total() == 70)
+        assert!(Box<Item>::N == 1)
+    }
     assert!(ordinary_charge() == 100)
     with (Wholesale, Price = Item {}) {
         assert!(charge() == 70)

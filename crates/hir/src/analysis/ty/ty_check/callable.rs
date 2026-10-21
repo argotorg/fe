@@ -480,28 +480,7 @@ impl<'db> Callable<'db> {
             return Vec::new();
         };
         let mode = BodyOwner::func_at(db, func, self.mode).mode();
-        func_signature(db, func, mode)
-            .list(db)
-            .iter()
-            .enumerate()
-            .filter_map(|(index, &bound)| {
-                if evidence.get(db, index).is_some() {
-                    return None;
-                }
-                let goal = super::super::subst::substitute_complete(db, bound, &subst).ok()?;
-                // A provider that is still schematic is resolved when the
-                // caller is instantiated. Concrete provider goals must obey
-                // the same selected-dictionary requirements as other bounds.
-                if super::super::visitor::mentions_effect_provider(db, goal) {
-                    return None;
-                }
-                (!super::super::visitor::collect_flags(db, goal).intersects(
-                    super::super::ty_def::TyFlags::HAS_VAR
-                        | super::super::ty_def::TyFlags::HAS_INVALID,
-                ))
-                .then_some(goal)
-            })
-            .collect()
+        evidence.missing_bound_goals(db, func_signature(db, func, mode), &subst)
     }
 
     /// Proofs of the assumptions the callee's body is checked under, as the

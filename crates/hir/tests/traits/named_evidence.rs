@@ -425,6 +425,112 @@ const fn chosen() -> u256 {{ with (Discount) {{ both<Item>() }} }}
 }
 
 #[test]
+fn transitive_supertrait_evidence_flows_through_conditions() {
+    values(
+        &format!(
+            r#"{PICKS}
+struct Box<T> {{ value: T }}
+impl<T: Pick> Pick for Box<T> {{ const fn value() -> u256 {{ T::value() }} }}
+trait Left: Pick {{}}
+trait Right: Pick {{}}
+impl<T: Pick> Left for Box<T> {{}}
+impl<T: Pick> Right for Box<T> {{}}
+trait Diamond: Left + Right {{ const N: u256 = 1 }}
+impl<T: Left + Right> Diamond for T {{}}
+const fn via<T: Diamond>() -> u256 {{ T::value() }}
+const fn forward<T: Diamond>() -> u256 {{ via<T>() }}
+struct Wrap<T> {{ value: T }}
+trait Count {{ const N: u256 }}
+impl<T: Diamond> Count for Wrap<T> {{ const N: u256 = 1 }}
+trait Total {{ const fn total() -> u256 }}
+impl<T: Diamond> Total for Wrap<T> as Through {{
+    const fn total() -> u256 {{ T::value() }}
+}}
+const fn ordinary() -> u256 {{ forward<Box<Item>>() }}
+const fn chosen() -> u256 {{ with (Discount) {{ forward<Box<Item>>() }} }}
+const fn method() -> u256 {{ with (Discount, Through) {{ <Wrap<Box<Item>> as Total>::total() }} }}
+const fn constant() -> u256 {{ with (Discount) {{ Box<Item>::N }} }}
+const fn impl_constant() -> u256 {{ with (Discount) {{ <Wrap<Box<Item>> as Count>::N }} }}
+const fn ordinary_constant() -> u256 {{ <Wrap<Box<Item>> as Count>::N }}
+"#
+        ),
+        &[
+            ("ordinary", 100),
+            ("chosen", 70),
+            ("method", 70),
+            ("constant", 1),
+            ("impl_constant", 1),
+            ("ordinary_constant", 1),
+        ],
+    );
+}
+
+#[test]
+fn transitive_conflicts_are_rejected_for_calls_and_constant_defaults() {
+    for extra in ["", " + Pick"] {
+        for access in ["via<Box<Item>>()", "Box<Item>::N"] {
+            let source = format!(
+                r#"{PICKS}
+struct Box<T> {{ value: T }}
+impl<T: Pick> Pick for Box<T> {{ const fn value() -> u256 {{ T::value() }} }}
+trait Left: Pick {{}}
+trait Right: Pick {{}}
+impl Left for Box<Item> {{}}
+impl<T: Pick> Right for Box<T> {{}}
+trait Diamond: Left + Right {{ const N: u256 = 1 }}
+impl<T: Left + Right{extra}> Diamond for T {{}}
+const fn via<T: Diamond>() -> u256 {{ T::N }}
+const fn chosen() -> u256 {{ with (Discount) {{ {access} }} }}
+"#
+            );
+            let codes = diagnostics(&source);
+            assert!(
+                codes.contains(&"6-0003".to_string()),
+                "{extra}, {access}: {codes:?}"
+            );
+            values(
+                &source.replace(&format!("with (Discount) {{ {access} }}"), access),
+                &[("chosen", 1)],
+            );
+        }
+    }
+}
+
+#[test]
+fn conflicting_private_implementation_conditions_are_rejected() {
+    let source = format!(
+        r#"{PICKS}
+struct Box<T> {{ value: T }}
+impl<T: Pick> Pick for Box<T> {{ const fn value() -> u256 {{ T::value() }} }}
+trait Left: Pick {{}}
+trait Right: Pick {{}}
+impl Left for Box<Item> {{}}
+impl<T: Pick> Right for Box<T> {{}}
+struct Wrap<T> {{ value: T }}
+trait Total {{ const fn total() -> u256 }}
+impl<T: Left + Right> Total for Wrap<T> as Through {{
+    const fn total() -> u256 {{ T::value() }}
+}}
+const fn read<T: Total>() -> u256 {{ T::total() }}
+const fn chosen() -> u256 {{ with (Discount, Through) {{ read<Wrap<Box<Item>>>() }} }}
+"#
+    );
+    let codes = diagnostics(&source);
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+    values(
+        &source.replace("Discount, Through", "Through"),
+        &[("chosen", 100)],
+    );
+    values(
+        &source.replace(
+            "impl Left for Box<Item> {}",
+            "impl<T: Pick> Left for Box<T> {}",
+        ),
+        &[("chosen", 70)],
+    );
+}
+
+#[test]
 fn written_types_refuse_selected_reads_but_concrete_helpers_mask_choices() {
     for value in ["Item::value()", "bound<Item>()"] {
         let codes = diagnostics(&format!(

@@ -78,18 +78,39 @@ native execution at O0/O1 both before and after the repair, so this establishes
 an identity collision, not a demonstrated runtime miscompile. Strict workspace
 Clippy and formatting pass after the repair.
 
-A bounded follow-up found a remaining limit around transitive supertrait
-projection and constant-default signatures. A direct literal constant access
-can be accepted where the corresponding generic-bound call is rejected, but a
-coherent transitive-diamond control also fails in the callable path. Adding
-only the callable's missing-evidence diagnostic to constants is therefore not
-a complete repair. This remains a separate investigation; no constant-reference
-change or claim of correct behavior for arbitrary transitive diamonds is included
-in the identity repair.
+Sean's subsequent review exposed two additional blockers: unresolved inference
+variables could enter fresh-table choice matching, and trait-keyed effect
+providers discarded their chosen bound proofs. The repairs retain ordinary
+inference diagnostics and transport resolved provider proofs through the same
+bound-evidence slots used by generic calls. All three provider/choice nesting
+forms, forwarding and failed selected prerequisites have discriminating tests.
+
+The transitive projection repair extends an implementation's actual prerequisite
+dictionaries with their implied dictionaries. Projection follows the existing
+proof DAG, checks agreement along repeated paths, and supplies the resulting
+slots to implementation methods and constants. Selected private prerequisites
+are checked at their producer too. Constant defaults use the same missing-proof
+validation as calls. This corrects both the coherent diamond rejection and the
+conflicting constant acceptance; it adds no second resolver or evidence kind.
+
+After these repairs, all 197 HIR trait tests pass, including 33 focused
+named-evidence tests. All four stable-identity tests pass. The expanded runtime
+fixture passes native and Sonatina/EVM execution at O0 and O1; strict workspace
+Clippy with all targets and features, formatting and diff checks pass. These
+are scoped checks on the repair, before integration onto PR #1848. The earlier
+CPU comparison has not been repeated on this repair.
+
+The bounded probes also retain two separate limitations for review. A generic
+associated constant whose initializer calls a bound const method can trigger
+3-0051 in both the earlier candidate and the original trait-evidence baseline,
+with every named declaration removed; that existing CTFE issue is outside these
+repairs. Generic named-only method lookup
+can require explicit `<Type as Trait>::method()` qualification where abbreviated
+`Type::method()` fails to discover the implementation. Normalization through
+evidence remains deferred. These checks do not establish arbitrary compiler-wide
+proof preservation or a full workspace CI result.
 
 The recommendation is to replace the previous named-implementation stack
-with this evidence-based candidate after independent review. The three
-rulings above are concrete recommendations, not unresolved implementation
-branches. The remaining projection limit needs follow-up before claiming those
-rules are implemented for every composition. Prior branches and repair
-checkpoints remain preserved.
+with this evidence-based candidate after independent review and integration
+onto Sean's standalone evidence PR #1848. The three rulings above are concrete
+recommendations. Prior branches and repair checkpoints remain preserved.

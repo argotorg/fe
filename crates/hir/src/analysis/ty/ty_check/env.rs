@@ -1728,7 +1728,9 @@ impl<'db> TyCheckEnv<'db> {
                     diags.push(failed_proof(use_.inst(), expr.span(self.body).into()));
                 }
             }
-            const_ref.record_bound_evidence(self.db, choices);
+            for goal in const_ref.record_bound_evidence(self.db, choices) {
+                diags.push(failed_proof(goal, expr.span(self.body).into()));
+            }
         }
         self.closure_infos
             .values_mut()
