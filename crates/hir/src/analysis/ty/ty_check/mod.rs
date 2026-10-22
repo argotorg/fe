@@ -43,7 +43,7 @@ use crate::analysis::ty::trait_resolution::constraint::{
 };
 use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_const_ty, walk_ty};
 use crate::hir_def::{
-    CallArg, CallableDef, FieldParent, GenericArgListId, ImplTrait, ModeMarker, Trait,
+    CallArg, CallableDef, FieldParent, GenericArgListId, ImplTrait, ItemKind, ModeMarker, Trait,
     params::FuncParamMode, scope_graph::ScopeId,
 };
 use crate::{
@@ -4687,7 +4687,7 @@ mod typed_body_tables {
         pub(super) covered_providers: FxHashSet<ExprId>,
         pub(super) named_impl_operands: FxHashSet<ExprId>,
         pub(super) provider_openings:
-            Vec<super::trait_resolution::generation::ProviderOpening<'db>>,
+            Vec<crate::analysis::ty::trait_resolution::generation::ProviderOpening<'db>>,
         pub(super) expr_choices:
             SecondaryMap<ExprId, Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>>,
         pub(super) const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
