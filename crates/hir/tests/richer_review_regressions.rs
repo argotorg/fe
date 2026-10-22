@@ -278,3 +278,41 @@ fn member_splices_keep_their_producer_and_method_generic_binders() {
         matches!(value.value(&db), SemConstValue::Scalar { value: fe_hir::analysis::semantic::SemConstScalar::Int {value}, .. } if value.to_string() == "42")
     );
 }
+
+#[test]
+fn field_name_holes_cover_constant_declarations_and_definitions() {
+    let source = format!(
+        "{PRELUDE}
+        trait Declared {{ const value: u256 }}
+        const fn make(_ record: Record) -> Code<Item> {{ let f = field(record, 0)
+            quote {{
+                const ${{f}}: u256 = 3
+                impl Pair {{ const ${{f}}: u256 = 9 }}
+                impl Declared for Pair {{ const ${{f}}: u256 = 7 }}
+                fn generated() -> u256 {{
+                    trait Local {{ const ${{f}}: u256 }}
+                    impl Local for Pair {{ const ${{f}}: u256 = 5 }}
+                    value + Pair::value + <Pair as Declared>::value + <Pair as Local>::value
+                }}
+            }}
+        }}"
+    );
+    assert!(output(&source, "Pair").is_empty());
+}
+
+#[test]
+fn nested_trait_member_splices_are_checked_at_the_destination() {
+    let source = format!(
+        "{PRELUDE}
+        const fn make(_ record: Record) -> Code<Item> {{
+            let declaration: Code<Item> = quote {{ const VALUE: u256 }}
+            let definition: Code<Item> = quote {{ const VALUE: u256 = 7 }}
+            quote {{ fn generated() -> u256 {{
+                trait Local {{ ${{declaration}} }}
+                impl Local for Pair {{ ${{definition}} }}
+                <Pair as Local>::VALUE
+            }} }}
+        }}"
+    );
+    assert!(output(&source, "Pair").is_empty());
+}
