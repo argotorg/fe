@@ -11,7 +11,7 @@ use hir::{
             ty_def::{BorrowKind, ClosureDef, ClosureTy, TyBase, TyData, TyId},
         },
     },
-    hir_def::{CallableDef, ItemKind, TopLevelMod, params::FuncParamMode, scope_graph::ScopeId},
+    hir_def::{Body, CallableDef, ItemKind, TopLevelMod, params::FuncParamMode, scope_graph::ScopeId},
     semantic::{ProviderBinding, ProviderSource},
 };
 
