@@ -290,10 +290,27 @@ pub(super) fn lower_derive_method<'db>(ctxt: &mut FileLowerCtxt<'db>, code: &Fro
         holes.clone(),
     );
     let quote_top_mod = frame.quote_top_mod;
+    // Admission covers the complete output, not just the children that happen
+    // to cast to items. In particular, a sibling item hole must not disappear
+    // before the bounded single-function check.
     let items = quote
         .item_list()
-        .map(|list| list.into_iter().collect::<Vec<_>>())
-        .or_else(|| quote.body().map(|block| block.items().collect::<Vec<_>>()))
+        .map(|list| {
+            list.syntax()
+                .children()
+                .map(ast::Item::cast)
+                .collect::<Option<Vec<_>>>()
+        })
+        .or_else(|| {
+            quote.body().map(|block| {
+                block
+                    .syntax()
+                    .children()
+                    .map(ast::Item::cast)
+                    .collect::<Option<Vec<_>>>()
+            })
+        })
+        .flatten()
         .unwrap_or_default();
     let [item] = items.as_slice() else {
         ctxt.record_generation_error(

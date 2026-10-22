@@ -246,3 +246,60 @@ const fn check_ordinary_and_named() -> usize {
         assert!(err.cause.contains(expected_cause), "{err}");
     }
 }
+
+#[test]
+fn explicit_derive_refuses_sibling_item_holes_without_dropping_output() {
+    let source = r#"use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Value { const fn value() -> u256 }
+struct Key {}
+struct Provider {}
+impl Derive<Value> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let extra = quote { const fn ignored() -> bool { missing } }
+        quote {
+            const fn value() -> u256 { 7 }
+            ${extra}
+        }
+    }
+}
+impl Value for Key with (Provider)
+const RESULT: u256 = Key::value()
+"#;
+    for rejected in [
+        source.to_owned(),
+        source.replace("${extra}", "const fn ignored() -> bool { missing }"),
+    ] {
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///tmp/explicit-derive-item-shape.fe").unwrap(),
+            Some(rejected.clone()),
+        );
+        let error = prepare_file(&db, file)
+            .err()
+            .expect("every sibling output node must be admitted or refused");
+        assert!(
+            error
+                .cause
+                .contains("bounded derive requires one function template"),
+            "{error}"
+        );
+        assert!(db.generation_inputs().functions(&db).is_empty());
+        assert!(db.generation_inputs().requests(&db).is_empty());
+        assert_eq!(file.text(&db).as_str(), rejected);
+    }
+    let source = source
+        .replace(
+            "        let extra = quote { const fn ignored() -> bool { missing } }\n",
+            "",
+        )
+        .replace("            ${extra}\n", "");
+    let mut db = DriverDataBase::default();
+    let url = Url::parse("file:///tmp/explicit-derive-one-item.fe").unwrap();
+    let file = db.workspace().touch(&mut db, url.clone(), Some(source));
+    let output = prepare_file(&db, file).unwrap().unwrap();
+    let output_file = output.workspace().get(&output, &url).unwrap();
+    let diags = output.run_on_top_mod(output.top_mod(output_file));
+    assert!(diags.is_empty(), "{}", diags.format_diags(&output));
+}
