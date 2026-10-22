@@ -1144,3 +1144,35 @@ const fn run() -> u256 { with (A) { Pair::score() } }
     assert!(cause.contains("cannot make progress"), "{cause}");
     assert!(!cause.contains("division by zero"), "{cause}");
 }
+
+#[test]
+fn invalid_generated_body_refuses_before_dependent_provider_execution() {
+    let cause = prepare_err(
+        r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+trait Value { const fn value() -> u256 }
+struct Pair {}
+struct Out {}
+struct A {}
+struct B {}
+impl Derive<Score> for B {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn score() -> u256 { missing_generated_value } }
+    }
+}
+impl Derive<Value> for A {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = with (B) { Pair::score() }
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote { const fn value() -> u256 { ${n} + ${fault} } }
+    }
+}
+const fn run() -> u256 { with (A) { Out::value() } }
+"#,
+    );
+    assert!(cause.contains("missing_generated_value"), "{cause}");
+    assert!(!cause.contains("division by zero"), "{cause}");
+}

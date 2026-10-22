@@ -664,6 +664,14 @@ pub fn prepare_file(
     ))
 }
 
+#[salsa::tracked]
+fn provider_access_preflight<'db>(
+    db: &'db dyn hir::analysis::HirAnalysisDb,
+    instance: hir::analysis::semantic::SemanticInstance<'db>,
+) {
+    let _ = hir::analysis::semantic::access::semantic_access_check_query(db, instance);
+}
+
 fn provider_needs_generation<'db>(
     db: &'db DriverDataBase,
     key: hir::analysis::semantic::SemanticInstanceKey<'db>,
@@ -684,11 +692,7 @@ fn provider_needs_generation<'db>(
         // Access preflight follows semantic dependencies beyond explicit calls,
         // including const references and implicit codec callees. Its cached
         // accumulator is authoritative for preparation before error handling.
-        if !hir::analysis::semantic::access::semantic_access_check_query::accumulated::<
-            GenerationDemand,
-        >(db, instance)
-        .is_empty()
-        {
+        if !provider_access_preflight::accumulated::<GenerationDemand>(db, instance).is_empty() {
             return true;
         }
         for callee in instance.callees(db) {
@@ -746,10 +750,9 @@ fn prepared_view(
 ) -> DriverDataBase {
     let url = file.url(db).expect("indexed generation input");
     let mut output = DriverDataBase::default();
-    let output_file =
-        output
-            .workspace()
-            .touch(&mut output, url.clone(), Some(file.text(db).clone()));
+    output
+        .workspace()
+        .touch(&mut output, url.clone(), Some(file.text(db).clone()));
     output
         .compiler_options()
         .set_recovery_mode(&mut output)
