@@ -4,6 +4,30 @@
 use parser::TextRange;
 use url::Url;
 
+/// One authored lexical provider operand. Ranges belong to unchanged source
+/// text in a preparation transaction; semantic IDs never cross database views.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ScopedDeriveOpeningKey {
+    pub file: Url,
+    pub binding_range: TextRange,
+}
+
+/// An exact authored trait declaration, never a path to resolve by spelling.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FrozenTraitRef {
+    pub file: Url,
+    pub range: TextRange,
+}
+
+/// Candidate availability requested by the ordinary evidence engine. Provider
+/// identity is retained by the checked opening in the current database view.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ScopedDeriveDemand {
+    pub opening: ScopedDeriveOpeningKey,
+    pub trait_ref: FrozenTraitRef,
+    pub target: FrozenRecordRef,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum FrozenScalar {
     Bool(bool),
