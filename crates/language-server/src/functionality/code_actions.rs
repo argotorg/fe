@@ -24,11 +24,11 @@ pub async fn handle_code_action(
     }
 
     let url = backend.map_client_uri_to_internal(lsp_uri.clone());
+    let analysis_db = backend.analysis_db_for_url(&url);
 
-    let file = backend
-        .db
+    let file = analysis_db
         .workspace()
-        .get(&backend.db, &url)
+        .get(&analysis_db, &url)
         .ok_or_else(|| {
             ResponseError::new(
                 async_lsp::ErrorCode::INTERNAL_ERROR,
@@ -36,8 +36,8 @@ pub async fn handle_code_action(
             )
         })?;
 
-    let file_text = file.text(&backend.db);
-    let top_mod = map_file_to_mod(&backend.db, file);
+    let file_text = file.text(&analysis_db);
+    let top_mod = map_file_to_mod(&analysis_db, file);
 
     let mut actions = Vec::new();
 
@@ -47,7 +47,7 @@ pub async fn handle_code_action(
 
     // Collect code actions for functions without return type annotations
     collect_return_type_actions(
-        &backend.db,
+        &analysis_db,
         top_mod,
         start,
         end,

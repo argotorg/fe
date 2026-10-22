@@ -2,7 +2,8 @@ use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range, Url}
 use camino::Utf8Path;
 use codespan_reporting::files as cs_files;
 use common::{
-    diagnostics::{CompleteDiagnostic, cmp_complete_diagnostics},
+    InputDb,
+    diagnostics::{CompleteDiagnostic, Span, SpanKind, cmp_complete_diagnostics},
     file::{File, IngotFileKind},
     ingot::IngotKind,
 };
@@ -13,7 +14,38 @@ use hir::hir_def::HirIngot;
 use hir::lower::map_file_to_mod;
 use rustc_hash::FxHashMap;
 
-use crate::util::diag_to_lsp;
+use crate::util::{diag_to_lsp, to_lsp_range_from_span};
+
+pub(crate) fn generation_error_diagnostics(
+    db: &DriverDataBase,
+    error: driver::generation::GenerationError,
+) -> FxHashMap<Url, Vec<Diagnostic>> {
+    let range = db
+        .workspace()
+        .get(db, &error.file)
+        .and_then(|file| {
+            to_lsp_range_from_span(
+                Span {
+                    file,
+                    range: error.range,
+                    kind: SpanKind::Original,
+                },
+                db,
+            )
+            .ok()
+        })
+        .unwrap_or_else(|| Range::new(Position::new(0, 0), Position::new(0, 0)));
+    FxHashMap::from_iter([(
+        error.file,
+        vec![Diagnostic {
+            range,
+            severity: Some(DiagnosticSeverity::ERROR),
+            source: Some("fe".into()),
+            message: error.cause,
+            ..Diagnostic::default()
+        }],
+    )])
+}
 
 /// Test-only latch: set to `true` to force the next
 /// `handle_files_need_diagnostics` call to panic (simulating an analysis-pass
@@ -40,6 +72,27 @@ pub trait LspDiagnostics {
 
 impl LspDiagnostics for DriverDataBase {
     fn diagnostics_for_ingot(&self, ingot: Ingot) -> FxHashMap<Url, Vec<Diagnostic>> {
+        if ingot.kind(self) == IngotKind::StandAlone
+            && self.generation_inputs().functions(self).is_empty()
+        {
+            for (url, file) in ingot.files(self).iter() {
+                if !matches!(file.kind(self), Some(IngotFileKind::Source)) {
+                    continue;
+                }
+                match driver::generation::prepare_file(self, file) {
+                    Ok(Some(prepared)) => {
+                        if let Some(prepared_ingot) = prepared
+                            .workspace()
+                            .containing_ingot(&prepared, url.clone())
+                        {
+                            return prepared.diagnostics_for_ingot(prepared_ingot);
+                        }
+                    }
+                    Err(error) => return generation_error_diagnostics(self, error),
+                    Ok(None) => {}
+                }
+            }
+        }
         let t_total = std::time::Instant::now();
         let mut result = FxHashMap::<Url, Vec<Diagnostic>>::default();
         let mut pass_manager = initialize_analysis_pass();

@@ -49,7 +49,7 @@ impl<'db> TypeId<'db> {
                     })
                 })
             }),
-            TypeKind::Never => false,
+            TypeKind::Primitive(_) | TypeKind::Never => false,
         }
     }
 
@@ -110,6 +110,7 @@ impl<'db> TypeId<'db> {
                 );
                 format!("[{elem_ty}; {len_str}]")
             }
+            TypeKind::Primitive(primitive) => primitive.name(db).data(db).to_string(),
             TypeKind::Never => "!".into(),
         }
     }
@@ -140,6 +141,8 @@ pub enum TypeKind<'db> {
     Ptr(Partial<TypeId<'db>>),
     Mode(TypeMode, Partial<TypeId<'db>>),
     Path(Partial<PathId<'db>>),
+    /// Compiler-owned primitive identity for frozen scalar holes.
+    Primitive(super::prim_ty::PrimTy),
     Tuple(TupleTypeId<'db>),
     /// The first `TypeId` is the element type, the second `Body` is the length.
     Array(Partial<TypeId<'db>>, Partial<Body<'db>>),

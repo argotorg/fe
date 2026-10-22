@@ -1256,6 +1256,9 @@ impl ToDoc for ast::Expr {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         use parser::ast::ExprKind;
         match self.kind() {
+            ExprKind::Quote(_) | ExprKind::QuoteHole(_) => {
+                ctx.alloc.text(ctx.snippet(self.syntax().text_range()))
+            }
             ExprKind::Lit(lit) => lit.to_doc(ctx),
             ExprKind::Block(block) => block.to_doc(ctx),
             ExprKind::Closure(closure) => closure.to_doc(ctx),

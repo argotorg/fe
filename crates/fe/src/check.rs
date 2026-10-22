@@ -445,6 +445,20 @@ fn check_single_file(
 
     // Try to get the file and check it for errors
     if let Some(file) = db.workspace().get(db, &file_url) {
+        match driver::generation::prepare_file(db, file) {
+            Ok(Some(prepared)) => {
+                *db = prepared;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("{error}");
+                return true;
+            }
+        }
+        let file = db
+            .workspace()
+            .get(db, &file_url)
+            .expect("prepared source file");
         let top_mod = db.top_mod(file);
         let diagnostics = CompilationDiagnostics::for_top_mod(db, top_mod, &file_url);
         let mut has_errors = false;

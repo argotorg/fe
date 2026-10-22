@@ -97,6 +97,9 @@ fn lower_hir_ty_impl<'db>(
             TyId::app(db, array, len_ty)
         }
 
+        HirTyKind::Primitive(primitive) => {
+            TyId::new(db, TyData::TyBase(super::ty_def::TyBase::from(*primitive)))
+        }
         HirTyKind::Never => TyId::never(db),
     };
     // A `#[view]` type exists only behind accesses, never inside a value.

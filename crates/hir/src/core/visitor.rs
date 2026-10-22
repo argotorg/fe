@@ -1280,6 +1280,11 @@ pub fn walk_expr<'db, V>(
             );
         }
 
+        Expr::ItemQuote(holes) => {
+            for hole in holes {
+                visit_node_in_body!(visitor, ctxt, hole, expr);
+            }
+        }
         Expr::UnsupportedMacroCall => {}
         Expr::Assert(call_args) => {
             ctxt.with_new_ctxt(
@@ -2057,7 +2062,7 @@ pub fn walk_type<'db, V>(
             },
         ),
 
-        TypeKind::Never => {}
+        TypeKind::Primitive(_) | TypeKind::Never => {}
     }
 }
 

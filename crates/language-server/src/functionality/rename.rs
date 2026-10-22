@@ -49,13 +49,16 @@ pub async fn handle_rename(
     {
         return Ok(None);
     }
+    let analysis_db = backend.analysis_db_for_url(&internal_url);
 
     let position = params.text_document_position.position;
     let new_name = params.new_name.clone();
 
     // Spawn heavy rename computation on the worker pool
     let outcome: RenameOutcome = backend
-        .spawn_on_workers(move |db| compute_rename_edits(db, &internal_url, position, &new_name))
+        .spawn_on_workers_with_db(analysis_db, move |db| {
+            compute_rename_edits(db, &internal_url, position, &new_name)
+        })
         .await
         .map_err(|e| {
             tracing::error!("rename worker failed: {e}");

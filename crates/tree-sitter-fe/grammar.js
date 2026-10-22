@@ -35,6 +35,7 @@ module.exports = grammar({
     $._block_comment_end,
     $._generic_open,
     $._comparison_lt,
+    $._quote_keyword,
   ],
 
   word: $ => $.identifier,
@@ -760,6 +761,8 @@ module.exports = grammar({
     // ==================== EXPRESSIONS ====================
 
     _expression: $ => choice(
+      $.quote_expression,
+      $.quote_splice,
       $.binary_expression,
       $.unary_expression,
       $.cast_expression,
@@ -1242,6 +1245,13 @@ module.exports = grammar({
     match_arm_break: $ => 'break',
 
     match_arm_continue: $ => 'continue',
+
+    quote_expression: $ => seq(
+      alias($._quote_keyword, 'quote'),
+      field('body', $.block),
+    ),
+
+    quote_splice: $ => seq('$', '{', field('value', $._expression), '}'),
 
     with_expression: $ => seq(
       'with',

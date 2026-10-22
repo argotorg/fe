@@ -665,6 +665,9 @@ fn check_sem_const_wf<'db>(
     value: SemConstId<'db>,
 ) -> WellFormedness<'db> {
     match value.value(db) {
+        SemConstValue::ItemCode { ty, .. } | SemConstValue::Meta { ty, .. } => {
+            check_ty_wf(db, solve_cx, *ty)
+        }
         SemConstValue::Description(term) => check_ty_wf(db, solve_cx, TyId::const_ty(db, *term)),
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => {
             for child in elems.iter().copied() {

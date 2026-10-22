@@ -2812,6 +2812,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 span.resolve(db),
                 error_code,
             ),
+            Self::CompileTimePhase { primary, message } => primary_diag(
+                severity,
+                message,
+                "compile-time-only value cannot be used in this runtime context",
+                primary.resolve(db),
+                error_code,
+            ),
             Self::InfiniteOccurrence(span) => primary_diag(
                 Severity::Error,
                 "infinite sized type found",

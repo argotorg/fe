@@ -23,11 +23,11 @@ pub async fn handle_signature_help(
             .uri
             .clone(),
     );
+    let analysis_db = backend.analysis_db_for_url(&url);
 
-    let file = backend
-        .db
+    let file = analysis_db
         .workspace()
-        .get(&backend.db, &url)
+        .get(&analysis_db, &url)
         .ok_or_else(|| {
             ResponseError::new(
                 async_lsp::ErrorCode::INTERNAL_ERROR,
@@ -35,12 +35,12 @@ pub async fn handle_signature_help(
             )
         })?;
 
-    let file_text = file.text(&backend.db);
+    let file_text = file.text(&analysis_db);
     let cursor = to_offset_from_position(params.text_document_position_params.position, file_text);
-    let top_mod = map_file_to_mod(&backend.db, file);
+    let top_mod = map_file_to_mod(&analysis_db, file);
 
     // Find the enclosing function call and get signature info
-    if let Some(sig_info) = find_signature_at_cursor(&backend.db, top_mod, cursor, file_text) {
+    if let Some(sig_info) = find_signature_at_cursor(&analysis_db, top_mod, cursor, file_text) {
         Ok(Some(sig_info))
     } else {
         Ok(None)

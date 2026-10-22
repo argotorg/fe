@@ -548,7 +548,7 @@ impl<'db> UnsafeChecker<'db, '_> {
                 self.check_record_init(expr, fields);
                 fields.iter().for_each(|field| self.check_expr(field.expr));
             }
-            Expr::Tuple(elems) | Expr::Array(elems) => {
+            Expr::Tuple(elems) | Expr::Array(elems) | Expr::ItemQuote(elems) => {
                 elems.iter().for_each(|elem| self.check_expr(*elem));
             }
         }

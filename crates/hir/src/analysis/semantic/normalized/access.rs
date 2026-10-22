@@ -132,7 +132,9 @@ impl<'db> NStatementKind<'db> {
                 NExpr::Binary { lhs, rhs, .. } => {
                     accesses.extend([lhs, rhs].map(|arg| OperationAccess::operand(db, body, *arg)));
                 }
-                NExpr::AggregateMake { fields, .. } | NExpr::EnumMake { fields, .. } => {
+                NExpr::ItemQuote { holes: fields, .. }
+                | NExpr::AggregateMake { fields, .. }
+                | NExpr::EnumMake { fields, .. } => {
                     accesses.extend(
                         fields
                             .iter()

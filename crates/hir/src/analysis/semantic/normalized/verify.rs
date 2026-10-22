@@ -551,6 +551,21 @@ fn verify_expr<'db>(
             }
             Ok(())
         }
+        NExpr::ItemQuote { holes, .. } => {
+            let scope = body.owner.key(db).impl_env(db).normalization_scope(db);
+            let code =
+                crate::analysis::ty::corelib::resolve_lib_type_path(db, scope, "core::meta::Code");
+            let item =
+                crate::analysis::ty::corelib::resolve_lib_type_path(db, scope, "core::meta::Item");
+            if !matches!((code, item), (Some(code), Some(item)) if result_ty == TyId::app(db, code, item))
+            {
+                return Err(NormalizedBodyVerifyError::ExpressionType);
+            }
+            for &hole in holes {
+                verify_scalar_ty(db, body, hole)?;
+            }
+            Ok(())
+        }
         NExpr::Forward { .. } | NExpr::CodeRegionRef { .. } => Ok(()),
     }
 }
@@ -971,7 +986,8 @@ fn value_has_mutable_view_origin<'db>(
                 NPlaceBase::Root(_) | NPlaceBase::Deref { .. } => None,
             }
         }
-        NExpr::CodeRegionRef { .. }
+        NExpr::ItemQuote { .. }
+        | NExpr::CodeRegionRef { .. }
         | NExpr::Const(_)
         | NExpr::Unary { .. }
         | NExpr::Binary { .. }

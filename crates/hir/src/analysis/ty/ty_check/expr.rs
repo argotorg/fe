@@ -359,6 +359,26 @@ impl<'db> TyChecker<'db> {
 
         self.env.enter_expr(expr);
         let mut actual = match expr_data {
+            Expr::ItemQuote(holes) => {
+                for &hole in holes {
+                    self.check_expr_unknown(hole);
+                }
+                let code = crate::analysis::ty::corelib::resolve_lib_type_path(
+                    self.db,
+                    self.env.scope(),
+                    "core::meta::Code",
+                );
+                let item = crate::analysis::ty::corelib::resolve_lib_type_path(
+                    self.db,
+                    self.env.scope(),
+                    "core::meta::Item",
+                );
+                match (code, item) {
+                    (Some(code), Some(item)) => ExprProp::new(TyId::app(self.db, code, item), true),
+                    _ => ExprProp::invalid(self.db),
+                }
+            }
+
             Expr::Lit(LitKind::String(string_id)) => {
                 ExprProp::new(self.string_literal_ty(*string_id, expected), true)
             }
@@ -426,6 +446,23 @@ impl<'db> TyChecker<'db> {
 
         actual.ty = normalize_ty(self.db, actual.ty, self.env.scope(), self.env.assumptions());
         self.report_normalization_limit(expr, actual.ty, expected);
+        let compile_time = match self.env.owner() {
+            BodyOwner::Func(function, _) => function.is_const(self.db),
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => true,
+            _ => false,
+        };
+        if !compile_time
+            && let Some(meta) = crate::core::meta::ty_contains_meta_carrier(self.db, actual.ty)
+        {
+            self.push_diag(BodyDiag::CompileTimePhase {
+                primary: expr.span(self.body()).into(),
+                message: format!(
+                    "`{}` is compile-time-only in a runtime expression",
+                    meta.pretty_print(self.db)
+                ),
+            });
+            actual = ExprProp::invalid(self.db);
+        }
         let typeable = Typeable::Expr(expr, actual.clone());
         actual.ty = self.unify_ty(typeable, actual.ty, expected);
         actual

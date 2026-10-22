@@ -1719,6 +1719,22 @@ fn prepare_tests_single_file(
             single_jobs: Vec::new(),
         };
     };
+    match driver::generation::prepare_file(db, file) {
+        Ok(Some(prepared)) => {
+            *db = prepared;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return SuitePreparation {
+                results: suite_error_result(suite, "compile", format!("{error}")),
+                single_jobs: Vec::new(),
+            };
+        }
+    }
+    let file = db
+        .workspace()
+        .get(db, &file_url)
+        .expect("prepared source file");
     let top_mod = db.top_mod(file);
 
     let diagnostics = CompilationDiagnostics::for_top_mod(db, top_mod, &file_url);

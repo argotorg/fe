@@ -12,6 +12,56 @@ use crate::{
 impl<'db> Expr<'db> {
     pub(super) fn lower_ast(ctxt: &mut BodyCtxt<'_, 'db>, ast: ast::Expr) -> ExprId {
         let expr = match ast.kind() {
+            ast::ExprKind::Quote(quote) => {
+                // Retain the original quote source for the checked constructor
+                // to report unsupported syntax; never descend into nested holes.
+                let holes = crate::core::meta::quote_holes(&quote)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|hole| Self::push_to_body_opt(ctxt, hole.value()))
+                    .collect();
+                Self::ItemQuote(holes)
+            }
+            ast::ExprKind::QuoteHole(hole) => {
+                let value = ctxt
+                    .f_ctxt
+                    .generation_holes
+                    .iter()
+                    .find(|(range, _)| *range == hole.syntax().text_range())
+                    .map(|(_, value)| value.clone());
+                match value {
+                    Some(common::generation::FrozenScalar::Bool(value)) => {
+                        Self::Lit(LitKind::Bool(value))
+                    }
+                    Some(common::generation::FrozenScalar::Int {
+                        negative,
+                        bytes,
+                        primitive,
+                    }) => {
+                        let integer = IntegerId::new(
+                            ctxt.f_ctxt.db(),
+                            num_bigint::BigUint::from_bytes_be(&bytes),
+                        );
+                        let mut value =
+                            ctxt.push_expr(Self::Lit(LitKind::Int(integer)), HirOrigin::raw(&ast));
+                        if negative {
+                            value =
+                                ctxt.push_expr(Self::Un(value, UnOp::Minus), HirOrigin::raw(&ast));
+                        }
+                        let primitive = crate::hir_def::prim_ty::PrimTy::from_name(
+                            ctxt.f_ctxt.db(),
+                            IdentId::new(ctxt.f_ctxt.db(), primitive),
+                        )
+                        .expect("validated frozen integer primitive");
+                        let ty = TypeId::new(
+                            ctxt.f_ctxt.db(),
+                            crate::hir_def::TypeKind::Primitive(primitive),
+                        );
+                        Self::Cast(value, crate::hir_def::Partial::Present(ty))
+                    }
+                    None => return ctxt.push_invalid_expr(HirOrigin::raw(&ast)),
+                }
+            }
             ast::ExprKind::Lit(lit) => {
                 if let Some(lit) = lit
                     .lit()

@@ -229,13 +229,17 @@ impl<'db> ScopeId<'db> {
 
     /// Returns `true` if `self` is a transitive reflexive child of `of`.
     pub fn is_transitive_child_of(self, db: &dyn HirDb, of: ScopeId) -> bool {
-        let mut current = Some(self);
-
-        while let Some(scope) = current {
+        let mut pending = vec![self];
+        let mut seen = FxHashSet::default();
+        while let Some(scope) = pending.pop() {
+            if !seen.insert(scope) {
+                continue;
+            }
             if scope == of {
                 return true;
             }
-            current = scope.parent(db);
+            pending.extend(scope.lex_parent(db));
+            pending.extend(scope.parent(db));
         }
 
         false
@@ -256,6 +260,9 @@ impl<'db> ScopeId<'db> {
     /// 1. the lexical parent if it exists
     /// 2. the parent module if 1. does not exist
     pub fn parent(self, db: &'db dyn HirDb) -> Option<Self> {
+        if let Some(publication) = self.data(db).publication_parent {
+            return Some(publication);
+        }
         let mut super_dest = None;
         for edge in self.edges(db) {
             if let EdgeKind::Lex(_) = edge.kind {
@@ -485,6 +492,8 @@ pub struct Scope<'db> {
     pub id: ScopeId<'db>,
     pub edges: IndexSet<ScopeEdge<'db>>,
     pub vis: Visibility,
+    /// Generated item membership, distinct from its lexical producer scope.
+    pub publication_parent: Option<ScopeId<'db>>,
 }
 
 impl<'db> Scope<'db> {
@@ -493,6 +502,7 @@ impl<'db> Scope<'db> {
             id: kind,
             edges: Default::default(),
             vis,
+            publication_parent: None,
         }
     }
 }

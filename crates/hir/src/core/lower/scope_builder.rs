@@ -329,6 +329,76 @@ impl<'db> ScopeGraphBuilder<'db> {
             .add_edge(parent_node, item_node, parent_to_child_edge);
     }
 
+    /// Keep target discovery edges while giving the whole generated function
+    /// its producer lexical origin. Its body remains a child of the function.
+    pub(super) fn set_quoted_function_origin(
+        &mut self,
+        function: crate::hir_def::Func<'db>,
+        producer: Option<parser::TextRange>,
+        producer_block: Option<parser::TextRange>,
+    ) {
+        let root = super::top_mod_ast(self.db, self.top_mod);
+        use parser::ast::prelude::*;
+        let function_node = self
+            .graph
+            .nodes
+            .iter()
+            .find_map(|(node, (scope, _))| {
+                (*scope == ScopeId::Item(function.into())).then_some(node)
+            })
+            .expect("generated function scope");
+        let block_node = producer_block.and_then(|range| {
+            self.graph.nodes.iter().find_map(|(node, (scope, _))| {
+                let ScopeId::Block(body, expression) = *scope else {
+                    return None;
+                };
+                let crate::span::HirOrigin::Raw(ptr) =
+                    body.source_map(self.db).expr_map.node_to_source(expression)
+                else {
+                    return None;
+                };
+                let expr_node = ptr.to_node(root.syntax());
+                let matches_range = expr_node.syntax().text_range() == range
+                    || match expr_node.kind() {
+                        parser::ast::ExprKind::Unsafe(unsafe_expr) => unsafe_expr
+                            .block()
+                            .is_some_and(|block| block.syntax().text_range() == range),
+                        _ => false,
+                    };
+                matches_range.then_some(node)
+            })
+        });
+        let producer_node = self
+            .graph
+            .nodes
+            .iter()
+            .find_map(|(node, (scope, _))| match (producer, scope) {
+                (None, ScopeId::Item(ItemKind::TopMod(mod_))) if *mod_ == self.top_mod => {
+                    Some(node)
+                }
+                (Some(range), ScopeId::Item(ItemKind::Mod(mod_))) => {
+                    let crate::span::HirOrigin::Raw(ptr) = mod_.origin(self.db) else {
+                        return None;
+                    };
+                    (ptr.to_node(root.syntax()).syntax().text_range() == range).then_some(node)
+                }
+                _ => None,
+            })
+            .expect("validated producer module exists in copied source");
+        self.graph
+            .edges
+            .entry(function_node)
+            .or_default()
+            .retain(|(_, kind)| !matches!(kind, EdgeKind::Lex(_)));
+        self.graph.nodes[function_node].1.publication_parent = Some(self.top_mod.scope());
+        let lexical = if producer_block.is_some() {
+            block_node.expect("validated producer block exists in unchanged copied source")
+        } else {
+            producer_node
+        };
+        self.graph.add_lex_edge(function_node, lexical);
+    }
+
     pub(super) fn joined_id(&self, variant: TrackedItemVariant<'db>) -> TrackedItemId<'db> {
         self.id_stack.last().unwrap().join(self.db, variant)
     }

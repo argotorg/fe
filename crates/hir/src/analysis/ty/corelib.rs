@@ -281,6 +281,9 @@ pub(crate) enum NumericExternIntrinsic {
 
 #[derive(Clone, Copy)]
 pub(crate) enum CtfeExternIntrinsic {
+    MetaFieldCount,
+    MetaField,
+    MetaFieldType,
     SizeOf,
     StorageSlots,
     Keccak256,
@@ -309,7 +312,13 @@ pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
         Some(RuntimeBuiltinFuncKind::PanicCode) => return Some(CtfeExternIntrinsic::PanicCode),
         _ => {}
     }
-    if lib_func_matches(db, func, "core::intrinsic::size_of") {
+    if lib_func_matches(db, func, "core::meta::field_count") {
+        Some(CtfeExternIntrinsic::MetaFieldCount)
+    } else if lib_func_matches(db, func, "core::meta::field") {
+        Some(CtfeExternIntrinsic::MetaField)
+    } else if lib_func_matches(db, func, "core::meta::field_type") {
+        Some(CtfeExternIntrinsic::MetaFieldType)
+    } else if lib_func_matches(db, func, "core::intrinsic::size_of") {
         Some(CtfeExternIntrinsic::SizeOf)
     } else if lib_func_matches(db, func, "core::intrinsic::storage_slots") {
         Some(CtfeExternIntrinsic::StorageSlots)

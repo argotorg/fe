@@ -71,7 +71,9 @@ pub(crate) fn const_scalar_from_value<'db>(
 ) -> Option<ConstScalar> {
     let ty = sem_const_ty(db, value);
     match value.value(db) {
-        SemConstValue::Unit
+        SemConstValue::Meta { .. }
+        | SemConstValue::ItemCode { .. }
+        | SemConstValue::Unit
         | SemConstValue::Tuple { .. }
         | SemConstValue::Struct { .. }
         | SemConstValue::Array { .. }
@@ -234,7 +236,11 @@ fn lower_const_node<'db>(
         });
     }
     match value.value(db) {
-        SemConstValue::Unit | SemConstValue::Scalar { .. } | SemConstValue::Description(..) => None,
+        SemConstValue::Meta { .. }
+        | SemConstValue::ItemCode { .. }
+        | SemConstValue::Unit
+        | SemConstValue::Scalar { .. }
+        | SemConstValue::Description(..) => None,
         SemConstValue::Tuple { elems, .. }
         | SemConstValue::Struct { fields: elems, .. }
         | SemConstValue::Array { elems, .. } => Some(ConstNode::Aggregate {

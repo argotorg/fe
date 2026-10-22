@@ -35,10 +35,13 @@ pub async fn handle_code_lens(
     {
         return Ok(None);
     }
+    let analysis_db = backend.analysis_db_for_url(&internal_url);
 
     // Spawn heavy reference counting on the worker pool
     let raw_lenses: Vec<RawCodeLens> = backend
-        .spawn_on_workers(move |db| compute_code_lens_data(db, &internal_url))
+        .spawn_on_workers_with_db(analysis_db, move |db| {
+            compute_code_lens_data(db, &internal_url)
+        })
         .await
         .map_err(|e| {
             tracing::error!("code lens worker failed: {e}");

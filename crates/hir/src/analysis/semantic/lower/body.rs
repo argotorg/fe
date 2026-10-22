@@ -1206,6 +1206,20 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
 
         match expr_data {
+            Expr::ItemQuote(holes) => {
+                let holes = holes
+                    .iter()
+                    .map(|&hole| self.lower_expr_operand(hole))
+                    .collect();
+                self.emit_expr_with_origin(
+                    origin,
+                    ty,
+                    SExpr::ItemQuote {
+                        expression: expr,
+                        holes,
+                    },
+                )
+            }
             Expr::Lit(lit) => self.lower_leaf_literal(expr, lit),
             Expr::Path(_) => self.lower_path_expr(expr),
             Expr::Try(inner) => self.lower_try(expr, *inner, ty),

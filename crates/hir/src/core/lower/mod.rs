@@ -39,6 +39,7 @@ mod contract;
 mod error;
 mod event;
 mod expr;
+mod generated;
 mod hir_builder;
 mod item;
 mod msg;
@@ -158,6 +159,7 @@ pub(crate) fn scope_graph_impl<'db>(
         item::validate_module_inner_attrs(&mut ctxt, items.inner_attr_list());
         lower_module_items(&mut ctxt, items);
     }
+    generated::append_functions(&mut ctxt);
     ctxt.leave_item_scope(top_mod);
 
     ctxt.build()
@@ -218,6 +220,10 @@ pub(super) struct FileLowerCtxt<'db> {
     next_impl_trait_idx: u32,
     next_static_assert_idx: u32,
     diagnostics: Vec<LowerDiagnostic>,
+    generation_holes: Vec<(parser::TextRange, common::generation::FrozenScalar)>,
+    /// Set while a generated function is lowered: its body is lowered with the
+    /// module, where the splice values are known, not on demand.
+    lowering_generated_function: bool,
 }
 
 impl<'db> FileLowerCtxt<'db> {
@@ -228,6 +234,8 @@ impl<'db> FileLowerCtxt<'db> {
             next_impl_trait_idx: 0,
             next_static_assert_idx: 0,
             diagnostics: Vec::new(),
+            generation_holes: Vec::new(),
+            lowering_generated_function: false,
         }
     }
 
@@ -238,6 +246,8 @@ impl<'db> FileLowerCtxt<'db> {
             next_impl_trait_idx: 0,
             next_static_assert_idx: 0,
             diagnostics: Vec::new(),
+            generation_holes: Vec::new(),
+            lowering_generated_function: false,
         }
     }
 

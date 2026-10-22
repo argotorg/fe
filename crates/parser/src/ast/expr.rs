@@ -7,7 +7,9 @@ ast_node! {
     /// An expression.
     /// Use [`Self::kind`] to determine the type of expression.
     pub struct Expr,
-    SK::BlockExpr
+    SK::QuoteExpr
+    | SK::QuoteHoleExpr
+    | SK::BlockExpr
     | SK::ClosureExpr
     | SK::BinExpr
     | SK::UnExpr
@@ -38,6 +40,8 @@ impl Expr {
     /// Returns the kind of expression.
     pub fn kind(&self) -> ExprKind {
         match self.syntax().kind() {
+            SK::QuoteExpr => ExprKind::Quote(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::QuoteHoleExpr => ExprKind::QuoteHole(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::BlockExpr => ExprKind::Block(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ClosureExpr => ExprKind::Closure(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::BinExpr => ExprKind::Bin(AstNode::cast(self.syntax().clone()).unwrap()),
@@ -568,6 +572,8 @@ impl AugAssignExpr {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From, derive_more::TryInto)]
 pub enum ExprKind {
+    Quote(QuoteExpr),
+    QuoteHole(QuoteHoleExpr),
     Lit(LitExpr),
     Let(LetExpr),
     Block(BlockExpr),
@@ -1334,5 +1340,25 @@ mod tests {
         assert!(matches!(range_expr.lhs().unwrap().kind(), ExprKind::Lit(_)));
         // rhs should be (n + 1) since .. has lower precedence
         assert!(matches!(range_expr.rhs().unwrap().kind(), ExprKind::Bin(_)));
+    }
+}
+
+ast_node! {
+    /// The template's exact authored syntax is retained until checked copying.
+    pub struct QuoteExpr,
+    SK::QuoteExpr,
+}
+impl QuoteExpr {
+    pub fn body(&self) -> Option<BlockExpr> {
+        support::child(self.syntax())
+    }
+}
+ast_node! {
+    pub struct QuoteHoleExpr,
+    SK::QuoteHoleExpr,
+}
+impl QuoteHoleExpr {
+    pub fn value(&self) -> Option<Expr> {
+        support::child(self.syntax())
     }
 }

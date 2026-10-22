@@ -319,7 +319,7 @@ impl<'db> RegionWalk<'db> {
             Expr::RecordInit(_, fields) => fields
                 .iter()
                 .for_each(|field| self.expr(field.expr, region)),
-            Expr::Tuple(elems) | Expr::Array(elems) => {
+            Expr::Tuple(elems) | Expr::Array(elems) | Expr::ItemQuote(elems) => {
                 elems.iter().for_each(|&elem| self.expr(elem, region))
             }
             Expr::If(cond, then, else_) => {
