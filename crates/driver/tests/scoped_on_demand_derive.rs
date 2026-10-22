@@ -1249,3 +1249,33 @@ static_assert(with (Provider) { Pair::score() == 42 })
             .any(|request| request.scoped_impl.is_some())
     );
 }
+
+#[test]
+fn provider_condition_prepares_its_generated_prerequisite_before_admission() {
+    let source = r#"use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> usize }
+trait Seed { const fn seed() -> usize }
+pub struct Pair {}
+pub struct Token {}
+struct B {}
+impl Derive<Seed> for B {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn seed() -> usize { 42 } }
+    }
+}
+struct A {}
+impl Derive<Score> for A where { with (B) { Token::seed() == 42 } } {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn score() -> usize { 42 } }
+    }
+}
+const fn run() -> usize { with (A) { Pair::score() } }
+"#;
+    let output = prepare(source).unwrap();
+    assert_eq!(eval_const_fn_u256(&output, "run"), "42");
+    let false_condition = source.replace("Token::seed() == 42", "Token::seed() == 41");
+    let error = prepare_err(&false_condition);
+    assert!(error.contains("const where predicate failed"), "{error}");
+    assert!(!error.contains("requires a prepared"), "{error}");
+}

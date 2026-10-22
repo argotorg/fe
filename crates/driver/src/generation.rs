@@ -594,7 +594,11 @@ pub fn prepare_file(
                         .map_err(|cause| error(pending.opening.binding_range, cause))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            for demand in pending {
+            // Admission can itself depend on generated const-condition bodies.
+            // Discover every such request and invalid opening before any CTFE.
+            let mut pending = std::collections::VecDeque::from(pending);
+            let mut ready = Vec::new();
+            while let Some(demand) = pending.pop_front() {
                 let range = demand.opening.binding_range;
                 if !batch.insert(demand.clone()) {
                     continue;
@@ -608,6 +612,24 @@ pub fn prepare_file(
                 }
                 let request = hir::core::meta::rebind_generation_request(&output, &demand)
                     .map_err(|cause| error(range, cause))?;
+                let dependencies = scoped_provider_admission_preflight::accumulated::<
+                    hir::analysis::ty::trait_resolution::generation::GenerationDemand,
+                >(&output, request);
+                let blocked = !dependencies.is_empty();
+                for dependency in dependencies {
+                    pending.push_back(
+                        dependency
+                            .demand
+                            .clone()
+                            .map_err(|cause| error(dependency.opening.binding_range, cause))?,
+                    );
+                }
+                if !blocked {
+                    ready.push((demand, request));
+                }
+            }
+            for (demand, request) in ready {
+                let range = demand.opening.binding_range;
                 let opening = request.opening(&output);
                 let origin = opening.scope(&output).item();
                 let (key, input) = hir::core::meta::scoped_derive_provider(
@@ -662,6 +684,22 @@ pub fn prepare_file(
         root.syntax().text_range(),
         "scoped generation preparation limit exceeded".into(),
     ))
+}
+
+#[salsa::tracked]
+fn scoped_provider_admission_preflight<'db>(
+    db: &'db dyn hir::analysis::HirAnalysisDb,
+    request: hir::analysis::ty::trait_resolution::generation::GenerationRequest<'db>,
+) {
+    let opening = request.opening(db);
+    let origin = opening.scope(db).item();
+    let _ = hir::core::meta::scoped_derive_provider(
+        db,
+        opening,
+        request.goal(db),
+        origin,
+        origin.span().into(),
+    );
 }
 
 #[salsa::tracked]
