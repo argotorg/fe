@@ -2374,22 +2374,6 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 let [family, query_result] = key.subst(self.db).generic_args(self.db) else {
                     return Err(CtfeError::NotConstEvaluable { origin }.into());
                 };
-                if !matches!(
-                    target_ty.data(self.db),
-                    crate::analysis::ty::ty_def::TyData::TyBase(
-                        crate::analysis::ty::ty_def::TyBase::Prim(
-                            crate::analysis::ty::ty_def::PrimTy::Bool
-                                | crate::analysis::ty::ty_def::PrimTy::U64
-                                | crate::analysis::ty::ty_def::PrimTy::U256
-                        )
-                    )
-                ) {
-                    return Err(CtfeError::InvalidOperation {
-                        origin,
-                        message: "type_is supports only bool, u64, and u256 candidates".into(),
-                    }
-                    .into());
-                }
                 let field_ty = field.ty(self.db);
                 if field_ty.has_invalid(self.db)
                     || family.has_invalid(self.db)
