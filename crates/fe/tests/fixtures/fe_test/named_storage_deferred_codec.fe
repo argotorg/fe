@@ -1,0 +1,47 @@
+use core::marker::{Pinned, Storage}
+use core::ops::{LaneCodec, Location, StateIndex}
+use std::evm::{SolLanes, Evm, Wei}
+trait Marker {}
+struct Item {}
+impl Marker for Item as Unrelated {}
+struct Outer<T> {}
+impl<T> LaneCodec<u8> for Outer<T> where SolLanes: LaneCodec<T> {
+    const BITS: u256 = 8
+    fn get(_ word: u256, offset: u256) -> u8 { ((word >> offset) & 255).downcast_truncate() }
+    fn set(_ word: u256, offset: u256, value: own u8) -> u256 { (word & !(255 << offset)) | ((value as u256) << offset) }
+}
+impl<T> LaneCodec<u8> for Outer<T> as Chosen where SolLanes: LaneCodec<T> {
+    const BITS: u256 = 8
+    fn get(_ word: u256, offset: u256) -> u8 { with (<Outer<T> as LaneCodec<u8>>) { <Outer<T> as LaneCodec<u8>>::get(word, offset: offset) + 1 } }
+    fn set(_ word: u256, offset: u256, value: own u8) -> u256 { with (<Outer<T> as LaneCodec<u8>>) { <Outer<T> as LaneCodec<u8>>::set(word, offset: offset, value: value - 1) } }
+}
+struct Coll<T> {}
+impl<T> Pinned for Coll<T> { type Space = Storage }
+unsafe impl<T> StateIndex for Coll<T> {
+    type Key = u256
+    type Entry = u8
+    type Lanes = Outer<T>
+    fn locate(self, _ root: u256, _ key: u256) -> Location { Location { slot: root + key / 32, offset: (key % 32) * 8 } }
+}
+fn fill<T>(c: mut Coll<T>) { with (Chosen<T>) { c[0] = 7 } }
+pub fn root(c: mut Coll<u8>) { fill(c: mut c) }
+
+msg M {
+    #[selector = 1]
+    Run -> u8,
+}
+pub contract C {
+    mut c: Coll<u8>
+    recv M {
+        Run -> u8 uses (mut c) {
+            fill(c: mut c)
+            c[0]
+        }
+    }
+}
+#[test]
+fn deferred_child_preserves_chosen_parent() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let raw: u8 = evm.call(addr: c, gas: 400000, value: Wei::zero(), message: M::Run {})
+    assert!(raw == 6)
+}

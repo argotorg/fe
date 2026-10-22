@@ -3899,6 +3899,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "mut_self_storage_receiver_regression",
     "mutex_lock_slot_no_transient_collision",
     "named_storage_codecs",
+    "named_storage_deferred_codec",
     "named_storage_evidence",
     "nested_index_assignment",
     "never_returning_recv_returns",
@@ -5578,7 +5579,11 @@ fn test_cli_build_payable_return_abi() {
 
 #[test]
 fn named_storage_preserves_dispatch_at_both_optimization_levels() {
-    for fixture in ["named_storage_evidence.fe", "named_storage_codecs.fe"] {
+    for fixture in [
+        "named_storage_evidence.fe",
+        "named_storage_codecs.fe",
+        "named_storage_deferred_codec.fe",
+    ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/fe_test")
             .join(fixture);
@@ -5622,5 +5627,77 @@ fn named_storage_aliases_do_not_assume_distinct_dictionaries_are_disjoint() {
                 "{output}"
             );
         }
+    }
+}
+
+#[test]
+fn named_storage_failed_codec_proofs_do_not_fall_back_to_ordinary() {
+    let source = include_str!("fixtures/named_storage_codec_failure.fe");
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("codec.fe");
+    for (name, source, should_pass) in [
+        ("failed packed choice", source.to_string(), false),
+        (
+            "satisfied choice",
+            format!("{source}\nimpl Missing for Arg {{}}\n"),
+            true,
+        ),
+        (
+            "unused whole-slot codec",
+            source.replace("BITS: u256 = 32", "BITS: u256 = 256"),
+            true,
+        ),
+    ] {
+        fs::write(&path, source).unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        if should_pass {
+            assert_eq!(exit, 0, "{name}: {output}");
+        } else {
+            assert_ne!(exit, 0, "failed chosen codec must not select ordinarily");
+            assert!(
+                output.contains("16-0008") && output.contains("implementation choices"),
+                "{output}"
+            );
+        }
+    }
+}
+
+#[test]
+fn named_storage_unrelated_choices_keep_generic_sol_codec_deferral() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("generic_codec.fe");
+    fs::write(
+        &path,
+        r#"
+use std::evm::SolArray
+trait Marker {}
+struct Item {}
+impl Marker for Item as Unrelated {}
+fn fill<T>(array: mut SolArray<T>, value: own T) {
+    with (Unrelated) { array[0] = value }
+}
+pub fn root(array: mut SolArray<u8>) { fill(array: mut array, value: 1) }
+"#,
+    )
+    .unwrap();
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_eq!(
+        exit, 0,
+        "unrelated choice must not turn a deferred codec into a failed choice: {output}"
+    );
+}
+
+#[test]
+fn named_storage_opaque_generic_codec_ignores_unrelated_choices() {
+    let source = include_str!("fixtures/named_storage_generic_codec.fe");
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("generic.fe");
+    for source in [source.to_string(), source.replace("with (Unrelated)", "")] {
+        fs::write(&path, source).unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        assert_eq!(
+            exit, 0,
+            "unrelated choice cannot reject ordinary generic codec: {output}"
+        );
     }
 }

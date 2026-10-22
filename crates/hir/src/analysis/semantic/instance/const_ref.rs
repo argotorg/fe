@@ -501,6 +501,16 @@ fn semantic_callee_key_with_assumptions<'db>(
     assumptions: PredicateListId<'db>,
     provider_resolution_mode: ProviderResolutionMode,
 ) -> Result<Option<SemanticCallCallee<'db>>, MethodArgMapError<'db>> {
+    let mut completed;
+    let callable = if callable.has_deferred_evidence(db) {
+        completed = callable.clone();
+        completed
+            .complete_deferred_evidence(db)
+            .ok_or(MethodArgMapError::MissingBody)?;
+        &completed
+    } else {
+        callable
+    };
     let CallableDef::Func(nominal_func) = callable.callable_def() else {
         return Ok(None);
     };

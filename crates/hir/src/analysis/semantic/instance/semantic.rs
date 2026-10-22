@@ -1414,12 +1414,39 @@ impl<'db> SemanticInstance<'db> {
         db: &'db dyn HirAnalysisDb,
         expr: ExprId,
     ) -> Result<[SemanticInstanceKey<'db>; 2], SemanticDiagnosticId<'db>> {
+        let calls = self
+            .key(db)
+            .typed_body(db)
+            .place_entry_calls(expr)
+            .ok_or_else(|| {
+                method_arg_map_diagnostic(
+                    db,
+                    self,
+                    MethodArgMapError::MissingBody,
+                    SemOrigin::Expr(expr),
+                )
+            })?;
+        if calls.codec_choice_failed {
+            let goal = calls.codec[0]
+                .trait_inst()
+                .expect("a checked codec has its trait goal");
+            return Err(SemanticDiagnosticId::new(
+                db,
+                SemanticDiagnostic::new(
+                    self,
+                    SemanticDiagnosticKind::StorageViolation,
+                    format!(
+                        "trait bound `{}` is not satisfied under the implementation choices at this indexing operation",
+                        goal.pretty_print(db, true)
+                    ),
+                    SemanticDiagnosticSpan::Origin {
+                        owner: self.key(db).owner(db),
+                        origin: SemOrigin::Expr(expr),
+                    },
+                ),
+            ));
+        }
         let finalize = || {
-            let calls = self
-                .key(db)
-                .typed_body(db)
-                .place_entry_calls(expr)
-                .ok_or(MethodArgMapError::MissingBody)?;
             let one = |callable: &Callable<'db>| {
                 let mut callable = callable.clone();
                 if callable.evidence().is_none() {

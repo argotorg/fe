@@ -60,6 +60,13 @@ pub enum Evidence<'db> {
     /// The assumption at this position in the extended assumption list of
     /// the body the goal was proved in.
     Assumption(u32),
+    /// The compiler's provisional ordinary Solidity codec obligation. Its
+    /// element is still generic, so the whole-slot fallback is not a selection.
+    /// Substitution closes this leaf without replacing any selected parent.
+    DeferredSolCodec {
+        goal: TraitInstId<'db>,
+        scope: ScopeId<'db>,
+    },
 }
 
 impl<'db> EvidenceId<'db> {
@@ -76,7 +83,7 @@ impl<'db> EvidenceId<'db> {
                 instantiated,
                 ..
             } => Some(ResolvedImplInstance::new(*selected, *instantiated, goal)),
-            Evidence::Assumption(_) => None,
+            Evidence::Assumption(_) | Evidence::DeferredSolCodec { .. } => None,
         }
     }
 
@@ -85,6 +92,7 @@ impl<'db> EvidenceId<'db> {
     fn rebase(self, db: &'db dyn HirAnalysisDb, bound: EvidenceList<'db>) -> Option<Self> {
         Some(match self.data(db) {
             Evidence::Assumption(index) => bound.get(db, *index as usize)?,
+            Evidence::DeferredSolCodec { .. } => self,
             Evidence::Impl {
                 selected,
                 instantiated,
@@ -113,11 +121,15 @@ impl<'db> EvidenceId<'db> {
         evidence_has_named_impl(db, self)
     }
 
+    pub(crate) fn has_deferred(self, db: &'db dyn HirAnalysisDb) -> bool {
+        evidence_has_deferred(db, self)
+    }
+
     /// The proofs of an implementation's conditions; none for an assumption.
     pub fn conds(self, db: &'db dyn HirAnalysisDb) -> &'db [EvidenceId<'db>] {
         match self.data(db) {
             Evidence::Impl { conds, .. } => conds,
-            Evidence::Assumption(_) => &[],
+            Evidence::Assumption(_) | Evidence::DeferredSolCodec { .. } => &[],
         }
     }
 
@@ -126,6 +138,7 @@ impl<'db> EvidenceId<'db> {
     pub fn bind(self, db: &'db dyn HirAnalysisDb, bound: EvidenceList<'db>) -> Self {
         match self.data(db) {
             Evidence::Assumption(index) => bound.get(db, *index as usize).unwrap_or(self),
+            Evidence::DeferredSolCodec { .. } => self,
             Evidence::Impl {
                 selected,
                 instantiated,
@@ -142,6 +155,57 @@ impl<'db> EvidenceId<'db> {
     }
 }
 
+#[salsa::tracked(returns(copy))]
+fn evidence_has_deferred<'db>(db: &'db dyn HirAnalysisDb, proof: EvidenceId<'db>) -> bool {
+    match proof.data(db) {
+        Evidence::DeferredSolCodec { .. } => true,
+        Evidence::Impl { conds, .. } => conds.iter().any(|proof| proof.has_deferred(db)),
+        Evidence::Assumption(_) => false,
+    }
+}
+
+/// Complete only the ordinary obligations explicitly retained by the producer.
+/// This runs at instance finalization, never in generic substitution/folding.
+#[salsa::tracked(returns(copy))]
+pub(crate) fn complete_deferred_evidence<'db>(
+    db: &'db dyn HirAnalysisDb,
+    proof: EvidenceId<'db>,
+) -> Option<EvidenceId<'db>> {
+    if !proof.has_deferred(db) {
+        return Some(proof);
+    }
+    match proof.data(db) {
+        Evidence::Assumption(_) => Some(proof),
+        Evidence::DeferredSolCodec { goal, scope } => {
+            if collect_flags(db, *goal).intersects(
+                TyFlags::HAS_PARAM
+                    | TyFlags::HAS_VAR
+                    | TyFlags::HAS_PROJECTION
+                    | TyFlags::HAS_INVALID,
+            ) {
+                Some(proof)
+            } else {
+                prove(db, TraitSolveCx::new(db, *scope), *goal)
+            }
+        }
+        Evidence::Impl {
+            selected,
+            instantiated,
+            conds,
+        } => Some(EvidenceId::new(
+            db,
+            Evidence::Impl {
+                selected: *selected,
+                instantiated: *instantiated,
+                conds: conds
+                    .iter()
+                    .map(|&proof| complete_deferred_evidence(db, proof))
+                    .collect::<Option<_>>()?,
+            },
+        )),
+    }
+}
+
 /// Proofs form a shared DAG. Cache this property so repeated tuple/condition
 /// children do not turn ground-key construction into an exponential walk.
 #[salsa::tracked(returns(copy))]
@@ -153,14 +217,14 @@ fn evidence_has_named_impl<'db>(db: &'db dyn HirAnalysisDb, evidence: EvidenceId
             matches!(selected.origin(db), ImplementorOrigin::Hir(implementation) if implementation.selection_name(db).is_some())
                 || conds.iter().any(|cond| cond.has_named_impl(db))
         }
-        Evidence::Assumption(_) => false,
+        Evidence::Assumption(_) | Evidence::DeferredSolCodec { .. } => false,
     }
 }
 
 #[salsa::tracked(returns(copy))]
 fn evidence_is_closed<'db>(db: &'db dyn HirAnalysisDb, evidence: EvidenceId<'db>) -> bool {
     match evidence.data(db) {
-        Evidence::Assumption(_) => false,
+        Evidence::Assumption(_) | Evidence::DeferredSolCodec { .. } => false,
         Evidence::Impl { conds, .. } => conds.iter().all(|cond| cond.is_closed(db)),
     }
 }
@@ -282,6 +346,13 @@ impl<'db> TyFoldable<'db> for EvidenceId<'db> {
                         .collect(),
                 },
             ),
+            Evidence::DeferredSolCodec { goal, scope } => EvidenceId::new(
+                db,
+                Evidence::DeferredSolCodec {
+                    goal: goal.fold_with(db, folder),
+                    scope: *scope,
+                },
+            ),
             Evidence::Assumption(_) => self,
         }
     }
@@ -292,16 +363,19 @@ impl<'db> TyVisitable<'db> for EvidenceId<'db> {
     where
         V: TyVisitor<'db> + ?Sized,
     {
-        if let Evidence::Impl {
-            instantiated,
-            conds,
-            ..
-        } = self.data(visitor.db())
-        {
-            instantiated.visit_with(visitor);
-            for cond in conds {
-                cond.visit_with(visitor);
+        match self.data(visitor.db()) {
+            Evidence::Impl {
+                instantiated,
+                conds,
+                ..
+            } => {
+                instantiated.visit_with(visitor);
+                for cond in conds {
+                    cond.visit_with(visitor);
+                }
             }
+            Evidence::DeferredSolCodec { goal, .. } => goal.visit_with(visitor),
+            Evidence::Assumption(_) => {}
         }
     }
 }
@@ -312,6 +386,25 @@ fn is_closed_goal<'db>(db: &'db dyn HirAnalysisDb, goal: TraitInstId<'db>) -> bo
     !collect_flags(db, goal).intersects(TyFlags::HAS_PARAM | TyFlags::HAS_VAR)
 }
 
+/// Result owned by proof production. A deliberately deferred ordinary layout
+/// obligation is distinct from a proof that the checked context cannot supply.
+/// Consumers must not turn an unavailable lexical proof into ordinary dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, SalsaValue)]
+pub(crate) enum ProofOutcome<'db> {
+    Proven(EvidenceId<'db>),
+    Deferred,
+    Unavailable,
+}
+
+impl<'db> ProofOutcome<'db> {
+    pub(crate) fn evidence(self) -> Option<EvidenceId<'db>> {
+        match self {
+            Self::Proven(evidence) => Some(evidence),
+            Self::Deferred | Self::Unavailable => None,
+        }
+    }
+}
+
 /// Proves `goal` in `solve_cx`, the context of the body that uses it. A goal
 /// or proof that still holds inference variables, such as a generic function
 /// item's own, has no evidence: it is proved where the body is instantiated.
@@ -320,6 +413,14 @@ pub fn prove<'db>(
     solve_cx: TraitSolveCx<'db>,
     goal: TraitInstId<'db>,
 ) -> Option<EvidenceId<'db>> {
+    prove_outcome(db, solve_cx, goal).evidence()
+}
+
+pub(crate) fn prove_outcome<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    goal: TraitInstId<'db>,
+) -> ProofOutcome<'db> {
     // Inference variables belong to the checker's unification table. Header
     // matching uses its own table and must only receive settled proof inputs.
     // Unresolved calls retain their ordinary inference diagnostics; evidence
@@ -330,7 +431,7 @@ pub fn prove<'db>(
             collect_flags(db, choices.items(db).as_slice()).intersects(unsettled)
         })
     {
-        return None;
+        return ProofOutcome::Deferred;
     }
     // A body's declared dictionary remains authoritative even when its type
     // is concrete. A lexical override explicitly replaces that dictionary.
@@ -342,7 +443,7 @@ pub fn prove<'db>(
             .iter()
             .position(|&bound| bound == goal)
     {
-        return Some(EvidenceId::new(db, Evidence::Assumption(index as u32)));
+        return ProofOutcome::Proven(EvidenceId::new(db, Evidence::Assumption(index as u32)));
     }
     // Closed goals without supplied dictionaries or choices share a proof.
     let solve_cx = if is_closed_goal(db, goal) && solve_cx.choices().is_none() {
@@ -527,73 +628,88 @@ fn prove_in<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     goal: TraitInstId<'db>,
-) -> Option<EvidenceId<'db>> {
+) -> ProofOutcome<'db> {
     let settled = |flags: TyFlags| !flags.intersects(TyFlags::HAS_VAR | TyFlags::HAS_INVALID);
     if !settled(collect_flags(db, goal)) {
-        return None;
+        return ProofOutcome::Deferred;
     }
     let Selection::Unique(resolved) = resolve_trait_impl_instance(db, solve_cx, goal) else {
-        return None;
+        return if collect_flags(db, goal).intersects(TyFlags::HAS_PARAM | TyFlags::HAS_PROJECTION)
+            && !solve_cx.has_matching_choice(db, goal)
+        {
+            ProofOutcome::Deferred
+        } else {
+            ProofOutcome::Unavailable
+        };
     };
     if !settled(collect_flags(db, resolved)) {
-        return None;
+        return ProofOutcome::Deferred;
     }
     if matches!(
         resolved.selected().origin(db),
         ImplementorOrigin::Structural
     ) && super::sol_codec::sol_codec_proof_is_deferred(db, resolved.trait_inst())
     {
-        return None;
+        return ProofOutcome::Proven(EvidenceId::new(
+            db,
+            Evidence::DeferredSolCodec {
+                goal: resolved.trait_inst(),
+                scope: solve_cx.origin_scope(db),
+            },
+        ));
     }
-    let evidence = match resolved.selected().origin(db) {
-        ImplementorOrigin::Assumption => {
-            Evidence::Assumption(answering_assumption(db, solve_cx, goal)? as u32)
-        }
-        ImplementorOrigin::Hir(_) => {
-            // A `mut` goal's conditions are its implementation's `mut?`
-            // bounds at `mut`.
-            let mode = Some(if goal.is_mut(db) {
-                BorrowKind::Mut
-            } else {
-                BorrowKind::Ref
-            });
-            Evidence::Impl {
+    let selected_proof = || -> Option<EvidenceId<'db>> {
+        let evidence = match resolved.selected().origin(db) {
+            ImplementorOrigin::Assumption => {
+                Evidence::Assumption(answering_assumption(db, solve_cx, goal)? as u32)
+            }
+            ImplementorOrigin::Hir(_) => {
+                // A `mut` goal's conditions are its implementation's `mut?`
+                // bounds at `mut`.
+                let mode = Some(if goal.is_mut(db) {
+                    BorrowKind::Mut
+                } else {
+                    BorrowKind::Ref
+                });
+                Evidence::Impl {
+                    selected: resolved.selected(),
+                    instantiated: resolved.instantiated(),
+                    conds: resolved
+                        .instantiated_constraints(db)
+                        .list(db)
+                        .iter()
+                        .map(|&cond| prove(db, solve_cx, cond.at_mode(db, mode)))
+                        .collect::<Option<_>>()?,
+                }
+            }
+            ImplementorOrigin::VirtualContract(_)
+            | ImplementorOrigin::Callable
+            | ImplementorOrigin::Structural => Evidence::Impl {
                 selected: resolved.selected(),
                 instantiated: resolved.instantiated(),
-                conds: resolved
-                    .instantiated_constraints(db)
-                    .list(db)
-                    .iter()
-                    .map(|&cond| prove(db, solve_cx, cond.at_mode(db, mode)))
-                    .collect::<Option<_>>()?,
+                conds: Vec::new(),
+            },
+        };
+        let proof = EvidenceId::new(db, evidence);
+        // A selected implementation also receives its private prerequisite
+        // dictionaries. Validate their shared implied slots here, while this
+        // producer owns the selection, before any body could reconstruct a
+        // missing slot with an ordinary proof.
+        if proof.has_named_impl(db) {
+            let supplied = expanded_condition_evidence(db, proof, solve_cx.assumptions());
+            let count = resolved
+                .selected()
+                .constraints(db)
+                .extend_all_bounds(db)
+                .list(db)
+                .len();
+            if (0..count).any(|index| supplied.get(db, index).is_none()) {
+                return None;
             }
         }
-        ImplementorOrigin::VirtualContract(_)
-        | ImplementorOrigin::Callable
-        | ImplementorOrigin::Structural => Evidence::Impl {
-            selected: resolved.selected(),
-            instantiated: resolved.instantiated(),
-            conds: Vec::new(),
-        },
+        Some(proof)
     };
-    let proof = EvidenceId::new(db, evidence);
-    // A selected implementation also receives its private prerequisite
-    // dictionaries. Validate their shared implied slots here, while this
-    // producer owns the selection, before any body could reconstruct a
-    // missing slot with an ordinary proof.
-    if proof.has_named_impl(db) {
-        let supplied = expanded_condition_evidence(db, proof, solve_cx.assumptions());
-        let count = resolved
-            .selected()
-            .constraints(db)
-            .extend_all_bounds(db)
-            .list(db)
-            .len();
-        if (0..count).any(|index| supplied.get(db, index).is_none()) {
-            return None;
-        }
-    }
-    Some(proof)
+    selected_proof().map_or(ProofOutcome::Unavailable, ProofOutcome::Proven)
 }
 
 /// The implementation answering `inst` where a checked body is
@@ -629,6 +745,7 @@ pub(crate) fn instantiated_selection<'db>(
             };
             Some(ResolvedImplInstance::new(*selected, instantiated, goal()))
         }
+        Some(Evidence::DeferredSolCodec { .. }) => None,
         Some(Evidence::Assumption(_)) if is_closed_goal(db, inst) => {
             let ordinary = solve_cx.with_assumptions(PredicateListId::empty_list(db));
             instantiated_selection(db, prove(db, ordinary, inst), solve_cx, inst)
@@ -864,6 +981,15 @@ pub(crate) fn instance_evidence<'db>(
             .enumerate()
             .map(|(index, &goal)| {
                 let supplied = supplied.get(db, index);
+                if let Some(proof) = supplied
+                    && proof.has_deferred(db)
+                {
+                    // A selected parent is authoritative even if one retained
+                    // obligation cannot close. Never replace that tree.
+                    let completed = complete_deferred_evidence(db, proof)?;
+                    return (!is_closed_goal(db, goal) || completed.is_closed(db))
+                        .then_some(completed);
+                }
                 if is_closed_goal(db, goal) && !supplied.is_some_and(|proof| proof.is_closed(db)) {
                     prove(db, solve_cx, goal)
                 } else {
@@ -879,6 +1005,6 @@ fn prove_cycle_initial<'db>(
     _: salsa::Id,
     _solve_cx: TraitSolveCx<'db>,
     _goal: TraitInstId<'db>,
-) -> Option<EvidenceId<'db>> {
-    None
+) -> ProofOutcome<'db> {
+    ProofOutcome::Unavailable
 }

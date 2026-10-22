@@ -1674,11 +1674,16 @@ impl<'db> TyCheckEnv<'db> {
         let solve_cx = TraitSolveCx::new(self.db, prober.scope).with_assumptions(assumptions);
         for (&expr, calls) in &mut self.place_entries {
             let solve_cx = solve_cx.with_choices(self.expr_choices[expr]);
-            for callable in calls.iter_mut() {
+            let mut codec_choice_failed = false;
+            for (index, callable) in calls.iter_mut().enumerate() {
                 *callable = callable.clone().fold_with(self.db, &mut prober);
-                callable.record_evidence(self.db, solve_cx);
+                let outcome = callable.record_evidence(self.db, solve_cx);
+                codec_choice_failed |= index > 0
+                    && solve_cx.choices().is_some()
+                    && matches!(outcome, super::super::evidence::ProofOutcome::Unavailable);
                 callable.record_bound_evidence(self.db, solve_cx);
             }
+            calls.codec_choice_failed = codec_choice_failed;
             if let Some(goal) = calls.locate.trait_inst()
                 && calls.locate.evidence().is_none()
                 && !super::super::visitor::collect_flags(self.db, goal).intersects(

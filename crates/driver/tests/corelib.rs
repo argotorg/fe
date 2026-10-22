@@ -673,3 +673,58 @@ pub fn root() -> u32 {
         diags.format_diags(&db)
     );
 }
+
+#[test]
+fn sol_codec_fallback_proof_waits_for_its_element_type() {
+    use hir::analysis::ty::{
+        evidence::{Evidence, prove},
+        trait_def::{ImplementorOrigin, TraitInstId},
+        trait_resolution::PredicateListId,
+        ty_def::TyId,
+    };
+    use hir::hir_def::CallableDef;
+
+    let mut db = release_profile_db();
+    let file = db.workspace().touch(
+        &mut db,
+        Url::parse("file:///sol_codec_fallback_proof.fe").unwrap(),
+        Some("pub fn root<T>() {}\n".to_string()),
+    );
+    let top_mod = db.top_mod(file);
+    let func = top_mod.all_funcs(&db)[0];
+    let scope = func.scope();
+    let codec = resolve_lib_type_path(&db, scope, "std::evm::SolLanes").unwrap();
+    let trait_ = resolve_core_trait(&db, scope, &["ops", "LaneCodec"]).unwrap();
+    let goal = |element| TraitInstId::new_simple(&db, trait_, vec![codec, element]);
+    let generic = goal(CallableDef::Func(func).params(&db)[0]);
+    let solve_cx = TraitSolveCx::new(&db, scope);
+
+    // The solver's provisional whole-slot fallback cannot become a lasting
+    // implementation proof: substituting a packed element changes its answer.
+    assert!(matches!(
+        is_goal_satisfiable(&db, solve_cx, generic),
+        GoalSatisfiability::Satisfied(_)
+    ));
+    let deferred = prove(&db, solve_cx, generic).unwrap();
+    assert!(matches!(
+        deferred.data(&db),
+        Evidence::DeferredSolCodec { .. }
+    ));
+    assert!(!deferred.is_closed(&db));
+
+    let supplied = solve_cx.with_assumptions(PredicateListId::new(&db, vec![generic]));
+    assert!(matches!(
+        prove(&db, supplied, generic).unwrap().data(&db),
+        Evidence::Assumption(_)
+    ));
+    for (element, structural) in [(TyId::u8(&db), false), (TyId::unit(&db), true)] {
+        let proof = prove(&db, solve_cx, goal(element)).unwrap();
+        let Evidence::Impl { selected, .. } = proof.data(&db) else {
+            panic!("concrete codec must have an implementation proof");
+        };
+        assert_eq!(
+            matches!(selected.origin(&db), ImplementorOrigin::Structural),
+            structural
+        );
+    }
+}

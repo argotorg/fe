@@ -459,6 +459,7 @@ fn an_instance_proves_the_bounds_its_arguments_close() {
                 Evidence::Impl { .. } if evidence.is_closed(&db) => "closed implementation",
                 Evidence::Impl { .. } => "implementation",
                 Evidence::Assumption(_) => "assumption",
+                Evidence::DeferredSolCodec { .. } => "deferred codec",
             }
         })
         .collect();

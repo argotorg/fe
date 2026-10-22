@@ -4457,6 +4457,9 @@ pub(crate) fn has_invisible_newtype_field<'db>(
 pub struct PlaceEntryCalls<'db> {
     pub locate: Callable<'db>,
     pub codec: [Callable<'db>; 2],
+    /// A lexical codec proof failed at the producer. Preserve that result even
+    /// when only substitution later determines whether the layout needs it.
+    pub codec_choice_failed: bool,
 }
 
 impl<'db> PlaceEntryCalls<'db> {

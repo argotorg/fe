@@ -24,7 +24,8 @@ use crate::analysis::{
         corelib::resolve_lib_func_path,
         diagnostics::{BodyDiag, FuncBodyDiag},
         evidence::{
-            EvidenceId, EvidenceList, declared_bound_evidence, instantiated_selection, prove,
+            EvidenceId, EvidenceList, ProofOutcome, declared_bound_evidence,
+            instantiated_selection, prove_outcome,
         },
         fold::{TyFoldable, TyFolder},
         generic_defaults::{DefaultApplication, GenericArgError},
@@ -431,8 +432,12 @@ impl<'db> Callable<'db> {
         &mut self,
         db: &'db dyn HirAnalysisDb,
         solve_cx: TraitSolveCx<'db>,
-    ) {
-        self.evidence = self.trait_inst.and_then(|inst| prove(db, solve_cx, inst));
+    ) -> ProofOutcome<'db> {
+        let outcome = self.trait_inst.map_or(ProofOutcome::Unavailable, |inst| {
+            prove_outcome(db, solve_cx, inst)
+        });
+        self.evidence = outcome.evidence();
+        outcome
     }
 
     /// The checker's proof of the call's trait goal.
@@ -496,6 +501,40 @@ impl<'db> Callable<'db> {
         self.bound_evidence = self
             .bound_evidence
             .map(|bound_evidence| bound_evidence.bind(db, bound));
+    }
+
+    pub(crate) fn has_deferred_evidence(&self, db: &'db dyn HirAnalysisDb) -> bool {
+        self.evidence.is_some_and(|proof| proof.has_deferred(db))
+            || self.bound_evidence.is_some_and(|bound| {
+                bound
+                    .entries(db)
+                    .iter()
+                    .flatten()
+                    .any(|proof| proof.has_deferred(db))
+            })
+    }
+
+    /// Close producer-owned ordinary codec leaves without selecting a parent
+    /// again. Generic substitution itself only transports these obligations.
+    pub(crate) fn complete_deferred_evidence(&mut self, db: &'db dyn HirAnalysisDb) -> Option<()> {
+        use super::super::evidence::complete_deferred_evidence;
+        if let Some(proof) = self.evidence {
+            self.evidence = Some(complete_deferred_evidence(db, proof)?);
+        }
+        if let Some(bound) = self.bound_evidence {
+            self.bound_evidence = Some(EvidenceList::of(
+                db,
+                bound
+                    .entries(db)
+                    .iter()
+                    .map(|proof| match proof {
+                        Some(proof) => complete_deferred_evidence(db, *proof).map(Some),
+                        None => Some(None),
+                    })
+                    .collect::<Option<Vec<_>>>()?,
+            ));
+        }
+        Some(())
     }
 
     /// The trait method the call runs, with its body: from the
