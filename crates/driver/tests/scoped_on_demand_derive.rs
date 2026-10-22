@@ -598,7 +598,7 @@ const fn generic_caller<T>(_ x: T) -> u256 {
 }
 
 #[test]
-fn written_const_inside_with_provider_is_unsupplied_not_ordinary_fallback() {
+fn written_types_refuse_provider_choices_while_ordinary_layout_stays_valid() {
     let source = r#"
 use core::derive::Derive
 use core::meta::{Record, Code, Item}
@@ -630,7 +630,19 @@ const fn array_len_under_provider() -> usize {
 }
 "#;
     let err = prepare_err(source);
-    assert!(err.contains("generated output admission failed"), "{err}");
+    assert!(
+        err.contains("8-0138") && err.contains("this written type reads a chosen implementation"),
+        "{err}"
+    );
+    let ordinary = source.replace("with (Provider) {", "{");
+    let (db, file) = input(&ordinary);
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    let diagnostics = db.run_on_top_mod(db.top_mod(file));
+    assert!(
+        !diagnostics.has_errors(&db),
+        "ordinary layout must remain valid"
+    );
+    assert_eq!(eval_const_fn_u256(&db, "array_len_under_provider"), "2");
 }
 
 #[test]
