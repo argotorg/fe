@@ -1946,6 +1946,46 @@ fn output_warnings_remain_diagnostics_without_refusing_generation() {
 }
 
 #[test]
+fn quotation_provider_preserves_master_destructured_function_parameters() {
+    let source = SOURCE.replace(
+        "const fn boost(_ n: usize) -> u256 { n as u256 + 40 }",
+        "const fn sum(_ (left, right): (usize, usize)) -> usize { left + right }\n const fn boost(_ n: usize) -> u256 { sum((n, 40)) as u256 }",
+    );
+    let (db, file) = input(&source);
+    let prepared = prepare_file(&db, file).unwrap().unwrap();
+    let prepared_file = prepared
+        .workspace()
+        .get(&prepared, &file.url(&db).unwrap())
+        .unwrap();
+    let module = prepared.top_mod(prepared_file);
+    assert!(prepared.run_on_top_mod(module).is_empty());
+    let function = module
+        .all_funcs(&prepared)
+        .iter()
+        .find(|function| {
+            function
+                .name(&prepared)
+                .to_opt()
+                .is_some_and(|name| name.data(&prepared) == "generated_count")
+        })
+        .unwrap();
+    let owner = BodyOwner::Func(*function, None);
+    let result = eval_body_owner_const(
+        &prepared,
+        owner,
+        GenericSubst::for_body_owner(&prepared, owner, vec![]),
+    );
+    let EvalOutcome::Ready(value) = result else {
+        panic!("{result:?}")
+    };
+    assert!(matches!(
+        value.value(&prepared),
+        SemConstValue::Scalar { value: SemConstScalar::Int { value }, .. }
+        if value.to_string() == "42"
+    ));
+}
+
+#[test]
 fn provider_body_warnings_do_not_refuse_generation_or_hide_errors() {
     let source = r#"use core::meta::{Record, Code, Item}
 struct Cell { word: u256 }
