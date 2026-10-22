@@ -174,8 +174,8 @@ pub(crate) fn scope_graph_impl<'db>(
         item::validate_module_inner_attrs(&mut ctxt, items.inner_attr_list());
         lower_module_items(&mut ctxt, items);
     }
-    ctxt.builder.apply_quoted_function_origins();
     generated::append_functions(&mut ctxt);
+    ctxt.builder.apply_quoted_function_origins();
     ctxt.leave_item_scope(top_mod);
 
     ctxt.build()
@@ -427,6 +427,41 @@ impl<'db> FileLowerCtxt<'db> {
                 _ => None,
             })
             .expect("validated authored record item exists in target module")
+    }
+
+    pub(super) fn resolve_trait_item(
+        &self,
+        reference: &common::generation::FrozenTraitRef,
+    ) -> crate::hir_def::Trait<'db> {
+        let db = self.db();
+        let file = db
+            .workspace()
+            .get(db, &reference.file)
+            .expect("validated frozen trait file exists in workspace");
+        let module = map_file_to_mod_impl(db, file);
+        if module == self.top_mod() {
+            return self
+                .builder
+                .find_trait_by_range(reference.range)
+                .expect("validated trait exists in unchanged source");
+        }
+        let root = top_mod_ast(db, module);
+        module
+            .scope_graph(db)
+            .scopes
+            .keys()
+            .find_map(|scope| {
+                let crate::hir_def::scope_graph::ScopeId::Item(ItemKind::Trait(trait_)) = *scope
+                else {
+                    return None;
+                };
+                let HirOrigin::Raw(ptr) = trait_.origin(db) else {
+                    return None;
+                };
+                (ptr.to_node(root.syntax()).syntax().text_range() == reference.range)
+                    .then_some(trait_)
+            })
+            .expect("validated trait exists in unchanged source")
     }
 
     pub(super) fn lower_field_hole_ident(

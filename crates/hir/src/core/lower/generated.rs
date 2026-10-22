@@ -118,7 +118,11 @@ pub(super) fn append_functions<'db>(ctxt: &mut FileLowerCtxt<'db>) {
         .cloned()
         .collect::<Vec<_>>();
     for request in requests {
-        lower_generated_item_code(ctxt, &request.code);
+        if let Some(scoped) = &request.scoped_impl {
+            lower_scoped_derive(ctxt, scoped, &request.code);
+        } else {
+            lower_generated_item_code(ctxt, &request.code);
+        }
     }
 }
 
@@ -423,4 +427,55 @@ pub(super) fn lower_member_hole<'db>(
             "member quotation hole requires Code<Item>",
         );
     }
+}
+
+/// Install a scoped output as a private named candidate, never an ordinary impl.
+fn lower_scoped_derive<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    scoped: &common::generation::FrozenScopedImpl,
+    code: &FrozenCode,
+) {
+    use crate::hir_def::{
+        AttrListId, GenericParamListId, IdentId, ImplTraitModifiers, Partial, PathId, PathKind,
+        TrackedItemVariant, TraitRefId, TypeId, TypeKind, Visibility, WhereClauseId,
+    };
+    let db = ctxt.db();
+    let trait_ = ctxt.resolve_trait_item(&scoped.demand.trait_ref);
+    let target = ctxt.resolve_record_item(&scoped.demand.target);
+    let bound_path = |item: ItemKind<'db>| {
+        PathId::new(
+            db,
+            PathKind::BoundItem {
+                item: item.scope(),
+                display: PathId::from_ident(db, item.name(db).expect("named source declaration")),
+            },
+            None,
+        )
+    };
+    let trait_ref = TraitRefId::new(db, Partial::Present(bound_path(trait_.into())));
+    let ty = TypeId::new(db, TypeKind::Path(Partial::Present(bound_path(target))));
+    let index = ctxt.next_impl_trait_idx();
+    let id = ctxt.joined_id(TrackedItemVariant::ImplTrait(index));
+    ctxt.enter_item_scope(id, false);
+    lower_derive_method(ctxt, code);
+    let implementation = ImplTrait::new(
+        db,
+        id,
+        Partial::Present(trait_ref),
+        Partial::Present(ty),
+        AttrListId::new(db, vec![]),
+        GenericParamListId::new(db, vec![]),
+        WhereClauseId::new(db, vec![]),
+        vec![],
+        vec![],
+        vec![],
+        ImplTraitModifiers {
+            is_unsafe: false,
+            selection_name: Some(IdentId::new(db, scoped.selection_name.clone())),
+            vis: Visibility::Private,
+        },
+        ctxt.top_mod(),
+        crate::span::HirOrigin::synthetic(),
+    );
+    ctxt.leave_item_scope(implementation);
 }

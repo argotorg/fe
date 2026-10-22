@@ -360,6 +360,23 @@ impl<'db> ScopeGraphBuilder<'db> {
             })
     }
 
+    pub(super) fn find_trait_by_range(
+        &self,
+        range: parser::TextRange,
+    ) -> Option<crate::hir_def::Trait<'db>> {
+        use parser::ast::prelude::*;
+        let root = super::top_mod_ast(self.db, self.top_mod);
+        self.graph.nodes.values().find_map(|(scope, _)| {
+            let ScopeId::Item(ItemKind::Trait(trait_)) = *scope else {
+                return None;
+            };
+            let crate::span::HirOrigin::Raw(ptr) = trait_.origin(self.db) else {
+                return None;
+            };
+            (ptr.to_node(root.syntax()).syntax().text_range() == range).then_some(trait_)
+        })
+    }
+
     pub(super) fn resolve_producer_scope(
         &self,
         quote_top_mod: TopLevelMod<'db>,
